@@ -237,14 +237,37 @@ class TestBuildRetrievedContent:
         result = _build_default(extraction=_make_extraction(main_content=content))
         assert result.body == content
 
-    def test_summary_mode_returns_full_content_for_now(self):
-        """Summary mode stubs: returns main_content as-is (US-008 adds extraction)."""
+    def test_summary_mode_single_paragraph_preserved(self):
+        """Summary mode with single paragraph preserves it (first + last)."""
         content = "This is a long article body that would be summarised."
         result = _build_default(
             extract_mode="summary",
             extraction=_make_extraction(main_content=content),
         )
         assert result.body == content
+
+    def test_summary_mode_sets_truncation_notice(self):
+        """Summary mode populates truncation_notice when content is trimmed."""
+        content = (
+            "First paragraph with the thesis.\n\n"
+            "Middle paragraph with no signals at all.\n\n"
+            "Last paragraph with the conclusion."
+        )
+        result = _build_default(
+            extract_mode="summary",
+            extraction=_make_extraction(main_content=content),
+        )
+        assert result.truncation_notice is not None
+        assert "general content" in result.truncation_notice
+
+    def test_full_mode_no_truncation_notice(self):
+        """Full mode should not set truncation_notice."""
+        content = "Some content here."
+        result = _build_default(
+            extract_mode="full",
+            extraction=_make_extraction(main_content=content),
+        )
+        assert result.truncation_notice is None
 
     def test_word_count_computed_on_body(self):
         content = "one two three four five"

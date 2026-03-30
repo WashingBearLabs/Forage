@@ -4,7 +4,9 @@ Assembles the final :class:`RetrievedContent` object from the outputs of
 Stages 1-3 plus redirect/domain metadata.  Computes a composite trust
 score and resolves the domain trust tier.
 
-Summary-mode smart extraction is stubbed here and wired in US-008.
+Summary mode uses :func:`extract_summary` from the smart extraction
+module to preserve high-signal content (statistics, quotes, references)
+while trimming filler.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from models import (
     Stage3Verdict,
     TrustTier,
 )
+from pipeline.smart_extraction import extract_summary
 from pipeline.stage1_extraction import ExtractionResult
 from pipeline.stage2_structural import StructuralScanResult
 from pipeline.stage3_promptguard import PromptGuardResult
@@ -158,10 +161,14 @@ def build_retrieved_content(
     )
 
     # -- Body text --
-    # Full mode: use main_content from Stage 1 (trafilatura output).
-    # Summary mode: for now, pass through main_content as-is (US-008 adds
-    # smart extraction).
-    body = extraction.main_content
+    truncation_notice: str | None = None
+    if extract_mode == "summary":
+        body, notice = extract_summary(
+            extraction.main_content, extraction.raw_text, extraction.title,
+        )
+        truncation_notice = notice if notice else None
+    else:
+        body = extraction.main_content
 
     # -- Injection spans --
     injection_detected = promptguard.verdict == Stage3Verdict.INJECTION_DETECTED
@@ -193,4 +200,5 @@ def build_retrieved_content(
         domain=domain,
         redirect_chain=redirect_chain,
         domain_changed_on_redirect=domain_changed_on_redirect,
+        truncation_notice=truncation_notice,
     )
