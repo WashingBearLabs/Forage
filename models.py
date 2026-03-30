@@ -172,6 +172,10 @@ class SearchResult(BaseModel):
     url: str = Field(..., description="Result URL")
     snippet: str = Field(..., description="Result snippet / description")
     engine: str | None = Field(default=None, description="Search engine used")
+    suspicious: bool = Field(
+        default=False,
+        description="Whether Stage 2 flagged this snippet as suspicious",
+    )
 
 
 class SearchResponse(BaseModel):

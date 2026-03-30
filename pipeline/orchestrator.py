@@ -295,17 +295,18 @@ async def run_search_pipeline(
 ) -> SearchResponse:
     """Run a web search through SearXNG with snippet sanitization.
 
-    SearXNG integration is stubbed -- Spec 2 will wire it fully.
-    The HTTP call is attempted but connection errors are handled
-    gracefully, returning an empty result set.
+    Queries SearXNG for results, then sanitizes each snippet through
+    Stage 1 (HTML extraction) and Stage 2 (structural scan).
 
-    Snippets from SearXNG are sanitized through Stage 1 extraction
-    (HTML stripping) and Stage 2 structural scan.  Snippets flagged
-    as BLOCKED are replaced with a safe placeholder.
+    - BLOCKED snippets are omitted entirely from the response.
+    - SUSPICIOUS snippets are included with a ``suspicious`` flag.
+    - SearXNG errors raise :class:`PipelineError` with a descriptive message.
     """
     request_id = uuid.uuid4().hex
 
-    # -- Attempt SearXNG HTTP call --
+    # -- Call SearXNG --
+    # Request extra results to compensate for any BLOCKED omissions.
+    fetch_limit = min(request.num_results * 2, 40)
     raw_results: list[dict[str, Any]] = []
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -319,27 +320,31 @@ async def run_search_pipeline(
             )
             resp.raise_for_status()
             data = resp.json()
-            raw_results = data.get("results", [])[:request.num_results]
-    except Exception:
-        # SearXNG not available yet (Spec 2 will wire this).
-        # Return empty results gracefully.
-        logger.warning(
-            "SearXNG not available at %s — returning empty results",
-            searxng_url,
-        )
-        return SearchResponse(
-            results=[],
+            raw_results = data.get("results", [])[:fetch_limit]
+    except httpx.HTTPStatusError as exc:
+        raise PipelineError(
+            error="searxng_error",
+            reason=f"SearXNG returned HTTP {exc.response.status_code}",
             request_id=request_id,
-            query=request.query,
-        )
+        ) from exc
+    except Exception as exc:
+        raise PipelineError(
+            error="searxng_unavailable",
+            reason=f"SearXNG not reachable at {searxng_url}: {exc}",
+            request_id=request_id,
+        ) from exc
 
     # -- Sanitize snippets through Stage 1 + 2 --
     sanitized_results: list[SearchResult] = []
     for raw in raw_results:
+        if len(sanitized_results) >= request.num_results:
+            break
+
         title = raw.get("title", "")
         url = raw.get("url", "")
         snippet = raw.get("content", "")
         engine = raw.get("engine")
+        suspicious = False
 
         # Stage 1: strip any HTML from snippet
         if snippet:
@@ -349,7 +354,12 @@ async def run_search_pipeline(
             # Stage 2: structural scan
             scan = scan_structural(clean_snippet)
             if scan.verdict == Stage2Verdict.BLOCKED:
-                clean_snippet = "[Content removed — injection detected]"
+                logger.info(
+                    "Omitting blocked search result: %s", url,
+                )
+                continue
+            if scan.verdict == Stage2Verdict.SUSPICIOUS:
+                suspicious = True
         else:
             clean_snippet = ""
 
@@ -358,6 +368,7 @@ async def run_search_pipeline(
             url=url,
             snippet=clean_snippet,
             engine=engine,
+            suspicious=suspicious,
         ))
 
     return SearchResponse(
