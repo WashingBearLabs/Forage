@@ -1,0 +1,13 @@
+# SearXNG rate limiter configuration
+# Internal-only instance — relaxed limits
+
+[botdetection.ip_limit]
+# Disable IP-based rate limiting for internal use
+link_token = false
+
+[botdetection.ip_lists]
+# No blocked IPs for internal instance
+block_ip = []
+pass_ip = [
+  "0.0.0.0/0",
+]

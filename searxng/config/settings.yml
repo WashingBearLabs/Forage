@@ -1,0 +1,33 @@
+use_default_settings: true
+
+general:
+  instance_name: "Poppy Search"
+
+search:
+  safe_search: 0
+  default_lang: "en"
+  formats:
+    - html
+    - json
+
+server:
+  port: 8080
+  bind_address: "0.0.0.0"
+  # Internal-only CSRF key for SearXNG's HTML UI.
+  # We only call the JSON API — not security-critical.
+  secret_key: "poppy-searxng-internal"
+
+engines:
+  - name: duckduckgo
+    engine: duckduckgo
+    disabled: false
+  - name: bing
+    engine: bing
+    disabled: false
+  - name: brave
+    engine: brave
+    disabled: false
+
+outgoing:
+  request_timeout: 10
+  useragent_suffix: ""
