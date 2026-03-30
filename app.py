@@ -14,6 +14,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+from promptguard.classifier import PromptGuardClassifier
+
 logger = logging.getLogger(__name__)
 
 VALKEY_URL = os.environ.get("VALKEY_URL", "redis://poppy-valkey:6379/4")
@@ -21,6 +23,7 @@ VALKEY_URL = os.environ.get("VALKEY_URL", "redis://poppy-valkey:6379/4")
 # -- Module-level state --
 
 _valkey_connected: bool = False
+_classifier: PromptGuardClassifier = PromptGuardClassifier()
 
 
 async def _check_valkey() -> bool:
@@ -62,6 +65,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("Valkey connection established")
     else:
         logger.warning("Valkey not available at startup")
+
+    # Load PromptGuard 2 model (CPU inference)
+    if _classifier.load():
+        logger.info("PromptGuard 2 model ready")
+    else:
+        logger.warning("PromptGuard 2 not available — ML injection detection disabled")
+
     yield
 
 
@@ -85,6 +95,6 @@ async def health() -> HealthResponse:
     _valkey_connected = await _check_valkey()
     return HealthResponse(
         status="healthy",
-        promptguard_loaded=False,  # US-006 will add PromptGuard model loading
+        promptguard_loaded=_classifier.loaded,
         cache_connected=_valkey_connected,
     )
