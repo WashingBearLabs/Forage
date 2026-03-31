@@ -43,9 +43,14 @@ COPY app.py models.py cache.py url_validator.py config.yaml ./
 COPY promptguard/ ./promptguard/
 COPY pipeline/ ./pipeline/
 
+# Copy and set up entrypoint for vault integration
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+
 # Switch to non-root user
 USER poppy
 
 EXPOSE 8020
 
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8020"]
