@@ -29,6 +29,9 @@ from pipeline.stage1_extraction import ExtractionResult, _normalize_text
 # Magic bytes at the start of every valid PDF file
 _PDF_MAGIC = b"%PDF-"
 
+# Maximum PDF file size (50 MB)
+_MAX_PDF_SIZE = 50 * 1024 * 1024
+
 # Page separator used when concatenating text from multiple pages
 _PAGE_SEPARATOR = "\n\n"
 
@@ -95,6 +98,11 @@ def extract_pdf(pdf_bytes: bytes) -> ExtractionResult:
     PDFExtractionError
         If the PDF contains no extractable text (e.g. scanned/image PDF).
     """
+    if len(pdf_bytes) > _MAX_PDF_SIZE:
+        raise PDFExtractionError(
+            f"PDF exceeds maximum size of {_MAX_PDF_SIZE // (1024 * 1024)}MB"
+        )
+
     reader = PdfReader(io.BytesIO(pdf_bytes))
 
     # -- Extract text from every page --

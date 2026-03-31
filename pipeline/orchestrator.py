@@ -108,7 +108,7 @@ async def run_retrieve_pipeline(
 
     # -- Step 1: Validate URL (RFC1918 + blocklist) --
     try:
-        validate_url(request.url, blocked_domains)
+        await validate_url(request.url, blocked_domains)
     except PrivateIPError as exc:
         raise PipelineError(
             error="private_ip",
@@ -209,6 +209,7 @@ async def run_retrieve_pipeline(
             trusted_domains=request.trusted_domains,
             verified_domains=request.verified_domains,
             blocked_domains=blocked_domains,
+            content_type=content_type,
         )
         return content.model_copy(update={"injection_detected": True})
 
@@ -217,7 +218,7 @@ async def run_retrieve_pipeline(
     _trust_tier = _resolve_request_trust_tier(
         domain, request.trusted_domains, request.verified_domains, blocked_domains,
     )
-    pg_result = run_promptguard(
+    pg_result = await run_promptguard(
         extraction.raw_text,
         classifier,
         threshold=request.promptguard_threshold,
@@ -243,6 +244,7 @@ async def run_retrieve_pipeline(
             trusted_domains=request.trusted_domains,
             verified_domains=request.verified_domains,
             blocked_domains=blocked_domains,
+            content_type=content_type,
         )
         return content.model_copy(update={"injection_detected": True})
 
@@ -261,6 +263,7 @@ async def run_retrieve_pipeline(
         trusted_domains=request.trusted_domains,
         verified_domains=request.verified_domains,
         blocked_domains=blocked_domains,
+        content_type=content_type,
     )
 
     # -- Step 8: Cache result --

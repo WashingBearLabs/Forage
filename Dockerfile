@@ -1,4 +1,5 @@
 # Poppy Retrieval sidecar — web content fetching and sanitization
+# Note: Uses pip instead of uv for sidecar simplicity (no uv installation needed in slim image)
 FROM python:3.12-slim
 
 WORKDIR /app

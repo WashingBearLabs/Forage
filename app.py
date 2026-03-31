@@ -28,13 +28,6 @@ logger = logging.getLogger(__name__)
 VALKEY_URL = os.environ.get("VALKEY_URL", "redis://poppy-valkey:6379/4")
 SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://poppy-searxng:8080")
 
-# -- Module-level state --
-
-_valkey_connected: bool = False
-_classifier: PromptGuardClassifier = PromptGuardClassifier()
-_cache: ContentCache | None = None
-_config: dict[str, Any] = {}
-
 
 def _load_config() -> dict[str, Any]:
     """Load sidecar configuration from ``config.yaml``."""
@@ -79,33 +72,35 @@ class HealthResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Startup/shutdown lifecycle."""
-    global _valkey_connected, _cache, _config
-
     # Load config
-    _config = _load_config()
-    logger.info("Sidecar config loaded (%d keys)", len(_config))
+    config = _load_config()
+    app.state.config = config
+    logger.info("Sidecar config loaded (%d keys)", len(config))
 
     # Connect content cache
-    _cache = ContentCache(VALKEY_URL)
-    cache_ok = await _cache.connect()
-    _valkey_connected = cache_ok
+    cache = ContentCache(VALKEY_URL)
+    cache_ok = await cache.connect()
+    app.state.cache = cache
+    app.state.valkey_connected = cache_ok
     if cache_ok:
         logger.info("Content cache connected (Valkey)")
     else:
         logger.warning("Content cache not available at startup")
 
     # Load PromptGuard 2 model (CPU inference)
-    if _classifier.load():
+    classifier = PromptGuardClassifier()
+    if classifier.load():
         logger.info("PromptGuard 2 model ready")
     else:
         logger.warning("PromptGuard 2 not available — ML injection detection disabled")
+    app.state.classifier = classifier
 
     yield
 
     # Shutdown
-    if _cache is not None:
-        await _cache.close()
-        _cache = None
+    if app.state.cache is not None:
+        await app.state.cache.close()
+        app.state.cache = None
 
 
 # -- App --
@@ -136,34 +131,34 @@ async def pipeline_error_handler(
 
 
 @app.get("/health", response_model=HealthResponse)
-async def health() -> HealthResponse:
+async def health(request: Request) -> HealthResponse:
     """Return service health status."""
-    global _valkey_connected
     # Re-check Valkey on each health call for accurate status
-    _valkey_connected = await _check_valkey()
+    valkey_connected = await _check_valkey()
+    request.app.state.valkey_connected = valkey_connected
     return HealthResponse(
         status="healthy",
-        promptguard_loaded=_classifier.loaded,
-        cache_connected=_valkey_connected,
+        promptguard_loaded=request.app.state.classifier.loaded,
+        cache_connected=valkey_connected,
     )
 
 
 @app.post("/retrieve", response_model=RetrievedContent)
-async def retrieve(request: RetrieveRequest) -> RetrievedContent:
+async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
     """Retrieve and sanitize web content through the full pipeline."""
     return await run_retrieve_pipeline(
-        request,
-        cache=_cache,
-        classifier=_classifier,
-        config=_config,
+        body,
+        cache=request.app.state.cache,
+        classifier=request.app.state.classifier,
+        config=request.app.state.config,
     )
 
 
 @app.post("/search", response_model=SearchResponse)
-async def search(request: SearchRequest) -> SearchResponse:
+async def search(request: Request, body: SearchRequest) -> SearchResponse:
     """Run a web search through SearXNG with snippet sanitization."""
     return await run_search_pipeline(
-        request,
+        body,
         searxng_url=SEARXNG_URL,
-        config=_config,
+        config=request.app.state.config,
     )

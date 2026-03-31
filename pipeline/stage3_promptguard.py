@@ -9,6 +9,7 @@ skipped and a safe fallback is returned.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -35,11 +36,11 @@ class PromptGuardResult:
     skipped: bool = False
 
 
-def run_promptguard(
+async def run_promptguard(
     text: str,
     classifier: PromptGuardClassifier | None,
     threshold: float = DEFAULT_THRESHOLD,
-    trust_tier: str = "standard",
+    trust_tier: TrustTier | str = "standard",
 ) -> PromptGuardResult:
     """Run PromptGuard classification on *text*.
 
@@ -61,8 +62,11 @@ def run_promptguard(
     -------
     PromptGuardResult with verdict, score, flagged chunks, and penalty.
     """
+    # Normalize trust_tier to string value for consistent comparison
+    tier_value = trust_tier.value if isinstance(trust_tier, TrustTier) else trust_tier
+
     # TRUSTED domains skip ML classification
-    if trust_tier == TrustTier.TRUSTED or trust_tier == TrustTier.TRUSTED.value:
+    if tier_value == TrustTier.TRUSTED.value:
         logger.debug("Skipping PromptGuard for TRUSTED domain")
         return PromptGuardResult(
             verdict=Stage3Verdict.SAFE,
@@ -72,20 +76,23 @@ def run_promptguard(
             skipped=True,
         )
 
-    # Model not available — degrade gracefully
+    # Model not available — degrade gracefully with a small penalty
+    # to signal reduced confidence (no ML scan was performed).
     if classifier is None or not classifier.loaded:
         logger.warning(
-            "PromptGuard model not loaded — returning safe fallback"
+            "PromptGuard model not loaded — returning safe fallback with penalty"
         )
         return PromptGuardResult(
             verdict=Stage3Verdict.SAFE,
             score=0.0,
             flagged_chunks=[],
-            penalty=0.0,
+            penalty=-0.1,
             skipped=True,
         )
 
-    score, flagged_chunks = classifier.classify(text)
+    # Run synchronous PyTorch inference in a thread to avoid blocking
+    # the event loop.
+    score, flagged_chunks = await asyncio.to_thread(classifier.classify, text)
 
     if score > threshold:
         return PromptGuardResult(

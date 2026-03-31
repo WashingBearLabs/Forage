@@ -1,6 +1,6 @@
 """Tests for url_validator — RFC1918 rejection, blocklist, DNS resolution.
 
-All tests mock ``socket.getaddrinfo`` to avoid real DNS queries.
+All tests mock ``loop.getaddrinfo`` to avoid real DNS queries.
 """
 
 from __future__ import annotations
@@ -44,6 +44,15 @@ def _fake_addrinfo_multi(*ips: str) -> list[tuple]:
     for ip in ips:
         results.extend(_fake_addrinfo(ip))
     return results
+
+
+def _mock_getaddrinfo(return_value=None, side_effect=None):
+    """Patch socket.getaddrinfo (called via run_in_executor) to return fake results."""
+    return patch(
+        "url_validator.socket.getaddrinfo",
+        return_value=return_value,
+        side_effect=side_effect,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -129,10 +138,11 @@ class TestRFC1918Rejection:
             ("0.0.0.0", "zero-address"),
         ],
     )
-    def test_private_ipv4_rejected(self, ip: str, label: str) -> None:
-        with patch("url_validator.socket.getaddrinfo", return_value=_fake_addrinfo(ip)):
+    @pytest.mark.asyncio
+    async def test_private_ipv4_rejected(self, ip: str, label: str) -> None:
+        with _mock_getaddrinfo(return_value=_fake_addrinfo(ip)):
             with pytest.raises(PrivateIPError):
-                validate_url(f"https://evil.example.com/{label}")
+                await validate_url(f"https://evil.example.com/{label}")
 
     @pytest.mark.parametrize(
         ("ip", "label"),
@@ -143,28 +153,27 @@ class TestRFC1918Rejection:
             ("fd00::1", "ipv6-ula-fd"),
         ],
     )
-    def test_private_ipv6_rejected(self, ip: str, label: str) -> None:
-        with patch("url_validator.socket.getaddrinfo", return_value=_fake_addrinfo(ip)):
+    @pytest.mark.asyncio
+    async def test_private_ipv6_rejected(self, ip: str, label: str) -> None:
+        with _mock_getaddrinfo(return_value=_fake_addrinfo(ip)):
             with pytest.raises(PrivateIPError):
-                validate_url(f"https://evil.example.com/{label}")
+                await validate_url(f"https://evil.example.com/{label}")
 
-    def test_public_ip_passes(self) -> None:
-        with patch(
-            "url_validator.socket.getaddrinfo",
-            return_value=_fake_addrinfo("93.184.216.34"),
-        ):
-            ip, hostname = validate_url("https://example.com/page")
+    @pytest.mark.asyncio
+    async def test_public_ip_passes(self) -> None:
+        with _mock_getaddrinfo(return_value=_fake_addrinfo("93.184.216.34")):
+            ip, hostname = await validate_url("https://example.com/page")
         assert ip == "93.184.216.34"
         assert hostname == "example.com"
 
-    def test_mixed_ips_rejected_if_any_private(self) -> None:
+    @pytest.mark.asyncio
+    async def test_mixed_ips_rejected_if_any_private(self) -> None:
         """If DNS returns both public and private IPs, reject."""
-        with patch(
-            "url_validator.socket.getaddrinfo",
+        with _mock_getaddrinfo(
             return_value=_fake_addrinfo_multi("93.184.216.34", "10.0.0.1"),
         ):
             with pytest.raises(PrivateIPError):
-                validate_url("https://example.com/")
+                await validate_url("https://example.com/")
 
 
 # ---------------------------------------------------------------------------
@@ -175,21 +184,25 @@ class TestRFC1918Rejection:
 class TestHostnameRejection:
     """Localhost and .local domains rejected before DNS resolution."""
 
-    def test_localhost_rejected(self) -> None:
+    @pytest.mark.asyncio
+    async def test_localhost_rejected(self) -> None:
         with pytest.raises(PrivateIPError, match="localhost"):
-            validate_url("https://localhost/path")
+            await validate_url("https://localhost/path")
 
-    def test_localhost_uppercase_rejected(self) -> None:
+    @pytest.mark.asyncio
+    async def test_localhost_uppercase_rejected(self) -> None:
         with pytest.raises(PrivateIPError, match="localhost"):
-            validate_url("https://LOCALHOST/path")
+            await validate_url("https://LOCALHOST/path")
 
-    def test_local_domain_rejected(self) -> None:
+    @pytest.mark.asyncio
+    async def test_local_domain_rejected(self) -> None:
         with pytest.raises(PrivateIPError, match=r"\.local"):
-            validate_url("https://myhost.local/path")
+            await validate_url("https://myhost.local/path")
 
-    def test_nested_local_domain_rejected(self) -> None:
+    @pytest.mark.asyncio
+    async def test_nested_local_domain_rejected(self) -> None:
         with pytest.raises(PrivateIPError, match=r"\.local"):
-            validate_url("https://deep.sub.myhost.local/path")
+            await validate_url("https://deep.sub.myhost.local/path")
 
 
 # ---------------------------------------------------------------------------
@@ -200,37 +213,35 @@ class TestHostnameRejection:
 class TestBlockedDomains:
     """Blocked domains must be rejected without making any HTTP request."""
 
-    def test_blocked_domain_rejected(self) -> None:
+    @pytest.mark.asyncio
+    async def test_blocked_domain_rejected(self) -> None:
         with pytest.raises(BlockedDomainError):
-            validate_url(
+            await validate_url(
                 "https://malware.example.com/path",
                 blocked_domains=["malware.example.com"],
             )
 
-    def test_blocked_domain_case_insensitive(self) -> None:
+    @pytest.mark.asyncio
+    async def test_blocked_domain_case_insensitive(self) -> None:
         with pytest.raises(BlockedDomainError):
-            validate_url(
+            await validate_url(
                 "https://MALWARE.Example.COM/path",
                 blocked_domains=["malware.example.com"],
             )
 
-    def test_unblocked_domain_passes(self) -> None:
-        with patch(
-            "url_validator.socket.getaddrinfo",
-            return_value=_fake_addrinfo("93.184.216.34"),
-        ):
-            ip, hostname = validate_url(
+    @pytest.mark.asyncio
+    async def test_unblocked_domain_passes(self) -> None:
+        with _mock_getaddrinfo(return_value=_fake_addrinfo("93.184.216.34")):
+            ip, hostname = await validate_url(
                 "https://safe.example.com/",
                 blocked_domains=["malware.example.com"],
             )
         assert ip == "93.184.216.34"
 
-    def test_empty_blocklist_passes(self) -> None:
-        with patch(
-            "url_validator.socket.getaddrinfo",
-            return_value=_fake_addrinfo("93.184.216.34"),
-        ):
-            ip, hostname = validate_url(
+    @pytest.mark.asyncio
+    async def test_empty_blocklist_passes(self) -> None:
+        with _mock_getaddrinfo(return_value=_fake_addrinfo("93.184.216.34")):
+            ip, hostname = await validate_url(
                 "https://example.com/",
                 blocked_domains=[],
             )
@@ -245,19 +256,26 @@ class TestBlockedDomains:
 class TestEdgeCases:
     """Malformed URLs, DNS failure, etc."""
 
-    def test_no_hostname_raises_valueerror(self) -> None:
-        with pytest.raises(ValueError, match="Cannot extract hostname"):
-            validate_url("not-a-url")
+    @pytest.mark.asyncio
+    async def test_no_hostname_raises_valueerror(self) -> None:
+        with pytest.raises(ValueError, match="Unsupported URL scheme"):
+            await validate_url("not-a-url")
 
-    def test_dns_failure_raises_valueerror(self) -> None:
-        with patch(
-            "url_validator.socket.getaddrinfo",
+    @pytest.mark.asyncio
+    async def test_unsupported_scheme_raises_valueerror(self) -> None:
+        with pytest.raises(ValueError, match="Unsupported URL scheme"):
+            await validate_url("ftp://example.com/file")
+
+    @pytest.mark.asyncio
+    async def test_dns_failure_raises_valueerror(self) -> None:
+        with _mock_getaddrinfo(
             side_effect=socket.gaierror("Name or service not known"),
         ):
             with pytest.raises(ValueError, match="DNS resolution failed"):
-                validate_url("https://nonexistent.example.invalid/")
+                await validate_url("https://nonexistent.example.invalid/")
 
-    def test_empty_addrinfo_raises_valueerror(self) -> None:
-        with patch("url_validator.socket.getaddrinfo", return_value=[]):
+    @pytest.mark.asyncio
+    async def test_empty_addrinfo_raises_valueerror(self) -> None:
+        with _mock_getaddrinfo(return_value=[]):
             with pytest.raises(ValueError, match="no results"):
-                validate_url("https://example.com/")
+                await validate_url("https://example.com/")

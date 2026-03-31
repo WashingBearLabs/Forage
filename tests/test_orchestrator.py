@@ -122,12 +122,12 @@ def _make_pg_safe(**overrides):  # type: ignore[no-untyped-def]
 # ---------------------------------------------------------------------------
 
 
-@patch("pipeline.orchestrator.validate_url", return_value=("93.184.216.34", "example.com"))
+@patch("pipeline.orchestrator.validate_url", new_callable=AsyncMock, return_value=("93.184.216.34", "example.com"))
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural")
-@patch("pipeline.orchestrator.run_promptguard")
+@patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.build_retrieved_content")
 async def test_retrieve_full_pipeline_happy_path(
     mock_build: MagicMock,
@@ -188,7 +188,7 @@ async def test_retrieve_full_pipeline_happy_path(
 # ---------------------------------------------------------------------------
 
 
-@patch("pipeline.orchestrator.validate_url", return_value=("93.184.216.34", "example.com"))
+@patch("pipeline.orchestrator.validate_url", new_callable=AsyncMock, return_value=("93.184.216.34", "example.com"))
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
 async def test_retrieve_cache_hit_skips_pipeline(
     mock_fetch: AsyncMock,
@@ -231,7 +231,7 @@ async def test_retrieve_cache_hit_skips_pipeline(
 # ---------------------------------------------------------------------------
 
 
-@patch("pipeline.orchestrator.validate_url", return_value=("93.184.216.34", "example.com"))
+@patch("pipeline.orchestrator.validate_url", new_callable=AsyncMock, return_value=("93.184.216.34", "example.com"))
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
@@ -287,12 +287,12 @@ async def test_retrieve_stage2_blocked_returns_quarantine(
 # ---------------------------------------------------------------------------
 
 
-@patch("pipeline.orchestrator.validate_url", return_value=("93.184.216.34", "example.com"))
+@patch("pipeline.orchestrator.validate_url", new_callable=AsyncMock, return_value=("93.184.216.34", "example.com"))
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural")
-@patch("pipeline.orchestrator.run_promptguard")
+@patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.build_retrieved_content")
 async def test_retrieve_stage3_injection_returns_quarantine(
     mock_build: MagicMock,
@@ -348,7 +348,7 @@ async def test_retrieve_stage3_injection_returns_quarantine(
 # ---------------------------------------------------------------------------
 
 
-@patch("pipeline.orchestrator.validate_url", side_effect=__import__("url_validator", fromlist=["PrivateIPError"]).PrivateIPError("resolves to 192.168.1.1"))
+@patch("pipeline.orchestrator.validate_url", new_callable=AsyncMock, side_effect=__import__("url_validator", fromlist=["PrivateIPError"]).PrivateIPError("resolves to 192.168.1.1"))
 async def test_retrieve_private_ip_raises_pipeline_error(
     mock_validate: MagicMock,
 ) -> None:
@@ -367,7 +367,7 @@ async def test_retrieve_private_ip_raises_pipeline_error(
     assert "reason" in error_dict
 
 
-@patch("pipeline.orchestrator.validate_url", side_effect=__import__("url_validator", fromlist=["BlockedDomainError"]).BlockedDomainError("domain blocked"))
+@patch("pipeline.orchestrator.validate_url", new_callable=AsyncMock, side_effect=__import__("url_validator", fromlist=["BlockedDomainError"]).BlockedDomainError("domain blocked"))
 async def test_retrieve_blocked_domain_raises_pipeline_error(
     mock_validate: MagicMock,
 ) -> None:
@@ -383,7 +383,7 @@ async def test_retrieve_blocked_domain_raises_pipeline_error(
     assert exc_info.value.error == "blocked_domain"
 
 
-@patch("pipeline.orchestrator.validate_url", return_value=("93.184.216.34", "example.com"))
+@patch("pipeline.orchestrator.validate_url", new_callable=AsyncMock, return_value=("93.184.216.34", "example.com"))
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock, side_effect=httpx.TimeoutException("timed out"))
 async def test_retrieve_timeout_raises_pipeline_error(
     mock_fetch: AsyncMock,
@@ -404,7 +404,7 @@ async def test_retrieve_timeout_raises_pipeline_error(
     assert exc_info.value.error == "fetch_timeout"
 
 
-@patch("pipeline.orchestrator.validate_url", side_effect=ValueError("Cannot extract hostname"))
+@patch("pipeline.orchestrator.validate_url", new_callable=AsyncMock, side_effect=ValueError("Cannot extract hostname"))
 async def test_retrieve_invalid_url_raises_pipeline_error(
     mock_validate: MagicMock,
 ) -> None:
@@ -622,18 +622,24 @@ def test_config_loading() -> None:
 def client() -> httpx.AsyncClient:
     """Create an async test client for the retrieval app."""
     from app import app
+    from promptguard.classifier import PromptGuardClassifier
+
+    # Ensure app.state has the required attributes for route handlers
+    app.state.cache = None
+    app.state.classifier = PromptGuardClassifier()
+    app.state.config = _SAMPLE_CONFIG
+    app.state.valkey_connected = False
 
     transport = httpx.ASGITransport(app=app)  # type: ignore[arg-type]
     return httpx.AsyncClient(transport=transport, base_url="http://test")
 
 
-@patch("app._cache", new=None)
-@patch("pipeline.orchestrator.validate_url", return_value=("93.184.216.34", "example.com"))
+@patch("pipeline.orchestrator.validate_url", new_callable=AsyncMock, return_value=("93.184.216.34", "example.com"))
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural")
-@patch("pipeline.orchestrator.run_promptguard")
+@patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.build_retrieved_content")
 async def test_post_retrieve_endpoint(
     mock_build: MagicMock,
@@ -672,7 +678,7 @@ async def test_post_retrieve_endpoint(
     assert "body" in data
 
 
-@patch("pipeline.orchestrator.validate_url", side_effect=__import__("url_validator", fromlist=["PrivateIPError"]).PrivateIPError("private"))
+@patch("pipeline.orchestrator.validate_url", new_callable=AsyncMock, side_effect=__import__("url_validator", fromlist=["PrivateIPError"]).PrivateIPError("private"))
 async def test_post_retrieve_error_response(
     mock_validate: MagicMock,
     client: httpx.AsyncClient,

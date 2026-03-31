@@ -11,6 +11,7 @@ collapsing, UTF-8 normalization, and whitespace collapsing.
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 import unicodedata
@@ -30,7 +31,10 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 # HTML elements stripped before raw-text extraction (security-sensitive)
-_DANGEROUS_TAGS = frozenset({"script", "style", "iframe", "meta", "link"})
+_DANGEROUS_TAGS = frozenset({
+    "script", "style", "iframe", "meta", "link",
+    "object", "embed", "form", "svg",
+})
 
 # Invisible Unicode codepoints to collapse
 _INVISIBLE_CHARS = frozenset(
@@ -190,8 +194,10 @@ def _extract_date(soup: BeautifulSoup) -> str | None:
 
 def _extract_raw_text(soup: BeautifulSoup) -> str:
     """Strip dangerous elements and extract full flattened text."""
-    # Work on a copy to avoid mutating the original soup
-    soup = BeautifulSoup(str(soup), "lxml")
+    # Work on a copy to avoid mutating the original soup.
+    # Use copy.copy instead of re-parsing via str(soup) to avoid
+    # the overhead of serialisation + re-parse.
+    soup = copy.copy(soup)
 
     # Remove dangerous tags
     for tag_name in _DANGEROUS_TAGS:

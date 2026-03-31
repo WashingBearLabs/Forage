@@ -17,11 +17,18 @@ if _retrieval_root not in sys.path:
     sys.path.insert(0, _retrieval_root)
 
 from app import app  # noqa: E402
+from promptguard.classifier import PromptGuardClassifier  # noqa: E402
 
 
 @pytest.fixture
 def client() -> httpx.AsyncClient:
     """Create an async test client for the retrieval app."""
+    # Ensure app.state has the expected attributes (normally set by lifespan)
+    app.state.classifier = PromptGuardClassifier()
+    app.state.cache = None
+    app.state.config = {}
+    app.state.valkey_connected = False
+
     transport = httpx.ASGITransport(app=app)  # type: ignore[arg-type]
     return httpx.AsyncClient(transport=transport, base_url="http://test")
 

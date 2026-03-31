@@ -53,12 +53,14 @@ def _resolve_trust_tier(
     """Resolve the trust tier for *domain* from the provided lists.
 
     Lookup order: blocked -> trusted -> verified -> STANDARD.
+    All comparisons are case-insensitive.
     """
-    if domain in blocked_domains:
+    domain = domain.lower()
+    if domain in {d.lower() for d in blocked_domains}:
         return TrustTier.BLOCKED
-    if domain in trusted_domains:
+    if domain in {d.lower() for d in trusted_domains}:
         return TrustTier.TRUSTED
-    if domain in verified_domains:
+    if domain in {d.lower() for d in verified_domains}:
         return TrustTier.VERIFIED
     return TrustTier.STANDARD
 
@@ -109,6 +111,7 @@ def build_retrieved_content(
     blocked_domains: list[str],
     cache_hit: bool = False,
     cached_at: datetime | None = None,
+    content_type: str = "html",
 ) -> RetrievedContent:
     """Assemble a :class:`RetrievedContent` from pipeline stage results.
 
@@ -189,7 +192,7 @@ def build_retrieved_content(
         title=extraction.title,
         body=body,
         word_count=word_count,
-        content_type="html",
+        content_type=content_type,
         trust_score=trust_score,
         trust_tier=trust_tier,
         injection_detected=injection_detected,

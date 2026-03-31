@@ -7,6 +7,7 @@ prevent DNS rebinding attacks.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
 import socket
@@ -66,6 +67,10 @@ def _is_private_ip(ip_str: str) -> bool:
     if ip_str in ("0.0.0.0", "::"):
         return True
 
+    # Check IPv4-mapped IPv6 addresses (e.g. ::ffff:192.168.1.1)
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+        return any(addr.ipv4_mapped in net for net in _PRIVATE_NETWORKS_V4)
+
     if isinstance(addr, ipaddress.IPv4Address):
         return any(addr in net for net in _PRIVATE_NETWORKS_V4)
 
@@ -87,7 +92,7 @@ def _check_hostname_blocklist(hostname: str) -> None:
             )
 
 
-def validate_url(
+async def validate_url(
     url: str,
     blocked_domains: list[str] | None = None,
 ) -> tuple[str, str]:
@@ -114,6 +119,11 @@ def validate_url(
         If the URL cannot be parsed.
     """
     parsed = urlparse(url)
+
+    # Reject non-HTTP(S) schemes
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Unsupported URL scheme: {parsed.scheme}")
+
     hostname = parsed.hostname
     if not hostname:
         msg = f"Cannot extract hostname from URL: {url}"
@@ -131,9 +141,12 @@ def validate_url(
     # 2. Hostname-level rejection (localhost, .local)
     _check_hostname_blocklist(hostname)
 
-    # 3. DNS resolution
+    # 3. DNS resolution (offloaded to thread to avoid blocking the event loop)
+    loop = asyncio.get_running_loop()
     try:
-        addrinfos = socket.getaddrinfo(hostname, None)
+        addrinfos = await loop.run_in_executor(
+            None, socket.getaddrinfo, hostname, None,
+        )
     except socket.gaierror as exc:
         msg = f"DNS resolution failed for '{hostname}': {exc}"
         raise ValueError(msg) from exc

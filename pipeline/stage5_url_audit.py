@@ -120,7 +120,7 @@ async def fetch_url(
         for hop in range(max_redirects + 1):
             # Validate the current URL against RFC1918 + blocklist
             # and capture the resolved IP for DNS pinning
-            resolved_ip, hostname = validate_url(current_url, blocked_domains)
+            resolved_ip, hostname = await validate_url(current_url, blocked_domains)
 
             # DNS pinning: rewrite URL to connect to the validated IP
             # and set Host header to the original hostname. This prevents
@@ -142,10 +142,10 @@ async def fetch_url(
             if selected_ua:
                 headers["User-Agent"] = selected_ua
 
-            # Use verify=False for IP-based URLs since TLS cert is for
-            # the hostname, not the IP. The Host header ensures the
-            # server responds correctly. We've already validated the IP
-            # is not private, so this is safe.
+            # TLS verification remains enabled. The SNI hostname extension
+            # tells the server which certificate to present, resolving the
+            # hostname/IP mismatch caused by DNS pinning. The Host header
+            # ensures correct virtual-host routing.
             response = await client.get(
                 pinned_url,
                 headers=headers,
