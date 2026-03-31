@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-MODEL_ID = "meta-llama/Prompt-Guard-2-22M"
+MODEL_ID = "meta-llama/Llama-Prompt-Guard-2-22M"
 MAX_SEQ_LEN = 512
 CHUNK_OVERLAP = 64
 # Index of the "injection" class in the model's output logits

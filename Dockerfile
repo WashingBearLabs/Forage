@@ -25,8 +25,8 @@ RUN if [ -n "$HF_TOKEN" ]; then \
       python3 -c "import os; \
         from transformers import AutoTokenizer, AutoModelForSequenceClassification; \
         t = os.environ['HF_TOKEN']; \
-        AutoTokenizer.from_pretrained('meta-llama/Prompt-Guard-2-22M', token=t); \
-        AutoModelForSequenceClassification.from_pretrained('meta-llama/Prompt-Guard-2-22M', token=t)"; \
+        AutoTokenizer.from_pretrained('meta-llama/Llama-Prompt-Guard-2-22M', token=t); \
+        AutoModelForSequenceClassification.from_pretrained('meta-llama/Llama-Prompt-Guard-2-22M', token=t)"; \
     else \
       echo 'No HF_TOKEN provided — skipping PromptGuard model download'; \
     fi
