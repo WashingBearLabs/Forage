@@ -57,7 +57,7 @@ class TestSearxngDockerCompose:
         hc = svc.get("healthcheck", {})
         assert hc, "healthcheck must be defined"
         test_cmd = " ".join(hc["test"]) if isinstance(hc["test"], list) else hc["test"]
-        assert "healthz" in test_cmd
+        assert "localhost:8080" in test_cmd
 
     def test_searxng_no_host_port_binding(self, compose: dict) -> None:
         """SearXNG is internal only — no host port mapping."""
