@@ -18,28 +18,32 @@ RUN pip install --no-cache-dir \
 RUN pip install --no-cache-dir \
     torch --index-url https://download.pytorch.org/whl/cpu
 
+# Create non-root user and model cache dir BEFORE downloading
+RUN useradd -r -s /bin/false poppy \
+    && mkdir -p /app/model-cache \
+    && chown poppy:poppy /app/model-cache
+ENV HF_HOME=/app/model-cache
+
 # Pre-download PromptGuard 2 model (gated — requires HF_TOKEN build arg)
+# Model is saved to /app/model-cache which is readable by the poppy user
 ARG HF_TOKEN=""
-ENV HF_TOKEN=${HF_TOKEN}
 RUN if [ -n "$HF_TOKEN" ]; then \
-      python3 -c "import os; \
+      HF_TOKEN="$HF_TOKEN" python3 -c "import os; \
         from transformers import AutoTokenizer, AutoModelForSequenceClassification; \
         t = os.environ['HF_TOKEN']; \
         AutoTokenizer.from_pretrained('meta-llama/Llama-Prompt-Guard-2-22M', token=t); \
-        AutoModelForSequenceClassification.from_pretrained('meta-llama/Llama-Prompt-Guard-2-22M', token=t)"; \
+        AutoModelForSequenceClassification.from_pretrained('meta-llama/Llama-Prompt-Guard-2-22M', token=t)" \
+      && chown -R poppy:poppy /app/model-cache; \
     else \
       echo 'No HF_TOKEN provided — skipping PromptGuard model download'; \
     fi
-# Clear the token from the environment after download
-ENV HF_TOKEN=""
 
 # Copy application source
 COPY app.py models.py cache.py url_validator.py config.yaml ./
 COPY promptguard/ ./promptguard/
 COPY pipeline/ ./pipeline/
 
-# Non-root user
-RUN useradd -r -s /bin/false poppy
+# Switch to non-root user
 USER poppy
 
 EXPOSE 8020
