@@ -20,18 +20,21 @@ RUN pip install --no-cache-dir \
 
 # Pre-download PromptGuard 2 model (gated — requires HF_TOKEN build arg)
 ARG HF_TOKEN=""
+ENV HF_TOKEN=${HF_TOKEN}
 RUN if [ -n "$HF_TOKEN" ]; then \
-      HF_TOKEN=$HF_TOKEN python3 -c \
-        "from transformers import AutoTokenizer, AutoModelForSequenceClassification; \
-         AutoTokenizer.from_pretrained('meta-llama/Prompt-Guard-2-22M', token='$HF_TOKEN'); \
-         AutoModelForSequenceClassification.from_pretrained('meta-llama/Prompt-Guard-2-22M', token='$HF_TOKEN')"; \
+      python3 -c "import os; \
+        from transformers import AutoTokenizer, AutoModelForSequenceClassification; \
+        t = os.environ['HF_TOKEN']; \
+        AutoTokenizer.from_pretrained('meta-llama/Prompt-Guard-2-22M', token=t); \
+        AutoModelForSequenceClassification.from_pretrained('meta-llama/Prompt-Guard-2-22M', token=t)"; \
     else \
       echo 'No HF_TOKEN provided — skipping PromptGuard model download'; \
     fi
+# Clear the token from the environment after download
+ENV HF_TOKEN=""
 
 # Copy application source
-COPY app.py ./
-COPY models.py ./
+COPY app.py models.py cache.py url_validator.py config.yaml ./
 COPY promptguard/ ./promptguard/
 COPY pipeline/ ./pipeline/
 
