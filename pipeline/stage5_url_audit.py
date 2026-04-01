@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import random
+import ssl
 from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlparse, urlunparse
 
@@ -118,10 +119,15 @@ async def fetch_url(
     # Select a User-Agent for this fetch (one per top-level call)
     selected_ua = random.choice(ua_pool) if ua_pool else ""
 
+    # Use stdlib SSL context — httpx's default context builder doesn't
+    # always find system CA certs on all OpenSSL/Debian combinations.
+    ssl_context = ssl.create_default_context()
+
     response: httpx.Response | None = None
     async with httpx.AsyncClient(
         timeout=timeout,
         follow_redirects=False,
+        verify=ssl_context,
     ) as client:
         for hop in range(max_redirects + 1):
             # Validate the current URL against RFC1918 + blocklist

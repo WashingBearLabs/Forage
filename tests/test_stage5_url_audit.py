@@ -450,9 +450,10 @@ class TestTimeoutEnforcement:
 
                 await fetch_url("https://example.com/", timeout=15.0)
 
-                mock_client_cls.assert_called_once_with(
-                    timeout=15.0, follow_redirects=False,
-                )
+                call_kwargs = mock_client_cls.call_args
+                assert call_kwargs.kwargs["timeout"] == 15.0
+                assert call_kwargs.kwargs["follow_redirects"] is False
+                assert "verify" in call_kwargs.kwargs  # SSL context
 
     @pytest.mark.asyncio
     async def test_default_timeout_is_30(self) -> None:
