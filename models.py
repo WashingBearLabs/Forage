@@ -154,6 +154,13 @@ class RetrieveRequest(BaseModel):
         le=1.0,
         description="PromptGuard confidence threshold",
     )
+    promptguard_fail_closed: bool = Field(
+        default=True,
+        description=(
+            "When True, block content if PromptGuard is unavailable "
+            "(fail-closed). When False, allow with a trust penalty (fail-open)."
+        ),
+    )
 
 
 class SearchRequest(BaseModel):

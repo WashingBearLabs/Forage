@@ -229,6 +229,7 @@ async def run_retrieve_pipeline(
         classifier,
         threshold=request.promptguard_threshold,
         trust_tier=_trust_tier,
+        fail_closed=request.promptguard_fail_closed,
     )
 
     if pg_result.verdict == Stage3Verdict.INJECTION_DETECTED:
@@ -303,6 +304,7 @@ async def run_search_pipeline(
     config: dict[str, Any],
     classifier: Any = None,
     promptguard_threshold: float = 0.85,
+    fail_closed: bool = True,
 ) -> SearchResponse:
     """Run a web search through SearXNG with snippet sanitization.
 
@@ -380,6 +382,7 @@ async def run_search_pipeline(
                     classifier,
                     threshold=promptguard_threshold,
                     trust_tier="standard",
+                    fail_closed=fail_closed,
                 )
                 if pg_result.verdict == Stage3Verdict.INJECTION_DETECTED:
                     logger.info(

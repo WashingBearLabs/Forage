@@ -41,6 +41,7 @@ async def run_promptguard(
     classifier: PromptGuardClassifier | None,
     threshold: float = DEFAULT_THRESHOLD,
     trust_tier: TrustTier | str = "standard",
+    fail_closed: bool = True,
 ) -> PromptGuardResult:
     """Run PromptGuard classification on *text*.
 
@@ -57,6 +58,10 @@ async def run_promptguard(
     trust_tier:
         The resolved trust tier for the domain.  ``"trusted"`` domains
         skip ML classification entirely.
+    fail_closed:
+        When True (default), block content from STANDARD and UNTRUSTED
+        domains if the classifier is unavailable.  When False, allow
+        content through with a penalty (fail-open).
 
     Returns
     -------
@@ -76,11 +81,11 @@ async def run_promptguard(
             skipped=True,
         )
 
-    # Model not available — fail-closed for STANDARD and UNTRUSTED tiers
-    # to prevent unscanned content from bypassing ML detection.
-    # VERIFIED domains get a lenient fallback (higher base trust).
+    # Model not available — behavior depends on fail_closed setting and tier.
     if classifier is None or not classifier.loaded:
-        if tier_value in (TrustTier.STANDARD.value, TrustTier.UNTRUSTED.value):
+        if fail_closed and tier_value in (
+            TrustTier.STANDARD.value, TrustTier.UNTRUSTED.value,
+        ):
             logger.warning(
                 "PromptGuard unavailable — fail-closed for %s tier",
                 tier_value,
@@ -92,9 +97,10 @@ async def run_promptguard(
                 penalty=INJECTION_PENALTY,
                 skipped=True,
             )
-        # VERIFIED tier: degrade gracefully with a penalty.
+        # Fail-open or VERIFIED tier: degrade gracefully with a penalty.
         logger.warning(
-            "PromptGuard unavailable — lenient fallback for %s tier",
+            "PromptGuard unavailable — %s for %s tier",
+            "lenient fallback" if tier_value == TrustTier.VERIFIED.value else "fail-open",
             tier_value,
         )
         return PromptGuardResult(

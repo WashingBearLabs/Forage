@@ -234,6 +234,27 @@ class TestModelNotLoaded:
         assert result.skipped is True
         assert result.penalty == 0.0
 
+    @pytest.mark.asyncio
+    async def test_fail_open_standard_allows_through(self) -> None:
+        """Standard tier with fail_closed=False: allow with penalty."""
+        result = await run_promptguard(
+            "Any text.", classifier=None, fail_closed=False,
+        )
+        assert result.verdict == Stage3Verdict.SAFE
+        assert result.skipped is True
+        assert result.penalty == -0.1
+
+    @pytest.mark.asyncio
+    async def test_fail_open_untrusted_allows_through(self) -> None:
+        """Untrusted tier with fail_closed=False: allow with penalty."""
+        result = await run_promptguard(
+            "Any text.", classifier=None,
+            trust_tier="untrusted", fail_closed=False,
+        )
+        assert result.verdict == Stage3Verdict.SAFE
+        assert result.skipped is True
+        assert result.penalty == -0.1
+
 
 # ---------------------------------------------------------------------------
 # PromptGuardClassifier unit tests (mocked internals)
