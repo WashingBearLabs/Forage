@@ -161,4 +161,5 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
         body,
         searxng_url=SEARXNG_URL,
         config=request.app.state.config,
+        classifier=request.app.state.classifier,
     )

@@ -76,11 +76,26 @@ async def run_promptguard(
             skipped=True,
         )
 
-    # Model not available — degrade gracefully with a small penalty
-    # to signal reduced confidence (no ML scan was performed).
+    # Model not available — fail-closed for STANDARD and UNTRUSTED tiers
+    # to prevent unscanned content from bypassing ML detection.
+    # VERIFIED domains get a lenient fallback (higher base trust).
     if classifier is None or not classifier.loaded:
+        if tier_value in (TrustTier.STANDARD.value, TrustTier.UNTRUSTED.value):
+            logger.warning(
+                "PromptGuard unavailable — fail-closed for %s tier",
+                tier_value,
+            )
+            return PromptGuardResult(
+                verdict=Stage3Verdict.INJECTION_DETECTED,
+                score=0.0,
+                flagged_chunks=["[PromptGuard unavailable — content blocked as precaution]"],
+                penalty=INJECTION_PENALTY,
+                skipped=True,
+            )
+        # VERIFIED tier: degrade gracefully with a penalty.
         logger.warning(
-            "PromptGuard model not loaded — returning safe fallback with penalty"
+            "PromptGuard unavailable — lenient fallback for %s tier",
+            tier_value,
         )
         return PromptGuardResult(
             verdict=Stage3Verdict.SAFE,

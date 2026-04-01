@@ -34,17 +34,30 @@ class BlockedDomainError(Exception):
 # ---------------------------------------------------------------------------
 
 _PRIVATE_NETWORKS_V4 = [
-    ipaddress.IPv4Network("10.0.0.0/8"),
-    ipaddress.IPv4Network("172.16.0.0/12"),
-    ipaddress.IPv4Network("192.168.0.0/16"),
-    ipaddress.IPv4Network("127.0.0.0/8"),
-    ipaddress.IPv4Network("169.254.0.0/16"),
+    ipaddress.IPv4Network("0.0.0.0/8"),          # "This" network
+    ipaddress.IPv4Network("10.0.0.0/8"),          # Private (RFC1918)
+    ipaddress.IPv4Network("100.64.0.0/10"),       # Shared address space (CGN, RFC6598)
+    ipaddress.IPv4Network("127.0.0.0/8"),         # Loopback
+    ipaddress.IPv4Network("169.254.0.0/16"),      # Link-local
+    ipaddress.IPv4Network("172.16.0.0/12"),       # Private (RFC1918)
+    ipaddress.IPv4Network("192.0.0.0/24"),        # IETF protocol assignments
+    ipaddress.IPv4Network("192.0.2.0/24"),        # TEST-NET-1 (documentation)
+    ipaddress.IPv4Network("192.168.0.0/16"),      # Private (RFC1918)
+    ipaddress.IPv4Network("198.18.0.0/15"),       # Benchmarking (RFC2544)
+    ipaddress.IPv4Network("198.51.100.0/24"),     # TEST-NET-2 (documentation)
+    ipaddress.IPv4Network("203.0.113.0/24"),      # TEST-NET-3 (documentation)
+    ipaddress.IPv4Network("224.0.0.0/4"),         # Multicast
+    ipaddress.IPv4Network("240.0.0.0/4"),         # Reserved for future use
+    ipaddress.IPv4Network("255.255.255.255/32"),  # Broadcast
 ]
 
 _PRIVATE_NETWORKS_V6 = [
-    ipaddress.IPv6Network("::1/128"),
-    ipaddress.IPv6Network("fe80::/10"),
-    ipaddress.IPv6Network("fc00::/7"),
+    ipaddress.IPv6Network("::1/128"),             # Loopback
+    ipaddress.IPv6Network("fe80::/10"),           # Link-local
+    ipaddress.IPv6Network("fc00::/7"),            # Unique local address
+    ipaddress.IPv6Network("::ffff:0:0/96"),       # IPv4-mapped (caught by ipv4_mapped check too)
+    ipaddress.IPv6Network("2001:db8::/32"),       # Documentation
+    ipaddress.IPv6Network("ff00::/8"),            # Multicast
 ]
 
 _BLOCKED_HOSTNAMES = {"localhost"}

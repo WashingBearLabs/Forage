@@ -77,6 +77,14 @@ class TestIsPrivateIP:
             "169.254.0.1",
             "169.254.255.255",
             "0.0.0.0",
+            "100.64.0.1",         # CGN shared address (RFC6598)
+            "192.0.2.1",          # TEST-NET-1
+            "198.18.0.1",         # Benchmarking (RFC2544)
+            "198.51.100.1",       # TEST-NET-2
+            "203.0.113.1",        # TEST-NET-3
+            "224.0.0.1",          # Multicast
+            "240.0.0.1",          # Reserved
+            "255.255.255.255",    # Broadcast
         ],
     )
     def test_private_ipv4(self, ip: str) -> None:
@@ -101,7 +109,7 @@ class TestIsPrivateIP:
             "8.8.8.8",
             "93.184.216.34",
             "1.1.1.1",
-            "203.0.113.1",
+            "151.101.1.140",
             "2607:f8b0:4004:800::200e",
         ],
     )

@@ -187,23 +187,52 @@ class TestTrustedDomainSkip:
 
 
 class TestModelNotLoaded:
-    """When model is unavailable, stage should degrade gracefully."""
+    """When model is unavailable, behavior depends on trust tier."""
 
     @pytest.mark.asyncio
-    async def test_none_classifier(self) -> None:
+    async def test_none_classifier_standard_fails_closed(self) -> None:
+        """Standard tier: fail-closed when PromptGuard unavailable."""
         result = await run_promptguard("Any text.", classifier=None)
+        assert result.verdict == Stage3Verdict.INJECTION_DETECTED
+        assert result.skipped is True
+        assert result.penalty == -0.5
+
+    @pytest.mark.asyncio
+    async def test_classifier_not_loaded_standard_fails_closed(self) -> None:
+        """Standard tier: fail-closed when classifier not loaded."""
+        classifier = _make_mock_classifier(loaded=False)
+        result = await run_promptguard("Any text.", classifier)
+        assert result.verdict == Stage3Verdict.INJECTION_DETECTED
+        assert result.skipped is True
+
+    @pytest.mark.asyncio
+    async def test_untrusted_tier_fails_closed(self) -> None:
+        """Untrusted tier: fail-closed when PromptGuard unavailable."""
+        result = await run_promptguard(
+            "Any text.", classifier=None, trust_tier="untrusted",
+        )
+        assert result.verdict == Stage3Verdict.INJECTION_DETECTED
+        assert result.skipped is True
+
+    @pytest.mark.asyncio
+    async def test_verified_tier_lenient_fallback(self) -> None:
+        """Verified tier: lenient fallback with penalty when unavailable."""
+        result = await run_promptguard(
+            "Any text.", classifier=None, trust_tier="verified",
+        )
         assert result.verdict == Stage3Verdict.SAFE
-        assert result.score == 0.0
         assert result.skipped is True
         assert result.penalty == -0.1
 
     @pytest.mark.asyncio
-    async def test_classifier_not_loaded(self) -> None:
-        classifier = _make_mock_classifier(loaded=False)
-        result = await run_promptguard("Any text.", classifier)
+    async def test_trusted_tier_skips_entirely(self) -> None:
+        """Trusted tier: skipped regardless of model availability."""
+        result = await run_promptguard(
+            "Any text.", classifier=None, trust_tier="trusted",
+        )
         assert result.verdict == Stage3Verdict.SAFE
-        assert result.score == 0.0
         assert result.skipped is True
+        assert result.penalty == 0.0
 
 
 # ---------------------------------------------------------------------------

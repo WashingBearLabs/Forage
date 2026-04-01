@@ -32,7 +32,7 @@ from pipeline.stage1_pdf import detect_content_type, extract_pdf
 from pipeline.stage2_structural import StructuralScanResult, scan_structural
 from pipeline.stage3_promptguard import PromptGuardResult, run_promptguard
 from pipeline.stage4_structuring import build_retrieved_content
-from pipeline.stage5_url_audit import fetch_url
+from pipeline.stage5_url_audit import ContentTooLargeError, fetch_url
 from url_validator import BlockedDomainError, PrivateIPError, validate_url
 
 if TYPE_CHECKING:
@@ -159,6 +159,12 @@ async def run_retrieve_pipeline(
         raise PipelineError(
             error="fetch_timeout",
             reason=f"Request timed out fetching {request.url}",
+            request_id=request_id,
+        ) from exc
+    except ContentTooLargeError as exc:
+        raise PipelineError(
+            error="content_too_large",
+            reason=str(exc),
             request_id=request_id,
         ) from exc
     except Exception as exc:
@@ -295,13 +301,16 @@ async def run_search_pipeline(
     *,
     searxng_url: str = _DEFAULT_SEARXNG_URL,
     config: dict[str, Any],
+    classifier: Any = None,
+    promptguard_threshold: float = 0.85,
 ) -> SearchResponse:
     """Run a web search through SearXNG with snippet sanitization.
 
     Queries SearXNG for results, then sanitizes each snippet through
-    Stage 1 (HTML extraction) and Stage 2 (structural scan).
+    Stage 1 (HTML extraction), Stage 2 (structural scan), and
+    Stage 3 (PromptGuard ML classification).
 
-    - BLOCKED snippets are omitted entirely from the response.
+    - BLOCKED snippets (Stage 2 or 3) are omitted from the response.
     - SUSPICIOUS snippets are included with a ``suspicious`` flag.
     - SearXNG errors raise :class:`PipelineError` with a descriptive message.
     """
@@ -358,11 +367,29 @@ async def run_search_pipeline(
             scan = scan_structural(clean_snippet)
             if scan.verdict == Stage2Verdict.BLOCKED:
                 logger.info(
-                    "Omitting blocked search result: %s", url,
+                    "Omitting blocked search result (structural): %s", url,
                 )
                 continue
             if scan.verdict == Stage2Verdict.SUSPICIOUS:
                 suspicious = True
+
+            # Stage 3: PromptGuard ML classification on snippet text.
+            if clean_snippet and classifier is not None:
+                pg_result = await run_promptguard(
+                    clean_snippet,
+                    classifier,
+                    threshold=promptguard_threshold,
+                    trust_tier="standard",
+                )
+                if pg_result.verdict == Stage3Verdict.INJECTION_DETECTED:
+                    logger.info(
+                        "Omitting blocked search result (promptguard score=%.2f): %s",
+                        pg_result.score,
+                        url,
+                    )
+                    continue
+                if pg_result.score > 0.5:
+                    suspicious = True
         else:
             clean_snippet = ""
 

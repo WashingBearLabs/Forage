@@ -624,9 +624,14 @@ def client() -> httpx.AsyncClient:
     from app import app
     from promptguard.classifier import PromptGuardClassifier
 
-    # Ensure app.state has the required attributes for route handlers
+    # Ensure app.state has the required attributes for route handlers.
+    # Use a mock classifier that reports as loaded and returns safe,
+    # so search pipeline PromptGuard checks don't fail-closed in tests.
+    mock_classifier = MagicMock(spec=PromptGuardClassifier)
+    mock_classifier.loaded = True
+    mock_classifier.classify.return_value = (0.0, [])
     app.state.cache = None
-    app.state.classifier = PromptGuardClassifier()
+    app.state.classifier = mock_classifier
     app.state.config = _SAMPLE_CONFIG
     app.state.valkey_connected = False
 

@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_MAX_REDIRECTS = 5
+DEFAULT_MAX_CONTENT_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
+class ContentTooLargeError(Exception):
+    """Raised when the response body exceeds the maximum size."""
 DEFAULT_USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -73,6 +78,7 @@ async def fetch_url(
     user_agents: list[str] | None = None,
     timeout: float = DEFAULT_TIMEOUT,
     max_redirects: int = DEFAULT_MAX_REDIRECTS,
+    max_content_bytes: int = DEFAULT_MAX_CONTENT_BYTES,
 ) -> FetchResult:
     """Fetch a URL with RFC1918 validation, DNS pinning, and redirect tracking.
 
@@ -178,6 +184,26 @@ async def fetch_url(
         raise ValueError(msg)
 
     final_response: httpx.Response = response
+
+    # Enforce response body size limit to prevent OOM from
+    # malicious servers returning multi-gigabyte responses.
+    # Check Content-Length header first (fast reject), then
+    # verify actual body size (servers can lie about length).
+    content_length = final_response.headers.get("content-length")
+    if content_length and content_length.isdigit():
+        if int(content_length) > max_content_bytes:
+            raise ContentTooLargeError(
+                f"Content-Length {content_length} exceeds "
+                f"{max_content_bytes} bytes for URL: {url}"
+            )
+
+    response_body = final_response.content
+    if len(response_body) > max_content_bytes:
+        raise ContentTooLargeError(
+            f"Response body ({len(response_body)} bytes) exceeds "
+            f"{max_content_bytes} bytes for URL: {url}"
+        )
+
     source_domain = urlparse(url).netloc
     final_domain = urlparse(current_url).netloc
     domain_changed = (
@@ -188,7 +214,7 @@ async def fetch_url(
         final_url=current_url,
         redirect_chain=redirect_chain,
         domain_changed_on_redirect=domain_changed,
-        response_body=final_response.content,
+        response_body=response_body,
         content_type=final_response.headers.get("content-type", ""),
         status_code=final_response.status_code,
     )
