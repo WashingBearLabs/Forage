@@ -17,8 +17,9 @@ logger = logging.getLogger(__name__)
 MODEL_ID = "meta-llama/Llama-Prompt-Guard-2-22M"
 MAX_SEQ_LEN = 512
 CHUNK_OVERLAP = 64
-# Index of the "injection" class in the model's output logits
-_INJECTION_LABEL_INDEX = 2
+# Prompt-Guard-2-22M has 2 output classes: BENIGN (0) and INJECTION (1).
+# (The older 86M model had 3 classes with INDIRECT at index 1.)
+_INJECTION_LABEL_INDEX = 1
 
 
 class PromptGuardClassifier:
