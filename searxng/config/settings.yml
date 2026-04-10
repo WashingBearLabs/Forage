@@ -16,17 +16,49 @@ server:
   # Internal-only CSRF key for SearXNG's HTML UI.
   # We only call the JSON API — not security-critical.
   secret_key: "poppy-searxng-internal"
+  # Resolve botdetection warnings — trust Traefik forwarded headers
+  limiter: false
+  public_instance: false
+  method: "GET"
+  http_protocol_version: "1.1"
+  forwarded_for_header: "X-Forwarded-For"
+  real_ip_header: "X-Real-IP"
 
+# Reliable engines — override defaults from use_default_settings
+# DuckDuckGo (primary), Brave (fallback), StartPage (fallback), Mojeek (fallback)
+# Bing removed — aggressively blocks homelab IPs
 engines:
+  # --- Enabled: reliable general search engines ---
   - name: duckduckgo
     engine: duckduckgo
     disabled: false
-  - name: bing
-    engine: bing
-    disabled: false
+    timeout: 5
   - name: brave
     engine: brave
     disabled: false
+    timeout: 5
+  - name: startpage
+    engine: startpage
+    disabled: false
+    timeout: 5
+  - name: mojeek
+    engine: mojeek
+    disabled: false
+    timeout: 5
+
+  # --- Disabled: unreliable or problematic engines ---
+  - name: bing
+    engine: bing
+    disabled: true
+  - name: karmasearch
+    engine: karmasearch
+    disabled: true
+  - name: ahmia
+    engine: ahmia
+    disabled: true
+  - name: torch
+    engine: torch
+    disabled: true
 
 outgoing:
   request_timeout: 10
