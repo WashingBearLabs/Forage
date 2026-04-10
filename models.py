@@ -193,3 +193,7 @@ class SearchResponse(BaseModel):
     )
     request_id: str = Field(..., min_length=1, description="UUID for this search")
     query: str = Field(..., min_length=1, description="Original query")
+    unresponsive_engines: list[str] = Field(
+        default_factory=list,
+        description="SearXNG engines that failed to respond",
+    )

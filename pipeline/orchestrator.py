@@ -322,6 +322,7 @@ async def run_search_pipeline(
     # Request extra results to compensate for any BLOCKED omissions.
     fetch_limit = min(request.num_results * 2, 40)
     raw_results: list[dict[str, Any]] = []
+    unresponsive_engines: list[str] = []
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
@@ -335,6 +336,10 @@ async def run_search_pipeline(
             resp.raise_for_status()
             data = resp.json()
             raw_results = data.get("results", [])[:fetch_limit]
+            unresponsive_engines = [
+                e[0] if isinstance(e, (list, tuple)) else str(e)
+                for e in data.get("unresponsive_engines", [])
+            ]
     except httpx.HTTPStatusError as exc:
         raise PipelineError(
             error="searxng_error",
@@ -408,6 +413,7 @@ async def run_search_pipeline(
         results=sanitized_results,
         request_id=request_id,
         query=request.query,
+        unresponsive_engines=unresponsive_engines,
     )
 
 

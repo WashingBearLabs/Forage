@@ -425,12 +425,19 @@ async def test_retrieve_invalid_url_raises_pipeline_error(
 # ---------------------------------------------------------------------------
 
 
-def _mock_searxng_response(results: list[dict[str, Any]]) -> MagicMock:
+def _mock_searxng_response(
+    results: list[dict[str, Any]],
+    *,
+    unresponsive_engines: list[Any] | None = None,
+) -> MagicMock:
     """Build a mock httpx response from SearXNG."""
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = {"results": results}
+    data: dict[str, Any] = {"results": results}
+    if unresponsive_engines is not None:
+        data["unresponsive_engines"] = unresponsive_engines
+    mock_resp.json.return_value = data
     return mock_resp
 
 
@@ -593,6 +600,59 @@ async def test_search_empty_snippet_handled() -> None:
     assert len(result.results) == 1
     assert result.results[0].snippet == ""
     assert result.results[0].suspicious is False
+
+
+async def test_search_unresponsive_engines_forwarded() -> None:
+    """unresponsive_engines from SearXNG JSON are forwarded in SearchResponse."""
+    mock_resp = _mock_searxng_response(
+        results=[],
+        unresponsive_engines=["google", "bing", "duckduckgo"],
+    )
+
+    with _searxng_client_patch(mock_resp):
+        result = await run_search_pipeline(
+            _make_search_request(),
+            searxng_url="http://test-searxng:8080",
+            config=_SAMPLE_CONFIG,
+        )
+
+    assert result.results == []
+    assert result.unresponsive_engines == ["google", "bing", "duckduckgo"]
+
+
+async def test_search_no_unresponsive_engines_empty_list() -> None:
+    """When SearXNG omits unresponsive_engines, defaults to empty list."""
+    mock_resp = _mock_searxng_response(results=[])
+
+    with _searxng_client_patch(mock_resp):
+        result = await run_search_pipeline(
+            _make_search_request(),
+            searxng_url="http://test-searxng:8080",
+            config=_SAMPLE_CONFIG,
+        )
+
+    assert result.results == []
+    assert result.unresponsive_engines == []
+
+
+async def test_search_unresponsive_engines_tuple_format() -> None:
+    """SearXNG sometimes returns engines as [name, error] tuples."""
+    mock_resp = _mock_searxng_response(
+        results=[],
+        unresponsive_engines=[
+            ["google", "timeout"],
+            ["bing", "rate-limited"],
+        ],
+    )
+
+    with _searxng_client_patch(mock_resp):
+        result = await run_search_pipeline(
+            _make_search_request(),
+            searxng_url="http://test-searxng:8080",
+            config=_SAMPLE_CONFIG,
+        )
+
+    assert result.unresponsive_engines == ["google", "bing"]
 
 
 # ---------------------------------------------------------------------------
