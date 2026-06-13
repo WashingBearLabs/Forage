@@ -10,9 +10,7 @@ import httpx
 import pytest
 
 # Add the retrieval service root to sys.path so app is importable
-_retrieval_root = str(
-    Path(__file__).resolve().parents[2] / "services" / "retrieval"
-)
+_retrieval_root = str(Path(__file__).resolve().parents[2] / "services" / "retrieval")
 if _retrieval_root not in sys.path:
     sys.path.insert(0, _retrieval_root)
 
