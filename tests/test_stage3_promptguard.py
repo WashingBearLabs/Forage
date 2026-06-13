@@ -371,7 +371,7 @@ class TestHealthEndpoint:
 
     @pytest.fixture
     def client(self) -> httpx.AsyncClient:
-        from app import app
+        from retrieval_app import app
 
         transport = httpx.ASGITransport(app=app)  # type: ignore[arg-type]
         return httpx.AsyncClient(transport=transport, base_url="http://test")
@@ -381,12 +381,14 @@ class TestHealthEndpoint:
         self, client: httpx.AsyncClient,
     ) -> None:
         """Without model, promptguard_loaded should be False."""
-        from app import app as _app
+        from retrieval_app import app as _app
 
         # Ensure app.state has the expected attributes
         _app.state.classifier = PromptGuardClassifier()
         _app.state.valkey_connected = False
-        with patch("app._check_valkey", new_callable=AsyncMock, return_value=True):
+        with patch(
+            "retrieval_app._check_valkey", new_callable=AsyncMock, return_value=True
+        ):
             resp = await client.get("/health")
         data = resp.json()
         assert data["promptguard_loaded"] is False
@@ -396,13 +398,15 @@ class TestHealthEndpoint:
         self, client: httpx.AsyncClient,
     ) -> None:
         """When classifier reports loaded, health should reflect it."""
-        from app import app as _app
+        from retrieval_app import app as _app
 
         mock_clf = MagicMock(spec=PromptGuardClassifier)
         mock_clf.loaded = True
         _app.state.classifier = mock_clf
         _app.state.valkey_connected = False
-        with patch("app._check_valkey", new_callable=AsyncMock, return_value=True):
+        with patch(
+            "retrieval_app._check_valkey", new_callable=AsyncMock, return_value=True
+        ):
             resp = await client.get("/health")
         data = resp.json()
         assert data["promptguard_loaded"] is True

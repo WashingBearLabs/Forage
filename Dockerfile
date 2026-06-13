@@ -39,9 +39,12 @@ RUN if [ -n "$HF_TOKEN" ]; then \
     fi
 
 # Copy application source
-COPY app.py models.py cache.py url_validator.py config.yaml ./
+COPY retrieval_app.py models.py cache.py url_validator.py config.yaml ./
 COPY promptguard/ ./promptguard/
 COPY pipeline/ ./pipeline/
+
+# Build-time import check — fails fast if the module is broken before image ships
+RUN python -c "import retrieval_app"
 
 # Copy and set up entrypoint for vault integration
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
@@ -53,4 +56,4 @@ USER poppy
 EXPOSE 8020
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8020"]
+CMD ["uvicorn", "retrieval_app:app", "--host", "0.0.0.0", "--port", "8020"]

@@ -662,7 +662,7 @@ async def test_search_unresponsive_engines_tuple_format() -> None:
 
 def test_config_loading() -> None:
     """Config YAML loads correctly with expected keys."""
-    from app import _load_config
+    from retrieval_app import _load_config
 
     config = _load_config()
     assert "user_agents" in config
@@ -681,8 +681,8 @@ def test_config_loading() -> None:
 @pytest.fixture
 def client() -> httpx.AsyncClient:
     """Create an async test client for the retrieval app."""
-    from app import app
     from promptguard.classifier import PromptGuardClassifier
+    from retrieval_app import app
 
     # Ensure app.state has the required attributes for route handlers.
     # Use a mock classifier that reports as loaded and returns safe,
