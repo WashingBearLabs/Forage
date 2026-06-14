@@ -11,6 +11,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from ..compose_helpers import load_compose
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -18,15 +20,8 @@ class TestSearxngDockerCompose:
     """Validate poppy-searxng service in docker-compose.yml."""
 
     @pytest.fixture
-    def compose_text(self) -> str:
-        path = _REPO_ROOT / "docker-compose.yml"
-        assert path.exists()
-        return path.read_text()
-
-    @pytest.fixture
-    def compose(self) -> dict:
-        path = _REPO_ROOT / "docker-compose.yml"
-        return yaml.safe_load(path.read_text())
+    def compose(self) -> dict[str, object]:
+        return load_compose()
 
     def test_searxng_service_defined(self, compose: dict) -> None:
         assert "poppy-searxng" in compose["services"]
@@ -72,8 +67,9 @@ class TestSearxngDockerCompose:
     def test_searxng_poppy_labels(self, compose: dict) -> None:
         svc = compose["services"]["poppy-searxng"]
         labels = svc.get("labels", {})
-        assert labels.get("poppy.enabled") == "true"
-        assert labels.get("poppy.name") == "poppy-searxng"
+        # poppy.service identifies searxng in the service registry (no poppy.enabled)
+        assert labels.get("poppy.service") == "searxng"
+        assert labels.get("poppy.name") == "SearXNG"
         assert labels.get("poppy.tier") == "core"
         assert labels.get("poppy.category") == "retrieval"
         assert labels.get("poppy.health") == "/healthz"
