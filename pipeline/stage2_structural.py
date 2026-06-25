@@ -50,6 +50,7 @@ _SUSPICIOUS_CATEGORIES = frozenset({
     "encoded_payload",
     "suspicious_url",
     "exfil_beacon",
+    "envelope_breakout",
 })
 
 # Pattern registry: (category, compiled_regex)
@@ -137,6 +138,19 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # Plain markdown images without dynamic content are not flagged.
     ("exfil_beacon", re.compile(
         r"!\[.*?\]\(https?://[^)]*(?:\{\{|\$\{|%7[Bb])",
+    )),
+
+    # -- Envelope tag breakout --
+    # Any sequence that opens or closes a wrapper tag in fetched content is an
+    # active attempt to escape the trust envelope.  Covers literal '<', named
+    # entity '&lt'/'&lt;', numeric entity '&#60'/'&#60;', and hex entity
+    # '&#x3c'/'&#x3c;' (semicolon optional — browsers decode both forms).
+    # Flagged SUSPICIOUS so trust score is depressed and <retrieval_warning>
+    # is rendered.
+    ("envelope_breakout", re.compile(
+        r"(?:<|&lt;?|&#0*60;?|&#x0*3c;?)\s*/?\s*"
+        r"(?:retrieved_content|retrieval_note|retrieval_warning|retrieval_cache_note)\b",
+        re.IGNORECASE,
     )),
 ]
 
