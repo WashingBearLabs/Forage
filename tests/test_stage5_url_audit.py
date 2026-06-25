@@ -23,15 +23,14 @@ if _retrieval_root not in sys.path:
     sys.path.insert(0, _retrieval_root)
 
 from pipeline.stage5_url_audit import (  # noqa: E402
-    ContentTooLargeError,
     DEFAULT_TIMEOUT,
     DEFAULT_USER_AGENTS,
+    ContentTooLargeError,
     FetchResult,
     TooManyRedirectsError,
     fetch_url,
 )
 from url_validator import BlockedDomainError, PrivateIPError  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -101,17 +100,16 @@ class TestBasicFetch:
         with patch(
             "url_validator.socket.getaddrinfo",
             return_value=_fake_addrinfo(),
+        ), patch(
+            "httpx.AsyncClient.stream",
+            return_value=_make_stream_cm(
+                _make_response(
+                    content=b"Hello World",
+                    headers={"content-type": "text/plain"},
+                )
+            ),
         ):
-            with patch(
-                "httpx.AsyncClient.stream",
-                return_value=_make_stream_cm(
-                    _make_response(
-                        content=b"Hello World",
-                        headers={"content-type": "text/plain"},
-                    )
-                ),
-            ):
-                result = await fetch_url("https://example.com/page")
+            result = await fetch_url("https://example.com/page")
 
         assert result.final_url == "https://example.com/page"
         assert result.redirect_chain == []
@@ -125,12 +123,11 @@ class TestBasicFetch:
         with patch(
             "url_validator.socket.getaddrinfo",
             return_value=_fake_addrinfo(),
+        ), patch(
+            "httpx.AsyncClient.stream",
+            return_value=_make_stream_cm(_make_response()),
         ):
-            with patch(
-                "httpx.AsyncClient.stream",
-                return_value=_make_stream_cm(_make_response()),
-            ):
-                result = await fetch_url("https://example.com/")
+            result = await fetch_url("https://example.com/")
 
         with pytest.raises(AttributeError):
             result.final_url = "https://other.com"  # type: ignore[misc]
@@ -149,9 +146,8 @@ class TestRFC1918DuringFetch:
         with patch(
             "url_validator.socket.getaddrinfo",
             return_value=_fake_addrinfo("10.0.0.1"),
-        ):
-            with pytest.raises(PrivateIPError):
-                await fetch_url("https://internal.example.com/")
+        ), pytest.raises(PrivateIPError):
+            await fetch_url("https://internal.example.com/")
 
     @pytest.mark.asyncio
     async def test_localhost_rejected(self) -> None:
@@ -185,15 +181,14 @@ class TestBlocklistDuringFetch:
         with patch(
             "url_validator.socket.getaddrinfo",
             return_value=_fake_addrinfo(),
+        ), patch(
+            "httpx.AsyncClient.stream",
+            return_value=_make_stream_cm(_make_response()),
         ):
-            with patch(
-                "httpx.AsyncClient.stream",
-                return_value=_make_stream_cm(_make_response()),
-            ):
-                result = await fetch_url(
-                    "https://safe.example.com/",
-                    blocked_domains=["malware.example.com"],
-                )
+            result = await fetch_url(
+                "https://safe.example.com/",
+                blocked_domains=["malware.example.com"],
+            )
         assert result.status_code == 200
 
 
@@ -214,12 +209,11 @@ class TestRedirectTracking:
         with patch(
             "url_validator.socket.getaddrinfo",
             return_value=_fake_addrinfo(),
+        ), patch(
+            "httpx.AsyncClient.stream",
+            side_effect=_stream_side_effect(*responses),
         ):
-            with patch(
-                "httpx.AsyncClient.stream",
-                side_effect=_stream_side_effect(*responses),
-            ):
-                result = await fetch_url("https://example.com/start")
+            result = await fetch_url("https://example.com/start")
 
         assert result.redirect_chain == ["https://example.com/start"]
         assert result.final_url == "https://example.com/final"
@@ -236,12 +230,11 @@ class TestRedirectTracking:
         with patch(
             "url_validator.socket.getaddrinfo",
             return_value=_fake_addrinfo(),
+        ), patch(
+            "httpx.AsyncClient.stream",
+            side_effect=_stream_side_effect(*responses),
         ):
-            with patch(
-                "httpx.AsyncClient.stream",
-                side_effect=_stream_side_effect(*responses),
-            ):
-                result = await fetch_url("https://example.com/hop1")
+            result = await fetch_url("https://example.com/hop1")
 
         assert result.redirect_chain == [
             "https://example.com/hop1",
@@ -259,15 +252,13 @@ class TestRedirectTracking:
         with patch(
             "url_validator.socket.getaddrinfo",
             return_value=_fake_addrinfo(),
-        ):
-            with patch(
-                "httpx.AsyncClient.stream",
-                side_effect=_stream_side_effect(*responses),
-            ):
-                with pytest.raises(TooManyRedirectsError):
-                    await fetch_url(
-                        "https://example.com/start", max_redirects=3,
-                    )
+        ), patch(
+            "httpx.AsyncClient.stream",
+            side_effect=_stream_side_effect(*responses),
+        ), pytest.raises(TooManyRedirectsError):
+            await fetch_url(
+                "https://example.com/start", max_redirects=3,
+            )
 
     @pytest.mark.asyncio
     async def test_redirect_to_private_ip_rejected(self) -> None:
@@ -289,13 +280,11 @@ class TestRedirectTracking:
         with patch(
             "url_validator.socket.getaddrinfo",
             side_effect=_varying_addrinfo,
-        ):
-            with patch(
-                "httpx.AsyncClient.stream",
-                side_effect=_stream_side_effect(*responses),
-            ):
-                with pytest.raises(PrivateIPError):
-                    await fetch_url("https://legit.example.com/")
+        ), patch(
+            "httpx.AsyncClient.stream",
+            side_effect=_stream_side_effect(*responses),
+        ), pytest.raises(PrivateIPError):
+            await fetch_url("https://legit.example.com/")
 
     @pytest.mark.asyncio
     async def test_relative_redirect_resolved(self) -> None:
@@ -307,12 +296,11 @@ class TestRedirectTracking:
         with patch(
             "url_validator.socket.getaddrinfo",
             return_value=_fake_addrinfo(),
+        ), patch(
+            "httpx.AsyncClient.stream",
+            side_effect=_stream_side_effect(*responses),
         ):
-            with patch(
-                "httpx.AsyncClient.stream",
-                side_effect=_stream_side_effect(*responses),
-            ):
-                result = await fetch_url("https://example.com/old-path")
+            result = await fetch_url("https://example.com/old-path")
 
         assert result.final_url == "https://example.com/new-path"
         assert result.redirect_chain == ["https://example.com/old-path"]
@@ -335,12 +323,11 @@ class TestDomainChangeDetection:
         with patch(
             "url_validator.socket.getaddrinfo",
             return_value=_fake_addrinfo(),
+        ), patch(
+            "httpx.AsyncClient.stream",
+            side_effect=_stream_side_effect(*responses),
         ):
-            with patch(
-                "httpx.AsyncClient.stream",
-                side_effect=_stream_side_effect(*responses),
-            ):
-                result = await fetch_url("https://example.com/start")
+            result = await fetch_url("https://example.com/start")
 
         assert result.domain_changed_on_redirect is True
         assert result.final_url == "https://other-domain.com/page"
@@ -354,12 +341,11 @@ class TestDomainChangeDetection:
         with patch(
             "url_validator.socket.getaddrinfo",
             return_value=_fake_addrinfo(),
+        ), patch(
+            "httpx.AsyncClient.stream",
+            side_effect=_stream_side_effect(*responses),
         ):
-            with patch(
-                "httpx.AsyncClient.stream",
-                side_effect=_stream_side_effect(*responses),
-            ):
-                result = await fetch_url("https://example.com/start")
+            result = await fetch_url("https://example.com/start")
 
         assert result.domain_changed_on_redirect is False
 
@@ -368,12 +354,11 @@ class TestDomainChangeDetection:
         with patch(
             "url_validator.socket.getaddrinfo",
             return_value=_fake_addrinfo(),
+        ), patch(
+            "httpx.AsyncClient.stream",
+            return_value=_make_stream_cm(_make_response()),
         ):
-            with patch(
-                "httpx.AsyncClient.stream",
-                return_value=_make_stream_cm(_make_response()),
-            ):
-                result = await fetch_url("https://example.com/")
+            result = await fetch_url("https://example.com/")
 
         assert result.domain_changed_on_redirect is False
 
@@ -392,12 +377,11 @@ class TestUserAgentRotation:
         with patch(
             "url_validator.socket.getaddrinfo",
             return_value=_fake_addrinfo(),
-        ):
-            with patch("httpx.AsyncClient.stream", mock_stream):
-                await fetch_url(
-                    "https://example.com/",
-                    user_agents=["TestBot/1.0"],
-                )
+        ), patch("httpx.AsyncClient.stream", mock_stream):
+            await fetch_url(
+                "https://example.com/",
+                user_agents=["TestBot/1.0"],
+            )
 
         call_args = mock_stream.call_args
         assert call_args.kwargs.get("headers", {}).get("User-Agent") == "TestBot/1.0"
@@ -408,9 +392,8 @@ class TestUserAgentRotation:
         with patch(
             "url_validator.socket.getaddrinfo",
             return_value=_fake_addrinfo(),
-        ):
-            with patch("httpx.AsyncClient.stream", mock_stream):
-                await fetch_url("https://example.com/")
+        ), patch("httpx.AsyncClient.stream", mock_stream):
+            await fetch_url("https://example.com/")
 
         call_args = mock_stream.call_args
         ua = call_args.kwargs.get("headers", {}).get("User-Agent", "")
@@ -427,9 +410,8 @@ class TestUserAgentRotation:
             with patch(
                 "url_validator.socket.getaddrinfo",
                 return_value=_fake_addrinfo(),
-            ):
-                with patch("httpx.AsyncClient.stream", mock_stream):
-                    await fetch_url("https://example.com/")
+            ), patch("httpx.AsyncClient.stream", mock_stream):
+                await fetch_url("https://example.com/")
             call_args = mock_stream.call_args
             ua = call_args.kwargs.get("headers", {}).get("User-Agent", "")
             seen_uas.add(ua)
@@ -452,24 +434,23 @@ class TestTimeoutEnforcement:
         with patch(
             "url_validator.socket.getaddrinfo",
             return_value=_fake_addrinfo(),
-        ):
-            with patch(
-                "pipeline.stage5_url_audit.httpx.AsyncClient",
-            ) as mock_client_cls:
-                mock_client = MagicMock()
-                mock_client.stream.return_value = _make_stream_cm(
-                    _make_response()
-                )
-                mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-                mock_client.__aexit__ = AsyncMock(return_value=False)
-                mock_client_cls.return_value = mock_client
+        ), patch(
+            "pipeline.stage5_url_audit.httpx.AsyncClient",
+        ) as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.stream.return_value = _make_stream_cm(
+                _make_response()
+            )
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
 
-                await fetch_url("https://example.com/", timeout=15.0)
+            await fetch_url("https://example.com/", timeout=15.0)
 
-                call_kwargs = mock_client_cls.call_args
-                assert call_kwargs.kwargs["timeout"] == 15.0
-                assert call_kwargs.kwargs["follow_redirects"] is False
-                assert "verify" in call_kwargs.kwargs  # SSL context
+            call_kwargs = mock_client_cls.call_args
+            assert call_kwargs.kwargs["timeout"] == 15.0
+            assert call_kwargs.kwargs["follow_redirects"] is False
+            assert "verify" in call_kwargs.kwargs  # SSL context
 
     @pytest.mark.asyncio
     async def test_default_timeout_is_30(self) -> None:
@@ -486,13 +467,11 @@ class TestTimeoutEnforcement:
         with patch(
             "url_validator.socket.getaddrinfo",
             return_value=_fake_addrinfo(),
-        ):
-            with patch(
-                "httpx.AsyncClient.stream",
-                return_value=timeout_cm,
-            ):
-                with pytest.raises(httpx.TimeoutException):
-                    await fetch_url("https://slow.example.com/")
+        ), patch(
+            "httpx.AsyncClient.stream",
+            return_value=timeout_cm,
+        ), pytest.raises(httpx.TimeoutException):
+            await fetch_url("https://slow.example.com/")
 
 
 # ---------------------------------------------------------------------------

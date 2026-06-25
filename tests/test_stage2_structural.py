@@ -16,7 +16,6 @@ if _retrieval_root not in sys.path:
 
 from models import Stage2Verdict  # noqa: E402
 from pipeline.stage2_structural import (  # noqa: E402
-    FlaggedSpan,
     StructuralScanResult,
     scan_structural,
 )
