@@ -1,4 +1,4 @@
-"""Tests for Stage 5 -- URL audit, fetch, redirect tracking (US-009).
+"""Tests for Stage 5 -- URL audit, fetch, redirect tracking (US-009/US-003).
 
 All tests mock DNS resolution and HTTP responses — no real network calls.
 """
@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import socket
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -21,6 +23,7 @@ if _retrieval_root not in sys.path:
     sys.path.insert(0, _retrieval_root)
 
 from pipeline.stage5_url_audit import (  # noqa: E402
+    ContentTooLargeError,
     DEFAULT_TIMEOUT,
     DEFAULT_USER_AGENTS,
     FetchResult,
@@ -67,6 +70,24 @@ def _make_redirect(location: str, status_code: int = 301) -> httpx.Response:
     )
 
 
+def _make_stream_cm(response: httpx.Response) -> MagicMock:
+    """Async context manager mock that yields *response* on __aenter__."""
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=response)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return cm
+
+
+def _stream_side_effect(*responses: httpx.Response) -> Callable[..., Any]:
+    """side_effect for AsyncClient.stream — yields responses in call order."""
+    it = iter(responses)
+
+    def _effect(*_args: Any, **_kwargs: Any) -> MagicMock:
+        return _make_stream_cm(next(it))
+
+    return _effect
+
+
 # ---------------------------------------------------------------------------
 # Basic fetch — no redirects
 # ---------------------------------------------------------------------------
@@ -82,11 +103,12 @@ class TestBasicFetch:
             return_value=_fake_addrinfo(),
         ):
             with patch(
-                "httpx.AsyncClient.get",
-                new_callable=AsyncMock,
-                return_value=_make_response(
-                    content=b"Hello World",
-                    headers={"content-type": "text/plain"},
+                "httpx.AsyncClient.stream",
+                return_value=_make_stream_cm(
+                    _make_response(
+                        content=b"Hello World",
+                        headers={"content-type": "text/plain"},
+                    )
                 ),
             ):
                 result = await fetch_url("https://example.com/page")
@@ -105,9 +127,8 @@ class TestBasicFetch:
             return_value=_fake_addrinfo(),
         ):
             with patch(
-                "httpx.AsyncClient.get",
-                new_callable=AsyncMock,
-                return_value=_make_response(),
+                "httpx.AsyncClient.stream",
+                return_value=_make_stream_cm(_make_response()),
             ):
                 result = await fetch_url("https://example.com/")
 
@@ -166,9 +187,8 @@ class TestBlocklistDuringFetch:
             return_value=_fake_addrinfo(),
         ):
             with patch(
-                "httpx.AsyncClient.get",
-                new_callable=AsyncMock,
-                return_value=_make_response(),
+                "httpx.AsyncClient.stream",
+                return_value=_make_stream_cm(_make_response()),
             ):
                 result = await fetch_url(
                     "https://safe.example.com/",
@@ -196,9 +216,8 @@ class TestRedirectTracking:
             return_value=_fake_addrinfo(),
         ):
             with patch(
-                "httpx.AsyncClient.get",
-                new_callable=AsyncMock,
-                side_effect=responses,
+                "httpx.AsyncClient.stream",
+                side_effect=_stream_side_effect(*responses),
             ):
                 result = await fetch_url("https://example.com/start")
 
@@ -219,9 +238,8 @@ class TestRedirectTracking:
             return_value=_fake_addrinfo(),
         ):
             with patch(
-                "httpx.AsyncClient.get",
-                new_callable=AsyncMock,
-                side_effect=responses,
+                "httpx.AsyncClient.stream",
+                side_effect=_stream_side_effect(*responses),
             ):
                 result = await fetch_url("https://example.com/hop1")
 
@@ -243,9 +261,8 @@ class TestRedirectTracking:
             return_value=_fake_addrinfo(),
         ):
             with patch(
-                "httpx.AsyncClient.get",
-                new_callable=AsyncMock,
-                side_effect=responses,
+                "httpx.AsyncClient.stream",
+                side_effect=_stream_side_effect(*responses),
             ):
                 with pytest.raises(TooManyRedirectsError):
                     await fetch_url(
@@ -274,9 +291,8 @@ class TestRedirectTracking:
             side_effect=_varying_addrinfo,
         ):
             with patch(
-                "httpx.AsyncClient.get",
-                new_callable=AsyncMock,
-                side_effect=responses,
+                "httpx.AsyncClient.stream",
+                side_effect=_stream_side_effect(*responses),
             ):
                 with pytest.raises(PrivateIPError):
                     await fetch_url("https://legit.example.com/")
@@ -293,9 +309,8 @@ class TestRedirectTracking:
             return_value=_fake_addrinfo(),
         ):
             with patch(
-                "httpx.AsyncClient.get",
-                new_callable=AsyncMock,
-                side_effect=responses,
+                "httpx.AsyncClient.stream",
+                side_effect=_stream_side_effect(*responses),
             ):
                 result = await fetch_url("https://example.com/old-path")
 
@@ -322,9 +337,8 @@ class TestDomainChangeDetection:
             return_value=_fake_addrinfo(),
         ):
             with patch(
-                "httpx.AsyncClient.get",
-                new_callable=AsyncMock,
-                side_effect=responses,
+                "httpx.AsyncClient.stream",
+                side_effect=_stream_side_effect(*responses),
             ):
                 result = await fetch_url("https://example.com/start")
 
@@ -342,9 +356,8 @@ class TestDomainChangeDetection:
             return_value=_fake_addrinfo(),
         ):
             with patch(
-                "httpx.AsyncClient.get",
-                new_callable=AsyncMock,
-                side_effect=responses,
+                "httpx.AsyncClient.stream",
+                side_effect=_stream_side_effect(*responses),
             ):
                 result = await fetch_url("https://example.com/start")
 
@@ -357,9 +370,8 @@ class TestDomainChangeDetection:
             return_value=_fake_addrinfo(),
         ):
             with patch(
-                "httpx.AsyncClient.get",
-                new_callable=AsyncMock,
-                return_value=_make_response(),
+                "httpx.AsyncClient.stream",
+                return_value=_make_stream_cm(_make_response()),
             ):
                 result = await fetch_url("https://example.com/")
 
@@ -376,31 +388,31 @@ class TestUserAgentRotation:
 
     @pytest.mark.asyncio
     async def test_custom_ua_used(self) -> None:
-        mock_get = AsyncMock(return_value=_make_response())
+        mock_stream = MagicMock(return_value=_make_stream_cm(_make_response()))
         with patch(
             "url_validator.socket.getaddrinfo",
             return_value=_fake_addrinfo(),
         ):
-            with patch("httpx.AsyncClient.get", mock_get):
+            with patch("httpx.AsyncClient.stream", mock_stream):
                 await fetch_url(
                     "https://example.com/",
                     user_agents=["TestBot/1.0"],
                 )
 
-        call_args = mock_get.call_args
+        call_args = mock_stream.call_args
         assert call_args.kwargs.get("headers", {}).get("User-Agent") == "TestBot/1.0"
 
     @pytest.mark.asyncio
     async def test_default_ua_from_pool(self) -> None:
-        mock_get = AsyncMock(return_value=_make_response())
+        mock_stream = MagicMock(return_value=_make_stream_cm(_make_response()))
         with patch(
             "url_validator.socket.getaddrinfo",
             return_value=_fake_addrinfo(),
         ):
-            with patch("httpx.AsyncClient.get", mock_get):
+            with patch("httpx.AsyncClient.stream", mock_stream):
                 await fetch_url("https://example.com/")
 
-        call_args = mock_get.call_args
+        call_args = mock_stream.call_args
         ua = call_args.kwargs.get("headers", {}).get("User-Agent", "")
         assert ua in DEFAULT_USER_AGENTS
 
@@ -409,14 +421,16 @@ class TestUserAgentRotation:
         """Multiple calls should eventually select different UAs."""
         seen_uas: set[str] = set()
         for _ in range(50):
-            mock_get = AsyncMock(return_value=_make_response())
+            mock_stream = MagicMock(
+                return_value=_make_stream_cm(_make_response())
+            )
             with patch(
                 "url_validator.socket.getaddrinfo",
                 return_value=_fake_addrinfo(),
             ):
-                with patch("httpx.AsyncClient.get", mock_get):
+                with patch("httpx.AsyncClient.stream", mock_stream):
                     await fetch_url("https://example.com/")
-            call_args = mock_get.call_args
+            call_args = mock_stream.call_args
             ua = call_args.kwargs.get("headers", {}).get("User-Agent", "")
             seen_uas.add(ua)
 
@@ -442,8 +456,10 @@ class TestTimeoutEnforcement:
             with patch(
                 "pipeline.stage5_url_audit.httpx.AsyncClient",
             ) as mock_client_cls:
-                mock_client = AsyncMock()
-                mock_client.get = AsyncMock(return_value=_make_response())
+                mock_client = MagicMock()
+                mock_client.stream.return_value = _make_stream_cm(
+                    _make_response()
+                )
                 mock_client.__aenter__ = AsyncMock(return_value=mock_client)
                 mock_client.__aexit__ = AsyncMock(return_value=False)
                 mock_client_cls.return_value = mock_client
@@ -462,17 +478,125 @@ class TestTimeoutEnforcement:
     @pytest.mark.asyncio
     async def test_timeout_exception_propagates(self) -> None:
         """httpx.TimeoutException should propagate to caller."""
+        timeout_cm = MagicMock()
+        timeout_cm.__aenter__ = AsyncMock(
+            side_effect=httpx.TimeoutException("timed out")
+        )
+        timeout_cm.__aexit__ = AsyncMock(return_value=False)
         with patch(
             "url_validator.socket.getaddrinfo",
             return_value=_fake_addrinfo(),
         ):
             with patch(
-                "httpx.AsyncClient.get",
-                new_callable=AsyncMock,
-                side_effect=httpx.TimeoutException("timed out"),
+                "httpx.AsyncClient.stream",
+                return_value=timeout_cm,
             ):
                 with pytest.raises(httpx.TimeoutException):
                     await fetch_url("https://slow.example.com/")
+
+
+# ---------------------------------------------------------------------------
+# Streaming byte-cap (US-003)
+# ---------------------------------------------------------------------------
+
+
+class TestStreamingByteCap:
+    """Incremental byte cap must abort oversized responses mid-stream."""
+
+    @pytest.mark.asyncio
+    async def test_body_exceeds_cap_raises(self) -> None:
+        """Response body exceeding max_content_bytes raises ContentTooLargeError."""
+        large_body = b"X" * 200
+        with (
+            patch("url_validator.socket.getaddrinfo", return_value=_fake_addrinfo()),
+            patch(
+                "httpx.AsyncClient.stream",
+                return_value=_make_stream_cm(_make_response(content=large_body)),
+            ),
+            pytest.raises(ContentTooLargeError),
+        ):
+            await fetch_url("https://example.com/", max_content_bytes=100)
+
+    @pytest.mark.asyncio
+    async def test_body_exactly_at_limit_succeeds(self) -> None:
+        """Body exactly at max_content_bytes must succeed (cap is exclusive)."""
+        body = b"A" * 100
+        with (
+            patch("url_validator.socket.getaddrinfo", return_value=_fake_addrinfo()),
+            patch(
+                "httpx.AsyncClient.stream",
+                return_value=_make_stream_cm(_make_response(content=body)),
+            ),
+        ):
+            result = await fetch_url("https://example.com/", max_content_bytes=100)
+        assert result.response_body == body
+
+    @pytest.mark.asyncio
+    async def test_content_length_fast_reject(self) -> None:
+        """Honest Content-Length over cap is rejected before streaming starts."""
+        with (
+            patch("url_validator.socket.getaddrinfo", return_value=_fake_addrinfo()),
+            patch(
+                "httpx.AsyncClient.stream",
+                return_value=_make_stream_cm(
+                    _make_response(
+                        content=b"body",
+                        headers={"content-length": "9999999"},
+                    )
+                ),
+            ),
+            pytest.raises(ContentTooLargeError, match="Content-Length"),
+        ):
+            await fetch_url("https://example.com/", max_content_bytes=100)
+
+    @pytest.mark.asyncio
+    async def test_redirect_hop_large_body_not_buffered(self) -> None:
+        """Redirect hop body is never read — a large redirect body does not OOM.
+
+        The redirect response is exited without calling aiter_bytes(); only
+        the Location header is consumed. Setting max_content_bytes very small
+        confirms the 1 MB redirect body does not trigger ContentTooLargeError.
+        """
+        redirect_resp = httpx.Response(
+            status_code=301,
+            content=b"R" * 1_000_000,  # 1 MB — would fail if buffered
+            headers={
+                "location": "https://example.com/final",
+                "content-type": "text/html",
+            },
+            request=httpx.Request("GET", "https://example.com/start"),
+        )
+        final_resp = _make_response(content=b"Final")
+
+        with (
+            patch("url_validator.socket.getaddrinfo", return_value=_fake_addrinfo()),
+            patch(
+                "httpx.AsyncClient.stream",
+                side_effect=_stream_side_effect(redirect_resp, final_resp),
+            ),
+        ):
+            result = await fetch_url(
+                "https://example.com/start",
+                max_content_bytes=50,  # 1 MB redirect would exceed this
+            )
+
+        assert result.response_body == b"Final"
+        assert result.redirect_chain == ["https://example.com/start"]
+        assert result.final_url == "https://example.com/final"
+
+    @pytest.mark.asyncio
+    async def test_small_body_within_cap_succeeds(self) -> None:
+        """Normal small response is returned correctly."""
+        with (
+            patch("url_validator.socket.getaddrinfo", return_value=_fake_addrinfo()),
+            patch(
+                "httpx.AsyncClient.stream",
+                return_value=_make_stream_cm(_make_response(content=b"hello")),
+            ),
+        ):
+            result = await fetch_url("https://example.com/", max_content_bytes=1024)
+        assert result.response_body == b"hello"
+        assert result.status_code == 200
 
 
 # ---------------------------------------------------------------------------

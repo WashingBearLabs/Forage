@@ -123,7 +123,10 @@ async def fetch_url(
     # always find system CA certs on all OpenSSL/Debian combinations.
     ssl_context = ssl.create_default_context()
 
-    response: httpx.Response | None = None
+    response_body = b""
+    final_status_code = 0
+    final_content_type = ""
+
     async with httpx.AsyncClient(
         timeout=timeout,
         follow_redirects=False,
@@ -158,69 +161,70 @@ async def fetch_url(
             # tells the server which certificate to present, resolving the
             # hostname/IP mismatch caused by DNS pinning. The Host header
             # ensures correct virtual-host routing.
-            response = await client.get(
+            #
+            # Streaming mode: headers are read immediately; body is only
+            # read on demand via aiter_bytes(). This prevents a malicious
+            # server from OOM-ing the sidecar by sending a multi-GB body
+            # on any hop (redirect or final) before any size check runs.
+            async with client.stream(
+                "GET",
                 pinned_url,
                 headers=headers,
                 extensions={"sni_hostname": hostname},
-            )
+            ) as response:
+                if response.is_redirect:
+                    redirect_chain.append(current_url)
+                    location = response.headers.get("location", "")
+                    if location:
+                        # Resolve relative redirects
+                        current_url = urljoin(current_url, location)
+                        if hop == max_redirects - 1:
+                            raise TooManyRedirectsError(
+                                f"Exceeded {max_redirects} redirects"
+                                f" for URL: {url}"
+                            )
+                        # Exit streaming context without reading body.
+                        # Closes the connection, discarding any body the
+                        # server is sending — no bytes are buffered.
+                        continue
+                    # No Location header — fall through and treat as final.
 
-            if response.is_redirect:
-                redirect_chain.append(current_url)
-                location = response.headers.get("location", "")
-                if not location:
-                    # No Location header — treat as final response
-                    break
-                # Resolve relative redirects
-                current_url = urljoin(current_url, location)
-
-                # Check if we've exceeded max redirects
-                if hop == max_redirects - 1:
-                    # One more validation on the final redirect target
-                    # before raising the error
-                    raise TooManyRedirectsError(
-                        f"Exceeded {max_redirects} redirects for URL: {url}"
+                # Final response (non-redirect, or redirect with no Location).
+                # Fast-reject on Content-Length before reading any body bytes.
+                cl = response.headers.get("content-length")
+                if cl and cl.isdigit() and int(cl) > max_content_bytes:
+                    raise ContentTooLargeError(
+                        f"Content-Length {cl} exceeds "
+                        f"{max_content_bytes} bytes for URL: {url}"
                     )
-                continue
 
-            # Not a redirect — we have our final response
-            break
+                # Stream body with incremental byte cap. Raises and closes
+                # the response the moment the running total exceeds the cap.
+                chunks: list[bytes] = []
+                running = 0
+                async for chunk in response.aiter_bytes():
+                    running += len(chunk)
+                    if running > max_content_bytes:
+                        raise ContentTooLargeError(
+                            f"Response body exceeds "
+                            f"{max_content_bytes} bytes for URL: {url}"
+                        )
+                    chunks.append(chunk)
 
-    if response is None:  # pragma: no cover — unreachable when max_redirects >= 0
-        msg = f"No response received for URL: {url}"
-        raise ValueError(msg)
-
-    final_response: httpx.Response = response
-
-    # Enforce response body size limit to prevent OOM from
-    # malicious servers returning multi-gigabyte responses.
-    # Check Content-Length header first (fast reject), then
-    # verify actual body size (servers can lie about length).
-    content_length = final_response.headers.get("content-length")
-    if content_length and content_length.isdigit():
-        if int(content_length) > max_content_bytes:
-            raise ContentTooLargeError(
-                f"Content-Length {content_length} exceeds "
-                f"{max_content_bytes} bytes for URL: {url}"
-            )
-
-    response_body = final_response.content
-    if len(response_body) > max_content_bytes:
-        raise ContentTooLargeError(
-            f"Response body ({len(response_body)} bytes) exceeds "
-            f"{max_content_bytes} bytes for URL: {url}"
-        )
+                response_body = b"".join(chunks)
+                final_status_code = response.status_code
+                final_content_type = response.headers.get("content-type", "")
+                break
 
     source_domain = urlparse(url).netloc
     final_domain = urlparse(current_url).netloc
-    domain_changed = (
-        bool(redirect_chain) and source_domain != final_domain
-    )
+    domain_changed = bool(redirect_chain) and source_domain != final_domain
 
     return FetchResult(
         final_url=current_url,
         redirect_chain=redirect_chain,
         domain_changed_on_redirect=domain_changed,
         response_body=response_body,
-        content_type=final_response.headers.get("content-type", ""),
-        status_code=final_response.status_code,
+        content_type=final_content_type,
+        status_code=final_status_code,
     )
