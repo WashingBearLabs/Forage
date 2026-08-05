@@ -32,7 +32,7 @@ from models import (
     TrustTier,
     UploadProvenance,
 )
-from pipeline.stage1_extraction import extract_html
+from pipeline.stage1_extraction import ExtractionResult, extract_html
 from pipeline.stage1_pdf import PDFExtractionError, detect_content_type, extract_pdf
 from pipeline.stage1_upload import (
     UnsupportedUploadFormatError,
@@ -42,8 +42,10 @@ from pipeline.stage1_upload import (
 from pipeline.stage2_structural import scan_structural
 from pipeline.stage3_promptguard import PromptGuardResult, run_promptguard
 from pipeline.stage4_structuring import (
+    SanitizationResult,
     build_extracted_content,
     build_retrieved_content,
+    structure_sanitization_result,
 )
 from pipeline.stage5_url_audit import ContentTooLargeError, fetch_url
 from url_validator import BlockedDomainError, PrivateIPError, validate_url
@@ -80,6 +82,46 @@ class UnsupportedFormatError(PipelineError):
 
     def __init__(self, reason: str, request_id: str) -> None:
         super().__init__("unsupported_format", reason, request_id)
+
+
+async def sanitize_and_structure(
+    *,
+    extraction: ExtractionResult,
+    trust_tier: TrustTier,
+    classifier: PromptGuardClassifier | None,
+    promptguard_threshold: float,
+    promptguard_fail_closed: bool,
+    extract_mode: str,
+    content_type: str,
+    sanitizer_revision: str = "",
+    domain_changed_on_redirect: bool = False,
+) -> SanitizationResult:
+    """Run the shared Stage 2-4 gauntlet for any extracted content source."""
+    structural = scan_structural(extraction.raw_text)
+    promptguard = PromptGuardResult(
+        verdict=Stage3Verdict.SAFE,
+        score=0.0,
+        skipped=True,
+    )
+    if structural.verdict != Stage2Verdict.BLOCKED:
+        promptguard = await run_promptguard(
+            extraction.raw_text,
+            classifier,
+            threshold=promptguard_threshold,
+            trust_tier=trust_tier,
+            fail_closed=promptguard_fail_closed,
+        )
+
+    return structure_sanitization_result(
+        extraction=extraction,
+        structural=structural,
+        promptguard=promptguard,
+        trust_tier=trust_tier,
+        extract_mode=extract_mode,
+        content_type=content_type,
+        sanitizer_revision=sanitizer_revision,
+        domain_changed_on_redirect=domain_changed_on_redirect,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -227,104 +269,47 @@ async def run_retrieve_pipeline(
         html_text = fetch_result.response_body.decode("utf-8", errors="replace")
         extraction = extract_html(html_text, request.url)
 
-    # -- Step 5: Stage 2 structural scan --
-    structural = scan_structural(extraction.raw_text)
-
     # Determine domain from final URL
     parsed_final = urlparse(fetch_result.final_url)
     domain = parsed_final.hostname or ""
-
-    if structural.verdict == Stage2Verdict.BLOCKED:
-        # Hard gate: return quarantine response
+    trust_tier = TrustTier(
+        _resolve_request_trust_tier(
+            domain,
+            request.trusted_domains,
+            request.verified_domains,
+            blocked_domains,
+        )
+    )
+    sanitization = await sanitize_and_structure(
+        extraction=extraction,
+        trust_tier=trust_tier,
+        classifier=classifier,
+        promptguard_threshold=request.promptguard_threshold,
+        promptguard_fail_closed=request.promptguard_fail_closed,
+        extract_mode=request.extract_mode,
+        content_type=content_type,
+        domain_changed_on_redirect=fetch_result.domain_changed_on_redirect,
+    )
+    if sanitization.injection_detected:
         logger.warning(
-            "Stage 2 BLOCKED for %s — returning quarantine",
+            "Content quarantined for %s — returning content-free response",
             request.url,
         )
-        # Build a PromptGuard placeholder (skipped)
-        pg_result = PromptGuardResult(
-            verdict=Stage3Verdict.SAFE,
-            score=0.0,
-            skipped=True,
-        )
-        content = build_retrieved_content(
-            request_id=request_id,
-            source_url=request.url,
-            final_url=fetch_result.final_url,
-            domain=domain,
-            extract_mode=request.extract_mode,
-            extraction=extraction,
-            structural=structural,
-            promptguard=pg_result,
-            redirect_chain=fetch_result.redirect_chain,
-            domain_changed_on_redirect=fetch_result.domain_changed_on_redirect,
-            trusted_domains=request.trusted_domains,
-            verified_domains=request.verified_domains,
-            blocked_domains=blocked_domains,
-            content_type=content_type,
-        )
-        return content.model_copy(update={"injection_detected": True})
-
-    # -- Step 6: Stage 3 PromptGuard --
-    # Resolve trust tier for skip logic
-    _trust_tier = _resolve_request_trust_tier(
-        domain,
-        request.trusted_domains,
-        request.verified_domains,
-        blocked_domains,
-    )
-    pg_result = await run_promptguard(
-        extraction.raw_text,
-        classifier,
-        threshold=request.promptguard_threshold,
-        trust_tier=_trust_tier,
-        fail_closed=request.promptguard_fail_closed,
-    )
-
-    if pg_result.verdict == Stage3Verdict.INJECTION_DETECTED:
-        logger.warning(
-            "Stage 3 INJECTION_DETECTED for %s — returning quarantine",
-            request.url,
-        )
-        content = build_retrieved_content(
-            request_id=request_id,
-            source_url=request.url,
-            final_url=fetch_result.final_url,
-            domain=domain,
-            extract_mode=request.extract_mode,
-            extraction=extraction,
-            structural=structural,
-            promptguard=pg_result,
-            redirect_chain=fetch_result.redirect_chain,
-            domain_changed_on_redirect=fetch_result.domain_changed_on_redirect,
-            trusted_domains=request.trusted_domains,
-            verified_domains=request.verified_domains,
-            blocked_domains=blocked_domains,
-            content_type=content_type,
-        )
-        return content.model_copy(update={"injection_detected": True})
-
-    # -- Step 7: Stage 4 structuring --
     content = build_retrieved_content(
         request_id=request_id,
         source_url=request.url,
         final_url=fetch_result.final_url,
         domain=domain,
-        extract_mode=request.extract_mode,
-        extraction=extraction,
-        structural=structural,
-        promptguard=pg_result,
+        sanitization=sanitization,
         redirect_chain=fetch_result.redirect_chain,
         domain_changed_on_redirect=fetch_result.domain_changed_on_redirect,
-        trusted_domains=request.trusted_domains,
-        verified_domains=request.verified_domains,
-        blocked_domains=blocked_domains,
-        content_type=content_type,
     )
 
-    # -- Step 8: Cache result --
+    # -- Step 8: Cache safe result --
     if (
         cache is not None
         and request.cache_ttl_hours > 0
+        and not content.injection_detected
         and content.trust_tier
         not in {
             TrustTier.UNTRUSTED,
@@ -377,31 +362,21 @@ async def run_extract_pipeline(
     except PDFExtractionError as exc:
         raise UnsupportedFormatError(str(exc), request_id) from exc
 
-    structural = scan_structural(extraction.raw_text)
-    if structural.verdict == Stage2Verdict.BLOCKED:
-        promptguard = PromptGuardResult(
-            verdict=Stage3Verdict.SAFE,
-            score=0.0,
-            skipped=True,
-        )
-    else:
-        promptguard = await run_promptguard(
-            extraction.raw_text,
-            classifier,
-            threshold=promptguard_threshold,
-            trust_tier=TrustTier.UNTRUSTED,
-            fail_closed=True,
-        )
+    sanitization = await sanitize_and_structure(
+        extraction=extraction,
+        trust_tier=TrustTier.UNTRUSTED,
+        classifier=classifier,
+        promptguard_threshold=promptguard_threshold,
+        promptguard_fail_closed=True,
+        extract_mode=extract_mode,
+        content_type=content_type,
+        sanitizer_revision=sanitizer_revision,
+    )
 
     return build_extracted_content(
         request_id=request_id,
         provenance=UploadProvenance(filename=filename, mime_hint=mime_hint),
-        extraction=extraction,
-        structural=structural,
-        promptguard=promptguard,
-        extract_mode=extract_mode,
-        content_type=content_type,
-        sanitizer_revision=sanitizer_revision,
+        sanitization=sanitization,
     )
 
 

@@ -1,8 +1,8 @@
 """Stage 4 -- Content structuring and trust score computation.
 
-Assembles the final :class:`RetrievedContent` object from the outputs of
-Stages 1-3 plus redirect/domain metadata.  Computes a composite trust
-score and resolves the domain trust tier.
+Assembles final response objects from the outputs of Stages 1-3 plus
+source metadata. Computes a composite trust score using the trust tier
+resolved by the source-specific orchestrator.
 
 Summary mode uses :func:`extract_summary` from the smart extraction
 module to preserve high-signal content (statistics, quotes, references)
@@ -40,6 +40,9 @@ _BASE_SCORES: dict[TrustTier, float] = {
 }
 
 _REDIRECT_DOMAIN_CHANGE_PENALTY = -0.1
+_QUARANTINE_BODY = "Content quarantined due to potential prompt injection."
+_STRUCTURAL_BLOCK_DIAGNOSTIC = "structural_injection_detected"
+_PROMPTGUARD_BLOCK_DIAGNOSTIC = "promptguard_injection_detected"
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,32 +62,6 @@ class SanitizationResult:
     stage3_verdict: Stage3Verdict
     truncation_notice: str | None
     sanitizer_revision: str
-
-
-# ---------------------------------------------------------------------------
-# Trust tier resolution
-# ---------------------------------------------------------------------------
-
-
-def _resolve_trust_tier(
-    domain: str,
-    trusted_domains: list[str],
-    verified_domains: list[str],
-    blocked_domains: list[str],
-) -> TrustTier:
-    """Resolve the trust tier for *domain* from the provided lists.
-
-    Lookup order: blocked -> trusted -> verified -> STANDARD.
-    All comparisons are case-insensitive.
-    """
-    domain = domain.lower()
-    if domain in {d.lower() for d in blocked_domains}:
-        return TrustTier.BLOCKED
-    if domain in {d.lower() for d in trusted_domains}:
-        return TrustTier.TRUSTED
-    if domain in {d.lower() for d in verified_domains}:
-        return TrustTier.VERIFIED
-    return TrustTier.STANDARD
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +88,7 @@ def _compute_trust_score(
     return max(0.0, min(1.0, score))
 
 
-def sanitize_and_structure(
+def structure_sanitization_result(
     *,
     extraction: ExtractionResult,
     structural: StructuralScanResult,
@@ -122,7 +99,7 @@ def sanitize_and_structure(
     sanitizer_revision: str = "",
     domain_changed_on_redirect: bool = False,
 ) -> SanitizationResult:
-    """Build source-neutral sanitized output from stages 1-3.
+    """Build source-neutral sanitized output from completed stages 1-3.
 
     Route-specific builders add URL or upload provenance after this function,
     keeping their public response schemas independent.
@@ -145,7 +122,7 @@ def sanitize_and_structure(
     else:
         body = extraction.main_content
 
-    return SanitizationResult(
+    result = SanitizationResult(
         title=extraction.title,
         body=body,
         word_count=len(body.split()) if body else 0,
@@ -160,6 +137,40 @@ def sanitize_and_structure(
         truncation_notice=truncation_notice,
         sanitizer_revision=sanitizer_revision,
     )
+    return finalize_quarantine(result)
+
+
+def finalize_quarantine(result: SanitizationResult) -> SanitizationResult:
+    """Remove untrusted content from a blocked sanitization result.
+
+    Structural matches and PromptGuard chunks can contain hostile document text,
+    so a quarantine response exposes only stable diagnostic labels.
+    """
+    structural_blocked = result.stage2_verdict == Stage2Verdict.BLOCKED
+    promptguard_blocked = result.stage3_verdict == Stage3Verdict.INJECTION_DETECTED
+    if not structural_blocked and not promptguard_blocked:
+        return result
+
+    diagnostic = (
+        _STRUCTURAL_BLOCK_DIAGNOSTIC
+        if structural_blocked
+        else _PROMPTGUARD_BLOCK_DIAGNOSTIC
+    )
+    return SanitizationResult(
+        title=result.title,
+        body=_QUARANTINE_BODY,
+        word_count=len(_QUARANTINE_BODY.split()),
+        content_type=result.content_type,
+        trust_score=result.trust_score,
+        trust_tier=result.trust_tier,
+        injection_detected=True,
+        injection_spans=[diagnostic],
+        structural_flags=result.structural_flags,
+        stage2_verdict=result.stage2_verdict,
+        stage3_verdict=result.stage3_verdict,
+        truncation_notice=None,
+        sanitizer_revision=result.sanitizer_revision,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -173,18 +184,11 @@ def build_retrieved_content(
     source_url: str,
     final_url: str,
     domain: str,
-    extract_mode: str,
-    extraction: ExtractionResult,
-    structural: StructuralScanResult,
-    promptguard: PromptGuardResult,
+    sanitization: SanitizationResult,
     redirect_chain: list[str],
     domain_changed_on_redirect: bool,
-    trusted_domains: list[str],
-    verified_domains: list[str],
-    blocked_domains: list[str],
     cache_hit: bool = False,
     cached_at: datetime | None = None,
-    content_type: str = "html",
 ) -> RetrievedContent:
     """Assemble a :class:`RetrievedContent` from pipeline stage results.
 
@@ -198,24 +202,13 @@ def build_retrieved_content(
         URL after redirects resolved.
     domain:
         Domain of *final_url*.
-    extract_mode:
-        ``"full"`` or ``"summary"``.
-    extraction:
-        Stage 1 extraction result.
-    structural:
-        Stage 2 structural scan result.
-    promptguard:
-        Stage 3 PromptGuard classification result.
+    sanitization:
+        Completed source-neutral Stage 2-4 result. Its trust tier was resolved
+        before PromptGuard ran and is therefore never re-derived here.
     redirect_chain:
         Ordered list of redirect URLs.
     domain_changed_on_redirect:
         Whether the domain changed between *source_url* and *final_url*.
-    trusted_domains:
-        Domains to treat as TRUSTED tier.
-    verified_domains:
-        Domains to treat as VERIFIED tier.
-    blocked_domains:
-        Domains to treat as BLOCKED tier.
     cache_hit:
         Whether this result came from cache.
     cached_at:
@@ -225,43 +218,27 @@ def build_retrieved_content(
     -------
     RetrievedContent fully populated from pipeline results.
     """
-    trust_tier = _resolve_trust_tier(
-        domain,
-        trusted_domains,
-        verified_domains,
-        blocked_domains,
-    )
-    result = sanitize_and_structure(
-        extraction=extraction,
-        structural=structural,
-        promptguard=promptguard,
-        trust_tier=trust_tier,
-        extract_mode=extract_mode,
-        content_type=content_type,
-        domain_changed_on_redirect=domain_changed_on_redirect,
-    )
-
     return RetrievedContent(
         request_id=request_id,
         source_url=source_url,
         final_url=final_url,
         cache_hit=cache_hit,
         cached_at=cached_at,
-        title=result.title,
-        body=result.body,
-        word_count=result.word_count,
-        content_type=result.content_type,
-        trust_score=result.trust_score,
-        trust_tier=result.trust_tier,
-        injection_detected=result.injection_detected,
-        injection_spans=result.injection_spans,
-        structural_flags=result.structural_flags,
-        stage2_verdict=result.stage2_verdict,
-        stage3_verdict=result.stage3_verdict,
+        title=sanitization.title,
+        body=sanitization.body,
+        word_count=sanitization.word_count,
+        content_type=sanitization.content_type,
+        trust_score=sanitization.trust_score,
+        trust_tier=sanitization.trust_tier,
+        injection_detected=sanitization.injection_detected,
+        injection_spans=sanitization.injection_spans,
+        structural_flags=sanitization.structural_flags,
+        stage2_verdict=sanitization.stage2_verdict,
+        stage3_verdict=sanitization.stage3_verdict,
         domain=domain,
         redirect_chain=redirect_chain,
         domain_changed_on_redirect=domain_changed_on_redirect,
-        truncation_notice=result.truncation_notice,
+        truncation_notice=sanitization.truncation_notice,
     )
 
 
@@ -269,37 +246,23 @@ def build_extracted_content(
     *,
     request_id: str,
     provenance: UploadProvenance,
-    extraction: ExtractionResult,
-    structural: StructuralScanResult,
-    promptguard: PromptGuardResult,
-    extract_mode: str,
-    content_type: str,
-    sanitizer_revision: str,
+    sanitization: SanitizationResult,
 ) -> ExtractedContent:
     """Assemble the upload-only response from the shared Stage 4 result."""
-    result = sanitize_and_structure(
-        extraction=extraction,
-        structural=structural,
-        promptguard=promptguard,
-        trust_tier=TrustTier.UNTRUSTED,
-        extract_mode=extract_mode,
-        content_type=content_type,
-        sanitizer_revision=sanitizer_revision,
-    )
     return ExtractedContent(
         request_id=request_id,
-        title=result.title,
-        body=result.body,
-        word_count=result.word_count,
-        content_type=result.content_type,
-        trust_score=result.trust_score,
-        trust_tier=result.trust_tier,
-        injection_detected=result.injection_detected,
-        injection_spans=result.injection_spans,
-        structural_flags=result.structural_flags,
-        stage2_verdict=result.stage2_verdict,
-        stage3_verdict=result.stage3_verdict,
+        title=sanitization.title,
+        body=sanitization.body,
+        word_count=sanitization.word_count,
+        content_type=sanitization.content_type,
+        trust_score=sanitization.trust_score,
+        trust_tier=sanitization.trust_tier,
+        injection_detected=sanitization.injection_detected,
+        injection_spans=sanitization.injection_spans,
+        structural_flags=sanitization.structural_flags,
+        stage2_verdict=sanitization.stage2_verdict,
+        stage3_verdict=sanitization.stage3_verdict,
         provenance=provenance,
-        truncation_notice=result.truncation_notice,
-        sanitizer_revision=result.sanitizer_revision,
+        truncation_notice=sanitization.truncation_notice,
+        sanitizer_revision=sanitization.sanitizer_revision,
     )
