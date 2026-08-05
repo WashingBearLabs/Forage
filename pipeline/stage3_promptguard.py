@@ -31,7 +31,7 @@ class PromptGuardResult:
 
     verdict: Stage3Verdict
     score: float
-    flagged_chunks: list[str] = field(default_factory=list)
+    flagged_chunks: list[str] = field(default_factory=list[str])
     penalty: float = 0.0
     skipped: bool = False
 
@@ -42,6 +42,7 @@ async def run_promptguard(
     threshold: float = DEFAULT_THRESHOLD,
     trust_tier: TrustTier | str = "standard",
     fail_closed: bool = True,
+    max_chunks: int | None = None,
 ) -> PromptGuardResult:
     """Run PromptGuard classification on *text*.
 
@@ -84,7 +85,8 @@ async def run_promptguard(
     # Model not available — behavior depends on fail_closed setting and tier.
     if classifier is None or not classifier.loaded:
         if fail_closed and tier_value in (
-            TrustTier.STANDARD.value, TrustTier.UNTRUSTED.value,
+            TrustTier.STANDARD.value,
+            TrustTier.UNTRUSTED.value,
         ):
             logger.warning(
                 "PromptGuard unavailable — fail-closed for %s tier",
@@ -93,14 +95,20 @@ async def run_promptguard(
             return PromptGuardResult(
                 verdict=Stage3Verdict.INJECTION_DETECTED,
                 score=0.0,
-                flagged_chunks=["[PromptGuard unavailable — content blocked as precaution]"],
+                flagged_chunks=[
+                    "[PromptGuard unavailable — content blocked as precaution]"
+                ],
                 penalty=INJECTION_PENALTY,
                 skipped=True,
             )
         # Fail-open or VERIFIED tier: degrade gracefully with a penalty.
         logger.warning(
             "PromptGuard unavailable — %s for %s tier",
-            "lenient fallback" if tier_value == TrustTier.VERIFIED.value else "fail-open",
+            (
+                "lenient fallback"
+                if tier_value == TrustTier.VERIFIED.value
+                else "fail-open"
+            ),
             tier_value,
         )
         return PromptGuardResult(
@@ -113,7 +121,11 @@ async def run_promptguard(
 
     # Run synchronous PyTorch inference in a thread to avoid blocking
     # the event loop.
-    score, flagged_chunks = await asyncio.to_thread(classifier.classify, text)
+    score, flagged_chunks = await asyncio.to_thread(
+        classifier.classify,
+        text,
+        max_chunks=max_chunks,
+    )
 
     if score > threshold:
         return PromptGuardResult(

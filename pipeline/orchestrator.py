@@ -9,11 +9,13 @@ Stage 3 halts the pipeline and returns a quarantine
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
 import unicodedata
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlparse, urlsplit, urlunsplit
 
@@ -32,6 +34,15 @@ from models import (
     TrustTier,
     UploadProvenance,
 )
+from pipeline.extraction_limits import (
+    MAX_PROMPTGUARD_CHUNKS,
+    ExtractionSettings,
+    max_extracted_characters,
+)
+from pipeline.pdf_subprocess import (
+    PDFClassifiableTextLimitError,
+    extract_pdf_in_subprocess,
+)
 from pipeline.stage1_extraction import ExtractionResult, extract_html
 from pipeline.stage1_pdf import (
     PDFEncryptedError,
@@ -43,8 +54,10 @@ from pipeline.stage1_pdf import (
 )
 from pipeline.stage1_upload import (
     UnsupportedUploadFormatError,
+    UploadTextClassifiableLimitError,
     detect_upload_content_type,
     extract_upload_text,
+    extract_upload_text_file,
 )
 from pipeline.stage2_structural import scan_structural
 from pipeline.stage3_promptguard import PromptGuardResult, run_promptguard
@@ -55,6 +68,7 @@ from pipeline.stage4_structuring import (
     structure_sanitization_result,
 )
 from pipeline.stage5_url_audit import ContentTooLargeError, fetch_url
+from promptguard.classifier import PromptGuardBudgetExceededError
 from url_validator import BlockedDomainError, PrivateIPError, validate_url
 
 if TYPE_CHECKING:
@@ -138,6 +152,7 @@ async def sanitize_and_structure(
     content_type: str,
     sanitizer_revision: str = "",
     domain_changed_on_redirect: bool = False,
+    max_promptguard_chunks: int | None = None,
 ) -> SanitizationResult:
     """Run the shared Stage 2-4 gauntlet for any extracted content source."""
     structural = scan_structural(extraction.raw_text)
@@ -153,6 +168,7 @@ async def sanitize_and_structure(
             threshold=promptguard_threshold,
             trust_tier=trust_tier,
             fail_closed=promptguard_fail_closed,
+            max_chunks=max_promptguard_chunks,
         )
 
     return structure_sanitization_result(
@@ -413,16 +429,93 @@ async def run_extract_pipeline(
     except Exception as exc:
         raise document_failure("extraction_failed", request_id) from exc
 
-    sanitization = await sanitize_and_structure(
-        extraction=extraction,
-        trust_tier=TrustTier.UNTRUSTED,
-        classifier=classifier,
-        promptguard_threshold=promptguard_threshold,
-        promptguard_fail_closed=True,
-        extract_mode=extract_mode,
-        content_type=content_type,
-        sanitizer_revision=sanitizer_revision,
+    if len(extraction.raw_text) > max_extracted_characters(MAX_PROMPTGUARD_CHUNKS):
+        raise document_failure("content_too_large_to_classify", request_id)
+    try:
+        sanitization = await sanitize_and_structure(
+            extraction=extraction,
+            trust_tier=TrustTier.UNTRUSTED,
+            classifier=classifier,
+            promptguard_threshold=promptguard_threshold,
+            promptguard_fail_closed=True,
+            extract_mode=extract_mode,
+            content_type=content_type,
+            sanitizer_revision=sanitizer_revision,
+            max_promptguard_chunks=MAX_PROMPTGUARD_CHUNKS,
+        )
+    except PromptGuardBudgetExceededError as exc:
+        raise document_failure("content_too_large_to_classify", request_id) from exc
+
+    return build_extracted_content(
+        request_id=request_id,
+        provenance=UploadProvenance(filename=filename, mime_hint=mime_hint),
+        sanitization=sanitization,
     )
+
+
+async def run_extract_pipeline_from_file(
+    path: Path,
+    *,
+    filename: str,
+    mime_hint: str | None,
+    extract_mode: str,
+    request_id: str,
+    classifier: PromptGuardClassifier | None,
+    promptguard_threshold: float,
+    sanitizer_revision: str,
+    settings: ExtractionSettings,
+    classification_semaphore: asyncio.Semaphore,
+) -> ExtractedContent:
+    """Extract a spooled upload with bounded PDF parsing and classification."""
+    try:
+        with path.open("rb") as source:
+            magic_bytes = source.read(5)
+        if magic_bytes == b"%PDF-":
+            extraction = await asyncio.to_thread(
+                extract_pdf_in_subprocess,
+                path,
+                settings,
+            )
+            content_type = "pdf"
+        else:
+            extraction = extract_upload_text_file(
+                path,
+                max_characters=settings.max_extracted_characters,
+            )
+            content_type = "text"
+    except UploadTextClassifiableLimitError as exc:
+        raise document_failure("content_too_large_to_classify", request_id) from exc
+    except PDFClassifiableTextLimitError as exc:
+        raise document_failure("content_too_large_to_classify", request_id) from exc
+    except UnsupportedUploadFormatError as exc:
+        raise document_failure("unsupported_format", request_id) from exc
+    except PDFEncryptedError as exc:
+        raise document_failure("pdf_encrypted", request_id) from exc
+    except PDFNoTextError as exc:
+        raise document_failure("pdf_no_text", request_id) from exc
+    except PDFExtractionError as exc:
+        raise document_failure("extraction_failed", request_id) from exc
+    except OSError as exc:
+        raise document_failure("extraction_failed", request_id) from exc
+
+    if len(extraction.raw_text) > settings.max_extracted_characters:
+        raise document_failure("content_too_large_to_classify", request_id)
+
+    try:
+        async with classification_semaphore:
+            sanitization = await sanitize_and_structure(
+                extraction=extraction,
+                trust_tier=TrustTier.UNTRUSTED,
+                classifier=classifier,
+                promptguard_threshold=promptguard_threshold,
+                promptguard_fail_closed=True,
+                extract_mode=extract_mode,
+                content_type=content_type,
+                sanitizer_revision=sanitizer_revision,
+                max_promptguard_chunks=settings.max_promptguard_chunks,
+            )
+    except PromptGuardBudgetExceededError as exc:
+        raise document_failure("content_too_large_to_classify", request_id) from exc
 
     return build_extracted_content(
         request_id=request_id,

@@ -6,17 +6,21 @@ No direct database access. Communicates with core via internal API only.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
+import tempfile
+import time
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import yaml
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -29,12 +33,17 @@ from models import (
     SearchRequest,
     SearchResponse,
 )
+from pipeline.extraction_limits import (
+    MAX_INPUT_BYTES,
+    ExtractionSettings,
+    extraction_settings_from_config,
+)
 from pipeline.orchestrator import (
     DOCUMENT_FAILURE_REASONS,
     PipelineError,
     UnsupportedFormatError,
     document_failure,
-    run_extract_pipeline,
+    run_extract_pipeline_from_file,
     run_retrieve_pipeline,
     run_search_pipeline,
 )
@@ -90,7 +99,7 @@ class HealthResponse(BaseModel):
 _MAX_FILENAME_LENGTH = 255
 _MAX_MIME_HINT_LENGTH = 255
 _MAX_REQUEST_ID_LENGTH = 128
-_MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
+_MAX_DOCUMENT_BYTES = MAX_INPUT_BYTES
 _UPLOAD_READ_CHUNK_SIZE = 1024 * 1024
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -100,10 +109,126 @@ class _RequestBodyTooLargeError(Exception):
     """Raised internally when an ASGI request body crosses its byte limit."""
 
 
+@dataclass(frozen=True, slots=True)
+class _SpoolResult:
+    """A sidecar-owned file and its accepted upload-byte count."""
+
+    path: Path
+    size: int
+
+
+class ExtractionMetrics:
+    """In-process counters exported by the internal ``/metrics`` endpoint."""
+
+    def __init__(self) -> None:
+        self.requests = 0
+        self.busy_rejections = 0
+        self.semaphore_saturation = 0
+        self.verdicts: dict[str, int] = {}
+
+    def record_verdict(self, verdict: str) -> None:
+        """Record one content-free extraction outcome."""
+        self.requests += 1
+        self.verdicts[verdict] = self.verdicts.get(verdict, 0) + 1
+
+
+class ExtractionAdmissionController:
+    """Bound active extraction work and pre-multipart waiting requests."""
+
+    def __init__(
+        self,
+        settings: ExtractionSettings,
+        metrics: ExtractionMetrics,
+    ) -> None:
+        self._limit = settings.extraction_concurrency
+        self._queue_depth = settings.admission_queue_depth
+        self._max_queued_bytes = settings.max_queued_upload_bytes
+        self._reservation_bytes = settings.max_input_bytes
+        self._metrics = metrics
+        self._active = 0
+        self._queued_bytes = 0
+        self._waiters: list[asyncio.Future[None]] = []
+        self._lock = asyncio.Lock()
+
+    @property
+    def active(self) -> int:
+        """Return active extraction slots."""
+        return self._active
+
+    @property
+    def queued(self) -> int:
+        """Return waiting extraction requests."""
+        return len(self._waiters)
+
+    @property
+    def queued_bytes(self) -> int:
+        """Return conservatively reserved queued upload bytes."""
+        return self._queued_bytes
+
+    async def acquire(self) -> bool:
+        """Reserve an active slot or bounded queue slot before multipart parsing."""
+        async with self._lock:
+            if self._active < self._limit:
+                self._active += 1
+                return True
+            self._metrics.semaphore_saturation += 1
+            if (
+                len(self._waiters) >= self._queue_depth
+                or self._queued_bytes + self._reservation_bytes > self._max_queued_bytes
+            ):
+                self._metrics.busy_rejections += 1
+                return False
+            waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+            self._waiters.append(waiter)
+            self._queued_bytes += self._reservation_bytes
+        try:
+            await waiter
+            return True
+        except BaseException:
+            async with self._lock:
+                if waiter in self._waiters:
+                    self._waiters.remove(waiter)
+                    self._queued_bytes -= self._reservation_bytes
+            raise
+
+    async def release(self) -> None:
+        """Release an active slot and promote exactly one bounded waiter."""
+        async with self._lock:
+            if self._waiters:
+                waiter = self._waiters.pop(0)
+                self._queued_bytes -= self._reservation_bytes
+                if not waiter.done():
+                    waiter.set_result(None)
+                return
+            self._active -= 1
+
+
+def _cgroup_memory_snapshot() -> dict[str, int | float | None]:
+    """Read cgroup v2 memory usage for a concrete OOM-proximity signal."""
+    memory_current = Path("/sys/fs/cgroup/memory.current")
+    memory_max = Path("/sys/fs/cgroup/memory.max")
+    try:
+        current = int(memory_current.read_text().strip())
+        max_value = memory_max.read_text().strip()
+        maximum = None if max_value == "max" else int(max_value)
+    except (OSError, ValueError):
+        return {
+            "cgroup_memory_current_bytes": None,
+            "cgroup_memory_max_bytes": None,
+            "oom_proximity_ratio": None,
+        }
+    ratio: float | None = None if maximum is None or maximum == 0 else current / maximum
+    return {
+        "cgroup_memory_current_bytes": current,
+        "cgroup_memory_max_bytes": maximum,
+        "oom_proximity_ratio": ratio,
+    }
+
+
 class DocumentSizeLimitMiddleware:
     """Reject oversized extract requests while their ASGI body is still streaming."""
 
-    def __init__(self, app: ASGIApp, *, max_bytes: int) -> None:
+    def __init__(self, app: ASGIApp, *, max_bytes: int | None = None) -> None:
         self._app = app
         self._max_bytes = max_bytes
 
@@ -113,6 +238,17 @@ class DocumentSizeLimitMiddleware:
             await self._app(scope, receive, send)
             return
 
+        app = scope.get("app")
+        settings = getattr(getattr(app, "state", None), "extraction_settings", None)
+        max_bytes = (
+            self._max_bytes
+            if self._max_bytes is not None
+            else (
+                settings.max_input_bytes
+                if isinstance(settings, ExtractionSettings)
+                else _MAX_DOCUMENT_BYTES
+            )
+        )
         received_bytes = 0
 
         async def receive_limited() -> Message:
@@ -120,7 +256,7 @@ class DocumentSizeLimitMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 received_bytes += len(message.get("body", b""))
-                if received_bytes > self._max_bytes:
+                if received_bytes > max_bytes:
                     raise _RequestBodyTooLargeError
             return message
 
@@ -137,21 +273,79 @@ class DocumentSizeLimitMiddleware:
             await response(scope, receive, send)
 
 
-async def _read_upload_bytes(
+class ExtractionAdmissionMiddleware:
+    """Reject disabled or over-capacity requests before FastAPI parses multipart."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Apply the release gate and bounded admission queue to ``/extract``."""
+        if scope["type"] != "http" or scope["path"] != "/extract":
+            await self._app(scope, receive, send)
+            return
+        app = scope.get("app")
+        settings = getattr(getattr(app, "state", None), "extraction_settings", None)
+        if not isinstance(settings, ExtractionSettings) or not settings.route_enabled:
+            await JSONResponse(status_code=404, content={"detail": "Not Found"})(
+                scope, receive, send
+            )
+            return
+        if app is None:
+            await JSONResponse(status_code=503, content={"detail": "Unavailable"})(
+                scope, receive, send
+            )
+            return
+        controller = getattr(app.state, "extraction_admission", None)
+        if not isinstance(controller, ExtractionAdmissionController):
+            await JSONResponse(status_code=503, content={"detail": "Unavailable"})(
+                scope, receive, send
+            )
+            return
+        if not await controller.acquire():
+            revision = getattr(app.state, "sanitizer_revision", "")
+            await JSONResponse(
+                status_code=429,
+                content={
+                    "error": "busy",
+                    "reason": DOCUMENT_FAILURE_REASONS["busy"],
+                    "request_id": uuid.uuid4().hex,
+                    "sanitizer_revision": revision,
+                },
+            )(scope, receive, send)
+            return
+        try:
+            await self._app(scope, receive, send)
+        finally:
+            await controller.release()
+
+
+async def _spool_upload(
     file: UploadFile,
     *,
-    max_bytes: int = _MAX_DOCUMENT_BYTES,
+    max_bytes: int,
     chunk_size: int = _UPLOAD_READ_CHUNK_SIZE,
-) -> bytes:
-    """Read an upload incrementally and enforce the file-byte extraction cap."""
-    chunks: list[bytes] = []
+) -> _SpoolResult:
+    """Spool a bounded upload to a 0600 sidecar-owned file for the parser child."""
+    path: Path | None = None
     received_bytes = 0
-    while chunk := await file.read(chunk_size):
-        received_bytes += len(chunk)
-        if received_bytes > max_bytes:
-            raise document_failure("content_too_large", uuid.uuid4().hex)
-        chunks.append(chunk)
-    return b"".join(chunks)
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix="poppy-extract-",
+            suffix=".upload",
+            delete=False,
+        ) as temporary:
+            path = Path(temporary.name)
+            while chunk := await file.read(chunk_size):
+                received_bytes += len(chunk)
+                if received_bytes > max_bytes:
+                    raise document_failure("content_too_large", uuid.uuid4().hex)
+                temporary.write(chunk)
+        return _SpoolResult(path=path, size=received_bytes)
+    except BaseException:
+        if path is not None:
+            path.unlink(missing_ok=True)
+        raise
 
 
 def _sanitize_upload_metadata(
@@ -214,6 +408,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Load config
     config = _load_config()
     app.state.config = config
+    settings = extraction_settings_from_config(config)
+    app.state.extraction_settings = settings
+    app.state.extraction_metrics = ExtractionMetrics()
+    app.state.extraction_admission = ExtractionAdmissionController(
+        settings,
+        app.state.extraction_metrics,
+    )
+    app.state.classification_semaphore = asyncio.Semaphore(
+        settings.classification_concurrency
+    )
     app.state.sanitizer_revision = derive_sanitizer_revision(config)
     logger.info("Sidecar config loaded (%d keys)", len(config))
 
@@ -248,7 +452,18 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
-app.add_middleware(DocumentSizeLimitMiddleware, max_bytes=_MAX_DOCUMENT_BYTES)
+_initial_extraction_settings = extraction_settings_from_config({})
+app.state.extraction_settings = _initial_extraction_settings
+app.state.extraction_metrics = ExtractionMetrics()
+app.state.extraction_admission = ExtractionAdmissionController(
+    _initial_extraction_settings,
+    app.state.extraction_metrics,
+)
+app.state.classification_semaphore = asyncio.Semaphore(
+    _initial_extraction_settings.classification_concurrency
+)
+app.add_middleware(DocumentSizeLimitMiddleware)
+app.add_middleware(ExtractionAdmissionMiddleware)
 
 
 # -- Error handler --
@@ -268,7 +483,7 @@ async def pipeline_error_handler(
             derive_sanitizer_revision(request.app.state.config),
         )
     return JSONResponse(
-        status_code=422,
+        status_code=429 if exc.error == "busy" else 422,
         content=content,
     )
 
@@ -293,6 +508,25 @@ async def health(request: Request) -> HealthResponse:
             derive_sanitizer_revision(request.app.state.config),
         ),
     )
+
+
+@app.get("/metrics")
+async def metrics(request: Request) -> dict[str, Any]:
+    """Expose internal extraction saturation and cgroup OOM-proximity counters."""
+    controller: ExtractionAdmissionController = request.app.state.extraction_admission
+    extraction_metrics: ExtractionMetrics = request.app.state.extraction_metrics
+    return {
+        "extraction": {
+            "requests": extraction_metrics.requests,
+            "busy_rejections": extraction_metrics.busy_rejections,
+            "semaphore_saturation": extraction_metrics.semaphore_saturation,
+            "active": controller.active,
+            "queued": controller.queued,
+            "queued_bytes": controller.queued_bytes,
+            "verdicts": extraction_metrics.verdicts,
+            **_cgroup_memory_snapshot(),
+        }
+    }
 
 
 @app.post("/retrieve", response_model=RetrievedContent)
@@ -328,37 +562,85 @@ async def extract(
     always a fixed, content-free user message.
     """
     del timeout_s
-    safe_filename, safe_mime_hint, safe_request_id = _sanitize_upload_metadata(
-        filename=filename,
-        mime_hint=mime_hint,
-        request_id=request_id,
-    )
+    settings: ExtractionSettings = request.app.state.extraction_settings
+    if not settings.route_enabled:
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    started_at = time.monotonic()
+    safe_request_id = uuid.uuid4().hex
+    size = 0
+    content_type = "unknown"
+    spool: _SpoolResult | None = None
     try:
-        threshold = float(request.app.state.config.get("promptguard_threshold", 0.85))
-    except (TypeError, ValueError) as exc:
-        raise UnsupportedFormatError(
-            "Sidecar promptguard_threshold configuration is invalid",
-            safe_request_id,
-        ) from exc
-    if not 0.0 <= threshold <= 1.0:
-        raise UnsupportedFormatError(
-            "Sidecar promptguard_threshold configuration is invalid",
-            safe_request_id,
+        safe_filename, safe_mime_hint, safe_request_id = _sanitize_upload_metadata(
+            filename=filename,
+            mime_hint=mime_hint,
+            request_id=request_id,
         )
-    return await run_extract_pipeline(
-        await _read_upload_bytes(file),
-        filename=safe_filename,
-        mime_hint=safe_mime_hint,
-        extract_mode=extract_mode,
-        request_id=safe_request_id,
-        classifier=request.app.state.classifier,
-        promptguard_threshold=threshold,
-        sanitizer_revision=getattr(
-            request.app.state,
-            "sanitizer_revision",
-            derive_sanitizer_revision(request.app.state.config),
-        ),
-    )
+        try:
+            threshold = float(
+                request.app.state.config.get("promptguard_threshold", 0.85)
+            )
+        except (TypeError, ValueError) as exc:
+            raise UnsupportedFormatError(
+                "Sidecar promptguard_threshold configuration is invalid",
+                safe_request_id,
+            ) from exc
+        if not 0.0 <= threshold <= 1.0:
+            raise UnsupportedFormatError(
+                "Sidecar promptguard_threshold configuration is invalid",
+                safe_request_id,
+            )
+        spool = await _spool_upload(file, max_bytes=settings.max_input_bytes)
+        size = spool.size
+        result = await run_extract_pipeline_from_file(
+            spool.path,
+            filename=safe_filename,
+            mime_hint=safe_mime_hint,
+            extract_mode=extract_mode,
+            request_id=safe_request_id,
+            classifier=request.app.state.classifier,
+            promptguard_threshold=threshold,
+            sanitizer_revision=getattr(
+                request.app.state,
+                "sanitizer_revision",
+                derive_sanitizer_revision(request.app.state.config),
+            ),
+            settings=settings,
+            classification_semaphore=request.app.state.classification_semaphore,
+        )
+        content_type = result.content_type
+        verdict = "injection_detected" if result.injection_detected else "success"
+        request.app.state.extraction_metrics.record_verdict(verdict)
+        logger.info(
+            "document extraction completed",
+            extra={
+                "request_id": safe_request_id,
+                "size": size,
+                "content_type": content_type,
+                "verdict": verdict,
+                "reason": verdict,
+                "duration": round(time.monotonic() - started_at, 3),
+            },
+        )
+        return result
+    except PipelineError as exc:
+        request.app.state.extraction_metrics.record_verdict(exc.error)
+        logger.info(
+            "document extraction completed",
+            extra={
+                "request_id": safe_request_id,
+                "size": size,
+                "content_type": content_type,
+                "verdict": "failure",
+                "reason": exc.error,
+                "duration": round(time.monotonic() - started_at, 3),
+            },
+        )
+        raise
+    finally:
+        if spool is not None:
+            spool.path.unlink(missing_ok=True)
 
 
 @app.post("/search", response_model=SearchResponse)

@@ -6,7 +6,9 @@ the format, so a caller cannot label arbitrary binary data as text.
 
 from __future__ import annotations
 
+import codecs
 import unicodedata
+from pathlib import Path
 
 from pipeline.stage1_extraction import ExtractionResult, normalize_text
 
@@ -16,6 +18,10 @@ _MAX_CONTROL_CHARACTER_RATIO = 0.05
 
 class UnsupportedUploadFormatError(ValueError):
     """Raised when uploaded bytes are neither a valid PDF nor valid text."""
+
+
+class UploadTextClassifiableLimitError(ValueError):
+    """Raised when valid text exceeds the available PromptGuard scan budget."""
 
 
 def extract_upload_text(
@@ -58,6 +64,73 @@ def extract_upload_text(
     if not normalized:
         raise UnsupportedUploadFormatError("Upload contains no visible text")
 
+    return ExtractionResult(
+        title=None,
+        author=None,
+        date=None,
+        raw_text=normalized,
+        main_content=normalized,
+        word_count=len(normalized.split()),
+    )
+
+
+def extract_upload_text_file(
+    path: Path,
+    *,
+    max_characters: int,
+    chunk_size: int = 64 * 1024,
+) -> ExtractionResult:
+    """Strictly decode a bounded text file without materializing a 50 MB upload."""
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
+    parts: list[str] = []
+    character_count = 0
+    control_count = 0
+
+    try:
+        with path.open("rb") as source:
+            while chunk := source.read(chunk_size):
+                decoded = decoder.decode(chunk)
+                character_count += len(decoded)
+                if character_count > max_characters:
+                    raise UploadTextClassifiableLimitError(
+                        "Upload text exceeds the PromptGuard classification budget"
+                    )
+                parts.append(decoded)
+                control_count += sum(
+                    1
+                    for character in decoded
+                    if unicodedata.category(character) == "Cc"
+                    and character not in {"\t", "\n", "\r"}
+                )
+            decoded = decoder.decode(b"", final=True)
+    except UnicodeDecodeError as exc:
+        raise UnsupportedUploadFormatError("Upload is not valid UTF-8 text") from exc
+
+    character_count += len(decoded)
+    if character_count > max_characters:
+        raise UploadTextClassifiableLimitError(
+            "Upload text exceeds the PromptGuard classification budget"
+        )
+    parts.append(decoded)
+    text = "".join(parts)
+    if not text:
+        raise UnsupportedUploadFormatError("Upload is empty")
+    if "\x00" in text:
+        raise UnsupportedUploadFormatError("Upload contains NUL bytes")
+    if not text.lstrip("\ufeff").strip():
+        raise UnsupportedUploadFormatError("Upload contains no visible text")
+    if control_count / len(text) > _MAX_CONTROL_CHARACTER_RATIO:
+        raise UnsupportedUploadFormatError(
+            "Upload contains too many control characters for text"
+        )
+
+    normalized = normalize_text(text)
+    if not normalized:
+        raise UnsupportedUploadFormatError("Upload contains no visible text")
+    if len(normalized) > max_characters:
+        raise UploadTextClassifiableLimitError(
+            "Upload text exceeds the PromptGuard classification budget"
+        )
     return ExtractionResult(
         title=None,
         author=None,

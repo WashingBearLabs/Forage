@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 MODEL_ID = "meta-llama/Llama-Prompt-Guard-2-22M"
 MAX_SEQ_LEN = 512
 CHUNK_OVERLAP = 64
+MAX_PROMPTGUARD_CHUNKS = 64
 # Prompt-Guard-2-22M has 2 output classes: BENIGN (0) and INJECTION (1).
 # (The older 86M model had 3 classes with INDIRECT at index 1.)
 _INJECTION_LABEL_INDEX = 1
@@ -48,12 +49,11 @@ class PromptGuardClassifier:
         model not downloaded, etc.).
         """
         try:
+            import torch  # noqa: F401  # type: ignore[import-untyped]
             from transformers import (  # type: ignore[import-untyped]
                 AutoModelForSequenceClassification,
                 AutoTokenizer,
             )
-
-            import torch  # noqa: F401  # type: ignore[import-untyped]
 
             self._tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
             self._model = AutoModelForSequenceClassification.from_pretrained(MODEL_ID)
@@ -85,7 +85,8 @@ class PromptGuardClassifier:
             return [text]
 
         token_ids: list[int] = tokenizer.encode(  # type: ignore[union-attr]
-            text, add_special_tokens=False,
+            text,
+            add_special_tokens=False,
         )
 
         if len(token_ids) <= MAX_SEQ_LEN:
@@ -96,7 +97,8 @@ class PromptGuardClassifier:
         for start in range(0, len(token_ids), step):
             window = token_ids[start : start + MAX_SEQ_LEN]
             chunk_text: str = tokenizer.decode(  # type: ignore[union-attr]
-                window, skip_special_tokens=True,
+                window,
+                skip_special_tokens=True,
             )
             chunks.append(chunk_text)
             # Stop if we've consumed all tokens
@@ -109,7 +111,12 @@ class PromptGuardClassifier:
     # Inference
     # -----------------------------------------------------------------
 
-    def classify(self, text: str) -> tuple[float, list[str]]:
+    def classify(
+        self,
+        text: str,
+        *,
+        max_chunks: int | None = None,
+    ) -> tuple[float, list[str]]:
         """Return ``(max_score, flagged_chunks)``.
 
         *max_score* is the highest injection probability (0.0-1.0)
@@ -127,6 +134,10 @@ class PromptGuardClassifier:
         import torch  # type: ignore[import-untyped]
 
         chunks = self._chunk_text(text)
+        if max_chunks is not None and len(chunks) > max_chunks:
+            raise PromptGuardBudgetExceededError(
+                "PromptGuard classification input exceeds the chunk budget"
+            )
         scores: list[float] = []
 
         for chunk in chunks:
@@ -149,8 +160,10 @@ class PromptGuardClassifier:
             return 0.0, []
 
         max_score = max(scores)
-        flagged = [
-            chunks[i] for i, s in enumerate(scores) if s == max_score
-        ]
+        flagged = [chunks[i] for i, s in enumerate(scores) if s == max_score]
 
         return max_score, flagged
+
+
+class PromptGuardBudgetExceededError(ValueError):
+    """Raised instead of silently classifying only a prefix of a document."""

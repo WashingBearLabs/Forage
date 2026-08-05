@@ -13,3 +13,22 @@ news_domains:
   - cnn.com
 seed_blocklist: []
 promptguard_threshold: 0.85
+# Release gate: /extract remains invisible (404) until this is enabled and the
+# sidecar is restarted. The route is internal-only on poppy-net; no Traefik
+# router exposes it.
+extract_route_enabled: false
+extraction:
+  # Hard bounds enforced in code: 50 MiB input, 500 pages, 20 s CPU, 90 s wall.
+  max_input_bytes: 52428800
+  max_pages: 500
+  child_cpu_seconds: 20
+  # The 1 GiB container reserves >=512 MiB for parent FastAPI + PromptGuard;
+  # the spawned pypdf worker may consume at most this independent 384 MiB.
+  child_address_space_bytes: 402653184
+  wall_clock_seconds: 90
+  # Derived character ceiling = (512 - 64) * 64 * 4 = 114688.
+  max_promptguard_chunks: 64
+  extraction_concurrency: 1
+  classification_concurrency: 1
+  admission_queue_depth: 1
+  max_queued_upload_bytes: 52428800

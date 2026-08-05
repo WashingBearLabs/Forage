@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import sys
 from pathlib import Path
@@ -57,6 +58,7 @@ _SAMPLE_CONFIG: dict = {
     "user_agents": ["TestAgent/1.0"],
     "news_domains": ["reuters.com"],
     "seed_blocklist": [],
+    "extract_route_enabled": True,
 }
 
 
@@ -1129,8 +1131,9 @@ def test_config_loading() -> None:
 @pytest.fixture
 def client() -> httpx.AsyncClient:
     """Create an async test client for the retrieval app."""
+    from pipeline.extraction_limits import extraction_settings_from_config
     from promptguard.classifier import PromptGuardClassifier
-    from retrieval_app import app
+    from retrieval_app import ExtractionAdmissionController, ExtractionMetrics, app
 
     # Ensure app.state has the required attributes for route handlers.
     # Use a mock classifier that reports as loaded and returns safe,
@@ -1141,6 +1144,16 @@ def client() -> httpx.AsyncClient:
     app.state.cache = None
     app.state.classifier = mock_classifier
     app.state.config = _SAMPLE_CONFIG
+    settings = extraction_settings_from_config(_SAMPLE_CONFIG)
+    app.state.extraction_settings = settings
+    app.state.extraction_metrics = ExtractionMetrics()
+    app.state.extraction_admission = ExtractionAdmissionController(
+        settings,
+        app.state.extraction_metrics,
+    )
+    app.state.classification_semaphore = asyncio.Semaphore(
+        settings.classification_concurrency
+    )
     app.state.valkey_connected = False
 
     transport = httpx.ASGITransport(app=app)  # type: ignore[arg-type]

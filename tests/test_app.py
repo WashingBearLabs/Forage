@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -17,12 +18,23 @@ _retrieval_root = str(Path(__file__).resolve().parents[2] / "services" / "retrie
 if _retrieval_root not in sys.path:
     sys.path.insert(0, _retrieval_root)
 
+from pipeline.extraction_limits import (  # noqa: E402
+    MAX_PROMPTGUARD_CHUNKS,
+    ExtractionConfigurationError,
+    extraction_settings_from_config,
+)
 from pipeline.orchestrator import PipelineError  # noqa: E402
-from promptguard.classifier import PromptGuardClassifier  # noqa: E402
+from promptguard.classifier import (  # noqa: E402
+    CHUNK_OVERLAP,
+    MAX_SEQ_LEN,
+    PromptGuardClassifier,
+)
 from retrieval_app import (  # noqa: E402
     _MAX_DOCUMENT_BYTES,
     DocumentSizeLimitMiddleware,
-    _read_upload_bytes,
+    ExtractionAdmissionController,
+    ExtractionMetrics,
+    _spool_upload,
     app,
 )
 
@@ -33,11 +45,38 @@ def client() -> httpx.AsyncClient:
     # Ensure app.state has the expected attributes (normally set by lifespan)
     app.state.classifier = PromptGuardClassifier()
     app.state.cache = None
-    app.state.config = {}
+    app.state.config = {"extract_route_enabled": True}
+    settings = extraction_settings_from_config(app.state.config)
+    app.state.extraction_settings = settings
+    app.state.extraction_metrics = ExtractionMetrics()
+    app.state.extraction_admission = ExtractionAdmissionController(
+        settings,
+        app.state.extraction_metrics,
+    )
+    app.state.classification_semaphore = asyncio.Semaphore(
+        settings.classification_concurrency
+    )
     app.state.valkey_connected = False
 
     transport = httpx.ASGITransport(app=app)  # type: ignore[arg-type]
     return httpx.AsyncClient(transport=transport, base_url="http://test")
+
+
+def test_extraction_limit_defaults_are_bounded_and_derived() -> None:
+    """The classifiable ceiling has one source: PromptGuard's chunk budget."""
+    settings = extraction_settings_from_config({})
+
+    assert settings.route_enabled is False
+    assert settings.max_input_bytes == 50 * 1024 * 1024
+    assert settings.max_pages == 500
+    assert settings.child_cpu_seconds == 20
+    assert settings.wall_clock_seconds == 90
+    assert settings.extraction_concurrency == 1
+    assert settings.max_extracted_characters == (
+        (MAX_SEQ_LEN - CHUNK_OVERLAP) * MAX_PROMPTGUARD_CHUNKS * 4
+    )
+    with pytest.raises(ExtractionConfigurationError):
+        extraction_settings_from_config({"extraction": {"max_pages": 501}})
 
 
 async def test_health_returns_200(client: httpx.AsyncClient) -> None:
@@ -158,7 +197,7 @@ async def test_bounded_upload_read_rejects_file_over_limit() -> None:
             return next(chunks, b"")
 
     with pytest.raises(PipelineError) as exc_info:
-        await _read_upload_bytes(
+        await _spool_upload(
             cast(Any, ChunkedUpload()),
             max_bytes=10,
             chunk_size=4,
@@ -166,3 +205,86 @@ async def test_bounded_upload_read_rejects_file_over_limit() -> None:
 
     assert chunk_sizes == [4, 4, 4]
     assert exc_info.value.error == "content_too_large"
+
+
+async def test_extract_release_gate_returns_404_when_disabled(
+    client: httpx.AsyncClient,
+) -> None:
+    """The default-off release gate hides the route before multipart parsing."""
+    settings = extraction_settings_from_config({})
+    app.state.extraction_settings = settings
+    app.state.extraction_metrics = ExtractionMetrics()
+    app.state.extraction_admission = ExtractionAdmissionController(
+        settings,
+        app.state.extraction_metrics,
+    )
+
+    response = await client.post(
+        "/extract",
+        files={"file": ("document.txt", b"safe", "text/plain")},
+        data={"filename": "document.txt"},
+    )
+
+    assert response.status_code == 404
+
+
+async def test_extract_benign_text_over_classification_budget_is_not_injection(
+    client: httpx.AsyncClient,
+) -> None:
+    """A benign over-budget document reports the honest classification outcome."""
+    settings = app.state.extraction_settings
+    response = await client.post(
+        "/extract",
+        files={
+            "file": (
+                "large.txt",
+                b"a" * (settings.max_extracted_characters + 1),
+                "text/plain",
+            )
+        },
+        data={"filename": "large.txt"},
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["error"] == "content_too_large_to_classify"
+    assert payload["error"] != "injection_detected"
+
+
+async def test_extraction_admission_queue_rejects_when_full() -> None:
+    """A reserved active slot and bounded queue yield an immediate busy outcome."""
+    settings = extraction_settings_from_config(
+        {
+            "extract_route_enabled": True,
+            "extraction": {
+                "admission_queue_depth": 1,
+                "max_queued_upload_bytes": _MAX_DOCUMENT_BYTES,
+            },
+        }
+    )
+    metrics = ExtractionMetrics()
+    controller = ExtractionAdmissionController(settings, metrics)
+
+    assert await controller.acquire() is True
+    queued = asyncio.create_task(controller.acquire())
+    await asyncio.sleep(0)
+    assert controller.queued == 1
+    assert controller.queued_bytes == _MAX_DOCUMENT_BYTES
+    assert await controller.acquire() is False
+    assert metrics.busy_rejections == 1
+
+    await controller.release()
+    assert await queued is True
+    await controller.release()
+
+
+async def test_metrics_expose_saturation_and_oom_proximity(
+    client: httpx.AsyncClient,
+) -> None:
+    """The internal counters include cgroup-backed OOM-proximity fields."""
+    response = await client.get("/metrics")
+
+    assert response.status_code == 200
+    extraction = response.json()["extraction"]
+    assert "semaphore_saturation" in extraction
+    assert "oom_proximity_ratio" in extraction
