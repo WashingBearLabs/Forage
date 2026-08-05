@@ -12,3 +12,4 @@ news_domains:
   - theguardian.com
   - cnn.com
 seed_blocklist: []
+promptguard_threshold: 0.85

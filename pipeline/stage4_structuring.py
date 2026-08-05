@@ -11,13 +11,16 @@ while trimming filler.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import datetime
 
 from models import (
+    ExtractedContent,
     RetrievedContent,
     Stage2Verdict,
     Stage3Verdict,
     TrustTier,
+    UploadProvenance,
 )
 from pipeline.smart_extraction import extract_summary
 from pipeline.stage1_extraction import ExtractionResult
@@ -37,6 +40,25 @@ _BASE_SCORES: dict[TrustTier, float] = {
 }
 
 _REDIRECT_DOMAIN_CHANGE_PENALTY = -0.1
+
+
+@dataclass(frozen=True, slots=True)
+class SanitizationResult:
+    """Source-neutral Stage 4 output shared by URL and upload responses."""
+
+    title: str | None
+    body: str
+    word_count: int
+    content_type: str
+    trust_score: float
+    trust_tier: TrustTier
+    injection_detected: bool
+    injection_spans: list[str]
+    structural_flags: list[str]
+    stage2_verdict: Stage2Verdict
+    stage3_verdict: Stage3Verdict
+    truncation_notice: str | None
+    sanitizer_revision: str
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +109,57 @@ def _compute_trust_score(
     # Penalties are already negative, so we add them
     score = base + stage2_penalty + stage3_penalty + redirect_penalty
     return max(0.0, min(1.0, score))
+
+
+def sanitize_and_structure(
+    *,
+    extraction: ExtractionResult,
+    structural: StructuralScanResult,
+    promptguard: PromptGuardResult,
+    trust_tier: TrustTier,
+    extract_mode: str,
+    content_type: str,
+    sanitizer_revision: str = "",
+    domain_changed_on_redirect: bool = False,
+) -> SanitizationResult:
+    """Build source-neutral sanitized output from stages 1-3.
+
+    Route-specific builders add URL or upload provenance after this function,
+    keeping their public response schemas independent.
+    """
+    trust_score = _compute_trust_score(
+        tier=trust_tier,
+        stage2_penalty=structural.penalty,
+        stage3_penalty=promptguard.penalty,
+        domain_changed_on_redirect=domain_changed_on_redirect,
+    )
+
+    truncation_notice: str | None = None
+    if extract_mode == "summary":
+        body, notice = extract_summary(
+            extraction.main_content,
+            extraction.raw_text,
+            extraction.title,
+        )
+        truncation_notice = notice if notice else None
+    else:
+        body = extraction.main_content
+
+    return SanitizationResult(
+        title=extraction.title,
+        body=body,
+        word_count=len(body.split()) if body else 0,
+        content_type=content_type,
+        trust_score=trust_score,
+        trust_tier=trust_tier,
+        injection_detected=(promptguard.verdict == Stage3Verdict.INJECTION_DETECTED),
+        injection_spans=list(promptguard.flagged_chunks),
+        structural_flags=[flag.category for flag in structural.flags],
+        stage2_verdict=structural.verdict,
+        stage3_verdict=promptguard.verdict,
+        truncation_notice=truncation_notice,
+        sanitizer_revision=sanitizer_revision,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -152,36 +225,21 @@ def build_retrieved_content(
     -------
     RetrievedContent fully populated from pipeline results.
     """
-    # -- Trust tier & score --
     trust_tier = _resolve_trust_tier(
-        domain, trusted_domains, verified_domains, blocked_domains,
+        domain,
+        trusted_domains,
+        verified_domains,
+        blocked_domains,
     )
-    trust_score = _compute_trust_score(
-        tier=trust_tier,
-        stage2_penalty=structural.penalty,
-        stage3_penalty=promptguard.penalty,
+    result = sanitize_and_structure(
+        extraction=extraction,
+        structural=structural,
+        promptguard=promptguard,
+        trust_tier=trust_tier,
+        extract_mode=extract_mode,
+        content_type=content_type,
         domain_changed_on_redirect=domain_changed_on_redirect,
     )
-
-    # -- Body text --
-    truncation_notice: str | None = None
-    if extract_mode == "summary":
-        body, notice = extract_summary(
-            extraction.main_content, extraction.raw_text, extraction.title,
-        )
-        truncation_notice = notice if notice else None
-    else:
-        body = extraction.main_content
-
-    # -- Injection spans --
-    injection_detected = promptguard.verdict == Stage3Verdict.INJECTION_DETECTED
-    injection_spans = list(promptguard.flagged_chunks)
-
-    # -- Structural flags --
-    structural_flags = [f.category for f in structural.flags]
-
-    # -- Word count on final body --
-    word_count = len(body.split()) if body else 0
 
     return RetrievedContent(
         request_id=request_id,
@@ -189,19 +247,59 @@ def build_retrieved_content(
         final_url=final_url,
         cache_hit=cache_hit,
         cached_at=cached_at,
-        title=extraction.title,
-        body=body,
-        word_count=word_count,
-        content_type=content_type,
-        trust_score=trust_score,
-        trust_tier=trust_tier,
-        injection_detected=injection_detected,
-        injection_spans=injection_spans,
-        structural_flags=structural_flags,
-        stage2_verdict=structural.verdict,
-        stage3_verdict=promptguard.verdict,
+        title=result.title,
+        body=result.body,
+        word_count=result.word_count,
+        content_type=result.content_type,
+        trust_score=result.trust_score,
+        trust_tier=result.trust_tier,
+        injection_detected=result.injection_detected,
+        injection_spans=result.injection_spans,
+        structural_flags=result.structural_flags,
+        stage2_verdict=result.stage2_verdict,
+        stage3_verdict=result.stage3_verdict,
         domain=domain,
         redirect_chain=redirect_chain,
         domain_changed_on_redirect=domain_changed_on_redirect,
-        truncation_notice=truncation_notice,
+        truncation_notice=result.truncation_notice,
+    )
+
+
+def build_extracted_content(
+    *,
+    request_id: str,
+    provenance: UploadProvenance,
+    extraction: ExtractionResult,
+    structural: StructuralScanResult,
+    promptguard: PromptGuardResult,
+    extract_mode: str,
+    content_type: str,
+    sanitizer_revision: str,
+) -> ExtractedContent:
+    """Assemble the upload-only response from the shared Stage 4 result."""
+    result = sanitize_and_structure(
+        extraction=extraction,
+        structural=structural,
+        promptguard=promptguard,
+        trust_tier=TrustTier.UNTRUSTED,
+        extract_mode=extract_mode,
+        content_type=content_type,
+        sanitizer_revision=sanitizer_revision,
+    )
+    return ExtractedContent(
+        request_id=request_id,
+        title=result.title,
+        body=result.body,
+        word_count=result.word_count,
+        content_type=result.content_type,
+        trust_score=result.trust_score,
+        trust_tier=result.trust_tier,
+        injection_detected=result.injection_detected,
+        injection_spans=result.injection_spans,
+        structural_flags=result.structural_flags,
+        stage2_verdict=result.stage2_verdict,
+        stage3_verdict=result.stage3_verdict,
+        provenance=provenance,
+        truncation_notice=result.truncation_notice,
+        sanitizer_revision=result.sanitizer_revision,
     )

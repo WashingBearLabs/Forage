@@ -8,23 +8,34 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal
 
 import yaml
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from cache import ContentCache
-from models import RetrievedContent, RetrieveRequest, SearchRequest, SearchResponse
+from models import (
+    ExtractedContent,
+    RetrievedContent,
+    RetrieveRequest,
+    SearchRequest,
+    SearchResponse,
+)
 from pipeline.orchestrator import (
     PipelineError,
+    UnsupportedFormatError,
+    run_extract_pipeline,
     run_retrieve_pipeline,
     run_search_pipeline,
 )
+from pipeline.sanitizer_revision import derive_sanitizer_revision
 from promptguard.classifier import PromptGuardClassifier
 
 logger = logging.getLogger(__name__)
@@ -70,6 +81,65 @@ class HealthResponse(BaseModel):
     promptguard_loaded: bool
     cache_connected: bool
     capabilities: dict[str, int]
+    sanitizer_revision: str
+
+
+_MAX_FILENAME_LENGTH = 255
+_MAX_MIME_HINT_LENGTH = 255
+_MAX_REQUEST_ID_LENGTH = 128
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+
+def _sanitize_upload_metadata(
+    *,
+    filename: str,
+    mime_hint: str | None,
+    request_id: str | None,
+) -> tuple[str, str | None, str]:
+    """Bound and sanitize untrusted upload metadata before logging or response use."""
+    safe_request_id = uuid.uuid4().hex
+    if len(filename) > _MAX_FILENAME_LENGTH:
+        raise PipelineError(
+            "invalid_filename",
+            f"filename exceeds {_MAX_FILENAME_LENGTH} characters",
+            safe_request_id,
+        )
+    cleaned_filename = _CONTROL_CHARS_RE.sub("", filename).replace("\\", "/")
+    cleaned_filename = cleaned_filename.rsplit("/", maxsplit=1)[-1].strip()
+    if cleaned_filename in {"", ".", ".."}:
+        raise PipelineError(
+            "invalid_filename",
+            "filename must contain a basename",
+            safe_request_id,
+        )
+
+    cleaned_mime_hint: str | None = None
+    if mime_hint is not None:
+        if len(mime_hint) > _MAX_MIME_HINT_LENGTH:
+            raise PipelineError(
+                "invalid_mime_hint",
+                f"mime_hint exceeds {_MAX_MIME_HINT_LENGTH} characters",
+                safe_request_id,
+            )
+        cleaned_mime_hint = _CONTROL_CHARS_RE.sub("", mime_hint).strip() or None
+
+    if request_id is None:
+        return cleaned_filename, cleaned_mime_hint, safe_request_id
+    if len(request_id) > _MAX_REQUEST_ID_LENGTH:
+        raise PipelineError(
+            "invalid_request_id",
+            f"request_id exceeds {_MAX_REQUEST_ID_LENGTH} characters",
+            safe_request_id,
+        )
+    cleaned_request_id = _CONTROL_CHARS_RE.sub("", request_id)
+    if not _REQUEST_ID_RE.fullmatch(cleaned_request_id):
+        raise PipelineError(
+            "invalid_request_id",
+            "request_id contains disallowed characters",
+            safe_request_id,
+        )
+    return cleaned_filename, cleaned_mime_hint, cleaned_request_id
 
 
 # -- Lifespan --
@@ -81,6 +151,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Load config
     config = _load_config()
     app.state.config = config
+    app.state.sanitizer_revision = derive_sanitizer_revision(config)
     logger.info("Sidecar config loaded (%d keys)", len(config))
 
     # Connect content cache
@@ -145,6 +216,11 @@ async def health(request: Request) -> HealthResponse:
         promptguard_loaded=request.app.state.classifier.loaded,
         cache_connected=valkey_connected,
         capabilities={"search_sanitization": 1},
+        sanitizer_revision=getattr(
+            request.app.state,
+            "sanitizer_revision",
+            derive_sanitizer_revision(request.app.state.config),
+        ),
     )
 
 
@@ -156,6 +232,56 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
         cache=request.app.state.cache,
         classifier=request.app.state.classifier,
         config=request.app.state.config,
+    )
+
+
+@app.post("/extract", response_model=ExtractedContent)
+async def extract(
+    request: Request,
+    file: Annotated[UploadFile, File()],
+    filename: Annotated[str, Form()],
+    mime_hint: Annotated[str | None, Form()] = None,
+    extract_mode: Annotated[Literal["summary", "full"], Form()] = "full",
+    request_id: Annotated[str | None, Form()] = None,
+    timeout_s: Annotated[float | None, Form(gt=0)] = None,
+) -> ExtractedContent:
+    """Extract an internal-network upload with fixed untrusted fail-closed policy.
+
+    This unauthenticated endpoint is intentionally reachable only on poppy-net
+    (Traefik is disabled). Filename and MIME hint are display-only metadata;
+    downstream consumers must never use them as filesystem paths.
+    """
+    del timeout_s
+    safe_filename, safe_mime_hint, safe_request_id = _sanitize_upload_metadata(
+        filename=filename,
+        mime_hint=mime_hint,
+        request_id=request_id,
+    )
+    try:
+        threshold = float(request.app.state.config.get("promptguard_threshold", 0.85))
+    except (TypeError, ValueError) as exc:
+        raise UnsupportedFormatError(
+            "Sidecar promptguard_threshold configuration is invalid",
+            safe_request_id,
+        ) from exc
+    if not 0.0 <= threshold <= 1.0:
+        raise UnsupportedFormatError(
+            "Sidecar promptguard_threshold configuration is invalid",
+            safe_request_id,
+        )
+    return await run_extract_pipeline(
+        await file.read(),
+        filename=safe_filename,
+        mime_hint=safe_mime_hint,
+        extract_mode=extract_mode,
+        request_id=safe_request_id,
+        classifier=request.app.state.classifier,
+        promptguard_threshold=threshold,
+        sanitizer_revision=getattr(
+            request.app.state,
+            "sanitizer_revision",
+            derive_sanitizer_revision(request.app.state.config),
+        ),
     )
 
 

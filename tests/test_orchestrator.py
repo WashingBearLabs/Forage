@@ -1,7 +1,8 @@
-"""Tests for the pipeline orchestrator and API endpoints (US-011, US-002)."""
+"""Tests for the pipeline orchestrator and API endpoints (US-001, US-011)."""
 
 from __future__ import annotations
 
+import io
 import sys
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ if _retrieval_root not in sys.path:
 
 from cache import ContentCache  # noqa: E402
 from models import (  # noqa: E402
+    ExtractedContent,
     RetrievedContent,
     Stage2Verdict,
     Stage3Verdict,
@@ -24,10 +26,16 @@ from models import (  # noqa: E402
 )
 from pipeline.orchestrator import (  # noqa: E402
     PipelineError,
+    run_extract_pipeline,
     run_retrieve_pipeline,
     run_search_pipeline,
 )
 from pipeline.stage1_extraction import ExtractionResult  # noqa: E402
+from pipeline.stage1_upload import (  # noqa: E402
+    UnsupportedUploadFormatError,
+    detect_upload_content_type,
+    extract_upload_text,
+)
 from pipeline.stage2_structural import StructuralScanResult  # noqa: E402
 from pipeline.stage3_promptguard import PromptGuardResult  # noqa: E402
 from pipeline.stage5_url_audit import FetchResult  # noqa: E402
@@ -46,6 +54,36 @@ _SAMPLE_CONFIG: dict = {
     "news_domains": ["reuters.com"],
     "seed_blocklist": [],
 }
+
+
+def _make_text_pdf(text: str) -> bytes:
+    """Create a small PDF with a text layer for multipart endpoint coverage."""
+    from pypdf import PdfWriter
+    from pypdf.generic import (
+        DecodedStreamObject,
+        DictionaryObject,
+        NameObject,
+    )
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    page = writer.pages[-1]
+    font = DictionaryObject()
+    font[NameObject("/Type")] = NameObject("/Font")
+    font[NameObject("/Subtype")] = NameObject("/Type1")
+    font[NameObject("/BaseFont")] = NameObject("/Helvetica")
+    fonts = DictionaryObject()
+    fonts[NameObject("/F1")] = font
+    resources = DictionaryObject()
+    resources[NameObject("/Font")] = fonts
+    page[NameObject("/Resources")] = resources
+    stream = DecodedStreamObject()
+    escaped_text = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    stream.set_data(f"BT /F1 12 Tf 72 720 Td ({escaped_text}) Tj ET".encode("latin-1"))
+    page[NameObject("/Contents")] = stream
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue()
 
 
 def _make_retrieve_request(**overrides):  # type: ignore[no-untyped-def]
@@ -1047,6 +1085,7 @@ def test_config_loading() -> None:
     assert "user_agents" in config
     assert "news_domains" in config
     assert "seed_blocklist" in config
+    assert config["promptguard_threshold"] == 0.85
     assert len(config["user_agents"]) == 5
     assert "reuters.com" in config["news_domains"]
     assert config["seed_blocklist"] == []
@@ -1195,3 +1234,157 @@ async def test_post_search_endpoint_searxng_error(client: httpx.AsyncClient) -> 
     assert data["error"] == "searxng_unavailable"
     assert "reason" in data
     assert "request_id" in data
+
+
+# ---------------------------------------------------------------------------
+# Upload extraction endpoint (US-001)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "content_bytes",
+    [
+        b"",
+        b" \t\n",
+        b"\x00\x00\x00",
+        (b"visible" + b"\x01" * 20),
+    ],
+)
+def test_upload_text_validity_gate_rejects_invalid_text(content_bytes: bytes) -> None:
+    """Empty, NUL-bearing, and control-heavy decoded bytes are not text uploads."""
+    with pytest.raises(UnsupportedUploadFormatError):
+        detect_upload_content_type(content_bytes)
+
+
+def test_upload_text_validity_gate_normalizes_bom_and_unicode() -> None:
+    """Valid UTF-8 text is normalized after strict decoding, including a BOM."""
+    content_bytes = "\ufeffCaf\u00e9 \u4e16\u754c".encode("utf-8")
+    result = extract_upload_text(content_bytes)
+    assert detect_upload_content_type(content_bytes, "application/pdf") == "text"
+    assert result.main_content == "Caf\u00e9 \u4e16\u754c"
+
+
+async def test_extract_pipeline_returns_upload_only_model() -> None:
+    """The pipeline returns a source-neutral sanitized upload response."""
+    classifier = MagicMock()
+    classifier.loaded = True
+    classifier.classify.return_value = (0.0, [])
+
+    result = await run_extract_pipeline(
+        b"Hello from an uploaded document.",
+        filename="report.txt",
+        mime_hint="application/pdf",
+        extract_mode="full",
+        request_id="upload-request",
+        classifier=classifier,
+        promptguard_threshold=0.85,
+        sanitizer_revision="test-revision",
+    )
+
+    assert isinstance(result, ExtractedContent)
+    assert result.content_type == "text"
+    assert result.provenance.source_type == "upload"
+    assert result.provenance.filename == "report.txt"
+    assert result.trust_tier == TrustTier.UNTRUSTED
+    assert result.sanitizer_revision == "test-revision"
+
+
+async def test_post_extract_text_endpoint_sanitizes_metadata(
+    client: httpx.AsyncClient,
+) -> None:
+    """Multipart text preserves only a basename and ignores advisory MIME."""
+    response = await client.post(
+        "/extract",
+        files={"file": ("ignored.bin", "Hello caf\u00e9", "application/octet-stream")},
+        data={
+            "filename": "../documents\\report.txt",
+            "mime_hint": "application/pdf",
+            "request_id": "upload:42",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["request_id"] == "upload:42"
+    assert data["content_type"] == "text"
+    assert data["provenance"] == {
+        "source_type": "upload",
+        "filename": "report.txt",
+        "mime_hint": "application/pdf",
+    }
+    assert data["trust_tier"] == "untrusted"
+    assert data["sanitizer_revision"]
+
+
+async def test_post_extract_pdf_endpoint_returns_pdf_content(
+    client: httpx.AsyncClient,
+) -> None:
+    """Multipart PDF bytes use the existing text-layer PDF extractor."""
+    response = await client.post(
+        "/extract",
+        files={
+            "file": (
+                "report.pdf",
+                _make_text_pdf("PDF upload content"),
+                "application/pdf",
+            )
+        },
+        data={"filename": "report.pdf"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["content_type"] == "pdf"
+    assert "PDF upload content" in data["body"]
+    assert data["stage2_verdict"] == "clean"
+    assert data["stage3_verdict"] == "safe"
+
+
+async def test_post_extract_rejects_unsupported_binary(
+    client: httpx.AsyncClient,
+) -> None:
+    """Undecodable binary payloads receive the stable unsupported taxonomy."""
+    response = await client.post(
+        "/extract",
+        files={"file": ("blob.bin", b"\xff\xfe\x00\x80", "application/octet-stream")},
+        data={"filename": "blob.bin"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"] == "unsupported_format"
+
+
+async def test_post_extract_uses_fixed_untrusted_policy(
+    client: httpx.AsyncClient,
+) -> None:
+    """Caller policy fields cannot make an upload skip PromptGuard."""
+    with patch(
+        "pipeline.orchestrator.run_promptguard",
+        new_callable=AsyncMock,
+        return_value=_make_pg_safe(),
+    ) as promptguard:
+        response = await client.post(
+            "/extract",
+            files={"file": ("report.txt", b"Safe text", "text/plain")},
+            data={
+                "filename": "report.txt",
+                "trust_tier": "trusted",
+                "promptguard_threshold": "0.0",
+                "promptguard_fail_closed": "false",
+            },
+        )
+
+    assert response.status_code == 200
+    assert promptguard.await_args.kwargs["trust_tier"] == TrustTier.UNTRUSTED
+    assert promptguard.await_args.kwargs["fail_closed"] is True
+
+
+async def test_health_publishes_derived_sanitizer_revision(
+    client: httpx.AsyncClient,
+) -> None:
+    """Health exposes the current mechanically derived sanitizer revision."""
+    with patch("retrieval_app._check_valkey", new_callable=AsyncMock):
+        response = await client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json()["sanitizer_revision"]

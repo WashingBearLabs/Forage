@@ -1,8 +1,4 @@
-"""Retrieval sidecar data models — Pydantic v2 schemas.
-
-``RetrievedContent`` is the **only** object that crosses the sidecar boundary
-into Poppy core.  All other pipeline internals stay inside the sidecar.
-"""
+"""Retrieval sidecar data models — Pydantic v2 schemas."""
 
 from __future__ import annotations
 
@@ -120,7 +116,72 @@ class RetrievedContent(BaseModel):
     @field_validator("content_type")
     @classmethod
     def _validate_content_type(cls, v: str) -> str:
-        allowed = {"html", "pdf"}
+        allowed = {"html", "pdf", "text"}
+        if v not in allowed:
+            msg = f"content_type must be one of {allowed}, got '{v}'"
+            raise ValueError(msg)
+        return v
+
+
+class UploadProvenance(BaseModel):
+    """Display-only metadata for an untrusted uploaded document.
+
+    Downstream consumers must treat ``filename`` and ``mime_hint`` as display
+    text only. They must never use either value as a filesystem path.
+    """
+
+    source_type: Literal["upload"] = "upload"
+    filename: str = Field(..., min_length=1, description="Sanitized display filename")
+    mime_hint: str | None = Field(
+        default=None,
+        description="Caller hint only; never authoritative for type detection",
+    )
+
+
+class ExtractedContent(BaseModel):
+    """Sanitized content returned for an uploaded document.
+
+    This upload-only wire model deliberately does not reuse
+    :class:`RetrievedContent`: uploads have no URL provenance.
+    """
+
+    request_id: str = Field(..., min_length=1, description="Extraction request ID")
+    title: str | None = Field(default=None, description="Extracted document title")
+    body: str = Field(..., description="Sanitized extracted document text")
+    word_count: int = Field(..., ge=0, description="Word count of body")
+    content_type: str = Field(..., description="Source format: 'pdf' or 'text'")
+    trust_score: float = Field(
+        ..., ge=0.0, le=1.0, description="Composite trust score (0.0-1.0)"
+    )
+    trust_tier: TrustTier = Field(..., description="Resolved trust tier")
+    injection_detected: bool = Field(
+        default=False, description="Whether prompt injection was detected"
+    )
+    injection_spans: list[str] = Field(
+        default_factory=list, description="Detected injection text spans"
+    )
+    structural_flags: list[str] = Field(
+        default_factory=list, description="Structural heuristic flags raised"
+    )
+    stage2_verdict: Stage2Verdict = Field(
+        ..., description="Stage-2 structural heuristic verdict"
+    )
+    stage3_verdict: Stage3Verdict = Field(
+        ..., description="Stage-3 PromptGuard ML verdict"
+    )
+    provenance: UploadProvenance
+    truncation_notice: str | None = Field(
+        default=None,
+        description="Describes what was omitted when extract_mode='summary'",
+    )
+    sanitizer_revision: str = Field(
+        ..., min_length=1, description="Derived sanitization pipeline revision"
+    )
+
+    @field_validator("content_type")
+    @classmethod
+    def _validate_content_type(cls, v: str) -> str:
+        allowed = {"pdf", "text"}
         if v not in allowed:
             msg = f"content_type must be one of {allowed}, got '{v}'"
             raise ValueError(msg)

@@ -20,7 +20,7 @@ import io
 
 from pypdf import PdfReader
 
-from pipeline.stage1_extraction import ExtractionResult, _normalize_text
+from pipeline.stage1_extraction import ExtractionResult, normalize_text
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -121,7 +121,7 @@ def extract_pdf(pdf_bytes: bytes) -> ExtractionResult:
         )
 
     # -- Normalize (same pipeline as HTML extraction) --
-    raw_text = _normalize_text(raw_text)
+    raw_text = normalize_text(raw_text)
 
     # For PDFs there is no boilerplate distinction, so main_content == raw_text
     main_content = raw_text

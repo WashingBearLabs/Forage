@@ -31,10 +31,19 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 # HTML elements stripped before raw-text extraction (security-sensitive)
-_DANGEROUS_TAGS = frozenset({
-    "script", "style", "iframe", "meta", "link",
-    "object", "embed", "form", "svg",
-})
+_DANGEROUS_TAGS = frozenset(
+    {
+        "script",
+        "style",
+        "iframe",
+        "meta",
+        "link",
+        "object",
+        "embed",
+        "form",
+        "svg",
+    }
+)
 
 # Invisible Unicode codepoints to collapse
 _INVISIBLE_CHARS = frozenset(
@@ -95,6 +104,11 @@ def _normalize_text(text: str) -> str:
     text = "\n".join(line.strip() for line in text.split("\n"))
     # Strip leading/trailing whitespace from entire text
     return text.strip()
+
+
+def normalize_text(text: str) -> str:
+    """Normalize extracted text with the shared Stage 1 post-processing rules."""
+    return _normalize_text(text)
 
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ import httpx
 
 from cache import ContentCache, cache_policy_fingerprint
 from models import (
+    ExtractedContent,
     RetrievedContent,
     RetrieveRequest,
     SearchRequest,
@@ -29,12 +30,21 @@ from models import (
     Stage2Verdict,
     Stage3Verdict,
     TrustTier,
+    UploadProvenance,
 )
 from pipeline.stage1_extraction import extract_html
-from pipeline.stage1_pdf import detect_content_type, extract_pdf
+from pipeline.stage1_pdf import PDFExtractionError, detect_content_type, extract_pdf
+from pipeline.stage1_upload import (
+    UnsupportedUploadFormatError,
+    detect_upload_content_type,
+    extract_upload_text,
+)
 from pipeline.stage2_structural import scan_structural
 from pipeline.stage3_promptguard import PromptGuardResult, run_promptguard
-from pipeline.stage4_structuring import build_retrieved_content
+from pipeline.stage4_structuring import (
+    build_extracted_content,
+    build_retrieved_content,
+)
 from pipeline.stage5_url_audit import ContentTooLargeError, fetch_url
 from url_validator import BlockedDomainError, PrivateIPError, validate_url
 
@@ -63,6 +73,13 @@ class PipelineError(Exception):
             "reason": self.reason,
             "request_id": self.request_id,
         }
+
+
+class UnsupportedFormatError(PipelineError):
+    """Raised when an upload is not a supported PDF or valid text document."""
+
+    def __init__(self, reason: str, request_id: str) -> None:
+        super().__init__("unsupported_format", reason, request_id)
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +342,67 @@ async def run_retrieve_pipeline(
         )
 
     return content
+
+
+# ---------------------------------------------------------------------------
+# Upload extraction pipeline
+# ---------------------------------------------------------------------------
+
+
+async def run_extract_pipeline(
+    content_bytes: bytes,
+    *,
+    filename: str,
+    mime_hint: str | None,
+    extract_mode: str,
+    request_id: str,
+    classifier: PromptGuardClassifier | None,
+    promptguard_threshold: float,
+    sanitizer_revision: str,
+) -> ExtractedContent:
+    """Extract and sanitize an untrusted uploaded PDF or UTF-8 text document.
+
+    Uploads intentionally have no caller-controlled trust policy. They always
+    run PromptGuard as untrusted and fail closed when the classifier is absent.
+    """
+    try:
+        content_type = detect_upload_content_type(content_bytes, mime_hint)
+        extraction = (
+            extract_pdf(content_bytes)
+            if content_type == "pdf"
+            else extract_upload_text(content_bytes, mime_hint)
+        )
+    except UnsupportedUploadFormatError as exc:
+        raise UnsupportedFormatError(str(exc), request_id) from exc
+    except PDFExtractionError as exc:
+        raise UnsupportedFormatError(str(exc), request_id) from exc
+
+    structural = scan_structural(extraction.raw_text)
+    if structural.verdict == Stage2Verdict.BLOCKED:
+        promptguard = PromptGuardResult(
+            verdict=Stage3Verdict.SAFE,
+            score=0.0,
+            skipped=True,
+        )
+    else:
+        promptguard = await run_promptguard(
+            extraction.raw_text,
+            classifier,
+            threshold=promptguard_threshold,
+            trust_tier=TrustTier.UNTRUSTED,
+            fail_closed=True,
+        )
+
+    return build_extracted_content(
+        request_id=request_id,
+        provenance=UploadProvenance(filename=filename, mime_hint=mime_hint),
+        extraction=extraction,
+        structural=structural,
+        promptguard=promptguard,
+        extract_mode=extract_mode,
+        content_type=content_type,
+        sanitizer_revision=sanitizer_revision,
+    )
 
 
 # ---------------------------------------------------------------------------
