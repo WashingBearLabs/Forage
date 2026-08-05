@@ -133,7 +133,7 @@ async def run_retrieve_pipeline(
 
     # -- Step 2: Check cache --
     if cache is not None:
-        cached = await cache.get(request.url)
+        cached = await cache.get(request.url, extract_mode=request.extract_mode)
         if cached is not None:
             logger.info("Cache hit for %s", request.url)
             return cached.model_copy(update={"request_id": request_id})
@@ -292,6 +292,7 @@ async def run_retrieve_pipeline(
         await cache.put(
             request.url,
             content,
+            extract_mode=request.extract_mode,
             domain=domain,
             news_domains=news_domains,
         )

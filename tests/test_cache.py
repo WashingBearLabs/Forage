@@ -3,25 +3,27 @@
 from __future__ import annotations
 
 import hashlib
+import pathlib
+
+# Ensure the retrieval service package is importable.
+import sys
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-# Ensure the retrieval service package is importable.
-import sys, pathlib  # noqa: E401
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "services" / "retrieval"))
+sys.path.insert(
+    0, str(pathlib.Path(__file__).resolve().parents[2] / "services" / "retrieval")
+)
 
-from cache import (  # noqa: E402
+from cache import (
+    _TRACKING_PARAMS,
     ContentCache,
     TrustTier,
-    _NO_CACHE_TIERS,
-    _TRACKING_PARAMS,
     cache_key,
     normalize_url,
 )
-from models import RetrievedContent, Stage2Verdict, Stage3Verdict  # noqa: E402
-
+from models import RetrievedContent, Stage2Verdict, Stage3Verdict
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -70,7 +72,10 @@ class TestNormalizeUrl:
         assert normalize_url(url) == "https://example.com"
 
     def test_strip_fragment(self) -> None:
-        assert normalize_url("https://example.com/page#section") == "https://example.com/page"
+        assert (
+            normalize_url("https://example.com/page#section")
+            == "https://example.com/page"
+        )
 
     def test_trailing_slash_removed(self) -> None:
         assert normalize_url("https://example.com/page/") == "https://example.com/page"
@@ -101,10 +106,15 @@ class TestNormalizeUrl:
 
     def test_preserves_path_case(self) -> None:
         # Path is case-sensitive per RFC 3986.
-        assert normalize_url("https://example.com/CasePath") == "https://example.com/CasePath"
+        assert (
+            normalize_url("https://example.com/CasePath")
+            == "https://example.com/CasePath"
+        )
 
     def test_port_preserved(self) -> None:
-        assert normalize_url("https://Example.COM:8080/p") == "https://example.com:8080/p"
+        assert (
+            normalize_url("https://Example.COM:8080/p") == "https://example.com:8080/p"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +131,8 @@ class TestCacheKey:
 
     def test_sha256(self) -> None:
         normalised = normalize_url("https://example.com")
-        expected = f"ret:{hashlib.sha256(normalised.encode()).hexdigest()}"
+        expected_input = f"{normalised}:summary"
+        expected = f"ret:{hashlib.sha256(expected_input.encode()).hexdigest()}"
         assert cache_key("https://example.com") == expected
 
     def test_same_url_different_tracking_params_same_key(self) -> None:
@@ -131,6 +142,14 @@ class TestCacheKey:
 
     def test_different_urls_different_keys(self) -> None:
         assert cache_key("https://a.com") != cache_key("https://b.com")
+
+    def test_different_extract_modes_have_different_keys(self) -> None:
+        """Summary entries cannot be returned for a full extraction request."""
+        url = "https://example.com"
+        assert cache_key(url, extract_mode="summary") != cache_key(
+            url,
+            extract_mode="full",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +195,33 @@ class TestContentCacheGetPut:
         assert result.cached_at is not None
         assert isinstance(result.cached_at, datetime)
         assert result.cached_at.tzinfo == UTC
+
+    @pytest.mark.asyncio()
+    async def test_summary_entry_is_not_returned_for_full_request(
+        self, cache: ContentCache, mock_redis: AsyncMock
+    ) -> None:
+        """A full request misses a cache entry produced by summary extraction."""
+        summary_content = _make_content(body="summary body")
+        stored: dict[str, str] = {}
+
+        async def fake_set(key: str, value: str, *, ex: int) -> bool:
+            stored[key] = value
+            return True
+
+        async def fake_get(key: str) -> str | None:
+            return stored.get(key)
+
+        mock_redis.set.side_effect = fake_set
+        mock_redis.get.side_effect = fake_get
+
+        await cache.put(
+            "https://example.com",
+            summary_content,
+            extract_mode="summary",
+            domain="example.com",
+        )
+
+        assert await cache.get("https://example.com", extract_mode="full") is None
 
     @pytest.mark.asyncio()
     async def test_get_no_client_returns_none(self) -> None:
@@ -247,9 +293,7 @@ class TestContentCacheGetPut:
     # -- round-trip ----------------------------------------------------------
 
     @pytest.mark.asyncio()
-    async def test_round_trip(
-        self, cache: ContentCache, mock_redis: AsyncMock
-    ) -> None:
+    async def test_round_trip(self, cache: ContentCache, mock_redis: AsyncMock) -> None:
         """Put then get returns equivalent content with cache_hit set."""
         original = _make_content(body="round trip test")
 

@@ -1,7 +1,7 @@
 """Valkey-backed content cache for the retrieval sidecar.
 
-Connects to Valkey DB 4.  Stores serialised ``RetrievedContent`` objects
-with TTL-based expiry keyed by SHA-256 of the normalised URL.
+Connects to Valkey DB 4. Stores serialised ``RetrievedContent`` objects with
+TTL-based expiry keyed by SHA-256 of the normalised URL and extraction mode.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import UTC, datetime
+from typing import Literal
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import redis.asyncio as aioredis  # type: ignore[import-untyped]
@@ -18,23 +19,27 @@ from models import RetrievedContent, TrustTier
 logger = logging.getLogger(__name__)
 
 # Tracking query parameters stripped during normalisation.
-_TRACKING_PARAMS: frozenset[str] = frozenset({
-    "utm_source",
-    "utm_medium",
-    "utm_campaign",
-    "utm_term",
-    "utm_content",
-    "fbclid",
-    "gclid",
-    "ref",
-    "source",
-})
+_TRACKING_PARAMS: frozenset[str] = frozenset(
+    {
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_term",
+        "utm_content",
+        "fbclid",
+        "gclid",
+        "ref",
+        "source",
+    }
+)
 
 # Trust tiers that must never be cached.
-_NO_CACHE_TIERS: frozenset[TrustTier] = frozenset({
-    TrustTier.UNTRUSTED,
-    TrustTier.BLOCKED,
-})
+_NO_CACHE_TIERS: frozenset[TrustTier] = frozenset(
+    {
+        TrustTier.UNTRUSTED,
+        TrustTier.BLOCKED,
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -63,11 +68,7 @@ def normalize_url(url: str) -> str:
 
     # Filter and sort query parameters
     params = parse_qs(parsed.query, keep_blank_values=True)
-    filtered = {
-        k: v
-        for k, v in params.items()
-        if k.lower() not in _TRACKING_PARAMS
-    }
+    filtered = {k: v for k, v in params.items() if k.lower() not in _TRACKING_PARAMS}
     sorted_query = urlencode(
         sorted(filtered.items()),
         doseq=True,
@@ -77,9 +78,10 @@ def normalize_url(url: str) -> str:
     return urlunparse((scheme, netloc, path, parsed.params, sorted_query, ""))
 
 
-def cache_key(url: str) -> str:
-    """Return the Valkey key for a URL."""
-    digest = hashlib.sha256(normalize_url(url).encode()).hexdigest()
+def cache_key(url: str, *, extract_mode: Literal["summary", "full"] = "summary") -> str:
+    """Return the Valkey key for a URL and content-shaping extraction mode."""
+    cache_input = f"{normalize_url(url)}:{extract_mode}"
+    digest = hashlib.sha256(cache_input.encode()).hexdigest()
     return f"ret:{digest}"
 
 
@@ -119,12 +121,14 @@ class ContentCache:
 
     # -- public API ----------------------------------------------------------
 
-    async def get(self, url: str) -> RetrievedContent | None:
+    async def get(
+        self, url: str, *, extract_mode: Literal["summary", "full"] = "summary"
+    ) -> RetrievedContent | None:
         """Fetch cached content for *url*, or ``None`` on miss."""
         if self._client is None:
             return None
 
-        key = cache_key(url)
+        key = cache_key(url, extract_mode=extract_mode)
         try:
             raw: bytes | None = await self._client.get(key)  # type: ignore[misc]
         except Exception:
@@ -147,6 +151,7 @@ class ContentCache:
         url: str,
         content: RetrievedContent,
         *,
+        extract_mode: Literal["summary", "full"] = "summary",
         ttl_hours: int = 24,
         domain: str = "",
         news_domains: list[str] | None = None,
@@ -168,7 +173,7 @@ class ContentCache:
         if news_domains and domain.lower() in {d.lower() for d in news_domains}:
             effective_ttl_hours = 1
 
-        key = cache_key(url)
+        key = cache_key(url, extract_mode=extract_mode)
         serialised = content.model_dump_json()
 
         try:

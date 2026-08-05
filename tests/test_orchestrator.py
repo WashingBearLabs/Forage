@@ -15,6 +15,7 @@ _retrieval_root = str(Path(__file__).resolve().parents[2] / "services" / "retrie
 if _retrieval_root not in sys.path:
     sys.path.insert(0, _retrieval_root)
 
+from cache import ContentCache  # noqa: E402
 from models import (  # noqa: E402
     RetrievedContent,
     Stage2Verdict,
@@ -239,6 +240,87 @@ async def test_retrieve_cache_hit_skips_pipeline(
     assert result.cache_hit is True
     mock_fetch.assert_not_called()
     cache_mock.put.assert_not_called()
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_summary_cache_does_not_serve_full_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A full pipeline request refetches rather than using a summary cache entry."""
+    from pipeline import orchestrator
+
+    cache = ContentCache()
+    cache_client = AsyncMock()
+    cache_entries: dict[str, str] = {}
+
+    async def get_cached(key: str) -> str | None:
+        return cache_entries.get(key)
+
+    async def store_cached(key: str, value: str, *, ex: int) -> bool:
+        cache_entries[key] = value
+        return True
+
+    cache_client.get.side_effect = get_cached
+    cache_client.set.side_effect = store_cached
+    cache._client = cache_client
+
+    fetch_result = _make_fetch_result()
+    monkeypatch.setattr(
+        orchestrator,
+        "validate_url",
+        AsyncMock(return_value=("93.184.216.34", "example.com")),
+    )
+    fetch = AsyncMock(return_value=fetch_result)
+    monkeypatch.setattr(orchestrator, "fetch_url", fetch)
+    monkeypatch.setattr(
+        orchestrator, "detect_content_type", MagicMock(return_value="html")
+    )
+    monkeypatch.setattr(
+        orchestrator, "extract_html", MagicMock(return_value=_make_extraction())
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "scan_structural",
+        MagicMock(return_value=_make_structural_clean()),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "run_promptguard",
+        AsyncMock(return_value=_make_pg_safe()),
+    )
+
+    def build_content(*, extract_mode: str, **kwargs: Any) -> RetrievedContent:
+        return RetrievedContent(
+            request_id=kwargs["request_id"],
+            source_url=kwargs["source_url"],
+            final_url=kwargs["final_url"],
+            body=f"{extract_mode} body",
+            word_count=2,
+            content_type="html",
+            trust_score=0.7,
+            trust_tier=TrustTier.STANDARD,
+            stage2_verdict=Stage2Verdict.CLEAN,
+            stage3_verdict=Stage3Verdict.SAFE,
+            domain=kwargs["domain"],
+        )
+
+    monkeypatch.setattr(orchestrator, "build_retrieved_content", build_content)
+
+    await run_retrieve_pipeline(
+        _make_retrieve_request(extract_mode="summary"),
+        cache=cache,
+        classifier=None,
+        config=_SAMPLE_CONFIG,
+    )
+    full_result = await run_retrieve_pipeline(
+        _make_retrieve_request(extract_mode="full"),
+        cache=cache,
+        classifier=None,
+        config=_SAMPLE_CONFIG,
+    )
+
+    assert fetch.await_count == 2
+    assert full_result.body == "full body"
 
 
 # ---------------------------------------------------------------------------
