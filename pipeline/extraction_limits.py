@@ -9,6 +9,7 @@ from promptguard.classifier import CHUNK_OVERLAP, MAX_SEQ_LEN
 
 MEBIBYTE = 1024 * 1024
 MAX_INPUT_BYTES = 50 * MEBIBYTE
+MAX_EXTRACTED_OUTPUT_BYTES = 2 * MEBIBYTE
 MAX_PDF_PAGES = 500
 MAX_CHILD_CPU_SECONDS = 20
 MAX_EXTRACTION_WALL_SECONDS = 90
@@ -64,7 +65,15 @@ class ExtractionSettings:
     @property
     def max_ipc_result_bytes(self) -> int:
         """Return the capped, length-framed child result payload size."""
-        return self.max_extracted_characters * 4 + 8 * 1024
+        return min(
+            MAX_EXTRACTED_OUTPUT_BYTES,
+            self.max_extracted_characters * 4 + 8 * 1024,
+        )
+
+    @property
+    def max_extracted_output_bytes(self) -> int:
+        """Return the hard UTF-8 output ceiling before classification."""
+        return min(MAX_EXTRACTED_OUTPUT_BYTES, self.max_extracted_characters * 4)
 
 
 def _bounded_int(

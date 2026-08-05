@@ -62,17 +62,25 @@ def _extract_pdf_path(path: Path, settings: ExtractionSettings) -> ExtractionRes
 
         page_texts: list[str] = []
         extracted_characters = 0
+        extracted_bytes = 0
         for page in reader.pages:
             page_text = page.extract_text() or ""
             extracted_characters += len(page_text)
-            if extracted_characters > settings.max_extracted_characters:
+            extracted_bytes += len(page_text.encode("utf-8"))
+            if (
+                extracted_characters > settings.max_extracted_characters
+                or extracted_bytes > settings.max_extracted_output_bytes
+            ):
                 raise PDFClassifiableTextLimitError(
                     "PDF text exceeds the PromptGuard classification budget"
                 )
             page_texts.append(page_text)
 
     raw_text = normalize_text("\n\n".join(page_texts))
-    if len(raw_text) > settings.max_extracted_characters:
+    if (
+        len(raw_text) > settings.max_extracted_characters
+        or len(raw_text.encode("utf-8")) > settings.max_extracted_output_bytes
+    ):
         raise PDFClassifiableTextLimitError(
             "PDF text exceeds the PromptGuard classification budget"
         )
@@ -198,6 +206,7 @@ def extract_pdf_in_subprocess(
         not isinstance(raw_text, str)
         or not isinstance(word_count, int)
         or len(raw_text) > settings.max_extracted_characters
+        or len(raw_text.encode("utf-8")) > settings.max_extracted_output_bytes
     ):
         raise PDFExtractionError("PDF extraction worker returned an invalid result")
     return ExtractionResult(

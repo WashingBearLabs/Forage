@@ -35,6 +35,7 @@ from models import (
     UploadProvenance,
 )
 from pipeline.extraction_limits import (
+    MAX_EXTRACTED_OUTPUT_BYTES,
     MAX_PROMPTGUARD_CHUNKS,
     ExtractionSettings,
     max_extracted_characters,
@@ -429,7 +430,10 @@ async def run_extract_pipeline(
     except Exception as exc:
         raise document_failure("extraction_failed", request_id) from exc
 
-    if len(extraction.raw_text) > max_extracted_characters(MAX_PROMPTGUARD_CHUNKS):
+    if (
+        len(extraction.raw_text) > max_extracted_characters(MAX_PROMPTGUARD_CHUNKS)
+        or len(extraction.raw_text.encode("utf-8")) > MAX_EXTRACTED_OUTPUT_BYTES
+    ):
         raise document_failure("content_too_large_to_classify", request_id)
     try:
         sanitization = await sanitize_and_structure(
@@ -481,6 +485,7 @@ async def run_extract_pipeline_from_file(
             extraction = extract_upload_text_file(
                 path,
                 max_characters=settings.max_extracted_characters,
+                max_output_bytes=settings.max_extracted_output_bytes,
             )
             content_type = "text"
     except UploadTextClassifiableLimitError as exc:
@@ -498,7 +503,11 @@ async def run_extract_pipeline_from_file(
     except OSError as exc:
         raise document_failure("extraction_failed", request_id) from exc
 
-    if len(extraction.raw_text) > settings.max_extracted_characters:
+    if (
+        len(extraction.raw_text) > settings.max_extracted_characters
+        or len(extraction.raw_text.encode("utf-8"))
+        > settings.max_extracted_output_bytes
+    ):
         raise document_failure("content_too_large_to_classify", request_id)
 
     try:

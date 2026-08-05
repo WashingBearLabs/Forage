@@ -10,6 +10,7 @@ import codecs
 import unicodedata
 from pathlib import Path
 
+from pipeline.extraction_limits import MAX_EXTRACTED_OUTPUT_BYTES
 from pipeline.stage1_extraction import ExtractionResult, normalize_text
 
 _PDF_MAGIC = b"%PDF-"
@@ -78,12 +79,14 @@ def extract_upload_text_file(
     path: Path,
     *,
     max_characters: int,
+    max_output_bytes: int = MAX_EXTRACTED_OUTPUT_BYTES,
     chunk_size: int = 64 * 1024,
 ) -> ExtractionResult:
     """Strictly decode a bounded text file without materializing a 50 MB upload."""
     decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
     parts: list[str] = []
     character_count = 0
+    output_bytes = 0
     control_count = 0
 
     try:
@@ -91,9 +94,14 @@ def extract_upload_text_file(
             while chunk := source.read(chunk_size):
                 decoded = decoder.decode(chunk)
                 character_count += len(decoded)
+                output_bytes += len(decoded.encode("utf-8"))
                 if character_count > max_characters:
                     raise UploadTextClassifiableLimitError(
                         "Upload text exceeds the PromptGuard classification budget"
+                    )
+                if output_bytes > max_output_bytes:
+                    raise UploadTextClassifiableLimitError(
+                        "Upload text exceeds the extracted output budget"
                     )
                 parts.append(decoded)
                 control_count += sum(
@@ -107,9 +115,14 @@ def extract_upload_text_file(
         raise UnsupportedUploadFormatError("Upload is not valid UTF-8 text") from exc
 
     character_count += len(decoded)
+    output_bytes += len(decoded.encode("utf-8"))
     if character_count > max_characters:
         raise UploadTextClassifiableLimitError(
             "Upload text exceeds the PromptGuard classification budget"
+        )
+    if output_bytes > max_output_bytes:
+        raise UploadTextClassifiableLimitError(
+            "Upload text exceeds the extracted output budget"
         )
     parts.append(decoded)
     text = "".join(parts)
@@ -130,6 +143,10 @@ def extract_upload_text_file(
     if len(normalized) > max_characters:
         raise UploadTextClassifiableLimitError(
             "Upload text exceeds the PromptGuard classification budget"
+        )
+    if len(normalized.encode("utf-8")) > max_output_bytes:
+        raise UploadTextClassifiableLimitError(
+            "Upload text exceeds the extracted output budget"
         )
     return ExtractionResult(
         title=None,
