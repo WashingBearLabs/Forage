@@ -1353,7 +1353,9 @@ async def test_post_extract_rejects_unsupported_binary(
     )
 
     assert response.status_code == 422
-    assert response.json()["error"] == "unsupported_format"
+    data = response.json()
+    assert data["error"] == "unsupported_format"
+    assert data["sanitizer_revision"]
 
 
 async def test_post_extract_uses_fixed_untrusted_policy(

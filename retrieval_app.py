@@ -196,9 +196,16 @@ async def pipeline_error_handler(
     exc: PipelineError,
 ) -> JSONResponse:
     """Return structured JSON for pipeline errors."""
+    content = exc.to_dict()
+    if request.url.path == "/extract":
+        content["sanitizer_revision"] = getattr(
+            request.app.state,
+            "sanitizer_revision",
+            derive_sanitizer_revision(request.app.state.config),
+        )
     return JSONResponse(
         status_code=422,
-        content=exc.to_dict(),
+        content=content,
     )
 
 
