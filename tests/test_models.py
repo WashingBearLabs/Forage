@@ -10,9 +10,7 @@ from pathlib import Path
 import pytest
 
 # Add the retrieval service root to sys.path so models is importable
-_retrieval_root = str(
-    Path(__file__).resolve().parents[2] / "services" / "retrieval"
-)
+_retrieval_root = str(Path(__file__).resolve().parents[2] / "services" / "retrieval")
 if _retrieval_root not in sys.path:
     sys.path.insert(0, _retrieval_root)
 
@@ -222,6 +220,7 @@ class TestSearchRequest:
     def test_defaults(self) -> None:
         req = SearchRequest(query="python pydantic")
         assert req.num_results == 5
+        assert req.promptguard_fail_closed is True
 
     def test_num_results_bounds(self) -> None:
         assert SearchRequest(query="q", num_results=1).num_results == 1
@@ -273,9 +272,7 @@ class TestSearchResponse:
     def test_valid_construction(self) -> None:
         resp = SearchResponse(
             results=[
-                SearchResult(
-                    title="R1", url="https://r1.com", snippet="s1"
-                ),
+                SearchResult(title="R1", url="https://r1.com", snippet="s1"),
             ],
             request_id=str(uuid.uuid4()),
             query="test",
@@ -283,9 +280,7 @@ class TestSearchResponse:
         assert len(resp.results) == 1
 
     def test_empty_results(self) -> None:
-        resp = SearchResponse(
-            results=[], request_id="abc123", query="nothing"
-        )
+        resp = SearchResponse(results=[], request_id="abc123", query="nothing")
         assert resp.results == []
 
     def test_serialization_roundtrip(self) -> None:
@@ -294,9 +289,7 @@ class TestSearchResponse:
                 SearchResult(
                     title="R1", url="https://r1.com", snippet="s1", engine="brave"
                 ),
-                SearchResult(
-                    title="R2", url="https://r2.com", snippet="s2"
-                ),
+                SearchResult(title="R2", url="https://r2.com", snippet="s2"),
             ],
             request_id="req-001",
             query="pydantic models",

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -20,7 +20,11 @@ from pydantic import BaseModel
 
 from cache import ContentCache
 from models import RetrievedContent, RetrieveRequest, SearchRequest, SearchResponse
-from pipeline.orchestrator import PipelineError, run_retrieve_pipeline, run_search_pipeline
+from pipeline.orchestrator import (
+    PipelineError,
+    run_retrieve_pipeline,
+    run_search_pipeline,
+)
 from promptguard.classifier import PromptGuardClassifier
 
 logger = logging.getLogger(__name__)
@@ -45,7 +49,8 @@ async def _check_valkey() -> bool:
         import redis.asyncio as aioredis  # type: ignore[import-untyped]
 
         client: aioredis.Redis = aioredis.from_url(  # type: ignore[assignment]
-            VALKEY_URL, socket_connect_timeout=2,
+            VALKEY_URL,
+            socket_connect_timeout=2,
         )
         await client.ping()  # type: ignore[misc]
         await client.aclose()
@@ -64,13 +69,14 @@ class HealthResponse(BaseModel):
     status: str
     promptguard_loaded: bool
     cache_connected: bool
+    capabilities: dict[str, int]
 
 
 # -- Lifespan --
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Startup/shutdown lifecycle."""
     # Load config
     config = _load_config()
@@ -98,9 +104,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
     # Shutdown
-    if app.state.cache is not None:
-        await app.state.cache.close()
-        app.state.cache = None
+    await app.state.cache.close()
 
 
 # -- App --
@@ -140,6 +144,7 @@ async def health(request: Request) -> HealthResponse:
         status="healthy",
         promptguard_loaded=request.app.state.classifier.loaded,
         cache_connected=valkey_connected,
+        capabilities={"search_sanitization": 1},
     )
 
 

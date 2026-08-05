@@ -43,6 +43,7 @@ async def test_health_returns_200(client: httpx.AsyncClient) -> None:
     assert data["status"] == "healthy"
     assert isinstance(data["promptguard_loaded"], bool)
     assert isinstance(data["cache_connected"], bool)
+    assert data["capabilities"]["search_sanitization"] == 1
 
 
 async def test_health_promptguard_defaults_false(

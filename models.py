@@ -7,7 +7,7 @@ into Poppy core.  All other pipeline internals stay inside the sidecar.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field, field_validator
 # ---------------------------------------------------------------------------
 
 
-class TrustTier(str, Enum):
+class TrustTier(StrEnum):
     """Domain trust classification."""
 
     TRUSTED = "trusted"
@@ -27,7 +27,7 @@ class TrustTier(str, Enum):
     BLOCKED = "blocked"
 
 
-class Stage2Verdict(str, Enum):
+class Stage2Verdict(StrEnum):
     """Stage-2 (structural heuristic) injection verdict."""
 
     CLEAN = "clean"
@@ -35,7 +35,7 @@ class Stage2Verdict(str, Enum):
     BLOCKED = "blocked"
 
 
-class Stage3Verdict(str, Enum):
+class Stage3Verdict(StrEnum):
     """Stage-3 (PromptGuard ML) injection verdict."""
 
     SAFE = "safe"
@@ -76,9 +76,7 @@ class RetrievedContent(BaseModel):
         ..., description="Sanitised main content (never raw HTML/PDF bytes)"
     )
     word_count: int = Field(..., ge=0, description="Word count of body")
-    content_type: str = Field(
-        ..., description="Source format: 'html' or 'pdf'"
-    )
+    content_type: str = Field(..., description="Source format: 'html' or 'pdf'")
 
     # -- Trust --
     trust_score: float = Field(
@@ -170,6 +168,13 @@ class SearchRequest(BaseModel):
     num_results: int = Field(
         default=5, ge=1, le=20, description="Number of results to return"
     )
+    promptguard_fail_closed: bool = Field(
+        default=True,
+        description=(
+            "When True, drop search results if PromptGuard is unavailable "
+            "(fail-closed). When False, allow with a suspicion marker (fail-open)."
+        ),
+    )
 
 
 class SearchResult(BaseModel):
@@ -181,7 +186,7 @@ class SearchResult(BaseModel):
     engine: str | None = Field(default=None, description="Search engine used")
     suspicious: bool = Field(
         default=False,
-        description="Whether Stage 2 flagged this snippet as suspicious",
+        description="Whether Stage 2 or Stage 3 flagged this result as suspicious",
     )
 
 

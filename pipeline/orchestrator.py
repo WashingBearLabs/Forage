@@ -10,9 +10,12 @@ Stage 3 halts the pipeline and returns a quarantine
 from __future__ import annotations
 
 import logging
+import re
+import time
+import unicodedata
 import uuid
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse, urlsplit, urlunsplit
 
 import httpx
 
@@ -27,9 +30,9 @@ from models import (
     Stage3Verdict,
     TrustTier,
 )
-from pipeline.stage1_extraction import ExtractionResult, extract_html
+from pipeline.stage1_extraction import extract_html
 from pipeline.stage1_pdf import detect_content_type, extract_pdf
-from pipeline.stage2_structural import StructuralScanResult, scan_structural
+from pipeline.stage2_structural import scan_structural
 from pipeline.stage3_promptguard import PromptGuardResult, run_promptguard
 from pipeline.stage4_structuring import build_retrieved_content
 from pipeline.stage5_url_audit import ContentTooLargeError, fetch_url
@@ -71,7 +74,7 @@ async def run_retrieve_pipeline(
     request: RetrieveRequest,
     *,
     cache: ContentCache | None,
-    classifier: "PromptGuardClassifier | None",
+    classifier: PromptGuardClassifier | None,
     config: dict[str, Any],
 ) -> RetrievedContent:
     """Run the full 5-stage retrieval pipeline.
@@ -176,7 +179,8 @@ async def run_retrieve_pipeline(
 
     # -- Step 4: Detect content type and run Stage 1 extraction --
     content_type = detect_content_type(
-        fetch_result.content_type, fetch_result.response_body,
+        fetch_result.content_type,
+        fetch_result.response_body,
     )
 
     if content_type == "pdf":
@@ -195,11 +199,14 @@ async def run_retrieve_pipeline(
     if structural.verdict == Stage2Verdict.BLOCKED:
         # Hard gate: return quarantine response
         logger.warning(
-            "Stage 2 BLOCKED for %s — returning quarantine", request.url,
+            "Stage 2 BLOCKED for %s — returning quarantine",
+            request.url,
         )
         # Build a PromptGuard placeholder (skipped)
         pg_result = PromptGuardResult(
-            verdict=Stage3Verdict.SAFE, score=0.0, skipped=True,
+            verdict=Stage3Verdict.SAFE,
+            score=0.0,
+            skipped=True,
         )
         content = build_retrieved_content(
             request_id=request_id,
@@ -222,7 +229,10 @@ async def run_retrieve_pipeline(
     # -- Step 6: Stage 3 PromptGuard --
     # Resolve trust tier for skip logic
     _trust_tier = _resolve_request_trust_tier(
-        domain, request.trusted_domains, request.verified_domains, blocked_domains,
+        domain,
+        request.trusted_domains,
+        request.verified_domains,
+        blocked_domains,
     )
     pg_result = await run_promptguard(
         extraction.raw_text,
@@ -295,6 +305,83 @@ async def run_retrieve_pipeline(
 
 # Default SearXNG URL (overridable via environment)
 _DEFAULT_SEARXNG_URL = "http://poppy-searxng:8080"
+_MAX_SEARCH_RESULTS_SCANNED = 20
+_MAX_SEARCH_TITLE_LENGTH = 512
+_MAX_SEARCH_URL_LENGTH = 2_048
+_MAX_SEARCH_SNIPPET_LENGTH = 2_000
+_LOCAL_PROMPTGUARD_TARGET_MS = 1_000
+_TOOL_AUGMENTED_FIRST_TOKEN_TARGET_MS = 5_000
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def _normalize_search_text(value: object, *, max_length: int) -> str:
+    """Normalize and bound a model-visible search field before scanning it."""
+    if not isinstance(value, str):
+        return ""
+    normalized = unicodedata.normalize("NFC", value)
+    normalized = _CONTROL_CHARS_RE.sub("", normalized)
+    normalized = " ".join(normalized.split())
+    return normalized[:max_length]
+
+
+def _sanitize_search_text(value: object, *, max_length: int) -> tuple[str, str]:
+    """Apply Stage 1 extraction to one bounded search text field."""
+    normalized = _normalize_search_text(value, max_length=max_length)
+    extraction = extract_html(f"<div>{normalized}</div>")
+    return (
+        _normalize_search_text(extraction.raw_text, max_length=max_length),
+        _normalize_search_text(extraction.raw_text, max_length=max_length),
+    )
+
+
+def _canonicalize_search_url(value: object) -> tuple[str, str] | None:
+    """Normalize a result URL and allow only canonical HTTP(S) URLs."""
+    normalized = _normalize_search_text(value, max_length=_MAX_SEARCH_URL_LENGTH)
+    if not normalized or any(character.isspace() for character in normalized):
+        return None
+
+    # Stage 1 processes this field before its Stage 2 structural scan, even
+    # though the model-visible form is the canonical URL rather than prose.
+    _visible, scanned = _sanitize_search_text(
+        unquote(normalized),
+        max_length=_MAX_SEARCH_URL_LENGTH,
+    )
+    try:
+        parsed = urlsplit(normalized)
+        port = parsed.port
+    except ValueError:
+        return None
+
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return None
+
+    host = parsed.hostname.lower()
+    if ":" in host:
+        host = f"[{host}]"
+    netloc = host if port is None else f"{host}:{port}"
+    canonical = urlunsplit(
+        (
+            parsed.scheme.lower(),
+            netloc,
+            parsed.path,
+            parsed.query,
+            "",
+        )
+    )
+    return (
+        _normalize_search_text(canonical, max_length=_MAX_SEARCH_URL_LENGTH),
+        scanned,
+    )
+
+
+def _search_result_promptguard_input(title: str, url: str, snippet: str) -> str:
+    """Build the single bounded PromptGuard input for a complete result."""
+    return f"Title: {title}\nURL: {url}\nSnippet: {snippet}"
 
 
 async def run_search_pipeline(
@@ -304,23 +391,24 @@ async def run_search_pipeline(
     config: dict[str, Any],
     classifier: Any = None,
     promptguard_threshold: float = 0.85,
-    fail_closed: bool = True,
 ) -> SearchResponse:
-    """Run a web search through SearXNG with snippet sanitization.
+    """Run a web search through SearXNG with complete-result sanitization.
 
-    Queries SearXNG for results, then sanitizes each snippet through
-    Stage 1 (HTML extraction), Stage 2 (structural scan), and
-    Stage 3 (PromptGuard ML classification).
+    Queries SearXNG for results, then sanitizes every model-visible title,
+    URL, and snippet through Stage 1 (HTML extraction), Stage 2 (structural
+    scan), and one aggregate Stage 3 PromptGuard classification per result.
+    At most ``_MAX_SEARCH_RESULTS_SCANNED`` results are classified, bounding
+    search-path inference work to 20 PromptGuard passes.
 
-    - BLOCKED snippets (Stage 2 or 3) are omitted from the response.
-    - SUSPICIOUS snippets are included with a ``suspicious`` flag.
+    - BLOCKED result fields (Stage 2 or 3) omit the entire result.
+    - SUSPICIOUS fields are included with a ``suspicious`` flag.
     - SearXNG errors raise :class:`PipelineError` with a descriptive message.
     """
     request_id = uuid.uuid4().hex
 
     # -- Call SearXNG --
     # Request extra results to compensate for any BLOCKED omissions.
-    fetch_limit = min(request.num_results * 2, 40)
+    fetch_limit = min(request.num_results * 2, _MAX_SEARCH_RESULTS_SCANNED)
     raw_results: list[dict[str, Any]] = []
     unresponsive_engines: list[str] = []
     try:
@@ -353,61 +441,108 @@ async def run_search_pipeline(
             request_id=request_id,
         ) from exc
 
-    # -- Sanitize snippets through Stage 1 + 2 --
+    # -- Sanitize complete results through Stages 1-3 --
     sanitized_results: list[SearchResult] = []
+    promptguard_started = time.perf_counter()
+    promptguard_scanned = 0
     for raw in raw_results:
         if len(sanitized_results) >= request.num_results:
             break
 
-        title = raw.get("title", "")
-        url = raw.get("url", "")
-        snippet = raw.get("content", "")
+        title, title_scan_text = _sanitize_search_text(
+            raw.get("title", ""),
+            max_length=_MAX_SEARCH_TITLE_LENGTH,
+        )
+        canonical_url = _canonicalize_search_url(raw.get("url", ""))
+        if canonical_url is None:
+            logger.info("Omitting search result with invalid URL")
+            continue
+        url, url_scan_text = canonical_url
+        snippet, snippet_scan_text = _sanitize_search_text(
+            raw.get("content", ""),
+            max_length=_MAX_SEARCH_SNIPPET_LENGTH,
+        )
         engine = raw.get("engine")
         suspicious = False
 
-        # Stage 1: strip any HTML from snippet
-        if snippet:
-            extraction = extract_html(snippet)
-            clean_snippet = extraction.main_content
-
-            # Stage 2: structural scan
-            scan = scan_structural(clean_snippet)
+        # Stage 2: scan every model-visible field before exposing the result.
+        blocked = False
+        for field_name, field_text in (
+            ("title", title_scan_text),
+            ("url", url_scan_text),
+            ("snippet", snippet_scan_text),
+        ):
+            scan = scan_structural(field_text)
             if scan.verdict == Stage2Verdict.BLOCKED:
                 logger.info(
-                    "Omitting blocked search result (structural): %s", url,
+                    "Omitting blocked search result (%s structural): %s",
+                    field_name,
+                    url,
                 )
-                continue
+                blocked = True
+                break
             if scan.verdict == Stage2Verdict.SUSPICIOUS:
                 suspicious = True
+        if blocked:
+            continue
 
-            # Stage 3: PromptGuard ML classification on snippet text.
-            if clean_snippet and classifier is not None:
-                pg_result = await run_promptguard(
-                    clean_snippet,
-                    classifier,
-                    threshold=promptguard_threshold,
-                    trust_tier="standard",
-                    fail_closed=fail_closed,
-                )
-                if pg_result.verdict == Stage3Verdict.INJECTION_DETECTED:
-                    logger.info(
-                        "Omitting blocked search result (promptguard score=%.2f): %s",
-                        pg_result.score,
-                        url,
-                    )
-                    continue
-                if pg_result.score > 0.5:
-                    suspicious = True
-        else:
-            clean_snippet = ""
+        # Stage 3 always runs, including when the classifier is unavailable.
+        # run_promptguard then honors request.promptguard_fail_closed.
+        pg_result = await run_promptguard(
+            _search_result_promptguard_input(title, url, snippet),
+            classifier,
+            threshold=promptguard_threshold,
+            trust_tier="standard",
+            fail_closed=request.promptguard_fail_closed,
+        )
+        promptguard_scanned += 1
+        if pg_result.verdict == Stage3Verdict.INJECTION_DETECTED:
+            logger.info(
+                "Omitting blocked search result (promptguard score=%.2f): %s",
+                pg_result.score,
+                url,
+            )
+            continue
+        if pg_result.score > 0.5:
+            suspicious = True
 
-        sanitized_results.append(SearchResult(
-            title=title,
-            url=url,
-            snippet=clean_snippet,
-            engine=engine,
-            suspicious=suspicious,
-        ))
+        sanitized_results.append(
+            SearchResult(
+                title=title,
+                url=url,
+                snippet=snippet,
+                engine=engine if isinstance(engine, str) else None,
+                suspicious=suspicious,
+            )
+        )
+
+    promptguard_duration_ms = round(
+        (time.perf_counter() - promptguard_started) * 1000,
+        2,
+    )
+    logger.info(
+        "search_promptguard_complete",
+        extra={
+            "scanned_results": promptguard_scanned,
+            "max_scanned_results": _MAX_SEARCH_RESULTS_SCANNED,
+            "duration_ms": promptguard_duration_ms,
+            "local_target_ms": _LOCAL_PROMPTGUARD_TARGET_MS,
+            "tool_augmented_first_token_target_ms": (
+                _TOOL_AUGMENTED_FIRST_TOKEN_TARGET_MS
+            ),
+        },
+    )
+    if promptguard_duration_ms > _LOCAL_PROMPTGUARD_TARGET_MS:
+        logger.warning(
+            "search_promptguard_local_latency_target_exceeded",
+            extra={
+                "duration_ms": promptguard_duration_ms,
+                "local_target_ms": _LOCAL_PROMPTGUARD_TARGET_MS,
+                "tool_augmented_first_token_target_ms": (
+                    _TOOL_AUGMENTED_FIRST_TOKEN_TARGET_MS
+                ),
+            },
+        )
 
     return SearchResponse(
         results=sanitized_results,
