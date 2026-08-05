@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from poppy.core.abilities.builtin.canvas import FILE_RECALL_FAILURE_MESSAGES
+
 # Add the retrieval service root to sys.path so app is importable
 _retrieval_root = str(Path(__file__).resolve().parents[2] / "services" / "retrieval")
 if _retrieval_root not in sys.path:
@@ -1294,6 +1296,11 @@ def test_document_failure_taxonomy_has_fixed_reason(error: str) -> None:
 
     assert failure.to_dict()["error"] == error
     assert failure.reason == DOCUMENT_FAILURE_REASONS[error]
+
+
+def test_file_recall_failure_messages_cover_document_taxonomy() -> None:
+    """Every stable sidecar document token has a core recall explanation."""
+    assert set(DOCUMENT_FAILURE_CODES) <= set(FILE_RECALL_FAILURE_MESSAGES)
 
 
 @pytest.mark.parametrize(
