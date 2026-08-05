@@ -19,6 +19,7 @@ import yaml
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from cache import ContentCache
 from models import (
@@ -29,8 +30,10 @@ from models import (
     SearchResponse,
 )
 from pipeline.orchestrator import (
+    DOCUMENT_FAILURE_REASONS,
     PipelineError,
     UnsupportedFormatError,
+    document_failure,
     run_extract_pipeline,
     run_retrieve_pipeline,
     run_search_pipeline,
@@ -87,8 +90,68 @@ class HealthResponse(BaseModel):
 _MAX_FILENAME_LENGTH = 255
 _MAX_MIME_HINT_LENGTH = 255
 _MAX_REQUEST_ID_LENGTH = 128
+_MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
+_UPLOAD_READ_CHUNK_SIZE = 1024 * 1024
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+
+class _RequestBodyTooLargeError(Exception):
+    """Raised internally when an ASGI request body crosses its byte limit."""
+
+
+class DocumentSizeLimitMiddleware:
+    """Reject oversized extract requests while their ASGI body is still streaming."""
+
+    def __init__(self, app: ASGIApp, *, max_bytes: int) -> None:
+        self._app = app
+        self._max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Count received bytes without trusting Content-Length."""
+        if scope["type"] != "http" or scope["path"] != "/extract":
+            await self._app(scope, receive, send)
+            return
+
+        received_bytes = 0
+
+        async def receive_limited() -> Message:
+            nonlocal received_bytes
+            message = await receive()
+            if message["type"] == "http.request":
+                received_bytes += len(message.get("body", b""))
+                if received_bytes > self._max_bytes:
+                    raise _RequestBodyTooLargeError
+            return message
+
+        try:
+            await self._app(scope, receive_limited, send)
+        except _RequestBodyTooLargeError:
+            response = JSONResponse(
+                status_code=413,
+                content={
+                    "error": "content_too_large",
+                    "reason": DOCUMENT_FAILURE_REASONS["content_too_large"],
+                },
+            )
+            await response(scope, receive, send)
+
+
+async def _read_upload_bytes(
+    file: UploadFile,
+    *,
+    max_bytes: int = _MAX_DOCUMENT_BYTES,
+    chunk_size: int = _UPLOAD_READ_CHUNK_SIZE,
+) -> bytes:
+    """Read an upload incrementally and enforce the file-byte extraction cap."""
+    chunks: list[bytes] = []
+    received_bytes = 0
+    while chunk := await file.read(chunk_size):
+        received_bytes += len(chunk)
+        if received_bytes > max_bytes:
+            raise document_failure("content_too_large", uuid.uuid4().hex)
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _sanitize_upload_metadata(
@@ -185,6 +248,7 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+app.add_middleware(DocumentSizeLimitMiddleware, max_bytes=_MAX_DOCUMENT_BYTES)
 
 
 # -- Error handler --
@@ -257,6 +321,11 @@ async def extract(
     This unauthenticated endpoint is intentionally reachable only on poppy-net
     (Traefik is disabled). Filename and MIME hint are display-only metadata;
     downstream consumers must never use them as filesystem paths.
+
+    Document failures use these stable ``error`` tokens: ``content_too_large``,
+    ``content_too_large_to_classify``, ``pdf_encrypted``, ``pdf_no_text``,
+    ``unsupported_format``, ``extraction_failed``, and ``busy``. ``reason`` is
+    always a fixed, content-free user message.
     """
     del timeout_s
     safe_filename, safe_mime_hint, safe_request_id = _sanitize_upload_metadata(
@@ -277,7 +346,7 @@ async def extract(
             safe_request_id,
         )
     return await run_extract_pipeline(
-        await file.read(),
+        await _read_upload_bytes(file),
         filename=safe_filename,
         mime_hint=safe_mime_hint,
         extract_mode=extract_mode,

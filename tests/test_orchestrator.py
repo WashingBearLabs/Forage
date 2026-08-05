@@ -25,12 +25,16 @@ from models import (  # noqa: E402
     TrustTier,
 )
 from pipeline.orchestrator import (  # noqa: E402
+    DOCUMENT_FAILURE_CODES,
+    DOCUMENT_FAILURE_REASONS,
     PipelineError,
+    document_failure,
     run_extract_pipeline,
     run_retrieve_pipeline,
     run_search_pipeline,
 )
 from pipeline.stage1_extraction import ExtractionResult  # noqa: E402
+from pipeline.stage1_pdf import PDFExtractionError  # noqa: E402
 from pipeline.stage1_upload import (  # noqa: E402
     UnsupportedUploadFormatError,
     detect_upload_content_type,
@@ -81,6 +85,30 @@ def _make_text_pdf(text: str) -> bytes:
     escaped_text = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
     stream.set_data(f"BT /F1 12 Tf 72 720 Td ({escaped_text}) Tj ET".encode("latin-1"))
     page[NameObject("/Contents")] = stream
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def _make_blank_pdf() -> bytes:
+    """Create an image-only stand-in with no PDF text layer."""
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def _make_encrypted_pdf(password: str) -> bytes:
+    """Create a real encrypted PDF for endpoint coverage."""
+    from pypdf import PdfReader, PdfWriter
+
+    source = PdfReader(io.BytesIO(_make_text_pdf("Encrypted upload content")))
+    writer = PdfWriter()
+    writer.append_pages_from_reader(source)
+    writer.encrypt(password)
     output = io.BytesIO()
     writer.write(output)
     return output.getvalue()
@@ -1244,6 +1272,18 @@ async def test_post_search_endpoint_searxng_error(client: httpx.AsyncClient) -> 
 
 
 @pytest.mark.parametrize(
+    "error",
+    DOCUMENT_FAILURE_CODES,
+)
+def test_document_failure_taxonomy_has_fixed_reason(error: str) -> None:
+    """Every stable document token is emitted in ``error`` with a safe reason."""
+    failure = document_failure(error, "document-request")
+
+    assert failure.to_dict()["error"] == error
+    assert failure.reason == DOCUMENT_FAILURE_REASONS[error]
+
+
+@pytest.mark.parametrize(
     "content_bytes",
     [
         b"",
@@ -1342,6 +1382,43 @@ async def test_post_extract_pdf_endpoint_returns_pdf_content(
     assert data["stage3_verdict"] == "safe"
 
 
+@pytest.mark.parametrize("password", ["required-password", ""])
+async def test_post_extract_encrypted_pdf_uses_specific_taxonomy(
+    client: httpx.AsyncClient, password: str
+) -> None:
+    """Password-protected and blank-password PDFs use ``pdf_encrypted``."""
+    response = await client.post(
+        "/extract",
+        files={
+            "file": (
+                "encrypted.pdf",
+                _make_encrypted_pdf(password),
+                "application/pdf",
+            )
+        },
+        data={"filename": "encrypted.pdf"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"] == "pdf_encrypted"
+    assert response.json()["reason"] == DOCUMENT_FAILURE_REASONS["pdf_encrypted"]
+
+
+async def test_post_extract_image_only_pdf_uses_specific_taxonomy(
+    client: httpx.AsyncClient,
+) -> None:
+    """PDFs with no text layer are distinct from encrypted PDFs."""
+    response = await client.post(
+        "/extract",
+        files={"file": ("scan.pdf", _make_blank_pdf(), "application/pdf")},
+        data={"filename": "scan.pdf"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"] == "pdf_no_text"
+    assert response.json()["reason"] == DOCUMENT_FAILURE_REASONS["pdf_no_text"]
+
+
 async def test_post_extract_rejects_unsupported_binary(
     client: httpx.AsyncClient,
 ) -> None:
@@ -1355,7 +1432,36 @@ async def test_post_extract_rejects_unsupported_binary(
     assert response.status_code == 422
     data = response.json()
     assert data["error"] == "unsupported_format"
+    assert data["reason"] == DOCUMENT_FAILURE_REASONS["unsupported_format"]
     assert data["sanitizer_revision"]
+
+
+async def test_extraction_failure_reason_does_not_leak_document_text() -> None:
+    """Raw parser errors cannot carry document bytes over the API boundary."""
+    document_substring = "secret document sentence"
+    classifier = MagicMock()
+
+    with (
+        patch(
+            "pipeline.orchestrator.extract_pdf",
+            side_effect=PDFExtractionError(f"Parser failed near {document_substring}"),
+        ),
+        pytest.raises(PipelineError) as exc_info,
+    ):
+        await run_extract_pipeline(
+            b"%PDF-1.7",
+            filename="document.pdf",
+            mime_hint="application/pdf",
+            extract_mode="full",
+            request_id="document-request",
+            classifier=classifier,
+            promptguard_threshold=0.85,
+            sanitizer_revision="test-revision",
+        )
+
+    assert exc_info.value.error == "extraction_failed"
+    assert exc_info.value.reason == DOCUMENT_FAILURE_REASONS["extraction_failed"]
+    assert document_substring not in exc_info.value.reason
 
 
 async def test_post_extract_uses_fixed_untrusted_policy(

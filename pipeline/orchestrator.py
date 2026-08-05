@@ -33,7 +33,14 @@ from models import (
     UploadProvenance,
 )
 from pipeline.stage1_extraction import ExtractionResult, extract_html
-from pipeline.stage1_pdf import PDFExtractionError, detect_content_type, extract_pdf
+from pipeline.stage1_pdf import (
+    PDFEncryptedError,
+    PDFExtractionError,
+    PDFNoTextError,
+    PDFTooLargeError,
+    detect_content_type,
+    extract_pdf,
+)
 from pipeline.stage1_upload import (
     UnsupportedUploadFormatError,
     detect_upload_content_type,
@@ -59,6 +66,31 @@ logger = logging.getLogger(__name__)
 # Error helpers
 # ---------------------------------------------------------------------------
 
+DOCUMENT_FAILURE_CODES = frozenset(
+    {
+        "content_too_large",
+        "content_too_large_to_classify",
+        "pdf_encrypted",
+        "pdf_no_text",
+        "unsupported_format",
+        "extraction_failed",
+        "busy",
+    }
+)
+
+DOCUMENT_FAILURE_REASONS = {
+    "content_too_large": (
+        "Document exceeds the 50 MB extraction limit. Documents between 50 MB "
+        "and the core upload limit of 100 MB can be uploaded but cannot be extracted."
+    ),
+    "content_too_large_to_classify": ("Document text is too large to classify safely."),
+    "pdf_encrypted": "PDF is encrypted and cannot be extracted.",
+    "pdf_no_text": "PDF contains no extractable text. OCR is not supported.",
+    "unsupported_format": "Document format is unsupported or its content is invalid.",
+    "extraction_failed": "Document extraction failed.",
+    "busy": "Document extraction is currently busy. Please try again.",
+}
+
 
 class PipelineError(Exception):
     """Base class for pipeline errors that produce structured JSON."""
@@ -82,6 +114,17 @@ class UnsupportedFormatError(PipelineError):
 
     def __init__(self, reason: str, request_id: str) -> None:
         super().__init__("unsupported_format", reason, request_id)
+
+
+def document_failure(error: str, request_id: str) -> PipelineError:
+    """Build a content-free, taxonomy-backed document extraction failure."""
+    if error not in DOCUMENT_FAILURE_CODES:
+        raise ValueError(f"Unsupported document failure code: {error}")
+    return PipelineError(
+        error=error,
+        reason=DOCUMENT_FAILURE_REASONS[error],
+        request_id=request_id,
+    )
 
 
 async def sanitize_and_structure(
@@ -358,9 +401,17 @@ async def run_extract_pipeline(
             else extract_upload_text(content_bytes, mime_hint)
         )
     except UnsupportedUploadFormatError as exc:
-        raise UnsupportedFormatError(str(exc), request_id) from exc
+        raise document_failure("unsupported_format", request_id) from exc
+    except PDFTooLargeError as exc:
+        raise document_failure("content_too_large", request_id) from exc
+    except PDFEncryptedError as exc:
+        raise document_failure("pdf_encrypted", request_id) from exc
+    except PDFNoTextError as exc:
+        raise document_failure("pdf_no_text", request_id) from exc
     except PDFExtractionError as exc:
-        raise UnsupportedFormatError(str(exc), request_id) from exc
+        raise document_failure("extraction_failed", request_id) from exc
+    except Exception as exc:
+        raise document_failure("extraction_failed", request_id) from exc
 
     sanitization = await sanitize_and_structure(
         extraction=extraction,

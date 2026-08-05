@@ -80,6 +80,18 @@ class PDFExtractionError(Exception):
     """Raised when PDF text extraction fails."""
 
 
+class PDFTooLargeError(PDFExtractionError):
+    """Raised when a PDF exceeds the extraction byte limit."""
+
+
+class PDFEncryptedError(PDFExtractionError):
+    """Raised when a PDF is encrypted, including with an empty password."""
+
+
+class PDFNoTextError(PDFExtractionError):
+    """Raised when a PDF has no extractable text layer."""
+
+
 def extract_pdf(pdf_bytes: bytes) -> ExtractionResult:
     """Extract text from a PDF's text layer.
 
@@ -99,11 +111,16 @@ def extract_pdf(pdf_bytes: bytes) -> ExtractionResult:
         If the PDF contains no extractable text (e.g. scanned/image PDF).
     """
     if len(pdf_bytes) > _MAX_PDF_SIZE:
-        raise PDFExtractionError(
+        raise PDFTooLargeError(
             f"PDF exceeds maximum size of {_MAX_PDF_SIZE // (1024 * 1024)}MB"
         )
 
     reader = PdfReader(io.BytesIO(pdf_bytes))
+    if reader.is_encrypted:
+        # Test whether a blank password opens the document, but never extract
+        # from encrypted PDFs: their classification must not depend on pypdf.
+        reader.decrypt("")
+        raise PDFEncryptedError("PDF is encrypted")
 
     # -- Extract text from every page --
     page_texts: list[str] = []
@@ -115,7 +132,7 @@ def extract_pdf(pdf_bytes: bytes) -> ExtractionResult:
 
     # -- Check for image-only PDFs (no text layer) --
     if not raw_text.strip():
-        raise PDFExtractionError(
+        raise PDFNoTextError(
             "PDF contains no extractable text (scanned/image PDF). "
             "OCR is not supported."
         )

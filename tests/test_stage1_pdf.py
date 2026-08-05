@@ -9,20 +9,18 @@ from pathlib import Path
 import pytest
 
 # Add the retrieval service root to sys.path so pipeline is importable
-_retrieval_root = str(
-    Path(__file__).resolve().parents[2] / "services" / "retrieval"
-)
+_retrieval_root = str(Path(__file__).resolve().parents[2] / "services" / "retrieval")
 if _retrieval_root not in sys.path:
     sys.path.insert(0, _retrieval_root)
 
-from pypdf import PdfWriter  # noqa: E402
-
 from pipeline.stage1_extraction import ExtractionResult  # noqa: E402
 from pipeline.stage1_pdf import (  # noqa: E402
-    PDFExtractionError,
+    PDFEncryptedError,
+    PDFNoTextError,
     detect_content_type,
     extract_pdf,
 )
+from pypdf import PdfReader, PdfWriter  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers -- build minimal PDFs in memory
@@ -47,15 +45,11 @@ def _make_text_pdf(
         # so we build a content stream manually.
         page = writer.pages[-1]
         # Build a minimal PDF content stream with text
-        content = (
-            f"BT /F1 12 Tf 72 720 Td ({_pdf_escape(text)}) Tj ET"
-        )
+        content = f"BT /F1 12 Tf 72 720 Td ({_pdf_escape(text)}) Tj ET"
         # Add a font resource so the content stream is valid
         from pypdf.generic import (
-            ArrayObject,
             DictionaryObject,
             NameObject,
-            TextStringObject,
         )
 
         font_dict = DictionaryObject()
@@ -70,10 +64,7 @@ def _make_text_pdf(
         page[NameObject("/Resources")] = resources
 
         # Encode content stream
-        import zlib
-
-        encoded = zlib.compress(content.encode("latin-1"))
-        from pypdf.generic import DecodedStreamObject, EncodedStreamObject
+        from pypdf.generic import DecodedStreamObject
 
         stream = DecodedStreamObject()
         stream.set_data(content.encode("latin-1"))
@@ -106,6 +97,17 @@ def _make_blank_pdf(num_pages: int = 1) -> bytes:
     writer = PdfWriter()
     for _ in range(num_pages):
         writer.add_blank_page(width=612, height=792)
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
+
+
+def _make_encrypted_pdf(password: str) -> bytes:
+    """Create a real encrypted PDF from a text-layer document."""
+    source_reader = PdfReader(io.BytesIO(_make_text_pdf(["Encrypted content."])))
+    writer = PdfWriter()
+    writer.append_pages_from_reader(source_reader)
+    writer.encrypt(password)
     buf = io.BytesIO()
     writer.write(buf)
     return buf.getvalue()
@@ -163,16 +165,12 @@ class TestMetadataStripping:
     """Test that all PDF metadata fields are stripped from the output."""
 
     def test_author_stripped(self) -> None:
-        pdf_bytes = _make_text_pdf(
-            ["Content."], author="Secret Author"
-        )
+        pdf_bytes = _make_text_pdf(["Content."], author="Secret Author")
         result = extract_pdf(pdf_bytes)
         assert result.author is None
 
     def test_title_stripped(self) -> None:
-        pdf_bytes = _make_text_pdf(
-            ["Content."], title="Secret Title"
-        )
+        pdf_bytes = _make_text_pdf(["Content."], title="Secret Title")
         result = extract_pdf(pdf_bytes)
         assert result.title is None
 
@@ -209,13 +207,23 @@ class TestImageOnlyPDF:
 
     def test_blank_pdf_raises_error(self) -> None:
         pdf_bytes = _make_blank_pdf(num_pages=1)
-        with pytest.raises(PDFExtractionError, match="no extractable text"):
+        with pytest.raises(PDFNoTextError, match="no extractable text"):
             extract_pdf(pdf_bytes)
 
     def test_multi_page_blank_raises_error(self) -> None:
         pdf_bytes = _make_blank_pdf(num_pages=3)
-        with pytest.raises(PDFExtractionError, match="OCR is not supported"):
+        with pytest.raises(PDFNoTextError, match="OCR is not supported"):
             extract_pdf(pdf_bytes)
+
+
+class TestEncryptedPDF:
+    """Test deterministic encrypted-PDF identification using real PDF fixtures."""
+
+    @pytest.mark.parametrize("password", ["required-password", ""])
+    def test_encrypted_pdf_raises_specific_error(self, password: str) -> None:
+        """Encrypted PDFs, including blank-password PDFs, are never parsed."""
+        with pytest.raises(PDFEncryptedError):
+            extract_pdf(_make_encrypted_pdf(password))
 
 
 # ---------------------------------------------------------------------------
@@ -253,9 +261,7 @@ class TestContentTypeDetection:
         assert detect_content_type("application/pdf", b"") == "pdf"
 
     def test_pdf_content_type_with_charset(self) -> None:
-        assert (
-            detect_content_type("application/pdf; charset=utf-8", b"") == "pdf"
-        )
+        assert detect_content_type("application/pdf; charset=utf-8", b"") == "pdf"
 
     def test_pdf_magic_bytes(self) -> None:
         assert detect_content_type(None, b"%PDF-1.7 rest of file") == "pdf"
