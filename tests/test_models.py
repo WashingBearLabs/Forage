@@ -174,6 +174,7 @@ class TestRetrieveRequest:
         assert req.verified_domains == []
         assert req.blocked_domains == []
         assert req.promptguard_threshold == 0.85
+        assert req.cache_ttl_hours == 24
 
     def test_custom_domains(self) -> None:
         req = RetrieveRequest(
@@ -197,6 +198,25 @@ class TestRetrieveRequest:
     def test_empty_url_rejected(self) -> None:
         with pytest.raises(Exception):  # noqa: B017
             RetrieveRequest(url="")
+
+    def test_cache_ttl_hours_bounds(self) -> None:
+        """Raw sidecar requests cannot supply negative or unbounded cache TTLs."""
+        assert (
+            RetrieveRequest(
+                url="https://example.com", cache_ttl_hours=0
+            ).cache_ttl_hours
+            == 0
+        )
+        assert (
+            RetrieveRequest(
+                url="https://example.com", cache_ttl_hours=8_760
+            ).cache_ttl_hours
+            == 8_760
+        )
+        with pytest.raises(Exception):  # noqa: B017
+            RetrieveRequest(url="https://example.com", cache_ttl_hours=-1)
+        with pytest.raises(Exception):  # noqa: B017
+            RetrieveRequest(url="https://example.com", cache_ttl_hours=8_761)
 
     def test_serialization_roundtrip(self) -> None:
         req = RetrieveRequest(

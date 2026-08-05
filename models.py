@@ -12,6 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+MAX_CACHE_TTL_HOURS = 8_760
+
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
@@ -136,6 +138,12 @@ class RetrieveRequest(BaseModel):
     url: str = Field(..., min_length=1, description="URL to retrieve")
     extract_mode: Literal["summary", "full"] = Field(
         default="summary", description="Extraction mode"
+    )
+    cache_ttl_hours: int = Field(
+        default=24,
+        ge=0,
+        le=MAX_CACHE_TTL_HOURS,
+        description="Maximum age of cached content; zero disables caching",
     )
     trusted_domains: list[str] = Field(
         default_factory=list, description="Domains to treat as trusted"

@@ -19,7 +19,7 @@ from urllib.parse import unquote, urlparse, urlsplit, urlunsplit
 
 import httpx
 
-from cache import ContentCache
+from cache import ContentCache, cache_policy_fingerprint
 from models import (
     RetrievedContent,
     RetrieveRequest,
@@ -108,6 +108,14 @@ async def run_retrieve_pipeline(
     for domain in seed_blocklist:
         if domain not in blocked_domains:
             blocked_domains.append(domain)
+    cache_policy = cache_policy_fingerprint(
+        trusted_domains=request.trusted_domains,
+        verified_domains=request.verified_domains,
+        blocked_domains=blocked_domains,
+        promptguard_threshold=request.promptguard_threshold,
+        promptguard_fail_closed=request.promptguard_fail_closed,
+    )
+    news_domains: list[str] = config.get("news_domains", [])
 
     # -- Step 1: Validate URL (RFC1918 + blocklist) --
     try:
@@ -133,10 +141,23 @@ async def run_retrieve_pipeline(
 
     # -- Step 2: Check cache --
     if cache is not None:
-        cached = await cache.get(request.url, extract_mode=request.extract_mode)
-        if cached is not None:
-            logger.info("Cache hit for %s", request.url)
-            return cached.model_copy(update={"request_id": request_id})
+        if request.cache_ttl_hours == 0:
+            await cache.delete(
+                request.url,
+                extract_mode=request.extract_mode,
+                policy_fingerprint=cache_policy,
+            )
+        else:
+            cached = await cache.get(
+                request.url,
+                extract_mode=request.extract_mode,
+                policy_fingerprint=cache_policy,
+                ttl_hours=request.cache_ttl_hours,
+                news_domains=news_domains,
+            )
+            if cached is not None:
+                logger.info("Cache hit for %s", request.url)
+                return cached.model_copy(update={"request_id": request_id})
 
     # -- Step 3: Fetch content --
     user_agents: list[str] = config.get("user_agents", [])
@@ -284,15 +305,21 @@ async def run_retrieve_pipeline(
     )
 
     # -- Step 8: Cache result --
-    if cache is not None and content.trust_tier not in {
-        TrustTier.UNTRUSTED,
-        TrustTier.BLOCKED,
-    }:
-        news_domains: list[str] = config.get("news_domains", [])
+    if (
+        cache is not None
+        and request.cache_ttl_hours > 0
+        and content.trust_tier
+        not in {
+            TrustTier.UNTRUSTED,
+            TrustTier.BLOCKED,
+        }
+    ):
         await cache.put(
             request.url,
             content,
             extract_mode=request.extract_mode,
+            policy_fingerprint=cache_policy,
+            ttl_hours=request.cache_ttl_hours,
             domain=domain,
             news_domains=news_domains,
         )

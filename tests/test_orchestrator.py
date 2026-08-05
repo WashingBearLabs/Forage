@@ -193,6 +193,8 @@ async def test_retrieve_full_pipeline_happy_path(
     mock_build.assert_called_once()
     cache_mock.get.assert_called_once()
     cache_mock.put.assert_called_once()
+    assert cache_mock.get.call_args.kwargs["ttl_hours"] == 24
+    assert cache_mock.put.call_args.kwargs["ttl_hours"] == 24
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +323,61 @@ async def test_retrieve_summary_cache_does_not_serve_full_request(
 
     assert fetch.await_count == 2
     assert full_result.body == "full body"
+
+
+@patch(
+    "pipeline.orchestrator.validate_url",
+    new_callable=AsyncMock,
+    return_value=("93.184.216.34", "example.com"),
+)
+@patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
+@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.orchestrator.detect_content_type", return_value="html")
+@patch("pipeline.orchestrator.scan_structural")
+@patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
+@patch("pipeline.orchestrator.build_retrieved_content")
+async def test_retrieve_ttl_zero_deletes_without_cache_read_or_write(
+    mock_build: MagicMock,
+    mock_pg: MagicMock,
+    mock_scan: MagicMock,
+    mock_detect: MagicMock,
+    mock_extract: MagicMock,
+    mock_fetch: AsyncMock,
+    mock_validate: MagicMock,
+) -> None:
+    """TTL zero deletes only the matching variant and bypasses cache I/O."""
+    mock_fetch.return_value = _make_fetch_result()
+    mock_extract.return_value = _make_extraction()
+    mock_scan.return_value = _make_structural_clean()
+    mock_pg.return_value = _make_pg_safe()
+    mock_build.return_value = RetrievedContent(
+        request_id="test-id",
+        source_url="https://example.com/page",
+        final_url="https://example.com/page",
+        body="content",
+        word_count=1,
+        content_type="html",
+        trust_score=0.7,
+        trust_tier=TrustTier.STANDARD,
+        stage2_verdict=Stage2Verdict.CLEAN,
+        stage3_verdict=Stage3Verdict.SAFE,
+        domain="example.com",
+    )
+    cache_mock = MagicMock()
+    cache_mock.get = AsyncMock()
+    cache_mock.put = AsyncMock()
+    cache_mock.delete = AsyncMock(return_value=True)
+
+    await run_retrieve_pipeline(
+        _make_retrieve_request(cache_ttl_hours=0),
+        cache=cache_mock,
+        classifier=None,
+        config=_SAMPLE_CONFIG,
+    )
+
+    cache_mock.delete.assert_awaited_once()
+    cache_mock.get.assert_not_awaited()
+    cache_mock.put.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

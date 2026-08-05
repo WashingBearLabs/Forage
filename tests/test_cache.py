@@ -7,7 +7,7 @@ import pathlib
 
 # Ensure the retrieval service package is importable.
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -21,6 +21,7 @@ from cache import (
     ContentCache,
     TrustTier,
     cache_key,
+    cache_policy_fingerprint,
     normalize_url,
 )
 from models import RetrievedContent, Stage2Verdict, Stage3Verdict
@@ -151,6 +152,28 @@ class TestCacheKey:
             extract_mode="full",
         )
 
+    def test_different_policy_fingerprints_have_different_keys(self) -> None:
+        """Changing a trust or PromptGuard policy cannot reuse shaped content."""
+        url = "https://example.com"
+        standard = cache_policy_fingerprint(
+            trusted_domains=[],
+            verified_domains=[],
+            blocked_domains=[],
+            promptguard_threshold=0.85,
+            promptguard_fail_closed=True,
+        )
+        trusted = cache_policy_fingerprint(
+            trusted_domains=["example.com"],
+            verified_domains=[],
+            blocked_domains=[],
+            promptguard_threshold=0.85,
+            promptguard_fail_closed=True,
+        )
+        assert cache_key(url, policy_fingerprint=standard) != cache_key(
+            url,
+            policy_fingerprint=trusted,
+        )
+
 
 # ---------------------------------------------------------------------------
 # ContentCache round-trip
@@ -166,6 +189,7 @@ class TestContentCacheGetPut:
         client.ping = AsyncMock(return_value=True)
         client.get = AsyncMock(return_value=None)
         client.set = AsyncMock(return_value=True)
+        client.delete = AsyncMock(return_value=1)
         client.aclose = AsyncMock()
         return client
 
@@ -235,6 +259,28 @@ class TestContentCacheGetPut:
         mock_redis.get.side_effect = ConnectionError("down")
         assert await cache.get("https://example.com") is None
 
+    @pytest.mark.asyncio()
+    async def test_get_rejects_entries_older_than_current_policy(
+        self, cache: ContentCache, mock_redis: AsyncMock
+    ) -> None:
+        """A lowered TTL expires content before its original Valkey expiry."""
+        content = _make_content().model_copy(
+            update={"retrieved_at": datetime.now(UTC) - timedelta(hours=2)}
+        )
+        mock_redis.get.return_value = content.model_dump_json().encode()
+
+        assert await cache.get("https://example.com", ttl_hours=1) is None
+        mock_redis.delete.assert_awaited_once()
+
+    @pytest.mark.asyncio()
+    async def test_get_ttl_zero_skips_read_and_deletes_variant(
+        self, cache: ContentCache, mock_redis: AsyncMock
+    ) -> None:
+        """Disabled caching cannot revive an entry from an earlier TTL policy."""
+        assert await cache.get("https://example.com", ttl_hours=0) is None
+        mock_redis.get.assert_not_awaited()
+        mock_redis.delete.assert_awaited_once()
+
     # -- put -----------------------------------------------------------------
 
     @pytest.mark.asyncio()
@@ -290,6 +336,21 @@ class TestContentCacheGetPut:
         ok = await cache.put("https://example.com", content, domain="example.com")
         assert ok is False
 
+    @pytest.mark.asyncio()
+    async def test_put_ttl_zero_skips_write_and_deletes_variant(
+        self, cache: ContentCache, mock_redis: AsyncMock
+    ) -> None:
+        """Valkey never receives EX=0 when cache is explicitly disabled."""
+        ok = await cache.put(
+            "https://example.com",
+            _make_content(),
+            ttl_hours=0,
+            domain="example.com",
+        )
+        assert ok is False
+        mock_redis.set.assert_not_awaited()
+        mock_redis.delete.assert_awaited_once()
+
     # -- round-trip ----------------------------------------------------------
 
     @pytest.mark.asyncio()
@@ -332,6 +393,7 @@ class TestTTLLogic:
         client = AsyncMock()
         client.ping = AsyncMock(return_value=True)
         client.set = AsyncMock(return_value=True)
+        client.delete = AsyncMock(return_value=1)
         client.aclose = AsyncMock()
         return client
 
