@@ -1288,7 +1288,7 @@ async def test_post_search_endpoint_searxng_error(client: httpx.AsyncClient) -> 
 
 @pytest.mark.parametrize(
     "error",
-    DOCUMENT_FAILURE_CODES,
+    sorted(DOCUMENT_FAILURE_CODES),
 )
 def test_document_failure_taxonomy_has_fixed_reason(error: str) -> None:
     """Every stable document token is emitted in ``error`` with a safe reason."""
