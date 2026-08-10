@@ -497,16 +497,18 @@ async def health(request: Request) -> HealthResponse:
     # Re-check Valkey on each health call for accurate status
     valkey_connected = await _check_valkey()
     request.app.state.valkey_connected = valkey_connected
+    sanitizer_revision = getattr(request.app.state, "sanitizer_revision", None)
+    if sanitizer_revision is None:
+        config = getattr(request.app.state, "config", None)
+        sanitizer_revision = (
+            derive_sanitizer_revision(config) if config is not None else "unknown"
+        )
     return HealthResponse(
         status="healthy",
         promptguard_loaded=request.app.state.classifier.loaded,
         cache_connected=valkey_connected,
         capabilities={"search_sanitization": 1},
-        sanitizer_revision=getattr(
-            request.app.state,
-            "sanitizer_revision",
-            derive_sanitizer_revision(request.app.state.config),
-        ),
+        sanitizer_revision=sanitizer_revision,
     )
 
 
