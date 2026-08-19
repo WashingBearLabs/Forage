@@ -540,6 +540,14 @@ async def run_extract_pipeline_from_file(
 # Default SearXNG URL (overridable via environment)
 _DEFAULT_SEARXNG_URL = "http://poppy-searxng:8080"
 _MAX_SEARCH_RESULTS_SCANNED = 20
+
+# Engines pinned on every SearXNG query. Without an explicit list SearXNG
+# fans out to every engine its image defaults enable — and with
+# `use_default_settings: true` on a :latest image, upstream releases keep
+# adding engines our config never vetted (observed live 2026-08-19: aol,
+# "karmasearch videos"). Must stay in sync with the enabled set in
+# config/searxng/settings.yml.
+_SEARXNG_ENGINES = "duckduckgo,brave,startpage,mojeek"
 _MAX_SEARCH_TITLE_LENGTH = 512
 _MAX_SEARCH_URL_LENGTH = 2_048
 _MAX_SEARCH_SNIPPET_LENGTH = 2_000
@@ -653,6 +661,7 @@ async def run_search_pipeline(
                     "q": request.query,
                     "format": "json",
                     "pageno": 1,
+                    "engines": _SEARXNG_ENGINES,
                 },
             )
             resp.raise_for_status()

@@ -1570,3 +1570,36 @@ async def test_health_publishes_derived_sanitizer_revision(
 
     assert response.status_code == 200
     assert response.json()["sanitizer_revision"]
+
+
+async def test_search_pins_the_vetted_engine_set() -> None:
+    """Every SearXNG query names its engines explicitly.
+
+    Without the pin, SearXNG fans out to whatever its image defaults
+    enable — `use_default_settings: true` on a :latest image means
+    upstream releases silently add unvetted engines (observed live
+    2026-08-19: aol, "karmasearch videos").
+    """
+    import pipeline.orchestrator as orch_module
+
+    mock_resp = _mock_searxng_response([])
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("pipeline.orchestrator.httpx.AsyncClient", return_value=mock_client):
+        await run_search_pipeline(
+            _make_search_request(),
+            searxng_url="http://test-searxng:8080",
+            config=_SAMPLE_CONFIG,
+        )
+
+    params = mock_client.get.call_args.kwargs["params"]
+    assert params["engines"] == orch_module._SEARXNG_ENGINES
+    assert set(params["engines"].split(",")) == {
+        "duckduckgo",
+        "brave",
+        "startpage",
+        "mojeek",
+    }
