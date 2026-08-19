@@ -1580,8 +1580,6 @@ async def test_search_pins_the_vetted_engine_set() -> None:
     upstream releases silently add unvetted engines (observed live
     2026-08-19: aol, "karmasearch videos").
     """
-    import pipeline.orchestrator as orch_module
-
     mock_resp = _mock_searxng_response([])
     mock_client = AsyncMock()
     mock_client.get.return_value = mock_resp
@@ -1596,7 +1594,8 @@ async def test_search_pins_the_vetted_engine_set() -> None:
         )
 
     params = mock_client.get.call_args.kwargs["params"]
-    assert params["engines"] == orch_module._SEARXNG_ENGINES
+    # The literal set IS the contract — it must stay in sync with the
+    # enabled engines in config/searxng/settings.yml (see _SEARXNG_ENGINES).
     assert set(params["engines"].split(",")) == {
         "duckduckgo",
         "brave",
