@@ -26,6 +26,15 @@ ENV HF_HOME=/app/model-cache
 
 # Pre-download PromptGuard 2 model (gated — requires HF_TOKEN build arg)
 # Model is saved to /app/model-cache which is readable by the poppy user
+#
+# OPERATIONAL: an image built WITHOUT the token has NO PromptGuard model —
+# the sidecar then runs fail-closed for standard-tier content and silently
+# discards every search result and flags every fetch (live 2026-08-19..28:
+# search "broken" while SearXNG returned 10 good results). deploy-local.sh
+# resolves the token from vault `secret/poppy/models/huggingface .api_key`;
+# if that secret is missing the deploy logs "No HF_TOKEN in vault" and
+# builds a guard-less image. Verify after deploy:
+#   docker logs poppy-retrieval | grep -i promptguard   → "model loaded"
 ARG HF_TOKEN=""
 RUN if [ -n "$HF_TOKEN" ]; then \
       HF_TOKEN="$HF_TOKEN" python3 -c "import os; \
