@@ -17,7 +17,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 
 import yaml
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -25,13 +25,20 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from cache import ContentCache
+from cache import CacheMetrics, ContentCache
 from models import (
     ExtractedContent,
     RetrievedContent,
     RetrieveRequest,
     SearchRequest,
     SearchResponse,
+)
+from pipeline import contract
+from pipeline.contract import (
+    CONTRACT_VERSION,
+    DEGRADED_CACHE_UNAVAILABLE,
+    DEGRADED_PROMPTGUARD_UNAVAILABLE,
+    PromptGuardState,
 )
 from pipeline.extraction_limits import (
     MAX_INPUT_BYTES,
@@ -55,6 +62,33 @@ logger = logging.getLogger(__name__)
 VALKEY_URL = os.environ.get("VALKEY_URL", "redis://poppy-valkey:6379/4")
 SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://poppy-searxng:8080")
 
+_LEGACY_CAPABILITY_ENV_VAR = "POPPY_RETRIEVAL_LEGACY_CAPABILITY"
+
+
+def _legacy_capability_advertisement_enabled() -> bool:
+    """Return whether the deploy-transition capability override is active.
+
+    Break-glass switch (see ``DEPLOYMENT.md``) so an operator can reopen
+    Poppy's web-search capability gate if this contract reaches prod before
+    its Poppy-side consumer (spec 2) does. Only ``capabilities`` lies under
+    this flag — ``status``, ``degraded_reasons``, and ``promptguard_loaded``
+    stay honest.
+    """
+    return os.environ.get(_LEGACY_CAPABILITY_ENV_VAR) == "1"
+
+
+def _warn_if_legacy_capability_advertisement_enabled() -> bool:
+    """Log a loud per-boot warning when the override is active; return its state."""
+    enabled = _legacy_capability_advertisement_enabled()
+    if enabled:
+        logger.warning(
+            "legacy_capability_advertisement_active — %s=1 is forcing /health "
+            "to advertise search_sanitization regardless of classifier state; "
+            "unset once spec 2's Poppy-side capability gate is deployed",
+            _LEGACY_CAPABILITY_ENV_VAR,
+        )
+    return enabled
+
 
 def _load_config() -> dict[str, Any]:
     """Load sidecar configuration from ``config.yaml``."""
@@ -66,34 +100,25 @@ def _load_config() -> dict[str, Any]:
     return {}
 
 
-async def _check_valkey() -> bool:
-    """Check if Valkey/Redis is reachable."""
-    try:
-        import redis.asyncio as aioredis  # type: ignore[import-untyped]
-
-        client: aioredis.Redis = aioredis.from_url(  # type: ignore[assignment]
-            VALKEY_URL,
-            socket_connect_timeout=2,
-        )
-        await client.ping()  # type: ignore[misc]
-        await client.aclose()
-        return True
-    except Exception:
-        logger.warning("Valkey connection check failed")
-        return False
-
-
 # -- Response models --
 
 
 class HealthResponse(BaseModel):
-    """Response body for ``GET /health``."""
+    """Response body for ``GET /health``.
 
-    status: str
+    HTTP status is always 200, even when ``status == "degraded"`` (family
+    decision 11) — the compose healthcheck is a bare ``curl -f`` that only
+    inspects the HTTP status code, so consumers must read ``status`` and
+    ``degraded_reasons`` rather than the response's non-2xx-ness.
+    """
+
+    status: Literal["healthy", "degraded"]
     promptguard_loaded: bool
     cache_connected: bool
     capabilities: dict[str, int]
     sanitizer_revision: str
+    contract_version: str
+    degraded_reasons: list[str] = []
 
 
 _MAX_FILENAME_LENGTH = 255
@@ -130,6 +155,70 @@ class ExtractionMetrics:
         """Record one content-free extraction outcome."""
         self.requests += 1
         self.verdicts[verdict] = self.verdicts.get(verdict, 0) + 1
+
+
+_PROMPTGUARD_STATES = frozenset(get_args(PromptGuardState))
+
+
+class SearchMetrics:
+    """In-process counters exported by the internal ``/metrics`` endpoint."""
+
+    def __init__(self) -> None:
+        self.requests = 0
+        self.errors: dict[str, int] = {}
+        self.omitted_by_reason: dict[str, int] = {}
+        self.unscanned_results = 0
+
+    def record_error(self, error: str) -> None:
+        """Record one content-free search error, keyed by ``PipelineError.error``."""
+        self.errors[error] = self.errors.get(error, 0) + 1
+
+    def record_response(self, response: SearchResponse) -> None:
+        """Fold one content-free search response's omission and scan counts in."""
+        for reason, count in response.omitted_by_reason.items():
+            key = (
+                reason
+                if reason in contract.OMISSION_REASONS
+                else contract.METRICS_OTHER_BUCKET
+            )
+            self.omitted_by_reason[key] = self.omitted_by_reason.get(key, 0) + count
+        self.unscanned_results += response.unscanned_results
+
+
+class RetrieveMetrics:
+    """In-process counters exported by the internal ``/metrics`` endpoint."""
+
+    def __init__(self) -> None:
+        self.requests = 0
+        self.errors: dict[str, int] = {}
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self.blocked_by_reason: dict[str, int] = {}
+        self.promptguard_state: dict[str, int] = {}
+
+    def record_error(self, error: str) -> None:
+        """Record one content-free retrieve error, keyed by ``PipelineError.error``."""
+        self.errors[error] = self.errors.get(error, 0) + 1
+
+    def record_content(self, content: RetrievedContent) -> None:
+        """Fold one content-free retrieved-content's cache/block/state counts in."""
+        if content.cache_hit:
+            self.cache_hits += 1
+        else:
+            self.cache_misses += 1
+        if content.injection_detected and content.injection_spans:
+            diagnostic = content.injection_spans[0]
+            key = (
+                diagnostic
+                if diagnostic in contract.DIAGNOSTICS
+                else contract.METRICS_OTHER_BUCKET
+            )
+            self.blocked_by_reason[key] = self.blocked_by_reason.get(key, 0) + 1
+        state = content.promptguard_state
+        state_key = (
+            state if state in _PROMPTGUARD_STATES else contract.METRICS_OTHER_BUCKET
+        )
+        self.promptguard_state[state_key] = self.promptguard_state.get(state_key, 0) + 1
 
 
 class ExtractionAdmissionController:
@@ -415,17 +504,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings,
         app.state.extraction_metrics,
     )
+    app.state.search_metrics = SearchMetrics()
+    app.state.retrieve_metrics = RetrieveMetrics()
     app.state.classification_semaphore = asyncio.Semaphore(
         settings.classification_concurrency
     )
     app.state.sanitizer_revision = derive_sanitizer_revision(config)
-    logger.info("Sidecar config loaded (%d keys)", len(config))
+    logger.info(
+        "Sidecar config loaded (%d keys); contract_version=%s",
+        len(config),
+        CONTRACT_VERSION,
+    )
+    _warn_if_legacy_capability_advertisement_enabled()
 
     # Connect content cache
-    cache = ContentCache(VALKEY_URL)
+    app.state.cache_metrics = CacheMetrics()
+    cache = ContentCache(VALKEY_URL, metrics=app.state.cache_metrics)
     cache_ok = await cache.connect()
     app.state.cache = cache
-    app.state.valkey_connected = cache_ok
     if cache_ok:
         logger.info("Content cache connected (Valkey)")
     else:
@@ -459,9 +555,12 @@ app.state.extraction_admission = ExtractionAdmissionController(
     _initial_extraction_settings,
     app.state.extraction_metrics,
 )
+app.state.search_metrics = SearchMetrics()
+app.state.retrieve_metrics = RetrieveMetrics()
 app.state.classification_semaphore = asyncio.Semaphore(
     _initial_extraction_settings.classification_concurrency
 )
+app.state.cache_metrics = CacheMetrics()
 app.add_middleware(DocumentSizeLimitMiddleware)
 app.add_middleware(ExtractionAdmissionMiddleware)
 
@@ -493,31 +592,56 @@ async def pipeline_error_handler(
 
 @app.get("/health", response_model=HealthResponse)
 async def health(request: Request) -> HealthResponse:
-    """Return service health status."""
-    # Re-check Valkey on each health call for accurate status
-    valkey_connected = await _check_valkey()
-    request.app.state.valkey_connected = valkey_connected
+    """Return service health status.
+
+    Always responds 200, even when degraded — the compose healthcheck
+    (bare ``curl -f``) only inspects the HTTP status, so a non-2xx here would
+    flap the container instead of surfacing the real problem. Callers must
+    check ``status``/``degraded_reasons`` in the body.
+    """
+    # Ping (subject to backoff) so a zero-traffic window still detects recovery
+    cache = getattr(request.app.state, "cache", None)
+    cache_connected = cache is not None and await cache.ping_if_due()
     sanitizer_revision = getattr(request.app.state, "sanitizer_revision", None)
     if sanitizer_revision is None:
         config = getattr(request.app.state, "config", None)
         sanitizer_revision = (
             derive_sanitizer_revision(config) if config is not None else "unknown"
         )
+
+    classifier_loaded = request.app.state.classifier.loaded
+    degraded_reasons: list[str] = []
+    if not classifier_loaded:
+        degraded_reasons.append(DEGRADED_PROMPTGUARD_UNAVAILABLE)
+    if not cache_connected:
+        degraded_reasons.append(DEGRADED_CACHE_UNAVAILABLE)
+    capabilities = (
+        {"search_sanitization": 1}
+        if classifier_loaded or _legacy_capability_advertisement_enabled()
+        else {}
+    )
+
     return HealthResponse(
-        status="healthy",
-        promptguard_loaded=request.app.state.classifier.loaded,
-        cache_connected=valkey_connected,
-        capabilities={"search_sanitization": 1},
+        status="degraded" if degraded_reasons else "healthy",
+        promptguard_loaded=classifier_loaded,
+        cache_connected=cache_connected,
+        capabilities=capabilities,
         sanitizer_revision=sanitizer_revision,
+        contract_version=CONTRACT_VERSION,
+        degraded_reasons=degraded_reasons,
     )
 
 
 @app.get("/metrics")
 async def metrics(request: Request) -> dict[str, Any]:
-    """Expose internal extraction saturation and cgroup OOM-proximity counters."""
+    """Expose internal extraction, search, retrieve, and cache counters."""
     controller: ExtractionAdmissionController = request.app.state.extraction_admission
     extraction_metrics: ExtractionMetrics = request.app.state.extraction_metrics
+    search_metrics: SearchMetrics = request.app.state.search_metrics
+    retrieve_metrics: RetrieveMetrics = request.app.state.retrieve_metrics
+    cache_metrics: CacheMetrics = request.app.state.cache_metrics
     return {
+        "contract_version": CONTRACT_VERSION,
         "extraction": {
             "requests": extraction_metrics.requests,
             "busy_rejections": extraction_metrics.busy_rejections,
@@ -527,19 +651,47 @@ async def metrics(request: Request) -> dict[str, Any]:
             "queued_bytes": controller.queued_bytes,
             "verdicts": extraction_metrics.verdicts,
             **_cgroup_memory_snapshot(),
-        }
+        },
+        "search": {
+            "requests": search_metrics.requests,
+            "errors": search_metrics.errors,
+            "omitted_by_reason": search_metrics.omitted_by_reason,
+            "unscanned_results": search_metrics.unscanned_results,
+        },
+        "retrieve": {
+            "requests": retrieve_metrics.requests,
+            "errors": retrieve_metrics.errors,
+            "cache_hits": retrieve_metrics.cache_hits,
+            "cache_misses": retrieve_metrics.cache_misses,
+            "blocked_by_reason": retrieve_metrics.blocked_by_reason,
+            "promptguard_state": retrieve_metrics.promptguard_state,
+        },
+        "cache": {
+            "reconnect_attempts": cache_metrics.reconnect_attempts,
+            "reconnect_successes": cache_metrics.reconnect_successes,
+            "reconnect_failures": cache_metrics.reconnect_failures,
+            "operation_failures": cache_metrics.operation_failures,
+        },
     }
 
 
 @app.post("/retrieve", response_model=RetrievedContent)
 async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
     """Retrieve and sanitize web content through the full pipeline."""
-    return await run_retrieve_pipeline(
-        body,
-        cache=request.app.state.cache,
-        classifier=request.app.state.classifier,
-        config=request.app.state.config,
-    )
+    retrieve_metrics: RetrieveMetrics = request.app.state.retrieve_metrics
+    retrieve_metrics.requests += 1
+    try:
+        content = await run_retrieve_pipeline(
+            body,
+            cache=request.app.state.cache,
+            classifier=request.app.state.classifier,
+            config=request.app.state.config,
+        )
+    except PipelineError as exc:
+        retrieve_metrics.record_error(exc.error)
+        raise
+    retrieve_metrics.record_content(content)
+    return content
 
 
 @app.post("/extract", response_model=ExtractedContent)
@@ -648,9 +800,17 @@ async def extract(
 @app.post("/search", response_model=SearchResponse)
 async def search(request: Request, body: SearchRequest) -> SearchResponse:
     """Run a web search through SearXNG with snippet sanitization."""
-    return await run_search_pipeline(
-        body,
-        searxng_url=SEARXNG_URL,
-        config=request.app.state.config,
-        classifier=request.app.state.classifier,
-    )
+    search_metrics: SearchMetrics = request.app.state.search_metrics
+    search_metrics.requests += 1
+    try:
+        response = await run_search_pipeline(
+            body,
+            searxng_url=SEARXNG_URL,
+            config=request.app.state.config,
+            classifier=request.app.state.classifier,
+        )
+    except PipelineError as exc:
+        search_metrics.record_error(exc.error)
+        raise
+    search_metrics.record_response(response)
+    return response

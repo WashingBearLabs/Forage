@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from models import Stage3Verdict, TrustTier
 
@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_THRESHOLD = 0.85
 INJECTION_PENALTY = -0.5
 
+SkipReason = Literal["trusted_tier", "model_unavailable", "structural_block"]
+
 
 @dataclass(frozen=True, slots=True)
 class PromptGuardResult:
@@ -34,6 +36,7 @@ class PromptGuardResult:
     flagged_chunks: list[str] = field(default_factory=list[str])
     penalty: float = 0.0
     skipped: bool = False
+    skip_reason: SkipReason | None = None
 
 
 async def run_promptguard(
@@ -80,6 +83,7 @@ async def run_promptguard(
             flagged_chunks=[],
             penalty=0.0,
             skipped=True,
+            skip_reason="trusted_tier",
         )
 
     # Model not available — behavior depends on fail_closed setting and tier.
@@ -100,6 +104,7 @@ async def run_promptguard(
                 ],
                 penalty=INJECTION_PENALTY,
                 skipped=True,
+                skip_reason="model_unavailable",
             )
         # Fail-open or VERIFIED tier: degrade gracefully with a penalty.
         logger.warning(
@@ -117,6 +122,7 @@ async def run_promptguard(
             flagged_chunks=[],
             penalty=-0.1,
             skipped=True,
+            skip_reason="model_unavailable",
         )
 
     # Run synchronous PyTorch inference in a thread to avoid blocking

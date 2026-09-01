@@ -24,6 +24,7 @@ from models import (  # noqa: E402
     Stage3Verdict,
     TrustTier,
 )
+from pipeline.contract import OMIT_INVALID_URL, OMIT_STRUCTURAL_BLOCKED  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -318,3 +319,35 @@ class TestSearchResponse:
         assert restored == resp
         assert restored.results[0].engine == "brave"
         assert restored.results[1].engine is None
+
+    def test_omission_fields_default(self) -> None:
+        """Backward-compatible defaults: no omissions, nothing unscanned."""
+        resp = SearchResponse(results=[], request_id="abc123", query="nothing")
+        assert resp.omitted_results == 0
+        assert resp.omitted_by_reason == {}
+        assert resp.unscanned_results == 0
+        assert resp.promptguard_unavailable is False
+
+    def test_omission_fields_explicit(self) -> None:
+        resp = SearchResponse(
+            results=[],
+            request_id="req-002",
+            query="test",
+            omitted_results=3,
+            omitted_by_reason={
+                OMIT_INVALID_URL: 1,
+                OMIT_STRUCTURAL_BLOCKED: 2,
+            },
+            unscanned_results=2,
+            promptguard_unavailable=True,
+        )
+        assert resp.omitted_results == 3
+        assert resp.omitted_by_reason == {
+            OMIT_INVALID_URL: 1,
+            OMIT_STRUCTURAL_BLOCKED: 2,
+        }
+        assert resp.unscanned_results == 2
+        assert resp.promptguard_unavailable is True
+
+        restored = SearchResponse.model_validate_json(resp.model_dump_json())
+        assert restored == resp

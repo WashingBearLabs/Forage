@@ -15,6 +15,7 @@ import re
 import time
 import unicodedata
 import uuid
+from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlparse, urlsplit, urlunsplit
@@ -34,6 +35,7 @@ from models import (
     TrustTier,
     UploadProvenance,
 )
+from pipeline import contract
 from pipeline.extraction_limits import (
     MAX_EXTRACTED_OUTPUT_BYTES,
     MAX_PROMPTGUARD_CHUNKS,
@@ -161,6 +163,7 @@ async def sanitize_and_structure(
         verdict=Stage3Verdict.SAFE,
         score=0.0,
         skipped=True,
+        skip_reason="structural_block",
     )
     if structural.verdict != Stage2Verdict.BLOCKED:
         promptguard = await run_promptguard(
@@ -233,6 +236,7 @@ async def run_retrieve_pipeline(
         blocked_domains=blocked_domains,
         promptguard_threshold=request.promptguard_threshold,
         promptguard_fail_closed=request.promptguard_fail_closed,
+        classifier_loaded=classifier is not None and classifier.loaded,
     )
     news_domains: list[str] = config.get("news_domains", [])
 
@@ -688,6 +692,9 @@ async def run_search_pipeline(
     sanitized_results: list[SearchResult] = []
     promptguard_started = time.perf_counter()
     promptguard_scanned = 0
+    unscanned_results = 0
+    promptguard_unavailable = False
+    omitted_by_reason: Counter[str] = Counter()
     for raw in raw_results:
         if len(sanitized_results) >= request.num_results:
             break
@@ -699,6 +706,7 @@ async def run_search_pipeline(
         canonical_url = _canonicalize_search_url(raw.get("url", ""))
         if canonical_url is None:
             logger.info("Omitting search result with invalid URL")
+            omitted_by_reason[contract.OMIT_INVALID_URL] += 1
             continue
         url, url_scan_text = canonical_url
         snippet, snippet_scan_text = _sanitize_search_text(
@@ -727,6 +735,7 @@ async def run_search_pipeline(
             if scan.verdict == Stage2Verdict.SUSPICIOUS:
                 suspicious = True
         if blocked:
+            omitted_by_reason[contract.OMIT_STRUCTURAL_BLOCKED] += 1
             continue
 
         # Stage 3 always runs, including when the classifier is unavailable.
@@ -738,16 +747,33 @@ async def run_search_pipeline(
             trust_tier="standard",
             fail_closed=request.promptguard_fail_closed,
         )
-        promptguard_scanned += 1
         if pg_result.verdict == Stage3Verdict.INJECTION_DETECTED:
-            logger.info(
-                "Omitting blocked search result (promptguard score=%.2f): %s",
-                pg_result.score,
-                url,
-            )
+            if pg_result.skip_reason == "model_unavailable":
+                logger.info(
+                    "Omitting search result — PromptGuard unavailable "
+                    "(fail-closed): %s",
+                    url,
+                )
+                omitted_by_reason[contract.OMIT_PROMPTGUARD_UNAVAILABLE] += 1
+                promptguard_unavailable = True
+            else:
+                logger.info(
+                    "Omitting blocked search result (promptguard score=%.2f): %s",
+                    pg_result.score,
+                    url,
+                )
+                omitted_by_reason[contract.OMIT_INJECTION_DETECTED] += 1
             continue
-        if pg_result.score > 0.5:
+
+        if pg_result.skipped and pg_result.skip_reason == "model_unavailable":
+            # Fail-open pass-through: PromptGuard did not classify this result.
+            unscanned_results += 1
             suspicious = True
+            promptguard_unavailable = True
+        else:
+            promptguard_scanned += 1
+            if pg_result.score > 0.5:
+                suspicious = True
 
         sanitized_results.append(
             SearchResult(
@@ -759,6 +785,7 @@ async def run_search_pipeline(
             )
         )
 
+    omitted_results = sum(omitted_by_reason.values())
     promptguard_duration_ms = round(
         (time.perf_counter() - promptguard_started) * 1000,
         2,
@@ -768,6 +795,9 @@ async def run_search_pipeline(
         extra={
             "scanned_results": promptguard_scanned,
             "max_scanned_results": _MAX_SEARCH_RESULTS_SCANNED,
+            "omitted_results": omitted_results,
+            "omitted_by_reason": dict(omitted_by_reason),
+            "unscanned_results": unscanned_results,
             "duration_ms": promptguard_duration_ms,
             "local_target_ms": _LOCAL_PROMPTGUARD_TARGET_MS,
             "tool_augmented_first_token_target_ms": (
@@ -792,6 +822,10 @@ async def run_search_pipeline(
         request_id=request_id,
         query=request.query,
         unresponsive_engines=unresponsive_engines,
+        omitted_results=omitted_results,
+        omitted_by_reason=dict(omitted_by_reason),
+        unscanned_results=unscanned_results,
+        promptguard_unavailable=promptguard_unavailable,
     )
 
 

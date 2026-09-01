@@ -22,6 +22,12 @@ from models import (
     TrustTier,
     UploadProvenance,
 )
+from pipeline.contract import (
+    DIAG_INJECTION_DETECTED,
+    DIAG_PROMPTGUARD_UNAVAILABLE,
+    DIAG_STRUCTURAL_BLOCKED,
+    PromptGuardState,
+)
 from pipeline.smart_extraction import extract_summary
 from pipeline.stage1_extraction import ExtractionResult
 from pipeline.stage2_structural import StructuralScanResult
@@ -41,8 +47,6 @@ _BASE_SCORES: dict[TrustTier, float] = {
 
 _REDIRECT_DOMAIN_CHANGE_PENALTY = -0.1
 _QUARANTINE_BODY = "Content quarantined due to potential prompt injection."
-_STRUCTURAL_BLOCK_DIAGNOSTIC = "structural_injection_detected"
-_PROMPTGUARD_BLOCK_DIAGNOSTIC = "promptguard_injection_detected"
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +64,7 @@ class SanitizationResult:
     structural_flags: list[str]
     stage2_verdict: Stage2Verdict
     stage3_verdict: Stage3Verdict
+    promptguard_state: PromptGuardState
     truncation_notice: str | None
     sanitizer_revision: str
 
@@ -86,6 +91,33 @@ def _compute_trust_score(
     # Penalties are already negative, so we add them
     score = base + stage2_penalty + stage3_penalty + redirect_penalty
     return max(0.0, min(1.0, score))
+
+
+def _derive_promptguard_state(
+    *,
+    promptguard: PromptGuardResult,
+    stage2_verdict: Stage2Verdict,
+) -> PromptGuardState:
+    """Classify how PromptGuard examined this document for the wire.
+
+    The stage-2 BLOCKED verdict is the authoritative backstop for
+    ``structural_blocked``: direct ``structure_sanitization_result`` callers
+    may pass a ``promptguard`` whose ``skip_reason`` was never set, but a
+    document PromptGuard never examined because stage 2 already blocked it
+    must never be reported as ``scanned``.
+    """
+    if promptguard.skip_reason == "trusted_tier":
+        return "skipped_trusted"
+    if (
+        promptguard.skip_reason == "structural_block"
+        or stage2_verdict == Stage2Verdict.BLOCKED
+    ):
+        return "structural_blocked"
+    if promptguard.skip_reason == "model_unavailable":
+        if promptguard.verdict == Stage3Verdict.INJECTION_DETECTED:
+            return "unavailable_blocked"
+        return "unavailable_allowed"
+    return "scanned"
 
 
 def structure_sanitization_result(
@@ -134,6 +166,10 @@ def structure_sanitization_result(
         structural_flags=[flag.category for flag in structural.flags],
         stage2_verdict=structural.verdict,
         stage3_verdict=promptguard.verdict,
+        promptguard_state=_derive_promptguard_state(
+            promptguard=promptguard,
+            stage2_verdict=structural.verdict,
+        ),
         truncation_notice=truncation_notice,
         sanitizer_revision=sanitizer_revision,
     )
@@ -151,11 +187,12 @@ def finalize_quarantine(result: SanitizationResult) -> SanitizationResult:
     if not structural_blocked and not promptguard_blocked:
         return result
 
-    diagnostic = (
-        _STRUCTURAL_BLOCK_DIAGNOSTIC
-        if structural_blocked
-        else _PROMPTGUARD_BLOCK_DIAGNOSTIC
-    )
+    if structural_blocked:
+        diagnostic = DIAG_STRUCTURAL_BLOCKED
+    elif result.promptguard_state == "unavailable_blocked":
+        diagnostic = DIAG_PROMPTGUARD_UNAVAILABLE
+    else:
+        diagnostic = DIAG_INJECTION_DETECTED
     return SanitizationResult(
         title=result.title,
         body=_QUARANTINE_BODY,
@@ -168,6 +205,7 @@ def finalize_quarantine(result: SanitizationResult) -> SanitizationResult:
         structural_flags=result.structural_flags,
         stage2_verdict=result.stage2_verdict,
         stage3_verdict=result.stage3_verdict,
+        promptguard_state=result.promptguard_state,
         truncation_notice=None,
         sanitizer_revision=result.sanitizer_revision,
     )
@@ -235,6 +273,7 @@ def build_retrieved_content(
         structural_flags=sanitization.structural_flags,
         stage2_verdict=sanitization.stage2_verdict,
         stage3_verdict=sanitization.stage3_verdict,
+        promptguard_state=sanitization.promptguard_state,
         domain=domain,
         redirect_chain=redirect_chain,
         domain_changed_on_redirect=domain_changed_on_redirect,
@@ -262,6 +301,7 @@ def build_extracted_content(
         structural_flags=sanitization.structural_flags,
         stage2_verdict=sanitization.stage2_verdict,
         stage3_verdict=sanitization.stage3_verdict,
+        promptguard_state=sanitization.promptguard_state,
         provenance=provenance,
         truncation_notice=sanitization.truncation_notice,
         sanitizer_revision=sanitization.sanitizer_revision,

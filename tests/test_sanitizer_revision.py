@@ -16,7 +16,12 @@ from pipeline import sanitizer_revision  # noqa: E402, I001  # type: ignore[repo
 
 @pytest.mark.parametrize(
     "source_name",
-    ("stage2_structural.py", "stage3_promptguard.py", "stage4_structuring.py"),
+    (
+        "contract.py",
+        "stage2_structural.py",
+        "stage3_promptguard.py",
+        "stage4_structuring.py",
+    ),
 )
 def test_sanitizer_revision_changes_for_security_pipeline_source(
     monkeypatch: pytest.MonkeyPatch,

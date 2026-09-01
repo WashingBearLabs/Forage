@@ -9,6 +9,7 @@ from typing import Any
 from promptguard.classifier import MODEL_ID
 
 _REVISION_SOURCES = (
+    "contract.py",
     "stage1_extraction.py",
     "stage1_pdf.py",
     "stage1_upload.py",

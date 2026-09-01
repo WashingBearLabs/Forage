@@ -9,9 +9,12 @@ disables both reads and writes for the matching cache variant.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
+import time
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -21,6 +24,12 @@ import redis.asyncio as aioredis  # type: ignore[import-untyped]
 from models import RetrievedContent, TrustTier
 
 logger = logging.getLogger(__name__)
+
+# Reconnect backoff: starts at 1s, doubles on each failed attempt, caps at 30s.
+_RECONNECT_INITIAL_BACKOFF_S = 1.0
+_RECONNECT_MAX_BACKOFF_S = 30.0
+# Bounded deadline for a reconnect attempt (connect + ping).
+_RECONNECT_TIMEOUT_S = 2.0
 
 # Tracking query parameters stripped during normalisation.
 _TRACKING_PARAMS: frozenset[str] = frozenset(
@@ -103,12 +112,20 @@ def cache_policy_fingerprint(
     blocked_domains: list[str],
     promptguard_threshold: float,
     promptguard_fail_closed: bool,
+    classifier_loaded: bool,
 ) -> str:
-    """Return a stable cache-key input for content-shaping retrieval policy."""
+    """Return a stable cache-key input for content-shaping retrieval policy.
+
+    ``classifier_loaded`` is included so a fail-open body sanitized while the
+    PromptGuard model was absent misses the cache once the model loads —
+    otherwise the stale unscanned entry would replay as if it had been
+    scanned.
+    """
     inputs = {
         "blocked_domains": sorted(
             {domain.strip().lower() for domain in blocked_domains}
         ),
+        "classifier_loaded": classifier_loaded,
         "promptguard_fail_closed": promptguard_fail_closed,
         "promptguard_threshold": promptguard_threshold,
         "trusted_domains": sorted(
@@ -137,6 +154,32 @@ def _effective_ttl_hours(
 
 
 # ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CacheMetrics:
+    """In-process counters for content-cache reconnect and operation health."""
+
+    reconnect_attempts: int = 0
+    reconnect_successes: int = 0
+    reconnect_failures: int = 0
+    operation_failures: int = 0
+
+
+def _closed_vocabulary_reason(exc: BaseException, *, default: str) -> str:
+    """Map an exception to the closed log-reason vocabulary.
+
+    Never logs ``str(exc)`` or the Valkey URL (which carries credentials) —
+    only one of ``connect_failed`` / ``operation_failed`` / ``timeout``.
+    """
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    return default
+
+
+# ---------------------------------------------------------------------------
 # Cache class
 # ---------------------------------------------------------------------------
 
@@ -144,25 +187,98 @@ def _effective_ttl_hours(
 class ContentCache:
     """Async Valkey cache for ``RetrievedContent`` objects."""
 
-    def __init__(self, valkey_url: str = "redis://poppy-valkey:6379/4") -> None:
+    def __init__(
+        self,
+        valkey_url: str = "redis://poppy-valkey:6379/4",
+        *,
+        metrics: CacheMetrics | None = None,
+    ) -> None:
         self._url = valkey_url
         self._client: aioredis.Redis | None = None
+        self._metrics = metrics if metrics is not None else CacheMetrics()
+        self._reconnect_lock = asyncio.Lock()
+        self._next_retry_at: float | None = None
+        self._backoff_s: float = _RECONNECT_INITIAL_BACKOFF_S
 
     # -- lifecycle -----------------------------------------------------------
 
-    async def connect(self) -> bool:
-        """Open a connection to Valkey.  Returns ``True`` on success."""
+    @property
+    def connected(self) -> bool:
+        """Return whether the most recent operation left the client connected."""
+        return self._client is not None
+
+    async def _attempt_connect(self) -> bool:
+        """Attempt one Valkey connection, bounded by a 2s deadline."""
         try:
-            self._client = aioredis.from_url(  # type: ignore[assignment]
-                self._url,
-                socket_connect_timeout=2,
+            async with asyncio.timeout(_RECONNECT_TIMEOUT_S):
+                client = aioredis.from_url(
+                    self._url,
+                    socket_connect_timeout=_RECONNECT_TIMEOUT_S,
+                    socket_timeout=_RECONNECT_TIMEOUT_S,
+                )
+                await client.ping()  # type: ignore[misc]
+        except Exception as exc:
+            logger.warning(
+                "Valkey connection failed for content cache (%s)",
+                _closed_vocabulary_reason(exc, default="connect_failed"),
             )
-            await self._client.ping()  # type: ignore[misc]
-            return True
-        except Exception:
-            logger.warning("Valkey connection failed for content cache")
             self._client = None
             return False
+        self._client = client  # type: ignore[assignment]
+        return True
+
+    async def connect(self) -> bool:
+        """Open a connection to Valkey.  Returns ``True`` on success."""
+        return await self._attempt_connect()
+
+    async def _ensure_client(self) -> bool:
+        """Reconnect if disconnected and the backoff window has elapsed.
+
+        A caller that finds a reconnect already in flight gets an immediate
+        miss rather than waiting on it.
+        """
+        if self._client is not None:
+            return True
+        now = time.monotonic()
+        if self._next_retry_at is not None and now < self._next_retry_at:
+            return False
+        if self._reconnect_lock.locked():
+            return False
+        async with self._reconnect_lock:
+            if self._client is not None:
+                return True
+            self._metrics.reconnect_attempts += 1
+            ok = await self._attempt_connect()
+            if ok:
+                self._metrics.reconnect_successes += 1
+                self._next_retry_at = None
+                self._backoff_s = _RECONNECT_INITIAL_BACKOFF_S
+            else:
+                self._metrics.reconnect_failures += 1
+                self._next_retry_at = time.monotonic() + self._backoff_s
+                self._backoff_s = min(
+                    self._backoff_s * 2,
+                    _RECONNECT_MAX_BACKOFF_S,
+                )
+            return ok
+
+    async def ping_if_due(self) -> bool:
+        """Reconnect (subject to backoff) if disconnected, else report connected.
+
+        Lets ``/health`` alone detect recovery during zero-traffic windows,
+        at the same bounded cost as any other cache operation.
+        """
+        return await self._ensure_client()
+
+    def _mark_disconnected(self, exc: BaseException) -> None:
+        """Clear the client after an operation failure so ``connected`` is honest."""
+        self._client = None
+        self._metrics.operation_failures += 1
+        self._next_retry_at = time.monotonic() + self._backoff_s
+        logger.warning(
+            "Content cache operation failed (%s)",
+            _closed_vocabulary_reason(exc, default="operation_failed"),
+        )
 
     async def close(self) -> None:
         """Gracefully close the Valkey connection."""
@@ -186,7 +302,7 @@ class ContentCache:
         Entries older than the current caller policy are deleted even if their
         original Valkey expiration was longer.
         """
-        if self._client is None:
+        if not await self._ensure_client():
             return None
 
         key = cache_key(
@@ -200,8 +316,8 @@ class ContentCache:
 
         try:
             raw: bytes | None = await self._client.get(key)  # type: ignore[misc]
-        except Exception:
-            logger.warning("Cache GET failed for %s", key)
+        except Exception as exc:
+            self._mark_disconnected(exc)
             return None
 
         if raw is None:
@@ -237,7 +353,7 @@ class ContentCache:
         policy_fingerprint: str | None = None,
     ) -> bool:
         """Delete a cache variant, returning whether Valkey accepted the request."""
-        if self._client is None:
+        if not await self._ensure_client():
             return False
         key = cache_key(
             url,
@@ -262,7 +378,7 @@ class ContentCache:
         Returns ``True`` if the value was written, ``False`` otherwise
         (client not connected, blocked tier, or write error).
         """
-        if self._client is None:
+        if not await self._ensure_client():
             return False
 
         key = cache_key(
@@ -293,17 +409,17 @@ class ContentCache:
                 ex=effective_ttl_hours * 3600,
             )
             return True
-        except Exception:
-            logger.warning("Cache PUT failed for %s", key)
+        except Exception as exc:
+            self._mark_disconnected(exc)
             return False
 
     async def _delete_key(self, key: str) -> bool:
         """Delete a precomputed cache key while preserving cache degradation."""
-        if self._client is None:
+        if not await self._ensure_client():
             return False
         try:
             await self._client.delete(key)  # type: ignore[misc]
             return True
-        except Exception:
-            logger.warning("Cache DELETE failed for %s", key)
+        except Exception as exc:
+            self._mark_disconnected(exc)
             return False

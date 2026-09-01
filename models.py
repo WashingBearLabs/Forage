@@ -8,6 +8,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from pipeline.contract import PromptGuardState
+
 MAX_CACHE_TTL_HOURS = 8_760
 
 # ---------------------------------------------------------------------------
@@ -96,6 +98,13 @@ class RetrievedContent(BaseModel):
     stage3_verdict: Stage3Verdict = Field(
         ..., description="Stage-3 PromptGuard ML verdict"
     )
+    promptguard_state: PromptGuardState = Field(
+        default="scanned",
+        description=(
+            "How PromptGuard examined this content: scanned, skipped_trusted, "
+            "structural_blocked, unavailable_blocked, or unavailable_allowed"
+        ),
+    )
 
     # -- Provenance --
     domain: str = Field(..., min_length=1, description="Domain of final_url")
@@ -168,6 +177,13 @@ class ExtractedContent(BaseModel):
     )
     stage3_verdict: Stage3Verdict = Field(
         ..., description="Stage-3 PromptGuard ML verdict"
+    )
+    promptguard_state: PromptGuardState = Field(
+        default="scanned",
+        description=(
+            "How PromptGuard examined this content: scanned, skipped_trusted, "
+            "structural_blocked, unavailable_blocked, or unavailable_allowed"
+        ),
     )
     provenance: UploadProvenance
     truncation_notice: str | None = Field(
@@ -270,4 +286,28 @@ class SearchResponse(BaseModel):
     unresponsive_engines: list[str] = Field(
         default_factory=list,
         description="SearXNG engines that failed to respond",
+    )
+    omitted_results: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Examined candidate results the pipeline withheld, across all reasons"
+        ),
+    )
+    omitted_by_reason: dict[str, int] = Field(
+        default_factory=dict,
+        description="Withheld-result counts keyed by contract.OMIT_* reason",
+    )
+    unscanned_results: int = Field(
+        default=0,
+        ge=0,
+        description="Returned results PromptGuard did not scan",
+    )
+    promptguard_unavailable: bool = Field(
+        default=False,
+        description=(
+            "PromptGuard was needed but did not run on at least one examined "
+            "result (withheld or returned) — a stage-2 structural block never "
+            "needed a scan and does not count"
+        ),
     )

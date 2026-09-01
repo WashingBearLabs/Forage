@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import logging
 import pathlib
 
 # Ensure the retrieval service package is importable.
 import sys
+import time
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -16,6 +19,7 @@ sys.path.insert(
     0, str(pathlib.Path(__file__).resolve().parents[2] / "services" / "retrieval")
 )
 
+import cache as cache_module
 from cache import (
     _TRACKING_PARAMS,
     ContentCache,
@@ -161,6 +165,7 @@ class TestCacheKey:
             blocked_domains=[],
             promptguard_threshold=0.85,
             promptguard_fail_closed=True,
+            classifier_loaded=True,
         )
         trusted = cache_policy_fingerprint(
             trusted_domains=["example.com"],
@@ -168,10 +173,35 @@ class TestCacheKey:
             blocked_domains=[],
             promptguard_threshold=0.85,
             promptguard_fail_closed=True,
+            classifier_loaded=True,
         )
         assert cache_key(url, policy_fingerprint=standard) != cache_key(
             url,
             policy_fingerprint=trusted,
+        )
+
+    def test_classifier_loaded_state_changes_fingerprint(self) -> None:
+        """A fail-open body cached while the model was absent misses once loaded."""
+        url = "https://example.com"
+        model_absent = cache_policy_fingerprint(
+            trusted_domains=[],
+            verified_domains=[],
+            blocked_domains=[],
+            promptguard_threshold=0.85,
+            promptguard_fail_closed=True,
+            classifier_loaded=False,
+        )
+        model_loaded = cache_policy_fingerprint(
+            trusted_domains=[],
+            verified_domains=[],
+            blocked_domains=[],
+            promptguard_threshold=0.85,
+            promptguard_fail_closed=True,
+            classifier_loaded=True,
+        )
+        assert cache_key(url, policy_fingerprint=model_absent) != cache_key(
+            url,
+            policy_fingerprint=model_loaded,
         )
 
 
@@ -515,3 +545,188 @@ class TestLifecycle:
         await c.close()
         mock_client.aclose.assert_awaited_once()
         assert c._client is None
+
+
+# ---------------------------------------------------------------------------
+# Drop detection, bounded reconnect, and backoff (US-002)
+# ---------------------------------------------------------------------------
+
+
+class TestReconnect:
+    """A dropped or never-connected cache self-heals at a bounded, backed-off cost."""
+
+    @pytest.mark.asyncio()
+    async def test_operation_failure_marks_cache_disconnected(self) -> None:
+        """A drop that begins *after* a successful connect clears the client."""
+        mock_redis = AsyncMock()
+        mock_redis.get = AsyncMock(side_effect=ConnectionError("dropped"))
+        c = ContentCache()
+        c._client = mock_redis
+
+        assert c.connected is True
+        result = await c.get("https://example.com")
+
+        assert result is None
+        assert c.connected is False
+        assert c._metrics.operation_failures == 1
+
+    @pytest.mark.asyncio()
+    async def test_get_reconnects_when_disconnected_and_backoff_elapsed(self) -> None:
+        with patch("cache.aioredis") as mock_mod:
+            mock_client = AsyncMock()
+            mock_client.ping = AsyncMock(return_value=True)
+            mock_client.get = AsyncMock(return_value=None)
+            mock_mod.from_url.return_value = mock_client
+
+            c = ContentCache()
+            result = await c.get("https://example.com")
+
+        assert result is None
+        assert c.connected is True
+        assert c._metrics.reconnect_attempts == 1
+        assert c._metrics.reconnect_successes == 1
+
+    @pytest.mark.asyncio()
+    async def test_put_reconnects_when_disconnected_and_backoff_elapsed(self) -> None:
+        with patch("cache.aioredis") as mock_mod:
+            mock_client = AsyncMock()
+            mock_client.ping = AsyncMock(return_value=True)
+            mock_client.set = AsyncMock(return_value=True)
+            mock_mod.from_url.return_value = mock_client
+
+            c = ContentCache()
+            ok = await c.put(
+                "https://example.com",
+                _make_content(),
+                domain="example.com",
+            )
+
+        assert ok is True
+        assert c.connected is True
+        assert c._metrics.reconnect_attempts == 1
+
+    @pytest.mark.asyncio()
+    async def test_delete_reconnects_when_disconnected_and_backoff_elapsed(
+        self,
+    ) -> None:
+        with patch("cache.aioredis") as mock_mod:
+            mock_client = AsyncMock()
+            mock_client.ping = AsyncMock(return_value=True)
+            mock_client.delete = AsyncMock(return_value=1)
+            mock_mod.from_url.return_value = mock_client
+
+            c = ContentCache()
+            ok = await c.delete("https://example.com")
+
+        assert ok is True
+        assert c.connected is True
+        assert c._metrics.reconnect_attempts == 1
+
+    @pytest.mark.asyncio()
+    async def test_stale_entry_eviction_works_after_reconnect(self) -> None:
+        """``_delete_key`` (eviction) is reachable via ``get()``'s own reconnect."""
+        stale = _make_content().model_copy(
+            update={"retrieved_at": datetime.now(UTC) - timedelta(hours=2)}
+        )
+        with patch("cache.aioredis") as mock_mod:
+            mock_client = AsyncMock()
+            mock_client.ping = AsyncMock(return_value=True)
+            mock_client.get = AsyncMock(return_value=stale.model_dump_json().encode())
+            mock_client.delete = AsyncMock(return_value=1)
+            mock_mod.from_url.return_value = mock_client
+
+            c = ContentCache()
+            result = await c.get("https://example.com", ttl_hours=1)
+
+        assert result is None
+        mock_client.delete.assert_awaited_once()
+        assert c.connected is True
+
+    @pytest.mark.asyncio()
+    async def test_backoff_limits_repeated_connection_attempts(self) -> None:
+        """>= 10 consecutive ``get()`` calls within the backoff window try once."""
+        with patch("cache.aioredis") as mock_mod:
+            mock_mod.from_url.side_effect = ConnectionError("down")
+            c = ContentCache()
+
+            for _ in range(10):
+                assert await c.get("https://example.com") is None
+
+        assert mock_mod.from_url.call_count == 1
+        assert c._metrics.reconnect_attempts == 1
+        assert c._metrics.reconnect_failures == 1
+
+    @pytest.mark.asyncio()
+    async def test_reconnect_is_bounded_by_a_two_second_deadline(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A black-holed Valkey cannot hang a reconnect past the deadline."""
+        monkeypatch.setattr(cache_module, "_RECONNECT_TIMEOUT_S", 0.05)
+
+        async def hang_forever() -> bool:
+            await asyncio.sleep(10)
+            return True
+
+        with patch("cache.aioredis") as mock_mod:
+            mock_client = AsyncMock()
+            mock_client.ping = AsyncMock(side_effect=hang_forever)
+            mock_mod.from_url.return_value = mock_client
+
+            c = ContentCache()
+            started = time.monotonic()
+            ok = await c._attempt_connect()
+            elapsed = time.monotonic() - started
+
+        assert ok is False
+        assert elapsed < 1.0
+
+    @pytest.mark.asyncio()
+    async def test_concurrent_calls_open_at_most_one_connection(self) -> None:
+        """A caller finding the reconnect lock held returns a miss immediately."""
+        connect_started = asyncio.Event()
+        release_connect = asyncio.Event()
+        attempts = 0
+
+        async def slow_ping() -> bool:
+            nonlocal attempts
+            attempts += 1
+            connect_started.set()
+            await release_connect.wait()
+            return True
+
+        with patch("cache.aioredis") as mock_mod:
+            mock_client = AsyncMock()
+            mock_client.ping = AsyncMock(side_effect=slow_ping)
+            mock_client.get = AsyncMock(return_value=None)
+            mock_mod.from_url.return_value = mock_client
+
+            c = ContentCache()
+            first = asyncio.create_task(c.get("https://example.com"))
+            await connect_started.wait()
+
+            concurrent_results = await asyncio.gather(
+                *(c.get("https://example.com") for _ in range(5))
+            )
+            release_connect.set()
+            first_result = await first
+
+        assert first_result is None
+        assert concurrent_results == [None] * 5
+        assert attempts == 1
+        assert c._metrics.reconnect_attempts == 1
+
+    @pytest.mark.asyncio()
+    async def test_connect_failure_never_logs_url_or_secret(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Failure logs use the closed reason vocabulary, never the raw URL."""
+        c = ContentCache(valkey_url="redis://:secret@unreachable:6379/4")
+
+        with caplog.at_level(logging.WARNING, logger="cache"):
+            ok = await c.connect()
+
+        assert ok is False
+        assert "secret" not in caplog.text
+        assert "unreachable" not in caplog.text

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from models import (  # noqa: E402
     Stage3Verdict,
     TrustTier,
 )
+from pipeline import contract  # noqa: E402
 from pipeline.orchestrator import (  # noqa: E402
     DOCUMENT_FAILURE_CODES,
     DOCUMENT_FAILURE_REASONS,
@@ -578,6 +580,181 @@ async def test_retrieve_stage3_injection_returns_quarantine(
 
 
 # ---------------------------------------------------------------------------
+# PromptGuard state on /retrieve (US-004)
+# ---------------------------------------------------------------------------
+
+
+@patch(
+    "pipeline.orchestrator.validate_url",
+    new_callable=AsyncMock,
+    return_value=("93.184.216.34", "example.com"),
+)
+@patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
+@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.orchestrator.detect_content_type", return_value="html")
+@patch("pipeline.orchestrator.scan_structural")
+async def test_retrieve_classifier_absent_fail_closed_reports_unavailable_blocked(
+    mock_scan: MagicMock,
+    mock_detect: MagicMock,
+    mock_extract: MagicMock,
+    mock_fetch: AsyncMock,
+    mock_validate: MagicMock,
+) -> None:
+    """Classifier absent + fail-closed is labeled unavailable, not an attack."""
+    mock_fetch.return_value = _make_fetch_result()
+    mock_extract.return_value = _make_extraction()
+    mock_scan.return_value = _make_structural_clean()
+
+    result = await run_retrieve_pipeline(
+        _make_retrieve_request(promptguard_fail_closed=True),
+        cache=None,
+        classifier=None,
+        config=_SAMPLE_CONFIG,
+    )
+
+    assert result.injection_spans == ["promptguard_unavailable"]
+    assert result.promptguard_state == "unavailable_blocked"
+    assert result.injection_detected is True
+    assert result.stage3_verdict == Stage3Verdict.INJECTION_DETECTED
+
+
+@patch(
+    "pipeline.orchestrator.validate_url",
+    new_callable=AsyncMock,
+    return_value=("93.184.216.34", "example.com"),
+)
+@patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
+@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.orchestrator.detect_content_type", return_value="html")
+@patch("pipeline.orchestrator.scan_structural")
+async def test_retrieve_classifier_absent_fail_open_reports_unavailable_allowed(
+    mock_scan: MagicMock,
+    mock_detect: MagicMock,
+    mock_extract: MagicMock,
+    mock_fetch: AsyncMock,
+    mock_validate: MagicMock,
+) -> None:
+    """Classifier absent + fail-open passes through, marked unavailable_allowed."""
+    mock_fetch.return_value = _make_fetch_result()
+    mock_extract.return_value = _make_extraction()
+    mock_scan.return_value = _make_structural_clean()
+
+    result = await run_retrieve_pipeline(
+        _make_retrieve_request(promptguard_fail_closed=False),
+        cache=None,
+        classifier=None,
+        config=_SAMPLE_CONFIG,
+    )
+
+    assert result.promptguard_state == "unavailable_allowed"
+    assert result.injection_detected is False
+    assert result.injection_spans == []
+
+
+@patch(
+    "pipeline.orchestrator.validate_url",
+    new_callable=AsyncMock,
+    return_value=("93.184.216.34", "example.com"),
+)
+@patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
+@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.orchestrator.detect_content_type", return_value="html")
+@patch("pipeline.orchestrator.scan_structural")
+async def test_retrieve_trusted_tier_loaded_classifier_reports_skipped_trusted(
+    mock_scan: MagicMock,
+    mock_detect: MagicMock,
+    mock_extract: MagicMock,
+    mock_fetch: AsyncMock,
+    mock_validate: MagicMock,
+) -> None:
+    """TRUSTED tier skips PromptGuard without reporting degradation."""
+    mock_fetch.return_value = _make_fetch_result()
+    mock_extract.return_value = _make_extraction()
+    mock_scan.return_value = _make_structural_clean()
+
+    classifier = MagicMock()
+    classifier.loaded = True
+
+    result = await run_retrieve_pipeline(
+        _make_retrieve_request(trusted_domains=["example.com"]),
+        cache=None,
+        classifier=classifier,
+        config=_SAMPLE_CONFIG,
+    )
+
+    assert result.promptguard_state == "skipped_trusted"
+    assert result.injection_detected is False
+    classifier.classify.assert_not_called()
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_cache_misses_when_classifier_loads_after_fail_open_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fail-open body cached while the model was absent misses once loaded."""
+    from pipeline import orchestrator
+
+    cache = ContentCache()
+    cache_client = AsyncMock()
+    cache_entries: dict[str, str] = {}
+
+    async def get_cached(key: str) -> str | None:
+        return cache_entries.get(key)
+
+    async def store_cached(key: str, value: str, *, ex: int) -> bool:
+        cache_entries[key] = value
+        return True
+
+    cache_client.get.side_effect = get_cached
+    cache_client.set.side_effect = store_cached
+    cache._client = cache_client
+
+    monkeypatch.setattr(
+        orchestrator,
+        "validate_url",
+        AsyncMock(return_value=("93.184.216.34", "example.com")),
+    )
+    fetch = AsyncMock(return_value=_make_fetch_result())
+    monkeypatch.setattr(orchestrator, "fetch_url", fetch)
+    monkeypatch.setattr(
+        orchestrator, "detect_content_type", MagicMock(return_value="html")
+    )
+    monkeypatch.setattr(
+        orchestrator, "extract_html", MagicMock(return_value=_make_extraction())
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "scan_structural",
+        MagicMock(return_value=_make_structural_clean()),
+    )
+
+    request = _make_retrieve_request(promptguard_fail_closed=False)
+
+    model_absent_result = await run_retrieve_pipeline(
+        request,
+        cache=cache,
+        classifier=None,
+        config=_SAMPLE_CONFIG,
+    )
+    assert model_absent_result.promptguard_state == "unavailable_allowed"
+    assert fetch.await_count == 1
+
+    loaded_classifier = MagicMock()
+    loaded_classifier.loaded = True
+    loaded_classifier.classify.return_value = (0.0, [])
+
+    model_loaded_result = await run_retrieve_pipeline(
+        request,
+        cache=cache,
+        classifier=loaded_classifier,
+        config=_SAMPLE_CONFIG,
+    )
+
+    assert fetch.await_count == 2
+    assert model_loaded_result.promptguard_state == "scanned"
+
+
+# ---------------------------------------------------------------------------
 # Error responses
 # ---------------------------------------------------------------------------
 
@@ -745,9 +922,13 @@ async def test_search_with_mocked_searxng() -> None:
     assert result.request_id  # non-empty
     # HTML tags should be stripped from snippet
     assert "<b>" not in result.results[0].snippet
-    # Default suspicious=False for clean snippets
-    assert result.results[0].suspicious is False
-    assert result.results[1].suspicious is False
+    # No classifier is passed and the request is fail-open, so PromptGuard
+    # skips every result and the fail-open marker applies.
+    assert result.results[0].suspicious is True
+    assert result.results[1].suspicious is True
+    assert result.omitted_results == 0
+    assert result.unscanned_results == 2
+    assert result.promptguard_unavailable is True
 
 
 async def test_search_searxng_unavailable_raises_pipeline_error() -> None:
@@ -825,6 +1006,8 @@ async def test_search_blocked_snippet_omitted() -> None:
     urls = [r.url for r in result.results]
     assert "https://evil.com/2" not in urls
     assert len(result.results) == 2
+    assert result.omitted_results == 1
+    assert result.omitted_by_reason == {contract.OMIT_STRUCTURAL_BLOCKED: 1}
 
 
 async def test_search_suspicious_snippet_flagged() -> None:
@@ -869,7 +1052,10 @@ async def test_search_suspicious_snippet_flagged() -> None:
             )
 
     assert len(result.results) == 2
-    assert result.results[0].suspicious is False
+    # No classifier is passed and the request is fail-open, so PromptGuard
+    # skips both results and the fail-open marker applies regardless of the
+    # Stage 2 verdict.
+    assert result.results[0].suspicious is True
     assert result.results[1].suspicious is True
 
 
@@ -894,6 +1080,9 @@ async def test_search_num_results_respected() -> None:
         )
 
     assert len(result.results) == 3
+    # The unexamined surplus (results 3-9) is not an omission — the loop
+    # never even reaches them.
+    assert result.omitted_results == 0
 
 
 async def test_search_empty_snippet_handled() -> None:
@@ -918,7 +1107,9 @@ async def test_search_empty_snippet_handled() -> None:
 
     assert len(result.results) == 1
     assert result.results[0].snippet == ""
-    assert result.results[0].suspicious is False
+    # No classifier is passed and the request is fail-open, so PromptGuard
+    # skips this result and the fail-open marker applies.
+    assert result.results[0].suspicious is True
 
 
 async def test_search_unresponsive_engines_forwarded() -> None:
@@ -952,6 +1143,8 @@ async def test_search_no_unresponsive_engines_empty_list() -> None:
 
     assert result.results == []
     assert result.unresponsive_engines == []
+    # Zero engine results means nothing was examined, so nothing was omitted.
+    assert result.omitted_results == 0
 
 
 async def test_search_unresponsive_engines_tuple_format() -> None:
@@ -997,6 +1190,10 @@ async def test_search_classifier_unavailable_fails_closed() -> None:
         )
 
     assert result.results == []
+    assert result.omitted_results == 1
+    assert result.omitted_by_reason == {contract.OMIT_PROMPTGUARD_UNAVAILABLE: 1}
+    assert result.promptguard_unavailable is True
+    assert result.unscanned_results == 0
 
 
 async def test_search_scans_title_url_and_snippet_before_exposure() -> None:
@@ -1034,6 +1231,11 @@ async def test_search_scans_title_url_and_snippet_before_exposure() -> None:
         )
 
     assert len(result.results) == 1
+    assert result.omitted_results == 3
+    assert result.omitted_by_reason == {
+        contract.OMIT_INVALID_URL: 1,
+        contract.OMIT_STRUCTURAL_BLOCKED: 2,
+    }
     sanitized = result.results[0]
     assert sanitized.title == "Safe title"
     assert sanitized.url == "https://example.com/path"
@@ -1106,6 +1308,114 @@ async def test_search_promptguard_work_is_capped_at_twenty_results() -> None:
     assert promptguard.await_count == 20
 
 
+async def test_search_injection_detected_with_loaded_classifier_counts_omission() -> (
+    None
+):
+    """A real classifier verdict is counted under injection_detected, not
+    promptguard_unavailable."""
+    mock_resp = _mock_searxng_response(
+        [
+            {
+                "title": "Attack",
+                "url": "https://example.com/attack",
+                "content": "Looks harmless on the surface.",
+            }
+        ]
+    )
+
+    with (
+        _searxng_client_patch(mock_resp),
+        patch(
+            "pipeline.orchestrator.run_promptguard",
+            new_callable=AsyncMock,
+            return_value=_make_pg_safe(
+                verdict=Stage3Verdict.INJECTION_DETECTED,
+                score=0.95,
+                skipped=False,
+            ),
+        ),
+    ):
+        result = await run_search_pipeline(
+            _make_search_request(),
+            searxng_url="http://test-searxng:8080",
+            config=_SAMPLE_CONFIG,
+        )
+
+    assert result.results == []
+    assert result.omitted_results == 1
+    assert result.omitted_by_reason == {contract.OMIT_INJECTION_DETECTED: 1}
+    assert result.promptguard_unavailable is False
+    assert result.unscanned_results == 0
+
+
+async def test_search_promptguard_complete_log_includes_omitted_and_unscanned(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The completion log surfaces the omitted map and unscanned count, and
+    promptguard_scanned counts only results PromptGuard actually classified."""
+
+    async def _pg_side_effect(
+        text: str, classifier: Any = None, **kwargs: Any
+    ) -> PromptGuardResult:
+        if "URL: https://example.com/scanned" in text:
+            return _make_pg_safe(score=0.1, skipped=False)
+        if "URL: https://example.com/unavailable" in text:
+            return PromptGuardResult(
+                verdict=Stage3Verdict.SAFE,
+                score=0.0,
+                skipped=True,
+                skip_reason="model_unavailable",
+            )
+        raise AssertionError(f"unexpected promptguard input: {text!r}")
+
+    mock_resp = _mock_searxng_response(
+        [
+            {
+                "title": "Bad URL",
+                "url": "javascript:alert(1)",
+                "content": "Otherwise harmless.",
+            },
+            {
+                "title": "Scanned",
+                "url": "https://example.com/scanned",
+                "content": "Clean.",
+            },
+            {
+                "title": "Unavailable",
+                "url": "https://example.com/unavailable",
+                "content": "Clean.",
+            },
+        ]
+    )
+
+    with (
+        _searxng_client_patch(mock_resp),
+        patch(
+            "pipeline.orchestrator.run_promptguard",
+            new_callable=AsyncMock,
+            side_effect=_pg_side_effect,
+        ),
+        caplog.at_level(logging.INFO, logger="pipeline.orchestrator"),
+    ):
+        result = await run_search_pipeline(
+            _make_search_request(),
+            searxng_url="http://test-searxng:8080",
+            config=_SAMPLE_CONFIG,
+        )
+
+    assert result.omitted_results == 1
+    assert result.omitted_by_reason == {contract.OMIT_INVALID_URL: 1}
+    assert result.unscanned_results == 1
+
+    record = next(
+        r for r in caplog.records if r.message == "search_promptguard_complete"
+    )
+    assert record.scanned_results == 1
+    assert record.omitted_results == 1
+    assert record.omitted_by_reason == {contract.OMIT_INVALID_URL: 1}
+    assert record.unscanned_results == 1
+
+
 # ---------------------------------------------------------------------------
 # Config loading
 # ---------------------------------------------------------------------------
@@ -1135,7 +1445,15 @@ def client() -> httpx.AsyncClient:
     """Create an async test client for the retrieval app."""
     from pipeline.extraction_limits import extraction_settings_from_config
     from promptguard.classifier import PromptGuardClassifier
-    from retrieval_app import ExtractionAdmissionController, ExtractionMetrics, app
+    from retrieval_app import (
+        ExtractionAdmissionController,
+        ExtractionMetrics,
+        RetrieveMetrics,
+        SearchMetrics,
+        app,
+    )
+
+    from tests.retrieval.fakes import FakeContentCache
 
     # Ensure app.state has the required attributes for route handlers.
     # Use a mock classifier that reports as loaded and returns safe,
@@ -1143,7 +1461,7 @@ def client() -> httpx.AsyncClient:
     mock_classifier = MagicMock(spec=PromptGuardClassifier)
     mock_classifier.loaded = True
     mock_classifier.classify.return_value = (0.0, [])
-    app.state.cache = None
+    app.state.cache = FakeContentCache()
     app.state.classifier = mock_classifier
     app.state.config = _SAMPLE_CONFIG
     settings = extraction_settings_from_config(_SAMPLE_CONFIG)
@@ -1153,10 +1471,11 @@ def client() -> httpx.AsyncClient:
         settings,
         app.state.extraction_metrics,
     )
+    app.state.search_metrics = SearchMetrics()
+    app.state.retrieve_metrics = RetrieveMetrics()
     app.state.classification_semaphore = asyncio.Semaphore(
         settings.classification_concurrency
     )
-    app.state.valkey_connected = False
 
     transport = httpx.ASGITransport(app=app)  # type: ignore[arg-type]
     return httpx.AsyncClient(transport=transport, base_url="http://test")
@@ -1531,6 +1850,7 @@ async def test_post_extract_structural_block_is_content_free(
     assert malicious_text not in data["body"]
     assert malicious_text not in " ".join(data["injection_spans"])
     assert data["word_count"] == len(data["body"].split())
+    assert data["promptguard_state"] == "structural_blocked"
 
 
 async def test_post_extract_promptguard_block_is_content_free(
@@ -1559,14 +1879,36 @@ async def test_post_extract_promptguard_block_is_content_free(
     assert data["injection_detected"] is True
     assert malicious_text not in data["body"]
     assert malicious_text not in " ".join(data["injection_spans"])
+    assert data["injection_spans"] == ["promptguard_injection_detected"]
+    assert data["promptguard_state"] == "scanned"
+
+
+async def test_post_extract_classifier_absent_reports_unavailable_blocked(
+    client: httpx.AsyncClient,
+) -> None:
+    """Uploads fail-closed on a missing model, labeled unavailable, not an attack."""
+    from promptguard.classifier import PromptGuardClassifier
+    from retrieval_app import app as _app
+
+    _app.state.classifier = PromptGuardClassifier()
+    response = await client.post(
+        "/extract",
+        files={"file": ("report.txt", "ordinary document text", "text/plain")},
+        data={"filename": "report.txt"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["injection_spans"] == ["promptguard_unavailable"]
+    assert data["promptguard_state"] == "unavailable_blocked"
+    assert data["injection_detected"] is True
 
 
 async def test_health_publishes_derived_sanitizer_revision(
     client: httpx.AsyncClient,
 ) -> None:
     """Health exposes the current mechanically derived sanitizer revision."""
-    with patch("retrieval_app._check_valkey", new_callable=AsyncMock):
-        response = await client.get("/health")
+    response = await client.get("/health")
 
     assert response.status_code == 200
     assert response.json()["sanitizer_revision"]

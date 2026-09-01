@@ -7,7 +7,7 @@ import json
 import sys
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -18,6 +18,15 @@ _retrieval_root = str(Path(__file__).resolve().parents[2] / "services" / "retrie
 if _retrieval_root not in sys.path:
     sys.path.insert(0, _retrieval_root)
 
+from models import (  # noqa: E402
+    RetrievedContent,
+    SearchResponse,
+    Stage2Verdict,
+    Stage3Verdict,
+    TrustTier,
+)
+from pipeline import contract  # noqa: E402
+from pipeline.contract import CONTRACT_VERSION, DIAG_STRUCTURAL_BLOCKED  # noqa: E402
 from pipeline.extraction_limits import (  # noqa: E402
     MAX_PROMPTGUARD_CHUNKS,
     ExtractionConfigurationError,
@@ -34,9 +43,13 @@ from retrieval_app import (  # noqa: E402
     DocumentSizeLimitMiddleware,
     ExtractionAdmissionController,
     ExtractionMetrics,
+    RetrieveMetrics,
+    SearchMetrics,
     _spool_upload,
     app,
 )
+
+from tests.retrieval.fakes import FakeContentCache  # noqa: E402
 
 
 @pytest.fixture
@@ -44,7 +57,7 @@ def client() -> httpx.AsyncClient:
     """Create an async test client for the retrieval app."""
     # Ensure app.state has the expected attributes (normally set by lifespan)
     app.state.classifier = PromptGuardClassifier()
-    app.state.cache = None
+    app.state.cache = FakeContentCache()
     app.state.config = {"extract_route_enabled": True}
     settings = extraction_settings_from_config(app.state.config)
     app.state.extraction_settings = settings
@@ -53,10 +66,11 @@ def client() -> httpx.AsyncClient:
         settings,
         app.state.extraction_metrics,
     )
+    app.state.search_metrics = SearchMetrics()
+    app.state.retrieve_metrics = RetrieveMetrics()
     app.state.classification_semaphore = asyncio.Semaphore(
         settings.classification_concurrency
     )
-    app.state.valkey_connected = False
 
     transport = httpx.ASGITransport(app=app)  # type: ignore[arg-type]
     return httpx.AsyncClient(transport=transport, base_url="http://test")
@@ -80,28 +94,24 @@ def test_extraction_limit_defaults_are_bounded_and_derived() -> None:
 
 
 async def test_health_returns_200(client: httpx.AsyncClient) -> None:
-    """GET /health returns 200 with expected JSON structure."""
-    with patch(
-        "retrieval_app._check_valkey", new_callable=AsyncMock, return_value=True
-    ):
-        resp = await client.get("/health")
+    """GET /health returns 200; the fixture's classifier is unloaded, so degraded."""
+    app.state.cache.connected = True
+    resp = await client.get("/health")
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["status"] == "healthy"
+    assert data["status"] == "degraded"
     assert isinstance(data["promptguard_loaded"], bool)
     assert isinstance(data["cache_connected"], bool)
-    assert data["capabilities"]["search_sanitization"] == 1
+    assert "search_sanitization" not in data["capabilities"]
 
 
 async def test_health_promptguard_defaults_false(
     client: httpx.AsyncClient,
 ) -> None:
     """PromptGuard is not loaded yet (US-006), so it should be False."""
-    with patch(
-        "retrieval_app._check_valkey", new_callable=AsyncMock, return_value=True
-    ):
-        resp = await client.get("/health")
+    app.state.cache.connected = True
+    resp = await client.get("/health")
 
     assert resp.json()["promptguard_loaded"] is False
 
@@ -110,10 +120,8 @@ async def test_health_cache_connected_true(
     client: httpx.AsyncClient,
 ) -> None:
     """When Valkey is reachable, cache_connected should be True."""
-    with patch(
-        "retrieval_app._check_valkey", new_callable=AsyncMock, return_value=True
-    ):
-        resp = await client.get("/health")
+    app.state.cache.connected = True
+    resp = await client.get("/health")
 
     assert resp.json()["cache_connected"] is True
 
@@ -121,14 +129,111 @@ async def test_health_cache_connected_true(
 async def test_health_cache_disconnected(
     client: httpx.AsyncClient,
 ) -> None:
-    """When Valkey is unreachable, cache_connected should be False."""
-    with patch(
-        "retrieval_app._check_valkey", new_callable=AsyncMock, return_value=False
-    ):
-        resp = await client.get("/health")
+    """When Valkey is unreachable, cache_connected should be False and degraded."""
+    app.state.cache.connected = False
+    resp = await client.get("/health")
 
     assert resp.json()["cache_connected"] is False
-    assert resp.json()["status"] == "healthy"
+    assert resp.json()["status"] == "degraded"
+    assert "cache_unavailable" in resp.json()["degraded_reasons"]
+
+
+async def test_health_missing_cache_reports_unavailable_never_raises(
+    client: httpx.AsyncClient,
+) -> None:
+    """A ``None`` (or unset) ``app.state.cache`` degrades honestly instead of 500ing."""
+    app.state.cache = None
+    try:
+        resp = await client.get("/health")
+    finally:
+        app.state.cache = FakeContentCache()
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["cache_connected"] is False
+    assert "cache_unavailable" in data["degraded_reasons"]
+
+
+async def test_health_healthy_when_classifier_loaded_and_cache_connected(
+    client: httpx.AsyncClient,
+) -> None:
+    """Loaded classifier + connected cache reports healthy with real capabilities."""
+    mock_classifier = MagicMock(spec=PromptGuardClassifier)
+    mock_classifier.loaded = True
+    app.state.classifier = mock_classifier
+    app.state.cache.connected = True
+    try:
+        resp = await client.get("/health")
+
+        data = resp.json()
+        assert data["status"] == "healthy"
+        assert data["degraded_reasons"] == []
+        assert data["capabilities"]["search_sanitization"] == 1
+        assert data["contract_version"] == CONTRACT_VERSION
+    finally:
+        app.state.classifier = PromptGuardClassifier()
+
+
+async def test_health_degraded_reports_promptguard_unavailable(
+    client: httpx.AsyncClient,
+) -> None:
+    """Unloaded classifier reports the promptguard_unavailable degraded reason."""
+    app.state.cache.connected = True
+    resp = await client.get("/health")
+
+    data = resp.json()
+    assert data["status"] == "degraded"
+    assert "promptguard_unavailable" in data["degraded_reasons"]
+    assert data["contract_version"] == CONTRACT_VERSION
+
+
+async def test_health_legacy_capability_override_restores_advertisement(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The break-glass env var keeps capabilities advertised while staying honest."""
+    monkeypatch.setenv("POPPY_RETRIEVAL_LEGACY_CAPABILITY", "1")
+    app.state.cache.connected = True
+    resp = await client.get("/health")
+
+    data = resp.json()
+    assert data["capabilities"]["search_sanitization"] == 1
+    assert data["status"] == "degraded"
+    assert "promptguard_unavailable" in data["degraded_reasons"]
+    assert data["promptguard_loaded"] is False
+
+
+async def test_health_legacy_capability_override_unset_withholds_advertisement(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without the override, an unloaded classifier withholds the capability."""
+    monkeypatch.delenv("POPPY_RETRIEVAL_LEGACY_CAPABILITY", raising=False)
+    app.state.cache.connected = True
+    resp = await client.get("/health")
+
+    assert "search_sanitization" not in resp.json()["capabilities"]
+
+
+def test_legacy_capability_warning_logged_only_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The per-boot warning fires only while the override env var is active."""
+    import logging
+
+    from retrieval_app import _warn_if_legacy_capability_advertisement_enabled
+
+    monkeypatch.delenv("POPPY_RETRIEVAL_LEGACY_CAPABILITY", raising=False)
+    with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+        assert _warn_if_legacy_capability_advertisement_enabled() is False
+    assert "legacy_capability_advertisement_active" not in caplog.text
+
+    caplog.clear()
+    monkeypatch.setenv("POPPY_RETRIEVAL_LEGACY_CAPABILITY", "1")
+    with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+        assert _warn_if_legacy_capability_advertisement_enabled() is True
+    assert "legacy_capability_advertisement_active" in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -288,3 +393,224 @@ async def test_metrics_expose_saturation_and_oom_proximity(
     extraction = response.json()["extraction"]
     assert "semaphore_saturation" in extraction
     assert "oom_proximity_ratio" in extraction
+
+
+async def test_metrics_covers_search_retrieve_and_cache_sections(
+    client: httpx.AsyncClient,
+) -> None:
+    """`/metrics` exposes fresh ``search``, ``retrieve``, and ``cache`` sections."""
+    response = await client.get("/metrics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["contract_version"] == CONTRACT_VERSION
+    assert body["search"] == {
+        "requests": 0,
+        "errors": {},
+        "omitted_by_reason": {},
+        "unscanned_results": 0,
+    }
+    assert body["retrieve"] == {
+        "requests": 0,
+        "errors": {},
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "blocked_by_reason": {},
+        "promptguard_state": {},
+    }
+    assert set(body["cache"]) == {
+        "reconnect_attempts",
+        "reconnect_successes",
+        "reconnect_failures",
+        "operation_failures",
+    }
+
+
+async def test_metrics_retrieve_records_cache_hit_and_promptguard_state(
+    client: httpx.AsyncClient,
+) -> None:
+    """`/retrieve` folds ``cache_hit``/``promptguard_state`` from the response model."""
+    content = RetrievedContent(
+        request_id="r1",
+        source_url="https://example.com/a",
+        final_url="https://example.com/a",
+        cache_hit=True,
+        title="T",
+        body="body",
+        word_count=1,
+        content_type="html",
+        trust_score=0.7,
+        trust_tier=TrustTier.STANDARD,
+        stage2_verdict=Stage2Verdict.CLEAN,
+        stage3_verdict=Stage3Verdict.SAFE,
+        promptguard_state="scanned",
+        domain="example.com",
+    )
+    with patch(
+        "retrieval_app.run_retrieve_pipeline", new=AsyncMock(return_value=content)
+    ):
+        resp = await client.post("/retrieve", json={"url": "https://example.com/a"})
+    assert resp.status_code == 200
+
+    metrics_resp = await client.get("/metrics")
+    retrieve_metrics = metrics_resp.json()["retrieve"]
+    assert retrieve_metrics["requests"] == 1
+    assert retrieve_metrics["cache_hits"] == 1
+    assert retrieve_metrics["cache_misses"] == 0
+    assert retrieve_metrics["promptguard_state"] == {"scanned": 1}
+    assert retrieve_metrics["blocked_by_reason"] == {}
+
+
+async def test_metrics_retrieve_records_blocked_by_reason_from_diagnostic(
+    client: httpx.AsyncClient,
+) -> None:
+    """`/retrieve` keys ``blocked_by_reason`` on the quarantine diagnostic label."""
+    content = RetrievedContent(
+        request_id="r2",
+        source_url="https://example.com/b",
+        final_url="https://example.com/b",
+        body="Content quarantined due to potential prompt injection.",
+        word_count=6,
+        content_type="html",
+        trust_score=0.0,
+        trust_tier=TrustTier.STANDARD,
+        injection_detected=True,
+        injection_spans=[DIAG_STRUCTURAL_BLOCKED],
+        stage2_verdict=Stage2Verdict.BLOCKED,
+        stage3_verdict=Stage3Verdict.SAFE,
+        promptguard_state="structural_blocked",
+        domain="example.com",
+    )
+    with patch(
+        "retrieval_app.run_retrieve_pipeline", new=AsyncMock(return_value=content)
+    ):
+        resp = await client.post("/retrieve", json={"url": "https://example.com/b"})
+    assert resp.status_code == 200
+
+    metrics_resp = await client.get("/metrics")
+    retrieve_metrics = metrics_resp.json()["retrieve"]
+    assert retrieve_metrics["blocked_by_reason"] == {DIAG_STRUCTURAL_BLOCKED: 1}
+    assert retrieve_metrics["promptguard_state"] == {"structural_blocked": 1}
+
+
+async def test_metrics_retrieve_blocked_by_reason_unknown_diagnostic_buckets_to_other(
+    client: httpx.AsyncClient,
+) -> None:
+    """An out-of-vocabulary diagnostic buckets to ``contract.METRICS_OTHER_BUCKET``."""
+    content = RetrievedContent(
+        request_id="r3",
+        source_url="https://example.com/c",
+        final_url="https://example.com/c",
+        body="Content quarantined due to potential prompt injection.",
+        word_count=6,
+        content_type="html",
+        trust_score=0.0,
+        trust_tier=TrustTier.STANDARD,
+        injection_detected=True,
+        injection_spans=["unexpected_diagnostic"],
+        stage2_verdict=Stage2Verdict.BLOCKED,
+        stage3_verdict=Stage3Verdict.SAFE,
+        promptguard_state="structural_blocked",
+        domain="example.com",
+    )
+    with patch(
+        "retrieval_app.run_retrieve_pipeline", new=AsyncMock(return_value=content)
+    ):
+        resp = await client.post("/retrieve", json={"url": "https://example.com/c"})
+    assert resp.status_code == 200
+
+    metrics_resp = await client.get("/metrics")
+    retrieve_metrics = metrics_resp.json()["retrieve"]
+    assert retrieve_metrics["blocked_by_reason"] == {contract.METRICS_OTHER_BUCKET: 1}
+
+
+async def test_metrics_retrieve_error_keys_on_error_code_not_reason(
+    client: httpx.AsyncClient,
+) -> None:
+    """`/retrieve` errors key on the closed ``error`` code, never on ``reason``."""
+    exc = PipelineError(
+        error="private_ip",
+        reason=(
+            "URL resolves to a private/internal address: 10.0.0.5 for "
+            "https://internal.example/secret"
+        ),
+        request_id="r4",
+    )
+    with patch("retrieval_app.run_retrieve_pipeline", new=AsyncMock(side_effect=exc)):
+        resp = await client.post(
+            "/retrieve", json={"url": "https://internal.example/secret"}
+        )
+    assert resp.status_code == 422
+    assert "internal.example" in resp.json()["reason"]
+
+    metrics_resp = await client.get("/metrics")
+    body = metrics_resp.json()
+    assert body["retrieve"]["errors"] == {"private_ip": 1}
+    assert "internal.example" not in json.dumps(body)
+
+
+async def test_metrics_search_records_omitted_and_unscanned_from_response(
+    client: httpx.AsyncClient,
+) -> None:
+    """`/search` folds ``omitted_by_reason``/``unscanned_results`` from the response."""
+    response = SearchResponse(
+        results=[],
+        request_id="s1",
+        query="test",
+        omitted_results=1,
+        omitted_by_reason={contract.OMIT_INVALID_URL: 1},
+        unscanned_results=2,
+    )
+    with patch(
+        "retrieval_app.run_search_pipeline", new=AsyncMock(return_value=response)
+    ):
+        resp = await client.post("/search", json={"query": "test"})
+    assert resp.status_code == 200
+
+    metrics_resp = await client.get("/metrics")
+    search_metrics = metrics_resp.json()["search"]
+    assert search_metrics["requests"] == 1
+    assert search_metrics["omitted_by_reason"] == {contract.OMIT_INVALID_URL: 1}
+    assert search_metrics["unscanned_results"] == 2
+
+
+async def test_metrics_search_omitted_by_reason_unknown_key_buckets_to_other(
+    client: httpx.AsyncClient,
+) -> None:
+    """An out-of-vocabulary omission reason buckets to ``METRICS_OTHER_BUCKET``."""
+    response = SearchResponse(
+        results=[],
+        request_id="s2",
+        query="test",
+        omitted_by_reason={"unexpected_reason": 1},
+    )
+    with patch(
+        "retrieval_app.run_search_pipeline", new=AsyncMock(return_value=response)
+    ):
+        resp = await client.post("/search", json={"query": "test"})
+    assert resp.status_code == 200
+
+    metrics_resp = await client.get("/metrics")
+    search_metrics = metrics_resp.json()["search"]
+    assert search_metrics["omitted_by_reason"] == {contract.METRICS_OTHER_BUCKET: 1}
+
+
+async def test_metrics_search_error_keys_are_content_free(
+    client: httpx.AsyncClient,
+) -> None:
+    """`/search` never leaks the SearXNG URL from ``reason`` into the metrics key."""
+    exc = PipelineError(
+        error="searxng_unavailable",
+        reason="SearXNG not reachable at http://poppy-searxng:8080: Connection refused",
+        request_id="s3",
+    )
+    with patch("retrieval_app.run_search_pipeline", new=AsyncMock(side_effect=exc)):
+        resp = await client.post("/search", json={"query": "test"})
+    assert resp.status_code == 422
+    assert "poppy-searxng" in resp.json()["reason"]
+
+    metrics_resp = await client.get("/metrics")
+    body = metrics_resp.json()
+    assert body["search"]["errors"] == {"searxng_unavailable": 1}
+    assert body["search"]["requests"] == 1
+    assert "poppy-searxng" not in json.dumps(body)
