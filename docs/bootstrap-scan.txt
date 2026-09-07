@@ -71,6 +71,13 @@ spec 2 re-check can distinguish "still not flagged" from "newly clean".
    is also Poppy's *live* compose value until spec 6 rotates it, which is part
    of why this repository stays PRIVATE for the whole of the bootstrap spec.
 
+Confirmation re-scan
+--------------------
+Re-run after the two documentation commits above landed and `main` was pushed:
+50 commits scanned (47 split + `.gitignore` + this report + bootstrap notes),
+same single false positive, no new findings.  This is the complete history
+spec 2 will re-check at the public flip.
+
 Standing risk while private
 ---------------------------
 The pre-spec-2 Dockerfile still carries `ARG HF_TOKEN` (removed in spec 2).
