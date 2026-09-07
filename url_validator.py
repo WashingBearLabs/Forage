@@ -55,7 +55,8 @@ _PRIVATE_NETWORKS_V6 = [
     ipaddress.IPv6Network("::1/128"),             # Loopback
     ipaddress.IPv6Network("fe80::/10"),           # Link-local
     ipaddress.IPv6Network("fc00::/7"),            # Unique local address
-    ipaddress.IPv6Network("::ffff:0:0/96"),       # IPv4-mapped (caught by ipv4_mapped check too)
+    # IPv4-mapped (also caught by the ipv4_mapped check)
+    ipaddress.IPv6Network("::ffff:0:0/96"),
     ipaddress.IPv6Network("2001:db8::/32"),       # Documentation
     ipaddress.IPv6Network("ff00::/8"),            # Multicast
 ]

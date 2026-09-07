@@ -2,19 +2,12 @@
 
 from __future__ import annotations
 
-import sys
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
 
-# Add the retrieval service root to sys.path so models is importable
-_retrieval_root = str(Path(__file__).resolve().parents[2] / "services" / "retrieval")
-if _retrieval_root not in sys.path:
-    sys.path.insert(0, _retrieval_root)
-
-from models import (  # noqa: E402
+from models import (
     RetrievedContent,
     RetrieveRequest,
     SearchRequest,
@@ -24,7 +17,7 @@ from models import (  # noqa: E402
     Stage3Verdict,
     TrustTier,
 )
-from pipeline.contract import OMIT_INVALID_URL, OMIT_STRUCTURAL_BLOCKED  # noqa: E402
+from pipeline.contract import OMIT_INVALID_URL, OMIT_STRUCTURAL_BLOCKED
 
 # ---------------------------------------------------------------------------
 # Helpers

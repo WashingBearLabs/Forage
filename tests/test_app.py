@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
-from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,32 +11,27 @@ import httpx
 import pytest
 from starlette.types import Message, Receive, Scope, Send
 
-# Add the retrieval service root to sys.path so app is importable
-_retrieval_root = str(Path(__file__).resolve().parents[2] / "services" / "retrieval")
-if _retrieval_root not in sys.path:
-    sys.path.insert(0, _retrieval_root)
-
-from models import (  # noqa: E402
+from models import (
     RetrievedContent,
     SearchResponse,
     Stage2Verdict,
     Stage3Verdict,
     TrustTier,
 )
-from pipeline import contract  # noqa: E402
-from pipeline.contract import CONTRACT_VERSION, DIAG_STRUCTURAL_BLOCKED  # noqa: E402
-from pipeline.extraction_limits import (  # noqa: E402
+from pipeline import contract
+from pipeline.contract import CONTRACT_VERSION, DIAG_STRUCTURAL_BLOCKED
+from pipeline.extraction_limits import (
     MAX_PROMPTGUARD_CHUNKS,
     ExtractionConfigurationError,
     extraction_settings_from_config,
 )
-from pipeline.orchestrator import PipelineError  # noqa: E402
-from promptguard.classifier import (  # noqa: E402
+from pipeline.orchestrator import PipelineError
+from promptguard.classifier import (
     CHUNK_OVERLAP,
     MAX_SEQ_LEN,
     PromptGuardClassifier,
 )
-from retrieval_app import (  # noqa: E402
+from retrieval_app import (
     _MAX_DOCUMENT_BYTES,
     DocumentSizeLimitMiddleware,
     ExtractionAdmissionController,
@@ -48,8 +41,7 @@ from retrieval_app import (  # noqa: E402
     _spool_upload,
     app,
 )
-
-from tests.retrieval.fakes import FakeContentCache  # noqa: E402
+from tests.fakes import FakeContentCache
 
 
 @pytest.fixture

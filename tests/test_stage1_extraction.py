@@ -2,19 +2,9 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pytest
 
-# Add the retrieval service root to sys.path so pipeline is importable
-_retrieval_root = str(
-    Path(__file__).resolve().parents[2] / "services" / "retrieval"
-)
-if _retrieval_root not in sys.path:
-    sys.path.insert(0, _retrieval_root)
-
-from pipeline.stage1_extraction import (  # noqa: E402
+from pipeline.stage1_extraction import (
     ExtractionResult,
     _collapse_invisible,
     _normalize_text,
@@ -144,7 +134,6 @@ HTML_EXCESSIVE_WHITESPACE = """\
 <html>
 <body>
 <p>First paragraph.</p>
-
 
 
 <p>Second paragraph after lots of blank lines.</p>

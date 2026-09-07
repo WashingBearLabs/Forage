@@ -2,20 +2,10 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pytest
 
-# Add the retrieval service root to sys.path so pipeline is importable
-_retrieval_root = str(
-    Path(__file__).resolve().parents[2] / "services" / "retrieval"
-)
-if _retrieval_root not in sys.path:
-    sys.path.insert(0, _retrieval_root)
-
-from models import Stage2Verdict  # noqa: E402
-from pipeline.stage2_structural import (  # noqa: E402
+from models import Stage2Verdict
+from pipeline.stage2_structural import (
     StructuralScanResult,
     scan_structural,
 )
@@ -182,7 +172,8 @@ class TestEncodedPayloads:
         by design. The ML model in Stage 3 handles disambiguation."""
         text = (
             "Here is an example of Base64 encoding in Python:\n"
-            "result = base64.b64encode(b'Hello World this is a long string for testing')\n"
+            "result = base64.b64encode("
+            "b'Hello World this is a long string for testing')\n"
             "# Output: SGVsbG8gV29ybGQgdGhpcyBpcyBhIGxvbmcgc3RyaW5nIGZvciB0ZXN0aW5n"
         )
         result = scan_structural(text)
@@ -263,7 +254,7 @@ class TestExfilBeacons:
         assert result.verdict == Stage2Verdict.SUSPICIOUS
 
     def test_markdown_image_no_template_clean(self) -> None:
-        """Markdown images without template variables should not trigger exfil_beacon."""
+        """Markdown images with no template variable are not exfil beacons."""
         result = scan_structural("![img](https://example.com/image.png)")
         assert not any(f.category == "exfil_beacon" for f in result.flags)
 

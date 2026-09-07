@@ -7,29 +7,21 @@ RetrievedContent population.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pytest
 
-# Add the retrieval service root to sys.path so modules are importable
-_retrieval_root = str(Path(__file__).resolve().parents[2] / "services" / "retrieval")
-if _retrieval_root not in sys.path:
-    sys.path.insert(0, _retrieval_root)
-
-from models import (  # noqa: E402
+from models import (
     RetrievedContent,
     Stage2Verdict,
     Stage3Verdict,
     TrustTier,
 )
-from pipeline.stage1_extraction import ExtractionResult  # noqa: E402
-from pipeline.stage2_structural import (  # noqa: E402
+from pipeline.stage1_extraction import ExtractionResult
+from pipeline.stage2_structural import (
     FlaggedSpan,
     StructuralScanResult,
 )
-from pipeline.stage3_promptguard import PromptGuardResult  # noqa: E402
-from pipeline.stage4_structuring import (  # noqa: E402
+from pipeline.stage3_promptguard import PromptGuardResult
+from pipeline.stage4_structuring import (
     _compute_trust_score,
     build_retrieved_content,
     structure_sanitization_result,

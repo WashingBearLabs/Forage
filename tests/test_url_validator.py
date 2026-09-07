@@ -6,26 +6,16 @@ All tests mock ``loop.getaddrinfo`` to avoid real DNS queries.
 from __future__ import annotations
 
 import socket
-import sys
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-# Add the retrieval service root to sys.path so modules are importable
-_retrieval_root = str(
-    Path(__file__).resolve().parents[2] / "services" / "retrieval"
-)
-if _retrieval_root not in sys.path:
-    sys.path.insert(0, _retrieval_root)
-
-from url_validator import (  # noqa: E402
+from url_validator import (
     BlockedDomainError,
     PrivateIPError,
     _is_private_ip,
     validate_url,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -148,9 +138,11 @@ class TestRFC1918Rejection:
     )
     @pytest.mark.asyncio
     async def test_private_ipv4_rejected(self, ip: str, label: str) -> None:
-        with _mock_getaddrinfo(return_value=_fake_addrinfo(ip)):
-            with pytest.raises(PrivateIPError):
-                await validate_url(f"https://evil.example.com/{label}")
+        with (
+            _mock_getaddrinfo(return_value=_fake_addrinfo(ip)),
+            pytest.raises(PrivateIPError),
+        ):
+            await validate_url(f"https://evil.example.com/{label}")
 
     @pytest.mark.parametrize(
         ("ip", "label"),
@@ -163,9 +155,11 @@ class TestRFC1918Rejection:
     )
     @pytest.mark.asyncio
     async def test_private_ipv6_rejected(self, ip: str, label: str) -> None:
-        with _mock_getaddrinfo(return_value=_fake_addrinfo(ip)):
-            with pytest.raises(PrivateIPError):
-                await validate_url(f"https://evil.example.com/{label}")
+        with (
+            _mock_getaddrinfo(return_value=_fake_addrinfo(ip)),
+            pytest.raises(PrivateIPError),
+        ):
+            await validate_url(f"https://evil.example.com/{label}")
 
     @pytest.mark.asyncio
     async def test_public_ip_passes(self) -> None:
@@ -179,9 +173,8 @@ class TestRFC1918Rejection:
         """If DNS returns both public and private IPs, reject."""
         with _mock_getaddrinfo(
             return_value=_fake_addrinfo_multi("93.184.216.34", "10.0.0.1"),
-        ):
-            with pytest.raises(PrivateIPError):
-                await validate_url("https://example.com/")
+        ), pytest.raises(PrivateIPError):
+            await validate_url("https://example.com/")
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +233,7 @@ class TestBlockedDomains:
     @pytest.mark.asyncio
     async def test_unblocked_domain_passes(self) -> None:
         with _mock_getaddrinfo(return_value=_fake_addrinfo("93.184.216.34")):
-            ip, hostname = await validate_url(
+            ip, _ = await validate_url(
                 "https://safe.example.com/",
                 blocked_domains=["malware.example.com"],
             )
@@ -249,7 +242,7 @@ class TestBlockedDomains:
     @pytest.mark.asyncio
     async def test_empty_blocklist_passes(self) -> None:
         with _mock_getaddrinfo(return_value=_fake_addrinfo("93.184.216.34")):
-            ip, hostname = await validate_url(
+            ip, _ = await validate_url(
                 "https://example.com/",
                 blocked_domains=[],
             )
@@ -278,12 +271,13 @@ class TestEdgeCases:
     async def test_dns_failure_raises_valueerror(self) -> None:
         with _mock_getaddrinfo(
             side_effect=socket.gaierror("Name or service not known"),
-        ):
-            with pytest.raises(ValueError, match="DNS resolution failed"):
-                await validate_url("https://nonexistent.example.invalid/")
+        ), pytest.raises(ValueError, match="DNS resolution failed"):
+            await validate_url("https://nonexistent.example.invalid/")
 
     @pytest.mark.asyncio
     async def test_empty_addrinfo_raises_valueerror(self) -> None:
-        with _mock_getaddrinfo(return_value=[]):
-            with pytest.raises(ValueError, match="no results"):
-                await validate_url("https://example.com/")
+        with (
+            _mock_getaddrinfo(return_value=[]),
+            pytest.raises(ValueError, match="no results"),
+        ):
+            await validate_url("https://example.com/")

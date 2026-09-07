@@ -3,16 +3,11 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
-_retrieval_root = str(Path(__file__).resolve().parents[2] / "services" / "retrieval")
-if _retrieval_root not in sys.path:
-    sys.path.insert(0, _retrieval_root)
-
-from models import ExtractedContent, RetrievedContent, SearchResponse  # noqa: E402
-from pipeline.contract import CONTRACT_VERSION  # noqa: E402
-from retrieval_app import HealthResponse  # noqa: E402
+from models import ExtractedContent, RetrievedContent, SearchResponse
+from pipeline.contract import CONTRACT_VERSION
+from retrieval_app import HealthResponse
 
 _GOLDEN_PATH = (
     Path(__file__).parent

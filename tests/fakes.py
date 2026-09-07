@@ -1,16 +1,10 @@
-"""Shared test doubles for services/retrieval/cache.py."""
+"""Shared test doubles for cache.py."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-_retrieval_root = str(Path(__file__).resolve().parents[2] / "services" / "retrieval")
-if _retrieval_root not in sys.path:
-    sys.path.insert(0, _retrieval_root)
-
-from cache import CacheMetrics  # noqa: E402
+from cache import CacheMetrics
 
 if TYPE_CHECKING:
     from models import RetrievedContent

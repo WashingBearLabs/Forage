@@ -2,16 +2,11 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
 
-_retrieval_root = str(Path(__file__).resolve().parents[2] / "services" / "retrieval")
-if _retrieval_root not in sys.path:
-    sys.path.insert(0, _retrieval_root)
-
-from pipeline import sanitizer_revision  # noqa: E402, I001  # type: ignore[reportMissingImports]
+from pipeline import sanitizer_revision  # type: ignore[reportMissingImports]
 
 
 @pytest.mark.parametrize(

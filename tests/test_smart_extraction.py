@@ -7,15 +7,7 @@ generation, and edge cases.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-# Add the retrieval service root to sys.path so modules are importable
-_retrieval_root = str(Path(__file__).resolve().parents[2] / "services" / "retrieval")
-if _retrieval_root not in sys.path:
-    sys.path.insert(0, _retrieval_root)
-
-from pipeline.smart_extraction import (  # noqa: E402
+from pipeline.smart_extraction import (
     _should_preserve,
     _split_paragraphs,
     extract_summary,
@@ -309,7 +301,7 @@ class TestCleanAcademicPage:
     """When every paragraph contains signals, nothing should be trimmed."""
 
     def test_no_content_trimmed(self):
-        body, notice = extract_summary(_CLEAN_ACADEMIC, "different raw", None)
+        body, _ = extract_summary(_CLEAN_ACADEMIC, "different raw", None)
         paragraphs = _split_paragraphs(_CLEAN_ACADEMIC)
         for para in paragraphs:
             assert para in body, f"Expected paragraph preserved: {para[:50]}..."
@@ -341,7 +333,7 @@ class TestEdgeCases:
 
     def test_title_parameter_accepted(self):
         """Title param is accepted without error (reserved for future use)."""
-        body, notice = extract_summary("Some content.", "different raw", "My Title")
+        body, _ = extract_summary("Some content.", "different raw", "My Title")
         assert body == "Some content."
 
     def test_paragraph_splitting_double_newline(self):

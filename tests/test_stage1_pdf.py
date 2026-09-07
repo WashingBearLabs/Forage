@@ -3,24 +3,17 @@
 from __future__ import annotations
 
 import io
-import sys
-from pathlib import Path
 
 import pytest
+from pypdf import PdfReader, PdfWriter
 
-# Add the retrieval service root to sys.path so pipeline is importable
-_retrieval_root = str(Path(__file__).resolve().parents[2] / "services" / "retrieval")
-if _retrieval_root not in sys.path:
-    sys.path.insert(0, _retrieval_root)
-
-from pipeline.stage1_extraction import ExtractionResult  # noqa: E402
-from pipeline.stage1_pdf import (  # noqa: E402
+from pipeline.stage1_extraction import ExtractionResult
+from pipeline.stage1_pdf import (
     PDFEncryptedError,
     PDFNoTextError,
     detect_content_type,
     extract_pdf,
 )
-from pypdf import PdfReader, PdfWriter  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers -- build minimal PDFs in memory

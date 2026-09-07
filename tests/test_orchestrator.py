@@ -5,31 +5,22 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
-import sys
-from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-from poppy.core.abilities.builtin.canvas import FILE_RECALL_FAILURE_MESSAGES
-
-# Add the retrieval service root to sys.path so app is importable
-_retrieval_root = str(Path(__file__).resolve().parents[2] / "services" / "retrieval")
-if _retrieval_root not in sys.path:
-    sys.path.insert(0, _retrieval_root)
-
-from cache import ContentCache  # noqa: E402
-from models import (  # noqa: E402
+from cache import ContentCache
+from models import (
     ExtractedContent,
     RetrievedContent,
     Stage2Verdict,
     Stage3Verdict,
     TrustTier,
 )
-from pipeline import contract  # noqa: E402
-from pipeline.orchestrator import (  # noqa: E402
+from pipeline import contract
+from pipeline.orchestrator import (
     DOCUMENT_FAILURE_CODES,
     DOCUMENT_FAILURE_REASONS,
     PipelineError,
@@ -38,16 +29,16 @@ from pipeline.orchestrator import (  # noqa: E402
     run_retrieve_pipeline,
     run_search_pipeline,
 )
-from pipeline.stage1_extraction import ExtractionResult  # noqa: E402
-from pipeline.stage1_pdf import PDFExtractionError  # noqa: E402
-from pipeline.stage1_upload import (  # noqa: E402
+from pipeline.stage1_extraction import ExtractionResult
+from pipeline.stage1_pdf import PDFExtractionError
+from pipeline.stage1_upload import (
     UnsupportedUploadFormatError,
     detect_upload_content_type,
     extract_upload_text,
 )
-from pipeline.stage2_structural import StructuralScanResult  # noqa: E402
-from pipeline.stage3_promptguard import PromptGuardResult  # noqa: E402
-from pipeline.stage5_url_audit import FetchResult  # noqa: E402
+from pipeline.stage2_structural import StructuralScanResult
+from pipeline.stage3_promptguard import PromptGuardResult
+from pipeline.stage5_url_audit import FetchResult
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -1452,8 +1443,7 @@ def client() -> httpx.AsyncClient:
         SearchMetrics,
         app,
     )
-
-    from tests.retrieval.fakes import FakeContentCache
+    from tests.fakes import FakeContentCache
 
     # Ensure app.state has the required attributes for route handlers.
     # Use a mock classifier that reports as loaded and returns safe,
@@ -1617,9 +1607,11 @@ def test_document_failure_taxonomy_has_fixed_reason(error: str) -> None:
     assert failure.reason == DOCUMENT_FAILURE_REASONS[error]
 
 
-def test_file_recall_failure_messages_cover_document_taxonomy() -> None:
-    """Every stable sidecar document token has a core recall explanation."""
-    assert set(DOCUMENT_FAILURE_CODES) <= set(FILE_RECALL_FAILURE_MESSAGES)
+# The companion assertion — every document failure code has a matching consumer
+# recall message — is a *consumer* property and cannot live here: Forage does not
+# and must not see the consuming agent's vocabulary. It is re-homed on the Poppy
+# side, asserted against the vendored contract in that repo's
+# tests/test_forage_contract.py (Poppy spec `poppy-consume-forage-image`).
 
 
 @pytest.mark.parametrize(

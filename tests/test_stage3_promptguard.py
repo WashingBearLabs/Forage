@@ -5,26 +5,19 @@ All tests use mocked models — no real model download required.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-# Add the retrieval service root to sys.path so modules are importable
-_retrieval_root = str(Path(__file__).resolve().parents[2] / "services" / "retrieval")
-if _retrieval_root not in sys.path:
-    sys.path.insert(0, _retrieval_root)
-
-from models import Stage3Verdict, TrustTier  # noqa: E402
-from pipeline.stage3_promptguard import (  # noqa: E402
+from models import Stage3Verdict, TrustTier
+from pipeline.stage3_promptguard import (
     DEFAULT_THRESHOLD,
     INJECTION_PENALTY,
     PromptGuardResult,
     run_promptguard,
 )
-from promptguard.classifier import (  # noqa: E402
+from promptguard.classifier import (
     MAX_SEQ_LEN,
     PromptGuardClassifier,
 )

@@ -6,23 +6,14 @@ All tests mock DNS resolution and HTTP responses — no real network calls.
 from __future__ import annotations
 
 import socket
-import sys
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-# Add the retrieval service root to sys.path so modules are importable
-_retrieval_root = str(
-    Path(__file__).resolve().parents[2] / "services" / "retrieval"
-)
-if _retrieval_root not in sys.path:
-    sys.path.insert(0, _retrieval_root)
-
-from pipeline.stage5_url_audit import (  # noqa: E402
+from pipeline.stage5_url_audit import (
     DEFAULT_TIMEOUT,
     DEFAULT_USER_AGENTS,
     ContentTooLargeError,
@@ -30,7 +21,7 @@ from pipeline.stage5_url_audit import (  # noqa: E402
     TooManyRedirectsError,
     fetch_url,
 )
-from url_validator import BlockedDomainError, PrivateIPError  # noqa: E402
+from url_validator import BlockedDomainError, PrivateIPError
 
 # ---------------------------------------------------------------------------
 # Helpers

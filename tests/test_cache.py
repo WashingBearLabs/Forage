@@ -1,23 +1,15 @@
-"""Tests for services/retrieval/cache.py — URL normalisation, cache round-trip, TTL."""
+"""Tests for cache.py — URL normalisation, cache round-trip, TTL."""
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
 import logging
-import pathlib
-
-# Ensure the retrieval service package is importable.
-import sys
 import time
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
-sys.path.insert(
-    0, str(pathlib.Path(__file__).resolve().parents[2] / "services" / "retrieval")
-)
 
 import cache as cache_module
 from cache import (

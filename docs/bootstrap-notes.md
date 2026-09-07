@@ -72,6 +72,29 @@ Until protection exists, the compensating control is the local
 `gitleaks` full-history scan recorded in `bootstrap-scan.txt`, re-run before
 the public flip.
 
+## Lint / type backlog handed to spec 2 (measured US-004, 2026-09-07)
+
+US-004 fixed the ruff `check` errors and left the two backlogs below to
+`feature-forage-ci-and-image`. All three numbers come from the toolchain the
+committed `uv.lock` pins (ruff 0.16.6, pyright 1.1.411) — measure with
+`uv run`, not a system tool, or the numbers will not reproduce.
+
+| Lane | State at US-004 close | Owner |
+|------|----------------------|-------|
+| `uv run ruff check .` | **clean** (0 errors) | fixed here |
+| `uv run ruff format --check .` | **6 files** would be reformatted: `pipeline/stage2_structural.py`, `pipeline/stage5_url_audit.py`, `url_validator.py`, `tests/test_stage2_structural.py`, `tests/test_stage5_url_audit.py`, `tests/test_url_validator.py` | spec 2 |
+| `uv run pyright` (strict) | **214 errors** — 22 in service code (4 files: `pipeline/stage1_extraction.py`, `pipeline/stage2_structural.py`, `pipeline/stage5_url_audit.py`, `promptguard/classifier.py`), 192 in tests (incl. 35 `reportPrivateUsage`) | spec 2 |
+
+Two measurement notes for spec 2's planning:
+
+- The planning-time estimate (~34 service / ~280 test errors) was taken before
+  a working `uv sync` existed. With dependencies actually installed, most
+  missing-stub errors resolve; 214 is the real number.
+- Ruff's own rule set moves between releases. The planning-time count of 22
+  `check` errors was measured on ruff 0.8; on the locked 0.16.6 the set differs
+  (`UP038` was removed, `RUF059` added). Pinning ruff in CI — the lock already
+  does for `uv run` — is what keeps this lane reproducible.
+
 ## Standing invariant while private
 
 The pre-spec-2 `Dockerfile` still carries `ARG HF_TOKEN` (spec 2 removes it).
