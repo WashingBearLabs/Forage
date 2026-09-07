@@ -1,9 +1,10 @@
 [project]
-name = "poppy-retrieval"
+name = "forage"
 version = "0.1.0"
-description = "Poppy Retrieval sidecar — web content fetching and sanitization"
+description = "Forage — extraction and telemetry service for safe web access by LLM agents"
 requires-python = ">=3.12"
-license = "MIT"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [
     { name = "WashingBearLabs" },
 ]
@@ -34,6 +35,20 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# The service keeps a flat module layout (no `forage/` package directory —
+# that rename is deferred), so hatchling's name-matching heuristic finds
+# nothing to ship and errors out. List the modules explicitly instead, the
+# same fix Poppy's root pyproject.toml uses for its `packages = ["poppy"]`.
+[tool.hatch.build.targets.wheel]
+include = [
+    "retrieval_app.py",
+    "models.py",
+    "cache.py",
+    "url_validator.py",
+    "pipeline",
+    "promptguard",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

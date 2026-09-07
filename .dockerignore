@@ -1,0 +1,23 @@
+# Docker build-context excludes.
+#
+# Mirrors Poppy's services/poppy-tts/.dockerignore, plus the Forage-specific
+# paths the image never needs (git history, the test suite, the KitTools
+# scaffold). Keeps the build context small — measured well under 5 MB.
+#
+# Note: .dockerignore patterns are root-anchored, so caches need an explicit
+# `**/` form to be pruned out of subdirectories too.
+
+.venv/
+__pycache__/
+**/__pycache__
+*.pyc
+**/*.pyc
+.ruff_cache
+**/.ruff_cache
+.pytest_cache
+**/.pytest_cache
+*.egg-info
+
+.git/
+tests/
+kit_tools/

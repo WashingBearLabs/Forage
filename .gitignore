@@ -5,3 +5,7 @@
 __pycache__/
 .ruff_cache/
 .pytest_cache/
+
+# Build artifacts (`uv build` / `hatchling`)
+dist/
+*.egg-info/

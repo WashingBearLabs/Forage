@@ -1,0 +1,36 @@
+Forage
+Copyright 2026 WashingBearLabs
+
+This product includes software developed by WashingBearLabs
+(https://github.com/WashingBearLabs).
+
+The source code in this repository is licensed under the Apache License,
+Version 2.0. See the LICENSE file in this repository, or obtain a copy at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+--------------------------------------------------------------------------
+Third-party model weights — Llama Prompt Guard 2
+--------------------------------------------------------------------------
+
+Built with Llama.
+
+Forage's Stage 3 prompt-injection classifier runs Meta's Llama Prompt Guard 2
+(`meta-llama/Llama-Prompt-Guard-2-22M`). Those model weights are NOT part of
+this repository, are NOT distributed with it, and are NOT covered by the
+Apache License above. They are obtained at run time by the operator from the
+Hugging Face gated repository, under the operator's own acceptance of:
+
+    Llama 4 Community License Agreement
+    https://github.com/meta-llama/llama-models/blob/main/models/llama4/LICENSE
+
+    Llama 4 Acceptable Use Policy
+    https://www.llama.com/llama4/use-policy/
+
+Llama Materials — including Llama Prompt Guard 2 and its outputs — remain
+governed by that agreement, which carries its own attribution, naming, and
+acceptable-use obligations. Operators who redistribute an image or artifact
+containing the weights must carry those obligations forward.
+
+"Llama" and "Meta" are trademarks of Meta Platforms, Inc. Forage is not
+sponsored by, endorsed by, or affiliated with Meta Platforms, Inc.
