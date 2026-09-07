@@ -1,0 +1,78 @@
+Forage bootstrap secret scan — full rewritten history
+=====================================================
+
+Purpose
+-------
+Gate for the first push of the extracted Forage repository (Poppy spec
+`forage-repo-bootstrap`, US-001).  The whole rewritten history is scanned
+BEFORE anything is pushed to GitHub.  This report is retained for the spec 2
+public-flip gate, which re-checks history at flip time.
+
+Provenance
+----------
+Split source repo    : Poppy (WashingBearLabs/Poppy)
+Poppy source commit  : f73e209165e7c74a3a91024caf4ae8f0f9c0036a
+Split method         : git filter-repo (a40bce54) on a throwaway clone
+  git filter-repo --prune-degenerate always \
+    --path services/retrieval --path config/searxng --path tests/retrieval \
+    --path-rename services/retrieval/: \
+    --path-rename config/searxng/:searxng/config/ \
+    --path-rename tests/retrieval/:tests/
+Rewritten history    : 47 commits (pre-bootstrap), 45 tracked files
+                       (25 root/service + 2 searxng/config + 18 tests)
+
+Scan
+----
+Tool     : gitleaks 8.30.1
+Date     : 2026-09-07
+Command  : gitleaks git --redact --report-format json <repo>
+Scope    : 48 commits (47 split commits + the .gitignore bootstrap commit),
+           ~529.54 KB of blob content
+Redaction: --redact — no secret material is reproduced in this report.
+
+Result
+------
+Findings: 1 (triaged as a false positive — see below)
+Real credentials found: 0
+Verdict: CLEAN — push gate passes.
+
+Finding 1 of 1 — FALSE POSITIVE (not a credential)
+--------------------------------------------------
+Rule        : generic-api-key
+File        : tests/test_stage2_structural.py
+Line        : 170
+Commit      : ba73b078 ("feat(retrieval-sidecar): US-005 - Stage 2 structural
+              regex scan", 2026-03-30)
+Match       : Token: <REDACTED>
+Fingerprint : ba73b07811687a4eec851f67e5ffb1d2cfadf436:
+              tests/test_stage2_structural.py:generic-api-key:170
+Triage      : The match is the literal argument of
+              `test_short_base64_no_match`, a unit test asserting that a short
+              alphanumeric string does NOT trip the Stage 2 encoded-payload
+              detector.  It is a hand-typed synthetic fixture, has never
+              authenticated to anything, and matched only because gitleaks'
+              generic heuristic keys off the adjacent word "Token:".  No
+              rotation is required.  The same literal is present in Poppy's
+              copy of the file and is unchanged by the extraction.
+
+Expected non-findings (present in the scanned tree, correctly NOT flagged)
+-------------------------------------------------------------------------
+These were called out in the spec as strings a scanner might surface.  The
+default gitleaks ruleset did not flag either; both are recorded here so the
+spec 2 re-check can distinguish "still not flagged" from "newly clean".
+
+1. `VAULT_ADDR` / `VAULT_ROLE_ID` / `VAULT_SECRET_ID` in `docker-entrypoint.sh`
+   (lines 12-14, 36-37, 82-88 and elsewhere).  These are environment-variable
+   *names* read at runtime — the AppRole credentials themselves were never in
+   the tree.  The entrypoint's vault coupling is removed wholesale by US-002.
+
+2. `secret_key: "poppy-searxng-internal"` in `searxng/config/settings.yml:18`.
+   A SearXNG placeholder, not a credential to any external service.  NOTE: it
+   is also Poppy's *live* compose value until spec 6 rotates it, which is part
+   of why this repository stays PRIVATE for the whole of the bootstrap spec.
+
+Standing risk while private
+---------------------------
+The pre-spec-2 Dockerfile still carries `ARG HF_TOKEN` (removed in spec 2).
+Any image built from this history before that change has the token recoverable
+via `docker history` — never push such an image anywhere.
