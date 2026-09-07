@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "models": {
+    "implementer": "sonnet",
+    "verifier": "opus",
+    "validator": "opus",
+    "reviewer": "opus",
+    "second_opinion": "sonnet",
+    "escalation": { "to": "opus", "on_attempt": 2, "sizes": ["L", "XL"] }
+  }
+}

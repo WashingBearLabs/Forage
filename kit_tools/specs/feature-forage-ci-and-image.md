@@ -1,0 +1,488 @@
+<!-- Template Version: 2.5.0 -->
+---
+feature: forage-ci-and-image
+status: active
+session_ready: true
+depends_on: []
+vision_ref: Secure Web Retrieval / provider-independent web access
+type: epic-child
+size: L
+epic: forage-extraction-forage-side
+epic_seq: 1
+epic_final: false
+execution_order: [US-001, US-006, US-002, US-003, US-005, US-007, US-004, US-008]
+created: 2026-09-02
+updated: 2026-09-07
+---
+
+# Feature Spec: Forage CI + Published Images (GHCR, secret-free)
+
+> **Executes in the Forage repo** (copied there by spec 1 US-005). GitHub-hosted runners —
+> Forage has no GPU/DB needs and must not depend on Poppy's self-hosted runner. **US-008 (the
+> public flip) is a human gate — pause for the supervisor**; several publish ACs additionally
+> need a real tag push, flagged per-story.
+
+## Overview
+
+Give Forage real CI (lint + format + strict types + tests on every PR) and a gated release
+pipeline publishing two images to GHCR: `ghcr.io/washingbearlabs/forage` (the service, **no
+baked weights, no HF build-arg** — closing the docker-history token-leak gotcha that blocks
+any public push) and `ghcr.io/washingbearlabs/forage-searxng` (digest-pinned base + baked
+config with **honestly-scoped public defaults** — round 2 established that `limiter: true`
+without a Redis backend is inert theater, so the hardening is: no IP-trust relaxations, no
+baked secret, and a documented Redis requirement for real rate limiting, proven by a
+cross-container JSON smoke). All jobs live in **one workflow file** so `needs:` edges are
+real, jobs are introduced in dependency order across stories (no forward `needs:` to a job a
+later story creates — round-2 finding), and required status checks are registered only after
+every job exists (US-007). The publish job runs after smoke + secret-grep; the one-way public
+flip (US-008) is last, gated three ways.
+
+## Goals
+
+- Every PR runs ruff check, ruff format --check, pyright strict, and pytest — all green with
+  zero baseline carve-outs; the same jobs gate publishes via same-workflow `needs:`.
+- A `v*` tag publishes the service image + a GitHub Release, a `searxng-v*` tag publishes the
+  companion image — in both cases only after their gate chains pass; `main` pushes publish
+  `sha-` service tags through the same chain.
+- `docker history --no-trunc` of the amd64 service image contains no `HF_TOKEN`, the
+  committed `uv.lock` contains no `nvidia-*` wheels, and the repo's full git history re-scans
+  clean before the one-way public flip.
+- The published service image, run with no env, serves `/health` with `status: "degraded"`,
+  `"promptguard_unavailable"` in `degraded_reasons`, and `contract_version` equal to
+  `pipeline/contract.py::CONTRACT_VERSION` within 120 s of start.
+- A second container can query the published searxng image with `format=json` and get engine
+  results (the client path Forage itself uses — proves bot-detection defaults don't break
+  the API consumer).
+
+## User Stories
+
+### US-001: CI workflow — ruff + format gates, CPU-locked dependencies
+
+**Priority:** P1
+
+**Description:** As a Forage maintainer, I want a single CI workflow with lint and format
+enforced and the dependency lock CPU-clean, structured so later jobs hang off it with real
+`needs:` edges.
+
+**Independent Test:** A PR with a deliberate lint error fails the `lint` job; one with only a
+formatting error fails the `format` check; `grep nvidia- uv.lock` is empty; main is green.
+
+**Implementation Hints:**
+- One file: `.github/workflows/ci.yml`, triggered on `pull_request`, `push` to `main`, and
+  tags `v*` **and `searxng-v*`** (the second pattern is load-bearing — round-2 finding:
+  `v*` does not match `searxng-v*`, so without it the companion image's publish lane is
+  unreachable). Publish jobs are added by later stories; this story lands only `lint` — no
+  `needs:` may reference a job that doesn't exist yet (GitHub rejects the whole file).
+- Jobs: `lint` (`uv run ruff check .` + `uv run ruff format --check .`). Burn the measured backlog to zero — per spec 1's **final** recorded numbers (US-004
+  execution, 2026-09-07): `ruff check` already 0, **6 files** fail `ruff format --check`;
+  the earlier 25/11 planning figure is superseded.
+- Poppy's workflow supply-chain conventions (this repo goes public): SHA-pin every
+  third-party action with a `# vX.Y.Z` comment, top-level `permissions: contents: read`,
+  `persist-credentials: false` on checkout. **Fork posture, corrected** (round-3 critical:
+  Poppy's fork guard is a *self-hosted-runner* mitigation — its own comment says so — and
+  porting it to `ubuntu-latest` would skip every gate on external PRs, or kill fork CI
+  outright): on GitHub-hosted runners, fork PRs run the quality gates normally with
+  read-only `GITHUB_TOKEN` and no secrets (GitHub's default); the rule to encode is
+  **`pull_request_target` is banned** (workflow-shape test) and no job exposes secrets to
+  fork-triggered runs.
+- **Port, don't reinvent, Poppy's workflow guard suite** (round-3 finding):
+  `tests/deployment/test_ci_workflow.py` already asserts SHA-pinning, top-level read-only
+  permissions, `persist-credentials: false`, and trigger shapes — none of which actionlint
+  checks; adapt a trimmed copy for Forage's workflow, and give the new non-Python guard
+  tests `test_mapping` entries per the KitTools convention.
+- Verify spec 1's CPU-torch lock landed: `uv sync` in CI must pull no CUDA wheels — assert by
+  grepping the **committed lock** (a warm cache makes job-log inspection vacuous; round-2
+  finding), plus one cold-cache job-log check recorded in Implementation Notes.
+- Add `actionlint` (pinned) as part of the lint job — machine-checks workflow validity on
+  every PR, replacing "verified once" throwaway proofs for the workflow structure.
+- Do NOT register required status checks here (US-007 does, once all jobs exist — round-2
+  deadlock finding); branch protection stays PR-only until then.
+
+**Acceptance Criteria:**
+- [ ] `ci.yml` with `lint` job on PR/push/both tag patterns; actions SHA-pinned; top-level
+      read-only permissions; `persist-credentials: false`; `pull_request_target` banned
+      (workflow-shape test); the ported workflow guard suite green; `actionlint` green.
+- [ ] Ruff check + format backlog burned to zero, no excludes; `uv run ruff format
+      --check .` added to this spec's standard AC tail (it is the gate this story adds).
+- [ ] `grep nvidia- uv.lock` empty (committed lock), one cold-cache CI log inspection
+      recorded.
+- [ ] Tests written/updated for new functionality
+- [ ] Full test suite passes (`uv run pytest`)
+- [ ] `uv run ruff check .` passes
+
+### US-006: Pyright-strict burn-down + tests-lane policy
+
+**Priority:** P1
+
+**Description:** As a Forage maintainer, I want pyright strict enforced in CI with the
+never-measured backlog actually burned, under an explicit written policy for test-code rules.
+
+**Independent Test:** A PR introducing a type error fails the `typecheck` job; `uv run
+pyright` exits 0 on main.
+
+**Implementation Hints:**
+- **Re-measure at story start** in the real environment (`uv sync --extra dev` first —
+  round 2 found the ~313 figure was taken in a venv missing torch/transformers/trafilatura,
+  and ~87 of those errors were in `test_searxng_docker.py`'s departed compose half). Record
+  the fresh number before burning.
+- Policy (decided 2026-09-02): service code fully strict — fix real errors; missing
+  third-party stubs handled via a small `typings/` dir containing **only stub declarations
+  for symbols actually used** (never a shadow of torch's real types — round-2 caveat). For
+  `tests/`, a pyright execution environment disables `reportPrivateUsage` only (rule-level,
+  documented); every other strict rule stays on.
+- Wire the `typecheck` job into ci.yml. **Escape hatch** (pre-agreed, round-2 finding): if
+  the burn-down overruns a session, split service-code-strict (blocking) from
+  tests-strict (follow-up story) at the supervisor pause — the seam is the two pyright
+  execution environments.
+
+**Acceptance Criteria:**
+- [ ] Fresh backlog measurement recorded; `uv run pyright` exits 0 on main; only rule-level
+      relaxation is `reportPrivateUsage` for `tests/`, with the policy comment.
+- [ ] Third-party gaps via minimal `typings/` stubs, no inline suppressions.
+- [ ] `typecheck` job in ci.yml (registration as required check deferred to US-007).
+- [ ] Tests written/updated for new functionality
+- [ ] Full test suite passes (`uv run pytest`)
+- [ ] `uv run ruff check . && uv run ruff format --check . && uv run pyright` passes
+
+### US-002: Test lane
+
+**Priority:** P1
+
+**Description:** As a Forage maintainer, I want the 531-test suite running on GitHub-hosted
+runners on every PR so regressions are caught without Poppy's infrastructure.
+
+**Independent Test:** A PR that breaks a pipeline stage test fails the `test` job; the
+hermeticity guard is exercised by a committed always-skipped canary test, not a throwaway.
+
+**Implementation Hints:**
+- `ubuntu-latest`, cached uv, `uv run pytest -q` as the `test` job.
+- Hermeticity from spec 1's `pytest-socket` autouse guard; commit a canary that **runs and
+  passes** — `tests/test_hermeticity.py` asserting `pytest.raises(SocketBlockedError)` on a
+  socket attempt (round-3 prose fix: it is an executing test, not "always-skipped"; Poppy's
+  `tests/test_conftest_socket_isolation.py` is the ready-made template to port).
+- Named step `uv run pytest -q tests/test_sanitizer_revision.py` (mirrors Poppy
+  `ci.yml:141-145`).
+
+**Acceptance Criteria:**
+- [ ] `test` job green on PR + main; sanitizer-revision step present; hermeticity canary
+      committed and passing.
+- [ ] Tests written/updated for new functionality
+- [ ] Full test suite passes (`uv run pytest`)
+- [ ] `uv run ruff check . && uv run ruff format --check . && uv run pyright` passes
+
+### US-003: Secret-free service image build + secret-grep gate
+
+**Priority:** P1
+
+**Description:** As a release manager, I want the service image built weights-free and
+secret-free from locked dependencies, with a mechanical history-grep job — the publish
+pipeline itself is US-007.
+
+**Independent Test:** The `build-amd64` job produces a loadable image; the `secret-grep` job
+greps its `docker history --no-trunc` for a defined pattern set and passes; a deliberately
+re-added `ARG HF_TOKEN` (committed canary test on the Dockerfile text, not a throwaway run)
+fails.
+
+**Implementation Hints:**
+- **Delete the HF build-arg path**: `ARG HF_TOKEN` + the conditional `from_pretrained` bake
+  block go away entirely; keep `ENV HF_HOME=/app/model-cache` and the
+  `RUN python -c "import retrieval_app"` build smoke. Install dependencies from the
+  committed `uv.lock` (`uv sync --locked` in the Dockerfile) — not the current unpinned
+  pip-parse (round-1 finding), and now guaranteed CPU-only by US-001's lock.
+- **Digest-pin the base**: `FROM python:3.12-slim@sha256:<digest> # 3.12.x` — the smoke→push
+  identity argument fails if the base can move between the two builds (round-2 finding), and
+  it matches the repo's own pinning posture.
+- Jobs this story lands: `build-amd64` (linux/amd64, `load: true`, GHA cache) and
+  `secret-grep`. **Image handoff is explicit** (round-3 critical: `needs:` is an ordering
+  edge, not a shared Docker daemon — a downstream job on a fresh runner has no image):
+  `build-amd64` ends with `docker save` → `actions/upload-artifact`; `secret-grep` and
+  US-005's `smoke` each `download-artifact` + `docker load` and **assert the loaded image
+  ID/digest equals the one `build-amd64` recorded** — one artifact, provably the same
+  bytes, never a rebuild. Grep pattern set defined in the workflow: `HF_TOKEN`,
+  `hf_[A-Za-z0-9]{20,}` (a bounded list; `docker history` inspects layer
+  metadata/commands, not file contents — the content guard is the deleted build-arg path +
+  the git-history scan).
+- Add a plain pytest asserting the Dockerfile contains no `ARG HF_TOKEN`/`ENV *TOKEN` line —
+  the permanent regression guard.
+
+**Acceptance Criteria:**
+- [ ] Dockerfile: no HF build-arg/bake, `uv.lock`-driven install, digest-pinned base;
+      Dockerfile-text guard test committed.
+- [ ] `build-amd64` + `secret-grep` jobs green with the save/upload/load/digest-equality
+      handoff (asserted, not assumed); grep pattern set defined in-workflow; metadata-scope
+      caveat documented in the job comment.
+- [ ] Tests written/updated for new functionality
+- [ ] Full test suite passes (`uv run pytest`)
+- [ ] `uv run ruff check . && uv run ruff format --check . && uv run pyright` passes
+
+### US-005: Published-image contract smoke job
+
+**Priority:** P1
+
+**Description:** As the Poppy integration owner, I want CI to run the built image and assert
+the `/health` contract so no artifact can regress the Epic 1 handshake.
+
+**Independent Test:** The `smoke` job (`needs: build-amd64`, image obtained via US-003's
+`download-artifact` + `docker load` with the digest-equality assertion — `needs:` alone
+provides ordering, not the image) starts the candidate with no HF token, polls `/health` up
+to 120 s, and fails on shape/value drift; assertions are shared with the golden-schema
+test's field source, not hand-enumerated.
+
+**Implementation Hints:**
+- `docker run -d -p 8020:8020` the loaded amd64 image; poll ≤120 s (round-2 finding: 30 s
+  spans a cold torch import too tightly); on failure dump `docker logs` into the job output.
+- Assert: HTTP 200; `status == "degraded"`; `"promptguard_unavailable"` in
+  `degraded_reasons`; `capabilities` lacks `search_sanitization`; `contract_version` read
+  from `pipeline/contract.py` at job time; `sanitizer_revision` non-empty; `/metrics`
+  responds with `contract_version`. Import the field expectations from the same module the
+  golden test uses (`tests/test_contract_schema.py` machinery) — one source of truth.
+- Spec 5 later extends this job (in-image contract file ↔ `/health` version equality).
+
+**Acceptance Criteria:**
+- [ ] `smoke` job green via the artifact handoff (download + load + digest-equality
+      asserted against `build-amd64`'s recorded ID), 120 s budget, log dump on failure,
+      field source shared with the golden-schema machinery.
+- [ ] Tests written/updated for new functionality
+- [ ] Full test suite passes (`uv run pytest`)
+- [ ] `uv run ruff check . && uv run ruff format --check . && uv run pyright` passes
+
+### US-007: Publish pipeline — tags, Release, multi-arch, required checks
+
+**Priority:** P1
+
+**Description:** As a release manager, I want the gated publish job, the GitHub Release, and
+the now-complete set of required status checks wired, so a tag can ship only through green
+gates.
+
+**Independent Test:** Push a `v0.9.0-rc` tag → `publish` (`needs: [lint, typecheck, test,
+build-amd64, secret-grep, smoke]`) pushes semver tags + creates a Release; the run URL and a
+deliberately-red rehearsal run URL are recorded in Implementation Notes (needs a real tag
+push — supervised checkpoint, flagged).
+
+**Implementation Hints:**
+- `publish` job conditioned on `v*` tags and main pushes: `docker/metadata-action` tags —
+  on `v*`: `X.Y.Z`, `X.Y`; on main: `sha-<short>`. **`latest` only on non-prerelease `v*`**
+  (round-2 finding: the rc-tag Independent Test must not move `latest`). Multi-arch rebuild
+  from the warm cache (qemu for arm64) with the **feasibility check first** — verify torch
+  CPU aarch64 wheels resolve and build time is < 30 min; else amd64-only, decision recorded
+  in `docs/releases.md` and the platform list trimmed.
+- GH Release created on `v*` (spec 5 attaches the contract asset). Job-scoped permissions:
+  `packages: write` **and `contents: write`** (Release creation 403s under the top-level
+  read-only default without it — round-3 finding), both on this job only. Failure modes stated: a partially-pushed multi-arch manifest re-runs
+  idempotently (buildx pushes are atomic per manifest list); Release creation after image
+  push, so a Release implies a pulled image exists.
+- Register required status checks now that all six jobs exist: `lint`, `typecheck`, `test`
+  (+ `actionlint` if separate). **Name the actor**: branch-protection edits need admin — a
+  fine-grained PAT or the supervisor by hand; `GITHUB_TOKEN` cannot (round-2 finding). AC
+  records which was used.
+- `docs/releases.md`: tag scheme, image-semver source of truth (git tag), prerelease
+  policy, amd64/arm64 status.
+
+**Acceptance Criteria:**
+- [ ] `publish` with the full `needs:` list; semver/`latest`/`sha-` tag policy implemented
+      as stated; Release on `v*`; multi-arch or the documented fallback.
+- [ ] Green publish run URL + red-rehearsal run URL recorded (supervised tag pushes).
+- [ ] Required status checks registered (actor recorded); `docs/releases.md` written.
+- [ ] Tests written/updated for new functionality
+- [ ] Full test suite passes (`uv run pytest`)
+- [ ] `uv run ruff check . && uv run ruff format --check . && uv run pyright` passes
+
+### US-004: forage-searxng companion image (honest public defaults)
+
+**Priority:** P1
+
+**Description:** As a Forage consumer, I want a published SearXNG image with baked engine
+config, no IP-trust relaxations, no baked secret, and a *working* JSON API — with rate
+limiting documented as requiring Redis rather than pretended.
+
+**Independent Test:** Two-container smoke: the searxng image + a curl container on one
+network — a `format=json` query returns engine results (bot-detection defaults verified
+compatible with the API client path Forage itself uses).
+
+**Implementation Hints:**
+- `searxng/Dockerfile`: `FROM searxng/searxng@sha256:<digest>` + `COPY config/
+  /etc/searxng/`.
+- **Honest hardening** (round-2 critical: `limiter: true` with no Redis backend is inert —
+  SearXNG logs it and runs unthrottled): baked config drops `pass_ip = ["0.0.0.0/0"]`, drops
+  the `forwarded_for`/`real_ip` header trust (client-spoofable once the image is reached
+  directly — round-2 finding), removes the baked `secret_key`, keeps engines/timeouts/JSON
+  format, and sets `limiter: true` **with the Redis requirement documented**: real limiting
+  requires a Redis/Valkey backend configured via the env var this story verifies against
+  the pinned digest (working name `SEARXNG_REDIS_URL` — **pending verification**, see the
+  smoke bullet) — the
+  spec-4 compose fragments wire it; without it the image logs the inert-limiter warning.
+  Whether `link_token` can be enabled without breaking the JSON client is answered by the
+  smoke below, not assumed.
+- **Cross-container smoke, split blocking/advisory** (round-3 critical — a live
+  third-party engine query in a publish `needs:` chain reproduces the exact
+  every-engine-throttled outage GOTCHAS records, with no break-glass): the **blocking**
+  half is hermetic — searxng + a Redis/Valkey container + a curl container on one network;
+  assert the limiter actually initialized (no inert-limiter warning in logs), a
+  `format=json` request returns HTTP 200 with a parseable envelope carrying a `results`
+  key and no bot-detection block page (proves baked config + `link_token` compatibility
+  with the API client path); the **advisory** half (real engine results non-empty) runs
+  non-blocking with its outcome logged. Real limiting requires a Redis/Valkey backend
+  configured via the env var **whose name this story verifies** (see next bullet — do not
+  treat any name as upstream-supported until verified). **Verify the actual Redis env-var name against the
+  pinned digest in-story** — `SEARXNG_REDIS_URL` is an unverified name that exists nowhere
+  in this repo, and upstream renamed this setting family toward Valkey during 2025
+  (round-3 critical); record the verified name, and propagate the correction to the two
+  sibling specs that cite it (cache-fallback US-004, poppy-consume US-002).
+- `SEARXNG_SECRET` mechanism: verify the upstream image's env substitution **in the
+  blocking smoke** (set it; assert start + serve) and determine unset behavior
+  empirically; document both.
+- Update the moved config-half tests (in Forage since spec 1): `test_engines_configured`
+  (asserts `"bing" in engine_names`) becomes the disabled-engine negative;
+  `test_secret_key_set` becomes the no-baked-literal negative; the two `TestSearxngLimiter`
+  tests re-point at the new limiter config values. Engine-parity test: compare the enabled
+  set against `_SEARXNG_ENGINES.split(",")` — it is a comma-joined **string** at
+  `orchestrator.py:554` (round-2 finding).
+- **Independent versioning**: `searxng-v*` tags (trigger already in US-001's workflow);
+  publish lane `needs:` its own build + the blocking smoke **+ the `test` job** (it carries
+  the config-regression and parity guards this story adds — round-3 finding); guard
+  conditions so `v*` and `searxng-v*` lanes never cross-fire. **Pre-agreed split line if
+  this story overruns a session** (round-3 sizing): artifact half (Dockerfile + config +
+  config tests) vs pipeline half (smoke jobs + publish lane + docs).
+- Add a config-regression pytest: baked `settings.yml`/`limiter.toml` contain no
+  `pass_ip` wildcard, no `secret_key` literal, no header-trust keys (the guard that stops a
+  future edit silently re-relaxing a public image — round-2 finding).
+- `docs/searxng.md`: pin-bump cadence (bump digest → smoke → `searxng-v*` tag; explicitly
+  the replacement for Poppy's deploy-time `:latest` refresh, with the honest note that
+  engine rot now surfaces via failed JSON smokes at bump time and Poppy-side web probes at
+  runtime), Redis requirement, header-trust rationale, Poppy limiter-overlay pattern.
+
+**Acceptance Criteria:**
+- [ ] `forage-searxng` published under `searxng-v*` via its own gated lane; base
+      digest-pinned; no bind mount needed.
+- [ ] Baked config: no `pass_ip` wildcard, no baked secret, no client-header trust;
+      limiter-with-Redis documented; config-regression pytest committed.
+- [ ] Blocking hermetic smoke (redis-backed limiter initialized + JSON envelope + no
+      bot-block page) green in the lane; advisory live-engine half non-blocking; the real
+      Redis env-var name verified against the pinned digest, recorded, and corrected in the
+      two citing sibling specs; `SEARXNG_SECRET` set/unset behavior verified + documented.
+- [ ] All four moved config-half tests updated (two negatives, limiter re-points,
+      string-split parity) and green.
+- [ ] `docs/searxng.md` complete per hints.
+- [ ] Tests written/updated for new functionality
+- [ ] Full test suite passes (`uv run pytest`)
+- [ ] `uv run ruff check . && uv run ruff format --check . && uv run pyright` passes
+
+### US-008: Public flip (human gate)
+
+**Priority:** P3 *(deliberately last and human-executed; the epic's downstream specs need it
+done before spec 6 pulls images, but nothing in THIS spec depends on it)*
+
+**Description:** As the owner, I want the repo and both GHCR packages flipped public exactly
+once, behind every gate, with the window controlled.
+
+**Independent Test:** Anonymous `docker pull` of both images succeeds; the flip checklist is
+recorded.
+
+**Implementation Hints:**
+- Gates, in order: (a) `secret-grep` green on the current images; (b) spec 1's full-history
+  secret scan re-run clean at HEAD (`gitleaks detect --redact`); (c) LICENSE/NOTICE present;
+  (d) **merge freeze on `main` for the flip window** (round-2 race finding); (e) delete all
+  pre-flip GHCR package versions (needs a PAT with `delete:packages` — `GITHUB_TOKEN`
+  cannot; round-2 finding); (f) flip repo + both packages public; (g) lift the freeze.
+- Note for the record: the `poppy-searxng-internal` placeholder in git history is Poppy's
+  live compose value until spec 6 rotates it — the flip is safe because the string grants
+  nothing outside poppy-net, but spec 6's rotation is registered as a follow-through
+  (cross-referenced there).
+- Supervisor performs; everything recorded in Implementation Notes.
+
+**Acceptance Criteria:**
+- [ ] Seven-step checklist executed in order and recorded; anonymous pulls of both images
+      verified.
+- [ ] The spec-6 secret-rotation follow-through cross-reference recorded.
+
+## Edge Cases
+
+- arm64 qemu build times out/flakes → feasibility check fixes or documents amd64-only;
+  smoke always runs the amd64 leg (US-007).
+- Tag pushed on a red tree → publish `needs:` the quality jobs in the same workflow
+  (US-007); actionlint prevents invalid-workflow states between stories (US-001).
+- GHCR package auto-created private on first push → flip checklist purges then flips
+  (US-008).
+- SearXNG upstream digest yanked → pin-bump doc covers recovery (US-004).
+- `SEARXNG_SECRET` unset at runtime → behavior verified + documented, never a silently
+  baked known secret (US-004).
+- A `searxng-v*` tag must never trigger the service publish lane and vice versa → explicit
+  guard conditions, asserted by actionlint + a workflow-shape pytest (US-004/US-007).
+
+## Out of Scope
+
+- Model download-at-start and the weights mirror (spec 3) — the weights-free image is
+  degraded-but-honest in the gap and Poppy does not consume it yet.
+- The OpenAPI contract file + drift check (spec 5); image signing/provenance (conscious
+  deferral — revisit with real third-party consumers).
+- Renovate/dependabot automation for the SearXNG pin.
+- Making the baked searxng config carry Poppy's relaxations (spec 6's overlay owns those).
+
+## Assumptions
+
+- GitHub-hosted runners suffice (CPU torch, mocked model in tests).
+- `WashingBearLabs` allows GHCR public packages; a PAT with branch-protection admin +
+  `delete:packages` is available for US-007/US-008's human steps.
+- First service `v1.0.0` waits for spec 5's freeze; pre-freeze tags are `0.x`/`-rc` and
+  never move `latest`… `latest` starts existing at `v1.0.0`.
+
+## Technical Considerations
+
+- Story order (frontmatter `execution_order`) is job-dependency order: lint → typecheck →
+  test → build/grep → smoke → publish+checks → searxng lane → flip. No story writes a
+  `needs:` referencing a job a later story creates.
+- The repo/packages stay private until US-008.
+
+## Related Documentation
+
+- Epic (this repo): [epic-forage-extraction-forage-side.md](epic-forage-extraction-forage-side.md)
+- Planned in Poppy (canonical planning record, one-way sync — see the wrapper's Notes):
+  [`epic-forage-extraction.md`](https://github.com/WashingBearLabs/Poppy/blob/main/kit_tools/specs/epic-forage-extraction.md) ·
+  [`WEB_ACCESS_FAMILY.md`](https://github.com/WashingBearLabs/Poppy/blob/main/kit_tools/specs/WEB_ACCESS_FAMILY.md)
+
+## Implementation Notes
+
+## Refinement Notes
+
+### Research Findings
+
+**Decision:** One workflow file, jobs introduced in dependency order, required checks
+registered last
+**Rationale:** `needs:` cannot span workflow files; an undefined `needs:` invalidates the
+whole file; a required check with no reporting job deadlocks every PR (round-2 criticals).
+
+**Decision:** Honest searxng hardening — drop IP-trust relaxations + secret, document the
+Redis requirement, prove the JSON client path with a cross-container smoke
+**Rationale:** round 2 established `limiter: true` alone is inert without a Redis backend
+(config-text hardening only), the header-trust keys are client-spoofable, and dropping
+`pass_ip`/`link_token` blindly risks breaking Forage's own `format=json` calls — so the
+smoke, not an assertion, is the arbiter.
+
+**Decision:** `searxng-v*` independent tag lane with explicit trigger + cross-fire guards
+**Rationale:** `v*` doesn't match `searxng-v*`; without its own trigger the companion
+image's publish path is unreachable (round-2 critical).
+
+**Decision:** Committed guard tests replace one-off "verified once" proofs
+**Rationale:** round-2 proof-by-throwaway pattern — Dockerfile-text guard, hermeticity
+canary, config-regression pytest, workflow-shape checks leave artifacts, not anecdotes.
+
+### Scope Adjustments
+
+- Round 2 (2026-09-02): US-003 split three ways (image+grep / US-007 publish+checks /
+  US-008 human flip); `execution_order` declared; required-check registration moved to
+  US-007; CPU-lock regeneration moved to spec 1 with a grep AC here; base image
+  digest-pinned; searxng hardening made honest (Redis-documented limiter, header-trust
+  dropped, JSON smoke); moved-test fossils enumerated; smoke budget 30→120 s with log dump;
+  `latest` scoped to non-prerelease; US-006 gains re-measure + escape hatch.
+
+### Decisions Made
+
+## Clarifications
+
+### Session 2026-09-02
+- Q: SearXNG config delivery to consumers? → A: Forage publishes `forage-searxng` (pinned
+  base + baked config); round 1: public-safe defaults + Poppy overlay; round 2: "safe"
+  redefined honestly (no IP-trust relaxations/secret; limiter requires Redis, documented and
+  compose-wired; JSON smoke proves the client path).
+- Q: Multi-arch from day one? → A: Yes, gated on an in-story feasibility check with a
+  documented amd64-only fallback.

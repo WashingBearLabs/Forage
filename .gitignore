@@ -9,3 +9,22 @@ __pycache__/
 # Build artifacts (`uv build` / `hatchling`)
 dist/
 *.egg-info/
+# --- KitTools (transient runtime state — do not commit) ---
+.kit/
+kit_tools/specs/.execution-config.json
+kit_tools/specs/.execution-state.json
+kit_tools/specs/.execution-health.json
+kit_tools/specs/.execution-control.json
+kit_tools/specs/.orchestrator.lock
+kit_tools/.pause_execution
+kit_tools/.execution-notifications
+kit_tools/.execution-events.jsonl
+kit_tools/SESSION_SCRATCH.md
+kit_tools/EXECUTION_LOG.md
+kit_tools/EXECUTION_LOG.md.1
+kit_tools/AUDIT_FINDINGS.md
+kit_tools/specs/.supervisor.log
+kit_tools/testing/test-metrics.json
+kit_tools/.*
+!kit_tools/.gitkeep
+# --- end KitTools ---

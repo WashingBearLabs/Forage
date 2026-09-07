@@ -43,9 +43,31 @@ commits survive and the count is 52 rather than 47.
 | Root/service files | 25 | 25 |
 | `searxng/config/` files | 2 | 2 |
 | `tests/` files | 18 | 18 |
-| `derive_sanitizer_revision({})` | same hash as Poppy | identical (`e6b2b56d…54000`) |
+| `derive_sanitizer_revision({})` | same hash as Poppy | identical at split time (`e6b2b56d…54000`) — **since deliberately diverged, see below** |
 | `docker build .` with no HF token | succeeds | succeeds; guard branch logged "No HF_TOKEN provided" |
 | Full-history secret scan | clean | clean — see `bootstrap-scan.txt` |
+
+### Sanitizer revision: deliberately diverged from Poppy (US-002, 2026-09-07)
+
+The table row above records the state **at split time**, when the two repos still hashed
+to the same value. That is no longer true, and the divergence is intentional.
+
+`pipeline/sanitizer_revision.py` hashes eight source files. US-002's vault-free
+configuration work edited `pipeline/orchestrator.py`'s default-hostname lines — one of
+those eight — so Forage's revision moved:
+
+| | Value |
+|---|---|
+| At split (US-001), identical to Poppy | `e6b2b56d…54000` |
+| **Current (US-002 onward)** | **`2b8d7e9a…`** |
+
+The other seven `_REVISION_SOURCES` files remain byte-identical to Poppy's copies; only
+`orchestrator.py` differs, and only in the default-hostname hunks.
+
+**Consequence for the Poppy-side specs: do not assume Poppy↔Forage revision parity.** A
+consumer that compares `sanitizer_revision` across the two repos will see a mismatch that
+means nothing. Compare `contract_version` instead — that is the field with cross-repo
+semantics.
 
 ## Deferred GitHub settings — for the spec 2 public flip
 

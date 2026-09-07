@@ -1,0 +1,43 @@
+# Template Version: 1.0.0
+#
+# KitTools worktree & environment contract.
+#
+# /kit-tools:execute-epic runs the orchestrator in a dedicated git worktree
+# (a second working directory on the epic branch) so it never shares the live
+# checkout. A fresh worktree shares git history but NOT gitignored working
+# files (.venv, node_modules, .env), so this committed contract makes a new
+# worktree runnable.
+#
+# SECURITY NOTE: env_bootstrap commands are executed by the orchestrator.
+# Review changes to this file in PRs as carefully as a CI config.
+
+# Default worktree root (~/.kit/worktrees/<project-id>/). Leave blank.
+root:
+
+# Make a fresh worktree runnable. Forage is a single uv-managed Python
+# project: `uv sync --extra dev` creates .venv and installs the runtime deps
+# plus pytest / pytest-asyncio / pytest-socket / ruff / pyright. The committed
+# uv.lock pins torch to the CPU index on Linux, so this is a ~5-minute cold
+# sync, not a 2.7 GB CUDA one. Run with the worktree as cwd; stops at first
+# failure.
+env_bootstrap:
+  - uv sync --extra dev
+
+# Gitignored secret/config files symlinked into the worktree.
+# Forage is 12-factor with no repo-local env file: config arrives as
+# environment variables at container start plus the tracked config.yaml.
+# Nothing to link.
+env_link: []
+
+# Local sibling path-dependencies symlinked into the worktree at their
+# matching relative path. Forage has none — every dependency resolves from
+# PyPI (or the pinned pytorch-cpu index) via uv.lock.
+path_links: []
+
+# Prefix the orchestrator prepends to every test/regression command it runs.
+# Without it, the detached orchestrator inherits the ambient PATH (not the
+# worktree .venv) and pytest collection crashes read as false REGRESSIONs.
+run_prefix: uv run
+
+# Remove the worktree on a clean finish; keep it on failure for debugging.
+cleanup_policy: remove-on-success
