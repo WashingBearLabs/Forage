@@ -34,31 +34,31 @@ class BlockedDomainError(Exception):
 # ---------------------------------------------------------------------------
 
 _PRIVATE_NETWORKS_V4 = [
-    ipaddress.IPv4Network("0.0.0.0/8"),          # "This" network
-    ipaddress.IPv4Network("10.0.0.0/8"),          # Private (RFC1918)
-    ipaddress.IPv4Network("100.64.0.0/10"),       # Shared address space (CGN, RFC6598)
-    ipaddress.IPv4Network("127.0.0.0/8"),         # Loopback
-    ipaddress.IPv4Network("169.254.0.0/16"),      # Link-local
-    ipaddress.IPv4Network("172.16.0.0/12"),       # Private (RFC1918)
-    ipaddress.IPv4Network("192.0.0.0/24"),        # IETF protocol assignments
-    ipaddress.IPv4Network("192.0.2.0/24"),        # TEST-NET-1 (documentation)
-    ipaddress.IPv4Network("192.168.0.0/16"),      # Private (RFC1918)
-    ipaddress.IPv4Network("198.18.0.0/15"),       # Benchmarking (RFC2544)
-    ipaddress.IPv4Network("198.51.100.0/24"),     # TEST-NET-2 (documentation)
-    ipaddress.IPv4Network("203.0.113.0/24"),      # TEST-NET-3 (documentation)
-    ipaddress.IPv4Network("224.0.0.0/4"),         # Multicast
-    ipaddress.IPv4Network("240.0.0.0/4"),         # Reserved for future use
+    ipaddress.IPv4Network("0.0.0.0/8"),  # "This" network
+    ipaddress.IPv4Network("10.0.0.0/8"),  # Private (RFC1918)
+    ipaddress.IPv4Network("100.64.0.0/10"),  # Shared address space (CGN, RFC6598)
+    ipaddress.IPv4Network("127.0.0.0/8"),  # Loopback
+    ipaddress.IPv4Network("169.254.0.0/16"),  # Link-local
+    ipaddress.IPv4Network("172.16.0.0/12"),  # Private (RFC1918)
+    ipaddress.IPv4Network("192.0.0.0/24"),  # IETF protocol assignments
+    ipaddress.IPv4Network("192.0.2.0/24"),  # TEST-NET-1 (documentation)
+    ipaddress.IPv4Network("192.168.0.0/16"),  # Private (RFC1918)
+    ipaddress.IPv4Network("198.18.0.0/15"),  # Benchmarking (RFC2544)
+    ipaddress.IPv4Network("198.51.100.0/24"),  # TEST-NET-2 (documentation)
+    ipaddress.IPv4Network("203.0.113.0/24"),  # TEST-NET-3 (documentation)
+    ipaddress.IPv4Network("224.0.0.0/4"),  # Multicast
+    ipaddress.IPv4Network("240.0.0.0/4"),  # Reserved for future use
     ipaddress.IPv4Network("255.255.255.255/32"),  # Broadcast
 ]
 
 _PRIVATE_NETWORKS_V6 = [
-    ipaddress.IPv6Network("::1/128"),             # Loopback
-    ipaddress.IPv6Network("fe80::/10"),           # Link-local
-    ipaddress.IPv6Network("fc00::/7"),            # Unique local address
+    ipaddress.IPv6Network("::1/128"),  # Loopback
+    ipaddress.IPv6Network("fe80::/10"),  # Link-local
+    ipaddress.IPv6Network("fc00::/7"),  # Unique local address
     # IPv4-mapped (also caught by the ipv4_mapped check)
     ipaddress.IPv6Network("::ffff:0:0/96"),
-    ipaddress.IPv6Network("2001:db8::/32"),       # Documentation
-    ipaddress.IPv6Network("ff00::/8"),            # Multicast
+    ipaddress.IPv6Network("2001:db8::/32"),  # Documentation
+    ipaddress.IPv6Network("ff00::/8"),  # Multicast
 ]
 
 _BLOCKED_HOSTNAMES = {"localhost"}
@@ -96,14 +96,10 @@ def _check_hostname_blocklist(hostname: str) -> None:
     """Reject hostnames that are inherently private (localhost, .local)."""
     lower = hostname.lower()
     if lower in _BLOCKED_HOSTNAMES:
-        raise PrivateIPError(
-            f"Hostname '{hostname}' is blocked (localhost)"
-        )
+        raise PrivateIPError(f"Hostname '{hostname}' is blocked (localhost)")
     for suffix in _BLOCKED_SUFFIXES:
         if lower.endswith(suffix):
-            raise PrivateIPError(
-                f"Hostname '{hostname}' is blocked ({suffix} domain)"
-            )
+            raise PrivateIPError(f"Hostname '{hostname}' is blocked ({suffix} domain)")
 
 
 async def validate_url(
@@ -148,9 +144,7 @@ async def validate_url(
         lower_host = hostname.lower()
         lower_blocked = {d.lower() for d in blocked_domains}
         if lower_host in lower_blocked:
-            raise BlockedDomainError(
-                f"Domain '{hostname}' is on the blocklist"
-            )
+            raise BlockedDomainError(f"Domain '{hostname}' is on the blocklist")
 
     # 2. Hostname-level rejection (localhost, .local)
     _check_hostname_blocklist(hostname)
@@ -159,7 +153,10 @@ async def validate_url(
     loop = asyncio.get_running_loop()
     try:
         addrinfos = await loop.run_in_executor(
-            None, socket.getaddrinfo, hostname, None,
+            None,
+            socket.getaddrinfo,
+            hostname,
+            None,
         )
     except socket.gaierror as exc:
         msg = f"DNS resolution failed for '{hostname}': {exc}"
@@ -174,9 +171,7 @@ async def validate_url(
     for _family, _type, _proto, _canonname, sockaddr in addrinfos:
         ip_str: str = str(sockaddr[0])
         if _is_private_ip(ip_str):
-            raise PrivateIPError(
-                f"URL '{url}' resolves to private IP {ip_str}"
-            )
+            raise PrivateIPError(f"URL '{url}' resolves to private IP {ip_str}")
         if first_public_ip is None:
             first_public_ip = ip_str
 
@@ -185,6 +180,9 @@ async def validate_url(
         raise ValueError(msg)
 
     logger.debug(
-        "URL validated: %s → %s (%s)", url, first_public_ip, hostname,
+        "URL validated: %s → %s (%s)",
+        url,
+        first_public_ip,
+        hostname,
     )
     return first_public_ip, hostname

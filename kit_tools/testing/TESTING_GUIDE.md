@@ -27,10 +27,13 @@ uv run pytest tests/test_cache.py -q
 uv run pytest tests/test_orchestrator.py -q -k test_search_returns_sanitized_results
 
 # Static analysis
-uv run ruff check .          # gate: must be clean
-uv run ruff format --check . # 6-file backlog, owned by feature-forage-ci-and-image
-uv run pyright               # strict; 214-error backlog, same owner
+uv run ruff check .          # CI gate: must be clean
+uv run ruff format --check . # CI gate since US-001: must be clean
+uv run pyright               # strict; 214-error backlog, owned by US-006
 ```
+
+Both ruff commands are blocking jobs in `.github/workflows/ci.yml`. Run them before you
+push — a red `lint` job costs a round trip on the free Actions tier.
 
 **Always go through `uv run`.** The lock pins the toolchain (ruff 0.16.6, pyright 1.1.411);
 a system-installed tool reports different numbers and the backlog counts will not
@@ -42,7 +45,7 @@ crash reads as a false regression.
 
 ## Test Structure
 
-18 files under `tests/`, flat, one module per subject. **534 tests, all green** as of
+20 files under `tests/`, flat, one module per subject. **567 tests, all green** as of
 2026-09-07.
 
 | Module | Tests | Covers |
@@ -57,10 +60,12 @@ crash reads as a false regression.
 | `tests/test_models.py` | 31 | Pydantic request/response models |
 | `tests/test_app.py` | 31 | FastAPI endpoints, `/health` body, capability break-glass |
 | `tests/test_stage3_promptguard.py` | 30 | ML scan; transformers/torch mocked |
+| `tests/test_ci_workflow.py` | 30 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture |
 | `tests/test_stage5_url_audit.py` | 28 | Outbound fetch + redirect-chain audit |
 | `tests/test_stage1_pdf.py` | 23 | PDF branch, subprocess isolation |
 | `tests/test_searxng_docker.py` | 9 | `searxng/config/` sanity (config half only) |
 | `tests/test_sanitizer_revision.py` | 6 | Revision hashing over `_REVISION_SOURCES` |
+| `tests/test_dependency_lock.py` | 3 | `uv.lock` stays CPU-only (no `nvidia-*` wheels) |
 | `tests/test_contract_schema.py` | 1 | Golden contract fixture vs `pipeline/contract.py` |
 
 Support files:
@@ -120,7 +125,14 @@ test_mapping:
   "pipeline/extraction_limits.py": "tests/test_stage1_extraction.py"
   "promptguard/classifier.py": "tests/test_stage3_promptguard.py"
   "searxng/config/*": "tests/test_searxng_docker.py"
+  ".github/workflows/ci.yml": "tests/test_ci_workflow.py"
+  "uv.lock": "tests/test_dependency_lock.py"
+  "pyproject.toml": "tests/test_dependency_lock.py"
 ```
+
+The last three are non-Python sources. They still need mappings: without one the
+orchestrator falls back to a heuristic glob over the whole suite, and a workflow or lock
+edit either runs everything or nothing.
 
 ---
 

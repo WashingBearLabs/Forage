@@ -67,14 +67,14 @@ class TestIsPrivateIP:
             "169.254.0.1",
             "169.254.255.255",
             "0.0.0.0",
-            "100.64.0.1",         # CGN shared address (RFC6598)
-            "192.0.2.1",          # TEST-NET-1
-            "198.18.0.1",         # Benchmarking (RFC2544)
-            "198.51.100.1",       # TEST-NET-2
-            "203.0.113.1",        # TEST-NET-3
-            "224.0.0.1",          # Multicast
-            "240.0.0.1",          # Reserved
-            "255.255.255.255",    # Broadcast
+            "100.64.0.1",  # CGN shared address (RFC6598)
+            "192.0.2.1",  # TEST-NET-1
+            "198.18.0.1",  # Benchmarking (RFC2544)
+            "198.51.100.1",  # TEST-NET-2
+            "203.0.113.1",  # TEST-NET-3
+            "224.0.0.1",  # Multicast
+            "240.0.0.1",  # Reserved
+            "255.255.255.255",  # Broadcast
         ],
     )
     def test_private_ipv4(self, ip: str) -> None:
@@ -171,9 +171,12 @@ class TestRFC1918Rejection:
     @pytest.mark.asyncio
     async def test_mixed_ips_rejected_if_any_private(self) -> None:
         """If DNS returns both public and private IPs, reject."""
-        with _mock_getaddrinfo(
-            return_value=_fake_addrinfo_multi("93.184.216.34", "10.0.0.1"),
-        ), pytest.raises(PrivateIPError):
+        with (
+            _mock_getaddrinfo(
+                return_value=_fake_addrinfo_multi("93.184.216.34", "10.0.0.1"),
+            ),
+            pytest.raises(PrivateIPError),
+        ):
             await validate_url("https://example.com/")
 
 
@@ -269,9 +272,12 @@ class TestEdgeCases:
 
     @pytest.mark.asyncio
     async def test_dns_failure_raises_valueerror(self) -> None:
-        with _mock_getaddrinfo(
-            side_effect=socket.gaierror("Name or service not known"),
-        ), pytest.raises(ValueError, match="DNS resolution failed"):
+        with (
+            _mock_getaddrinfo(
+                side_effect=socket.gaierror("Name or service not known"),
+            ),
+            pytest.raises(ValueError, match="DNS resolution failed"),
+        ):
             await validate_url("https://nonexistent.example.invalid/")
 
     @pytest.mark.asyncio

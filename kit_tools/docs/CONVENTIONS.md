@@ -26,11 +26,12 @@ uv run ruff format .
 uv run pyright
 ```
 
-**Known backlog (measured 2026-09-07, owned by `feature-forage-ci-and-image`):**
-`ruff check` is clean; `ruff format --check` would reformat **6 files**; `pyright` strict
-reports **214 errors** (22 service across 4 files, 192 in tests including 35
-`reportPrivateUsage`). Do not treat these as a licence to add more — leave the files you
-touch no worse, and prefer fixing what you touch.
+**Known backlog (owned by `feature-forage-ci-and-image`):** `ruff check` is clean and
+`ruff format --check` is clean — both are now **blocking CI gates** (US-001, 2026-09-07),
+so neither backlog can come back. `pyright` strict still reports **214 errors** (22
+service across 4 files, 192 in tests including 35 `reportPrivateUsage`), burned down by
+US-006. Do not treat that as a licence to add more — leave the files you touch no worse,
+and prefer fixing what you touch.
 
 ---
 

@@ -134,5 +134,6 @@ side must be replayed onto the other, with the Poppy source commit recorded in
 `docs/bootstrap-notes.md`'s pin record.
 
 One thing has already diverged deliberately: `derive_sanitizer_revision()` moved from
-`e6b2b56d…` to `2b8d7e9a…` here when the vault-free hostname defaults landed. **Do not
-assume Poppy↔Forage revision parity** — compare contracts, not revisions.
+`e6b2b56d…` to `2b8d7e9a…` here when the vault-free hostname defaults landed, and again to
+`cd00a8b4…` when the `ruff format` CI gate reformatted `pipeline/stage2_structural.py`.
+**Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

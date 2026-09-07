@@ -29,10 +29,10 @@ preserved). See `docs/bootstrap-notes.md` for the pin record.
 |--------|--------|
 | Maturity | Pre-1.0, freshly extracted (2026-09-07) |
 | Repo visibility | **Private** — flips public in `feature-forage-ci-and-image` after its gates pass |
-| Tests | 534 collected, all green (`uv run pytest`), hermetic via `pytest-socket` |
-| Lint | `uv run ruff check .` clean; `ruff format --check` has a 6-file backlog |
+| Tests | 567 collected, all green (`uv run pytest`), hermetic via `pytest-socket` |
+| Lint | `uv run ruff check .` and `ruff format --check .` both clean — **enforced in CI** |
 | Types | `uv run pyright` (strict) has a **214-error** backlog — 22 service / 192 tests |
-| CI | **None yet** — `feature-forage-ci-and-image` builds it |
+| CI | `.github/workflows/ci.yml` — `lint` job live; `typecheck`/`test`/build/publish land across the rest of `feature-forage-ci-and-image` |
 | Published image | **None yet** — same spec |
 | Deployment | Poppy's in-tree copy is still the deployed source of truth (coexistence rule) |
 

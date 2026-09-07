@@ -113,9 +113,18 @@ constant and `searxng/config/settings.yml`. Both live in this repo now; keep the
 
 **What happens:**
 `derive_sanitizer_revision()` hashes eight source files. The vault-free configuration work
-edited `pipeline/orchestrator.py`'s default-hostname lines, so Forage's revision moved
-from `e6b2b56d…` to `2b8d7e9a…` while Poppy's in-tree copy stayed on the old value. Seven
-of the eight sources are still byte-identical between the repos; the revision is not.
+edited `pipeline/orchestrator.py`'s default-hostname lines, moving Forage's revision from
+`e6b2b56d…` to `2b8d7e9a…`; installing the `ruff format --check` CI gate then reformatted
+`pipeline/stage2_structural.py` — also one of the eight — moving it again to
+`cd00a8b4…c96b9a`. Poppy's in-tree copy stayed on the original value throughout. Six of
+the eight sources are still byte-identical between the repos; the revision is not.
+
+**Note the second rotation was format-only.** No sanitization behaviour changed — the hash
+is over bytes, so `ruff format` moves it. Any reformat of a `_REVISION_SOURCES` file
+rotates the revision and invalidates every cached sanitization keyed on it. Do it
+deliberately, at a gate boundary, with the before/after recorded (as
+`docs/bootstrap-notes.md` does) — never as a drive-by inside a behavioural change, where
+it would be indistinguishable from a real sanitizer change.
 
 **Why it matters:**
 Any cross-repo work that assumes Poppy↔Forage revision parity will be wrong. The

@@ -58,11 +58,19 @@ those eight — so Forage's revision moved:
 
 | | Value |
 |---|---|
-| At split (US-001), identical to Poppy | `e6b2b56d…54000` |
-| **Current (US-002 onward)** | **`2b8d7e9a…`** |
+| At split (`forage-repo-bootstrap` US-001), identical to Poppy | `e6b2b56d…54000` |
+| After the vault-free hostname defaults (`forage-repo-bootstrap` US-002) | `2b8d7e9a…` |
+| **Current (`forage-ci-and-image` US-001 onward)** | **`cd00a8b4…c96b9a`** |
 
-The other seven `_REVISION_SOURCES` files remain byte-identical to Poppy's copies; only
-`orchestrator.py` differs, and only in the default-hostname hunks.
+The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
+burning the six-file backlog to zero, and one of those six —
+`pipeline/stage2_structural.py` — is a `_REVISION_SOURCES` member. No sanitization
+*behaviour* changed; the hash moved because the hash is over bytes. It was done at gate
+installation on purpose, so the rotation happens once, early, and under a recorded
+before/after rather than incidentally inside a later behavioural change.
+
+Six of the eight `_REVISION_SOURCES` files remain byte-identical to Poppy's copies;
+`orchestrator.py` (hostname defaults) and `stage2_structural.py` (formatting) differ.
 
 **Consequence for the Poppy-side specs: do not assume Poppy↔Forage revision parity.** A
 consumer that compares `sanitizer_revision` across the two repos will see a mismatch that

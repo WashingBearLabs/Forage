@@ -32,6 +32,8 @@ DEFAULT_MAX_CONTENT_BYTES = 10 * 1024 * 1024  # 10 MB
 
 class ContentTooLargeError(Exception):
     """Raised when the response body exceeds the maximum size."""
+
+
 DEFAULT_USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -148,14 +150,16 @@ async def fetch_url(
             parsed = urlparse(current_url)
             # For IPv6, wrap in brackets
             ip_host = f"[{resolved_ip}]" if ":" in resolved_ip else resolved_ip
-            pinned_url = urlunparse((
-                parsed.scheme,
-                f"{ip_host}:{parsed.port}" if parsed.port else ip_host,
-                parsed.path,
-                parsed.params,
-                parsed.query,
-                parsed.fragment,
-            ))
+            pinned_url = urlunparse(
+                (
+                    parsed.scheme,
+                    f"{ip_host}:{parsed.port}" if parsed.port else ip_host,
+                    parsed.path,
+                    parsed.params,
+                    parsed.query,
+                    parsed.fragment,
+                )
+            )
 
             headers: dict[str, str] = {"Host": hostname}
             if selected_ua:
@@ -184,8 +188,7 @@ async def fetch_url(
                         current_url = urljoin(current_url, location)
                         if hop == max_redirects - 1:
                             raise TooManyRedirectsError(
-                                f"Exceeded {max_redirects} redirects"
-                                f" for URL: {url}"
+                                f"Exceeded {max_redirects} redirects for URL: {url}"
                             )
                         # Exit streaming context without reading body.
                         # Closes the connection, discarding any body the

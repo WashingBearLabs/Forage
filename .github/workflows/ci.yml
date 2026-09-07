@@ -1,0 +1,129 @@
+# Forage CI — one workflow file for the whole gate chain.
+#
+# Everything lives here on purpose: `needs:` cannot span workflow files, so a
+# split would turn the publish gates into wishful thinking. Jobs are therefore
+# introduced in dependency order across the `forage-ci-and-image` stories, and
+# a `needs:` may never name a job a later story adds — GitHub rejects the whole
+# file, not just the offending job. This story (US-001) lands `lint` only;
+# `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke` and `publish`
+# arrive in US-006/002/003/005/007.
+#
+# Supply-chain posture (this repo goes public in US-008):
+#   * every third-party action is pinned to a full 40-hex commit SHA with a
+#     `# vX.Y.Z` comment saying what that SHA is;
+#   * the workflow token is read-only at the top level — a publish job raises
+#     its own job-scoped permissions and nothing else inherits them;
+#   * checkout never persists credentials into the runner's git config;
+#   * `pull_request_target` is banned outright. Fork PRs run these gates as
+#     ordinary `pull_request` events: GitHub-hosted runner, read-only
+#     GITHUB_TOKEN, no repository secrets. That is the correct posture here —
+#     Poppy's same-repo fork guard is a *self-hosted-runner* mitigation, and
+#     copying it onto hosted runners would either skip every gate on external
+#     contributions or kill fork CI outright.
+#
+# actionlint (below) machine-checks that this file is *valid*; nothing in
+# actionlint checks that it is *safe*, so tests/test_ci_workflow.py asserts the
+# properties above on every run of the suite.
+
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+    tags:
+      # Two patterns, both load-bearing: `v*` is the service image's release
+      # lane and does NOT match `searxng-v*`, so without the second pattern the
+      # companion image (US-004) has no reachable publish path.
+      - "v*"
+      - "searxng-v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  # Superseded PR pushes collapse to the newest commit; main and tag runs are
+  # never cancelled — a tag run is the gate chain for a publish.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Pinned + checksum-verified: `actionlint` gates workflow validity on every
+  # PR, which only means something if the binary itself is not a moving target.
+  ACTIONLINT_VERSION: "1.7.12"
+  ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+  UV_VERSION: "0.9.28"
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync dev environment
+        # --locked fails if uv.lock is stale relative to pyproject.toml, so a
+        # dependency edit that skipped re-locking cannot reach main.
+        run: uv sync --extra dev --locked
+
+      - name: Assert the committed lock is CPU-only
+        # Resolving torch from plain PyPI drags in 15 nvidia-* CUDA packages
+        # (~2.7 GB) no Forage lane needs. The committed lock is the artifact
+        # that has to stay clean; the installed-environment check below proves
+        # the lock is actually what CI installs.
+        run: |
+          set -euo pipefail
+          if grep -q 'nvidia-' uv.lock; then
+            echo "::error file=uv.lock::uv.lock contains nvidia-* CUDA wheels — re-lock with the pytorch-cpu index configured in pyproject.toml"
+            grep -n 'nvidia-' uv.lock | head -20
+            exit 1
+          fi
+          echo "uv.lock is CPU-only: no nvidia-* wheels."
+
+      - name: Assert the synced environment pulled no CUDA wheels
+        # The cold-cache evidence for US-001's AC: on a cache miss the step
+        # above it downloads every wheel, and this one proves none of them were
+        # CUDA. Keep it after the sync, never before.
+        run: |
+          set -euo pipefail
+          uv pip list > installed-packages.txt
+          if grep -qiE '^nvidia-' installed-packages.txt; then
+            echo "::error::CUDA wheels were installed despite a CPU-only lock"
+            grep -iE '^nvidia-' installed-packages.txt
+            exit 1
+          fi
+          echo "No nvidia-* packages in the synced environment."
+          grep -iE '^torch ' installed-packages.txt || true
+          rm -f installed-packages.txt
+
+      - name: ruff check
+        run: uv run ruff check .
+
+      - name: ruff format --check
+        run: uv run ruff format --check .
+
+      - name: Install actionlint
+        run: |
+          set -euo pipefail
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "${tarball}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "${tarball}" actionlint
+          rm -f "${tarball}"
+          ./actionlint --version
+
+      - name: actionlint
+        run: ./actionlint -color

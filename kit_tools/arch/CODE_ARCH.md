@@ -85,8 +85,10 @@ resolves `_REVISION_SOURCES` relative to its own file and hashes them; the value
 every `/health` body and response envelope so a consumer can tell which sanitizer version
 produced a result. Editing any of those eight files changes the revision — that is the
 intent, but it means Forage's revision has **deliberately diverged** from Poppy's since
-the vault-free config work (`e6b2b56d…` → `2b8d7e9a…`). Nothing downstream may assume
-Poppy↔Forage revision parity.
+the vault-free config work (`e6b2b56d…` → `2b8d7e9a…`), and moved once more when the
+`ruff format` CI gate reformatted `stage2_structural.py` (`2b8d7e9a…` → `cd00a8b4…`) — a
+format-only rotation, taken deliberately at gate installation. Nothing downstream may
+assume Poppy↔Forage revision parity.
 
 **The response contract is versioned and consumers refuse on a mismatch.** Any change to
 a response shape is a contract change: bump `contract_version` in `pipeline/contract.py`,
