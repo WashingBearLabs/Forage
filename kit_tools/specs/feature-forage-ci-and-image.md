@@ -545,6 +545,127 @@ once all jobs exist, because a required check with no reporting job deadlocks ev
   the new counts and the three non-Python `test_mapping` entries
   (`.github/workflows/ci.yml`, `uv.lock`, `pyproject.toml`).
 
+### US-006 — Pyright-strict burn-down + tests-lane policy (2026-09-07)
+
+**Shipped:** `pyproject.toml` (`[tool.pyright]` policy + two execution environments),
+`typings/` (`README.md` + `transformers/__init__.pyi`), `.github/workflows/ci.yml`
+(`typecheck` job), `tests/test_pyright_policy.py` (12 tests), 7 new guards in
+`tests/test_ci_workflow.py`, and real type fixes across 4 service modules and 11 test
+modules. Commit `f673fab`.
+
+**CI run — green:** <https://github.com/WashingBearLabs/Forage/actions/runs/34171246831>
+· conclusion `success` · `typecheck` **29 s**, `lint` **22 s**, started in parallel · the
+`pyright (strict)` step logged `0 errors, 0 warnings, 0 informations` on `ubuntu-latest`,
+which is a real cross-check: the CPU-torch index is `sys_platform == 'linux'`-gated, so a
+macOS-only zero would not have proved the Linux resolution.
+
+**Fresh backlog measurement (AC 1).** Taken after `uv sync --extra dev --locked` in the
+real environment, on the locked pyright 1.1.411 — and taken *twice*, because the first
+number is not the honest one:
+
+| Measurement | Total | Service | Tests |
+|---|---:|---:|---:|
+| Default config (pyright honours type-ignore comments) | **214** | 22 (4 files) | 192 (incl. 35 `reportPrivateUsage`) |
+| With `enableTypeIgnoreComments = false` | **269** | 57 | 212 |
+
+214 reproduces spec 1's hand-over figure exactly, so nothing had moved under US-001's
+format pass. But the repo carried **30 inherited `# type: ignore` comments**, and pyright
+honours them by default with no rule code required — one comment silences every diagnostic
+on its line. 55 errors were hiding behind them. Reporting 214 as "the backlog" and then
+declaring zero would have been a fiction, so the switch was turned off and the real 269
+paid down. Every one of the 30 comments is gone; four turned out to be stale (they
+suppressed nothing).
+
+**Service code: strict, fixed, not silenced.**
+
+- `promptguard/classifier.py` (24 errors) — `transformers`' auto-class factories are
+  annotated as returning `Unknown`, which propagated through tokenising, the forward pass
+  and `outputs.logits`. Fixed with `typings/transformers/__init__.pyi`: four symbols,
+  narrowest true signatures, `TYPE_CHECKING`-only imports so the runtime stays lazy.
+  **torch gets no stub** — it ships complete types and the classifier now consumes them
+  (`torch.no_grad`, `torch.softmax`, `Tensor.item()` wrapped in `float()`), exactly as
+  round 2 asked.
+- `cache.py` (5) — `redis.asyncio.Redis` declares its commands through `**kwargs: Any`. A
+  `_ValkeyClient` Protocol names the five operations Forage issues, the connection is cast
+  to it once where it is created, and `_ensure_client()` now returns the client instead of
+  a bool so each call site is narrowed rather than a possible `None` access.
+- `pipeline/stage1_extraction.py` (26) — the optional-import dance became
+  `try: import trafilatura / except ImportError: trafilatura = None`, which pyright
+  narrows at the call site (a separate `_HAS_*` bool carries no such correlation). The
+  `<meta>` and JSON-LD strategies moved behind `_attr_text()` and `_json_ld_documents()`.
+- `pipeline/stage2_structural.py`, `pipeline/stage5_url_audit.py` (1 each) —
+  `field(default_factory=list)` → `list[FlaggedSpan]` / `list[str]`.
+
+**One real bug the strict pass surfaced.** `tag[name].strip()` assumed every HTML
+attribute is a `str`; bs4 returns an `AttributeValueList` for multi-valued attributes
+(`class`, `rel`), which has no `.strip()` and would raise `AttributeError` out of author
+and date extraction. `_attr_text()` now falls through to the next strategy, which is what
+the priority-ordered list already meant. Everything else in that refactor is
+behaviour-preserving — verified by the suite, and by re-confirming that bs4 4.15 gives
+empty `Tag`s a truthy `__bool__` (on older bs4, `if meta and …` would have been dead code
+via `__len__`, and the rewrite would have been a behaviour *change*).
+
+**Tests lane: one rule, and only one.** `[[tool.pyright.executionEnvironments]]` with
+`root = "tests"` disables `reportPrivateUsage` and nothing else; a second entry with
+`root = "."` covers everything else with no overrides at all. Two notes for later stories:
+
+- The tests environment needs `extraPaths = ["."]`. An execution environment *replaces*
+  the default import root, and Forage's modules are flat at the repo root — without it,
+  every first-party import in the suite resolves as a stub-less third-party library and
+  the error count goes *up* by 62 `reportMissingTypeStubs`.
+- Six tests deliberately do what the type system forbids (assign to a frozen dataclass,
+  pass a value outside a `Literal`). Those route through `tests.fakes.assert_frozen` and a
+  `dict[str, Any]` splat rather than a suppression, so the runtime assertion still runs.
+  `kit_tools/docs/CONVENTIONS.md` now carries this as a table: which situation gets which
+  escape, and that "anything else" gets none.
+
+**Guards, mutation-verified.** `tests/test_pyright_policy.py` pins the whole policy —
+strict mode, no top-level rule overrides, type-ignore comments disabled, no inline
+suppression anywhere in the repo's `.py`/`.pyi`, exactly one relaxation scoped to `tests/`,
+`stubPath`, and no torch stub. Seven new `test_ci_workflow.py` guards pin the `typecheck`
+job, including one that fails if `uv run pyright` ever gains a path argument (which would
+silently narrow the checked surface). Six mutations were applied and confirmed to fail
+before restoring: dropped `typecheck` job (7 failures), narrowed pyright scope, a second
+tests relaxation, `enableTypeIgnoreComments = true`, a top-level rule override, and a
+re-introduced inline suppression (1 failure each).
+
+**⚠️ `sanitizer_revision` rotated — second rotation of this spec, behaviour-preserving.**
+Two `_REVISION_SOURCES` members were touched (`stage1_extraction.py`,
+`stage2_structural.py`):
+
+```
+before: cd00a8b456990c01529fbaf230d9c1c1a14b0a8aadbe2f9839b6f8f468c96b9a
+after:  0537316d83510dab3cfafb6ebd61dafdffa5d51be2dd2e01fb9777bfd0e3e253
+```
+
+(`derive_sanitizer_revision({"promptguard_threshold": 0.85})`; `config.yaml` yields the
+same value.) Unlike US-001's, this one is **not** ast-identical — `stage1_extraction.py`
+took the helper refactor above. It is still not a sanitizer change: the extraction
+strategies, their priority order and their outputs are unchanged bar the
+`AttributeValueList` fix. Taken here for the same reason as last time — at a gate
+boundary, once, under a recorded before/after. Propagated to `CLAUDE.md`,
+`kit_tools/arch/CODE_ARCH.md`, `kit_tools/docs/GOTCHAS.md` (now a four-row table) and
+`docs/bootstrap-notes.md`. Five of the eight sources remain byte-identical to Poppy's.
+
+**Job shape.** `typecheck` is a **sibling** of `lint`, not a successor: neither reads the
+other's output, so a `needs:` edge would only serialise two ~25 s jobs and delay the second
+failure report. The `needs:` edges that matter are US-007's, hanging the publish off both.
+
+**Notes for the following stories:**
+- The suite is **not gated by CI yet** — there is no `test` job until US-002, so
+  `test_pyright_policy.py` and `test_ci_workflow.py` currently bite only locally and at
+  review. US-002 closes that, and it is the story that makes every guard in this spec real.
+- Reuse `uv sync --extra dev --locked` verbatim (US-001's note still stands). `uv run
+  pyright` also pulls `nodeenv` and a Node runtime on first run inside the job; that is
+  included in the 29 s and is cached with the uv cache.
+- Suite went 567 → **586** tests, all green. `kit_tools/testing/TESTING_GUIDE.md` carries
+  the new counts, the `tests/test_pyright_policy.py` row, and two new `test_mapping`
+  entries (`pyproject.toml` now maps to two modules; `typings/*` is new).
+- **Rider from US-001, discharged:** `kit_tools/specs/epic-forage-extraction-forage-side.md`
+  now carries the current revision (`0537316d…`), a zero backlog with the 214/269
+  correction, and 586 collected — with the "compare contracts, not revisions" instruction
+  kept intact.
+
 ## Refinement Notes
 
 ### Research Findings

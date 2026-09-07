@@ -161,6 +161,7 @@ jobs:
         # Zero errors, zero baseline. The only rule-level relaxation in the
         # whole repo is `reportPrivateUsage` for tests/, declared in
         # pyproject.toml's [tool.pyright] block and asserted by
-        # tests/test_pyright_policy.py — which this job also runs, via the
-        # suite, so the policy cannot be widened silently.
+        # tests/test_pyright_policy.py. Note those assertions are *not* gated
+        # by CI yet — the suite has no job until US-002 adds `test`; until
+        # then the policy guards only bite locally and at review.
         run: uv run pyright
