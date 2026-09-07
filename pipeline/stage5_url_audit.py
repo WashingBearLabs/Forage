@@ -57,7 +57,7 @@ class FetchResult:
     """Result of the Stage 5 URL fetch and audit."""
 
     final_url: str
-    redirect_chain: list[str] = field(default_factory=list)
+    redirect_chain: list[str] = field(default_factory=list[str])
     domain_changed_on_redirect: bool = False
     response_body: bytes = b""
     content_type: str = ""

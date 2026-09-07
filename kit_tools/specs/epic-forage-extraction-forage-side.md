@@ -125,15 +125,21 @@ that something is missing here.
   recoverable via `docker history`. Spec 1 (`ci-and-image`) removes the build-arg path and
   spec 2 (`model-bootstrap`) replaces it with download-at-start; until both land, local
   builds only. This is also why the repo is private.
-- **Measured backlog handed over at bootstrap** (measure with `uv run`, not system tools —
-  the lock pins ruff 0.16.6 / pyright 1.1.411): `ruff check` **clean**;
-  `ruff format --check` **6 files**; `pyright` strict **214 errors** (22 service across 4
-  files, 192 in tests incl. 35 `reportPrivateUsage`).
-- **`sanitizer_revision` has deliberately diverged** from Poppy (`e6b2b56d…` →
-  `2b8d7e9a…`). The Poppy-side spec must not assume revision parity — compare contracts.
-- **The suite is hermetic and exact**: 534 collected, all green. The count is a gate, not
-  a floor. A committed hermeticity canary was deliberately deferred to
-  `forage-ci-and-image` US-002 so the exact count stayed provable at bootstrap.
+- **Static-analysis backlog: none left** (measure with `uv run`, not system tools — the
+  lock pins ruff 0.16.6 / pyright 1.1.411). All three lanes are clean and all three are
+  blocking CI gates: `ruff check` and `ruff format --check` since `ci-and-image` US-001,
+  `pyright` strict since US-006. The bootstrap hand-over figures — `ruff format` 6 files,
+  `pyright` 214 errors — are **historical**, kept in `../../docs/bootstrap-notes.md`; the
+  pyright one was itself understated, since 55 more errors sat behind 30 inherited
+  type-ignore comments (269 real). Pyright's only carve-out is `reportPrivateUsage` for
+  `tests/`, pinned by `tests/test_pyright_policy.py`.
+- **`sanitizer_revision` has deliberately diverged** from Poppy, and has now rotated three
+  times (`e6b2b56d…` → `2b8d7e9a…` → `cd00a8b4…` → **`0537316d…`**, current). The
+  Poppy-side spec must not assume revision parity — compare contracts.
+- **The suite is hermetic and exact**: **586 collected**, all green (534 at bootstrap, +33
+  from US-001's workflow guards, +19 from US-006's typecheck and policy guards). The count
+  is a gate, not a floor. A committed hermeticity canary is still deferred to
+  `forage-ci-and-image` US-002.
 - **Coexistence:** Poppy's in-tree copy stays the deployed source of truth until it pins a
   Forage image. Replay any hotfix to the extracted paths both ways and update the pin
   record in `../../docs/bootstrap-notes.md`.

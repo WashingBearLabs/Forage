@@ -60,7 +60,8 @@ those eight — so Forage's revision moved:
 |---|---|
 | At split (`forage-repo-bootstrap` US-001), identical to Poppy | `e6b2b56d…54000` |
 | After the vault-free hostname defaults (`forage-repo-bootstrap` US-002) | `2b8d7e9a…` |
-| **Current (`forage-ci-and-image` US-001 onward)** | **`cd00a8b4…c96b9a`** |
+| After the `ruff format` gate (`forage-ci-and-image` US-001) | `cd00a8b4…c96b9a` |
+| **Current (`forage-ci-and-image` US-006 onward)** | **`0537316d…e3e253`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -69,8 +70,19 @@ burning the six-file backlog to zero, and one of those six —
 installation on purpose, so the rotation happens once, early, and under a recorded
 before/after rather than incidentally inside a later behavioural change.
 
-Six of the eight `_REVISION_SOURCES` files remain byte-identical to Poppy's copies;
-`orchestrator.py` (hostname defaults) and `stage2_structural.py` (formatting) differ.
+The third rotation is the pyright-strict burn-down (US-006), taken on the same principle
+and at the same kind of boundary. Two `_REVISION_SOURCES` members were touched:
+`stage2_structural.py` gained a type argument on one `field(default_factory=...)`, and
+`stage1_extraction.py`'s metadata extraction moved behind two typed helpers,
+`_attr_text()` and `_json_ld_documents()`. Behaviour is preserved, with one deliberate
+bug fix that strict typing surfaced: a multi-valued HTML attribute (bs4 hands those back
+as `AttributeValueList`, not `str`) used to raise `AttributeError` out of
+`tag[name].strip()` and now falls through to the next extraction strategy, which is what
+the priority-ordered list already meant.
+
+Five of the eight `_REVISION_SOURCES` files remain byte-identical to Poppy's copies;
+`orchestrator.py` (hostname defaults), `stage2_structural.py` (formatting, then a type
+argument) and `stage1_extraction.py` (typed metadata helpers) differ.
 
 **Consequence for the Poppy-side specs: do not assume Poppy↔Forage revision parity.** A
 consumer that compares `sanitizer_revision` across the two repos will see a mismatch that
@@ -114,6 +126,13 @@ committed `uv.lock` pins (ruff 0.16.6, pyright 1.1.411) — measure with
 | `uv run ruff check .` | **clean** (0 errors) | fixed here |
 | `uv run ruff format --check .` | **6 files** would be reformatted: `pipeline/stage2_structural.py`, `pipeline/stage5_url_audit.py`, `url_validator.py`, `tests/test_stage2_structural.py`, `tests/test_stage5_url_audit.py`, `tests/test_url_validator.py` | spec 2 |
 | `uv run pyright` (strict) | **214 errors** — 22 in service code (4 files: `pipeline/stage1_extraction.py`, `pipeline/stage2_structural.py`, `pipeline/stage5_url_audit.py`, `promptguard/classifier.py`), 192 in tests (incl. 35 `reportPrivateUsage`) | spec 2 |
+
+**All three lanes are now closed and blocking in CI.** `ruff check` + `ruff format`
+(spec 2 US-001, 2026-09-07) and `pyright` (spec 2 US-006, same day). One correction to the
+214 figure for the record: it was measured with pyright honouring the 30 inherited
+type-ignore comments the code carried. With those disabled — which is how the burn-down
+was done, and how CI runs now — the real backlog was **269 errors** (57 service, 212
+tests). Both numbers are true; the second is the one that was actually paid down.
 
 Two measurement notes for spec 2's planning:
 

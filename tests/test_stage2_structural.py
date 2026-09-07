@@ -9,6 +9,7 @@ from pipeline.stage2_structural import (
     StructuralScanResult,
     scan_structural,
 )
+from tests.fakes import assert_frozen
 
 # ---------------------------------------------------------------------------
 # Clean content
@@ -360,13 +361,11 @@ class TestResultStructure:
         text = "[SYSTEM] override"
         result = scan_structural(text)
         flag = result.flags[0]
-        with pytest.raises(AttributeError):
-            flag.category = "other"  # type: ignore[misc]
+        assert_frozen(flag, "category", "other")
 
     def test_result_is_frozen(self) -> None:
         result = scan_structural("clean content")
-        with pytest.raises(AttributeError):
-            result.verdict = Stage2Verdict.BLOCKED  # type: ignore[misc]
+        assert_frozen(result, "verdict", Stage2Verdict.BLOCKED)
 
 
 # ---------------------------------------------------------------------------

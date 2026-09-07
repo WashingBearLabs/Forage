@@ -30,7 +30,7 @@ class StructuralScanResult:
     """Result of the Stage 2 structural scan."""
 
     verdict: Stage2Verdict
-    flags: list[FlaggedSpan] = field(default_factory=list)
+    flags: list[FlaggedSpan] = field(default_factory=list[FlaggedSpan])
     penalty: float = 0.0
 
 

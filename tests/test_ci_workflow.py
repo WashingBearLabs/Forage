@@ -350,6 +350,71 @@ class TestLintJob:
 
 
 # ---------------------------------------------------------------------------
+# The typecheck job
+# ---------------------------------------------------------------------------
+
+
+class TestTypecheckJob:
+    """The gate US-006 adds: pyright strict, against the committed lock."""
+
+    def test_typecheck_job_exists(self, jobs: dict[str, Any]) -> None:
+        assert "typecheck" in jobs, "Expected a 'typecheck' job in ci.yml"
+
+    def test_typecheck_runs_on_github_hosted_ubuntu(self, jobs: dict[str, Any]) -> None:
+        runs_on = jobs["typecheck"]["runs-on"]
+        assert runs_on == "ubuntu-latest", (
+            f"typecheck must run on a GitHub-hosted runner; got {runs_on!r}"
+        )
+
+    def test_typecheck_has_timeout_minutes(self, jobs: dict[str, Any]) -> None:
+        timeout = jobs["typecheck"].get("timeout-minutes")
+        assert isinstance(timeout, int) and timeout > 0, (
+            f"typecheck needs a timeout-minutes backstop; got {timeout!r}"
+        )
+
+    def test_typecheck_runs_pyright(self, jobs: dict[str, Any]) -> None:
+        assert "uv run pyright" in _run_text(jobs, "typecheck"), (
+            "typecheck must run pyright — the whole point of the job"
+        )
+
+    def test_typecheck_does_not_narrow_pyright_scope(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        # `uv run pyright <path>` would check only that path and let the rest
+        # of the repo rot. Pyright's own config decides the scope.
+        for line in _run_text(jobs, "typecheck").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("uv run pyright"):
+                assert stripped == "uv run pyright", (
+                    "pyright must run over the whole project; arguments would "
+                    f"narrow it to a subset. Got: {stripped!r}"
+                )
+
+    def test_typecheck_syncs_against_the_committed_lock(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        assert "--locked" in _run_text(jobs, "typecheck"), (
+            "pyright's answers depend on the exact dependency versions it "
+            "sees, so the sync must come from the committed lock"
+        )
+
+    def test_typecheck_uv_setup_enables_caching(self, jobs: dict[str, Any]) -> None:
+        setup = next(
+            (
+                step
+                for step in _steps(jobs, "typecheck")
+                if "setup-uv" in str(step.get("uses", ""))
+            ),
+            None,
+        )
+        assert setup is not None, "typecheck must install uv via astral-sh/setup-uv"
+        with_block: dict[str, Any] = setup.get("with") or {}
+        assert with_block.get("enable-cache") is True, (
+            "setup-uv must enable caching in every job on the free tier"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Job graph
 # ---------------------------------------------------------------------------
 

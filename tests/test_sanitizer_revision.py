@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline import sanitizer_revision  # type: ignore[reportMissingImports]
+from pipeline import sanitizer_revision
 
 
 @pytest.mark.parametrize(

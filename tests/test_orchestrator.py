@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+from contextlib import AbstractContextManager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,6 +16,8 @@ from cache import ContentCache
 from models import (
     ExtractedContent,
     RetrievedContent,
+    RetrieveRequest,
+    SearchRequest,
     Stage2Verdict,
     Stage3Verdict,
     TrustTier,
@@ -49,7 +52,7 @@ _SAMPLE_HTML = (
     b"here.</p></body></html>"
 )
 
-_SAMPLE_CONFIG: dict = {
+_SAMPLE_CONFIG: dict[str, Any] = {
     "user_agents": ["TestAgent/1.0"],
     "news_domains": ["reuters.com"],
     "seed_blocklist": [],
@@ -111,10 +114,8 @@ def _make_encrypted_pdf(password: str) -> bytes:
     return output.getvalue()
 
 
-def _make_retrieve_request(**overrides):  # type: ignore[no-untyped-def]
-    from models import RetrieveRequest
-
-    defaults = {
+def _make_retrieve_request(**overrides: Any) -> RetrieveRequest:
+    defaults: dict[str, Any] = {
         "url": "https://example.com/page",
         "extract_mode": "full",
         "trusted_domains": [],
@@ -126,10 +127,8 @@ def _make_retrieve_request(**overrides):  # type: ignore[no-untyped-def]
     return RetrieveRequest(**defaults)
 
 
-def _make_search_request(**overrides):  # type: ignore[no-untyped-def]
-    from models import SearchRequest
-
-    defaults = {
+def _make_search_request(**overrides: Any) -> SearchRequest:
+    defaults: dict[str, Any] = {
         "query": "test query",
         "num_results": 5,
         # Existing generic pipeline tests exercise sanitization behavior rather
@@ -140,8 +139,8 @@ def _make_search_request(**overrides):  # type: ignore[no-untyped-def]
     return SearchRequest(**defaults)
 
 
-def _make_fetch_result(**overrides):  # type: ignore[no-untyped-def]
-    defaults = {
+def _make_fetch_result(**overrides: Any) -> FetchResult:
+    defaults: dict[str, Any] = {
         "final_url": "https://example.com/page",
         "redirect_chain": [],
         "domain_changed_on_redirect": False,
@@ -153,8 +152,8 @@ def _make_fetch_result(**overrides):  # type: ignore[no-untyped-def]
     return FetchResult(**defaults)
 
 
-def _make_extraction(**overrides):  # type: ignore[no-untyped-def]
-    defaults = {
+def _make_extraction(**overrides: Any) -> ExtractionResult:
+    defaults: dict[str, Any] = {
         "title": "Test Page",
         "author": None,
         "date": None,
@@ -166,8 +165,8 @@ def _make_extraction(**overrides):  # type: ignore[no-untyped-def]
     return ExtractionResult(**defaults)
 
 
-def _make_structural_clean(**overrides):  # type: ignore[no-untyped-def]
-    defaults = {
+def _make_structural_clean(**overrides: Any) -> StructuralScanResult:
+    defaults: dict[str, Any] = {
         "verdict": Stage2Verdict.CLEAN,
         "flags": [],
         "penalty": 0.0,
@@ -176,8 +175,8 @@ def _make_structural_clean(**overrides):  # type: ignore[no-untyped-def]
     return StructuralScanResult(**defaults)
 
 
-def _make_pg_safe(**overrides):  # type: ignore[no-untyped-def]
-    defaults = {
+def _make_pg_safe(**overrides: Any) -> PromptGuardResult:
+    defaults: dict[str, Any] = {
         "verdict": Stage3Verdict.SAFE,
         "score": 0.1,
         "flagged_chunks": [],
@@ -869,7 +868,7 @@ def _mock_searxng_response(
 
 def _searxng_client_patch(
     mock_response: MagicMock | None = None, *, side_effect: Exception | None = None
-):  # type: ignore[no-untyped-def]
+) -> AbstractContextManager[MagicMock]:
     """Return a patch context for ``httpx.AsyncClient`` used by the search pipeline."""
     mock_client = AsyncMock()
     if side_effect is not None:
@@ -1160,8 +1159,6 @@ async def test_search_unresponsive_engines_tuple_format() -> None:
 
 async def test_search_classifier_unavailable_fails_closed() -> None:
     """An unavailable classifier must not pass clean-looking results through."""
-    from models import SearchRequest
-
     mock_resp = _mock_searxng_response(
         [
             {
@@ -1261,7 +1258,9 @@ async def test_search_promptguard_receives_complete_result_and_request_policy() 
 
     assert len(result.results) == 1
     promptguard.assert_awaited_once()
-    args, kwargs = promptguard.await_args
+    await_args = promptguard.await_args
+    assert await_args is not None
+    args, kwargs = await_args
     assert "Title: Title" in args[0]
     assert "URL: https://example.com" in args[0]
     assert "Snippet: Snippet" in args[0]
@@ -1401,10 +1400,13 @@ async def test_search_promptguard_complete_log_includes_omitted_and_unscanned(
     record = next(
         r for r in caplog.records if r.message == "search_promptguard_complete"
     )
-    assert record.scanned_results == 1
-    assert record.omitted_results == 1
-    assert record.omitted_by_reason == {contract.OMIT_INVALID_URL: 1}
-    assert record.unscanned_results == 1
+    # `extra=` fields land in LogRecord.__dict__ and are invisible to the
+    # LogRecord type, so read them the way logging actually stores them.
+    fields = record.__dict__
+    assert fields["scanned_results"] == 1
+    assert fields["omitted_results"] == 1
+    assert fields["omitted_by_reason"] == {contract.OMIT_INVALID_URL: 1}
+    assert fields["unscanned_results"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1467,7 +1469,7 @@ def client() -> httpx.AsyncClient:
         settings.classification_concurrency
     )
 
-    transport = httpx.ASGITransport(app=app)  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="http://test")
 
 
@@ -1817,8 +1819,10 @@ async def test_post_extract_uses_fixed_untrusted_policy(
 
     assert response.status_code == 200
     promptguard.assert_awaited_once()
-    assert promptguard.await_args.kwargs["trust_tier"] == TrustTier.UNTRUSTED
-    assert promptguard.await_args.kwargs["fail_closed"] is True
+    await_args = promptguard.await_args
+    assert await_args is not None
+    assert await_args.kwargs["trust_tier"] == TrustTier.UNTRUSTED
+    assert await_args.kwargs["fail_closed"] is True
     response_data = response.json()
     assert response_data["trust_tier"] == TrustTier.UNTRUSTED.value
     assert response_data["trust_score"] == pytest.approx(0.40)

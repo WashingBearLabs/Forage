@@ -1,13 +1,33 @@
-"""Shared test doubles for cache.py."""
+"""Shared test doubles and helpers for the Forage suite."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
+import pytest
+
 from cache import CacheMetrics
 
 if TYPE_CHECKING:
     from models import RetrievedContent
+
+
+def assert_frozen(instance: object, field: str, value: object) -> None:
+    """Assert *instance* refuses assignment to *field* — the frozen guarantee.
+
+    The write goes through ``setattr`` with a name the type checker cannot see
+    through, and that indirection is the point: written plainly,
+    ``instance.field = value`` is a *static* error precisely because the
+    dataclass is frozen, so under strict type checking the runtime behaviour
+    these tests exist to pin could not be expressed at all. The suite still
+    asserts the real thing — that the assignment raises at run time.
+
+    ``AttributeError`` rather than ``dataclasses.FrozenInstanceError`` because
+    Forage's result types are ``slots=True`` as well as ``frozen=True``, and
+    the two paths raise different subclasses of the same base.
+    """
+    with pytest.raises(AttributeError):
+        setattr(instance, field, value)
 
 
 class FakeContentCache:

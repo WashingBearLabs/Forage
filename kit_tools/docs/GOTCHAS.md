@@ -112,19 +112,33 @@ constant and `searxng/config/settings.yml`. Both live in this repo now; keep the
 **Added:** 2026-09-07 (forage-repo-bootstrap US-002)
 
 **What happens:**
-`derive_sanitizer_revision()` hashes eight source files. The vault-free configuration work
-edited `pipeline/orchestrator.py`'s default-hostname lines, moving Forage's revision from
-`e6b2b56d…` to `2b8d7e9a…`; installing the `ruff format --check` CI gate then reformatted
-`pipeline/stage2_structural.py` — also one of the eight — moving it again to
-`cd00a8b4…c96b9a`. Poppy's in-tree copy stayed on the original value throughout. Six of
-the eight sources are still byte-identical between the repos; the revision is not.
+`derive_sanitizer_revision()` hashes eight source files. Forage's revision has moved three
+times, each time at a gate boundary and each time deliberately:
 
-**Note the second rotation was format-only.** No sanitization behaviour changed — the hash
-is over bytes, so `ruff format` moves it. Any reformat of a `_REVISION_SOURCES` file
+| When | Value | What moved it |
+|---|---|---|
+| At split | `e6b2b56d…` | — (identical to Poppy) |
+| `forage-repo-bootstrap` US-002 | `2b8d7e9a…` | vault-free hostname defaults in `orchestrator.py` |
+| `forage-ci-and-image` US-001 | `cd00a8b4…` | `ruff format` gate reformatted `stage2_structural.py` |
+| `forage-ci-and-image` US-006 | `0537316d…e3e253` | pyright-strict burn-down retyped `stage1_extraction.py` + `stage2_structural.py` |
+
+Poppy's in-tree copy stayed on the original value throughout. Five of the eight sources
+are still byte-identical between the repos; the revision is not.
+
+**None of the three rotations changed sanitization behaviour.** The hash is over bytes, so
+a reformat or a type annotation moves it just as a real rule change would — and that is
+exactly why *when* you take a rotation matters. Any edit to a `_REVISION_SOURCES` file
 rotates the revision and invalidates every cached sanitization keyed on it. Do it
 deliberately, at a gate boundary, with the before/after recorded (as
 `docs/bootstrap-notes.md` does) — never as a drive-by inside a behavioural change, where
 it would be indistinguishable from a real sanitizer change.
+
+US-006's rotation is the one to read carefully: `stage2_structural.py` took an annotation
+only (`field(default_factory=list[FlaggedSpan])`), but `stage1_extraction.py` took a real
+refactor — the `<meta>`/JSON-LD strategies now go through `_attr_text()` and
+`_json_ld_documents()`. That refactor is behaviour-preserving *except* for one genuine fix
+it made unavoidable: a multi-valued attribute (bs4's `AttributeValueList`) used to raise
+`AttributeError` from `tag[name].strip()`, and now falls through to the next strategy.
 
 **Why it matters:**
 Any cross-repo work that assumes Poppy↔Forage revision parity will be wrong. The

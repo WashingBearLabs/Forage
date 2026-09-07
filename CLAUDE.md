@@ -87,14 +87,21 @@ reason. Any new startup or cache code must preserve this.
 
 ```bash
 uv sync --extra dev     # environment (creates .venv)
-uv run pytest           # 534 tests, all green, hermetic
-uv run ruff check .     # must stay clean
-uv run ruff format .    # 6-file backlog exists
-uv run pyright          # strict; 214-error backlog exists
+uv run pytest           # 586 tests, all green, hermetic
+uv run ruff check .     # must stay clean — blocking CI gate
+uv run ruff format .    # must stay clean — blocking CI gate
+uv run pyright          # strict, ZERO errors — blocking CI gate
 ```
 
 Always go through `uv run` — the lock pins the toolchain, and a system-installed ruff or
 pyright will report numbers that don't reproduce.
+
+All three are zero, with no baseline and no excludes. The single type-checking carve-out
+in the repo is `reportPrivateUsage` for `tests/`; type-ignore comments are switched off
+outright, so a suppression cannot quietly restore the green. The policy lives in
+`pyproject.toml`'s `[tool.pyright]` comment and is asserted by
+`tests/test_pyright_policy.py`. Third-party gaps go in `typings/` — minimal stubs
+declaring only the symbols this repo calls; read `typings/README.md` before adding one.
 
 The suite is hermetic: an autouse `pytest-socket` guard in `tests/conftest.py` fails any
 test that touches the real network. Mock at the seam; never relax the guard.
@@ -134,6 +141,8 @@ side must be replayed onto the other, with the Poppy source commit recorded in
 `docs/bootstrap-notes.md`'s pin record.
 
 One thing has already diverged deliberately: `derive_sanitizer_revision()` moved from
-`e6b2b56d…` to `2b8d7e9a…` here when the vault-free hostname defaults landed, and again to
-`cd00a8b4…` when the `ruff format` CI gate reformatted `pipeline/stage2_structural.py`.
+`e6b2b56d…` to `2b8d7e9a…` here when the vault-free hostname defaults landed, again to
+`cd00a8b4…` when the `ruff format` CI gate reformatted `pipeline/stage2_structural.py`,
+and once more to `0537316d…` when the pyright-strict burn-down retyped
+`pipeline/stage1_extraction.py` and `pipeline/stage2_structural.py`.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

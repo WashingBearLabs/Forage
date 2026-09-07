@@ -29,11 +29,17 @@ uv run pytest tests/test_orchestrator.py -q -k test_search_returns_sanitized_res
 # Static analysis
 uv run ruff check .          # CI gate: must be clean
 uv run ruff format --check . # CI gate since US-001: must be clean
-uv run pyright               # strict; 214-error backlog, owned by US-006
+uv run pyright               # CI gate since US-006: strict, zero errors
 ```
 
-Both ruff commands are blocking jobs in `.github/workflows/ci.yml`. Run them before you
-push — a red `lint` job costs a round trip on the free Actions tier.
+All three are blocking jobs in `.github/workflows/ci.yml` (`lint` and `typecheck`). Run
+them before you push — a red gate costs a round trip on the free Actions tier.
+
+`pyright` runs with **no baseline and one carve-out**: `reportPrivateUsage` is off for
+`tests/` and nothing else is relaxed anywhere. Type-ignore comments are disabled
+(`enableTypeIgnoreComments = false`), so the only way to make pyright quiet is to make the
+types right — or, for a genuine third-party gap, to add a minimal stub under `typings/`.
+`tests/test_pyright_policy.py` fails if any of that drifts.
 
 **Always go through `uv run`.** The lock pins the toolchain (ruff 0.16.6, pyright 1.1.411);
 a system-installed tool reports different numbers and the backlog counts will not
@@ -45,7 +51,7 @@ crash reads as a false regression.
 
 ## Test Structure
 
-20 files under `tests/`, flat, one module per subject. **567 tests, all green** as of
+21 files under `tests/`, flat, one module per subject. **586 tests, all green** as of
 2026-09-07.
 
 | Module | Tests | Covers |
@@ -60,9 +66,10 @@ crash reads as a false regression.
 | `tests/test_models.py` | 31 | Pydantic request/response models |
 | `tests/test_app.py` | 31 | FastAPI endpoints, `/health` body, capability break-glass |
 | `tests/test_stage3_promptguard.py` | 30 | ML scan; transformers/torch mocked |
-| `tests/test_ci_workflow.py` | 30 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture |
+| `tests/test_ci_workflow.py` | 37 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph |
 | `tests/test_stage5_url_audit.py` | 28 | Outbound fetch + redirect-chain audit |
 | `tests/test_stage1_pdf.py` | 23 | PDF branch, subprocess isolation |
+| `tests/test_pyright_policy.py` | 12 | Type-checking policy: strict, one carve-out, no suppressions |
 | `tests/test_searxng_docker.py` | 9 | `searxng/config/` sanity (config half only) |
 | `tests/test_sanitizer_revision.py` | 6 | Revision hashing over `_REVISION_SOURCES` |
 | `tests/test_dependency_lock.py` | 3 | `uv.lock` stays CPU-only (no `nvidia-*` wheels) |
@@ -89,8 +96,9 @@ calls in the cache tests the day it was added.
 **Async needs no decorator.** `asyncio_mode = "auto"` is set in `pyproject.toml`.
 
 **The exact count is a gate, not a floor.** The extraction verified *exactly* 531 tests
-moved (534 collected after alias parametrization), so a silently dropped module cannot
-hide under a "≥ N passed" assertion. When you add tests, update the counts here.
+moved (534 collected after alias parametrization); the suite has since grown to 586 as CI
+guards landed (US-001 +33, US-006 +19). A silently dropped module cannot hide under a
+"≥ N passed" assertion. When you add tests, update the counts here.
 
 **Tests ship with the code they cover, in the same commit.**
 
@@ -127,12 +135,15 @@ test_mapping:
   "searxng/config/*": "tests/test_searxng_docker.py"
   ".github/workflows/ci.yml": "tests/test_ci_workflow.py"
   "uv.lock": "tests/test_dependency_lock.py"
-  "pyproject.toml": "tests/test_dependency_lock.py"
+  "pyproject.toml": ["tests/test_dependency_lock.py", "tests/test_pyright_policy.py"]
+  "typings/*": "tests/test_pyright_policy.py"
 ```
 
-The last three are non-Python sources. They still need mappings: without one the
-orchestrator falls back to a heuristic glob over the whole suite, and a workflow or lock
-edit either runs everything or nothing.
+The last four are non-Python sources (or, for `typings/`, stub files no test imports).
+They still need mappings: without one the orchestrator falls back to a heuristic glob over
+the whole suite, and a workflow, lock or config edit either runs everything or nothing.
+`pyproject.toml` maps to two modules because it carries two independently-guarded
+concerns: the CPU-only dependency lock and the type-checking policy.
 
 ---
 

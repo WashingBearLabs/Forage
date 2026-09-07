@@ -6,7 +6,8 @@ All tests mock ``loop.getaddrinfo`` to avoid real DNS queries.
 from __future__ import annotations
 
 import socket
-from unittest.mock import patch
+from contextlib import AbstractContextManager
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -22,21 +23,29 @@ from url_validator import (
 # ---------------------------------------------------------------------------
 
 
-def _fake_addrinfo(ip: str) -> list[tuple]:
+# ``socket.getaddrinfo`` returns 5-tuples; the fakes below build the one shape
+# these tests care about — a single IPv4/IPv6 address with no scope fields.
+AddrInfo = tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[str, int]]
+
+
+def _fake_addrinfo(ip: str) -> list[AddrInfo]:
     """Build a minimal getaddrinfo result returning a single IP."""
     family = socket.AF_INET6 if ":" in ip else socket.AF_INET
     return [(family, socket.SOCK_STREAM, 0, "", (ip, 0))]
 
 
-def _fake_addrinfo_multi(*ips: str) -> list[tuple]:
+def _fake_addrinfo_multi(*ips: str) -> list[AddrInfo]:
     """Build a getaddrinfo result returning multiple IPs."""
-    results = []
+    results: list[AddrInfo] = []
     for ip in ips:
         results.extend(_fake_addrinfo(ip))
     return results
 
 
-def _mock_getaddrinfo(return_value=None, side_effect=None):
+def _mock_getaddrinfo(
+    return_value: list[AddrInfo] | None = None,
+    side_effect: BaseException | None = None,
+) -> AbstractContextManager[MagicMock]:
     """Patch socket.getaddrinfo (called via run_in_executor) to return fake results."""
     return patch(
         "url_validator.socket.getaddrinfo",

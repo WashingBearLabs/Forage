@@ -10,6 +10,7 @@ compose is spec 4's work.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -22,35 +23,35 @@ class TestSearxngSettings:
     """Validate searxng/config/settings.yml."""
 
     @pytest.fixture
-    def settings(self) -> dict:
+    def settings(self) -> dict[str, Any]:
         path = _SEARXNG_CONFIG / "settings.yml"
         assert path.exists(), "settings.yml must exist at searxng/config/"
         return yaml.safe_load(path.read_text())
 
-    def test_json_format_enabled(self, settings: dict) -> None:
+    def test_json_format_enabled(self, settings: dict[str, Any]) -> None:
         formats = settings.get("search", {}).get("formats", [])
         assert "json" in formats
 
-    def test_server_port_8080(self, settings: dict) -> None:
+    def test_server_port_8080(self, settings: dict[str, Any]) -> None:
         assert settings["server"]["port"] == 8080
 
-    def test_server_binds_all_interfaces(self, settings: dict) -> None:
+    def test_server_binds_all_interfaces(self, settings: dict[str, Any]) -> None:
         assert settings["server"]["bind_address"] == "0.0.0.0"
 
-    def test_secret_key_set(self, settings: dict) -> None:
+    def test_secret_key_set(self, settings: dict[str, Any]) -> None:
         assert settings["server"]["secret_key"]
 
-    def test_engines_configured(self, settings: dict) -> None:
+    def test_engines_configured(self, settings: dict[str, Any]) -> None:
         engines = settings.get("engines", [])
         engine_names = {e["name"] for e in engines}
         assert "duckduckgo" in engine_names
         assert "bing" in engine_names
         assert "brave" in engine_names
 
-    def test_request_timeout(self, settings: dict) -> None:
+    def test_request_timeout(self, settings: dict[str, Any]) -> None:
         assert settings["outgoing"]["request_timeout"] == 10
 
-    def test_default_lang_english(self, settings: dict) -> None:
+    def test_default_lang_english(self, settings: dict[str, Any]) -> None:
         assert settings["search"]["default_lang"] == "en"
 
 

@@ -7,6 +7,8 @@ RetrievedContent population.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from models import (
@@ -20,7 +22,7 @@ from pipeline.stage2_structural import (
     FlaggedSpan,
     StructuralScanResult,
 )
-from pipeline.stage3_promptguard import PromptGuardResult
+from pipeline.stage3_promptguard import PromptGuardResult, SkipReason
 from pipeline.stage4_structuring import (
     _compute_trust_score,
     build_retrieved_content,
@@ -67,7 +69,7 @@ def _make_promptguard(
     flagged_chunks: list[str] | None = None,
     penalty: float = 0.0,
     skipped: bool = False,
-    skip_reason: str | None = None,
+    skip_reason: SkipReason | None = None,
 ) -> PromptGuardResult:
     return PromptGuardResult(
         verdict=verdict,
@@ -79,9 +81,9 @@ def _make_promptguard(
     )
 
 
-def _build_default(**overrides):
+def _build_default(**overrides: Any) -> RetrievedContent:
     """Build a RetrievedContent with sensible defaults, accepting overrides."""
-    kwargs = dict(
+    kwargs: dict[str, Any] = dict(
         request_id="req-001",
         source_url="https://example.com/page",
         final_url="https://example.com/page",

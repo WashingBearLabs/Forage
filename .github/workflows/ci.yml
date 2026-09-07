@@ -4,9 +4,15 @@
 # split would turn the publish gates into wishful thinking. Jobs are therefore
 # introduced in dependency order across the `forage-ci-and-image` stories, and
 # a `needs:` may never name a job a later story adds — GitHub rejects the whole
-# file, not just the offending job. This story (US-001) lands `lint` only;
-# `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke` and `publish`
-# arrive in US-006/002/003/005/007.
+# file, not just the offending job. `lint` (US-001) and `typecheck` (US-006)
+# are here; `test`, `build-amd64`, `secret-grep`, `smoke` and `publish` arrive
+# in US-002/003/005/007.
+#
+# `lint` and `typecheck` are siblings, not a chain: neither reads the other's
+# output, so making one `needs:` the other would only serialise two ~30 s jobs
+# and delay the second failure report. The `needs:` edges that matter are the
+# ones US-007 hangs off both of them, when a publish must not happen over a
+# red gate.
 #
 # Supply-chain posture (this repo goes public in US-008):
 #   * every third-party action is pinned to a full 40-hex commit SHA with a
@@ -127,3 +133,34 @@ jobs:
 
       - name: actionlint
         run: ./actionlint -color
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync dev environment
+        # Same `--locked` sync as lint: pyright's answers depend on the exact
+        # dependency versions it sees, so the types checked in CI have to come
+        # from the committed lock, not from a fresh resolution.
+        run: uv sync --extra dev --locked
+
+      - name: pyright (strict)
+        # Zero errors, zero baseline. The only rule-level relaxation in the
+        # whole repo is `reportPrivateUsage` for tests/, declared in
+        # pyproject.toml's [tool.pyright] block and asserted by
+        # tests/test_pyright_policy.py — which this job also runs, via the
+        # suite, so the policy cannot be widened silently.
+        run: uv run pyright

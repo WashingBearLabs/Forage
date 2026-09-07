@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
@@ -186,8 +187,13 @@ class TestRetrieveRequest:
         assert req.extract_mode == "full"
 
     def test_invalid_extract_mode_rejected(self) -> None:
+        # The literal is deliberately outside the declared Literal type — the
+        # point of the test is that pydantic rejects it at *run* time, so the
+        # value is passed through **kwargs to keep the static checker out of
+        # an assertion it would otherwise pre-empt.
+        bad: dict[str, Any] = {"url": "https://example.com", "extract_mode": "partial"}
         with pytest.raises(Exception):  # noqa: B017
-            RetrieveRequest(url="https://example.com", extract_mode="partial")  # type: ignore[arg-type]
+            RetrieveRequest(**bad)
 
     def test_empty_url_rejected(self) -> None:
         with pytest.raises(Exception):  # noqa: B017

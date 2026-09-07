@@ -79,3 +79,47 @@ select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
 [tool.pyright]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
+# `# type: ignore` is not a fix, and pyright honours it by default — with no
+# rule code required, so one such comment silences *every* diagnostic on its
+# line. Turning it off is what makes "pyright exits 0" mean something here:
+# the repo's real backlog at the start of US-006 was 269 errors, of which 55
+# were hidden behind 30 inherited `# type: ignore` comments. With the switch
+# off they cannot creep back unnoticed. A genuinely unavoidable case would
+# need a narrow `# pyright: ignore[ruleName]`, which still works and which
+# tests/test_pyright_policy.py counts — currently zero, repo-wide.
+enableTypeIgnoreComments = false
+# Local stubs for third-party packages whose shipped types leave holes in the
+# symbols Forage actually calls. Each stub declares only what this repo uses —
+# see typings/README.md for the rule and the reason it is a rule.
+stubPath = "typings"
+
+# --- Type-checking policy (forage-ci-and-image US-006) --------------------
+# Service code is strict with no carve-outs at all: every rule below the
+# `strict` preset applies to retrieval_app.py, models.py, cache.py,
+# url_validator.py, pipeline/ and promptguard/, and the backlog was burned to
+# zero rather than baselined.
+#
+# `tests/` gets exactly one rule-level relaxation, `reportPrivateUsage`, and
+# nothing else. Unit tests legitimately reach for the private surface of the
+# module under test — `cache._closed_vocabulary_reason`, an orchestrator's
+# `_client`, `retrieval_app._load_config` — and the alternative to allowing
+# that is either widening the service's public API purely to satisfy a type
+# checker, or sprinkling per-line suppressions through the suite. Both are
+# worse than one documented, narrowly-scoped rule. Every *other* strict rule
+# stays on for tests: unknown types, missing annotations and bad arguments are
+# real defects in a test just as they are in the service.
+#
+# Adding a second relaxation here is a policy change, not a fix — and
+# tests/test_pyright_policy.py will fail until this comment is updated to say
+# why.
+[[tool.pyright.executionEnvironments]]
+root = "tests"
+# An execution environment replaces the default import root, and Forage's
+# modules are flat at the repo root (`from cache import ...`), so hand it back
+# — otherwise every first-party import in the suite resolves as a stub-less
+# third-party library. This mirrors what tests/conftest.py does at runtime.
+extraPaths = ["."]
+reportPrivateUsage = "none"
+
+[[tool.pyright.executionEnvironments]]
+root = "."

@@ -16,10 +16,10 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Literal, Protocol, cast
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-import redis.asyncio as aioredis  # type: ignore[import-untyped]
+import redis.asyncio as aioredis
 
 from models import RetrievedContent, TrustTier
 
@@ -184,6 +184,24 @@ def _closed_vocabulary_reason(exc: BaseException, *, default: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+class _ValkeyClient(Protocol):
+    """The five Valkey operations this cache actually issues.
+
+    ``redis.asyncio.Redis`` declares its commands through ``**kwargs`` typed as
+    ``Any``, so under strict type checking every call site here decayed to an
+    unknown type and had to be silenced. Naming the surface instead — and
+    casting the connection to it once, where it is created — types the rest of
+    the file precisely and doubles as a statement of exactly how much of Valkey
+    Forage depends on. Widening this is a deliberate act, not an accident.
+    """
+
+    async def ping(self) -> bool: ...
+    async def get(self, name: str) -> bytes | None: ...
+    async def set(self, name: str, value: str, *, ex: int) -> bool | None: ...
+    async def delete(self, name: str) -> int: ...
+    async def aclose(self) -> None: ...
+
+
 class ContentCache:
     """Async Valkey cache for ``RetrievedContent`` objects."""
 
@@ -194,7 +212,7 @@ class ContentCache:
         metrics: CacheMetrics | None = None,
     ) -> None:
         self._url = valkey_url
-        self._client: aioredis.Redis | None = None
+        self._client: _ValkeyClient | None = None
         self._metrics = metrics if metrics is not None else CacheMetrics()
         self._reconnect_lock = asyncio.Lock()
         self._next_retry_at: float | None = None
@@ -211,12 +229,15 @@ class ContentCache:
         """Attempt one Valkey connection, bounded by a 2s deadline."""
         try:
             async with asyncio.timeout(_RECONNECT_TIMEOUT_S):
-                client = aioredis.from_url(
-                    self._url,
-                    socket_connect_timeout=_RECONNECT_TIMEOUT_S,
-                    socket_timeout=_RECONNECT_TIMEOUT_S,
+                client = cast(
+                    "_ValkeyClient",
+                    aioredis.from_url(
+                        self._url,
+                        socket_connect_timeout=_RECONNECT_TIMEOUT_S,
+                        socket_timeout=_RECONNECT_TIMEOUT_S,
+                    ),
                 )
-                await client.ping()  # type: ignore[misc]
+                await client.ping()
         except Exception as exc:
             logger.warning(
                 "Valkey connection failed for content cache (%s)",
@@ -224,29 +245,35 @@ class ContentCache:
             )
             self._client = None
             return False
-        self._client = client  # type: ignore[assignment]
+        self._client = client
         return True
 
     async def connect(self) -> bool:
         """Open a connection to Valkey.  Returns ``True`` on success."""
         return await self._attempt_connect()
 
-    async def _ensure_client(self) -> bool:
-        """Reconnect if disconnected and the backoff window has elapsed.
+    async def _ensure_client(self) -> _ValkeyClient | None:
+        """Return a connected client, reconnecting if the backoff has elapsed.
 
         A caller that finds a reconnect already in flight gets an immediate
         miss rather than waiting on it.
+
+        Handing back the client rather than a bare ``bool`` is what lets each
+        call site below use a narrowed, non-optional value: a boolean carries
+        no correlation with ``self._client``, so every command would otherwise
+        read as a possible attribute access on ``None``.
         """
-        if self._client is not None:
-            return True
+        client = self._client
+        if client is not None:
+            return client
         now = time.monotonic()
         if self._next_retry_at is not None and now < self._next_retry_at:
-            return False
+            return None
         if self._reconnect_lock.locked():
-            return False
+            return None
         async with self._reconnect_lock:
             if self._client is not None:
-                return True
+                return self._client
             self._metrics.reconnect_attempts += 1
             ok = await self._attempt_connect()
             if ok:
@@ -260,7 +287,7 @@ class ContentCache:
                     self._backoff_s * 2,
                     _RECONNECT_MAX_BACKOFF_S,
                 )
-            return ok
+            return self._client if ok else None
 
     async def ping_if_due(self) -> bool:
         """Reconnect (subject to backoff) if disconnected, else report connected.
@@ -268,7 +295,7 @@ class ContentCache:
         Lets ``/health`` alone detect recovery during zero-traffic windows,
         at the same bounded cost as any other cache operation.
         """
-        return await self._ensure_client()
+        return await self._ensure_client() is not None
 
     def _mark_disconnected(self, exc: BaseException) -> None:
         """Clear the client after an operation failure so ``connected`` is honest."""
@@ -282,8 +309,9 @@ class ContentCache:
 
     async def close(self) -> None:
         """Gracefully close the Valkey connection."""
-        if self._client is not None:
-            await self._client.aclose()
+        client = self._client
+        if client is not None:
+            await client.aclose()
             self._client = None
 
     # -- public API ----------------------------------------------------------
@@ -302,7 +330,8 @@ class ContentCache:
         Entries older than the current caller policy are deleted even if their
         original Valkey expiration was longer.
         """
-        if not await self._ensure_client():
+        client = await self._ensure_client()
+        if client is None:
             return None
 
         key = cache_key(
@@ -315,7 +344,7 @@ class ContentCache:
             return None
 
         try:
-            raw: bytes | None = await self._client.get(key)  # type: ignore[misc]
+            raw = await client.get(key)
         except Exception as exc:
             self._mark_disconnected(exc)
             return None
@@ -353,7 +382,7 @@ class ContentCache:
         policy_fingerprint: str | None = None,
     ) -> bool:
         """Delete a cache variant, returning whether Valkey accepted the request."""
-        if not await self._ensure_client():
+        if await self._ensure_client() is None:
             return False
         key = cache_key(
             url,
@@ -378,7 +407,8 @@ class ContentCache:
         Returns ``True`` if the value was written, ``False`` otherwise
         (client not connected, blocked tier, or write error).
         """
-        if not await self._ensure_client():
+        client = await self._ensure_client()
+        if client is None:
             return False
 
         key = cache_key(
@@ -403,7 +433,7 @@ class ContentCache:
         serialised = content.model_dump_json()
 
         try:
-            await self._client.set(  # type: ignore[misc]
+            await client.set(
                 key,
                 serialised,
                 ex=effective_ttl_hours * 3600,
@@ -415,10 +445,11 @@ class ContentCache:
 
     async def _delete_key(self, key: str) -> bool:
         """Delete a precomputed cache key while preserving cache degradation."""
-        if not await self._ensure_client():
+        client = await self._ensure_client()
+        if client is None:
             return False
         try:
-            await self._client.delete(key)  # type: ignore[misc]
+            await client.delete(key)
             return True
         except Exception as exc:
             self._mark_disconnected(exc)

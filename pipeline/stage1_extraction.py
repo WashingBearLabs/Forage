@@ -16,15 +16,19 @@ import json
 import re
 import unicodedata
 from dataclasses import dataclass
+from typing import cast
 
-from bs4 import BeautifulSoup, Comment
+from bs4 import BeautifulSoup, Comment, Tag
+from bs4.element import NavigableString
 
 try:
-    import trafilatura  # type: ignore[import-untyped]
-
-    _HAS_TRAFILATURA = True
-except ImportError:
-    _HAS_TRAFILATURA = False
+    import trafilatura
+except ImportError:  # pragma: no cover - trafilatura is a declared dependency
+    # Binding the module name to None (rather than a separate `_HAS_*` flag)
+    # is what lets the call site's `if trafilatura is None` narrow the name for
+    # a type checker: a boolean flag carries no such correlation, and the
+    # `trafilatura.extract(...)` below would read as possibly-unbound.
+    trafilatura = None
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -125,17 +129,59 @@ def _extract_title(soup: BeautifulSoup) -> str | None:
     return None
 
 
+def _attr_text(element: Tag | NavigableString | None, name: str) -> str | None:
+    """Return *element*'s ``name`` attribute as stripped text, else ``None``.
+
+    Two shapes have to be filtered out before ``.strip()`` is safe, and both
+    are things bs4 really returns: ``find()`` can hand back a
+    ``NavigableString`` rather than a ``Tag``, and a multi-valued attribute
+    (``class``, ``rel``) comes back as an ``AttributeValueList``, not a
+    ``str``. The previous ``tag[name].strip()`` raised ``AttributeError`` on
+    the second; here both fall through to the next extraction strategy, which
+    is what the priority-ordered callers below already expect from a miss.
+    """
+    if not isinstance(element, Tag):
+        return None
+    value = element.get(name)
+    # Absent or empty is a miss; a whitespace-only value still strips to "",
+    # which is the pre-existing behaviour and is left alone deliberately.
+    if not isinstance(value, str) or not value:
+        return None
+    return value.strip()
+
+
+def _json_ld_documents(soup: BeautifulSoup) -> list[dict[str, object]]:
+    """Return the JSON-LD ``<script>`` payloads that parse to an object.
+
+    ``json.loads`` is typed as returning ``Any``, which would spread through
+    every downstream ``.get()`` as an unknown type. Narrowing once here — to
+    ``dict[str, object]``, the only shape the callers look at — keeps the
+    strategies below honest about what they actually know.
+    """
+    documents: list[dict[str, object]] = []
+    for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
+        try:
+            parsed: object = json.loads(script.get_text() or "")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(parsed, dict):
+            documents.append(cast("dict[str, object]", parsed))
+    return documents
+
+
 def _extract_author(soup: BeautifulSoup) -> str | None:
     """Extract author via multiple strategies (priority order)."""
     # 1. <meta property="article:author">
-    meta = soup.find("meta", attrs={"property": "article:author"})
-    if meta and meta.get("content"):
-        return meta["content"].strip()  # type: ignore[index]
+    author = _attr_text(
+        soup.find("meta", attrs={"property": "article:author"}), "content"
+    )
+    if author is not None:
+        return author
 
     # 2. <meta name="author">
-    meta = soup.find("meta", attrs={"name": "author"})
-    if meta and meta.get("content"):
-        return meta["content"].strip()  # type: ignore[index]
+    author = _attr_text(soup.find("meta", attrs={"name": "author"}), "content")
+    if author is not None:
+        return author
 
     # 3. <a rel="author">
     a_tag = soup.find("a", attrs={"rel": "author"})
@@ -153,19 +199,16 @@ def _extract_author(soup: BeautifulSoup) -> str | None:
         return div.get_text(strip=True)
 
     # 6. JSON-LD @type: Article -> author.name
-    for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
-        try:
-            data = json.loads(script.string or "")
-            if isinstance(data, dict) and data.get("@type") == "Article":
-                author = data.get("author")
-                if isinstance(author, dict):
-                    name = author.get("name")
-                    if name:
-                        return str(name).strip()
-                elif isinstance(author, str):
-                    return author.strip()
-        except (json.JSONDecodeError, TypeError):
+    for data in _json_ld_documents(soup):
+        if data.get("@type") != "Article":
             continue
+        candidate = data.get("author")
+        if isinstance(candidate, dict):
+            name = cast("dict[str, object]", candidate).get("name")
+            if name:
+                return str(name).strip()
+        elif isinstance(candidate, str):
+            return candidate.strip()
 
     return None
 
@@ -173,30 +216,27 @@ def _extract_author(soup: BeautifulSoup) -> str | None:
 def _extract_date(soup: BeautifulSoup) -> str | None:
     """Extract publication date via multiple strategies (priority order)."""
     # 1. <meta property="article:published_time">
-    meta = soup.find("meta", attrs={"property": "article:published_time"})
-    if meta and meta.get("content"):
-        return meta["content"].strip()  # type: ignore[index]
+    date = _attr_text(
+        soup.find("meta", attrs={"property": "article:published_time"}), "content"
+    )
+    if date is not None:
+        return date
 
     # 2. <meta name="date">
-    meta = soup.find("meta", attrs={"name": "date"})
-    if meta and meta.get("content"):
-        return meta["content"].strip()  # type: ignore[index]
+    date = _attr_text(soup.find("meta", attrs={"name": "date"}), "content")
+    if date is not None:
+        return date
 
     # 3. <time datetime="...">
-    time_tag = soup.find("time", attrs={"datetime": True})
-    if time_tag and time_tag.get("datetime"):
-        return time_tag["datetime"].strip()  # type: ignore[index]
+    date = _attr_text(soup.find("time", attrs={"datetime": True}), "datetime")
+    if date is not None:
+        return date
 
     # 4. JSON-LD datePublished
-    for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
-        try:
-            data = json.loads(script.string or "")
-            if isinstance(data, dict):
-                date_pub = data.get("datePublished")
-                if date_pub:
-                    return str(date_pub).strip()
-        except (json.JSONDecodeError, TypeError):
-            continue
+    for data in _json_ld_documents(soup):
+        date_pub = data.get("datePublished")
+        if date_pub:
+            return str(date_pub).strip()
 
     return None
 
@@ -235,7 +275,7 @@ def _extract_main_content(html: str, url: str | None = None) -> str | None:
 
     Returns ``None`` when trafilatura is not installed or fails to extract.
     """
-    if not _HAS_TRAFILATURA:
+    if trafilatura is None:
         return None
 
     result = trafilatura.extract(

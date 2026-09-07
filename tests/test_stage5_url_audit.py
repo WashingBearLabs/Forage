@@ -21,6 +21,7 @@ from pipeline.stage5_url_audit import (
     TooManyRedirectsError,
     fetch_url,
 )
+from tests.fakes import assert_frozen
 from url_validator import BlockedDomainError, PrivateIPError
 
 # ---------------------------------------------------------------------------
@@ -28,7 +29,12 @@ from url_validator import BlockedDomainError, PrivateIPError
 # ---------------------------------------------------------------------------
 
 
-def _fake_addrinfo(ip: str = "93.184.216.34") -> list[tuple]:
+# ``socket.getaddrinfo`` returns 5-tuples; the fakes below build the one shape
+# these tests care about — a single IPv4/IPv6 address with no scope fields.
+AddrInfo = tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[str, int]]
+
+
+def _fake_addrinfo(ip: str = "93.184.216.34") -> list[AddrInfo]:
     """Build a minimal getaddrinfo result returning a single public IP."""
     family = socket.AF_INET6 if ":" in ip else socket.AF_INET
     return [(family, socket.SOCK_STREAM, 0, "", (ip, 0))]
@@ -126,8 +132,7 @@ class TestBasicFetch:
         ):
             result = await fetch_url("https://example.com/")
 
-        with pytest.raises(AttributeError):
-            result.final_url = "https://other.com"  # type: ignore[misc]
+        assert_frozen(result, "final_url", "https://other.com")
 
 
 # ---------------------------------------------------------------------------
@@ -276,7 +281,7 @@ class TestRedirectTracking:
         """Redirect destination resolving to private IP must be rejected."""
         call_count = 0
 
-        def _varying_addrinfo(host, port):
+        def _varying_addrinfo(host: str, port: int) -> list[AddrInfo]:
             nonlocal call_count
             call_count += 1
             if call_count <= 1:
@@ -627,8 +632,7 @@ class TestFetchResultStructure:
 
     def test_frozen(self) -> None:
         result = FetchResult(final_url="https://example.com")
-        with pytest.raises(AttributeError):
-            result.final_url = "other"  # type: ignore[misc]
+        assert_frozen(result, "final_url", "other")
 
     def test_defaults(self) -> None:
         result = FetchResult(final_url="https://example.com")

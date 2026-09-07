@@ -14,6 +14,7 @@ from pipeline.stage1_pdf import (
     detect_content_type,
     extract_pdf,
 )
+from tests.fakes import assert_frozen
 
 # ---------------------------------------------------------------------------
 # Helpers -- build minimal PDFs in memory
@@ -65,7 +66,7 @@ def _make_text_pdf(
 
     # Set metadata if provided
     if any([author, title, subject, keywords, creator, producer]):
-        metadata = {}
+        metadata: dict[str, str] = {}
         if author:
             metadata["/Author"] = author
         if title:
@@ -293,5 +294,4 @@ class TestPDFNormalization:
     def test_frozen_dataclass(self) -> None:
         pdf_bytes = _make_text_pdf(["Content."])
         result = extract_pdf(pdf_bytes)
-        with pytest.raises(AttributeError):
-            result.title = "new"  # type: ignore[misc]
+        assert_frozen(result, "title", "new")

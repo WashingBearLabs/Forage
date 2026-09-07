@@ -26,12 +26,22 @@ uv run ruff format .
 uv run pyright
 ```
 
-**Known backlog (owned by `feature-forage-ci-and-image`):** `ruff check` is clean and
-`ruff format --check` is clean — both are now **blocking CI gates** (US-001, 2026-09-07),
-so neither backlog can come back. `pyright` strict still reports **214 errors** (22
-service across 4 files, 192 in tests including 35 `reportPrivateUsage`), burned down by
-US-006. Do not treat that as a licence to add more — leave the files you touch no worse,
-and prefer fixing what you touch.
+**No backlog.** `ruff check`, `ruff format --check` and `pyright` are all clean, and all
+three are **blocking CI gates** (US-001 and US-006, 2026-09-07). None of them was
+baselined: the pyright backlog — 269 errors once the 30 inherited type-ignore comments
+were counted — was burned to zero with real fixes.
+
+### Type-checking policy
+
+Read this before reaching for a suppression; there is a right place for every case.
+
+| Situation | What to do |
+|---|---|
+| Your own code does not type-check | Fix the types. This is the answer almost every time. |
+| A dependency's shipped types leave a symbol you call as `Unknown` | Add a minimal stub under `typings/` declaring **only** the symbols this repo calls — read `typings/README.md` first, a stub shadows the real package. |
+| A test needs a module's private surface | Already allowed: `reportPrivateUsage` is off for `tests/`, and only for `tests/`. |
+| A test needs to do something the type system forbids on purpose (assign to a frozen dataclass, pass a value outside a `Literal`) | Route it through a helper that hides the constant from the checker — `tests.fakes.assert_frozen` is the worked example — so the runtime assertion still runs. |
+| Anything else | Nothing. Type-ignore comments are switched off repo-wide (`enableTypeIgnoreComments = false`); adding a rule relaxation is a policy change that fails `tests/test_pyright_policy.py` until the policy comment in `pyproject.toml` is updated too. |
 
 ---
 

@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import pytest
-
 from pipeline.stage1_extraction import (
     ExtractionResult,
     _collapse_invisible,
     _normalize_text,
     extract_html,
 )
+from tests.fakes import assert_frozen
 
 # ---------------------------------------------------------------------------
 # Sample HTML fixtures
@@ -410,5 +409,4 @@ class TestEdgeCases:
 
     def test_frozen_dataclass(self) -> None:
         result = extract_html(MINIMAL_HTML)
-        with pytest.raises(AttributeError):
-            result.title = "new title"  # type: ignore[misc]
+        assert_frozen(result, "title", "new title")

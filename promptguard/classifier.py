@@ -10,7 +10,11 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    pass
+    # Import-time only: torch and transformers are heavyweight and optional at
+    # runtime (the classifier degrades to "unavailable" without them), so the
+    # real imports stay inside load()/classify(). See typings/transformers for
+    # the stub that makes the auto-class factories return something knowable.
+    from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +36,8 @@ class PromptGuardClassifier:
     """
 
     def __init__(self) -> None:
-        self._model: object | None = None
-        self._tokenizer: object | None = None
+        self._model: PreTrainedModel | None = None
+        self._tokenizer: PreTrainedTokenizerBase | None = None
         self._loaded: bool = False
 
     @property
@@ -49,15 +53,22 @@ class PromptGuardClassifier:
         model not downloaded, etc.).
         """
         try:
-            import torch  # noqa: F401  # type: ignore[import-untyped]
-            from transformers import (  # type: ignore[import-untyped]
+            import torch
+            from transformers import (
                 AutoModelForSequenceClassification,
                 AutoTokenizer,
             )
 
+            # torch is imported here so a missing or broken install fails
+            # inside this try — at startup — rather than on the first
+            # classify() call in a request path. Read the version so the
+            # import is not a dead name that a linter would strip.
+            logger.debug("PromptGuard loading against torch %s", torch.__version__)
+
             self._tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-            self._model = AutoModelForSequenceClassification.from_pretrained(MODEL_ID)
-            self._model.eval()  # type: ignore[union-attr]
+            model = AutoModelForSequenceClassification.from_pretrained(MODEL_ID)
+            model.eval()
+            self._model = model
             self._loaded = True
             logger.info("PromptGuard 2 model loaded successfully")
             return True
@@ -84,10 +95,7 @@ class PromptGuardClassifier:
         if tokenizer is None:
             return [text]
 
-        token_ids: list[int] = tokenizer.encode(  # type: ignore[union-attr]
-            text,
-            add_special_tokens=False,
-        )
+        token_ids = tokenizer.encode(text, add_special_tokens=False)
 
         if len(token_ids) <= MAX_SEQ_LEN:
             return [text]
@@ -96,10 +104,7 @@ class PromptGuardClassifier:
         step = MAX_SEQ_LEN - CHUNK_OVERLAP
         for start in range(0, len(token_ids), step):
             window = token_ids[start : start + MAX_SEQ_LEN]
-            chunk_text: str = tokenizer.decode(  # type: ignore[union-attr]
-                window,
-                skip_special_tokens=True,
-            )
+            chunk_text = tokenizer.decode(window, skip_special_tokens=True)
             chunks.append(chunk_text)
             # Stop if we've consumed all tokens
             if start + MAX_SEQ_LEN >= len(token_ids):
@@ -125,13 +130,15 @@ class PromptGuardClassifier:
 
         If the model is not loaded, returns ``(0.0, [])``.
         """
-        if not self._loaded or self._model is None or self._tokenizer is None:
+        model = self._model
+        tokenizer = self._tokenizer
+        if not self._loaded or model is None or tokenizer is None:
             logger.warning(
                 "classify() called but model not loaded — returning safe fallback"
             )
             return 0.0, []
 
-        import torch  # type: ignore[import-untyped]
+        import torch
 
         chunks = self._chunk_text(text)
         if max_chunks is not None and len(chunks) > max_chunks:
@@ -141,7 +148,7 @@ class PromptGuardClassifier:
         scores: list[float] = []
 
         for chunk in chunks:
-            inputs = self._tokenizer(  # type: ignore[misc]
+            inputs = tokenizer(
                 chunk,
                 return_tensors="pt",
                 truncation=True,
@@ -149,11 +156,11 @@ class PromptGuardClassifier:
                 padding=True,
             )
             with torch.no_grad():
-                outputs = self._model(**inputs)  # type: ignore[misc]
+                outputs = model(**inputs)
 
             # Softmax over logits → probability of injection class
             probs = torch.softmax(outputs.logits, dim=-1)
-            injection_prob: float = probs[0, _INJECTION_LABEL_INDEX].item()
+            injection_prob = float(probs[0, _INJECTION_LABEL_INDEX].item())
             scores.append(injection_prob)
 
         if not scores:

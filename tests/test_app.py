@@ -64,7 +64,7 @@ def client() -> httpx.AsyncClient:
         settings.classification_concurrency
     )
 
-    transport = httpx.ASGITransport(app=app)  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="http://test")
 
 

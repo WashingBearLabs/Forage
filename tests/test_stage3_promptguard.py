@@ -5,6 +5,7 @@ All tests use mocked models — no real model download required.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -21,6 +22,7 @@ from promptguard.classifier import (
     MAX_SEQ_LEN,
     PromptGuardClassifier,
 )
+from tests.fakes import assert_frozen
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -317,7 +319,11 @@ class TestChunking:
         # Simulate 1000 tokens — exceeds MAX_SEQ_LEN (512)
         token_ids = list(range(1000))
         mock_tokenizer.encode.return_value = token_ids
-        mock_tokenizer.decode.side_effect = lambda ids, **kw: f"chunk({len(ids)})"
+
+        def _fake_decode(ids: Sequence[int], **_kwargs: object) -> str:
+            return f"chunk({len(ids)})"
+
+        mock_tokenizer.decode.side_effect = _fake_decode
         c._tokenizer = mock_tokenizer
 
         chunks = c._chunk_text("Long " * 500)
@@ -350,8 +356,7 @@ class TestResultStructure:
             verdict=Stage3Verdict.SAFE,
             score=0.0,
         )
-        with pytest.raises(AttributeError):
-            result.verdict = Stage3Verdict.INJECTION_DETECTED  # type: ignore[misc]
+        assert_frozen(result, "verdict", Stage3Verdict.INJECTION_DETECTED)
 
     def test_defaults(self) -> None:
         result = PromptGuardResult(
@@ -392,7 +397,7 @@ class TestHealthEndpoint:
     def client(self) -> httpx.AsyncClient:
         from retrieval_app import app
 
-        transport = httpx.ASGITransport(app=app)  # type: ignore[arg-type]
+        transport = httpx.ASGITransport(app=app)
         return httpx.AsyncClient(transport=transport, base_url="http://test")
 
     @pytest.mark.asyncio
