@@ -99,16 +99,16 @@ formatting error fails the `format` check; `grep nvidia- uv.lock` is empty; main
   deadlock finding); branch protection stays PR-only until then.
 
 **Acceptance Criteria:**
-- [ ] `ci.yml` with `lint` job on PR/push/both tag patterns; actions SHA-pinned; top-level
+- [x] `ci.yml` with `lint` job on PR/push/both tag patterns; actions SHA-pinned; top-level
       read-only permissions; `persist-credentials: false`; `pull_request_target` banned
       (workflow-shape test); the ported workflow guard suite green; `actionlint` green.
-- [ ] Ruff check + format backlog burned to zero, no excludes; `uv run ruff format
+- [x] Ruff check + format backlog burned to zero, no excludes; `uv run ruff format
       --check .` added to this spec's standard AC tail (it is the gate this story adds).
-- [ ] `grep nvidia- uv.lock` empty (committed lock), one cold-cache CI log inspection
+- [x] `grep nvidia- uv.lock` empty (committed lock), one cold-cache CI log inspection
       recorded.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
 
 ### US-006: Pyright-strict burn-down + tests-lane policy
 
@@ -441,6 +441,13 @@ recorded.
   [`WEB_ACCESS_FAMILY.md`](https://github.com/WashingBearLabs/Poppy/blob/main/kit_tools/specs/WEB_ACCESS_FAMILY.md)
 
 ## Implementation Notes
+
+- **US-001 PASS 2026-09-07** (verifier: pass-with-warnings, 8/8 re-measured incl. own
+  mutations + SHA-pin resolution + cold-cache log fetch). Commits 8c652ad+5c8d8f2: ci.yml
+  lint lane (25s cold/18s warm, both runs success), format backlog 6→0, 33 guard tests
+  (567 total), CPU-lock asserted. sanitizer_revision rotated format-only (stage2_structural
+  reformat): 2b8d7e9a… → cd00a8b4…, ast-identical, propagated. Rider to US-006: refresh the
+  Forage wrapper's stale snapshot lines (old revision value, '6 format files', '534').
 
 ### US-001 — CI workflow, ruff + format gates, CPU-locked dependencies (2026-09-07)
 
