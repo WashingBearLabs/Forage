@@ -442,6 +442,102 @@ recorded.
 
 ## Implementation Notes
 
+### US-001 — CI workflow, ruff + format gates, CPU-locked dependencies (2026-09-07)
+
+**Shipped:** `.github/workflows/ci.yml` (one file, `lint` job only — no `needs:` anywhere,
+so nothing forward-references a job US-002/003/005/006/007 will add),
+`tests/test_ci_workflow.py` (30 tests), `tests/test_dependency_lock.py` (3 tests).
+Commit `8c652ad`.
+
+**First CI run — green, cold cache:**
+<https://github.com/WashingBearLabs/Forage/actions/runs/34169334923> · conclusion
+`success` · `lint` in **25 s** · run triggered by the push of `8c652ad` to `main`.
+
+**Cold-cache CI log inspection (AC 3).** The run above is the cold one — `Install uv`
+logged `No GitHub Actions cache found for key: setup-uv-2-x86_64-unknown-linux-gnu-
+ubuntu-24.04-3.12.3-daaa55d7…`, so every wheel was fetched from the network, and the
+`Post Install uv` step saved the cache afterwards. Evidence from that job's log:
+
+| Signal | Value |
+|---|---|
+| `Downloading nvidia*` lines | **0** (the only `nvidia` strings in the whole log are the guard scripts' own `grep` commands) |
+| torch download | `Downloading torch (187.2MiB)` — one wheel, no CUDA runtime packages |
+| Package count | `Prepared 75 packages` / `Installed 75 packages` (the CUDA resolution adds 15 more) |
+| Installed torch build | `torch 2.14.0+cpu` |
+| Guard steps | `uv.lock is CPU-only: no nvidia-* wheels.` / `No nvidia-* packages in the synced environment.` |
+
+The grep of the **committed lock** is the durable assertion (a warm cache would make
+log-reading vacuous); the environment check is the second, complementary one — it proves
+the lock is what CI actually installs, and it is the step that produces the log evidence
+above. Both are also asserted locally by `tests/test_dependency_lock.py`.
+
+**`ruff format --check` backlog burned to zero.** Six files, matching spec 1's final
+recorded figure: `pipeline/stage2_structural.py`, `pipeline/stage5_url_audit.py`,
+`url_validator.py`, `tests/test_stage2_structural.py`, `tests/test_stage5_url_audit.py`,
+`tests/test_url_validator.py`. `ruff check` was already clean and stayed clean. No
+excludes, no `# fmt: off`.
+
+**⚠️ `sanitizer_revision` rotated — format-only, deliberate, once.**
+`pipeline/stage2_structural.py` is one of the eight `_REVISION_SOURCES`, so reformatting
+it moved the hash:
+
+```
+before: 2b8d7e9afd28e6a90dc8eb9c7408bf84294f6c74c26b972a7d25e2a9f65f1d6e
+after:  cd00a8b456990c01529fbaf230d9c1c1a14b0a8aadbe2f9839b6f8f468c96b9a
+```
+
+(`derive_sanitizer_revision({"promptguard_threshold": 0.85})`; `config.yaml` yields the
+same value.) `pipeline/stage5_url_audit.py`, the other reformatted pipeline file, is *not*
+a revision source. **No sanitization behaviour changed** — the hash is over bytes. Taking
+the rotation here, at gate installation, is the cheap moment: it happens once, under a
+recorded before/after, instead of surfacing later inside a behavioural change where it
+would be indistinguishable from a real sanitizer edit. Propagated to `CLAUDE.md`,
+`kit_tools/arch/CODE_ARCH.md`, `kit_tools/docs/GOTCHAS.md` and
+`docs/bootstrap-notes.md` (which now carries all three values in one table). Nothing
+asserts the literal in code — only prose referenced it.
+
+**Guard suite — ported, not reinvented.** A trimmed adaptation of Poppy's
+`tests/deployment/test_ci_workflow.py`, keeping the assertions actionlint cannot make:
+SHA-pinning (plus a `# vX.Y.Z` comment on every pin), top-level read-only permissions,
+`persist-credentials: false` on every checkout, and trigger shape (both `v*` **and**
+`searxng-v*`). Dropped as Poppy-specific: self-hosted `runs-on`, the draft-skip condition,
+sibling-checkout layout, the lint ratchet, and the change-detection job. Added for Forage:
+a `pull_request_target` ban across every workflow file, a repository-secret allowlist
+(`GITHUB_TOKEN` only), and a **job-graph integrity test** — no `needs:` may name an
+undefined job — which is the mechanical form of this spec's no-forward-`needs:` rule and
+guards every remaining story. Each guard was verified to *bite* by mutating `ci.yml` five
+ways (dropped `searxng-v*`, unpinned action, added `pull_request_target` + a repo secret +
+top-level write, forward `needs: [typecheck]`, dropped `persist-credentials` and the
+format gate) and confirming exactly the expected failures before restoring.
+
+**Fork posture, as corrected in round 3.** No fork guard was ported. Fork PRs run the
+gates as ordinary `pull_request` events on GitHub-hosted runners with a read-only
+`GITHUB_TOKEN` and no secrets; the encoded rules are the `pull_request_target` ban and the
+secret allowlist. Poppy's `head.repo.full_name == github.repository` guard is a
+*self-hosted-runner* mitigation and is inapplicable here.
+
+**actionlint** is pinned to **1.7.12** with a `sha256sum -c` check on the release tarball
+(digest `8aca8db9…a3d8` in the workflow's `env:`) — a version pin over an unverified
+download is not a pin. Verified locally at the same version before pushing (`actionlint`
+exit 0), and green in CI. A guard test asserts the version is exact and the digest is a
+real sha256.
+
+**Deliberately NOT done:** required status checks are not registered — US-007 does that
+once all jobs exist, because a required check with no reporting job deadlocks every PR.
+
+**Notes for the following stories:**
+- `concurrency.cancel-in-progress` is `${{ github.event_name == 'pull_request' }}` — PR
+  pushes collapse, main and **tag** runs never cancel. Do not simplify it to `true`: a
+  cancelled tag run is a cancelled publish gate chain.
+- `uv sync --extra dev --locked` is the environment step; `--locked` makes a
+  `pyproject.toml` edit that skipped re-locking fail CI. Reuse it verbatim in the
+  `typecheck` and `test` jobs.
+- Cold `lint` is 25 s wall clock, ~185 MB of downloads dominated by the torch wheel. With
+  the uv cache warm it will be far less. Budget accordingly on the free tier.
+- Suite went 534 → **567** tests, all green. `kit_tools/testing/TESTING_GUIDE.md` carries
+  the new counts and the three non-Python `test_mapping` entries
+  (`.github/workflows/ci.yml`, `uv.lock`, `pyproject.toml`).
+
 ## Refinement Notes
 
 ### Research Findings
