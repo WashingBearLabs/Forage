@@ -179,12 +179,34 @@ async def test_health_degraded_reports_promptguard_unavailable(
     assert data["contract_version"] == CONTRACT_VERSION
 
 
+# Both break-glass names: the current one and the pre-extraction alias. Every
+# legacy-capability test below is parametrized over this pair so the alias can
+# never drift away from the name it aliases.
+_LEGACY_CAPABILITY_ENV_VARS = (
+    "FORAGE_LEGACY_CAPABILITY",
+    "POPPY_RETRIEVAL_LEGACY_CAPABILITY",
+)
+
+# Values that must NOT arm the override: the semantics are an exact ``== "1"``
+# match, never a truthiness test.
+_NON_ARMING_VALUES = ("", "0", "true", "TRUE", "yes", "on", " 1", "1 ", "11")
+
+
+def _clear_legacy_capability_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unset every break-glass name so a stray ambient value cannot arm it."""
+    for name in _LEGACY_CAPABILITY_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.mark.parametrize("env_var", _LEGACY_CAPABILITY_ENV_VARS)
 async def test_health_legacy_capability_override_restores_advertisement(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
+    env_var: str,
 ) -> None:
-    """The break-glass env var keeps capabilities advertised while staying honest."""
-    monkeypatch.setenv("POPPY_RETRIEVAL_LEGACY_CAPABILITY", "1")
+    """Either break-glass name keeps capabilities advertised while staying honest."""
+    _clear_legacy_capability_env(monkeypatch)
+    monkeypatch.setenv(env_var, "1")
     app.state.cache.connected = True
     resp = await client.get("/health")
 
@@ -195,37 +217,53 @@ async def test_health_legacy_capability_override_restores_advertisement(
     assert data["promptguard_loaded"] is False
 
 
+@pytest.mark.parametrize("env_var", _LEGACY_CAPABILITY_ENV_VARS)
 async def test_health_legacy_capability_override_unset_withholds_advertisement(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
+    env_var: str,
 ) -> None:
-    """Without the override, an unloaded classifier withholds the capability."""
-    monkeypatch.delenv("POPPY_RETRIEVAL_LEGACY_CAPABILITY", raising=False)
+    """Only an exact ``1`` arms the override — on either name."""
+    _clear_legacy_capability_env(monkeypatch)
     app.state.cache.connected = True
-    resp = await client.get("/health")
 
+    resp = await client.get("/health")
     assert "search_sanitization" not in resp.json()["capabilities"]
 
+    for value in _NON_ARMING_VALUES:
+        monkeypatch.setenv(env_var, value)
+        resp = await client.get("/health")
+        assert "search_sanitization" not in resp.json()["capabilities"], value
 
+
+@pytest.mark.parametrize("env_var", _LEGACY_CAPABILITY_ENV_VARS)
 def test_legacy_capability_warning_logged_only_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    env_var: str,
 ) -> None:
-    """The per-boot warning fires only while the override env var is active."""
+    """The per-boot warning fires only when armed, and names the arming var."""
     import logging
 
     from retrieval_app import _warn_if_legacy_capability_advertisement_enabled
 
-    monkeypatch.delenv("POPPY_RETRIEVAL_LEGACY_CAPABILITY", raising=False)
+    _clear_legacy_capability_env(monkeypatch)
     with caplog.at_level(logging.WARNING, logger="retrieval_app"):
         assert _warn_if_legacy_capability_advertisement_enabled() is False
     assert "legacy_capability_advertisement_active" not in caplog.text
 
     caplog.clear()
-    monkeypatch.setenv("POPPY_RETRIEVAL_LEGACY_CAPABILITY", "1")
+    monkeypatch.setenv(env_var, "1")
     with caplog.at_level(logging.WARNING, logger="retrieval_app"):
         assert _warn_if_legacy_capability_advertisement_enabled() is True
     assert "legacy_capability_advertisement_active" in caplog.text
+
+    # The warning must name whichever variable actually armed it — an operator
+    # who has to unset it needs the real name, not a hardcoded constant.
+    assert env_var in caplog.text
+    for other in _LEGACY_CAPABILITY_ENV_VARS:
+        if other != env_var:
+            assert other not in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -591,18 +629,22 @@ async def test_metrics_search_error_keys_are_content_free(
     client: httpx.AsyncClient,
 ) -> None:
     """`/search` never leaks the SearXNG URL from ``reason`` into the metrics key."""
+    # The full URL, not the bare host: the metrics body legitimately contains
+    # the "searxng_unavailable" error key, so the leak check needs a token that
+    # only the URL can produce.
+    searxng_url = "http://searxng:8080"
     exc = PipelineError(
         error="searxng_unavailable",
-        reason="SearXNG not reachable at http://poppy-searxng:8080: Connection refused",
+        reason=f"SearXNG not reachable at {searxng_url}: Connection refused",
         request_id="s3",
     )
     with patch("retrieval_app.run_search_pipeline", new=AsyncMock(side_effect=exc)):
         resp = await client.post("/search", json={"query": "test"})
     assert resp.status_code == 422
-    assert "poppy-searxng" in resp.json()["reason"]
+    assert searxng_url in resp.json()["reason"]
 
     metrics_resp = await client.get("/metrics")
     body = metrics_resp.json()
     assert body["search"]["errors"] == {"searxng_unavailable": 1}
     assert body["search"]["requests"] == 1
-    assert "poppy-searxng" not in json.dumps(body)
+    assert searxng_url not in json.dumps(body)

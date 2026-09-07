@@ -1,5 +1,5 @@
-# Poppy Retrieval sidecar — web content fetching and sanitization
-# Note: Uses pip instead of uv for sidecar simplicity (no uv installation needed in slim image)
+# Forage — web content fetching, extraction, and sanitization service
+# Note: Uses pip instead of uv for image simplicity (no uv installation needed in slim image)
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -28,13 +28,16 @@ ENV HF_HOME=/app/model-cache
 # Model is saved to /app/model-cache which is readable by the poppy user
 #
 # OPERATIONAL: an image built WITHOUT the token has NO PromptGuard model —
-# the sidecar then runs fail-closed for standard-tier content and silently
+# the service then runs fail-closed for standard-tier content and silently
 # discards every search result and flags every fetch (live 2026-08-19..28:
-# search "broken" while SearXNG returned 10 good results). deploy-local.sh
-# resolves the token from vault `secret/poppy/models/huggingface .api_key`;
-# if that secret is missing the deploy logs "No HF_TOKEN in vault" and
-# builds a guard-less image. Verify after deploy:
-#   docker logs poppy-retrieval | grep -i promptguard   → "model loaded"
+# search "broken" while SearXNG returned 10 good results). Supply your own
+# token — Forage reads no secret store, at build time or at run time:
+#   docker build --build-arg HF_TOKEN="$HF_TOKEN" -t forage .
+# Verify after deploy (the body never lies, even under the break-glass flag):
+#   curl -s localhost:8020/health | jq .promptguard_loaded   → true
+#
+# NEVER push an image built with the token to a registry you do not fully
+# control: the build arg is recoverable from the layer history.
 ARG HF_TOKEN=""
 RUN if [ -n "$HF_TOKEN" ]; then \
       HF_TOKEN="$HF_TOKEN" python3 -c "import os; \
@@ -55,7 +58,9 @@ COPY pipeline/ ./pipeline/
 # Build-time import check — fails fast if the module is broken before image ships
 RUN python -c "import retrieval_app"
 
-# Copy and set up entrypoint for vault integration
+# Copy the entrypoint. It is a bare `exec "$@"` shim — Forage takes all of its
+# configuration from the environment (docs/configuration.md) and never talks to
+# a secret store at boot.
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 

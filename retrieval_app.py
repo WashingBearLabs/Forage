@@ -59,35 +59,57 @@ from promptguard.classifier import PromptGuardClassifier
 
 logger = logging.getLogger(__name__)
 
-VALKEY_URL = os.environ.get("VALKEY_URL", "redis://poppy-valkey:6379/4")
-SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://poppy-searxng:8080")
+# Runtime configuration is 12-factor: every setting arrives as an environment
+# variable at container start (see ``docs/configuration.md``). There is no
+# vault client and no secret-bearing config API — ``VALKEY_URL`` arrives
+# ready-made, credentials and all, from the operator's env or secret store.
+VALKEY_URL = os.environ.get("VALKEY_URL", "redis://valkey:6379/4")
+SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://searxng:8080")
 
-_LEGACY_CAPABILITY_ENV_VAR = "POPPY_RETRIEVAL_LEGACY_CAPABILITY"
+# Break-glass capability override. ``FORAGE_LEGACY_CAPABILITY`` is the current
+# name; ``POPPY_RETRIEVAL_LEGACY_CAPABILITY`` is the pre-extraction alias, kept
+# so a deployment that already carries it keeps working. Order matters only for
+# which name the warning reports when both are armed.
+_LEGACY_CAPABILITY_ENV_VAR = "FORAGE_LEGACY_CAPABILITY"
+_DEPRECATED_LEGACY_CAPABILITY_ENV_VAR = "POPPY_RETRIEVAL_LEGACY_CAPABILITY"
+_LEGACY_CAPABILITY_ENV_VARS = (
+    _LEGACY_CAPABILITY_ENV_VAR,
+    _DEPRECATED_LEGACY_CAPABILITY_ENV_VAR,
+)
+
+
+def _legacy_capability_arming_env_var() -> str | None:
+    """Return the name of the env var arming the capability override, if any.
+
+    Break-glass switch (see ``docs/configuration.md``) so an operator can
+    reopen a consuming agent's web-search capability gate if this contract
+    reaches production before that consumer does. Exact-match ``== "1"``
+    semantics on both names — no truthiness, so ``true``/``yes``/``0`` do not
+    arm it. Only ``capabilities`` lies under this flag; ``status``,
+    ``degraded_reasons``, and ``promptguard_loaded`` stay honest.
+    """
+    for name in _LEGACY_CAPABILITY_ENV_VARS:
+        if os.environ.get(name) == "1":
+            return name
+    return None
 
 
 def _legacy_capability_advertisement_enabled() -> bool:
-    """Return whether the deploy-transition capability override is active.
-
-    Break-glass switch (see ``DEPLOYMENT.md``) so an operator can reopen
-    Poppy's web-search capability gate if this contract reaches prod before
-    its Poppy-side consumer (spec 2) does. Only ``capabilities`` lies under
-    this flag — ``status``, ``degraded_reasons``, and ``promptguard_loaded``
-    stay honest.
-    """
-    return os.environ.get(_LEGACY_CAPABILITY_ENV_VAR) == "1"
+    """Return whether the deploy-transition capability override is active."""
+    return _legacy_capability_arming_env_var() is not None
 
 
 def _warn_if_legacy_capability_advertisement_enabled() -> bool:
     """Log a loud per-boot warning when the override is active; return its state."""
-    enabled = _legacy_capability_advertisement_enabled()
-    if enabled:
+    armed_by = _legacy_capability_arming_env_var()
+    if armed_by is not None:
         logger.warning(
             "legacy_capability_advertisement_active — %s=1 is forcing /health "
             "to advertise search_sanitization regardless of classifier state; "
-            "unset once spec 2's Poppy-side capability gate is deployed",
-            _LEGACY_CAPABILITY_ENV_VAR,
+            "unset once the consuming agent's own capability gate is deployed",
+            armed_by,
         )
-    return enabled
+    return armed_by is not None
 
 
 def _load_config() -> dict[str, Any]:
@@ -706,9 +728,12 @@ async def extract(
 ) -> ExtractedContent:
     """Extract an internal-network upload with fixed untrusted fail-closed policy.
 
-    This unauthenticated endpoint is intentionally reachable only on poppy-net
-    (Traefik is disabled). Filename and MIME hint are display-only metadata;
-    downstream consumers must never use them as filesystem paths.
+    This endpoint is unauthenticated — like every other Forage route — so
+    network placement is its only access control: keep the service on a
+    private network and never publish port 8020 to an untrusted one (see
+    ``docs/configuration.md``, "Deployment posture"). Filename and MIME hint
+    are display-only metadata; downstream consumers must never use them as
+    filesystem paths.
 
     Document failures use these stable ``error`` tokens: ``content_too_large``,
     ``content_too_large_to_classify``, ``pdf_encrypted``, ``pdf_no_text``,

@@ -14,8 +14,9 @@ news_domains:
 seed_blocklist: []
 promptguard_threshold: 0.85
 # Release gate: /extract remains invisible (404) until this is enabled and the
-# sidecar is restarted. The route is internal-only on poppy-net; no Traefik
-# router exposes it.
+# service is restarted. Forage ships no authentication, so once the gate is
+# open the route is reachable by anything that can reach port 8020 — network
+# placement is the only control (docs/configuration.md, "Deployment posture").
 extract_route_enabled: false
 extraction:
   # Hard bounds enforced in code: 50 MiB input, 500 pages, 20 s CPU, 90 s wall.

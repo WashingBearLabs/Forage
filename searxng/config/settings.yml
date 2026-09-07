@@ -16,7 +16,9 @@ server:
   # Internal-only CSRF key for SearXNG's HTML UI.
   # We only call the JSON API — not security-critical.
   secret_key: "poppy-searxng-internal"
-  # Resolve botdetection warnings — trust Traefik forwarded headers
+  # Rate limiting off: this instance is private-network-only and its only
+  # client is Forage. Nothing terminates in front of it by default, so the
+  # forwarded-header settings below apply only if you add a reverse proxy.
   limiter: false
   public_instance: false
   method: "GET"

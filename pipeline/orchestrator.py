@@ -541,8 +541,10 @@ async def run_extract_pipeline_from_file(
 # Search pipeline
 # ---------------------------------------------------------------------------
 
-# Default SearXNG URL (overridable via environment)
-_DEFAULT_SEARXNG_URL = "http://poppy-searxng:8080"
+# Default SearXNG URL (overridable via the SEARXNG_URL environment variable —
+# see docs/configuration.md). Deliberately a neutral service name: Forage has
+# no opinion about the compose project it is dropped into.
+_DEFAULT_SEARXNG_URL = "http://searxng:8080"
 _MAX_SEARCH_RESULTS_SCANNED = 20
 
 # Engines pinned on every SearXNG query. Without an explicit list SearXNG
@@ -550,7 +552,7 @@ _MAX_SEARCH_RESULTS_SCANNED = 20
 # `use_default_settings: true` on a :latest image, upstream releases keep
 # adding engines our config never vetted (observed live 2026-08-19: aol,
 # "karmasearch videos"). Must stay in sync with the enabled set in
-# config/searxng/settings.yml.
+# searxng/config/settings.yml.
 _SEARXNG_ENGINES = "duckduckgo,brave,startpage,mojeek"
 _MAX_SEARCH_TITLE_LENGTH = 512
 _MAX_SEARCH_URL_LENGTH = 2_048

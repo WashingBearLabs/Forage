@@ -7,7 +7,7 @@ import hashlib
 import logging
 import time
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -712,8 +712,17 @@ class TestReconnect:
     async def test_connect_failure_never_logs_url_or_secret(
         self,
         caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Failure logs use the closed reason vocabulary, never the raw URL."""
+        """No code path logs a password-bearing VALKEY_URL.
+
+        Two paths carry the URL and both are covered here: ``ContentCache``'s
+        own connect failure (closed reason vocabulary), and service startup,
+        which reads ``VALKEY_URL`` straight from the operator's environment
+        and hands it to the cache. The entrypoint no longer builds that URL
+        from a secret store — it arrives already populated — so startup is the
+        first place a careless log line would leak it.
+        """
         c = ContentCache(valkey_url="redis://:secret@unreachable:6379/4")
 
         with caplog.at_level(logging.WARNING, logger="cache"):
@@ -722,3 +731,33 @@ class TestReconnect:
         assert ok is False
         assert "secret" not in caplog.text
         assert "unreachable" not in caplog.text
+
+        # --- Startup path: run the real lifespan with a credentialed URL. ---
+        from fastapi import FastAPI
+
+        import retrieval_app
+
+        password = "hunter2-startup-password"
+        startup_url = f"redis://:{password}@unreachable-startup-host:6379/4"
+        monkeypatch.setattr(retrieval_app, "VALKEY_URL", startup_url)
+        # Keep the model load out of it: this test is about log content.
+        monkeypatch.setattr(
+            retrieval_app,
+            "PromptGuardClassifier",
+            lambda: MagicMock(load=MagicMock(return_value=False), loaded=False),
+        )
+
+        caplog.clear()
+        probe_app = FastAPI()
+        with caplog.at_level(logging.DEBUG):
+            async with retrieval_app.lifespan(probe_app):
+                pass
+
+        # Canary: the startup path really did log (and really did fail to
+        # reach the credentialed URL), so the absence checks below are not
+        # passing vacuously on an empty capture.
+        assert "Content cache not available at startup" in caplog.text
+
+        assert password not in caplog.text
+        assert startup_url not in caplog.text
+        assert "unreachable-startup-host" not in caplog.text

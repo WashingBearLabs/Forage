@@ -92,16 +92,17 @@ Forage is 12-factor: everything comes from environment variables at container st
 plus the mounted `config.yaml`. It has **no** OpenBao/Vault client, no secret-bearing
 runtime API, and no config database.
 
-- `VALKEY_URL` — content-cache connection string. Supply it through an env file or your
-  secret store, not an inline `-e` flag (shell history).
-- `SEARXNG_URL` — SearXNG base URL for `/search`.
+- `VALKEY_URL` (default `redis://valkey:6379/4`) — content-cache connection string.
+  Supply it through an env file or your secret store, not an inline `-e` flag (shell
+  history).
+- `SEARXNG_URL` (default `http://searxng:8080`) — SearXNG base URL for `/search`.
 - `config.yaml` — user-agent pool, news-domain trust list, seed blocklist, PromptGuard
   threshold, the `extract_route_enabled` gate, and the `extraction:` resource limits.
 - SearXNG's own settings live in `searxng/config/`.
 
-The complete reference — every variable, every `config.yaml` key, defaults, and
-credential-handling guidance — lives in [`docs/configuration.md`](docs/configuration.md),
-which lands with the vault-free configuration story.
+The complete reference — every variable, every `config.yaml` key, defaults, the
+break-glass caveat, and credential-handling guidance — lives in
+[`docs/configuration.md`](docs/configuration.md).
 
 ## PromptGuard weights and the Hugging Face gated repo
 

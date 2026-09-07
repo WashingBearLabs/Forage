@@ -1929,7 +1929,7 @@ async def test_search_pins_the_vetted_engine_set() -> None:
 
     params = mock_client.get.call_args.kwargs["params"]
     # The literal set IS the contract — it must stay in sync with the
-    # enabled engines in config/searxng/settings.yml (see _SEARXNG_ENGINES).
+    # enabled engines in searxng/config/settings.yml (see _SEARXNG_ENGINES).
     assert set(params["engines"].split(",")) == {
         "duckduckgo",
         "brave",
