@@ -239,12 +239,12 @@ test's field source, not hand-enumerated.
 - Spec 5 later extends this job (in-image contract file ↔ `/health` version equality).
 
 **Acceptance Criteria:**
-- [ ] `smoke` job green via the artifact handoff (download + load + digest-equality
+- [x] `smoke` job green via the artifact handoff (download + load + digest-equality
       asserted against `build-amd64`'s recorded ID), 120 s budget, log dump on failure,
       field source shared with the golden-schema machinery.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run ruff format --check . && uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run ruff format --check . && uv run pyright` passes
 
 ### US-007: Publish pipeline — tags, Release, multi-arch, required checks
 
