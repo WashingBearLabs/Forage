@@ -206,14 +206,14 @@ fails.
   the permanent regression guard.
 
 **Acceptance Criteria:**
-- [ ] Dockerfile: no HF build-arg/bake, `uv.lock`-driven install, digest-pinned base;
+- [x] Dockerfile: no HF build-arg/bake, `uv.lock`-driven install, digest-pinned base;
       Dockerfile-text guard test committed.
-- [ ] `build-amd64` + `secret-grep` jobs green with the save/upload/load/digest-equality
+- [x] `build-amd64` + `secret-grep` jobs green with the save/upload/load/digest-equality
       handoff (asserted, not assumed); grep pattern set defined in-workflow; metadata-scope
       caveat documented in the job comment.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run ruff format --check . && uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run ruff format --check . && uv run pyright` passes
 
 ### US-005: Published-image contract smoke job
 
