@@ -1420,10 +1420,20 @@ Digest:    sha256:be9c1996b04b5f59677b973baa2c534f2f52027fde9c0c4478615c6816cb2f
 Contract smoke PASSED: degraded, honest, and on-contract.
 ```
 
-So: two tags exist and no others; **`latest` does not exist** (asserted by
-`docker manifest inspect` failing, not by absence from a list); the rc is a real two-platform
-OCI index; and the *published* image — not the artifact tarball — passes the committed
-contract smoke. `docker pull` of the ghcr ref succeeded as part of that.
+So, at that moment: two tags and no others; **`latest` does not exist** (asserted by
+`docker manifest inspect` *failing*, not by absence from a list); the rc is a real
+two-platform OCI index; and the *published* image — not the artifact tarball — passes the
+committed contract smoke. `docker pull` of the ghcr ref succeeded as part of that.
+
+The tag *count* is a snapshot, not an invariant: every push to `main` adds one more
+`sha-<short>` by design, and this story's own doc commit added `sha-893ccb6` after the
+listing above was taken (run
+<https://github.com/WashingBearLabs/Forage/actions/runs/34180822114>, seven jobs green,
+`publish` pushing that one tag and again reporting 16 identical layers). The invariant the
+evidence establishes is the shape of the set: **only** `sha-` tags and pre-release
+versions, no `X.Y` alias, and no `latest` — which stays true until the first
+non-pre-release `v*` tag, and is asserted on every run by the guards rather than by this
+paragraph.
 
 The Release body carries the digest, the platform list, and a link to the run that built
 it.
