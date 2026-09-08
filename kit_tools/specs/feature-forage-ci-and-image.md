@@ -164,11 +164,11 @@ hermeticity guard is exercised by a committed always-skipped canary test, not a 
   `ci.yml:141-145`).
 
 **Acceptance Criteria:**
-- [ ] `test` job green on PR + main; sanitizer-revision step present; hermeticity canary
+- [x] `test` job green on PR + main; sanitizer-revision step present; hermeticity canary
       committed and passing.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run ruff format --check . && uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run ruff format --check . && uv run pyright` passes
 
 ### US-003: Secret-free service image build + secret-grep gate
 
