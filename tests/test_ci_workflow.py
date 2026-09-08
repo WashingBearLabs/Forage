@@ -1580,16 +1580,27 @@ class TestPublishJob:
         with_block: dict[str, Any] = (
             _step_using(jobs, "publish", _BUILD_ACTION).get("with") or {}
         )
-        platforms = _resolve_env(workflow, str(with_block.get("platforms", "")))
+        declared = str(with_block.get("platforms", "")).strip()
+        # The *expression*, not its value. Comparing `_resolve_env(...)` against
+        # the env block would compare a string to itself: a hardcoded
+        # `linux/amd64,linux/arm64` resolves to exactly the env value and sails
+        # through, and the mutation run proved it does. `_resolve_env` is for
+        # comparing two single-sourced references to each other; using it on one
+        # side and a literal on the other tests equality of values, never
+        # single-sourcing. That distinction matters here because
+        # docs/releases.md tells the next maintainer that `PUBLISH_PLATFORMS` is
+        # the one lever for the amd64-only fallback — a copy of the string
+        # elsewhere makes that documentation false without failing anything.
+        assert declared == "${{ env.PUBLISH_PLATFORMS }}", (
+            f"publish declares `platforms: {declared}`. It must read "
+            "`${{ env.PUBLISH_PLATFORMS }}` — docs/releases.md documents that "
+            "variable as the single place a platform trim happens."
+        )
+        env_block: dict[str, Any] = workflow.get("env") or {}
+        platforms = str(env_block.get("PUBLISH_PLATFORMS", ""))
         assert "linux/amd64" in platforms, (
             f"publish builds {platforms!r}. amd64 is the only architecture this "
             "workflow gates, so it can never be the one that gets trimmed."
-        )
-        env_block: dict[str, Any] = workflow.get("env") or {}
-        assert platforms == str(env_block.get("PUBLISH_PLATFORMS")), (
-            "The platform list must come from `env.PUBLISH_PLATFORMS` — "
-            "docs/releases.md documents that value, and a trim has to be "
-            "visible in one place"
         )
 
     def test_emulation_is_set_up_exactly_when_it_is_needed(
