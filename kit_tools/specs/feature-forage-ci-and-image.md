@@ -1615,6 +1615,413 @@ US-005's notes has been rewritten rather than footnoted.
   pull smoke. They are measurements and one-time proofs, not gates — the durable artifacts
   are the numbers, the platform list, and the committed guards.
 
+### US-004 — forage-searxng companion image, honest public defaults (2026-09-08)
+
+**Shipped:** `searxng/Dockerfile` (new), `searxng/config/settings.yml` +
+`searxng/config/limiter.toml` (reworked), `searxng_smoke.py` (779 lines, new, repo root),
+`tests/test_searxng_smoke.py` (61 tests, new), `tests/test_searxng_docker.py`
+(9 → 28 tests, rewritten), `.github/workflows/ci.yml` (`searxng-build`, `searxng-smoke`,
+`searxng-publish`, plus cross-fire `if:` on `build-amd64`/`secret-grep`/`smoke`),
+52 new guards in `tests/test_ci_workflow.py` (149 → 201), `docs/searxng.md` (new), and
+the doc propagation. Commits `090cb38` + `474333c` + `e10ff5f` + `1700b29` + `fefe0ae`
++ `3bc6daf`.
+
+**The main-push run — green, nine jobs, one correctly skipped:**
+<https://github.com/WashingBearLabs/Forage/actions/runs/34184930763> · conclusion
+`success` · `lint` 21 s, `typecheck` 27 s, `test` 28 s, `build-amd64` 1 m 32 s,
+`secret-grep` 46 s, `smoke` 1 m 11 s, `publish` 1 m 30 s, **`searxng-build` 1 m 01 s**,
+**`searxng-smoke` 58 s**; `searxng-publish` skipped (no `main`-push publish for the
+companion image, by design).
+
+**The companion publish — tag `searxng-v0.1.0-rc`:**
+<https://github.com/WashingBearLabs/Forage/actions/runs/34185197984> · conclusion
+`success` · `lint` 16 s, `typecheck` 23 s, `test` 31 s, `searxng-build` 33 s,
+`searxng-smoke` 46 s, **`searxng-publish` 1 m 08 s** — and `build-amd64`, `secret-grep`,
+`smoke` and `publish` all **skipped in 0 s**. That skip list is the cross-fire guard
+working in production rather than in a test.
+
+**The published-image proof:**
+<https://github.com/WashingBearLabs/Forage/actions/runs/34185387103> (throwaway branch,
+since deleted). Run from inside Actions with `packages: read`, because the session's `gh`
+token carries no `read:packages` scope and no PAT was minted — the same instrument
+US-007 used, and the better one anyway: it pulls the way a consumer does.
+
+---
+
+#### The Redis env-var name, and the much larger thing behind it
+
+The story existed to defuse one landmine — `SEARXNG_REDIS_URL` was an unverified name —
+and defusing it uncovered a bigger one under the same floorboard.
+
+**The name, verified against the pinned digest.** `searx/settings_defaults.py` carries
+*both*:
+
+```python
+# redis is deprecated ..
+'redis':  {'url': SettingsValue((None, False, str), False, 'SEARXNG_REDIS_URL')},
+'valkey': {'url': SettingsValue((None, False, str), False, 'SEARXNG_VALKEY_URL')},
+```
+
+`searx/valkeydb.py` prefers `valkey.url`, falls back to `redis.url`, and warns
+(`DeprecationWarning: setting redis.url is deprecated, use valkey.url`). Both were
+exercised live and both initialise the limiter. **The name to document is
+`SEARXNG_VALKEY_URL`**; the old one works and is superseded.
+
+**The bigger finding: a working limiter refuses this image's only client.** The spec's
+plan was `limiter: true` with the backend requirement documented, on round 2's correct
+observation that `limiter: true` without a backend is inert theatre. The first half
+reproduces exactly. The second half does not survive contact with the consumer.
+Measured, limiter installed, real Valkey attached:
+
+| Client | Result | Blocked by |
+|---|---|---|
+| Forage's own httpx client | **429 on request 1** | `http_accept_language` — httpx sends no `Accept-Language` |
+| `curl` | **429 on request 1** | `http_accept_encoding`, and again `http_user_agent` |
+| a browser-shaped client | 200, 200, 200, **429** | `ip_limit.API_MAX = 4` per `API_WINDOW = 3600 s`, per client network, for `format != html` |
+
+Neither constant is settable from `limiter.toml`; both are module-level in
+`searx/botdetection/ip_limit.py`. botdetection is a *browser* detector, and an API
+consumer is not a browser.
+
+So the AC's own smoke, written literally, would have passed and been useless: one
+`format=json` request inside a fresh window returns 200 whether or not a limiter is
+installed. The gate would have been green while the shipped image throttled Forage's
+search stage to four queries an hour — an *intermittent* production failure, surfacing in
+Forage's logs only as `searxng_error`.
+
+**What shipped instead: `limiter: false`, stated at length in the file.** This is a
+deliberate deviation from the AC's wording and it is aimed squarely at the AC's intent —
+the story's own Description asks for "a *working* JSON API", and `limiter: true` is not
+compatible with one. The honest position is that this image does not rate limit and says
+so; what protects it is not being exposed. The opt-in for a deployment that must expose
+it is `SEARXNG_LIMITER=true` + `SEARXNG_VALKEY_URL` (no rebuild, no overlay — both are
+schema-mapped env vars), and then a `pass_ip` entry for the consumer's network: a scoped
+IP-trust relaxation made by the operator who needs it, rather than baked in for everyone.
+
+The AC's clause is still satisfied in substance, and by measurement rather than
+assertion: the blocking smoke *does* stand up a Valkey-backed limiter and prove it
+initialised. It just does not ship it.
+
+**`link_token`, answered empirically rather than assumed.** With the limiter installed
+and a browser-shaped JSON client: `200 200 200 429` with `link_token = false`,
+`200 200 429 302` with it true (`BURST_MAX_SUSPICIOUS = 2`, then `SUSPICIOUS_IP_MAX`
+redirects). It strictly narrows an already-narrow budget, and never gets the chance to
+matter for Forage's real client, which the header methods refuse two steps earlier. Off.
+
+**`SEARXNG_SECRET`, both directions.** Set → starts and serves. Unset → the container
+**exits 1** with `ERROR:searx.webapp: server.secret_key is not changed. Please use
+something else instead of ultrasecretkey.` The mechanism is not the obvious one: the
+image's entrypoint substitutes a random secret only into a *generated* settings file, and
+a baked file means that path never runs — so with `use_default_settings: true` the value
+falls through to upstream's placeholder and `webapp.py` refuses it. Fail-loud, which is
+what a required variable should be.
+
+#### What the baked config actually changed
+
+Every interesting property is a removal, which is why every guard is a negative.
+
+| Was | Is | Why |
+|---|---|---|
+| `secret_key: "poppy-searxng-internal"` | absent; `SEARXNG_SECRET` required | a known secret in a published image signs sessions for every puller |
+| `limiter: false` + relaxed limiter.toml | `limiter: false`, hardened limiter.toml | same value, opposite meaning: it is now a stated position with the measurements behind it, not an oversight |
+| `pass_ip = ["0.0.0.0/0"]` | `pass_ip = []`, `block_ip = []` | `ip_lists` has priority over every other method — that one line disabled bot detection entirely |
+| `forwarded_for_header` / `real_ip_header` | absent | client-spoofable once reachable directly; **and not schema keys any more** — header trust moved to `botdetection.trusted_proxies`, whose loopback-only default is correct here and is deliberately not extended |
+| (upstream default) `pass_searxng_org = true` | `false` | an unasked-for grant of unrestricted access to a hardcoded IP set, in a sidecar nobody monitors |
+| `instance_name: "Poppy Search"` | `"Forage Search"` | this image is Forage's to publish |
+| `torch`, `karmasearch` listed disabled | removed | **neither module exists upstream any more, and naming a missing engine is not a no-op**: SearXNG logs `Cannot load engine` with a traceback at startup for each, disabled or not. Found by reading the container's log rather than by reasoning. |
+
+`bing` and `ahmia` stay *listed and disabled* — with `use_default_settings: true`, an
+entry is what stops an upstream release re-enabling them.
+
+#### The base pin
+
+`searxng/searxng@sha256:1dab138e…9759` = **2026.9.7-3e454637f**, published 2026-09-07,
+upstream revision `3e454637fb9829756c805dd9c02100f0bc9520fd`. A multi-arch index covering
+`linux/amd64`, `linux/arm64` and `linux/arm/v7`, so the two-platform publish is not
+foreclosed. The release and date live on the comment lines *above* the `FROM`, because
+Dockerfile has no inline comments (US-003's finding, reused rather than rediscovered),
+and a guard test keeps them there.
+
+Two helper images are pinned the same way, in `searxng_smoke.py` rather than in the
+workflow: `valkey/valkey@sha256:d2e18f34…` (8.1-alpine, Valkey 8.1.10) and
+`curlimages/curl@sha256:58adaa4e…` (curl 8.22.0). A gate whose supporting cast can move
+is not reproducible.
+
+#### The smoke is genuinely hermetic, and that took a specific mechanism
+
+`docker network create --internal`. Containers on it reach each other and nothing else:
+every engine query fails DNS resolution and the JSON envelope comes back with
+`results: []`. That is the property that lets this job sit in a publish `needs:` chain —
+round 3's critical was that a live engine query there reproduces the
+every-engine-throttled outage `GOTCHAS.md` records, with a release as the victim.
+
+**Docker silently ignores `-p` on an `--internal` network.** Measured: the container
+reported `8080/tcp` rather than a published port and the host got `000` from curl. So the
+client has to be a third container, which is what the spec's hint said anyway — but for a
+reason worth writing down rather than inherited.
+
+Four blocking phases, and the third and fourth are a differential rather than a log grep:
+
+1. `SEARXNG_SECRET` unset ⇒ the container exits non-zero, naming the secret.
+2. Shipped defaults (with a Valkey URL supplied, to prove a *present* backend does not
+   switch a limiter on) ⇒ `format=json` answers 200 with a parseable envelope carrying
+   `results`, and no block page.
+3. Six consecutive JSON requests, all 200 — past `API_MAX`. This is the guard that
+   notices if someone turns the limiter back on, and it is why the probe count is
+   `API_MAX + 2` rather than a round number.
+4. `SEARXNG_LIMITER=true` **with** Valkey ⇒ the limiter installs for real; **without** ⇒
+   the inert-limiter error is logged and everything is served.
+
+Phase 4's positive assertion is the one worth explaining. "The limiter initialised" has
+no log line at the default level (`connecting to Valkey` is INFO, and INFO is filtered
+unless `SEARXNG_DEBUG` is set — which changes behaviour and has no business in a gate).
+So the smoke asserts it *behaviourally and directly*: a browser-shaped request reaches
+`ip_limit`, `ip_limit` writes its sliding windows to Valkey, and the smoke reads that
+DB's key count back. `Valkey keys after it: 3` is the limiter's own fingerprint. An
+API-shaped request then gets 429, and the unbacked phase gets 200 with the error logged
+and **zero** keys written. Three states, three distinguishable signatures.
+
+The runner's log, unedited:
+
+```
+[1/4] SEARXNG_SECRET unset — the image must refuse to serve
+      exited=True code=1
+[2/4] shipped defaults — JSON envelope and 6 consecutive requests
+      format=json -> HTTP 200
+      6 consecutive JSON requests: [200, 200, 200, 200, 200, 200]
+[3/4] SEARXNG_LIMITER=true with SEARXNG_VALKEY_URL — a real limiter
+      browser-shaped -> HTTP 200; Valkey keys after it: 3; API-shaped -> HTTP 429
+[4/4] SEARXNG_LIMITER=true with no backend — inert, and loud
+      API-shaped -> HTTP 200; Valkey keys: 0
+searxng hermetic smoke PASSED.
+```
+
+**The advisory half passed too**, on the first run — the four enabled engines returned
+results from a GitHub-hosted runner IP (`Live-engine probe outcome: success`, also
+written to the job summary). Recorded because a passing advisory probe today is the
+baseline against which a future red one means something.
+
+**It is a committed script, not a heredoc**, for `contract_smoke.py`'s reasons: Docker
+goes through an injected runner, every judgement is a pure function over captured output,
+and `tests/test_searxng_smoke.py` drives all 61 of those branches without a daemon. It
+also means a maintainer bumping the pin reproduces CI with one command instead of
+reconstructing a job — which is the thing anyone will want first.
+
+#### Two lanes, guarded apart in both directions
+
+`refs/tags/v` and `refs/tags/searxng-v` are mutually exclusive prefixes, and every job in
+both lanes now carries its own `if:` rather than leaning on skip propagation through
+`needs:` — propagation is a property of the graph that a later edit could remove without
+noticing, and an explicit condition is what a test can evaluate per job.
+
+| Ref | Runs | Skips |
+|---|---|---|
+| `refs/tags/searxng-v0.1.0-rc` | lint, typecheck, test, searxng-build, searxng-smoke, searxng-publish | build-amd64, secret-grep, smoke, publish |
+| `refs/tags/v1.0.0` | lint, typecheck, test, build-amd64, secret-grep, smoke, publish | all three companion jobs |
+| PR / `main` | everything except the two publishes (and `searxng-publish` never runs on `main`) | — |
+
+`test` is the one edge the lanes share, and it is load-bearing: the guards that stop a
+relaxation reaching a published companion image are pytest tests, not workflow steps.
+Publishing over a red suite would publish exactly the config they exist to refuse.
+
+**A trap the service lane's policy would have walked into.** `publish` tests for a
+pre-release with `!contains(github.ref, '-')`. Copied to this lane that is *always false*
+— every ref here contains a hyphen, in the `searxng-v` prefix itself — so `latest` would
+never have moved for any release, and the failure would have been silent for as long as
+nobody cut a stable version. The companion policy is written against the version after
+the prefix is stripped, and `_evaluate` gained a `steps.version.outputs.version` context
+key so a test can ask the workflow its own answer for both a release and a pre-release.
+
+`searxng-v0.1.0` is also not a semver string, so `metadata-action` cannot parse the ref:
+a step strips the prefix and hands the version to every rule as an explicit `value=`,
+failing the job if the ref did not carry the prefix.
+
+#### What the registry holds, verified from a consumer's position
+
+```
+--- ghcr.io/v2/washingbearlabs/forage-searxng/tags/list ---
+{"name":"washingbearlabs/forage-searxng","tags":["0.1.0-rc"]}
+--- end tag list ---
+latest does not resolve. Correct: no non-pre-release searxng-v* tag has been published.
+
+Name:      ghcr.io/washingbearlabs/forage-searxng:0.1.0-rc
+MediaType: application/vnd.oci.image.index.v1+json
+Digest:    sha256:e6c7aec517386392573ab966b8a5e3fb6e9fc39227c5ad5987b5094595f6dfec
+  Platform:  linux/amd64   (sha256:8d2e50ae…4ef8)
+  Platform:  linux/arm64   (sha256:dde08293…977f)
+
+searxng hermetic smoke PASSED.        <- against the PUBLISHED image, not a local build
+```
+
+One tag and no others; `latest` asserted absent by `docker manifest inspect` *failing*
+with a token that can read the repository, not by absence from a list; a real two-platform
+OCI index; and the published image passes the same four blocking phases the gate ran.
+
+`searxng-publish` also verified itself: `Gated companion filesystem: 6 layers` →
+`Published companion filesystem is identical to the gated one (6 layers)`. Same
+mechanism and same reasoning as US-007's — the amd64 leg is rebuilt from the cache
+`searxng-build` filled in the same run (a buildx multi-arch push cannot ship a
+`docker load`ed image), and diff IDs are what tie the rebuild back to the smoked image.
+
+**No GitHub Release for this image, and therefore no `contents: write`.** Its changelog
+is upstream's; a Release here would be an empty page asserting authorship of someone
+else's work. `searxng-publish` holds `packages: write` and `contents: read` — the latter
+written out rather than inherited, because a job-level block replaces the top-level grant
+(US-007's expensive lesson, now a guard test that this lane is the first to exercise).
+
+#### Guards, mutation-verified — 51 mutations, one escape, caught and closed
+
+Implementation committed **first**, then mutated (US-003's harness lesson).
+
+| Mutation | Failures |
+|---|---|
+| ci.yml: searxng-publish drops the `test` gate | 1 |
+| ci.yml: searxng-publish drops the blocking smoke | 1 |
+| ci.yml: the live probe becomes blocking | 1 |
+| ci.yml: the blocking smoke becomes advisory | 1 |
+| ci.yml: the advisory outcome is never recorded | 1 |
+| ci.yml: searxng-publish fires on every tag (cross-fire) | 1 |
+| ci.yml: build-amd64 loses its `searxng-v` exclusion | 2 |
+| ci.yml: searxng-build loses its `v*` exclusion | 2 |
+| ci.yml: the companion pre-release test copies the service lane's | 1 |
+| ci.yml: `latest` becomes unconditional on the companion lane | 1 |
+| ci.yml: searxng-publish grants itself `contents: write` | 2 |
+| ci.yml: searxng-publish scopes permissions without `contents` | 2 |
+| ci.yml: searxng-build pushes | 1 |
+| ci.yml: the companion build shares build-amd64's cache scope | 1 |
+| ci.yml: the companion build context widens to the repo root | 1 |
+| ci.yml: the companion layer verification warns instead of failing | 1 |
+| ci.yml: the companion identity assert warns instead of failing | 1 |
+| ci.yml: searxng-smoke rebuilds instead of loading the artifact | 2 |
+| ci.yml: the smoke job restates an assertion in bash | 1 |
+| ci.yml: the smoke job skips the `--locked` sync | 1 |
+| ci.yml: the companion platform list is hardcoded | 1 |
+| ci.yml: the QEMU step stops following the platform list | 1 |
+| ci.yml: the companion lane creates a GitHub Release | 1 |
+| ci.yml: the vacuous-comparison floor is removed | 1 |
+| ci.yml: the version-prefix strip loses its failure branch | 1 |
+| ci.yml: the companion lane uploads a second copy of the image | 1 |
+| ci.yml: the companion lane logs in with a stored PAT | 2 |
+| settings.yml: the limiter is switched back on | 1 |
+| settings.yml: a `secret_key` is baked back in | 2 |
+| settings.yml: header trust returns | 1 |
+| settings.yml: an engine is enabled the orchestrator never asks for | 4 |
+| settings.yml: bing disappears from the list entirely | 2 |
+| settings.yml: `use_default_settings` is dropped | 1 |
+| limiter.toml: the wildcard pass list returns | 3 |
+| limiter.toml: `trusted_proxies` is baked in | 1 |
+| limiter.toml: `link_token` is enabled | 1 |
+| limiter.toml: the searxng.org passlist is re-enabled | 1 |
+| searxng/Dockerfile: the base is un-pinned | 1 |
+| searxng/Dockerfile: the release comment is dropped | 1 |
+| searxng/Dockerfile: the config stops being baked | 2 |
+| searxng/Dockerfile: an entrypoint wrapper is added | 1 |
+| smoke: the blocking network stops being internal | **0 → 1** |
+| smoke: the budget probe stops reaching past `API_MAX` | 1 |
+| smoke: a phase is dropped from the blocking tuple | 1 |
+| smoke: the deprecated env-var name becomes the documented one | 2 |
+| smoke: an empty Valkey DB stops failing the backed phase | 2 |
+| smoke: the envelope check tolerates a missing `results` key | 1 |
+| smoke: the inert phase stops requiring the warning | 1 |
+| smoke: a bot-block 429 is accepted as an envelope | 2 |
+| smoke: the helper images are un-pinned | 1 |
+| smoke: a secret-less container that keeps running is accepted | 1 |
+
+**The escape, and it is the most important row in the table.** Flipping
+`create_network(internal=True)` to `False` at its one real call site inside
+`run_blocking_smoke` failed **nothing**. The guard had been written the obvious way — it
+called `harness.create_network(internal=True)` itself and asserted the flag came
+through — so it tested the *method* and not the *call site*. Hermeticity is the entire
+justification for putting this smoke inside a publish gate chain; without `--internal`
+every phase still goes green while a throttled DuckDuckGo can fail a release. The guard
+now drives `run_blocking_smoke` with the phases monkeypatched empty and asserts on the
+`docker network create` argv it actually issues. This is the same family as US-007's
+`_resolve_env` escape: **asserting that a helper behaves correctly is not asserting that
+anything calls it correctly.**
+
+**Three mutations were bad probes, not escapes, and re-running them properly is the
+other lesson.** `use_default_settings: true`, `link_token = false` and the `--- end tags
+---` anchor each appear more than once in their file, and a first-occurrence replace hit
+a *comment* (or, for the release anchor, the service lane's `publish` job instead of
+`searxng-publish`). Each reported zero failures and looked exactly like an escaped guard.
+Re-applied against a unique anchor they fail 1 test each. US-005 recorded this as "a
+mutation harness needs its mutations verified as much as the guards do"; the corollary
+this time is concrete — **check the occurrence count before trusting a zero.**
+
+**One more finding from the guards themselves.** The first version of
+`test_the_smoke_does_not_enumerate_its_assertions_in_bash` grepped the job's shell for
+`"results"`, `"429"` and `"limiter"` — and failed on the advisory step's own prose ("the
+engines the baked config enables returned results"). That is US-003's
+vocabulary-versus-behaviour mistake committed *by the guard* rather than by the thing
+guarded. It now forbids the three tools you would reach for to restate an assertion —
+`grep`, `jq`, `curl` — which is a statement about behaviour and cannot false-positive on
+English.
+
+#### `sanitizer_revision` did NOT rotate
+
+`0537316d83510dab…e3e253` before and after, measured both times — the fifth story in a
+row to leave it alone. Nothing here touches a `_REVISION_SOURCES` file;
+`pipeline/orchestrator.py` *is* one, which is exactly why the engine-parity assertion
+imports `_SEARXNG_ENGINES` from a test rather than adding a public alias to it. A naming
+convenience is not worth a rotation.
+
+#### Measurements worth carrying forward
+
+| Thing | Value |
+|---|---|
+| Companion image size (amd64) | **91 MB** (upstream's base + one COPY layer) |
+| `docker save \| gzip -1` | **90 MB** |
+| `searxng-build` (cold) | 1 m 01 s; 33 s warm |
+| `searxng-smoke` | 46–58 s for four container lifecycles + the advisory probe |
+| `searxng-publish` | 1 m 08 s including the emulated arm64 leg |
+| Artifact retention | 1 day (the floor), as with the service image |
+
+The arm64 leg is cheap here in a way it is not for the service image: this build runs no
+`RUN` step, so emulation has no CPU work to slow down. It is a base layer plus a COPY.
+
+#### Notes for the following stories
+
+- **Spec 4's compose fragments** (`feature-forage-cache-fallback` US-004) have been
+  corrected in place: the backend variable is `SEARXNG_VALKEY_URL`, `SEARXNG_SECRET` is
+  **required** (an unset one exits 1, so a fragment without it dies on first `up`), and
+  the fragments must **not** wire a limiter at all — turning it on would fail their own
+  `/search` round-trip.
+- **`epic-forage-extraction` spec 3 (`poppy-consume`) US-002 lives in the Poppy
+  repository and was NOT touched.** Its citation of `SEARXNG_REDIS_URL` needs the same
+  correction, plus the limiter finding: Poppy's overlay must not enable the limiter
+  without also passlisting Forage's network. Flagged for the supervisor.
+- **Spec 6 owns the Poppy overlay.** `/etc/searxng/settings.yml` and
+  `/etc/searxng/limiter.toml` are ordinary files in the image, so a bind mount over
+  either *replaces* it wholesale — an overlay must repeat whatever it still wants from
+  the baked file. The `use_default_settings: true` relationship is with *upstream's*
+  settings, not with this image's. It also rotates the `poppy-searxng-internal` secret,
+  which US-008's flip note already tracks.
+- **Bumping the pin is a documented, testable ritual** (`docs/searxng.md`): bump the
+  digest and the comment, `uv run python searxng_smoke.py --image forage-searxng:ci`,
+  then `--live`, then `pytest tests/test_searxng_docker.py`, then a `searxng-v*` tag.
+  `GOTCHAS.md`'s `:latest`-rot entry was rewritten rather than annotated: pinning removes
+  the *silent* rot, it does not make upstream's engine fixes arrive on their own, and a
+  bump nobody performs re-arms the gotcha.
+- The advisory probe is the early-warning signal for engine rot and it is deliberately
+  non-blocking. Read the job summary at every bump; a red line there is the cue to look,
+  not a reason to hold a release.
+- **arm64 is published but ungated**, exactly as for the service image. Nothing in this
+  workflow has ever executed the emulated leg; it is built from the same commit and the
+  same digest-pinned multi-arch base, and `docs/searxng.md` says so to consumers.
+- Two new action pins were needed: none. The lane reuses `actions/checkout` v7.0.1,
+  `astral-sh/setup-uv` v10.0.1, `docker/setup-buildx-action` v4.3.0,
+  `docker/build-push-action` v7.3.0, `actions/upload-artifact` v7.0.1,
+  `actions/download-artifact` v8.0.1, `docker/setup-qemu-action` v4.3.0,
+  `docker/metadata-action` v6.2.0 and `docker/login-action` v4.6.0.
+- Suite went 771 → **905** tests (+61 `test_searxng_smoke.py`, +19 net in
+  `test_searxng_docker.py`, +52 workflow guards), all green.
+  `kit_tools/testing/TESTING_GUIDE.md` carries the counts, the ten-job two-lane
+  description, and three `test_mapping` entries (`searxng/Dockerfile`,
+  `searxng_smoke.py`, and `searxng/config/*` unchanged).
+- One throwaway branch was used and is deleted, with its run recorded above.
+- `US-008's flip checklist now covers two packages that both exist`: `forage` and
+  `forage-searxng`. The latter currently holds exactly one pre-release tag.
+
 ## Refinement Notes
 
 ### Research Findings
