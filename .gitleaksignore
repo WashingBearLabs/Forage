@@ -1,0 +1,10 @@
+# Triaged false positives for the full-history secret scan (US-008 gate b).
+# Format: <commit>:<file>:<rule>:<line>. Each entry needs a reason.
+#
+# "Token: abc123def456" — a synthetic 12-character literal in a PromptGuard
+# structural-scan test asserting that short base64-like strings do NOT trigger
+# the stage-2 regex. Fabricated for the test in Poppy US-005 (2026-08), carried
+# over by the filter-repo history split; never a real credential. Still present
+# at HEAD (tests/test_stage2_structural.py, test_short_base64_no_match) for the
+# same reason. Triaged 2026-09-08 at the public-flip gate.
+ba73b07811687a4eec851f67e5ffb1d2cfadf436:tests/test_stage2_structural.py:generic-api-key:170
