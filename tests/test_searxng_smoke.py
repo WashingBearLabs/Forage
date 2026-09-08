@@ -358,15 +358,11 @@ class TestSearchPath:
 
 
 class TestLifecycle:
-    def test_the_blocking_network_is_internal(self) -> None:
+    def test_create_network_passes_internal_through(self) -> None:
         docker = FakeDocker()
         _harness(docker).create_network(internal=True)
         create = [call for call in docker.argv_for("network") if "create" in call]
-        assert create and "--internal" in create[0], (
-            "The blocking phases must run with no egress. Without --internal, "
-            "every phase still passes while the hermeticity claim — and the "
-            "reason a publish gate may contain this smoke at all — is false."
-        )
+        assert create and "--internal" in create[0]
 
     def test_the_live_network_is_not_internal(self) -> None:
         docker = FakeDocker()
@@ -478,6 +474,52 @@ class TestReadiness:
 
 
 class TestPhaseWiring:
+    def test_the_blocking_run_creates_a_network_with_no_egress(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # THE guard for the hermeticity claim, and it drives
+        # `run_blocking_smoke` rather than `create_network` — which is the
+        # whole point.
+        #
+        # Written the obvious way first, this test called
+        # `harness.create_network(internal=True)` itself and asserted the flag
+        # came through. That tests the *method*: a mutation flipping the
+        # argument at the one call site that matters passed the entire suite.
+        # The hermeticity claim is what lets this smoke sit inside a publish
+        # `needs:` chain at all — without `--internal`, every phase still goes
+        # green while a throttled DuckDuckGo can fail a release.
+        #
+        # The phases are emptied rather than simulated: what is under test is
+        # the wiring, and four faked container lifecycles would only add ways
+        # for this test to fail for the wrong reason.
+        monkeypatch.setattr(smoke, "BLOCKING_PHASES", ())
+        docker = FakeDocker()
+        assert smoke.run_blocking_smoke(_harness(docker)) == []
+        create = [call for call in docker.argv_for("network") if "create" in call]
+        assert create, "run_blocking_smoke created no network"
+        assert "--internal" in create[0], (
+            "run_blocking_smoke created a network with egress. Every phase "
+            "would still pass, and the hermeticity claim this lane rests on "
+            "would silently be false."
+        )
+        assert any(smoke.VALKEY_CONTAINER in call for call in docker.argv_for("run")), (
+            "run_blocking_smoke must start the Valkey the limiter phases need"
+        )
+
+    def test_the_live_run_creates_a_network_with_egress(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _no_phase(_harness_arg: smoke.SearxngHarness) -> list[str]:
+            return []
+
+        monkeypatch.setattr(smoke, "phase_live_engines", _no_phase)
+        docker = FakeDocker()
+        assert smoke.run_live_smoke(_harness(docker)) == []
+        create = [call for call in docker.argv_for("network") if "create" in call]
+        assert create and "--internal" not in create[0], (
+            "The advisory probe must reach real engines; that is its whole job."
+        )
+
     def test_every_blocking_phase_is_registered(self) -> None:
         assert (
             smoke.phase_secret_required,
