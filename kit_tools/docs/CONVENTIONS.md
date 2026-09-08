@@ -103,7 +103,10 @@ the reference a third-party operator reads, and it is checked against the code.
 - `asyncio_mode = "auto"` — async tests need no decorator.
 - The suite is **hermetic**: `tests/conftest.py` installs an autouse `pytest-socket`
   guard. Any test that reaches the real network fails loudly. Mock at the seam
-  (httpx, DNS, transformers/torch) rather than relaxing the guard.
+  (httpx, DNS, transformers/torch) rather than relaxing the guard —
+  `tests/test_hermeticity.py` is the executing canary that turns red if you do.
+- The whole suite is a **blocking CI job** (`test`, US-002), so a guard test is a real
+  gate rather than a local convention.
 - Tests are expected alongside the code they cover, in the same commit.
 
 ---

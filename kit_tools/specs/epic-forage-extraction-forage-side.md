@@ -136,10 +136,12 @@ that something is missing here.
 - **`sanitizer_revision` has deliberately diverged** from Poppy, and has now rotated three
   times (`e6b2b56d…` → `2b8d7e9a…` → `cd00a8b4…` → **`0537316d…`**, current). The
   Poppy-side spec must not assume revision parity — compare contracts.
-- **The suite is hermetic and exact**: **586 collected**, all green (534 at bootstrap, +33
-  from US-001's workflow guards, +19 from US-006's typecheck and policy guards). The count
-  is a gate, not a floor. A committed hermeticity canary is still deferred to
-  `forage-ci-and-image` US-002.
+- **The suite is hermetic and exact**: **607 collected**, all green (534 at bootstrap, +33
+  from US-001's workflow guards, +19 from US-006's typecheck and policy guards, +21 from
+  US-002's canary and test-lane guards). The count is a gate, not a floor. The hermeticity
+  canary is committed and executing (`tests/test_hermeticity.py`), and since US-002 the
+  whole suite runs in CI — every guard in this repo is finally CI-enforced rather than
+  local-only.
 - **Coexistence:** Poppy's in-tree copy stays the deployed source of truth until it pins a
   Forage image. Replay any hotfix to the extracted paths both ways and update the pin
   record in `../../docs/bootstrap-notes.md`.

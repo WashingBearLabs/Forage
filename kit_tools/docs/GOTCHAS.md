@@ -159,8 +159,16 @@ reaches the network fails with `SocketBlockedError` instead of passing slowly an
 
 **Why it matters:**
 Poppy's equivalent guard lived in a `conftest.py` that did **not** move; porting it was a
-deliberate act. It immediately caught three real DNS calls in the cache tests. Removing it
-would silently un-hermeticize the suite and the loss would not show up as a failure.
+deliberate act. It immediately caught three real DNS calls in the cache tests.
+
+**Removing it used to be silent — since `forage-ci-and-image` US-002 it is not.**
+`tests/test_hermeticity.py` is an executing canary: eight tests that assert TCP, UDP,
+IPv6, `getaddrinfo`, `gethostbyname` and `create_connection` all raise
+`SocketBlockedError` while `AF_UNIX` socketpairs and async tests still work. Delete the
+fixture, drop `autouse`, or lose the Unix-socket exemption and those tests go red.
+`TestHermeticityCanaryIsEnforced` in `tests/test_ci_workflow.py` closes the one gap a
+canary cannot close about itself — that it is committed and not skipped — and it lives in
+a different module for exactly that reason.
 
 **If a new test needs the network:** it doesn't. Mock at the seam (httpx, `getaddrinfo`,
 transformers/torch).

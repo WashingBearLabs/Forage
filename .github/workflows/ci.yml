@@ -4,14 +4,14 @@
 # split would turn the publish gates into wishful thinking. Jobs are therefore
 # introduced in dependency order across the `forage-ci-and-image` stories, and
 # a `needs:` may never name a job a later story adds — GitHub rejects the whole
-# file, not just the offending job. `lint` (US-001) and `typecheck` (US-006)
-# are here; `test`, `build-amd64`, `secret-grep`, `smoke` and `publish` arrive
-# in US-002/003/005/007.
+# file, not just the offending job. `lint` (US-001), `typecheck` (US-006) and
+# `test` (US-002) are here; `build-amd64`, `secret-grep`, `smoke` and `publish`
+# arrive in US-003/005/007.
 #
-# `lint` and `typecheck` are siblings, not a chain: neither reads the other's
-# output, so making one `needs:` the other would only serialise two ~30 s jobs
-# and delay the second failure report. The `needs:` edges that matter are the
-# ones US-007 hangs off both of them, when a publish must not happen over a
+# `lint`, `typecheck` and `test` are siblings, not a chain: none reads another's
+# output, so making one `needs:` another would only serialise three short jobs
+# and delay the second and third failure reports. The `needs:` edges that matter
+# are the ones US-007 hangs off all three, when a publish must not happen over a
 # red gate.
 #
 # Supply-chain posture (this repo goes public in US-008):
@@ -161,7 +161,49 @@ jobs:
         # Zero errors, zero baseline. The only rule-level relaxation in the
         # whole repo is `reportPrivateUsage` for tests/, declared in
         # pyproject.toml's [tool.pyright] block and asserted by
-        # tests/test_pyright_policy.py. Note those assertions are *not* gated
-        # by CI yet — the suite has no job until US-002 adds `test`; until
-        # then the policy guards only bite locally and at review.
+        # tests/test_pyright_policy.py — which the `test` job below now runs on
+        # every PR, so the policy is enforced by CI and not only at review.
         run: uv run pyright
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    # The suite is hermetic and CPU-only: ~3 s locally, and on a cold cache the
+    # job is dominated by the ~185 MB torch wheel, not by pytest. The cap is a
+    # runaway backstop, not a budget.
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync dev environment
+        # Same `--locked` sync as the other two lanes: the suite must run
+        # against the dependency versions the lock pins, or a green run says
+        # nothing about what a consumer installs.
+        run: uv sync --extra dev --locked
+
+      - name: Verify sanitizer revision derivation
+        # Mirrors Poppy's ci.yml step of the same name. Redundant with the full
+        # run below and deliberately so: it is a *named* step, so the
+        # file-recall cache contract — every security-stage source and
+        # behaviour-affecting threshold must mechanically move the sidecar's
+        # opaque sanitization revision — reports as its own red line rather
+        # than as six failures inside a 607-test log. It runs first, and in
+        # seconds, so an unrelated suite failure cannot mask it.
+        run: uv run pytest -q tests/test_sanitizer_revision.py
+
+      - name: pytest
+        # The whole suite, no selection filters. This is the job that finally
+        # makes every guard in this repo CI-enforced: until it existed,
+        # test_ci_workflow.py, test_pyright_policy.py, test_dependency_lock.py
+        # and the hermeticity canary all bit only on a developer's machine.
+        run: uv run pytest -q

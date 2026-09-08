@@ -26,6 +26,11 @@ this repository needs to still hold on the day it goes public (US-008):
 Assertions run against the parsed YAML wherever possible, so reorganising the
 file cannot silently void a check.
 
+Since US-002 this module also guards the *hermeticity canary* the ``test`` lane
+depends on (:class:`TestHermeticityCanaryIsEnforced`). That check lives here,
+in a different module, on purpose: a canary can assert anything it likes about
+the socket guard, but it cannot notice its own module being skipped.
+
 test_mapping:
   .github/workflows/ci.yml: tests/test_ci_workflow.py
 """
@@ -94,6 +99,13 @@ def _all_steps(jobs: dict[str, Any]) -> list[dict[str, Any]]:
     for job in jobs.values():
         collected.extend(job.get("steps", []))
     return collected
+
+
+def _run_lines(jobs: dict[str, Any], job_name: str) -> list[str]:
+    """Every non-empty `run:` line of a job, stripped."""
+    return [
+        line.strip() for line in _run_text(jobs, job_name).splitlines() if line.strip()
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +423,193 @@ class TestTypecheckJob:
         with_block: dict[str, Any] = setup.get("with") or {}
         assert with_block.get("enable-cache") is True, (
             "setup-uv must enable caching in every job on the free tier"
+        )
+
+
+# ---------------------------------------------------------------------------
+# The test job
+# ---------------------------------------------------------------------------
+
+# Flags that would turn "the suite ran" into "some of the suite ran". A green
+# `test` job is the evidence every other guard in this repo rests on, so the
+# one thing it must never do is quietly check a subset.
+_SUITE_NARROWING_FLAGS = frozenset(
+    {
+        "-k",
+        "-m",
+        "-x",
+        "--exitfirst",
+        "--maxfail",
+        "--ignore",
+        "--ignore-glob",
+        "--deselect",
+        "--lf",
+        "--last-failed",
+        "--sw",
+        "--stepwise",
+    }
+)
+
+_SANITIZER_STEP_RUN = "uv run pytest -q tests/test_sanitizer_revision.py"
+_FULL_SUITE_RUN = "uv run pytest -q"
+
+
+class TestTestJob:
+    """The gate US-002 adds: the whole suite, on GitHub-hosted runners.
+
+    This is the job that makes every other guard in the repo real. Before it
+    existed, `test_ci_workflow.py`, `test_pyright_policy.py`,
+    `test_dependency_lock.py` and the hermeticity canary all bit only on a
+    developer's machine — nothing in CI ran pytest at all.
+    """
+
+    def test_test_job_exists(self, jobs: dict[str, Any]) -> None:
+        assert "test" in jobs, (
+            "Expected a 'test' job in ci.yml — without it the suite, and every "
+            "guard inside it, is enforced only at review"
+        )
+
+    def test_test_job_runs_on_github_hosted_ubuntu(self, jobs: dict[str, Any]) -> None:
+        runs_on = jobs["test"]["runs-on"]
+        assert runs_on == "ubuntu-latest", (
+            "The suite is hermetic and CPU-only; it must not depend on Poppy's "
+            f"self-hosted runner. Got {runs_on!r}"
+        )
+
+    def test_test_job_has_timeout_minutes(self, jobs: dict[str, Any]) -> None:
+        timeout = jobs["test"].get("timeout-minutes")
+        assert isinstance(timeout, int) and timeout > 0, (
+            f"test needs a timeout-minutes backstop; got {timeout!r}"
+        )
+
+    def test_test_job_runs_the_whole_suite(self, jobs: dict[str, Any]) -> None:
+        assert _FULL_SUITE_RUN in _run_lines(jobs, "test"), (
+            f"test must run {_FULL_SUITE_RUN!r} as a bare command. A path "
+            "argument would silently reduce the gate to whatever subset the "
+            "author last cared about."
+        )
+
+    def test_test_job_applies_no_selection_filters(self, jobs: dict[str, Any]) -> None:
+        for line in _run_lines(jobs, "test"):
+            if not line.startswith("uv run pytest"):
+                continue
+            flags = {token.split("=", 1)[0] for token in line.split()}
+            offenders = sorted(flags & _SUITE_NARROWING_FLAGS)
+            assert offenders == [], (
+                f"pytest invocation {line!r} carries selection/short-circuit "
+                f"flags {offenders}. A filtered run reports green for tests it "
+                "never executed."
+            )
+
+    def test_sanitizer_revision_step_exists_and_is_named(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        step = next(
+            (
+                candidate
+                for candidate in _steps(jobs, "test")
+                if str(candidate.get("run", "")).strip() == _SANITIZER_STEP_RUN
+            ),
+            None,
+        )
+        assert step is not None, (
+            f"Expected a step running {_SANITIZER_STEP_RUN!r} (mirrors Poppy's "
+            "ci.yml). The full suite covers it too; the point of the separate "
+            "step is a distinct red line for the file-recall cache contract."
+        )
+        name = str(step.get("name", ""))
+        assert "sanitizer revision" in name.lower(), (
+            "The sanitizer-revision step must be *named* — an unnamed step "
+            f"renders as its shell command and defeats the purpose. Got {name!r}"
+        )
+
+    def test_sanitizer_revision_step_runs_before_the_full_suite(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        runs = [str(step.get("run", "")).strip() for step in _steps(jobs, "test")]
+        assert _SANITIZER_STEP_RUN in runs and _FULL_SUITE_RUN in runs
+        assert runs.index(_SANITIZER_STEP_RUN) < runs.index(_FULL_SUITE_RUN), (
+            "The targeted sanitizer-revision step must run before the full "
+            "suite; after it, an unrelated failure anywhere in 607 tests would "
+            "stop the contract guard from reporting at all"
+        )
+
+    def test_test_job_syncs_against_the_committed_lock(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        assert "--locked" in _run_text(jobs, "test"), (
+            "The suite must run against the versions the lock pins, or a green "
+            "run says nothing about what a consumer installs"
+        )
+
+    def test_test_job_uv_setup_enables_caching(self, jobs: dict[str, Any]) -> None:
+        setup = next(
+            (
+                step
+                for step in _steps(jobs, "test")
+                if "setup-uv" in str(step.get("uses", ""))
+            ),
+            None,
+        )
+        assert setup is not None, "test must install uv via astral-sh/setup-uv"
+        with_block: dict[str, Any] = setup.get("with") or {}
+        assert with_block.get("enable-cache") is True, (
+            "setup-uv must enable caching in every job on the free tier"
+        )
+
+
+# ---------------------------------------------------------------------------
+# The hermeticity canary the test lane depends on
+# ---------------------------------------------------------------------------
+
+_CANARY_PATH = _REPO_ROOT / "tests" / "test_hermeticity.py"
+_CONFTEST_PATH = _REPO_ROOT / "tests" / "conftest.py"
+_SKIP_MARK_RE = re.compile(r"pytest\.mark\.(skip|skipif|xfail)\b")
+_DISABLE_SOCKET_RE = re.compile(r"disable_socket\(\s*allow_unix_socket\s*=\s*True\s*\)")
+
+
+class TestHermeticityCanaryIsEnforced:
+    """The canary must be committed, executing, and backed by a live guard.
+
+    These assertions deliberately live in *this* module rather than in
+    ``tests/test_hermeticity.py``: a canary can assert anything it likes about
+    the socket guard, but it cannot notice its own module being skipped. Run
+    from here, a `pytestmark = pytest.mark.skip` on the canary still turns the
+    suite red.
+    """
+
+    def test_canary_module_is_committed(self) -> None:
+        assert _CANARY_PATH.exists(), (
+            "tests/test_hermeticity.py must exist — the suite's hermeticity is "
+            "enforced by an autouse fixture, and deleting that fixture produces "
+            "no failure unless something asserts on it"
+        )
+
+    def test_canary_asserts_the_block_is_active(self) -> None:
+        source = _CANARY_PATH.read_text()
+        assert "SocketBlockedError" in source and "pytest.raises" in source, (
+            "The canary must assert that a socket attempt raises "
+            "SocketBlockedError; anything weaker is documentation"
+        )
+
+    def test_canary_is_not_skipped(self) -> None:
+        source = _CANARY_PATH.read_text()
+        marks = sorted(set(_SKIP_MARK_RE.findall(source)))
+        assert marks == [], (
+            f"The canary carries {marks} markers. A skipped canary is worse "
+            "than no canary: the suite stays green while the hermeticity "
+            "invariant is unguarded."
+        )
+
+    def test_conftest_still_installs_the_autouse_socket_guard(self) -> None:
+        source = _CONFTEST_PATH.read_text()
+        assert "autouse=True" in source, (
+            "The socket guard must stay autouse — an opt-in guard protects only "
+            "the tests that remember to ask for it"
+        )
+        assert _DISABLE_SOCKET_RE.search(source), (
+            "tests/conftest.py must call disable_socket(allow_unix_socket=True): "
+            "blocked network, Unix sockets kept for asyncio's self-pipe"
         )
 
 

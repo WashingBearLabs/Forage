@@ -32,8 +32,16 @@ uv run ruff format --check . # CI gate since US-001: must be clean
 uv run pyright               # CI gate since US-006: strict, zero errors
 ```
 
-All three are blocking jobs in `.github/workflows/ci.yml` (`lint` and `typecheck`). Run
-them before you push — a red gate costs a round trip on the free Actions tier.
+All four are blocking jobs in `.github/workflows/ci.yml` (`lint`, `typecheck` and, since
+US-002, `test`). Run them before you push — a red gate costs a round trip on the free
+Actions tier.
+
+**`test` is the job that makes the rest real.** Until it landed, nothing in CI ran pytest,
+so `test_ci_workflow.py`, `test_pyright_policy.py`, `test_dependency_lock.py` and the
+hermeticity canary all bit only on a developer's machine. The job runs `uv run pytest -q`
+with no selection filters, preceded by a named `uv run pytest -q
+tests/test_sanitizer_revision.py` step so the file-recall cache contract reports as its
+own red line instead of as six failures inside a 607-test log.
 
 `pyright` runs with **no baseline and one carve-out**: `reportPrivateUsage` is off for
 `tests/` and nothing else is relaxed anywhere. Type-ignore comments are disabled
@@ -51,7 +59,7 @@ crash reads as a false regression.
 
 ## Test Structure
 
-21 files under `tests/`, flat, one module per subject. **586 tests, all green** as of
+22 files under `tests/`, flat, one module per subject. **607 tests, all green** as of
 2026-09-07.
 
 | Module | Tests | Covers |
@@ -66,11 +74,12 @@ crash reads as a false regression.
 | `tests/test_models.py` | 31 | Pydantic request/response models |
 | `tests/test_app.py` | 31 | FastAPI endpoints, `/health` body, capability break-glass |
 | `tests/test_stage3_promptguard.py` | 30 | ML scan; transformers/torch mocked |
-| `tests/test_ci_workflow.py` | 37 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph |
+| `tests/test_ci_workflow.py` | 50 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane |
 | `tests/test_stage5_url_audit.py` | 28 | Outbound fetch + redirect-chain audit |
 | `tests/test_stage1_pdf.py` | 23 | PDF branch, subprocess isolation |
 | `tests/test_pyright_policy.py` | 12 | Type-checking policy: strict, one carve-out, no suppressions |
 | `tests/test_searxng_docker.py` | 9 | `searxng/config/` sanity (config half only) |
+| `tests/test_hermeticity.py` | 8 | Executing canary for the autouse socket guard |
 | `tests/test_sanitizer_revision.py` | 6 | Revision hashing over `_REVISION_SOURCES` |
 | `tests/test_dependency_lock.py` | 3 | `uv.lock` stays CPU-only (no `nvidia-*` wheels) |
 | `tests/test_contract_schema.py` | 1 | Golden contract fixture vs `pipeline/contract.py` |
@@ -93,12 +102,19 @@ real network fails loudly with `SocketBlockedError`. Mock at the seam — httpx,
 `socket.getaddrinfo`, transformers/torch — never relax the guard. It caught three real DNS
 calls in the cache tests the day it was added.
 
+Since US-002 the guard has an executing canary, `tests/test_hermeticity.py`: eight tests
+that assert TCP/UDP/IPv6 construction, both DNS entry points and `create_connection` are
+blocked while `AF_UNIX` socketpairs and async tests still work. Delete or weaken the
+fixture and those tests go red — before the canary, the loss produced no failure at all.
+`TestHermeticityCanaryIsEnforced` in `tests/test_ci_workflow.py` covers the one thing the
+canary cannot check about itself: that it is committed and not skipped.
+
 **Async needs no decorator.** `asyncio_mode = "auto"` is set in `pyproject.toml`.
 
 **The exact count is a gate, not a floor.** The extraction verified *exactly* 531 tests
-moved (534 collected after alias parametrization); the suite has since grown to 586 as CI
-guards landed (US-001 +33, US-006 +19). A silently dropped module cannot hide under a
-"≥ N passed" assertion. When you add tests, update the counts here.
+moved (534 collected after alias parametrization); the suite has since grown to 607 as CI
+guards landed (US-001 +33, US-006 +19, US-002 +21). A silently dropped module cannot hide
+under a "≥ N passed" assertion. When you add tests, update the counts here.
 
 **Tests ship with the code they cover, in the same commit.**
 
@@ -133,11 +149,15 @@ test_mapping:
   "pipeline/extraction_limits.py": "tests/test_stage1_extraction.py"
   "promptguard/classifier.py": "tests/test_stage3_promptguard.py"
   "searxng/config/*": "tests/test_searxng_docker.py"
+  "tests/conftest.py": "tests/test_hermeticity.py"
   ".github/workflows/ci.yml": "tests/test_ci_workflow.py"
   "uv.lock": "tests/test_dependency_lock.py"
   "pyproject.toml": ["tests/test_dependency_lock.py", "tests/test_pyright_policy.py"]
   "typings/*": "tests/test_pyright_policy.py"
 ```
+
+`tests/conftest.py` maps to the canary because the fixture it installs is the thing under
+test there — an edit to the socket guard must run `tests/test_hermeticity.py`.
 
 The last four are non-Python sources (or, for `typings/`, stub files no test imports).
 They still need mappings: without one the orchestrator falls back to a heuristic glob over
