@@ -5,14 +5,15 @@
 # introduced in dependency order across the `forage-ci-and-image` stories, and
 # a `needs:` may never name a job a later story adds — GitHub rejects the whole
 # file, not just the offending job. `lint` (US-001), `typecheck` (US-006),
-# `test` (US-002), `build-amd64` and `secret-grep` (US-003) and `smoke`
-# (US-005) are here; `publish` arrives in US-007.
+# `test` (US-002), `build-amd64` and `secret-grep` (US-003), `smoke` (US-005)
+# and `publish` (US-007) are all here; `searxng-build` / `searxng-publish`
+# arrive in US-004.
 #
 # `lint`, `typecheck`, `test` and `build-amd64` are siblings, not a chain: none
 # reads another's output, so making one `needs:` another would only serialise
 # short jobs and delay the second and third failure reports. The `needs:` edges
-# that matter are `secret-grep`'s (below) and US-007's, which hangs the publish
-# off all of them, when a publish must not happen over a red gate.
+# that matter are `secret-grep`'s (below) and `publish`'s, which hangs off all
+# six, because a publish must not happen over a red gate.
 #
 # `build-amd64` is deliberately *not* gated on `lint`/`typecheck`/`test`: a
 # broken image and a broken lint are independent failures and a developer wants
@@ -92,6 +93,16 @@ env:
   # the script's own default so the two cannot drift.
   SMOKE_CONTAINER: "forage-smoke"
   SMOKE_TIMEOUT_SECONDS: "120"
+  # The published service image. Lower-case and spelled out rather than derived
+  # from `github.repository_owner`, which renders `WashingBearLabs` — GHCR
+  # rejects an upper-case path component, and a publish job is the wrong place
+  # to discover that.
+  IMAGE_NAME: "ghcr.io/washingbearlabs/forage"
+  # The platform list `publish` builds. Single-sourced here because
+  # docs/releases.md documents it and a guard test reads it: the arm64 leg is
+  # emulated (qemu) and is the one that can be trimmed if it ever stops fitting
+  # the budget, and a trim has to be visible in one place.
+  PUBLISH_PLATFORMS: "linux/amd64,linux/arm64"
 
 jobs:
   lint:
@@ -531,3 +542,313 @@ jobs:
       - name: Remove the smoke container
         if: always()
         run: docker rm -f "${SMOKE_CONTAINER}" > /dev/null 2>&1 || true
+
+  publish:
+    name: publish
+    # The only job in this file that writes anything outside the run. It fires
+    # on exactly two events and never on a pull request — a PR head is not a
+    # release candidate, and a fork PR must not reach the registry at all:
+    #
+    #   * a `v*` tag  -> the service image's release lane;
+    #   * a push to `main` -> a `sha-<short>` build, so every merged commit is
+    #     pullable without minting a version.
+    #
+    # `startsWith(github.ref, 'refs/tags/v')` is also the cross-fire guard the
+    # spec's edge-case list asks for: `refs/tags/searxng-v0.1.0` does not start
+    # with `refs/tags/v`, so the companion image's tag (US-004) cannot trigger
+    # the service lane. US-004's own lane keys off `refs/tags/searxng-v` for the
+    # same reason, in the other direction.
+    if: >-
+      github.event_name == 'push'
+      && (github.ref == 'refs/heads/main'
+      || startsWith(github.ref, 'refs/tags/v'))
+    # Every gate in the file, at once. `needs:` here is not the ordering
+    # convenience it is elsewhere: it is the whole point of keeping these jobs
+    # in one workflow. A tag pushed onto a red tree runs the gates, they fail,
+    # and this job never starts.
+    needs: [lint, typecheck, test, build-amd64, secret-grep, smoke]
+    runs-on: ubuntu-latest
+    # The one deliberate exception to this file's no-job-permissions rule, and
+    # it is scoped to this job alone — the top-level grant stays `contents:
+    # read`, so nothing else in the workflow can inherit either of these.
+    #
+    #   packages: write  — push to ghcr.io/washingbearlabs/forage.
+    #   contents: write  — `gh release create`. Release creation 403s under the
+    #                      top-level read-only default; a Release is a write to
+    #                      the repository's contents, not to its packages.
+    #
+    # Neither is available to a fork PR: this job cannot run on a pull_request
+    # event at all (see the `if:` above), and GitHub keeps a fork's token
+    # read-only regardless.
+    permissions:
+      contents: write
+      packages: write
+    # The qemu-emulated arm64 leg is the long pole. Cold it is minutes of
+    # emulated wheel installation and an emulated `import torch`; warm it is a
+    # cache restore. A backstop, not a budget — docs/releases.md carries the
+    # measured numbers and the trim rule.
+    timeout-minutes: 60
+    steps:
+      # The build needs the source, and the Release step needs the tag. Same
+      # `persist-credentials: false` as everywhere else: the two writes below
+      # go through explicitly-passed tokens, never through a credential this
+      # step left lying in the runner's git config.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU
+        # Only needed for the emulated leg. Conditioned on the platform list so
+        # that trimming `PUBLISH_PLATFORMS` back to amd64-only also drops the
+        # emulator, rather than leaving a step that silently does nothing.
+        if: contains(env.PUBLISH_PLATFORMS, 'arm64')
+        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+        with:
+          platforms: arm64
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Download the image artifact
+        # This job is the *last* consumer of `build-amd64`'s artifact, and it
+        # consumes it for a reason the other two do not share: it is the only
+        # job in a position to check that what reaches the registry is the
+        # filesystem `smoke` executed and `secret-grep` cleared. See the
+        # verification step after the push.
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ env.IMAGE_ARTIFACT }}
+          path: ${{ env.IMAGE_DOWNLOAD_DIR }}
+
+      - name: Load the image and assert it is the one build-amd64 built
+        # US-003's assertion, copied verbatim from `smoke` rather than
+        # re-derived. `docker save`/`docker load` preserve the image ID exactly
+        # — it is the digest of the image config — so a mismatch means this job
+        # would be comparing the registry against a different image than the one
+        # that was built, cleared and smoked.
+        run: |
+          set -euo pipefail
+          recorded="$(tr -d '[:space:]' < "${IMAGE_DOWNLOAD_DIR}/${IMAGE_ID_FILE}")"
+          if [ -z "${recorded}" ]; then
+            echo "::error::${IMAGE_ID_FILE} carried no image ID"
+            exit 1
+          fi
+          gunzip -c "${IMAGE_DOWNLOAD_DIR}/${IMAGE_TARBALL}" | docker load
+          loaded="$(docker image inspect --format '{{.Id}}' "${IMAGE_REF}")"
+          if [ "${loaded#sha256:}" != "${recorded#sha256:}" ]; then
+            echo "::error::loaded image ${loaded} is not the ${recorded} build-amd64 recorded — this job would be publishing against a different image than the one that was gated"
+            exit 1
+          fi
+          echo "Loaded ${IMAGE_REF} = ${loaded} (identical to build-amd64's)"
+
+      - name: Record the gated filesystem
+        # `RootFS.Layers` is the ordered list of *diff IDs* — the sha256 of each
+        # layer's uncompressed tar. It is the image's filesystem, independent of
+        # how any registry chose to compress it and independent of the image
+        # config's metadata (exporter format, timestamps, labels). That makes it
+        # the right thing to compare a rebuilt-and-pushed image against; see the
+        # verification step below for why a rebuild is what happens.
+        run: |
+          set -euo pipefail
+          docker image inspect --format '{{json .RootFS.Layers}}' "${IMAGE_REF}" \
+            | jq -c '.' > gated-layers.json
+          echo "Gated amd64 filesystem: $(jq -r 'length' gated-layers.json) layers"
+          cat gated-layers.json
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive the image tags
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          # Every tag rule is written out, and `latest=false` turns off the
+          # action's own automatic handling first. `latest=auto` would do
+          # roughly the right thing, but "roughly" is not good enough for the
+          # one tag whose accidental movement is a production incident: the
+          # rule below is readable in one line and asserted by
+          # tests/test_ci_workflow.py.
+          #
+          #   v1.2.3      -> 1.2.3, 1.2, latest
+          #   v0.9.0-rc   -> 0.9.0-rc          (no 0.9, no latest)
+          #   main        -> sha-<short>
+          #
+          # A pre-release is any tag carrying a `-`, which is exactly semver's
+          # own definition. It moves neither `latest` nor the `X.Y` alias:
+          # both are pointers consumers follow, and a release candidate is by
+          # definition something no consumer should be followed into. `latest`
+          # does not exist at all until the first non-pre-release `v*` tag,
+          # which this spec's Assumptions place at `v1.0.0`.
+          #
+          # Every rule carries its own `enable=`, including the two that
+          # `metadata-action` would no-op on anyway (a `type=semver` rule emits
+          # nothing for a branch ref). Relying on that no-op would make the
+          # policy readable only by someone who knows the action's internals,
+          # and it is what the guard test caught when these were written
+          # loosely: on a main push the `{{major}}.{{minor}}` rule was *live*
+          # and merely produced no output. Stated explicitly, the four lines
+          # answer "which tags does this ref publish?" on their own.
+          flavor: |
+            latest=false
+          tags: |
+            type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') }}
+            type=sha,prefix=sha-,format=short,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') }}
+
+      - name: Build and push the multi-arch image
+        id: push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: ${{ env.PUBLISH_PLATFORMS }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          # A multi-arch push cannot ship the tarball above: a manifest list is
+          # built by buildx across platforms, and `docker load` puts a
+          # single-platform image in a daemon buildx does not push from. So the
+          # amd64 leg is *rebuilt* — from `type=gha`, the cache `build-amd64`
+          # wrote with `mode=max` earlier in this same run, at this same commit,
+          # off the same digest-pinned base and the same committed `uv.lock`.
+          # Every amd64 layer is therefore served from cache rather than
+          # re-executed, and the step after this one proves it: it compares the
+          # published amd64 image's diff IDs against the ones the gated tarball
+          # carried. "Cache-keyed, then verified" is the linkage; "the same
+          # bytes were pushed" would not have been true.
+          #
+          # The second cache scope is where the arm64 layers live. They cannot
+          # share `build-amd64`'s scope: that job writes an amd64-only manifest
+          # on every run, so a shared scope would evict the emulated layers on
+          # the next push and pay the cold qemu cost forever.
+          cache-from: |
+            type=gha
+            type=gha,scope=publish
+          cache-to: type=gha,mode=max,scope=publish
+          # Attestations are deliberately off. Image signing and provenance are
+          # this spec's declared Out of Scope — the deferral is conscious, to be
+          # revisited with real third-party consumers — and shipping the
+          # producing half of that story without the verifying half would be
+          # decoration. It also keeps the pushed artifact a plain manifest list,
+          # which is what the verification below reads.
+          provenance: false
+          sbom: false
+
+      - name: Verify the published amd64 image is the gated filesystem
+        # THE point of this job downloading an artifact it cannot push.
+        #
+        # `smoke` executed a specific amd64 image and `secret-grep` read its
+        # layer history. Neither says anything about what reached the registry
+        # unless something ties the two together, and `needs:` does not: it is
+        # an ordering edge. This does. The published amd64 manifest's config
+        # carries `rootfs.diff_ids` — the uncompressed digest of every layer —
+        # and they must equal the gated tarball's, layer for layer and in order.
+        # Equal diff IDs mean an identical filesystem: same base, same wheels,
+        # same source, byte for byte.
+        #
+        # What it deliberately does NOT claim: that the published image *is* the
+        # loaded one. The image IDs differ, and legitimately — the config
+        # records the exporter's own metadata — so asserting on them would be
+        # asserting on a storage detail, which is the same mistake
+        # `build-amd64`'s builder-vs-daemon note declines to make.
+        #
+        # FAILURE MODE: this runs after the push, because there is nothing to
+        # inspect before it. If it fails, the tags exist but point at an image
+        # that was never gated, the run is red, and — critically — the Release
+        # step below never runs. A red publish is not a release; treat the tags
+        # it left as untrusted and re-run once the cause is fixed.
+        #
+        # SCOPE: amd64 only. There is no arm64 artifact, because there is no
+        # arm64 gate — nothing in this workflow has ever executed the emulated
+        # leg. It is built from the same commit, the same lock and the same
+        # digest-pinned multi-arch base, and that is the whole of the claim.
+        # docs/releases.md says so to consumers rather than leaving it implied.
+        env:
+          PUSHED_DIGEST: ${{ steps.push.outputs.digest }}
+          PUSHED_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PUSHED_DIGEST}" ]; then
+            echo "::error::the build step reported no pushed digest"
+            exit 1
+          fi
+          published="${IMAGE_NAME}@${PUSHED_DIGEST}"
+          echo "Inspecting ${published}"
+          image_json="$(docker buildx imagetools inspect "${published}" --format '{{json .Image}}')"
+          # A multi-platform push hands back a map keyed by platform; a
+          # single-platform one hands back the config itself. Handle both, so
+          # trimming PUBLISH_PLATFORMS does not quietly void this check.
+          published_layers="$(
+            printf '%s' "${image_json}" \
+              | jq -c 'if has("linux/amd64") then .["linux/amd64"] else . end | .rootfs.diff_ids'
+          )"
+          gated_layers="$(cat gated-layers.json)"
+          if [ "${published_layers}" != "${gated_layers}" ]; then
+            echo "::error::the published amd64 filesystem is not the one that passed the gates"
+            echo "gated:     ${gated_layers}"
+            echo "published: ${published_layers}"
+            exit 1
+          fi
+          echo "Published amd64 filesystem is identical to the gated one ($(printf '%s' "${gated_layers}" | jq -r 'length') layers)."
+          echo "--- tags pushed for ${GITHUB_REF} ---"
+          printf '%s\n' "${PUSHED_TAGS}"
+          echo "--- end tags ---"
+
+      - name: Create the GitHub Release
+        # LAST, and only on a `v*` tag. The ordering is the contract: a Release
+        # is created only after the image is pushed *and* verified, so a
+        # published Release implies a pullable, gated image. The reverse is not
+        # promised and does not need to be — a `main` push produces a
+        # `sha-<short>` image and no Release at all.
+        #
+        # FAILURE MODE, push side: buildx uploads blobs, then the per-platform
+        # manifests, then the index — and a tag only moves when the index lands.
+        # An interrupted push therefore leaves orphan blobs rather than a
+        # half-formed tag, and re-running the same tag re-pushes, skipping every
+        # blob the registry already holds. Re-running a failed publish is safe.
+        #
+        # FAILURE MODE, this step: if the push succeeded and this fails, the
+        # image is live and the Release is missing. That is the harmless
+        # direction, and it is recoverable by re-running the job; the direction
+        # that would matter — a Release advertising an image nobody can pull —
+        # is the one the ordering rules out.
+        #
+        # `gh` is preinstalled on GitHub-hosted runners, so this needs no
+        # fourth-party action for a two-line API call.
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_REPO: ${{ github.repository }}
+          PUSHED_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          # Same pre-release rule as the tag policy above, and deliberately the
+          # same one-character test: a tag carrying a `-` is a semver
+          # pre-release, is marked as such on the Release, and moved neither
+          # `latest` nor the `X.Y` alias.
+          release_args=(--repo "${RELEASE_REPO}" --title "${RELEASE_TAG}")
+          case "${RELEASE_TAG}" in
+            *-*) release_args+=(--prerelease) ;;
+          esac
+          notes="$(cat <<EOF
+          Published image: \`${IMAGE_NAME}:${RELEASE_TAG#v}\`
+
+          Digest: \`${PUSHED_DIGEST}\`
+          Platforms: \`${PUBLISH_PLATFORMS}\`
+
+          Built and pushed by [run ${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${RELEASE_REPO}/actions/runs/${GITHUB_RUN_ID})
+          after lint, typecheck, test, build-amd64, secret-grep and smoke all
+          passed on this commit. The published amd64 layers were verified
+          identical to the image the contract smoke executed.
+          EOF
+          )"
+          gh release create "${RELEASE_TAG}" "${release_args[@]}" --notes "${notes}"
+          echo "Release ${RELEASE_TAG} created after the image push."

@@ -169,6 +169,179 @@ def _step_using(jobs: dict[str, Any], job_name: str, action: str) -> dict[str, A
     raise AssertionError(f"Job {job_name!r} has no step using {action!r}")
 
 
+class ExpressionError(AssertionError):
+    """A GitHub expression the evaluator below refuses to guess at.
+
+    Raised rather than swallowed on purpose. These tests decide what the
+    publish lane does for a given ref by *evaluating* the workflow's own
+    conditions, so an expression the evaluator cannot parse must fail loudly:
+    a rewritten condition that quietly evaluated to ``False`` would report a
+    green "``latest`` does not move" for a policy nobody checked.
+    """
+
+
+_EXPR_TOKEN_RE = re.compile(
+    r"""\s*(?:
+        (?P<lparen>\()
+      | (?P<rparen>\))
+      | (?P<comma>,)
+      | (?P<and>&&)
+      | (?P<or>\|\|)
+      | (?P<eq>==)
+      | (?P<neq>!=)
+      | (?P<bang>!)
+      | (?P<string>'[^']*')
+      | (?P<ident>[A-Za-z_][A-Za-z0-9_.]*)
+    )""",
+    re.VERBOSE,
+)
+
+_EXPR_FUNCTIONS = frozenset({"startswith", "endswith", "contains"})
+
+
+def _tokenize_expression(expression: str) -> list[tuple[str, str]]:
+    tokens: list[tuple[str, str]] = []
+    position = 0
+    while position < len(expression):
+        if expression[position].isspace():
+            position += 1
+            continue
+        match = _EXPR_TOKEN_RE.match(expression, position)
+        if match is None or match.lastgroup is None:
+            raise ExpressionError(
+                f"Cannot tokenise {expression!r} at offset {position}: "
+                f"{expression[position : position + 20]!r}"
+            )
+        tokens.append((match.lastgroup, match.group().strip()))
+        position = match.end()
+    return tokens
+
+
+class _ExpressionParser:
+    """A recursive-descent evaluator for the subset of GitHub expressions ci.yml uses.
+
+    Deliberately small and deliberately strict: `&&`, `||`, `!`, `==`, `!=`,
+    parentheses, single-quoted strings, `github.*` context lookups and the
+    three string predicates. Anything else raises, because the point of
+    evaluating rather than substring-matching is that the answer is the
+    workflow's answer.
+    """
+
+    def __init__(self, tokens: list[tuple[str, str]], context: dict[str, str]) -> None:
+        self._tokens = tokens
+        self._index = 0
+        self._context = context
+
+    def _peek(self) -> str | None:
+        if self._index >= len(self._tokens):
+            return None
+        return self._tokens[self._index][0]
+
+    def _next(self) -> tuple[str, str]:
+        if self._index >= len(self._tokens):
+            raise ExpressionError("Expression ended early")
+        token = self._tokens[self._index]
+        self._index += 1
+        return token
+
+    def _accept(self, kind: str) -> bool:
+        if self._peek() == kind:
+            self._index += 1
+            return True
+        return False
+
+    def _expect(self, kind: str) -> None:
+        if not self._accept(kind):
+            raise ExpressionError(f"Expected {kind}, got {self._peek()!r}")
+
+    def parse(self) -> bool:
+        value = self._parse_or()
+        if self._index != len(self._tokens):
+            raise ExpressionError(f"Trailing tokens from index {self._index}")
+        if not isinstance(value, bool):
+            raise ExpressionError(f"Expression is not a boolean: {value!r}")
+        return value
+
+    def _parse_or(self) -> str | bool:
+        value = self._parse_and()
+        while self._accept("or"):
+            right = self._parse_and()
+            value = bool(value) or bool(right)
+        return value
+
+    def _parse_and(self) -> str | bool:
+        value = self._parse_comparison()
+        while self._accept("and"):
+            right = self._parse_comparison()
+            value = bool(value) and bool(right)
+        return value
+
+    def _parse_comparison(self) -> str | bool:
+        left = self._parse_unary()
+        if self._accept("eq"):
+            return left == self._parse_unary()
+        if self._accept("neq"):
+            return left != self._parse_unary()
+        return left
+
+    def _parse_unary(self) -> str | bool:
+        if self._accept("bang"):
+            return not bool(self._parse_unary())
+        return self._parse_primary()
+
+    def _parse_primary(self) -> str | bool:
+        kind, text = self._next()
+        if kind == "lparen":
+            value = self._parse_or()
+            self._expect("rparen")
+            return value
+        if kind == "string":
+            return text[1:-1]
+        if kind != "ident":
+            raise ExpressionError(f"Unexpected token {text!r}")
+        if self._peek() == "lparen":
+            return self._parse_call(text)
+        if text in {"true", "false"}:
+            return text == "true"
+        if text not in self._context:
+            raise ExpressionError(
+                f"Unknown context value {text!r}; the evaluator only knows "
+                f"{sorted(self._context)}"
+            )
+        return self._context[text]
+
+    def _parse_call(self, name: str) -> bool:
+        function = name.lower()
+        if function not in _EXPR_FUNCTIONS:
+            raise ExpressionError(f"Unsupported function {name!r}")
+        self._expect("lparen")
+        arguments: list[str | bool] = [self._parse_or()]
+        while self._accept("comma"):
+            arguments.append(self._parse_or())
+        self._expect("rparen")
+        if len(arguments) != 2 or not all(isinstance(a, str) for a in arguments):
+            raise ExpressionError(f"{name}() needs two string arguments")
+        haystack, needle = str(arguments[0]), str(arguments[1])
+        if function == "startswith":
+            return haystack.startswith(needle)
+        if function == "endswith":
+            return haystack.endswith(needle)
+        return needle in haystack
+
+
+def _evaluate(expression: str, ref: str, event_name: str) -> bool:
+    """Evaluate a workflow condition for a hypothetical ref and event."""
+    stripped = expression.strip()
+    if stripped.startswith("${{") and stripped.endswith("}}"):
+        stripped = stripped[3:-2]
+    context = {
+        "github.ref": ref,
+        "github.ref_name": ref.rsplit("/", 1)[-1],
+        "github.event_name": event_name,
+    }
+    return _ExpressionParser(_tokenize_expression(stripped), context).parse()
+
+
 def _if_block_body(script: str, *tokens: str) -> str | None:
     """The body of the first `if` whose condition mentions every token.
 
@@ -299,9 +472,33 @@ class TestPermissions:
         perms: dict[str, Any] = workflow["permissions"]
         writable = sorted(k for k, v in perms.items() if v == "write")
         assert writable == [], (
-            f"Top-level write permissions on {writable}. The publish job (US-007) "
+            f"Top-level write permissions on {writable}. The publish job "
             "declares `packages: write` / `contents: write` on itself; nothing "
             "else may inherit them."
+        )
+
+    def test_publish_is_the_only_job_that_raises_write_permissions(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        # The general form of the rule, rather than one guard per job. Until
+        # US-007 the file's shape was simply "no job block declares
+        # permissions", and `build-amd64` and `smoke` each asserted that about
+        # themselves. That is no longer true and pretending otherwise would be
+        # the dishonest reading: `publish` *must* raise two write scopes to do
+        # its job. So the invariant is stated as what it actually is — exactly
+        # one job may raise write access, it is `publish`, and the grant is
+        # exactly these two scopes. A third scope, or a second job, fails here
+        # even if that job never existed when this was written.
+        raised: dict[str, list[str]] = {}
+        for name, job in jobs.items():
+            perms: dict[str, Any] = job.get("permissions") or {}
+            writable = sorted(key for key, value in perms.items() if value == "write")
+            if writable:
+                raised[name] = writable
+        assert raised == {"publish": ["contents", "packages"]}, (
+            f"Jobs raising write permissions: {raised}. Exactly one job may — "
+            "`publish`, with `contents: write` for the Release and "
+            "`packages: write` for the registry push, and nothing else."
         )
 
 
@@ -1210,13 +1407,492 @@ class TestSmokeJob:
 
 
 # ---------------------------------------------------------------------------
+# The publish lane
+# ---------------------------------------------------------------------------
+
+_METADATA_ACTION = "docker/metadata-action"
+_LOGIN_ACTION = "docker/login-action"
+_QEMU_ACTION = "docker/setup-qemu-action"
+
+# Every gate `publish` must wait on. Spelled out rather than derived from the
+# job list: the point of the assertion is that adding a seventh gate and
+# forgetting to hang the publish off it is a test failure, and a derived list
+# would quietly absorb exactly that mistake.
+_PUBLISH_GATES = ["lint", "typecheck", "test", "build-amd64", "secret-grep", "smoke"]
+
+# The refs the tag policy is evaluated against below. The last two are the ones
+# that matter: a companion-image tag must not reach the service lane, and a
+# pre-release must not move `latest`.
+_MAIN_REF = "refs/heads/main"
+_RELEASE_REF = "refs/tags/v1.0.0"
+_PRERELEASE_REF = "refs/tags/v0.9.0-rc"
+_SEARXNG_REF = "refs/tags/searxng-v0.1.0"
+_PR_REF = "refs/pull/3/merge"
+
+
+def _job_block(raw_text: str, job_name: str) -> str:
+    """The raw lines of one job, comments included, up to the next job key."""
+    lines = raw_text.splitlines()
+    starts = [index for index, line in enumerate(lines) if line == f"  {job_name}:"]
+    assert len(starts) == 1, f"Expected exactly one `{job_name}:` job key"
+    start = starts[0]
+    for index in range(start + 1, len(lines)):
+        line = lines[index]
+        if (
+            line.startswith("  ")
+            and not line.startswith("   ")
+            and line.rstrip().endswith(":")
+        ):
+            return "\n".join(lines[start:index])
+    return "\n".join(lines[start:])
+
+
+def _publish_tag_rules(jobs: dict[str, Any]) -> list[str]:
+    """Each non-empty line of the metadata-action `tags:` policy."""
+    with_block: dict[str, Any] = (
+        _step_using(jobs, "publish", _METADATA_ACTION).get("with") or {}
+    )
+    return [
+        line.strip()
+        for line in str(with_block.get("tags", "")).splitlines()
+        if line.strip()
+    ]
+
+
+def _rule_named(rules: list[str], marker: str) -> str:
+    matches = [rule for rule in rules if marker in rule]
+    assert len(matches) == 1, (
+        f"Expected exactly one tag rule containing {marker!r}; got {matches}"
+    )
+    return matches[0]
+
+
+def _enabled_tag_rules(
+    jobs: dict[str, Any], ref: str, event_name: str = "push"
+) -> list[str]:
+    """The tag rules whose `enable=` condition holds for a given ref.
+
+    A rule with no `enable=` is unconditional and always listed. An `enable=`
+    the evaluator cannot parse raises rather than being treated as false — see
+    :class:`ExpressionError`.
+    """
+    enabled: list[str] = []
+    for rule in _publish_tag_rules(jobs):
+        match = re.search(r"enable=(.*)$", rule)
+        if match is None or _evaluate(match.group(1), ref, event_name):
+            enabled.append(rule)
+    return enabled
+
+
+class TestPublishJob:
+    """US-007's publish: gated by everything, and stingy about what it moves."""
+
+    def test_publish_job_exists(self, jobs: dict[str, Any]) -> None:
+        assert "publish" in jobs, (
+            "Expected a `publish` job — the whole reason this workflow is one "
+            "file is so it can `needs:` every gate in it"
+        )
+
+    def test_publish_needs_every_gate(self, jobs: dict[str, Any]) -> None:
+        needs: Any = jobs["publish"].get("needs", [])
+        needs_list = [needs] if isinstance(needs, str) else list(needs)
+        assert sorted(needs_list) == sorted(_PUBLISH_GATES), (
+            f"publish needs {sorted(needs_list)}, expected "
+            f"{sorted(_PUBLISH_GATES)}. A missing edge is a lane that ships an "
+            "image over a gate nobody waited for."
+        )
+
+    def test_publish_runs_on_github_hosted_ubuntu(self, jobs: dict[str, Any]) -> None:
+        assert jobs["publish"]["runs-on"] == "ubuntu-latest"
+
+    def test_publish_has_timeout_minutes(self, jobs: dict[str, Any]) -> None:
+        assert isinstance(jobs["publish"].get("timeout-minutes"), int), (
+            "publish must carry a timeout — the emulated arm64 leg is the one "
+            "job in this file that could plausibly hang for an hour"
+        )
+
+    @pytest.mark.parametrize(
+        ("ref", "event_name", "expected"),
+        [
+            (_MAIN_REF, "push", True),
+            (_RELEASE_REF, "push", True),
+            (_PRERELEASE_REF, "push", True),
+            # The cross-fire guard the spec's edge-case list asks for: a
+            # companion-image tag runs the gates but must never reach the
+            # service publish lane.
+            (_SEARXNG_REF, "push", False),
+            # A pull request head is not a release candidate, and a fork PR
+            # must not reach the registry at all.
+            (_PR_REF, "pull_request", False),
+            (_MAIN_REF, "pull_request", False),
+        ],
+    )
+    def test_which_refs_reach_the_publish_lane(
+        self, jobs: dict[str, Any], ref: str, event_name: str, expected: bool
+    ) -> None:
+        # Evaluated, not substring-matched. US-003's escaped mutation taught
+        # this repo that checking a script's vocabulary is not checking its
+        # control flow; the same is true of a job condition. This runs the
+        # workflow's own expression against a ref and asserts the answer.
+        condition = str(jobs["publish"]["if"])
+        assert _evaluate(condition, ref, event_name) is expected, (
+            f"publish `if:` evaluates to {not expected} for ref {ref!r} on a "
+            f"{event_name} event. Condition was:\n{condition}"
+        )
+
+    def test_publish_permissions_are_exactly_the_two_writes_it_needs(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        perms: dict[str, Any] = jobs["publish"].get("permissions") or {}
+        assert perms == {"contents": "write", "packages": "write"}, (
+            f"publish permissions are {perms}. `packages: write` pushes the "
+            "image and `contents: write` creates the Release (which 403s under "
+            "the top-level read-only default). Nothing else, and job-scoped so "
+            "no other job inherits either."
+        )
+
+    def test_publish_targets_the_ghcr_service_repository(
+        self, jobs: dict[str, Any], workflow: Any
+    ) -> None:
+        with_block: dict[str, Any] = (
+            _step_using(jobs, "publish", _METADATA_ACTION).get("with") or {}
+        )
+        images = _resolve_env(workflow, str(with_block.get("images", "")))
+        assert images == "ghcr.io/washingbearlabs/forage", (
+            f"publish targets {images!r}. GHCR rejects an upper-case path "
+            "component, so the name is spelled out lower-case rather than "
+            "derived from `github.repository_owner` (`WashingBearLabs`)."
+        )
+        assert images == images.lower()
+
+    def test_publish_actually_pushes(self, jobs: dict[str, Any]) -> None:
+        with_block: dict[str, Any] = (
+            _step_using(jobs, "publish", _BUILD_ACTION).get("with") or {}
+        )
+        assert with_block.get("push") is True, (
+            "publish must set `push: true` — it is the only job in this "
+            "workflow permitted to, and the only one that should"
+        )
+
+    def test_publish_builds_the_declared_platform_list(
+        self, jobs: dict[str, Any], workflow: Any
+    ) -> None:
+        with_block: dict[str, Any] = (
+            _step_using(jobs, "publish", _BUILD_ACTION).get("with") or {}
+        )
+        platforms = _resolve_env(workflow, str(with_block.get("platforms", "")))
+        assert "linux/amd64" in platforms, (
+            f"publish builds {platforms!r}. amd64 is the only architecture this "
+            "workflow gates, so it can never be the one that gets trimmed."
+        )
+        env_block: dict[str, Any] = workflow.get("env") or {}
+        assert platforms == str(env_block.get("PUBLISH_PLATFORMS")), (
+            "The platform list must come from `env.PUBLISH_PLATFORMS` — "
+            "docs/releases.md documents that value, and a trim has to be "
+            "visible in one place"
+        )
+
+    def test_emulation_is_set_up_exactly_when_it_is_needed(
+        self, jobs: dict[str, Any], workflow: Any
+    ) -> None:
+        env_block: dict[str, Any] = workflow.get("env") or {}
+        platforms = str(env_block.get("PUBLISH_PLATFORMS", ""))
+        qemu_steps = [
+            step
+            for step in _steps(jobs, "publish")
+            if _QEMU_ACTION in str(step.get("uses", ""))
+        ]
+        if "arm64" in platforms:
+            assert qemu_steps, (
+                "publish builds an arm64 leg but sets up no emulator; buildx "
+                "would fail on the first RUN instruction"
+            )
+        else:
+            assert not qemu_steps, (
+                "publish sets up qemu for a platform list that needs none — a "
+                "step that silently does nothing outlives the reason for it"
+            )
+
+    # -- tag policy ---------------------------------------------------------
+
+    def test_the_actions_own_latest_handling_is_turned_off(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        with_block: dict[str, Any] = (
+            _step_using(jobs, "publish", _METADATA_ACTION).get("with") or {}
+        )
+        flavor = str(with_block.get("flavor", ""))
+        assert "latest=false" in flavor.replace(" ", ""), (
+            "metadata-action must be told `latest=false`. Its `latest=auto` "
+            "does roughly the right thing, and `latest` is the one tag whose "
+            "accidental movement is a production incident — the rule is "
+            "written out below instead."
+        )
+
+    def test_the_tag_policy_is_the_four_rules_the_spec_asks_for(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        rules = _publish_tag_rules(jobs)
+        assert len(rules) == 4, f"Expected four tag rules, got {rules}"
+        assert "type=semver,pattern={{version}}" in _rule_named(rules, "{{version}}")
+        assert "{{major}}.{{minor}}" in _rule_named(rules, "{{major}}")
+        assert "prefix=sha-" in _rule_named(rules, "type=sha")
+        assert "value=latest" in _rule_named(rules, "latest")
+
+    @pytest.mark.parametrize(
+        ("ref", "expected_markers"),
+        [
+            # A push to main gets one moving tag and nothing else: no semver
+            # value exists for it, and it must not touch `latest`.
+            (_MAIN_REF, {"type=sha"}),
+            # A pre-release publishes its exact version and nothing that any
+            # consumer follows — no `X.Y` alias, and above all no `latest`.
+            (_PRERELEASE_REF, {"{{version}}"}),
+            # A real release moves everything.
+            (_RELEASE_REF, {"{{version}}", "{{major}}", "latest"}),
+        ],
+    )
+    def test_which_tags_a_ref_publishes(
+        self, jobs: dict[str, Any], ref: str, expected_markers: set[str]
+    ) -> None:
+        enabled = _enabled_tag_rules(jobs, ref)
+        markers = {
+            marker
+            for marker in ("{{version}}", "{{major}}", "type=sha", "latest")
+            if any(marker in rule for rule in enabled)
+        }
+        assert markers == expected_markers, (
+            f"For ref {ref!r} the enabled tag rules are {enabled}, which is "
+            f"{sorted(markers)} rather than {sorted(expected_markers)}"
+        )
+
+    def test_latest_never_moves_for_a_prerelease(self, jobs: dict[str, Any]) -> None:
+        # The single most dangerous property in this file, asserted on its own
+        # so its failure message says what broke rather than "a set differs".
+        latest_rule = _rule_named(_publish_tag_rules(jobs), "value=latest")
+        condition = re.search(r"enable=(.*)$", latest_rule)
+        assert condition is not None, (
+            f"The `latest` rule carries no `enable=`: {latest_rule!r}. An "
+            "unconditional `latest` moves on every publish, release candidates "
+            "included."
+        )
+        expression = condition.group(1)
+        assert _evaluate(expression, _RELEASE_REF, "push") is True
+        assert _evaluate(expression, _PRERELEASE_REF, "push") is False, (
+            "A `-rc` tag would move `latest`. This spec's Assumptions put the "
+            "first `latest` at v1.0.0; every pre-release before it must leave "
+            f"the tag alone. Condition was {expression!r}"
+        )
+        assert _evaluate(expression, _MAIN_REF, "push") is False
+        assert _evaluate(expression, _SEARXNG_REF, "push") is False
+
+    # -- the identity chain -------------------------------------------------
+
+    def test_publish_downloads_and_loads_the_gated_image(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        uses = [str(step.get("uses", "")) for step in _steps(jobs, "publish")]
+        assert any(_DOWNLOAD_ACTION in ref for ref in uses), (
+            "publish must download build-amd64's artifact. It is the last "
+            "consumer, and the only job placed to check that what reaches the "
+            "registry is what passed the gates."
+        )
+        assert "docker load" in _run_text(jobs, "publish")
+
+    def test_publish_asserts_the_loaded_image_is_the_built_one(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        run_text = _run_text(jobs, "publish")
+        assert "IMAGE_ID_FILE" in run_text and "docker image inspect" in run_text
+
+    def test_an_identity_mismatch_fails_the_job(self, jobs: dict[str, Any]) -> None:
+        # Narrow for the reason US-003 recorded: the job has other `exit 1`s,
+        # so a substring check over the whole script would stay green while
+        # this branch degraded to a warning.
+        body = _if_block_body(_run_text(jobs, "publish"), "loaded", "recorded", "!=")
+        assert body is not None, (
+            "publish must compare the loaded image ID against the recorded one"
+        )
+        assert "exit 1" in body, (
+            "The image-identity mismatch branch must exit non-zero. Branch "
+            "body was:\n" + body
+        )
+
+    def test_publish_verifies_the_published_layers_against_the_gated_ones(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        run_text = _run_text(jobs, "publish")
+        assert "RootFS.Layers" in run_text, (
+            "publish must record the gated image's diff IDs — the sha256 of "
+            "each layer's uncompressed tar, which is the filesystem itself and "
+            "survives re-compression by a registry"
+        )
+        assert "rootfs.diff_ids" in run_text and "imagetools inspect" in run_text, (
+            "publish must read the *published* image's diff IDs back out of "
+            "the registry. A multi-arch push cannot ship the loaded tarball, "
+            "so the amd64 leg is rebuilt from the cache build-amd64 wrote — "
+            "and 'rebuilt from the same cache' is a claim that has to be "
+            "checked, not asserted in a comment."
+        )
+
+    def test_a_layer_mismatch_fails_the_job(self, jobs: dict[str, Any]) -> None:
+        body = _if_block_body(
+            _run_text(jobs, "publish"), "published_layers", "gated_layers", "!="
+        )
+        assert body is not None, (
+            "publish must compare the published diff IDs against the gated "
+            "ones inside an `if` — the comparison is the whole linkage between "
+            "the smoke-tested image and the registry"
+        )
+        assert "exit 1" in body, (
+            "A published image that is not the gated filesystem must fail the "
+            "run, which is also what stops the Release from being created. "
+            "Branch body was:\n" + body
+        )
+
+    def test_publish_verifies_before_it_releases(self, jobs: dict[str, Any]) -> None:
+        names = [str(step.get("name", "")) for step in _steps(jobs, "publish")]
+        push_index = next(i for i, name in enumerate(names) if "Build and push" in name)
+        verify_index = next(i for i, name in enumerate(names) if "Verify" in name)
+        release_index = next(i for i, name in enumerate(names) if "Release" in name)
+        assert push_index < verify_index < release_index, (
+            f"Step order is {names}. The Release must come after the push and "
+            "after the verification: a Release is the artifact humans and "
+            "downstream specs read as 'this version shipped', so it may only "
+            "exist once a gated image is pullable. Reversing this makes a "
+            "Release a promise the registry has not kept."
+        )
+
+    def test_the_release_is_created_only_on_a_version_tag(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        release_step = next(
+            step
+            for step in _steps(jobs, "publish")
+            if "Release" in str(step.get("name", ""))
+        )
+        condition = str(release_step.get("if", ""))
+        assert condition, "The Release step must carry its own `if:`"
+        assert _evaluate(condition, _RELEASE_REF, "push") is True
+        assert _evaluate(condition, _PRERELEASE_REF, "push") is True
+        assert _evaluate(condition, _MAIN_REF, "push") is False, (
+            "A push to main publishes a `sha-` image and no Release. Minting a "
+            "Release per commit would make the word meaningless."
+        )
+        assert _evaluate(condition, _SEARXNG_REF, "push") is False
+
+    def test_the_release_marks_prereleases_as_such(self, jobs: dict[str, Any]) -> None:
+        run_text = _run_text(jobs, "publish")
+        assert "--prerelease" in run_text, (
+            "A `-rc` tag must produce a Release flagged pre-release, or "
+            "GitHub's own 'latest release' pointer moves onto it — the same "
+            "mistake as moving the `latest` image tag, in a different registry"
+        )
+
+    def test_the_release_uses_the_preinstalled_cli(self, jobs: dict[str, Any]) -> None:
+        assert "gh release create" in _run_text(jobs, "publish"), (
+            "The Release is created with the preinstalled `gh`, not a "
+            "fourth-party action. One fewer pinned dependency for a two-line "
+            "API call is the right trade on a repository about to go public."
+        )
+
+    # -- posture ------------------------------------------------------------
+
+    def test_publish_logs_in_with_only_the_workflow_token(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        login = _step_using(jobs, "publish", _LOGIN_ACTION)
+        with_block: dict[str, Any] = login.get("with") or {}
+        assert str(with_block.get("registry")) == "ghcr.io"
+        password = str(with_block.get("password", ""))
+        assert "secrets.GITHUB_TOKEN" in password, (
+            f"The registry login uses {password!r}. GITHUB_TOKEN is minted per "
+            "run and dies with it; a stored PAT would be a long-lived registry "
+            "credential sitting in a repository that is about to go public."
+        )
+
+    def test_publish_ships_no_attestations(self, jobs: dict[str, Any]) -> None:
+        with_block: dict[str, Any] = (
+            _step_using(jobs, "publish", _BUILD_ACTION).get("with") or {}
+        )
+        assert with_block.get("provenance") is False, (
+            "Image signing and provenance are this spec's declared Out of "
+            "Scope. Emitting attestations without the verifying half is "
+            "decoration, and it changes the shape of the pushed artifact the "
+            "verification step reads."
+        )
+        assert with_block.get("sbom") is False
+
+    def test_publish_uses_a_separate_cache_scope_for_the_emulated_layers(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        with_block: dict[str, Any] = (
+            _step_using(jobs, "publish", _BUILD_ACTION).get("with") or {}
+        )
+        cache_from = str(with_block.get("cache-from", ""))
+        cache_to = str(with_block.get("cache-to", ""))
+        assert "type=gha" in cache_from and "scope=publish" in cache_from, (
+            "publish must read both the default scope (build-amd64's amd64 "
+            f"layers) and its own; got cache-from={cache_from!r}"
+        )
+        assert "scope=publish" in cache_to and "mode=max" in cache_to, (
+            "The arm64 layers must be written to their own scope. Sharing "
+            "build-amd64's would evict them on its next amd64-only run and pay "
+            f"the cold qemu cost forever; got cache-to={cache_to!r}"
+        )
+
+    def test_publish_uploads_no_artifacts_of_its_own(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        uploads = [
+            str(step.get("uses"))
+            for step in _steps(jobs, "publish")
+            if _UPLOAD_ACTION in str(step.get("uses", ""))
+        ]
+        assert uploads == [], (
+            f"publish uploads artifacts ({uploads}). Its output is a registry "
+            "push and a Release; there is nothing to hand on."
+        )
+
+    def test_publish_documents_its_failure_modes(self, raw: str) -> None:
+        prose = _comment_prose(_job_block(raw, "publish"))
+        for phrase in (
+            "a red publish is not a release",
+            "re-running a failed publish is safe",
+            "a published release implies a pullable, gated image",
+        ):
+            assert phrase in prose, (
+                f"The publish job must state {phrase!r} beside the step it "
+                "describes. These are the questions someone asks at 2am with a "
+                "half-finished push, and the answer belongs in the file."
+            )
+
+    def test_the_arm64_leg_is_documented_as_ungated(self, raw: str) -> None:
+        prose = _comment_prose(_job_block(raw, "publish"))
+        assert "there is no arm64 gate" in prose, (
+            "The identity chain covers amd64 only — nothing in this workflow "
+            "has ever executed the emulated leg. A verification step that does "
+            "not say what it excludes reads as covering everything."
+        )
+
+
+# ---------------------------------------------------------------------------
 # The image artifact handoff, across every consumer
 # ---------------------------------------------------------------------------
 
-# Every job that receives the built image. New consumers (US-007's publish)
-# belong here: the handoff is only sound if all of them read the same artifact
-# and assert the same identity.
-_IMAGE_CONSUMERS = ("secret-grep", "smoke")
+# Every job that receives the built image. All three read the same artifact and
+# assert the same identity against `build-amd64`'s recorded image ID; a fourth
+# consumer belongs here too, because the handoff is only sound if none of them
+# quietly rebuilds or invents a second copy.
+#
+# `publish` is a consumer with a twist worth knowing before reading its tests:
+# it downloads the tarball but cannot *push* it — a buildx multi-arch push
+# builds a manifest list across platforms and cannot ship an image `docker
+# load` put in a daemon. What it does with the artifact is compare it: the
+# published amd64 layers must equal the gated ones, diff ID for diff ID. So it
+# is a consumer of the image's *identity*, not of its bytes-on-the-wire, and
+# that is exactly the distinction its own tests assert.
+_IMAGE_CONSUMERS = ("secret-grep", "smoke", "publish")
 
 
 class TestImageArtifactHandoff:
