@@ -83,14 +83,69 @@ rather than once.
 
 **Mitigation and the pin-bump cadence:**
 The image must be **pulled and recreated on a schedule**, not pinned once and forgotten.
-Forage publishes a companion `forage-searxng` image (pinned base + baked config) in
-`feature-forage-ci-and-image`; **that CI cadence is what keeps this from recurring**, and
-a bump job that stops running re-arms the gotcha. Rolling our own search image was
-considered and rejected — the community maintaining engine definitions weekly *is* the
-value.
+Forage now publishes a companion `forage-searxng` image (digest-pinned base + baked
+config) — US-004, shipped 2026-09-08 — and **the pin bump is the schedule**: bump the
+digest, smoke it, tag `searxng-v*`. The runbook is `docs/searxng.md`.
+
+Be honest about what that did and did not fix. Pinning removes the *silent* rot (nobody
+could say which SearXNG was in production) and it removes the drive-by engine changes.
+It does **not** make fixes arrive on their own — that is what `:latest` was buying. Two
+signals replace it, and neither repairs anything: the advisory live-engine probe in
+`searxng-smoke` goes red at bump time (deliberately non-blocking, so it never fails a
+release over someone else's rate limiter), and Poppy's runtime web probes notice in
+production. **A bump nobody performs re-arms this gotcha**, exactly as a bump job that
+stopped running would have. Rolling our own search image was considered and rejected —
+the community maintaining engine definitions weekly *is* the value.
 
 **Also note:** the engine list appears in two places — `pipeline/orchestrator.py`'s engine
-constant and `searxng/config/settings.yml`. Both live in this repo now; keep them in sync.
+constant and `searxng/config/settings.yml`. Both live in this repo now, and
+`tests/test_searxng_docker.py` now asserts the two sets are equal rather than asking
+anyone to keep them in sync by hand.
+
+---
+
+### SearXNG's limiter refuses API clients — turning it on is an outage, not protection
+
+**Location:** `searxng/config/settings.yml`, `searxng/config/limiter.toml`
+**Severity:** 🔴 High
+**Added:** 2026-09-08 (US-004; measured against `searxng/searxng` 2026.9.7-3e454637f)
+
+**What happens:**
+`server.limiter: true` with a working Valkey backend does not rate-limit abuse of the
+JSON API. It refuses the JSON API. Measured, three ways:
+
+| Client | Result |
+|---|---|
+| Forage's own httpx client | **429 on the first request** — `http_accept_language` blocks anything without an `Accept-Language` header, and httpx sends none |
+| `curl` | **429 on the first request** — `http_accept_encoding`, then `http_user_agent` (its regex matches curl, wget, python-requests) |
+| a perfectly browser-shaped client | 200, 200, 200, **429** — `ip_limit.API_MAX = 4` per `API_WINDOW = 3600 s`, per client network, for any `format != html` |
+
+Neither `API_MAX` nor `API_WINDOW` is configurable from `limiter.toml`; they are module
+constants in `searx/botdetection/ip_limit.py`. botdetection is a *browser* detector, and
+an API consumer is not a browser.
+
+**Why it matters:**
+The failure is intermittent, not total — four searches an hour succeed — so it presents
+as "web search is flaky" with a 429 that never reaches a Forage log line as anything but
+`searxng_error`. And the switch reads as a security improvement, so it is exactly the
+thing a well-meaning hardening pass turns on.
+
+The trap has a second face: `limiter: true` with **no** backend is inert theatre.
+Upstream logs `The limiter requires Valkey` at ERROR and serves everything unthrottled.
+So the config that *looks* protected is either unprotected or broken, depending on
+whether someone wired up Valkey.
+
+**Mitigation:**
+The baked config ships `limiter: false` and says why, at length, in place.
+`tests/test_searxng_docker.py::TestSearxngLimiter::test_limiter_is_off_in_the_baked_config`
+fails if it comes back, and `searxng_smoke.py` exercises all three states in CI — off,
+on-with-Valkey (which must throttle) and on-without (which must log and serve). The image
+is protected by *not being exposed*: it is a sidecar on a private network with one client.
+
+A deployment that must expose it opts in with `SEARXNG_LIMITER=true` plus
+`SEARXNG_VALKEY_URL`, and then needs a `pass_ip` entry for its consumer's network — a
+scoped IP-trust relaxation, made by the operator who needs it. `docs/searxng.md` has the
+recipe.
 
 ---
 

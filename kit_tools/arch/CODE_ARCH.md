@@ -39,6 +39,8 @@ Design principles:
 ├── cache.py                 # Valkey/Redis content cache (closed log vocabulary)
 ├── url_validator.py         # SSRF defense: RFC1918 rejection, DNS-rebinding checks
 ├── contract_smoke.py        # CI-only: asserts a running image's /health contract.
+├── searxng_smoke.py         # CI-only: stands the companion image up beside a
+│                            # Valkey on an --internal network and probes it.
 │                            # Not in the image — the Dockerfile COPY list is explicit
 ├── config.yaml              # UA pool, trusted domains, blocklist, thresholds, limits
 ├── Dockerfile               # CPU-torch image; digest-pinned base, uv.lock install,
@@ -48,7 +50,8 @@ Design principles:
 ├── uv.lock                  # CPU-pinned torch on Linux; `grep nvidia-` must stay empty
 ├── pipeline/                # the five sanitization stages + orchestrator + contract
 ├── promptguard/             # Llama Prompt Guard 2 classifier wrapper
-├── searxng/config/          # settings.yml + limiter.toml for the companion SearXNG
+├── searxng/                 # the forage-searxng companion image: Dockerfile
+│                            # (digest-pinned base) + config/ (settings.yml, limiter.toml)
 ├── tests/                   # 24 files; flat, one module per subject
 ├── docs/                    # configuration.md, bootstrap-notes.md, bootstrap-scan.txt
 └── kit_tools/               # this documentation framework + feature specs
@@ -78,6 +81,7 @@ Design principles:
 | `pipeline/stage3_promptguard.py` | 151 | ML injection scan; skipped for trusted domains. |
 | `pipeline/contract.py` | 100 | The versioned response contract (`contract_version`, currently **1.0.0**). |
 | `contract_smoke.py` | 367 | CI's published-image smoke: polls a running container's `/health`, validates it against the same `HealthResponse` model the golden test pins, and reads every wire value from `pipeline/contract.py` at run time. Ships in no image. |
+| `searxng_smoke.py` | 779 | CI's companion-image smoke: creates an egress-free Docker network, runs SearXNG beside a Valkey and probes it from a third container. Docker goes through an injected runner and every judgement is a pure function, so `tests/test_searxng_smoke.py` covers the failure branches without a daemon. Ships in no image. |
 | `pipeline/sanitizer_revision.py` | 31 | Hashes eight source files into a `sanitizer_revision` string. See the gotcha below. |
 
 ---

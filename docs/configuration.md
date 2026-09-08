@@ -204,21 +204,34 @@ exist to make the service *more* conservative, not less.
 ## SearXNG configuration
 
 `searxng/config/` holds the settings for the companion SearXNG instance, not for Forage
-itself. Mount it into your SearXNG container:
+itself. **You no longer mount it**: since `forage-ci-and-image` US-004 it is baked into
+`ghcr.io/washingbearlabs/forage-searxng`, over a digest-pinned upstream base.
+[`docs/searxng.md`](searxng.md) is the full reference — running it, the pin-bump cadence,
+and what CI proves. The short version:
 
 | File | Purpose |
 |------|---------|
-| `settings.yml` | Instance name, enabled engines and their timeouts, `search.formats` (**`json` is required** — Forage calls the JSON API), bind address and port, and the non-secret `secret_key` placeholder for SearXNG's own HTML UI CSRF token. |
-| `limiter.toml` | Bot-detection and rate-limit settings. Relaxed, on the private-network assumption above. |
+| `settings.yml` | Instance name, enabled engines and their timeouts, `search.formats` (**`json` is required** — Forage calls the JSON API), bind address and port. **No `secret_key`**: `SEARXNG_SECRET` is required at runtime and an unset one is a hard start failure. |
+| `limiter.toml` | Bot-detection settings. **Hardened, not relaxed** — no wildcard pass list, no `trusted_proxies` additions, `link_token` off. |
 
-Two coupling points to keep in mind:
+| Variable | Required | What it does |
+|---|---|---|
+| `SEARXNG_SECRET` | **yes** | Signs the SearXNG HTML UI's session cookies. No default, no baked literal. |
+| `SEARXNG_VALKEY_URL` | no | `valkey://host:6379/0`. The verified current name; `SEARXNG_REDIS_URL` still works but is deprecated upstream. |
+| `SEARXNG_LIMITER` | no | `true` turns the rate limiter on. See the warning below. |
+
+Three coupling points to keep in mind:
 
 - Forage pins an explicit engine list on every query. It must stay in sync with the
   engines enabled in `settings.yml` — otherwise a query names an engine SearXNG does not
-  have.
-- The SearXNG image is not pinned to a digest upstream; a `:latest` bump can enable
-  engines this configuration never vetted. That is why the engine list is explicit on
-  both sides.
+  have. `tests/test_searxng_docker.py` asserts the two sets are equal.
+- The upstream base **is** digest-pinned now, so a `:latest` bump can no longer enable
+  engines this configuration never vetted. The trade is that engine fixes no longer
+  arrive on their own: see the pin-bump cadence in `docs/searxng.md`.
+- **The limiter is off, deliberately.** Turning it on refuses Forage's own client: an
+  httpx request is 429'd on the first call (no `Accept-Language` header) and even a
+  browser-shaped client gets four `format!=html` requests per hour. `docs/searxng.md`
+  carries the measurements and the opt-in for a deployment that needs one anyway.
 
 ---
 

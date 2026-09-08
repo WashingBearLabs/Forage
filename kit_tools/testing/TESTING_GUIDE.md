@@ -36,11 +36,24 @@ All four are blocking jobs in `.github/workflows/ci.yml` (`lint`, `typecheck` an
 US-002, `test`). Run them before you push — a red gate costs a round trip on the free
 Actions tier.
 
-**Six jobs run on every push and PR**: the three above plus `build-amd64` and
-`secret-grep` (US-003) and `smoke` (US-005). A seventh, `publish` (US-007), runs only on
-a push to `main` or a `v*` tag and `needs:` all six — see
+**Ten jobs, in two lanes.** The *service* lane runs `lint`, `typecheck`, `test`,
+`build-amd64` and `secret-grep` (US-003) and `smoke` (US-005) on every push and PR, plus
+`publish` (US-007) on a push to `main` or a `v*` tag, which `needs:` all six — see
 [`docs/releases.md`](../../docs/releases.md) for the tag scheme and what a green publish
-does and does not prove. `smoke` is the only lane that *runs*
+does and does not prove. The *companion* lane (US-004) is `searxng-build`,
+`searxng-smoke` and `searxng-publish`, keyed off `searxng-v*` tags and documented in
+[`docs/searxng.md`](../../docs/searxng.md); `searxng-publish` `needs:` its own two plus
+`test`. The two lanes are mutually exclusive by ref prefix: a `searxng-v*` tag skips
+every service-image job and a `v*` tag skips all three companion jobs, each asserted by
+*evaluating* the job's own condition against both tag shapes.
+
+`searxng-smoke` is worth knowing about separately: its blocking half stands the companion
+image up beside a Valkey on a `--internal` Docker network (no egress at all) and runs four
+phases through `searxng_smoke.py`, while a `--live` probe that reaches real engines runs
+`continue-on-error: true` afterwards. Reproduce either with
+`uv run python searxng_smoke.py --image forage-searxng:ci [--live]`.
+
+`smoke` is the only service-lane job that *runs*
 the image rather than inspecting it — it starts the built container with no Hugging Face
 token and asserts the degraded `/health` contract through `contract_smoke.py`. You can
 run exactly what it runs:
@@ -79,7 +92,7 @@ crash reads as a false regression.
 
 ## Test Structure
 
-24 files under `tests/`, flat, one module per subject. **771 tests, all green** as of
+25 files under `tests/`, flat, one module per subject. **905 tests, all green** as of
 2026-09-08.
 
 | Module | Tests | Covers |
@@ -94,13 +107,14 @@ crash reads as a false regression.
 | `tests/test_models.py` | 31 | Pydantic request/response models |
 | `tests/test_app.py` | 31 | FastAPI endpoints, `/health` body, capability break-glass |
 | `tests/test_stage3_promptguard.py` | 30 | ML scan; transformers/torch mocked |
-| `tests/test_ci_workflow.py` | 147 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane, image build + secret-grep gate, smoke job + artifact handoff, publish lane (tag policy evaluated, not matched) |
+| `tests/test_ci_workflow.py` | 201 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane, image build + secret-grep gate, smoke job + artifact handoff, both publish lanes (tag policies evaluated, not matched) and the cross-fire guards between them |
 | `tests/test_contract_smoke.py` | 47 | `contract_smoke.py`: every `/health` clause, polling, and the single-source ties to the golden schema |
 | `tests/test_stage5_url_audit.py` | 28 | Outbound fetch + redirect-chain audit |
 | `tests/test_stage1_pdf.py` | 23 | PDF branch, subprocess isolation |
 | `tests/test_dockerfile.py` | 20 | `Dockerfile` text: no secret may enter the build, digest-pinned base, lock-driven install |
 | `tests/test_pyright_policy.py` | 12 | Type-checking policy: strict, one carve-out, no suppressions |
-| `tests/test_searxng_docker.py` | 9 | `searxng/config/` sanity (config half only) |
+| `tests/test_searxng_smoke.py` | 61 | `searxng_smoke.py`: every evaluator branch, the Docker argv it builds, and the `--internal` wiring |
+| `tests/test_searxng_docker.py` | 28 | `searxng/Dockerfile` + baked config: the negatives (no wildcard pass list, no baked secret, no header trust) and engine parity with `_SEARXNG_ENGINES` |
 | `tests/test_hermeticity.py` | 8 | Executing canary for the autouse socket guard |
 | `tests/test_sanitizer_revision.py` | 6 | Revision hashing over `_REVISION_SOURCES` |
 | `tests/test_dependency_lock.py` | 3 | `uv.lock` stays CPU-only (no `nvidia-*` wheels) |
@@ -134,7 +148,7 @@ canary cannot check about itself: that it is committed and not skipped.
 **Async needs no decorator.** `asyncio_mode = "auto"` is set in `pyproject.toml`.
 
 **The exact count is a gate, not a floor.** The extraction verified *exactly* 531 tests
-moved (534 collected after alias parametrization); the suite has since grown to 771 as CI
+moved (534 collected after alias parametrization); the suite has since grown to 905 as CI
 guards landed (US-001 +33, US-006 +19, US-002 +21, US-003 +49, US-005 +75, US-007 +40). A silently
 dropped module cannot hide under a "≥ N passed" assertion. When you add tests, update the
 counts here.
@@ -181,6 +195,8 @@ test_mapping:
   "pipeline/extraction_limits.py": "tests/test_stage1_extraction.py"
   "promptguard/classifier.py": "tests/test_stage3_promptguard.py"
   "searxng/config/*": "tests/test_searxng_docker.py"
+  "searxng/Dockerfile": "tests/test_searxng_docker.py"
+  "searxng_smoke.py": "tests/test_searxng_smoke.py"
   "tests/conftest.py": "tests/test_hermeticity.py"
   ".github/workflows/ci.yml": "tests/test_ci_workflow.py"
   "Dockerfile": "tests/test_dockerfile.py"

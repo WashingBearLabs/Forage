@@ -98,7 +98,9 @@ runtime API, and no config database.
 - `SEARXNG_URL` (default `http://searxng:8080`) — SearXNG base URL for `/search`.
 - `config.yaml` — user-agent pool, news-domain trust list, seed blocklist, PromptGuard
   threshold, the `extract_route_enabled` gate, and the `extraction:` resource limits.
-- SearXNG's own settings live in `searxng/config/`.
+- SearXNG's own settings are baked into the companion image built from `searxng/`
+  (`ghcr.io/washingbearlabs/forage-searxng`) — see [`docs/searxng.md`](docs/searxng.md).
+  `SEARXNG_SECRET` is required when you run it.
 
 The complete reference — every variable, every `config.yaml` key, defaults, the
 break-glass caveat, and credential-handling guidance — lives in
@@ -155,9 +157,15 @@ suite, an image build, a baked-secret scan and a contract smoke against the buil
 container; a `v*` tag or a push to `main` publishes a multi-arch image to
 `ghcr.io/washingbearlabs/forage` behind all six gates. The tag scheme, the pre-release
 policy and what a green publish does and does not prove are in
-[`docs/releases.md`](docs/releases.md). **The repository and its packages are private
-until the one-way public flip**, so those pulls are not anonymous yet.
+[`docs/releases.md`](docs/releases.md).
 
-Still to come: download-at-start model bootstrap, the `forage-searxng` companion image,
+A second, independently versioned lane publishes the **companion SearXNG image**,
+`ghcr.io/washingbearlabs/forage-searxng` — upstream's SearXNG at a digest-pinned base
+plus a baked config with honest public defaults (no wildcard pass list, no baked secret,
+no client-header trust) — behind its own hermetic cross-container smoke.
+[`docs/searxng.md`](docs/searxng.md) has the runbook. **The repository and both packages
+are private until the one-way public flip**, so those pulls are not anonymous yet.
+
+Still to come: download-at-start model bootstrap,
 an optional in-memory cache when no Valkey is configured, and the frozen OpenAPI
 contract.

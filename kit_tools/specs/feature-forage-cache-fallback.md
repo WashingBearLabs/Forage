@@ -261,9 +261,18 @@ reaches a working `/retrieve` + `/search` round-trip.
 **Implementation Hints:**
 - `compose/minimal.yml`: `forage` (weights via spec 3's download-at-start, named volume
   `forage-model-cache:/app/model-cache` — the shared literal `docs/weights.md` pins) +
-  **service named `searxng`** running the spec-2 image (`SEARXNG_SECRET` passthrough per
-  its documented mechanism, plus its Redis-backend wiring via the env var spec 2 verifies (working name `SEARXNG_REDIS_URL`, pending that verification) where the
-  fragment includes a redis) — service names MUST match the code's neutral defaults
+  **service named `searxng`** running the spec-2 image (`SEARXNG_SECRET` passthrough —
+  **required**: spec 2 verified that an unset one is a hard start failure, exit 1, so
+  the fragment must pass it or `docker compose up` dies on the first try). **Corrected
+  by spec 2 US-004, 2026-09-08:** the verified backend env var is **`SEARXNG_VALKEY_URL`**
+  (`valkey://valkey:6379/0`), not the working name `SEARXNG_REDIS_URL` this hint used to
+  carry — upstream renamed the setting family to Valkey and marks `redis.url` deprecated;
+  the old name still works but warns. **And do not wire a limiter into these fragments
+  at all**: spec 2 measured that `SEARXNG_LIMITER=true` with a working backend refuses
+  Forage's own httpx client with HTTP 429 on the *first* request, so a compose fragment
+  that turned it on would fail its own `/search` round-trip. The spec-2 image ships
+  `limiter: false`; leave it. See `docs/searxng.md` — service names MUST match the code's
+  neutral defaults
   (`http://searxng:8080`; round-2 finding: a `forage-searxng` service name breaks the
   fragment's own round-trip with `SEARXNG_URL` unset) — no Valkey for the content cache.
 - `compose/full.yml`: adds pinned `valkey/valkey:8` + explicit `VALKEY_URL` wiring; service
