@@ -346,8 +346,18 @@ class _ExpressionParser:
         return needle in haystack
 
 
-def _evaluate(expression: str, ref: str, event_name: str) -> bool:
-    """Evaluate a workflow condition for a hypothetical ref and event."""
+def _evaluate(
+    expression: str, ref: str, event_name: str, *, version: str | None = None
+) -> bool:
+    """Evaluate a workflow condition for a hypothetical ref and event.
+
+    ``version`` supplies ``steps.version.outputs.version``, which the
+    companion lane's tag policy is written against rather than against the ref.
+    It has to be: every ref in that lane contains a hyphen — it is in the
+    `searxng-v` prefix — so the service lane's `!contains(github.ref, '-')`
+    pre-release test would read *every* companion tag as a pre-release. The
+    version is derived by stripping the prefix, and the policy is stated on it.
+    """
     stripped = expression.strip()
     if stripped.startswith("${{") and stripped.endswith("}}"):
         stripped = stripped[3:-2]
@@ -356,6 +366,8 @@ def _evaluate(expression: str, ref: str, event_name: str) -> bool:
         "github.ref_name": ref.rsplit("/", 1)[-1],
         "github.event_name": event_name,
     }
+    if version is not None:
+        context["steps.version.outputs.version"] = version
     return _ExpressionParser(_tokenize_expression(stripped), context).parse()
 
 
@@ -494,28 +506,40 @@ class TestPermissions:
             "else may inherit them."
         )
 
-    def test_publish_is_the_only_job_that_raises_write_permissions(
+    def test_only_the_publish_lanes_raise_write_permissions(
         self, jobs: dict[str, Any]
     ) -> None:
         # The general form of the rule, rather than one guard per job. Until
         # US-007 the file's shape was simply "no job block declares
         # permissions", and `build-amd64` and `smoke` each asserted that about
-        # themselves. That is no longer true and pretending otherwise would be
-        # the dishonest reading: `publish` *must* raise two write scopes to do
-        # its job. So the invariant is stated as what it actually is — exactly
-        # one job may raise write access, it is `publish`, and the grant is
-        # exactly these two scopes. A third scope, or a second job, fails here
-        # even if that job never existed when this was written.
+        # themselves. That stopped being true when `publish` had to raise two
+        # write scopes to do its job, so the invariant was restated as an exact
+        # map rather than a prohibition — and it is restated again here, for
+        # the same reason and in the same shape.
+        #
+        # US-004 adds a second publish lane, and the interesting part of this
+        # map is now the asymmetry rather than the count: `searxng-publish`
+        # gets `packages` and NOT `contents`. It creates no GitHub Release, so
+        # it needs no write to the repository's contents, and a lane that
+        # publishes someone else's software under a pinned digest is exactly
+        # the lane that should not be able to write to this repository.
+        #
+        # An extra scope, or a third job, fails here even if that job did not
+        # exist when this was written.
         raised: dict[str, list[str]] = {}
         for name, job in jobs.items():
             perms: dict[str, Any] = job.get("permissions") or {}
             writable = sorted(key for key, value in perms.items() if value == "write")
             if writable:
                 raised[name] = writable
-        assert raised == {"publish": ["contents", "packages"]}, (
-            f"Jobs raising write permissions: {raised}. Exactly one job may — "
+        assert raised == {
+            "publish": ["contents", "packages"],
+            "searxng-publish": ["packages"],
+        }, (
+            f"Jobs raising write permissions: {raised}. Exactly two may — "
             "`publish`, with `contents: write` for the Release and "
-            "`packages: write` for the registry push, and nothing else."
+            "`packages: write` for the registry push; and `searxng-publish`, "
+            "with `packages: write` alone."
         )
 
     def test_a_job_that_scopes_permissions_and_checks_out_keeps_contents(
@@ -2025,23 +2049,608 @@ class TestImageArtifactHandoff:
                 "come from the same single-sourced names or they can drift"
             )
 
-    def test_there_is_exactly_one_image_artifact(
+    def test_there_is_exactly_one_artifact_per_image(
         self, jobs: dict[str, Any], workflow: Any
     ) -> None:
-        # One artifact, provably the same bytes, never a rebuild — and never a
-        # second copy either: the tarball is ~375 MiB against a 500 MB
-        # free-tier quota, so a per-consumer artifact would triple the bill for
-        # no added guarantee.
+        # One artifact per image, provably the same bytes, never a rebuild —
+        # and never a second copy of the *same* image: the service tarball is
+        # ~375 MiB against a 500 MB free-tier quota, so a per-consumer artifact
+        # would triple the bill for no added guarantee.
+        #
+        # This used to read `len(uploads) == 1`, which was the right rule while
+        # there was one image. US-004 publishes a second, genuinely different
+        # one (~90 MiB), and its three-job lane needs the same
+        # build→smoke→publish identity chain for the same reason. So the rule
+        # is restated as what it always meant: an exact set, named. A third
+        # entry fails here — including a redundant copy of either image, which
+        # is the mistake the original was written to catch.
+        expected = {
+            _resolve_env(workflow, "${{ env.IMAGE_ARTIFACT }}"),
+            _resolve_env(workflow, "${{ env.SEARXNG_IMAGE_ARTIFACT }}"),
+        }
         uploads: set[str] = set()
         for step in _all_steps(jobs):
             if _UPLOAD_ACTION not in str(step.get("uses", "")):
                 continue
             with_block: dict[str, Any] = step.get("with") or {}
             uploads.add(_resolve_env(workflow, str(with_block.get("name", ""))))
-        assert len(uploads) == 1, (
-            f"The workflow uploads {sorted(uploads)}. Consumers share one image "
-            "artifact; a second one is storage nobody reads."
+        assert uploads == expected, (
+            f"The workflow uploads {sorted(uploads)}, expected "
+            f"{sorted(expected)} — one artifact per published image, and no "
+            "second copy of either."
         )
+
+
+# ---------------------------------------------------------------------------
+# The companion image's lane (US-004)
+# ---------------------------------------------------------------------------
+
+# A companion pre-release, needed alongside `_SEARXNG_REF` because this lane's
+# pre-release test cannot be the service lane's. Every ref here contains a
+# hyphen — it is in the `searxng-v` prefix — so `!contains(github.ref, '-')`
+# would read every companion tag as a pre-release and `latest` would never
+# move. The policy is written against the version, after the prefix comes off.
+_SEARXNG_PRERELEASE_REF = "refs/tags/searxng-v0.2.0-rc"
+
+_SEARXNG_JOBS = ("searxng-build", "searxng-smoke", "searxng-publish")
+_SERVICE_IMAGE_JOBS = ("build-amd64", "secret-grep", "smoke", "publish")
+
+_SEARXNG_SMOKE_RUN = "uv run python searxng_smoke.py"
+_SEARXNG_SMOKE_MODULE_PATH = _REPO_ROOT / "searxng_smoke.py"
+
+# The searxng lane's own handoff: producer, and every job that must download
+# and prove the identity of what it consumes.
+_SEARXNG_IMAGE_CONSUMERS = ("searxng-smoke", "searxng-publish")
+
+
+def _searxng_tag_rules(jobs: dict[str, Any]) -> list[str]:
+    with_block: dict[str, Any] = (
+        _step_using(jobs, "searxng-publish", _METADATA_ACTION).get("with") or {}
+    )
+    return [
+        line.strip()
+        for line in str(with_block.get("tags", "")).splitlines()
+        if line.strip()
+    ]
+
+
+def _searxng_enabled_tag_rules(jobs: dict[str, Any], version: str) -> list[str]:
+    """The companion tag rules whose `enable=` holds for a given version."""
+    enabled: list[str] = []
+    for rule in _searxng_tag_rules(jobs):
+        match = re.search(r"enable=(.*)$", rule)
+        if match is None or _evaluate(
+            match.group(1), _SEARXNG_REF, "push", version=version
+        ):
+            enabled.append(rule)
+    return enabled
+
+
+class TestLaneCrossFire:
+    """The two publish lanes are mutually exclusive, and it is machine-checked.
+
+    The spec's edge-case list asks that a `searxng-v*` tag never trigger the
+    service publish lane *and vice versa*. Both directions are asserted the
+    same way US-007 established: by evaluating each job's own condition against
+    each tag shape, rather than by asserting a substring is present somewhere.
+    A rewritten condition that happened to keep the same words would pass a
+    substring check and fail this one.
+    """
+
+    @pytest.mark.parametrize("job_name", _SERVICE_IMAGE_JOBS)
+    def test_no_service_image_job_runs_on_a_companion_tag(
+        self, jobs: dict[str, Any], job_name: str
+    ) -> None:
+        condition = jobs[job_name].get("if")
+        assert condition is not None, (
+            f"{job_name} has no `if:`. Every job that builds, inspects or "
+            "publishes the *service* image must exclude `searxng-v*`: a "
+            "companion tag ships the companion image and nothing else, so five "
+            "minutes and 375 MiB of artifact storage would go on an image no "
+            "job in that lane reads."
+        )
+        assert _evaluate(str(condition), _SEARXNG_REF, "push") is False, (
+            f"{job_name} runs on {_SEARXNG_REF}. Condition was:\n{condition}"
+        )
+
+    @pytest.mark.parametrize("job_name", _SEARXNG_JOBS)
+    def test_no_companion_job_runs_on_a_service_release_tag(
+        self, jobs: dict[str, Any], job_name: str
+    ) -> None:
+        condition = jobs[job_name].get("if")
+        assert condition is not None, f"{job_name} has no `if:`"
+        for ref in (_RELEASE_REF, _PRERELEASE_REF):
+            assert _evaluate(str(condition), ref, "push") is False, (
+                f"{job_name} runs on {ref}. Condition was:\n{condition}"
+            )
+
+    @pytest.mark.parametrize("job_name", _SERVICE_IMAGE_JOBS)
+    def test_service_image_jobs_still_run_on_the_events_that_matter(
+        self, jobs: dict[str, Any], job_name: str
+    ) -> None:
+        # The cross-fire guard must not have narrowed the service lane past
+        # `searxng-v*`. `publish` is excluded from the pull-request case by
+        # design (a PR head is not a release candidate); the other three run.
+        condition = str(jobs[job_name]["if"])
+        assert _evaluate(condition, _RELEASE_REF, "push") is True
+        assert _evaluate(condition, _MAIN_REF, "push") is True
+        if job_name != "publish":
+            assert _evaluate(condition, _PR_REF, "pull_request") is True
+
+    @pytest.mark.parametrize("job_name", ("searxng-build", "searxng-smoke"))
+    def test_the_companion_build_and_smoke_run_wherever_the_config_can_change(
+        self, jobs: dict[str, Any], job_name: str
+    ) -> None:
+        condition = str(jobs[job_name]["if"])
+        assert _evaluate(condition, _PR_REF, "pull_request") is True, (
+            f"{job_name} does not run on pull requests. A PR that edits "
+            "searxng/config/ must be smoked before it reaches main — that is "
+            "the event where the baked config is most likely to change."
+        )
+        assert _evaluate(condition, _MAIN_REF, "push") is True
+        assert _evaluate(condition, _SEARXNG_REF, "push") is True
+
+    def test_the_companion_publish_fires_only_on_its_own_tags(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        condition = str(jobs["searxng-publish"]["if"])
+        assert _evaluate(condition, _SEARXNG_REF, "push") is True
+        assert _evaluate(condition, _SEARXNG_PRERELEASE_REF, "push") is True
+        # No `main`-push publish: unlike the service image, this one changes
+        # only when the pinned digest or the baked config does, so a `sha-` tag
+        # per commit would be a registry full of identical images.
+        assert _evaluate(condition, _MAIN_REF, "push") is False
+        assert _evaluate(condition, _PR_REF, "pull_request") is False
+
+
+class TestSearxngBuildJob:
+    """The companion build: pinned context, no push, one asserted artifact."""
+
+    def test_the_job_exists(self, jobs: dict[str, Any]) -> None:
+        assert "searxng-build" in jobs
+
+    def test_it_builds_the_searxng_directory_as_its_own_context(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        with_block: dict[str, Any] = (
+            _step_using(jobs, "searxng-build", _BUILD_ACTION).get("with") or {}
+        )
+        assert str(with_block.get("context")) == "searxng", (
+            f"searxng-build's context is {with_block.get('context')!r}. It must "
+            "be `searxng`, not the repo root: a narrower context is what stops "
+            "`COPY config/` from ever reaching anything else in the repository."
+        )
+
+    def test_it_never_pushes(self, jobs: dict[str, Any]) -> None:
+        with_block: dict[str, Any] = (
+            _step_using(jobs, "searxng-build", _BUILD_ACTION).get("with") or {}
+        )
+        assert with_block.get("push") is False, (
+            "searxng-build must not push. Publishing is searxng-publish's, "
+            "behind the smoke and the test lane and its own job-scoped "
+            "`packages: write`."
+        )
+        assert with_block.get("load") is True, (
+            "searxng-build must `load: true` — the image has to reach this "
+            "runner's daemon to be saved and handed on"
+        )
+
+    def test_it_builds_only_amd64(self, jobs: dict[str, Any]) -> None:
+        with_block: dict[str, Any] = (
+            _step_using(jobs, "searxng-build", _BUILD_ACTION).get("with") or {}
+        )
+        assert str(with_block.get("platforms")) == "linux/amd64", (
+            "The gated build is amd64: `load: true` cannot put a manifest list "
+            "in a daemon, and the smoke runs on the runner's own architecture."
+        )
+
+    def test_it_uses_its_own_cache_scope(self, jobs: dict[str, Any]) -> None:
+        with_block: dict[str, Any] = (
+            _step_using(jobs, "searxng-build", _BUILD_ACTION).get("with") or {}
+        )
+        cache_from = str(with_block.get("cache-from", ""))
+        cache_to = str(with_block.get("cache-to", ""))
+        assert "scope=searxng" in cache_from and "scope=searxng" in cache_to, (
+            f"searxng-build's cache is {cache_from!r} / {cache_to!r}. It cannot "
+            "share `build-amd64`'s default scope: that job writes an amd64 "
+            "service manifest on every run, so a shared scope would have the "
+            "two images evicting each other forever (US-007's arm64 finding, "
+            "in the other direction)."
+        )
+
+    def test_it_records_the_image_id_as_a_hard_failure(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        script = _run_text(jobs, "searxng-build")
+        body = _if_block_body(script, "-z", "inspected")
+        assert body is not None and "exit 1" in body, (
+            "searxng-build must fail — not warn — when the daemon holds no "
+            "image to record. There would be nothing to hand on, and every "
+            "downstream identity assertion would be comparing against an empty "
+            "string. (US-003's escaped mutation: a substring check over the "
+            "whole script tests its vocabulary, not its control flow.)"
+        )
+
+
+class TestSearxngSmokeJob:
+    """The blocking half gates; the advisory half reports and cannot fail it."""
+
+    def test_the_job_exists_and_needs_the_build(self, jobs: dict[str, Any]) -> None:
+        needs = jobs["searxng-smoke"].get("needs")
+        needs_list = [needs] if isinstance(needs, str) else list(needs or [])
+        assert needs_list == ["searxng-build"]
+
+    def test_the_smoke_module_is_committed(self) -> None:
+        assert _SEARXNG_SMOKE_MODULE_PATH.exists(), (
+            "searxng_smoke.py must exist at the repo root — the job runs the "
+            "committed script, not a heredoc"
+        )
+
+    def test_the_blocking_step_runs_the_committed_script(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        steps = _steps(jobs, "searxng-smoke")
+        blocking = [
+            step
+            for step in steps
+            if _SEARXNG_SMOKE_RUN in str(step.get("run", ""))
+            and "--live" not in str(step.get("run", ""))
+        ]
+        assert len(blocking) == 1, (
+            f"Expected exactly one blocking smoke step; found {len(blocking)}"
+        )
+        assert not blocking[0].get("continue-on-error"), (
+            "The hermetic smoke is the gate. `continue-on-error` on it would "
+            "leave the lane with no blocking assertion at all while still "
+            "showing a green tick."
+        )
+
+    def test_the_live_probe_is_advisory(self, jobs: dict[str, Any]) -> None:
+        steps = _steps(jobs, "searxng-smoke")
+        live = [step for step in steps if "--live" in str(step.get("run", ""))]
+        assert len(live) == 1, "Expected exactly one --live step"
+        assert live[0].get("continue-on-error") is True, (
+            "The live-engine probe must be non-blocking. A live third-party "
+            "query inside a publish `needs:` chain reproduces the "
+            "every-engine-throttled outage kit_tools/docs/GOTCHAS.md records, "
+            "with a publish gate as the victim and no break-glass — round 3's "
+            "critical, and the whole reason the smoke is split in two."
+        )
+        assert live[0].get("id") == "live", (
+            "The advisory step needs an `id` so its outcome can be reported; "
+            "an orange step nobody records is an orange step nobody reads."
+        )
+
+    def test_the_advisory_outcome_is_recorded(self, jobs: dict[str, Any]) -> None:
+        steps = _steps(jobs, "searxng-smoke")
+        reporters = [
+            step
+            for step in steps
+            if "steps.live.outcome"
+            in str(step.get("env", "")) + str(step.get("run", ""))
+        ]
+        assert reporters, (
+            "Nothing reads `steps.live.outcome`. The advisory half only earns "
+            "its place if its verdict is written down where the next pin bump "
+            "will see it."
+        )
+        assert any(
+            str(step.get("if", "")).strip() == "always()" for step in reporters
+        ), (
+            "The outcome report must run with `if: always()` — the case worth "
+            "recording is the one where the probe failed."
+        )
+
+    def test_the_smoke_checks_out_the_repository(self, jobs: dict[str, Any]) -> None:
+        # Unlike `secret-grep`, and for the same reason `smoke` does: the
+        # assertions and the advisory engine list come from *this commit*.
+        assert any(
+            "checkout" in str(step.get("uses", ""))
+            for step in _steps(jobs, "searxng-smoke")
+        )
+
+    def test_the_smoke_syncs_with_locked(self, jobs: dict[str, Any]) -> None:
+        assert "uv sync --extra dev --locked" in _run_text(jobs, "searxng-smoke"), (
+            "Reuse the same `--locked` sync as every other lane: the smoke "
+            "imports from this tree and must resolve against the pinned "
+            "dependency versions"
+        )
+
+    def test_the_smoke_does_not_enumerate_its_assertions_in_bash(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        # The parallel of `test_smoke_does_not_enumerate_the_contract_in_bash`.
+        # Every judgement belongs in searxng_smoke.py, where
+        # tests/test_searxng_smoke.py can drive its failure branches; a copy
+        # here would be a second one that nothing exercises.
+        #
+        # The check is on the *tools*, not on a word list. A first attempt
+        # grepped the shell for "results", "429" and "limiter" and failed on
+        # the advisory step's own prose ("the engines ... returned results") —
+        # which is the vocabulary-versus-behaviour mistake US-003 recorded,
+        # committed by the guard rather than by the thing guarded. These three
+        # are what you reach for to restate an assertion in bash, and none has
+        # any business in this job.
+        script = _run_text(jobs, "searxng-smoke")
+        for tool in ("grep", "jq", "curl"):
+            assert not re.search(rf"(?:^|[\s|(]){tool}\b", script), (
+                f"The searxng-smoke job's shell invokes {tool!r}. Its "
+                "assertions live in searxng_smoke.py, which is covered by "
+                "tests/test_searxng_smoke.py; an HTTP probe or a JSON check "
+                "here would be an untested second copy of the contract."
+            )
+
+    def test_the_smoke_raises_no_permissions(self, jobs: dict[str, Any]) -> None:
+        assert not jobs["searxng-smoke"].get("permissions"), (
+            "searxng-smoke needs nothing beyond the top-level read-only grant"
+        )
+
+
+class TestSearxngPublishJob:
+    """The companion publish: gated three ways, and stingy about `latest`."""
+
+    def test_it_needs_its_build_its_smoke_and_the_test_lane(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        needs = sorted(jobs["searxng-publish"].get("needs") or [])
+        assert needs == ["searxng-build", "searxng-smoke", "test"], (
+            f"searxng-publish needs {needs}. `test` is the edge that matters "
+            "most: the guards that stop a relaxation reaching a published "
+            "companion image — no wildcard pass list, no baked secret, no "
+            "header trust, engine parity with the code that queries it — are "
+            "pytest tests, not workflow steps. Publishing over a red suite "
+            "would publish exactly the config they exist to refuse."
+        )
+
+    def test_its_permissions_are_packages_write_and_contents_read(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        perms: dict[str, Any] = jobs["searxng-publish"].get("permissions") or {}
+        assert perms == {"contents": "read", "packages": "write"}, (
+            f"searxng-publish permissions are {perms}. `packages: write` to "
+            "push; `contents: read` written out rather than inherited, because "
+            "a job-level block REPLACES the top-level grant and checkout would "
+            "otherwise 404 on a private repository. No `contents: write`: this "
+            "lane creates no Release."
+        )
+
+    def test_it_creates_no_github_release(self, jobs: dict[str, Any]) -> None:
+        script = _run_text(jobs, "searxng-publish")
+        assert "gh release" not in script, (
+            "The companion lane must not create a Release. Its changelog is "
+            "upstream's, and a Release here would be an empty page asserting "
+            "authorship of someone else's work. The registry tag is the "
+            "artifact — and a Release would need `contents: write`, which is "
+            "the permission this lane deliberately does not have."
+        )
+
+    def test_it_targets_the_companion_ghcr_repository(
+        self, jobs: dict[str, Any], workflow: Any
+    ) -> None:
+        with_block: dict[str, Any] = (
+            _step_using(jobs, "searxng-publish", _METADATA_ACTION).get("with") or {}
+        )
+        images = _resolve_env(workflow, str(with_block.get("images", "")))
+        assert images == "ghcr.io/washingbearlabs/forage-searxng"
+        assert images == images.lower(), "GHCR rejects an upper-case path component"
+
+    def test_metadata_actions_own_latest_handling_is_off(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        with_block: dict[str, Any] = (
+            _step_using(jobs, "searxng-publish", _METADATA_ACTION).get("with") or {}
+        )
+        assert "latest=false" in str(with_block.get("flavor", "")), (
+            "`latest=auto` does roughly the right thing, and roughly is not a "
+            "standard to hold the one tag whose accidental movement is a "
+            "production incident to. Every rule is stated instead."
+        )
+
+    def test_a_release_version_publishes_the_alias_and_latest(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        enabled = _searxng_enabled_tag_rules(jobs, "0.1.0")
+        rendered = " ".join(enabled)
+        assert "{{version}}" in rendered
+        assert "{{major}}.{{minor}}" in rendered
+        assert "value=latest" in rendered
+
+    def test_a_prerelease_version_moves_neither_alias_nor_latest(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        # THE trap this lane's policy exists to avoid, in both directions. The
+        # service lane tests `!contains(github.ref, '-')`; copied here that is
+        # *always false*, because `searxng-v` itself contains a hyphen — so
+        # `latest` would never move for any release. The test is on the
+        # version, and both halves are checked: a pre-release moves nothing
+        # extra, and a release does move both.
+        enabled = " ".join(_searxng_enabled_tag_rules(jobs, "0.2.0-rc"))
+        assert "{{version}}" in enabled, "the exact version is always published"
+        assert "{{major}}.{{minor}}" not in enabled, (
+            "A pre-release moved the X.Y alias. Both it and `latest` are "
+            "pointers consumers follow, and a release candidate is by "
+            "definition something no consumer should be followed into."
+        )
+        assert "value=latest" not in enabled, "A pre-release moved `latest`"
+
+    def test_the_version_is_derived_by_stripping_the_tag_prefix(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        script = _run_text(jobs, "searxng-publish")
+        assert "GITHUB_REF_NAME#searxng-v" in script, (
+            "`searxng-v0.1.0` is not a semver string, so metadata-action "
+            "cannot parse the ref: the prefix has to come off and be handed to "
+            "every tag rule as an explicit `value=`."
+        )
+        body = _if_block_body(script, "version", "GITHUB_REF_NAME")
+        assert body is not None and "exit 1" in body, (
+            "A ref that did not carry the prefix must fail the job rather than "
+            "publish an image tagged with the whole ref name."
+        )
+
+    def test_it_verifies_the_published_layers_against_the_gated_ones(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        script = _run_text(jobs, "searxng-publish")
+        assert "diff_ids" in script and "RootFS.Layers" in script, (
+            "The amd64 leg is rebuilt from cache at publish time — a buildx "
+            "multi-arch push cannot ship a `docker load`ed image — so "
+            "something has to tie what reached the registry back to what the "
+            "smoke executed. Diff IDs are that something: the sha256 of each "
+            "layer's uncompressed tar, unaffected by a registry re-compressing "
+            "blobs or a different exporter writing the config."
+        )
+        body = _if_block_body(script, "published_layers", "gated_layers")
+        assert body is not None and "exit 1" in body, (
+            "A layer mismatch must fail the job, not warn. A warning here "
+            "means the tags exist, point at an ungated image, and the run is "
+            "green."
+        )
+
+    def test_a_vacuous_layer_comparison_is_refused(self, jobs: dict[str, Any]) -> None:
+        script = _run_text(jobs, "searxng-publish")
+        body = _if_block_body(script, "gated_count", "-eq 0")
+        assert body is not None and "exit 1" in body, (
+            "If both sides degraded to an empty list, string equality would "
+            "pass a comparison of nothing against nothing. The floor is what "
+            "makes the comparison mean something."
+        )
+
+    def test_it_uses_a_separate_publish_cache_scope(self, jobs: dict[str, Any]) -> None:
+        with_block: dict[str, Any] = (
+            _step_using(jobs, "searxng-publish", _BUILD_ACTION).get("with") or {}
+        )
+        cache_to = str(with_block.get("cache-to", ""))
+        cache_from = str(with_block.get("cache-from", ""))
+        assert "scope=searxng-publish" in cache_to
+        assert (
+            "scope=searxng" in cache_from and "scope=searxng-publish" in cache_from
+        ), (
+            "The multi-arch publish reads both scopes and writes only its own: "
+            "the gated amd64 layers come from searxng-build's scope, and the "
+            "emulated arm64 layers must not evict them (US-007's finding)."
+        )
+
+    def test_attestations_are_off(self, jobs: dict[str, Any]) -> None:
+        with_block: dict[str, Any] = (
+            _step_using(jobs, "searxng-publish", _BUILD_ACTION).get("with") or {}
+        )
+        assert with_block.get("provenance") is False
+        assert with_block.get("sbom") is False
+
+    def test_the_platform_list_is_read_from_env_not_hardcoded(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        # US-007's escaped mutation, not repeated: `_resolve_env` returns a
+        # non-expression unchanged, so comparing a hardcoded copy of the same
+        # string to the env value passes while single-sourcing is gone. Assert
+        # the expression itself.
+        with_block: dict[str, Any] = (
+            _step_using(jobs, "searxng-publish", _BUILD_ACTION).get("with") or {}
+        )
+        platforms = str(with_block.get("platforms", "")).strip()
+        assert platforms == "${{ env.SEARXNG_PUBLISH_PLATFORMS }}", (
+            f"searxng-publish's platforms are {platforms!r}. docs/searxng.md "
+            "tells the next maintainer that the env key is the one lever for "
+            "an amd64-only fallback; a second copy of the string makes that "
+            "documentation false while everything stays green."
+        )
+
+    def test_the_qemu_step_follows_the_platform_list(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        qemu = _step_using(jobs, "searxng-publish", _QEMU_ACTION)
+        assert "SEARXNG_PUBLISH_PLATFORMS" in str(qemu.get("if", "")), (
+            "Trimming the platform list must drop the emulator with it, rather "
+            "than leaving a step that silently does nothing"
+        )
+
+    def test_the_registry_login_uses_the_workflow_token(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        with_block: dict[str, Any] = (
+            _step_using(jobs, "searxng-publish", _LOGIN_ACTION).get("with") or {}
+        )
+        assert "secrets.GITHUB_TOKEN" in str(with_block.get("password", "")), (
+            "The push authenticates with the run's own scoped token. A stored "
+            "PAT would be a long-lived credential in a repository about to go "
+            "public, and it is not needed."
+        )
+
+
+class TestSearxngImageArtifactHandoff:
+    """The companion lane's own producer/consumer contract, asserted."""
+
+    @pytest.mark.parametrize("consumer", _SEARXNG_IMAGE_CONSUMERS)
+    def test_upload_and_download_agree_on_the_artifact_name(
+        self, jobs: dict[str, Any], workflow: Any, consumer: str
+    ) -> None:
+        upload: dict[str, Any] = (
+            _step_using(jobs, "searxng-build", _UPLOAD_ACTION).get("with") or {}
+        )
+        download: dict[str, Any] = (
+            _step_using(jobs, consumer, _DOWNLOAD_ACTION).get("with") or {}
+        )
+        uploaded = _resolve_env(workflow, str(upload.get("name", "")))
+        downloaded = _resolve_env(workflow, str(download.get("name", "")))
+        assert uploaded and uploaded == downloaded, (
+            f"searxng-build uploads {uploaded!r} but {consumer} downloads "
+            f"{downloaded!r}"
+        )
+
+    @pytest.mark.parametrize("consumer", _SEARXNG_IMAGE_CONSUMERS)
+    def test_the_consumer_asserts_the_loaded_identity(
+        self, jobs: dict[str, Any], consumer: str
+    ) -> None:
+        script = _run_text(jobs, consumer)
+        assert "docker load" in script, (
+            f"{consumer} must load the artifact rather than rebuild. `needs:` "
+            "is an ordering edge, not a shared Docker daemon: a rebuild would "
+            "be a different image with the same Dockerfile."
+        )
+        body = _if_block_body(script, "loaded", "recorded")
+        assert body is not None and "exit 1" in body, (
+            f"{consumer} must FAIL on an identity mismatch, not warn. A "
+            "warning leaves it acting on an image nothing gated."
+        )
+
+    @pytest.mark.parametrize("consumer", _SEARXNG_IMAGE_CONSUMERS)
+    def test_the_consumer_reads_the_files_the_producer_uploads(
+        self, jobs: dict[str, Any], consumer: str
+    ) -> None:
+        script = _run_text(jobs, consumer)
+        for key in ("SEARXNG_IMAGE_TARBALL", "SEARXNG_IMAGE_ID_FILE"):
+            assert key in script, (
+                f"{consumer} never reads ${{{{ env.{key} }}}}; both halves of "
+                "the handoff must come from the same single-sourced names"
+            )
+
+    def test_the_two_lanes_do_not_share_an_artifact(
+        self, jobs: dict[str, Any], workflow: Any
+    ) -> None:
+        env_block: dict[str, Any] = workflow.get("env") or {}
+        assert env_block["IMAGE_ARTIFACT"] != env_block["SEARXNG_IMAGE_ARTIFACT"]
+        assert env_block["IMAGE_REF"] != env_block["SEARXNG_IMAGE_REF"]
+        assert env_block["IMAGE_NAME"] != env_block["SEARXNG_IMAGE_NAME"]
+
+    def test_the_companion_lane_never_touches_the_service_artifact(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        # The failure this prevents is quiet: a copy-paste from `smoke` that
+        # leaves `IMAGE_ARTIFACT` in place downloads the *service* image, and
+        # the identity assert then compares it against a file that is not
+        # there. Better to fail here than to debug that at 375 MiB a run.
+        for job_name in _SEARXNG_JOBS:
+            script = _run_text(jobs, job_name)
+            for step in _steps(jobs, job_name):
+                with_block: dict[str, Any] = step.get("with") or {}
+                script += str(with_block.get("name", ""))
+            assert "env.IMAGE_ARTIFACT" not in script, (
+                f"{job_name} references the service image artifact"
+            )
+            assert "${IMAGE_REF}" not in script, (
+                f"{job_name} references the service image ref"
+            )
 
 
 # ---------------------------------------------------------------------------

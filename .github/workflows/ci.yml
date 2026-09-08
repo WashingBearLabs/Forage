@@ -104,6 +104,27 @@ env:
   # the budget, and a trim has to be visible in one place.
   PUBLISH_PLATFORMS: "linux/amd64,linux/arm64"
 
+  # --- The companion image's lane (US-004) ---
+  #
+  # `forage-searxng` is upstream's SearXNG plus a baked config. It has its own
+  # build, its own smoke and its own publish, keyed off `searxng-v*` tags, and
+  # it shares nothing with the service lane but the `test` job — which it does
+  # need, because the config-regression and engine-parity guards that stop a
+  # relaxation reaching a published image live in the suite.
+  SEARXNG_IMAGE_REF: "forage-searxng:ci"
+  SEARXNG_IMAGE_ARTIFACT: "forage-searxng-image"
+  SEARXNG_IMAGE_TARBALL: "forage-searxng.tar.gz"
+  SEARXNG_IMAGE_ID_FILE: "searxng-image-id.txt"
+  SEARXNG_IMAGE_DOWNLOAD_DIR: "downloaded-searxng-image"
+  # Lower-case and spelled out, for the same reason IMAGE_NAME is: GHCR
+  # rejects an upper-case path component and a publish job is the wrong place
+  # to find that out.
+  SEARXNG_IMAGE_NAME: "ghcr.io/washingbearlabs/forage-searxng"
+  # Cheap here in a way it is not for the service image: this build runs no
+  # RUN step, so the emulated leg is a base layer plus a COPY and costs
+  # seconds rather than minutes. Same trim lever, same single source.
+  SEARXNG_PUBLISH_PLATFORMS: "linux/amd64,linux/arm64"
+
 jobs:
   lint:
     name: lint
@@ -253,6 +274,16 @@ jobs:
 
   build-amd64:
     name: build-amd64
+    # The cross-fire guard, service side. A `searxng-v*` tag ships the
+    # companion image and nothing else, so building, grepping, smoking and
+    # publishing the *service* image on it would spend five minutes and 375 MiB
+    # of artifact storage producing something no job in that lane reads.
+    # `secret-grep`, `smoke` and `publish` each carry the same exclusion rather
+    # than leaning on this job's skip propagating: an explicit condition is
+    # what the guard test can evaluate per job, and propagation is a property
+    # of the `needs:` graph that a later edit could remove without noticing.
+    if: >-
+      !startsWith(github.ref, 'refs/tags/searxng-v')
     runs-on: ubuntu-latest
     # The cold build downloads ~200 MB of CPU torch plus the rest of the lock;
     # the cap is a runaway backstop, not a budget.
@@ -357,6 +388,9 @@ jobs:
     # The image itself arrives through the artifact below, with its identity
     # asserted; a downstream job cannot see the upstream job's Docker daemon.
     needs: build-amd64
+    # Cross-fire guard, service side — see `build-amd64`.
+    if: >-
+      !startsWith(github.ref, 'refs/tags/searxng-v')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -439,6 +473,9 @@ jobs:
     # through the artifact below with its identity asserted, because a
     # downstream job cannot see the upstream job's Docker daemon.
     needs: build-amd64
+    # Cross-fire guard, service side — see `build-amd64`.
+    if: >-
+      !startsWith(github.ref, 'refs/tags/searxng-v')
     runs-on: ubuntu-latest
     # The 120 s health budget, plus `docker load` (~28 s) and a cold `uv sync`.
     # A backstop, not a budget.
@@ -886,3 +923,436 @@ jobs:
           )"
           gh release create "${RELEASE_TAG}" "${release_args[@]}" --notes "${notes}"
           echo "Release ${RELEASE_TAG} created after the image push."
+
+  # ==========================================================================
+  # The companion image's lane (US-004)
+  #
+  # `forage-searxng` is a separate product with a separate version: upstream's
+  # SearXNG at a pinned digest, plus the baked config in `searxng/config/`. It
+  # moves when that pin or that config moves, which is nothing to do with when
+  # the service image moves, so it gets its own tag prefix (`searxng-v*`), its
+  # own build, its own smoke and its own publish.
+  #
+  # The two lanes are mutually exclusive by ref prefix and each says so in its
+  # own `if:` — `refs/tags/v` and `refs/tags/searxng-v` cannot both match, and
+  # `tests/test_ci_workflow.py` proves that by *evaluating* both lanes'
+  # conditions against both tag shapes rather than by reading them.
+  #
+  # The one thing the lanes share is `test`. That is deliberate and it is the
+  # `needs:` edge that matters most here: the guards that stop a relaxation
+  # reaching a published companion image — no wildcard pass list, no baked
+  # secret, no header trust, engine parity with the code that queries it — are
+  # pytest tests, not workflow steps. Publishing this image over a red suite
+  # would publish exactly the config those tests exist to refuse.
+  # ==========================================================================
+
+  searxng-build:
+    name: searxng-build
+    # Cross-fire guard, companion side. `refs/tags/searxng-v0.1.0` does not
+    # start with `refs/tags/v`, so this one condition excludes the service
+    # release lane while still running on pull requests, on `main`, and on
+    # `searxng-v*` tags — which is exactly the set of events where the baked
+    # config could have changed.
+    if: >-
+      !startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # 90 MB image, no compilation, one COPY over a pinned base. A backstop.
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Build the amd64 companion image
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          # `searxng/`, not the repo root: the companion image's build context
+          # is its own directory, so the Dockerfile's `COPY config/` cannot
+          # reach anything else in the repository even by accident.
+          context: searxng
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.SEARXNG_IMAGE_REF }}
+          # Its own cache scope. It cannot share `build-amd64`'s: that job
+          # writes an amd64 service manifest on every run, and a shared scope
+          # would have the two images evicting each other forever.
+          cache-from: type=gha,scope=searxng
+          cache-to: type=gha,mode=max,scope=searxng
+          # Same reason as `build-amd64`: the docker exporter `load: true` uses
+          # cannot carry attestations.
+          provenance: false
+
+      - name: Record the built image ID
+        # The companion half of US-003's handoff contract, and it matters more
+        # here than the wording suggests: what the smoke proves is a property
+        # of *a configuration*, and a configuration is only in an image. If the
+        # smoke and the publish could see different builds, the smoke would be
+        # proving something about a container nobody ships.
+        env:
+          BUILDER_IMAGE_ID: ${{ steps.build.outputs.imageid }}
+        run: |
+          set -euo pipefail
+          inspected="$(docker image inspect --format '{{.Id}}' "${SEARXNG_IMAGE_REF}")"
+          if [ -z "${inspected}" ]; then
+            echo "::error::the daemon holds no image tagged ${SEARXNG_IMAGE_REF}"
+            exit 1
+          fi
+          if [ -z "${BUILDER_IMAGE_ID}" ]; then
+            echo "::notice::build-push-action reported no image ID."
+          elif [ "${BUILDER_IMAGE_ID#sha256:}" != "${inspected#sha256:}" ]; then
+            echo "::notice::builder reported ${BUILDER_IMAGE_ID}, daemon reports ${inspected} (config vs index digest — expected on a containerd image store)"
+          else
+            echo "Builder and daemon agree on the image ID."
+          fi
+          printf '%s\n' "${inspected}" > "${SEARXNG_IMAGE_ID_FILE}"
+          echo "Built ${SEARXNG_IMAGE_REF} = ${inspected}"
+
+      - name: Save the image for the downstream jobs
+        run: |
+          set -euo pipefail
+          docker save "${SEARXNG_IMAGE_REF}" | gzip -1 > "${SEARXNG_IMAGE_TARBALL}"
+          ls -lh "${SEARXNG_IMAGE_TARBALL}" "${SEARXNG_IMAGE_ID_FILE}"
+
+      - name: Upload the companion image artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.SEARXNG_IMAGE_ARTIFACT }}
+          path: |
+            ${{ env.SEARXNG_IMAGE_TARBALL }}
+            ${{ env.SEARXNG_IMAGE_ID_FILE }}
+          # ~90 MB, consumed minutes later in the same run. A second image
+          # artifact against a 500 MB free-tier quota is worth the floor.
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
+  searxng-smoke:
+    name: searxng-smoke
+    needs: searxng-build
+    # Cross-fire guard, companion side — see `searxng-build`.
+    if: >-
+      !startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # Four container starts, each waiting on SearXNG's boot, plus an advisory
+    # probe that reaches real engines. A backstop, not a budget.
+    timeout-minutes: 30
+    steps:
+      # This job checks out, like `smoke` and unlike `secret-grep`: the
+      # assertions live in `searxng_smoke.py` and the advisory probe reads the
+      # enabled engine list out of `searxng/config/settings.yml`, so the smoke
+      # is measured against *this commit's* config rather than a copy of it.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync dev environment
+        run: uv sync --extra dev --locked
+
+      - name: Download the companion image artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ env.SEARXNG_IMAGE_ARTIFACT }}
+          path: ${{ env.SEARXNG_IMAGE_DOWNLOAD_DIR }}
+
+      - name: Load the image and assert it is the one searxng-build built
+        run: |
+          set -euo pipefail
+          recorded="$(tr -d '[:space:]' < "${SEARXNG_IMAGE_DOWNLOAD_DIR}/${SEARXNG_IMAGE_ID_FILE}")"
+          if [ -z "${recorded}" ]; then
+            echo "::error::${SEARXNG_IMAGE_ID_FILE} carried no image ID"
+            exit 1
+          fi
+          gunzip -c "${SEARXNG_IMAGE_DOWNLOAD_DIR}/${SEARXNG_IMAGE_TARBALL}" | docker load
+          loaded="$(docker image inspect --format '{{.Id}}' "${SEARXNG_IMAGE_REF}")"
+          if [ "${loaded#sha256:}" != "${recorded#sha256:}" ]; then
+            echo "::error::loaded image ${loaded} is not the ${recorded} searxng-build recorded — this job would be smoking a different image than the one that was built"
+            exit 1
+          fi
+          echo "Loaded ${SEARXNG_IMAGE_REF} = ${loaded} (identical to searxng-build's)"
+
+      - name: Hermetic smoke (blocking)
+        # Four phases, all on a Docker network created with `--internal`, so
+        # nothing in this step reaches the internet. That is the property that
+        # lets this job sit in a publish `needs:` chain at all: a live engine
+        # query here would reproduce the every-engine-throttled outage
+        # kit_tools/docs/GOTCHAS.md records, with a publish gate as the victim
+        # and no break-glass.
+        #
+        # No assertion is enumerated in this shell. `searxng_smoke.py` holds
+        # them, `tests/test_searxng_smoke.py` covers their failure branches,
+        # and the same command reproduces this job on a laptop — which is what
+        # anyone bumping the base digest will want first.
+        run: |
+          set -euo pipefail
+          uv run python searxng_smoke.py --image "${SEARXNG_IMAGE_REF}"
+
+      - name: Live-engine probe (advisory)
+        # NON-BLOCKING ON PURPOSE, and this is the honest half of the split.
+        #
+        # Whether DuckDuckGo, Brave, Startpage and Mojeek answer a query from a
+        # GitHub-hosted runner is not this repository's to guarantee: shared
+        # egress IPs get throttled, engines change their HTML, and any of that
+        # would turn a red publish into a story about someone else's rate
+        # limiter. So it runs, its outcome is recorded in the step below, and
+        # it cannot fail the job.
+        #
+        # What it is still worth: engine rot is silent otherwise. Poppy's old
+        # deploy-time `:latest` pull meant a broken engine surfaced as thin
+        # search results in production; here it surfaces as an advisory red
+        # line at pin-bump time, which is a much earlier place to meet it.
+        id: live
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          uv run python searxng_smoke.py --image "${SEARXNG_IMAGE_REF}" --live
+
+      - name: Record the advisory outcome
+        # Without this, a failing advisory step is a small orange mark most
+        # people scroll past. This puts the verdict in the job log and in the
+        # run summary, where the next pin bump will actually read it.
+        if: always()
+        env:
+          LIVE_OUTCOME: ${{ steps.live.outcome }}
+        run: |
+          set -euo pipefail
+          echo "Live-engine probe outcome: ${LIVE_OUTCOME}"
+          {
+            echo "### forage-searxng live-engine probe: \`${LIVE_OUTCOME}\`"
+            echo
+            if [ "${LIVE_OUTCOME}" = "success" ]; then
+              echo "The engines the baked config enables returned results."
+            else
+              echo "Advisory only — the blocking hermetic smoke is what gates"
+              echo "this lane. A failure here means engine rot, a throttled"
+              echo "runner IP, or an upstream engine rename: check the step log"
+              echo "before the next \`searxng-v*\` tag."
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Clean up any surviving smoke containers
+        # `searxng_smoke.py` tears its own containers down in a `finally`, so
+        # this only matters when the step itself was killed — a job timeout, a
+        # cancelled run. Cheap insurance against a leaked container holding the
+        # network open on a self-hosted runner one day.
+        if: always()
+        run: |
+          docker rm -f forage-searxng-smoke-sx forage-searxng-smoke-valkey > /dev/null 2>&1 || true
+          docker network rm -f forage-searxng-smoke > /dev/null 2>&1 || true
+
+  searxng-publish:
+    name: searxng-publish
+    # Tags only, and only this prefix. There is no `main`-push publish for the
+    # companion image: unlike the service, it changes only when the pinned
+    # digest or the baked config changes, so a `sha-` tag per commit would be
+    # a registry full of identical images.
+    if: >-
+      github.event_name == 'push'
+      && startsWith(github.ref, 'refs/tags/searxng-v')
+    # `test` is the load-bearing edge here — see the lane comment above. The
+    # other two are this lane's own build and its blocking smoke.
+    needs: [test, searxng-build, searxng-smoke]
+    runs-on: ubuntu-latest
+    # `contents: read` is written out rather than inherited: a job-level
+    # permissions block REPLACES the top-level grant instead of merging with
+    # it, so omitting it here would lose the read this job needs to check the
+    # repository out — and the failure is a 404 on the repo URL, which reads
+    # like a typo rather than a permissions bug (US-007's expensive lesson,
+    # now also a guard test).
+    #
+    # No `contents: write`: this lane creates no GitHub Release. Releases carry
+    # changelogs and, from spec 5, the service's contract asset; the companion
+    # image's changelog is upstream's, and a Release here would be an empty
+    # page asserting authorship of someone else's work. The registry tag is
+    # the artifact.
+    permissions:
+      contents: read
+      packages: write
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU
+        if: contains(env.SEARXNG_PUBLISH_PLATFORMS, 'arm64')
+        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+        with:
+          platforms: arm64
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Download the companion image artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ env.SEARXNG_IMAGE_ARTIFACT }}
+          path: ${{ env.SEARXNG_IMAGE_DOWNLOAD_DIR }}
+
+      - name: Load the image and assert it is the one searxng-build built
+        run: |
+          set -euo pipefail
+          recorded="$(tr -d '[:space:]' < "${SEARXNG_IMAGE_DOWNLOAD_DIR}/${SEARXNG_IMAGE_ID_FILE}")"
+          if [ -z "${recorded}" ]; then
+            echo "::error::${SEARXNG_IMAGE_ID_FILE} carried no image ID"
+            exit 1
+          fi
+          gunzip -c "${SEARXNG_IMAGE_DOWNLOAD_DIR}/${SEARXNG_IMAGE_TARBALL}" | docker load
+          loaded="$(docker image inspect --format '{{.Id}}' "${SEARXNG_IMAGE_REF}")"
+          if [ "${loaded#sha256:}" != "${recorded#sha256:}" ]; then
+            echo "::error::loaded image ${loaded} is not the ${recorded} searxng-build recorded — this job would be publishing against a different image than the one that was gated"
+            exit 1
+          fi
+          echo "Loaded ${SEARXNG_IMAGE_REF} = ${loaded} (identical to searxng-build's)"
+
+      - name: Record the gated filesystem
+        # Diff IDs — the sha256 of each layer's *uncompressed* tar — because
+        # they survive a registry re-compressing blobs and a different exporter
+        # writing the config, which image IDs do not. Same instrument `publish`
+        # uses, for the same reason: the amd64 leg is rebuilt below and this is
+        # what ties the rebuild back to the image the smoke executed.
+        run: |
+          set -euo pipefail
+          docker image inspect --format '{{json .RootFS.Layers}}' "${SEARXNG_IMAGE_REF}" \
+            | jq -c '.' > gated-searxng-layers.json
+          echo "Gated companion filesystem: $(jq -r 'length' gated-searxng-layers.json) layers"
+          cat gated-searxng-layers.json
+
+      - name: Derive the companion version from the tag
+        # `searxng-v0.1.0` is not a semver string, so metadata-action cannot
+        # parse the ref directly; the prefix comes off here and the version is
+        # handed to every tag rule below as an explicit `value=`.
+        id: version
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#searxng-v}"
+          if [ "${version}" = "${GITHUB_REF_NAME}" ]; then
+            echo "::error::${GITHUB_REF_NAME} is not a searxng-v* tag — this job should not have run"
+            exit 1
+          fi
+          printf 'version=%s\n' "${version}" >> "${GITHUB_OUTPUT}"
+          echo "Publishing forage-searxng ${version} from tag ${GITHUB_REF_NAME}"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive the image tags
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.SEARXNG_IMAGE_NAME }}
+          # Same policy as the service lane, and one trap that is specific to
+          # this one: the pre-release test CANNOT be `contains(github.ref,
+          # '-')`. Every ref in this lane contains a hyphen — it is in the
+          # `searxng-v` prefix itself — so that rule would read every tag as a
+          # pre-release and `latest` would never move at all. The test is on
+          # the *version*, after the prefix comes off.
+          #
+          #   searxng-v0.1.0     -> 0.1.0, 0.1, latest
+          #   searxng-v0.2.0-rc  -> 0.2.0-rc          (no 0.2, no latest)
+          #
+          # `latest=false` turns off metadata-action's own `latest=auto` first,
+          # so every tag this job pushes is stated here rather than inferred.
+          flavor: |
+            latest=false
+          tags: |
+            type=semver,pattern={{version}},value=${{ steps.version.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.version }},enable=${{ !contains(steps.version.outputs.version, '-') }}
+            type=raw,value=latest,enable=${{ !contains(steps.version.outputs.version, '-') }}
+
+      - name: Build and push the multi-arch companion image
+        id: push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: searxng
+          platforms: ${{ env.SEARXNG_PUBLISH_PLATFORMS }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          # The amd64 leg is rebuilt rather than pushed from the tarball, for
+          # the reason `publish` documents at length: a buildx multi-arch push
+          # builds a manifest list across platforms and cannot ship an image
+          # `docker load` put in a daemon. It is served from the cache
+          # `searxng-build` filled earlier in this same run, at this same
+          # commit, off the same digest-pinned base — and the step after this
+          # one checks that claim instead of asserting it.
+          cache-from: |
+            type=gha,scope=searxng
+            type=gha,scope=searxng-publish
+          cache-to: type=gha,mode=max,scope=searxng-publish
+          # Attestations off, as in `publish`: signing and provenance are this
+          # spec's declared Out of Scope, and shipping the producing half
+          # without the verifying half would be decoration.
+          provenance: false
+          sbom: false
+
+      - name: Verify the published amd64 image is the gated filesystem
+        # What the smoke proved is a property of a *configuration*, and the
+        # only thing that ties that proof to the registry is this comparison:
+        # the published amd64 config's `rootfs.diff_ids` must equal the gated
+        # tarball's layers, in order. Equal diff IDs mean an identical
+        # filesystem — same pinned base, same baked settings.yml and
+        # limiter.toml, byte for byte.
+        #
+        # FAILURE MODE: this runs after the push, because there is nothing to
+        # inspect before it. If it fails, the tags exist but point at an image
+        # that was never smoked, and the run is red. Treat those tags as
+        # untrusted and re-run once the cause is fixed.
+        #
+        # SCOPE: amd64 only. There is no arm64 gate — nothing in this workflow
+        # has ever run the emulated leg. It is built from the same commit and
+        # the same digest-pinned multi-arch base, and that is the whole claim.
+        # docs/searxng.md says so to consumers rather than leaving it implied.
+        env:
+          PUSHED_DIGEST: ${{ steps.push.outputs.digest }}
+          PUSHED_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PUSHED_DIGEST}" ]; then
+            echo "::error::the build step reported no pushed digest"
+            exit 1
+          fi
+          published="${SEARXNG_IMAGE_NAME}@${PUSHED_DIGEST}"
+          echo "Inspecting ${published}"
+          image_json="$(docker buildx imagetools inspect "${published}" --format '{{json .Image}}')"
+          published_layers="$(
+            printf '%s' "${image_json}" \
+              | jq -c 'if has("linux/amd64") then .["linux/amd64"] else . end | .rootfs.diff_ids'
+          )"
+          gated_layers="$(cat gated-searxng-layers.json)"
+          # Floor before comparing: two `null`s compare equal, and an empty
+          # gated list is itself the error rather than a passing comparison.
+          gated_count="$(printf '%s' "${gated_layers}" | jq -r 'if type == "array" then length else 0 end')"
+          if [ "${gated_count}" -eq 0 ]; then
+            echo "::error::gated layer list is empty or not an array — refusing a vacuous comparison"
+            exit 1
+          fi
+          if [ "${published_layers}" != "${gated_layers}" ]; then
+            echo "::error::the published companion filesystem is not the one that passed the gates"
+            echo "gated:     ${gated_layers}"
+            echo "published: ${published_layers}"
+            exit 1
+          fi
+          echo "Published companion filesystem is identical to the gated one (${gated_count} layers)."
+          echo "--- tags pushed for ${GITHUB_REF} ---"
+          printf '%s\n' "${PUSHED_TAGS}"
+          echo "--- end tags ---"
