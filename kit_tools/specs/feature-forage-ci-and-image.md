@@ -791,7 +791,9 @@ for a cosmetic gain, so they stand.
 **CI run — green, all five jobs:**
 <https://github.com/WashingBearLabs/Forage/actions/runs/34174140579> · conclusion
 `success` · `lint` 21 s, `typecheck` 31 s, `test` 27 s, **`build-amd64` 3 m 00 s**
-(cold cache — 2 m 06 s of it the build itself), **`secret-grep` 37 s**.
+(cold cache — 2 m 06 s of it the build itself), **`secret-grep` 37 s**. The docs commit's
+run (<https://github.com/WashingBearLabs/Forage/actions/runs/34174487496>) is the warm-cache
+confirmation: same five jobs green, `build-amd64` down to 1 m 15 s on 12 cached layers.
 
 **The handoff worked end to end, and the log says so rather than implying it:**
 
@@ -921,18 +923,26 @@ rather than just not mentioning one.
 | Image size (amd64) | 348 MB — CPU torch, no weights, no CUDA |
 | `docker save \| gzip -1` on the runner | 375 MiB; artifact **392,867,329 bytes** |
 | Cold `build-amd64` | 3 m 00 s total, 2 m 06 s of build |
-| `secret-grep` | 37 s (≈6 s download, ≈28 s `docker load`) |
+| Warm `build-amd64` (2nd run, 12 `CACHED` layers) | **1 m 15 s** |
+| `secret-grep` | 37 s cold / 34 s warm (≈6 s download, ≈28 s `docker load`) |
 | Artifact retention | 1 day (the minimum) |
 
-**⚠️ Free-tier storage is the one real operational risk here.** GitHub Free gives the org
-**500 MB** of shared Actions/Packages storage, and one run's image artifact is **375 MiB**
-of it. Two overlapping runs — a `main` push and a tag push on the same day, which is
-exactly the US-007 release shape — exceed the quota and `upload-artifact` fails, taking
-`build-amd64` red. It fails loudly rather than silently, which is the right direction, but
-US-005 and US-007 should plan for it: the cheapest fix is a final job in the chain that
-deletes `forage-amd64-image` once `smoke` and `publish` have consumed it, rather than
-waiting out the 1-day retention. Note also that `build-push-action` uploads its own
-`*.dockerbuild` build record (64 KB, **90-day** retention) on every run; it is small and
+The warm number is the evidence that `cache-from`/`cache-to: type=gha,mode=max` actually
+works rather than merely being configured: the second run logged 12 `CACHED` layers and
+came in at 42 % of the cold time. The residual minute is `docker save` + upload, which no
+cache helps.
+
+**Free-tier storage: a cost to watch, not the hard failure I first wrote down.** GitHub
+Free nominally gives the org **500 MB** of shared Actions/Packages storage and one run's
+image artifact is **375 MiB** of it, so I expected the second same-day run to be refused.
+It was not: after two runs the repository held **785,840,829 bytes** of live artifacts
+(2 × `forage-amd64-image` + 2 small `*.dockerbuild` records) and both uploads succeeded.
+So the quota is not enforced as an upload block here — it is billed/soft, or the
+accounting lags. The measured facts, not the prediction: 375 MiB per run, 1-day retention,
+two concurrent copies fine. It is still worth US-005/US-007 adding a final job that deletes
+`forage-amd64-image` once `smoke` and `publish` have consumed it, on cost grounds rather
+than on a predicted red build. Note also that `build-push-action` uploads its own
+`*.dockerbuild` build record (42–64 KB, **90-day** retention) on every run; small and
 useful for debugging failed builds, so it was left on, but it is not free either.
 
 **Notes for the following stories:**
