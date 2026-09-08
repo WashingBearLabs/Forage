@@ -279,13 +279,13 @@ push — supervised checkpoint, flagged).
   policy, amd64/arm64 status.
 
 **Acceptance Criteria:**
-- [ ] `publish` with the full `needs:` list; semver/`latest`/`sha-` tag policy implemented
+- [x] `publish` with the full `needs:` list; semver/`latest`/`sha-` tag policy implemented
       as stated; Release on `v*`; multi-arch or the documented fallback.
-- [ ] Green publish run URL + red-rehearsal run URL recorded (supervised tag pushes).
-- [ ] Required status checks registered (actor recorded); `docs/releases.md` written.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run ruff format --check . && uv run pyright` passes
+- [x] Green publish run URL + red-rehearsal run URL recorded (supervised tag pushes).
+- [x] Required status checks registered (actor recorded); `docs/releases.md` written.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run ruff format --check . && uv run pyright` passes
 
 ### US-004: forage-searxng companion image (honest public defaults)
 
