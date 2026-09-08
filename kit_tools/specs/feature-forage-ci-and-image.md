@@ -1149,6 +1149,25 @@ US-007's consumption of the same artifact. What is actually available:
   the list to extend when it lands — every consumer is then held to the same
   download-and-assert contract by parametrization.
 
+**Where the smoke's 70 seconds go** (from the run above — worth knowing before anyone
+tries to speed it up):
+
+| Step | Time |
+|---|---|
+| Checkout | 1 s |
+| Install uv | 7 s |
+| `uv sync --extra dev --locked` | **2 s** (cache warm — shared `uv.lock` key with the other four lanes) |
+| Download the image artifact | 4.5 s |
+| `docker load` + identity assert | **41 s** |
+| `docker run -d` | 0.3 s |
+| `/health` contract (4 polls) | **10 s** |
+
+`docker load` is the job, and no cache helps it — it is the same ~28-41 s `secret-grep`
+pays. The sync is cheap only because four other jobs warmed the same cache; on a cold one
+it is the ~185 MB torch wheel. That cost is inherent rather than accidental: the smoke's
+expectations *are* Python objects from this tree, and the only way to avoid importing them
+is to restate them, which is the thing the AC forbids.
+
 **Job shape.** `smoke` is a sibling of `secret-grep`, both `needs: build-amd64`: neither
 reads the other's output and a broken contract and a leaked token are independent
 failures worth reporting in one run. `smoke` *does* check the repository out, which is the
