@@ -136,13 +136,13 @@ pyright` exits 0 on main.
   execution environments.
 
 **Acceptance Criteria:**
-- [ ] Fresh backlog measurement recorded; `uv run pyright` exits 0 on main; only rule-level
+- [x] Fresh backlog measurement recorded; `uv run pyright` exits 0 on main; only rule-level
       relaxation is `reportPrivateUsage` for `tests/`, with the policy comment.
-- [ ] Third-party gaps via minimal `typings/` stubs, no inline suppressions.
-- [ ] `typecheck` job in ci.yml (registration as required check deferred to US-007).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run ruff format --check . && uv run pyright` passes
+- [x] Third-party gaps via minimal `typings/` stubs, no inline suppressions.
+- [x] `typecheck` job in ci.yml (registration as required check deferred to US-007).
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run ruff format --check . && uv run pyright` passes
 
 ### US-002: Test lane
 
@@ -442,6 +442,16 @@ recorded.
 
 ## Implementation Notes
 
+- **US-006 PASS 2026-09-07** (verifier: pass-with-warnings, 6/6; all figures re-derived,
+  suppression-scoping proven with planted errors). f673fab+9376e33: pyright strict 0/0/0
+  with enableTypeIgnoreComments=false (real backlog 269, incl. 55 hidden behind 39
+  inherited suppressions — census corrected from 30 by verifier); minimal transformers
+  stub, no torch stub; tests-lane reportPrivateUsage only; typecheck lane green on GitHub;
+  suite 586 delta-lossless. Revision rotated cd00a8b4…→0537316d… (2 sources; the
+  stage1_extraction change verified behavior-identical over 630 docs — recorded as
+  defensive hardening, NOT a bug fix, per verifier; branch accepted untested). Honesty
+  corrections applied by supervisor pre-commit.
+
 - **US-001 PASS 2026-09-07** (verifier: pass-with-warnings, 8/8 re-measured incl. own
   mutations + SHA-pin resolution + cold-cache log fetch). Commits 8c652ad+5c8d8f2: ci.yml
   lint lane (25s cold/18s warm, both runs success), format backlog 6→0, 33 guard tests
@@ -569,7 +579,7 @@ number is not the honest one:
 | With `enableTypeIgnoreComments = false` | **269** | 57 | 212 |
 
 214 reproduces spec 1's hand-over figure exactly, so nothing had moved under US-001's
-format pass. But the repo carried **30 inherited `# type: ignore` comments**, and pyright
+format pass. But the repo carried **39 inherited `# type: ignore` comments** (census corrected by the US-006 verifier), and pyright
 honours them by default with no rule code required — one comment silences every diagnostic
 on its line. 55 errors were hiding behind them. Reporting 214 as "the backlog" and then
 declaring zero would have been a fiction, so the switch was turned off and the real 269
@@ -596,7 +606,7 @@ suppressed nothing).
 - `pipeline/stage2_structural.py`, `pipeline/stage5_url_audit.py` (1 each) —
   `field(default_factory=list)` → `list[FlaggedSpan]` / `list[str]`.
 
-**One real bug the strict pass surfaced.** `tag[name].strip()` assumed every HTML
+**Defensive hardening the strict pass surfaced** (verifier downgraded from "real bug": not reproducible — no call site reads a multi-valued attribute; 630-doc differential test showed zero behavior change; branch accepted untested as defensive). `tag[name].strip()` assumed every HTML
 attribute is a `str`; bs4 returns an `AttributeValueList` for multi-valued attributes
 (`class`, `rel`), which has no `.strip()` and would raise `AttributeError` out of author
 and date extraction. `_attr_text()` now falls through to the next strategy, which is what

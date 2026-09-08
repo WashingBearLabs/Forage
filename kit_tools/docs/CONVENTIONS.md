@@ -28,7 +28,7 @@ uv run pyright
 
 **No backlog.** `ruff check`, `ruff format --check` and `pyright` are all clean, and all
 three are **blocking CI gates** (US-001 and US-006, 2026-09-07). None of them was
-baselined: the pyright backlog — 269 errors once the 30 inherited type-ignore comments
+baselined: the pyright backlog — 269 errors once the 39 inherited type-ignore comments
 were counted — was burned to zero with real fixes.
 
 ### Type-checking policy

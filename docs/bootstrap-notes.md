@@ -75,7 +75,7 @@ and at the same kind of boundary. Two `_REVISION_SOURCES` members were touched:
 `stage2_structural.py` gained a type argument on one `field(default_factory=...)`, and
 `stage1_extraction.py`'s metadata extraction moved behind two typed helpers,
 `_attr_text()` and `_json_ld_documents()`. Behaviour is preserved, with one deliberate
-bug fix that strict typing surfaced: a multi-valued HTML attribute (bs4 hands those back
+defensive hardening strict typing surfaced (verifier: not reproducible as a live bug — no call site reads a multi-valued attribute; differential-tested 630 docs, zero mismatches): a multi-valued HTML attribute (bs4 hands those back
 as `AttributeValueList`, not `str`) used to raise `AttributeError` out of
 `tag[name].strip()` and now falls through to the next extraction strategy, which is what
 the priority-ordered list already meant.

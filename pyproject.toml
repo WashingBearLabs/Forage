@@ -83,7 +83,7 @@ typeCheckingMode = "strict"
 # rule code required, so one such comment silences *every* diagnostic on its
 # line. Turning it off is what makes "pyright exits 0" mean something here:
 # the repo's real backlog at the start of US-006 was 269 errors, of which 55
-# were hidden behind 30 inherited `# type: ignore` comments. With the switch
+# were hidden behind 39 inherited `# type: ignore` comments. With the switch
 # off they cannot creep back unnoticed. A genuinely unavoidable case would
 # need a narrow `# pyright: ignore[ruleName]`, which still works and which
 # tests/test_pyright_policy.py counts — currently zero, repo-wide.
