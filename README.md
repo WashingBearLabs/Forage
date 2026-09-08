@@ -115,6 +115,13 @@ token to obtain the weights; Forage cannot and does not distribute them for you.
 machine-readable state on purpose — an earlier silent version of this failure went
 unnoticed for nine days in production. Do not treat a degraded Forage as a scanned one.
 
+**The image ships no weights, and takes no build argument.** `docker build .` needs
+nothing but the source: no credential enters the build, because a Docker build argument is
+recoverable from the finished image's layer history and would therefore be published along
+with the image. A runtime fetch into the `HF_HOME` volume replaces it; until that lands,
+a freshly built image starts degraded, which is the honest answer rather than a broken
+one.
+
 ## Licensing
 
 Forage's licensing splits in two, and the split matters:

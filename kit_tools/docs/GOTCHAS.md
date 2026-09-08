@@ -16,33 +16,6 @@ live in, and losing them in the move was an identified risk.
 
 ## Active Gotchas
 
-### The pre-CI Dockerfile bakes an HF token — never push its image anywhere
-
-**Location:** `Dockerfile` (`ARG HF_TOKEN`)
-**Severity:** 🔴 High
-**Added:** 2026-09-07 (travelled from Poppy at extraction)
-
-**What happens:**
-The Hugging Face token reaches the image as a Docker **build ARG**, which makes it
-readable from the built image's layer history via
-`docker history --no-trunc forage:<tag>` — and from any registry the image is pushed to —
-even though it never appears in the running container's environment.
-
-**Why it matters:**
-This is *the* blocker on publishing a Forage image, and it is why this repository is
-**private** until `feature-forage-ci-and-image` lands. An image built *with* a token is a
-leaked token the moment it is pushed.
-
-**The rule, until the build-arg path is gone:**
-Never push an image built from this Dockerfile to any registry, public or private.
-Local builds and local runs are fine.
-
-**Resolution:** `feature-forage-model-bootstrap` replaces bake-at-build with
-download-at-start; `feature-forage-ci-and-image` removes the build-arg path and gates
-publishing. When both have landed, this entry closes — and the public flip may proceed.
-
----
-
 ### PromptGuard model absent → the service reports **degraded**, and you must treat it as unscanned
 
 **Location:** `promptguard/classifier.py`, `pipeline/stage3_promptguard.py`, `/health`
@@ -50,11 +23,13 @@ publishing. When both have landed, this entry closes — and the public flip may
 **Added:** 2026-09-07 (travelled from Poppy; post-Epic-1 wording)
 
 **What happens:**
-Stage 3 runs the gated `meta-llama/Llama-Prompt-Guard-2-22M`. A token-less build produces
-an image with no weights. Forage then reports `status: "degraded"` with
-`promptguard_unavailable` in `degraded_reasons` and `promptguard_loaded: false`, and the
-ML injection scan does not happen. Stage 2's deterministic regex pass still runs; stage 3
-does not.
+Stage 3 runs the gated `meta-llama/Llama-Prompt-Guard-2-22M`. **Since
+`forage-ci-and-image` US-003 every image is weights-free** — the build-time bake is gone
+and the runtime fetch that replaces it is `feature-forage-model-bootstrap`, which has not
+landed — so this is the *default* state of a built image, not an accident of a forgotten
+token. Forage reports `status: "degraded"` with `promptguard_unavailable` in
+`degraded_reasons` and `promptguard_loaded: false`, and the ML injection scan does not
+happen. Stage 2's deterministic regex pass still runs; stage 3 does not.
 
 **Why it matters:**
 Before the honest-health contract existed, this failure was *silent* — `/health` reported
@@ -71,7 +46,9 @@ machine-readable. Keep it that way.
 
 **Verify after any rebuild:**
 `docker logs <container> | grep -i promptguard` → "model loaded", and
-`curl -s localhost:8020/health | jq .promptguard_loaded` → `true`.
+`curl -s localhost:8020/health | jq .promptguard_loaded` → `true`. Until spec 3 lands,
+expect `false` from a stock image and treat the content as unscanned — that is the honest
+answer, not a broken deploy.
 
 ---
 
@@ -196,6 +173,46 @@ without the index config silently reintroduces it.
 ---
 
 ## Historical / Closed
+
+### The Dockerfile bakes an HF token — build-arg recoverable via `docker history`
+
+**Was:** `Dockerfile` (`ARG HF_TOKEN` + the conditional `from_pretrained` bake block)
+**Closed:** 2026-09-07, `forage-ci-and-image` US-003 — **on the Forage side only,** read the
+two carve-outs below before treating this as finished.
+
+The token used to reach the image as a Docker **build ARG**, which made it readable from
+the built image's layer history via `docker history --no-trunc` — and from any registry
+the image was pushed to — even though it never appeared in the running container's
+environment. It was *the* blocker on publishing a Forage image and the reason this
+repository is private.
+
+**What closed it.** US-003 deleted the path outright rather than working around it: no
+`ARG HF_TOKEN`, no bake step, no credential of any kind in the build. Two mechanical
+guards keep it deleted, and both run on every PR:
+
+| Guard | Scope | Where |
+|---|---|---|
+| `tests/test_dockerfile.py` (20 tests) | the Dockerfile's **text** — no secret-shaped ARG/ENV/RUN assignment, no `from_pretrained`, no token-shaped literal | the `test` lane, and every local `uv run pytest` |
+| the `secret-grep` CI job | the **built image's** `docker history --no-trunc`, for `HF_TOKEN` and `hf_[A-Za-z0-9]{20,}` | `.github/workflows/ci.yml`, on the artifact `build-amd64` produced |
+
+Both were mutation-verified: re-adding `ARG HF_TOKEN` fails three of the source guards,
+and a deliberately-leaking canary image built with a synthetic token matched both grep
+patterns.
+
+**Two things this closure does NOT say.**
+
+1. **It is not permission to push.** The image is secret-free, but publishing still runs
+   through US-007's gated lane, and the repository and its packages stay private until
+   US-008's human flip. "No longer a leak" and "ready to publish" are different claims.
+2. **Poppy's copy is still armed.** `services/retrieval/Dockerfile` in the Poppy monorepo
+   still carries `ARG HF_TOKEN`; the two copies coexist until spec 6 pins Poppy to a
+   published Forage image. The Poppy-side closure of this gotcha rides that spec, and
+   the rule there is unchanged: never push an image built from *that* Dockerfile.
+
+The consequence of the deletion — a weights-free image — is live and tracked separately in
+the PromptGuard entry above, until `feature-forage-model-bootstrap` adds the runtime fetch.
+
+---
 
 ### `sys.modules['app']` collision
 

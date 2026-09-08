@@ -121,10 +121,17 @@ that something is missing here.
 
 ### Standing context for every story in this epic
 
-- **Never push an image built from the current Dockerfile.** It bakes `ARG HF_TOKEN`,
-  recoverable via `docker history`. Spec 1 (`ci-and-image`) removes the build-arg path and
-  spec 2 (`model-bootstrap`) replaces it with download-at-start; until both land, local
-  builds only. This is also why the repo is private.
+- **The Dockerfile no longer bakes a secret** (spec 1 `ci-and-image` US-003, 2026-09-07).
+  `ARG HF_TOKEN` and the `from_pretrained` bake block are gone, the base is digest-pinned
+  and dependencies come from the committed `uv.lock`; `tests/test_dockerfile.py` guards
+  the source and CI's `secret-grep` job greps the built image's layer history. **Pushing
+  is still not on**, for a different reason: publishing runs through US-007's gated lane
+  and the repo plus both GHCR packages stay private until US-008's human flip. Note also
+  that Poppy's in-tree `services/retrieval/Dockerfile` *still* carries `ARG HF_TOKEN` —
+  the old rule applies there verbatim until spec 6.
+- **Every built image is weights-free** until spec 2 (`model-bootstrap`) adds the runtime
+  fetch. That is the honest degraded state (`promptguard_unavailable`), not a broken
+  build, and US-005's `smoke` job asserts exactly that contract.
 - **Static-analysis backlog: none left** (measure with `uv run`, not system tools — the
   lock pins ruff 0.16.6 / pyright 1.1.411). All three lanes are clean and all three are
   blocking CI gates: `ruff check` and `ruff format --check` since `ci-and-image` US-001,
@@ -136,9 +143,10 @@ that something is missing here.
 - **`sanitizer_revision` has deliberately diverged** from Poppy, and has now rotated three
   times (`e6b2b56d…` → `2b8d7e9a…` → `cd00a8b4…` → **`0537316d…`**, current). The
   Poppy-side spec must not assume revision parity — compare contracts.
-- **The suite is hermetic and exact**: **607 collected**, all green (534 at bootstrap, +33
+- **The suite is hermetic and exact**: **656 collected**, all green (534 at bootstrap, +33
   from US-001's workflow guards, +19 from US-006's typecheck and policy guards, +21 from
-  US-002's canary and test-lane guards). The count is a gate, not a floor. The hermeticity
+  US-002's canary and test-lane guards, +49 from US-003's Dockerfile and image-handoff
+  guards). The count is a gate, not a floor. The hermeticity
   canary is committed and executing (`tests/test_hermeticity.py`), and since US-002 the
   whole suite runs in CI — every guard in this repo is finally CI-enforced rather than
   local-only.

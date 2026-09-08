@@ -84,6 +84,12 @@ Five of the eight `_REVISION_SOURCES` files remain byte-identical to Poppy's cop
 `orchestrator.py` (hostname defaults), `stage2_structural.py` (formatting, then a type
 argument) and `stage1_extraction.py` (typed metadata helpers) differ.
 
+**No fourth rotation.** `forage-ci-and-image` US-002 and US-003 both left the revision at
+`0537316d…e3e253`, verified before and after each story: neither the CI test lane nor the
+Dockerfile rework touches a `_REVISION_SOURCES` file (all eight live under `pipeline/`).
+Recorded because the two stories before them each moved it, and silence would be
+ambiguous — "unchanged" is a measurement here, not an omission.
+
 **Consequence for the Poppy-side specs: do not assume Poppy↔Forage revision parity.** A
 consumer that compares `sanitizer_revision` across the two repos will see a mismatch that
 means nothing. Compare `contract_version` instead — that is the field with cross-repo
@@ -144,8 +150,21 @@ Two measurement notes for spec 2's planning:
   (`UP038` was removed, `RUF059` added). Pinning ruff in CI — the lock already
   does for `uv run` — is what keeps this lane reproducible.
 
-## Standing invariant while private
+## Standing invariant while private — DISCHARGED for this repo (2026-09-07)
 
-The pre-spec-2 `Dockerfile` still carries `ARG HF_TOKEN` (spec 2 removes it).
-An image built *with* a token has that token recoverable via `docker history` —
-never push such an image anywhere.
+This section used to read: "the pre-spec-2 `Dockerfile` still carries `ARG HF_TOKEN`
+(spec 2 removes it). An image built *with* a token has that token recoverable via
+`docker history` — never push such an image anywhere."
+
+Spec 2 US-003 removed it. `Dockerfile` now declares no `ARG` at all, installs from the
+committed `uv.lock`, and pins its base by digest; `tests/test_dockerfile.py` guards the
+source text and CI's `secret-grep` job greps the built image's layer history on every run.
+An image built from this repository can no longer carry a build-time credential.
+
+Two boundaries the discharge does not cross:
+
+- **Publishing is still gated.** Secret-free is not released. Pushes go through US-007's
+  gated lane; the repository and both GHCR packages stay private until US-008.
+- **Poppy's in-tree copy is unchanged.** `services/retrieval/Dockerfile` in the monorepo
+  still carries `ARG HF_TOKEN`, and the two copies coexist until spec 6 pins Poppy to a
+  published image. The old rule still applies there, verbatim.

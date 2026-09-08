@@ -32,17 +32,27 @@ may never reach across to check what someone does with it.
 Legacy `POPPY_*` environment-variable names survive only as back-compat aliases with a
 `FORAGE_*` primary. No new name contains "poppy".
 
-### 2. Never push an image built from the current Dockerfile.
+### 2. No secret may enter the image build. Ever.
 
-`Dockerfile` still takes `ARG HF_TOKEN` to bake the PromptGuard weights at build time. A
-build ARG is recoverable from the image's layer history via `docker history --no-trunc` —
-and from any registry the image reaches. An image built with a token is a leaked token the
-moment it is pushed, public registry or private.
+`Dockerfile` takes **no build arguments at all**, and it must stay that way. A build ARG is
+not a secret: Docker records it in the image's layer history, where `docker history
+--no-trunc` reads it straight back out of any registry the image reaches. Deleting the
+downloaded file afterwards does nothing about it.
 
-Local builds and local runs are fine. **Pushing is not**, anywhere, until
-`feature-forage-model-bootstrap` moves to download-at-start and
-`feature-forage-ci-and-image` removes the build-arg path. This is also why the repository
-is private; the public flip is a human gate.
+The old `ARG HF_TOKEN` + `from_pretrained` bake block was removed in
+`forage-ci-and-image` US-003, and two mechanical guards keep it removed —
+`tests/test_dockerfile.py` on the file's text (every `uv run pytest`) and CI's
+`secret-grep` job on the built image's layer history. Adding a credential back to the
+build means defeating both on purpose. Pass secrets at **runtime**, through the container
+environment (`docs/configuration.md`); Forage reads no secret store at boot either.
+
+Two things that closure does not license:
+
+- **Publishing.** The image is secret-free, not released. Pushes go through US-007's gated
+  lane; the repository and its GHCR packages stay private until US-008's human flip.
+- **Poppy's copy.** `services/retrieval/Dockerfile` in the monorepo still carries
+  `ARG HF_TOKEN` and will until spec 6 pins Poppy to a published Forage image. Never push
+  an image built from *that* file.
 
 ### 3. The module layout is flat, and that is a decision.
 

@@ -782,6 +782,191 @@ for a cosmetic gain, so they stand.
   up as a failure". That is now false and was corrected in the same commit rather than left
   to rot — the claim was true only until this story landed.
 
+### US-003 — Secret-free service image build + secret-grep gate (2026-09-07)
+
+**Shipped:** `Dockerfile` (reworked), `.github/workflows/ci.yml` (`build-amd64` +
+`secret-grep`), `tests/test_dockerfile.py` (20 tests, new), 29 new guards in
+`tests/test_ci_workflow.py` (50 → 79). Commit `32df2d0`.
+
+**CI run — green, all five jobs:**
+<https://github.com/WashingBearLabs/Forage/actions/runs/34174140579> · conclusion
+`success` · `lint` 21 s, `typecheck` 31 s, `test` 27 s, **`build-amd64` 3 m 00 s**
+(cold cache — 2 m 06 s of it the build itself), **`secret-grep` 37 s**.
+
+**The handoff worked end to end, and the log says so rather than implying it:**
+
+```
+build-amd64  Built  forage:ci = sha256:9208d33abf5ea227cb6f163449752a211def142e8a934a232c028636dc774751
+build-amd64  Builder and daemon agree on the image ID.
+secret-grep  Loaded forage:ci = sha256:9208d33a…4751 (identical to build-amd64's)
+secret-grep  No forbidden pattern in the layer history of forage:ci.
+```
+
+**What was deleted.** `ARG HF_TOKEN` and the conditional `from_pretrained` bake block are
+gone entirely — not guarded, not defaulted-to-empty, gone. A build argument is not a
+secret: BuildKit records the instruction verbatim in the finished image's layer history,
+`docker history --no-trunc` reads it back, and the image carries it to every registry it
+reaches. Deleting the downloaded file afterwards does nothing. That was *the* blocker on
+publishing a Forage image and the reason this repo is private.
+
+**What replaced the install.** `uv sync --locked --no-dev --no-install-project`, from the
+committed lock, with uv itself digest-pinned (`ghcr.io/astral-sh/uv:0.9.28@sha256:59240a65…`)
+at the same version `ci.yml`'s `UV_VERSION` installs. The previous form parsed
+`pyproject.toml` with a `tomllib` shell one-liner and pip-installed the unpinned ranges
+plus a second `pip install torch --index-url …/cpu` — a different dependency set from the
+one CI lints, type-checks and tests. Three flags carry weight and are commented in place:
+`--no-install-project` (Forage's modules are flat at `/app` and imported from the working
+directory, exactly as before — installing the project as a wheel too would ship a second
+copy of every module), and `UV_PYTHON_DOWNLOADS=never` + `UV_PYTHON_PREFERENCE=only-system`
+(uv's default preference is a *managed* interpreter, so without these the image would
+download a second 3.12 and run one Python while CI type-checked another). The `UV_*` vars
+are set on the `RUN` rather than as `ENV` so nothing leaks into the runtime environment.
+
+**Base pin, and a syntax finding.** `FROM python:3.12-slim@sha256:78387bc3…184ea`,
+resolved 2026-09-07 to **3.12.14-slim-trixie**; the index digest covers `linux/amd64` and
+`linux/arm64/v8`, so US-007's multi-arch ambition is not foreclosed. The spec's hint spells
+the pin `FROM …@sha256:<digest> # 3.12.x`, and **that form does not parse** — Dockerfile
+has no inline comments, a `#` after an instruction's arguments is another argument, and
+`FROM` rejects it (`FROM requires either one or three arguments`, verified by building
+it). The version therefore lives on the comment line directly above, and
+`test_base_version_recorded_in_an_adjacent_comment` keeps it there — a bare 64-hex digest
+with no record of what it is cannot be maintained.
+
+**Single-stage, deliberately.** A multi-stage build would have kept uv out of the shipped
+image, but `docker history` reports only the *final* stage's layers, so it would silently
+narrow what `secret-grep` can see to the last stage alone. Trading ~30 MB on a 348 MB
+image for a weaker gate is a bad trade when the gate is the point of the story.
+`test_single_from_instruction` pins it, with that reasoning in the failure message.
+
+**Image handoff: one artifact, asserted identity, never a rebuild.** Round 3's critical was
+right — `needs:` is an ordering edge, not a shared Docker daemon. `build-amd64` ends with
+`docker save | gzip -1` plus the image ID in `image-id.txt`; `secret-grep` downloads both,
+loads, and compares. `docker save`/`docker load` preserve the image ID exactly (it is the
+digest of the image config), which is what makes the comparison meaningful.
+
+One honesty note on the cross-check: `build-push-action`'s own `imageid` output is logged
+beside the daemon's `.Id` but a **disagreement is a notice, not a failure**. The two
+legitimately differ by storage backend — the action reports the image *config* digest while
+a daemon on the containerd image store reports the manifest-list digest for the same image
+(reproduced locally on Docker Desktop: `71ada4f2…` vs `f4344483…`). Failing on that would
+be failing on a storage detail. On the runner they agreed. The check that is hard is the
+daemon-to-daemon one in `secret-grep`: same field, same command, both sides.
+
+**Grep scope, stated in the job rather than assumed.** `docker history --no-trunc` reports
+layer metadata — the instruction that created each layer — and does not read file
+contents. It therefore catches a `--build-arg`, an `ENV`, or a `RUN`-line assignment, and
+does not catch a secret written into a file. The job comment says so at length, because a
+green tick that reads as "filesystem scanned" is worse than no tick. The content-side
+guards are named there: the deleted path, `tests/test_dockerfile.py`, and spec 1's
+full-history `gitleaks` scan re-run before US-008. Pattern set, defined in the workflow and
+not in a checked-out script: `HF_TOKEN` and `hf_[A-Za-z0-9]{20,}`.
+
+**The gate was proven to bite, not just to pass.** A throwaway canary image built with
+`--build-arg HF_TOKEN="hf_FAKE…"` (synthetic; no real token exists anywhere in this work)
+matched **both** patterns out of its layer history, while the real image matched neither.
+A gate only ever verified green is a gate nobody has tested.
+
+**Guards, mutation-verified — 25 mutations, each confirmed to fail exactly the expected
+tests before restoring.**
+
+| Mutation | Failures |
+|---|---|
+| Dockerfile: re-add `ARG HF_TOKEN` | 3 |
+| Dockerfile: re-add a `from_pretrained` bake step | 1 |
+| Dockerfile: un-pin the base image | 1 |
+| Dockerfile: drop the base-version comment | 1 |
+| Dockerfile: drop `--locked` from `uv sync` | 1 |
+| Dockerfile: un-pin the `COPY --from` uv image | 1 |
+| Dockerfile: drop `ENV HF_HOME` | 1 |
+| Dockerfile: drop the build-time import smoke | 1 |
+| Dockerfile: bake a differently-*named* secret ENV (`HF_API_TOKEN`) | 2 |
+| ci.yml: `build-amd64` pushes | 1 |
+| ci.yml: `build-amd64` does not load the image | 1 |
+| ci.yml: build targets the runner's default platform | 1 |
+| ci.yml: `build-amd64` grants itself `packages: write` | 1 |
+| ci.yml: drop the GHA build cache | 1 |
+| ci.yml: upload warns instead of failing on an empty save | 1 |
+| ci.yml: download names a different artifact | 1 |
+| ci.yml: drop the token-shape grep pattern | 1 |
+| ci.yml: remove the metadata-scope caveat | 1 |
+| ci.yml: identity mismatch warns instead of failing | 1 |
+| ci.yml: delete the identity comparison entirely | 1 |
+| ci.yml: `secret-grep` rebuilds instead of loading | 1 |
+| ci.yml: `secret-grep` checks out the repo | 1 |
+| ci.yml: forward `needs:` to a job US-007 has not added | 1 (`TestJobGraph`) |
+| ci.yml: delete the `secret-grep` job | 15 |
+| ci.yml: delete the `build-amd64` job | 16 |
+
+**One mutation escaped on the first pass, and that is the useful finding.** The
+identity-assert guard originally checked `"exit 1" in run_text`. Downgrading the mismatch
+branch from `::error` + `exit 1` to a bare `::warning` left the job's *other* `exit 1`
+(the empty-ID-file guard) in place, so the coarse check stayed green while the assertion
+the whole handoff rests on had become decorative — **98 passed**. The guard now locates
+the specific conditional (`_if_block_body`) and asserts `exit 1` inside *that* branch.
+The lesson generalises: a substring check over a whole script tests the script's
+vocabulary, not its control flow. It is recorded in the test's own comment so the next
+person does not re-loosen it.
+
+**`sanitizer_revision` did NOT rotate.** `0537316d83510dab…e3e253` before and after,
+measured both times — the second story running in a row to leave it alone. None of the
+eight `_REVISION_SOURCES` files (all under `pipeline/`) is touched by a Dockerfile or
+workflow change. Recorded because two of this spec's stories did move it and silence
+would be ambiguous; `docs/bootstrap-notes.md` now says "no fourth rotation" explicitly
+rather than just not mentioning one.
+
+**Measurements worth carrying forward.**
+
+| Thing | Value |
+|---|---|
+| Image size (amd64) | 348 MB — CPU torch, no weights, no CUDA |
+| `docker save \| gzip -1` on the runner | 375 MiB; artifact **392,867,329 bytes** |
+| Cold `build-amd64` | 3 m 00 s total, 2 m 06 s of build |
+| `secret-grep` | 37 s (≈6 s download, ≈28 s `docker load`) |
+| Artifact retention | 1 day (the minimum) |
+
+**⚠️ Free-tier storage is the one real operational risk here.** GitHub Free gives the org
+**500 MB** of shared Actions/Packages storage, and one run's image artifact is **375 MiB**
+of it. Two overlapping runs — a `main` push and a tag push on the same day, which is
+exactly the US-007 release shape — exceed the quota and `upload-artifact` fails, taking
+`build-amd64` red. It fails loudly rather than silently, which is the right direction, but
+US-005 and US-007 should plan for it: the cheapest fix is a final job in the chain that
+deletes `forage-amd64-image` once `smoke` and `publish` have consumed it, rather than
+waiting out the 1-day retention. Note also that `build-push-action` uploads its own
+`*.dockerbuild` build record (64 KB, **90-day** retention) on every run; it is small and
+useful for debugging failed builds, so it was left on, but it is not free either.
+
+**Notes for the following stories:**
+- **US-005's `smoke` reuses this exact artifact** — `download-artifact` with
+  `name: ${{ env.IMAGE_ARTIFACT }}`, `gunzip -c "${IMAGE_TARBALL}" | docker load`, then the
+  same `.Id`-vs-`image-id.txt` comparison. Copy the assert; do not re-derive it, and do not
+  add a second artifact.
+- `provenance: false` on the build step is load-bearing, not tidiness: the docker exporter
+  `load: true` uses cannot carry attestations.
+- The four action pins added here: `docker/setup-buildx-action` v4.3.0,
+  `docker/build-push-action` v7.3.0, `actions/upload-artifact` v7.0.1,
+  `actions/download-artifact` v8.0.1. The upload/download major numbers genuinely differ —
+  they are separately versioned repositories, both on the v4+ artifact backend.
+- `secret-grep` deliberately has **no checkout**. The pattern set lives in the workflow so
+  the gate cannot be weakened by editing a script the job fetches, and a guard test pins
+  the absence.
+- `build-amd64` is a *sibling* of `lint`/`typecheck`/`test`, not a successor: a broken
+  image and a broken lint are independent failures and one run should report both.
+  US-007's `publish` is what requires all of them green at once.
+- **Harness lesson (self-inflicted, cost ~20 minutes):** the mutation script restored files
+  with `git checkout --`, which reverted *uncommitted* work — the whole Dockerfile and both
+  new jobs — because the implementation had not been committed yet. Commit first, mutate
+  second. The untracked test module survived, which made the loss quieter than it should
+  have been.
+- Suite went 607 → **656** tests (+20 `test_dockerfile.py`, +29 workflow guards), all
+  green. `kit_tools/testing/TESTING_GUIDE.md` carries the new counts and a new
+  `test_mapping` entry (`Dockerfile` → `tests/test_dockerfile.py`).
+- `kit_tools/docs/GOTCHAS.md`'s build-arg entry moved to **Historical / Closed** — with
+  both carve-outs written into the entry rather than left implied: closure is not
+  permission to push (US-007/US-008 still gate that), and Poppy's in-tree
+  `services/retrieval/Dockerfile` still carries `ARG HF_TOKEN` until spec 6. The
+  PromptGuard-degraded entry was corrected in the same pass: "a token-less build produces
+  an image with no weights" is now "*every* image is weights-free until spec 3".
+
 ## Refinement Notes
 
 ### Research Findings

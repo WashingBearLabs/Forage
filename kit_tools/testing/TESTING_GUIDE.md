@@ -59,7 +59,7 @@ crash reads as a false regression.
 
 ## Test Structure
 
-22 files under `tests/`, flat, one module per subject. **607 tests, all green** as of
+23 files under `tests/`, flat, one module per subject. **656 tests, all green** as of
 2026-09-07.
 
 | Module | Tests | Covers |
@@ -74,9 +74,10 @@ crash reads as a false regression.
 | `tests/test_models.py` | 31 | Pydantic request/response models |
 | `tests/test_app.py` | 31 | FastAPI endpoints, `/health` body, capability break-glass |
 | `tests/test_stage3_promptguard.py` | 30 | ML scan; transformers/torch mocked |
-| `tests/test_ci_workflow.py` | 50 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane |
+| `tests/test_ci_workflow.py` | 79 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane, image build + secret-grep gate |
 | `tests/test_stage5_url_audit.py` | 28 | Outbound fetch + redirect-chain audit |
 | `tests/test_stage1_pdf.py` | 23 | PDF branch, subprocess isolation |
+| `tests/test_dockerfile.py` | 20 | `Dockerfile` text: no secret may enter the build, digest-pinned base, lock-driven install |
 | `tests/test_pyright_policy.py` | 12 | Type-checking policy: strict, one carve-out, no suppressions |
 | `tests/test_searxng_docker.py` | 9 | `searxng/config/` sanity (config half only) |
 | `tests/test_hermeticity.py` | 8 | Executing canary for the autouse socket guard |
@@ -112,9 +113,9 @@ canary cannot check about itself: that it is committed and not skipped.
 **Async needs no decorator.** `asyncio_mode = "auto"` is set in `pyproject.toml`.
 
 **The exact count is a gate, not a floor.** The extraction verified *exactly* 531 tests
-moved (534 collected after alias parametrization); the suite has since grown to 607 as CI
-guards landed (US-001 +33, US-006 +19, US-002 +21). A silently dropped module cannot hide
-under a "≥ N passed" assertion. When you add tests, update the counts here.
+moved (534 collected after alias parametrization); the suite has since grown to 656 as CI
+guards landed (US-001 +33, US-006 +19, US-002 +21, US-003 +49). A silently dropped module
+cannot hide under a "≥ N passed" assertion. When you add tests, update the counts here.
 
 **Tests ship with the code they cover, in the same commit.**
 
@@ -151,6 +152,7 @@ test_mapping:
   "searxng/config/*": "tests/test_searxng_docker.py"
   "tests/conftest.py": "tests/test_hermeticity.py"
   ".github/workflows/ci.yml": "tests/test_ci_workflow.py"
+  "Dockerfile": "tests/test_dockerfile.py"
   "uv.lock": "tests/test_dependency_lock.py"
   "pyproject.toml": ["tests/test_dependency_lock.py", "tests/test_pyright_policy.py"]
   "typings/*": "tests/test_pyright_policy.py"
@@ -159,21 +161,26 @@ test_mapping:
 `tests/conftest.py` maps to the canary because the fixture it installs is the thing under
 test there — an edit to the socket guard must run `tests/test_hermeticity.py`.
 
-The last four are non-Python sources (or, for `typings/`, stub files no test imports).
+The last five are non-Python sources (or, for `typings/`, stub files no test imports).
 They still need mappings: without one the orchestrator falls back to a heuristic glob over
-the whole suite, and a workflow, lock or config edit either runs everything or nothing.
-`pyproject.toml` maps to two modules because it carries two independently-guarded
+the whole suite, and a workflow, lock, Dockerfile or config edit either runs everything or
+nothing. `pyproject.toml` maps to two modules because it carries two independently-guarded
 concerns: the CPU-only dependency lock and the type-checking policy.
 
 ---
 
 ## What Is Not Covered by `pytest`
 
-- **The container.** `docker build .` (token-less) and `docker run` + `curl /health` are
-  manual checks today. `feature-forage-ci-and-image` automates them.
+- **Building and running the container.** `tests/test_dockerfile.py` guards the
+  Dockerfile's *text*, not a build — pytest never invokes Docker, and the suite stays
+  hermetic. The build itself is CI's `build-amd64` job (US-003) and the runtime `/health`
+  contract is the `smoke` job (US-005); `docker run` + `curl /health` remains a manual
+  check locally.
 - **Live SearXNG / live Valkey.** Every test mocks them. A real end-to-end smoke against
   running companions is a manual step, and `feature-forage-cache-fallback` carries an
   explicit manual-smoke half.
 - **Real PromptGuard weights.** `tests/test_stage3_promptguard.py` mocks transformers and
   torch, so the suite passes with no model present — which is correct, and also why the
-  degraded path needs its own manual verification after a rebuild.
+  degraded path needs its own manual verification after a rebuild. Since US-003 removed
+  the build-time bake, *every* built image is in that state until
+  `feature-forage-model-bootstrap` lands.

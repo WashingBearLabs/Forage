@@ -39,14 +39,15 @@ Design principles:
 ├── cache.py                 # Valkey/Redis content cache (closed log vocabulary)
 ├── url_validator.py         # SSRF defense: RFC1918 rejection, DNS-rebinding checks
 ├── config.yaml              # UA pool, trusted domains, blocklist, thresholds, limits
-├── Dockerfile               # CPU-torch image; ARG HF_TOKEN (removed by spec 2)
+├── Dockerfile               # CPU-torch image; digest-pinned base, uv.lock install,
+│                            # secret-free (no build ARG, no baked weights)
 ├── docker-entrypoint.sh     # 17 lines: `exec "$@"`. Vault-free by design.
 ├── pyproject.toml           # uv/hatchling/ruff/pyright/pytest config
 ├── uv.lock                  # CPU-pinned torch on Linux; `grep nvidia-` must stay empty
 ├── pipeline/                # the five sanitization stages + orchestrator + contract
 ├── promptguard/             # Llama Prompt Guard 2 classifier wrapper
 ├── searxng/config/          # settings.yml + limiter.toml for the companion SearXNG
-├── tests/                   # 18 files; flat, one module per subject
+├── tests/                   # 23 files; flat, one module per subject
 ├── docs/                    # configuration.md, bootstrap-notes.md, bootstrap-scan.txt
 └── kit_tools/               # this documentation framework + feature specs
 ```

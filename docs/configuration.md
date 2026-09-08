@@ -128,17 +128,25 @@ classifier is not loaded.
 
 ### Build-time arguments
 
-These are `docker build` arguments, not runtime variables.
+**There are none, and that is deliberate.** `Dockerfile` declares no `ARG`, so
+`docker build .` takes nothing but the source tree; every setting Forage has arrives as a
+runtime environment variable, from the tables above.
 
-| Argument | Default | Purpose |
-|----------|---------|---------|
-| `HF_TOKEN` | `""` (empty) | Hugging Face token used **at build time only** to pre-download `meta-llama/Llama-Prompt-Guard-2-22M`, which lives in a gated repository. With an empty token the build succeeds and simply skips the download. |
+This replaced an `HF_TOKEN` build argument that pre-downloaded the gated
+`meta-llama/Llama-Prompt-Guard-2-22M` weights into the image. A build argument is
+recorded in the finished image's layer history, where `docker history --no-trunc` reads it
+straight back out of any registry the image reaches — so an image built with a token was a
+published token, and no amount of cleaning the filesystem changed that. The path was
+removed in full (`forage-ci-and-image` US-003); `tests/test_dockerfile.py` and CI's
+`secret-grep` job both fail if it comes back.
 
-> **Never push an image built with `HF_TOKEN` to any registry you do not fully control.**
-> The build argument is recoverable from the image's layer history (`docker history`).
-> An image built *without* the token has no PromptGuard weights and therefore runs
-> permanently `degraded` with `promptguard_unavailable` — verify with
-> `curl -s localhost:8020/health | jq .promptguard_loaded` after every deploy.
+> **Consequence, until `feature-forage-model-bootstrap` lands: every image ships without
+> PromptGuard weights** and therefore runs permanently `degraded` with
+> `promptguard_unavailable` in `degraded_reasons`. That is the honest state, not a broken
+> build — check it with `curl -s localhost:8020/health | jq .promptguard_loaded` and treat
+> standard-tier content as unscanned while it reads `false`. The replacement is a
+> *runtime* fetch into the `HF_HOME` volume (`/app/model-cache`), configured through the
+> environment like everything else.
 
 ---
 
