@@ -38,6 +38,8 @@ Design principles:
 ├── models.py                # Pydantic request/response models
 ├── cache.py                 # Valkey/Redis content cache (closed log vocabulary)
 ├── url_validator.py         # SSRF defense: RFC1918 rejection, DNS-rebinding checks
+├── contract_smoke.py        # CI-only: asserts a running image's /health contract.
+│                            # Not in the image — the Dockerfile COPY list is explicit
 ├── config.yaml              # UA pool, trusted domains, blocklist, thresholds, limits
 ├── Dockerfile               # CPU-torch image; digest-pinned base, uv.lock install,
 │                            # secret-free (no build ARG, no baked weights)
@@ -47,7 +49,7 @@ Design principles:
 ├── pipeline/                # the five sanitization stages + orchestrator + contract
 ├── promptguard/             # Llama Prompt Guard 2 classifier wrapper
 ├── searxng/config/          # settings.yml + limiter.toml for the companion SearXNG
-├── tests/                   # 23 files; flat, one module per subject
+├── tests/                   # 24 files; flat, one module per subject
 ├── docs/                    # configuration.md, bootstrap-notes.md, bootstrap-scan.txt
 └── kit_tools/               # this documentation framework + feature specs
 ```
@@ -75,6 +77,7 @@ Design principles:
 | `pipeline/stage1_pdf.py` | 156 | PDF branch of stage 1. |
 | `pipeline/stage3_promptguard.py` | 151 | ML injection scan; skipped for trusted domains. |
 | `pipeline/contract.py` | 100 | The versioned response contract (`contract_version`, currently **1.0.0**). |
+| `contract_smoke.py` | 367 | CI's published-image smoke: polls a running container's `/health`, validates it against the same `HealthResponse` model the golden test pins, and reads every wire value from `pipeline/contract.py` at run time. Ships in no image. |
 | `pipeline/sanitizer_revision.py` | 31 | Hashes eight source files into a `sanitizer_revision` string. See the gotcha below. |
 
 ---

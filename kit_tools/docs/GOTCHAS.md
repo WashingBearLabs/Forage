@@ -44,11 +44,23 @@ machine-readable. Keep it that way.
 - Never "resolve" a fail-closed consumer by turning fail-closed off. The correct fix is
   supplying the weights.
 
+**Since US-005 this is machine-enforced, not a rule you have to remember.** CI's `smoke`
+job runs the built image with no Hugging Face token on every push and PR and asserts the
+degraded contract through `contract_smoke.py`: HTTP 200, `status: "degraded"`,
+`promptguard_unavailable` in `degraded_reasons`, no `search_sanitization` capability, a
+derived `sanitizer_revision`, and `contract_version` equal to this tree's
+`pipeline/contract.py`. A commit that made `/health` claim `healthy` without weights now
+turns the workflow red. Verified against a live container both ways — the honest image
+passes, and the same image with the break-glass `FORAGE_LEGACY_CAPABILITY=1` armed fails
+with exactly the capability violation.
+
 **Verify after any rebuild:**
 `docker logs <container> | grep -i promptguard` → "model loaded", and
 `curl -s localhost:8020/health | jq .promptguard_loaded` → `true`. Until spec 3 lands,
 expect `false` from a stock image and treat the content as unscanned — that is the honest
-answer, not a broken deploy.
+answer, not a broken deploy. The refusal is a `GatedRepoError` (HTTP 401) from
+`huggingface.co`, which fails in seconds rather than hanging; the app is serving within
+~6 s of `docker run` even under emulation.
 
 ---
 

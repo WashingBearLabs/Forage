@@ -36,6 +36,23 @@ All four are blocking jobs in `.github/workflows/ci.yml` (`lint`, `typecheck` an
 US-002, `test`). Run them before you push — a red gate costs a round trip on the free
 Actions tier.
 
+**Six jobs run on every push and PR**: the three above plus `build-amd64` and
+`secret-grep` (US-003) and `smoke` (US-005). The last one is the only lane that *runs*
+the image rather than inspecting it — it starts the built container with no Hugging Face
+token and asserts the degraded `/health` contract through `contract_smoke.py`. You can
+run exactly what it runs:
+
+```bash
+docker build -t forage:ci .
+docker run -d --name forage-smoke -p 8020:8020 forage:ci
+uv run python contract_smoke.py --base-url http://127.0.0.1:8020
+docker rm -f forage-smoke
+```
+
+Expect `status: "degraded"` with `promptguard_unavailable`. A weights-free image
+reporting `healthy` is the nine-day production failure this repo exists not to repeat,
+and the smoke is the mechanical guard against it.
+
 **`test` is the job that makes the rest real.** Until it landed, nothing in CI ran pytest,
 so `test_ci_workflow.py`, `test_pyright_policy.py`, `test_dependency_lock.py` and the
 hermeticity canary all bit only on a developer's machine. The job runs `uv run pytest -q`
@@ -59,7 +76,7 @@ crash reads as a false regression.
 
 ## Test Structure
 
-23 files under `tests/`, flat, one module per subject. **656 tests, all green** as of
+24 files under `tests/`, flat, one module per subject. **731 tests, all green** as of
 2026-09-07.
 
 | Module | Tests | Covers |
@@ -74,7 +91,8 @@ crash reads as a false regression.
 | `tests/test_models.py` | 31 | Pydantic request/response models |
 | `tests/test_app.py` | 31 | FastAPI endpoints, `/health` body, capability break-glass |
 | `tests/test_stage3_promptguard.py` | 30 | ML scan; transformers/torch mocked |
-| `tests/test_ci_workflow.py` | 79 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane, image build + secret-grep gate |
+| `tests/test_ci_workflow.py` | 107 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane, image build + secret-grep gate, smoke job + artifact handoff |
+| `tests/test_contract_smoke.py` | 47 | `contract_smoke.py`: every `/health` clause, polling, and the single-source ties to the golden schema |
 | `tests/test_stage5_url_audit.py` | 28 | Outbound fetch + redirect-chain audit |
 | `tests/test_stage1_pdf.py` | 23 | PDF branch, subprocess isolation |
 | `tests/test_dockerfile.py` | 20 | `Dockerfile` text: no secret may enter the build, digest-pinned base, lock-driven install |
@@ -113,9 +131,19 @@ canary cannot check about itself: that it is committed and not skipped.
 **Async needs no decorator.** `asyncio_mode = "auto"` is set in `pyproject.toml`.
 
 **The exact count is a gate, not a floor.** The extraction verified *exactly* 531 tests
-moved (534 collected after alias parametrization); the suite has since grown to 656 as CI
-guards landed (US-001 +33, US-006 +19, US-002 +21, US-003 +49). A silently dropped module
-cannot hide under a "≥ N passed" assertion. When you add tests, update the counts here.
+moved (534 collected after alias parametrization); the suite has since grown to 731 as CI
+guards landed (US-001 +33, US-006 +19, US-002 +21, US-003 +49, US-005 +75). A silently
+dropped module cannot hide under a "≥ N passed" assertion. When you add tests, update the
+counts here.
+
+**Contract expectations have one source.** `contract_smoke.py` validates a live
+`/health` body against the same `HealthResponse` model `tests/test_contract_schema.py`
+pins against the golden fixture, and imports every wire value it compares
+(`CONTRACT_VERSION`, the degraded reason, the capability key) rather than restating it.
+`tests/test_contract_smoke.py::TestSingleSourceOfTruth` asserts that mechanically — same
+objects, and no wire literal anywhere in the smoke's code. If you find yourself typing a
+field name or a version into a workflow's shell, that is the thing this arrangement
+exists to prevent.
 
 **Tests ship with the code they cover, in the same commit.**
 
@@ -131,7 +159,7 @@ Used by the KitTools orchestrator to pick the right tests for a changed file.
 
 ```yaml
 test_mapping:
-  "retrieval_app.py": "tests/test_app.py"
+  "retrieval_app.py": ["tests/test_app.py", "tests/test_contract_smoke.py"]
   "models.py": "tests/test_models.py"
   "cache.py": "tests/test_cache.py"
   "url_validator.py": "tests/test_url_validator.py"
@@ -153,6 +181,7 @@ test_mapping:
   "tests/conftest.py": "tests/test_hermeticity.py"
   ".github/workflows/ci.yml": "tests/test_ci_workflow.py"
   "Dockerfile": "tests/test_dockerfile.py"
+  "contract_smoke.py": "tests/test_contract_smoke.py"
   "uv.lock": "tests/test_dependency_lock.py"
   "pyproject.toml": ["tests/test_dependency_lock.py", "tests/test_pyright_policy.py"]
   "typings/*": "tests/test_pyright_policy.py"

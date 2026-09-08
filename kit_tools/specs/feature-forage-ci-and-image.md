@@ -977,6 +977,211 @@ useful for debugging failed builds, so it was left on, but it is not free either
   PromptGuard-degraded entry was corrected in the same pass: "a token-less build produces
   an image with no weights" is now "*every* image is weights-free until spec 3".
 
+### US-005 — Published-image contract smoke job (2026-09-07)
+
+**Shipped:** `.github/workflows/ci.yml` (`smoke` job), `contract_smoke.py` (367 lines,
+new, repo root), `tests/test_contract_smoke.py` (47 tests, new), 28 new guards in
+`tests/test_ci_workflow.py` (79 → 107), and a two-line change to `retrieval_app.py`.
+Commit `d88ba70`.
+
+**CI run — green, all six jobs:**
+<https://github.com/WashingBearLabs/Forage/actions/runs/34176322730> · conclusion
+`success` · `lint` 21 s, `typecheck` 30 s, `test` 27 s, `build-amd64` 1 m 43 s (warm),
+`secret-grep` 47 s, **`smoke` 1 m 10 s**. This is the first run in which CI *executes*
+the image it builds rather than inspecting it.
+
+**What the smoke job's log says, rather than implies:**
+
+```
+smoke  Loaded forage:ci = sha256:ad349b75…0996 (identical to build-amd64's)
+smoke  forage-smoke Up Less than a second
+smoke  Expecting contract_version 1.0.0 (pipeline/contract.py)
+smoke  /health answered 200 after 4 attempt(s)
+smoke  {"status":"degraded","promptguard_loaded":false,"cache_connected":false,
+        "capabilities":{},"sanitizer_revision":"0537316d…e3e253",
+        "contract_version":"1.0.0","degraded_reasons":["promptguard_unavailable",
+        "cache_unavailable"]}
+smoke  Contract smoke PASSED: degraded, honest, and on-contract.
+```
+
+**The field expectations are not in bash, and that is the story.** The AC asks for the
+smoke's expectations to share a source with the golden-schema machinery. What that rules
+out is the obvious implementation — `curl | jq -e '.status == "degraded"'` and a list of
+field names in the workflow — because that list is a *second* copy of the contract, free
+to keep passing after the first one moves. `contract_smoke.py` instead:
+
+* validates the live body with `HealthResponse.model_validate` and compares the payload's
+  key set against `HealthResponse.model_fields` — the same model object
+  `tests/test_contract_schema.py` pins against `tests/golden/contract_1_0_0.json`, so a
+  wire-shape change that skipped a `CONTRACT_VERSION` bump fails the golden test and the
+  smoke together, and an *added* field fails the smoke even before the golden file is
+  regenerated;
+* imports `CONTRACT_VERSION` and `DEGRADED_PROMPTGUARD_UNAVAILABLE` from
+  `pipeline/contract.py` at job time (the job checks the repo out precisely so it can);
+* imports the capability key from `retrieval_app`.
+
+`TestSingleSourceOfTruth` makes all three checkable rather than conventional: the model
+must be the *same object* (`is`) as the golden test's, the version must be the same object
+as `pipeline.contract`'s, and an AST pass asserts that **no wire value appears as a string
+literal in the smoke's code** — docstrings exempt, because prose naming
+`promptguard_unavailable` is documentation while a literal is a contract. A parallel guard
+(`test_smoke_does_not_enumerate_the_contract_in_bash`) applies the same rule to the
+workflow's shell.
+
+**One two-line service change, and why it was the right seam.** `capabilities` is typed
+`dict[str, int]`, so the JSON schema — and therefore the golden fixture — cannot pin the
+key `search_sanitization`; it existed only as a literal inside `health()`.
+`retrieval_app.py` now names it once (`CAPABILITY_SEARCH_SANITIZATION`) and the smoke
+imports it. The alternative was putting the string in `pipeline/contract.py`, which is a
+`_REVISION_SOURCES` file — that would have rotated `sanitizer_revision` for a naming
+change, which is exactly the drive-by rotation `GOTCHAS.md` warns against.
+`tests/test_app.py` still spells the literal out in five places on purpose: the constant
+single-sources the *symbol*, those tests pin the *value*, and a rename of either is caught.
+The tie is also asserted behaviourally — `test_capability_key_is_the_one_health_advertises`
+stands the real app up with a loaded classifier and reads back what it advertises, because
+a constant that merely *looks* like the wire string is not evidence.
+
+**Why the script sits at the repo root.** `CONVENTIONS.md` has two rules that between them
+decide this: modules are flat at the root, and never a per-module `sys.path.insert`. A
+`scripts/contract_smoke.py` would import nothing (`sys.path[0]` is the script's directory,
+not the cwd) without either a path hack or a `-m` invocation. At the root it runs as
+`uv run python contract_smoke.py` from any developer's checkout, which matters because
+reproducing a red smoke by hand is the first thing anyone will want to do. It is a CI
+utility, not part of the image: the Dockerfile's `COPY` list is explicit and does not
+include it, and `.dockerignore` is irrelevant to that.
+
+**It is deliberately not a pytest module.** The suite runs under an autouse
+`pytest-socket` guard that blocks exactly the loopback request the smoke has to make.
+Splitting it into an injectable fetcher plus pure evaluators is what let 47 tests cover
+every clause without touching a socket — and it is also what let the *timeout* path be
+tested (a zero budget still makes one attempt, and the last response goes to the evaluator,
+so "never came up" reports as a contract violation with the body attached rather than as a
+second error path).
+
+**The gate was proven to bite against a live container, not only in unit tests.** Two
+negative rehearsals against the real amd64 image on the local daemon:
+
+| Rehearsal | Result |
+|---|---|
+| stock image, no env | PASSED — `degraded`, `promptguard_unavailable`, `capabilities: {}`, revision `0537316d…` |
+| same image, `FORAGE_LEGACY_CAPABILITY=1` armed | **FAILED**, exit 1, exactly one violation: `/health advertises 'search_sanitization' … while PromptGuard is unavailable` |
+| nothing listening on the port, 3 s budget | **FAILED**, exit 1, two violations, no crash and no traceback |
+
+The middle row is the useful one: the break-glass override makes a *degraded* service
+advertise the capability anyway, which is the nearest thing this repo can produce to a
+dishonest image, and the smoke isolates it to one line while every other clause still
+passes.
+
+**PromptGuard's refusal is fast, which is why 120 s is comfortable.** The weights-free
+image reaches Hugging Face, gets `GatedRepoError` / HTTP 401 for
+`meta-llama/Llama-Prompt-Guard-2-22M`, logs it and carries on. On the runner `/health`
+answered on the **4th** poll (~8 s after `docker run`); locally, under qemu emulation on
+arm64, on the 4th–5th. The budget is not close to binding, but it stays at 120 s: the
+number that matters is a cold `torch` import on a loaded runner, not the warm case.
+
+**Guards, mutation-verified — 28 mutations, each confirmed to fail exactly the expected
+tests before restoring.** The implementation was committed *first* (US-003's harness
+lesson: its mutation script's `git checkout --` restore ate 20 minutes of uncommitted
+work).
+
+| Mutation | Failures |
+|---|---|
+| ci.yml: the `smoke` job is renamed out of the graph | 26 |
+| ci.yml: identity mismatch warns instead of failing | 1 |
+| ci.yml: delete the identity comparison entirely | 1 |
+| ci.yml: enumerate the contract in bash (`grep '"contract_version":"1.0.0"'`) | 1 |
+| ci.yml: pass `-e HF_TOKEN=fake` into the container | 1 |
+| ci.yml: drop `-p 8020:8020` | 1 |
+| ci.yml: budget cut from 120 s to 30 s | 1 |
+| ci.yml: log dump conditioned on `success()` | 1 |
+| ci.yml: log-dump step deleted outright | 1 |
+| ci.yml: cleanup no longer `always()` | 1 |
+| ci.yml: smoke stops running the committed script | 1 |
+| ci.yml: smoke rebuilds instead of loading the artifact | 3 |
+| ci.yml: smoke downloads into the checked-out working tree | 1 |
+| ci.yml: smoke downloads a different artifact name | 1 |
+| ci.yml: smoke grants itself `packages: write` | 1 |
+| ci.yml: smoke drops `--locked` | 1 |
+| ci.yml: smoke uploads its own artifact | 2 |
+| ci.yml: smoke forward-`needs:` a job US-007 has not added | 1 |
+| contract_smoke: tolerate `status: "healthy"` | 3 |
+| contract_smoke: hardcode the contract version | 1 |
+| contract_smoke: drop the `promptguard_unavailable` check | 3 |
+| contract_smoke: drop the capability check | 2 |
+| contract_smoke: accept the `"unknown"` revision | 1 |
+| contract_smoke: drop the unexpected-field check | 1 |
+| contract_smoke: validate against a private subclass of the model | 2 |
+| contract_smoke: drop the `/metrics` version check | 2 |
+| contract_smoke: lower the default budget to 30 s | 2 |
+| retrieval_app: rename the advertised capability key | 3 |
+
+**One probe was bad and it is worth recording as a probe, not as an escape.** The first
+attempt at "remove the on-failure log dump" inserted a second `if:` key into the same
+step; PyYAML takes the last key, so `if: failure()` survived and the mutation changed
+nothing — it reported a green suite and looked exactly like an escaped guard. Re-run
+properly (replace the condition; then delete the whole step) it fails as designed, twice.
+A mutation harness needs its mutations verified as much as the guards do.
+
+**`sanitizer_revision` did NOT rotate.** `0537316d83510dab…e3e253` before and after,
+measured both times — the third story in a row to leave it alone, and the first that can
+*observe* it from outside: the smoke reads the value off a running container and fails on
+an empty one or the `"unknown"` fallback. Nothing under `pipeline/` was touched;
+`retrieval_app.py` is not a `_REVISION_SOURCES` member.
+
+**Artifact pressure: measured, and deliberately not "fixed" here.** The carry-forward from
+US-003 asked this story to reduce artifact pressure where cheap without foreclosing
+US-007's consumption of the same artifact. What is actually available:
+
+* `retention-days` is already **1**, which is upload-artifact's floor. That lever is spent.
+* The smoke adds **zero** artifact bytes — it consumes the tarball and uploads nothing.
+  `test_smoke_uploads_no_artifacts_of_its_own` and `test_there_is_exactly_one_image_artifact`
+  keep it that way; the second is the one that stops a future consumer solving its problem
+  with a second 375 MiB copy.
+* A **delete-the-artifact job was considered and rejected.** It needs job-scoped
+  `actions: write` — a new write-permission surface on a repository about to go public,
+  which also grants cancelling runs and deleting caches — to reclaim storage against a
+  quota US-003 measured as *not* enforced (two concurrent runs held 785 MB against a
+  nominal 500 MB and both uploads succeeded). And the sequencing is a trap: a cleanup job
+  gated on `[secret-grep, smoke]` today would delete the artifact before US-007's
+  `publish` can read it, and nothing would fail until a release did.
+* US-007 is the right place, because `publish` is the last consumer and the `needs:` list
+  is complete by construction there. `_IMAGE_CONSUMERS` in `tests/test_ci_workflow.py` is
+  the list to extend when it lands — every consumer is then held to the same
+  download-and-assert contract by parametrization.
+
+**Job shape.** `smoke` is a sibling of `secret-grep`, both `needs: build-amd64`: neither
+reads the other's output and a broken contract and a leaked token are independent
+failures worth reporting in one run. `smoke` *does* check the repository out, which is the
+exact opposite of `secret-grep`'s deliberate no-checkout — and for the opposite reason.
+`secret-grep` keeps its working directory empty so its pattern set cannot be weakened by
+editing a fetched script; `smoke`'s whole point is to compare the running image against
+*this commit's* contract, so reading `pipeline/contract.py` at job time is the feature.
+Both reasons are written beside their jobs.
+
+**Notes for the following stories:**
+- **Spec 5 extends this job** (in-image contract file ↔ `/health` version equality). The
+  seam is `contract_smoke.py`: add an evaluator returning a failure list, call it from
+  `run_smoke`, and cover it in `tests/test_contract_smoke.py`. Do not add assertions to
+  the workflow's shell — the guard that forbids it is
+  `test_smoke_does_not_enumerate_the_contract_in_bash`, and it is deliberate.
+- A close relative is available and was left out as beyond the AC: the container's
+  `sanitizer_revision` could be compared to `derive_sanitizer_revision(config)` computed
+  from this tree, since the image is built from this commit in the same run. That is a
+  strictly stronger check than "non-empty" and a natural companion to spec 5's version
+  equality.
+- **US-007's `publish` must download the same artifact and assert the same identity.** Add
+  `"publish"` to `_IMAGE_CONSUMERS` and the two parametrized handoff tests cover it for
+  free. `needs:` is still only ordering.
+- The two action pins this story reuses (`actions/download-artifact` v8.0.1,
+  `actions/checkout` v7.0.1) are US-001/US-003's; no new third-party action was added.
+- Suite went 656 → **731** tests (+47 `test_contract_smoke.py`, +28 workflow guards), all
+  green. `kit_tools/testing/TESTING_GUIDE.md` carries the new counts, the six-job list, a
+  copy-pasteable local smoke recipe, and two `test_mapping` changes (`contract_smoke.py`
+  is new; `retrieval_app.py` now maps to two modules).
+- `kit_tools/docs/GOTCHAS.md`'s PromptGuard entry gained the paragraph that makes it
+  honest: the "never report healthy without weights" rule is no longer something a
+  reviewer has to remember — it is a red workflow.
+
 ## Refinement Notes
 
 ### Research Findings

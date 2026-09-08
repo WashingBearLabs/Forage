@@ -84,11 +84,17 @@ Five of the eight `_REVISION_SOURCES` files remain byte-identical to Poppy's cop
 `orchestrator.py` (hostname defaults), `stage2_structural.py` (formatting, then a type
 argument) and `stage1_extraction.py` (typed metadata helpers) differ.
 
-**No fourth rotation.** `forage-ci-and-image` US-002 and US-003 both left the revision at
-`0537316d…e3e253`, verified before and after each story: neither the CI test lane nor the
-Dockerfile rework touches a `_REVISION_SOURCES` file (all eight live under `pipeline/`).
-Recorded because the two stories before them each moved it, and silence would be
-ambiguous — "unchanged" is a measurement here, not an omission.
+**No fourth rotation.** `forage-ci-and-image` US-002, US-003 and US-005 all left the
+revision at `0537316d…e3e253`, verified before and after each story: none of the CI test
+lane, the Dockerfile rework or the contract smoke touches a `_REVISION_SOURCES` file (all
+eight live under `pipeline/`). Recorded because the two stories before them each moved
+it, and silence would be ambiguous — "unchanged" is a measurement here, not an omission.
+
+US-005 is the story where that stability became *observable from outside*: the smoke job
+reads `sanitizer_revision` off a running container's `/health` and fails if it is empty
+or the `"unknown"` fallback, so a build that silently lost its ability to derive one is
+now a red gate rather than a field nobody looks at. The value the CI run reported —
+`0537316d83510dab…e3e253` — is the same one this tree derives locally.
 
 **Consequence for the Poppy-side specs: do not assume Poppy↔Forage revision parity.** A
 consumer that compares `sanitizer_revision` across the two repos will see a mismatch that
