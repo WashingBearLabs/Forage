@@ -340,6 +340,40 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
+  arm64-feasibility:
+    # THROWAWAY — US-007's multi-arch feasibility measurement, on a discarded
+    # branch. Answers the two questions the spec's hint asks before the platform
+    # list is decided: do the CPU torch aarch64 wheels the committed lock pins
+    # actually install, and does a cold qemu-emulated arm64 build come in under
+    # 30 minutes on a GitHub-hosted runner? It pushes nothing and uploads
+    # nothing; the durable artifacts are the recorded number and the platform
+    # list that lands on main.
+    name: arm64-feasibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Build the arm64 image under emulation
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/arm64
+          push: false
+          load: false
+          tags: forage:arm64-feasibility
+          cache-from: type=gha
+          provenance: false
+
   secret-grep:
     name: secret-grep
     # The first real `needs:` edge in this workflow — and an ordering edge only.
