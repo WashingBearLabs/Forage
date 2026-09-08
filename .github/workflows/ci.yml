@@ -483,7 +483,12 @@ jobs:
         # gives ordering; this is what gives identity. `docker save`/`docker
         # load` preserve the image ID exactly — it is the digest of the image
         # config — so a mismatch means this job would be smoking a different
-        # image than the one that was built, cleared and (US-007) published.
+        # image than the one that was built and cleared. What `publish` does
+        # with that identity is a separate mechanism: it cannot push this
+        # tarball (a multi-arch push is built by buildx across platforms and
+        # cannot ship a `docker load`ed image), so it rebuilds the amd64 leg
+        # from the same cache and then compares the published layers back
+        # against this one. See its verification step.
         run: |
           set -euo pipefail
           recorded="$(tr -d '[:space:]' < "${IMAGE_DOWNLOAD_DIR}/${IMAGE_ID_FILE}")"
@@ -580,6 +585,16 @@ jobs:
     # Neither is available to a fork PR: this job cannot run on a pull_request
     # event at all (see the `if:` above), and GitHub keeps a fork's token
     # read-only regardless.
+    #
+    # NOTE for whoever writes the next permissions block (US-004's searxng
+    # lane): a job-level block **replaces** the top-level grant, it does not
+    # merge with it. Ask for `packages: read` alone and you silently lose
+    # `contents: read`, and `actions/checkout` then fails with `fatal:
+    # repository '.../Forage/' not found` — a private-repo 404 that reads like a
+    # typo rather than a permissions bug. This job gets away with listing no
+    # `contents: read` only because `write` implies it. A guard test
+    # (`test_a_job_that_scopes_permissions_and_checks_out_keeps_contents`)
+    # enforces the rule for every future block.
     permissions:
       contents: write
       packages: write

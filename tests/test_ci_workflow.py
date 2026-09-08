@@ -41,6 +41,23 @@ hand-written field list in bash would be a second copy of the contract, free
 to keep passing after the real one moves — which is precisely the drift the
 job exists to catch.
 
+US-007 adds :class:`TestPublishJob`, and with it the only job in the file
+allowed to write anything outside the run. Two of its guards are worth knowing
+about before reading the rest:
+
+* the tag policy and the job condition are **evaluated**, not substring-matched.
+  ``_evaluate`` is a small recursive-descent interpreter for the subset of
+  GitHub expressions this workflow uses, so a test can ask "for
+  ``refs/tags/v0.9.0-rc``, which tags does this publish?" and get the
+  workflow's own answer. An expression it cannot parse raises rather than
+  reading as ``False``;
+* ``publish`` is an image consumer that cannot push what it consumes. A buildx
+  multi-arch push builds a manifest list across platforms and cannot ship an
+  image ``docker load`` put in a daemon, so the amd64 leg is rebuilt from the
+  cache ``build-amd64`` filled and the published layers are then compared back
+  against the gated tarball's. Its tests assert that comparison exists and
+  fails the run, because without it the artifact download would be ceremony.
+
 Assertions run against the parsed YAML wherever possible, so reorganising the
 file cannot silently void a check.
 
@@ -500,6 +517,39 @@ class TestPermissions:
             "`publish`, with `contents: write` for the Release and "
             "`packages: write` for the registry push, and nothing else."
         )
+
+    def test_a_job_that_scopes_permissions_and_checks_out_keeps_contents(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        # A job-level `permissions:` block REPLACES the top-level grant — it
+        # does not merge with it. Learned the expensive way while gathering
+        # US-007's evidence: a throwaway job declared `permissions: {packages:
+        # read}` to pull the published image, silently lost the `contents: read`
+        # it had been inheriting, and `actions/checkout` failed with
+        # `fatal: repository 'https://github.com/WashingBearLabs/Forage/' not
+        # found` — a 404 for a private repository, which reads like a typo in
+        # the repo name rather than like a permissions bug. `publish` is fine
+        # today only because `contents: write` happens to imply read.
+        #
+        # US-004 adds the searxng lane and will write the next permissions
+        # block, so this is worth guarding rather than remembering.
+        for name, job in jobs.items():
+            perms: dict[str, Any] = job.get("permissions") or {}
+            if not perms:
+                continue
+            checks_out = any(
+                "checkout" in str(step.get("uses", "")) for step in job.get("steps", [])
+            )
+            if not checks_out:
+                continue
+            assert perms.get("contents") in {"read", "write"}, (
+                f"Job {name!r} scopes its own permissions to {perms} and also "
+                "checks the repository out. A job-level block replaces the "
+                "top-level `contents: read` rather than adding to it, so this "
+                "job cannot clone a private repository — and the failure is a "
+                "404 on the repo URL, which looks like anything but a "
+                "permissions problem."
+            )
 
 
 # ---------------------------------------------------------------------------
