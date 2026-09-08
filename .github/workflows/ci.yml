@@ -543,6 +543,85 @@ jobs:
         if: always()
         run: docker rm -f "${SMOKE_CONTAINER}" > /dev/null 2>&1 || true
 
+  published-pull-smoke:
+    # THROWAWAY — US-007 evidence, on a discarded branch. Pulls the *published*
+    # rc image the way a consumer would (registry, not artifact), runs the
+    # committed contract smoke against it, enumerates every tag the GHCR
+    # package actually holds, and asserts `latest` does not resolve. Publishes
+    # nothing.
+    name: published-pull-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync dev environment
+        run: uv sync --extra dev --locked
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enumerate every tag the package holds
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          bearer="$(printf '%s' "${REGISTRY_TOKEN}" | base64 -w0)"
+          echo "--- ghcr.io/v2/washingbearlabs/forage/tags/list ---"
+          curl -sfSL -H "Authorization: Bearer ${bearer}" \
+            "https://ghcr.io/v2/washingbearlabs/forage/tags/list" | jq -S .
+          echo "--- end tag list ---"
+
+      - name: Assert latest does not resolve
+        run: |
+          set -euo pipefail
+          if docker manifest inspect ghcr.io/washingbearlabs/forage:latest > /dev/null 2>&1; then
+            echo "::error::ghcr.io/washingbearlabs/forage:latest exists — a pre-release moved it"
+            exit 1
+          fi
+          echo "latest does not resolve. Correct: no non-pre-release v* tag has been published."
+
+      - name: Inspect and pull the published rc image
+        run: |
+          set -euo pipefail
+          ref="ghcr.io/washingbearlabs/forage:0.9.0-rc"
+          docker buildx imagetools inspect "${ref}"
+          docker pull --platform linux/amd64 "${ref}"
+          docker image inspect --format '{{.Id}} {{json .RootFS.Layers}}' "${ref}"
+
+      - name: Contract smoke against the published image
+        run: |
+          set -euo pipefail
+          docker run -d --name published-smoke -p 8020:8020 \
+            ghcr.io/washingbearlabs/forage:0.9.0-rc
+          uv run python contract_smoke.py \
+            --base-url "http://127.0.0.1:8020" \
+            --timeout-seconds "${SMOKE_TIMEOUT_SECONDS}"
+
+      - name: Dump the container log
+        if: failure()
+        run: docker logs published-smoke 2>&1 || true
+
+      - name: Remove the container
+        if: always()
+        run: docker rm -f published-smoke > /dev/null 2>&1 || true
+
   publish:
     name: publish
     # The only job in this file that writes anything outside the run. It fires
