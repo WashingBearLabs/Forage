@@ -805,13 +805,32 @@ jobs:
               | jq -c 'if has("linux/amd64") then .["linux/amd64"] else . end | .rootfs.diff_ids'
           )"
           gated_layers="$(cat gated-layers.json)"
+          # Floor before comparing: if both sides ever degraded to `null` (a
+          # jq miss on each), string equality would pass a comparison of
+          # nothing against nothing. An empty gated list is itself the error.
+          gated_count="$(printf '%s' "${gated_layers}" | jq -r 'if type == "array" then length else 0 end')"
+          if [ "${gated_count}" -eq 0 ]; then
+            echo "::error::gated layer list is empty or not an array — refusing a vacuous comparison"
+            exit 1
+          fi
           if [ "${published_layers}" != "${gated_layers}" ]; then
             echo "::error::the published amd64 filesystem is not the one that passed the gates"
             echo "gated:     ${gated_layers}"
             echo "published: ${published_layers}"
             exit 1
           fi
-          echo "Published amd64 filesystem is identical to the gated one ($(printf '%s' "${gated_layers}" | jq -r 'length') layers)."
+          echo "Published amd64 filesystem is identical to the gated one (${gated_count} layers)."
+          # The rootfs parity above proves the *filesystem*. A `--build-arg`
+          # or `ENV` secret would live in the image *config* — an empty layer
+          # with identical diff_ids and a leaked history line — which is the
+          # one place secret-grep's tarball read cannot see once the registry
+          # copy exists. Same pattern set as secret-grep, applied to every
+          # platform's published config (the inspect JSON carries them all).
+          if printf '%s' "${image_json}" | grep -E -q 'HF_TOKEN|hf_[A-Za-z0-9]{20,}'; then
+            echo "::error::the published image config carries a forbidden pattern"
+            exit 1
+          fi
+          echo "No forbidden pattern in the published image config."
           echo "--- tags pushed for ${GITHUB_REF} ---"
           printf '%s\n' "${PUSHED_TAGS}"
           echo "--- end tags ---"

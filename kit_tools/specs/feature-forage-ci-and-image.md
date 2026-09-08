@@ -1236,7 +1236,9 @@ Both reasons are written beside their jobs.
 
 **Shipped:** `.github/workflows/ci.yml` (`publish` job), `docs/releases.md` (new), 40 new
 guards in `tests/test_ci_workflow.py` (107 → 147) including a small GitHub-expression
-evaluator, plus the doc propagation. Commits `cf0517b` + `e45f70f`.
+evaluator, plus the doc propagation. Commits `cf0517b` + `e45f70f` + `7f99371` (the
+scoped-permissions-keeps-contents guard, described below but omitted from this list as
+first written — supervisor correction).
 
 **The green publish — tag `v0.9.0-rc`:**
 <https://github.com/WashingBearLabs/Forage/actions/runs/34179620038> · conclusion

@@ -1811,6 +1811,41 @@ class TestPublishJob:
             "Branch body was:\n" + body
         )
 
+    def test_the_layer_comparison_cannot_pass_vacuously(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        body = _if_block_body(_run_text(jobs, "publish"), "gated_count", "-eq 0")
+        assert body is not None, (
+            "publish must floor the gated layer list before comparing: two "
+            "jq misses both yield the string 'null', and 'null' != 'null' is "
+            "false — a comparison of nothing against nothing would pass"
+        )
+        assert "exit 1" in body, (
+            "An empty gated layer list must fail the run, not merely skip the "
+            "comparison. Branch body was:\n" + body
+        )
+
+    def test_publish_greps_the_published_config_for_secrets(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        run_text = _run_text(jobs, "publish")
+        body = _if_block_body(run_text, "image_json", "grep", "HF_TOKEN")
+        assert body is not None, (
+            "publish must grep the published image config for the secret "
+            "pattern set. The rootfs parity proves the filesystem; a "
+            "build-arg/ENV leak lives in the config with an *empty* layer — "
+            "identical diff_ids, leaked history — and secret-grep only ever "
+            "reads the local tarball, never the registry copy"
+        )
+        assert "exit 1" in body, (
+            "A forbidden pattern in the published config must fail the run. "
+            "Branch body was:\n" + body
+        )
+        assert "hf_[A-Za-z0-9]{20,}" in run_text, (
+            "The published-config grep must use the same pattern set "
+            "secret-grep defines — one vocabulary, two vantage points"
+        )
+
     def test_publish_verifies_before_it_releases(self, jobs: dict[str, Any]) -> None:
         names = [str(step.get("name", "")) for step in _steps(jobs, "publish")]
         push_index = next(i for i, name in enumerate(names) if "Build and push" in name)
