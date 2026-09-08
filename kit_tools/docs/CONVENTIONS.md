@@ -54,7 +54,7 @@ Read this before reaching for a suppression; there is a right place for every ca
 | Test modules | `tests/test_<module>.py`, mirroring the module under test | `tests/test_cache.py` |
 | Private helpers | leading underscore | `_closed_vocabulary_reason` |
 | Module constants | `SCREAMING_SNAKE`, leading `_` when private | `_DEFAULT_SEARXNG_URL` |
-| Env vars | `SCREAMING_SNAKE`, product-neutral | `VALKEY_URL`, `FORAGE_LEGACY_CAPABILITY` |
+| Env vars | `SCREAMING_SNAKE`, product-neutral | `VALKEY_URL`, `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION` |
 
 **No `poppy` in a new name.** The extraction is deliberate; legacy `POPPY_*` env-var names
 survive only as back-compat aliases with a `FORAGE_*` primary.

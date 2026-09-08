@@ -61,8 +61,8 @@ instance is private-network-only and Forage is its only client.
 |----------|---------|---------|
 | `VALKEY_URL` | `redis://valkey:6379/4` | Connection string for the Valkey/Redis content cache. Standard `redis://` URL, including the database index. **May carry a password — see credential handling below.** |
 | `SEARXNG_URL` | `http://searxng:8080` | Base URL of the SearXNG instance backing `POST /search`. |
-| `FORAGE_LEGACY_CAPABILITY` | unset | **Break-glass only** — see below. |
-| `POPPY_RETRIEVAL_LEGACY_CAPABILITY` | unset | Deprecated alias of `FORAGE_LEGACY_CAPABILITY`, kept so a pre-extraction deployment keeps working. Identical semantics. |
+| `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION` | unset | **Break-glass only** — see below. |
+| `POPPY_RETRIEVAL_LEGACY_CAPABILITY` | unset | Deprecated alias of `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION`, kept so a pre-extraction deployment keeps working. Identical semantics. |
 | `HF_HOME` | `/app/model-cache` (set by the image) | Hugging Face cache directory the PromptGuard weights are read from. Override only if you mount the weights elsewhere. |
 
 The defaults for `VALKEY_URL` and `SEARXNG_URL` are deliberately neutral service names —
@@ -96,9 +96,9 @@ Do your half:
 - Rotating the password means restarting the container — the URL is read once at import
   time.
 
-### Break-glass: the legacy capability override
+### Break-glass: the sanitization-advertisement override
 
-`FORAGE_LEGACY_CAPABILITY` (or its deprecated alias
+`FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION` (or its deprecated alias
 `POPPY_RETRIEVAL_LEGACY_CAPABILITY`) set to **exactly `1`** forces `GET /health` to
 advertise `capabilities: {"search_sanitization": 1}` even when the PromptGuard
 classifier is not loaded.

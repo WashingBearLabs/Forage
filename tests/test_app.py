@@ -180,10 +180,12 @@ async def test_health_degraded_reports_promptguard_unavailable(
 
 
 # Both break-glass names: the current one and the pre-extraction alias. Every
-# legacy-capability test below is parametrized over this pair so the alias can
-# never drift away from the name it aliases.
-_LEGACY_CAPABILITY_ENV_VARS = (
-    "FORAGE_LEGACY_CAPABILITY",
+# break-glass test below is parametrized over this pair so the alias can
+# never drift away from the name it aliases. (The interim name
+# FORAGE_LEGACY_CAPABILITY was retired un-aliased at the 2026-09-08 rename —
+# it never shipped in any deployment.)
+_BREAK_GLASS_ENV_VARS = (
+    "FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION",
     "POPPY_RETRIEVAL_LEGACY_CAPABILITY",
 )
 
@@ -192,20 +194,20 @@ _LEGACY_CAPABILITY_ENV_VARS = (
 _NON_ARMING_VALUES = ("", "0", "true", "TRUE", "yes", "on", " 1", "1 ", "11")
 
 
-def _clear_legacy_capability_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def _clear_break_glass_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unset every break-glass name so a stray ambient value cannot arm it."""
-    for name in _LEGACY_CAPABILITY_ENV_VARS:
+    for name in _BREAK_GLASS_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
 
 
-@pytest.mark.parametrize("env_var", _LEGACY_CAPABILITY_ENV_VARS)
-async def test_health_legacy_capability_override_restores_advertisement(
+@pytest.mark.parametrize("env_var", _BREAK_GLASS_ENV_VARS)
+async def test_health_break_glass_override_restores_advertisement(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
     env_var: str,
 ) -> None:
     """Either break-glass name keeps capabilities advertised while staying honest."""
-    _clear_legacy_capability_env(monkeypatch)
+    _clear_break_glass_env(monkeypatch)
     monkeypatch.setenv(env_var, "1")
     app.state.cache.connected = True
     resp = await client.get("/health")
@@ -217,14 +219,14 @@ async def test_health_legacy_capability_override_restores_advertisement(
     assert data["promptguard_loaded"] is False
 
 
-@pytest.mark.parametrize("env_var", _LEGACY_CAPABILITY_ENV_VARS)
-async def test_health_legacy_capability_override_unset_withholds_advertisement(
+@pytest.mark.parametrize("env_var", _BREAK_GLASS_ENV_VARS)
+async def test_health_break_glass_override_unset_withholds_advertisement(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
     env_var: str,
 ) -> None:
     """Only an exact ``1`` arms the override — on either name."""
-    _clear_legacy_capability_env(monkeypatch)
+    _clear_break_glass_env(monkeypatch)
     app.state.cache.connected = True
 
     resp = await client.get("/health")
@@ -236,8 +238,8 @@ async def test_health_legacy_capability_override_unset_withholds_advertisement(
         assert "search_sanitization" not in resp.json()["capabilities"], value
 
 
-@pytest.mark.parametrize("env_var", _LEGACY_CAPABILITY_ENV_VARS)
-def test_legacy_capability_warning_logged_only_when_enabled(
+@pytest.mark.parametrize("env_var", _BREAK_GLASS_ENV_VARS)
+def test_break_glass_warning_logged_only_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     env_var: str,
@@ -245,23 +247,23 @@ def test_legacy_capability_warning_logged_only_when_enabled(
     """The per-boot warning fires only when armed, and names the arming var."""
     import logging
 
-    from retrieval_app import _warn_if_legacy_capability_advertisement_enabled
+    from retrieval_app import _warn_if_break_glass_advertisement_enabled
 
-    _clear_legacy_capability_env(monkeypatch)
+    _clear_break_glass_env(monkeypatch)
     with caplog.at_level(logging.WARNING, logger="retrieval_app"):
-        assert _warn_if_legacy_capability_advertisement_enabled() is False
-    assert "legacy_capability_advertisement_active" not in caplog.text
+        assert _warn_if_break_glass_advertisement_enabled() is False
+    assert "break_glass_advertisement_active" not in caplog.text
 
     caplog.clear()
     monkeypatch.setenv(env_var, "1")
     with caplog.at_level(logging.WARNING, logger="retrieval_app"):
-        assert _warn_if_legacy_capability_advertisement_enabled() is True
-    assert "legacy_capability_advertisement_active" in caplog.text
+        assert _warn_if_break_glass_advertisement_enabled() is True
+    assert "break_glass_advertisement_active" in caplog.text
 
     # The warning must name whichever variable actually armed it — an operator
     # who has to unset it needs the real name, not a hardcoded constant.
     assert env_var in caplog.text
-    for other in _LEGACY_CAPABILITY_ENV_VARS:
+    for other in _BREAK_GLASS_ENV_VARS:
         if other != env_var:
             assert other not in caplog.text
 

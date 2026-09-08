@@ -345,7 +345,7 @@ clean machine reaches a loaded classifier.
   while waiting → "Built with Llama" obligations.
 - Document running **without** the model as a supported honest mode: what still works
   (extraction, structural scan, URL audit), what is withheld (`search_sanitization`), and
-  that `POPPY_RETRIEVAL_LEGACY_CAPABILITY`/`FORAGE_LEGACY_CAPABILITY` is break-glass only —
+  that `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION` (alias `POPPY_RETRIEVAL_LEGACY_CAPABILITY`) is break-glass only —
   never the steady-state workaround for a missing token (validation note).
 - Doc-only story.
 

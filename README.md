@@ -163,6 +163,17 @@ A second, independently versioned lane publishes the **companion SearXNG image**
 `ghcr.io/washingbearlabs/forage-searxng` — upstream's SearXNG at a digest-pinned base
 plus a baked config with honest public defaults (no wildcard pass list, no baked secret,
 no client-header trust) — behind its own hermetic cross-container smoke.
+
+> ⚠️ **`forage-searxng` is not built for direct internet exposure.** It ships with rate
+> limiting **off** — measured on the pinned digest, a working SearXNG limiter refuses the
+> JSON API this image exists to serve (HTTP 429 on the first request from a header-bare
+> client, and a hard 4-requests/hour cap on API formats via an upstream module constant no
+> config can raise). Run it on an internal network behind your own service, the way the
+> official Redis and Postgres images assume. If a deployment must expose it, the opt-in
+> (`SEARXNG_LIMITER=true` + `SEARXNG_VALKEY_URL` + a `pass_ip` passlist for your own
+> client's network) and its measured consequences are documented in
+> [`docs/searxng.md`](docs/searxng.md).
+
 [`docs/searxng.md`](docs/searxng.md) has the runbook. **The repository and both packages
 are private until the one-way public flip**, so those pulls are not anonymous yet.
 

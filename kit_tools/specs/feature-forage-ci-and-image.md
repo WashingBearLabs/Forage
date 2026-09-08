@@ -390,6 +390,24 @@ once, behind every gate, with the window controlled.
 **Independent Test:** Anonymous `docker pull` of both images succeeds; the flip checklist is
 recorded.
 
+**Gate decisions (2026-09-08, owner — codified before execution):**
+1. **Break-glass flag renamed before the flip.** `FORAGE_LEGACY_CAPABILITY` →
+   `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION` (self-describing; the old name read like a
+   compat shim). The never-deployed interim name is retired un-aliased;
+   `POPPY_RETRIEVAL_LEGACY_CAPABILITY` stays as the deployed-in-Poppy alias. Semantics
+   unchanged (exact `== "1"`, loud boot warning, only `capabilities` lies). Log token
+   `legacy_capability_advertisement_active` → `break_glass_advertisement_active`.
+2. **Limiter posture accepted.** The public `forage-searxng` ships `limiter: false` per
+   US-004's measurements; protection is deployment-side (internal network / fronting
+   service), stated loudly in the README images section, matching the official
+   Redis/Postgres-image posture. Round 2's `limiter: true`-is-hardened premise is
+   formally retired.
+3. **Registry after the purge: fresh rc tags.** Step (e) deletes every pre-flip version;
+   after the flip, push `v0.9.1-rc` + `searxng-v0.1.1-rc` through the full gate chains —
+   they verify the anonymous-pull AC, carry the corrected OCI labels, and prove publish
+   works on the public repo. The weights mirror (spec 2's `forage-weights`, when created)
+   stays **private** regardless — Llama license.
+
 **Implementation Hints:**
 - Gates, in order: (a) `secret-grep` green on the current images; (b) spec 1's full-history
   secret scan re-run clean at HEAD (`gitleaks detect --redact`); (c) LICENSE/NOTICE present;

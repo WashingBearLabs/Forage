@@ -66,19 +66,22 @@ logger = logging.getLogger(__name__)
 VALKEY_URL = os.environ.get("VALKEY_URL", "redis://valkey:6379/4")
 SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://searxng:8080")
 
-# Break-glass capability override. ``FORAGE_LEGACY_CAPABILITY`` is the current
-# name; ``POPPY_RETRIEVAL_LEGACY_CAPABILITY`` is the pre-extraction alias, kept
-# so a deployment that already carries it keeps working. Order matters only for
-# which name the warning reports when both are armed.
-_LEGACY_CAPABILITY_ENV_VAR = "FORAGE_LEGACY_CAPABILITY"
-_DEPRECATED_LEGACY_CAPABILITY_ENV_VAR = "POPPY_RETRIEVAL_LEGACY_CAPABILITY"
-_LEGACY_CAPABILITY_ENV_VARS = (
-    _LEGACY_CAPABILITY_ENV_VAR,
-    _DEPRECATED_LEGACY_CAPABILITY_ENV_VAR,
+# Break-glass capability override. ``FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION``
+# is the current name — deliberately self-describing, so nobody arms it thinking
+# it is a compatibility shim (it was ``FORAGE_LEGACY_CAPABILITY`` until the
+# 2026-09-08 pre-public-flip rename; that never-deployed name is retired, not
+# aliased). ``POPPY_RETRIEVAL_LEGACY_CAPABILITY`` is the pre-extraction alias,
+# kept so a deployment that already carries it keeps working. Order matters only
+# for which name the warning reports when both are armed.
+_BREAK_GLASS_ENV_VAR = "FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION"
+_DEPRECATED_BREAK_GLASS_ENV_VAR = "POPPY_RETRIEVAL_LEGACY_CAPABILITY"
+_BREAK_GLASS_ENV_VARS = (
+    _BREAK_GLASS_ENV_VAR,
+    _DEPRECATED_BREAK_GLASS_ENV_VAR,
 )
 
 
-def _legacy_capability_arming_env_var() -> str | None:
+def _break_glass_arming_env_var() -> str | None:
     """Return the name of the env var arming the capability override, if any.
 
     Break-glass switch (see ``docs/configuration.md``) so an operator can
@@ -88,23 +91,23 @@ def _legacy_capability_arming_env_var() -> str | None:
     arm it. Only ``capabilities`` lies under this flag; ``status``,
     ``degraded_reasons``, and ``promptguard_loaded`` stay honest.
     """
-    for name in _LEGACY_CAPABILITY_ENV_VARS:
+    for name in _BREAK_GLASS_ENV_VARS:
         if os.environ.get(name) == "1":
             return name
     return None
 
 
-def _legacy_capability_advertisement_enabled() -> bool:
+def _break_glass_advertisement_enabled() -> bool:
     """Return whether the deploy-transition capability override is active."""
-    return _legacy_capability_arming_env_var() is not None
+    return _break_glass_arming_env_var() is not None
 
 
-def _warn_if_legacy_capability_advertisement_enabled() -> bool:
+def _warn_if_break_glass_advertisement_enabled() -> bool:
     """Log a loud per-boot warning when the override is active; return its state."""
-    armed_by = _legacy_capability_arming_env_var()
+    armed_by = _break_glass_arming_env_var()
     if armed_by is not None:
         logger.warning(
-            "legacy_capability_advertisement_active — %s=1 is forcing /health "
+            "break_glass_advertisement_active — %s=1 is forcing /health "
             "to advertise search_sanitization regardless of classifier state; "
             "unset once the consuming agent's own capability gate is deployed",
             armed_by,
@@ -544,7 +547,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         len(config),
         CONTRACT_VERSION,
     )
-    _warn_if_legacy_capability_advertisement_enabled()
+    _warn_if_break_glass_advertisement_enabled()
 
     # Connect content cache
     app.state.cache_metrics = CacheMetrics()
@@ -646,7 +649,7 @@ async def health(request: Request) -> HealthResponse:
         degraded_reasons.append(DEGRADED_CACHE_UNAVAILABLE)
     capabilities = (
         {CAPABILITY_SEARCH_SANITIZATION: 1}
-        if classifier_loaded or _legacy_capability_advertisement_enabled()
+        if classifier_loaded or _break_glass_advertisement_enabled()
         else {}
     )
 

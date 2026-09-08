@@ -51,7 +51,7 @@ degraded contract through `contract_smoke.py`: HTTP 200, `status: "degraded"`,
 derived `sanitizer_revision`, and `contract_version` equal to this tree's
 `pipeline/contract.py`. A commit that made `/health` claim `healthy` without weights now
 turns the workflow red. Verified against a live container both ways — the honest image
-passes, and the same image with the break-glass `FORAGE_LEGACY_CAPABILITY=1` armed fails
+passes, and the same image with the break-glass `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION=1` (pre-rename: `FORAGE_LEGACY_CAPABILITY`) armed fails
 with exactly the capability violation.
 
 **Verify after any rebuild:**
