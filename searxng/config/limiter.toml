@@ -1,13 +1,64 @@
-# SearXNG rate limiter configuration
-# Internal-only instance — relaxed limits
+# Baked bot-detection configuration for the forage-searxng image.
+#
+# This file overlays upstream's searx/limiter.toml schema; anything not named
+# here keeps the pinned release's default. It exists to REMOVE relaxations, not
+# to add them — the whole file is three settings and every one of them is a
+# tightening or an explicit "no exceptions".
+#
+# None of it does anything unless the limiter is actually installed, which
+# needs `server.limiter: true` (settings.yml) *and* a Valkey backend
+# (SEARXNG_VALKEY_URL). See docs/searxng.md.
+
+[botdetection]
+
+# NO trusted_proxies HERE, DELIBERATELY.
+#
+# Upstream's default is loopback only ('127.0.0.0/8', '::1'), which is the
+# correct default for an image that is reached directly over a container
+# network: a peer at 172.x is not loopback, so its X-Forwarded-For and
+# X-Real-IP headers are ignored and the connecting address is the client. The
+# config this replaced trusted those headers unconditionally, which let any
+# caller choose its own rate-limit bucket by sending one line.
+#
+# An operator who puts a reverse proxy in front of this image adds that proxy's
+# network here, in their own overlay. Baking one in would ship the trust to
+# every consumer, including the ones with nothing in front.
 
 [botdetection.ip_limit]
-# Disable IP-based rate limiting for internal use
+
+# link_token OFF — an empirical result, not a preference.
+#
+# The link_token method treats a client that never fetches a token-carrying
+# link as *suspicious* and drops it onto the reduced budgets:
+# BURST_MAX_SUSPICIOUS = 2, then SUSPICIOUS_IP_MAX = 3. A browser fetches the
+# link; an API client never will.
+#
+# Measured against the pinned digest, limiter installed with Valkey, a
+# perfectly browser-shaped `format=json` client:
+#
+#     link_token = false ->  200 200 200 429   (ip_limit.API_MAX = 4/hour)
+#     link_token = true  ->  200 200 429 302   (BURST_MAX_SUSPICIOUS = 2)
+#
+# So enabling it strictly narrows an already-narrow API budget. It also never
+# gets the chance to matter for Forage's real client, which the header methods
+# refuse two steps earlier — see settings.yml's `limiter:` note.
+#
+# `server.public_instance: true` overrides this back to true in code, which is
+# one more reason settings.yml leaves public_instance false.
 link_token = false
 
 [botdetection.ip_lists]
-# No blocked IPs for internal instance
+
+# Both lists explicitly empty. The config this replaced carried
+# pass_ip = ["0.0.0.0/0"] — every address on the internet given unrestricted
+# access, which turns the limiter off for everyone while leaving `limiter:`
+# reading as though it were on. An empty list is the honest expression of "no
+# exceptions"; a consumer who needs one adds it in their own overlay.
 block_ip = []
-pass_ip = [
-  "0.0.0.0/0",
-]
+pass_ip = []
+
+# Upstream defaults this to true, which grants a hardcoded set of SearXNG
+# organisation IPs (check.searx.space and friends) unrestricted access. That is
+# a reasonable default for a public instance that wants to be monitored, and it
+# is an unasked-for IP-trust relaxation in a sidecar nobody is monitoring.
+pass_searxng_org = false

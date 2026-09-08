@@ -1,11 +1,20 @@
+# Baked SearXNG settings for the forage-searxng image.
+#
+# `use_default_settings: true` means this file is an *overlay* on upstream's
+# searx/settings.yml, not a replacement: anything not named here keeps the
+# pinned release's default. Consumers who need more (Poppy's private-network
+# relaxations, a reverse proxy's trusted networks) mount their own overlay —
+# this file is the public baseline and deliberately relaxes nothing.
 use_default_settings: true
 
 general:
-  instance_name: "Poppy Search"
+  instance_name: "Forage Search"
 
 search:
   safe_search: 0
   default_lang: "en"
+  # `json` is the whole reason this config exists: upstream's generated default
+  # ships html only, and Forage's search stage is a JSON API client.
   formats:
     - html
     - json
@@ -13,22 +22,83 @@ search:
 server:
   port: 8080
   bind_address: "0.0.0.0"
-  # Internal-only CSRF key for SearXNG's HTML UI.
-  # We only call the JSON API — not security-critical.
-  secret_key: "poppy-searxng-internal"
-  # Rate limiting off: this instance is private-network-only and its only
-  # client is Forage. Nothing terminates in front of it by default, so the
-  # forwarded-header settings below apply only if you add a reverse proxy.
+
+  # NO secret_key HERE, AND THAT IS THE POINT.
+  #
+  # Upstream's schema declares `secret_key` with no default and the environment
+  # name `SEARXNG_SECRET`, so an unset variable is a hard start failure with a
+  # named error — not a silent fallback. Verified against the pinned digest.
+  #
+  # The image this replaced baked the literal "poppy-searxng-internal". A known
+  # secret shipped in a public image is not a secret; it signs the HTML UI's
+  # session cookies for every instance that ever pulled it. Requiring the
+  # operator to supply one, and failing loudly when they do not, is the honest
+  # version. docs/searxng.md carries the generation recipe.
+
+  # LIMITER OFF, and this is the most consequential line in the file. Read
+  # docs/searxng.md before changing it; the reasoning is measured, not assumed.
+  #
+  # The plan was `limiter: true` with the Valkey requirement documented, on the
+  # grounds that `true` without a backend is inert theatre. The first half of
+  # that is right and verified: with no backend, upstream logs "The limiter
+  # requires Valkey" at ERROR and serves every request unthrottled.
+  #
+  # The second half does not survive contact with this image's only client.
+  # Measured against the pinned digest with a real Valkey attached:
+  #
+  #   * Forage's own httpx client is refused HTTP 429 on its FIRST request.
+  #     botdetection's `http_accept_language` method blocks any request without
+  #     an Accept-Language header, and httpx does not send one. A `curl` client
+  #     is blocked one method earlier (`http_accept_encoding`), and again by
+  #     `http_user_agent`, whose regex matches curl, wget and python-requests.
+  #   * Even a perfectly browser-shaped client gets **four `format!=html`
+  #     requests per hour, per client network** — `ip_limit.API_MAX = 4` over
+  #     `API_WINDOW = 3600`. Neither is configurable from limiter.toml; they are
+  #     module constants.
+  #
+  # So a working limiter on this image does not rate-limit abuse of a search
+  # API. It refuses the search API. The only way to have both is a `pass_ip`
+  # entry for the consumer's network, which is an IP-trust relaxation — the
+  # thing this config exists to stop shipping to everybody by default.
+  #
+  # `false` is therefore the honest value: this image does not rate limit, and
+  # says so, instead of shipping a switch that reads as protection and works as
+  # an outage. The protection this image actually relies on is not being exposed
+  # — it is a sidecar on a private network with one client.
+  #
+  # To turn it on anyway (a deployment that must expose it, with the consumer
+  # passlisted in an overlay), no rebuild is needed:
+  #     -e SEARXNG_LIMITER=true -e SEARXNG_VALKEY_URL=valkey://valkey:6379/0
+  # Both halves are required. The CI smoke exercises all three states — off,
+  # on-with-Valkey, and on-without — so none of the above is a claim.
   limiter: false
+
+  # `public_instance: true` would force link_token on (see limiter.toml) and
+  # `sys.exit(1)` when no Valkey backend is configured. Both are wrong for a
+  # sidecar serving one API client on a private network.
   public_instance: false
+
   method: "GET"
   http_protocol_version: "1.1"
-  forwarded_for_header: "X-Forwarded-For"
-  real_ip_header: "X-Real-IP"
 
-# Reliable engines — override defaults from use_default_settings
-# DuckDuckGo (primary), Brave (fallback), StartPage (fallback), Mojeek (fallback)
-# Bing removed — aggressively blocks homelab IPs
+  # NO forwarded_for_header / real_ip_header.
+  #
+  # They are gone twice over. They are client-spoofable the moment the image is
+  # reachable directly — a caller who can set X-Forwarded-For picks its own rate
+  # limit bucket — and, as of this pinned release, they are not even schema keys
+  # any more: header trust moved to `botdetection.trusted_proxies` in
+  # limiter.toml, whose default (loopback only) is what applies here. A reverse
+  # proxy in front of this image adds its own network there, in its own overlay.
+
+# Engines pinned on purpose, not inherited.
+#
+# With `use_default_settings: true` on a moving tag, upstream releases keep
+# enabling engines this config never vetted (observed live 2026-08-19: aol,
+# "karmasearch videos"). The enabled set below must stay in sync with
+# `_SEARXNG_ENGINES` in pipeline/orchestrator.py — Forage names the engines on
+# every query, so a divergence means either a request for an engine this image
+# has disabled, or an engine enabled here that nothing ever asks for.
+# tests/test_searxng_docker.py asserts the two sets are equal.
 engines:
   # --- Enabled: reliable general search engines ---
   - name: duckduckgo
@@ -49,17 +119,20 @@ engines:
     timeout: 5
 
   # --- Disabled: unreliable or problematic engines ---
+  # bing aggressively blocks homelab and cloud IP ranges; ahmia is a Tor hidden
+  # service index, not general web search. They are listed rather than omitted
+  # so a future `use_default_settings` release cannot quietly re-enable them.
+  #
+  # `torch` and `karmasearch` used to be listed here too and are gone: neither
+  # module exists in the pinned release any more, and naming a missing engine
+  # is not a no-op — SearXNG logs `Cannot load engine` with a traceback at
+  # startup for each one, whether or not it is disabled. Disabling an engine
+  # that cannot be loaded protects nothing and buries the log.
   - name: bing
     engine: bing
     disabled: true
-  - name: karmasearch
-    engine: karmasearch
-    disabled: true
   - name: ahmia
     engine: ahmia
-    disabled: true
-  - name: torch
-    engine: torch
     disabled: true
 
 outgoing:
