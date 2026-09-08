@@ -676,6 +676,112 @@ failure report. The `needs:` edges that matter are US-007's, hanging the publish
   correction, and 586 collected — with the "compare contracts, not revisions" instruction
   kept intact.
 
+### US-002 — Test lane (2026-09-07)
+
+**Shipped:** `.github/workflows/ci.yml` (`test` job), `tests/test_hermeticity.py` (8
+tests, new), 13 new guards in `tests/test_ci_workflow.py` (37 → 50), and the doc
+propagation. Commit `5bea1b8`.
+
+**CI run — green:** <https://github.com/WashingBearLabs/Forage/actions/runs/34172572962>
+· conclusion `success` · `test` **31 s** (`607 passed, 10 warnings in 10.33s`), `lint`
+**17 s**, `typecheck` **29 s**, all three started within a second of each other. The named
+`Verify sanitizer revision derivation` step reported its own `6 passed in 0.03s` above the
+full run.
+
+**This is the story that makes every guard in the repo CI-enforced.** Until this job
+existed, nothing in CI ran pytest at all: `test_ci_workflow.py`'s supply-chain assertions,
+`test_pyright_policy.py`'s policy pins, `test_dependency_lock.py`'s CPU-only lock check and
+the hermeticity guard all bit on a developer's machine and at review, and nowhere else. A
+PR could have deleted the socket guard, unpinned an action or relaxed a pyright rule and
+still shown two green checks. US-006's "not gated by CI yet" note is discharged here; the
+only remaining gap is that these checks are not yet *required* for merge, which US-007
+registers once all six jobs exist.
+
+**Job shape.** `test` is a third **sibling** of `lint` and `typecheck` — no `needs:`, for
+the same reason US-006 gave: none reads another's output, so an edge would only serialise
+three sub-30 s jobs and delay the second and third failure reports. `timeout-minutes: 20`
+is a runaway backstop, not a budget (the suite is 3 s locally, 10 s on the runner; the cold
+cost is the ~185 MB torch wheel, not pytest).
+
+**Step order is deliberate.** The named sanitizer-revision step runs *before* the full
+suite, not after Poppy's placement in a separate job. Poppy can afford a separate job; here
+the same job runs both, and after the full suite an unrelated failure anywhere in 607 tests
+would stop the contract guard from reporting at all. Running it first costs 0.03 s and buys
+a distinct red line for the file-recall cache contract. A guard test pins the ordering.
+
+**The canary runs and passes — round 3's prose fix, honoured.** `tests/test_hermeticity.py`
+is an executing test module, never a skipped one. Ported from Poppy's
+`tests/test_conftest_socket_isolation.py` and trimmed to what is true here: Poppy's
+`@pytest.mark.integration` re-enable lane and its `allow_hosts(['127.0.0.1'])` postgres
+exemption **do not exist in Forage**, so copying those two tests would have asserted
+fixtures this repo does not have. What replaced them are holes the original left open on a
+guard that also patches DNS:
+
+| Assertion | Hole it closes |
+|---|---|
+| TCP / UDP / IPv6 construction blocked | the exemption is family-scoped (`AF_UNIX`), not protocol-scoped |
+| `getaddrinfo` and `gethostbyname` blocked | name resolution is what the three real cache-test leaks actually did; a socket-only canary would pass while DNS escaped |
+| `create_connection` to loopback blocked | the API client code actually calls, and proof this suite has no local-service exemption to grow into one silently |
+| `AF_UNIX` socketpair works; an async test runs | a guard that took the exemption away would take the whole async half of the suite with it |
+
+Verified on Linux as well as macOS by the CI run above — the event-loop self-pipe assertion
+is platform-sensitive and a macOS-only green would not have proved it.
+
+**A canary cannot notice its own module being skipped**, so
+`TestHermeticityCanaryIsEnforced` lives in `tests/test_ci_workflow.py` instead: the canary
+exists, asserts `SocketBlockedError`, carries no skip/xfail markers, and `conftest.py` still
+declares `autouse=True` + `disable_socket(allow_unix_socket=True)`. Cross-module on purpose
+— a `pytestmark = pytest.mark.skip` on the canary still turns the suite red.
+
+**Guards, mutation-verified.** Eleven mutations applied, each confirmed to fail exactly the
+expected tests before restoring (script kept out of the tree):
+
+| Mutation | Failures |
+|---|---|
+| `test` job deleted | 9 (all of `TestTestJob`) |
+| full suite narrowed to `pytest -q tests/` | 2 |
+| `pytest -q -x --maxfail=1` | 3 |
+| sanitizer-revision step removed | 2 |
+| sanitizer step renamed to something meaningless | 1 |
+| sanitizer step moved after the full suite | 1 |
+| `--locked` dropped from the test job's sync | 1 |
+| `enable-cache: false` in the test job | 1 |
+| canary module `pytestmark`-skipped | 1 (and 8 skipped, which is the tell) |
+| canary module deleted | 3 |
+| `autouse` removed from the socket fixture | 8 — 1 structural + **all 7 canary behaviour tests**, which is the canary earning its place |
+
+The narrowing guard rejects `-k`, `-m`, `-x`, `--exitfirst`, `--maxfail`, `--ignore`,
+`--ignore-glob`, `--deselect`, `--lf`, `--last-failed`, `--sw`, `--stepwise` on any pytest
+invocation in the job, and separately requires a bare `uv run pytest -q` line. A green
+`test` job is the evidence every other guard rests on; the one thing it must never do is
+quietly check a subset.
+
+**`sanitizer_revision` did NOT rotate.** `0537316d83510dab…e3e253` before and after — the
+first story in this spec to leave it alone, because nothing here touches a
+`_REVISION_SOURCES` file. Recorded because the previous two stories each moved it and
+silence would be ambiguous.
+
+**Warning noise is pre-existing and intentional.** The canary adds 7 `UserWarning: A test
+tried to use socket.*` lines to the summary (10 total). `pytest-socket` emits that warning
+alongside the exception so a swallowed error still surfaces; `tests/test_cache.py` already
+produced 3 of them. Filtering them in the canary only would have invented a new convention
+for a cosmetic gain, so they stand.
+
+**Notes for the following stories:**
+- The `test` job is a required-check candidate for US-007 alongside `lint` and `typecheck`
+  — it is the one whose absence from that list would matter most.
+- `TestJobGraph::test_no_needs_references_an_undefined_job` still passes with three jobs and
+  no edges; US-003's `secret-grep` is the first real `needs:` and the first exercise of it.
+- Reuse `uv sync --extra dev --locked` verbatim (US-001/US-006's note stands, now three for
+  three).
+- Suite went 586 → **607** tests (+8 canary, +13 workflow guards), all green.
+  `kit_tools/testing/TESTING_GUIDE.md` carries the new counts, the
+  `tests/test_hermeticity.py` row, and a new `test_mapping` entry
+  (`tests/conftest.py` → `tests/test_hermeticity.py`).
+- `kit_tools/docs/GOTCHAS.md`'s hermeticity entry said removing the guard "would not show
+  up as a failure". That is now false and was corrected in the same commit rather than left
+  to rot — the claim was true only until this story landed.
+
 ## Refinement Notes
 
 ### Research Findings
