@@ -49,11 +49,15 @@ link_token = false
 
 [botdetection.ip_lists]
 
-# Both lists explicitly empty. The config this replaced carried
-# pass_ip = ["0.0.0.0/0"] — every address on the internet given unrestricted
+# Both lists explicitly empty. The config this replaced passlisted the
+# all-addresses network — every address on the internet given unrestricted
 # access, which turns the limiter off for everyone while leaving `limiter:`
 # reading as though it were on. An empty list is the honest expression of "no
 # exceptions"; a consumer who needs one adds it in their own overlay.
+#
+# The literal is deliberately not written out anywhere in this file:
+# tests/test_searxng_docker.py greps the whole text, comments included, because
+# a commented-out wildcard is one uncomment away from being live again.
 block_ip = []
 pass_ip = []
 

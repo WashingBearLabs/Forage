@@ -29,11 +29,13 @@ server:
   # name `SEARXNG_SECRET`, so an unset variable is a hard start failure with a
   # named error — not a silent fallback. Verified against the pinned digest.
   #
-  # The image this replaced baked the literal "poppy-searxng-internal". A known
-  # secret shipped in a public image is not a secret; it signs the HTML UI's
-  # session cookies for every instance that ever pulled it. Requiring the
-  # operator to supply one, and failing loudly when they do not, is the honest
-  # version. docs/searxng.md carries the generation recipe.
+  # The config this replaced baked a fixed literal (named in docs/searxng.md,
+  # and deliberately not repeated here — tests/test_searxng_docker.py greps
+  # this file's whole text, comments included). A known secret shipped in a
+  # public image is not a secret; it signs the HTML UI's session cookies for
+  # every instance that ever pulled it. Requiring the operator to supply one,
+  # and failing loudly when they do not, is the honest version.
+  # docs/searxng.md carries the generation recipe.
 
   # LIMITER OFF, and this is the most consequential line in the file. Read
   # docs/searxng.md before changing it; the reasoning is measured, not assumed.
