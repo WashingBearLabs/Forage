@@ -44,6 +44,8 @@
 # actionlint checks that it is *safe*, so tests/test_ci_workflow.py asserts the
 # properties above on every run of the suite.
 
+# THROWAWAY: PR-event rehearsal for US-007. This branch is discarded unmerged.
+
 name: CI
 
 on:
