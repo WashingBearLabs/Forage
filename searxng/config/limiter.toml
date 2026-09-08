@@ -36,7 +36,7 @@
 # Measured against the pinned digest, limiter installed with Valkey, a
 # perfectly browser-shaped `format=json` client:
 #
-#     link_token = false ->  200 200 200 429   (ip_limit.API_MAX = 4/hour)
+#     link_token = false ->  200 200 200 200 429  (ip_limit.API_MAX = 4/hour)
 #     link_token = true  ->  200 200 429 302   (BURST_MAX_SUSPICIOUS = 2)
 #
 # So enabling it strictly narrows an already-narrow API budget. It also never

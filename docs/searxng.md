@@ -146,7 +146,7 @@ public instance that wants `check.searx.space` to monitor it; an unasked-for
 relaxation in a sidecar nobody monitors.
 
 **`link_token` stays off.** Measured on the pinned digest, limiter installed,
-browser-shaped JSON client: `200 200 200 429` with it off, `200 200 429 302`
+browser-shaped JSON client: `200 200 200 200 429` with it off (`ip_limit.API_MAX = 4`), `200 200 429 302`
 with it on (`BURST_MAX_SUSPICIOUS = 2`, then `SUSPICIOUS_IP_MAX`). It strictly
 narrows an already-narrow API budget, and never gets the chance to matter for
 Forage's real client, which the header methods refuse two steps earlier.
@@ -183,7 +183,15 @@ secret currently in Poppy's compose is rotated there.
 
 ## Engines
 
-The baked config pins the engines rather than inheriting them:
+The baked config names the engines Forage cares about. Be precise about what
+that buys: with `use_default_settings: true` the `engines:` list **merges into**
+upstream's — it overrides the named entries and inherits everything else, so
+the running image enables the full upstream default set (~84 engines at this
+pin, visible at `/config`), not just the four below. Naming an engine is what
+lets this config *hold its state* against upstream changes; it does not shrink
+the set. The reason that's acceptable is the client: Forage names its engines
+on every query (`engines=` parameter), so the ~80 inherited engines are
+reachable only by a caller who asks for them.
 
 | Engine | State |
 |---|---|
@@ -197,11 +205,12 @@ vetted (observed live 2026-08-19: `aol`, `karmasearch videos`), and
 `pipeline/orchestrator.py` names its engines on every query precisely so a new
 default cannot change what a Forage search fans out to.
 
-The enabled set and `_SEARXNG_ENGINES` in `pipeline/orchestrator.py` are a
-contract with two ends, and `tests/test_searxng_docker.py` asserts they are the
-same set. An engine enabled here that Forage never asks for is dead config; one
-Forage asks for that is disabled here is a request answered with nothing, and it
-surfaces as thin results rather than as an error.
+The *named-enabled* set and `_SEARXNG_ENGINES` in `pipeline/orchestrator.py`
+are a contract with two ends, and `tests/test_searxng_docker.py` asserts they
+are the same set — the parity is over the entries this file declares, not over
+everything the merged config enables. An engine Forage asks for that is
+disabled here is a request answered with nothing, and it surfaces as thin
+results rather than as an error.
 
 Two names were **removed** rather than left disabled: `torch` and
 `karmasearch` no longer exist upstream, and naming a missing engine is not a

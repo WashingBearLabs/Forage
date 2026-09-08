@@ -29,9 +29,12 @@ pipeline publishing two images to GHCR: `ghcr.io/washingbearlabs/forage` (the se
 baked weights, no HF build-arg** — closing the docker-history token-leak gotcha that blocks
 any public push) and `ghcr.io/washingbearlabs/forage-searxng` (digest-pinned base + baked
 config with **honestly-scoped public defaults** — round 2 established that `limiter: true`
-without a Redis backend is inert theater, so the hardening is: no IP-trust relaxations, no
-baked secret, and a documented Redis requirement for real rate limiting, proven by a
-cross-container JSON smoke). All jobs live in **one workflow file** so `needs:` edges are
+without a Redis backend is inert theater; US-004's own measurements then went further and
+established that a *working* limiter refuses the image's only client (429 on request one)
+and caps JSON at 4 requests/hour via a module constant, so the shipped image bakes
+`limiter: false` with the env-pair opt-in (`SEARXNG_LIMITER=true` + `SEARXNG_VALKEY_URL`)
+documented; the hardening is: no IP-trust relaxations, no baked secret, and the measured
+limiter reality documented, proven by a cross-container JSON smoke). All jobs live in **one workflow file** so `needs:` edges are
 real, jobs are introduced in dependency order across stories (no forward `needs:` to a job a
 later story creates — round-2 finding), and required status checks are registered only after
 every job exists (US-007). The publish job runs after smoke + secret-grep; the one-way public
@@ -306,13 +309,18 @@ compatible with the API client path Forage itself uses).
   SearXNG logs it and runs unthrottled): baked config drops `pass_ip = ["0.0.0.0/0"]`, drops
   the `forwarded_for`/`real_ip` header trust (client-spoofable once the image is reached
   directly — round-2 finding), removes the baked `secret_key`, keeps engines/timeouts/JSON
-  format, and sets `limiter: true` **with the Redis requirement documented**: real limiting
-  requires a Redis/Valkey backend configured via the env var this story verifies against
-  the pinned digest (working name `SEARXNG_REDIS_URL` — **pending verification**, see the
-  smoke bullet) — the
-  spec-4 compose fragments wire it; without it the image logs the inert-limiter warning.
+  format. ~~sets `limiter: true` with the Redis requirement documented~~ **[RETIRED by
+  US-004's own measurements — supervisor correction 2026-09-08]**: the story verified the
+  env var (it is `SEARXNG_VALKEY_URL`; `SEARXNG_REDIS_URL` is deprecated-but-working) and
+  found that a *working* limiter refuses the image's only client — Forage's httpx gets 429
+  on request ONE (`http_accept_language`), and even browser-shaped clients get 4
+  `format!=html` API requests/hour (`ip_limit.API_MAX`, a module constant `limiter.toml`
+  cannot raise). The image therefore ships `limiter: false` with the measurements written
+  into the config file and the env-pair opt-in (`SEARXNG_LIMITER=true` +
+  `SEARXNG_VALKEY_URL`) documented; the spec-4 compose fragments must NOT wire a limiter
+  (cache-fallback US-004 hint corrected in-repo). See US-004 Implementation Notes.
   Whether `link_token` can be enabled without breaking the JSON client is answered by the
-  smoke below, not assumed.
+  smoke below, not assumed (answer: no — off).
 - **Cross-container smoke, split blocking/advisory** (round-3 critical — a live
   third-party engine query in a publish `needs:` chain reproduces the exact
   every-engine-throttled outage GOTCHAS records, with no break-glass): the **blocking**
@@ -321,13 +329,11 @@ compatible with the API client path Forage itself uses).
   `format=json` request returns HTTP 200 with a parseable envelope carrying a `results`
   key and no bot-detection block page (proves baked config + `link_token` compatibility
   with the API client path); the **advisory** half (real engine results non-empty) runs
-  non-blocking with its outcome logged. Real limiting requires a Redis/Valkey backend
-  configured via the env var **whose name this story verifies** (see next bullet — do not
-  treat any name as upstream-supported until verified). **Verify the actual Redis env-var name against the
-  pinned digest in-story** — `SEARXNG_REDIS_URL` is an unverified name that exists nowhere
-  in this repo, and upstream renamed this setting family toward Valkey during 2025
-  (round-3 critical); record the verified name, and propagate the correction to the two
-  sibling specs that cite it (cache-fallback US-004, poppy-consume US-002).
+  non-blocking with its outcome logged. **[Verified 2026-09-08]** the env-var name is
+  `SEARXNG_VALKEY_URL` (upstream renamed the family toward Valkey; `SEARXNG_REDIS_URL`
+  is deprecated-but-working — both exercised live against the pinned digest); the
+  correction is propagated to cache-fallback US-004 (in-repo, commit `3bc6daf`) and to
+  poppy-consume US-002 (Poppy repo, via supervisor handoff).
 - `SEARXNG_SECRET` mechanism: verify the upstream image's env substitution **in the
   blocking smoke** (set it; assert start + serve) and determine unset behavior
   empirically; document both.
@@ -352,20 +358,26 @@ compatible with the API client path Forage itself uses).
   runtime), Redis requirement, header-trust rationale, Poppy limiter-overlay pattern.
 
 **Acceptance Criteria:**
-- [ ] `forage-searxng` published under `searxng-v*` via its own gated lane; base
+- [x] `forage-searxng` published under `searxng-v*` via its own gated lane; base
       digest-pinned; no bind mount needed.
-- [ ] Baked config: no `pass_ip` wildcard, no baked secret, no client-header trust;
-      limiter-with-Redis documented; config-regression pytest committed.
-- [ ] Blocking hermetic smoke (redis-backed limiter initialized + JSON envelope + no
+- [x] Baked config: no `pass_ip` wildcard, no baked secret, no client-header trust;
+      limiter-with-Redis documented; config-regression pytest committed. *(Satisfied with
+      a measured deviation: the image ships `limiter: false` — a working limiter refuses
+      the JSON client — with the Valkey-backed opt-in documented; see the RETIRED hint
+      above and Implementation Notes.)*
+- [x] Blocking hermetic smoke (redis-backed limiter initialized + JSON envelope + no
       bot-block page) green in the lane; advisory live-engine half non-blocking; the real
       Redis env-var name verified against the pinned digest, recorded, and corrected in the
       two citing sibling specs; `SEARXNG_SECRET` set/unset behavior verified + documented.
-- [ ] All four moved config-half tests updated (two negatives, limiter re-points,
+      *(The smoke proves a Valkey-backed limiter CAN initialize — behaviorally, via the
+      keys it writes, differentially vs no-backend — which is the clause's substance; the
+      shipped default is off, per the deviation above. Verified name: `SEARXNG_VALKEY_URL`.)*
+- [x] All four moved config-half tests updated (two negatives, limiter re-points,
       string-split parity) and green.
-- [ ] `docs/searxng.md` complete per hints.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run ruff format --check . && uv run pyright` passes
+- [x] `docs/searxng.md` complete per hints.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run ruff format --check . && uv run pyright` passes
 
 ### US-008: Public flip (human gate)
 
@@ -1703,7 +1715,7 @@ assertion: the blocking smoke *does* stand up a Valkey-backed limiter and prove 
 initialised. It just does not ship it.
 
 **`link_token`, answered empirically rather than assumed.** With the limiter installed
-and a browser-shaped JSON client: `200 200 200 429` with `link_token = false`,
+and a browser-shaped JSON client: `200 200 200 200 429` with `link_token = false`,
 `200 200 429 302` with it true (`BURST_MAX_SUSPICIOUS = 2`, then `SUSPICIOUS_IP_MAX`
 redirects). It strictly narrows an already-narrow budget, and never gets the chance to
 matter for Forage's real client, which the header methods refuse two steps earlier. Off.

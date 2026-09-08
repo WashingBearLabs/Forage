@@ -1277,6 +1277,11 @@ jobs:
             type=semver,pattern={{version}},value=${{ steps.version.outputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.version }},enable=${{ !contains(steps.version.outputs.version, '-') }}
             type=raw,value=latest,enable=${{ !contains(steps.version.outputs.version, '-') }}
+          # metadata-action derives `title` from the repository name, which is
+          # the *service's* name. This is the companion image; say so.
+          labels: |
+            org.opencontainers.image.title=forage-searxng
+            org.opencontainers.image.description=Pinned SearXNG with Forage's baked engine config
 
       - name: Build and push the multi-arch companion image
         id: push

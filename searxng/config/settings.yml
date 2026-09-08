@@ -92,15 +92,19 @@ server:
   # limiter.toml, whose default (loopback only) is what applies here. A reverse
   # proxy in front of this image adds its own network there, in its own overlay.
 
-# Engines pinned on purpose, not inherited.
+# Engines: named entries OVERRIDE, everything else is INHERITED.
 #
-# With `use_default_settings: true` on a moving tag, upstream releases keep
-# enabling engines this config never vetted (observed live 2026-08-19: aol,
-# "karmasearch videos"). The enabled set below must stay in sync with
-# `_SEARXNG_ENGINES` in pipeline/orchestrator.py — Forage names the engines on
-# every query, so a divergence means either a request for an engine this image
-# has disabled, or an engine enabled here that nothing ever asks for.
-# tests/test_searxng_docker.py asserts the two sets are equal.
+# With `use_default_settings: true` this list *merges into* upstream's — it
+# does not replace it. The running image therefore enables the full upstream
+# default set (~84 engines at the pinned digest, see /config), plus the four
+# named below, minus the named-disabled ones. Naming an entry is what holds
+# its state against upstream releases (observed live 2026-08-19: upstream
+# enabled aol and "karmasearch videos" under a moving tag); it does not
+# shrink the set. Forage is unaffected because it names its engines on every
+# query — the inherited engines answer only callers who ask for them.
+# The named-enabled set below must stay in sync with `_SEARXNG_ENGINES` in
+# pipeline/orchestrator.py; tests/test_searxng_docker.py asserts the two sets
+# are equal.
 engines:
   # --- Enabled: reliable general search engines ---
   - name: duckduckgo

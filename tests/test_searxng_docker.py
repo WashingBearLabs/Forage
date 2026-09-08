@@ -348,14 +348,26 @@ class TestEngineParity:
             "config or a silently empty half of every search."
         )
 
-    def test_engines_are_pinned_rather_than_inherited(
+    def test_named_engines_override_upstream_defaults(
         self, settings: dict[str, Any]
     ) -> None:
+        """Named entries hold their state; they do NOT shrink the set.
+
+        With ``use_default_settings: true`` the ``engines:`` list *merges
+        into* upstream's rather than replacing it — the running image enables
+        the full upstream default set (~84 engines at the pinned digest,
+        measured via ``/config``) alongside the four named-enabled entries.
+        What naming an engine buys is override authority: upstream releases
+        keep changing engine state under a moving tag (observed live
+        2026-08-19: aol, 'karmasearch videos' enabled), and only a named
+        entry resists that. Forage is unaffected by the inherited engines
+        because it names its engines on every query.
+        """
         assert _engine_entries(settings), (
-            "The config must name its engines. With `use_default_settings: "
-            "true` and no engine list, upstream releases keep enabling engines "
-            "this repository never vetted (observed live 2026-08-19: aol, "
-            "'karmasearch videos')."
+            "The config must name the engines whose state it depends on: with "
+            "`use_default_settings: true`, an unnamed engine's state belongs "
+            "to upstream, and the named-disabled negatives below "
+            "(bing, ahmia) only work because their entries exist."
         )
 
 
