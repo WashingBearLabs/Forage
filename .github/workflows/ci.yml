@@ -553,6 +553,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
+      # A job-level block REPLACES the top-level grant, it does not merge:
+      # `packages: read` alone drops `contents: read` and checkout 404s on a
+      # private repo. Both, explicitly.
+      contents: read
       packages: read
     steps:
       - name: Checkout
