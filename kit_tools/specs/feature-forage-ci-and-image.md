@@ -1144,10 +1144,16 @@ US-007's consumption of the same artifact. What is actually available:
   nominal 500 MB and both uploads succeeded). And the sequencing is a trap: a cleanup job
   gated on `[secret-grep, smoke]` today would delete the artifact before US-007's
   `publish` can read it, and nothing would fail until a release did.
-* US-007 is the right place, because `publish` is the last consumer and the `needs:` list
-  is complete by construction there. `_IMAGE_CONSUMERS` in `tests/test_ci_workflow.py` is
-  the list to extend when it lands — every consumer is then held to the same
-  download-and-assert contract by parametrization.
+* This bullet used to nominate US-007 as the right place for that cleanup job, on the
+  grounds that `publish` is the last consumer and its `needs:` list is complete by
+  construction. **US-007 landed and that turned out to be wrong**, so the claim is
+  retired rather than annotated: `publish` is *conditional* — it is skipped on every
+  pull_request event and on `searxng-v*` tags — so a cleanup job hung off it would never
+  run for the majority of workflow runs, which are exactly the ones parking a 375 MiB
+  tarball. The rejection stands on the reason above (a new `actions: write` surface for a
+  quota that is not enforced), and the retention floor of 1 day stands as the whole of the
+  mitigation. `_IMAGE_CONSUMERS` in `tests/test_ci_workflow.py` did gain `"publish"`, and
+  every consumer is held to the same download-and-assert contract by parametrization.
 
 **Where the smoke's 70 seconds go** (from the run above — worth knowing before anyone
 tries to speed it up):
@@ -1188,9 +1194,34 @@ Both reasons are written beside their jobs.
   from this tree, since the image is built from this commit in the same run. That is a
   strictly stronger check than "non-empty" and a natural companion to spec 5's version
   equality.
-- **US-007's `publish` must download the same artifact and assert the same identity.** Add
-  `"publish"` to `_IMAGE_CONSUMERS` and the two parametrized handoff tests cover it for
-  free. `needs:` is still only ordering.
+- **US-007's `publish` downloads the same artifact and asserts the same identity — and
+  that is not, on its own, a statement about what gets published.** This bullet originally
+  stopped at the first clause, and its verifier was right to flag it against US-007's
+  multi-arch hint: the two cannot both be read as written, because a buildx multi-arch
+  push *cannot ship a `docker load`ed image*. A manifest list is built across platforms by
+  buildx and pushed from its own builder; the tarball lives in the runner's daemon, which
+  buildx does not push from. The corrected statement, as implemented:
+
+  * `publish` **is** a consumer — it downloads the one artifact and asserts the loaded
+    image ID equals `build-amd64`'s, byte-for-byte the assertion `secret-grep` and `smoke`
+    make. `"publish"` is in `_IMAGE_CONSUMERS` and the two parametrized handoff tests
+    cover it for free, exactly as this bullet promised.
+  * What that assertion establishes is that *the tarball* is the gated image. It
+    establishes nothing about the registry, because the amd64 leg is **rebuilt** at
+    publish time from `type=gha` — the cache `build-amd64` wrote with `mode=max` earlier
+    in the same run, at the same commit, off the same digest-pinned base and lock. Every
+    amd64 layer is served from cache rather than re-executed.
+  * "Served from cache" is a claim, so US-007 checks it instead of asserting it: after the
+    push it reads the published amd64 manifest's `rootfs.diff_ids` back out of the
+    registry and requires them equal, in order, to the tarball's `RootFS.Layers`. Diff IDs
+    are the sha256 of each layer's *uncompressed* tar, so they survive re-compression by a
+    registry and by a different exporter — which is what makes them the right thing to
+    compare and image IDs the wrong thing (those differ legitimately, since the config
+    records exporter metadata).
+
+  So: `needs:` is ordering, the artifact download gives the gated image an identity, and
+  the post-push diff-ID comparison is what ties that identity to the registry. Three
+  separate mechanisms; none of them substitutes for another.
 - The two action pins this story reuses (`actions/download-artifact` v8.0.1,
   `actions/checkout` v7.0.1) are US-001/US-003's; no new third-party action was added.
 - Suite went 656 → **731** tests (+47 `test_contract_smoke.py`, +28 workflow guards), all
@@ -1200,6 +1231,377 @@ Both reasons are written beside their jobs.
 - `kit_tools/docs/GOTCHAS.md`'s PromptGuard entry gained the paragraph that makes it
   honest: the "never report healthy without weights" rule is no longer something a
   reviewer has to remember — it is a red workflow.
+
+### US-007 — Publish pipeline: tags, Release, multi-arch, required checks (2026-09-08)
+
+**Shipped:** `.github/workflows/ci.yml` (`publish` job), `docs/releases.md` (new), 40 new
+guards in `tests/test_ci_workflow.py` (107 → 147) including a small GitHub-expression
+evaluator, plus the doc propagation. Commits `cf0517b` + `e45f70f`.
+
+**The green publish — tag `v0.9.0-rc`:**
+<https://github.com/WashingBearLabs/Forage/actions/runs/34179620038> · conclusion
+`success` · `lint` 17 s, `typecheck` 28 s, `test` 38 s, `build-amd64` 1 m 39 s,
+`secret-grep` 47 s, `smoke` 1 m 11 s, **`publish` 1 m 02 s**. It pushed exactly one tag —
+`ghcr.io/washingbearlabs/forage:0.9.0-rc` — and created a Release flagged
+**pre-release**. `latest` was not referenced.
+
+**The red rehearsal — tag `v0.9.1-redrehearsal`:**
+<https://github.com/WashingBearLabs/Forage/actions/runs/34179924855> · conclusion
+`failure` · `test` **failed**, `lint`/`typecheck`/`build-amd64`/`secret-grep`/`smoke`
+succeeded, **`publish` skipped with zero steps executed**. Nothing was pushed and no
+Release was created. Detail below.
+
+Two earlier runs in the same story, both on throwaway branches now deleted: the
+**PR-event proof** (<https://github.com/WashingBearLabs/Forage/actions/runs/34178166673>,
+all six jobs green on a real `pull_request` event) and the **arm64 feasibility
+measurement** (<https://github.com/WashingBearLabs/Forage/actions/runs/34178289804>).
+
+---
+
+#### The contradiction US-005's verifier flagged, resolved
+
+US-005's hand-over said `publish` "must download the same artifact and assert the same
+identity"; this story's hint described a multi-arch buildx rebuild from a warm cache. The
+verifier was right that both cannot hold as written, and the reason is concrete: **a
+buildx multi-arch push cannot ship a `docker load`ed image.** A manifest list is built
+across platforms by buildx and pushed from its own builder; the tarball lives in the
+runner's Docker daemon, which buildx does not push from. There is no flag that bridges
+that.
+
+The resolution is not to pick one horn. It is that "the published image is the gated one"
+was being asked of a single mechanism when it needs three, and each does a different job:
+
+1. **`needs:`** — ordering, and only ordering. Six edges, so a tag on a red tree never
+   reaches this job.
+2. **The artifact download + image-ID assert** — copied verbatim from `smoke`. This
+   establishes that *the tarball this job holds* is the image `build-amd64` built,
+   `secret-grep` cleared and `smoke` executed. It establishes nothing about the registry.
+3. **The post-push diff-ID comparison** — the new part, and the one that closes the gap.
+
+The amd64 leg *is* rebuilt at publish time, from `type=gha` — the cache `build-amd64`
+wrote with `mode=max` earlier in the same run, at the same commit, off the same
+digest-pinned base and the same committed `uv.lock`. "Served from cache rather than
+re-executed" is a claim about a build system's behaviour, so the job checks it instead of
+asserting it: it records the gated tarball's `RootFS.Layers` before the push, and after
+the push reads the published amd64 manifest's `rootfs.diff_ids` back out of the registry
+with `docker buildx imagetools inspect`. They must be equal, in order.
+
+Diff IDs are the sha256 of each layer's **uncompressed** tar, so they are unaffected by a
+registry re-compressing blobs or by a different exporter writing the config — which is
+exactly what makes them the right thing to compare, and image IDs the wrong thing. Image
+IDs *do* differ here, legitimately, because the config records the exporter's own
+metadata. Asserting on those would be the same mistake `build-amd64`'s
+builder-vs-daemon note already declines to make.
+
+**It holds, measured, on both real runs:**
+
+```
+publish  Gated amd64 filesystem: 16 layers
+publish  Published amd64 filesystem is identical to the gated one (16 layers).
+```
+
+with 12 `CACHED` amd64 layers in the build log. So the linkage argument is not "cache-keyed,
+therefore probably the same" — it is "cache-keyed, and then verified".
+
+US-005's Implementation Notes have been **rewritten** where they carried the contradicted
+half, not annotated underneath it — this project has a recorded failure mode about
+corrections that live below the wrong text. Two passages changed: the `_IMAGE_CONSUMERS`
+hand-over bullet, and the artifact-pressure bullet (see the retention note below).
+`tests/test_ci_workflow.py`'s module docstring and `_IMAGE_CONSUMERS`' own comment now
+state the twist where a reader meets it: `publish` is a consumer that cannot push what it
+consumes.
+
+**Scope of the claim, stated in the job and in `docs/releases.md` rather than implied:
+amd64 only.** There is no arm64 artifact because there is no arm64 gate — nothing in this
+workflow has ever *executed* the emulated leg. It is built from the same commit, the same
+lock and the same digest-pinned multi-arch base, and that is the whole of the claim. A
+consumer on arm64 is the first thing to run that image, and `docs/releases.md` says so.
+
+#### Multi-arch feasibility: measured before the platform list was decided
+
+Both halves of the hint's check, answered with numbers rather than judgement.
+
+*Do the CPU torch aarch64 wheels resolve?* Yes, and from the committed lock:
+`torch-2.14.0+cpu-cp312-cp312-manylinux_2_28_aarch64.whl` is in `uv.lock` under the
+`download.pytorch.org/whl/cpu` index. `manylinux_2_28` needs glibc ≥ 2.28; the pinned
+base is trixie (2.41). The base digest is an *index* covering `linux/amd64` and
+`linux/arm64/v8`, as US-003 already recorded.
+
+*Does a cold qemu build fit inside 30 minutes?* **2 m 22 s** — 8 % of the budget. Measured
+on a throwaway PR job with an empty cache, every layer built:
+
+| Step | Time |
+|---|---|
+| `apt-get install curl` | 44.1 s |
+| `uv sync --locked --no-dev` (torch 151.9 MiB aarch64 wheel; 66 packages) | 39.2 s |
+| `RUN python -c "import retrieval_app"` — the genuinely emulated CPU work | 54.1 s |
+| base pull, context, the rest | ~5 s |
+
+It is cheap because **nothing in this image is compiled**: it is a wheel install, and qemu
+only slows the interpreter work. The one emulated CPU cost is the import smoke, 54 s
+against ~5 s native. So multi-arch went ahead and **no amd64-only fallback was taken**.
+
+The fallback is still one line if that ever changes — `PUBLISH_PLATFORMS` in the
+workflow's `env:` block — and it is wired so a trim is self-consistent: the QEMU setup
+step is conditioned on the platform list and drops out on its own, and the verification
+step handles a single-platform manifest as well as an index. `docs/releases.md` carries
+the table and the trim rule.
+
+**Cache shape matters and is not tidiness.** The arm64 layers live in their own GHA scope
+(`cache-to: type=gha,mode=max,scope=publish`, with `cache-from` reading both that and the
+default scope). They cannot share `build-amd64`'s: that job writes an amd64-only manifest
+on every run, so a shared scope would evict the emulated layers each time and pay the cold
+qemu cost forever. The evidence it works: the first publish (main push, arm64 cold) took
+**4 m 37 s**; the tag run's publish, reading the scope the main run filled, took
+**1 m 02 s**.
+
+#### The tag policy is evaluated, not pattern-matched
+
+Four rules, each carrying its own `enable=`:
+
+| Ref | Tags published | Release |
+|---|---|---|
+| `refs/heads/main` | `sha-<short>` | none |
+| `refs/tags/v0.9.0-rc` (any tag with a `-`) | `0.9.0-rc` | yes, `--prerelease` |
+| `refs/tags/v1.0.0` | `1.0.0`, `1.0`, `latest` | yes |
+| `refs/tags/searxng-v0.1.0` | none — the job does not run | none |
+
+`flavor: latest=false` turns off `metadata-action`'s own `latest=auto` first. `latest=auto`
+does roughly the right thing, and "roughly" is not a standard to hold the one tag whose
+accidental movement is a production incident to. The rule is written out instead:
+`startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-')`, which is semver's
+own definition of a pre-release reduced to one character.
+
+The guards for this do not grep the policy — they **evaluate** it.
+`tests/test_ci_workflow.py` grew a ~120-line recursive-descent interpreter for the subset
+of GitHub expressions this file uses (`&&`, `||`, `!`, `==`, `!=`, parentheses,
+single-quoted strings, `github.*`, `startsWith`/`endsWith`/`contains`), so a test can ask
+"for `refs/tags/v0.9.0-rc`, which tags does this publish, and does this job even run?" and
+get the *workflow's* answer. An expression it cannot parse **raises** rather than reading
+as `False` — a rewritten condition that silently evaluated false would report a green
+"`latest` does not move" for a policy nobody checked.
+
+That was worth the code the first time it ran. Written loosely, the `{{major}}.{{minor}}`
+rule was gated only on `!contains(github.ref, '-')`, which is *true* for
+`refs/heads/main`: the rule was live on every main push and merely produced no output,
+because `metadata-action` emits nothing for a branch ref. The test caught it, and the
+policy now states each condition in full rather than leaning on an action's internals.
+US-003's lesson generalises past shell: a substring check over a condition tests its
+vocabulary, not its meaning.
+
+The same evaluator is what makes the **cross-fire guard** real rather than rhetorical.
+`refs/tags/searxng-v0.1.0` does not start with `refs/tags/v`, and the test demonstrates
+that by evaluating the job's own `if:` against that ref rather than by asserting a
+substring is present.
+
+#### The supervised tag push, and what the registry actually holds
+
+Verified from inside Actions on a throwaway PR
+(<https://github.com/WashingBearLabs/Forage/actions/runs/34180408923>), because the
+session's `gh` token carries no `read:packages` scope and **no PAT was minted to get
+one**. That turned out to be the better instrument anyway: it pulls the way a consumer
+does, from the registry, with a token that only has `packages: read`.
+
+```
+--- ghcr.io/v2/washingbearlabs/forage/tags/list ---
+{ "name": "washingbearlabs/forage", "tags": [ "sha-e45f70f", "0.9.0-rc" ] }
+--- end tag list ---
+latest does not resolve. Correct: no non-pre-release v* tag has been published.
+
+Name:      ghcr.io/washingbearlabs/forage:0.9.0-rc
+MediaType: application/vnd.oci.image.index.v1+json
+Digest:    sha256:be9c1996b04b5f59677b973baa2c534f2f52027fde9c0c4478615c6816cb2fd0
+  Platform:  linux/amd64   (sha256:848a5244…23e5)
+  Platform:  linux/arm64   (sha256:cc4bb375…ed5f)
+
+/health answered 200 after 5 attempt(s)
+{"status":"degraded", … ,"sanitizer_revision":"0537316d…e3e253","contract_version":"1.0.0",
+ "degraded_reasons":["promptguard_unavailable","cache_unavailable"]}
+Contract smoke PASSED: degraded, honest, and on-contract.
+```
+
+So: two tags exist and no others; **`latest` does not exist** (asserted by
+`docker manifest inspect` failing, not by absence from a list); the rc is a real two-platform
+OCI index; and the *published* image — not the artifact tarball — passes the committed
+contract smoke. `docker pull` of the ghcr ref succeeded as part of that.
+
+The Release body carries the digest, the platform list, and a link to the run that built
+it.
+
+#### The red rehearsal, and the boundary it exposed
+
+The rehearsal commit is a realistic defect rather than sabotage of the pipeline:
+`CONTRACT_VERSION` bumped to `9.9.9` without regenerating the golden fixture — the exact
+mistake US-005 built the smoke to worry about. It was built in a **separate git worktree**
+so `main` and the working tree were never touched, tagged `v0.9.1-redrehearsal`, and only
+the *tag* was pushed (the workflow's `push` trigger covers `main` and tags, so a branch
+push would have run nothing).
+
+Result: `test` **failed** — `4 failed, 766 passed`, headed by
+`test_contract_schema_matches_golden — FileNotFoundError: tests/golden/contract_9_9_9.json`
+— and `publish` was **skipped with an empty step list**: it never started, so nothing could
+have been pushed even partially. No Release exists for that tag; the registry tag list
+above, taken afterwards, holds nothing from it. The tag was then deleted from the remote
+and locally, and the worktree removed.
+
+**The useful surprise: `smoke` passed.** That is not a hole, it is the boundary between two
+guards, and it is worth knowing before someone reads a green smoke as "the contract is
+right". `smoke` reads `CONTRACT_VERSION` from `pipeline/contract.py` at job time and
+compares it to what the running image reports — and the image was built from the *same*
+commit, so both said `9.9.9` and they agreed. The smoke tests **image↔tree agreement**;
+the golden fixture tests **tree↔frozen-contract agreement**. Neither subsumes the other,
+and it took a deliberately-red run to make that visible. The rehearsal was aimed at the
+`needs:` chain and it demonstrated something else as well.
+
+#### Required status checks: attempted, refused, deferred — with the actor named
+
+| Attempt | Actor | Result |
+|---|---|---|
+| `PUT /repos/WashingBearLabs/Forage/branches/main/protection`, six contexts | `wblabs001` — repo **ADMIN**, token scoped `admin:org, repo, workflow, gist` | `403 Upgrade to GitHub Pro or make this repository public` |
+| `POST /repos/WashingBearLabs/Forage/rulesets` | same | same 403 |
+| `GET /orgs/WashingBearLabs/rulesets` (org-level fallback) | same | `403 Upgrade to GitHub Team` |
+
+**A correction to the hint, which said the blocker was the actor.** It read
+"branch-protection edits need admin — a fine-grained PAT or the supervisor by hand;
+`GITHUB_TOKEN` cannot". An admin token was used and got the same 403 from all three APIs.
+The blocker is the **plan**: private repositories on GitHub Free have no branch protection
+at all. A PAT would have bought nothing, and none was created. This is the same wall the
+bootstrap spec hit, so the deferral is recorded the same way — in
+`docs/bootstrap-notes.md`'s deferred-security list, with the exact six contexts to
+register at the public flip and the note that `actionlint` is a *step* inside `lint`, not
+a job, and must not be listed.
+
+The AC therefore reads as satisfied-by-recorded-deferral, matching the bootstrap
+precedent. Worth saying plainly what is and is not lost: required checks stop a human
+merging over red. The `needs:` chain stops anything *publishing* over red — which is the
+property that protects a consumer, and it is live now.
+
+#### Guards, mutation-verified — 28 mutations, one escape, caught and closed
+
+Implementation committed **first** (US-003's harness lesson, honoured — the restore is
+`git checkout --`).
+
+| Mutation | Failures |
+|---|---|
+| ci.yml: delete the `publish` job outright | 39 |
+| ci.yml: drop `smoke` from the `needs:` list | 1 |
+| ci.yml: publish grants itself a third write scope (`actions: write`) | 2 |
+| ci.yml: `build-amd64` grants itself `packages: write` | 2 |
+| ci.yml: `latest` becomes unconditional | 3 |
+| ci.yml: `latest` drops only the pre-release half of its condition | 2 |
+| ci.yml: metadata-action's own `latest=auto` re-enabled | 1 |
+| ci.yml: the `X.Y` alias loses its pre-release gate | 1 |
+| ci.yml: the `sha-` tag is published from every ref | 2 |
+| ci.yml: the publish `if` widens to every tag (searxng cross-fire) | 1 |
+| ci.yml: the publish `if` stops excluding pull requests | 1 |
+| ci.yml: the Release is created before the image is pushed | 1 |
+| ci.yml: the Release step loses its `v*`-tag condition | 1 |
+| ci.yml: the Release stops flagging pre-releases | 1 |
+| ci.yml: a layer mismatch warns instead of failing | 1 |
+| ci.yml: the layer verification is deleted entirely | 5 |
+| ci.yml: an image-identity mismatch warns instead of failing | 1 |
+| ci.yml: publish stops downloading the gated artifact | 6 |
+| ci.yml: publish does not push | 1 |
+| ci.yml: the platform list is hardcoded instead of read from env | **0 → 1** |
+| ci.yml: `PUBLISH_PLATFORMS` trimmed to amd64 but the QEMU step stays | 1 |
+| ci.yml: attestations turned back on | 1 |
+| ci.yml: the emulated layers share `build-amd64`'s cache scope | 1 |
+| ci.yml: publish uploads its own copy of the image | 2 |
+| ci.yml: the registry login uses a stored PAT | 2 |
+| ci.yml: the failure-mode prose removed from the job | 1 |
+| ci.yml: the arm64-is-ungated caveat removed | 1 |
+| ci.yml: publish forward-`needs:` a job US-004 has not added | 2 |
+
+**The escape, and why it is the useful row.** Hardcoding
+`platforms: linux/amd64,linux/arm64` in place of `${{ env.PUBLISH_PLATFORMS }}` failed
+nothing. The guard read `_resolve_env(workflow, platforms)` and compared it to the env
+block — but `_resolve_env` returns a non-expression unchanged, so a hardcoded copy of the
+same string resolves to itself and matches. The test verified equality of *values* and
+believed it had verified *single-sourcing*. That matters beyond tidiness: `docs/releases.md`
+tells the next maintainer that `PUBLISH_PLATFORMS` is the one lever for the amd64-only
+fallback, and a second copy of the string makes that documentation false while everything
+stays green. The guard now asserts the expression itself, and the reasoning is in the
+test so nobody re-loosens it. Generalised: `_resolve_env` is for comparing two
+single-sourced references to *each other*; put a literal on one side and it stops testing
+what you think.
+
+#### A second finding, from the evidence-gathering rather than the implementation
+
+A job-level `permissions:` block **replaces** the top-level grant — it does not merge with
+it. The throwaway pull-smoke job declared `permissions: {packages: read}`, silently lost
+the `contents: read` it had been inheriting, and `actions/checkout` failed with
+`fatal: repository 'https://github.com/WashingBearLabs/Forage/' not found` — a private-repo
+404 that reads like a typo in the repo name rather than like a permissions bug. `publish`
+is unaffected only because `contents: write` implies read.
+
+Since US-004 writes the next permissions block, this became a guard rather than a memory:
+`test_a_job_that_scopes_permissions_and_checks_out_keeps_contents` fails if any job scopes
+its own permissions, checks the repository out, and omits `contents`. The reason is also
+written beside `publish`'s block.
+
+#### The no-job-permissions rule, restated honestly
+
+`build-amd64` and `smoke` each asserted "this job raises no write permissions", and the
+file's shape was simply that no job declared permissions at all. That is no longer true —
+`publish` must raise two scopes — so the invariant is now stated as what it actually is:
+`test_publish_is_the_only_job_that_raises_write_permissions` collects every job's write
+grants and requires the result to be exactly `{"publish": ["contents", "packages"]}`. A
+third scope fails it, and so does a second job, including one that did not exist when it
+was written. The two per-job guards stay: they name their own reason and fail with a
+message about *that* job.
+
+#### `sanitizer_revision` did NOT rotate
+
+`0537316d83510dab…e3e253` before and after, measured both times — the fourth story in a
+row to leave it alone. Nothing here touches a `_REVISION_SOURCES` file; the only edit that
+went near one was the red rehearsal's `CONTRACT_VERSION` bump, which lived in a throwaway
+worktree on a tag that has been deleted and was never an ancestor of `main`.
+`docs/bootstrap-notes.md`'s "no fourth rotation" paragraph still holds.
+
+#### Artifact retention: the US-005 carry-forward, closed with a correction
+
+`publish` **does** consume the amd64 artifact, so the retention floor of **1 day** stands
+as the whole of the mitigation and no cleanup job was added.
+
+US-005 nominated this story as the right place for one, reasoning that `publish` is the
+last consumer and its `needs:` list is complete by construction. That reasoning does not
+survive contact: **`publish` is conditional.** It is skipped on every `pull_request` event
+and on `searxng-v*` tags, so a cleanup job hung off it would never run for the majority of
+workflow runs — which are exactly the ones parking a 375 MiB tarball. US-005's own
+rejection reasons still stand unchanged (a new `actions: write` surface on a repository
+about to go public, against a quota US-003 measured as not enforced). That bullet in
+US-005's notes has been rewritten rather than footnoted.
+
+#### Notes for the following stories
+
+- **US-004's searxng lane is a sibling of this one, not an extension.** Guard the two
+  lanes apart with `startsWith(github.ref, 'refs/tags/searxng-v')`; `refs/tags/v` and
+  `refs/tags/searxng-v` are already mutually exclusive as prefixes, and
+  `TestPublishJob::test_which_refs_reach_the_publish_lane` is the pattern to copy — add
+  `_SEARXNG_REF` cases to both lanes' tables and the cross-fire is machine-checked in both
+  directions.
+- `_evaluate` in `tests/test_ci_workflow.py` is reusable for any `if:` or `enable=` in
+  this file. Extend `_EXPR_FUNCTIONS` if a new predicate is needed; do **not** make it
+  tolerant of what it cannot parse.
+- **Read `docs/releases.md` before touching the tag policy.** It is written for a consumer
+  and is the only place the amd64/arm64 gating asymmetry is stated in full.
+- The four action pins added here: `docker/setup-qemu-action` v4.3.0,
+  `docker/metadata-action` v6.2.0, `docker/login-action` v4.6.0 — and *not* a
+  release action: `gh release create` uses the preinstalled CLI, which is one fewer pinned
+  dependency for a two-line API call on a repository about to go public.
+- **spec 5 attaches the contract asset to the Release.** The seam is the
+  `Create the GitHub Release` step; `gh release create` takes files as trailing arguments,
+  and `test_publish_verifies_before_it_releases` already pins the ordering that makes an
+  attached asset meaningful.
+- `publish` on a `main` push costs ~1–4½ minutes depending on whether the arm64 scope is
+  warm, on top of the six gates. Every merge to main now publishes a `sha-` image; that is
+  deliberate (a pullable build per commit) but it is not free on the Actions tier.
+- Suite went 731 → **771** tests (+40 workflow guards), all green.
+  `kit_tools/testing/TESTING_GUIDE.md` carries the new counts and the seventh job.
+- Three throwaway branches were used and all three are deleted, with their runs recorded
+  above: the PR-event proof, the arm64 feasibility measurement, and the published-image
+  pull smoke. They are measurements and one-time proofs, not gates — the durable artifacts
+  are the numbers, the platform list, and the committed guards.
 
 ## Refinement Notes
 

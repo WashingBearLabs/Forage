@@ -213,9 +213,11 @@ patterns.
 
 **Two things this closure does NOT say.**
 
-1. **It is not permission to push.** The image is secret-free, but publishing still runs
-   through US-007's gated lane, and the repository and its packages stay private until
-   US-008's human flip. "No longer a leak" and "ready to publish" are different claims.
+1. **It is not permission to push.** The image is secret-free, and since US-007
+   (2026-09-08) it does get pushed — but only through the `publish` lane, behind all six
+   gates and a check that the published amd64 layers are the ones `smoke` executed. The
+   repository and its packages stay private until US-008's human flip. "No longer a leak",
+   "gated" and "public" are three different claims; see `docs/releases.md`.
 2. **Poppy's copy is still armed.** `services/retrieval/Dockerfile` in the Poppy monorepo
    still carries `ARG HF_TOKEN`; the two copies coexist until spec 6 pins Poppy to a
    published Forage image. The Poppy-side closure of this gotcha rides that spec, and

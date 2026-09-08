@@ -48,8 +48,10 @@ environment (`docs/configuration.md`); Forage reads no secret store at boot eith
 
 Two things that closure does not license:
 
-- **Publishing.** The image is secret-free, not released. Pushes go through US-007's gated
-  lane; the repository and its GHCR packages stay private until US-008's human flip.
+- **Publishing.** The image is secret-free, not public. The `publish` lane is live (US-007,
+  2026-09-08): a push reaches GHCR only behind all six gates plus a layer-identity check,
+  and the repository and its GHCR packages stay private until US-008's human flip.
+  `docs/releases.md` is the reference for the tag scheme and what a green publish proves.
 - **Poppy's copy.** `services/retrieval/Dockerfile` in the monorepo still carries
   `ARG HF_TOKEN` and will until spec 6 pins Poppy to a published Forage image. Never push
   an image built from *that* file.

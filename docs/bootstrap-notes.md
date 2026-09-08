@@ -126,6 +126,38 @@ Until protection exists, the compensating control is the local
 `gitleaks` full-history scan recorded in `bootstrap-scan.txt`, re-run before
 the public flip.
 
+### Required status checks — attempted and deferred (spec 2 US-007, 2026-09-08)
+
+The "not until CI exists" condition above is now discharged: all six jobs
+exist and report. Registration was **attempted and refused**, so it joins the
+deferred list rather than being marked done.
+
+| Attempt | Actor | Result |
+|---|---|---|
+| `PUT /repos/WashingBearLabs/Forage/branches/main/protection` with the six contexts | `wblabs001` — repo **ADMIN**, org token scoped `admin:org, repo, workflow, gist` | `403 Upgrade to GitHub Pro or make this repository public to enable this feature.` |
+| `POST /repos/WashingBearLabs/Forage/rulesets` (the newer API) | same | same 403 |
+| `GET /orgs/WashingBearLabs/rulesets` (org-level fallback) | same | `403 Upgrade to GitHub Team to enable this feature.` |
+
+**A correction worth carrying**, because the spec's hint said otherwise: this
+is not a *permissions* problem, so no credential fixes it. The hint read
+"branch-protection edits need admin — a fine-grained PAT or the supervisor by
+hand; `GITHUB_TOKEN` cannot". An admin token was used and got the same 403.
+The blocker is the **plan**, not the actor: private repositories on GitHub Free
+have no branch protection at all. Minting a PAT for this would have bought
+nothing, and none was created.
+
+**Apply at the public flip, alongside the three settings above:** required
+status checks `lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`,
+`smoke` (six contexts — `actionlint` is a *step* inside `lint`, not a separate
+job, so it must not be listed), `strict: false`, and
+`required_approving_review_count: 0` per the first note above.
+
+The compensating control in the meantime is stronger than it sounds and worth
+stating plainly: the release gates are `needs:` edges inside one workflow file,
+not merge policy. Required checks would stop a human merging over red; the
+`needs:` chain stops anything *publishing* over red, which is the property that
+actually protects consumers. See [`releases.md`](releases.md).
+
 ## Lint / type backlog handed to spec 2 (measured US-004, 2026-09-07)
 
 US-004 fixed the ruff `check` errors and left the two backlogs below to
@@ -169,8 +201,10 @@ An image built from this repository can no longer carry a build-time credential.
 
 Two boundaries the discharge does not cross:
 
-- **Publishing is still gated.** Secret-free is not released. Pushes go through US-007's
-  gated lane; the repository and both GHCR packages stay private until US-008.
+- **Publishing is gated, and now live.** Secret-free is not public. US-007's `publish`
+  lane shipped 2026-09-08 and has published `sha-e45f70f` and `0.9.0-rc`; every push runs
+  behind all six gates plus a layer-identity check (`docs/releases.md`). The repository
+  and both GHCR packages stay private until US-008.
 - **Poppy's in-tree copy is unchanged.** `services/retrieval/Dockerfile` in the monorepo
   still carries `ARG HF_TOKEN`, and the two copies coexist until spec 6 pins Poppy to a
   published image. The old rule still applies there, verbatim.

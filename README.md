@@ -150,5 +150,14 @@ command.
 two copies coexist, and any fix to the three extracted paths on either side must be
 replayed onto the other — with the Poppy source commit recorded in the pin record.
 
-Still to come: CI and published images, download-at-start model bootstrap, optional
-(in-memory) cache when no Valkey is configured, and the frozen OpenAPI contract.
+**CI and published images are live.** Every push and PR runs lint, strict types, the full
+suite, an image build, a baked-secret scan and a contract smoke against the built
+container; a `v*` tag or a push to `main` publishes a multi-arch image to
+`ghcr.io/washingbearlabs/forage` behind all six gates. The tag scheme, the pre-release
+policy and what a green publish does and does not prove are in
+[`docs/releases.md`](docs/releases.md). **The repository and its packages are private
+until the one-way public flip**, so those pulls are not anonymous yet.
+
+Still to come: download-at-start model bootstrap, the `forage-searxng` companion image,
+an optional in-memory cache when no Valkey is configured, and the frozen OpenAPI
+contract.
