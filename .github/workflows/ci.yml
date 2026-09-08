@@ -4,15 +4,28 @@
 # split would turn the publish gates into wishful thinking. Jobs are therefore
 # introduced in dependency order across the `forage-ci-and-image` stories, and
 # a `needs:` may never name a job a later story adds — GitHub rejects the whole
-# file, not just the offending job. `lint` (US-001), `typecheck` (US-006) and
-# `test` (US-002) are here; `build-amd64`, `secret-grep`, `smoke` and `publish`
-# arrive in US-003/005/007.
+# file, not just the offending job. `lint` (US-001), `typecheck` (US-006),
+# `test` (US-002), `build-amd64` and `secret-grep` (US-003) are here; `smoke`
+# and `publish` arrive in US-005/007.
 #
-# `lint`, `typecheck` and `test` are siblings, not a chain: none reads another's
-# output, so making one `needs:` another would only serialise three short jobs
-# and delay the second and third failure reports. The `needs:` edges that matter
-# are the ones US-007 hangs off all three, when a publish must not happen over a
-# red gate.
+# `lint`, `typecheck`, `test` and `build-amd64` are siblings, not a chain: none
+# reads another's output, so making one `needs:` another would only serialise
+# short jobs and delay the second and third failure reports. The `needs:` edges
+# that matter are `secret-grep`'s (below) and US-007's, which hangs the publish
+# off all of them, when a publish must not happen over a red gate.
+#
+# `build-amd64` is deliberately *not* gated on `lint`/`typecheck`/`test`: a
+# broken image and a broken lint are independent failures and a developer wants
+# both reports from one run. US-007's `publish` is what requires every gate to
+# be green at once.
+#
+# The image travels between jobs as an artifact, never as a rebuild. `needs:`
+# is an ordering edge, not a shared Docker daemon — each job gets a fresh runner
+# with an empty image store — so `build-amd64` ends with `docker save` +
+# `upload-artifact`, and every consumer downloads it, `docker load`s it, and
+# asserts the loaded image ID equals the one `build-amd64` recorded. Two builds
+# of "the same" Dockerfile are not the same image; one artifact with an asserted
+# identity is.
 #
 # Supply-chain posture (this repo goes public in US-008):
 #   * every third-party action is pinned to a full 40-hex commit SHA with a
@@ -60,6 +73,14 @@ env:
   ACTIONLINT_VERSION: "1.7.12"
   ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
   UV_VERSION: "0.9.28"
+  # The local-only tag the built image carries between jobs, and the artifact
+  # that carries it. Nothing here is a registry reference: `build-amd64` never
+  # logs in and never pushes — publishing is US-007's job, under its own
+  # job-scoped `packages: write`.
+  IMAGE_REF: "forage:ci"
+  IMAGE_ARTIFACT: "forage-amd64-image"
+  IMAGE_TARBALL: "forage-amd64.tar.gz"
+  IMAGE_ID_FILE: "image-id.txt"
 
 jobs:
   lint:
@@ -207,3 +228,185 @@ jobs:
         # test_ci_workflow.py, test_pyright_policy.py, test_dependency_lock.py
         # and the hermeticity canary all bit only on a developer's machine.
         run: uv run pytest -q
+
+  build-amd64:
+    name: build-amd64
+    runs-on: ubuntu-latest
+    # The cold build downloads ~200 MB of CPU torch plus the rest of the lock;
+    # the cap is a runaway backstop, not a budget.
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Build the amd64 service image
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64
+          # Never push from this job. Publishing is US-007's, behind the full
+          # gate chain and its own job-scoped permissions; this job exists to
+          # produce one artifact that `secret-grep` and (US-005) `smoke` can
+          # inspect. `load: true` puts it in this runner's daemon so it can be
+          # saved.
+          push: false
+          load: true
+          tags: ${{ env.IMAGE_REF }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # The docker exporter `load: true` uses cannot carry attestations.
+          # Leaving provenance on makes buildx build something it then cannot
+          # hand to the daemon; turning it off keeps the exported image exactly
+          # what gets saved, loaded and asserted downstream.
+          provenance: false
+
+      - name: Record the built image ID
+        # This is half of the handoff contract. `docker save`/`docker load`
+        # preserve an image's ID exactly — it is the digest of the image config
+        # — so recording it here and asserting it after every load is what makes
+        # "the image the downstream job inspected is the image this job built" a
+        # checked fact rather than an assumption about tags.
+        #
+        # The recorded value is the *daemon's* `.Id`, because that is what a
+        # `docker load` on another runner reproduces, so it is the only value
+        # the downstream equality check can be made of. A missing image here is
+        # a hard failure: there would be nothing to hand on.
+        #
+        # build-push-action's own `imageid` output is logged beside it as a
+        # cross-check, but a disagreement is reported and not failed on. The two
+        # legitimately differ depending on how the daemon stores images: the
+        # action reports the image *config* digest, while a daemon using the
+        # containerd image store reports the manifest-list digest for the same
+        # image. Failing on that would be failing on a storage detail. The check
+        # that has to be exact is the daemon-to-daemon one below, in
+        # `secret-grep` — same field, same command, both sides.
+        env:
+          BUILDER_IMAGE_ID: ${{ steps.build.outputs.imageid }}
+        run: |
+          set -euo pipefail
+          inspected="$(docker image inspect --format '{{.Id}}' "${IMAGE_REF}")"
+          if [ -z "${inspected}" ]; then
+            echo "::error::the daemon holds no image tagged ${IMAGE_REF}"
+            exit 1
+          fi
+          if [ -z "${BUILDER_IMAGE_ID}" ]; then
+            echo "::notice::build-push-action reported no image ID."
+          elif [ "${BUILDER_IMAGE_ID#sha256:}" != "${inspected#sha256:}" ]; then
+            echo "::notice::builder reported ${BUILDER_IMAGE_ID}, daemon reports ${inspected} (config vs index digest — expected on a containerd image store)"
+          else
+            echo "Builder and daemon agree on the image ID."
+          fi
+          printf '%s\n' "${inspected}" > "${IMAGE_ID_FILE}"
+          echo "Built ${IMAGE_REF} = ${inspected}"
+
+      - name: Save the image for the downstream jobs
+        # gzip -1: the layers inside a `docker save` tar are uncompressed, so a
+        # cheap pass is worth a lot of upload time. upload-artifact's own zip
+        # step is then disabled (compression-level: 0) rather than run over
+        # already-compressed bytes.
+        run: |
+          set -euo pipefail
+          docker save "${IMAGE_REF}" | gzip -1 > "${IMAGE_TARBALL}"
+          ls -lh "${IMAGE_TARBALL}" "${IMAGE_ID_FILE}"
+
+      - name: Upload the image artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.IMAGE_ARTIFACT }}
+          path: |
+            ${{ env.IMAGE_TARBALL }}
+            ${{ env.IMAGE_ID_FILE }}
+          # One day: this artifact is consumed minutes later by jobs in the same
+          # run and is worth several hundred MB against a 500 MB free-tier
+          # storage quota. Nothing should ever read it after the run ends.
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
+  secret-grep:
+    name: secret-grep
+    # The first real `needs:` edge in this workflow — and an ordering edge only.
+    # The image itself arrives through the artifact below, with its identity
+    # asserted; a downstream job cannot see the upstream job's Docker daemon.
+    needs: build-amd64
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # No checkout. This job needs the built image and nothing from the
+      # repository: the pattern set below is defined here, in the workflow, so
+      # the gate cannot be weakened by editing a script the job fetches.
+      - name: Download the image artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ env.IMAGE_ARTIFACT }}
+
+      - name: Load the image and assert it is the one build-amd64 built
+        run: |
+          set -euo pipefail
+          recorded="$(tr -d '[:space:]' < "${IMAGE_ID_FILE}")"
+          if [ -z "${recorded}" ]; then
+            echo "::error::${IMAGE_ID_FILE} carried no image ID"
+            exit 1
+          fi
+          gunzip -c "${IMAGE_TARBALL}" | docker load
+          loaded="$(docker image inspect --format '{{.Id}}' "${IMAGE_REF}")"
+          if [ "${loaded#sha256:}" != "${recorded#sha256:}" ]; then
+            echo "::error::loaded image ${loaded} is not the ${recorded} build-amd64 recorded — this job would be inspecting a different image than the one that was built"
+            exit 1
+          fi
+          echo "Loaded ${IMAGE_REF} = ${loaded} (identical to build-amd64's)"
+
+      - name: Grep the layer history for baked secrets
+        # SCOPE — read this before reading a green tick here as "no secrets in
+        # the image".
+        #
+        # `docker history --no-trunc` prints layer *metadata*: the instruction
+        # that created each layer, its size, its timestamp. It does not read
+        # file contents. What it therefore catches is exactly the leak shape
+        # that kept this repository private — a token passed as `--build-arg`,
+        # which Docker records verbatim in the layer history of every image
+        # built with it, recoverable from any registry the image reaches and
+        # unaffected by deleting the file afterwards. It equally catches a
+        # secret baked into an `ENV` or typed into a `RUN` command line.
+        #
+        # It does NOT catch a secret written into a file inside a layer, and it
+        # is not a filesystem scanner. Those are covered elsewhere, on purpose:
+        # the build-arg path is deleted from the Dockerfile outright and
+        # `tests/test_dockerfile.py` fails if it returns; the image bakes no
+        # weights and reads no secret store; and the full-history `gitleaks`
+        # scan re-runs at HEAD before the public flip (US-008). This job is the
+        # mechanical gate that proves the deletion held for the image actually
+        # built, on every run.
+        #
+        # The pattern set is deliberately short and lives here rather than in a
+        # checked-out script. `HF_TOKEN` is the variable name the deleted path
+        # used; `hf_[A-Za-z0-9]{20,}` is the shape of a Hugging Face token
+        # itself, so a differently-named carrier is caught too.
+        run: |
+          set -euo pipefail
+          layer_history="$(docker history --no-trunc "${IMAGE_REF}")"
+          echo "--- docker history --no-trunc ${IMAGE_REF} ---"
+          printf '%s\n' "${layer_history}"
+          echo "--- end history ---"
+          status=0
+          while IFS= read -r pattern; do
+            [ -n "${pattern}" ] || continue
+            if printf '%s\n' "${layer_history}" | grep -Eiq -- "${pattern}"; then
+              echo "::error::layer history matches forbidden pattern /${pattern}/"
+              printf '%s\n' "${layer_history}" | grep -Ein -- "${pattern}" || true
+              status=1
+            fi
+          done <<'PATTERNS'
+          HF_TOKEN
+          hf_[A-Za-z0-9]{20,}
+          PATTERNS
+          if [ "${status}" -eq 0 ]; then
+            echo "No forbidden pattern in the layer history of ${IMAGE_REF}."
+          fi
+          exit "${status}"
