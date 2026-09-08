@@ -29,8 +29,17 @@ store, so a downstream job that simply names ``build-amd64`` and then runs
 ``docker history`` would be inspecting nothing, and one that rebuilds would be
 inspecting a *different* image than the one that was built. The workflow
 therefore saves the image to an artifact and asserts the loaded image ID
-against the recorded one, and :class:`TestImageArtifactHandoff` checks that the
-two halves of that contract still refer to the same artifact.
+against the recorded one, and :class:`TestImageArtifactHandoff` checks that
+every consumer of that contract still refers to the same artifact.
+
+US-005 adds :class:`TestSmokeJob`, whose least obvious assertion is a
+*negative* one: the smoke job must not enumerate the ``/health`` contract in
+its own shell. The field expectations belong to ``contract_smoke.py``, which
+validates against the same ``HealthResponse`` model the golden-schema test
+pins and reads every wire value from ``pipeline/contract.py`` at run time. A
+hand-written field list in bash would be a second copy of the contract, free
+to keep passing after the real one moves — which is precisely the drift the
+job exists to catch.
 
 Assertions run against the parsed YAML wherever possible, so reorganising the
 file cannot silently void a check.
@@ -52,6 +61,8 @@ from typing import Any
 
 import pytest
 import yaml
+
+import contract_smoke
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
@@ -919,37 +930,346 @@ class TestSecretGrepJob:
         )
 
 
-class TestImageArtifactHandoff:
-    """The producer and the consumer must name the same artifact."""
+# ---------------------------------------------------------------------------
+# The published-image contract smoke
+# ---------------------------------------------------------------------------
 
-    def test_upload_and_download_agree_on_the_artifact_name(
+_SMOKE_MODULE_PATH = _REPO_ROOT / "contract_smoke.py"
+_SMOKE_SCRIPT_RUN = "uv run python contract_smoke.py"
+
+# Wire values the smoke job must NOT restate in its own shell. Every one of
+# them is imported by contract_smoke.py from pipeline/contract.py or
+# retrieval_app.py at run time; a copy in bash would be a second contract, and
+# a second contract keeps passing after the first one moves.
+_CONTRACT_VALUES_THAT_MUST_NOT_BE_IN_BASH = (
+    "promptguard_unavailable",
+    "search_sanitization",
+    "degraded_reasons",
+    "contract_version",
+    "sanitizer_revision",
+)
+
+
+class TestSmokeJob:
+    """US-005's gate: the candidate image really serves the degraded contract.
+
+    ``build-amd64`` proves an image builds and ``secret-grep`` proves it
+    carries no baked token. Neither runs it. This job does — with no Hugging
+    Face token, which is the only state an image built from this repository can
+    be in until the runtime weights fetch lands — and asserts that what comes
+    back is honest degradation rather than a crash or a false ``healthy``.
+    """
+
+    def test_smoke_job_exists(self, jobs: dict[str, Any]) -> None:
+        assert "smoke" in jobs, (
+            "Expected a 'smoke' job in ci.yml — without it, nothing in CI ever "
+            "runs the image it builds, and the Epic 1 /health handshake is "
+            "guarded only by unit tests against an in-process app"
+        )
+
+    def test_smoke_needs_the_build(self, jobs: dict[str, Any]) -> None:
+        needs = jobs["smoke"].get("needs", [])
+        needs_list = [needs] if isinstance(needs, str) else list(needs)
+        assert "build-amd64" in needs_list, (
+            f"smoke must run after build-amd64; got needs={needs_list!r}"
+        )
+
+    def test_smoke_runs_on_github_hosted_ubuntu(self, jobs: dict[str, Any]) -> None:
+        runs_on = jobs["smoke"]["runs-on"]
+        assert runs_on == "ubuntu-latest", (
+            f"smoke must run on a GitHub-hosted runner; got {runs_on!r}"
+        )
+
+    def test_smoke_has_timeout_minutes(self, jobs: dict[str, Any]) -> None:
+        timeout = jobs["smoke"].get("timeout-minutes")
+        assert isinstance(timeout, int) and timeout > 0, (
+            f"smoke needs a timeout-minutes backstop; got {timeout!r}"
+        )
+
+    def test_smoke_downloads_and_loads_the_image(self, jobs: dict[str, Any]) -> None:
+        _step_using(jobs, "smoke", _DOWNLOAD_ACTION)  # raises if absent
+        assert "docker load" in _run_text(jobs, "smoke"), (
+            "smoke must `docker load` the downloaded tarball — it runs on a "
+            "fresh runner whose image store is empty, so `needs: build-amd64` "
+            "alone leaves it with nothing to run"
+        )
+
+    def test_smoke_downloads_into_a_subdirectory(
         self, jobs: dict[str, Any], workflow: Any
+    ) -> None:
+        # Unlike secret-grep, this job checks the repository out. Unpacking a
+        # ~375 MB tarball over the working tree would leave the smoke's own
+        # source next to build artefacts and make `path:` drift silent.
+        with_block: dict[str, Any] = (
+            _step_using(jobs, "smoke", _DOWNLOAD_ACTION).get("with") or {}
+        )
+        path = _resolve_env(workflow, str(with_block.get("path", "")))
+        assert path and path != ".", (
+            "smoke checks the repository out, so the image artifact must be "
+            f"downloaded into its own directory; got path={path!r}"
+        )
+
+    def test_smoke_never_rebuilds_the_image(self, jobs: dict[str, Any]) -> None:
+        builders = [
+            str(step.get("uses"))
+            for step in _steps(jobs, "smoke")
+            if _BUILD_ACTION in str(step.get("uses", ""))
+        ]
+        assert builders == [], (
+            f"smoke builds its own image ({builders}). Two builds of the same "
+            "Dockerfile are not the same image, and the one this job cleared "
+            "would not be the one US-007 publishes."
+        )
+        assert "docker build" not in _run_text(jobs, "smoke")
+
+    def test_smoke_asserts_the_loaded_image_is_the_built_one(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        run_text = _run_text(jobs, "smoke")
+        assert "IMAGE_ID_FILE" in run_text and "docker image inspect" in run_text, (
+            "smoke must read the recorded image ID and inspect what it actually "
+            "loaded — otherwise 'the image we built' is an assumption about a "
+            "tag, and a tag is not an identity"
+        )
+
+    def test_an_identity_mismatch_fails_the_job(self, jobs: dict[str, Any]) -> None:
+        # Narrow on purpose, for the reason recorded on secret-grep's twin:
+        # the job has another `exit 1` (the empty-ID guard), so a check for
+        # `exit 1` anywhere in the script stays green while the assertion the
+        # whole handoff rests on is downgraded to a warning.
+        body = _if_block_body(_run_text(jobs, "smoke"), "loaded", "recorded", "!=")
+        assert body is not None, (
+            "smoke must compare the loaded image ID against the recorded one "
+            "in an `if` — without it the handoff is trust in a tag name"
+        )
+        assert "exit 1" in body, (
+            "The image-identity mismatch branch must exit non-zero. A mismatch "
+            "that only warns reports a green contract for an image nobody "
+            "built. Branch body was:\n" + body
+        )
+
+    def test_smoke_runs_the_image_detached_on_the_service_port(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        run_lines = _run_lines(jobs, "smoke")
+        run_command = next(
+            (line for line in run_lines if line.startswith("docker run")), None
+        )
+        assert run_command is not None, "smoke must `docker run` the loaded image"
+        assert " -d " in f" {run_command} ", (
+            f"smoke must run the container detached; got {run_command!r}"
+        )
+        assert "-p 8020:8020" in run_command, (
+            "The container must publish 8020 — the port the Dockerfile EXPOSEs "
+            f"and the one the contract script probes. Got {run_command!r}"
+        )
+
+    def test_smoke_passes_no_environment_to_the_container(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        run_lines = _run_lines(jobs, "smoke")
+        run_command = next(
+            (line for line in run_lines if line.startswith("docker run")), None
+        )
+        assert run_command is not None
+        tokens = run_command.split()
+        offenders = [
+            token
+            for token in tokens
+            if token in {"-e", "--env"} or token.startswith("--env")
+        ]
+        assert offenders == [], (
+            f"smoke passes environment into the container ({offenders}). The "
+            "whole point is the no-token state every image built here is in: a "
+            "token, or a flag that fakes readiness, would test a configuration "
+            "this repository cannot produce."
+        )
+
+    def test_smoke_runs_the_committed_contract_script(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        assert _SMOKE_MODULE_PATH.exists(), (
+            "contract_smoke.py must be committed — the smoke job's assertions "
+            "live there so they can share the golden schema's field source"
+        )
+        assert _SMOKE_SCRIPT_RUN in _run_text(jobs, "smoke"), (
+            f"smoke must invoke {_SMOKE_SCRIPT_RUN!r}; anything else is a "
+            "second implementation of the contract"
+        )
+
+    @pytest.mark.parametrize("wire_value", _CONTRACT_VALUES_THAT_MUST_NOT_BE_IN_BASH)
+    def test_smoke_does_not_enumerate_the_contract_in_bash(
+        self, jobs: dict[str, Any], wire_value: str
+    ) -> None:
+        assert wire_value not in _run_text(jobs, "smoke"), (
+            f"The smoke job's shell mentions {wire_value!r}. Field expectations "
+            "must come from contract_smoke.py, which imports them from "
+            "pipeline/contract.py and validates against the same HealthResponse "
+            "model tests/test_contract_schema.py pins. A copy here is a second "
+            "contract that can drift from the first — an AC of US-005."
+        )
+
+    def test_smoke_budget_matches_the_scripts_default(self, workflow: Any) -> None:
+        env_block: dict[str, Any] = workflow.get("env") or {}
+        budget = float(str(env_block.get("SMOKE_TIMEOUT_SECONDS", "0")))
+        assert budget == contract_smoke.DEFAULT_TIMEOUT_SECONDS, (
+            f"ci.yml budgets {budget:g}s for /health but contract_smoke.py "
+            f"defaults to {contract_smoke.DEFAULT_TIMEOUT_SECONDS:g}s. One "
+            "number, two places: keep them tied, and keep it at 120 — 30 s "
+            "spans a cold torch import too tightly (round-2 finding)."
+        )
+
+    def test_smoke_passes_the_budget_to_the_script(self, jobs: dict[str, Any]) -> None:
+        run_text = _run_text(jobs, "smoke")
+        assert (
+            "--timeout-seconds" in run_text and "SMOKE_TIMEOUT_SECONDS" in run_text
+        ), (
+            "The smoke must hand the workflow's budget to the script, or the "
+            "number in ci.yml is decoration and the real budget is whatever the "
+            "script defaults to"
+        )
+
+    def test_smoke_dumps_the_container_log_on_failure(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        dumps = [
+            step
+            for step in _steps(jobs, "smoke")
+            if "docker logs" in str(step.get("run", ""))
+        ]
+        assert dumps, (
+            "smoke must dump `docker logs` when it fails — an AC. Without it a "
+            "red smoke says only that the contract was violated, with no way to "
+            "tell a crashed import from a wrong field, and the container is "
+            "gone by the time anyone looks."
+        )
+        conditions = [str(step.get("if", "")).replace(" ", "") for step in dumps]
+        assert any("failure()" in condition for condition in conditions), (
+            f"The log dump must be conditioned on failure(); got {conditions!r}. "
+            "A dump that only runs on success is the one case nobody needs."
+        )
+
+    def test_smoke_removes_the_container_afterwards(self, jobs: dict[str, Any]) -> None:
+        cleanups = [
+            step
+            for step in _steps(jobs, "smoke")
+            if "docker rm" in str(step.get("run", ""))
+        ]
+        assert cleanups, "smoke must remove the container it started"
+        conditions = [str(step.get("if", "")).replace(" ", "") for step in cleanups]
+        assert any("always()" in condition for condition in conditions), (
+            f"Cleanup must run on always(); got {conditions!r} — a cleanup that "
+            "is skipped on failure is skipped exactly when it matters"
+        )
+
+    def test_smoke_uploads_no_artifacts_of_its_own(self, jobs: dict[str, Any]) -> None:
+        # Deliberate, and a cost decision as much as a shape one: one run of
+        # this workflow already parks ~375 MiB of image tarball against a
+        # 500 MB free-tier storage quota. The smoke consumes that artifact and
+        # adds nothing to it.
+        uploads = [
+            str(step.get("uses"))
+            for step in _steps(jobs, "smoke")
+            if _UPLOAD_ACTION in str(step.get("uses", ""))
+        ]
+        assert uploads == [], (
+            f"smoke uploads artifacts ({uploads}). It has nothing to hand on: "
+            "its output is a pass/fail and a job log."
+        )
+
+    def test_smoke_grants_itself_no_write_permissions(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        perms: dict[str, Any] = jobs["smoke"].get("permissions") or {}
+        writable = sorted(k for k, v in perms.items() if v == "write")
+        assert writable == [], (
+            f"smoke raises write permissions on {writable}. It runs a container "
+            "and reads two endpoints; only the publish job (US-007) may write."
+        )
+
+    def test_smoke_syncs_against_the_committed_lock(self, jobs: dict[str, Any]) -> None:
+        assert "--locked" in _run_text(jobs, "smoke"), (
+            "The smoke's expectations are Python objects imported from this "
+            "tree, so they must resolve against the versions the lock pins"
+        )
+
+    def test_smoke_uv_setup_enables_caching(self, jobs: dict[str, Any]) -> None:
+        setup = next(
+            (
+                step
+                for step in _steps(jobs, "smoke")
+                if "setup-uv" in str(step.get("uses", ""))
+            ),
+            None,
+        )
+        assert setup is not None, "smoke must install uv via astral-sh/setup-uv"
+        with_block: dict[str, Any] = setup.get("with") or {}
+        assert with_block.get("enable-cache") is True, (
+            "setup-uv must enable caching in every job on the free tier"
+        )
+
+
+# ---------------------------------------------------------------------------
+# The image artifact handoff, across every consumer
+# ---------------------------------------------------------------------------
+
+# Every job that receives the built image. New consumers (US-007's publish)
+# belong here: the handoff is only sound if all of them read the same artifact
+# and assert the same identity.
+_IMAGE_CONSUMERS = ("secret-grep", "smoke")
+
+
+class TestImageArtifactHandoff:
+    """The producer and every consumer must name the same artifact."""
+
+    @pytest.mark.parametrize("consumer", _IMAGE_CONSUMERS)
+    def test_upload_and_download_agree_on_the_artifact_name(
+        self, jobs: dict[str, Any], workflow: Any, consumer: str
     ) -> None:
         upload: dict[str, Any] = (
             _step_using(jobs, "build-amd64", _UPLOAD_ACTION).get("with") or {}
         )
         download: dict[str, Any] = (
-            _step_using(jobs, "secret-grep", _DOWNLOAD_ACTION).get("with") or {}
+            _step_using(jobs, consumer, _DOWNLOAD_ACTION).get("with") or {}
         )
         uploaded = _resolve_env(workflow, str(upload.get("name", "")))
         downloaded = _resolve_env(workflow, str(download.get("name", "")))
         assert uploaded and uploaded == downloaded, (
-            f"build-amd64 uploads {uploaded!r} but secret-grep downloads "
+            f"build-amd64 uploads {uploaded!r} but {consumer} downloads "
             f"{downloaded!r}. A name mismatch fails at download time with a "
             "message about a missing artifact rather than about the handoff."
         )
 
+    @pytest.mark.parametrize("consumer", _IMAGE_CONSUMERS)
     def test_the_consumer_reads_the_files_the_producer_uploads(
-        self, jobs: dict[str, Any], workflow: Any
+        self, jobs: dict[str, Any], workflow: Any, consumer: str
     ) -> None:
         env_block: dict[str, Any] = workflow.get("env") or {}
-        consumer = _run_text(jobs, "secret-grep")
+        consumer_script = _run_text(jobs, consumer)
         for key in ("IMAGE_TARBALL", "IMAGE_ID_FILE"):
-            assert key in consumer, (
-                f"secret-grep never reads ${{{{ env.{key} }}}} "
+            assert key in consumer_script, (
+                f"{consumer} never reads ${{{{ env.{key} }}}} "
                 f"({env_block.get(key)!r}); both halves of the handoff have to "
                 "come from the same single-sourced names or they can drift"
             )
+
+    def test_there_is_exactly_one_image_artifact(
+        self, jobs: dict[str, Any], workflow: Any
+    ) -> None:
+        # One artifact, provably the same bytes, never a rebuild — and never a
+        # second copy either: the tarball is ~375 MiB against a 500 MB
+        # free-tier quota, so a per-consumer artifact would triple the bill for
+        # no added guarantee.
+        uploads: set[str] = set()
+        for step in _all_steps(jobs):
+            if _UPLOAD_ACTION not in str(step.get("uses", "")):
+                continue
+            with_block: dict[str, Any] = step.get("with") or {}
+            uploads.add(_resolve_env(workflow, str(with_block.get("name", ""))))
+        assert len(uploads) == 1, (
+            f"The workflow uploads {sorted(uploads)}. Consumers share one image "
+            "artifact; a second one is storage nobody reads."
+        )
 
 
 # ---------------------------------------------------------------------------

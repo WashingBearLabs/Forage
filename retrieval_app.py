@@ -124,6 +124,13 @@ def _load_config() -> dict[str, Any]:
 
 # -- Response models --
 
+# The one capability key ``/health`` advertises, named once so the CI contract
+# smoke (``contract_smoke.py``) can import it instead of restating the wire
+# string. The literal itself is still pinned by ``tests/test_app.py``, which
+# spells it out: the constant single-sources the *symbol*, those tests pin the
+# *value*, and renaming the value without meaning to fails them.
+CAPABILITY_SEARCH_SANITIZATION = "search_sanitization"
+
 
 class HealthResponse(BaseModel):
     """Response body for ``GET /health``.
@@ -638,7 +645,7 @@ async def health(request: Request) -> HealthResponse:
     if not cache_connected:
         degraded_reasons.append(DEGRADED_CACHE_UNAVAILABLE)
     capabilities = (
-        {"search_sanitization": 1}
+        {CAPABILITY_SEARCH_SANITIZATION: 1}
         if classifier_loaded or _legacy_capability_advertisement_enabled()
         else {}
     )

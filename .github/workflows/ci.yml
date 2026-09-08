@@ -5,8 +5,8 @@
 # introduced in dependency order across the `forage-ci-and-image` stories, and
 # a `needs:` may never name a job a later story adds — GitHub rejects the whole
 # file, not just the offending job. `lint` (US-001), `typecheck` (US-006),
-# `test` (US-002), `build-amd64` and `secret-grep` (US-003) are here; `smoke`
-# and `publish` arrive in US-005/007.
+# `test` (US-002), `build-amd64` and `secret-grep` (US-003) and `smoke`
+# (US-005) are here; `publish` arrives in US-007.
 #
 # `lint`, `typecheck`, `test` and `build-amd64` are siblings, not a chain: none
 # reads another's output, so making one `needs:` another would only serialise
@@ -81,6 +81,17 @@ env:
   IMAGE_ARTIFACT: "forage-amd64-image"
   IMAGE_TARBALL: "forage-amd64.tar.gz"
   IMAGE_ID_FILE: "image-id.txt"
+  # `smoke` checks the repository out as well as downloading the image, so it
+  # unpacks the artifact into a subdirectory instead of over the working tree.
+  # `secret-grep` has no checkout and downloads into the job's empty cwd.
+  IMAGE_DOWNLOAD_DIR: "downloaded-image"
+  # The smoke container's name, and the health budget handed to
+  # `contract_smoke.py`. 120 s, not 30: a cold start imports torch before
+  # uvicorn binds, and the weights-free PromptGuard load reaches Hugging Face
+  # and is refused first (round-2 finding). A guard test ties this number to
+  # the script's own default so the two cannot drift.
+  SMOKE_CONTAINER: "forage-smoke"
+  SMOKE_TIMEOUT_SECONDS: "120"
 
 jobs:
   lint:
@@ -410,3 +421,113 @@ jobs:
             echo "No forbidden pattern in the layer history of ${IMAGE_REF}."
           fi
           exit "${status}"
+
+  smoke:
+    name: smoke
+    # Ordering only, exactly as in `secret-grep`: the image itself arrives
+    # through the artifact below with its identity asserted, because a
+    # downstream job cannot see the upstream job's Docker daemon.
+    needs: build-amd64
+    runs-on: ubuntu-latest
+    # The 120 s health budget, plus `docker load` (~28 s) and a cold `uv sync`.
+    # A backstop, not a budget.
+    timeout-minutes: 20
+    steps:
+      # This job DOES check the repository out, unlike `secret-grep` — and for
+      # the opposite reason. `secret-grep` keeps its working directory empty so
+      # its pattern set cannot be weakened by editing a script it fetches. This
+      # job's entire point is to compare the running image against *this
+      # commit's* contract: `contract_smoke.py` imports `CONTRACT_VERSION` from
+      # `pipeline/contract.py`, the degraded reason from the same module, and
+      # the `HealthResponse` model that `tests/test_contract_schema.py` pins
+      # against the golden fixture. Reading those at job time is what makes a
+      # version bump that the image did not pick up a red smoke instead of a
+      # green one.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync dev environment
+        # Same `--locked` sync as every other lane: the smoke's expectations
+        # are Python objects imported from this tree, so they have to be
+        # resolved against the versions the lock pins.
+        run: uv sync --extra dev --locked
+
+      - name: Download the image artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ env.IMAGE_ARTIFACT }}
+          path: ${{ env.IMAGE_DOWNLOAD_DIR }}
+
+      - name: Load the image and assert it is the one build-amd64 built
+        # US-003's assertion, unchanged bar the download directory. `needs:`
+        # gives ordering; this is what gives identity. `docker save`/`docker
+        # load` preserve the image ID exactly — it is the digest of the image
+        # config — so a mismatch means this job would be smoking a different
+        # image than the one that was built, cleared and (US-007) published.
+        run: |
+          set -euo pipefail
+          recorded="$(tr -d '[:space:]' < "${IMAGE_DOWNLOAD_DIR}/${IMAGE_ID_FILE}")"
+          if [ -z "${recorded}" ]; then
+            echo "::error::${IMAGE_ID_FILE} carried no image ID"
+            exit 1
+          fi
+          gunzip -c "${IMAGE_DOWNLOAD_DIR}/${IMAGE_TARBALL}" | docker load
+          loaded="$(docker image inspect --format '{{.Id}}' "${IMAGE_REF}")"
+          if [ "${loaded#sha256:}" != "${recorded#sha256:}" ]; then
+            echo "::error::loaded image ${loaded} is not the ${recorded} build-amd64 recorded — this job would be smoking a different image than the one that was built"
+            exit 1
+          fi
+          echo "Loaded ${IMAGE_REF} = ${loaded} (identical to build-amd64's)"
+
+      - name: Run the candidate image with no Hugging Face token
+        # No `-e` of any kind, deliberately. This is the state every image
+        # built from this repository is in until the runtime weights fetch
+        # lands (`feature-forage-model-bootstrap`): no token, no weights, and
+        # therefore no PromptGuard. The contract asserted below is what an
+        # honestly-degraded service owes its consumer in that state. A token
+        # passed here would test a configuration this repository cannot build.
+        run: |
+          set -euo pipefail
+          docker run -d --name "${SMOKE_CONTAINER}" -p 8020:8020 "${IMAGE_REF}"
+          docker ps --filter "name=${SMOKE_CONTAINER}" --format '{{.Names}} {{.Status}}'
+
+      - name: Assert the degraded /health contract
+        # The field expectations are NOT enumerated here. `contract_smoke.py`
+        # validates the live body against the same `HealthResponse` model the
+        # golden-schema test pins, and reads every wire value it compares from
+        # `pipeline/contract.py` at run time — one source of truth, checked by
+        # tests/test_contract_smoke.py rather than asserted in a comment. A
+        # hand-written field list in bash here would be a second contract.
+        run: |
+          set -euo pipefail
+          uv run python contract_smoke.py \
+            --base-url "http://127.0.0.1:8020" \
+            --timeout-seconds "${SMOKE_TIMEOUT_SECONDS}"
+
+      - name: Dump the container log
+        # Runs on any failure above — a contract violation, a container that
+        # never came up, even a bad `docker load`. Without it, "the smoke went
+        # red" arrives with no way to tell a crashed import from a wrong field,
+        # and the container is gone by the time anyone looks.
+        if: failure()
+        run: |
+          echo "--- docker ps -a ---"
+          docker ps -a --filter "name=${SMOKE_CONTAINER}" || true
+          echo "--- container state ---"
+          docker inspect --format '{{json .State}}' "${SMOKE_CONTAINER}" || true
+          echo "--- docker logs ${SMOKE_CONTAINER} ---"
+          docker logs "${SMOKE_CONTAINER}" 2>&1 || true
+          echo "--- end of container log ---"
+
+      - name: Remove the smoke container
+        if: always()
+        run: docker rm -f "${SMOKE_CONTAINER}" > /dev/null 2>&1 || true
