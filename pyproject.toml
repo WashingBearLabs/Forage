@@ -23,7 +23,7 @@ dependencies = [
     # calls `snapshot_download` itself. It has always been present as a
     # transitive dependency of `transformers`, but a module that imports a
     # package must declare it — a transitive pin is someone else's to drop.
-    "huggingface_hub>=0.30.0",
+    "huggingface_hub>=1.30.0",
     "torch>=2.2.0",
     "python-multipart==0.0.20",
 ]

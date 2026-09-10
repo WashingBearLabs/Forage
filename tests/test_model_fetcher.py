@@ -900,6 +900,40 @@ class TestSingleEntryPoint:
             HF_TOKEN_ENV_VAR,
         }
 
+    def test_no_environment_access_evades_the_exact_set(self) -> None:
+        """The exact-set walk only sees ``.get()``/``getenv()`` call nodes.
+
+        A plain ``os.environ["NAME"]`` subscript — or any other mention of
+        ``os.environ`` outside those two call shapes — would be an env read
+        the closed set above never counts (US-001 verification finding: the
+        subscript form escaped all sibling tests). So the module may touch
+        ``os.environ`` only inside the recognised call shapes; anything else
+        is a refusal here, whatever it does.
+        """
+        source = (_REPO_ROOT / "model_fetcher.py").read_text()
+        tree = ast.parse(source)
+        counted = {
+            id(node.func.value)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and _reads_the_environment(node)
+            and isinstance(node.func, ast.Attribute)
+        }
+        stray = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute)
+            and node.attr == "environ"
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "os"
+            and id(node) not in counted
+        ]
+        assert not stray, (
+            f"{len(stray)} os.environ access(es) outside the recognised "
+            "`.get()` call shape — a subscript or aliased read the "
+            "exact-set test cannot count. Use os.environ.get(<CONSTANT>)."
+        )
+
     def test_environment_variable_names_are_never_inline_literals(self) -> None:
         """Each read goes through a module constant a caller can import."""
         source = (_REPO_ROOT / "model_fetcher.py").read_text()

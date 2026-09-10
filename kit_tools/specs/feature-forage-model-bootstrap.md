@@ -116,7 +116,7 @@ the pinned revision's snapshot.
 - Loaded-state readback stays the per-request `_loaded` check (`retrieval_app.py:593-632`).
 
 **Acceptance Criteria:**
-- [ ] **(CI-checkable)** Empty volume + `HF_TOKEN` → fetch (pinned revision), verify via
+- [x] **(CI-checkable)** Empty volume + `HF_TOKEN` → fetch (pinned revision), verify via
       the US-002 verifier (already landed per `execution_order`), load;
       `promptguard_loaded: true` with `search_sanitization` advertised and
       `promptguard_unavailable` cleared, no restart — all with mocked transport.
@@ -124,19 +124,19 @@ the pinned revision's snapshot.
       token):** start→loaded ≤ 5 min on the reference container (round-3: a live gated-HF
       measurement cannot sit in an unsupervised story's checkbox; spec 6's split pattern
       adopted).
-- [ ] Lifespan startup yields immediately (dedicated **lifespan test harness** — the
+- [x] Lifespan startup yields immediately (dedicated **lifespan test harness** — the
       existing `client` fixture uses `ASGITransport`, which never fires lifespan events;
       round-3 finding); `/health` during fetch adds no latency beyond the pre-existing 2 s
       cache-reconnect floor (`cache.py:32` `_RECONNECT_TIMEOUT_S` — the bare "<1 s" was
       unmeetable in this spec's slot for cache reasons unrelated to the fetch; round-3
       critical), measured with a connected/fake cache.
-- [ ] `FORAGE_MODEL_REVISION` respected end-to-end; the constant==manifest==mirror-tag
+- [x] `FORAGE_MODEL_REVISION` respected end-to-end; the constant==manifest==mirror-tag
       lock test present; `sanitizer_revision` derivation includes the revision.
-- [ ] `HF_TOKEN` never logged; no-token runs log no error from this path (the combined
+- [x] `HF_TOKEN` never logged; no-token runs log no error from this path (the combined
       failure log is US-004's).
-- [ ] Tests written/updated for new functionality (fetch layer mocked; suite stays hermetic)
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run pyright` passes
+- [x] Tests written/updated for new functionality (fetch layer mocked; suite stays hermetic)
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run pyright` passes
 
 ### US-002: Integrity manifest + quarantine (all sources)
 
@@ -248,6 +248,10 @@ tarball, safe-extracts, verifies, and the classifier **loads**; with both source
 ERROR names both attempts and `/health` stays degraded.
 
 **Implementation Hints:**
+- **US-001 verification carry-forward:** `model.fetch_failures` does NOT increment on the
+  no-token path (that is a *skip*, not a failure — correct for US-001's AC). The spec's
+  Goals bullet promises the counter for the "neither source" case: making it move there is
+  THIS story's job once the mirror leg exists — do not assume it already increments.
 - Transport (decided 2026-09-02): ship the pinned `oras` **static binary** in the image and
   shell out — hand-rolling the OCI token-exchange/manifest/blob dance is a bigger diff than
   this spec's budget (validation recommendation). Env: `FORAGE_WEIGHTS_MIRROR` (default the
