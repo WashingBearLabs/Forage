@@ -85,8 +85,14 @@ RUN useradd -r -s /bin/false poppy \
 # "degraded" means for a consumer in the meantime.
 ENV HF_HOME=/app/model-cache
 
-# Application source.
+# Application source. The COPY list is filename-enumerated on purpose — the
+# CI-only smoke drivers stay out of the image that way — which also means a new
+# module is invisible to the runtime until it is named here. `model_fetcher.py`
+# and the `weights_manifest.json` it verifies against are both runtime inputs:
+# without them the runtime weights fetch has no verifier and no pin, and would
+# have to either load unverified bytes or refuse to load at all.
 COPY retrieval_app.py models.py cache.py url_validator.py config.yaml ./
+COPY model_fetcher.py weights_manifest.json ./
 COPY promptguard/ ./promptguard/
 COPY pipeline/ ./pipeline/
 

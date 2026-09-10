@@ -1,8 +1,8 @@
 <!-- Template Version: 2.1.0 -->
 # TESTING_GUIDE.md
 
-> Last updated: 2026-09-07
-> Updated by: Claude (forage-repo-bootstrap US-005)
+> Last updated: 2026-09-10
+> Updated by: Claude (forage-model-bootstrap US-002)
 
 ## Quick Start
 
@@ -74,7 +74,7 @@ so `test_ci_workflow.py`, `test_pyright_policy.py`, `test_dependency_lock.py` an
 hermeticity canary all bit only on a developer's machine. The job runs `uv run pytest -q`
 with no selection filters, preceded by a named `uv run pytest -q
 tests/test_sanitizer_revision.py` step so the file-recall cache contract reports as its
-own red line instead of as six failures inside a 607-test log.
+own red line instead of as six failures inside a 992-test log.
 
 `pyright` runs with **no baseline and one carve-out**: `reportPrivateUsage` is off for
 `tests/` and nothing else is relaxed anywhere. Type-ignore comments are disabled
@@ -92,11 +92,12 @@ crash reads as a false regression.
 
 ## Test Structure
 
-25 files under `tests/`, flat, one module per subject. **905 tests, all green** as of
-2026-09-08.
+26 files under `tests/`, flat, one module per subject, plus `fakes.py`, `golden/` and
+`fixtures/`. **992 tests, all green** as of 2026-09-10.
 
 | Module | Tests | Covers |
 |--------|------:|--------|
+| `tests/test_model_fetcher.py` | 77 | `model_fetcher.py`: fail-closed manifest verification, exact-set + safetensors-only allowlist, symlink-resolving hashing, one-generation quarantine, the loadable safetensors fixture |
 | `tests/test_stage2_structural.py` | 78 | Deterministic regex injection scan |
 | `tests/test_orchestrator.py` | 61 | End-to-end pipeline drive, search + retrieve paths |
 | `tests/test_url_validator.py` | 59 | SSRF defense: RFC1918, DNS rebinding, schemes |
@@ -105,13 +106,13 @@ crash reads as a false regression.
 | `tests/test_stage1_extraction.py` | 41 | HTML extraction, `raw_text` vs `main_content` |
 | `tests/test_stage4_structuring.py` | 39 | Response assembly + composite trust score |
 | `tests/test_models.py` | 31 | Pydantic request/response models |
-| `tests/test_app.py` | 31 | FastAPI endpoints, `/health` body, capability break-glass |
+| `tests/test_app.py` | 33 | FastAPI endpoints, `/health` body, capability break-glass, the `/metrics` `model` counters |
 | `tests/test_stage3_promptguard.py` | 30 | ML scan; transformers/torch mocked |
 | `tests/test_ci_workflow.py` | 201 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane, image build + secret-grep gate, smoke job + artifact handoff, both publish lanes (tag policies evaluated, not matched) and the cross-fire guards between them |
 | `tests/test_contract_smoke.py` | 47 | `contract_smoke.py`: every `/health` clause, polling, and the single-source ties to the golden schema |
 | `tests/test_stage5_url_audit.py` | 28 | Outbound fetch + redirect-chain audit |
 | `tests/test_stage1_pdf.py` | 23 | PDF branch, subprocess isolation |
-| `tests/test_dockerfile.py` | 20 | `Dockerfile` text: no secret may enter the build, digest-pinned base, lock-driven install |
+| `tests/test_dockerfile.py` | 28 | `Dockerfile` text: no secret may enter the build, digest-pinned base, lock-driven install |
 | `tests/test_pyright_policy.py` | 12 | Type-checking policy: strict, one carve-out, no suppressions |
 | `tests/test_searxng_smoke.py` | 61 | `searxng_smoke.py`: every evaluator branch, the Docker argv it builds, and the `--internal` wiring |
 | `tests/test_searxng_docker.py` | 28 | `searxng/Dockerfile` + baked config: the negatives (no wildcard pass list, no baked secret, no header trust) and engine parity with `_SEARXNG_ENGINES` |
@@ -148,7 +149,7 @@ canary cannot check about itself: that it is committed and not skipped.
 **Async needs no decorator.** `asyncio_mode = "auto"` is set in `pyproject.toml`.
 
 **The exact count is a gate, not a floor.** The extraction verified *exactly* 531 tests
-moved (534 collected after alias parametrization); the suite has since grown to 905 as CI
+moved (534 collected after alias parametrization); the suite has since grown to 992 as CI
 guards landed (US-001 +33, US-006 +19, US-002 +21, US-003 +49, US-005 +75, US-007 +40). A silently
 dropped module cannot hide under a "≥ N passed" assertion. When you add tests, update the
 counts here.

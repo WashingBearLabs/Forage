@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # GOTCHAS.md
 
-> Last updated: 2026-09-07
-> Updated by: Claude (forage-repo-bootstrap US-005)
+> Last updated: 2026-09-10
+> Updated by: Claude (forage-model-bootstrap US-002)
 
 ## Overview
 
@@ -61,6 +61,41 @@ expect `false` from a stock image and treat the content as unscanned — that is
 answer, not a broken deploy. The refusal is a `GatedRepoError` (HTTP 401) from
 `huggingface.co`, which fails in seconds rather than hanging; the app is serving within
 ~6 s of `docker run` even under emulation.
+
+---
+
+### A plain `snapshot_download` fails verification — pass `ALLOW_PATTERNS`
+
+**Location:** `model_fetcher.py`, `weights_manifest.json`
+**Severity:** 🟡 Medium
+**Added:** 2026-09-10 (`feature-forage-model-bootstrap` US-002)
+
+**What happens:**
+`model_fetcher.verify_weights()` is an **exact-set** check with a format allowlist: every
+file the manifest pins must be present with the right sha256 and size, and the snapshot
+must contain *nothing else*. A plain
+`snapshot_download("meta-llama/Llama-Prompt-Guard-2-22M", revision=...)` also pulls
+`README.md` and `.gitattributes`, neither of which is an allowlisted format. The download
+succeeds, the files land, and verification then refuses the whole set — `file_extra` /
+`disallowed_format` — and quarantines it. The failure looks like corruption and is not.
+
+**Why it matters:**
+It bites at exactly the two moments nobody wants a surprise: the first real HF fetch
+(US-001) and the vendoring run that generates the real manifest (US-003). And the
+quarantine makes it look destructive.
+
+**Mitigation:**
+Pass `allow_patterns=model_fetcher.ALLOW_PATTERNS` to every `snapshot_download`, and
+apply `model_fetcher.is_allowed_filename()` when generating a manifest. `ALLOW_PATTERNS`
+is derived from `ALLOWED_SUFFIXES` — one constant, so the fetch filter and the
+verification rule cannot drift apart. Widening the allowlist to admit README files is the
+wrong fix: `.bin` is excluded by the *same* rule, and that exclusion is the RCE closure
+(`from_pretrained` can never be handed a pickle).
+
+**Related:** `weights_manifest.json` is currently a fail-closed placeholder with
+`"files": []`, so `verify_weights()` refuses everything with `manifest_empty` until
+US-003 commits the real manifest. That is the intended interim state, and nothing calls
+the verifier at boot yet — a stock image's `/health` is unchanged.
 
 ---
 

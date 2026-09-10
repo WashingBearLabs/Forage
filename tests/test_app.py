@@ -11,6 +11,7 @@ import httpx
 import pytest
 from starlette.types import Message, Receive, Scope, Send
 
+from model_fetcher import ModelMetrics
 from models import (
     RetrievedContent,
     SearchResponse,
@@ -60,6 +61,7 @@ def client() -> httpx.AsyncClient:
     )
     app.state.search_metrics = SearchMetrics()
     app.state.retrieve_metrics = RetrieveMetrics()
+    app.state.model_metrics = ModelMetrics()
     app.state.classification_semaphore = asyncio.Semaphore(
         settings.classification_concurrency
     )
@@ -455,6 +457,40 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "reconnect_successes",
         "reconnect_failures",
         "operation_failures",
+    }
+
+
+async def test_metrics_exposes_the_model_acquisition_counters(
+    client: httpx.AsyncClient,
+) -> None:
+    """`/metrics` carries the weight-acquisition section, named counters and all."""
+    response = await client.get("/metrics")
+
+    assert response.json()["model"] == {
+        "fetch_failures": 0,
+        "verify_failures": 0,
+        "quarantines": 0,
+        "fetch_in_progress": False,
+    }
+
+
+async def test_metrics_model_counters_reflect_the_live_metrics_object(
+    client: httpx.AsyncClient,
+) -> None:
+    """A refused weight set is visible to an operator, not only in the log."""
+    model_metrics: ModelMetrics = app.state.model_metrics
+    model_metrics.record_fetch_failure()
+    model_metrics.record_verify_failure()
+    model_metrics.record_quarantine()
+    model_metrics.fetch_in_progress = True
+
+    response = await client.get("/metrics")
+
+    assert response.json()["model"] == {
+        "fetch_failures": 1,
+        "verify_failures": 1,
+        "quarantines": 1,
+        "fetch_in_progress": True,
     }
 
 

@@ -343,3 +343,56 @@ class TestRuntimeShapePreserved:
         assert "uvicorn" in cmd and "retrieval_app:app" in cmd and "8020" in cmd, (
             f"CMD must serve retrieval_app:app on 8020; got {cmd!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Everything the runtime needs is actually copied in
+# ---------------------------------------------------------------------------
+
+
+class TestRuntimeSourceIsCopied:
+    """The COPY list is filename-enumerated, so a new module is easy to forget.
+
+    Enumeration is the right choice — it is what keeps `contract_smoke.py`,
+    `searxng_smoke.py` and the test suite out of a published image — but its
+    failure mode is silent: the image builds, imports, serves, and only the
+    path that needed the missing file breaks, at runtime, in production. The
+    weights fetcher and the manifest it verifies against are the current
+    example (`feature-forage-model-bootstrap` US-002): without them the
+    runtime fetch has no pin and no verifier.
+    """
+
+    @pytest.mark.parametrize(
+        "filename",
+        [
+            "retrieval_app.py",
+            "models.py",
+            "cache.py",
+            "url_validator.py",
+            "config.yaml",
+            "model_fetcher.py",
+            "weights_manifest.json",
+        ],
+    )
+    def test_runtime_file_is_copied(
+        self, instructions: list[str], filename: str
+    ) -> None:
+        copied = " ".join(_instructions_named(instructions, "COPY"))
+        assert filename in copied.split(), (
+            f"{filename!r} is not in the Dockerfile's COPY list. The list is "
+            "enumerated by filename, so an uncopied module is missing from the "
+            "image with no build error — the failure surfaces at runtime."
+        )
+
+    def test_the_copied_runtime_files_exist_in_the_repo(
+        self, instructions: list[str]
+    ) -> None:
+        """A COPY of a path that is not committed fails the build outright."""
+        missing = [
+            token
+            for text in _instructions_named(instructions, "COPY")
+            if not text.startswith("--from=")
+            for token in text.split()[:-1]
+            if not (_REPO_ROOT / token).exists()
+        ]
+        assert missing == [], f"Dockerfile COPYs path(s) that do not exist: {missing}"

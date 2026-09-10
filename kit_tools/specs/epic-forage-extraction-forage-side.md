@@ -143,10 +143,13 @@ that something is missing here.
 - **`sanitizer_revision` has deliberately diverged** from Poppy, and has now rotated three
   times (`e6b2b56d…` → `2b8d7e9a…` → `cd00a8b4…` → **`0537316d…`**, current). The
   Poppy-side spec must not assume revision parity — compare contracts.
-- **The suite is hermetic and exact**: **656 collected**, all green (534 at bootstrap, +33
-  from US-001's workflow guards, +19 from US-006's typecheck and policy guards, +21 from
-  US-002's canary and test-lane guards, +49 from US-003's Dockerfile and image-handoff
-  guards). The count is a gate, not a floor. The hermeticity
+- **The suite is hermetic and exact**: **992 collected**, all green (534 at bootstrap;
+  spec-1 additions: +33 US-001 workflow guards, +19 US-006 typecheck/policy, +21 US-002
+  canary/test-lane, +49 US-003 Dockerfile/handoff, +75 US-005 smoke, +40 US-007 publish,
+  +2 supervisor parity guards, +132 US-004 searxng (its supervisor fix renamed a test,
+  net zero); spec-2: +87 US-002 manifest/quarantine — the per-story counts live in
+  `kit_tools/testing/TESTING_GUIDE.md`, which is the canonical tally). The count is a
+  gate, not a floor. The hermeticity
   canary is committed and executing (`tests/test_hermeticity.py`), and since US-002 the
   whole suite runs in CI — every guard in this repo is finally CI-enforced rather than
   local-only.
