@@ -544,6 +544,261 @@ the cache tree) is covered by the last row and by
 `tests/test_app.py`, 8 in `tests/test_dockerfile.py`). `ruff check`, `ruff format
 --check` and `pyright` (strict) all zero.
 
+### US-001: Startup fetcher — HF source, pinned revision, non-blocking (2026-09-10)
+
+**Shape.** `model_fetcher.py` grew the acquisition half it was designed for, so the module
+is now the whole answer to "which bytes, from where, and are they the ones we pinned?":
+
+```python
+acquire_and_load(classifier, *, cache_root=None, revision=None,
+                 manifest_path=None, metrics=None) -> bool
+```
+
+The pipeline is **verify what is cached → fetch → verify → load**, and every stop is a
+logged `False`. `retrieval_app.lifespan` calls it as
+`asyncio.create_task(asyncio.to_thread(...))` and keeps the handle on
+`app.state.model_task`. The three keyword arguments default to the environment and the
+committed constants; they exist so a test can drive the pipeline, not as a configuration
+surface — `resolve_revision()`, `resolve_cache_root()` and the `MANIFEST_PATH` module
+constant are what production uses.
+
+**Yielding immediately is the requirement, and `to_thread` alone does not meet it.**
+An `await asyncio.to_thread(...)` before the `yield` is still an await: uvicorn binds
+nothing until lifespan startup returns, so a ~270 MiB download would hold the port closed
+past the compose healthcheck's 10 s x 5 retries (no `start_period`) and the container
+would restart-loop. `test_lifespan_startup_yields_immediately` parks the acquisition in
+its worker thread for up to 10 s and asserts startup returned in under 2; the mutation
+that replaces the task with an `await` fails 7 tests.
+
+**A lifespan harness had to exist first.** The `client` fixture in `tests/test_app.py`
+uses `httpx.ASGITransport`, which never fires lifespan events, so every startup assertion
+would have passed vacuously against it. `_running_app()` enters the real `lifespan(app)`
+with only `ContentCache` replaced. It is the only place in the suite where `app.state` is
+populated by the service rather than by a fixture, and it is where the flip, the latency
+and the shutdown tests live.
+
+**`/health` latency during a fetch — measured, and reconciled with the AC.** The AC says
+"no latency beyond the pre-existing 2 s cache-reconnect floor (`cache.py`'s
+`_RECONNECT_TIMEOUT_S`), measured with a connected/fake cache", and those two halves pull
+in opposite directions: with the cache **connected** there is no floor to spend, because
+`ping_if_due()` returns without attempting anything. So the floor is not a budget this
+story gets to use — it is context for why the spec could not say "<1 s" flatly in this
+slot. The measurement is therefore the strict one, and it is not close: five sequential
+`/health` calls with the fetch provably in flight (`fetch_in_progress` asserted true on
+both sides of the loop) took **4.14, 0.28, 0.20, 0.18, 0.18 ms**. The first is FastAPI's
+first-request path, not the fetch. The test asserts `max < 1.0 s` rather than the measured
+figure, deliberately: a shared CI runner can stall a thread hand-off, and a bound tight
+enough to catch a regression here would be tight enough to flake.
+
+**The revision pin, and what "end-to-end" cost.** `DEFAULT_MODEL_REVISION` is
+`11614a15…790ed0`, overridable by `FORAGE_MODEL_REVISION`, and the value is validated as a
+40-character commit sha — an unusable override falls back to the pin with an ERROR that
+does **not** echo the value (it is operator-supplied text heading for a log line, and it
+is interpolated into a filesystem path). The revision reaches `snapshot_download`,
+`verify_weights`'s snapshot walk, and both `from_pretrained` calls.
+
+**The triple lock, honestly.** Two of the three legs exist and are locked
+(`test_the_pin_is_locked_to_the_committed_manifest`): the constant equals the committed
+manifest's `revision`, and the model ids match. US-002's placeholder already carried the
+revision, so no manifest change was needed and its fail-closed `"files": []` emptiness is
+untouched. **The third leg — the mirror tag
+`ghcr.io/washingbearlabs/forage-weights:<revision>` — cannot be asserted yet because no
+such tag exists.** US-003 creates it and owns closing that leg; the test's docstring says
+so, in those terms, rather than pretending the lock is complete.
+
+**`$HF_HOME/hub`, passed explicitly to both sides.** `hub_cache_dir()` is handed to
+`snapshot_download(cache_dir=...)` *and* to `from_pretrained(cache_dir=...)`. Passing it
+rather than relying on the environment is not belt-and-braces — it is necessary.
+`huggingface_hub` samples `HF_HOME` into `constants.HF_HUB_CACHE` **at import time**, so a
+process that sets the variable after import (which is every test, and any future
+in-process reconfiguration) has the library reading one tree while the fetcher writes
+another. Explicit `cache_dir` on both calls makes the two provably the same directory. The
+round-3 critical stands and is guarded: `cache_dir=$HF_HOME` fails 9 tests, `local_dir=`
+fails 11.
+
+**Token handling.** `HF_TOKEN` is read at acquisition time, passed only to
+`snapshot_download(token=...)`, and never logged. Download failures use a **closed reason
+vocabulary** — `http_<status>`, `timeout`, `io_failed`, `fetch_failed` — the same
+discipline `cache.py` applies to `VALKEY_URL`, and for a sharper reason than it looks:
+`huggingface_hub`'s exceptions carry request context, so `logger.error(..., exc)` is a
+credential leak waiting for the right exception. The guard test plants a token-shaped
+literal *inside* the exception message and asserts it never reaches `caplog` at any level;
+mutating the log line to `%s` the exception fails it.
+
+**No token is a warning, not an error — and the AC's wording drove the control flow.**
+"No-token runs log no error from this path" meant the fetch had to be *skipped*, not
+attempted-and-failed, so `_acquire_and_load` checks the token before anything that could
+log an ERROR and emits one WARNING (`weights_fetch_skipped`). Two consequences fell out
+of taking that literally:
+
+- **A cold cache is not a verification failure.** Calling `verify_weights()` on an empty
+  volume would log `weights_verification_failed — snapshot_missing` at ERROR on every
+  first boot, which is crying wolf at exactly the moment a real refusal needs to be
+  readable. `_verify_cached()` returns `None` when the snapshot directory does not exist:
+  there is nothing to verify yet, which is a different statement from "what is there is
+  wrong".
+- **A manifest-level refusal short-circuits.** If our own manifest cannot bless anything,
+  neither a token nor another 270 MiB helps, so the pipeline stops with the refusal the
+  verifier already logged. Without that branch a token-less boot on a broken manifest
+  would report three causes — the refusal, "no HF_TOKEN", and "the pin blesses nothing" —
+  two of which would send an operator looking for a credential. That is the property
+  `test_a_manifest_level_refusal_diagnoses_one_cause_not_three` pins, and it is the test
+  that closed the one mutation that initially escaped (see the table).
+
+**The pre-flight pin check saves a doomed download.** With the placeholder manifest, a
+container *with* a token would otherwise fetch ~270 MiB and then refuse it as
+`manifest_empty`. `read_manifest_pin()` — a reader, not a second verification entry point;
+it opens no weight file and logs nothing — is consulted before the fetch, and an
+unusable pin is `weights_pin_unusable` with zero bytes transferred. Live-verified below.
+
+**`local_files_only=True` at the load.** The exact file set was verified moments earlier,
+so there is nothing left for the loader to look for, and an etag round-trip would make a
+*loaded* classifier depend on the hub still being reachable. This is also what lets the
+end-to-end test prove the load is network-free under the autouse socket guard. US-005 owns
+the warm-start path proper (verify-then-load with no fetch at all, and the retry task);
+the flag arriving here is the same flag, not that story's AC.
+
+**The sanitizer_revision rotation, acknowledged and attributed.**
+
+```
+before: 0537316d83510dab3cfafb6ebd61dafdffa5d51be2dd2e01fb9777bfd0e3e253
+after:  5927038d64ed54a619e52b94899148f56bfede37d38f3c1a53c435edc719d111
+```
+
+`derive_sanitizer_revision()` now hashes `MODEL_ID@revision` where it hashed `MODEL_ID`.
+**Not one byte of a `_REVISION_SOURCES` file moved** — verified by re-deriving with the
+old formula against the new tree and getting `0537316d…e3e253` back exactly, which makes
+this the first rotation of the four attributable to an *input* rather than to a source
+edit. The reason it had to happen: weights used to be a constant of the image, so the
+model id described the model completely; they are a runtime, per-deployment input now, and
+two containers running identical code can scan with different weights. A revision that
+could not tell them apart would key a cache on a sanitization behaviour it does not
+describe.
+
+Propagated to every place that stated the old value: `CLAUDE.md`,
+`docs/bootstrap-notes.md` (new fourth-rotation section with the before/after and the
+reasoning), `kit_tools/docs/GOTCHAS.md` (table row + the "four rotations, and why the
+fourth is a different kind" paragraph), `kit_tools/arch/CODE_ARCH.md`, and the epic
+wrapper. `grep -rn 0537316d` now hits only archived specs and the historical rows that
+should keep it. **Poppy-side blast radius, exactly as the spec words it:**
+`stored_file_extractions` are re-extracted on next access; that transition is owned by
+spec 6. `test_the_hashed_model_identity_is_model_id_at_revision` recomputes the whole
+digest independently rather than asserting "it changed", so a future implementation that
+hashed the two halves separately would fail.
+
+**`fetch_in_progress` is real now.** Set before the download and cleared in a `finally`,
+so it is false on the failure path too. `/metrics` exposes it unchanged from US-002's
+shape — that section was built to accept this without re-shaping, and it did.
+
+**Dependency.** `huggingface_hub>=0.30.0` is a direct dependency (it was already present
+transitively via `transformers`; a module that imports a package must declare it), and
+`uv lock` ran in the same commit — the lock gained exactly two lines and
+`grep nvidia- uv.lock` stays empty. No Dockerfile change was needed: no new module, and
+the dependency arrives through `uv sync --locked`.
+
+**One local stub.** `typings/huggingface_hub/__init__.pyi` declares `snapshot_download`
+and nothing else. Upstream annotates its `user_agent` parameter as a bare `dict`, which
+makes the whole overload set partially unknown under strict pyright and the symbol
+unusable at the call site. Per `typings/README.md` the stub carries only the five keywords
+the fetcher passes. `typings/transformers/__init__.pyi` gained `revision` and `cache_dir`
+on both `from_pretrained` factories, for the same reason it exists at all.
+
+**A landed US-002 test was rewritten, deliberately.**
+`test_the_production_manifest_path_is_not_configurable` asserted that `model_fetcher.py`
+contained no `os.environ` and no `getenv` — a *proxy* for "the manifest path is not
+configurable", and one that stopped being true the moment the module grew a revision pin
+and a cache root. The proxy is replaced by three assertions that are strictly stronger:
+the manifest constant is still the repo-root file, the exact set of environment variables
+the module reads (parsed out of its own AST and resolved through its constants) is
+`{FORAGE_MODEL_REVISION, HF_HOME, HF_TOKEN}`, and no read uses an inline string literal.
+A fourth environment variable now fails a test rather than passing a substring check.
+
+**Mutation-verified guards** (each applied to the committed tree, mapped tests run, tree
+restored):
+
+| Mutation | Result |
+|---|---|
+| lifespan `await`s the fetch instead of tasking it | 7 fail |
+| shutdown leaves the acquisition task running | 1 fails |
+| plain `snapshot_download`, no `allow_patterns` | 1 fails |
+| `cache_dir=$HF_HOME` instead of `$HF_HOME/hub` | 9 fail |
+| download uses `local_dir=` instead of the hub cache | 11 fail |
+| `revision=` not passed to the download | 10 fail |
+| fetch failure logs `str(exc)` | 2 fail |
+| an unvalidated revision override is honoured | 6 fail |
+| fetch attempted without a token | 3 fail |
+| no manifest pre-check before the download | 1 fails |
+| `fetch_in_progress` never set | 1 fails |
+| the load is allowed to reach the hub (`local_files_only=False`) | 3 fail |
+| a manifest-level refusal re-fetches anyway | **escaped**, then 1 fails |
+| the verifier is called on a cold cache | 4 fail |
+| sanitizer revision hashes `MODEL_ID` alone | 2 fail |
+| classifier ignores the revision it is handed | 1 fails |
+| `model_fetcher` reads a fourth environment variable | 1 fails |
+
+The escape is the interesting row and is left in the table rather than tidied away. The
+manifest short-circuit was masked by the pre-flight pin check downstream of it: both
+refuse, so no test could tell them apart on outcome alone. They differ in *diagnosis*, and
+the test added to close it asserts that difference (one cause logged, not three) rather
+than re-asserting the outcome. 16 of 17 caught on the first pass; 17 of 17 after.
+
+**Live-verified on a built image** (`docker build` + `docker run`, both branches):
+
+| Run | Result |
+|---|---|
+| no token | `weights_fetch_skipped — no HF_TOKEN…` at WARNING, **zero ERROR lines**, `/health` degraded + `promptguard_unavailable`, volume untouched |
+| `HF_TOKEN` set (fake), placeholder manifest | `weights_pin_unusable — /app/weights_manifest.json pins no verifiable file set…`, **no download attempted**, `/app/model-cache` still empty |
+| both | `Application startup complete` precedes the acquisition line — startup yielded first — and `contract_smoke.py` reports **PASSED: degraded, honest, and on-contract** |
+
+The live `/health` carries `sanitizer_revision: 5927038d…19d111`, so the rotation is
+confirmed in the image and not only in the tree.
+
+**What is CI-proven and what is not — plainly.** CI has no Hugging Face token and the
+socket guard is autouse, so every fetch test drives a `snapshot_download` double. That
+proves the arguments the fetcher passes, the tree the bytes land in, the verification, the
+`false → true` flip, and a **real** `PromptGuardClassifier.load()` opening the result
+(the committed tiny-model fixture, resolved through `MODEL_ID` + revision + `cache_dir`
+exactly as the real weights will be — the socket guard is the proof it reached no
+network). It does **not** prove that the gated repo answers, that
+`11614a15…790ed0` exists upstream, or how long ~270 MiB takes on a 1-vCPU/1 GB container.
+That is US-001's live half, and it lands at **US-003's supervised session** — which holds
+the real token, vendors at this same sha, and has the AC to record the start→loaded
+measurement. The AC checkbox above is worded that way for this reason; nothing here should
+be read as having measured it.
+
+**A gotcha found by the socket guard, and handed forward.** `huggingface_hub` 1.30 calls
+`detect_agent()` while building request headers, which fetches a harness registry over
+HTTP from `{ENDPOINT}/api/agent-harnesses` — on **every** hub call, including
+`from_pretrained(..., local_files_only=True)` against a full cache. It is best-effort
+(3 s timeout, all errors swallowed, cached 24 h at `$HF_HOME/.agent_harnesses.json`), so
+nothing breaks and the load succeeds. But it is a real outbound attempt on the load path,
+and **US-005's "zero network on a warm start" AC is measured against exactly this**:
+`HF_HUB_OFFLINE=1` suppresses it, and can only be scoped to the warm-path load because it
+would also disable the download. Recorded in `docs/GOTCHAS.md` with that trade spelled
+out. The cache file lands in `$HF_HOME`, a sibling of `hub/`, so the verifier never sees
+it — but a future check that assumes the volume holds only what we put there will.
+
+**Shutdown, and one honest limitation.** The lifespan cancels `app.state.model_task` if it
+is still pending. Cancelling the *task* stops the await; it does not stop the worker
+thread, which `asyncio.to_thread` runs on the default executor, so an interpreter exit
+during a live download still joins that thread. US-005 owns shutdown-clean for the retry
+task and inherits the same seam; the container's stop grace period bounds the real-world
+case. The test here asserts the task is cancelled, which is the part this story created.
+
+**Docs updated with measured numbers, not derived ones.** `CODE_ARCH.md`'s module table
+had drifted before this story (`cache.py` 425→456, `stage1_extraction.py` 297→337,
+`stage2_structural.py` 218→304, `url_validator.py` 190→188); every row was re-measured
+with `wc -l` while the table was open, and the Overview's "~5,750 lines" is now 6,353
+service lines plus 1,146 of CI-only smoke drivers, stated as two figures because the
+single number was ambiguous about which it meant.
+
+**Suite:** 992 → 1048 green (+46 in `tests/test_model_fetcher.py`, +7 in
+`tests/test_app.py`, +3 in `tests/test_sanitizer_revision.py`). `ruff check`,
+`ruff format --check` and `pyright` (strict) all zero, with no new suppression — the one
+place a test needed an exception carrying a `response` attribute uses a small local
+exception class rather than the inline `pyright: ignore` that
+`tests/test_pyright_policy.py` forbids.
+
 ## Refinement Notes
 
 ### Research Findings

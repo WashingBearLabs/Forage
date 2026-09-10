@@ -2,7 +2,7 @@
 # GOTCHAS.md
 
 > Last updated: 2026-09-10
-> Updated by: Claude (forage-model-bootstrap US-002)
+> Updated by: Claude (forage-model-bootstrap US-001)
 
 ## Overview
 
@@ -24,12 +24,19 @@ live in, and losing them in the move was an identified risk.
 
 **What happens:**
 Stage 3 runs the gated `meta-llama/Llama-Prompt-Guard-2-22M`. **Since
-`forage-ci-and-image` US-003 every image is weights-free** — the build-time bake is gone
-and the runtime fetch that replaces it is `feature-forage-model-bootstrap`, which has not
-landed — so this is the *default* state of a built image, not an accident of a forgotten
-token. Forage reports `status: "degraded"` with `promptguard_unavailable` in
-`degraded_reasons` and `promptguard_loaded: false`, and the ML injection scan does not
-happen. Stage 2's deterministic regex pass still runs; stage 3 does not.
+`forage-ci-and-image` US-003 every image is weights-free**: the build-time bake is gone,
+and since `feature-forage-model-bootstrap` US-001 a *runtime* fetch replaces it — which
+needs `HF_TOKEN`, because the repository is gated. So a container started without one is
+weightless by design, not by accident. Forage reports `status: "degraded"` with
+`promptguard_unavailable` in `degraded_reasons` and `promptguard_loaded: false`, and the
+ML injection scan does not happen. Stage 2's deterministic regex pass still runs; stage 3
+does not.
+
+**The tell, since US-001, is one log line at start:** `weights_fetch_skipped — no
+HF_TOKEN in the environment`. If instead you see `weights_pin_unusable`, the token is not
+the problem — the committed `weights_manifest.json` is still the placeholder that pins no
+files (US-003 replaces it), and the fetch is refused before it spends the bandwidth.
+`weights_verification_failed` means bytes arrived and were refused; read its reason codes.
 
 **Why it matters:**
 Before the honest-health contract existed, this failure was *silent* — `/health` reported
@@ -55,12 +62,17 @@ passes, and the same image with the break-glass `FORAGE_BREAK_GLASS_ADVERTISE_SA
 with exactly the capability violation.
 
 **Verify after any rebuild:**
-`docker logs <container> | grep -i promptguard` → "model loaded", and
-`curl -s localhost:8020/health | jq .promptguard_loaded` → `true`. Until spec 3 lands,
-expect `false` from a stock image and treat the content as unscanned — that is the honest
-answer, not a broken deploy. The refusal is a `GatedRepoError` (HTTP 401) from
-`huggingface.co`, which fails in seconds rather than hanging; the app is serving within
-~6 s of `docker run` even under emulation.
+`docker logs <container>` → one of the three lines above, and
+`curl -s localhost:8020/health | jq .promptguard_loaded` → `true` once a token and the
+real manifest are both in place. Expect `false` from a stock image and treat the content
+as unscanned — that is the honest answer, not a broken deploy.
+
+**A `false` that is on its way to `true` looks identical on `/health`.** Since US-001 the
+fetch runs behind a serving app, so a container that is three minutes into a ~270 MiB
+download reports exactly what a token-less one reports. `/metrics`' `model` section is
+what separates them: `fetch_in_progress: true` means downloading, and the
+`fetch_failures` / `verify_failures` / `quarantines` counters say whether anything has
+gone wrong yet. Poppy's deploy readiness wait reads that field for this reason.
 
 ---
 
@@ -94,8 +106,46 @@ wrong fix: `.bin` is excluded by the *same* rule, and that exclusion is the RCE 
 
 **Related:** `weights_manifest.json` is currently a fail-closed placeholder with
 `"files": []`, so `verify_weights()` refuses everything with `manifest_empty` until
-US-003 commits the real manifest. That is the intended interim state, and nothing calls
-the verifier at boot yet — a stock image's `/health` is unchanged.
+US-003 commits the real manifest. Since US-001 the boot path *does* consult it — and
+short-circuits on it: a manifest that pins nothing could never bless a download, so the
+fetch is refused before it starts (`weights_pin_unusable`) rather than after ~270 MiB.
+A stock image's `/health` is unchanged either way.
+
+---
+
+### `huggingface_hub` 1.x phones home while building request headers — even offline
+
+**Location:** `promptguard/classifier.py`'s load path, `model_fetcher.py`
+**Severity:** 🟡 Medium
+**Added:** 2026-09-10 (`feature-forage-model-bootstrap` US-001)
+
+**What happens:**
+`huggingface_hub` 1.30's `build_hf_headers()` calls `detect_agent()`, which fetches a
+"harness registry" from `{ENDPOINT}/api/agent-harnesses` to decide what to put in the
+user-agent string. It runs on **every** hub call, including `from_pretrained(...,
+local_files_only=True)` on a fully-populated cache — the flag governs *file* resolution,
+not header construction. Found by the suite's socket guard, which flagged
+`socket.getaddrinfo` in a test that had no business touching the network.
+
+**Why it matters:**
+Two places, for two different reasons.
+
+- **US-005's "zero network on a warm start" is measured against this.** A socket-guarded
+  warm-start test will see an attempt unless something suppresses it, and "zero network"
+  has to mean zero.
+- **Cold-boot latency.** The fetch is best-effort with a 3 s timeout and every failure is
+  swallowed, so nothing breaks — but on a container with no egress it is 3 s spent on
+  every process start until the response is cached.
+
+**Mitigation:** `HF_HUB_OFFLINE=1` disables it (`_fetch_registry` returns early), and the
+result is cached at `$HF_HOME/.agent_harnesses.json` for 24 h. Neither is free of
+consequence: `HF_HUB_OFFLINE` also disables the download itself, so it can only be scoped
+to a warm-path load, never set globally — that trade belongs to US-005.
+
+**One thing it does *not* affect:** the cache file lands in `$HF_HOME`, a sibling of
+`hub/` and `quarantine/`. `verify_weights()` walks `hub/models--…/snapshots/<rev>/` and
+never sees it, so it is not an "extra file" — but any future check that assumes the
+volume contains only what we put there will be surprised by it.
 
 ---
 
@@ -191,8 +241,9 @@ recipe.
 **Added:** 2026-09-07 (forage-repo-bootstrap US-002)
 
 **What happens:**
-`derive_sanitizer_revision()` hashes eight source files. Forage's revision has moved three
-times, each time at a gate boundary and each time deliberately:
+`derive_sanitizer_revision()` hashes eight source files plus the model identity and the
+active threshold. Forage's revision has moved four times, each time at a boundary and each
+time deliberately:
 
 | When | Value | What moved it |
 |---|---|---|
@@ -200,15 +251,22 @@ times, each time at a gate boundary and each time deliberately:
 | `forage-repo-bootstrap` US-002 | `2b8d7e9a…` | vault-free hostname defaults in `orchestrator.py` |
 | `forage-ci-and-image` US-001 | `cd00a8b4…` | `ruff format` gate reformatted `stage2_structural.py` |
 | `forage-ci-and-image` US-006 | `0537316d…e3e253` | pyright-strict burn-down retyped `stage1_extraction.py` + `stage2_structural.py` |
+| `forage-model-bootstrap` US-001 | `5927038d…19d111` | the hashed model identity became `MODEL_ID@revision` — **no source byte moved** |
 
 Poppy's in-tree copy stayed on the original value throughout. Five of the eight sources
 are still byte-identical between the repos; the revision is not.
 
-**None of the three rotations changed sanitization behaviour.** The hash is over bytes, so
-a reformat or a type annotation moves it just as a real rule change would — and that is
-exactly why *when* you take a rotation matters. Any edit to a `_REVISION_SOURCES` file
-rotates the revision and invalidates every cached sanitization keyed on it. Do it
-deliberately, at a gate boundary, with the before/after recorded (as
+**None of the four rotations changed sanitization behaviour** — but the fourth is a
+different *kind* of rotation and worth reading as such. The first three moved because the
+hash is over bytes and someone reformatted or retyped a hashed file. The fourth moved
+because an **input changed**: weights are a runtime, per-deployment thing now
+(`FORAGE_MODEL_REVISION`), so two containers running identical code can scan with
+different weights, and the identity had to grow the revision to stay honest. All eight
+sources are byte-identical across it, verified by re-deriving with the old formula.
+
+That is exactly why *when* you take a rotation matters. Any edit to a `_REVISION_SOURCES`
+file rotates the revision and invalidates every cached sanitization keyed on it. Do it
+deliberately, at a boundary, with the before/after recorded (as
 `docs/bootstrap-notes.md` does) — never as a drive-by inside a behavioural change, where
 it would be indistinguishable from a real sanitizer change.
 

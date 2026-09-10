@@ -99,7 +99,7 @@ reason. Any new startup or cache code must preserve this.
 
 ```bash
 uv sync --extra dev     # environment (creates .venv)
-uv run pytest           # 992 tests, all green, hermetic — blocking CI gate
+uv run pytest           # 1048 tests, all green, hermetic — blocking CI gate
 uv run ruff check .     # must stay clean — blocking CI gate
 uv run ruff format .    # must stay clean — blocking CI gate
 uv run pyright          # strict, ZERO errors — blocking CI gate
@@ -155,6 +155,10 @@ side must be replayed onto the other, with the Poppy source commit recorded in
 One thing has already diverged deliberately: `derive_sanitizer_revision()` moved from
 `e6b2b56d…` to `2b8d7e9a…` here when the vault-free hostname defaults landed, again to
 `cd00a8b4…` when the `ruff format` CI gate reformatted `pipeline/stage2_structural.py`,
-and once more to `0537316d…` when the pyright-strict burn-down retyped
-`pipeline/stage1_extraction.py` and `pipeline/stage2_structural.py`.
+once more to `0537316d…` when the pyright-strict burn-down retyped
+`pipeline/stage1_extraction.py` and `pipeline/stage2_structural.py`, and now to
+`5927038d…` — the one rotation of the four that changed an *input* rather than a source
+byte: the hashed model identity is `MODEL_ID@revision` since weights became a runtime,
+per-deployment input (`forage-model-bootstrap` US-001). `docs/bootstrap-notes.md` carries
+the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

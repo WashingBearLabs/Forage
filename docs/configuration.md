@@ -63,7 +63,9 @@ instance is private-network-only and Forage is its only client.
 | `SEARXNG_URL` | `http://searxng:8080` | Base URL of the SearXNG instance backing `POST /search`. |
 | `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION` | unset | **Break-glass only** — see below. |
 | `POPPY_RETRIEVAL_LEGACY_CAPABILITY` | unset | Deprecated alias of `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION`, kept so a pre-extraction deployment keeps working. Identical semantics. |
-| `HF_HOME` | `/app/model-cache` (set by the image) | Hugging Face cache directory the PromptGuard weights are read from. Override only if you mount the weights elsewhere. |
+| `HF_HOME` | `/app/model-cache` (set by the image) | Hugging Face cache directory the PromptGuard weights are fetched into and read from. Override only if you mount the weights elsewhere. Mount a volume here or the weights are re-fetched on every container recreate. |
+| `HF_TOKEN` | unset | Hugging Face access token for the **gated** `meta-llama/Llama-Prompt-Guard-2-22M` repository. Optional — see "Weights acquisition" below. **Carries a credential**; supply it the same way as `VALKEY_URL`. |
+| `FORAGE_MODEL_REVISION` | the committed pin (a 40-character commit sha) | Which upstream revision of the weights to fetch, verify and load. Only a full commit sha is accepted — a branch name is refused with an error and the committed pin is used instead. |
 
 The defaults for `VALKEY_URL` and `SEARXNG_URL` are deliberately neutral service names —
 they assume a compose network with services literally called `valkey` and `searxng`, and
@@ -140,13 +142,40 @@ published token, and no amount of cleaning the filesystem changed that. The path
 removed in full (`forage-ci-and-image` US-003); `tests/test_dockerfile.py` and CI's
 `secret-grep` job both fail if it comes back.
 
-> **Consequence, until `feature-forage-model-bootstrap` lands: every image ships without
-> PromptGuard weights** and therefore runs permanently `degraded` with
-> `promptguard_unavailable` in `degraded_reasons`. That is the honest state, not a broken
-> build — check it with `curl -s localhost:8020/health | jq .promptguard_loaded` and treat
-> standard-tier content as unscanned while it reads `false`. The replacement is a
-> *runtime* fetch into the `HF_HOME` volume (`/app/model-cache`), configured through the
-> environment like everything else.
+> **Consequence: every image ships without PromptGuard weights.** They are acquired at
+> *run time* instead, into the `HF_HOME` volume — see the next section.
+
+### Weights acquisition
+
+`feature-forage-model-bootstrap` US-001. At start Forage checks the model cache and, if it
+does not already hold the pinned weight set, fetches it from Hugging Face. Three things
+about that are worth knowing before you configure it:
+
+- **The fetch never blocks the service.** Startup yields immediately and the download runs
+  behind it, so `/health` answers throughout and a container healthcheck never sees a
+  hung boot. While it runs, `/metrics`' `model.fetch_in_progress` is `true` — that is what
+  distinguishes "downloading ~270 MiB" from "wedged", since `/health` reports `degraded`
+  for both. `promptguard_loaded` flips to `true` in place when the load completes; no
+  restart is involved.
+- **Nothing unverified is ever loaded.** The download is checked against the committed
+  `weights_manifest.json` — an exact file set with per-file sha256, safetensors only —
+  before `from_pretrained` is allowed to open it. A set that fails is quarantined, not
+  loaded.
+- **`HF_TOKEN` is optional, and its absence is a supported mode.** The repository is
+  gated, so without a token the fetch is skipped with a single warning and Forage runs
+  `degraded` with `promptguard_unavailable` — honestly, indefinitely, and without
+  retrying into an error loop. Nothing else about the service changes: extraction, the
+  structural scan and the URL audit all still work. Getting a token is
+  `docs/weights.md`'s subject.
+
+The token is never logged. Download failures are reported through a closed reason
+vocabulary (`http_401`, `timeout`, `io_failed`, `fetch_failed`) rather than by
+interpolating the exception, for the same reason `cache.py` never prints `VALKEY_URL`:
+the library's errors carry request context. Supply `HF_TOKEN` through an env file or a
+secret store, exactly as for `VALKEY_URL` above.
+
+Check it with `curl -s localhost:8020/health | jq .promptguard_loaded`, and treat
+standard-tier content as unscanned while it reads `false`.
 
 ---
 
