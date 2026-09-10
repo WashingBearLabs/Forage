@@ -27,6 +27,7 @@ test_mapping:
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -537,9 +538,29 @@ class TestFormatAllowlist:
         assert cast(tuple[Any, ...], tokenizer_call.args)[0] == MODEL_ID
 
     def test_the_loader_posture_is_stated_in_the_source(self) -> None:
-        """A canary for a future edit that drops the keyword without noticing."""
+        """A canary for a future edit that drops the keyword without noticing.
+
+        AST-based on purpose: a plain substring grep was satisfied by the
+        *comment* explaining the posture, so removing the real keyword left
+        it green (US-002 verification finding). This walks the call nodes.
+        """
         source = (_REPO_ROOT / "promptguard" / "classifier.py").read_text()
-        assert "use_safetensors=True" in source
+        tree = ast.parse(source)
+        posture_calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and any(
+                kw.arg == "use_safetensors"
+                and isinstance(kw.value, ast.Constant)
+                and kw.value.value is True
+                for kw in node.keywords
+            )
+        ]
+        assert posture_calls, (
+            "No call in promptguard/classifier.py passes use_safetensors=True "
+            "— the loader can fall back to torch.load pickle deserialization"
+        )
 
 
 # ---------------------------------------------------------------------------

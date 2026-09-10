@@ -67,7 +67,7 @@ Design principles:
 | Module | Lines | Responsibility |
 |--------|------:|----------------|
 | `pipeline/orchestrator.py` | 853 | Drives the five stages end to end; owns the SearXNG engine list and `_DEFAULT_SEARXNG_URL`. The busiest file in the repo. |
-| `retrieval_app.py` | 858 | FastAPI app + the five endpoints, startup wiring, `/health` body assembly, the legacy-capability break-glass warning. |
+| `retrieval_app.py` | 866 | FastAPI app + the five endpoints, startup wiring, `/health` body assembly, the legacy-capability break-glass warning. |
 | `cache.py` | 425 | Valkey content cache. **Never logs the connection URL** — it may carry a password; enforced by a closed log vocabulary and a dedicated regression test. |
 | `models.py` | 313 | Pydantic models for every request and response shape. |
 | `pipeline/stage4_structuring.py` | 308 | Assembles the response object and the composite trust score. |
