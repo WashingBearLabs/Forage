@@ -177,21 +177,21 @@ reported.
   asked for named counters).
 
 **Acceptance Criteria:**
-- [ ] Exact-set manifest verification (missing/extra/mismatch each covered by test);
+- [x] Exact-set manifest verification (missing/extra/mismatch each covered by test);
       absent/empty/unparseable **manifest** fails closed (each covered by test);
       safetensors-only allowlist enforced AND `use_safetensors=True` at the loader;
       Dockerfile COPY carries the manifest + fetcher module.
-- [ ] A tiny **loadable** safetensors fixture committed (a real minimal model
+- [x] A tiny **loadable** safetensors fixture committed (a real minimal model
       `from_pretrained(use_safetensors=True)` can open) — US-004's mirror-to-load test
       consumes it (round-2 finding: synthetic byte fixtures can't exercise the loader).
-- [ ] One verification code path with a single public entry point, designed for all three
+- [x] One verification code path with a single public entry point, designed for all three
       call sites (fixture-proven here; the HF/mirror/warm callers wire in as US-001/US-004/
       US-005 land — forward reference made explicit, round-2 finding).
-- [ ] Quarantine bounded to one generation, outside the loader's scan tree; counters
+- [x] Quarantine bounded to one generation, outside the loader's scan tree; counters
       `model.fetch_failures` / `verify_failures` / `quarantines` exposed in `/metrics`.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run pyright` passes
 
 ### US-003: Vendor the weights (ops, supervised)
 
