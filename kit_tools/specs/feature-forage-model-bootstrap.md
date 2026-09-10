@@ -413,6 +413,137 @@ clean machine reaches a loaded classifier.
 
 ## Implementation Notes
 
+### US-002: Integrity manifest + quarantine (2026-09-10)
+
+**Shape.** `model_fetcher.py` at the repo root (flat layout, per `CLAUDE.md` invariant 3),
+with exactly one public verification entry point:
+
+```python
+verify_weights(cache_root, *, manifest_path=MANIFEST_PATH, metrics=None) -> VerificationResult
+```
+
+`cache_root` is `$HF_HOME` (`/app/model-cache`), **not** `$HF_HUB_CACHE` — the `hub/`
+level is added inside `snapshot_path()` so no call site has to remember it. US-001,
+US-004 and US-005 all call this same function; `manifest_path` is injectable **for
+fixtures only** and the production path is the module constant `MANIFEST_PATH`
+(`tests/test_model_fetcher.py::TestSingleEntryPoint` asserts the default is that
+constant and that the module reads no environment variable at all).
+
+`VerificationResult` carries `ok`, every `failures` entry found (not just the first),
+the parsed `manifest`, the `snapshot_dir`, and `quarantined_to`. Failures use a **closed
+reason vocabulary** — `manifest_missing`, `manifest_empty`, `manifest_unparseable`,
+`manifest_invalid`, `manifest_disallowed_format`, `snapshot_missing`, `file_missing`,
+`file_extra`, `disallowed_format`, `size_mismatch`, `hash_mismatch`, `unreadable_file`,
+`symlink_escape`, `disallowed_entry` — the same discipline `cache.py` applies to its
+connection failures.
+
+**`weights_manifest.json` ships as an honest fail-closed placeholder.** US-003 commits
+the real one ("US-002 shipped only fixtures"), but the Dockerfile's `COPY` list gains the
+filename in *this* story and a `COPY` of a non-existent path fails the build outright. So
+the file is committed with `"files": []`, the pinned `model_id`/`revision`, and a
+self-describing `_comment`. An empty file list is a **verification failure**
+(`manifest_empty`), not "nothing to verify" — a manifest that pins nothing would happily
+verify an empty snapshot, which is the exact hole this story exists to close.
+
+**Interim runtime behaviour is unchanged, and that is deliberate.** Nothing calls
+`verify_weights()` at boot yet — US-001 owns the fetch → verify → load wiring — so a
+stock image still reports `degraded` with `promptguard_unavailable` because
+`classifier.load()` cannot reach the gated repo. Live-verified on this branch: `docker
+build` succeeds, `contract_smoke.py` against the running container reports **PASSED:
+degraded, honest, and on-contract**, and the `secret-grep` pattern set finds nothing in
+the image's layer history.
+
+**Format allowlist → a binding contract for US-001/US-003.** `ALLOWED_SUFFIXES` is
+`{.safetensors, .json, .txt, .model}` and is applied to the manifest's own entries as
+well as to what is on disk, so a manifest that blesses a `pytorch_model.bin` fails with
+`manifest_disallowed_format` even when the bytes match. The consequence the fetch stories
+must honour: a plain `snapshot_download(MODEL_ID, revision=...)` also pulls `README.md`
+and `.gitattributes`, and this verifier then refuses them as extra files. **Pass
+`allow_patterns=model_fetcher.ALLOW_PATTERNS`** — the same constant, in
+`huggingface_hub`'s pattern shape — so the fetch and the verification cannot disagree.
+Recorded in `docs/GOTCHAS.md` as well, because it is the kind of thing that gets
+rediscovered at the worst moment.
+
+**Loader half of the closure.** `promptguard/classifier.py` now calls
+`AutoModelForSequenceClassification.from_pretrained(MODEL_ID, use_safetensors=True)`.
+`typings/transformers/__init__.pyi` grew the `use_safetensors` and `local_files_only`
+keywords (the latter for US-005's zero-network warm start, and used by the fixture
+tests). Editing `promptguard/classifier.py` does **not** rotate `sanitizer_revision` —
+`_REVISION_SOURCES` hashes `pipeline/*.py` plus the `MODEL_ID` *string*, and neither
+moved. Verified before and after: `0537316d83510dab3cfafb6ebd61dafdffa5d51be2dd2e01fb9777bfd0e3e253`,
+unchanged, in the tree and in the running container. **US-001 owns the deliberate
+rotation** when it hashes `MODEL_ID@revision`.
+
+**Quarantine moves the whole model directory, not just `snapshots/<revision>/`.** The
+spec says "the offending snapshot"; the implementation moves
+`hub/models--<org>--<name>/` because the real bytes live in `blobs/` and
+`huggingface_hub` treats a blob whose filename it already holds as cached *without
+re-hashing it*. Leaving the blobs behind would let the next fetch re-link the same
+corrupt bytes and quarantine them again, forever — the recovery path US-005 needs would
+never converge. Destination is `<cache_root>/quarantine/`, a **sibling** of `hub/` and
+never a child, bounded to one generation (the previous quarantine is deleted first).
+
+**A manifest-level failure never quarantines.** If our own manifest is missing or
+unparseable the weights may be perfectly good, and destroying a ~270 MiB download over
+our bug is not a trade worth making. Only snapshot-level failures move anything.
+
+**Symlink handling.** The walk uses `os.scandir` rather than `rglob`, resolves file
+symlinks and hashes the resolved bytes, refuses *directory* symlinks outright (HF never
+creates one; following one is how a walk both misses files and finds a cycle), and
+refuses any link resolving outside the model's own cache directory
+(`symlink_escape`) — which is the shape a hostile mirror tarball takes on US-004's
+extraction path.
+
+**The loadable fixture.** `tests/fixtures/tiny_model/` is a real 2-layer DeBERTa-v2
+sequence classifier with random weights — 4 files, ~96 KB, `model.safetensors` only —
+generated locally from configuration alone (no gated repo touched, no weights
+downloaded). `tests/fixtures/README.md` carries the regeneration recipe.
+`TestLoadableFixture` opens it with `from_pretrained(use_safetensors=True,
+local_files_only=True)` under the autouse socket guard, which is what proves the load is
+network-free, then materializes it into a real HF cache layout and runs it through the
+verifier. US-004's mirror-to-load test consumes the same fixture.
+
+**`/metrics` gained an additive `model` section** — `fetch_failures`, `verify_failures`,
+`quarantines`, plus the `fetch_in_progress` boolean Technical Considerations asked for
+(false until US-001 sets it, so US-001 does not have to re-shape the section). `/metrics`
+is outside the frozen response-model surface, so no `CONTRACT_VERSION` bump: the golden
+schema pins `HealthResponse`/`SearchResponse`/`RetrievedContent`/`ExtractedContent` only,
+and `contract_smoke.py`'s `/metrics` check reads `contract_version` alone. `ModelMetrics`
+lives in `model_fetcher.py` mirroring `CacheMetrics` in `cache.py`, and is initialised in
+both the lifespan and the module-level `app.state` block.
+
+**No dependency was added and `uv.lock` is untouched** — verification is stdlib
+(`hashlib`, `json`, `os`, `shutil`). `huggingface_hub` becomes a direct dependency in
+US-001, where it is actually called. `uv lock --check` is clean against the
+`pyproject.toml` edit (the wheel `include` list gained `model_fetcher.py` and
+`weights_manifest.json`); `grep nvidia- uv.lock` stays empty.
+
+**Mutation-verified guards** (each applied to the committed tree, tests run, tree
+restored):
+
+| Mutation | Result |
+|---|---|
+| drop `use_safetensors=True` from the loader | `test_the_loader_is_pinned_to_safetensors` fails |
+| add `.bin` to `ALLOWED_SUFFIXES` | 4 allowlist tests fail |
+| quarantine keeps every generation | `test_quarantine_is_bounded_to_one_generation` fails |
+| empty manifest treated as "nothing to verify" | 2 fail-closed tests fail |
+| drop `weights_manifest.json` from the Dockerfile `COPY` | `test_runtime_file_is_copied[weights_manifest.json]` fails |
+| disable symlink containment | `test_a_symlink_out_of_the_model_directory_is_refused` fails |
+| remove the `/metrics` `model` section | 2 `test_app.py` tests fail |
+| move the quarantine inside `hub/` | `test_the_quarantine_is_outside_the_hub_tree` fails |
+| ignore extra files | 3 exact-set/allowlist tests fail |
+| walk the whole model dir instead of the snapshot | every exact-set/fixture test fails |
+
+One mutation — hashing through the symlink path rather than its resolved target — was
+**not** caught, and correctly so: `open()` follows symlinks, so the two read identical
+bytes. The property that actually matters (the walk root is `snapshots/<revision>/`, not
+the cache tree) is covered by the last row and by
+`test_unreferenced_blobs_are_not_part_of_the_set`.
+
+**Suite:** 905 → 992 green (77 new in `tests/test_model_fetcher.py`, 2 in
+`tests/test_app.py`, 8 in `tests/test_dockerfile.py`). `ruff check`, `ruff format
+--check` and `pyright` (strict) all zero.
+
 ## Refinement Notes
 
 ### Research Findings

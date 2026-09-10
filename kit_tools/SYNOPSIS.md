@@ -2,7 +2,7 @@
 # SYNOPSIS.md
 
 > Last updated: 2026-09-07
-> Updated by: Claude (forage-repo-bootstrap US-005)
+> Updated by: Claude (forage-model-bootstrap US-002)
 
 ---
 
@@ -29,7 +29,7 @@ preserved). See `docs/bootstrap-notes.md` for the pin record.
 |--------|--------|
 | Maturity | Pre-1.0, freshly extracted (2026-09-07) |
 | Repo visibility | **Private** — flips public in `feature-forage-ci-and-image` after its gates pass |
-| Tests | 607 collected, all green (`uv run pytest`), hermetic via `pytest-socket` — **enforced in CI** since US-002, with a committed hermeticity canary |
+| Tests | 992 collected, all green (`uv run pytest`), hermetic via `pytest-socket` — **enforced in CI** since US-002, with a committed hermeticity canary |
 | Lint | `uv run ruff check .` and `ruff format --check .` both clean — **enforced in CI** |
 | Types | `uv run pyright` (strict) is **clean — 0 errors**, no baseline; **enforced in CI** |
 | CI | `.github/workflows/ci.yml` — `lint`, `typecheck` and `test` jobs live; build/publish land across the rest of `feature-forage-ci-and-image` |
@@ -95,11 +95,11 @@ path and yields a `promptguard_unavailable` degraded runtime.
 
 | Path | Contents |
 |------|----------|
-| repo root | `retrieval_app.py`, `models.py`, `cache.py`, `url_validator.py`, `config.yaml`, `Dockerfile` |
+| repo root | `retrieval_app.py`, `models.py`, `cache.py`, `url_validator.py`, `model_fetcher.py`, `weights_manifest.json`, `config.yaml`, `Dockerfile` |
 | `pipeline/` | The five sanitization stages, the orchestrator, and the response contract |
 | `promptguard/` | The Llama Prompt Guard 2 classifier wrapper |
 | `searxng/config/` | SearXNG `settings.yml` + `limiter.toml` |
-| `tests/` | 18 files, one module per subject, plus `fakes.py` and `golden/` |
+| `tests/` | 26 files, one module per subject, plus `fakes.py`, `golden/` and `fixtures/` |
 | `docs/` | `configuration.md` (full env/config reference), `bootstrap-notes.md`, `bootstrap-scan.txt` |
 | `kit_tools/` | This documentation framework + the feature specs |
 

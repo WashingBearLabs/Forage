@@ -1,14 +1,14 @@
 <!-- Template Version: 2.0.0 -->
 # CODE_ARCH.md
 
-> Last updated: 2026-09-07
-> Updated by: Claude (forage-repo-bootstrap US-005)
+> Last updated: 2026-09-10
+> Updated by: Claude (forage-model-bootstrap US-002)
 
 ---
 
 ## Overview
 
-Forage is a **single-process FastAPI service, ~5,100 lines**, with a deliberately flat
+Forage is a **single-process FastAPI service, ~5,750 lines**, with a deliberately flat
 module layout: the top-level modules sit at the repo root rather than inside a `forage/`
 package. That is a decision, not an accident — it keeps the Dockerfile's `COPY` lines,
 `pipeline/sanitizer_revision.py`'s hashed source paths, and the whole moved test suite
@@ -38,6 +38,9 @@ Design principles:
 ├── models.py                # Pydantic request/response models
 ├── cache.py                 # Valkey/Redis content cache (closed log vocabulary)
 ├── url_validator.py         # SSRF defense: RFC1918 rejection, DNS-rebinding checks
+├── model_fetcher.py         # Weight-set integrity: exact-set manifest verification,
+│                            # safetensors-only allowlist, one-generation quarantine
+├── weights_manifest.json    # The committed weight pin (placeholder until US-003)
 ├── contract_smoke.py        # CI-only: asserts a running image's /health contract.
 ├── searxng_smoke.py         # CI-only: stands the companion image up beside a
 │                            # Valkey on an --internal network and probes it.
@@ -52,7 +55,7 @@ Design principles:
 ├── promptguard/             # Llama Prompt Guard 2 classifier wrapper
 ├── searxng/                 # the forage-searxng companion image: Dockerfile
 │                            # (digest-pinned base) + config/ (settings.yml, limiter.toml)
-├── tests/                   # 24 files; flat, one module per subject
+├── tests/                   # 26 files; flat, one module per subject
 ├── docs/                    # configuration.md, bootstrap-notes.md, bootstrap-scan.txt
 └── kit_tools/               # this documentation framework + feature specs
 ```
@@ -64,7 +67,7 @@ Design principles:
 | Module | Lines | Responsibility |
 |--------|------:|----------------|
 | `pipeline/orchestrator.py` | 853 | Drives the five stages end to end; owns the SearXNG engine list and `_DEFAULT_SEARXNG_URL`. The busiest file in the repo. |
-| `retrieval_app.py` | 841 | FastAPI app + the five endpoints, startup wiring, `/health` body assembly, the legacy-capability break-glass warning. |
+| `retrieval_app.py` | 858 | FastAPI app + the five endpoints, startup wiring, `/health` body assembly, the legacy-capability break-glass warning. |
 | `cache.py` | 425 | Valkey content cache. **Never logs the connection URL** — it may carry a password; enforced by a closed log vocabulary and a dedicated regression test. |
 | `models.py` | 313 | Pydantic models for every request and response shape. |
 | `pipeline/stage4_structuring.py` | 308 | Assembles the response object and the composite trust score. |
@@ -76,7 +79,8 @@ Design principles:
 | `url_validator.py` | 190 | Private-IP rejection and DNS-rebinding protection. |
 | `pipeline/extraction_limits.py` | 181 | Resource limits from `config.yaml`'s `extraction:` block. |
 | `pipeline/stage1_upload.py` | 172 | Upload path for `/extract` (gated by `extract_route_enabled`). |
-| `promptguard/classifier.py` | 169 | Loads and runs Llama Prompt Guard 2; absent weights → degraded, never silent. |
+| `promptguard/classifier.py` | 187 | Loads and runs Llama Prompt Guard 2 (`use_safetensors=True` — the loader can never fall back to a pickle); absent weights → degraded, never silent. |
+| `model_fetcher.py` | 628 | The one gate every weight source passes: fail-closed manifest verification, exact-set + safetensors-only allowlist, symlink-resolving hashing over `snapshots/<revision>/`, one-generation quarantine, and the `ModelMetrics` counters `/metrics` exports. |
 | `pipeline/stage1_pdf.py` | 156 | PDF branch of stage 1. |
 | `pipeline/stage3_promptguard.py` | 151 | ML injection scan; skipped for trusted domains. |
 | `pipeline/contract.py` | 100 | The versioned response contract (`contract_version`, currently **1.0.0**). |
