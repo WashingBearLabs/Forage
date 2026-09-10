@@ -1,0 +1,16 @@
+{
+  "_comment": [
+    "PLACEHOLDER — this manifest pins no files yet, and model_fetcher.verify_weights()",
+    "therefore refuses every weight set it is asked about, with reason 'manifest_empty'.",
+    "That is the correct interim state: fail-closed, loudly, never 'nothing to verify'.",
+    "feature-forage-model-bootstrap US-003 replaces it with the real per-file sha256 set,",
+    "generated from the vendored snapshot at the revision below with the same",
+    "safetensors-only allowlist enforced at generation time.",
+    "Nothing reads this file at boot until US-001 wires the fetcher into the lifespan,",
+    "so a stock image still reports exactly what it reports today: degraded, with",
+    "promptguard_unavailable."
+  ],
+  "model_id": "meta-llama/Llama-Prompt-Guard-2-22M",
+  "revision": "11614a155199674a0a95e6602d6ab0417b790ed0",
+  "files": []
+}

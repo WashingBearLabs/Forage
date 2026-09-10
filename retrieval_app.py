@@ -26,6 +26,7 @@ from pydantic import BaseModel
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from cache import CacheMetrics, ContentCache
+from model_fetcher import ModelMetrics
 from models import (
     ExtractedContent,
     RetrievedContent,
@@ -538,6 +539,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     app.state.search_metrics = SearchMetrics()
     app.state.retrieve_metrics = RetrieveMetrics()
+    app.state.model_metrics = ModelMetrics()
     app.state.classification_semaphore = asyncio.Semaphore(
         settings.classification_concurrency
     )
@@ -589,6 +591,7 @@ app.state.extraction_admission = ExtractionAdmissionController(
 )
 app.state.search_metrics = SearchMetrics()
 app.state.retrieve_metrics = RetrieveMetrics()
+app.state.model_metrics = ModelMetrics()
 app.state.classification_semaphore = asyncio.Semaphore(
     _initial_extraction_settings.classification_concurrency
 )
@@ -666,12 +669,13 @@ async def health(request: Request) -> HealthResponse:
 
 @app.get("/metrics")
 async def metrics(request: Request) -> dict[str, Any]:
-    """Expose internal extraction, search, retrieve, and cache counters."""
+    """Expose internal extraction, search, retrieve, cache, and model counters."""
     controller: ExtractionAdmissionController = request.app.state.extraction_admission
     extraction_metrics: ExtractionMetrics = request.app.state.extraction_metrics
     search_metrics: SearchMetrics = request.app.state.search_metrics
     retrieve_metrics: RetrieveMetrics = request.app.state.retrieve_metrics
     cache_metrics: CacheMetrics = request.app.state.cache_metrics
+    model_metrics: ModelMetrics = request.app.state.model_metrics
     return {
         "contract_version": CONTRACT_VERSION,
         "extraction": {
@@ -703,6 +707,17 @@ async def metrics(request: Request) -> dict[str, Any]:
             "reconnect_successes": cache_metrics.reconnect_successes,
             "reconnect_failures": cache_metrics.reconnect_failures,
             "operation_failures": cache_metrics.operation_failures,
+        },
+        # Weight acquisition (feature-forage-model-bootstrap). Additive:
+        # `/metrics` is outside the frozen response-model surface, so this
+        # section needs no CONTRACT_VERSION bump. `fetch_in_progress` is what
+        # distinguishes "downloading ~270 MiB" from "wedged" while `/health`
+        # reports degraded for both.
+        "model": {
+            "fetch_failures": model_metrics.fetch_failures,
+            "verify_failures": model_metrics.verify_failures,
+            "quarantines": model_metrics.quarantines,
+            "fetch_in_progress": model_metrics.fetch_in_progress,
         },
     }
 

@@ -1,0 +1,214 @@
+{
+  "version": "1.0",
+  "truncation": null,
+  "padding": null,
+  "added_tokens": [
+    {
+      "id": 0,
+      "content": "[PAD]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 1,
+      "content": "[CLS]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 2,
+      "content": "[SEP]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 3,
+      "content": "[UNK]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 4,
+      "content": "[MASK]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    }
+  ],
+  "normalizer": {
+    "type": "Sequence",
+    "normalizers": [
+      {
+        "type": "NFD"
+      },
+      {
+        "type": "Lowercase"
+      }
+    ]
+  },
+  "pre_tokenizer": {
+    "type": "Whitespace"
+  },
+  "post_processor": {
+    "type": "TemplateProcessing",
+    "single": [
+      {
+        "SpecialToken": {
+          "id": "[CLS]",
+          "type_id": 0
+        }
+      },
+      {
+        "Sequence": {
+          "id": "A",
+          "type_id": 0
+        }
+      },
+      {
+        "SpecialToken": {
+          "id": "[SEP]",
+          "type_id": 0
+        }
+      }
+    ],
+    "pair": [
+      {
+        "SpecialToken": {
+          "id": "[CLS]",
+          "type_id": 0
+        }
+      },
+      {
+        "Sequence": {
+          "id": "A",
+          "type_id": 0
+        }
+      },
+      {
+        "SpecialToken": {
+          "id": "[SEP]",
+          "type_id": 0
+        }
+      },
+      {
+        "Sequence": {
+          "id": "B",
+          "type_id": 1
+        }
+      },
+      {
+        "SpecialToken": {
+          "id": "[SEP]",
+          "type_id": 1
+        }
+      }
+    ],
+    "special_tokens": {
+      "[CLS]": {
+        "id": "[CLS]",
+        "ids": [
+          1
+        ],
+        "tokens": [
+          "[CLS]"
+        ]
+      },
+      "[SEP]": {
+        "id": "[SEP]",
+        "ids": [
+          2
+        ],
+        "tokens": [
+          "[SEP]"
+        ]
+      }
+    }
+  },
+  "decoder": null,
+  "model": {
+    "type": "WordPiece",
+    "unk_token": "[UNK]",
+    "continuing_subword_prefix": "##",
+    "max_input_chars_per_word": 100,
+    "vocab": {
+      "[PAD]": 0,
+      "[CLS]": 1,
+      "[SEP]": 2,
+      "[UNK]": 3,
+      "[MASK]": 4,
+      "tok0": 5,
+      "tok1": 6,
+      "tok2": 7,
+      "tok3": 8,
+      "tok4": 9,
+      "tok5": 10,
+      "tok6": 11,
+      "tok7": 12,
+      "tok8": 13,
+      "tok9": 14,
+      "tok10": 15,
+      "tok11": 16,
+      "tok12": 17,
+      "tok13": 18,
+      "tok14": 19,
+      "tok15": 20,
+      "tok16": 21,
+      "tok17": 22,
+      "tok18": 23,
+      "tok19": 24,
+      "tok20": 25,
+      "tok21": 26,
+      "tok22": 27,
+      "tok23": 28,
+      "tok24": 29,
+      "tok25": 30,
+      "tok26": 31,
+      "tok27": 32,
+      "tok28": 33,
+      "tok29": 34,
+      "tok30": 35,
+      "tok31": 36,
+      "tok32": 37,
+      "tok33": 38,
+      "tok34": 39,
+      "tok35": 40,
+      "tok36": 41,
+      "tok37": 42,
+      "tok38": 43,
+      "tok39": 44,
+      "tok40": 45,
+      "tok41": 46,
+      "tok42": 47,
+      "tok43": 48,
+      "tok44": 49,
+      "tok45": 50,
+      "tok46": 51,
+      "tok47": 52,
+      "tok48": 53,
+      "tok49": 54,
+      "tok50": 55,
+      "tok51": 56,
+      "tok52": 57,
+      "tok53": 58,
+      "tok54": 59,
+      "tok55": 60,
+      "tok56": 61,
+      "tok57": 62,
+      "tok58": 63
+    }
+  }
+}

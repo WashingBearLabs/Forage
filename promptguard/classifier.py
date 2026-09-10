@@ -66,7 +66,18 @@ class PromptGuardClassifier:
             logger.debug("PromptGuard loading against torch %s", torch.__version__)
 
             self._tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-            model = AutoModelForSequenceClassification.from_pretrained(MODEL_ID)
+            # `use_safetensors=True` is the loader half of the supply-chain
+            # closure `model_fetcher.verify_weights()` opens: without it
+            # `from_pretrained` falls back to a pickle checkpoint
+            # (`pytorch_model.bin`) and unpickling is arbitrary code
+            # execution. The manifest's format allowlist means such a file
+            # never reaches the cache — this makes the loader refuse it even
+            # if verification were bypassed. Pinned by
+            # tests/test_model_fetcher.py.
+            model = AutoModelForSequenceClassification.from_pretrained(
+                MODEL_ID,
+                use_safetensors=True,
+            )
             model.eval()
             self._model = model
             self._loaded = True

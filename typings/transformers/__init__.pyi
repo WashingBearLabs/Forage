@@ -51,11 +51,18 @@ class PreTrainedModel:
 class AutoTokenizer:
     @classmethod
     def from_pretrained(
-        cls, pretrained_model_name_or_path: str | PathLike[str]
+        cls,
+        pretrained_model_name_or_path: str | PathLike[str],
+        *,
+        local_files_only: bool = ...,
     ) -> PreTrainedTokenizerBase: ...
 
 class AutoModelForSequenceClassification:
     @classmethod
     def from_pretrained(
-        cls, pretrained_model_name_or_path: str | PathLike[str]
+        cls,
+        pretrained_model_name_or_path: str | PathLike[str],
+        *,
+        use_safetensors: bool = ...,
+        local_files_only: bool = ...,
     ) -> PreTrainedModel: ...
