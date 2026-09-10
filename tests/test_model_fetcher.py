@@ -1568,6 +1568,37 @@ class TestAcquireAndLoad:
         assert loaded is False
         assert cast(MagicMock, download).call_count == 0
 
+    def test_a_manifest_level_refusal_diagnoses_one_cause_not_three(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """When our own pin is the problem, that is the whole message.
+
+        Falling through would add "no HF_TOKEN" and "the pin blesses nothing"
+        on top of the refusal already logged — three lines, two of them
+        misleading, for one cause. An operator reading that log would go
+        looking for a token.
+        """
+        cache_root = tmp_path / "model-cache"
+        _materialize(cache_root, model_id=MODEL_ID, revision=DEFAULT_MODEL_REVISION)
+        monkeypatch.delenv(HF_TOKEN_ENV_VAR, raising=False)
+
+        with caplog.at_level("DEBUG"):
+            loaded = acquire_and_load(
+                _FakeClassifier(),
+                cache_root=cache_root,
+                revision=DEFAULT_MODEL_REVISION,
+                manifest_path=MANIFEST_PATH,
+            )
+
+        assert loaded is False
+        assert "weights_verification_failed" in caplog.text
+        assert REASON_MANIFEST_EMPTY in caplog.text
+        assert "weights_fetch_skipped" not in caplog.text
+        assert "weights_pin_unusable" not in caplog.text
+
     def test_a_corrupt_cached_set_is_quarantined_and_re_fetched(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
