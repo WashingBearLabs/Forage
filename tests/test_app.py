@@ -4,6 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import tempfile
+import threading
+import time
+from collections.abc import AsyncGenerator, Callable
+from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,7 +17,8 @@ import httpx
 import pytest
 from starlette.types import Message, Receive, Scope, Send
 
-from model_fetcher import ModelMetrics
+import model_fetcher
+from model_fetcher import DEFAULT_MODEL_REVISION, ModelMetrics
 from models import (
     RetrievedContent,
     SearchResponse,
@@ -20,7 +27,11 @@ from models import (
     TrustTier,
 )
 from pipeline import contract
-from pipeline.contract import CONTRACT_VERSION, DIAG_STRUCTURAL_BLOCKED
+from pipeline.contract import (
+    CONTRACT_VERSION,
+    DEGRADED_PROMPTGUARD_UNAVAILABLE,
+    DIAG_STRUCTURAL_BLOCKED,
+)
 from pipeline.extraction_limits import (
     MAX_PROMPTGUARD_CHUNKS,
     ExtractionConfigurationError,
@@ -30,6 +41,7 @@ from pipeline.orchestrator import PipelineError
 from promptguard.classifier import (
     CHUNK_OVERLAP,
     MAX_SEQ_LEN,
+    MODEL_ID,
     PromptGuardClassifier,
 )
 from retrieval_app import (
@@ -41,8 +53,13 @@ from retrieval_app import (
     SearchMetrics,
     _spool_upload,
     app,
+    lifespan,
 )
-from tests.fakes import FakeContentCache
+from tests.fakes import (
+    FakeContentCache,
+    hub_download_double,
+    weights_manifest_document,
+)
 
 
 @pytest.fixture
@@ -686,3 +703,318 @@ async def test_metrics_search_error_keys_are_content_free(
     assert body["search"]["errors"] == {"searxng_unavailable": 1}
     assert body["search"]["requests"] == 1
     assert searxng_url not in json.dumps(body)
+
+
+# ---------------------------------------------------------------------------
+# Lifespan: startup yields immediately, the fetch runs behind it
+# ---------------------------------------------------------------------------
+#
+# `feature-forage-model-bootstrap` US-001. These tests need a harness of their
+# own: the `client` fixture above drives the app through `httpx.ASGITransport`,
+# which never fires lifespan events at all, so every assertion about startup
+# would pass vacuously against it. The helper below runs the *real* `lifespan`
+# context manager — the same code uvicorn runs — with only the Valkey client
+# replaced, and is the only place in the suite where `app.state` is populated
+# by the service rather than by a fixture.
+
+
+class _LifespanCache(FakeContentCache):
+    """`FakeContentCache` plus the two methods only the lifespan calls."""
+
+    async def connect(self) -> bool:
+        """Report the settable ``connected`` state, mirroring ``ContentCache``."""
+        return self.connected
+
+
+@asynccontextmanager
+async def _running_app(
+    *,
+    cache_connected: bool = True,
+) -> AsyncGenerator[httpx.AsyncClient, None]:
+    """Start the app through its real lifespan and hand back a client."""
+    with patch("retrieval_app.ContentCache") as cache_factory:
+        cache_factory.return_value = _LifespanCache(connected=cache_connected)
+        async with lifespan(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as lifespan_client:
+                yield lifespan_client
+
+
+_TINY_MODEL_DIR = Path(__file__).resolve().parent / "fixtures" / "tiny_model"
+
+
+async def _settled(task: asyncio.Task[bool], *, timeout: float = 15.0) -> bool:
+    """Wait for the acquisition task to finish, generously.
+
+    The budget is deliberately far larger than the work: a shared CI runner
+    can stall a thread hand-off for a second or more, and a tight bound here
+    would buy nothing but a flaky suite. The assertion that matters is what
+    the task *did*, not how fast it did it.
+    """
+    return await asyncio.wait_for(task, timeout=timeout)
+
+
+@asynccontextmanager
+async def _fetchable_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncGenerator[MagicMock, None]:
+    """A cache root, a manifest and a token that let exactly one fetch succeed.
+
+    Everything here is the production seam: ``HF_HOME`` places the cache,
+    ``HF_TOKEN`` authorises the fetch, and the manifest is the committed pin
+    (swapped for one describing the tiny-model fixture, since the real one is
+    US-003's). Only ``snapshot_download`` is a double.
+    """
+    files = {
+        path.name: path.read_bytes()
+        for path in sorted(_TINY_MODEL_DIR.iterdir())
+        if path.is_file()
+    }
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        cache_root = root / "model-cache"
+        cache_root.mkdir()
+        manifest = root / "weights_manifest.json"
+        manifest.write_text(
+            json.dumps(
+                weights_manifest_document(
+                    files,
+                    model_id=MODEL_ID,
+                    revision=DEFAULT_MODEL_REVISION,
+                )
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("HF_HOME", str(cache_root))
+        monkeypatch.setenv("HF_TOKEN", "hf_" + "x" * 34)
+        monkeypatch.delenv("FORAGE_MODEL_REVISION", raising=False)
+        monkeypatch.setattr(model_fetcher, "MANIFEST_PATH", manifest)
+        with patch("huggingface_hub.snapshot_download") as download:
+            download.side_effect = hub_download_double(files)
+            yield download
+
+
+def _blocking_acquisition(
+    release: threading.Event,
+    *,
+    loads: bool = True,
+) -> Callable[..., bool]:
+    """An acquisition that parks in its worker thread until *release* is set.
+
+    Stands in for the minutes a real ~270 MiB fetch takes, without the
+    minutes. It runs in the thread `asyncio.to_thread` gives it, so a blocking
+    wait here is exactly the pressure a real download applies to the event
+    loop — which is to say, none, if the wiring is right.
+    """
+
+    def _acquire(
+        classifier: PromptGuardClassifier,
+        *,
+        metrics: ModelMetrics | None = None,
+        **_kwargs: object,
+    ) -> bool:
+        if metrics is not None:
+            metrics.fetch_in_progress = True
+        try:
+            release.wait(timeout=10)
+        finally:
+            if metrics is not None:
+                metrics.fetch_in_progress = False
+        if loads:
+            classifier._loaded = True
+        return loads
+
+    return _acquire
+
+
+async def test_lifespan_startup_yields_immediately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Startup must not wait on the fetch — uvicorn serves nothing until it returns.
+
+    The compose healthcheck is 10 s x 5 retries with no `start_period`, so a
+    startup that blocked for a ~270 MiB download would be restart-looped
+    before it ever finished. The acquisition parks for up to 10 s here; if
+    startup were awaiting it, this test would take that long instead of
+    milliseconds.
+    """
+    release = threading.Event()
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _blocking_acquisition(release)
+    )
+    try:
+        started_at = time.monotonic()
+        async with _running_app():
+            elapsed = time.monotonic() - started_at
+
+            assert elapsed < 2.0
+            model_task = cast("asyncio.Task[bool]", app.state.model_task)
+            assert model_task.done() is False
+    finally:
+        release.set()
+
+
+async def test_health_answers_while_the_fetch_is_in_flight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`/health` latency is unaffected by an acquisition running behind it.
+
+    Measured with a *connected* cache, which is what the story's independent
+    test asks for and what makes the number meaningful: the AC's "no latency
+    beyond the pre-existing 2 s cache-reconnect floor" names a floor that only
+    a *disconnected* cache can spend (`cache.py`'s `_RECONNECT_TIMEOUT_S`
+    bounds one reconnect attempt), and that spend has nothing to do with the
+    fetch. With the cache connected there is no floor to hide behind, so the
+    assertion is the strict one: every response inside a fraction of a second,
+    while the fetch is provably still running.
+    """
+    release = threading.Event()
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _blocking_acquisition(release)
+    )
+    try:
+        async with _running_app(cache_connected=True) as client:
+            await asyncio.sleep(0.05)
+            model_metrics: ModelMetrics = app.state.model_metrics
+            assert model_metrics.fetch_in_progress is True
+
+            latencies: list[float] = []
+            for _ in range(5):
+                started_at = time.monotonic()
+                response = await client.get("/health")
+                latencies.append(time.monotonic() - started_at)
+
+                assert response.status_code == 200
+                assert response.json()["promptguard_loaded"] is False
+
+            assert max(latencies) < 1.0
+            assert model_metrics.fetch_in_progress is True
+    finally:
+        release.set()
+
+
+async def test_metrics_reports_fetch_in_progress_while_downloading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The counter that tells an operator "downloading" from "wedged"."""
+    release = threading.Event()
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _blocking_acquisition(release)
+    )
+    try:
+        async with _running_app() as client:
+            await asyncio.sleep(0.05)
+            during = (await client.get("/metrics")).json()["model"]
+
+            assert during["fetch_in_progress"] is True
+            assert during["fetch_failures"] == 0
+    finally:
+        release.set()
+
+
+async def test_promptguard_loaded_flips_without_a_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """False to true in place, through the real fetch-verify-load wiring.
+
+    Only the transport is mocked: `snapshot_download` writes the committed
+    tiny-model fixture into a real hub cache layout, and the module's own
+    verifier and `PromptGuardClassifier.load()` do the rest. The `/health`
+    body is read before and after, and the three fields a consumer gates on
+    all move together.
+    """
+    async with (
+        _fetchable_environment(monkeypatch) as download,
+        _running_app() as client,
+    ):
+        before = (await client.get("/health")).json()
+
+        assert before["promptguard_loaded"] is False
+        assert DEGRADED_PROMPTGUARD_UNAVAILABLE in before["degraded_reasons"]
+        assert "search_sanitization" not in before["capabilities"]
+
+        await _settled(cast("asyncio.Task[bool]", app.state.model_task))
+        after = (await client.get("/health")).json()
+
+        assert after["promptguard_loaded"] is True
+        assert DEGRADED_PROMPTGUARD_UNAVAILABLE not in after["degraded_reasons"]
+        assert after["capabilities"]["search_sanitization"] == 1
+        assert after["status"] == "healthy"
+        assert download.call_count == 1
+
+
+async def test_a_token_less_boot_stays_degraded_and_keeps_serving(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stock image's honest state: no token, no fetch, no error, still up."""
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.setenv("HF_HOME", "/nonexistent-model-cache")
+
+    with patch("huggingface_hub.snapshot_download") as download:
+        async with _running_app() as client:
+            await _settled(cast("asyncio.Task[bool]", app.state.model_task))
+            body = (await client.get("/health")).json()
+
+            assert body["status"] == "degraded"
+            assert body["promptguard_loaded"] is False
+            assert DEGRADED_PROMPTGUARD_UNAVAILABLE in body["degraded_reasons"]
+            assert cast(MagicMock, download).call_count == 0
+            assert (await client.get("/metrics")).json()["model"] == {
+                "fetch_failures": 0,
+                "verify_failures": 0,
+                "quarantines": 0,
+                "fetch_in_progress": False,
+            }
+
+
+async def test_the_acquisition_task_does_not_outlive_the_lifespan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shutdown cancels the handle it created — a leaked task hangs pytest.
+
+    US-005 owns the *retry* task's clean-shutdown AC; this is the same seam,
+    asserted for the acquisition task US-001 creates, because a task nothing
+    ever cancels is a defect to introduce rather than to inherit.
+    """
+    release = threading.Event()
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _blocking_acquisition(release)
+    )
+    try:
+        async with _running_app():
+            model_task = cast("asyncio.Task[bool]", app.state.model_task)
+
+            assert model_task.done() is False
+
+        assert model_task.cancelled() is True
+    finally:
+        release.set()
+
+
+async def test_the_lifespan_calls_the_fetcher_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`asyncio.to_thread`, not a bare task around synchronous work.
+
+    A task around a blocking call would still stall the loop the moment it was
+    scheduled; the thread is what keeps `/health` answering. Asserted by
+    recording the thread the acquisition actually runs on.
+    """
+    threads: list[int] = []
+
+    def _record(
+        classifier: PromptGuardClassifier,
+        *,
+        metrics: ModelMetrics | None = None,
+        **_kwargs: object,
+    ) -> bool:
+        threads.append(threading.get_ident())
+        return False
+
+    monkeypatch.setattr(model_fetcher, "acquire_and_load", _record)
+    async with _running_app():
+        await _settled(cast("asyncio.Task[bool]", app.state.model_task))
+
+    assert threads and threads[0] != threading.get_ident()

@@ -1,4 +1,4 @@
-"""Weight-set integrity verification and quarantine for the model cache.
+"""Weight acquisition for the model cache: fetch, verify, load.
 
 Forage's PromptGuard weights used to be baked into the image at build time,
 behind a build ARG that leaked the Hugging Face token into the layer history
@@ -50,6 +50,33 @@ already has as cached without re-hashing it. Leaving the blobs behind would let
 the next fetch re-link the same corrupt bytes and quarantine them again,
 forever.
 
+**Acquisition** (US-001). :func:`acquire_and_load` is the pipeline the service
+starts at boot: verify what the cache already holds → fetch the pinned revision
+from Hugging Face if it cannot satisfy the pin → verify the download → load.
+Four properties are load-bearing:
+
+1. **It blocks, and it is meant to be called off the event loop.** The caller
+   is `retrieval_app.lifespan`, through
+   `asyncio.create_task(asyncio.to_thread(...))` — a task, not an `await`,
+   because lifespan startup must *yield immediately*: uvicorn serves nothing
+   until it returns, and the compose healthcheck (10 s x 5 retries, no
+   `start_period`) would restart-loop the container while a ~270 MiB download
+   ran.
+2. **The revision is pinned**, to :data:`DEFAULT_MODEL_REVISION` unless
+   :data:`MODEL_REVISION_ENV_VAR` overrides it. An unpinned `main` turns any
+   upstream commit into "corruption" on the next start.
+3. **The cache tree is `$HF_HOME/hub`**, never `$HF_HOME` and never a
+   `local_dir`. Both the download and the load are handed that directory
+   explicitly (:func:`hub_cache_dir`), so the bytes that land are the bytes
+   verified and the bytes opened — no reliance on which environment variable
+   either library sampled at import time.
+4. **The token is optional and never logged.** No token is a supported
+   degraded mode, not an error: the fetch is skipped with a warning and
+   `/health` keeps saying `promptguard_unavailable`. Failures are reported
+   through a closed reason vocabulary (`http_401`, `timeout`, …) because
+   `huggingface_hub`'s exceptions carry request context and `HF_TOKEN` must
+   never reach a log line.
+
 test_mapping:
   model_fetcher.py: tests/test_model_fetcher.py
   weights_manifest.json: tests/test_model_fetcher.py
@@ -63,9 +90,12 @@ import logging
 import os
 import re
 import shutil
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Final, cast
+from typing import Any, Final, Protocol, cast
+
+from promptguard.classifier import MODEL_ID
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +113,28 @@ HUB_DIRNAME: Final = "hub"
 # Deliberately a sibling of `hub/`, never a child: the loader scans the hub
 # tree, and a quarantine inside it is not a quarantine.
 QUARANTINE_DIRNAME: Final = "quarantine"
+
+# The pinned upstream revision, measured on the live sidecar. `snapshot_download`
+# and `from_pretrained` both take it, the committed manifest repeats it, and
+# US-003 vendors the mirror artifact under exactly this tag — one value, three
+# places, locked together by test. Bumping it is a deliberate re-vendor:
+# revision + manifest + mirror tag move in one commit.
+DEFAULT_MODEL_REVISION: Final = "11614a155199674a0a95e6602d6ab0417b790ed0"
+
+# The three environment variables this module reads. Named constants rather
+# than inline literals so `tests/test_model_fetcher.py` can assert the whole
+# set from the AST — the manifest path, notably, is *not* among them.
+MODEL_REVISION_ENV_VAR: Final = "FORAGE_MODEL_REVISION"
+CACHE_ROOT_ENV_VAR: Final = "HF_HOME"
+HF_TOKEN_ENV_VAR: Final = "HF_TOKEN"
+
+# Where the weights live when nothing says otherwise — the Dockerfile's
+# `ENV HF_HOME=/app/model-cache`, restated so a bare `python -c` run outside
+# the image resolves the same tree the image does.
+DEFAULT_CACHE_ROOT: Final = Path("/app/model-cache")
+
+# Acquisition sources, named once. US-004 adds `mirror`.
+SOURCE_HUGGINGFACE: Final = "huggingface"
 
 # The format allowlist. `.safetensors` is the weights format that cannot
 # execute code on load; the rest are the inert tokenizer/config files a
@@ -242,6 +294,22 @@ class VerificationResult:
             seen[failure.reason] = None
         return tuple(seen)
 
+    @property
+    def manifest_failure(self) -> bool:
+        """Whether the refusal is our manifest's fault, not the weights'.
+
+        The distinction the quarantine rule already makes, exposed for the
+        acquisition path: a manifest that cannot bless *any* file set will not
+        be fixed by downloading ~270 MiB again, so :func:`acquire_and_load`
+        stops rather than fetching bytes it could never accept.
+        """
+        return _is_manifest_failure(self.failures)
+
+
+def _is_manifest_failure(failures: tuple[VerificationFailure, ...]) -> bool:
+    """Whether any failure is about the manifest rather than the weight set."""
+    return any(failure.reason in _MANIFEST_REASONS for failure in failures)
+
 
 def is_allowed_filename(name: str) -> bool:
     """Whether *name* is a format this service will admit into the cache.
@@ -268,6 +336,20 @@ def snapshot_path(cache_root: Path | str, model_id: str, revision: str) -> Path:
     return (
         Path(cache_root) / HUB_DIRNAME / repo_dirname(model_id) / "snapshots" / revision
     )
+
+
+def hub_cache_dir(cache_root: Path | str) -> Path:
+    """Return ``$HF_HUB_CACHE`` — the directory both fetch and load are given.
+
+    ``huggingface_hub``'s ``cache_dir`` and ``transformers``' ``cache_dir`` are
+    the *hub* cache (``$HF_HOME/hub``), one level below the volume. Passing
+    ``$HF_HOME`` writes a repo tree one directory too high, and the loader then
+    reads a different one — a failure that presents as "the download worked and
+    the model still isn't there". Passing it explicitly, from one helper, also
+    removes the dependence on which value either library sampled from the
+    environment when it was imported.
+    """
+    return Path(cache_root) / HUB_DIRNAME
 
 
 def quarantine_root(cache_root: Path | str) -> Path:
@@ -614,9 +696,7 @@ def _refuse(
         ", ".join(str(failure) for failure in failures),
     )
     quarantined_to: Path | None = None
-    if quarantine_from is not None and not any(
-        failure.reason in _MANIFEST_REASONS for failure in failures
-    ):
+    if quarantine_from is not None and not _is_manifest_failure(failures):
         cache_root, repo_dir = quarantine_from
         quarantined_to = _quarantine(cache_root, repo_dir, metrics)
     return VerificationResult(
@@ -626,3 +706,315 @@ def _refuse(
         snapshot_dir=snapshot_dir,
         quarantined_to=quarantined_to,
     )
+
+
+# ---------------------------------------------------------------------------
+# Acquisition: the pinned revision, the environment, the token
+# ---------------------------------------------------------------------------
+
+
+def resolve_revision() -> str:
+    """Return the revision to fetch, verify and load.
+
+    :data:`DEFAULT_MODEL_REVISION` unless :data:`MODEL_REVISION_ENV_VAR` names
+    another commit sha. The shape is validated because the value is
+    interpolated into a filesystem path and because a branch name is not a pin:
+    a movable ``main`` turns the next upstream commit into "corruption" on the
+    following start. An unusable override falls back to the committed pin
+    loudly — and without echoing the value, which is operator-supplied text
+    heading for a log line.
+    """
+    configured = os.environ.get(MODEL_REVISION_ENV_VAR, "").strip()
+    if not configured:
+        return DEFAULT_MODEL_REVISION
+    if _REVISION_RE.match(configured) is None:
+        logger.error(
+            "model_revision_invalid — %s must be a 40-character commit sha; "
+            "falling back to the committed pin",
+            MODEL_REVISION_ENV_VAR,
+        )
+        return DEFAULT_MODEL_REVISION
+    return configured
+
+
+def resolve_cache_root() -> Path:
+    """Return ``$HF_HOME`` — the volume holding ``hub/``, not ``hub/`` itself."""
+    configured = os.environ.get(CACHE_ROOT_ENV_VAR, "").strip()
+    return Path(configured) if configured else DEFAULT_CACHE_ROOT
+
+
+def _resolve_token() -> str | None:
+    """Return the Hugging Face token, or ``None`` when there is none.
+
+    Absence is a supported mode, not an error: the gated repo is simply
+    unreachable and ``/health`` says so. The value is never logged, never put
+    in an exception message, and never passed anywhere but
+    ``snapshot_download``'s ``token=`` keyword.
+    """
+    token = os.environ.get(HF_TOKEN_ENV_VAR, "").strip()
+    return token or None
+
+
+def read_manifest_pin(
+    manifest_path: Path | str = MANIFEST_PATH,
+) -> WeightsManifest | None:
+    """Return the committed pin, or ``None`` if the manifest cannot supply one.
+
+    A reader, not a verifier — it opens no weight file and logs nothing, so a
+    caller can ask "could this manifest bless anything?" before spending a
+    ~270 MiB download to find out. :func:`verify_weights` remains the single
+    entry point for deciding whether a *weight set* is acceptable.
+    """
+    manifest, _failures = _load_manifest(Path(manifest_path))
+    return manifest
+
+
+def _fetch_reason(exc: BaseException) -> str:
+    """Map a download failure to a closed, credential-free reason code.
+
+    Never ``str(exc)``: ``huggingface_hub``'s errors carry request URLs,
+    response bodies and request context, and ``HF_TOKEN`` must never reach a
+    log line (``CLAUDE.md`` invariant 6 — the same discipline ``cache.py``
+    applies to ``VALKEY_URL``). An HTTP status is the one detail worth keeping:
+    401/403 means the token is missing rights, 404 means the revision is gone.
+    """
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if isinstance(status, int):
+        return f"http_{status}"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    if isinstance(exc, OSError):
+        return "io_failed"
+    return "fetch_failed"
+
+
+class SupportsWeightLoad(Protocol):
+    """The one classifier method this module drives.
+
+    A protocol rather than :class:`promptguard.classifier.PromptGuardClassifier`
+    so the acquisition pipeline can be exercised against a double without the
+    test suite having to build a real transformer — and so this module keeps
+    its stdlib-only import weight.
+    """
+
+    def load(
+        self,
+        *,
+        revision: str | None = None,
+        cache_dir: Path | str | None = None,
+        local_files_only: bool = False,
+    ) -> bool:
+        """Load the classifier from *cache_dir* at *revision*."""
+        ...
+
+
+def _download_from_hub(
+    *,
+    revision: str,
+    cache_root: Path,
+    token: str,
+    metrics: ModelMetrics,
+) -> bool:
+    """Download the pinned snapshot from Hugging Face into the hub cache.
+
+    ``allow_patterns`` is :data:`ALLOW_PATTERNS` and not optional: a plain
+    snapshot download also pulls ``README.md`` and ``.gitattributes``, which
+    the exact-set verifier then refuses as extra files — a download that
+    "succeeds" straight into a quarantine.
+    """
+    # Imported here rather than at module scope: verification is stdlib-only
+    # and is exercised in contexts (US-003's generator, the fixture tests) that
+    # have no business paying for the hub client.
+    from huggingface_hub import snapshot_download
+
+    metrics.fetch_in_progress = True
+    started_at = time.monotonic()
+    try:
+        snapshot_download(
+            MODEL_ID,
+            revision=revision,
+            cache_dir=hub_cache_dir(cache_root),
+            allow_patterns=list(ALLOW_PATTERNS),
+            token=token,
+        )
+    except Exception as exc:
+        metrics.record_fetch_failure()
+        logger.error(
+            "weights_fetch_failed — source=%s revision=%s reason=%s duration=%.1fs",
+            SOURCE_HUGGINGFACE,
+            revision,
+            _fetch_reason(exc),
+            time.monotonic() - started_at,
+        )
+        return False
+    finally:
+        metrics.fetch_in_progress = False
+    logger.info(
+        "weights_fetched — source=%s revision=%s duration=%.1fs",
+        SOURCE_HUGGINGFACE,
+        revision,
+        time.monotonic() - started_at,
+    )
+    return True
+
+
+def _load_verified(
+    classifier: SupportsWeightLoad,
+    *,
+    cache_root: Path,
+    revision: str,
+) -> bool:
+    """Load the just-verified snapshot, from disk only.
+
+    ``local_files_only=True`` because the exact file set was verified a moment
+    ago: there is nothing left for the loader to go and look for, and an etag
+    round-trip would make a loaded classifier depend on the hub still being
+    reachable.
+    """
+    started_at = time.monotonic()
+    loaded = classifier.load(
+        revision=revision,
+        cache_dir=hub_cache_dir(cache_root),
+        local_files_only=True,
+    )
+    if loaded:
+        logger.info(
+            "weights_loaded — revision=%s duration=%.1fs",
+            revision,
+            time.monotonic() - started_at,
+        )
+    else:
+        logger.error(
+            "weights_load_failed — the verified set at revision=%s did not load; "
+            "PromptGuard stays unavailable",
+            revision,
+        )
+    return loaded
+
+
+def _verify_cached(
+    *,
+    cache_root: Path,
+    revision: str,
+    manifest_path: Path,
+    metrics: ModelMetrics,
+) -> VerificationResult | None:
+    """Verify what the cache already holds, or ``None`` when it is cold.
+
+    A cold cache is not a verification failure — there is nothing to verify
+    yet — and treating it as one would log ``weights_verification_failed`` at
+    ERROR on every first boot, which is exactly the cry-wolf that makes a real
+    refusal unreadable.
+    """
+    if not snapshot_path(cache_root, MODEL_ID, revision).is_dir():
+        return None
+    return verify_weights(cache_root, manifest_path=manifest_path, metrics=metrics)
+
+
+def acquire_and_load(
+    classifier: SupportsWeightLoad,
+    *,
+    cache_root: Path | str | None = None,
+    revision: str | None = None,
+    manifest_path: Path | str | None = None,
+    metrics: ModelMetrics | None = None,
+) -> bool:
+    """Bring *classifier* to loaded, fetching the pinned weights if needed.
+
+    The boot pipeline, in order: verify what is cached (skipping the fetch
+    entirely when it already satisfies the pin) → fetch the pinned revision
+    from Hugging Face → verify the download → load. Returns whether the
+    classifier ended up loaded.
+
+    **Blocking on purpose, and not to be awaited from the lifespan.**
+    ``snapshot_download`` and ``from_pretrained`` are synchronous network and
+    torch work; the caller is
+    ``asyncio.create_task(asyncio.to_thread(acquire_and_load, ...))`` so that
+    lifespan startup yields immediately and ``/health`` answers throughout.
+
+    **It does not raise.** It runs detached in a worker thread, where an
+    exception would surface only as a stray "Task exception was never
+    retrieved" at interpreter shutdown. Every failure is a logged ``False``.
+
+    *cache_root*, *revision* and *manifest_path* default to the environment and
+    the committed constants; they are parameters so a test can drive the whole
+    pipeline without one, not a configuration surface.
+    """
+    metrics = metrics if metrics is not None else ModelMetrics()
+    try:
+        return _acquire_and_load(
+            classifier,
+            cache_root=(
+                Path(cache_root) if cache_root is not None else resolve_cache_root()
+            ),
+            revision=revision if revision is not None else resolve_revision(),
+            manifest_path=(
+                MANIFEST_PATH if manifest_path is None else Path(manifest_path)
+            ),
+            metrics=metrics,
+        )
+    except Exception:
+        metrics.record_fetch_failure()
+        logger.exception(
+            "weights_acquisition_crashed — PromptGuard stays unavailable and "
+            "/health stays degraded"
+        )
+        return False
+
+
+def _acquire_and_load(
+    classifier: SupportsWeightLoad,
+    *,
+    cache_root: Path,
+    revision: str,
+    manifest_path: Path,
+    metrics: ModelMetrics,
+) -> bool:
+    """The acquisition pipeline proper. See :func:`acquire_and_load`."""
+    cached = _verify_cached(
+        cache_root=cache_root,
+        revision=revision,
+        manifest_path=manifest_path,
+        metrics=metrics,
+    )
+    if cached is not None:
+        if cached.ok:
+            return _load_verified(classifier, cache_root=cache_root, revision=revision)
+        if cached.manifest_failure:
+            # The refusal is ours, not the weight set's. Another download
+            # cannot fix a manifest that blesses nothing.
+            return False
+
+    token = _resolve_token()
+    if token is None:
+        # Not an error: a token-less deployment is a supported degraded mode,
+        # and the loud combined "every source failed" ERROR belongs to US-004,
+        # which is the story that knows whether a mirror was available.
+        logger.warning(
+            "weights_fetch_skipped — no %s in the environment, so the gated "
+            "repo cannot be reached; PromptGuard stays unavailable and /health "
+            "stays degraded",
+            HF_TOKEN_ENV_VAR,
+        )
+        return False
+
+    if read_manifest_pin(manifest_path) is None:
+        logger.error(
+            "weights_pin_unusable — %s pins no verifiable file set, so a "
+            "download could never be blessed; refusing to fetch",
+            manifest_path,
+        )
+        return False
+
+    if not _download_from_hub(
+        revision=revision,
+        cache_root=cache_root,
+        token=token,
+        metrics=metrics,
+    ):
+        return False
+
+    verified = verify_weights(cache_root, manifest_path=manifest_path, metrics=metrics)
+    if not verified.ok:
+        return False
+    return _load_verified(classifier, cache_root=cache_root, revision=revision)

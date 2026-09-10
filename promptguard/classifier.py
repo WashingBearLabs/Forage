@@ -10,6 +10,8 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     # Import-time only: torch and transformers are heavyweight and optional at
     # runtime (the classifier degrades to "unavailable" without them), so the
     # real imports stay inside load()/classify(). See typings/transformers for
@@ -45,12 +47,26 @@ class PromptGuardClassifier:
         """Whether the model is ready for inference."""
         return self._loaded
 
-    def load(self) -> bool:
-        """Load model from local HuggingFace cache.
+    def load(
+        self,
+        *,
+        revision: str | None = None,
+        cache_dir: Path | str | None = None,
+        local_files_only: bool = False,
+    ) -> bool:
+        """Load model from the local HuggingFace cache.
 
         Returns ``True`` on success, ``False`` if the model or its
         dependencies are not available (torch / transformers missing,
         model not downloaded, etc.).
+
+        *revision* pins the commit sha to open, *cache_dir* is the **hub**
+        cache (``$HF_HOME/hub``) the weights were verified in, and
+        *local_files_only* forbids the hub round-trip transformers otherwise
+        makes even on a full cache hit. ``model_fetcher.acquire_and_load()``
+        supplies all three after :func:`model_fetcher.verify_weights` has
+        blessed the exact file set; the defaults preserve the pre-US-001
+        behaviour for any other caller.
         """
         try:
             import torch
@@ -65,7 +81,12 @@ class PromptGuardClassifier:
             # import is not a dead name that a linter would strip.
             logger.debug("PromptGuard loading against torch %s", torch.__version__)
 
-            self._tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                MODEL_ID,
+                revision=revision,
+                cache_dir=cache_dir,
+                local_files_only=local_files_only,
+            )
             # `use_safetensors=True` is the loader half of the supply-chain
             # closure `model_fetcher.verify_weights()` opens: without it
             # `from_pretrained` falls back to a pickle checkpoint
@@ -77,6 +98,9 @@ class PromptGuardClassifier:
             model = AutoModelForSequenceClassification.from_pretrained(
                 MODEL_ID,
                 use_safetensors=True,
+                revision=revision,
+                cache_dir=cache_dir,
+                local_files_only=local_files_only,
             )
             model.eval()
             self._model = model

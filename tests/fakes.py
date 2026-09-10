@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+import hashlib
+import os
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal
 
 import pytest
 
 from cache import CacheMetrics
+from model_fetcher import repo_dirname
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping
+
     from models import RetrievedContent
 
 
@@ -28,6 +34,93 @@ def assert_frozen(instance: object, field: str, value: object) -> None:
     """
     with pytest.raises(AttributeError):
         setattr(instance, field, value)
+
+
+def sha256_hex(payload: bytes) -> str:
+    """The digest the weights manifest pins, for a fixture's bytes."""
+    return hashlib.sha256(payload).hexdigest()
+
+
+def materialize_hub_snapshot(
+    cache_root: Path,
+    files: Mapping[str, bytes],
+    *,
+    model_id: str,
+    revision: str,
+    symlinks: bool = True,
+) -> Path:
+    """Build ``hub/models--…/{blobs,snapshots/<rev>}`` the way the hub does.
+
+    ``symlinks=True`` is the real shape — content under ``blobs/``, the
+    snapshot a directory of links into it — which is what makes a walk that
+    hashes the *link* rather than its target, or one that walks the whole
+    model directory, produce the wrong answer. The flat form exists so a test
+    can prove the walk handles both.
+
+    Shared because two suites need the same layout for different reasons:
+    ``test_model_fetcher.py`` verifies against it, and ``test_app.py``'s
+    lifespan tests have ``snapshot_download`` write it.
+    """
+    repo = cache_root / "hub" / repo_dirname(model_id)
+    blobs = repo / "blobs"
+    snapshot = repo / "snapshots" / revision
+    blobs.mkdir(parents=True, exist_ok=True)
+    snapshot.mkdir(parents=True, exist_ok=True)
+    for name, payload in files.items():
+        link = snapshot / name
+        link.parent.mkdir(parents=True, exist_ok=True)
+        if symlinks:
+            blob = blobs / sha256_hex(payload)
+            blob.write_bytes(payload)
+            link.symlink_to(os.path.relpath(blob, link.parent))
+        else:
+            link.write_bytes(payload)
+    return snapshot
+
+
+def hub_download_double(
+    files: Mapping[str, bytes],
+    *,
+    on_call: Callable[[], None] | None = None,
+) -> Callable[..., str]:
+    """A ``snapshot_download`` stand-in that writes a real cache tree.
+
+    It honours the ``cache_dir`` it is handed, which several assertions rest
+    on: a fetcher that wrote somewhere else would materialise a snapshot the
+    verifier never looks at, and a double that ignored the argument could not
+    tell the two apart.
+    """
+
+    def _download(repo_id: str, **kwargs: Any) -> str:
+        if on_call is not None:
+            on_call()
+        cache_dir = Path(str(kwargs["cache_dir"]))
+        snapshot = materialize_hub_snapshot(
+            cache_dir.parent,
+            files,
+            model_id=repo_id,
+            revision=str(kwargs["revision"]),
+        )
+        return str(snapshot)
+
+    return _download
+
+
+def weights_manifest_document(
+    files: Mapping[str, bytes],
+    *,
+    model_id: str,
+    revision: str,
+) -> dict[str, Any]:
+    """The manifest that exactly describes *files* — nothing more, nothing less."""
+    return {
+        "model_id": model_id,
+        "revision": revision,
+        "files": [
+            {"path": name, "sha256": sha256_hex(payload), "size": len(payload)}
+            for name, payload in sorted(files.items())
+        ],
+    }
 
 
 class FakeContentCache:

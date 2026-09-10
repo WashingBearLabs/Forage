@@ -19,6 +19,11 @@ dependencies = [
     "redis>=5.0.0",
     "pyyaml>=6.0",
     "transformers>=4.40.0",
+    # Direct since `feature-forage-model-bootstrap` US-001: `model_fetcher.py`
+    # calls `snapshot_download` itself. It has always been present as a
+    # transitive dependency of `transformers`, but a module that imports a
+    # package must declare it — a transitive pin is someone else's to drop.
+    "huggingface_hub>=0.30.0",
     "torch>=2.2.0",
     "python-multipart==0.0.20",
 ]
