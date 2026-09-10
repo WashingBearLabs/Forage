@@ -120,9 +120,12 @@ unnoticed for nine days in production. Do not treat a degraded Forage as a scann
 **The image ships no weights, and takes no build argument.** `docker build .` needs
 nothing but the source: no credential enters the build, because a Docker build argument is
 recoverable from the finished image's layer history and would therefore be published along
-with the image. A runtime fetch into the `HF_HOME` volume replaces it; until that lands,
-a freshly built image starts degraded, which is the honest answer rather than a broken
-one.
+with the image. The weights are fetched at **run time** instead, into the `HF_HOME`
+volume, from a pinned revision and verified against a committed sha256 manifest before
+anything is loaded. Set `HF_TOKEN` in the container's environment to enable it; leave it
+unset and Forage runs degraded, indefinitely and honestly. Either way the service starts
+and serves immediately — the download runs behind a live `/health`, and
+`promptguard_loaded` flips to `true` in place when it completes.
 
 ## Licensing
 

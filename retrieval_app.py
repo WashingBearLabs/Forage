@@ -14,7 +14,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args
@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+import model_fetcher
 from cache import CacheMetrics, ContentCache
 from model_fetcher import ModelMetrics
 from models import (
@@ -561,17 +562,38 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     else:
         logger.warning("Content cache not available at startup")
 
-    # Load PromptGuard 2 model (CPU inference)
+    # Acquire and load the PromptGuard 2 weights (fetch → verify → load).
+    #
+    # A task around a thread, never an `await` — and the difference is the
+    # whole point. `snapshot_download` + `from_pretrained` is minutes of
+    # blocking network and torch work for a ~270 MiB weight set; uvicorn
+    # serves nothing until lifespan startup returns, and the compose
+    # healthcheck (10 s x 5 retries, no `start_period`) would restart-loop the
+    # container before the first byte landed. So startup yields immediately,
+    # `/health` answers honestly `degraded` with `promptguard_unavailable`
+    # throughout, and `promptguard_loaded` flips to true in place when the
+    # load finishes — no restart, no second request path.
+    #
+    # The handle lives on `app.state` so shutdown can cancel it; US-005's
+    # backoff retry task rides the same seam.
     classifier = PromptGuardClassifier()
-    if classifier.load():
-        logger.info("PromptGuard 2 model ready")
-    else:
-        logger.warning("PromptGuard 2 not available — ML injection detection disabled")
     app.state.classifier = classifier
+    app.state.model_task = asyncio.create_task(
+        asyncio.to_thread(
+            model_fetcher.acquire_and_load,
+            classifier,
+            metrics=app.state.model_metrics,
+        )
+    )
 
     yield
 
     # Shutdown
+    model_task: asyncio.Task[bool] | None = getattr(app.state, "model_task", None)
+    if model_task is not None and not model_task.done():
+        model_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await model_task
     await app.state.cache.close()
 
 
@@ -592,6 +614,10 @@ app.state.extraction_admission = ExtractionAdmissionController(
 app.state.search_metrics = SearchMetrics()
 app.state.retrieve_metrics = RetrieveMetrics()
 app.state.model_metrics = ModelMetrics()
+# Declared here as well as in the lifespan so the attribute exists for a
+# transport that never fires lifespan events (`httpx.ASGITransport`, which the
+# suite's `client` fixture uses) — `None` means "no acquisition was started".
+app.state.model_task = None
 app.state.classification_semaphore = asyncio.Semaphore(
     _initial_extraction_settings.classification_concurrency
 )

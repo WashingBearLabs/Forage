@@ -140,14 +140,16 @@ that something is missing here.
   pyright one was itself understated, since 55 more errors sat behind 30 inherited
   type-ignore comments (269 real). Pyright's only carve-out is `reportPrivateUsage` for
   `tests/`, pinned by `tests/test_pyright_policy.py`.
-- **`sanitizer_revision` has deliberately diverged** from Poppy, and has now rotated three
-  times (`e6b2b56d…` → `2b8d7e9a…` → `cd00a8b4…` → **`0537316d…`**, current). The
+- **`sanitizer_revision` has deliberately diverged** from Poppy, and has now rotated four
+  times (`e6b2b56d…` → `2b8d7e9a…` → `cd00a8b4…` → `0537316d…` → **`5927038d…`**,
+  current). The fourth is the odd one out: no source byte moved, the hashed model identity
+  became `MODEL_ID@revision` when weights became a runtime input (spec-2 US-001). The
   Poppy-side spec must not assume revision parity — compare contracts.
-- **The suite is hermetic and exact**: **992 collected**, all green (534 at bootstrap;
+- **The suite is hermetic and exact**: **1048 collected**, all green (534 at bootstrap;
   spec-1 additions: +33 US-001 workflow guards, +19 US-006 typecheck/policy, +21 US-002
   canary/test-lane, +49 US-003 Dockerfile/handoff, +75 US-005 smoke, +40 US-007 publish,
   +2 supervisor parity guards, +132 US-004 searxng (its supervisor fix renamed a test,
-  net zero); spec-2: +87 US-002 manifest/quarantine — the per-story counts live in
+  net zero); spec-2: +87 US-002 manifest/quarantine, +56 US-001 acquisition/lifespan — the per-story counts live in
   `kit_tools/testing/TESTING_GUIDE.md`, which is the canonical tally). The count is a
   gate, not a floor. The hermeticity
   canary is committed and executing (`tests/test_hermeticity.py`), and since US-002 the

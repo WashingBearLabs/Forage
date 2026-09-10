@@ -61,7 +61,8 @@ those eight — so Forage's revision moved:
 | At split (`forage-repo-bootstrap` US-001), identical to Poppy | `e6b2b56d…54000` |
 | After the vault-free hostname defaults (`forage-repo-bootstrap` US-002) | `2b8d7e9a…` |
 | After the `ruff format` gate (`forage-ci-and-image` US-001) | `cd00a8b4…c96b9a` |
-| **Current (`forage-ci-and-image` US-006 onward)** | **`0537316d…e3e253`** |
+| After the pyright-strict burn-down (`forage-ci-and-image` US-006) | `0537316d…e3e253` |
+| **Current (`forage-model-bootstrap` US-001 onward)** | **`5927038d…19d111`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -84,17 +85,55 @@ Five of the eight `_REVISION_SOURCES` files remain byte-identical to Poppy's cop
 `orchestrator.py` (hostname defaults), `stage2_structural.py` (formatting, then a type
 argument) and `stage1_extraction.py` (typed metadata helpers) differ.
 
-**No fourth rotation.** `forage-ci-and-image` US-002, US-003 and US-005 all left the
-revision at `0537316d…e3e253`, verified before and after each story: none of the CI test
-lane, the Dockerfile rework or the contract smoke touches a `_REVISION_SOURCES` file (all
-eight live under `pipeline/`). Recorded because the two stories before them each moved
-it, and silence would be ambiguous — "unchanged" is a measurement here, not an omission.
+**No rotation across the rest of `forage-ci-and-image`.** US-002, US-003 and US-005 all
+left the revision at `0537316d…e3e253`, verified before and after each story: none of the
+CI test lane, the Dockerfile rework or the contract smoke touches a `_REVISION_SOURCES`
+file (all eight live under `pipeline/`). `forage-model-bootstrap` US-002 left it there
+too. Recorded because the stories around them moved it, and silence would be ambiguous —
+"unchanged" is a measurement here, not an omission.
 
 US-005 is the story where that stability became *observable from outside*: the smoke job
 reads `sanitizer_revision` off a running container's `/health` and fails if it is empty
 or the `"unknown"` fallback, so a build that silently lost its ability to derive one is
 now a red gate rather than a field nobody looks at. The value the CI run reported —
-`0537316d83510dab…e3e253` — is the same one this tree derives locally.
+`0537316d83510dab…e3e253` — is the same one that tree derived locally.
+
+### The fourth rotation: the weights pin joined the hash (`forage-model-bootstrap` US-001, 2026-09-10)
+
+```
+before: 0537316d83510dab3cfafb6ebd61dafdffa5d51be2dd2e01fb9777bfd0e3e253
+after:  5927038d64ed54a619e52b94899148f56bfede37d38f3c1a53c435edc719d111
+```
+
+**Attribution: not one byte of a `_REVISION_SOURCES` file moved.** All eight are
+byte-identical across this change, verified by re-deriving with the *old* formula against
+the *new* tree and getting `0537316d…e3e253` back exactly. The whole delta is one changed
+input: `derive_sanitizer_revision()` now hashes `MODEL_ID@revision` where it hashed
+`MODEL_ID` alone.
+
+**Why the rotation was taken, rather than avoided.** Until this story the weights were a
+constant of the image: one `MODEL_ID`, baked, identical everywhere, so hashing the id
+alone described the model completely. They are a *runtime* input now — fetched at start,
+pinned by commit sha, and overridable per-deployment with `FORAGE_MODEL_REVISION`. Two
+containers running byte-identical code can therefore be scanning with different weights,
+and a `sanitizer_revision` that could not tell them apart would be keying a cache on a
+sanitization behaviour it does not actually describe. That is the precise failure this
+value exists to prevent, so the input had to change; the rotation is the price.
+
+Taken here on the same principle as the previous three: at a boundary, deliberately, with
+the before/after measured — and in the one story where the *reason* for it is the story's
+own subject, rather than as a drive-by inside something else.
+
+**Blast radius.** Every cached sanitization keyed on the old revision is invalidated, in
+this repo and in the consuming one. Poppy's `stored_file_extractions` are re-extracted on
+next access; that transition is **owned by spec 6**, which pins Poppy to a published
+Forage image and is the place the two sides meet. Nothing here needs to do anything about
+it — the value is opaque and the consumer treats a change as "re-extract", which is
+correct behaviour, not damage.
+
+**And Poppy's copy has not moved.** It still derives the split-time value. The rule in the
+next paragraph applies with one more reason behind it: Forage's revision now depends on an
+environment variable Poppy's copy does not read.
 
 **Consequence for the Poppy-side specs: do not assume Poppy↔Forage revision parity.** A
 consumer that compares `sanitizer_revision` across the two repos will see a mismatch that

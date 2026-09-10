@@ -29,6 +29,7 @@ delete it when the last caller goes away.
 | Stub | Reason |
 |---|---|
 | `transformers/__init__.pyi` | `AutoTokenizer.from_pretrained` and `AutoModelForSequenceClassification.from_pretrained` are typed as returning `Unknown` upstream, so every downstream use in `promptguard/classifier.py` (tokenising, the forward pass, `.logits`) decays to `Unknown` too. |
+| `huggingface_hub/__init__.pyi` | `snapshot_download`'s `user_agent` parameter is annotated as a bare `dict`, which makes its whole overload set partially unknown under strict mode — and the symbol itself unusable at `model_fetcher.py`'s call site. The stub declares the five keywords the fetcher passes and the one overload it uses. |
 
 **`torch` deliberately has no stub here.** It ships real, complete types; the
 classifier consumes them directly (`torch.no_grad`, `torch.softmax`,

@@ -54,6 +54,8 @@ class AutoTokenizer:
         cls,
         pretrained_model_name_or_path: str | PathLike[str],
         *,
+        revision: str | None = ...,
+        cache_dir: str | PathLike[str] | None = ...,
         local_files_only: bool = ...,
     ) -> PreTrainedTokenizerBase: ...
 
@@ -64,5 +66,7 @@ class AutoModelForSequenceClassification:
         pretrained_model_name_or_path: str | PathLike[str],
         *,
         use_safetensors: bool = ...,
+        revision: str | None = ...,
+        cache_dir: str | PathLike[str] | None = ...,
         local_files_only: bool = ...,
     ) -> PreTrainedModel: ...
