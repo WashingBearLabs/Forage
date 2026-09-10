@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: forage-ci-and-image
-status: active
+status: completed
 session_ready: true
 depends_on: []
 vision_ref: Secure Web Retrieval / provider-independent web access
@@ -12,7 +12,8 @@ epic_seq: 1
 epic_final: false
 execution_order: [US-001, US-006, US-002, US-003, US-005, US-007, US-004, US-008]
 created: 2026-09-02
-updated: 2026-09-07
+updated: 2026-09-10
+completed: 2026-09-10
 ---
 
 # Feature Spec: Forage CI + Published Images (GHCR, secret-free)
@@ -421,9 +422,9 @@ recorded.
 - Supervisor performs; everything recorded in Implementation Notes.
 
 **Acceptance Criteria:**
-- [ ] Seven-step checklist executed in order and recorded; anonymous pulls of both images
+- [x] Seven-step checklist executed in order and recorded; anonymous pulls of both images
       verified.
-- [ ] The spec-6 secret-rotation follow-through cross-reference recorded.
+- [x] The spec-6 secret-rotation follow-through cross-reference recorded.
 
 ## Edge Cases
 
@@ -2051,6 +2052,46 @@ The arm64 leg is cheap here in a way it is not for the service image: this build
 - One throwaway branch was used and is deleted, with its run recorded above.
 - `US-008's flip checklist now covers two packages that both exist`: `forage` and
   `forage-searxng`. The latter currently holds exactly one pre-release tag.
+
+### US-008 — Public flip (2026-09-10, supervisor-executed human gate)
+
+**The seven steps, in order, all recorded:**
+
+| Step | Result |
+|---|---|
+| (a) secret-grep green on current images | run 34188019788 (HEAD `ca8c9f5`→rerun green) — `secret-grep: success` |
+| (b) full-history gitleaks at HEAD | 88 commits scanned; **1 finding, triaged false positive** — the synthetic `Token: abc123def456` literal in the stage-2 structural test; recorded by fingerprint in the committed `.gitleaksignore` (`c50dab5`), re-scan **no leaks found** |
+| (c) LICENSE/NOTICE | Apache-2.0 LICENSE + NOTICE present |
+| (d) merge freeze | held from `c50dab5` (2026-09-08) through the flip (2026-09-10); zero pushes to main in the window |
+| (e) purge pre-flip GHCR versions | both packages **deleted wholesale** (30 forage + 3 forage-searxng versions); `delete:packages` obtained via `gh auth refresh` on the owner's existing login — **no standalone PAT minted**; org listing confirmed empty |
+| (f) flip public | repo: `gh repo edit --visibility public` ✓; packages: recreated private by the post-flip publishes, flipped in the UI (visibility change is UI-only) — **blocked first by the org's package-creation policy** (public disabled for members); fixed at org Settings → Packages → allow Public, then both flips succeeded |
+| (g) lift freeze | lifted; `v0.9.1-rc` + `searxng-v0.1.1-rc` pushed at `c50dab5`, both lanes green (runs 34528502559 / 34528505149) |
+
+**Anonymous-pull verification (the AC's own test):** with a scratch `DOCKER_CONFIG`
+(no stored credentials), `docker pull` of `forage:0.9.1-rc` and
+`forage-searxng:0.1.1-rc` both succeeded. On the pulled artifacts: OCI titles correct
+(`forage-searxng` carries the US-004 supervisor-fix label), `docker history` secret grep
+0 matches on both, and `contract_smoke.py` against the anonymously-pulled service image:
+**PASSED — degraded, honest, and on-contract.**
+
+**Deferred security re-applied in full at the flip** (per `docs/bootstrap-notes.md`):
+secret scanning + push protection enabled; branch protection on `main` — the six required
+checks `lint`/`typecheck`/`test`/`build-amd64`/`secret-grep`/`smoke` (`strict: false`),
+PRs required, `required_approving_review_count: 0`, `enforce_admins: false`. **Direct
+push to main is closed from here on** — this closeout is the first self-merged PR under
+the new protection. `actionlint` correctly not listed (a step inside `lint`, not a job).
+
+**Gate decisions executed as codified** (see the Gate decisions block above): break-glass
+flag renamed pre-flip (`FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION`, alias kept, interim
+name retired un-aliased); limiter posture shipped with the loud README warning; registry
+purged then re-seeded with fresh gate-chain rc tags.
+
+**Spec-6 secret-rotation follow-through (AC 2):** the `poppy-searxng-internal` placeholder
+string in this repo's git history is Poppy's live compose value until spec 6 US-002/US-003
+rotate it. The flip is safe — the string grants nothing outside poppy-net (it is a SearXNG
+`secret_key` HMAC seed, not a credential to any reachable service) — but rotation at
+spec 6 is registered there and cross-referenced here. The one remaining scope note:
+`delete:packages` is to be dropped from the owner's gh login now that step (e) is done.
 
 ## Refinement Notes
 
