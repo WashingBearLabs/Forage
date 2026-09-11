@@ -1,7 +1,7 @@
 <!-- Template Version: 2.0.0 -->
 # SYNOPSIS.md
 
-> Last updated: 2026-09-07
+> Last updated: 2026-09-11
 > Updated by: Claude (forage-model-bootstrap US-002)
 
 ---
@@ -29,7 +29,7 @@ preserved). See `docs/bootstrap-notes.md` for the pin record.
 |--------|--------|
 | Maturity | Pre-1.0, freshly extracted (2026-09-07) |
 | Repo visibility | **Private** — flips public in `feature-forage-ci-and-image` after its gates pass |
-| Tests | 1427 collected, all green (`uv run pytest`), hermetic via `pytest-socket` — **enforced in CI** since US-002, with a committed hermeticity canary |
+| Tests | 1465 collected, all green (`uv run pytest`), hermetic via `pytest-socket` — **enforced in CI** since US-002, with a committed hermeticity canary |
 | Lint | `uv run ruff check .` and `ruff format --check .` both clean — **enforced in CI** |
 | Types | `uv run pyright` (strict) is **clean — 0 errors**, no baseline; **enforced in CI** |
 | CI | `.github/workflows/ci.yml` — `lint`, `typecheck` and `test` jobs live; build/publish land across the rest of `feature-forage-ci-and-image` |
@@ -99,7 +99,9 @@ path and yields a `promptguard_unavailable` degraded runtime.
 | `pipeline/` | The five sanitization stages, the orchestrator, and the response contract |
 | `promptguard/` | The Llama Prompt Guard 2 classifier wrapper |
 | `searxng/config/` | SearXNG `settings.yml` + `limiter.toml` |
-| `tests/` | 26 files, one module per subject, plus `fakes.py`, `golden/` and `fixtures/` |
+| `contract/` | The frozen wire contract: generated `openapi.yaml` + its committed `.sha256` anchor. Regenerate with `uv run python -m scripts.export_contract`; never hand-edit |
+| `scripts/` | Operator-only, run by hand from a checkout; in no image |
+| `tests/` | 29 files, one module per subject, plus `fakes.py`, `golden/` and `fixtures/` |
 | `docs/` | `configuration.md` (full env/config reference), `bootstrap-notes.md`, `bootstrap-scan.txt` |
 | `kit_tools/` | This documentation framework + the feature specs |
 

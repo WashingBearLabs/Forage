@@ -2,7 +2,7 @@
 # TESTING_GUIDE.md
 
 > Last updated: 2026-09-11
-> Updated by: Claude (forage-contract US-001)
+> Updated by: Claude (forage-contract US-002)
 
 ## Quick Start
 
@@ -92,10 +92,11 @@ crash reads as a false regression.
 
 ## Test Structure
 
-28 files under `tests/`, flat, one module per subject, plus `fakes.py`, `golden/` and
-`fixtures/`. **1447 tests, all green** as of 2026-09-11 (`feature-forage-contract`
-US-001 added `test_contract_errors.py`'s 25 and US-005 `test_contract_metrics.py`'s 20;
-the per-module counts in the table below have not all been re-measured since 2026-09-10).
+29 files under `tests/`, flat, one module per subject, plus `fakes.py`, `golden/` and
+`fixtures/`. **1465 tests, all green** as of 2026-09-11 (`feature-forage-contract`
+US-001 added `test_contract_errors.py`'s 25, US-005 `test_contract_metrics.py`'s 20 and
+US-002 `test_contract_export.py`'s 18; the per-module counts in the table below have not
+all been re-measured since 2026-09-10).
 
 | Module | Tests | Covers |
 |--------|------:|--------|
@@ -125,6 +126,7 @@ the per-module counts in the table below have not all been re-measured since 202
 | `tests/test_dependency_lock.py` | 3 | `uv.lock` stays CPU-only (no `nvidia-*` wheels) |
 | `tests/test_contract_errors.py` | 25 | The documented error surface: the seventeen-code vocabulary swept from every raise site in the repo, pinned against Poppy's inlined allowlist; per-emission-site parity (each mirror model reproduces the live body byte-for-byte, driven through the real routes); the `responses=` declaration map; and the FastAPI 422-suppression behaviour the union declarations rest on |
 | `tests/test_contract_metrics.py` | 20 | The typed `/metrics` body and the served app metadata: parity between the handler's dict and the bytes the typed route sends (compared *outside* the model, so a reorder at any depth is caught), the flat cgroup keys in both wire and schema, the `extra="forbid"` failure mode and the permissive-model counterfactual it avoids, the dataclass-counter ↔ model field ties, `info.version == CONTRACT_VERSION`, and the mechanical check that every path FastAPI serves — `/docs`, `/redoc` and `/openapi.json` included — is acknowledged in `docs/configuration.md`'s posture section |
+| `tests/test_contract_export.py` | 18 | The frozen `contract/openapi.yaml`: that the committed bytes are what the app generates, that the committed `.sha256` anchor is the sha256 of those bytes in `sha256sum -c` form, that the render is byte-stable across processes and `PYTHONHASHSEED` values (measured in subprocesses, not asserted), that the canonical form round-trips and carries no YAML anchors, and that `/extract` is documented while `extract_route_enabled` is `false`. The drift check's own failure case is committed as `tests/fixtures/contract/unregenerated_openapi.yaml` and fed to the same checker |
 | `tests/test_contract_schema.py` | 1 | Golden contract fixture vs `pipeline/contract.py` |
 
 Support files:
@@ -134,6 +136,7 @@ Support files:
 | `tests/conftest.py` | Puts the repo root on `sys.path`; installs the autouse socket guard |
 | `tests/fakes.py` | Shared fakes and builders: the fake cache, `assert_frozen`, the Hugging Face cache-layout helpers (`materialize_hub_snapshot`, `hub_download_double`, `weights_manifest_document`) that `test_model_fetcher.py` and `test_app.py` both build fixtures from, and `record_network_attempts` — which *counts* outbound attempts rather than only refusing them, because a library that swallows the guard's error makes "blocked" and "never tried" look identical |
 | `tests/fixtures/tiny_model/` | A real, loadable 2-layer DeBERTa-v2 classifier (~96 KB, safetensors only) — the fixture that lets the *actual* loader be exercised rather than mocked |
+| `tests/fixtures/contract/unregenerated_openapi.yaml` | The contract drift check's committed failure case: `contract/openapi.yaml` with `Extract422ErrorResponse.sanitizer_revision` removed — what the file would look like if a response model had changed and nobody regenerated. Written by `scripts/export_contract.py` alongside the contract, so one command keeps both in step |
 | `tests/golden/contract_1_0_0.json` | Frozen contract fixture for `test_contract_schema.py`; `contract_1_1_0.json` is the current one. The fixture pins `model_json_schema()`, which moves for description and enum-rendering changes as well as wire ones — regenerate it for a documentation-only change, bump `CONTRACT_VERSION` (new file alongside the old) for a real one |
 
 ### Testing the lifespan
@@ -199,6 +202,19 @@ exists to prevent.
 `contract_version` in `pipeline/contract.py` and updating (or adding) the fixture under
 `tests/golden/`.
 
+**And the frozen contract regenerated.** Since US-002 anything that moves the OpenAPI
+document — a response model, a `responses=` declaration, a field description, a FastAPI
+bump — must be followed by:
+
+```bash
+uv run python -m scripts.export_contract   # rewrites all three artifacts
+```
+
+`tests/test_contract_export.py` fails until you do, naming that command. Commit
+`contract/openapi.yaml`, `contract/openapi.yaml.sha256` and
+`tests/fixtures/contract/unregenerated_openapi.yaml` together — one command writes all
+three and they are only consistent as a set. Never hand-edit any of them.
+
 ---
 
 ## Test Mapping
@@ -207,12 +223,12 @@ Used by the KitTools orchestrator to pick the right tests for a changed file.
 
 ```yaml
 test_mapping:
-  "retrieval_app.py": ["tests/test_app.py", "tests/test_contract_smoke.py", "tests/test_contract_errors.py", "tests/test_contract_metrics.py"]
-  "models.py": ["tests/test_models.py", "tests/test_contract_errors.py"]
+  "retrieval_app.py": ["tests/test_app.py", "tests/test_contract_smoke.py", "tests/test_contract_errors.py", "tests/test_contract_metrics.py", "tests/test_contract_export.py"]
+  "models.py": ["tests/test_models.py", "tests/test_contract_errors.py", "tests/test_contract_export.py"]
   "cache.py": "tests/test_cache.py"
   "url_validator.py": "tests/test_url_validator.py"
   "pipeline/orchestrator.py": "tests/test_orchestrator.py"
-  "pipeline/contract.py": ["tests/test_contract_schema.py", "tests/test_contract_errors.py"]
+  "pipeline/contract.py": ["tests/test_contract_schema.py", "tests/test_contract_errors.py", "tests/test_contract_export.py"]
   "pipeline/sanitizer_revision.py": "tests/test_sanitizer_revision.py"
   "model_fetcher.py": ["tests/test_model_fetcher.py", "tests/test_app.py"]
   "weights_manifest.json": "tests/test_model_fetcher.py"
@@ -239,6 +255,9 @@ test_mapping:
   "pyproject.toml": ["tests/test_dependency_lock.py", "tests/test_pyright_policy.py"]
   "typings/*": "tests/test_pyright_policy.py"
   "docs/configuration.md": "tests/test_contract_metrics.py"
+  "contract/openapi.yaml": "tests/test_contract_export.py"
+  "contract/openapi.yaml.sha256": "tests/test_contract_export.py"
+  "scripts/export_contract.py": "tests/test_contract_export.py"
 ```
 
 `tests/conftest.py` maps to the canary because the fixture it installs is the thing under
@@ -252,6 +271,12 @@ They still need mappings: without one the orchestrator falls back to a heuristic
 the whole suite, and a workflow, lock, Dockerfile or config edit either runs everything or
 nothing. `pyproject.toml` maps to two modules because it carries two independently-guarded
 concerns: the CPU-only dependency lock and the type-checking policy.
+
+`retrieval_app.py`, `models.py` and `pipeline/contract.py` all gained
+`tests/test_contract_export.py` in `feature-forage-contract` US-002. That is the whole
+point of the drift check: the three files that can move the OpenAPI document must run the
+test that notices, or a response-model edit reaches a PR with `contract/openapi.yaml` still
+describing the old shape.
 
 ---
 
