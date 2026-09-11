@@ -161,16 +161,21 @@ Since US-002 the guard has an executing canary, `tests/test_hermeticity.py`: eig
 that assert TCP/UDP/IPv6 construction, both DNS entry points and `create_connection` are
 blocked while `AF_UNIX` socketpairs and async tests still work. Delete or weaken the
 fixture and those tests go red — before the canary, the loss produced no failure at all.
+`forage-cache-fallback` US-002 added two more for `conftest.py`'s *other* autouse
+fixture, the one that clears inherited environment settings (`HF_TOKEN`, `HF_HOME`, the
+three `FORAGE_*` weight variables, and `VALKEY_URL` — which since that story selects the
+cache backend): an exact-set gate on the list and a canary that none of them survives
+into a test.
 `TestHermeticityCanaryIsEnforced` in `tests/test_ci_workflow.py` covers the one thing the
 canary cannot check about itself: that it is committed and not skipped.
 
 **Async needs no decorator.** `asyncio_mode = "auto"` is set in `pyproject.toml`.
 
 **The exact count is a gate, not a floor.** The extraction verified *exactly* 531 tests
-moved (534 collected after alias parametrization); the suite has since grown to 1325 as CI
+moved (534 collected after alias parametrization); the suite has since grown to 1327 as CI
 guards landed (US-001 +33, US-006 +19, US-002 +21, US-003 +49, US-005 +75, US-007 +40; then
 `forage-model-bootstrap` US-002 +87, US-001 +56, US-003 +102, US-004 +76 and US-005 +24;
-then `forage-cache-fallback` US-001 +63 and US-002 +11). A silently
+then `forage-cache-fallback` US-001 +63 and US-002 +13). A silently
 dropped module cannot hide under a "≥ N passed" assertion. When you add tests, update the
 counts here.
 
