@@ -185,13 +185,13 @@ repeat runs; `/extract` appears while `extract_route_enabled: false`.
 - Dependency-bump rendering changes show as reviewable regen diffs (docstring note).
 
 **Acceptance Criteria:**
-- [ ] `contract/openapi.yaml` + `contract/openapi.yaml.sha256` committed, generated,
+- [x] `contract/openapi.yaml` + `contract/openapi.yaml.sha256` committed, generated,
       deterministic; `/extract` present.
-- [ ] Drift pytest in the suite; a deliberate un-regenerated change fails it (committed as
+- [x] Drift pytest in the suite; a deliberate un-regenerated change fails it (committed as
       a self-test fixture case, not a throwaway run).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run pyright` passes
 
 ### US-003: Semver governance, PR template, SECURITY.md
 
@@ -514,6 +514,143 @@ documentation endpoints needed, since nothing in this repo declares them.
 **Left for siblings:** no `contract/` directory yet, and `/openapi.json` is generated
 per-request rather than exported (US-002); the 400→413 correction and the two-semver
 rulings are still spec text, not `GOVERNANCE.md` (US-003).
+
+### US-002 — Generated contract file + pytest drift check (2026-09-11)
+
+**Shipped:** branch `story/ct-us-002-contract-export`. Suite 1447 → **1465** green
+(+18, all in the new `tests/test_contract_export.py`); `ruff check`, `ruff format
+--check`, `uv run pyright` and `actionlint` all zero. `CONTRACT_VERSION` unchanged at
+`1.1.0`. Zero production code changed — `retrieval_app.py`, `models.py` and `pipeline/`
+are byte-identical to US-005's tree; this story only *reads* the app.
+
+**`sanitizer_revision` did NOT rotate** —
+`8b1b7f78e85f733ef3b8ace5194632a8cf92410131b2c1af995c456f20196d7c` before and after,
+re-derived at both ends. Nothing this story touched is in `_REVISION_SOURCES`, and
+`git diff --stat main -- pipeline/ models.py` is empty. US-001 keeps the spec's one
+acknowledged rotation.
+
+**Three artifacts, one command.** `uv run python -m scripts.export_contract` writes
+`contract/openapi.yaml` (45,089 bytes, 1,335 lines), `contract/openapi.yaml.sha256`, and
+`tests/fixtures/contract/unregenerated_openapi.yaml` (the self-test twin, below). They are
+only consistent as a set, so the script writes all three or none, and `--check` verifies
+all three without writing. The drift gate itself is **not** the CLI: the tests import
+`drift_report()` and call it, so it runs in spec 2's `test` job, under the orchestrator's
+regression gate, and on every local `uv run pytest` with no lane for anyone to forget.
+
+**The document matches US-005's preview exactly** — 5 paths, 25 components, 38,414 bytes
+as `json.dumps(..., sort_keys=True)`, `info.version` `1.1.0`, `/metrics.get` carrying the
+`description` the grown handler docstring produced. The 17-code vocabulary is visible in
+the artifact as well as in the models: sweeping every `error` property in the committed
+YAML for its `const`/`enum` members returns exactly **17** distinct codes.
+
+**The canonical form, and an honest account of which parts are load-bearing.** Four
+settings are pinned in `scripts/export_contract.py` (JSON round-trip → no-alias dumper →
+`sort_keys=True` → `width=88, indent=2, allow_unicode=True`), and the docstring explains
+each. Mutation testing then made a more precise claim possible than "all four are
+required", which would have been false:
+
+- **Sorting is produced twice.** `json.dumps(sort_keys=True)` and the dumper's
+  `sort_keys=True` each fully sort the document; removing either alone moves no byte.
+  Removing **both** does, and fails the drift test plus
+  `test_every_mapping_is_key_sorted_at_every_depth` — which reads the *render*, not the
+  committed file, precisely so it pins the renderer rather than re-checking a file the
+  drift test already covers.
+- **The anti-alias machinery is precautionary today.** With *both* defences removed the
+  document still renders anchor-free: FastAPI + pydantic 0.141.1/2.x happen not to share
+  a non-scalar sub-object. It is kept because the failure it guards against — `&id001`
+  appearing in a published contract after a dependency bump — is the silent kind, and the
+  cost is two lines. Recorded rather than dressed up as a fix for something observed.
+- **`width=88` is a deliberate trade.** The artifact reads like the rest of the tree and
+  keeps its em dashes, at the price that editing one word of a long description reflows
+  its block, and that a PyYAML folding change will move bytes no API change moved. Per the
+  spec's edge case, that *is* the intent: a dependency bump surfaces as a reviewable regen
+  diff rather than as silence.
+
+**Determinism is measured, not asserted.** `test_the_render_survives_a_different_hash_seed`
+renders the contract in two subprocesses with `PYTHONHASHSEED=0` and `=1` and compares
+both to the in-process render. The seed can only be set before interpreter start, so this
+costs two ~1.2 s subprocesses; it is the only test that could catch a set iterated into a
+list, which is the one nondeterminism class that would make the drift check a coin flip
+between two CI runs. (The children also get `HF_HUB_OFFLINE=1` — the suite's socket guard
+does not reach a subprocess, and `kit_tools/docs/GOTCHAS.md` documents the hub call that
+would otherwise be possible.)
+
+**The anchor is `sha256sum`-format with the basename, not the repo path.**
+`<64 hex>  openapi.yaml\n`, so `sha256sum -c openapi.yaml.sha256` verifies unchanged from
+the repo's `contract/`, from a directory of downloaded Release assets, and from
+`/app/contract/` in the image — the three contexts US-004's three-way check runs in, where
+the paths differ and the bytes must not. It is checked against the **committed file's own
+bytes**, not against a fresh render: a rendered-vs-rendered check would pass on a tree
+where both files were stale together.
+
+**The self-test twin, and why it is a full copy.** The AC asks for the drift check's
+failure case to be *committed*, not demonstrated once by hand. The twin is
+`contract/openapi.yaml` with `Extract422ErrorResponse.sanitizer_revision` removed — the
+field Poppy hard-rejects a 422 without — which is exactly the file you would have on disk
+after adding that field to the model and forgetting to regenerate. Three properties make
+it a real test rather than a ritual:
+
+1. it is **generated** by the same command as the contract, so it cannot fall behind;
+2. `test_the_twin_differs_from_the_contract_in_one_documented_way` computes a structural
+   diff and requires it to be exactly `…Extract422ErrorResponse.properties.sanitizer_revision`
+   and `…required` — without it, a twin that rotted into an unrelated file would keep the
+   "is it caught?" test green for the wrong reason;
+3. `unregenerated_twin()` **raises** if its target property is gone, because a twin that
+   silently came back identical to the contract would hollow the whole check out. Mutation
+   4 below is that failure mode, and three tests catch it.
+
+The cost is a 1,334-line duplicate in `tests/fixtures/` and a doubled diff on every future
+regen. Paid deliberately: a committed failure case that is a whole real document is the
+only version that proves the checker rejects what it must.
+
+**`/extract` while `extract_route_enabled: false` — verified, and then strengthened.**
+The route is registered at import and only the handler gates (404), so the document is
+config-independent. Rather than assume it, two tests measure it: `/extract` is in `paths`
+with the gate off, and toggling the gate moves **no byte** of the render. A contract that
+appeared and disappeared with a config file would be worthless to pin.
+
+**Mutation-verified** (each applied to a committed tree, then reverted; clean tree back to
+1465):
+
+| Mutation | Result |
+|---|---|
+| a response model's field description reworded, nothing regenerated | **3 failures** — contract drift, twin drift, and the one-documented-way check |
+| `contract/openapi.yaml` hand-edited | **3 failures** — drift plus both anchor assertions |
+| the twin edited somewhere other than its documented difference | **2 failures** |
+| the twin replaced by a copy of the contract (a hollow self-test) | **3 failures**, incl. "the checker catches an un-regenerated change" |
+| `CONTRACT_VERSION` bumped to `1.2.0`, nothing regenerated | **5 failures** — drift ×2, the file↔`CONTRACT_VERSION` tie, the one-documented-way check, and `test_contract_schema.py`'s missing golden |
+| `sort_keys=False` in the dumper *only* | 18 passed — the JSON round-trip already sorted it |
+| the no-alias dumper removed, or the round-trip removed, or both | 18 passed, and the render is still anchor-free |
+| both sorting mechanisms removed | **3 failures** |
+
+**Handoffs, and one AC landed early.**
+
+- The **Dockerfile `COPY` was deliberately not added** — US-004 owns in-image shipping, and
+  the COPY list is filename-enumerated by `CLAUDE.md` invariant 3. Worth knowing before
+  that story starts: `.dockerignore` excludes `tests/`, `kit_tools/` and `scripts/` but
+  **not** `contract/`, so the directory is already in the build context and US-004's change
+  is one `COPY contract/ /app/contract/` line plus its `tests/test_dockerfile.py` guard.
+- US-004's AC-1 half "the drift pytest also asserts the committed anchor matches the
+  committed file" is **already landed here**
+  (`test_the_committed_anchor_is_the_sha256_of_the_committed_contract`, plus
+  `test_the_anchor_is_sha256sum_verifiable_as_committed`). Committing an anchor in US-002
+  that nothing checked until US-004 would have been a two-story gap in the trust root. Read
+  that AC as verify-not-implement.
+- US-003 inherits the bump checklist's target: the regen command is
+  `uv run python -m scripts.export_contract` and it writes three files that must be
+  committed together. `kit_tools/testing/TESTING_GUIDE.md`'s Rules section already states
+  it; GOVERNANCE.md should carry the consumer-facing half (verify the copy you fetched
+  against `contract/openapi.yaml.sha256`, never against another copy).
+
+**Docs touched.** `kit_tools/testing/TESTING_GUIDE.md` (counts 1447 → 1465, 28 → 29 files,
+the new module's row, the twin fixture's row, the regen rule, and the mapping — where
+`retrieval_app.py`, `models.py` and `pipeline/contract.py` all gained
+`tests/test_contract_export.py`, which is the point: the three files that can move the
+document must run the test that notices). `kit_tools/arch/CODE_ARCH.md` (the `contract/`
+directory, the script's Key Modules row, the `scripts/` line count). `kit_tools/SYNOPSIS.md`
+(test count, `contract/` and `scripts/` rows). `tests/fixtures/README.md` (what the twin is
+and why it is generated). `CLAUDE.md` invariant 4 gained the mechanical consequence: the
+frozen surface is a file now, both artifacts are generated, and the regen command is named.
 
 ## Refinement Notes
 

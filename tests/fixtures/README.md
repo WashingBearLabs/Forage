@@ -3,6 +3,28 @@
 Committed fixtures for the test suite. Nothing here is shipped in the image —
 `.dockerignore` excludes `tests/` outright.
 
+## `contract/unregenerated_openapi.yaml`
+
+The contract drift check's own failure case, committed rather than staged by hand.
+`feature-forage-contract` US-002 asks for a *deliberate un-regenerated change* that fails
+`tests/test_contract_export.py`, and a gate nobody has watched fail is not yet a gate — so
+this file is `contract/openapi.yaml` with one property removed,
+`Extract422ErrorResponse.sanitizer_revision`: exactly the file you would have on disk if
+you had added that field to the model and forgotten to regenerate. The property is not an
+arbitrary pick — it is the one Poppy hard-rejects a 422 without.
+
+It is **generated**, by the same command as the contract itself:
+
+```bash
+uv run python -m scripts.export_contract
+```
+
+so it can never fall behind the document it is a twin of. Two tests use it, and they check
+different things: one feeds it to the real `drift_report()` and asserts it is caught, the
+other asserts it differs from the live document in that one documented way and no other —
+without which a fixture that had rotted into some unrelated file would keep the first test
+green for the wrong reason.
+
 ## `tiny_model/`
 
 A **real, loadable** DeBERTa-v2 sequence classifier with random weights: 4 files,

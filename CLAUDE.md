@@ -85,6 +85,14 @@ fixture under `tests/golden/`, and note the change for the consuming repo.
 `feature-forage-contract` freezes the OpenAPI surface and formalises the bump policy —
 read it before touching `pipeline/contract.py` or the response models in `models.py`.
 
+Since US-002 the frozen surface is a file, `contract/openapi.yaml`, with a committed
+`openapi.yaml.sha256` anchor beside it — the trust root every other copy of the contract
+is verified against, because Release assets and registry tags are mutable and a checksum
+in the git history is not. Both are **generated**; hand-editing either is always wrong.
+Anything that moves the document — a response model, a `responses=` declaration, a field
+description, a FastAPI bump — is followed by `uv run python -m scripts.export_contract`,
+and `tests/test_contract_export.py` is red until it is.
+
 ### 5. Degradation is loud, never silent.
 
 `/health` always returns 200; the truth is in the body (`status`, `degraded_reasons`,

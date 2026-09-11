@@ -2,14 +2,14 @@
 # CODE_ARCH.md
 
 > Last updated: 2026-09-11
-> Updated by: Claude (forage-contract US-005)
+> Updated by: Claude (forage-contract US-002)
 
 ---
 
 ## Overview
 
 Forage is a **single-process FastAPI service, 7,218 lines** (plus 1,146 lines of CI-only
-smoke drivers and 1,124 lines of operator scripts under `scripts/`, none of which ship in
+smoke drivers and 1,451 lines of operator scripts under `scripts/` (measured `wc -l`, sum of the table below), none of which ship in
 any image; all figures measured outside `tests/`), with a deliberately flat
 module layout: the top-level modules sit at the repo root rather than inside a `forage/`
 package. That is a decision, not an accident — it keeps the Dockerfile's `COPY` lines,
@@ -62,10 +62,14 @@ Design principles:
 ├── promptguard/             # Llama Prompt Guard 2 classifier wrapper
 ├── searxng/                 # the forage-searxng companion image: Dockerfile
 │                            # (digest-pinned base) + config/ (settings.yml, limiter.toml)
+├── contract/                # the frozen wire contract: openapi.yaml (generated) and
+│                            # openapi.yaml.sha256, the committed anchor every other
+│                            # copy is verified against. Generated, never hand-edited
 ├── scripts/                 # operator-only, run by hand: vendor_weights.py vendors the
-│                            # pinned weights to the private GHCR mirror. Ships in no
+│                            # pinned weights to the private GHCR mirror;
+│                            # export_contract.py regenerates contract/. Ships in no
 │                            # image — the Dockerfile COPY list names nothing here
-├── tests/                   # 27 files; flat, one module per subject
+├── tests/                   # 28 test_*.py modules (+ conftest.py, fakes.py, __init__.py); flat, one module per subject
 ├── docs/                    # configuration.md, weights.md, releases.md, searxng.md,
 │                            # bootstrap-notes.md, bootstrap-scan.txt
 └── kit_tools/               # this documentation framework + feature specs
@@ -98,6 +102,7 @@ Design principles:
 | `contract_smoke.py` | 367 | CI's published-image smoke: polls a running container's `/health`, validates it against the same `HealthResponse` model the golden test pins, and reads every wire value from `pipeline/contract.py` at run time. Ships in no image. |
 | `searxng_smoke.py` | 779 | CI's companion-image smoke: creates an egress-free Docker network, runs SearXNG beside a Valkey and probes it from a third container. Docker goes through an injected runner and every judgement is a pure function, so `tests/test_searxng_smoke.py` covers the failure branches without a daemon. Ships in no image. |
 | `scripts/vendor_weights.py` | 1112 | Operator-only, supervised: downloads the pinned revision, generates `weights_manifest.json` with the safetensors allowlist enforced **at generation time**, builds a deterministic symlink-dereferenced tarball, self-checks it through the real verifier, `oras push`es it tagged by revision sha, and confirms the GHCR package is private. Every constant comes from `model_fetcher`; no credential ever reaches an argv. Ships in no image; `docs/weights.md` is the procedure. |
+| `scripts/export_contract.py` | 327 | Operator-only: renders `app.openapi()` into `contract/openapi.yaml` in a canonical form pinned here (JSON round-trip, no anchors, sorted keys, `width=88`), writes the sha256 anchor, and writes the drift check's own committed failure case. Byte-stable across processes and hash seeds — `tests/test_contract_export.py` calls `drift_report()` directly, so the gate runs on every `uv run pytest` rather than in a lane someone has to remember. |
 | `pipeline/sanitizer_revision.py` | 42 | Hashes eight source files into a `sanitizer_revision` string. See the gotcha below. |
 
 ---
