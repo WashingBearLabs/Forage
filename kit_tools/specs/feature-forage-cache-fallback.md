@@ -230,22 +230,22 @@ passes.
   the 1.1.0 contract.
 
 **Acceptance Criteria:**
-- [ ] `cache_backend` in `/health` + storage counters in `/metrics` (at `:669-673`, layer
+- [x] `cache_backend` in `/health` + storage counters in `/metrics` (at `:669-673`, layer
       distinction documented); the run matrix test-covered with named per-run assertions:
       memory-mode → `status`/`cache_backend`/`cache_connected` = `"healthy"`/`"memory"`/
       `true`; valkey-up → `"healthy"`/`"valkey"`/`true`; valkey-down → `"degraded"` with
       `cache_unavailable`/`"valkey"`/`false`; **and the `app.state.cache is None` case →
       `/health` responds non-500** (micro-verify: the fourth case lived only in a hint).
-- [ ] `cache_connected` clarified semantics carried in the field description +
+- [x] `cache_connected` clarified semantics carried in the field description +
       `docs/configuration.md`.
-- [ ] `cache_policy_fingerprint()` includes the derived sanitizer revision (kwarg added,
+- [x] `cache_policy_fingerprint()` includes the derived sanitizer revision (kwarg added,
       test-covered: revision rotation invalidates cache hits).
-- [ ] `CONTRACT_VERSION == "1.1.0"`; `golden/contract_1_1_0.json` present via the
+- [x] `CONTRACT_VERSION == "1.1.0"`; `golden/contract_1_1_0.json` present via the
       derivation mechanism, `contract_1_0_0.json` retained; rotation acknowledged in the
       commit message.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run pyright` passes
 
 ### US-004: Example compose fragments + mode docs
 
@@ -578,6 +578,168 @@ to the token alone.
 `sanitizer_revision` verified **unrotated** before and after:
 `5927038d64ed54a619e52b94899148f56bfede37d38f3c1a53c435edc719d111`
 (neither `retrieval_app.py` nor `conftest.py` is a `_REVISION_SOURCES` member).
+
+### US-003 — Health/metrics surface + contract 1.1.0 (2026-09-10)
+
+**What landed on the wire.** `HealthResponse` (still in `retrieval_app.py`, not
+`models.py`) gained `cache_backend: CacheBackend` — the `Literal["valkey", "memory"]`
+alias US-002 already declared, so the two strings have one definition across the
+selection, the startup log and the response. `cache_connected` gained the field
+description its semantics had been living in prose: *"the selected backend is
+operational… not a statement that Valkey is present — read `cache_backend` for that."*
+`CONTRACT_VERSION` is `1.1.0`, additive.
+
+`cache_backend` is **published once by the lifespan** (`app.state.cache_backend =
+backend`, the name `_select_cache_storage` already returned) and read per request, on the
+`sanitizer_revision` precedent. Two small helpers do the reading —
+`_resolved_cache_backend(state)` and `_resolved_sanitizer_revision(state)` — and the
+second one exists because `/retrieve` now needs the revision too, so `/health`'s inline
+fallback became a function rather than a second copy. `/extract`'s own
+`getattr(..., derive_sanitizer_revision(...))` call was left alone: it is out of this
+story's scope, and it is worth knowing that its default argument evaluates *eagerly* on
+every request. The new helper does not.
+
+**The fallback is load-bearing, not defensive.** `cache_backend` is a **required** field,
+so a request that found nothing on `app.state` would fail model validation and 500 the one
+endpoint that must never return non-200. That is the fourth matrix case, and it is the
+reason the field resolves through `_configured_cache_backend()` — the same question the
+lifespan asked, answered from the environment — rather than a hard-coded `"memory"`.
+
+**The four runs, each asserted by name:**
+
+| Run | `status` | `cache_backend` | `cache_connected` | `degraded_reasons` |
+|---|---|---|---|---|
+| `VALKEY_URL` unset | `healthy` | `memory` | `true` | `[]` |
+| set + reachable | `healthy` | `valkey` | `true` | `[]` |
+| set + unreachable | `degraded` | `valkey` | `false` | `["cache_unavailable"]` |
+| `app.state.cache` absent | (200, not 500) | `memory` → `valkey` as the env changes | `false` | `cache_unavailable` |
+
+The first three run through US-002's `_started_with_valkey_url` harness — the real
+lifespan and the real `ContentCache`, only Valkey's socket doubled. The fourth runs on the
+lifespan-less `client` fixture with `app.state.cache = None` **and** the published
+`cache_backend` deleted, which is the only way to exercise the fallback at all: `app` is a
+module singleton, so a lifespan test earlier in the session leaves a value behind.
+
+**The stale-stamped-payload window, closed.** `cache_policy_fingerprint()` takes
+`sanitizer_revision` as a required kwarg and folds it into the hashed inputs;
+`run_retrieve_pipeline()` takes it as a required keyword-only parameter and `/retrieve`
+passes the one this process derived. Both were made *required* rather than defaulted —
+a default would have let the production caller forget and leave the fix inert with every
+test still green. The cost was mechanical: 6 fingerprint call sites in `test_cache.py`,
+16 pipeline call sites in `test_orchestrator.py`, all one line each, and pyright-strict
+caught the set exhaustively.
+
+The pipeline is where the value comes from because it is where it already came from:
+`run_extract_pipeline` has taken `sanitizer_revision: str` from the route since Epic 1.
+Deriving it inside the orchestrator instead would have put eight file reads and a sha256
+on every `/retrieve`.
+
+**Rotation, taken and attributed.** Two `_REVISION_SOURCES` files moved:
+
+```
+before: 5927038d64ed54a619e52b94899148f56bfede37d38f3c1a53c435edc719d111
+after:  fa4691c57449c52fe367208bdeeb650cbe474d93485c3b90cc8989b5e593547c
+```
+
+Attribution was **measured**, not assumed — re-deriving with each edit reverted in turn
+gives `b9b716c3…` (only `contract.py` reverted) and `7bfbeed5…` (only `orchestrator.py`
+reverted), so both edits are load-bearing and neither alone produces the shipped value.
+Recorded in `docs/bootstrap-notes.md` as the fifth rotation, with the same table;
+`kit_tools/docs/GOTCHAS.md`, `CLAUDE.md` and `kit_tools/arch/CODE_ARCH.md` were
+grep-updated to the new value, and the commit message carries the before/after per the AC.
+
+This is the **first rotation whose point is the invalidation rather than its price**.
+`pipeline/contract.py`'s docstring has always said a contract change must invalidate
+cached extractions sanitized under the old contract; nothing inside Forage enforced it,
+because the key mixed in every caller-supplied policy knob and not the pipeline's own
+revision. Now it does, so the bump is also the flush. Forage-side cost: entries become
+unreachable at the next start and age out on their own TTL — free in memory mode. The
+Poppy-side cost (`stored_file_extractions` re-extraction) is unchanged from the fourth
+rotation and is spec 6's, already noted there; nothing new is owed.
+
+**Golden fixtures.** `tests/golden/contract_1_1_0.json` was produced by the derivation
+mechanism itself (`json.dumps(_current_schemas(), indent=2, sort_keys=True)`, which
+reproduces `contract_1_0_0.json` byte-for-byte on the old tree). The diff against 1.0.0 is
+purely additive and entirely inside `HealthResponse`: the new property, the new
+`cache_connected` description, one more entry in `required`. `contract_1_0_0.json` is
+**retained** — spec 5's GOVERNANCE rules on retention; this story just does not delete it.
+
+**The CI smoke: confirmed, not assumed.** `contract_smoke.py` itself needed **no change**
+— it derives its expected field set from `HEALTH_MODEL.model_fields` and reads
+`CONTRACT_VERSION` from `pipeline/contract.py` at job time, so the new field and the new
+version arrived on their own. What it *did* catch immediately is that
+`tests/test_contract_smoke.py`'s `_health_body()` fixture is a hand-written payload: ten
+of its tests went red until `cache_backend` was added to it, including
+`test_field_expectations_track_the_model`, which deletes each declared field in turn. The
+value in the fixture is `"memory"`, because the smoke job runs the image with no `-e` of
+any kind — the same memory-mode container US-002's live evidence recorded.
+
+**Live container evidence, from the PR's own `smoke` job** (PR #14, run 34568618988):
+
+```
+Expecting contract_version 1.1.0 (pipeline/contract.py)
+{"status":"degraded","promptguard_loaded":false,"cache_connected":true,
+ "capabilities":{},"sanitizer_revision":"fa4691c5…93547c",
+ "contract_version":"1.1.0","cache_backend":"memory",
+ "degraded_reasons":["promptguard_unavailable"]}
+Contract smoke PASSED: degraded, honest, and on-contract.
+```
+
+Three things at once: the new field is on the wire from a real container, the bump reached
+the image, and the revision the built image derives is byte-identical to the one derived
+locally — which is the only end-to-end check that the rotation recorded here is the
+rotation that ships.
+
+**Already satisfied by US-001, verified rather than re-implemented.** AC1's `/metrics`
+clause: the four `storage_*` counters render under the `cache` section (now
+`retrieval_app.py:869-878`, the hint's `:669-673` being the pre-US-001 insertion point),
+the exact-set assertion in `test_app.py` covers them, and `docs/configuration.md`'s
+`cache:` section carries the two-layer distinction (`retrieve.cache_hits` = request
+outcomes, `cache.storage_*` = storage operations). AC2's doc half was likewise landed by
+US-002; this story added the *field description* — the half that was still missing — and
+named `cache_backend` in the three places `configuration.md` had to hedge around it while
+the field did not exist yet, including the prod cross-ref, which now reads
+`cache_backend == "valkey"` as spec 6's checklist states it.
+
+**Mutation verification — 10 mutants, 10 killed:**
+
+| Mutant | Killed by |
+|---|---|
+| M1 drop `cache_backend` from `HealthResponse` | `test_contract_schema_matches_golden` |
+| M2 hardcode `cache_backend="valkey"` in the handler | `test_health_names_the_backend_it_selected_for_this_start[memory-healthy]` |
+| M3 read the environment per request instead of `app.state` | `test_the_lifespan_publishes_the_backend_it_selected` |
+| M4 drop the no-cache fallback | `test_health_without_a_cache_still_names_a_backend_and_never_500s` |
+| M5 invert `_configured_cache_backend`'s rule | `test_the_backend_name_never_drifts_from_the_storage_actually_built` |
+| M6 drop the revision from the fingerprint inputs | `test_a_rotated_sanitizer_revision_changes_the_fingerprint`, `…misses_the_cached_entry[fake_storage/in_memory_storage]` |
+| M7 pass a constant revision from `run_retrieve_pipeline` | `test_a_rotated_sanitizer_revision_invalidates_the_cached_entry` |
+| M8 revert `CONTRACT_VERSION` to `1.0.0` | `test_contract_schema_matches_golden` (the filename derivation) |
+| M9 delete `golden/contract_1_1_0.json` | `test_contract_schema_matches_golden` |
+| M10 drop the `cache_connected` description | `test_contract_schema_matches_golden` |
+
+**M5 is the one worth reading.** Inverting `_configured_cache_backend()` survives the
+first **three** cases of the matrix (they go through the lifespan, which takes its name
+from `_select_cache_storage`, not the helper) — *(supervisor correction 2026-09-13: the
+notes first claimed it survived all four and only the drift test caught it; the
+verifier's re-run shows case 4 — the no-cache path, which routes through the fallback —
+kills it too, so it is double-pinned: drift test + matrix case 4. The design is safer
+than first advertised.)* Two functions encode one rule — one for the lifespan, which
+needs a storage object, one for `/health`'s fallback, which has nowhere to put one — and
+the drift test asserts they agree for both environments.
+
+M7 is the wiring gate: `cache_policy_fingerprint` taking the revision is inert unless
+`/retrieve` passes the one this process derived, so the kill is at the route level (three
+requests: miss, cached hit as the control, then a re-fetch after the rotation).
+
+**Deliberately not done here:** the compose fragments and the README mode matrix
+(US-004's); stamping `RetrievedContent` with `sanitizer_revision` (the model has no such
+field — `ExtractedContent` does, and adding one to the retrieve response would be a wire
+change this story's minor bump does not cover); and any Poppy-side work, which the spec
+correctly says is none — the comparison is major-only and a minor drift logs.
+
+**Gates.** 1338 passed (1327 + 11); `ruff check` / `ruff format --check` /
+`pyright --strict` / `actionlint` all zero. One process note: run pyright through
+`uv run`, as `CONVENTIONS.md` says — a bare `.venv/bin/pyright` in this tree reports 34
+phantom errors from a different environment's stubs.
 
 ## Refinement Notes
 

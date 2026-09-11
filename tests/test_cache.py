@@ -41,6 +41,24 @@ from tests.fakes import FakeStorage, ManualClock, assert_frozen
 # Fixtures
 # ---------------------------------------------------------------------------
 
+# A plausible derived revision, shaped like `derive_sanitizer_revision`'s
+# output. The fingerprint treats it as opaque, so one fixed sample serves every
+# call that is not deliberately rotating it.
+_SAMPLE_REVISION = "a" * 64
+
+
+def _fingerprint_at_revision(sanitizer_revision: str) -> str:
+    """One retrieval policy, fingerprinted under the given pipeline revision."""
+    return cache_policy_fingerprint(
+        trusted_domains=[],
+        verified_domains=[],
+        blocked_domains=[],
+        promptguard_threshold=0.85,
+        promptguard_fail_closed=True,
+        classifier_loaded=True,
+        sanitizer_revision=sanitizer_revision,
+    )
+
 
 def _make_content(
     *,
@@ -198,6 +216,7 @@ class TestCacheKey:
             promptguard_threshold=0.85,
             promptguard_fail_closed=True,
             classifier_loaded=True,
+            sanitizer_revision=_SAMPLE_REVISION,
         )
         trusted = cache_policy_fingerprint(
             trusted_domains=["example.com"],
@@ -206,6 +225,7 @@ class TestCacheKey:
             promptguard_threshold=0.85,
             promptguard_fail_closed=True,
             classifier_loaded=True,
+            sanitizer_revision=_SAMPLE_REVISION,
         )
         assert cache_key(url, policy_fingerprint=standard) != cache_key(
             url,
@@ -222,6 +242,7 @@ class TestCacheKey:
             promptguard_threshold=0.85,
             promptguard_fail_closed=True,
             classifier_loaded=False,
+            sanitizer_revision=_SAMPLE_REVISION,
         )
         model_loaded = cache_policy_fingerprint(
             trusted_domains=[],
@@ -230,10 +251,38 @@ class TestCacheKey:
             promptguard_threshold=0.85,
             promptguard_fail_closed=True,
             classifier_loaded=True,
+            sanitizer_revision=_SAMPLE_REVISION,
         )
         assert cache_key(url, policy_fingerprint=model_absent) != cache_key(
             url,
             policy_fingerprint=model_loaded,
+        )
+
+    def test_a_rotated_sanitizer_revision_changes_the_fingerprint(self) -> None:
+        """A pipeline change cannot replay content the old pipeline sanitized.
+
+        `pipeline/contract.py`'s docstring states the rule — a contract change
+        must invalidate cached extractions sanitized under the old one — and
+        until US-003 nothing enforced it: the key mixed in every caller-supplied
+        knob but not the revision, so a deploy that rotated it kept serving the
+        previous code's output for up to a TTL.
+        """
+        url = "https://example.com"
+        before = _fingerprint_at_revision("0" * 64)
+        after = _fingerprint_at_revision("1" * 64)
+
+        assert before != after
+        assert cache_key(url, policy_fingerprint=before) != cache_key(
+            url,
+            policy_fingerprint=after,
+        )
+
+    def test_an_unchanged_sanitizer_revision_keeps_the_fingerprint_stable(
+        self,
+    ) -> None:
+        """The revision is an input, not a nonce — the same one keys the same."""
+        assert _fingerprint_at_revision(_SAMPLE_REVISION) == _fingerprint_at_revision(
+            _SAMPLE_REVISION
         )
 
 
@@ -1004,6 +1053,7 @@ class TestPolicyParityAcrossStorages:
             promptguard_threshold=0.85,
             promptguard_fail_closed=True,
             classifier_loaded=False,
+            sanitizer_revision=_SAMPLE_REVISION,
         )
         model_loaded = cache_policy_fingerprint(
             trusted_domains=[],
@@ -1012,6 +1062,7 @@ class TestPolicyParityAcrossStorages:
             promptguard_threshold=0.85,
             promptguard_fail_closed=True,
             classifier_loaded=True,
+            sanitizer_revision=_SAMPLE_REVISION,
         )
         await harness.cache.put(
             _PARITY_URL,
@@ -1026,6 +1077,30 @@ class TestPolicyParityAcrossStorages:
         )
         miss = await harness.cache.get(_PARITY_URL, policy_fingerprint=model_loaded)
         assert miss is None
+
+    async def test_a_rotated_sanitizer_revision_misses_the_cached_entry(
+        self, harness: _ParityHarness
+    ) -> None:
+        """Rotation invalidates: the stored entry survives, the read misses.
+
+        The same proof as the sibling above, for the input US-003 added. Note
+        what it asserts about the *storage*: nothing is deleted, because the
+        old pipeline's entry is not wrong, merely unreachable — it ages out on
+        its own TTL while the new revision fills a key of its own.
+        """
+        before = _fingerprint_at_revision("0" * 64)
+        after = _fingerprint_at_revision("1" * 64)
+        await harness.cache.put(
+            _PARITY_URL,
+            _make_content(),
+            policy_fingerprint=before,
+            domain="example.com",
+        )
+
+        assert (
+            await harness.cache.get(_PARITY_URL, policy_fingerprint=before) is not None
+        )
+        assert await harness.cache.get(_PARITY_URL, policy_fingerprint=after) is None
 
     async def test_extract_mode_keys_the_variant(self, harness: _ParityHarness) -> None:
         await harness.cache.put(

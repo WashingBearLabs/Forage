@@ -31,9 +31,12 @@ def _current_schemas() -> dict[str, object]:
 def test_contract_schema_matches_golden() -> None:
     """Any unrecorded wire-shape change must bump CONTRACT_VERSION.
 
-    This spec *defines* 1.0.0: a change here means either a story forgot to
-    update the golden file in the same commit, or the wire shape changed
-    without a version bump — both are bugs.
+    The fixture filename is derived from ``CONTRACT_VERSION``, so a bump is
+    only complete once the matching golden file exists: a change here means
+    either a story forgot to write it in the same commit, or the wire shape
+    changed without a version bump — both are bugs. Superseded fixtures stay
+    (``contract_1_0_0.json`` alongside ``contract_1_1_0.json``); the retention
+    rule itself is ``feature-forage-contract``'s to write down.
     """
     golden = json.loads(_GOLDEN_PATH.read_text())
     current = _current_schemas()

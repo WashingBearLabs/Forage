@@ -56,8 +56,9 @@ Poppy half (consuming the image, then deleting the in-tree copy) executes in Pop
       suite.
 - [ ] A third party can `docker compose up` from the example fragment with only
       `HF_TOKEN` (+ `SEARXNG_SECRET`) set and get a working `/search` + `/retrieve`.
-- [ ] Contract drift check passes; `contract_version` frozen at `1.0.0` with a documented
-      bump policy.
+- [ ] Contract drift check passes; `contract_version` frozen at `1.1.0` with a documented
+      bump policy (`1.0.0` → `1.1.0` in `forage-cache-fallback` US-003, the additive
+      `/health` field `cache_backend`, before the freeze).
 
 ---
 

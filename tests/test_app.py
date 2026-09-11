@@ -9,7 +9,7 @@ import tempfile
 import threading
 import time
 from collections.abc import AsyncGenerator, Callable
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -25,6 +25,7 @@ from cache import (
     DEFAULT_CACHE_MAX_BYTES,
     DEFAULT_CACHE_MAX_ENTRIES,
     CacheConfigurationError,
+    CacheMetrics,
     CacheSettings,
     ContentCache,
     InMemoryStorage,
@@ -41,6 +42,7 @@ from models import (
 from pipeline import contract
 from pipeline.contract import (
     CONTRACT_VERSION,
+    DEGRADED_CACHE_UNAVAILABLE,
     DEGRADED_PROMPTGUARD_UNAVAILABLE,
     DIAG_STRUCTURAL_BLOCKED,
 )
@@ -1399,3 +1401,169 @@ async def test_no_selection_path_logs_the_valkey_url(
     assert "redis://" not in caplog.text
     assert "wrong-scheme-host" not in caplog.text
     assert "valkey-that-is-not-there" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# `cache_backend` on /health, contract 1.1.0 (`feature-forage-cache-fallback`
+# US-003)
+# ---------------------------------------------------------------------------
+#
+# Four runs, each asserted by name rather than by loop:
+#
+#   memory mode          -> healthy  / memory / cache_connected true
+#   Valkey up            -> healthy  / valkey / cache_connected true
+#   Valkey down          -> degraded / valkey / cache_connected false
+#   no cache on app.state-> /health still answers 200 and still names a backend
+#
+# The first three run through the same real `lifespan` the US-002 selection
+# tests use; the fourth is the one `/health` path that has no cache to ask, and
+# a *required* wire field read off `app.state` is exactly the shape that turns
+# an honest degraded report into a 500.
+
+
+@pytest.mark.parametrize(
+    (
+        "valkey_url",
+        "valkey_reachable",
+        "expected_status",
+        "expected_backend",
+        "expected_connected",
+        "expected_reasons",
+    ),
+    [
+        pytest.param(None, False, "healthy", "memory", True, [], id="memory-healthy"),
+        pytest.param(
+            _WORKING_VALKEY_URL,
+            True,
+            "healthy",
+            "valkey",
+            True,
+            [],
+            id="valkey-up-healthy",
+        ),
+        pytest.param(
+            _UNREACHABLE_VALKEY_URL,
+            False,
+            "degraded",
+            "valkey",
+            False,
+            [DEGRADED_CACHE_UNAVAILABLE],
+            id="valkey-down-degraded",
+        ),
+    ],
+)
+async def test_health_names_the_backend_it_selected_for_this_start(
+    monkeypatch: pytest.MonkeyPatch,
+    valkey_url: str | None,
+    valkey_reachable: bool,
+    expected_status: str,
+    expected_backend: str,
+    expected_connected: bool,
+    expected_reasons: list[str],
+) -> None:
+    """Cases 1-3 of 4 — the field says which storage this container is running.
+
+    `cache_connected` alone cannot answer the operator's question. A `true`
+    means "the selected backend is operational", which is what memory mode
+    reports for free, so a deployment that silently lost its Valkey and a
+    deployment that is healthily in memory mode look identical on Epic 1's
+    surface. `cache_backend` is the field that separates them, and the live
+    checklist in the consuming repo's spec 6 asserts it reads `valkey` in
+    production.
+    """
+    with ExitStack() as stack:
+        if valkey_reachable:
+            aioredis = stack.enter_context(patch("cache.aioredis"))
+            aioredis.from_url.return_value = _valkey_double()
+        async with _started_with_valkey_url(
+            monkeypatch, valkey_url=valkey_url
+        ) as client:
+            data = (await client.get("/health")).json()
+
+    assert data["status"] == expected_status
+    assert data["cache_backend"] == expected_backend
+    assert data["cache_connected"] is expected_connected
+    assert data["degraded_reasons"] == expected_reasons
+    assert data["contract_version"] == CONTRACT_VERSION
+
+
+async def test_health_without_a_cache_still_names_a_backend_and_never_500s(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Case 4 of 4 — no cache on `app.state`: 200, and the field still answers.
+
+    `test_health_missing_cache_reports_unavailable_never_raises` guards this
+    path for Epic 1's fields. `cache_backend` is *required* by the response
+    model, so a start that published no value would fail model validation and
+    500 the one endpoint that must never 500 — the fallback below is what makes
+    it a degraded report instead. It reads the environment, the same question
+    the lifespan asked, so the answer tracks the deployment rather than being a
+    hard-coded guess.
+    """
+    published = getattr(app.state, "cache_backend", None)
+    app.state.cache = None
+    if published is not None:
+        delattr(app.state, "cache_backend")
+    try:
+        monkeypatch.delenv("VALKEY_URL", raising=False)
+        unconfigured = await client.get("/health")
+
+        monkeypatch.setenv("VALKEY_URL", _WORKING_VALKEY_URL)
+        configured = await client.get("/health")
+    finally:
+        app.state.cache = FakeContentCache()
+        if published is not None:
+            app.state.cache_backend = published
+
+    assert unconfigured.status_code == 200
+    assert unconfigured.json()["cache_backend"] == "memory"
+    assert unconfigured.json()["cache_connected"] is False
+    assert DEGRADED_CACHE_UNAVAILABLE in unconfigured.json()["degraded_reasons"]
+
+    assert configured.status_code == 200
+    assert configured.json()["cache_backend"] == "valkey"
+
+
+def test_the_backend_name_never_drifts_from_the_storage_actually_built(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_configured_cache_backend` answers what `_select_cache_storage` builds.
+
+    Two functions encode the same rule — one for the lifespan, which needs the
+    storage, and one for `/health`'s fallback, which has nowhere to put one.
+    This is the gate that keeps them the same rule.
+    """
+    monkeypatch.delenv("VALKEY_URL", raising=False)
+    storage, backend = retrieval_app._select_cache_storage(
+        settings=CacheSettings(),
+        metrics=CacheMetrics(),
+    )
+    assert isinstance(storage, InMemoryStorage)
+    assert backend == "memory" == retrieval_app._configured_cache_backend()
+
+    monkeypatch.setenv("VALKEY_URL", _WORKING_VALKEY_URL)
+    storage, backend = retrieval_app._select_cache_storage(
+        settings=CacheSettings(),
+        metrics=CacheMetrics(),
+    )
+    assert isinstance(storage, ValkeyStorage)
+    assert backend == "valkey" == retrieval_app._configured_cache_backend()
+
+
+async def test_the_lifespan_publishes_the_backend_it_selected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The value `/health` reads is decided once, at start, not per request.
+
+    A request-time read of `VALKEY_URL` would report a backend the running
+    process is not using the moment anyone changed the environment, which is
+    the drift `app.state` exists to prevent.
+    """
+    async with _started_with_valkey_url(monkeypatch, valkey_url=None) as client:
+        assert app.state.cache_backend == "memory"
+
+        monkeypatch.setenv("VALKEY_URL", _WORKING_VALKEY_URL)
+        data = (await client.get("/health")).json()
+
+    assert data["cache_backend"] == "memory"

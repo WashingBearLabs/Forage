@@ -67,6 +67,10 @@ def _health_body(**overrides: object) -> str:
         "capabilities": {},
         "sanitizer_revision": _REVISION,
         "contract_version": CONTRACT_VERSION,
+        # The smoke runs the image with no `-e` of any kind, so the container
+        # it reads has no `VALKEY_URL` and reports the memory backend
+        # (`feature-forage-cache-fallback` US-002/US-003).
+        "cache_backend": "memory",
         "degraded_reasons": [
             DEGRADED_PROMPTGUARD_UNAVAILABLE,
             DEGRADED_CACHE_UNAVAILABLE,

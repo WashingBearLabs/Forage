@@ -79,7 +79,7 @@ is now load-bearing for the two consumers above.
 ### 4. A change to a response shape is a contract change.
 
 The response contract is versioned (`pipeline/contract.py`, `contract_version` currently
-**1.0.0**), and consumers are expected to refuse activation on a major mismatch rather
+**1.1.0**), and consumers are expected to refuse activation on a major mismatch rather
 than guess. Changing any response shape means: bump the version, update or add the golden
 fixture under `tests/golden/`, and note the change for the consuming repo.
 `feature-forage-contract` freezes the OpenAPI surface and formalises the bump policy —
@@ -164,8 +164,11 @@ One thing has already diverged deliberately: `derive_sanitizer_revision()` moved
 `cd00a8b4…` when the `ruff format` CI gate reformatted `pipeline/stage2_structural.py`,
 once more to `0537316d…` when the pyright-strict burn-down retyped
 `pipeline/stage1_extraction.py` and `pipeline/stage2_structural.py`, and now to
-`5927038d…` — the one rotation of the four that changed an *input* rather than a source
+`5927038d…` — the one rotation that changed an *input* rather than a source
 byte: the hashed model identity is `MODEL_ID@revision` since weights became a runtime,
-per-deployment input (`forage-model-bootstrap` US-001). `docs/bootstrap-notes.md` carries
+per-deployment input (`forage-model-bootstrap` US-001) — and a fifth time to
+`fa4691c5…` with the contract bump to `1.1.0`, the first rotation whose *point* is the
+invalidation (`forage-cache-fallback` US-003 made the revision an input to the content
+cache's key). `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

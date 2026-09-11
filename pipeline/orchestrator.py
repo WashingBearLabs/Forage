@@ -198,6 +198,7 @@ async def run_retrieve_pipeline(
     cache: ContentCache | None,
     classifier: PromptGuardClassifier | None,
     config: dict[str, Any],
+    sanitizer_revision: str,
 ) -> RetrievedContent:
     """Run the full 5-stage retrieval pipeline.
 
@@ -206,11 +207,17 @@ async def run_retrieve_pipeline(
     request:
         Inbound retrieval request with URL and options.
     cache:
-        Valkey content cache (may be ``None`` if disconnected).
+        Content cache over the selected storage (may be ``None`` if the
+        service has none).
     classifier:
         PromptGuard 2 classifier instance (may be ``None``).
     config:
         Sidecar configuration loaded from ``config.yaml``.
+    sanitizer_revision:
+        The revision this process sanitizes under, derived once at startup and
+        passed in the way ``run_extract_pipeline`` already takes it. It keys
+        the cache: content sanitized under an older pipeline must not be
+        replayed by a newer one.
 
     Returns
     -------
@@ -237,6 +244,7 @@ async def run_retrieve_pipeline(
         promptguard_threshold=request.promptguard_threshold,
         promptguard_fail_closed=request.promptguard_fail_closed,
         classifier_loaded=classifier is not None and classifier.loaded,
+        sanitizer_revision=sanitizer_revision,
     )
     news_domains: list[str] = config.get("news_domains", [])
 

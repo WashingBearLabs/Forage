@@ -18,11 +18,19 @@ from __future__ import annotations
 
 from typing import Literal
 
-CONTRACT_VERSION = "1.0.0"
+CONTRACT_VERSION = "1.1.0"
 """The retrieval sidecar's wire-shape version, carried on ``/health``.
 
 Bump MAJOR when a field is removed/renamed or its semantics change; bump
-MINOR when fields are only added. This is distinct from ``sanitizer_revision``
+MINOR when fields are only added.
+
+* ``1.0.0`` — the frozen Epic 1 surface.
+* ``1.1.0`` — ``/health`` gained ``cache_backend`` (``"valkey"`` | ``"memory"``),
+  an additive field naming the storage the content cache selected at start
+  (``feature-forage-cache-fallback`` US-003). Nothing was removed and no field
+  changed meaning, so a consumer comparing MAJOR keeps working untouched.
+
+This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy
 at ``poppy/core/retrieval/client.py``): ``sanitizer_revision`` is a
 mechanically-derived hash of pipeline *behavior* (source, model identity,
