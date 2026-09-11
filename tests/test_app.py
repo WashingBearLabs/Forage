@@ -945,14 +945,27 @@ async def test_promptguard_loaded_flips_without_a_restart(
         assert download.call_count == 1
 
 
-async def test_a_token_less_boot_stays_degraded_and_keeps_serving(
-    monkeypatch: pytest.MonkeyPatch,
+async def test_a_credential_less_boot_stays_degraded_and_says_so_once(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The stock image's honest state: no token, no fetch, no error, still up."""
-    monkeypatch.delenv("HF_TOKEN", raising=False)
+    """The stock image's honest state: no credentials, still up, audibly degraded.
+
+    This is the container CI's `smoke` job runs and the one a third party gets
+    from `docker run`. US-001 asserted the counters stayed at zero here and
+    left a note that the combined "every source failed" ERROR was US-004's; it
+    is now US-004's, so the counter moves and the line is logged — once,
+    naming both sources. Nothing was *attempted* (both credentials are
+    absent), and that is precisely why the acquisition itself counts as the
+    failed attempt: a degraded container with every counter at zero is the
+    silent path this spec exists to close.
+    """
     monkeypatch.setenv("HF_HOME", "/nonexistent-model-cache")
 
-    with patch("huggingface_hub.snapshot_download") as download:
+    with (
+        patch("huggingface_hub.snapshot_download") as download,
+        patch("subprocess.run") as run,
+        caplog.at_level("DEBUG", logger="model_fetcher"),
+    ):
         async with _running_app() as client:
             await _settled(cast("asyncio.Task[bool]", app.state.model_task))
             body = (await client.get("/health")).json()
@@ -961,12 +974,21 @@ async def test_a_token_less_boot_stays_degraded_and_keeps_serving(
             assert body["promptguard_loaded"] is False
             assert DEGRADED_PROMPTGUARD_UNAVAILABLE in body["degraded_reasons"]
             assert cast(MagicMock, download).call_count == 0
+            assert cast(MagicMock, run).call_count == 0
             assert (await client.get("/metrics")).json()["model"] == {
-                "fetch_failures": 0,
+                "fetch_failures": 1,
                 "verify_failures": 0,
                 "quarantines": 0,
                 "fetch_in_progress": False,
             }
+
+    errors = [
+        record.getMessage() for record in caplog.records if record.levelname == "ERROR"
+    ]
+    assert len(errors) == 1
+    assert errors[0].startswith("weights_unavailable")
+    assert "huggingface=skipped_no_token" in errors[0]
+    assert "mirror=skipped_no_token" in errors[0]
 
 
 async def test_the_acquisition_task_does_not_outlive_the_lifespan(

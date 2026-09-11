@@ -66,6 +66,8 @@ instance is private-network-only and Forage is its only client.
 | `HF_HOME` | `/app/model-cache` (set by the image) | Hugging Face cache directory the PromptGuard weights are fetched into and read from. Override only if you mount the weights elsewhere. Mount a volume here or the weights are re-fetched on every container recreate. |
 | `HF_TOKEN` | unset | Hugging Face access token for the **gated** `meta-llama/Llama-Prompt-Guard-2-22M` repository. Optional — see "Weights acquisition" below. **Carries a credential**; supply it the same way as `VALKEY_URL`. |
 | `FORAGE_MODEL_REVISION` | the committed pin (a 40-character commit sha) | Which upstream revision of the weights to fetch, verify and load. Only a full commit sha is accepted — a branch name is refused with an error and the committed pin is used instead. |
+| `FORAGE_WEIGHTS_MIRROR` | `ghcr.io/washingbearlabs/forage-weights` | The OCI **repository** holding the vendored weights, used when Hugging Face cannot supply them. A repository, never a tag: the tag is always `FORAGE_MODEL_REVISION`, so redirecting the mirror cannot also redirect which revision it serves. Validated to a lower-case `<registry>/<owner>/<name>`, optionally prefixed `https://` — anything else (an `http://` scheme, embedded credentials, a tag or digest) is refused with an error and the mirror is treated as unconfigured. |
+| `FORAGE_MIRROR_TOKEN` | unset | Registry credential for `FORAGE_WEIGHTS_MIRROR`. Optional — without it the mirror is skipped exactly as a missing `HF_TOKEN` skips Hugging Face. **Carries a credential**; supply it the same way as `VALKEY_URL`. A **read-only** token, scoped as narrowly as your registry allows — see `docs/weights.md` § "The mirror read token". |
 
 The defaults for `VALKEY_URL` and `SEARXNG_URL` are deliberately neutral service names —
 they assume a compose network with services literally called `valkey` and `searxng`, and
@@ -147,9 +149,10 @@ removed in full (`forage-ci-and-image` US-003); `tests/test_dockerfile.py` and C
 
 ### Weights acquisition
 
-`feature-forage-model-bootstrap` US-001. At start Forage checks the model cache and, if it
-does not already hold the pinned weight set, fetches it from Hugging Face. Three things
-about that are worth knowing before you configure it:
+`feature-forage-model-bootstrap` US-001/US-004. At start Forage checks the model cache
+and, if it does not already hold the pinned weight set, fetches it — from Hugging Face
+first, then from the OCI mirror. Three things about that are worth knowing before you
+configure it:
 
 - **The fetch never blocks the service.** Startup yields immediately and the download runs
   behind it, so `/health` answers throughout and a container healthcheck never sees a
@@ -161,18 +164,47 @@ about that are worth knowing before you configure it:
   `weights_manifest.json` — an exact file set with per-file sha256, safetensors only —
   before `from_pretrained` is allowed to open it. A set that fails is quarantined, not
   loaded.
-- **`HF_TOKEN` is optional, and its absence is a supported mode.** The repository is
-  gated, so without a token the fetch is skipped with a single warning and Forage runs
-  `degraded` with `promptguard_unavailable` — honestly, indefinitely, and without
-  retrying into an error loop. Nothing else about the service changes: extraction, the
+- **Every credential is optional, and their absence is a supported mode.** The Hugging
+  Face repository is gated and the mirror is private, so a source without its credential
+  is *skipped*, not failed. Nothing else about the service changes: extraction, the
   structural scan and the URL audit all still work. Getting a token is
   `docs/weights.md`'s subject.
 
-The token is never logged. Download failures are reported through a closed reason
-vocabulary (`http_401`, `timeout`, `io_failed`, `fetch_failed`) rather than by
-interpolating the exception, for the same reason `cache.py` never prints `VALKEY_URL`:
-the library's errors carry request context. Supply `HF_TOKEN` through an env file or a
-secret store, exactly as for `VALKEY_URL` above.
+#### Two sources, in order
+
+Hugging Face is tried first, then `FORAGE_WEIGHTS_MIRROR`. The mirror is the fallback and
+not an alternative: it is a copy we refresh by hand at vendor cadence, so reaching for it
+while the upstream answers would let a stale artifact quietly become the source of truth.
+It is what keeps the service buildable when the gated repository is unavailable — an
+outage, a revoked token, or a vendor decision.
+
+Both sources land in the same place and pass the same gate. The mirrored artifact is
+pulled with `oras` (shipped in the image), extracted into a staging directory under
+`HF_HOME`, checked against `weights_manifest.json` **there**, and only then moved into the
+cache the loader reads. Unverified bytes never enter it. The staging directory is removed
+on every path, successful or not, along with `huggingface_hub`'s own `$HF_HOME/xet/`
+chunk cache — on a 1 GB container those are the space the next fetch needs.
+
+#### When neither source answers
+
+Forage stays `degraded` with `promptguard_unavailable` and logs **one** ERROR naming both
+sources and what each did — `weights_unavailable — … Attempts: huggingface=…, mirror=…` —
+and `/metrics`' `model.fetch_failures` moves. That is true of a container with no
+credentials at all, which is the stock image's honest state: it is a supported mode, but
+not a quiet one. The outcome codes are a closed set; `skipped_no_token` means no
+credential was configured for that source, `misconfigured` means `FORAGE_WEIGHTS_MIRROR`
+could not be used, and anything else means the source was reached and did not deliver.
+
+#### Credentials in logs
+
+Neither token is ever logged. Failures are reported through closed reason vocabularies —
+`http_401`, `timeout`, `io_failed`, `fetch_failed` for the Hugging Face leg; an exit
+status plus `pull_failed` / `timeout` / `oras_missing` and friends for the mirror — rather
+than by interpolating an exception or a captured subprocess stream, for the same reason
+`cache.py` never prints `VALKEY_URL`: `huggingface_hub`'s errors carry request context and
+a registry can put anything it likes in an error body. `FORAGE_MIRROR_TOKEN` reaches
+`oras` on stdin, never as an argument, because `ps` is world-readable. Supply both through
+an env file or a secret store, exactly as for `VALKEY_URL` above.
 
 Check it with `curl -s localhost:8020/health | jq .promptguard_loaded`, and treat
 standard-tier content as unscanned while it reads `false`.
