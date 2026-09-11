@@ -111,22 +111,22 @@ parity is identical by construction and cannot fail) — passes against both a n
   eviction semantics we must test anyway).
 
 **Acceptance Criteria:**
-- [ ] `CacheStorage` protocol (incl. `connect()`/`close()` — the lifespan calls them) +
+- [x] `CacheStorage` protocol (incl. `connect()`/`close()` — the lifespan calls them) +
       `InMemoryStorage` landed; `ContentCache` policy code paths unchanged and
       single-sourced (no policy logic in either storage).
-- [ ] Parametrized suite covers the five policy behaviors AND storage-level TTL expiry,
+- [x] Parametrized suite covers the five policy behaviors AND storage-level TTL expiry,
       against `FakeStorage` + `InMemoryStorage`; the moved test_cache/test_orchestrator
       fixtures rewired to the storage seam with assertions preserved.
-- [ ] Entry-count and byte bounds enforced with expired-first-then-LRU eviction (both
+- [x] Entry-count and byte bounds enforced with expired-first-then-LRU eviction (both
       bounds + the ordering tested); oversized entries skipped-not-stored with the counter
       incremented; defaults 256/32 MiB via the `cache:` config block (extraction_limits
       pattern); storage counters (hits/misses/evictions/oversize_skips) maintained.
-- [ ] A repeated `/retrieve` of the same URL in memory mode is served from the cache,
+- [x] A repeated `/retrieve` of the same URL in memory mode is served from the cache,
       asserted at the route level (round-2 completionist gap: unit-level suites alone could
       pass with a backend `/retrieve` never consults).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run pyright` passes
 
 ### US-002: Backend selection + default removal
 
@@ -360,7 +360,8 @@ round-3 location finding held).
 - **`ValkeyStorage`** took the whole reconnect stack unchanged (bounded 2 s connect
   deadline, doubling backoff, single-flight lock, `_closed_vocabulary_reason`). The
   `TestReconnect` suite — the "configured case unchanged" regression net US-002 leans on —
-  needed *one* line changed in *one* of its eight tests.
+  needed changes in *two* of its eight tests (supervisor correction: the notes first
+  claimed one; the verifier's diff found the second).
 - **Constructor stayed backward-compatible**: `ContentCache(valkey_url=..., metrics=...,
   storage=None)` still builds a Valkey-backed cache. Nothing in `retrieval_app.py`
   selects a backend — that is US-002.
@@ -370,7 +371,7 @@ close but not exact, and the seam absorbed most of them:
 
 | Hint (round 2) | Measured at implementation | What it cost |
 |---|---|---|
-| 48 `mock_redis` uses | 48 | All gone — the two policy fixtures now inject `FakeStorage` |
+| 48 `mock_redis` uses | 48 | 38 gone — the two policy fixtures now inject `FakeStorage`; 10 legitimately remain in the Valkey failure-path tests (supervisor correction: "all gone" was overcounted) |
 | 9 `patch("cache.aioredis")` blocks | 9 | **0 changed** (module-level `aioredis` still the target) |
 | 7 `._client` + 8 `._metrics` refs | 9 + 8 | 5 `._client` rewired to a `ValkeyStorage`; all 8 `._metrics` survive verbatim |
 | 19 `ContentCache()` sites | 21 in tests (24 repo-wide incl. this spec's own prose) | 4 rewired, the rest untouched |
