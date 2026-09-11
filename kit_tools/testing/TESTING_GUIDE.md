@@ -97,7 +97,7 @@ crash reads as a false regression.
 
 | Module | Tests | Covers |
 |--------|------:|--------|
-| `tests/test_model_fetcher.py` | 124 | `model_fetcher.py`: fail-closed manifest verification, exact-set + safetensors-only allowlist, symlink-resolving hashing, one-generation quarantine, the loadable safetensors fixture, and the acquisition pipeline — revision pin, `$HF_HOME/hub` resolution, the mocked HF fetch, token redaction |
+| `tests/test_model_fetcher.py` | 188 | `model_fetcher.py`: fail-closed manifest verification, exact-set + safetensors-only allowlist, symlink-resolving hashing, one-generation quarantine, the loadable safetensors fixture, and the acquisition pipeline — revision pin, `$HF_HOME/hub` resolution, the mocked HF fetch, token redaction |
 | `tests/test_vendor_weights.py` | 102 | `scripts/vendor_weights.py`: the symlink-dereferenced tarball (built, extracted, bytes compared), tar determinism, generation-time allowlist refusal, the manifest round-trip through the real verifier, credential hygiene on the `oras` path, and the private-package visibility check — all fixture-driven, no registry and no token |
 | `tests/test_stage2_structural.py` | 78 | Deterministic regex injection scan |
 | `tests/test_orchestrator.py` | 61 | End-to-end pipeline drive, search + retrieve paths |
@@ -113,7 +113,7 @@ crash reads as a false regression.
 | `tests/test_contract_smoke.py` | 47 | `contract_smoke.py`: every `/health` clause, polling, and the single-source ties to the golden schema |
 | `tests/test_stage5_url_audit.py` | 28 | Outbound fetch + redirect-chain audit |
 | `tests/test_stage1_pdf.py` | 23 | PDF branch, subprocess isolation |
-| `tests/test_dockerfile.py` | 28 | `Dockerfile` text: no secret may enter the build, digest-pinned base, lock-driven install |
+| `tests/test_dockerfile.py` | 39 | `Dockerfile` text: no secret may enter the build, digest-pinned base, lock-driven install |
 | `tests/test_pyright_policy.py` | 12 | Type-checking policy: strict, one carve-out, no suppressions |
 | `tests/test_searxng_smoke.py` | 61 | `searxng_smoke.py`: every evaluator branch, the Docker argv it builds, and the `--internal` wiring |
 | `tests/test_searxng_docker.py` | 28 | `searxng/Dockerfile` + baked config: the negatives (no wildcard pass list, no baked secret, no header trust) and engine parity with `_SEARXNG_ENGINES` |

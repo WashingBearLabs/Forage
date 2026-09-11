@@ -148,7 +148,9 @@ but a deployment does not.
 **Mitigation:**
 Use `/metrics`' `model` section — not the logs — to observe a fetch in flight. Failures
 are ERROR and do surface, with a closed reason vocabulary. If you need the success lines
-while debugging, run the image with `uvicorn --log-level info`, or set the level from a
+while debugging, `uvicorn --log-level info` does NOT work — that flag configures
+uvicorn's own loggers, not the root (measured at US-004 verification: `weights_fetch_attempt`
+still never appears). The working fallback is `logging.basicConfig(level=...)` from a
 Python entry point; note that this changes output for *every* lane at once, which is why
 US-004 recorded it here rather than changing it in passing.
 

@@ -280,15 +280,15 @@ ERROR names both attempts and `/health` stays degraded.
   (cross-ref exists there) — without it the mirror has no production consumer.
 
 **Acceptance Criteria:**
-- [ ] Mirror-only fetch reaches a **loaded classifier** (end-to-end with mocked transport +
+- [x] Mirror-only fetch reaches a **loaded classifier** (end-to-end with mocked transport +
       real verifier + real loader path); HF-first order when both present.
-- [ ] Extraction uses `filter="data"` into a temp dir; only verified sets reach the snapshot
+- [x] Extraction uses `filter="data"` into a temp dir; only verified sets reach the snapshot
       layout.
-- [ ] Both-sources-failed: one ERROR naming both, counter incremented, degraded persists;
+- [x] Both-sources-failed: one ERROR naming both, counter incremented, degraded persists;
       neither token ever logged (test-asserted for both).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run pyright` passes
 
 ### US-005: Warm-start cache lifecycle + degraded-recovery retry
 
@@ -750,7 +750,7 @@ than re-asserting the outcome. 16 of 17 caught on the first pass; 17 of 17 after
 
 | Run | Result |
 |---|---|
-| no token | `weights_fetch_skipped — no HF_TOKEN…` at WARNING, **zero ERROR lines**, `/health` degraded + `promptguard_unavailable`, volume untouched |
+| no token | `weights_fetch_skipped — no HF_TOKEN…` at WARNING, **zero ERROR lines** *(historical — true at US-001; superseded by US-004, whose Goals-mandated both-sources-exhausted ERROR now fires in this configuration)*, `/health` degraded + `promptguard_unavailable`, volume untouched |
 | `HF_TOKEN` set (fake), placeholder manifest | `weights_pin_unusable — /app/weights_manifest.json pins no verifiable file set…`, **no download attempted**, `/app/model-cache` still empty |
 | both | `Application startup complete` precedes the acquisition line — startup yielded first — and `contract_smoke.py` reports **PASSED: degraded, honest, and on-contract** |
 

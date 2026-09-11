@@ -2564,6 +2564,35 @@ class TestMirrorFetch:
 class TestMirrorExtractionIsSafe:
     """A tarball is bytes a remote party chose. Treat it that way."""
 
+    def test_extractall_passes_the_data_filter_literally(self) -> None:
+        """The AC names ``filter="data"``; pin the literal, not just outcomes.
+
+        US-004 verification found a ``filter="tar"`` mutation left all
+        behavioural tests green — the hostile-tarball suite happens to be
+        refused by ``tar`` too, but ``tar`` performs no absolute-path or
+        traversal filtering by contract, so the behavioural cover is
+        incidental. The call site must say ``data``.
+        """
+        tree = ast.parse((_REPO_ROOT / "model_fetcher.py").read_text())
+        extract_calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "extractall"
+        ]
+        assert extract_calls, "model_fetcher.py no longer calls extractall"
+        for call in extract_calls:
+            filters = [
+                kw.value.value
+                for kw in call.keywords
+                if kw.arg == "filter" and isinstance(kw.value, ast.Constant)
+            ]
+            assert filters == ["data"], (
+                'every extractall in model_fetcher.py must pass filter="data" '
+                f"as a literal; found keywords {[(kw.arg) for kw in call.keywords]}"
+            )
+
     def test_a_traversing_member_never_escapes_the_staging_area(
         self,
         tmp_path: Path,

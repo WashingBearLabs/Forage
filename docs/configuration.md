@@ -187,8 +187,10 @@ chunk cache — on a 1 GB container those are the space the next fetch needs.
 
 #### When neither source answers
 
-Forage stays `degraded` with `promptguard_unavailable` and logs **one** ERROR naming both
+Forage stays `degraded` with `promptguard_unavailable` and logs a single *terminal* ERROR naming both
 sources and what each did — `weights_unavailable — … Attempts: huggingface=…, mirror=…` —
+(a source that was genuinely reached and failed also logs its own leg-level diagnostic
+first, so a real outage produces the terminal record plus one per failed attempt) —
 and `/metrics`' `model.fetch_failures` moves. That is true of a container with no
 credentials at all, which is the stock image's honest state: it is a supported mode, but
 not a quiet one. The outcome codes are a closed set; `skipped_no_token` means no
