@@ -9,7 +9,8 @@
 ## Overview
 
 Forage is a **single-process FastAPI service, 6,353 lines** (plus 1,146 lines of CI-only
-smoke drivers that ship in no image; both figures measured outside `tests/`), with a deliberately flat
+smoke drivers and 1,124 lines of operator scripts under `scripts/`, none of which ship in
+any image; all figures measured outside `tests/`), with a deliberately flat
 module layout: the top-level modules sit at the repo root rather than inside a `forage/`
 package. That is a decision, not an accident — it keeps the Dockerfile's `COPY` lines,
 `pipeline/sanitizer_revision.py`'s hashed source paths, and the whole moved test suite
@@ -42,7 +43,8 @@ Design principles:
 ├── model_fetcher.py         # Weight acquisition: the pinned revision, the HF fetch,
 │                            # exact-set manifest verification, safetensors-only
 │                            # allowlist, one-generation quarantine
-├── weights_manifest.json    # The committed weight pin (placeholder until US-003)
+├── weights_manifest.json    # The committed weight pin (fail-closed placeholder
+│                            # until US-003's supervised vendoring run replaces it)
 ├── contract_smoke.py        # CI-only: asserts a running image's /health contract.
 ├── searxng_smoke.py         # CI-only: stands the companion image up beside a
 │                            # Valkey on an --internal network and probes it.
@@ -57,8 +59,12 @@ Design principles:
 ├── promptguard/             # Llama Prompt Guard 2 classifier wrapper
 ├── searxng/                 # the forage-searxng companion image: Dockerfile
 │                            # (digest-pinned base) + config/ (settings.yml, limiter.toml)
-├── tests/                   # 26 files; flat, one module per subject
-├── docs/                    # configuration.md, bootstrap-notes.md, bootstrap-scan.txt
+├── scripts/                 # operator-only, run by hand: vendor_weights.py vendors the
+│                            # pinned weights to the private GHCR mirror. Ships in no
+│                            # image — the Dockerfile COPY list names nothing here
+├── tests/                   # 27 files; flat, one module per subject
+├── docs/                    # configuration.md, weights.md, releases.md, searxng.md,
+│                            # bootstrap-notes.md, bootstrap-scan.txt
 └── kit_tools/               # this documentation framework + feature specs
 ```
 
@@ -88,6 +94,7 @@ Design principles:
 | `pipeline/contract.py` | 100 | The versioned response contract (`contract_version`, currently **1.0.0**). |
 | `contract_smoke.py` | 367 | CI's published-image smoke: polls a running container's `/health`, validates it against the same `HealthResponse` model the golden test pins, and reads every wire value from `pipeline/contract.py` at run time. Ships in no image. |
 | `searxng_smoke.py` | 779 | CI's companion-image smoke: creates an egress-free Docker network, runs SearXNG beside a Valkey and probes it from a third container. Docker goes through an injected runner and every judgement is a pure function, so `tests/test_searxng_smoke.py` covers the failure branches without a daemon. Ships in no image. |
+| `scripts/vendor_weights.py` | 1112 | Operator-only, supervised: downloads the pinned revision, generates `weights_manifest.json` with the safetensors allowlist enforced **at generation time**, builds a deterministic symlink-dereferenced tarball, self-checks it through the real verifier, `oras push`es it tagged by revision sha, and confirms the GHCR package is private. Every constant comes from `model_fetcher`; no credential ever reaches an argv. Ships in no image; `docs/weights.md` is the procedure. |
 | `pipeline/sanitizer_revision.py` | 42 | Hashes eight source files into a `sanitizer_revision` string. See the gotcha below. |
 
 ---

@@ -12,7 +12,7 @@ epic_seq: 2
 epic_final: false
 execution_order: [US-002, US-001, US-003, US-004, US-005, US-006]
 created: 2026-09-02
-updated: 2026-09-07
+updated: 2026-09-10
 ---
 
 # Feature Spec: Forage Model Bootstrap — Download-at-Start Weights + Vendored Mirror
@@ -223,14 +223,14 @@ committed `weights_manifest.json`.
 - Commits the real `weights_manifest.json` (US-002 shipped only fixtures).
 
 **Acceptance Criteria:**
-- [ ] Weights artifact at `ghcr.io/washingbearlabs/forage-weights:<revision>` (private,
+- [x] Weights artifact at `ghcr.io/washingbearlabs/forage-weights:<revision>` (private,
       visibility verified post-push); committed `weights_manifest.json` matches a fresh pull
       via the US-002 verifier (proving the dereferenced tar carries real bytes).
-- [ ] `scripts/vendor_weights.py` committed and green under the repo's lint/type gates;
+- [x] `scripts/vendor_weights.py` committed and green under the repo's lint/type gates;
       allowlist enforced at generation time; token via env, never argv or logs.
-- [ ] `docs/weights.md` covers vendor/re-vendor, license rationale, mirror-token
+- [x] `docs/weights.md` covers vendor/re-vendor, license rationale, mirror-token
       least-privilege setup (dedicated read-only GHCR PAT; account-wide classic-PAT caveat).
-- [ ] **US-001's live timing half recorded here**: this supervised session (the one with a
+- [x] **US-001's live timing half recorded here**: this supervised session (the one with a
       real token) measures container start → `promptguard_loaded: true` on the reference
       envelope and records ≤ 5 min in Implementation Notes (micro-verify: the deferral
       previously had no landing AC).
@@ -802,6 +802,227 @@ single number was ambiguous about which it meant.
 place a test needed an exception carrying a `response` attribute uses a small local
 exception class rather than the inline `pyright: ignore` that
 `tests/test_pyright_policy.py` forbids.
+
+### US-003: Vendor the weights — **build half** (2026-09-10)
+
+> **This story is split.** Everything below was produced by a tokenless
+> implementation session: the script, its tests, and `docs/weights.md`. The **supervised
+> ops half** — the real gated download, the `oras push`, the post-push visibility check,
+> the fresh-pull verification, the committed real manifest, and US-001's live
+> start→loaded measurement — is a separate session with the owner's credentials, and is
+> recorded in "Supervised ops half — pending" at the end of this section. **None of the
+> four acceptance criteria is complete until that half runs.**
+
+**Shape.** `scripts/vendor_weights.py`, a new `scripts/` package that ships in no image
+(the Dockerfile's `COPY` list is filename-enumerated and names nothing there;
+`test_the_script_is_not_shipped_in_the_image` asserts it). Six phases, each a function,
+each individually runnable with `--step`:
+
+```
+download → manifest → tar → selfcheck → push → visibility
+```
+
+That structure is not decoration. A supervised run is a human at a terminal spending a
+~270 MiB download, and the thing they most need is the ability to stop, look at the
+manifest diff, and resume — not to re-run a monolith because the registry credential was
+wrong. `--dry-run` performs 1–4 and prints the exact `oras` argv and the exact API URLs
+5–6 would have used.
+
+**It is a package (`scripts/__init__.py`), invoked as `python -m scripts.vendor_weights`.**
+That makes the repository root the import root, so the script does `import model_fetcher`
+the way `contract_smoke.py` does from the top level — with no `sys.path` insertion, which
+`kit_tools/docs/CONVENTIONS.md` forbids, and no dependence on the project happening to be
+installed editable. Lint and type lanes needed no decision: `ruff check .` and `pyright`
+already run over the whole tree, and the script is strict-clean with no suppression.
+
+**Every constant is imported, and a test forbids restating one.** `MODEL_ID`,
+`DEFAULT_MODEL_REVISION`, `ALLOW_PATTERNS` and `is_allowed_filename` come from
+`model_fetcher`/`promptguard.classifier`; `test_no_constant_is_restated_as_a_literal`
+parses the script's AST, collects every **non-docstring** string constant, and fails if
+`.safetensors`, `meta-llama/` or the revision sha appears in one. Docstrings are exempt
+deliberately — prose naming the model is documentation, not a second source of truth. The
+reason this matters more here than in most places: a vendoring run that fetched a
+different file set from the one the service verifies would mint a manifest **no running
+container could ever satisfy**, and the failure would present as corruption.
+
+**The dereferenced tar — the round-2 critical, and the test that has teeth.** Every entry
+in `snapshots/<rev>/` is a symlink into `blobs/`, so a naive `tar` ships links and ~0
+bytes, and the failure only surfaces on the far side of a pull, during the outage that
+made someone reach for the mirror. Members are built from the **resolved** file
+(`dereference=True` is set as well, but the guarantee does not rest on it). The guard is
+not "assert the flag is set": `test_the_archive_carries_real_bytes_not_links` archives a
+real symlinked hub tree, extracts it, and compares bytes — and
+`test_a_naive_archive_would_have_shipped_nothing` builds the naive archive alongside it
+and asserts every member is a zero-byte symlink, so the positive test has a demonstrated
+negative to be meaningful against.
+
+**Determinism, and why it is worth the fuss.** Members sorted; `mtime`, `mode`, `uid`,
+`gid`, `uname`, `gname` pinned; the **gzip** header stamped `mtime=0` with no source
+filename — `tarfile.open(mode="w:gz")` stamps the clock and would alone have made two
+runs differ. Verified live: two builds of the same snapshot are byte-identical, and stay
+identical after `touch`ing every source file. The payoff is that a published artifact can
+be **re-derived and compared** rather than merely trusted; without it, "is the mirror
+still the bytes we vendored?" has no cheap answer.
+
+**Generation-time allowlist: the other end of the RCE closure.** US-002 made the verifier
+refuse a `.bin`. This makes one **ungeneratable**: `enforce_allowlist()` runs before a
+single hash is written, in `generate_manifest()` *and* in `build_tarball()` — the tarball
+too, because US-004 extracts it into the directory the loader reads. There is no flag that
+turns it off, which is the property `test_no_flag_makes_the_generator_emit_one` states.
+Mutating either call site away fails tests (8 and 1 respectively).
+
+**The self-check calls the real verifier, and it is the same function the fresh-pull check
+uses.** `extract_and_verify()` extracts into a throwaway cache in the exact
+`hub/models--…/snapshots/<rev>/` layout and calls
+`model_fetcher.verify_weights()` — not a re-implementation. So "the tarball is good" and
+"the running service will accept these bytes" are the same statement, and the supervisor's
+Independent Test (`oras pull` on a clean machine, then verify) is `--step selfcheck
+--tarball <pulled>`. Extraction is `filter="data"` explicitly; a hostile member named
+`../escape.json` is refused and nothing lands outside the destination.
+
+**No credential reaches an argv, a log line, or an exception message.** `ps` is
+world-readable and terminal scrollback outlives the credentials in it.
+
+| Credential | How it travels |
+|---|---|
+| `HF_TOKEN` | `snapshot_download(token=...)` only |
+| `GHCR_TOKEN` | **stdin** to `oras login --password-stdin`, then `oras logout` in a `finally` |
+| `GITHUB_TOKEN` | an `Authorization: Bearer` header |
+
+Every captured subprocess stream is passed through `redact()` before it can be printed,
+and a download failure reports `type(exc).__name__` plus actionable advice rather than
+`str(exc)` — `huggingface_hub`'s exceptions carry request context, which is the shape of
+leak `model_fetcher` already closes with its own closed reason vocabulary. Four tests
+cover it, including one that plants a token-shaped literal inside the exception message.
+
+**`oras` is detected, not assumed.** `require_oras()` runs before anything else in the
+push and fails with install guidance (`oras.land`, `brew install oras`) plus the sentence
+that actually matters at that moment: *everything before the push is already done and on
+disk; nothing needs repeating.* The alternative is a `FileNotFoundError` from inside a
+subprocess call, three phases and one 270 MiB download in.
+
+**Leg three of US-001's triple lock is closed.** The mirror tag is **derived** from
+`DEFAULT_MODEL_REVISION` (`mirror_ref()`), never spelled out, and
+`test_the_mirror_tag_is_the_pinned_revision` asserts the derived ref matches both the
+constant and the committed manifest's `revision`. `test_the_pin_is_locked_to_the_committed_manifest`'s
+docstring was updated to say so rather than to keep promising a future story. What no test
+in this repository can assert is whether the tag has actually been **pushed** — that is
+the supervised half, and the fresh-pull check is how it is confirmed.
+
+**The committed `weights_manifest.json` is untouched, and three tests were made
+swap-proof instead.** The placeholder stays the fail-closed placeholder in this half —
+the real one is generated by the supervised run. The interesting part is what a *swap
+rehearsal* found: a real-shaped manifest committed into the tree turned **three US-001
+tests red**, because `TestAcquireAndLoad`'s manifest-empty branch tests drove the branch
+with `MANIFEST_PATH` itself. Plus two more that asserted the placeholder state directly.
+An ops commit whose entire job is replacing one JSON file has no business also editing
+tests, and one that has to will land with the edits wrong or missing. So:
+
+| Test | Before | Now |
+|---|---|---|
+| `test_it_is_still_the_interim_placeholder_and_fails_closed` | asserted `files == []` and told US-003 to delete it | `test_it_fails_closed_in_whichever_state_it_is_in` — empty ⇒ `manifest_empty`; populated ⇒ sorted, de-duplicated, allowlisted, safetensors-bearing, at the pinned revision, and `snapshot_missing` on an empty cache |
+| `test_the_manifest_pin_is_readable_without_verifying_anything` | asserted `read_manifest_pin(MANIFEST_PATH) is None` | asserts the **equivalence** `(pin is None) is (files == [])` |
+| `test_an_unusable_manifest_stops_before_the_download` | drove the branch with `MANIFEST_PATH` | drives it with `_pinless_manifest(tmp_path)`, a fixture of that shape |
+| `test_a_cached_set_refused_by_our_own_manifest_is_not_re_fetched` | same | same |
+| `test_a_manifest_level_refusal_diagnoses_one_cause_not_three` | same | same |
+
+Re-ran the rehearsal after the change: **1151 green with a real-shaped manifest in the
+tree.** The supervised commit is now a pure file replacement. This is US-001's "a landed
+US-002 test was rewritten, deliberately" pattern applied a second time, for the same
+reason: the assertion was a proxy for a state rather than a statement of a property.
+
+**`docs/weights.md`** covers the bump-together rule (constant + manifest + mirror tag in
+**one commit**, with the honest note that the first two legs are test-locked and the third
+can only be confirmed by pulling), the six-step procedure, the fresh-pull verification, the
+re-vendor sequence, the four distinct credentials and least privilege for each — including
+the finding that a **fine-grained PAT scoped to the single package** is the target and a
+classic `read:packages` PAT is **account-wide**, and that the push token must never be
+reused as the deployment's read token — the licence rationale, and the
+`forage-model-cache` volume literal that `feature-forage-cache-fallback.md` cites from
+here. The `_comment` block inside a generated manifest restates the bump-together rule, so
+it is readable at the file too.
+
+**Live-verified, tokenless, end to end.** A hub tree was built from the committed
+`tests/fixtures/tiny_model` fixture with real `blobs/` symlinks, then driven through the
+CLI: `--step manifest` printed a four-file first-generation diff and wrote the manifest;
+`--step tar` produced an 82,588-byte archive whose four members are regular files with
+real sizes (`tar -tvzf`: mode `0644`, uid/gid `0`, `Dec 31 1969`); a second build after
+`touch`ing every source file was byte-identical (`00542e1c…`); `--step selfcheck` reported
+*the extracted tarball verifies against the committed manifest*; `--dry-run` printed the
+`oras push` argv and both GitHub API URLs and invoked neither; and a token-less
+`--step download` refused with the `HF_TOKEN` message and exit 1.
+
+**Mutation-verified guards** (each applied to the committed tree, `tests/test_vendor_weights.py`
+run, tree restored):
+
+| Mutation | Result |
+|---|---|
+| tar adds the snapshot entries directly (no dereference) | 2 fail |
+| tar members keep the source mtime | 2 fail |
+| tar members keep the source uid/gid | 1 fails |
+| gzip header stamps the clock | 1 fails |
+| members are emitted in reverse order | 5 fail |
+| manifest generation skips the allowlist | 8 fail |
+| the tarball skips the allowlist | 1 fails |
+| the registry token is passed as an argument | 2 fail |
+| a subprocess failure is reported unredacted | 1 fails |
+| the credential is left in the registry config (no logout) | 2 fail |
+| `oras` is assumed rather than detected | 1 fails |
+| any visibility is accepted | 1 fails |
+| a response with no `visibility` field passes | 1 fails |
+| extraction uses the permissive tar filter | 1 fails |
+| the vendoring download drops `allow_patterns` | 1 fails |
+| the download writes to `$HF_HOME` instead of `$HF_HOME/hub` | 1 fails |
+| a download failure interpolates the exception | 1 fails |
+| a token-less vendoring run attempts the download anyway | 1 fails |
+| the self-check trusts the tarball instead of verifying it | 2 fail |
+| the self-check runs against an unusable manifest | 1 fails |
+| the mirror tag is `latest` rather than the revision | 2 fail |
+| a directory symlink is followed rather than refused | 2 fail |
+| the dry run pushes anyway | 1 fails |
+| the API client accepts plain http | 1 fails |
+
+24 of 24 caught on the first pass. The swap rehearsal above is the closest thing to an
+escape in this story and it was not a mutation of the script at all — it was a mutation of
+the *data* the tests happened to be anchored to, which is a class of fragility a
+per-function mutation pass does not look for.
+
+**`sanitizer_revision` did not move**, verified before and after:
+`5927038d64ed54a619e52b94899148f56bfede37d38f3c1a53c435edc719d111`. `scripts/` is not a
+`_REVISION_SOURCES` path and neither `MODEL_ID` nor the revision changed — correct, because
+nothing about sanitization behaviour changed.
+
+**Suite:** 1049 → 1151 green (+102 in `tests/test_vendor_weights.py`;
+`tests/test_model_fetcher.py` stays at 124 — five tests rewritten, none added or removed).
+`ruff check`, `ruff format --check` and `pyright` (strict) all zero, with no new
+suppression and no dependency added.
+
+#### Supervised ops half — executed 2026-09-12 (supervisor session, owner credentials)
+
+Runbook followed with three corrections from the build-half verification (W1: `--dry-run`
+is not read-only — phases 1–4 run, so the rehearsal used `--manifest <scratch path>` to
+keep the committed placeholder's first-generation diff readable on the real run;
+`docs/weights.md` fixed in the same commit. W2: `--step all` includes the push — never
+used. W3: US-001's boxes were already ticked; its live half is recorded here as evidence,
+not as new ticks).
+
+| Step | Result |
+|---|---|
+| 1 Rehearse | `--dry-run --manifest <scratch>`: plan printed, phases 1–4 ran, push/visibility printed argv/URLs only. Mirror ref `ghcr.io/washingbearlabs/forage-weights:11614a155199674a0a95e6602d6ab0417b790ed0` |
+| 2 Download | 5 files, **292,006,923 bytes** total (`model.safetensors` 283,347,432 — the spec's figure is the weights file, not the snapshot): config.json 870 · model.safetensors 283,347,432 · special_tokens_map.json 286 · tokenizer.json 8,657,051 · tokenizer_config.json 1,284 |
+| 2 Manifest | First-generation `+` diff, all five entries allowlisted; **scratch and real runs produced byte-identical manifests** (independent downloads → same hashes: generation is deterministic end-to-end) |
+| 2 Tar + selfcheck | 233,577,795 bytes, 5 members; extracted tarball verifies via the real `model_fetcher.verify_weights` |
+| 3 Push | `oras push` (token via stdin, argv credential-free, logout in finally) → pushed |
+| 4 Visibility | **`ghcr.io/washingbearlabs/forage-weights is private`** — verified post-push via the API |
+| 5 Fresh pull | Clean directory, `oras pull`, digest `sha256:aa65280f…45ec96`; pulled tarball sha256 `973ce90aac79d5ad83c920e3ed1a8382b1c2cd308c1c5dc69a029e93d5284060` — **byte-identical to the built one**; published bytes verify via `--step selfcheck --tarball <pulled>`; `oras logout` after |
+| 6 Manifest commit | One-file commit `f8cd371`; suite **1151 green** with the real manifest (the swap rehearsal held) |
+| 7 Cold timing | Reference envelope (`--cpus 1 --memory 1024m`, fresh volume, real token): container start → `promptguard_loaded: true` in **19 s** (**AC ≤ 5 min: met ×15**). Max `/health` latency during the download **160 ms** (< 1 s at every poll). End state: `status: degraded` for `cache_unavailable` only (correct spec-slot semantics — no Valkey attached), `promptguard_unavailable` gone, `search_sanitization` advertised, revision `5927038d…19d111` served live, counters `fetch_failures/verify_failures/quarantines` all 0 |
+| 7 Warm timing | Same volume, **`--network none`**: loaded in **9 s** — the warm path provably requires zero network, a stronger form of US-005's upcoming AC than the socket-count it asks for. Only log noise: torch's `jit.script` deprecation FutureWarning |
+
+**Note for US-005:** the warm measurement above was taken with the network *absent*, so
+the `huggingface_hub` harness-registry background call (GOTCHAS) either did not fire or
+failed silently as designed — US-005's socket-guarded test should still pin the
+`HF_HUB_OFFLINE` behavior explicitly rather than citing this run alone.
 
 ## Refinement Notes
 

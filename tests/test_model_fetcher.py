@@ -137,6 +137,22 @@ def _write_manifest(tmp_path: Path, document: object) -> Path:
     return path
 
 
+def _pinless_manifest(tmp_path: Path) -> Path:
+    """A manifest that parses and pins the real model but blesses no file.
+
+    The shape of the committed placeholder, as a **fixture**. These tests used
+    to drive the manifest-empty branch with ``MANIFEST_PATH`` itself, which
+    tied them to an interim state US-003's supervised ops commit replaces — an
+    ops commit whose whole job is swapping that one file has no business also
+    editing tests. The branch under test is "a manifest that blesses nothing",
+    and that is what this builds.
+    """
+    return _write_manifest(
+        tmp_path,
+        {"model_id": MODEL_ID, "revision": DEFAULT_MODEL_REVISION, "files": []},
+    )
+
+
 def _cache_with_snapshot(tmp_path: Path) -> tuple[Path, Path]:
     """A cache root holding the canonical good snapshot, and its manifest."""
     cache_root = tmp_path / "model-cache"
@@ -981,27 +997,43 @@ class TestCommittedManifest:
         assert len(document["revision"]) == 40
         assert isinstance(document["files"], list)
 
-    def test_it_is_still_the_interim_placeholder_and_fails_closed(
-        self, tmp_path: Path
-    ) -> None:
-        """US-003 replaces this file; delete this test in the same commit.
+    def test_it_fails_closed_in_whichever_state_it_is_in(self, tmp_path: Path) -> None:
+        """Placeholder or real pin — never a manifest that blesses nothing.
 
-        Until then the honest interim behaviour is a refusal with
-        ``manifest_empty`` — degraded, loud, and never "nothing to verify".
-        Nothing calls the verifier at boot yet (US-001 wires it), so a stock
-        image still reports exactly what it reports today.
+        This started life as ``test_it_is_still_the_interim_placeholder…``,
+        which asserted the empty ``files`` list and told US-003 to delete it.
+        US-003's build half rewrote it instead, because the manifest is
+        replaced by that story's **supervised ops** commit — a human running
+        ``scripts/vendor_weights.py`` with the real token — and an ops commit
+        that also has to edit a test is an ops commit that will land with the
+        test edited wrongly or not at all.
+
+        So the assertion is the property that survives the swap: an empty file
+        list refuses with ``manifest_empty``; a populated one pins a
+        de-duplicated, sorted, allowlisted set including real safetensors
+        weights at the committed revision. Either way an empty cache verifies
+        as **false**, which is the whole point of the file.
         """
         document = cast(
             dict[str, Any], json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
         )
+        files = cast("list[dict[str, Any]]", document["files"])
         cache_root = tmp_path / "model-cache"
         cache_root.mkdir()
 
         result = verify_weights(cache_root)
 
-        assert document["files"] == []
         assert result.ok is False
-        assert result.reasons == (REASON_MANIFEST_EMPTY,)
+        if not files:
+            assert result.reasons == (REASON_MANIFEST_EMPTY,)
+            return
+        assert result.reasons == (REASON_SNAPSHOT_MISSING,)
+        paths = [cast(str, entry["path"]) for entry in files]
+        assert paths == sorted(paths)
+        assert len(set(paths)) == len(paths)
+        assert all(is_allowed_filename(path) for path in paths)
+        assert any(path.endswith(".safetensors") for path in paths)
+        assert all(cast(int, entry["size"]) > 0 for entry in files)
 
 
 # ---------------------------------------------------------------------------
@@ -1139,11 +1171,12 @@ class TestRevisionPin:
     def test_the_pin_is_locked_to_the_committed_manifest(self) -> None:
         """Leg two of the triple lock: constant == manifest revision.
 
-        Leg one is the constant itself; leg three — the mirror tag
-        ``ghcr.io/washingbearlabs/forage-weights:<revision>`` — lands with
-        US-003, which vendors the artifact and is the first story in which a
-        tag exists to compare against. US-002 committed the manifest with this
-        revision already in it, so the two legs that exist are locked now.
+        Leg one is the constant itself. Leg three — the mirror tag
+        ``ghcr.io/washingbearlabs/forage-weights:<revision>`` — landed with
+        US-003, which *derives* the tag from this constant rather than
+        spelling it out; ``tests/test_vendor_weights.py``'s
+        ``test_the_mirror_tag_is_the_pinned_revision`` is that leg's lock.
+        All three are one fact now.
         """
         document = cast(
             dict[str, Any], json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
@@ -1153,8 +1186,24 @@ class TestRevisionPin:
         assert document["model_id"] == MODEL_ID
 
     def test_the_manifest_pin_is_readable_without_verifying_anything(self) -> None:
-        """``read_manifest_pin`` is a reader; the placeholder pins no files."""
-        assert read_manifest_pin(MANIFEST_PATH) is None
+        """``read_manifest_pin`` is a reader, and it reports the real state.
+
+        The placeholder pins no files and therefore reads as ``None`` — which
+        is what makes the boot path refuse to spend ~270 MiB it could never
+        bless. Once US-003's supervised run commits the generated manifest it
+        reads as the pin. Asserting the *equivalence* rather than either side
+        keeps that ops commit a pure manifest swap.
+        """
+        document = cast(
+            dict[str, Any], json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        )
+
+        pin = read_manifest_pin(MANIFEST_PATH)
+
+        assert (pin is None) is (document["files"] == [])
+        if pin is not None:
+            assert (pin.model_id, pin.revision) == (MODEL_ID, DEFAULT_MODEL_REVISION)
+            assert pin.total_bytes > 0
 
     def test_a_real_manifest_yields_its_pin(self, tmp_path: Path) -> None:
         manifest = _write_manifest(tmp_path, _manifest_document())
@@ -1558,9 +1607,9 @@ class TestAcquireAndLoad:
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """The interim state: the committed manifest pins nothing yet.
+        """A pin that blesses nothing must not cost a download.
 
-        Fetching ~270 MiB that the pin could never bless is not fail-closed,
+        Fetching ~270 MiB that the pin could never accept is not fail-closed,
         it is just slow — so the pipeline refuses before spending the
         bandwidth, and says which file is at fault.
         """
@@ -1576,7 +1625,7 @@ class TestAcquireAndLoad:
                 _FakeClassifier(),
                 cache_root=cache_root,
                 revision=DEFAULT_MODEL_REVISION,
-                manifest_path=MANIFEST_PATH,
+                manifest_path=_pinless_manifest(tmp_path),
             )
 
         assert loaded is False
@@ -1596,7 +1645,7 @@ class TestAcquireAndLoad:
                 _FakeClassifier(),
                 cache_root=cache_root,
                 revision=DEFAULT_MODEL_REVISION,
-                manifest_path=MANIFEST_PATH,
+                manifest_path=_pinless_manifest(tmp_path),
             )
 
         assert loaded is False
@@ -1624,7 +1673,7 @@ class TestAcquireAndLoad:
                 _FakeClassifier(),
                 cache_root=cache_root,
                 revision=DEFAULT_MODEL_REVISION,
-                manifest_path=MANIFEST_PATH,
+                manifest_path=_pinless_manifest(tmp_path),
             )
 
         assert loaded is False

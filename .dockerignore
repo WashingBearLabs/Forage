@@ -21,3 +21,6 @@ __pycache__/
 .git/
 tests/
 kit_tools/
+# Operator-only, run by hand from a checkout; the Dockerfile COPY list names
+# nothing here and the image has no use for it.
+scripts/

@@ -2,7 +2,7 @@
 # GOTCHAS.md
 
 > Last updated: 2026-09-10
-> Updated by: Claude (forage-model-bootstrap US-001)
+> Updated by: Claude (forage-model-bootstrap US-003, build half)
 
 ## Overview
 
@@ -104,12 +104,21 @@ verification rule cannot drift apart. Widening the allowlist to admit README fil
 wrong fix: `.bin` is excluded by the *same* rule, and that exclusion is the RCE closure
 (`from_pretrained` can never be handed a pickle).
 
-**Related:** `weights_manifest.json` is currently a fail-closed placeholder with
-`"files": []`, so `verify_weights()` refuses everything with `manifest_empty` until
-US-003 commits the real manifest. Since US-001 the boot path *does* consult it — and
-short-circuits on it: a manifest that pins nothing could never bless a download, so the
-fetch is refused before it starts (`weights_pin_unusable`) rather than after ~270 MiB.
-A stock image's `/health` is unchanged either way.
+**Mitigation, generation side (US-003).** `scripts/vendor_weights.py` applies
+`is_allowed_filename()` **at manifest-generation time** and refuses the whole run if the
+snapshot carries anything else — a manifest blessing a `.bin` is not merely unusable, it
+cannot be produced. It also passes `ALLOW_PATTERNS` to its own `snapshot_download`, so the
+vendoring run and the container fetch land the same set by construction.
+
+**Related:** `weights_manifest.json` is a fail-closed placeholder with `"files": []` until
+**US-003's supervised ops run** (the one holding the real token) commits the generated
+one; `verify_weights()` refuses everything with `manifest_empty` until then. US-003's
+build half deliberately left it that way and made the tests state-agnostic across the
+swap, so the ops commit is a pure manifest replacement. Since US-001 the boot path *does*
+consult it — and short-circuits on it: a manifest that pins nothing could never bless a
+download, so the fetch is refused before it starts (`weights_pin_unusable`) rather than
+after ~270 MiB. A stock image's `/health` is unchanged either way. `docs/weights.md` is
+the vendoring procedure.
 
 ---
 
