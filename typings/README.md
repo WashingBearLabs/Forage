@@ -30,6 +30,7 @@ delete it when the last caller goes away.
 |---|---|
 | `transformers/__init__.pyi` | `AutoTokenizer.from_pretrained` and `AutoModelForSequenceClassification.from_pretrained` are typed as returning `Unknown` upstream, so every downstream use in `promptguard/classifier.py` (tokenising, the forward pass, `.logits`) decays to `Unknown` too. |
 | `huggingface_hub/__init__.pyi` | `snapshot_download`'s `user_agent` parameter is annotated as a bare `dict`, which makes its whole overload set partially unknown under strict mode — and the symbol itself unusable at `model_fetcher.py`'s call site. The stub declares the five keywords the fetcher passes and the one overload it uses. |
+| `huggingface_hub/constants.pyi` | Not a gap in upstream's types — a **consequence of the stub above**. A stub package shadows the real one entirely, so once `huggingface_hub/__init__.pyi` exists, every submodule this repo imports needs its own declaration or the import does not resolve at all. `model_fetcher._offline_hub()` assigns `constants.HF_HUB_OFFLINE`, so the stub declares that one name. This is the shape of tax a shadow stub charges, and it is worth knowing before adding the next one. |
 
 **`torch` deliberately has no stub here.** It ships real, complete types; the
 classifier consumes them directly (`torch.no_grad`, `torch.softmax`,

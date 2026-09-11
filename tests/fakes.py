@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+import socket
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 import pytest
 
@@ -104,6 +105,51 @@ def hub_download_double(
         return str(snapshot)
 
     return _download
+
+
+def record_network_attempts(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record every outbound attempt made while the returned list is watched.
+
+    The autouse ``pytest-socket`` guard makes a real connection *fail*, which
+    is not the same thing as making it *not happen*: ``huggingface_hub``
+    swallows every error from its best-effort harness-registry request, so a
+    blocked attempt and no attempt at all look identical to a test that only
+    asserts the call succeeded. US-005's "zero network on a warm start" is a
+    claim about attempts, so the attempts have to be counted.
+
+    This records and then refuses, exactly as the guard does — the recording is
+    the only addition. ``AF_UNIX`` sockets are delegated to whatever is already
+    installed (asyncio's event-loop self-pipe is one, and the suite allows it).
+
+    Assignment goes through ``monkeypatch`` rather than a bare ``socket.socket
+    = …`` for two reasons: restoration is guaranteed even when an assertion
+    raises, and re-binding a module's *class* attribute to a function is
+    something pyright rightly refuses to type.
+    """
+    attempts: list[str] = []
+    real_socket = socket.socket
+
+    def _refuse(label: str) -> NoReturn:
+        attempts.append(label)
+        raise OSError(f"network attempt refused by the test recorder: {label}")
+
+    def _socket(
+        family: int = socket.AF_INET, *args: Any, **kwargs: Any
+    ) -> socket.socket:
+        if family in (socket.AF_INET, socket.AF_INET6):
+            _refuse(f"socket(family={family})")
+        return real_socket(family, *args, **kwargs)
+
+    def _getaddrinfo(host: object, port: object, *args: Any, **kwargs: Any) -> NoReturn:
+        _refuse(f"getaddrinfo({host!r}, {port!r})")
+
+    def _create_connection(address: object, *args: Any, **kwargs: Any) -> NoReturn:
+        _refuse(f"create_connection({address!r})")
+
+    monkeypatch.setattr(socket, "socket", _socket)
+    monkeypatch.setattr(socket, "getaddrinfo", _getaddrinfo)
+    monkeypatch.setattr(socket, "create_connection", _create_connection)
+    return attempts
 
 
 def weights_manifest_document(

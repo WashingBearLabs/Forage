@@ -488,6 +488,7 @@ async def test_metrics_exposes_the_model_acquisition_counters(
         "verify_failures": 0,
         "quarantines": 0,
         "fetch_in_progress": False,
+        "retries_scheduled": 0,
     }
 
 
@@ -499,6 +500,7 @@ async def test_metrics_model_counters_reflect_the_live_metrics_object(
     model_metrics.record_fetch_failure()
     model_metrics.record_verify_failure()
     model_metrics.record_quarantine()
+    model_metrics.record_retry_scheduled()
     model_metrics.fetch_in_progress = True
 
     response = await client.get("/metrics")
@@ -508,6 +510,7 @@ async def test_metrics_model_counters_reflect_the_live_metrics_object(
         "verify_failures": 1,
         "quarantines": 1,
         "fetch_in_progress": True,
+        "retries_scheduled": 1,
     }
 
 
@@ -752,8 +755,40 @@ async def _settled(task: asyncio.Task[bool], *, timeout: float = 15.0) -> bool:
     can stall a thread hand-off for a second or more, and a tight bound here
     would buy nothing but a flaky suite. The assertion that matters is what
     the task *did*, not how fast it did it.
+
+    Only usable when the acquisition **succeeds**: since US-005 the task is a
+    retry loop with no ending short of a loaded classifier, so awaiting it
+    after a failure hangs until the timeout. :func:`_first_attempt_failed` is
+    the observable for the failing case.
     """
     return await asyncio.wait_for(task, timeout=timeout)
+
+
+def _park_the_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Push the first retry an hour out, so exactly one attempt runs.
+
+    Every lifespan test that lets an acquisition *fail* needs this. The task
+    retries until it loads, so without it a test asserting "one ERROR" would
+    race the second attempt, and one asserting a counter would read whichever
+    value the scheduler happened to leave. An hour is not a wait — the lifespan
+    cancels the sleeping task on the way out — it is a guarantee that nothing
+    else runs while the assertions do.
+    """
+    monkeypatch.setattr(model_fetcher, "RETRY_INITIAL_BACKOFF_S", 3600.0)
+
+
+async def _first_attempt_failed(*, timeout: float = 15.0) -> None:
+    """Wait until the acquisition has completed one attempt without loading.
+
+    ``retries_scheduled`` moves when the loop arms the next attempt, which is
+    the first observable moment after an attempt has finished and failed — and
+    unlike awaiting the task, it exists in a world where the task never ends.
+    """
+    model_metrics: ModelMetrics = app.state.model_metrics
+    deadline = time.monotonic() + timeout
+    while model_metrics.retries_scheduled < 1:
+        assert time.monotonic() < deadline, "the acquisition never finished an attempt"
+        await asyncio.sleep(0.01)
 
 
 @asynccontextmanager
@@ -958,8 +993,14 @@ async def test_a_credential_less_boot_stays_degraded_and_says_so_once(
     absent), and that is precisely why the acquisition itself counts as the
     failed attempt: a degraded container with every counter at zero is the
     silent path this spec exists to close.
+
+    Since US-005 the attempt is the first turn of a retry loop, so the ERROR
+    is "once per attempt" rather than "once ever" — `_park_the_retry` holds the
+    second attempt off while the assertions run, and the loop is cancelled with
+    the lifespan.
     """
     monkeypatch.setenv("HF_HOME", "/nonexistent-model-cache")
+    _park_the_retry(monkeypatch)
 
     with (
         patch("huggingface_hub.snapshot_download") as download,
@@ -967,7 +1008,7 @@ async def test_a_credential_less_boot_stays_degraded_and_says_so_once(
         caplog.at_level("DEBUG", logger="model_fetcher"),
     ):
         async with _running_app() as client:
-            await _settled(cast("asyncio.Task[bool]", app.state.model_task))
+            await _first_attempt_failed()
             body = (await client.get("/health")).json()
 
             assert body["status"] == "degraded"
@@ -980,6 +1021,7 @@ async def test_a_credential_less_boot_stays_degraded_and_says_so_once(
                 "verify_failures": 0,
                 "quarantines": 0,
                 "fetch_in_progress": False,
+                "retries_scheduled": 1,
             }
 
     errors = [
@@ -991,14 +1033,52 @@ async def test_a_credential_less_boot_stays_degraded_and_says_so_once(
     assert "mirror=skipped_no_token" in errors[0]
 
 
+async def test_the_running_acquisition_is_the_one_published_on_app_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`app.state.model_acquisition` must be the object holding the live lock.
+
+    Single-flight only means anything if every caller shares one
+    `WeightAcquisition`: a second caller that constructed its own would get its
+    own `asyncio.Lock` and start a second ~270 MiB download beside the first.
+    The published object is the *mechanism* by which they share it, so "it is
+    published" is not enough — this asserts it is the one the running task is
+    using, by reading `in_flight` while that task is provably parked inside an
+    acquisition.
+
+    Added after a mutation escape: replacing the published object with `None`
+    broke nothing, because the reason it exists lives in the next story rather
+    than in this diff.
+    """
+    release = threading.Event()
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _blocking_acquisition(release)
+    )
+    try:
+        async with _running_app():
+            await asyncio.sleep(0.05)
+            acquisition = cast(
+                "model_fetcher.WeightAcquisition", app.state.model_acquisition
+            )
+            model_task = cast("asyncio.Task[bool]", app.state.model_task)
+
+            assert acquisition.in_flight is True
+            assert acquisition.metrics is app.state.model_metrics
+            assert await acquisition.attempt_once() is False
+            assert model_task.done() is False
+    finally:
+        release.set()
+
+
 async def test_the_acquisition_task_does_not_outlive_the_lifespan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Shutdown cancels the handle it created — a leaked task hangs pytest.
 
-    US-005 owns the *retry* task's clean-shutdown AC; this is the same seam,
-    asserted for the acquisition task US-001 creates, because a task nothing
-    ever cancels is a defect to introduce rather than to inherit.
+    The retry loop has no ending short of a loaded classifier, so this is not
+    tidiness: cancellation is the only thing that stops it, and a task nothing
+    cancels outlives the lifespan — which under pytest is a hang rather than a
+    warning.
     """
     release = threading.Event()
     monkeypatch.setattr(
@@ -1035,8 +1115,9 @@ async def test_the_lifespan_calls_the_fetcher_off_the_event_loop(
         threads.append(threading.get_ident())
         return False
 
+    _park_the_retry(monkeypatch)
     monkeypatch.setattr(model_fetcher, "acquire_and_load", _record)
     async with _running_app():
-        await _settled(cast("asyncio.Task[bool]", app.state.model_task))
+        await _first_attempt_failed()
 
     assert threads and threads[0] != threading.get_ident()

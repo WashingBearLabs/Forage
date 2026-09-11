@@ -320,18 +320,18 @@ classifier loads on a later retry without restart.
   literal in one doc place (`docs/weights.md`) both specs cite.
 
 **Acceptance Criteria:**
-- [ ] Warm start: zero network (socket-guarded + `local_files_only=True`), verified, loaded
+- [x] Warm start: zero network (socket-guarded + `local_files_only=True`), verified, loaded
       <60 s.
-- [ ] Backoff retry (normative schedule) converges after transient failure without restart;
+- [x] Backoff retry (normative schedule) converges after transient failure without restart;
       the quarantine → re-fetch → loaded recovery path test-asserted end-to-end (round-2
       gap: claimed in Edge Cases with no AC); single-flight enforced; task cancels cleanly
       on shutdown (test-asserted).
-- [ ] `docs/configuration.md` updated with the three new env vars (`FORAGE_MODEL_REVISION`,
+- [x] `docs/configuration.md` updated with the three new env vars (`FORAGE_MODEL_REVISION`,
       `FORAGE_WEIGHTS_MIRROR`, `FORAGE_MIRROR_TOKEN`) — spec 1's "every env var" doc
       (round-2 gap).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run pyright` passes
 
 ### US-006: Third-party token documentation
 
@@ -1304,6 +1304,282 @@ required by an AC; all are recorded here so the choice to skip them is a choice.
    committed manifest unchanged: the pull should 404 (`pull_failed`) rather than serve
    something that then fails verification. Either outcome is correct and both are loud;
    which one happens is a property of GHCR, not of this code.
+
+### US-005: Warm-start cache lifecycle + degraded-recovery retry (2026-09-10)
+
+**Both halves of the pre-agreed split landed** — the warm-path verification/load and the
+retry task. They are unequal in kind, and it is worth saying which is which: the warm path
+was already *structurally* present (US-001's pipeline verifies the cache first and skips
+the fetch when it satisfies the pin — its
+`test_an_already_verified_cache_loads_without_downloading` calls itself "the warm shape
+US-005 builds on"), so that half is a **measurement** rather than new control flow. The
+measurement is what found the story's one real bug.
+
+#### The warm path
+
+**`HF_HUB_OFFLINE=1` does not work at run time, and the recorded mitigation was wrong.**
+US-001 handed this story a gotcha: `huggingface_hub` 1.30's `build_hf_headers()` calls
+`detect_agent()`, which fetches an agent-harness registry over HTTP on **every** hub call,
+`from_pretrained(..., local_files_only=True)` against a full cache included. It recorded
+the fix as "`HF_HUB_OFFLINE=1` disables it". That is true only of a process that had the
+variable set **before it imported `huggingface_hub`**: the library samples it once at
+import into `huggingface_hub.constants.HF_HUB_OFFLINE` (`constants.py:192`), and
+`_fetch_registry` reads that constant. Measured three ways on a cold `HF_HOME`, against a
+warm `local_files_only=True` load of the committed fixture:
+
+| Mechanism | Outbound attempts | Loads? |
+|---|---|---|
+| none | **1** — `create_connection(('huggingface.co', 443))` (httpx/httpcore; an earlier draft said getaddrinfo — corrected at verification) | yes |
+| `os.environ["HF_HUB_OFFLINE"] = "1"` at run time | **1** — unchanged | yes |
+| `huggingface_hub.constants.HF_HUB_OFFLINE = True` | **0** | yes |
+
+So `model_fetcher._offline_hub()` sets the constant, and
+`test_the_environment_variable_alone_does_not_suppress_it` pins the negative half — if a
+future release starts reading the environment at call time, that test goes red and the
+mechanism can be simplified to the documented one. `kit_tools/docs/GOTCHAS.md`'s entry is
+**corrected** rather than extended: a mitigation that does not mitigate is worse than
+none, because it stops anyone looking.
+
+**Scoping it to the load is load-bearing, not tidiness.** The same flag disables
+`snapshot_download`, so an `ENV HF_HUB_OFFLINE=1` in the Dockerfile — the obvious reading
+of US-001's note — would convert *every cold start* into a permanent degraded mode. By the
+time `_load_verified` runs the download has already finished, which makes the pin inert on
+the cold path and decisive on the warm one. It is entered and restored in a `finally`; a
+leaked pin would silently disable the next acquisition, so that has its own test,
+including the case where the load raises.
+
+**The suite's socket guard cannot prove "zero network", and that is the second finding.**
+`pytest-socket` makes a connection *fail*; `huggingface_hub` swallows every error from
+this particular request by design. A blocked attempt and no attempt at all are therefore
+indistinguishable to a test that asserts only that the load succeeded — this AC could be
+"met" by a test that measures nothing. `tests.fakes.record_network_attempts` **counts**
+attempts (`socket.socket` for the inet families, `getaddrinfo`, `create_connection`) and
+then refuses exactly as the guard does, and
+`test_without_the_offline_pin_the_warm_load_reaches_the_network` is the demonstrated
+negative that makes the zero meaningful — US-003's
+`test_a_naive_archive_would_have_shipped_nothing` pattern, applied to a measurement rather
+than an artifact.
+
+**Two caches make this trivially easy to test vacuously.** The registry is cached in a
+module global (`_detect_agent._registry`) for the life of the process *and* on disk at
+`$HF_HOME/.agent_harnesses.json` for 24 h. On any machine that has ever talked to the Hub
+— a developer's laptop, or simply the second test in a session — the call resolves from
+cache and reaches nothing whatever the code does. The `cold_harness_registry` fixture
+clears both, with `monkeypatch`'s `raising=True` so a rename upstream fails loudly instead
+of quietly restoring the theatre. Without that fixture every assertion in
+`TestWarmStartTouchesNoNetwork` passes on a mutated tree.
+
+**The `< 60 s` half is cited, not re-measured**, following US-001's precedent for a live
+figure. US-003's supervised session measured the reference envelope (1 vCPU / 1 GB) at
+**19 s cold and 9 s warm, the warm run under `--network none`**. The committed fixture is
+96 KB, so a wall-clock assertion here would measure the fixture, not the weights. What the
+tests pin instead is the *cause* of that number: the warm path runs no `snapshot_download`,
+no `oras`, and now no hub round-trip at all — asserted, not assumed.
+
+#### The retry
+
+**`WeightAcquisition` is the service's first real background loop**, and the lifespan's
+task is now `create_task(acquisition.run())` rather than
+`create_task(to_thread(acquire_and_load, …))`. `acquire_and_load` itself is untouched: the
+loop wraps it, so every property US-001 and US-004 established — the source order, the
+skip-vs-fail matrix, the single verification entry point, the one terminal ERROR — holds
+unchanged on every turn.
+
+**The schedule is constants, not configuration.** `RETRY_INITIAL_BACKOFF_S = 30.0`,
+`RETRY_MAX_BACKOFF_S = 600.0`, `RETRY_JITTER_FRACTION = 0.20`, and the AST exact-set test
+still reads **five** environment variables. Deliberate, in the same spirit as US-004's
+refusal to make the staging bound configurable: the backoff bounds the load a fleet of
+sidecars puts on someone else's gated repository, and a bound an operator can move is not
+a bound. The whole progression is asserted rather than inferred —
+`[30, 60, 120, 240, 480, 600, 600]` — through the pure `next_backoff`.
+
+**The jitter is applied to the sleep and never fed back into the base.** A schedule that
+jittered its own state would random-walk away from the doubling it is meant to follow, and
+after a dozen intervals the cap would not describe anything.
+`test_the_jitter_is_not_fed_back_into_the_base` drives seven real turns of the loop and
+compares the *bases* to the normative list, which is why the mutation writing
+`next_backoff(delay)` instead of `next_backoff(self._backoff_s)` is caught.
+
+**Testing the loop needed no production seam.** `retry_delay` is the function the loop
+hands its backoff to, so a `patch.object(model_fetcher, "retry_delay", …)` spy records
+exactly the value under test and returns zero — no injectable `sleep`, no globally patched
+`asyncio.sleep` (which `httpx`/anyio also use), and no module-level alias existing only
+for tests.
+
+**Single-flight turns a second caller away rather than queuing it.** The lock is held for
+the whole of `attempt_once()`; a caller that finds it held gets `False` and a WARNING.
+This mirrors `cache.ContentCache._ensure_client` ("a caller that finds a reconnect already
+in flight gets an immediate miss rather than waiting on it") for a sharper reason: queuing
+here means a second ~270 MiB download starting the instant the first one finishes. The
+acquisition object lives on `app.state.model_acquisition` so any future second caller
+goes through the same lock rather than instantiating its own. *(Supervisor correction
+2026-09-12: the callers this passage originally named were fictional — no `/reload`
+endpoint exists anywhere in the family, and spec 6's readiness wait is an external
+`/health` poll, not an in-process poke. The seam's real consumers today are the lifespan
+wiring and the identity-pinning test; it is cheap, pattern-consistent scaffolding, kept
+on those grounds.)*
+
+**It retries forever, and that is the deliberate half of the design.** The loop stops on a
+loaded classifier or on cancellation, and nothing in between is treated as permanent. The
+cost is real and worth stating plainly: the **stock, credential-less container retries at
+the 10-minute ceiling for as long as it runs**, logging US-004's terminal ERROR each time
+— measured at **576 log lines a day** (4 `weights_*` lines per attempt; 144 of them the
+terminal ERROR) where it previously logged one. Three things made that the right trade
+rather than a regression. `CLAUDE.md` invariant 5 says degradation is loud and never
+silent, and a service that has been missing a capability for six hours should still be
+saying so. `cache.py` made the *same posture choice* for Valkey — keep signalling, never
+go quiet — though not an identical mechanism (its recovery is request-driven and idle
+means silent, caps at 30 s, and logs WARNING rather than ERROR; supervisor correction
+2026-09-12). A cheaper-noise variant (ERROR on state-change, WARNING heartbeat after) was
+weighed at verification and deliberately NOT taken now — the loud form is shipped and
+test-pinned; revisit in Epic 4 if operational noise proves real.
+And the alternative — classifying some failures as permanent — is wrong on the facts: the
+Overview's "late-credentialed" case is a token that is *present but not yet approved* for
+the gated repo, which heals in-process on a retry and on nothing else.
+
+**`/metrics` gained `retries_scheduled`**, because the retry introduces a third state
+behind an unchanged `/health`. `fetch_in_progress: true` is downloading;
+`retries_scheduled > 0` with `fetch_in_progress: false` is waiting; both at zero on a
+degraded container means the first attempt has not finished. The counter moves when a
+retry is **armed** rather than when it starts — mirroring `CacheMetrics.reconnect_attempts`
+— which is also the only observable a test has for "one attempt finished and failed" now
+that the task no longer ends. The `weights_retry_scheduled` line is WARNING for the reason
+US-004 recorded: nothing configures logging here, the root logger drops INFO, and a retry
+announced at INFO would be invisible in exactly the container that needs it. Confirmed in
+`docker logs` below.
+
+#### Two landed tests were reworked, and the reason generalises
+
+`tests/test_app.py`'s `_settled(task)` awaited the acquisition task to completion. That is
+still correct when the acquisition *succeeds*, and permanently wrong when it fails — the
+task has no ending short of a loaded classifier, so two tests would have **hung rather
+than failed**. They now use `_park_the_retry(monkeypatch)` (push the first retry an hour
+out, so exactly one attempt runs while the assertions do) plus `_first_attempt_failed()`
+(poll `retries_scheduled`, with a deadline). The generalisation is the one the
+mock-all-agent-starts lesson already carries: **a test that starts a background loop needs
+a deterministic way to stop it and a bounded way to wait on it.** Every polling loop added
+in this diff carries a deadline and an assertion message, for the same reason — a
+regression should fail the suite, not hang it.
+
+#### A new typing stub, and the tax a shadow stub charges
+
+`typings/huggingface_hub/constants.pyi` declares one name, `HF_HUB_OFFLINE`. It is not a
+gap in upstream's types: `typings/huggingface_hub/__init__.pyi` **shadows** the real
+package for pyright, so once that file exists every submodule this repo imports needs its
+own declaration or the import does not resolve at all. `typings/README.md` records that,
+because it is a fact about the shadow rather than about `huggingface_hub`, and the next
+person adding a stub should know the cost before they add one.
+
+#### Shutdown, and the limit inherited unchanged
+
+The lifespan cancels `app.state.model_task`, and the loop's only suspension points are the
+acquisition and the sleep, so cancellation unwinds it at either. US-001's honest limit
+carries over verbatim: cancelling during an acquisition stops the *await*, not the worker
+thread `asyncio.to_thread` is running it on. The container's stop grace period bounds the
+real-world case; the retry sleep — where the task spends nearly all of its life — cancels
+instantly.
+
+#### Verification
+
+`sanitizer_revision` did **not** move, checked before and after:
+`5927038d64ed54a619e52b94899148f56bfede37d38f3c1a53c435edc719d111`, and confirmed live on
+the running container's `/health`. Correct — no `_REVISION_SOURCES` file was touched and
+neither `MODEL_ID` nor the revision changed. Nothing about sanitization behaviour changed:
+*when* the weights arrive is not part of what they are.
+
+**Suite:** 1227 → 1251 green (+23 in `tests/test_model_fetcher.py`, +1 in
+`tests/test_app.py`, where two further tests were reworked and two `/metrics` assertions
+extended). `ruff check`, `ruff format --check` and `pyright` (strict) all zero, with no new
+suppression.
+
+**Mutation-verified guards** (each applied to the committed tree, the mapped tests
+`tests/test_model_fetcher.py` + `tests/test_app.py` run, tree restored):
+
+| Mutation | Result |
+|---|---|
+| the warm load is not pinned offline | 2 fail |
+| the offline pin is never restored | 2 fail |
+| the load is allowed to reach the hub (`local_files_only=False`) | 1 fail in 3.7 s, then the run stalls |
+| the backoff has no ceiling | 3 fail |
+| the backoff does not grow | 4 fail |
+| the initial interval is one second, not thirty | 3 fail |
+| the cap is one hour, not ten minutes | 3 fail |
+| the delay is not jittered | 1 fails |
+| the jitter is ±80% | 2 fail |
+| the jitter is fed back into the base interval | 2 fail |
+| single-flight is not enforced | 1 fails |
+| a second caller queues behind the first instead of being turned away | 1 fails |
+| the acquisition runs on the event loop | 5 fail |
+| the loop gives up after one attempt | 6 fail |
+| the loop keeps retrying after a successful load | hangs (caught) |
+| success does not reset the backoff | 1 fails |
+| no retry is ever armed (`next_retry_at` stays `None`) | 1 fails |
+| the retry is not counted | 4 fail |
+| the retry is announced at INFO, which the container drops | 1 fails |
+| the lifespan awaits the acquisition instead of tasking it | hangs (caught) |
+| shutdown leaves the retry loop running | 1 fails |
+| `/metrics` drops the retry counter | 3 fail |
+| the acquisition object is not shared (a second caller gets its own lock) | **escaped**, then 1 fails |
+
+22 of 23 on the first pass, 23 of 23 after. Two rows deserve their footnotes.
+
+**The escape is the interesting one, and its diagnosis is a pattern.** Replacing
+`app.state.model_acquisition` with `None` broke nothing, because **the reason that
+attribute exists lives in a later story** — there is no second caller yet, so "published"
+had no consequence to assert. The temptation was to assert presence (`is not None`), which
+would have closed the mutation while pinning nothing worth pinning. The test added instead
+asserts *identity*: while the lifespan's task is parked inside an acquisition, the
+published object reports `in_flight is True` and shares the app's `ModelMetrics`, and a
+second `attempt_once()` through it is refused. That is the property single-flight actually
+needs. **Generalised: a seam built for the next story is a seam nothing can test — so test
+the thing that makes it a seam (identity, shared state), not its existence.**
+
+**Three mutations are caught as hangs rather than failures**, which is worth knowing
+before someone meets one. Two are correct and unavoidable: a loop that never terminates
+and a lifespan that awaits it *are* hangs, and that is exactly the symptom the reworked
+`_settled` tests exist to keep out of the shipped code. The third is an artifact of running
+the whole module — `local_files_only=False` fails in **3.7 s** at
+`test_a_verified_fetch_reaches_a_loaded_classifier`, and only a *later* test that drives
+the real loader then stalls trying to reach the Hub. The property is caught fast; the
+whole-suite symptom is a failure followed by a stall.
+
+**Live-verified on a built image** (`docker build` + `docker run --cpus 1 --memory 1024m`,
+arm64, no credentials — the stock container):
+
+| Observation | Result |
+|---|---|
+| startup order | `Application startup complete` precedes the acquisition, as since US-001 |
+| t+0 | `weights_fetch_skipped` + `weights_mirror_skipped` at WARNING, one terminal ERROR, then **`weights_retry_scheduled — no verified weights yet; retry 1 in 24s (base 30s, jittered +/-20%)`** — visible in `docker logs`, which is the whole reason the line is WARNING |
+| t+24 s | retry 1 ran and failed; `retry 2 in 69s (base 60s…)` |
+| t+93 s | retry 2 ran and failed; `retry 3 in 116s (base 120s…)` |
+| the observed delays | 24 / 69 / 116 s against bases 30 / 60 / 120 — ×0.80, ×1.15, ×0.97, every one inside ±20%, and visibly *different* multipliers, which is the jitter doing its job |
+| `/metrics` | `retries_scheduled` 1 → 3 and `fetch_failures` 1 → 3 across the window; `quarantines` and `verify_failures` stayed 0 |
+| `/health` | `degraded` with `promptguard_unavailable` throughout; `sanitizer_revision` served live as `5927038d…19d111` |
+| `/app/model-cache` | **empty (4 KB) after three acquisitions** — the staging sweep holds across a loop, not just across one attempt |
+| `contract_smoke.py` | **PASSED: degraded, honest, and on-contract** |
+
+What this does **not** prove is the warm half on real weights: that needs the gated token,
+and it was measured at US-003's supervised session (9 s under `--network none`). The
+warm-path claims here are proven against the committed fixture with attempts counted,
+which is the stronger statement about *behaviour* and the weaker one about *bytes*.
+
+#### Docs
+
+`docs/configuration.md` gains "Warm starts, and what makes the second boot fast" and "When
+a source is only temporarily unavailable" — the retry schedule, the three `/metrics`
+states, and the explicit note that an unmounted volume is supported behaviour rather than
+an error (the spec's Edge Case). **The three environment variables this AC names were
+already documented** — `FORAGE_MODEL_REVISION` by US-001, `FORAGE_WEIGHTS_MIRROR` and
+`FORAGE_MIRROR_TOKEN` by US-004 — so that criterion was verified and closed rather than
+duplicated; what was missing was the behaviour *around* them, which is what was added.
+`docs/weights.md`'s volume section — the one place the `forage-model-cache` literal lives,
+which `feature-forage-cache-fallback.md` cites from here — gains the warm-start
+consequence and the measured 9 s / 19 s pair. `kit_tools/docs/GOTCHAS.md` carries the
+corrected `HF_HUB_OFFLINE` entry and the third `/metrics` state;
+`kit_tools/arch/CODE_ARCH.md` the re-measured module table (`model_fetcher.py`
+1635→1872, `retrieval_app.py` 892→905, service total 6,968→7,218) and the retry loop's
+three properties; `TESTING_GUIDE.md`, `SYNOPSIS.md`, `AGENT_README.md` and `CLAUDE.md` the
+suite count, which had drifted to 1226 against an actual 1227 before this story.
 
 ## Refinement Notes
 

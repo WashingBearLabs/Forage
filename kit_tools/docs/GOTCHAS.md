@@ -74,6 +74,11 @@ what separates them: `fetch_in_progress: true` means downloading, and the
 `fetch_failures` / `verify_failures` / `quarantines` counters say whether anything has
 gone wrong yet. Poppy's deploy readiness wait reads that field for this reason.
 
+Since US-005 there is a **third** state behind the same `false`: waiting out a backoff
+between retries. `retries_scheduled > 0` with `fetch_in_progress: false` is that one, and
+the `weights_retry_scheduled` WARNING names the delay. Both-at-zero on a degraded
+container means the first attempt simply has not finished.
+
 ---
 
 ### A plain `snapshot_download` fails verification — pass `ALLOW_PATTERNS`
@@ -156,11 +161,12 @@ US-004 recorded it here rather than changing it in passing.
 
 ---
 
-### `huggingface_hub` 1.x phones home while building request headers — even offline
+### `huggingface_hub` 1.x phones home while building request headers — and `HF_HUB_OFFLINE=1` does not stop it at run time
 
 **Location:** `promptguard/classifier.py`'s load path, `model_fetcher.py`
 **Severity:** 🟡 Medium
 **Added:** 2026-09-10 (`feature-forage-model-bootstrap` US-001)
+**Updated:** 2026-09-10 (US-005 — **the mitigation below was wrong, and is corrected**)
 
 **What happens:**
 `huggingface_hub` 1.30's `build_hf_headers()` calls `detect_agent()`, which fetches a
@@ -180,15 +186,34 @@ Two places, for two different reasons.
   swallowed, so nothing breaks — but on a container with no egress it is 3 s spent on
   every process start until the response is cached.
 
-**Mitigation:** `HF_HUB_OFFLINE=1` disables it (`_fetch_registry` returns early), and the
-result is cached at `$HF_HOME/.agent_harnesses.json` for 24 h. Neither is free of
-consequence: `HF_HUB_OFFLINE` also disables the download itself, so it can only be scoped
-to a warm-path load, never set globally — that trade belongs to US-005.
+**The correction (US-005, measured both ways).** `HF_HUB_OFFLINE=1` *does* disable the
+call — but only if it is set **before `huggingface_hub` is imported**. The variable is
+sampled once at import into `huggingface_hub.constants.HF_HUB_OFFLINE`
+(`constants.py:192`) and `_fetch_registry` reads that constant, so setting the environment
+variable from a running process changes nothing at all. Measured on a cold `HF_HOME`:
+with `os.environ["HF_HUB_OFFLINE"] = "1"` the warm load still made one
+`create_connection(('huggingface.co', 443))` (httpx/httpcore; an earlier draft recorded getaddrinfo); with `constants.HF_HUB_OFFLINE = True` it made none,
+and loaded identically.
 
-**One thing it does *not* affect:** the cache file lands in `$HF_HOME`, a sibling of
-`hub/` and `quarantine/`. `verify_weights()` walks `hub/models--…/snapshots/<rev>/` and
-never sees it, so it is not an "extra file" — but any future check that assumes the
-volume contains only what we put there will be surprised by it.
+**Mitigation:** `model_fetcher._offline_hub()` sets **the constant**, scoped to the
+classifier load and restored in a `finally`. Scoping matters as much as the mechanism: the
+same flag disables `snapshot_download`, so a process-wide pin (an `ENV` line in the
+Dockerfile, say) would turn every cold start into a permanent degraded mode. By the time
+the load runs, the download has already finished — which is why the pin is safe on the
+cold path and load-bearing on the warm one. `tests/test_model_fetcher.py`'s
+`TestWarmStartTouchesNoNetwork` pins all of it, including a negative control that removes
+the pin and asserts the attempt reappears; the suite's plain socket guard cannot see this
+on its own, because `huggingface_hub` swallows the error — a blocked attempt and no
+attempt look identical unless you *count* attempts
+(`tests.fakes.record_network_attempts`).
+
+**The other cache.** The registry response is also cached at
+`$HF_HOME/.agent_harnesses.json` for 24 h, which means a machine that has ever reached the
+Hub will not make the call again and any test of this must clear both that file and the
+module-level `_registry` global to mean anything. The file lands in `$HF_HOME`, a sibling
+of `hub/` and `quarantine/`; `verify_weights()` walks `hub/models--…/snapshots/<rev>/` and
+never sees it, so it is not an "extra file" — but any future check that assumes the volume
+contains only what we put there will be surprised by it.
 
 ---
 

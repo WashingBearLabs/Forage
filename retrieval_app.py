@@ -574,21 +574,30 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # throughout, and `promptguard_loaded` flips to true in place when the
     # load finishes — no restart, no second request path.
     #
-    # The handle lives on `app.state` so shutdown can cancel it; US-005's
-    # backoff retry task rides the same seam.
+    # The handle lives on `app.state` so shutdown can cancel it.
+    #
+    # US-005 made the task a *loop*: `WeightAcquisition.run()` retries on a
+    # bounded, jittered backoff until the classifier loads, so a sidecar that
+    # started during a Hugging Face outage — or before its gated-repo approval
+    # came through — converges without anyone restarting it. It holds the
+    # single-flight lock, which is why the object is on `app.state` too: any
+    # future caller that wants an acquisition has to go through the same lock
+    # rather than starting a second ~270 MiB download alongside this one.
     classifier = PromptGuardClassifier()
     app.state.classifier = classifier
-    app.state.model_task = asyncio.create_task(
-        asyncio.to_thread(
-            model_fetcher.acquire_and_load,
-            classifier,
-            metrics=app.state.model_metrics,
-        )
+    acquisition = model_fetcher.WeightAcquisition(
+        classifier,
+        metrics=app.state.model_metrics,
     )
+    app.state.model_acquisition = acquisition
+    app.state.model_task = asyncio.create_task(acquisition.run())
 
     yield
 
-    # Shutdown
+    # Shutdown. The acquisition loop has no ending of its own short of a loaded
+    # classifier, so cancelling it is not tidiness — it is the only thing that
+    # stops it. A task nobody cancels outlives the lifespan, and under pytest
+    # that is a hang rather than a warning.
     model_task: asyncio.Task[bool] | None = getattr(app.state, "model_task", None)
     if model_task is not None and not model_task.done():
         model_task.cancel()
@@ -614,10 +623,11 @@ app.state.extraction_admission = ExtractionAdmissionController(
 app.state.search_metrics = SearchMetrics()
 app.state.retrieve_metrics = RetrieveMetrics()
 app.state.model_metrics = ModelMetrics()
-# Declared here as well as in the lifespan so the attribute exists for a
+# Declared here as well as in the lifespan so the attributes exist for a
 # transport that never fires lifespan events (`httpx.ASGITransport`, which the
 # suite's `client` fixture uses) — `None` means "no acquisition was started".
 app.state.model_task = None
+app.state.model_acquisition = None
 app.state.classification_semaphore = asyncio.Semaphore(
     _initial_extraction_settings.classification_concurrency
 )
@@ -738,12 +748,15 @@ async def metrics(request: Request) -> dict[str, Any]:
         # `/metrics` is outside the frozen response-model surface, so this
         # section needs no CONTRACT_VERSION bump. `fetch_in_progress` is what
         # distinguishes "downloading ~270 MiB" from "wedged" while `/health`
-        # reports degraded for both.
+        # reports degraded for both; `retries_scheduled` (US-005) separates
+        # both of those from "waiting to try again", which is the state a
+        # backoff introduces and nothing else reports.
         "model": {
             "fetch_failures": model_metrics.fetch_failures,
             "verify_failures": model_metrics.verify_failures,
             "quarantines": model_metrics.quarantines,
             "fetch_in_progress": model_metrics.fetch_in_progress,
+            "retries_scheduled": model_metrics.retries_scheduled,
         },
     }
 
