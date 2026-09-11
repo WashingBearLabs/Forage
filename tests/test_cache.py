@@ -731,7 +731,10 @@ class TestReconnect:
 
         password = "hunter2-startup-password"
         startup_url = f"redis://:{password}@unreachable-startup-host:6379/4"
-        monkeypatch.setattr(retrieval_app, "VALKEY_URL", startup_url)
+        # The env var itself since US-002 removed the module constant this
+        # line used to patch: startup reads `VALKEY_URL` per start, so this
+        # now exercises the operator's real path rather than a test seam.
+        monkeypatch.setenv("VALKEY_URL", startup_url)
         # Keep the model load out of it: this test is about log content.
         monkeypatch.setattr(
             retrieval_app,

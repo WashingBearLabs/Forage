@@ -26,7 +26,15 @@ from pydantic import BaseModel
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 import model_fetcher
-from cache import CacheMetrics, ContentCache, cache_settings_from_config
+from cache import (
+    CacheMetrics,
+    CacheSettings,
+    CacheStorage,
+    ContentCache,
+    InMemoryStorage,
+    ValkeyStorage,
+    cache_settings_from_config,
+)
 from model_fetcher import ModelMetrics
 from models import (
     ExtractedContent,
@@ -65,8 +73,12 @@ logger = logging.getLogger(__name__)
 # variable at container start (see ``docs/configuration.md``). There is no
 # vault client and no secret-bearing config API — ``VALKEY_URL`` arrives
 # ready-made, credentials and all, from the operator's env or secret store.
-VALKEY_URL = os.environ.get("VALKEY_URL", "redis://valkey:6379/4")
 SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://searxng:8080")
+
+# Which storage the content cache runs over, named once for the selection
+# below. ``/health`` gains a field carrying it in the next story; until then
+# these two strings are the startup log's closed vocabulary for the choice.
+CacheBackend = Literal["valkey", "memory"]
 
 # Break-glass capability override. ``FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION``
 # is the current name — deliberately self-describing, so nobody arms it thinking
@@ -115,6 +127,53 @@ def _warn_if_break_glass_advertisement_enabled() -> bool:
             armed_by,
         )
     return armed_by is not None
+
+
+def _configured_valkey_url() -> str | None:
+    """Return the operator's ``VALKEY_URL``, or ``None`` when it is fully unset.
+
+    A callable rather than an import-time constant, on
+    :func:`_break_glass_arming_env_var`'s pattern: the value is read once per
+    *start* either way, but a function can be exercised per start, and the four
+    starts this distinction exists for are exactly what the tests drive.
+
+    **Only a fully unset variable means "no Valkey".** An empty value is
+    configured-and-invalid, not absent: ``VALKEY_URL=${VALKEY_URL}`` rendered
+    against nothing is a realistic deployment accident, and reading it as
+    "unset" would answer a broken configuration by quietly running an
+    unshared, non-persistent cache in production. It goes down the Valkey path
+    instead, where it fails loudly as ``degraded: cache_unavailable``.
+    """
+    return os.environ.get("VALKEY_URL")
+
+
+def _select_cache_storage(
+    *,
+    settings: CacheSettings,
+    metrics: CacheMetrics,
+) -> tuple[CacheStorage, CacheBackend]:
+    """Choose the content cache's storage for this start, with its name.
+
+    Unset means the single-container deployment: a bounded in-memory cache,
+    operational from the first request, reporting healthy. Anything else means
+    the operator asked for Valkey, and asking for a Valkey that cannot be
+    reached — or for one whose URL does not parse — is a configuration failure
+    the service reports rather than papers over. Neither the unreachable nor
+    the unparseable case falls back to memory: a silent fallback would turn a
+    typo into a cache that never shares anything with the rest of the
+    deployment, which is precisely the failure ``cache_unavailable`` exists to
+    surface.
+
+    The URL is handed straight to :class:`~cache.ValkeyStorage`, which parses
+    it inside its own guarded connect and maps every failure to the closed log
+    vocabulary. Nothing here inspects, splits or logs it — the value may carry
+    a password, and a parse attempt at this layer would be a second place for
+    one to escape into a log line.
+    """
+    url = _configured_valkey_url()
+    if url is None:
+        return InMemoryStorage(settings=settings, metrics=metrics), "memory"
+    return ValkeyStorage(url, metrics=metrics), "valkey"
 
 
 def _load_config() -> dict[str, Any]:
@@ -555,13 +614,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Connect content cache. The `cache:` bounds are validated here whichever
     # storage ends up selected — a typo fails the boot loudly, exactly as the
     # `extraction:` block does, rather than silently widening a memory bound.
+    #
+    # The storage is chosen here, from `VALKEY_URL`, and injected: the service
+    # never relies on `ContentCache`'s own Valkey default, which survives only
+    # as the test-facing constructor convenience it always was.
     app.state.cache_settings = cache_settings_from_config(config)
     app.state.cache_metrics = CacheMetrics()
-    cache = ContentCache(VALKEY_URL, metrics=app.state.cache_metrics)
+    storage, backend = _select_cache_storage(
+        settings=app.state.cache_settings,
+        metrics=app.state.cache_metrics,
+    )
+    cache = ContentCache(storage=storage, metrics=app.state.cache_metrics)
     cache_ok = await cache.connect()
     app.state.cache = cache
     if cache_ok:
-        logger.info("Content cache connected (Valkey)")
+        # `backend` is one of two literals, never the URL.
+        logger.info("Content cache connected (%s)", backend)
     else:
         logger.warning("Content cache not available at startup")
 

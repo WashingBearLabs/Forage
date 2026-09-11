@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import tempfile
 import threading
 import time
@@ -25,6 +26,9 @@ from cache import (
     DEFAULT_CACHE_MAX_ENTRIES,
     CacheConfigurationError,
     CacheSettings,
+    ContentCache,
+    InMemoryStorage,
+    ValkeyStorage,
 )
 from model_fetcher import DEFAULT_MODEL_REVISION, ModelMetrics
 from models import (
@@ -1167,3 +1171,231 @@ async def test_lifespan_refuses_an_out_of_range_cache_bound(
     with pytest.raises(CacheConfigurationError):
         async with lifespan(probe_app):
             pass
+
+
+# ---------------------------------------------------------------------------
+# Backend selection from VALKEY_URL (`feature-forage-cache-fallback` US-002)
+# ---------------------------------------------------------------------------
+#
+# Five starts, one per configuration the operator can produce:
+#
+#   fully unset   -> in-memory, healthy, and no connection attempted at all
+#   valid         -> Valkey, healthy
+#   unreachable   -> Valkey, `degraded: cache_unavailable`
+#   unparseable   -> Valkey, `degraded: cache_unavailable`
+#   empty string  -> Valkey, `degraded: cache_unavailable`
+#
+# They run through the real `lifespan` *and the real `ContentCache`* — unlike
+# `_running_app` above, which patches the cache away. That is the whole point:
+# what is under test is which storage a start selects and what `/health` then
+# says about it, and a patched `ContentCache` would answer both questions
+# itself. Only Valkey's socket is a double.
+
+
+_UNREACHABLE_VALKEY_URL = "redis://:unreachable-secret@valkey-that-is-not-there:6379/4"
+_UNPARSEABLE_VALKEY_URL = "http://:unparseable-secret@wrong-scheme-host:6379/0"
+_WORKING_VALKEY_URL = "redis://:working-secret@valkey:6379/4"
+
+
+def _valkey_double() -> AsyncMock:
+    """A Valkey client that answers every command this cache issues."""
+    client = AsyncMock()
+    client.ping = AsyncMock(return_value=True)
+    client.get = AsyncMock(return_value=None)
+    client.set = AsyncMock(return_value=True)
+    client.delete = AsyncMock(return_value=1)
+    client.aclose = AsyncMock(return_value=None)
+    return client
+
+
+def _acquisition_that_never_loads(
+    classifier: PromptGuardClassifier,
+    *,
+    metrics: ModelMetrics | None = None,
+    **_kwargs: object,
+) -> bool:
+    """One acquisition attempt that finishes instantly without loading."""
+    return False
+
+
+@asynccontextmanager
+async def _started_with_valkey_url(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    valkey_url: str | None,
+    promptguard_loaded: bool = True,
+) -> AsyncGenerator[httpx.AsyncClient, None]:
+    """Start the app through its real lifespan with `VALKEY_URL` exactly as given.
+
+    ``valkey_url=None`` means *fully unset*, which is the one input that
+    selects memory mode; every other value — including ``""`` — is a
+    configured Valkey.
+
+    The classifier is a double so the cache is the only thing `/health` can be
+    degraded about: these tests assert `status` as well as `degraded_reasons`,
+    and a real (unloaded) PromptGuard would make every run degraded for a
+    reason that has nothing to do with the backend.
+    """
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _acquisition_that_never_loads
+    )
+    monkeypatch.setattr(
+        retrieval_app,
+        "PromptGuardClassifier",
+        lambda: MagicMock(spec=PromptGuardClassifier, loaded=promptguard_loaded),
+    )
+    if valkey_url is None:
+        monkeypatch.delenv("VALKEY_URL", raising=False)
+    else:
+        monkeypatch.setenv("VALKEY_URL", valkey_url)
+
+    async with lifespan(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as selection_client:
+            yield selection_client
+
+
+def test_only_a_fully_unset_valkey_url_reads_as_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_configured_valkey_url` distinguishes unset from empty, at the source.
+
+    The distinction is a security decision, not a nicety: an empty value is
+    what `VALKEY_URL=${VALKEY_URL}` renders to when the substitution has
+    nothing to substitute, and collapsing it into "unset" (``... or None``)
+    would answer a broken deployment with a silent, unshared memory cache.
+    """
+    monkeypatch.delenv("VALKEY_URL", raising=False)
+    assert retrieval_app._configured_valkey_url() is None
+
+    monkeypatch.setenv("VALKEY_URL", "")
+    assert retrieval_app._configured_valkey_url() == ""
+
+    monkeypatch.setenv("VALKEY_URL", _WORKING_VALKEY_URL)
+    assert retrieval_app._configured_valkey_url() == _WORKING_VALKEY_URL
+
+
+async def test_unset_valkey_url_runs_in_memory_healthy_and_never_connects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Case 1 of 5 — fully unset: in-memory, healthy, no connection attempted.
+
+    The "no connection attempted" half is the behavioural form of "no baked
+    env default remains": with the old `retrieval_app.py` default in place
+    this start would build a `ValkeyStorage` for `redis://valkey:6379/4` and
+    reach for it, so `from_url` not being called is what proves the default
+    gone. The autouse socket guard is the second net under the same claim.
+    """
+    with patch("cache.aioredis") as aioredis:
+        async with _started_with_valkey_url(monkeypatch, valkey_url=None) as client:
+            cache = cast("ContentCache", app.state.cache)
+            resp = await client.get("/health")
+
+            assert isinstance(cache.storage, InMemoryStorage)
+            aioredis.from_url.assert_not_called()
+
+            data = resp.json()
+            assert data["status"] == "healthy"
+            assert data["degraded_reasons"] == []
+            assert data["cache_connected"] is True
+
+
+async def test_a_working_valkey_url_selects_valkey_and_stays_healthy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Case 2 of 5 — set and working: Valkey, healthy, one connection made."""
+    with patch("cache.aioredis") as aioredis:
+        aioredis.from_url.return_value = _valkey_double()
+        async with _started_with_valkey_url(
+            monkeypatch, valkey_url=_WORKING_VALKEY_URL
+        ) as client:
+            cache = cast("ContentCache", app.state.cache)
+            resp = await client.get("/health")
+
+            assert isinstance(cache.storage, ValkeyStorage)
+            assert aioredis.from_url.call_count == 1
+
+            data = resp.json()
+            assert data["status"] == "healthy"
+            assert data["degraded_reasons"] == []
+            assert data["cache_connected"] is True
+
+
+@pytest.mark.parametrize(
+    "valkey_url",
+    [
+        pytest.param(_UNREACHABLE_VALKEY_URL, id="unreachable"),
+        pytest.param(_UNPARSEABLE_VALKEY_URL, id="unparseable"),
+        pytest.param("", id="empty-string"),
+    ],
+)
+async def test_a_broken_valkey_url_degrades_and_never_falls_back_to_memory(
+    monkeypatch: pytest.MonkeyPatch,
+    valkey_url: str,
+) -> None:
+    """Cases 3-5 of 5 — configured and failing: Valkey, `cache_unavailable`.
+
+    Unreachable, unparseable and empty are one behaviour on purpose. Each is a
+    configuration the operator *wrote*, so each fails loudly rather than
+    quietly running a cache nothing else in the deployment shares; the
+    unparseable one additionally proves a bad URL is a degraded report and not
+    a crashed boot.
+    """
+    async with _started_with_valkey_url(monkeypatch, valkey_url=valkey_url) as client:
+        cache = cast("ContentCache", app.state.cache)
+        resp = await client.get("/health")
+
+        assert isinstance(cache.storage, ValkeyStorage)
+        assert not isinstance(cache.storage, InMemoryStorage)
+
+        data = resp.json()
+        assert data["status"] == "degraded"
+        assert data["degraded_reasons"] == ["cache_unavailable"]
+        assert data["cache_connected"] is False
+
+
+@pytest.mark.parametrize(
+    ("valkey_url", "secret"),
+    [
+        pytest.param(None, None, id="unset"),
+        pytest.param(_WORKING_VALKEY_URL, "working-secret", id="valid"),
+        pytest.param(_UNREACHABLE_VALKEY_URL, "unreachable-secret", id="unreachable"),
+        pytest.param(_UNPARSEABLE_VALKEY_URL, "unparseable-secret", id="unparseable"),
+        pytest.param("", None, id="empty-string"),
+    ],
+)
+async def test_no_selection_path_logs_the_valkey_url(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    valkey_url: str | None,
+    secret: str | None,
+) -> None:
+    """All five starts keep the closed log vocabulary — no URL, no password.
+
+    `cache.py`'s invariant, asserted here at the layer that now *chooses* the
+    URL: selection reads the variable and hands it on, so a helpful "couldn't
+    parse VALKEY_URL=…" anywhere along that path would leak a credential out
+    of the one variable that routinely carries one.
+    """
+    with patch("cache.aioredis") as aioredis:
+        aioredis.from_url.return_value = _valkey_double()
+        with caplog.at_level(logging.DEBUG):
+            async with _started_with_valkey_url(
+                monkeypatch, valkey_url=valkey_url
+            ) as client:
+                await client.get("/health")
+
+    # Canary: the start really did log, so the absence checks below are not
+    # passing vacuously against an empty capture.
+    assert caplog.text.strip()
+
+    if valkey_url:
+        assert valkey_url not in caplog.text
+    if secret is not None:
+        assert secret not in caplog.text
+    assert "redis://" not in caplog.text
+    assert "wrong-scheme-host" not in caplog.text
+    assert "valkey-that-is-not-there" not in caplog.text

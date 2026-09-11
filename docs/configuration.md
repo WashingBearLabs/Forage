@@ -59,7 +59,7 @@ instance is private-network-only and Forage is its only client.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `VALKEY_URL` | `redis://valkey:6379/4` | Connection string for the Valkey/Redis content cache. Standard `redis://` URL, including the database index. **May carry a password — see credential handling below.** |
+| `VALKEY_URL` | **unset** — the content cache runs in memory | Connection string for the Valkey/Redis content cache. Standard `redis://` URL, including the database index. Setting it selects the Valkey backend; leaving it unset selects the bounded in-memory one. **May carry a password — see credential handling below.** |
 | `SEARXNG_URL` | `http://searxng:8080` | Base URL of the SearXNG instance backing `POST /search`. |
 | `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION` | unset | **Break-glass only** — see below. |
 | `POPPY_RETRIEVAL_LEGACY_CAPABILITY` | unset | Deprecated alias of `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION`, kept so a pre-extraction deployment keeps working. Identical semantics. |
@@ -69,15 +69,58 @@ instance is private-network-only and Forage is its only client.
 | `FORAGE_WEIGHTS_MIRROR` | `ghcr.io/washingbearlabs/forage-weights` | The OCI **repository** holding the vendored weights, used when Hugging Face cannot supply them. A repository, never a tag: the tag is always `FORAGE_MODEL_REVISION`, so redirecting the mirror cannot also redirect which revision it serves. Validated to a lower-case `<registry>/<owner>/<name>`, optionally prefixed `https://` — anything else (an `http://` scheme, embedded credentials, a tag or digest) is refused with an error and the mirror is treated as unconfigured. |
 | `FORAGE_MIRROR_TOKEN` | unset | Registry credential for `FORAGE_WEIGHTS_MIRROR`. Optional — without it the mirror is skipped exactly as a missing `HF_TOKEN` skips Hugging Face. **Carries a credential**; supply it the same way as `VALKEY_URL`. A **read-only** token, scoped as narrowly as your registry allows — see `docs/weights.md` § "The mirror read token". |
 
-The defaults for `VALKEY_URL` and `SEARXNG_URL` are deliberately neutral service names —
-they assume a compose network with services literally called `valkey` and `searxng`, and
-nothing more. If neither companion is reachable, Forage still starts and reports itself
-`degraded` (`cache_unavailable`, and `promptguard_unavailable` on any token-less build)
-rather than refusing to boot.
+`SEARXNG_URL`'s default is a deliberately neutral service name — it assumes a compose
+network with a service literally called `searxng`, and nothing more. If SearXNG is not
+reachable, Forage still starts and reports itself `degraded` rather than refusing to
+boot; the same is true of a missing PromptGuard (`promptguard_unavailable` on any
+token-less build).
 
-> **Forward note.** A later change makes an unset `VALKEY_URL` mean "run the cache
-> in-memory" rather than "connect to the default host". Until then, unset means *the
-> default above*, and an unreachable default means `cache_unavailable`.
+### Cache backend selection
+
+`VALKEY_URL` decides which storage the content cache runs over, once per container
+start. There are two backends and one rule:
+
+| `VALKEY_URL` | Backend | `/health` |
+|---|---|---|
+| **Fully unset** | Bounded in-memory (see the `cache:` block below) | `healthy` — nothing is missing, this is a supported deployment |
+| Set and reachable | Valkey | `healthy` |
+| Set but unreachable | Valkey | `degraded`, `cache_unavailable` |
+| Set to an unparseable URL | Valkey | `degraded`, `cache_unavailable` — never a failed boot |
+| **Set to the empty string** | Valkey | `degraded`, `cache_unavailable` |
+
+The rule is that **only a fully unset variable means "no Valkey"**. Anything else is a
+Valkey you asked for, and a Valkey you asked for and did not get is reported, never
+silently replaced with an in-memory cache: the memory backend is per-process and
+non-persistent, so quietly substituting it would hand a broken deployment a cache
+nothing else in it shares.
+
+The empty string is deliberately on the "configured" side of that line, which is worth
+stating plainly because it is the case most likely to surprise. `VALKEY_URL=${VALKEY_URL}`
+in a compose file, an `env_file` line with nothing after the `=`, or a templating step
+that rendered nothing all produce an empty value, and every one of them is a mistake
+someone should hear about rather than a request for memory mode.
+
+There is **no connection attempt at all** when the variable is unset — not to a default
+host, not to `localhost`. Forage has no baked-in Valkey address.
+
+Consequences of memory mode, in one place:
+
+- The cache lives in the one uvicorn worker's process. Nothing is shared with another
+  container and nothing survives a restart.
+- It is bounded — `cache.max_entries` and `cache.max_bytes` below — and evicts rather
+  than grows.
+- `cache_connected` in `/health` means "the selected backend is operational", so it is
+  always `true` in memory mode. It is not a statement that Valkey is present.
+- The cache serves `POST /retrieve` only. `/search` has never been cached, in either
+  backend.
+
+> **Production deployments should set it.** Poppy — the consumer this service was
+> extracted from — runs Valkey and keeps doing so: its Forage environment file is
+> declared `required: true` on the Poppy side, so a missing or unmounted env file fails
+> that deployment loudly instead of quietly dropping it into memory mode, and the
+> epic's live checklist asserts the running backend is Valkey rather than trusting the
+> config. If you run more than one Forage replica, or want the cache to survive a
+> restart, set `VALKEY_URL`.
 
 ### Credential handling for `VALKEY_URL`
 
@@ -97,8 +140,8 @@ Do your half:
 - Remember that `docker inspect` shows a container's full environment to anyone who can
   reach the Docker socket, whichever method you used. Restrict socket access
   accordingly.
-- Rotating the password means restarting the container — the URL is read once at import
-  time.
+- Rotating the password means restarting the container — the URL is read once per start,
+  when the cache backend is selected.
 
 ### Break-glass: the sanitization-advertisement override
 
@@ -285,7 +328,8 @@ that file sets, which is not always the code default.
 ### The `cache:` block
 
 Bounds for `InMemoryStorage`, the bounded in-process content-cache storage that sits
-under the cache's policy layer. They are validated at startup regardless of which storage
+under the cache's policy layer — the backend an unset `VALKEY_URL` selects (see "Cache
+backend selection" above). They are validated at startup regardless of which storage
 is active, so a typo fails the boot loudly rather than silently widening a memory bound.
 
 The budget is the container's real headroom: `mem_limit: 1024m` already reserves 512 MiB
@@ -375,8 +419,8 @@ curl -s localhost:8020/health | jq
 | Field | What it tells you |
 |-------|-------------------|
 | `status` | `healthy` or `degraded`. |
-| `degraded_reasons` | `promptguard_unavailable` (no weights — the ML scan is not running), `cache_unavailable` (Valkey unreachable). |
+| `degraded_reasons` | `promptguard_unavailable` (no weights — the ML scan is not running), `cache_unavailable` (a *configured* Valkey is unreachable or its URL is unusable — see "Cache backend selection"; memory mode never reports it). |
 | `promptguard_loaded` | Always honest, even with the break-glass override set. |
-| `cache_connected` | Live ping, subject to reconnect backoff. |
+| `cache_connected` | "The selected backend is operational." A live ping in Valkey mode, subject to reconnect backoff; always `true` in memory mode, where there is no connection to lose. |
 | `sanitizer_revision` | Opaque hash of the sanitization sources, the model identity, and `promptguard_threshold`. Changes when sanitization behaviour changes. |
 | `contract_version` | Response-contract version. Consumers should refuse to activate on a mismatch rather than guess. |

@@ -62,9 +62,10 @@ should refuse to activate on a mismatch rather than guess.
 # Build
 docker build -t forage .
 
-# Run (private network only — see the posture note above)
+# Run (private network only — see the posture note above).
+# No VALKEY_URL: the content cache runs in memory. Add
+# `-e VALKEY_URL=redis://valkey:6379/4` to use a Valkey you are running.
 docker run --rm -p 127.0.0.1:8020:8020 \
-  -e VALKEY_URL=redis://valkey:6379/4 \
   -e SEARXNG_URL=http://searxng:8080 \
   forage
 
@@ -72,11 +73,14 @@ docker run --rm -p 127.0.0.1:8020:8020 \
 curl -s localhost:8020/health | jq
 ```
 
-Forage wants two companions: a Valkey/Redis instance for the content cache and a
-SearXNG instance for `/search`. Both are optional in the sense that Forage starts
-without them and reports itself `degraded`; neither is optional for full function. A
-worked `docker-compose.yml` bringing up all three lands with the cache-fallback work
-(`examples/` — not yet in this repo).
+Forage wants one companion and can use a second. **SearXNG** backs `/search`: without it
+Forage starts and reports itself `degraded`. **Valkey/Redis** backs the content cache and
+is genuinely optional — leave `VALKEY_URL` unset and the cache runs bounded and in-memory
+in the container, reporting `healthy`; set it and Forage uses Valkey, reporting
+`degraded: cache_unavailable` if the one you configured cannot be reached. Memory mode is
+per-process and does not survive a restart, so a multi-replica or restart-sensitive
+deployment should set `VALKEY_URL`. A worked `docker-compose.yml` for both modes lands
+with the cache-fallback work (`compose/` — not yet in this repo).
 
 Local development:
 
@@ -92,9 +96,10 @@ Forage is 12-factor: everything comes from environment variables at container st
 plus the mounted `config.yaml`. It has **no** OpenBao/Vault client, no secret-bearing
 runtime API, and no config database.
 
-- `VALKEY_URL` (default `redis://valkey:6379/4`) — content-cache connection string.
-  Supply it through an env file or your secret store, not an inline `-e` flag (shell
-  history).
+- `VALKEY_URL` (**unset by default** — the content cache runs in memory) — content-cache
+  connection string. Only a fully unset value selects memory mode; an empty or broken one
+  is a configured Valkey that reports `cache_unavailable`. Supply it through an env file
+  or your secret store, not an inline `-e` flag (shell history).
 - `SEARXNG_URL` (default `http://searxng:8080`) — SearXNG base URL for `/search`.
 - `config.yaml` — user-agent pool, news-domain trust list, seed blocklist, PromptGuard
   threshold, the `extract_route_enabled` gate, and the `extraction:` resource limits.

@@ -167,9 +167,10 @@ canary cannot check about itself: that it is committed and not skipped.
 **Async needs no decorator.** `asyncio_mode = "auto"` is set in `pyproject.toml`.
 
 **The exact count is a gate, not a floor.** The extraction verified *exactly* 531 tests
-moved (534 collected after alias parametrization); the suite has since grown to 1251 as CI
+moved (534 collected after alias parametrization); the suite has since grown to 1325 as CI
 guards landed (US-001 +33, US-006 +19, US-002 +21, US-003 +49, US-005 +75, US-007 +40; then
-`forage-model-bootstrap` US-002 +87, US-001 +56, US-003 +102, US-004 +76 and US-005 +24). A silently
+`forage-model-bootstrap` US-002 +87, US-001 +56, US-003 +102, US-004 +76 and US-005 +24;
+then `forage-cache-fallback` US-001 +63 and US-002 +11). A silently
 dropped module cannot hide under a "≥ N passed" assertion. When you add tests, update the
 counts here.
 
