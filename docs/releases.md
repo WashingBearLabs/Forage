@@ -10,6 +10,16 @@ lane and is documented separately in `docs/searxng.md` (US-004).
 > **Public since US-008's 2026-09-10 flip** — repository and packages; anonymous
 > pulls verified at the gate.
 
+## Withdrawn tags
+
+A publish run that fails the layer-identity gate leaves its tag pointing at an image
+whose layers are NOT the ones `smoke` executed — the workflow's own doctrine calls that
+tag untrusted. The rule, set when `v0.9.2-rc` did exactly this on a cold cache
+(2026-09-11): **withdraw the git tag AND delete the GHCR package version.** Deleting the
+version needs `delete:packages` (obtained ad hoc, dropped after); until both halves are
+done the registry is advertising an ungated image, which is worse than none.
+`0.9.2-rc`'s package version is pending deletion under this rule.
+
 ## The tag scheme
 
 | You push | The registry gets | A GitHub Release? |

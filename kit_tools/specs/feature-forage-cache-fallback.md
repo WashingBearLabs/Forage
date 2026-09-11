@@ -792,10 +792,14 @@ cache). Both are self-contained and both `docker compose config -q` green.
 does. The spec's last hint asked for the header; the guard is because a file nobody
 knows is load-bearing gets edited as if it were not.
 
-**Image pins, checked against the registry rather than the docs.** The published tags
-are `ghcr.io/washingbearlabs/forage:0.9.3-rc` and
-`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc` — confirmed by enumerating the GHCR
-package versions, not by reading a document. Worth knowing: **`docs/searxng.md` cites
+**Image pins.** `ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc` is published —
+confirmed by enumerating the GHCR package versions at writing.
+`ghcr.io/washingbearlabs/forage:0.9.3-rc` is NOT published yet and no registry check can
+confirm it: it is pre-registered here and cut warm immediately after this PR merges
+(supervisor sequencing — 0.9.1-rc predates contract 1.1.0, and 0.9.2-rc failed the
+publish parity gate on a cold cache and was withdrawn). A registry enumeration at
+writing returns `[0.9.1-rc, 0.9.2-rc]` for forage; the fragments intentionally cite
+neither. Worth knowing: **`docs/searxng.md` cites
 `forage-searxng:0.1.0` in three places and that tag has never existed** (the tags pushed
 were `searxng-v0.1.0-rc` and `searxng-v0.1.1-rc`, which publish `0.1.0-rc` / `0.1.1-rc`).
 Out of this story's scope, left alone, recorded here — it is a copy-paste-and-fail for a
@@ -882,13 +886,21 @@ touches is a `_REVISION_SOURCES` member.
 
 ---
 
-#### **Manual smoke — HUMAN GATE, pending**
+#### > **What the guards do NOT prove:** every fragment test in
+> `tests/test_compose_fragments.py` is parse-only — tag *shape*, service names, bindings —
+> with no registry call anywhere. A green suite is not a pullable pin; the pull happens
+> here, in this smoke, which is part of why it is a gate.
+
+**Manual smoke — HUMAN GATE, pending**
 
 > The AC's *"manual smoke transcript recorded"* clause. **Not executed by the
 > implementer.** The supervisor runs this with the owner and pastes the transcript
 > under "Recorded transcript" below. Mirrors the US-003-of-model-bootstrap pattern.
 
-**Before you start.** You need a Hugging Face token with `meta-llama/Llama-Prompt-Guard-2-22M`
+**Before you start.** SEQUENCING: this PR must be MERGED and the `v0.9.3-rc` tag cut and
+its publish lane green BEFORE this smoke — the fragments pin `forage:0.9.3-rc`, which does
+not exist until then; running early fails at the pull with `manifest unknown`. Then: you
+need a Hugging Face token with `meta-llama/Llama-Prompt-Guard-2-22M`
 access approved. Nothing else: the repository and both packages have been PUBLIC since the
 2026-09-10 flip (supervisor correction — the first draft of this runbook said a GHCR
 login was needed; the verifier's anonymous pull disproved it). The completion criterion

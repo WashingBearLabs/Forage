@@ -290,7 +290,7 @@ Two boundaries the discharge does not cross:
 - **Publishing is gated, and now live.** Secret-free is not public. US-007's `publish`
   lane shipped 2026-09-08 and has published `sha-e45f70f` and `0.9.0-rc`; every push runs
   behind all six gates plus a layer-identity check (`docs/releases.md`). The repository
-  and both GHCR packages stay private until US-008.
+  and both GHCR packages have been PUBLIC since US-008's 2026-09-10 flip.
 - **Poppy's in-tree copy is unchanged.** `services/retrieval/Dockerfile` in the monorepo
   still carries `ARG HF_TOKEN`, and the two copies coexist until spec 6 pins Poppy to a
   published image. The old rule still applies there, verbatim.
