@@ -557,9 +557,26 @@ backend is Valkey. It is phrased without naming the not-yet-shipped `cache_backe
 the same reason — they stated a default that no longer exists — leaving the full mode
 matrix to US-004.
 
+**Live container evidence, from the PR's own smoke job.** The `smoke` job is now the
+memory-mode deployment running for real — a container with no `VALKEY_URL` (indeed no
+`-e` at all), and its `/health` body is the story's goal in one line:
+
+```json
+{"status":"degraded","promptguard_loaded":false,"cache_connected":true,
+ "capabilities":{},"sanitizer_revision":"5927038d…19d111",
+ "contract_version":"1.0.0","degraded_reasons":["promptguard_unavailable"]}
+```
+
+`cache_connected: true` with **no `cache_unavailable`** — on `main` that same container
+reported both `false` and the reason, because the deleted default sent it at a Valkey
+that was never there. The remaining degradation is the weights, which is that job's
+whole point. `docker run -e HF_TOKEN=… forage` reaching `healthy` (Goal 1) is now down
+to the token alone.
+
 **Gates.** 1327 passed (1314 + 13); `ruff check` / `ruff format --check` /
-`pyright --strict` / `actionlint` all zero. `sanitizer_revision` verified **unrotated**
-before and after: `5927038d64ed54a619e52b94899148f56bfede37d38f3c1a53c435edc719d111`
+`pyright --strict` / `actionlint` all zero; PR CI green including `smoke`.
+`sanitizer_revision` verified **unrotated** before and after:
+`5927038d64ed54a619e52b94899148f56bfede37d38f3c1a53c435edc719d111`
 (neither `retrieval_app.py` nor `conftest.py` is a `_REVISION_SOURCES` member).
 
 ## Refinement Notes
