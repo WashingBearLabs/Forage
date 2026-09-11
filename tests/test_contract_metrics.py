@@ -25,6 +25,7 @@ Three claims are checked here, each the way it is stated:
 from __future__ import annotations
 
 import dataclasses
+import json
 import re
 from collections.abc import Iterator
 from pathlib import Path
@@ -137,8 +138,11 @@ async def test_served_metrics_are_the_handlers_dict_serialized(
     """The claim, checked as stated: typing changed no wire byte.
 
     The handler is called directly for the dict it builds, then the same app is
-    driven over ASGI for the bytes it sends. A model that renamed, reordered,
-    retyped or dropped a counter breaks one of the three assertions below.
+    driven over ASGI for the bytes it sends. The load-bearing assertion is the
+    last one: the handler's dict serialized the way an untyped route would have
+    serialized it, compared against what the typed route actually sent. A model
+    that renamed, reordered, retyped or dropped a counter — at any depth —
+    fails it, because the comparison never passes through the model.
     """
     expected = await retrieval_app.metrics(_metrics_request())
     response = await client.get("/metrics")
@@ -147,6 +151,10 @@ async def test_served_metrics_are_the_handlers_dict_serialized(
     payload: dict[str, Any] = response.json()
     assert payload == expected
     assert list(payload) == list(expected)
+    # `JSONResponse.render`'s arguments, which is what produced `response.text`.
+    assert response.text == json.dumps(
+        expected, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+    )
     assert response.text == MetricsResponse.model_validate(expected).model_dump_json()
 
 
