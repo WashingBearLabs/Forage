@@ -159,18 +159,18 @@ two reporting `degraded: cache_unavailable`.
   prod to memory-mode" path is closed on the Poppy side, note it here.
 
 **Acceptance Criteria:**
-- [ ] Fully-unset → memory; set-and-working → valkey; unreachable, unparseable, and
+- [x] Fully-unset → memory; set-and-working → valkey; unreachable, unparseable, and
       empty-string each → valkey-selected + `degraded: cache_unavailable` (all five cases
       tested).
-- [ ] No baked `VALKEY_URL` **env** default remains (behavioral test: env fully unset
+- [x] No baked `VALKEY_URL` **env** default remains (behavioral test: env fully unset
       selects memory mode, no connection attempt); `cache.py:192` constructor default
       explicitly exempted.
-- [ ] The new parse/selection path logs no URL under any of the five cases (test-asserted).
-- [ ] `docs/configuration.md` updated: `VALKEY_URL` semantics, `cache:` config keys, the
+- [x] The new parse/selection path logs no URL under any of the five cases (test-asserted).
+- [x] `docs/configuration.md` updated: `VALKEY_URL` semantics, `cache:` config keys, the
       prod-side valkey assertion cross-ref.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run pyright` passes
 
 ### US-003: Health/metrics surface + contract 1.1.0
 
@@ -456,6 +456,128 @@ on one it never writes to.
 statically — `test_every_storage_satisfies_the_cache_storage_protocol` annotates a
 `list[CacheStorage]` holding all three implementations, which is where pyright checks a
 structural protocol.
+
+### US-002 — Backend selection + default removal (2026-09-10)
+
+**What landed.** `retrieval_app.py` lost its `VALKEY_URL` module constant and gained two
+functions: `_configured_valkey_url()` (reads the env var, returns `None` only when it is
+*fully unset*) and `_select_cache_storage(settings=…, metrics=…)`, which returns
+`(storage, backend_name)`. The lifespan injects the result —
+`ContentCache(storage=storage, metrics=…)` — so the service never touches
+`ContentCache`'s own `valkey_url` default. That default is untouched, exactly as the AC
+exempts it: it is now *only* a test-facing constructor convenience, which is what the
+spec-1 note said it was.
+
+Selection is a **callable, not an import-time constant** (US-003's prescribed pattern,
+adopted here because this is the story that builds the thing). Production reads the
+variable once per start either way; the difference is that five starts are now testable
+through the real env, rather than through a module attribute no operator has.
+
+**The five cases, all driven through the real `lifespan` and the real `ContentCache`:**
+
+| `VALKEY_URL` | Storage selected | `/health` |
+|---|---|---|
+| fully unset | `InMemoryStorage` | `healthy`, `degraded_reasons == []` |
+| valid, reachable | `ValkeyStorage` | `healthy` |
+| unreachable | `ValkeyStorage` | `degraded`, `["cache_unavailable"]` |
+| unparseable (`http://…`) | `ValkeyStorage` | `degraded`, `["cache_unavailable"]` |
+| empty string | `ValkeyStorage` | `degraded`, `["cache_unavailable"]` |
+
+The tests deliberately do **not** patch `ContentCache` (unlike `_running_app`, the
+existing lifespan harness) — a patched cache would answer both questions the story
+asks. Only Valkey's socket is a double; the unreachable case is caught by the suite's own
+socket guard, which is the honest shape of "unreachable" in a hermetic suite.
+
+**`/health` needed no change, and that is the story boundary.** Memory mode reports
+healthy *through Epic 1's existing handler*: `InMemoryStorage.ping_if_due()` is `True`, so
+`cache_connected` is true and `cache_unavailable` is never appended. The status flip is
+therefore a consequence of selection, not a separate edit, and this story asserts it
+behaviourally. What is left for US-003 is the additive **`cache_backend` wire field** and
+the `1.1.0` bump — genuinely new surface. `_select_cache_storage` already returns the
+backend name (the startup log consumes it), so US-003's plumbing is
+`app.state.cache_backend = backend` plus the response model.
+
+**Deliberately not done here:** `app.state.cache_backend` (US-003's field has no consumer
+yet), and the compose fragments / README mode matrix (US-004's).
+
+**The one frozen-suite line that had to move.** `TestReconnect::
+test_connect_failure_never_logs_url_or_secret` patched `retrieval_app.VALKEY_URL` — the
+attribute this story's AC deletes — so `monkeypatch.setattr` would have raised
+`AttributeError`. It is now `monkeypatch.setenv("VALKEY_URL", startup_url)`: one line,
+every assertion and the canary unchanged, and the test is strictly stronger for it (it
+exercises the operator's real path instead of a test seam). Nothing else in
+`TestReconnect`'s eight tests moved, and the suite stayed green throughout — it did its
+job as the "configured case unchanged" net.
+
+**The CI smoke needed no change, and the `degraded_reasons` question was checked, not
+assumed.** `contract_smoke.py` asserts `status == "degraded"` and
+`promptguard_unavailable in degraded_reasons` — it never asserts `cache_unavailable`, and
+it enumerates no field list of its own (everything comes from `HealthResponse` and
+`pipeline.contract`). The smoke job runs the image with no `-e` of any kind, so after this
+story it runs in **memory mode**: `cache_connected: true`, `degraded_reasons:
+["promptguard_unavailable"]`, `status: "degraded"` — still degraded, for the weights, which
+is the contract that job exists to pin. The PRIOR_LEARNINGS note that it "expects
+`cache_unavailable`" did not hold against the source.
+
+**Hermeticity: `VALKEY_URL` joined the cleared environment.** It now *selects a backend*,
+so a developer with one exported would run every lifespan test down the Valkey path while
+CI ran them down the memory path — and it is the one variable that routinely carries a
+password, inside a suite whose assertions read the log. `tests/conftest.py`'s
+`_ACQUISITION_ENV_VARS` became `_CLEARED_ENV_VARS` and gained it. That guard was
+initially unenforced (mutant M6 below passed), so it got the same treatment the socket
+guard got: an exact-set gate plus an executing canary in `tests/test_hermeticity.py`,
+which is the module `test_mapping` already points `conftest.py` at.
+
+**Mutation verification — 6 mutants, 6 killed:**
+
+| Mutant | Killed by |
+|---|---|
+| M1 reinstate the env default `os.environ.get("VALKEY_URL", "redis://valkey:6379/4")` | `test_unset_valkey_url_runs_in_memory_healthy_and_never_connects` (+ `test_only_a_fully_unset_valkey_url_reads_as_absent`) |
+| M2 collapse empty into unset (`… or None`) | `test_a_broken_valkey_url_degrades_and_never_falls_back_to_memory[empty-string]` |
+| M3 fall back to memory when the configured Valkey fails to connect | all three `…never_falls_back_to_memory` cases (+ `TestReconnect::test_connect_failure_never_logs_url_or_secret`) |
+| M4 log the URL on the selection path | `test_no_selection_path_logs_the_valkey_url[valid/unreachable/unparseable]` (+ the same `TestReconnect` test) |
+| M5 "helpfully" route an unparseable URL to memory | `…never_falls_back_to_memory[unparseable]` and `[empty-string]` |
+| M6 drop `VALKEY_URL` from the cleared environment | `test_the_cleared_environment_is_the_expected_exact_set` |
+
+M4 is the AC's closed-log-vocabulary requirement as a gate: the selection path hands the
+raw URL straight to `ValkeyStorage` and never parses, splits or interpolates it, because
+a parse attempt at this layer would be a second place for a password to reach a log line.
+The five-case log test asserts the URL, its password token and both hostnames are absent
+from a `DEBUG`-level capture of the whole start.
+
+**Docs.** `docs/configuration.md` gained a **"Cache backend selection"** section (the
+five-case table, why empty is configured-and-invalid, "no connection attempt at all when
+unset", the memory-mode consequences list, and the `cache_connected` clarification), plus
+corrections to the `VALKEY_URL` row (default is now *unset*), the `degraded_reasons` row,
+and the "read once at import time" line. The prod-side cross-ref is a callout there:
+Poppy's env file is `required: true`, so a missing one fails that deploy loudly rather
+than dropping prod to memory mode, and spec 6 US-007's live checklist asserts the running
+backend is Valkey. It is phrased without naming the not-yet-shipped `cache_backend` field.
+`README.md`'s quickstart, companion paragraph and `VALKEY_URL` bullet were corrected for
+the same reason — they stated a default that no longer exists — leaving the full mode
+matrix to US-004.
+
+**Live container evidence, from the PR's own smoke job.** The `smoke` job is now the
+memory-mode deployment running for real — a container with no `VALKEY_URL` (indeed no
+`-e` at all), and its `/health` body is the story's goal in one line:
+
+```json
+{"status":"degraded","promptguard_loaded":false,"cache_connected":true,
+ "capabilities":{},"sanitizer_revision":"5927038d…19d111",
+ "contract_version":"1.0.0","degraded_reasons":["promptguard_unavailable"]}
+```
+
+`cache_connected: true` with **no `cache_unavailable`** — on `main` that same container
+reported both `false` and the reason, because the deleted default sent it at a Valkey
+that was never there. The remaining degradation is the weights, which is that job's
+whole point. `docker run -e HF_TOKEN=… forage` reaching `healthy` (Goal 1) is now down
+to the token alone.
+
+**Gates.** 1327 passed (1314 + 13); `ruff check` / `ruff format --check` /
+`pyright --strict` / `actionlint` all zero; PR CI green including `smoke`.
+`sanitizer_revision` verified **unrotated** before and after:
+`5927038d64ed54a619e52b94899148f56bfede37d38f3c1a53c435edc719d111`
+(neither `retrieval_app.py` nor `conftest.py` is a `_REVISION_SOURCES` member).
 
 ## Refinement Notes
 

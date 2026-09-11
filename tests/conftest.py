@@ -14,12 +14,18 @@ Two jobs:
    pass. Unix sockets stay allowed — asyncio's event-loop self-pipe is one.
 
 3. **No inherited credentials.** The weight-acquisition environment variables
-   are cleared before every test. A developer who exports ``HF_TOKEN`` or
-   ``FORAGE_MIRROR_TOKEN`` in their shell — the people most likely to, being
-   the ones who vendor the weights — would otherwise run a *different* suite
-   from CI's: paths that assert "this source is skipped" would quietly take
-   the configured branch instead. The socket guard would catch a real fetch,
-   but only after the branch had already diverged.
+   and ``VALKEY_URL`` are cleared before every test. A developer who exports
+   ``HF_TOKEN`` or ``FORAGE_MIRROR_TOKEN`` in their shell — the people most
+   likely to, being the ones who vendor the weights — would otherwise run a
+   *different* suite from CI's: paths that assert "this source is skipped"
+   would quietly take the configured branch instead. The socket guard would
+   catch a real fetch, but only after the branch had already diverged.
+
+   ``VALKEY_URL`` joined them with `feature-forage-cache-fallback` US-002,
+   which made an unset one *select a different storage backend*: a developer
+   pointing one at their own Valkey would run every lifespan test against the
+   Valkey path CI runs against memory, and the credential such a URL routinely
+   carries would be in the process the suite's log-leak assertions read.
 """
 
 from __future__ import annotations
@@ -36,12 +42,13 @@ if str(_REPO_ROOT) not in sys.path:
 
 # Cleared for every test; a test that wants one sets it with `monkeypatch`,
 # which runs after this fixture and is undone after the test.
-_ACQUISITION_ENV_VARS = (
+_CLEARED_ENV_VARS = (
     "HF_TOKEN",
     "HF_HOME",
     "FORAGE_MODEL_REVISION",
     "FORAGE_WEIGHTS_MIRROR",
     "FORAGE_MIRROR_TOKEN",
+    "VALKEY_URL",
 )
 
 
@@ -53,6 +60,6 @@ def forbid_network() -> None:
 
 @pytest.fixture(autouse=True)
 def forbid_inherited_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Run every test against an environment with no weights credentials."""
-    for name in _ACQUISITION_ENV_VARS:
+    """Run every test against an environment with no inherited configuration."""
+    for name in _CLEARED_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
