@@ -124,9 +124,9 @@ that something is missing here.
 - **The Dockerfile no longer bakes a secret** (spec 1 `ci-and-image` US-003, 2026-09-07).
   `ARG HF_TOKEN` and the `from_pretrained` bake block are gone, the base is digest-pinned
   and dependencies come from the committed `uv.lock`; `tests/test_dockerfile.py` guards
-  the source and CI's `secret-grep` job greps the built image's layer history. **Pushing
-  is still not on**, for a different reason: publishing runs through US-007's gated lane
-  and the repo plus both GHCR packages stay private until US-008's human flip. Note also
+  the source and CI's `secret-grep` job greps the built image's layer history. Publishing
+  runs through US-007's gated lane; the repo and both GHCR packages have been PUBLIC since
+  US-008's 2026-09-10 flip (anonymous pulls verified at the gate). Note also
   that Poppy's in-tree `services/retrieval/Dockerfile` *still* carries `ARG HF_TOKEN` —
   the old rule applies there verbatim until spec 6.
 - **Every built image is weights-free** until spec 2 (`model-bootstrap`) adds the runtime

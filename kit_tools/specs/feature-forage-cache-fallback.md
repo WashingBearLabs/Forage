@@ -290,10 +290,10 @@ reaches a working `/retrieve` + `/search` round-trip.
 - [ ] Both fragments committed with code-matching service hostnames; `config -q` green in
       CI for both; loopback-only port bindings; manual smoke transcript recorded (this AC
       is a **human gate** — marked supervised in the epic wrapper, round-2 finding).
-- [ ] README mode matrix + posture line; fragments referenced from the quickstart.
-- [ ] Tests written/updated for new functionality (the CI `config -q` step counts)
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run pyright` passes
+- [x] README mode matrix + posture line; fragments referenced from the quickstart.
+- [x] Tests written/updated for new functionality (the CI `config -q` step counts)
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run pyright` passes
 
 ## Edge Cases
 
@@ -740,6 +740,257 @@ correctly says is none — the comparison is major-only and a minor drift logs.
 `pyright --strict` / `actionlint` all zero. One process note: run pyright through
 `uv run`, as `CONVENTIONS.md` says — a bare `.venv/bin/pyright` in this tree reports 34
 phantom errors from a different environment's stubs.
+
+### US-004 — Example compose fragments + mode docs (2026-09-10, build half)
+
+**This story ships in two halves.** Everything below is the build half: the two
+fragments, the CI gate, the committed guards and the README. The AC's *"manual smoke
+transcript recorded"* clause is a **human gate** — marked supervised in the epic wrapper
+— and its runbook is the last section here, deliberately unexecuted.
+
+**What landed.** `compose/minimal.yml` (Forage + SearXNG, no Valkey) and
+`compose/full.yml` (the same, plus a digest-pinned `valkey/valkey:8` under the content
+cache). Both are self-contained and both `docker compose config -q` green.
+
+| | `minimal.yml` | `full.yml` |
+|---|---|---|
+| Services | `forage`, `searxng` | `forage`, `searxng`, `valkey` |
+| `VALKEY_URL` | **absent entirely** | `redis://valkey:6379/4`, a literal |
+| Published ports | `127.0.0.1:8020:8020` only | same |
+| Weights volume | `forage-model-cache` → `/app/model-cache` | same |
+| Compose project | `forage-minimal` | `forage-full` |
+
+**Four decisions worth reading.**
+
+1. **`full.yml` repeats `minimal.yml` instead of extending it.** An overlay that only
+   adds a service cannot be `config`-validated or started on its own, and a reader
+   copying an example should be able to read one file. The duplication is real, so it is
+   asserted rather than trusted: `TestTheDuplicationDoesNotDrift` fails if the two
+   fragments pin different images, publish differently, or mount the weights
+   differently.
+2. **The weights volume takes an explicit `name: forage-model-cache`.** Without it
+   Compose namespaces per project (`forage-minimal_forage-model-cache`), which would
+   both lose docs/weights.md's canonical spelling and make switching modes a ~270 MiB
+   re-download. The cost is stated in place: `down -v` from either fragment removes the
+   weights both use.
+3. **`HF_TOKEN` is a bare-name passthrough, `SEARXNG_SECRET` is `${…:?}`.** The two
+   credentials need opposite treatment and compose has a form for each. A bare
+   `- HF_TOKEN` passes a value through when set and leaves the variable *genuinely
+   unset* when not — measured, `docker compose config` renders `HF_TOKEN: null` — which
+   matters because no-token is a supported mode and an empty string is a different
+   thing. `SEARXNG_SECRET` gets the required-or-fail form because upstream's own schema
+   exits 1 without it: `:?` moves that failure from a container's exit code into a
+   Compose message naming the variable, before anything starts.
+4. **Neither fragment wires a limiter, and `full.yml` says so where the temptation
+   is.** The `SEARXNG_VALKEY_URL` note sits in the `searxng` service of the fragment
+   that has a Valkey running three lines below it — because that is where "we have one
+   now, wire it up" happens, and the result would be Forage's own client 429'd on its
+   first request. Two guards cover it: no `SEARXNG_LIMITER` and no limiter backend, on
+   any service of either file.
+
+**`minimal.yml`'s header names the completion criterion**, and a guard asserts that it
+does. The spec's last hint asked for the header; the guard is because a file nobody
+knows is load-bearing gets edited as if it were not.
+
+**Image pins.** `ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc` is published —
+confirmed by enumerating the GHCR package versions at writing.
+`ghcr.io/washingbearlabs/forage:0.9.3-rc` is NOT published yet and no registry check can
+confirm it: it is pre-registered here and cut warm immediately after this PR merges
+(supervisor sequencing — 0.9.1-rc predates contract 1.1.0, and 0.9.2-rc failed the
+publish parity gate on a cold cache and was withdrawn). A registry enumeration at
+writing returns `[0.9.1-rc, 0.9.2-rc]` for forage; the fragments intentionally cite
+neither. Worth knowing: **`docs/searxng.md` cites
+`forage-searxng:0.1.0` in three places and that tag has never existed** (the tags pushed
+were `searxng-v0.1.0-rc` and `searxng-v0.1.1-rc`, which publish `0.1.0-rc` / `0.1.1-rc`).
+Out of this story's scope, left alone, recorded here — it is a copy-paste-and-fail for a
+third party, exactly the shape these fragments exist to remove. The guard test refuses
+`latest` (which does not exist for either image yet), a bare repository, and the
+`sha-<short>` tags a main push produces, and cross-checks the repository names against
+`ci.yml`'s own `IMAGE_NAME` / `SEARXNG_IMAGE_NAME`.
+
+**The CI gate is a step in `lint`, not a `compose-validate` job — and that is the
+decision, not an implementation detail.** The six contexts registered as required on
+`main` are `lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke` (read from
+the branch protection API, not assumed). A new job would be green, visible and **not
+required** — a gate nobody has to pass, and nobody would notice it was not one. Inside
+`lint` it is required by construction, costs seconds on a runner that is already checked
+out, and sits beside `actionlint`, which is the same kind of check: static validation of
+a config file this repository ships for other people to run. `lint` also carries no
+`if:`, so it runs on both tag lanes. **Flagged for the supervisor:** if this should
+instead be its own context, it needs a branch-protection change, and
+`test_the_validation_runs_in_a_required_job` is the test that will go red first.
+
+The step supplies `SEARXNG_SECRET: compose-config-validation-placeholder`. That is not a
+dodge — interpolation is part of what `config` validates, so the required variable must
+have *a* value or the step would be exercising the error path; nothing is started, so
+which value is irrelevant. `test_every_required_variable_is_supplied_to_the_check`
+derives the required set from the fragments themselves, so adding a `${…:?}` variable
+and forgetting CI is a suite failure naming the variable rather than a red push.
+
+**`tests/test_compose_fragments.py` (new, 56 tests; `TestComposeFragmentValidation` adds
+the other 8) parses; it does not run Docker** —
+the `tests/test_dockerfile.py` precedent, and the reason is that shelling out to the
+Compose CLI would make the whole hermetic suite depend on a daemon. Three layers cover
+the fragments and they answer different questions: CI's `config -q` says *Compose accepts
+them*, this module says *they say the right things*, and the manual smoke says *they
+serve traffic*. Only the middle one runs on every commit and can fail on the line that
+moved.
+
+The two guards most worth their weight are the ones tying a fragment to code:
+`_DEFAULT_SEARXNG_URL`'s host must be a service name in both files (a service renamed
+`forage-searxng` validates fine and then fails its own `/search` round-trip — the
+round-2 finding, now mechanical), and `full.yml`'s database index must equal the one
+`ContentCache.__init__`'s default carries, read through `inspect.signature`. That
+constructor default is US-002's named exemption from "no baked default"; tying the
+fragment to it means a deployment moved between the two cannot land on a different
+keyspace and silently see an empty cache.
+
+**Mutation verification — 18 mutants, 18 killed**, each by a named test:
+
+| Mutant | Killed by |
+|---|---|
+| M1 publish `8020:8020` on every interface | `test_every_published_port_binds_to_loopback` |
+| M2 rename the service to `forage-searxng` | `test_the_searxng_service_is_named_for_the_code_default` |
+| M3 drop the `SEARXNG_SECRET` passthrough | `test_the_secret_is_passed_through` |
+| M4 `${SEARXNG_SECRET:-changeme}` instead of `:?` | `test_the_secret_is_required_not_defaulted` |
+| M5 wire `SEARXNG_LIMITER: "true"` | `test_no_service_enables_the_limiter` |
+| M6 add `VALKEY_URL=${VALKEY_URL}` to `minimal.yml` | `test_no_service_carries_valkey_url` |
+| M7 interpolate `full.yml`'s `VALKEY_URL` | `test_valkey_url_is_a_literal_not_an_interpolation` |
+| M8 move the database index to `/0` | `test_the_database_index_matches_the_codes_own_default` |
+| M9 rename the weights volume | `test_the_volume_is_declared_under_the_documented_name` |
+| M10 pull `forage:latest` | `test_every_image_is_pinned` |
+| M11 drop the valkey digest | `test_third_party_images_are_digest_pinned` |
+| M12 delete the CI validation step | `test_a_step_validates_the_fragments` |
+| M13 move it into a `compose-validate` job | `test_the_validation_runs_in_a_required_job` |
+| M14 drop the placeholder the required variable needs | `test_every_required_variable_is_supplied_to_the_check` |
+| M15 point `VALKEY_URL` at a host not in the file | `test_valkey_url_names_the_service_in_this_file` |
+| M16 let Compose namespace the weights volume | `test_the_volume_is_declared_under_the_documented_name` |
+| M17 mount the weights off `HF_HOME` | `test_forage_mounts_it_at_the_images_hf_home` |
+| M18 bump one fragment's pin and not the other | `test_the_shared_services_run_the_same_image` |
+
+**README.** The quickstart is now `docker compose -f minimal.yml up -d` with a two-line
+`.env`, and the `docker run` form is kept below it as the direct-image alternative. A
+**mode matrix** compares memory and Valkey on selection, the `cache_backend` wire value,
+both `/health` outcomes, restart survival, replica sharing and bounds, and links each
+row's worked example. The posture line is repeated over the fragments (loopback only,
+nothing else published), and the two easy-to-get-wrong facts are stated under the table:
+only a *fully unset* `VALKEY_URL` means memory mode, and the cache serves `/retrieve`
+only. One stale line was corrected in passing — Status still listed the optional
+in-memory cache as "still to come" after US-001–003 shipped it.
+
+**Gates.** 1402 passed (1338 + 64); `ruff check` / `ruff format --check` /
+`pyright --strict` / `actionlint` all zero; `docker compose config -q` green on both
+fragments locally. `sanitizer_revision` verified **unrotated** before and after:
+`fa4691c57449c52fe367208bdeeb650cbe474d93485c3b90cc8989b5e593547c` — nothing this story
+touches is a `_REVISION_SOURCES` member.
+
+---
+
+> **What the guards do NOT prove:** every fragment test in
+> `tests/test_compose_fragments.py` is parse-only — tag *shape*, service names, bindings —
+> with no registry call anywhere. A green suite is not a pullable pin; the pull happens
+> here, in this smoke, which is part of why it is a gate.
+
+#### Manual smoke — **HUMAN GATE, pending**
+
+> The AC's *"manual smoke transcript recorded"* clause. **Not executed by the
+> implementer.** The supervisor runs this with the owner and pastes the transcript
+> under "Recorded transcript" below. Mirrors the US-003-of-model-bootstrap pattern.
+
+**Before you start.** SEQUENCING: this PR must be MERGED and the `v0.9.3-rc` tag cut and
+its publish lane green BEFORE this smoke — the fragments pin `forage:0.9.3-rc`, which does
+not exist until then; running early fails at the pull with `manifest unknown`. Then: you
+need a Hugging Face token with `meta-llama/Llama-Prompt-Guard-2-22M`
+access approved. Nothing else: the repository and both packages have been PUBLIC since the
+2026-09-10 flip (supervisor correction — the first draft of this runbook said a GHCR
+login was needed; the verifier's anonymous pull disproved it). The completion criterion
+*"a third party can `docker compose up` with only `HF_TOKEN`"* is literally true today;
+record that the pull needed no login when you run it.
+
+```bash
+cd ~/Documents/GitHub/Forage/compose
+
+# 1. No registry login — the images are public; an anonymous pull is part of
+#    what this smoke proves.
+
+# 2. The only configuration a reader supplies. HF_TOKEN is the real one;
+#    SEARXNG_SECRET is any long random string.
+{
+  echo "HF_TOKEN=hf_REPLACE_ME"
+  echo "SEARXNG_SECRET=$(head -c 32 /dev/urandom | base64)"
+} > .env
+chmod 600 .env
+
+# 3. Bring up the two-container deployment. RECORD: does `up -d` succeed with
+#    no further edits to the fragment? That question is the AC.
+docker compose -f minimal.yml up -d
+docker compose -f minimal.yml ps
+```
+
+```bash
+# 4. Watch the weights converge (~270 MiB; /health stays 200 throughout).
+#    RECORD: model.fetch_in_progress true at least once, then false.
+curl -s localhost:8020/metrics | jq '.model'
+
+# 5. Wait for the flip, then RECORD the whole body.
+until curl -sf localhost:8020/health | jq -e '.promptguard_loaded == true' >/dev/null
+do sleep 10; done
+curl -s localhost:8020/health | jq
+```
+
+Expected at step 5 — this is the memory-mode goal in one body:
+
+```json
+{"status":"healthy","promptguard_loaded":true,"cache_connected":true,
+ "capabilities":{"search_sanitization":1},
+ "sanitizer_revision":"fa4691c5…93547c","contract_version":"1.1.0",
+ "cache_backend":"memory","degraded_reasons":[]}
+```
+
+```bash
+# 6. /retrieve round-trip, twice. RECORD both `cache_hit` values: the first
+#    must be false and the second true — that is the in-memory cache serving a
+#    repeat, which is Goal 1 of this spec observed from outside.
+for i in 1 2; do
+  curl -s -X POST localhost:8020/retrieve \
+    -H 'content-type: application/json' \
+    -d '{"url":"https://example.com","extract_mode":"summary"}' \
+  | jq '{attempt:'"$i"', source_url, cache_hit, trust_tier: .trust.tier?}'
+done
+
+# 7. /search round-trip through the companion image. RECORD the result count
+#    and that no 429 appears — a non-empty list is the limiter decision
+#    (absent, deliberately) being the right one.
+curl -s -X POST localhost:8020/search \
+  -H 'content-type: application/json' \
+  -d '{"query":"raccoon","num_results":3}' \
+| jq '{results: (.results | length), first: .results[0].title?}'
+
+# 8. Storage counters. RECORD cache.storage_hits ≥ 1 and the retrieve section
+#    beside it — the two layers US-003 documented, seen together for once.
+curl -s localhost:8020/metrics | jq '{cache, retrieve}'
+```
+
+```bash
+# 9. Switch modes. RECORD: cache_backend flips to "valkey", and the weights do
+#    NOT re-download (the shared `forage-model-cache` volume) — so
+#    promptguard_loaded should reach true in seconds, not minutes.
+docker compose -f minimal.yml down
+docker compose -f full.yml up -d
+sleep 20 && curl -s localhost:8020/health | jq '{status, cache_backend, cache_connected, promptguard_loaded}'
+
+# 10. Tear down WITHOUT -v, so the verified weight set survives for next time.
+docker compose -f full.yml down
+rm -f .env
+```
+
+**What the transcript must contain**, at minimum: whether `up -d` worked unedited, the
+step-5 `/health` body, both `cache_hit` values from step 6, the step-7 result count, the
+step-8 `cache.storage_*` counters, and the step-9 `cache_backend: "valkey"` with the
+observed warm-start time. Anything that needed a manual fix is the most valuable line in
+it — the fragment is wrong, not the run.
+
+**Recorded transcript:** _(pending — supervisor + owner)_
 
 ## Refinement Notes
 

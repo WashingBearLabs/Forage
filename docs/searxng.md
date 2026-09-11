@@ -10,8 +10,8 @@ of the box, on defaults that are safe to publish. Written by
 `forage-ci-and-image` US-004; the service image's own lane is in
 `docs/releases.md`.
 
-> **The repository and both packages are private until US-008's one-way public
-> flip.** Everything below is already true; anonymous pulls are not.
+> **Public since US-008's 2026-09-10 flip** — the repository and both packages;
+> anonymous pulls verified at the gate.
 
 ## Running it
 
@@ -19,7 +19,7 @@ of the box, on defaults that are safe to publish. Written by
 docker run -d --name searxng \
   -e SEARXNG_SECRET="$(head -c 32 /dev/urandom | base64)" \
   -p 8080:8080 \
-  ghcr.io/washingbearlabs/forage-searxng:0.1.0
+  ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc
 ```
 
 `SEARXNG_SECRET` is **required**. There is no default and no baked literal, and
@@ -93,7 +93,7 @@ docker run -d \
   -e SEARXNG_SECRET=… \
   -e SEARXNG_LIMITER=true \
   -e SEARXNG_VALKEY_URL=valkey://valkey:6379/0 \
-  ghcr.io/washingbearlabs/forage-searxng:0.1.0
+  ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc
 ```
 
 **Both halves are required.** `SEARXNG_LIMITER=true` alone gets you the inert
@@ -162,7 +162,7 @@ a mounted overlay, not a different image:
 ```yaml
 services:
   searxng:
-    image: ghcr.io/washingbearlabs/forage-searxng:0.1.0
+    image: ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc
     environment:
       SEARXNG_SECRET: ${SEARXNG_SECRET:?set me}
     volumes:

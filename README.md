@@ -58,29 +58,66 @@ should refuse to activate on a mismatch rather than guess.
 
 ## Quickstart
 
-```bash
-# Build
-docker build -t forage .
+Two containers, one token. [`compose/minimal.yml`](compose/minimal.yml) is the whole
+deployment:
 
-# Run (private network only — see the posture note above).
-# No VALKEY_URL: the content cache runs in memory. Add
-# `-e VALKEY_URL=redis://valkey:6379/4` to use a Valkey you are running.
-docker run --rm -p 127.0.0.1:8020:8020 \
-  -e SEARXNG_URL=http://searxng:8080 \
-  forage
+```bash
+git clone https://github.com/WashingBearLabs/Forage && cd Forage/compose
+
+# HF_TOKEN is optional (without it Forage runs degraded, honestly — see below).
+# SEARXNG_SECRET is required: upstream SearXNG exits 1 without one.
+{
+  echo "HF_TOKEN=hf_your_token_here"
+  echo "SEARXNG_SECRET=$(head -c 32 /dev/urandom | base64)"
+} > .env
+
+docker compose -f minimal.yml up -d
 
 # Health — read the body, not just the code
 curl -s localhost:8020/health | jq
 ```
 
+[`compose/full.yml`](compose/full.yml) is the same thing with a Valkey under the content
+cache. Both publish Forage's port to `127.0.0.1` only and publish nothing else at all —
+**Forage ships no authentication**, so that binding is your first control, not Forage's
+own SSRF defenses. Read the posture note above before widening it.
+
+Or run the image directly (private network only):
+
+```bash
+docker build -t forage .
+docker run --rm -p 127.0.0.1:8020:8020 forage
+```
+
+`SEARXNG_URL` defaults to `http://searxng:8080` and `VALKEY_URL` is unset by default, so a
+compose network with a service literally called `searxng` needs neither.
+
+### The two cache modes
+
 Forage wants one companion and can use a second. **SearXNG** backs `/search`: without it
 Forage starts and reports itself `degraded`. **Valkey/Redis** backs the content cache and
-is genuinely optional — leave `VALKEY_URL` unset and the cache runs bounded and in-memory
-in the container, reporting `healthy`; set it and Forage uses Valkey, reporting
-`degraded: cache_unavailable` if the one you configured cannot be reached. Memory mode is
-per-process and does not survive a restart, so a multi-replica or restart-sensitive
-deployment should set `VALKEY_URL`. A worked `docker-compose.yml` for both modes lands
-with the cache-fallback work (`compose/` — not yet in this repo).
+is genuinely optional — which mode you are in is `cache_backend` in `/health`:
+
+| | Memory mode | Valkey mode |
+|---|---|---|
+| How you select it | leave `VALKEY_URL` **fully unset** | set `VALKEY_URL` |
+| `/health` `cache_backend` | `"memory"` | `"valkey"` |
+| `/health` when the cache is fine | `healthy` | `healthy` |
+| `/health` when it is not | n/a — nothing to lose | `degraded`, `cache_unavailable` |
+| Survives a container restart | **no** | yes |
+| Shared between replicas | **no** — one uvicorn worker's process, per-container | yes |
+| Bounded by | `cache.max_entries` / `cache.max_bytes` (256 entries / 32 MiB) | your Valkey |
+| Example | [`compose/minimal.yml`](compose/minimal.yml) | [`compose/full.yml`](compose/full.yml) |
+
+Two things are easy to get wrong. **Only a *fully unset* `VALKEY_URL` means memory
+mode** — an empty string, or a `VALKEY_URL=${VALKEY_URL}` that rendered nothing, is a
+Valkey you asked for and did not get, and Forage reports `degraded: cache_unavailable`
+rather than silently substituting a per-process cache. And the cache serves `POST
+/retrieve` only; `/search` has never been cached, in either mode.
+
+A multi-replica or restart-sensitive deployment should set `VALKEY_URL`.
+[`docs/configuration.md`](docs/configuration.md) § "Cache backend selection" has the full
+five-case table.
 
 Local development:
 
@@ -188,7 +225,7 @@ no client-header trust) — behind its own hermetic cross-container smoke.
 > [`docs/searxng.md`](docs/searxng.md).
 
 [`docs/searxng.md`](docs/searxng.md) has the runbook. **The repository and both packages
-are private until the one-way public flip**, so those pulls are not anonymous yet.
+went public at the 2026-09-10 US-008 flip**; anonymous pulls verified at the gate.
 
-Still to come: an optional in-memory cache when no Valkey is configured, and the frozen
+The optional in-memory cache shipped with contract `1.1.0`; still to come is the frozen
 OpenAPI contract.

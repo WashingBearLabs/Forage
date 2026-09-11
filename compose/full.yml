@@ -1,0 +1,121 @@
+# compose/full.yml — the same deployment as `minimal.yml`, with a real Valkey
+# under the content cache.
+#
+# Use this one when you run more than one Forage replica, or when you want the
+# cache to survive a container restart. Everything else is identical: same
+# images, same loopback-only binding, same absent limiter, same
+# `forage-model-cache` volume. README's mode matrix is the one-screen
+# comparison of what the third container buys you.
+#
+#   cd compose
+#   {
+#     echo "HF_TOKEN=hf_your_token_here"
+#     echo "SEARXNG_SECRET=$(head -c 32 /dev/urandom | base64)"
+#   } > .env
+#   docker compose -f full.yml up -d
+#   curl -s localhost:8020/health | jq .cache_backend   # => "valkey"
+#
+# WHY THIS FILE REPEATS `minimal.yml` INSTEAD OF EXTENDING IT. A reader copying
+# an example should be able to read one file and know what they are running,
+# and `docker compose -f compose/full.yml up` has to work on its own — an
+# overlay that only adds a service cannot be validated or started by itself.
+# The invariants the two fragments share (loopback bindings, service names, the
+# volume literal, the absent limiter, the required secret) are asserted across
+# *both* files by tests/test_compose_fragments.py, so the duplication cannot
+# drift silently.
+#
+# DEPLOYMENT POSTURE — unchanged, and it now covers three containers. Forage
+# ships no authentication; its one published port is bound to `127.0.0.1`, and
+# neither SearXNG nor Valkey publishes anything at all. Valkey here is
+# passwordless *because* it is unreachable from outside the compose network. If
+# you move it anywhere else, give it a password and put it in `VALKEY_URL` —
+# which is then a credential, so it belongs in `compose/.env`, never in an
+# inline `-e` flag (docs/configuration.md § "Credential handling for
+# `VALKEY_URL`").
+
+name: forage-full
+
+services:
+  forage:
+    # ghcr.io/washingbearlabs/forage, tag 0.9.3-rc — the first tag TO BE published
+    # carrying contract 1.1.0 + cache_backend (0.9.1-rc predates them; 0.9.2-rc
+    # failed its publish parity gate cold; its git tag was withdrawn, package-version deletion pending). Superseded by v1.0.0 at
+    # `feature-forage-contract`; docs/releases.md has the tag scheme.
+    image: ghcr.io/washingbearlabs/forage:0.9.3-rc
+    restart: unless-stopped
+    # Loopback only — see the DEPLOYMENT POSTURE note above.
+    ports:
+      - "127.0.0.1:8020:8020"
+    environment:
+      # Bare name: passed through when you set one, genuinely unset when you do
+      # not. Running without it is a supported degraded mode — see
+      # docs/weights.md § "Bring your own token".
+      - HF_TOKEN
+      # The one line that distinguishes this fragment from `minimal.yml`, and
+      # it is a LITERAL on purpose. `VALKEY_URL=${VALKEY_URL}` would render an
+      # empty string whenever the host variable is unset, and an empty value is
+      # a *configured* Valkey that cannot be reached — `degraded:
+      # cache_unavailable`, not memory mode. If you need a password here,
+      # interpolate the whole URL from `compose/.env` where it is always set,
+      # or put the password in an env file of its own.
+      #
+      # Host `valkey` is the service below. Database index 4 matches the one
+      # `ContentCache`'s own constructor default has always used, so a
+      # deployment moved between the two never lands on a different keyspace by
+      # accident; a guard test ties the two together.
+      - VALKEY_URL=redis://valkey:6379/4
+      # SEARXNG_URL stays unset: Forage's default is `http://searxng:8080` and
+      # the service below is named to match it.
+    volumes:
+      # Canonical name and mount point, both pinned by docs/weights.md §
+      # "The model cache volume".
+      - forage-model-cache:/app/model-cache
+    mem_limit: 1024m
+
+  searxng:
+    # Same companion image and the same load-bearing service name as
+    # `minimal.yml`: it must match the host in Forage's `SEARXNG_URL` default.
+    image: ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc
+    restart: unless-stopped
+    environment:
+      # Required, for the same reason it is required in `minimal.yml`: upstream
+      # makes an unset `SEARXNG_SECRET` a hard start failure, so `:?` turns
+      # that into a message from Compose before anything starts.
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?set SEARXNG_SECRET in compose/.env — e.g. head -c 32 /dev/urandom | base64}
+      # NOTE: `SEARXNG_VALKEY_URL` is deliberately NOT wired to the Valkey
+      # below, even though one is now running. That variable only matters
+      # together with `SEARXNG_LIMITER=true`, and a working limiter refuses
+      # Forage's own client with HTTP 429 on the first request — it would break
+      # this fragment's `/search` round-trip, not protect it. The Valkey here
+      # is the *content cache's*, which is a different thing entirely.
+      # docs/searxng.md § "Turning it on anyway" has the scoped opt-in for a
+      # deployment that must expose SearXNG directly.
+
+  valkey:
+    # valkey/valkey 8.1.10 (Debian trixie), published 2026-09-07. Pinned by
+    # digest rather than by the `8` tag it currently wears, for the same reason
+    # `searxng/Dockerfile` pins its base: a floating tag means the image a
+    # reader runs and the image anyone tested are different builds, and the
+    # version comment above it would be a lie. Multi-arch index: linux/amd64,
+    # linux/arm64, linux/arm/v7, linux/ppc64le. Bumping it is a deliberate act.
+    image: valkey/valkey:8@sha256:3fbd2e3e4b6e85e046c1e7c215e8f79087bc0357789184305806664e320996f3
+    restart: unless-stopped
+    # Persistence, so the cache actually survives the restart this fragment
+    # exists to provide. Without it a Valkey restart is indistinguishable from
+    # memory mode, which would make the third container pure overhead.
+    command: ["valkey-server", "--save", "60", "1", "--appendonly", "no"]
+    volumes:
+      - forage-valkey-data:/data
+    # No published ports and no password: unreachable from outside the compose
+    # network is the control here. Both change together if you move it.
+
+volumes:
+  forage-model-cache:
+    # Fixed name, exactly as in `minimal.yml` and for the same two reasons: it
+    # is docs/weights.md's canonical spelling, and it lets the two fragments
+    # share one verified weight set instead of downloading ~270 MiB twice.
+    name: forage-model-cache
+  # Project-scoped, deliberately unlike the one above: the cache contents are
+  # this deployment's, there is nothing to share, and a fixed name would let
+  # two Forage stacks on one host collide in each other's keyspace.
+  forage-valkey-data:
