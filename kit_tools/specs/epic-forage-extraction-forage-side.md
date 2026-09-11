@@ -140,11 +140,15 @@ that something is missing here.
   pyright one was itself understated, since 55 more errors sat behind 30 inherited
   type-ignore comments (269 real). Pyright's only carve-out is `reportPrivateUsage` for
   `tests/`, pinned by `tests/test_pyright_policy.py`.
-- **`sanitizer_revision` has deliberately diverged** from Poppy, and has now rotated four
+- **`sanitizer_revision` has deliberately diverged** from Poppy, and has now rotated six
   times (`e6b2b56d…` → `2b8d7e9a…` → `cd00a8b4…` → `0537316d…` → `5927038d…` →
-  **`fa4691c5…`**, 6th rotation at cache-fallback US-003,
+  `fa4691c5…` → **`8b1b7f78…`**, 7th value, at contract US-001,
   current). The fourth is the odd one out: no source byte moved, the hashed model identity
   became `MODEL_ID@revision` when weights became a runtime input (spec-2 US-001). The
+  seventh is spec 4's single acknowledged rotation — `contract.py` gained the
+  seventeen-code error vocabulary, zero wire bytes changed, contract still `1.1.0`. (This
+  list counts *values* from the at-split hash; `docs/bootstrap-notes.md` counts *moves*
+  and calls the same event the sixth rotation. Prefer the values to the ordinals.) The
   Poppy-side spec must not assume revision parity — compare contracts.
 - **The suite is hermetic and exact**: **1048 collected**, all green (534 at bootstrap;
   spec-1 additions: +33 US-001 workflow guards, +19 US-006 typecheck/policy, +21 US-002

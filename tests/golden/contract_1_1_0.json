@@ -218,6 +218,7 @@
         "additionalProperties": {
           "type": "integer"
         },
+        "description": "Sanitization capabilities this deployment advertises, as a presence map: a key is present with the value 1 when the capability is available and absent otherwise. One key is defined in contract 1.1.0 \u2014 'search_sanitization', present when PromptGuard is loaded (or when the break-glass override is armed; see docs/configuration.md). Deliberately a dict rather than an enum: a consumer reads the keys it knows and ignores the rest, so a future capability is an additive-safe MINOR change.",
         "title": "Capabilities",
         "type": "object"
       },
@@ -227,7 +228,12 @@
       },
       "degraded_reasons": {
         "default": [],
+        "description": "Why status is 'degraded', as closed-vocabulary reason codes. Empty exactly when status is 'healthy'. The members are derived from contract.DegradedReason, which is also what this field is validated against on the way out \u2014 so a reason added to the handler without being added to the alias fails response validation loudly instead of reaching a consumer unannounced.",
         "items": {
+          "enum": [
+            "promptguard_unavailable",
+            "cache_unavailable"
+          ],
           "type": "string"
         },
         "title": "Degraded Reasons",
@@ -530,7 +536,7 @@
         "additionalProperties": {
           "type": "integer"
         },
-        "description": "Withheld-result counts keyed by contract.OMIT_* reason",
+        "description": "Withheld-result counts keyed by contract.OMIT_* reason. Four keys are defined in contract 1.1.0 \u2014 'invalid_url', 'structural_blocked', 'injection_detected' and 'promptguard_unavailable'. Only non-zero reasons appear. Deliberately a dict rather than an enum: a consumer sums the values and buckets keys it does not know (as /metrics does, under 'other'), so a future omission reason is an additive-safe MINOR change instead of a validation failure on an old client.",
         "title": "Omitted By Reason",
         "type": "object"
       },

@@ -296,7 +296,16 @@ class SearchResponse(BaseModel):
     )
     omitted_by_reason: dict[str, int] = Field(
         default_factory=dict,
-        description="Withheld-result counts keyed by contract.OMIT_* reason",
+        description=(
+            "Withheld-result counts keyed by contract.OMIT_* reason. Four keys "
+            "are defined in contract 1.1.0 — 'invalid_url', "
+            "'structural_blocked', 'injection_detected' and "
+            "'promptguard_unavailable'. Only non-zero reasons appear. "
+            "Deliberately a dict rather than an enum: a consumer sums the "
+            "values and buckets keys it does not know (as /metrics does, under "
+            "'other'), so a future omission reason is an additive-safe MINOR "
+            "change instead of a validation failure on an old client."
+        ),
     )
     unscanned_results: int = Field(
         default=0,

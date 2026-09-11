@@ -63,7 +63,8 @@ those eight — so Forage's revision moved:
 | After the `ruff format` gate (`forage-ci-and-image` US-001) | `cd00a8b4…c96b9a` |
 | After the pyright-strict burn-down (`forage-ci-and-image` US-006) | `0537316d…e3e253` |
 | After the weights pin joined the hashed identity (`forage-model-bootstrap` US-001) | `5927038d…19d111` |
-| **Current (`forage-cache-fallback` US-003, contract `1.1.0`)** | **`fa4691c5…93547c`** |
+| After the contract bump to `1.1.0` (`forage-cache-fallback` US-003) | `fa4691c5…93547c` |
+| **Current (`forage-contract` US-001, error vocabulary; contract still `1.1.0`)** | **`8b1b7f78…196d7c`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -157,7 +158,7 @@ than assume it:
 | Both files at their previous state | `5927038d…19d111` |
 | Only `contract.py` reverted | `b9b716c3…5151a12` |
 | Only `orchestrator.py` reverted | `7bfbeed5…1437f0` |
-| *(supervisor correction 2026-09-13: the two intermediate values above were transposed as first recorded — the verifier's independent re-derivation fixed the labels; conclusion unchanged, both edits load-bearing)* | |
+| *(supervisor correction 2026-09-10: the two intermediate values above were transposed as first recorded — the verifier's independent re-derivation fixed the labels; conclusion unchanged, both edits load-bearing)* | |
 | Both edits (shipped) | **`fa4691c5…93547c`** |
 
 - `pipeline/contract.py` — `CONTRACT_VERSION` `1.0.0` → `1.1.0` for the additive
@@ -186,6 +187,65 @@ anyway) and one TTL of extra fetches in Valkey mode. Consumer-side: Poppy's
 `stored_file_extractions` are keyed on this value and are re-extracted on next access.
 That is the same transition the fourth rotation already handed to the consuming repo's
 spec 6, which owns it; nothing new is owed here.
+
+### The sixth rotation: the error vocabulary joined the contract (`forage-contract` US-001, 2026-09-11)
+
+```
+before: fa4691c57449c52fe367208bdeeb650cbe474d93485c3b90cc8989b5e593547c
+after:  8b1b7f78e85f733ef3b8ace5194632a8cf92410131b2c1af995c456f20196d7c
+```
+
+**A note on counting, because two documents number these differently and both are
+right.** This file counts *moves*, so this is the sixth. `kit_tools/specs/epic-forage-extraction-forage-side.md`
+counts *values*, starting from the at-split hash, so the same event is its **seventh**.
+The values themselves are the unambiguous reference; prefer them over any ordinal.
+
+**Attribution: exactly one `_REVISION_SOURCES` file moved — `pipeline/contract.py`.**
+Measured, not assumed, by re-deriving with that file swapped back to `main`'s bytes:
+
+| Tree | Derived |
+|---|---|
+| All eight sources at `main` (control) | `fa4691c5…93547c` |
+| Only `contract.py` reverted to `main`, everything else as shipped | `fa4691c5…93547c` |
+| The shipped tree | **`8b1b7f78…196d7c`** |
+
+The control and the single-revert row agreeing *is* the attribution: with `contract.py`
+put back the hash returns to the pre-story value exactly, so nothing else in the story
+touched a hashed file. Read that as one measurement with one conclusion — unlike the
+fifth rotation, where two files moved and the two intermediate values had to be kept
+straight (they were transposed when first recorded, and a re-derivation fixed the
+labels). There is no intermediate to transpose here.
+
+The story's other edits — the mirror models and `responses=` declarations in
+`retrieval_app.py`, the `omitted_by_reason` description in `models.py`, the new
+`tests/test_contract_errors.py`, the regenerated golden fixture — are all outside
+`pipeline/`, and `_REVISION_SOURCES` resolves relative to that directory. None of them
+can move the hash, by construction.
+
+**What moved inside `contract.py`.** The seventeen-code error vocabulary and the
+`DegradedReason` alias, as `Literal` types with their frozensets derived from them
+(`frozenset(get_args(...))`), plus the docstrings that explain each site's shape. No
+constant changed value: `DEGRADED_REASONS` holds the same two strings it always did, and
+`CONTRACT_VERSION` stays **`1.1.0`** under the documentation-only ruling — the whole
+story is parity-tested to change zero wire bytes
+(`tests/test_contract_errors.py`).
+
+**Why the rotation was taken here, rather than avoided.** `contract.py` is where every
+wire literal in this service is defined exactly once, and putting the error vocabulary
+anywhere else to dodge the hash would have been the tail wagging the dog. The spec
+acknowledged one rotation for the whole of `feature-forage-contract` and this is it: the
+remaining stories (US-005, US-002, US-003, US-004) must either stay out of
+`_REVISION_SOURCES` files or be content-neutral in them, so the shipped contract carries
+one revision rather than five.
+
+**Blast radius, and the part that is deliberate.** `cache_policy_fingerprint()` takes
+the revision as an input since the fifth rotation, so every cached extraction keyed on
+`fa4691c5…` becomes unreachable at the next start and ages out on its own TTL. That is
+**correct behaviour, not collateral damage** — it is the mechanism the fifth rotation
+installed on purpose, and a documentation pass that rotated the hash without flushing
+the cache would be the broken outcome. Free in memory mode; one TTL of extra fetches in
+Valkey mode. Consumer-side is unchanged from the fourth and fifth rotations: Poppy
+re-extracts on next access, and spec 6 owns that transition.
 
 ## Deferred GitHub settings — for the spec 2 public flip
 
