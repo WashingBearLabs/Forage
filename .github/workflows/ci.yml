@@ -198,6 +198,46 @@ jobs:
       - name: actionlint
         run: ./actionlint -color
 
+      - name: Validate the example compose fragments
+        # `feature-forage-cache-fallback` US-004's machine-checkable half.
+        # `compose/minimal.yml` is the extraction epic's completion-criterion
+        # artifact — "a third party can `docker compose up` with only
+        # HF_TOKEN" — and the live proof of that is a manual smoke transcript,
+        # which is exactly the kind of evidence that is true once and then
+        # silently rots. `config -q` is what a machine can check on every
+        # commit: the fragments parse, interpolate, and describe services
+        # Compose will accept.
+        #
+        # WHY THIS IS A STEP IN `lint` AND NOT A `compose-validate` JOB. The
+        # six contexts registered as required on `main` are lint, typecheck,
+        # test, build-amd64, secret-grep and smoke; a new job would be green,
+        # visible, and NOT required — a gate nobody has to pass. A step inside
+        # an already-required job is required by construction, costs seconds on
+        # a runner that is already checked out, and sits with `actionlint`,
+        # which is the same kind of check: static validation of a config file
+        # this repository ships for other people to run.
+        #
+        # `lint` carries no `if:`, so this runs on every push, every PR and
+        # both tag lanes. Docker Compose v2 is preinstalled on GitHub-hosted
+        # runners; `config` is pure local parsing and pulls nothing.
+        #
+        # The placeholder is not a dodge. Interpolation is part of what
+        # `config` validates, and the fragments declare `SEARXNG_SECRET`
+        # required-or-fail (`${SEARXNG_SECRET:?…}`) precisely because upstream
+        # SearXNG exits 1 without it. Some value has to be present or the check
+        # would be testing the error path; nothing is started, so which value
+        # is irrelevant. tests/test_ci_workflow.py asserts that every
+        # required-or-fail variable the fragments declare is supplied here, so
+        # adding one to a fragment and forgetting it here fails the suite
+        # rather than only this job.
+        env:
+          SEARXNG_SECRET: compose-config-validation-placeholder
+        run: |
+          set -euo pipefail
+          docker compose -f compose/minimal.yml config -q
+          docker compose -f compose/full.yml config -q
+          echo "Both example compose fragments parse and interpolate."
+
   typecheck:
     name: typecheck
     runs-on: ubuntu-latest

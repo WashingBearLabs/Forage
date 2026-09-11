@@ -1,0 +1,136 @@
+# compose/minimal.yml — Forage's minimum viable deployment: two containers.
+#
+# THIS FILE IS THE PROOF ARTIFACT for the extraction epic's completion
+# criterion — "a third party can `docker compose up` with only `HF_TOKEN`".
+# If a reader needs anything from this file beyond a Hugging Face token and a
+# random SearXNG secret, the criterion is not met and this file is the thing
+# that is wrong. Treat it that way when editing it.
+#
+#   cd compose
+#   {
+#     echo "HF_TOKEN=hf_your_token_here"
+#     echo "SEARXNG_SECRET=$(head -c 32 /dev/urandom | base64)"
+#   } > .env
+#   docker compose -f minimal.yml up -d
+#   curl -s localhost:8020/health | jq
+#
+# Compose reads `compose/.env` on its own — the project directory is this
+# file's own — and an env file is also what docs/configuration.md § "Credential
+# handling" asks for: never an inline `-e` flag, which lands in your shell
+# history and in `ps` output on the host.
+#
+# WHAT YOU GET. Forage plus the companion SearXNG, nothing else. The content
+# cache runs bounded and in-memory inside the Forage container, `/health`
+# reports `cache_backend: "memory"`, and `status` reaches `"healthy"` once the
+# PromptGuard weights have downloaded. Memory mode is per-process and does not
+# survive a restart; `full.yml` is the same deployment with a real Valkey under
+# the cache, and README's mode matrix is the one-screen comparison.
+#
+# NO VALKEY, DELIBERATELY. `VALKEY_URL` appears nowhere below — not set to an
+# empty string, not `${VALKEY_URL}`, not "left blank for you to fill in". Only
+# a *fully unset* variable selects the in-memory backend. An empty or
+# unrenderable one is a Valkey you asked for and did not get, which Forage
+# reports as `degraded: cache_unavailable` rather than silently replacing with
+# a cache nothing else in your deployment shares. `${VALKEY_URL}` in a compose
+# file is the exact shape of that mistake.
+#
+# NO LIMITER, DELIBERATELY. `SEARXNG_LIMITER` is absent for a measured reason:
+# turned on, SearXNG's limiter refuses this image's only client. Forage's httpx
+# client is 429'd on its *first* request, and even a browser-shaped client gets
+# four JSON requests an hour from an upstream module constant no config can
+# raise. A fragment that turned it on would fail its own `/search` round-trip.
+# kit_tools/docs/GOTCHAS.md and docs/searxng.md carry the numbers and the
+# scoped opt-in for a deployment that must expose SearXNG directly.
+#
+# DEPLOYMENT POSTURE — Forage ships no authentication. The one published port
+# is bound to `127.0.0.1` and SearXNG publishes nothing at all: it is reachable
+# only from the compose network, which is where its only client lives. Never
+# widen either to `0.0.0.0` on a segment you do not trust — anyone who can
+# reach 8020 can make Forage fetch arbitrary URLs on your behalf, and Forage is
+# a good SSRF target by nature because making outbound requests is its job.
+#
+# IMAGE PINS. Both images carry explicit pre-release tags, because those are
+# what is published today: `latest` does not exist for either image yet. It
+# starts existing at the first non-pre-release `v*` tag, which
+# `feature-forage-contract` puts at `v1.0.0` — move these examples to it when
+# it lands. docs/releases.md has the tag scheme; docs/searxng.md has the
+# companion image's.
+
+name: forage-minimal
+
+services:
+  forage:
+    # ghcr.io/washingbearlabs/forage, tag 0.9.1-rc. Superseded by v1.0.0 at
+    # `feature-forage-contract`; see the IMAGE PINS note above.
+    image: ghcr.io/washingbearlabs/forage:0.9.1-rc
+    restart: unless-stopped
+    # Loopback only. See the DEPLOYMENT POSTURE note above; this binding is the
+    # first control, not Forage's own SSRF defenses.
+    ports:
+      - "127.0.0.1:8020:8020"
+    environment:
+      # Bare name, not `HF_TOKEN: ${HF_TOKEN:-}`: a bare name passes the value
+      # through when you set one (in `.env` or your shell) and leaves the
+      # variable genuinely *unset* in the container when you do not. Running
+      # without it is a supported mode — Forage starts, serves, and reports
+      # itself `degraded` with `promptguard_unavailable` forever, honestly.
+      # docs/weights.md § "Bring your own token" is the walk-through.
+      - HF_TOKEN
+      # SEARXNG_URL is deliberately NOT set. Forage's built-in default is
+      # `http://searxng:8080`, a neutral service name — which is why the
+      # service below is called `searxng` and not `forage-searxng`. Renaming it
+      # breaks this fragment's own `/search` round-trip.
+      #
+      # VALKEY_URL is deliberately NOT set. See the NO VALKEY note above.
+    volumes:
+      # The PromptGuard weights (~270 MiB) land here and are verified against
+      # the committed manifest before anything opens them. Without the volume
+      # the container re-downloads them on every recreate — documented
+      # behaviour, not an error, but a slow one. `forage-model-cache` is the
+      # canonical name docs/weights.md § "The model cache volume" pins, and
+      # `/app/model-cache` is the image's own `HF_HOME`.
+      - forage-model-cache:/app/model-cache
+    # The envelope the in-memory cache bounds were sized against: 512 MiB for
+    # the parent FastAPI + torch process, 384 MiB for the spawned extraction
+    # worker, ~128 MiB of headroom, of which the 32 MiB default cache bound
+    # spends a quarter. docs/configuration.md § "The `cache:` block" does the
+    # arithmetic. Raise it if you raise `cache.max_bytes`.
+    mem_limit: 1024m
+
+  searxng:
+    # ghcr.io/washingbearlabs/forage-searxng, tag 0.1.1-rc — upstream's SearXNG
+    # at a digest-pinned base plus Forage's baked engine config. Independently
+    # versioned from the service image; docs/searxng.md is its runbook.
+    #
+    # The service name is load-bearing: it must match the host in Forage's
+    # `SEARXNG_URL` default (`http://searxng:8080`).
+    image: ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc
+    restart: unless-stopped
+    environment:
+      # REQUIRED, and required loudly. There is no baked secret and no default:
+      # upstream's own schema makes an unset `SEARXNG_SECRET` a hard start
+      # failure (exit 1), so a fragment that did not pass it would die on the
+      # first `docker compose up`. The `:?` makes Compose say which variable is
+      # missing before anything starts, instead of leaving you reading a
+      # container's exit code. Any long random string; see docs/searxng.md.
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?set SEARXNG_SECRET in compose/.env — e.g. head -c 32 /dev/urandom | base64}
+    # No published ports, on purpose: Forage reaches SearXNG over the compose
+    # network and nothing else needs to. If you want to query it directly
+    # during a bring-up, add `ports: ["127.0.0.1:8080:8080"]` in your own
+    # overlay rather than here — and read the limiter note above first, because
+    # this image is not built for direct exposure.
+    #
+    # No `depends_on` either. Forage does not need SearXNG to start: a Forage
+    # that cannot reach it serves `/retrieve` and reports `/search` failures
+    # honestly, so start ordering buys nothing worth the extra moving part.
+
+volumes:
+  forage-model-cache:
+    # An explicit `name:`, so the volume is literally `forage-model-cache` and
+    # not `forage-minimal_forage-model-cache`. Two reasons: it is the canonical
+    # spelling docs/weights.md pins, and it means `full.yml` reuses the *same*
+    # verified weights rather than re-downloading ~270 MiB when you switch
+    # modes. The cost of a fixed name is that `docker compose down -v` from
+    # either fragment removes the weights both were using; `down` without `-v`
+    # leaves them alone.
+    name: forage-model-cache

@@ -58,6 +58,14 @@ about before reading the rest:
   against the gated tarball's. Its tests assert that comparison exists and
   fails the run, because without it the artifact download would be ceremony.
 
+``feature-forage-cache-fallback`` US-004 adds
+:class:`TestComposeFragmentValidation`, whose least obvious assertion is about
+*where* a check lives rather than what it does: the compose fragments are
+validated by a step inside ``lint``, because the six contexts registered as
+required on ``main`` are exactly :data:`_PUBLISH_GATES` and a tidy-looking
+``compose-validate`` job would be green, visible and not required. That
+property is invisible in the workflow file, so it is asserted here.
+
 Assertions run against the parsed YAML wherever possible, so reorganising the
 file cannot silently void a check.
 
@@ -716,6 +724,134 @@ class TestLintJob:
         assert "sha256sum -c" in raw, (
             "The pinned actionlint download must be checksum-verified — a "
             "version pin over an unverified download is not a pin"
+        )
+
+
+# ---------------------------------------------------------------------------
+# The compose-fragment validation step (feature-forage-cache-fallback US-004)
+# ---------------------------------------------------------------------------
+
+_COMPOSE_FRAGMENTS = ("compose/minimal.yml", "compose/full.yml")
+_COMPOSE_VALIDATE_JOB = "lint"
+# `${NAME:?message}` — Compose's required-or-fail interpolation. A fragment
+# that declares one cannot be `config`-validated without a value for it.
+_REQUIRED_COMPOSE_VAR_RE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*):\?")
+
+
+def _compose_validate_step(jobs: dict[str, Any]) -> dict[str, Any]:
+    for step in _steps(jobs, _COMPOSE_VALIDATE_JOB):
+        if "docker compose" in str(step.get("run", "")):
+            return step
+    raise AssertionError(
+        f"No step in the {_COMPOSE_VALIDATE_JOB!r} job runs `docker compose`"
+    )
+
+
+class TestComposeFragmentValidation:
+    """`compose/*.yml` must be machine-checked on every commit.
+
+    ``compose/minimal.yml`` is the extraction epic's completion-criterion
+    artifact — "a third party can ``docker compose up`` with only
+    ``HF_TOKEN``" — and the live proof of that is a manual smoke transcript,
+    which is true once and then rots silently. ``docker compose config -q`` is
+    the half a machine can re-check: the fragments parse, they interpolate,
+    and Compose accepts the services they describe.
+
+    The placement guard below is the one worth reading. The six contexts
+    registered as required on ``main`` are exactly :data:`_PUBLISH_GATES`, so
+    a ``compose-validate`` *job* would be green, visible and **not required** —
+    a gate nobody has to pass. Living inside an already-required job is what
+    makes this one blocking, and that property is invisible in the workflow
+    file itself.
+    """
+
+    def test_both_fragments_are_committed(self) -> None:
+        for fragment in _COMPOSE_FRAGMENTS:
+            assert (_REPO_ROOT / fragment).exists(), (
+                f"{fragment} must exist — CI validates it on every run and "
+                "the epic's completion criterion is demonstrated with it"
+            )
+
+    def test_a_step_validates_the_fragments(self, jobs: dict[str, Any]) -> None:
+        script = str(_compose_validate_step(jobs).get("run", ""))
+        for fragment in _COMPOSE_FRAGMENTS:
+            assert f"-f {fragment} config -q" in script, (
+                f"CI must run `docker compose -f {fragment} config -q`. "
+                "`config` is pure local parsing: it pulls nothing, starts "
+                "nothing, and costs seconds."
+            )
+
+    def test_the_validation_runs_in_a_required_job(self, jobs: dict[str, Any]) -> None:
+        assert _COMPOSE_VALIDATE_JOB in _PUBLISH_GATES, (
+            f"The compose check lives in {_COMPOSE_VALIDATE_JOB!r}, which is "
+            f"not one of the required contexts {_PUBLISH_GATES}. A job outside "
+            "that set is advisory no matter how red it goes."
+        )
+        _compose_validate_step(jobs)
+
+    def test_the_hosting_job_runs_on_every_event(self, jobs: dict[str, Any]) -> None:
+        condition = jobs[_COMPOSE_VALIDATE_JOB].get("if")
+        assert condition is None, (
+            f"The {_COMPOSE_VALIDATE_JOB!r} job grew an `if:` ({condition!r}). "
+            "Both tag lanes ship something a reader may compose up, so this "
+            "check must not be skippable by ref shape."
+        )
+
+    def test_the_step_fails_the_job_on_a_bad_fragment(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        step = _compose_validate_step(jobs)
+        assert step.get("continue-on-error") is not True, (
+            "The compose check is blocking. An advisory one would let a "
+            "fragment that no longer parses reach a third party."
+        )
+        assert "set -euo pipefail" in str(step.get("run", "")), (
+            "Without `set -e` the second `config -q` masks the first one's "
+            "exit status and the step reports the last command only"
+        )
+
+    def test_every_required_variable_is_supplied_to_the_check(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        # Interpolation is part of what `config` validates, so a fragment's
+        # `${NAME:?…}` variables have to be present or the step would be
+        # exercising the error path. Asserting the two sets agree turns
+        # "someone added a required variable and forgot CI" into a suite
+        # failure naming the variable, rather than a red job on push.
+        declared: set[str] = set()
+        for fragment in _COMPOSE_FRAGMENTS:
+            text = (_REPO_ROOT / fragment).read_text()
+            declared.update(_REQUIRED_COMPOSE_VAR_RE.findall(text))
+        env_block: dict[str, Any] = _compose_validate_step(jobs).get("env") or {}
+        supplied = set(env_block)
+        missing = sorted(declared - supplied)
+        assert missing == [], (
+            f"The compose fragments require {missing} but the CI step supplies "
+            f"{sorted(supplied)}. Add a placeholder value — nothing is "
+            "started, so the value is irrelevant; its presence is not."
+        )
+
+    def test_the_placeholder_is_not_a_plausible_real_secret(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        # A repository that is about to go public should not carry anything
+        # secret-shaped in a workflow file, even a fake one: `secret-grep` and
+        # `gitleaks` both read for shapes, and a plausible-looking literal
+        # costs someone an investigation.
+        env_block: dict[str, Any] = _compose_validate_step(jobs).get("env") or {}
+        for name, value in env_block.items():
+            assert "placeholder" in str(value).lower(), (
+                f"The compose step's {name} value should say it is a "
+                f"placeholder; got {value!r}"
+            )
+
+    def test_the_placement_reasoning_is_recorded_in_the_job(self, raw: str) -> None:
+        prose = _comment_prose(raw)
+        assert "compose" in prose and "required" in prose, (
+            "The workflow must record why the compose check is a step in an "
+            "existing job rather than a job of its own. The next person to "
+            "tidy it into a `compose-validate` job would silently make it "
+            "advisory."
         )
 
 
