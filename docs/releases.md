@@ -7,8 +7,8 @@ The service image is **`ghcr.io/washingbearlabs/forage`**. The companion SearXNG
 image (`ghcr.io/washingbearlabs/forage-searxng`) has its own independent tag
 lane and is documented separately in `docs/searxng.md` (US-004).
 
-> **Both the repository and its packages are private until US-008's one-way
-> public flip.** Everything below is already true; anonymous pulls are not.
+> **Public since US-008's 2026-09-10 flip** — repository and packages; anonymous
+> pulls verified at the gate.
 
 ## The tag scheme
 

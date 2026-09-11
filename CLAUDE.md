@@ -55,9 +55,9 @@ needed a per-architecture download, declined the conventional `ARG TARGETARCH`, 
 
 Two things that closure does not license:
 
-- **Publishing.** The image is secret-free, not public. The `publish` lane is live (US-007,
-  2026-09-08): a push reaches GHCR only behind all six gates plus a layer-identity check,
-  and the repository and its GHCR packages stay private until US-008's human flip.
+- **Publishing.** The image is secret-free AND public (US-008's flip, 2026-09-10). The
+  `publish` lane is live (US-007, 2026-09-08): a push reaches GHCR only behind all six
+  gates plus a layer-identity check; anonymous pulls were verified at the flip gate.
   `docs/releases.md` is the reference for the tag scheme and what a green publish proves.
 - **Poppy's copy.** `services/retrieval/Dockerfile` in the monorepo still carries
   `ARG HF_TOKEN` and will until spec 6 pins Poppy to a published Forage image. Never push

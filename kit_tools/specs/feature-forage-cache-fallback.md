@@ -793,7 +793,7 @@ does. The spec's last hint asked for the header; the guard is because a file nob
 knows is load-bearing gets edited as if it were not.
 
 **Image pins, checked against the registry rather than the docs.** The published tags
-are `ghcr.io/washingbearlabs/forage:0.9.1-rc` and
+are `ghcr.io/washingbearlabs/forage:0.9.3-rc` and
 `ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc` — confirmed by enumerating the GHCR
 package versions, not by reading a document. Worth knowing: **`docs/searxng.md` cites
 `forage-searxng:0.1.0` in three places and that tag has never existed** (the tags pushed
@@ -889,17 +889,17 @@ touches is a `_REVISION_SOURCES` member.
 > under "Recorded transcript" below. Mirrors the US-003-of-model-bootstrap pattern.
 
 **Before you start.** You need a Hugging Face token with `meta-llama/Llama-Prompt-Guard-2-22M`
-access approved, and — **until the public flip** — a GHCR login, because the repository
-and both packages are still private. That second prerequisite is itself worth recording:
-the completion criterion says *"a third party can `docker compose up` with only
-`HF_TOKEN`"*, and today a third party would also need credentials to pull the images at
-all. Note whether the pull needed a login when you run it.
+access approved. Nothing else: the repository and both packages have been PUBLIC since the
+2026-09-10 flip (supervisor correction — the first draft of this runbook said a GHCR
+login was needed; the verifier's anonymous pull disproved it). The completion criterion
+*"a third party can `docker compose up` with only `HF_TOKEN`"* is literally true today;
+record that the pull needed no login when you run it.
 
 ```bash
 cd ~/Documents/GitHub/Forage/compose
 
-# 1. Registry access (private packages; drop this after the public flip).
-gh auth token | docker login ghcr.io -u "$(gh api user --jq .login)" --password-stdin
+# 1. No registry login — the images are public; an anonymous pull is part of
+#    what this smoke proves.
 
 # 2. The only configuration a reader supplies. HF_TOKEN is the real one;
 #    SEARXNG_SECRET is any long random string.

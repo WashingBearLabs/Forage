@@ -225,7 +225,7 @@ no client-header trust) — behind its own hermetic cross-container smoke.
 > [`docs/searxng.md`](docs/searxng.md).
 
 [`docs/searxng.md`](docs/searxng.md) has the runbook. **The repository and both packages
-are private until the one-way public flip**, so those pulls are not anonymous yet.
+went public at the 2026-09-10 US-008 flip**; anonymous pulls verified at the gate.
 
 The optional in-memory cache shipped with contract `1.1.0`; still to come is the frozen
 OpenAPI contract.

@@ -28,3 +28,8 @@ kit_tools/testing/test-metrics.json
 kit_tools/.*
 !kit_tools/.gitkeep
 # --- end KitTools ---
+
+# Compose env files carry live tokens (HF_TOKEN, SEARXNG_SECRET) — never
+# committable in a public repo (cache-fallback US-004 verification blocker B3).
+.env
+compose/.env
