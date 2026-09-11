@@ -2,7 +2,7 @@
 # TESTING_GUIDE.md
 
 > Last updated: 2026-09-11
-> Updated by: Claude (forage-model-bootstrap US-005)
+> Updated by: Claude (forage-contract US-001)
 
 ## Quick Start
 
@@ -74,7 +74,7 @@ so `test_ci_workflow.py`, `test_pyright_policy.py`, `test_dependency_lock.py` an
 hermeticity canary all bit only on a developer's machine. The job runs `uv run pytest -q`
 with no selection filters, preceded by a named `uv run pytest -q
 tests/test_sanitizer_revision.py` step so the file-recall cache contract reports as its
-own red line instead of as nine failures inside a 1251-test log.
+own red line instead of as nine failures inside a full-suite log.
 
 `pyright` runs with **no baseline and one carve-out**: `reportPrivateUsage` is off for
 `tests/` and nothing else is relaxed anywhere. Type-ignore comments are disabled
@@ -92,7 +92,7 @@ crash reads as a false regression.
 
 ## Test Structure
 
-28 files under `tests/`, flat, one module per subject, plus `fakes.py`, `golden/` and
+27 files under `tests/`, flat, one module per subject, plus `fakes.py`, `golden/` and
 `fixtures/`. **1427 tests, all green** as of 2026-09-11 (`feature-forage-contract`
 US-001 added `test_contract_errors.py`'s 25; the per-module counts in the table below
 have not all been re-measured since 2026-09-10).
@@ -102,16 +102,17 @@ have not all been re-measured since 2026-09-10).
 | `tests/test_model_fetcher.py` | 212 | `model_fetcher.py`: fail-closed manifest verification, exact-set + safetensors-only allowlist, symlink-resolving hashing, one-generation quarantine, the loadable safetensors fixture, the acquisition pipeline (revision pin, `$HF_HOME/hub` resolution, the mocked HF fetch, the `oras` mirror leg, token redaction), and US-005's warm start + retry loop — the counted-attempt proof that a warm load reaches no network, the normative 30 s→10 min jittered schedule, quarantine→re-fetch→loaded recovery on the real loader, single-flight, and clean cancellation |
 | `tests/test_vendor_weights.py` | 102 | `scripts/vendor_weights.py`: the symlink-dereferenced tarball (built, extracted, bytes compared), tar determinism, generation-time allowlist refusal, the manifest round-trip through the real verifier, credential hygiene on the `oras` path, and the private-package visibility check — all fixture-driven, no registry and no token |
 | `tests/test_stage2_structural.py` | 78 | Deterministic regex injection scan |
-| `tests/test_orchestrator.py` | 61 | End-to-end pipeline drive, search + retrieve paths |
+| `tests/test_orchestrator.py` | 63 | End-to-end pipeline drive, search + retrieve paths |
 | `tests/test_url_validator.py` | 59 | SSRF defense: RFC1918, DNS rebinding, schemes |
-| `tests/test_cache.py` | 52 | Valkey cache incl. the never-log-the-URL invariant |
+| `tests/test_cache.py` | 116 | Valkey cache incl. the never-log-the-URL invariant |
 | `tests/test_smart_extraction.py` | 45 | Summary mode / high-signal preservation |
 | `tests/test_stage1_extraction.py` | 41 | HTML extraction, `raw_text` vs `main_content` |
 | `tests/test_stage4_structuring.py` | 39 | Response assembly + composite trust score |
 | `tests/test_models.py` | 31 | Pydantic request/response models |
-| `tests/test_app.py` | 41 | FastAPI endpoints, `/health` body, capability break-glass, the `/metrics` `model` counters, and the lifespan harness: startup yields immediately, `/health` latency during a fetch, the `promptguard_loaded` flip, and the retry task's cancellation at shutdown |
+| `tests/test_app.py` | 60 | FastAPI endpoints, `/health` body, capability break-glass, the `/metrics` `model` counters, and the lifespan harness: startup yields immediately, `/health` latency during a fetch, the `promptguard_loaded` flip, and the retry task's cancellation at shutdown |
 | `tests/test_stage3_promptguard.py` | 30 | ML scan; transformers/torch mocked |
-| `tests/test_ci_workflow.py` | 201 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane, image build + secret-grep gate, smoke job + artifact handoff, both publish lanes (tag policies evaluated, not matched) and the cross-fire guards between them |
+| `tests/test_ci_workflow.py` | 209 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane, image build + secret-grep gate, smoke job + artifact handoff, both publish lanes (tag policies evaluated, not matched) and the cross-fire guards between them |
+| `tests/test_compose_fragments.py` | 56 | Compose fragments, parse-only shape guards (audit: row was missing) |
 | `tests/test_contract_smoke.py` | 47 | `contract_smoke.py`: every `/health` clause, polling, and the single-source ties to the golden schema |
 | `tests/test_stage5_url_audit.py` | 28 | Outbound fetch + redirect-chain audit |
 | `tests/test_stage1_pdf.py` | 23 | PDF branch, subprocess isolation |
@@ -119,7 +120,7 @@ have not all been re-measured since 2026-09-10).
 | `tests/test_pyright_policy.py` | 12 | Type-checking policy: strict, one carve-out, no suppressions |
 | `tests/test_searxng_smoke.py` | 61 | `searxng_smoke.py`: every evaluator branch, the Docker argv it builds, and the `--internal` wiring |
 | `tests/test_searxng_docker.py` | 28 | `searxng/Dockerfile` + baked config: the negatives (no wildcard pass list, no baked secret, no header trust) and engine parity with `_SEARXNG_ENGINES` |
-| `tests/test_hermeticity.py` | 8 | Executing canary for the autouse socket guard |
+| `tests/test_hermeticity.py` | 10 | Executing canary for the autouse socket guard |
 | `tests/test_sanitizer_revision.py` | 9 | Revision hashing over `_REVISION_SOURCES` and the `MODEL_ID@revision` model identity |
 | `tests/test_dependency_lock.py` | 3 | `uv.lock` stays CPU-only (no `nvidia-*` wheels) |
 | `tests/test_contract_errors.py` | 25 | The documented error surface: the seventeen-code vocabulary swept from every raise site in the repo, pinned against Poppy's inlined allowlist; per-emission-site parity (each mirror model reproduces the live body byte-for-byte, driven through the real routes); the `responses=` declaration map; and the FastAPI 422-suppression behaviour the union declarations rest on |
@@ -175,7 +176,7 @@ canary cannot check about itself: that it is committed and not skipped.
 **Async needs no decorator.** `asyncio_mode = "auto"` is set in `pyproject.toml`.
 
 **The exact count is a gate, not a floor.** The extraction verified *exactly* 531 tests
-moved (534 collected after alias parametrization); the suite has since grown to 1327 as CI
+moved (534 collected after alias parametrization); the suite has since grown (1427 at contract US-001 — the headline above is current) as CI
 guards landed (US-001 +33, US-006 +19, US-002 +21, US-003 +49, US-005 +75, US-007 +40; then
 `forage-model-bootstrap` US-002 +87, US-001 +56, US-003 +102, US-004 +76 and US-005 +24;
 then `forage-cache-fallback` US-001 +63 and US-002 +13). A silently

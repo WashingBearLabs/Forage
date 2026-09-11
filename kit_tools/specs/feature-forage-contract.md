@@ -107,27 +107,28 @@ as an enum.
 - `degraded_reasons: list[DegradedReason]` typed the same derived-Literal way — and because
   response validation would 500 on an unlisted member, the derivation-from-frozenset is the
   guard (a future new reason updates both atomically; noted in the field docstring).
-- No `sanitizer_revision` sources change (this story touches typing/declarations, not the
-  hashed pipeline files' behavior — `contract.py` edits rotate the revision, acknowledged
-  once for the spec).
+- ~~No `sanitizer_revision` sources change~~ **[RETIRED — audit 2026-09-11: FALSE as
+  shipped.** `pipeline/contract.py` IS a hashed source, the frozensets landed there, and
+  the revision rotated (`fa4691c5…` → `8b1b7f78…`) — the spec's one acknowledged
+  rotation. See Implementation Notes.]**
 
 **Acceptance Criteria:**
-- [ ] Per-status models + `responses=` declarations exactly matching the emission map above
+- [x] Per-status models + `responses=` declarations exactly matching the emission map above
       (`/health`+`/metrics` clean); no emission site's output bytes change (parity pytest
       per site).
-- [ ] `ErrorCode` covers all 17 codes via frozenset-derived Literals; `degraded_reasons`
+- [x] `ErrorCode` covers all 17 codes via frozenset-derived Literals; `degraded_reasons`
       enum-rendered the same way; `sanitizer_revision` present-and-documented on the
       `/extract` 422 component.
-- [ ] `capabilities`/`omitted_by_reason` vocabularies documented in field descriptions
+- [x] `capabilities`/`omitted_by_reason` vocabularies documented in field descriptions
       (kept `dict[str,int]` — additive-safe per governance).
-- [ ] **Golden fixtures regenerated in the same commit** (`golden/contract_1_1_0.json` —
+- [x] **Golden fixtures regenerated in the same commit** (`golden/contract_1_1_0.json` —
       the enum/description tightening changes `model_json_schema()` and the existing
       golden test fails otherwise; its docstring's "bump CONTRACT_VERSION" instruction is
       updated to reference the no-bump ruling; round-3 critical restoring a dropped
       round-2 AC).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run pyright` passes
 
 ### US-005: Typed `/metrics` + app metadata
 
@@ -143,6 +144,7 @@ the cgroup keys **flattened into `extraction` exactly as today** (`**_cgroup_mem
 serves `info.version == CONTRACT_VERSION` and the posture description.
 
 **Implementation Hints:**
+- **Must NOT rotate `sanitizer_revision`** — US-001 spent the spec's one acknowledged rotation; stay out of `_REVISION_SOURCES` files or be content-neutral in them.
 - Typed model with `extra="forbid"` + the runtime parity test (round-2 second-opinion: the
   forbid + parity pair makes a future unmodeled metric fail loudly instead of being
   silently filtered by FastAPI's response validation).
@@ -173,6 +175,7 @@ and drift-checked in the normal test suite so the file is always the truth.
 repeat runs; `/extract` appears while `extract_route_enabled: false`.
 
 **Implementation Hints:**
+- **Must NOT rotate `sanitizer_revision`** — US-001 spent the spec's one acknowledged rotation; stay out of `_REVISION_SOURCES` files or be content-neutral in them.
 - `scripts/export_contract.py`: dump `app.openapi()` deterministically (sorted keys,
   canonical YAML); also write `contract/openapi.yaml.sha256` (the **committed anchor** the
   distribution story and Poppy's vendoring verify against — round-2: Release assets are
@@ -204,8 +207,15 @@ pre-freeze / PATCH post-freeze), an urgent security tightening (expedited MINOR 
 compatibility window** — never a silent break).
 
 **Implementation Hints:**
+- **Must NOT rotate `sanitizer_revision`** — US-001 spent the spec's one acknowledged rotation; stay out of `_REVISION_SOURCES` files or be content-neutral in them.
 - `contract/GOVERNANCE.md`: the classification rules; the recorded rulings — (a) US-001/
-  US-005's documentation pass = no bump (parity-tested zero wire change); (b) new
+  US-005's documentation pass = no bump (parity-tested zero wire change); (a2, added at
+  US-001 verification 2026-09-11) **the documented-but-unreachable `/extract` 413**: the
+  contract declares a status no HTTP client can observe (FastAPI wraps the middleware's
+  raise into a 400 — GOTCHAS carries the measurements); GOVERNANCE must classify BOTH the
+  current state (documenting intent alongside reality's 400, no bump) and the future fix
+  (correcting 400→413 is a WIRE CHANGE requiring a bump) — codegen consumers read
+  statuses, not descriptions, so this ruling is load-bearing for them; (b) new
   omission/degraded enum members = MINOR (Poppy buckets unknowns) with the release-note
   announcement obligation for security-block reasons; (c) golden-fixture retention (all
   historical `contract_X_Y_Z.json` fixtures retained); (d) the `/retrieve` error `reason`
@@ -243,6 +253,7 @@ the committed `contract/openapi.yaml.sha256` (needs the pushed tag — supervise
 run URL recorded).
 
 **Implementation Hints:**
+- **Must NOT rotate `sanitizer_revision`** — US-001 spent the spec's one acknowledged rotation; stay out of `_REVISION_SOURCES` files or be content-neutral in them.
 - Dockerfile: `COPY contract/ /app/contract/`.
 - Release workflow: upload `contract/openapi.yaml` + its `.sha256` as assets (mutability
   caveat documented; the committed anchor governs).
@@ -384,7 +395,8 @@ both statuses on `/extract`, and US-003's governance doc should classify the
 400→413 correction when someone wants it.**
 
 **Golden fixture regenerated in the same commit** (`tests/golden/contract_1_1_0.json`).
-The diff is three lines of sanctioned growth — `capabilities` and `omitted_by_reason`
+The diff is +7/−1 lines across four annotation changes (audit correction: first recorded
+as "three lines"/three items — `degraded_reasons` also gained a description) — `capabilities` and `omitted_by_reason`
 descriptions, and `degraded_reasons` items gaining their enum — with no field added,
 removed, renamed or retyped on the wire. `test_contract_schema.py`'s docstring no longer
 says "bump CONTRACT_VERSION"; it now explains that the fixture pins `model_json_schema()`

@@ -2,7 +2,7 @@
 # CODE_ARCH.md
 
 > Last updated: 2026-09-11
-> Updated by: Claude (forage-model-bootstrap US-005)
+> Updated by: Claude (forage-contract US-001)
 
 ---
 

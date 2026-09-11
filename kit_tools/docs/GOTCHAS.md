@@ -2,7 +2,7 @@
 # GOTCHAS.md
 
 > Last updated: 2026-09-11
-> Updated by: Claude (forage-model-bootstrap US-004)
+> Updated by: Claude (forage-contract US-001)
 
 ## Overview
 
@@ -229,7 +229,10 @@ contains only what we put there will be surprised by it.
 to emit `413 {"error": "content_too_large", "reason": ...}`. On `/extract` that
 exception is never its own to catch. The route is a multipart form route, so the first
 thing to pull from `receive` is FastAPI's `await request.form()` — and
-`fastapi/routing.py` wraps *any* exception out of that call in
+`fastapi/routing.py` wraps any exception out of that call — other than
+`json.JSONDecodeError` (→ 422) and `HTTPException` (re-raised as-is), neither of which
+applies to `_RequestBodyTooLargeError` (audit precision 2026-09-11: an earlier draft said
+"*any*") — in
 `HTTPException(400, "There was an error parsing the body")`. The 400 response is
 produced and sent inside the middleware's `await self._app(...)`, which then returns
 normally, so the `except _RequestBodyTooLargeError` block never runs.
@@ -372,7 +375,7 @@ time deliberately:
 | `forage-cache-fallback` US-003 | `fa4691c5…93547c` | `contract.py` bumped to `1.1.0` **and** `orchestrator.py` threaded the revision into the cache key — the rotation whose *point* is the invalidation |
 | `forage-contract` US-001 | `8b1b7f78…196d7c` | `contract.py` gained the 17-code error vocabulary and `DegradedReason` as derived Literals — documentation only, contract still `1.1.0`, and the **one** rotation the whole of `feature-forage-contract` gets |
 
-Poppy's in-tree copy stayed on the original value throughout. Five of the eight sources
+Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
 **None of the six rotations changed sanitization behaviour** — but the fourth and fifth

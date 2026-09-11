@@ -158,7 +158,7 @@ than assume it:
 | Both files at their previous state | `5927038d…19d111` |
 | Only `contract.py` reverted | `b9b716c3…5151a12` |
 | Only `orchestrator.py` reverted | `7bfbeed5…1437f0` |
-| *(supervisor correction 2026-09-13: the two intermediate values above were transposed as first recorded — the verifier's independent re-derivation fixed the labels; conclusion unchanged, both edits load-bearing)* | |
+| *(supervisor correction 2026-09-10: the two intermediate values above were transposed as first recorded — the verifier's independent re-derivation fixed the labels; conclusion unchanged, both edits load-bearing)* | |
 | Both edits (shipped) | **`fa4691c5…93547c`** |
 
 - `pipeline/contract.py` — `CONTRACT_VERSION` `1.0.0` → `1.1.0` for the additive
