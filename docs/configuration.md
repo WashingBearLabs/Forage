@@ -279,7 +279,33 @@ that file sets, which is not always the code default.
 | `seed_blocklist` | list of strings | `[]` | `[]` | Domains merged into every request's `blocked_domains` before URL validation — a permanent, deployment-wide deny list. |
 | `promptguard_threshold` | float | `0.85` | `0.85` | Injection score at or above which stage 3 marks content as injected. Also feeds the `sanitizer_revision` hash, so changing it changes that value by design. |
 | `extract_route_enabled` | boolean | `false` | `false` | Release gate for `POST /extract`. While `false` the route returns **404** — it is invisible, not merely refused. Requires a restart to take effect. Remember there is no authentication in front of it. |
+| `cache` | mapping | `{}` (all defaults) | both keys at their defaults | Bounds for the bounded in-memory content-cache storage — see below. |
 | `extraction` | mapping | `{}` (all defaults) | all keys set to their maxima | Resource limits for untrusted document extraction — see below. |
+
+### The `cache:` block
+
+Bounds for `InMemoryStorage`, the bounded in-process content-cache storage that sits
+under the cache's policy layer. They are validated at startup regardless of which storage
+is active, so a typo fails the boot loudly rather than silently widening a memory bound.
+
+The budget is the container's real headroom: `mem_limit: 1024m` already reserves 512 MiB
+for the parent FastAPI + torch + PromptGuard process and 384 MiB for the spawned
+extraction worker, leaving roughly 128 MiB. The 32 MiB default spends a quarter of it.
+
+| Key | Default | Allowed range | Purpose |
+|-----|---------|---------------|---------|
+| `max_entries` | `256` | 1 – 4096 | Maximum cached responses held in memory. Beyond it, entries are evicted — already-expired ones first, then least-recently-used. |
+| `max_bytes` | `33554432` (32 MiB) | 1 MiB – 128 MiB | Maximum total serialised bytes held in memory, accounted exactly (values are stored as the same JSON bytes Valkey would hold). A single response larger than this bound is never cached: it is served uncached and counted in `/metrics` as `cache.storage_oversize_skips`. |
+
+The cache serves `POST /retrieve` only — `/search` has never been cached — and it is
+per-process by design (one uvicorn worker, nothing shared, nothing persisted across a
+restart).
+
+Two layers of counter appear in `/metrics` and are not duplicates of each other:
+`retrieve.cache_hits` / `cache_misses` count **request** outcomes, while
+`cache.storage_hits` / `storage_misses` / `storage_evictions` /
+`storage_oversize_skips` count **storage operations** underneath the policy layer. Only
+the in-memory storage can move the last two.
 
 ### The `extraction:` block
 

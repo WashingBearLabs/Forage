@@ -42,6 +42,7 @@ from pipeline.stage1_upload import (
 from pipeline.stage2_structural import StructuralScanResult
 from pipeline.stage3_promptguard import PromptGuardResult
 from pipeline.stage5_url_audit import FetchResult
+from tests.fakes import FakeStorage
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -313,20 +314,7 @@ async def test_retrieve_summary_cache_does_not_serve_full_request(
     """A full pipeline request refetches rather than using a summary cache entry."""
     from pipeline import orchestrator
 
-    cache = ContentCache()
-    cache_client = AsyncMock()
-    cache_entries: dict[str, str] = {}
-
-    async def get_cached(key: str) -> str | None:
-        return cache_entries.get(key)
-
-    async def store_cached(key: str, value: str, *, ex: int) -> bool:
-        cache_entries[key] = value
-        return True
-
-    cache_client.get.side_effect = get_cached
-    cache_client.set.side_effect = store_cached
-    cache._client = cache_client
+    cache = ContentCache(storage=FakeStorage())
 
     fetch_result = _make_fetch_result()
     monkeypatch.setattr(
@@ -684,20 +672,7 @@ async def test_retrieve_cache_misses_when_classifier_loads_after_fail_open_cache
     """A fail-open body cached while the model was absent misses once loaded."""
     from pipeline import orchestrator
 
-    cache = ContentCache()
-    cache_client = AsyncMock()
-    cache_entries: dict[str, str] = {}
-
-    async def get_cached(key: str) -> str | None:
-        return cache_entries.get(key)
-
-    async def store_cached(key: str, value: str, *, ex: int) -> bool:
-        cache_entries[key] = value
-        return True
-
-    cache_client.get.side_effect = get_cached
-    cache_client.set.side_effect = store_cached
-    cache._client = cache_client
+    cache = ContentCache(storage=FakeStorage())
 
     monkeypatch.setattr(
         orchestrator,
@@ -1519,6 +1494,96 @@ async def test_post_retrieve_endpoint(
     data = resp.json()
     assert data["source_url"] == "https://example.com/page"
     assert "body" in data
+
+
+@pytest.fixture
+def memory_cache_client(client: httpx.AsyncClient) -> httpx.AsyncClient:
+    """The API client with a real ``ContentCache`` over ``InMemoryStorage``.
+
+    The `client` fixture's ``FakeContentCache`` never stores anything, which is
+    exactly the shape a unit-level suite can pass under while `/retrieve` never
+    consults its cache at all. This one puts the real thing on ``app.state`` —
+    cache, storage, and the ``CacheMetrics`` instance `/metrics` reads — so the
+    assertion below is about the wired service, not about a component.
+    """
+    from cache import CacheMetrics, ContentCache, InMemoryStorage
+    from retrieval_app import app
+
+    metrics = CacheMetrics()
+    app.state.cache_metrics = metrics
+    app.state.cache = ContentCache(
+        storage=InMemoryStorage(metrics=metrics),
+        metrics=metrics,
+    )
+    return client
+
+
+@patch(
+    "pipeline.orchestrator.validate_url",
+    new_callable=AsyncMock,
+    return_value=("93.184.216.34", "example.com"),
+)
+@patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
+@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.orchestrator.detect_content_type", return_value="html")
+@patch("pipeline.orchestrator.scan_structural")
+@patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
+@patch("pipeline.orchestrator.build_retrieved_content")
+async def test_post_retrieve_repeat_is_served_from_the_in_memory_cache(
+    mock_build: MagicMock,
+    mock_pg: MagicMock,
+    mock_scan: MagicMock,
+    mock_detect: MagicMock,
+    mock_extract: MagicMock,
+    mock_fetch: AsyncMock,
+    mock_validate: MagicMock,
+    memory_cache_client: httpx.AsyncClient,
+) -> None:
+    """A repeated `/retrieve` in memory mode is served from the cache.
+
+    Asserted at the route level and through `/metrics`: one outbound fetch for
+    two requests, the second response flagged ``cache_hit``, and both layers of
+    counter moving — the request-level ``retrieve.cache_hits`` and the
+    storage-level ``cache.storage_hits``.
+    """
+    mock_fetch.return_value = _make_fetch_result()
+    mock_extract.return_value = _make_extraction()
+    mock_scan.return_value = _make_structural_clean()
+    mock_pg.return_value = _make_pg_safe()
+    mock_build.return_value = RetrievedContent(
+        request_id="memory-cache-test",
+        source_url="https://example.com/page",
+        final_url="https://example.com/page",
+        title="Test",
+        body="Content from the network",
+        word_count=4,
+        content_type="html",
+        trust_score=0.7,
+        trust_tier=TrustTier.STANDARD,
+        stage2_verdict=Stage2Verdict.CLEAN,
+        stage3_verdict=Stage3Verdict.SAFE,
+        domain="example.com",
+    )
+
+    first = await memory_cache_client.post(
+        "/retrieve", json={"url": "https://example.com/page"}
+    )
+    second = await memory_cache_client.post(
+        "/retrieve", json={"url": "https://example.com/page"}
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["cache_hit"] is False
+    assert second.json()["cache_hit"] is True
+    assert second.json()["body"] == "Content from the network"
+    assert mock_fetch.await_count == 1
+
+    metrics = (await memory_cache_client.get("/metrics")).json()
+    assert metrics["retrieve"]["cache_hits"] == 1
+    assert metrics["retrieve"]["cache_misses"] == 1
+    assert metrics["cache"]["storage_hits"] == 1
+    assert metrics["cache"]["storage_misses"] == 1
 
 
 @patch(

@@ -15,9 +15,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from fastapi import FastAPI
 from starlette.types import Message, Receive, Scope, Send
 
 import model_fetcher
+import retrieval_app
+from cache import (
+    DEFAULT_CACHE_MAX_BYTES,
+    DEFAULT_CACHE_MAX_ENTRIES,
+    CacheConfigurationError,
+    CacheSettings,
+)
 from model_fetcher import DEFAULT_MODEL_REVISION, ModelMetrics
 from models import (
     RetrievedContent,
@@ -474,6 +482,10 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "reconnect_successes",
         "reconnect_failures",
         "operation_failures",
+        "storage_hits",
+        "storage_misses",
+        "storage_evictions",
+        "storage_oversize_skips",
     }
 
 
@@ -1121,3 +1133,37 @@ async def test_the_lifespan_calls_the_fetcher_off_the_event_loop(
         await _first_attempt_failed()
 
     assert threads and threads[0] != threading.get_ident()
+
+
+# `feature-forage-cache-fallback` US-001. The `cache:` bounds are validated at
+# startup whichever storage is selected, so these run through the real lifespan
+# for the same reason the weight-acquisition tests above do: the `client`
+# fixture never fires it.
+
+
+async def test_lifespan_publishes_the_validated_cache_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The shipped `config.yaml` bounds reach `app.state` at startup."""
+    _park_the_retry(monkeypatch)
+    async with _running_app():
+        settings = cast("CacheSettings", app.state.cache_settings)
+
+        assert settings.max_entries == DEFAULT_CACHE_MAX_ENTRIES
+        assert settings.max_bytes == DEFAULT_CACHE_MAX_BYTES
+
+
+async def test_lifespan_refuses_an_out_of_range_cache_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A memory bound outside its range fails the boot rather than widening."""
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {"cache": {"max_bytes": 512 * 1024 * 1024}},
+    )
+
+    probe_app = FastAPI()
+    with pytest.raises(CacheConfigurationError):
+        async with lifespan(probe_app):
+            pass

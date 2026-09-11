@@ -111,22 +111,22 @@ parity is identical by construction and cannot fail) — passes against both a n
   eviction semantics we must test anyway).
 
 **Acceptance Criteria:**
-- [ ] `CacheStorage` protocol (incl. `connect()`/`close()` — the lifespan calls them) +
+- [x] `CacheStorage` protocol (incl. `connect()`/`close()` — the lifespan calls them) +
       `InMemoryStorage` landed; `ContentCache` policy code paths unchanged and
       single-sourced (no policy logic in either storage).
-- [ ] Parametrized suite covers the five policy behaviors AND storage-level TTL expiry,
+- [x] Parametrized suite covers the five policy behaviors AND storage-level TTL expiry,
       against `FakeStorage` + `InMemoryStorage`; the moved test_cache/test_orchestrator
       fixtures rewired to the storage seam with assertions preserved.
-- [ ] Entry-count and byte bounds enforced with expired-first-then-LRU eviction (both
+- [x] Entry-count and byte bounds enforced with expired-first-then-LRU eviction (both
       bounds + the ordering tested); oversized entries skipped-not-stored with the counter
       incremented; defaults 256/32 MiB via the `cache:` config block (extraction_limits
       pattern); storage counters (hits/misses/evictions/oversize_skips) maintained.
-- [ ] A repeated `/retrieve` of the same URL in memory mode is served from the cache,
+- [x] A repeated `/retrieve` of the same URL in memory mode is served from the cache,
       asserted at the route level (round-2 completionist gap: unit-level suites alone could
       pass with a backend `/retrieve` never consults).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run pyright` passes
 
 ### US-002: Backend selection + default removal
 
@@ -336,6 +336,126 @@ reaches a working `/retrieve` + `/search` round-trip.
   [`WEB_ACCESS_FAMILY.md`](https://github.com/WashingBearLabs/Poppy/blob/main/kit_tools/specs/WEB_ACCESS_FAMILY.md)
 
 ## Implementation Notes
+
+### US-001 — Storage-backend abstraction + bounded in-memory backend (2026-09-10)
+
+**Shape landed.** `cache.py` (456 → 847 lines) now carries four things where it carried
+one: the `CacheStorage` protocol, `ValkeyStorage`, `InMemoryStorage`, and a `ContentCache`
+that is *only* policy. All four live in `cache.py` per the flat-layout rule, which also
+kept the nine `patch("cache.aioredis")` targets valid with no re-export needed (the
+round-3 location finding held).
+
+- **`CacheStorage`** — `connected` (property), `connect()`, `close()`, `ping_if_due()`,
+  `get(key) -> bytes | None`, `set(key, value, *, ttl_seconds) -> bool`,
+  `delete(key) -> bool`. `connect()`/`close()` are in because the lifespan calls them;
+  `ping_if_due()` is in because `/health` does, and a storage with no connection to lose
+  answers it for free.
+- **`ContentCache`** kept `get`/`put`/`delete` signatures byte-identical and lost every
+  connection concern: the `_ensure_client()` pre-checks are gone (a storage that cannot
+  serve returns `None`/`False` on its own), `_delete_key()` collapsed into
+  `self._storage.delete(key)`. What stayed: tier refusal, read-time revalidation with
+  news-domain shortening, tz-naive rejection, zero-TTL purge, fingerprint keying. **No
+  policy logic exists in either storage** — mutation M5 below proves the refusal has a
+  single home.
+- **`ValkeyStorage`** took the whole reconnect stack unchanged (bounded 2 s connect
+  deadline, doubling backoff, single-flight lock, `_closed_vocabulary_reason`). The
+  `TestReconnect` suite — the "configured case unchanged" regression net US-002 leans on —
+  needed changes in *two* of its eight tests (supervisor correction: the notes first
+  claimed one; the verifier's diff found the second).
+- **Constructor stayed backward-compatible**: `ContentCache(valkey_url=..., metrics=...,
+  storage=None)` still builds a Valkey-backed cache. Nothing in `retrieval_app.py`
+  selects a backend — that is US-002.
+
+**Blast radius, remeasured (round-2 hint numbers vs. actual).** The hints' counts were
+close but not exact, and the seam absorbed most of them:
+
+| Hint (round 2) | Measured at implementation | What it cost |
+|---|---|---|
+| 48 `mock_redis` uses | 48 | 38 gone — the two policy fixtures now inject `FakeStorage`; 10 legitimately remain in the Valkey failure-path tests (supervisor correction: "all gone" was overcounted) |
+| 9 `patch("cache.aioredis")` blocks | 9 | **0 changed** (module-level `aioredis` still the target) |
+| 7 `._client` + 8 `._metrics` refs | 9 + 8 | 5 `._client` rewired to a `ValkeyStorage`; all 8 `._metrics` survive verbatim |
+| 19 `ContentCache()` sites | 21 in tests (24 repo-wide incl. this spec's own prose) | 4 rewired, the rest untouched |
+| `test_orchestrator.py:339,710` | `:316,687` | Both replaced by `ContentCache(storage=FakeStorage())` — ~26 lines of hand-rolled dict plumbing deleted |
+
+**Delta-losslessness verified mechanically.** `pytest --collect-only` node IDs were
+diffed against `main`: **zero removed, 63 added** (1251 → 1314). Every rewired test kept
+its name and its assertion's meaning — `mock_redis.set.call_args.kwargs["ex"]` became
+`storage.last_ttl_seconds`, `mock_redis.delete.assert_awaited_once()` became
+`storage.delete_calls == 1`.
+
+**Counter naming — a deliberate departure.** The hint names the counters
+"hits/misses/evictions/oversize_skips"; they landed as `storage_hits`, `storage_misses`,
+`storage_evictions`, `storage_oversize_skips` on `CacheMetrics`. `/metrics`' `cache`
+section would otherwise carry a bare `hits` two lines below `retrieve.cache_hits`, and the
+round-2 correction is explicit that these are *different layers* (per-operation storage
+stats vs. per-request pipeline outcomes). The prefix makes the distinction unmissable at
+the point of confusion rather than only in prose. US-003's doc AC still stands.
+
+**`/metrics` exact-set assertion updated, not loosened** (`test_app.py`) — the four new
+names were added to the set. `/health` and `tests/golden/` are **byte-unchanged**;
+`CONTRACT_VERSION` stays `1.0.0`; `contract_smoke` green. The bump is US-003's.
+
+**`sanitizer_revision` did not rotate** — verified before and after:
+`5927038d64ed54a619e52b94899148f56bfede37d38f3c1a53c435edc719d111` both times. `cache.py`
+is not a `_REVISION_SOURCES` member and `derive_sanitizer_revision()` reads only
+`promptguard_threshold` out of `config.yaml`, so the new `cache:` block is invisible to it.
+
+**In-memory design decisions.**
+
+- **Serialised JSON bytes**, not objects — exact byte accounting *and* the security
+  property that no caller ever holds a live reference to a cached value.
+- **Synchronous mutations.** No `await` sits inside any mutation, so concurrent requests
+  on the one event loop cannot interleave into torn state; a 64-way `asyncio.gather`
+  test pins the byte accounting.
+- **Eviction is expired-first, then LRU, and only under pressure.** `_enforce_bounds()`
+  returns immediately when both bounds hold, which keeps `storage_evictions` meaning
+  "removed to make room". An entry that merely aged out and was noticed on the next read
+  is a `storage_misses` — that distinction is asserted.
+- **Oversized entry** (larger than the whole byte bound) is skipped, counted, *and*
+  discards any entry it supersedes at that key, so a skipped write can never leave the
+  previous payload serving.
+- A non-positive `ttl_seconds` stores nothing (Valkey would raise on `EX=0`;
+  `ContentCache` never calls it, the guard is defensive).
+
+**Config.** `CacheSettings` / `cache_settings_from_config()` live in `cache.py`, not under
+`pipeline/`: the import dependency runs `pipeline.orchestrator → cache`, so importing
+`pipeline.extraction_limits._bounded_int` from here would close that loop for twelve
+lines. The idiom is re-stated locally with that reasoning in its docstring. Defaults
+**256 entries / 32 MiB**, ranges 1–4096 and 1–128 MiB, wired in the lifespan as
+`app.state.cache_settings` and validated there whichever storage is active — a bad
+`cache:` block fails the boot, exactly as `extraction:` does.
+
+`docs/configuration.md` gained a `cache:` block section (keys, ranges, the two-layer
+counter distinction, the `/retrieve`-only scope honesty). US-002's doc AC — `VALKEY_URL`
+semantics and the prod-side valkey cross-ref — is untouched and still owed.
+
+**Mutation verification — 13 mutants, 13 killed**, each by a named test:
+
+| Mutant | Killed by |
+|---|---|
+| M1 expired-first → pure LRU | `test_expired_entries_are_purged_before_a_live_one_is_evicted` |
+| M2 drop the byte bound | `test_the_byte_bound_evicts_until_the_total_fits` |
+| M3 drop the entry-count bound | `test_the_entry_count_bound_evicts_the_least_recently_used` |
+| M4 store the oversized entry | `test_an_entry_larger_than_the_byte_bound_is_skipped_not_stored` |
+| M5 drop tier refusal from the policy layer | `test_put_untrusted_skipped` |
+| M6 drop the in-memory TTL check | `test_the_storage_expires_an_entry_on_its_own_clock[in_memory_storage]` |
+| M7 drop the tz-naive rejection | `test_a_tz_naive_entry_is_refused_and_purged[fake_storage]` |
+| M8 drop the zero-TTL read purge | `test_get_ttl_zero_skips_read_and_deletes_variant` |
+| M9 stop validating `cache:` at startup | `test_lifespan_publishes_the_validated_cache_settings` |
+| M10 drop the storage counters from `/metrics` | `test_metrics_covers_search_retrieve_and_cache_sections` |
+| M11 in-memory storage never hits | `test_cacheable_tiers_are_stored[in_memory_storage-standard]` |
+| M11r same, scoped to the route suite | `test_post_retrieve_repeat_is_served_from_the_in_memory_cache` |
+| M12 `/retrieve` never writes to the storage | `test_post_retrieve_repeat_is_served_from_the_in_memory_cache` |
+
+M11r and M12 exist to answer the round-2 completionist gap directly: the route-level test
+is a real gate, not decoration — it goes red on a backend `/retrieve` never consults *and*
+on one it never writes to.
+
+**Gates.** 1314 passed (baseline 1251 + 63); `ruff check` / `ruff format --check` /
+`pyright --strict` / `actionlint` all zero. `CacheStorage` conformance is asserted
+statically — `test_every_storage_satisfies_the_cache_storage_protocol` annotates a
+`list[CacheStorage]` holding all three implementations, which is where pyright checks a
+structural protocol.
 
 ## Refinement Notes
 

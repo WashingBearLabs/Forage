@@ -18,6 +18,12 @@ promptguard_threshold: 0.85
 # open the route is reachable by anything that can reach port 8020 — network
 # placement is the only control (docs/configuration.md, "Deployment posture").
 extract_route_enabled: false
+cache:
+  # Bounds for the bounded in-memory cache storage. The 1 GiB container
+  # already reserves 512 MiB for the parent process and 384 MiB for the
+  # extraction child, leaving ~128 MiB — 32 MiB spends a quarter of it.
+  max_entries: 256
+  max_bytes: 33554432
 extraction:
   # Hard bounds enforced in code: 50 MiB input, 500 pages, 20 s CPU, 90 s wall.
   max_input_bytes: 52428800
