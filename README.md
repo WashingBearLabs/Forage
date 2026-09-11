@@ -47,13 +47,13 @@ the numbering follows the sanitization order the contract reports.
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /health` | Always 200. Body carries `status` (`healthy`/`degraded`), `degraded_reasons`, `promptguard_loaded`, `cache_connected`, `sanitizer_revision`, `contract_version`. **Check the body, not the status code.** |
+| `GET /health` | Always 200. Body carries `status` (`healthy`/`degraded`), `degraded_reasons`, `promptguard_loaded`, `cache_connected`, `cache_backend`, `sanitizer_revision`, `contract_version`. **Check the body, not the status code.** |
 | `GET /metrics` | Extraction, search, retrieve, and cache counters. |
 | `POST /search` | Search via SearXNG, with every result run through the pipeline. |
 | `POST /retrieve` | Fetch and sanitize a single URL. |
 | `POST /extract` | Extract from an uploaded document (gated behind `extract_route_enabled` in `config.yaml`). |
 
-The response contract is versioned (`contract_version`, currently **1.0.0**). Consumers
+The response contract is versioned (`contract_version`, currently **1.1.0**). Consumers
 should refuse to activate on a mismatch rather than guess.
 
 ## Quickstart

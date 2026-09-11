@@ -1,0 +1,593 @@
+{
+  "ExtractedContent": {
+    "$defs": {
+      "Stage2Verdict": {
+        "description": "Stage-2 (structural heuristic) injection verdict.",
+        "enum": [
+          "clean",
+          "suspicious",
+          "blocked"
+        ],
+        "title": "Stage2Verdict",
+        "type": "string"
+      },
+      "Stage3Verdict": {
+        "description": "Stage-3 (PromptGuard ML) injection verdict.",
+        "enum": [
+          "safe",
+          "injection_detected"
+        ],
+        "title": "Stage3Verdict",
+        "type": "string"
+      },
+      "TrustTier": {
+        "description": "Domain trust classification.",
+        "enum": [
+          "trusted",
+          "verified",
+          "standard",
+          "untrusted",
+          "blocked"
+        ],
+        "title": "TrustTier",
+        "type": "string"
+      },
+      "UploadProvenance": {
+        "description": "Display-only metadata for an untrusted uploaded document.\n\nDownstream consumers must treat ``filename`` and ``mime_hint`` as display\ntext only. They must never use either value as a filesystem path.",
+        "properties": {
+          "filename": {
+            "description": "Sanitized display filename",
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          },
+          "mime_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Caller hint only; never authoritative for type detection",
+            "title": "Mime Hint"
+          },
+          "source_type": {
+            "const": "upload",
+            "default": "upload",
+            "title": "Source Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filename"
+        ],
+        "title": "UploadProvenance",
+        "type": "object"
+      }
+    },
+    "description": "Sanitized content returned for an uploaded document.\n\nThis upload-only wire model deliberately does not reuse\n:class:`RetrievedContent`: uploads have no URL provenance.",
+    "properties": {
+      "body": {
+        "description": "Sanitized extracted document text",
+        "title": "Body",
+        "type": "string"
+      },
+      "content_type": {
+        "description": "Source format: 'pdf' or 'text'",
+        "title": "Content Type",
+        "type": "string"
+      },
+      "injection_detected": {
+        "default": false,
+        "description": "Whether prompt injection was detected",
+        "title": "Injection Detected",
+        "type": "boolean"
+      },
+      "injection_spans": {
+        "description": "Detected injection text spans",
+        "items": {
+          "type": "string"
+        },
+        "title": "Injection Spans",
+        "type": "array"
+      },
+      "promptguard_state": {
+        "default": "scanned",
+        "description": "How PromptGuard examined this content: scanned, skipped_trusted, structural_blocked, unavailable_blocked, or unavailable_allowed",
+        "enum": [
+          "scanned",
+          "skipped_trusted",
+          "structural_blocked",
+          "unavailable_blocked",
+          "unavailable_allowed"
+        ],
+        "title": "Promptguard State",
+        "type": "string"
+      },
+      "provenance": {
+        "$ref": "#/$defs/UploadProvenance"
+      },
+      "request_id": {
+        "description": "Extraction request ID",
+        "minLength": 1,
+        "title": "Request Id",
+        "type": "string"
+      },
+      "sanitizer_revision": {
+        "description": "Derived sanitization pipeline revision",
+        "minLength": 1,
+        "title": "Sanitizer Revision",
+        "type": "string"
+      },
+      "stage2_verdict": {
+        "$ref": "#/$defs/Stage2Verdict",
+        "description": "Stage-2 structural heuristic verdict"
+      },
+      "stage3_verdict": {
+        "$ref": "#/$defs/Stage3Verdict",
+        "description": "Stage-3 PromptGuard ML verdict"
+      },
+      "structural_flags": {
+        "description": "Structural heuristic flags raised",
+        "items": {
+          "type": "string"
+        },
+        "title": "Structural Flags",
+        "type": "array"
+      },
+      "title": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Extracted document title",
+        "title": "Title"
+      },
+      "truncation_notice": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Describes what was omitted when extract_mode='summary'",
+        "title": "Truncation Notice"
+      },
+      "trust_score": {
+        "description": "Composite trust score (0.0-1.0)",
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "title": "Trust Score",
+        "type": "number"
+      },
+      "trust_tier": {
+        "$ref": "#/$defs/TrustTier",
+        "description": "Resolved trust tier"
+      },
+      "word_count": {
+        "description": "Word count of body",
+        "minimum": 0,
+        "title": "Word Count",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "request_id",
+      "body",
+      "word_count",
+      "content_type",
+      "trust_score",
+      "trust_tier",
+      "stage2_verdict",
+      "stage3_verdict",
+      "provenance",
+      "sanitizer_revision"
+    ],
+    "title": "ExtractedContent",
+    "type": "object"
+  },
+  "HealthResponse": {
+    "description": "Response body for ``GET /health``.\n\nHTTP status is always 200, even when ``status == \"degraded\"`` (family\ndecision 11) \u2014 the compose healthcheck is a bare ``curl -f`` that only\ninspects the HTTP status code, so consumers must read ``status`` and\n``degraded_reasons`` rather than the response's non-2xx-ness.",
+    "properties": {
+      "cache_backend": {
+        "description": "Which storage the content cache selected at start: 'valkey' when VALKEY_URL was set, 'memory' when it was fully unset. Added in contract 1.1.0.",
+        "enum": [
+          "valkey",
+          "memory"
+        ],
+        "title": "Cache Backend",
+        "type": "string"
+      },
+      "cache_connected": {
+        "description": "Whether the selected cache backend is operational. In Valkey mode this is a live ping, subject to reconnect backoff. In memory mode it is always true: the backend is in this process and there is no connection to lose. It is not a statement that Valkey is present \u2014 read cache_backend for that.",
+        "title": "Cache Connected",
+        "type": "boolean"
+      },
+      "capabilities": {
+        "additionalProperties": {
+          "type": "integer"
+        },
+        "title": "Capabilities",
+        "type": "object"
+      },
+      "contract_version": {
+        "title": "Contract Version",
+        "type": "string"
+      },
+      "degraded_reasons": {
+        "default": [],
+        "items": {
+          "type": "string"
+        },
+        "title": "Degraded Reasons",
+        "type": "array"
+      },
+      "promptguard_loaded": {
+        "title": "Promptguard Loaded",
+        "type": "boolean"
+      },
+      "sanitizer_revision": {
+        "title": "Sanitizer Revision",
+        "type": "string"
+      },
+      "status": {
+        "enum": [
+          "healthy",
+          "degraded"
+        ],
+        "title": "Status",
+        "type": "string"
+      }
+    },
+    "required": [
+      "status",
+      "promptguard_loaded",
+      "cache_connected",
+      "capabilities",
+      "sanitizer_revision",
+      "contract_version",
+      "cache_backend"
+    ],
+    "title": "HealthResponse",
+    "type": "object"
+  },
+  "RetrievedContent": {
+    "$defs": {
+      "Stage2Verdict": {
+        "description": "Stage-2 (structural heuristic) injection verdict.",
+        "enum": [
+          "clean",
+          "suspicious",
+          "blocked"
+        ],
+        "title": "Stage2Verdict",
+        "type": "string"
+      },
+      "Stage3Verdict": {
+        "description": "Stage-3 (PromptGuard ML) injection verdict.",
+        "enum": [
+          "safe",
+          "injection_detected"
+        ],
+        "title": "Stage3Verdict",
+        "type": "string"
+      },
+      "TrustTier": {
+        "description": "Domain trust classification.",
+        "enum": [
+          "trusted",
+          "verified",
+          "standard",
+          "untrusted",
+          "blocked"
+        ],
+        "title": "TrustTier",
+        "type": "string"
+      }
+    },
+    "description": "Sanitised web content returned to Poppy core.\n\nThis is the **sole** object that crosses the sidecar boundary.",
+    "properties": {
+      "body": {
+        "description": "Sanitised main content (never raw HTML/PDF bytes)",
+        "title": "Body",
+        "type": "string"
+      },
+      "cache_hit": {
+        "default": false,
+        "description": "Whether this result came from cache",
+        "title": "Cache Hit",
+        "type": "boolean"
+      },
+      "cached_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "When the result was cached (if cache_hit)",
+        "title": "Cached At"
+      },
+      "content_type": {
+        "description": "Source format: 'html' or 'pdf'",
+        "title": "Content Type",
+        "type": "string"
+      },
+      "domain": {
+        "description": "Domain of final_url",
+        "minLength": 1,
+        "title": "Domain",
+        "type": "string"
+      },
+      "domain_changed_on_redirect": {
+        "default": false,
+        "description": "Whether the domain changed between source_url and final_url",
+        "title": "Domain Changed On Redirect",
+        "type": "boolean"
+      },
+      "final_url": {
+        "description": "URL after redirects resolved",
+        "minLength": 1,
+        "title": "Final Url",
+        "type": "string"
+      },
+      "injection_detected": {
+        "default": false,
+        "description": "Whether prompt-injection was detected",
+        "title": "Injection Detected",
+        "type": "boolean"
+      },
+      "injection_spans": {
+        "description": "Detected injection text spans",
+        "items": {
+          "type": "string"
+        },
+        "title": "Injection Spans",
+        "type": "array"
+      },
+      "promptguard_state": {
+        "default": "scanned",
+        "description": "How PromptGuard examined this content: scanned, skipped_trusted, structural_blocked, unavailable_blocked, or unavailable_allowed",
+        "enum": [
+          "scanned",
+          "skipped_trusted",
+          "structural_blocked",
+          "unavailable_blocked",
+          "unavailable_allowed"
+        ],
+        "title": "Promptguard State",
+        "type": "string"
+      },
+      "redirect_chain": {
+        "description": "Ordered list of redirect URLs",
+        "items": {
+          "type": "string"
+        },
+        "title": "Redirect Chain",
+        "type": "array"
+      },
+      "request_id": {
+        "description": "UUID for this retrieval",
+        "minLength": 1,
+        "title": "Request Id",
+        "type": "string"
+      },
+      "retrieved_at": {
+        "description": "When the content was fetched (UTC)",
+        "format": "date-time",
+        "title": "Retrieved At",
+        "type": "string"
+      },
+      "source_url": {
+        "description": "Original URL requested",
+        "minLength": 1,
+        "title": "Source Url",
+        "type": "string"
+      },
+      "stage2_verdict": {
+        "$ref": "#/$defs/Stage2Verdict",
+        "description": "Stage-2 structural heuristic verdict"
+      },
+      "stage3_verdict": {
+        "$ref": "#/$defs/Stage3Verdict",
+        "description": "Stage-3 PromptGuard ML verdict"
+      },
+      "structural_flags": {
+        "description": "Structural heuristic flags raised",
+        "items": {
+          "type": "string"
+        },
+        "title": "Structural Flags",
+        "type": "array"
+      },
+      "title": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Page title",
+        "title": "Title"
+      },
+      "truncation_notice": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Describes what was omitted when extract_mode='summary'",
+        "title": "Truncation Notice"
+      },
+      "trust_score": {
+        "description": "Composite trust score (0.0-1.0)",
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "title": "Trust Score",
+        "type": "number"
+      },
+      "trust_tier": {
+        "$ref": "#/$defs/TrustTier",
+        "description": "Resolved trust tier"
+      },
+      "word_count": {
+        "description": "Word count of body",
+        "minimum": 0,
+        "title": "Word Count",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "request_id",
+      "source_url",
+      "final_url",
+      "body",
+      "word_count",
+      "content_type",
+      "trust_score",
+      "trust_tier",
+      "stage2_verdict",
+      "stage3_verdict",
+      "domain"
+    ],
+    "title": "RetrievedContent",
+    "type": "object"
+  },
+  "SearchResponse": {
+    "$defs": {
+      "SearchResult": {
+        "description": "A single search result.",
+        "properties": {
+          "engine": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Search engine used",
+            "title": "Engine"
+          },
+          "snippet": {
+            "description": "Result snippet / description",
+            "title": "Snippet",
+            "type": "string"
+          },
+          "suspicious": {
+            "default": false,
+            "description": "Whether Stage 2 or Stage 3 flagged this result as suspicious",
+            "title": "Suspicious",
+            "type": "boolean"
+          },
+          "title": {
+            "description": "Result title",
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "description": "Result URL",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "url",
+          "snippet"
+        ],
+        "title": "SearchResult",
+        "type": "object"
+      }
+    },
+    "description": "Response wrapper for search results.",
+    "properties": {
+      "omitted_by_reason": {
+        "additionalProperties": {
+          "type": "integer"
+        },
+        "description": "Withheld-result counts keyed by contract.OMIT_* reason",
+        "title": "Omitted By Reason",
+        "type": "object"
+      },
+      "omitted_results": {
+        "default": 0,
+        "description": "Examined candidate results the pipeline withheld, across all reasons",
+        "minimum": 0,
+        "title": "Omitted Results",
+        "type": "integer"
+      },
+      "promptguard_unavailable": {
+        "default": false,
+        "description": "PromptGuard was needed but did not run on at least one examined result (withheld or returned) \u2014 a stage-2 structural block never needed a scan and does not count",
+        "title": "Promptguard Unavailable",
+        "type": "boolean"
+      },
+      "query": {
+        "description": "Original query",
+        "minLength": 1,
+        "title": "Query",
+        "type": "string"
+      },
+      "request_id": {
+        "description": "UUID for this search",
+        "minLength": 1,
+        "title": "Request Id",
+        "type": "string"
+      },
+      "results": {
+        "description": "Search results",
+        "items": {
+          "$ref": "#/$defs/SearchResult"
+        },
+        "title": "Results",
+        "type": "array"
+      },
+      "unresponsive_engines": {
+        "description": "SearXNG engines that failed to respond",
+        "items": {
+          "type": "string"
+        },
+        "title": "Unresponsive Engines",
+        "type": "array"
+      },
+      "unscanned_results": {
+        "default": 0,
+        "description": "Returned results PromptGuard did not scan",
+        "minimum": 0,
+        "title": "Unscanned Results",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "request_id",
+      "query"
+    ],
+    "title": "SearchResponse",
+    "type": "object"
+  }
+}

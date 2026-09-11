@@ -62,7 +62,8 @@ those eight — so Forage's revision moved:
 | After the vault-free hostname defaults (`forage-repo-bootstrap` US-002) | `2b8d7e9a…` |
 | After the `ruff format` gate (`forage-ci-and-image` US-001) | `cd00a8b4…c96b9a` |
 | After the pyright-strict burn-down (`forage-ci-and-image` US-006) | `0537316d…e3e253` |
-| **Current (`forage-model-bootstrap` US-001 onward)** | **`5927038d…19d111`** |
+| After the weights pin joined the hashed identity (`forage-model-bootstrap` US-001) | `5927038d…19d111` |
+| **Current (`forage-cache-fallback` US-003, contract `1.1.0`)** | **`fa4691c5…93547c`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -139,6 +140,51 @@ environment variable Poppy's copy does not read.
 consumer that compares `sanitizer_revision` across the two repos will see a mismatch that
 means nothing. Compare `contract_version` instead — that is the field with cross-repo
 semantics.
+
+### The fifth rotation: the contract bump to `1.1.0` (`forage-cache-fallback` US-003, 2026-09-10)
+
+```
+before: 5927038d64ed54a619e52b94899148f56bfede37d38f3c1a53c435edc719d111
+after:  fa4691c57449c52fe367208bdeeb650cbe474d93485c3b90cc8989b5e593547c
+```
+
+**Attribution: two `_REVISION_SOURCES` files moved, and both were load-bearing.** Measured
+by re-deriving with each edit reverted in turn, which is the only way to say this rather
+than assume it:
+
+| Tree | Derived |
+|---|---|
+| Both files at their previous state | `5927038d…19d111` |
+| Only `contract.py` reverted | `7bfbeed5…1437f0` |
+| Only `orchestrator.py` reverted | `b9b716c3…5151a12` |
+| Both edits (shipped) | **`fa4691c5…93547c`** |
+
+- `pipeline/contract.py` — `CONTRACT_VERSION` `1.0.0` → `1.1.0` for the additive
+  `/health` field `cache_backend`, plus the version history the docstring now carries.
+- `pipeline/orchestrator.py` — `run_retrieve_pipeline` takes the derived revision and
+  passes it to `cache_policy_fingerprint()`.
+
+**This one is a different kind again, and it is worth naming.** The first three rotations
+were byte churn (formatting, typing) and the fourth was a changed input; in all four the
+invalidation was the *price* of the change. Here it is the *point*. `contract.py`'s own
+docstring says a contract change must invalidate cached extractions sanitized under the
+old contract — and nothing was enforcing that inside Forage: `cache_key()` /
+`cache_policy_fingerprint()` mixed in every caller-supplied policy knob but not the
+pipeline's own revision, so a deploy that rotated the revision kept serving entries the
+previous pipeline had sanitized, for up to a full TTL, stamped as if they were current.
+US-003 closes it by making the revision an input to the fingerprint, so this rotation is
+also the first one that *actually* flushes Forage's own cache.
+
+**No sanitization behaviour changed.** Stages 1-4 are untouched; the orchestrator edit
+adds a keyword argument and threads it to the cache key, and the contract edit is a
+version string and prose. What changed is what the cache considers the same content.
+
+**Blast radius.** Forage-side: every live cache entry becomes unreachable at the next
+start and ages out on its own TTL — free in memory mode (nothing survives a restart
+anyway) and one TTL of extra fetches in Valkey mode. Consumer-side: Poppy's
+`stored_file_extractions` are keyed on this value and are re-extracted on next access.
+That is the same transition the fourth rotation already handed to the consuming repo's
+spec 6, which owns it; nothing new is owed here.
 
 ## Deferred GitHub settings — for the spec 2 public flip
 

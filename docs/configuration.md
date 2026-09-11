@@ -80,13 +80,18 @@ token-less build).
 `VALKEY_URL` decides which storage the content cache runs over, once per container
 start. There are two backends and one rule:
 
-| `VALKEY_URL` | Backend | `/health` |
-|---|---|---|
-| **Fully unset** | Bounded in-memory (see the `cache:` block below) | `healthy` — nothing is missing, this is a supported deployment |
-| Set and reachable | Valkey | `healthy` |
-| Set but unreachable | Valkey | `degraded`, `cache_unavailable` |
-| Set to an unparseable URL | Valkey | `degraded`, `cache_unavailable` — never a failed boot |
-| **Set to the empty string** | Valkey | `degraded`, `cache_unavailable` |
+| `VALKEY_URL` | Backend | `/health` `cache_backend` | `/health` `status` |
+|---|---|---|---|
+| **Fully unset** | Bounded in-memory (see the `cache:` block below) | `memory` | `healthy` — nothing is missing, this is a supported deployment |
+| Set and reachable | Valkey | `valkey` | `healthy` |
+| Set but unreachable | Valkey | `valkey` | `degraded`, `cache_unavailable` |
+| Set to an unparseable URL | Valkey | `valkey` | `degraded`, `cache_unavailable` — never a failed boot |
+| **Set to the empty string** | Valkey | `valkey` | `degraded`, `cache_unavailable` |
+
+`cache_backend` reports the choice this container made, not the one its environment would
+make now: it is decided once, at start, and fixed for the life of the process. Changing
+`VALKEY_URL` takes a restart, and until then `/health` keeps telling you what is actually
+running.
 
 The rule is that **only a fully unset variable means "no Valkey"**. Anything else is a
 Valkey you asked for, and a Valkey you asked for and did not get is reported, never
@@ -110,7 +115,8 @@ Consequences of memory mode, in one place:
 - It is bounded — `cache.max_entries` and `cache.max_bytes` below — and evicts rather
   than grows.
 - `cache_connected` in `/health` means "the selected backend is operational", so it is
-  always `true` in memory mode. It is not a statement that Valkey is present.
+  always `true` in memory mode. It is not a statement that Valkey is present —
+  `cache_backend` is the field that answers that one.
 - The cache serves `POST /retrieve` only. `/search` has never been cached, in either
   backend.
 
@@ -122,9 +128,9 @@ Consequences of memory mode, in one place:
 > flips, or a missing env file silently drops prod to memory mode), so a missing or
 > unmounted env file fails that deployment loudly instead of quietly dropping it into
 > memory mode, and the
-> epic's live checklist asserts the running backend is Valkey rather than trusting the
-> config. If you run more than one Forage replica, or want the cache to survive a
-> restart, set `VALKEY_URL`.
+> epic's live checklist asserts `cache_backend == "valkey"` on the running container
+> rather than trusting the config. If you run more than one Forage replica, or want the
+> cache to survive a restart, set `VALKEY_URL`.
 
 ### Credential handling for `VALKEY_URL`
 
@@ -425,6 +431,7 @@ curl -s localhost:8020/health | jq
 | `status` | `healthy` or `degraded`. |
 | `degraded_reasons` | `promptguard_unavailable` (no weights — the ML scan is not running), `cache_unavailable` (a *configured* Valkey is unreachable or its URL is unusable — see "Cache backend selection"; memory mode never reports it). |
 | `promptguard_loaded` | Always honest, even with the break-glass override set. |
-| `cache_connected` | "The selected backend is operational." A live ping in Valkey mode, subject to reconnect backoff; always `true` in memory mode, where there is no connection to lose. |
+| `cache_connected` | "The selected backend is operational." A live ping in Valkey mode, subject to reconnect backoff; always `true` in memory mode, where there is no connection to lose. It is **not** a statement that Valkey is present — read `cache_backend` for that. |
+| `cache_backend` | `valkey` or `memory` — which storage the content cache selected at start, decided once from `VALKEY_URL` and fixed for the life of the process. Added in contract `1.1.0`. This is the field that separates "healthily in memory mode" from "silently lost its Valkey"; `cache_connected` alone reports `true` for both. |
 | `sanitizer_revision` | Opaque hash of the sanitization sources, the model identity, and `promptguard_threshold`. Changes when sanitization behaviour changes. |
 | `contract_version` | Response-contract version. Consumers should refuse to activate on a mismatch rather than guess. |

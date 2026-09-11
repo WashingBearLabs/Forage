@@ -310,7 +310,7 @@ recipe.
 
 **What happens:**
 `derive_sanitizer_revision()` hashes eight source files plus the model identity and the
-active threshold. Forage's revision has moved four times, each time at a boundary and each
+active threshold. Forage's revision has moved five times, each time at a boundary and each
 time deliberately:
 
 | When | Value | What moved it |
@@ -320,17 +320,26 @@ time deliberately:
 | `forage-ci-and-image` US-001 | `cd00a8b4…` | `ruff format` gate reformatted `stage2_structural.py` |
 | `forage-ci-and-image` US-006 | `0537316d…e3e253` | pyright-strict burn-down retyped `stage1_extraction.py` + `stage2_structural.py` |
 | `forage-model-bootstrap` US-001 | `5927038d…19d111` | the hashed model identity became `MODEL_ID@revision` — **no source byte moved** |
+| `forage-cache-fallback` US-003 | `fa4691c5…93547c` | `contract.py` bumped to `1.1.0` **and** `orchestrator.py` threaded the revision into the cache key — the rotation whose *point* is the invalidation |
 
 Poppy's in-tree copy stayed on the original value throughout. Five of the eight sources
 are still byte-identical between the repos; the revision is not.
 
-**None of the four rotations changed sanitization behaviour** — but the fourth is a
-different *kind* of rotation and worth reading as such. The first three moved because the
-hash is over bytes and someone reformatted or retyped a hashed file. The fourth moved
+**None of the five rotations changed sanitization behaviour** — but the fourth and fifth
+are different *kinds* of rotation and worth reading as such. The first three moved because
+the hash is over bytes and someone reformatted or retyped a hashed file. The fourth moved
 because an **input changed**: weights are a runtime, per-deployment thing now
 (`FORAGE_MODEL_REVISION`), so two containers running identical code can scan with
 different weights, and the identity had to grow the revision to stay honest. All eight
 sources are byte-identical across it, verified by re-deriving with the old formula.
+
+The fifth is the first one where the invalidation is the **objective** rather than the
+price. `contract.py`'s docstring has always said a contract change must invalidate cached
+extractions; nothing inside Forage enforced it, because `cache_policy_fingerprint()` mixed
+in every caller-supplied policy knob but not the pipeline's own revision. US-003 made the
+revision an input to that fingerprint, so the bump to contract `1.1.0` is also the first
+rotation that actually flushes Forage's own cache. Read it that way: a rotation is now a
+deliberate cache-invalidation lever, not only a hash that happened to move.
 
 That is exactly why *when* you take a rotation matters. Any edit to a `_REVISION_SOURCES`
 file rotates the revision and invalidates every cached sanitization keyed on it. Do it

@@ -125,6 +125,7 @@ def cache_policy_fingerprint(
     promptguard_threshold: float,
     promptguard_fail_closed: bool,
     classifier_loaded: bool,
+    sanitizer_revision: str,
 ) -> str:
     """Return a stable cache-key input for content-shaping retrieval policy.
 
@@ -132,6 +133,17 @@ def cache_policy_fingerprint(
     PromptGuard model was absent misses the cache once the model loads —
     otherwise the stale unscanned entry would replay as if it had been
     scanned.
+
+    ``sanitizer_revision`` is included for the same reason one step out
+    (``feature-forage-cache-fallback`` US-003). It is
+    ``derive_sanitizer_revision()``'s hash of the sanitization sources, the
+    model identity and the active threshold, and ``pipeline/contract.py``'s own
+    docstring states the rule it enforces: *a change to the contract must
+    invalidate cached extractions that were sanitized under the old one*.
+    Nothing was enforcing it here — the key mixed in every caller-supplied
+    policy knob but not the pipeline's own revision, so a deploy that rotated
+    the revision kept serving entries sanitized by the previous code for up to
+    a full TTL. Passing it makes the rotation the invalidation.
     """
     inputs = {
         "blocked_domains": sorted(
@@ -140,6 +152,7 @@ def cache_policy_fingerprint(
         "classifier_loaded": classifier_loaded,
         "promptguard_fail_closed": promptguard_fail_closed,
         "promptguard_threshold": promptguard_threshold,
+        "sanitizer_revision": sanitizer_revision,
         "trusted_domains": sorted(
             {domain.strip().lower() for domain in trusted_domains}
         ),

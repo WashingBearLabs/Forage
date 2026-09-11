@@ -60,6 +60,13 @@ _SAMPLE_CONFIG: dict[str, Any] = {
     "extract_route_enabled": True,
 }
 
+# A plausible derived revision, shaped like `derive_sanitizer_revision`'s
+# output. Every `run_retrieve_pipeline` call passes one because the retrieve
+# pipeline keys its cache on it (`feature-forage-cache-fallback` US-003); the
+# value is opaque to everything below, so a fixed sample is enough except in
+# the tests that deliberately rotate it.
+_SAMPLE_REVISION = "a" * 64
+
 
 def _make_text_pdf(text: str) -> bytes:
     """Create a small PDF with a text layer for multipart endpoint coverage."""
@@ -244,6 +251,7 @@ async def test_retrieve_full_pipeline_happy_path(
         cache=cache_mock,
         classifier=None,
         config=_SAMPLE_CONFIG,
+        sanitizer_revision=_SAMPLE_REVISION,
     )
 
     assert result.source_url == "https://example.com/page"
@@ -300,6 +308,7 @@ async def test_retrieve_cache_hit_skips_pipeline(
         cache=cache_mock,
         classifier=None,
         config=_SAMPLE_CONFIG,
+        sanitizer_revision=_SAMPLE_REVISION,
     )
 
     assert result.cache_hit is True
@@ -363,12 +372,14 @@ async def test_retrieve_summary_cache_does_not_serve_full_request(
         cache=cache,
         classifier=None,
         config=_SAMPLE_CONFIG,
+        sanitizer_revision=_SAMPLE_REVISION,
     )
     full_result = await run_retrieve_pipeline(
         _make_retrieve_request(extract_mode="full"),
         cache=cache,
         classifier=None,
         config=_SAMPLE_CONFIG,
+        sanitizer_revision=_SAMPLE_REVISION,
     )
 
     assert fetch.await_count == 2
@@ -423,6 +434,7 @@ async def test_retrieve_ttl_zero_deletes_without_cache_read_or_write(
         cache=cache_mock,
         classifier=None,
         config=_SAMPLE_CONFIG,
+        sanitizer_revision=_SAMPLE_REVISION,
     )
 
     cache_mock.delete.assert_awaited_once()
@@ -485,6 +497,7 @@ async def test_retrieve_stage2_blocked_returns_quarantine(
         cache=None,
         classifier=None,
         config=_SAMPLE_CONFIG,
+        sanitizer_revision=_SAMPLE_REVISION,
     )
 
     assert result.injection_detected is True
@@ -551,6 +564,7 @@ async def test_retrieve_stage3_injection_returns_quarantine(
         cache=None,
         classifier=None,
         config=_SAMPLE_CONFIG,
+        sanitizer_revision=_SAMPLE_REVISION,
     )
 
     assert result.injection_detected is True
@@ -588,6 +602,7 @@ async def test_retrieve_classifier_absent_fail_closed_reports_unavailable_blocke
         cache=None,
         classifier=None,
         config=_SAMPLE_CONFIG,
+        sanitizer_revision=_SAMPLE_REVISION,
     )
 
     assert result.injection_spans == ["promptguard_unavailable"]
@@ -622,6 +637,7 @@ async def test_retrieve_classifier_absent_fail_open_reports_unavailable_allowed(
         cache=None,
         classifier=None,
         config=_SAMPLE_CONFIG,
+        sanitizer_revision=_SAMPLE_REVISION,
     )
 
     assert result.promptguard_state == "unavailable_allowed"
@@ -658,6 +674,7 @@ async def test_retrieve_trusted_tier_loaded_classifier_reports_skipped_trusted(
         cache=None,
         classifier=classifier,
         config=_SAMPLE_CONFIG,
+        sanitizer_revision=_SAMPLE_REVISION,
     )
 
     assert result.promptguard_state == "skipped_trusted"
@@ -700,6 +717,7 @@ async def test_retrieve_cache_misses_when_classifier_loads_after_fail_open_cache
         cache=cache,
         classifier=None,
         config=_SAMPLE_CONFIG,
+        sanitizer_revision=_SAMPLE_REVISION,
     )
     assert model_absent_result.promptguard_state == "unavailable_allowed"
     assert fetch.await_count == 1
@@ -713,6 +731,7 @@ async def test_retrieve_cache_misses_when_classifier_loads_after_fail_open_cache
         cache=cache,
         classifier=loaded_classifier,
         config=_SAMPLE_CONFIG,
+        sanitizer_revision=_SAMPLE_REVISION,
     )
 
     assert fetch.await_count == 2
@@ -741,6 +760,7 @@ async def test_retrieve_private_ip_raises_pipeline_error(
             cache=None,
             classifier=None,
             config=_SAMPLE_CONFIG,
+            sanitizer_revision=_SAMPLE_REVISION,
         )
 
     assert exc_info.value.error == "private_ip"
@@ -766,6 +786,7 @@ async def test_retrieve_blocked_domain_raises_pipeline_error(
             cache=None,
             classifier=None,
             config=_SAMPLE_CONFIG,
+            sanitizer_revision=_SAMPLE_REVISION,
         )
 
     assert exc_info.value.error == "blocked_domain"
@@ -795,6 +816,7 @@ async def test_retrieve_timeout_raises_pipeline_error(
             cache=cache_mock,
             classifier=None,
             config=_SAMPLE_CONFIG,
+            sanitizer_revision=_SAMPLE_REVISION,
         )
 
     assert exc_info.value.error == "fetch_timeout"
@@ -815,6 +837,7 @@ async def test_retrieve_invalid_url_raises_pipeline_error(
             cache=None,
             classifier=None,
             config=_SAMPLE_CONFIG,
+            sanitizer_revision=_SAMPLE_REVISION,
         )
 
     assert exc_info.value.error == "invalid_url"
@@ -1584,6 +1607,83 @@ async def test_post_retrieve_repeat_is_served_from_the_in_memory_cache(
     assert metrics["retrieve"]["cache_misses"] == 1
     assert metrics["cache"]["storage_hits"] == 1
     assert metrics["cache"]["storage_misses"] == 1
+
+
+@patch(
+    "pipeline.orchestrator.validate_url",
+    new_callable=AsyncMock,
+    return_value=("93.184.216.34", "example.com"),
+)
+@patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
+@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.orchestrator.detect_content_type", return_value="html")
+@patch("pipeline.orchestrator.scan_structural")
+@patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
+@patch("pipeline.orchestrator.build_retrieved_content")
+async def test_a_rotated_sanitizer_revision_invalidates_the_cached_entry(
+    mock_build: MagicMock,
+    mock_pg: MagicMock,
+    mock_scan: MagicMock,
+    mock_detect: MagicMock,
+    mock_extract: MagicMock,
+    mock_fetch: AsyncMock,
+    mock_validate: MagicMock,
+    memory_cache_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A revision rotation re-fetches instead of replaying the old pipeline.
+
+    Asserted at the route level, because that is where the fix has to be live:
+    `cache_policy_fingerprint` taking the revision is inert unless `/retrieve`
+    actually passes the one this process derived. The control is the middle
+    request — the same start, the same URL, served from the cache — so the
+    third request's re-fetch can only be the rotation.
+
+    The window this closes was real: `contract.py`'s docstring says a contract
+    change must invalidate cached extractions, and until US-003 the cache key
+    carried no revision at all, so a deploy that rotated it kept serving
+    payloads the previous pipeline sanitized for up to a full TTL.
+    """
+    mock_fetch.return_value = _make_fetch_result()
+    mock_extract.return_value = _make_extraction()
+    mock_scan.return_value = _make_structural_clean()
+    mock_pg.return_value = _make_pg_safe()
+    from retrieval_app import app
+
+    mock_build.return_value = RetrievedContent(
+        request_id="rotation-test",
+        source_url="https://example.com/page",
+        final_url="https://example.com/page",
+        title="Test",
+        body="Content from the network",
+        word_count=4,
+        content_type="html",
+        trust_score=0.7,
+        trust_tier=TrustTier.STANDARD,
+        stage2_verdict=Stage2Verdict.CLEAN,
+        stage3_verdict=Stage3Verdict.SAFE,
+        domain="example.com",
+    )
+    monkeypatch.setattr(app.state, "sanitizer_revision", "0" * 64, raising=False)
+
+    first = await memory_cache_client.post(
+        "/retrieve", json={"url": "https://example.com/page"}
+    )
+    repeat = await memory_cache_client.post(
+        "/retrieve", json={"url": "https://example.com/page"}
+    )
+    assert first.json()["cache_hit"] is False
+    assert repeat.json()["cache_hit"] is True
+    assert mock_fetch.await_count == 1
+
+    monkeypatch.setattr(app.state, "sanitizer_revision", "1" * 64, raising=False)
+    after_rotation = await memory_cache_client.post(
+        "/retrieve", json={"url": "https://example.com/page"}
+    )
+
+    assert after_rotation.status_code == 200
+    assert after_rotation.json()["cache_hit"] is False
+    assert mock_fetch.await_count == 2
 
 
 @patch(

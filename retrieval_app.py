@@ -22,7 +22,8 @@ from typing import Annotated, Any, Literal, get_args
 import yaml
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from starlette.datastructures import State
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 import model_fetcher
@@ -75,9 +76,10 @@ logger = logging.getLogger(__name__)
 # ready-made, credentials and all, from the operator's env or secret store.
 SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://searxng:8080")
 
-# Which storage the content cache runs over, named once for the selection
-# below. ``/health`` gains a field carrying it in the next story; until then
-# these two strings are the startup log's closed vocabulary for the choice.
+# Which storage the content cache runs over, named once: the selection below
+# returns it, the startup log says it, and ``HealthResponse.cache_backend``
+# carries it on the wire (contract 1.1.0). Two literals, one source — a third
+# name cannot appear in one place and not the others.
 CacheBackend = Literal["valkey", "memory"]
 
 # Break-glass capability override. ``FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION``
@@ -147,6 +149,18 @@ def _configured_valkey_url() -> str | None:
     return os.environ.get("VALKEY_URL")
 
 
+def _configured_cache_backend() -> CacheBackend:
+    """Name the backend this start selects, without building it.
+
+    :func:`_select_cache_storage` is the one that constructs the storage, and
+    it answers the same question the same way; this exists for the one caller
+    that needs the name with no storage to hand — ``/health`` before (or
+    without) a lifespan. ``tests/test_app.py`` asserts the two agree for both
+    environments rather than trusting that they were written to.
+    """
+    return "memory" if _configured_valkey_url() is None else "valkey"
+
+
 def _select_cache_storage(
     *,
     settings: CacheSettings,
@@ -174,6 +188,28 @@ def _select_cache_storage(
     if url is None:
         return InMemoryStorage(settings=settings, metrics=metrics), "memory"
     return ValkeyStorage(url, metrics=metrics), "valkey"
+
+
+def _resolved_cache_backend(state: State) -> CacheBackend:
+    """Return the backend this app selected at start, or the one it would pick.
+
+    The lifespan publishes ``cache_backend`` once, and every request reads that
+    — a process does not change backend while it runs. The fallback exists for
+    the same reason ``sanitizer_revision``'s does: a transport that never fires
+    lifespan events still has to get an honest answer out of ``/health``, and
+    answering it from the environment is the same question the lifespan asked.
+    """
+    backend: CacheBackend | None = getattr(state, "cache_backend", None)
+    return backend if backend is not None else _configured_cache_backend()
+
+
+def _resolved_sanitizer_revision(state: State) -> str:
+    """Return the revision derived at start, deriving one if there is none."""
+    revision: str | None = getattr(state, "sanitizer_revision", None)
+    if revision is not None:
+        return revision
+    config: dict[str, Any] | None = getattr(state, "config", None)
+    return derive_sanitizer_revision(config) if config is not None else "unknown"
 
 
 def _load_config() -> dict[str, Any]:
@@ -207,10 +243,25 @@ class HealthResponse(BaseModel):
 
     status: Literal["healthy", "degraded"]
     promptguard_loaded: bool
-    cache_connected: bool
+    cache_connected: bool = Field(
+        description=(
+            "Whether the selected cache backend is operational. In Valkey mode "
+            "this is a live ping, subject to reconnect backoff. In memory mode "
+            "it is always true: the backend is in this process and there is no "
+            "connection to lose. It is not a statement that Valkey is present "
+            "— read cache_backend for that."
+        )
+    )
     capabilities: dict[str, int]
     sanitizer_revision: str
     contract_version: str
+    cache_backend: CacheBackend = Field(
+        description=(
+            "Which storage the content cache selected at start: 'valkey' when "
+            "VALKEY_URL was set, 'memory' when it was fully unset. Added in "
+            "contract 1.1.0."
+        )
+    )
     degraded_reasons: list[str] = []
 
 
@@ -627,6 +678,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     cache = ContentCache(storage=storage, metrics=app.state.cache_metrics)
     cache_ok = await cache.connect()
     app.state.cache = cache
+    # Published for `/health` on the `sanitizer_revision` precedent above:
+    # decided once per start, read per request, never recomputed from the
+    # environment while the process runs.
+    app.state.cache_backend = backend
     if cache_ok:
         # `backend` is one of two literals, never the URL.
         logger.info("Content cache connected (%s)", backend)
@@ -744,12 +799,7 @@ async def health(request: Request) -> HealthResponse:
     # Ping (subject to backoff) so a zero-traffic window still detects recovery
     cache = getattr(request.app.state, "cache", None)
     cache_connected = cache is not None and await cache.ping_if_due()
-    sanitizer_revision = getattr(request.app.state, "sanitizer_revision", None)
-    if sanitizer_revision is None:
-        config = getattr(request.app.state, "config", None)
-        sanitizer_revision = (
-            derive_sanitizer_revision(config) if config is not None else "unknown"
-        )
+    sanitizer_revision = _resolved_sanitizer_revision(request.app.state)
 
     classifier_loaded = request.app.state.classifier.loaded
     degraded_reasons: list[str] = []
@@ -770,6 +820,7 @@ async def health(request: Request) -> HealthResponse:
         capabilities=capabilities,
         sanitizer_revision=sanitizer_revision,
         contract_version=CONTRACT_VERSION,
+        cache_backend=_resolved_cache_backend(request.app.state),
         degraded_reasons=degraded_reasons,
     )
 
@@ -853,6 +904,7 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
             cache=request.app.state.cache,
             classifier=request.app.state.classifier,
             config=request.app.state.config,
+            sanitizer_revision=_resolved_sanitizer_revision(request.app.state),
         )
     except PipelineError as exc:
         retrieve_metrics.record_error(exc.error)

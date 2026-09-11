@@ -93,7 +93,7 @@ Design principles:
 | `model_fetcher.py` | 1872 | Weight acquisition end to end. The one gate every source passes — fail-closed manifest verification, exact-set + safetensors-only allowlist, symlink-resolving hashing over `snapshots/<revision>/`, one-generation quarantine, the `ModelMetrics` counters `/metrics` exports — plus `acquire_and_load()`, the boot pipeline the lifespan runs in a worker thread: verify the cache, then **Hugging Face, then the GHCR mirror**, then one ERROR naming both. The mirror leg shells out to the image's pinned `oras`, extracts with `filter="data"` into a bounded staging area, verifies *there*, and installs by rename. Owns the revision pin, the `$HF_HOME/hub` resolution both the download and the loader are handed, and the five environment variables the acquisition path reads. `WeightAcquisition` wraps that pipeline in the service's only background loop: single-flight, 30 s→10 min jittered backoff, cancellable, and a hub-offline pin scoped to the load so a warm start makes zero network attempts. |
 | `pipeline/stage1_pdf.py` | 156 | PDF branch of stage 1. |
 | `pipeline/stage3_promptguard.py` | 151 | ML injection scan; skipped for trusted domains. |
-| `pipeline/contract.py` | 100 | The versioned response contract (`contract_version`, currently **1.0.0**). |
+| `pipeline/contract.py` | 108 | The versioned response contract (`contract_version`, currently **1.1.0**). |
 | `contract_smoke.py` | 367 | CI's published-image smoke: polls a running container's `/health`, validates it against the same `HealthResponse` model the golden test pins, and reads every wire value from `pipeline/contract.py` at run time. Ships in no image. |
 | `searxng_smoke.py` | 779 | CI's companion-image smoke: creates an egress-free Docker network, runs SearXNG beside a Valkey and probes it from a third container. Docker goes through an injected runner and every judgement is a pure function, so `tests/test_searxng_smoke.py` covers the failure branches without a daemon. Ships in no image. |
 | `scripts/vendor_weights.py` | 1112 | Operator-only, supervised: downloads the pinned revision, generates `weights_manifest.json` with the safetensors allowlist enforced **at generation time**, builds a deterministic symlink-dereferenced tarball, self-checks it through the real verifier, `oras push`es it tagged by revision sha, and confirms the GHCR package is private. Every constant comes from `model_fetcher`; no credential ever reaches an argv. Ships in no image; `docs/weights.md` is the procedure. |
@@ -113,8 +113,11 @@ since the vault-free config work (`e6b2b56d…` → `2b8d7e9a…`), moved again 
 `ruff format` CI gate reformatted `stage2_structural.py` (`2b8d7e9a…` → `cd00a8b4…`) — a
 format-only rotation, taken deliberately at gate installation — a third time when the
 pyright-strict burn-down retyped `stage1_extraction.py` and `stage2_structural.py`
-(`cd00a8b4…` → `0537316d…`), and a fourth when the weights became a runtime input and the
-pinned revision joined the identity (`0537316d…` → `5927038d…`, no source byte moved).
+(`cd00a8b4…` → `0537316d…`), a fourth when the weights became a runtime input and the
+pinned revision joined the identity (`0537316d…` → `5927038d…`, no source byte moved), and
+a fifth with the contract bump to `1.1.0` (`5927038d…` → `fa4691c5…`, `contract.py` +
+`orchestrator.py`) — the first rotation taken *for* the invalidation rather than despite
+it, now that the revision keys the content cache.
 Nothing downstream may assume Poppy↔Forage revision parity.
 
 **Startup is non-blocking, and one background task is the reason.** The lifespan does its
