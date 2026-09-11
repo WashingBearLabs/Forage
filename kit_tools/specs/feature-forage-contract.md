@@ -185,13 +185,13 @@ repeat runs; `/extract` appears while `extract_route_enabled: false`.
 - Dependency-bump rendering changes show as reviewable regen diffs (docstring note).
 
 **Acceptance Criteria:**
-- [ ] `contract/openapi.yaml` + `contract/openapi.yaml.sha256` committed, generated,
+- [x] `contract/openapi.yaml` + `contract/openapi.yaml.sha256` committed, generated,
       deterministic; `/extract` present.
-- [ ] Drift pytest in the suite; a deliberate un-regenerated change fails it (committed as
+- [x] Drift pytest in the suite; a deliberate un-regenerated change fails it (committed as
       a self-test fixture case, not a throwaway run).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run pyright` passes
 
 ### US-003: Semver governance, PR template, SECURITY.md
 

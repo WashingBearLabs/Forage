@@ -101,7 +101,7 @@ path and yields a `promptguard_unavailable` degraded runtime.
 | `searxng/config/` | SearXNG `settings.yml` + `limiter.toml` |
 | `contract/` | The frozen wire contract: generated `openapi.yaml` + its committed `.sha256` anchor. Regenerate with `uv run python -m scripts.export_contract`; never hand-edit |
 | `scripts/` | Operator-only, run by hand from a checkout; in no image |
-| `tests/` | 29 files, one module per subject, plus `fakes.py`, `golden/` and `fixtures/` |
+| `tests/` | 28 `test_*.py` modules, one per subject, plus `conftest.py`, `fakes.py`, `golden/` and `fixtures/` |
 | `docs/` | `configuration.md` (full env/config reference), `bootstrap-notes.md`, `bootstrap-scan.txt` |
 | `kit_tools/` | This documentation framework + the feature specs |
 
