@@ -672,8 +672,23 @@ version arrived on their own. What it *did* catch immediately is that
 of its tests went red until `cache_backend` was added to it, including
 `test_field_expectations_track_the_model`, which deletes each declared field in turn. The
 value in the fixture is `"memory"`, because the smoke job runs the image with no `-e` of
-any kind — the same memory-mode container US-002's live evidence recorded. The PR's own
-`smoke` job is the live proof.
+any kind — the same memory-mode container US-002's live evidence recorded.
+
+**Live container evidence, from the PR's own `smoke` job** (PR #14, run 34568618988):
+
+```
+Expecting contract_version 1.1.0 (pipeline/contract.py)
+{"status":"degraded","promptguard_loaded":false,"cache_connected":true,
+ "capabilities":{},"sanitizer_revision":"fa4691c5…93547c",
+ "contract_version":"1.1.0","cache_backend":"memory",
+ "degraded_reasons":["promptguard_unavailable"]}
+Contract smoke PASSED: degraded, honest, and on-contract.
+```
+
+Three things at once: the new field is on the wire from a real container, the bump reached
+the image, and the revision the built image derives is byte-identical to the one derived
+locally — which is the only end-to-end check that the rotation recorded here is the
+rotation that ships.
 
 **Already satisfied by US-001, verified rather than re-implemented.** AC1's `/metrics`
 clause: the four `storage_*` counters render under the `cache` section (now
