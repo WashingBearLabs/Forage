@@ -482,22 +482,26 @@ class ModelMetricsResponse(BaseModel):
     )
 
 
+# ``extra="forbid"`` on all six metrics models is a choice about failure mode,
+# not tidiness, and the class docstrings stay consumer-facing because they are
+# what the generated contract publishes. The rule, for whoever adds a counter:
+# FastAPI validates a handler's return against its response model, and a
+# permissive model would *silently filter* a counter the model does not carry —
+# added, reviewed, deployed, and never on the wire. Forbidding extras makes that
+# a loud 500 instead. So a new counter goes in the handler and in its section
+# model, in the same commit and in the same position (the parity test compares
+# serialized bytes, so order is contract). ``tests/test_contract_metrics.py``
+# drives both halves, including the permissive counterfactual.
+
+
 class MetricsResponse(BaseModel):
     """Response body for ``GET /metrics``.
 
-    Fully typed with ``extra="forbid"`` at every level, which is a deliberate
-    choice about failure mode rather than tidiness. FastAPI validates a
-    response against its model, and a permissive model would *silently filter*
-    a counter the model does not carry — a new metric would be added, shipped,
-    and never appear on the wire. Forbidding extras turns that into a loud 500
-    instead, and ``tests/test_contract_metrics.py`` drives exactly that case.
-    So: adding a counter to the handler means adding it here, in the same
-    commit, in the same position.
-
-    These counters are unauthenticated, like every Forage endpoint (see
-    ``docs/configuration.md``, "Deployment posture"). They are content-free by
-    construction — no URL, query, filename or document text reaches any of
-    them — but they do describe traffic volume and failure rates.
+    Unauthenticated, like every Forage endpoint (``docs/configuration.md``,
+    "Deployment posture"). The counters are content-free by construction — no
+    URL, query, filename or document text reaches any of them — but they do
+    describe traffic volume and failure rates, so they are part of what network
+    placement protects.
     """
 
     model_config = ConfigDict(extra="forbid")

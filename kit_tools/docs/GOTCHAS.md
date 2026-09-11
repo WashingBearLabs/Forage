@@ -2,7 +2,7 @@
 # GOTCHAS.md
 
 > Last updated: 2026-09-11
-> Updated by: Claude (forage-contract US-001)
+> Updated by: Claude (forage-contract US-005)
 
 ## Overview
 
@@ -266,6 +266,44 @@ the ASGI seam, which is the only place the 413 shape can be produced.
 400 to 413 — and it belongs to whoever owns the next contract bump, not to a passing
 refactor. `feature-forage-contract` is explicitly a zero-wire-byte spec and deliberately
 left the behaviour alone.
+
+---
+
+### Adding a `/metrics` counter without adding it to the model **500s the endpoint**
+
+**Location:** `retrieval_app.py` (`MetricsResponse` and its five section models)
+**Severity:** 🟡 Medium
+**Added:** 2026-09-11 (`feature-forage-contract` US-005)
+
+**What happens:**
+`/metrics` is a typed response since US-005, and every one of its six models sets
+`extra="forbid"`. FastAPI validates a handler's return against the response model, so a
+counter added to the handler dict and not to the model raises `ResponseValidationError`
+— a 500 on an endpoint an operator reaches for precisely when something is wrong. The
+whole `/metrics` route goes down, not just the new field.
+
+**Why it was built that way — read this before "fixing" it by relaxing the model.**
+The alternative is worse and silent. A permissive response model makes FastAPI *filter*
+the unmodeled key out of the response and answer 200: the counter is added, reviewed,
+merged, deployed, and never appears on the wire, and the first person to notice is
+whoever is debugging an incident without the number they were promised.
+`tests/test_contract_metrics.py` pins both halves —
+`test_an_unmodeled_counter_fails_loudly` for ours,
+`test_a_permissive_response_model_would_have_dropped_it_instead` for the counterfactual,
+measured on the locked FastAPI rather than asserted.
+
+**Mitigation:**
+Add the field to its section model in the same commit, **in the same position** — the
+parity test compares the served bytes against the handler dict's own serialization, so
+order is part of the contract, not a formatting detail. Then classify the addition:
+`/metrics` was outside the frozen response surface when its `model` section was added
+additively, and it is inside that surface now.
+
+**Related:** the three cgroup keys are flat inside `extraction` because
+`**_cgroup_memory_snapshot()` splats them there. Nesting them under a `memory` object is
+a wire change, not tidying; `tests/test_app.py::test_metrics_expose_saturation_and_oom_proximity`
+is the older fossil guard for that decision and `tests/test_contract_metrics.py` adds the
+schema half.
 
 ---
 
