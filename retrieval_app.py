@@ -295,6 +295,230 @@ class HealthResponse(BaseModel):
     )
 
 
+class ExtractionMetricsResponse(BaseModel):
+    """The ``extraction`` section of ``GET /metrics``.
+
+    The three cgroup/OOM fields are **flat members of this section, not a
+    nested object**: the handler splats ``_cgroup_memory_snapshot()`` in, and
+    has since the fields existed. The model mirrors that flattening rather
+    than tidying it — nesting them would be a wire change, and
+    ``tests/test_app.py``'s ``oom_proximity_ratio in extraction`` assertion is
+    the fossil guard that says so.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    requests: int = Field(
+        description="Extraction attempts that reached the handler, successes included."
+    )
+    busy_rejections: int = Field(
+        description=(
+            "Requests refused with 429 because the bounded admission queue was "
+            "full or its byte reservation would have been exceeded."
+        )
+    )
+    semaphore_saturation: int = Field(
+        description=(
+            "Requests that found every extraction slot busy. Counts queueing as "
+            "well as rejection, so it is always >= busy_rejections."
+        )
+    )
+    active: int = Field(description="Extraction slots in use right now.")
+    queued: int = Field(description="Requests waiting for a slot right now.")
+    queued_bytes: int = Field(
+        description=(
+            "Upload bytes conservatively reserved for the queued requests — the "
+            "per-request maximum, not a measured size."
+        )
+    )
+    verdicts: dict[str, int] = Field(
+        description=(
+            "Content-free outcomes by key: 'success', 'injection_detected', or "
+            "the error code of a document failure. Additive-safe, like "
+            "HealthResponse.capabilities — read the keys you know."
+        )
+    )
+    cgroup_memory_current_bytes: int | None = Field(
+        description=(
+            "cgroup v2 memory.current for this container, or null where no "
+            "cgroup v2 memory controller is readable (a plain host, macOS)."
+        )
+    )
+    cgroup_memory_max_bytes: int | None = Field(
+        description=(
+            "cgroup v2 memory.max, or null when unreadable or literally 'max' "
+            "(no limit set)."
+        )
+    )
+    oom_proximity_ratio: float | None = Field(
+        description=(
+            "current/max as a fraction, or null when either side is null or "
+            "max is zero. The concrete OOM-proximity signal an operator reads."
+        )
+    )
+
+
+class SearchMetricsResponse(BaseModel):
+    """The ``search`` section of ``GET /metrics``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    requests: int = Field(description="Search requests that reached the handler.")
+    errors: dict[str, int] = Field(
+        description=(
+            "Refusals keyed by the /search error code (searxng_error, "
+            "searxng_unavailable)."
+        )
+    )
+    omitted_by_reason: dict[str, int] = Field(
+        description=(
+            "Results withheld, keyed by the closed omission vocabulary; anything "
+            "outside it is folded into contract.METRICS_OTHER_BUCKET rather than "
+            "growing this map without bound."
+        )
+    )
+    unscanned_results: int = Field(
+        description="Results returned without an ML injection scan (degraded mode)."
+    )
+
+
+class RetrieveMetricsResponse(BaseModel):
+    """The ``retrieve`` section of ``GET /metrics``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    requests: int = Field(description="Retrieve requests that reached the handler.")
+    errors: dict[str, int] = Field(
+        description="Refusals keyed by the /retrieve error code."
+    )
+    cache_hits: int = Field(
+        description=(
+            "Requests served from the content cache. A *request* outcome — see "
+            "the cache section for the storage-operation counters underneath."
+        )
+    )
+    cache_misses: int = Field(description="Requests that had to fetch.")
+    blocked_by_reason: dict[str, int] = Field(
+        description=(
+            "Injection blocks keyed by the leading diagnostic, bucketed into "
+            "contract.METRICS_OTHER_BUCKET outside the closed vocabulary."
+        )
+    )
+    promptguard_state: dict[str, int] = Field(
+        description=(
+            "Retrievals by classifier state (scanned / skipped / unavailable), "
+            "bucketed the same way."
+        )
+    )
+
+
+class CacheMetricsResponse(BaseModel):
+    """The ``cache`` section of ``GET /metrics``.
+
+    Two layers share this response and are not duplicates of each other.
+    ``retrieve.cache_hits``/``cache_misses`` count *request* outcomes; the
+    ``storage_*`` counters here count *storage operations* underneath the
+    cache's policy layer, so a zero-TTL purge or a policy-stale entry moves
+    one and not the other. Only the in-memory storage can move
+    ``storage_evictions``/``storage_oversize_skips`` — Valkey does its own
+    eviction and has no byte bound of ours.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    reconnect_attempts: int = Field(description="Reconnects attempted to the backend.")
+    reconnect_successes: int = Field(
+        description="Reconnects that restored the backend."
+    )
+    reconnect_failures: int = Field(description="Reconnects that failed.")
+    operation_failures: int = Field(
+        description="Cache operations that failed against the backend."
+    )
+    storage_hits: int = Field(description="Key lookups that found live bytes.")
+    storage_misses: int = Field(
+        description="Key lookups that found nothing, an aged-out entry included."
+    )
+    storage_evictions: int = Field(
+        description=(
+            "Entries the in-memory storage dropped to stay inside its bounds. "
+            "Always 0 on Valkey."
+        )
+    )
+    storage_oversize_skips: int = Field(
+        description=(
+            "Entries the in-memory storage refused as over its per-entry byte "
+            "bound. Always 0 on Valkey."
+        )
+    )
+
+
+class ModelMetricsResponse(BaseModel):
+    """The ``model`` section of ``GET /metrics`` — weight acquisition.
+
+    ``fetch_in_progress`` is what distinguishes "downloading ~270 MiB" from
+    "wedged" while ``/health`` reports ``degraded`` for both, and
+    ``retries_scheduled`` separates both of those from "waiting out a backoff".
+    On a container whose logs drop INFO (``kit_tools/docs/GOTCHAS.md``) this
+    section is the only place a fetch in flight is visible.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    fetch_failures: int = Field(description="Acquisition attempts that failed.")
+    verify_failures: int = Field(
+        description="Weight sets refused by manifest verification."
+    )
+    quarantines: int = Field(
+        description="Weight sets moved out of the loader's scan tree."
+    )
+    fetch_in_progress: bool = Field(
+        description="Whether an acquisition is running right now."
+    )
+    retries_scheduled: int = Field(
+        description=(
+            "Retries armed after a failed acquisition. Non-zero with "
+            "fetch_in_progress false is the 'waiting to try again' state."
+        )
+    )
+
+
+# ``extra="forbid"`` on all six metrics models is a choice about failure mode,
+# not tidiness, and the class docstrings stay consumer-facing because they are
+# what the generated contract publishes. The rule, for whoever adds a counter:
+# FastAPI validates a handler's return against its response model, and a
+# permissive model would *silently filter* a counter the model does not carry —
+# added, reviewed, deployed, and never on the wire. Forbidding extras makes that
+# a loud 500 instead. So a new counter goes in the handler and in its section
+# model, in the same commit and in the same position (the parity test compares
+# serialized bytes, so order is contract). ``tests/test_contract_metrics.py``
+# drives both halves, including the permissive counterfactual.
+
+
+class MetricsResponse(BaseModel):
+    """Response body for ``GET /metrics``.
+
+    Unauthenticated, like every Forage endpoint (``docs/configuration.md``,
+    "Deployment posture"). The counters are content-free by construction — no
+    URL, query, filename or document text reaches any of them — but they do
+    describe traffic volume and failure rates, so they are part of what network
+    placement protects.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    contract_version: str = Field(
+        description=(
+            "The wire contract this process implements — the same value "
+            "/health and the OpenAPI document's info.version carry."
+        )
+    )
+    extraction: ExtractionMetricsResponse
+    search: SearchMetricsResponse
+    retrieve: RetrieveMetricsResponse
+    cache: CacheMetricsResponse
+    model: ModelMetricsResponse
+
+
 # The error bodies below are **mirrors**, not emitters. Every one of them
 # documents a shape some site in this module already puts on the wire, and not
 # one emission site was changed to route through them: ``responses=``
@@ -924,9 +1148,35 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 # -- App --
 
+# The served description. Whatever reads the contract — Swagger UI, a codegen
+# run, a consumer opening `contract/openapi.yaml` — meets the deployment
+# posture before it meets a route, because there is no authentication layer
+# further in to discover. `docs/configuration.md` is the long form.
+_APP_DESCRIPTION = (
+    "Forage fetches, sanitizes and caches web content for an AI agent: it "
+    "reports what it found and how confident it is, and its consumer owns "
+    "every trust decision.\n\n"
+    "**Forage ships no authentication.** Every endpoint below — and "
+    "`/docs`, `/redoc` and `/openapi.json` with them — is unauthenticated by "
+    "design. There is no API key, no bearer token, no allowlist and no rate "
+    "limit, so **network placement is the access control**: run Forage only "
+    "on a private network and never publish its port to an untrusted segment. "
+    "Anyone who can reach it can make it fetch arbitrary URLs on your behalf "
+    "and can read every counter `/metrics` exposes.\n\n"
+    "Forage is not a trust boundary. A `healthy` Forage is not a promise that "
+    "the content it returned is safe. See `docs/configuration.md`, "
+    '"Deployment posture".'
+)
+
+# `version` is the wire contract's version, not the package's: consumers
+# negotiate on `contract_version`, and a document whose `info.version` said
+# anything else would be a second, disagreeing answer to the same question.
+# `pyproject.toml`'s version is packaging metadata and stays independent
+# (docs/releases.md).
 app = FastAPI(
-    title="Poppy Retrieval Sidecar",
-    version="0.1.0",
+    title="Forage",
+    version=CONTRACT_VERSION,
+    description=_APP_DESCRIPTION,
     lifespan=lifespan,
 )
 _initial_extraction_settings = extraction_settings_from_config({})
@@ -1027,9 +1277,15 @@ async def health(request: Request) -> HealthResponse:
     )
 
 
-@app.get("/metrics")
+@app.get("/metrics", response_model=MetricsResponse)
 async def metrics(request: Request) -> dict[str, Any]:
-    """Expose internal extraction, search, retrieve, cache, and model counters."""
+    """Expose internal extraction, search, retrieve, cache, and model counters.
+
+    The handler still builds the body as a dict and lets
+    :class:`MetricsResponse` validate it on the way out — that ordering is the
+    point. A counter added here and not to the model fails response validation
+    loudly rather than being filtered out of the wire in silence.
+    """
     controller: ExtractionAdmissionController = request.app.state.extraction_admission
     extraction_metrics: ExtractionMetrics = request.app.state.extraction_metrics
     search_metrics: SearchMetrics = request.app.state.search_metrics
@@ -1062,12 +1318,9 @@ async def metrics(request: Request) -> dict[str, Any]:
             "blocked_by_reason": retrieve_metrics.blocked_by_reason,
             "promptguard_state": retrieve_metrics.promptguard_state,
         },
-        # Two layers share this response and are not duplicates of each other.
-        # `retrieve.cache_hits`/`cache_misses` above count *request* outcomes;
-        # the `storage_*` counters here count *storage operations* underneath
-        # the cache's policy layer, and only the in-memory storage can move
-        # `storage_evictions` / `storage_oversize_skips` (Valkey does its own
-        # eviction and has no byte bound of ours).
+        # A different layer from `retrieve.cache_hits`/`cache_misses` above,
+        # not a duplicate of it — :class:`CacheMetricsResponse` says why, and
+        # says it where a consumer reading the contract will find it.
         "cache": {
             "reconnect_attempts": cache_metrics.reconnect_attempts,
             "reconnect_successes": cache_metrics.reconnect_successes,
@@ -1078,13 +1331,12 @@ async def metrics(request: Request) -> dict[str, Any]:
             "storage_evictions": cache_metrics.storage_evictions,
             "storage_oversize_skips": cache_metrics.storage_oversize_skips,
         },
-        # Weight acquisition (feature-forage-model-bootstrap). Additive:
-        # `/metrics` is outside the frozen response-model surface, so this
-        # section needs no CONTRACT_VERSION bump. `fetch_in_progress` is what
-        # distinguishes "downloading ~270 MiB" from "wedged" while `/health`
-        # reports degraded for both; `retries_scheduled` (US-005) separates
-        # both of those from "waiting to try again", which is the state a
-        # backoff introduces and nothing else reports.
+        # Weight acquisition (feature-forage-model-bootstrap); the states these
+        # five counters separate are documented on
+        # :class:`ModelMetricsResponse`. `/metrics` was outside the frozen
+        # response-model surface when this section was added additively — it is
+        # inside it now, so a sixth counter is a contract change to classify,
+        # not a free addition.
         "model": {
             "fetch_failures": model_metrics.fetch_failures,
             "verify_failures": model_metrics.verify_failures,

@@ -26,9 +26,30 @@ design:
 | `POST /retrieve` | none |
 | `POST /extract` | none (and gated off by default — see `extract_route_enabled`) |
 
+**And so are the three documentation endpoints FastAPI serves alongside them** — easy to
+forget, because nothing in this repo declares them:
+
+| Endpoint | Auth | What it exposes |
+|----------|------|-----------------|
+| `GET /openapi.json` | none | The generated OpenAPI document: every route, every response shape, every error code, and the service's `contract_version` as `info.version`. |
+| `GET /docs` | none | Swagger UI over that document — **interactive**, so a reader can issue real `/retrieve`, `/search` and `/extract` calls from the browser. |
+| `GET /redoc` | none | ReDoc over the same document; read-only rendering. |
+
+Swagger UI also registers `GET /docs/oauth2-redirect`, an inert OAuth callback page —
+Forage configures no OAuth flow, so it has nothing to redirect.
+
+None of the three leaks a secret (the document is generated from the same models this
+repo publishes as `contract/openapi.yaml`, and Forage holds no user data), but `/docs` is
+a working client for an unauthenticated SSRF-capable service, and the document is a map
+of the attack surface. Treat all three as part of what network placement protects. If you
+want them gone on a particular deployment, FastAPI takes `docs_url=None`,
+`redoc_url=None` and `openapi_url=None` — Forage does not expose that as configuration,
+because turning the contract off is not a substitute for putting the service on a private
+network.
+
 There is no API key, no bearer token, no allowlist, and no rate limit. **Anyone who can
-reach port 8020 can make Forage fetch arbitrary URLs on your behalf, and can read every
-counter `/metrics` exposes.**
+reach port 8020 can make Forage fetch arbitrary URLs on your behalf, can read every
+counter `/metrics` exposes, and can read the full API contract.**
 
 Consequences you must design around:
 
@@ -435,3 +456,13 @@ curl -s localhost:8020/health | jq
 | `cache_backend` | `valkey` or `memory` — which storage the content cache selected at start, decided once from `VALKEY_URL` and fixed for the life of the process. Added in contract `1.1.0`. This is the field that separates "healthily in memory mode" from "silently lost its Valkey"; `cache_connected` alone reports `true` for both. |
 | `sanitizer_revision` | Opaque hash of the sanitization sources, the model identity, and `promptguard_threshold`. Changes when sanitization behaviour changes. |
 | `contract_version` | Response-contract version. Consumers should refuse to activate on a mismatch rather than guess. |
+
+```bash
+# The served contract's version, which is the same number by construction.
+curl -s localhost:8020/openapi.json | jq -r .info.version
+```
+
+Both read `pipeline/contract.py`'s `CONTRACT_VERSION` — one constant, so the two can only
+disagree if something in front of Forage is rewriting responses. The suite pins the tie
+(`tests/test_contract_metrics.py`); there is no deployment-time setting that moves either
+value.

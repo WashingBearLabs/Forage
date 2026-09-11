@@ -156,12 +156,12 @@ serves `info.version == CONTRACT_VERSION` and the posture description.
   surface.
 
 **Acceptance Criteria:**
-- [ ] `/metrics` fully typed (`extra="forbid"`), cgroup keys flat as today, parity test
+- [x] `/metrics` fully typed (`extra="forbid"`), cgroup keys flat as today, parity test
       green, `test_app.py` flat-key assertion untouched and green.
-- [ ] Live `info.version == CONTRACT_VERSION`; posture description served; docs updated.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run pyright` passes
+- [x] Live `info.version == CONTRACT_VERSION`; posture description served; docs updated.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run pyright` passes
 
 ### US-002: Generated contract file + pytest drift check
 
@@ -410,6 +410,110 @@ a raise site using an undocumented code → 1; the 413 declaration moved off its
 **Left for siblings:** `/metrics` is deliberately untyped and undeclared here (US-005);
 `FastAPI(title=..., version=CONTRACT_VERSION, description=...)` still reads
 `version="0.1.0"` (US-005); no `contract/` directory yet (US-002).
+
+### US-005 — Typed `/metrics` + app metadata (2026-09-11)
+
+**Shipped:** branch `story/ct-us-005-typed-metrics`. Suite 1427 → **1447** green
+(+20, all in the new `tests/test_contract_metrics.py`); `ruff check`, `ruff format
+--check`, `uv run pyright` and `actionlint` all zero. `CONTRACT_VERSION` unchanged at
+`1.1.0`.
+
+**`sanitizer_revision` did NOT rotate** —
+`8b1b7f78e85f733ef3b8ace5194632a8cf92410131b2c1af995c456f20196d7c` before and after,
+re-derived at both ends. Nothing this story touched is in `_REVISION_SOURCES`:
+`retrieval_app.py` is not one of the eight hashed `pipeline/` files, and neither is
+`models.py`, which was not opened. US-001 keeps the spec's one acknowledged rotation.
+
+**Zero wire bytes moved, and that is the assertion rather than the claim.** `/metrics`'
+full body was captured before the change and compared after: byte-identical, including
+key order at every depth. The committed guard is stronger than a captured string, though,
+because a fixture goes stale —
+`test_served_metrics_are_the_handlers_dict_serialized` calls the handler **directly**
+for the dict it builds and compares the served bytes against
+`json.dumps(expected, ensure_ascii=False, allow_nan=False, separators=(",", ":"))`,
+which is exactly `JSONResponse.render`'s call. That comparison never passes through the
+model, so it catches a rename, a retype, a dropped counter *or a reorder at any depth* —
+and the reorder case is not hypothetical: mutation 3 below is caught by this assertion
+and by nothing else in the suite.
+
+**Six models, in `retrieval_app.py` beside `HealthResponse`.** `MetricsResponse` plus
+`ExtractionMetricsResponse` / `SearchMetricsResponse` / `RetrieveMetricsResponse` /
+`CacheMetricsResponse` / `ModelMetricsResponse` — the `*Response` suffix is load-bearing,
+since `ExtractionMetrics`, `SearchMetrics`, `RetrieveMetrics`, `CacheMetrics` and
+`ModelMetrics` are all live counter classes. All six carry `extra="forbid"`. The handler
+still **builds a dict** and lets FastAPI validate it on the way out; that ordering is the
+design, not an accident of minimal diffing. A permissive response model silently
+*filters* an unmodeled key and answers 200 — measured on the locked FastAPI in
+`test_a_permissive_response_model_would_have_dropped_it_instead`, which is the
+counterfactual that makes the forbid worth its cost. Ours raises instead
+(`test_an_unmodeled_counter_fails_loudly`), and that new failure mode is written up in
+`kit_tools/docs/GOTCHAS.md` so the next person to add a counter meets it in a doc rather
+than in a 500.
+
+**The cgroup keys are flat, in the wire and now in the schema.** `**_cgroup_memory_
+snapshot()` still splats `cgroup_memory_current_bytes` / `cgroup_memory_max_bytes` /
+`oom_proximity_ratio` into `extraction`, and `ExtractionMetricsResponse` declares them as
+three flat scalar-or-null fields. `tests/test_app.py`'s
+`test_metrics_expose_saturation_and_oom_proximity` was **not touched** — it is the fossil
+guard and stays exactly as it was; the new module adds the schema half (`$ref`-free
+properties, and `verdicts` as the section's only object-valued member, so no `memory: {}`
+can appear).
+
+**App metadata.** `FastAPI(title="Forage", version=CONTRACT_VERSION, description=…)`
+replaces `title="Poppy Retrieval Sidecar", version="0.1.0"`. The description states the
+no-auth/private-network posture and names `/docs`, `/redoc` and `/openapi.json` as part
+of the unauthenticated surface, so a reader meets the precondition before the first route.
+`pyproject.toml`'s `version = "0.1.0"` is untouched — packaging metadata, independent by
+`docs/releases.md`'s rule.
+
+**What the metadata swap does and does not disturb, reconciled honestly.** US-001's
+declaration-map tests (`test_declared_error_statuses_match_the_emission_map`,
+`test_each_declaration_points_at_its_mirror_model`, the enum and component assertions)
+all read `app.openapi()["paths"]` and `["components"]`; **none** of them reads `info`, so
+none needed a change and none was changed. The golden fixture is likewise untouched:
+`tests/test_contract_schema.py` pins `model_json_schema()` for four models
+(`HealthResponse`, `SearchResponse`, `RetrievedContent`, `ExtractedContent`) and this
+story changed none of them — the new metrics models were deliberately **not** added to
+`_SCHEMA_MODELS`, because US-002 is about to freeze the whole document and a second
+partial pin would be two sources for one fact. What did change in `/openapi.json` is the
+`info` block (title, version, a description where there was none) and the `/metrics` 200
+schema, which was `{"additionalProperties": true, "type": "object", "title": "Response
+Metrics Metrics Get"}` and is now a `$ref`. Documentation growth, no response body moved.
+
+**For US-002's diff review — what `/metrics` contributes to the document.** Six new
+components: `MetricsResponse` (`additionalProperties: false`; six required properties in
+order `contract_version`, then `$ref`s to `extraction`, `search`, `retrieve`, `cache`,
+`model`) and the five section components, each `additionalProperties: false` with every
+property required and described. `paths./metrics.get.responses.200` becomes
+`{"$ref": "#/components/schemas/MetricsResponse"}`. `info` becomes
+`{"title": "Forage", "description": "<posture paragraph>", "version": "1.1.0"}`. The
+component count goes 19 → 25; the generated document is ~38 KB (38,414 bytes as
+`json.dumps(..., sort_keys=True)`). Nothing else in `paths` moves except `paths./metrics.get.description` (the handler docstring grew and FastAPI publishes it as the operation description — verifier precision 2026-09-11; every other path item is byte-identical).
+
+**Docs.** `docs/configuration.md`'s "Deployment posture" gains a second table for the
+three documentation endpoints (each `none`), a note that Swagger also registers the inert
+`/docs/oauth2-redirect`, and the reason they matter (`/docs` is a working client for an
+unauthenticated SSRF-capable service). "Verifying a running instance" gains the
+`/openapi.json | jq -r .info.version` check. That doc is now **mechanically** tied to
+reality: `test_every_served_path_is_acknowledged_in_the_posture_doc` walks `app.routes`
+and fails if a served path is missing from the section — which is the guard the
+documentation endpoints needed, since nothing in this repo declares them.
+
+**Mutation-verified** (each applied to a committed tree, then reverted; clean tree back to
+1447):
+
+| Mutation | Result |
+|---|---|
+| cgroup keys nested under `"memory"` instead of splatted | **20 failures**, incl. `test_app.py`'s fossil guard |
+| `retries_scheduled` dropped from `ModelMetricsResponse` | **21 failures**, incl. the dataclass↔model field tie |
+| two `CacheMetricsResponse` fields swapped | **1 failure** — the handler-dict serialization assertion, and only it |
+| `title`/`version` reverted to the placeholders | **2 failures** |
+| the `/redoc` row deleted from `docs/configuration.md` | **2 failures** |
+| a sixth counter added to the handler only | **20 failures** (the endpoint 500s) |
+
+**Left for siblings:** no `contract/` directory yet, and `/openapi.json` is generated
+per-request rather than exported (US-002); the 400→413 correction and the two-semver
+rulings are still spec text, not `GOVERNANCE.md` (US-003).
 
 ## Refinement Notes
 

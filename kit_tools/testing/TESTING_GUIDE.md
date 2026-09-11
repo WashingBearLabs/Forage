@@ -92,10 +92,10 @@ crash reads as a false regression.
 
 ## Test Structure
 
-27 files under `tests/`, flat, one module per subject, plus `fakes.py`, `golden/` and
-`fixtures/`. **1427 tests, all green** as of 2026-09-11 (`feature-forage-contract`
-US-001 added `test_contract_errors.py`'s 25; the per-module counts in the table below
-have not all been re-measured since 2026-09-10).
+28 files under `tests/`, flat, one module per subject, plus `fakes.py`, `golden/` and
+`fixtures/`. **1447 tests, all green** as of 2026-09-11 (`feature-forage-contract`
+US-001 added `test_contract_errors.py`'s 25 and US-005 `test_contract_metrics.py`'s 20;
+the per-module counts in the table below have not all been re-measured since 2026-09-10).
 
 | Module | Tests | Covers |
 |--------|------:|--------|
@@ -124,6 +124,7 @@ have not all been re-measured since 2026-09-10).
 | `tests/test_sanitizer_revision.py` | 9 | Revision hashing over `_REVISION_SOURCES` and the `MODEL_ID@revision` model identity |
 | `tests/test_dependency_lock.py` | 3 | `uv.lock` stays CPU-only (no `nvidia-*` wheels) |
 | `tests/test_contract_errors.py` | 25 | The documented error surface: the seventeen-code vocabulary swept from every raise site in the repo, pinned against Poppy's inlined allowlist; per-emission-site parity (each mirror model reproduces the live body byte-for-byte, driven through the real routes); the `responses=` declaration map; and the FastAPI 422-suppression behaviour the union declarations rest on |
+| `tests/test_contract_metrics.py` | 20 | The typed `/metrics` body and the served app metadata: parity between the handler's dict and the bytes the typed route sends (compared *outside* the model, so a reorder at any depth is caught), the flat cgroup keys in both wire and schema, the `extra="forbid"` failure mode and the permissive-model counterfactual it avoids, the dataclass-counter ↔ model field ties, `info.version == CONTRACT_VERSION`, and the mechanical check that every path FastAPI serves — `/docs`, `/redoc` and `/openapi.json` included — is acknowledged in `docs/configuration.md`'s posture section |
 | `tests/test_contract_schema.py` | 1 | Golden contract fixture vs `pipeline/contract.py` |
 
 Support files:
@@ -206,7 +207,7 @@ Used by the KitTools orchestrator to pick the right tests for a changed file.
 
 ```yaml
 test_mapping:
-  "retrieval_app.py": ["tests/test_app.py", "tests/test_contract_smoke.py", "tests/test_contract_errors.py"]
+  "retrieval_app.py": ["tests/test_app.py", "tests/test_contract_smoke.py", "tests/test_contract_errors.py", "tests/test_contract_metrics.py"]
   "models.py": ["tests/test_models.py", "tests/test_contract_errors.py"]
   "cache.py": "tests/test_cache.py"
   "url_validator.py": "tests/test_url_validator.py"
@@ -237,12 +238,16 @@ test_mapping:
   "uv.lock": "tests/test_dependency_lock.py"
   "pyproject.toml": ["tests/test_dependency_lock.py", "tests/test_pyright_policy.py"]
   "typings/*": "tests/test_pyright_policy.py"
+  "docs/configuration.md": "tests/test_contract_metrics.py"
 ```
 
 `tests/conftest.py` maps to the canary because the fixture it installs is the thing under
 test there — an edit to the socket guard must run `tests/test_hermeticity.py`.
 
-The last five are non-Python sources (or, for `typings/`, stub files no test imports).
+The non-Python entries at the end — the workflow, the Dockerfile, the lock,
+`pyproject.toml`, `typings/` (stub files no test imports) and `docs/configuration.md`
+(whose deployment-posture section `tests/test_contract_metrics.py` checks against the
+paths FastAPI actually serves) — are the ones most easily left unmapped.
 They still need mappings: without one the orchestrator falls back to a heuristic glob over
 the whole suite, and a workflow, lock, Dockerfile or config edit either runs everything or
 nothing. `pyproject.toml` maps to two modules because it carries two independently-guarded

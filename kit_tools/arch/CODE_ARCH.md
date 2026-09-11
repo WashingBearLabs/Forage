@@ -2,7 +2,7 @@
 # CODE_ARCH.md
 
 > Last updated: 2026-09-11
-> Updated by: Claude (forage-contract US-001)
+> Updated by: Claude (forage-contract US-005)
 
 ---
 
@@ -36,7 +36,8 @@ Design principles:
 
 ```
 .
-├── retrieval_app.py         # FastAPI app: the 5 endpoints, startup, health/metrics
+├── retrieval_app.py         # FastAPI app: the 5 endpoints, startup, health/metrics,
+│                            # and every response model the contract documents
 ├── models.py                # Pydantic request/response models
 ├── cache.py                 # Valkey/Redis content cache (closed log vocabulary)
 ├── url_validator.py         # SSRF defense: RFC1918 rejection, DNS-rebinding checks
@@ -77,7 +78,7 @@ Design principles:
 | Module | Lines | Responsibility |
 |--------|------:|----------------|
 | `pipeline/orchestrator.py` | 853 | Drives the five stages end to end; owns the SearXNG engine list and `_DEFAULT_SEARXNG_URL`. The busiest file in the repo. |
-| `retrieval_app.py` | 1042 | FastAPI app + the five endpoints, startup wiring, `/health` body assembly, the legacy-capability break-glass warning. |
+| `retrieval_app.py` | 1563 | FastAPI app + the five endpoints, startup wiring, `/health` body assembly, the legacy-capability break-glass warning. Since `forage-contract` it also carries the documentation surface: the five per-shape error **mirrors** (US-001) and the six `/metrics` response models (US-005), all `extra="forbid"`, none of which any emission site routes through — the emission sites are unchanged and parity tests hold the models to them. The `FastAPI(...)` call serves `title="Forage"`, `version=CONTRACT_VERSION` and the no-auth/private-network posture, so `/openapi.json` cannot disagree with `/health` about which contract this process implements. |
 | `cache.py` | 860 | Valkey content cache. **Never logs the connection URL** — it may carry a password; enforced by a closed log vocabulary and a dedicated regression test. |
 | `models.py` | 313 | Pydantic models for every request and response shape. |
 | `pipeline/stage4_structuring.py` | 308 | Assembles the response object and the composite trust score. |
