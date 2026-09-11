@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: forage-cache-fallback
-status: active
+status: completed
 session_ready: true
 depends_on: [forage-model-bootstrap]
 vision_ref: Secure Web Retrieval / provider-independent web access
@@ -11,7 +11,8 @@ epic: forage-extraction-forage-side
 epic_seq: 3
 epic_final: false
 created: 2026-09-02
-updated: 2026-09-07
+updated: 2026-09-11
+completed: 2026-09-11
 ---
 
 # Feature Spec: Forage Cache Fallback — Optional Valkey via a Storage-Backend Abstraction
@@ -287,7 +288,7 @@ reaches a working `/retrieve` + `/search` round-trip.
   only `HF_TOKEN`") — header comment says so.
 
 **Acceptance Criteria:**
-- [ ] Both fragments committed with code-matching service hostnames; `config -q` green in
+- [x] Both fragments committed with code-matching service hostnames; `config -q` green in
       CI for both; loopback-only port bindings; manual smoke transcript recorded (this AC
       is a **human gate** — marked supervised in the epic wrapper, round-2 finding).
 - [x] README mode matrix + posture line; fragments referenced from the quickstart.
@@ -891,7 +892,7 @@ touches is a `_REVISION_SOURCES` member.
 > with no registry call anywhere. A green suite is not a pullable pin; the pull happens
 > here, in this smoke, which is part of why it is a gate.
 
-#### Manual smoke — **HUMAN GATE, pending**
+#### Manual smoke — executed 2026-09-11 (human gate)
 
 > The AC's *"manual smoke transcript recorded"* clause. **Not executed by the
 > implementer.** The supervisor runs this with the owner and pastes the transcript
@@ -990,7 +991,34 @@ step-8 `cache.storage_*` counters, and the step-9 `cache_backend: "valkey"` with
 observed warm-start time. Anything that needed a manual fix is the most valuable line in
 it — the fragment is wrong, not the run.
 
-**Recorded transcript:** _(pending — supervisor + owner)_
+**Recorded transcript** (2026-09-11, supervisor + owner; fragments at `ce6351a`,
+image `forage:0.9.3-rc`, anonymous pull — no registry login performed):
+
+- **Steps 1–3:** `.env` written (`HF_TOKEN` + random `SEARXNG_SECRET`, mode 600);
+  `docker compose -f minimal.yml up -d` succeeded **with no edits to the fragment**
+  (the AC's question); both containers Up; images pulled anonymously.
+- **Step 4:** `/metrics.model` mid-fetch: `fetch_in_progress: true`, all failure
+  counters 0.
+- **Step 5:** `/health` reached the memory-mode goal body exactly:
+  `status: "healthy"`, `promptguard_loaded: true`, `cache_connected: true`,
+  `capabilities: {"search_sanitization": 1}`, `sanitizer_revision: fa4691c5…93547c`,
+  `contract_version: "1.1.0"`, `cache_backend: "memory"`, `degraded_reasons: []`.
+- **Step 6:** `/retrieve` ×2 on example.com: `cache_hit` **false then true** — the
+  in-memory cache serving a repeat, observed from outside.
+- **Step 7:** `/search` "raccoon": **3 results**, first "Raccoon - Wikipedia",
+  **no 429** — the shipped limiter-off decision working live.
+- **Step 8:** `cache.storage_hits: 1`, `storage_misses: 1`, evictions/oversize 0;
+  `retrieve.cache_hits: 1`, `cache_misses: 1`, `promptguard_state.scanned: 2` —
+  both counter layers coherent side by side.
+- **Step 9:** mode switch to `full.yml`: `cache_backend: "valkey"`,
+  `cache_connected: true`, `status: "healthy"`, `promptguard_loaded: true` observed
+  at **T+24 s** from `up -d` — no re-download (shared `forage-model-cache` volume).
+- **Step 10:** teardown without `-v`; volume preserved; `.env` and the owner's token
+  file deleted.
+
+Nothing needed a manual fix. The completion criterion — a third party with only
+`HF_TOKEN` (+ `SEARXNG_SECRET`) reaches a working `/retrieve` + `/search` — held
+end to end, anonymously.
 
 ## Refinement Notes
 

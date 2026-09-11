@@ -470,3 +470,19 @@ differently outside the uv environment. CONVENTIONS.md's "never a system-install
 binary" rule reads as if the project venv binary were safe; it is not. Reproduced
 independently in a clean clone at verification. The only supported invocations are
 `uv run pyright` locally and the CI typecheck job.
+
+## A cold-cache publish fails its own parity gate — and poisons the publish scope
+
+**Severity: high** · **Found: 2026-09-11 (v0.9.2-rc incident)** · **Spec-4 blocker on v1.0.0**
+
+The image build is not byte-reproducible: the uv-sync/COPY layers embed timestamps, so a
+rebuild only matches the gated tarball when buildx reuses cached layers. Three publishes
+passed warm; the first tag cut hours after its commit's main build (cache evicted by PR
+churn) failed the diff_ids parity gate twice — correctly. Worse, the failed rebuild wrote
+its wrong layers to the `publish` GHA-cache scope, after which even main-push publishes
+failed: publish's `cache-from` prefers its own scope. Recovery that worked: delete the
+`index-publish-*` cache entries (`gh cache list/delete`) so publish falls through to the
+gated `buildkit` scope, re-run, then cut tags immediately after a green main build.
+The durable fix (reproducible builds via SOURCE_DATE_EPOCH-style normalization, or pushing
+the gated artifact for the amd64 leg) is spec 4's opening work — `v1.0.0` must not depend
+on warm-cache ritual. The withdrawn-tag rule lives in `docs/releases.md`.
