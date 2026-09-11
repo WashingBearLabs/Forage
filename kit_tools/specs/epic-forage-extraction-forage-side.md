@@ -32,7 +32,7 @@ in-tree copy), which executes in Poppy.
 | Seq | Feature Spec | Status | Stories | Human gates | Dependencies |
 |-----|-------------|--------|---------|-------------|--------------|
 | 1 | [feature-forage-ci-and-image](archive/feature-forage-ci-and-image.md) | **✅ Completed 2026-09-10** (8/8, 1 attempt each; repo+images PUBLIC, branch protection live — main is PR-only now) | 8 | US-008 executed 2026-09-10 | — |
-| 2 | [feature-forage-model-bootstrap](feature-forage-model-bootstrap.md) | Planned | 6 | **US-003 (weights vendoring) = supervised** — needs the owner's HF token + GHCR credentials | forage-ci-and-image |
+| 2 | [feature-forage-model-bootstrap](archive/feature-forage-model-bootstrap.md) | **✅ Completed 2026-09-12** (6/6, 1 attempt each; mirror vendored + private; cold 19s / warm 9s network-none; revision rotated to 5927038d…) | 6 | forage-ci-and-image |
 | 3 | [feature-forage-cache-fallback](feature-forage-cache-fallback.md) | Planned | 4 | **US-004 manual-smoke half = human gate** | forage-model-bootstrap |
 | 4 | [feature-forage-contract](feature-forage-contract.md) | Planned | 5 | **US-004 cuts `v1.0.0`** — supervised tag push | forage-ci-and-image, forage-cache-fallback |
 

@@ -127,6 +127,11 @@ unset and Forage runs degraded, indefinitely and honestly. Either way the servic
 and serves immediately — the download runs behind a live `/health`, and
 `promptguard_loaded` flips to `true` in place when it completes.
 
+The step-by-step — Hugging Face account, Meta's access approval, the token scope to
+pick, what `/health` and `/metrics` show while the download converges, and the license
+obligations that travel with the weights — is
+[`docs/weights.md` § "Bring your own token"](docs/weights.md#bring-your-own-token).
+
 ## Licensing
 
 Forage's licensing splits in two, and the split matters:
@@ -180,6 +185,5 @@ no client-header trust) — behind its own hermetic cross-container smoke.
 [`docs/searxng.md`](docs/searxng.md) has the runbook. **The repository and both packages
 are private until the one-way public flip**, so those pulls are not anonymous yet.
 
-Still to come: download-at-start model bootstrap,
-an optional in-memory cache when no Valkey is configured, and the frozen OpenAPI
-contract.
+Still to come: an optional in-memory cache when no Valkey is configured, and the frozen
+OpenAPI contract.

@@ -17,6 +17,10 @@ Written by `feature-forage-model-bootstrap` US-003.
 > **The mirror is private, and staying private is checked after every push.** See
 > [Why the mirror is private](#why-the-mirror-is-private) for the licensing reasoning —
 > it is a deliberate choice, not a restriction imposed on us.
+>
+> **Running Forage outside WashingBearLabs?** Most of this page is our vendoring
+> runbook. Yours is [Bring your own token](#bring-your-own-token) — the mirror cannot
+> serve you, and that section is honest about what that means.
 
 ---
 
@@ -194,7 +198,8 @@ Four credentials appear on this page and none of them is the same credential.
 ### `HF_TOKEN` — the download
 
 A Hugging Face **read** token, on an account whose access request Meta has approved. It is
-also what a third-party operator supplies to run Forage without our mirror at all. It is
+also what a third-party operator supplies to run Forage without our mirror at all — the
+walk-through for that is [Bring your own token](#bring-your-own-token). It is
 runtime-optional: a container without one is honestly `degraded`, never silently
 unscanned.
 
@@ -266,6 +271,120 @@ The private posture is *verified*, not assumed: every vendoring run ends by aski
 GitHub API for the package's visibility and failing if it is anything but `private`. GHCR
 creates a package on first push with the account's default visibility, and a default is
 not a guarantee.
+
+---
+
+## Bring your own token
+
+Everything above is about *our* copy. This section is for everyone else: you are running
+Forage outside WashingBearLabs and you want `/health` to reach `status: "healthy"`.
+
+Be clear about one thing first: **the mirror is not available to you.**
+`ghcr.io/washingbearlabs/forage-weights` is private and stays that way (previous
+section), so `FORAGE_WEIGHTS_MIRROR` and `FORAGE_MIRROR_TOKEN` do nothing useful in a
+third-party deployment — leave them unset. Your path to the weights is Hugging Face,
+from Meta, under Meta's terms, and until [you vendor a mirror of your
+own](#if-you-want-outage-insurance-of-your-own) it is your *only* path: a Hugging Face
+outage leaves your deployment degraded (and retrying) rather than falling back to
+anything. It is one credential and five steps, and only the wait in step 2 is out of
+your hands.
+
+### The walk-through
+
+1. **Create a Hugging Face account** at https://huggingface.co if you do not have one.
+2. **Request access to the gated repository.** Visit
+   https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-22M while signed in and submit
+   the access request — this is where you accept the **Llama 4 Community License
+   Agreement** and **Acceptable Use Policy** (the terms `NOTICE` cites). Meta approves
+   per account, and approval is **not instant**: minutes on a good day, longer on a bad
+   one. There is nothing to configure while you wait.
+3. **Create a read token.** Hugging Face → Settings → Access Tokens. A **fine-grained**
+   token with *"Read access to contents of all public gated repos you can access"* is
+   the narrowest scope that can perform the download and is what you should prefer; a
+   classic `read` token also works. Nothing here ever needs write.
+4. **Set `HF_TOKEN`** in the container's environment — through an env file or a secret
+   store, never an inline `-e` flag (`docs/configuration.md` § "Credential handling"
+   applies to this token too). That is the *only* variable you need: the revision pin is
+   the committed default, so leave `FORAGE_MODEL_REVISION` alone — overriding it without
+   a matching manifest fails verification, loudly and correctly (see [the
+   rule](#the-three-places-the-revision-appears--and-the-rule-about-them)).
+5. **Start the container and watch it converge.** Startup does not block on the
+   download: the service answers immediately as `degraded`, fetches the ~270 MiB behind
+   a live `/health`, verifies every byte against the committed manifest, and
+   `promptguard_loaded` flips to `true` in place — no restart.
+
+Mount a volume at `HF_HOME` (see [the volume section](#the-model-cache-volume)) and step
+5 happens once: every later start finds the verified set and loads it with **zero
+network** — the token is not even read.
+
+### What you will see while it converges
+
+`/health` reports `degraded` + `promptguard_unavailable` for the entire acquisition,
+whether that is "downloading right now", "waiting to retry", or "wedged". The
+`/metrics` `model` section is what separates those three states — read it rather than
+tailing logs:
+
+| Reading | Meaning |
+|---|---|
+| `fetch_in_progress: true` | downloading or verifying right now |
+| `retries_scheduled > 0`, `fetch_in_progress: false` | a previous attempt failed; the backoff is waiting to try again |
+| both zero/false, still degraded | the first attempt has not finished yet |
+
+A failed attempt is never final: the retry schedule (30 s doubling to a 10-minute
+ceiling, ±20% jitter, forever) means a token that Meta approves an hour after the
+container started converges **without a restart**. The schedule, the metrics, and the
+log lines each attempt emits are documented in `docs/configuration.md` § "Weights
+acquisition".
+
+Done looks like: `promptguard_loaded: true`, `promptguard_unavailable` gone from
+`degraded_reasons`, and — cache connected — `status: "healthy"`. From a clean machine to
+that state is this section's acceptance test.
+
+### Running without the token — supported, honest, loud
+
+No token is a **supported mode**, not a crippled one. Extraction, the structural
+injection scan (stage 2) and the URL audit (stage 5) all still run; what is withheld is
+stage 3's ML classification, and `/health` says so: `degraded`,
+`promptguard_unavailable`, and no `search_sanitization` capability advertised. Your
+consuming agent should treat standard-tier content as unscanned while
+`promptguard_loaded` reads `false` — that is the honest contract.
+
+It is deliberately not a *quiet* mode. A credential-less container retries at the
+ceiling for as long as it runs and logs a terminal ERROR on every attempt — a service
+missing a capability for six hours should still be saying so. If the drumbeat bothers
+you, the fix is a token, not a log filter; and for monitoring, `/metrics` (above) is the
+machine-readable readout.
+
+One thing is **never** the answer to a missing token:
+`FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION` (deprecated alias
+`POPPY_RETRIEVAL_LEGACY_CAPABILITY`) forces `/health` to advertise
+`search_sanitization` while the classifier is not running. It exists for one bounded
+consumer-transition window, it makes your agent believe content is being ML-scanned when
+it is not, and `docs/configuration.md` § "Break-glass" carries the full caveat. If you
+are reaching for it because getting a token is inconvenient, stop — the walk-through
+above is the steady-state answer.
+
+### The obligations that travel with the weights
+
+Forage's source is Apache-2.0; the weights you just fetched are not. They are **Llama
+Materials**, governed by the Llama 4 Community License you accepted in step 2, which
+carries its own attribution ("Built with Llama"), naming, and acceptable-use
+obligations. `NOTICE` ships in every Forage image — including yours — whether or not the
+weights ever load. What the image cannot do for you: if you redistribute an image,
+volume snapshot, or artifact that *contains* the weights, the Llama terms travel with
+it, and carrying them forward becomes your obligation.
+
+### If you want outage insurance of your own
+
+The vendoring procedure at the top of this page is not WashingBearLabs-specific.
+`scripts/vendor_weights.py --repository <your-registry>/<you>/forage-weights` builds the
+same deterministic artifact and pushes it to a registry you control (the final
+visibility check speaks the GitHub API, so it is GHCR-specific; elsewhere, verify
+privacy your own way). Then set `FORAGE_WEIGHTS_MIRROR` and a read-only
+`FORAGE_MIRROR_TOKEN` exactly as `docs/configuration.md` describes and your deployment
+has the same fallback ours does. Mind two things: your mirror must stay private for the
+same licensing-posture reasons ours does, and a mirror *containing* the weights is a
+redistribution — the obligations above apply to it.
 
 ---
 
