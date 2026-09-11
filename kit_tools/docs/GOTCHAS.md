@@ -2,7 +2,7 @@
 # GOTCHAS.md
 
 > Last updated: 2026-09-10
-> Updated by: Claude (forage-model-bootstrap US-003, build half)
+> Updated by: Claude (forage-model-bootstrap US-004)
 
 ## Overview
 
@@ -119,6 +119,38 @@ consult it — and short-circuits on it: a manifest that pins nothing could neve
 download, so the fetch is refused before it starts (`weights_pin_unusable`) rather than
 after ~270 MiB. A stock image's `/health` is unchanged either way. `docs/weights.md` is
 the vendoring procedure.
+
+---
+
+### Nothing configures logging, so every `logger.info` in this repo is invisible in the container
+
+**Location:** repo-wide; most visibly `model_fetcher.py`'s acquisition lines
+**Severity:** 🟡 Medium
+**Added:** 2026-09-10 (`feature-forage-model-bootstrap` US-004)
+
+**What happens:**
+No module calls `logging.basicConfig()` and the entrypoint sets no log level, so the root
+logger keeps Python's default — **WARNING**. Verified in a running container:
+`logging.getLogger("model_fetcher").getEffectiveLevel()` is `30`. Every `logger.info` in
+the service is therefore emitted and then dropped. `weights_verified`, `weights_fetched`,
+`weights_loaded` and `weights_fetch_attempt` are all INFO, so the entire *success*
+narrative of a weights acquisition is invisible to `docker logs` while every failure is
+loud.
+
+**Why it matters:**
+It reads as a bug in the wrong direction. An operator watching a cold start sees nothing
+at all until either the ERROR or a `promptguard_loaded: true` on `/health` — which makes
+"is it downloading or is it wedged?" a question the logs cannot answer, and is precisely
+why `/metrics` carries `model.fetch_in_progress`. It also quietly weakens any acceptance
+criterion phrased as "logged": the record is emitted, and a `caplog`-based test sees it,
+but a deployment does not.
+
+**Mitigation:**
+Use `/metrics`' `model` section — not the logs — to observe a fetch in flight. Failures
+are ERROR and do surface, with a closed reason vocabulary. If you need the success lines
+while debugging, run the image with `uvicorn --log-level info`, or set the level from a
+Python entry point; note that this changes output for *every* lane at once, which is why
+US-004 recorded it here rather than changing it in passing.
 
 ---
 

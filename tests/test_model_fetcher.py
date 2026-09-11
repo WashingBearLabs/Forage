@@ -28,8 +28,10 @@ test_mapping:
 from __future__ import annotations
 
 import ast
+import io
 import json
 import os
+import random
 import subprocess
 import tarfile
 from collections.abc import Callable, Mapping, Sequence
@@ -2795,6 +2797,137 @@ class TestMirrorStagingIsBounded:
         assert f"{SOURCE_MIRROR}={OUTCOME_ARTIFACT_OVERSIZED}" in caplog.text
         assert metrics.fetch_failures == 1
 
+    def test_a_tarball_larger_than_the_bound_is_refused_before_extraction(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The bound on what arrived, isolated from the bound on what it holds.
+
+        The payload is incompressible, so the artifact is larger on disk than
+        the cap while its declared members are comfortably under it — which is
+        the only way to prove *this* check fires rather than the one after it.
+        Two bounds that cover for each other are one bound with a spare.
+        """
+        cache_root, manifest = _fetchable_cache(tmp_path)
+        pin = read_manifest_pin(manifest)
+        assert pin is not None
+        cap = staging_cap_bytes(pin)
+
+        oversized = tmp_path / "oversized.tar.gz"
+        payload = random.Random(0).randbytes(cap - 100)
+        with tarfile.open(oversized, "w:gz") as archive:
+            info = tarfile.TarInfo("model.safetensors")
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+
+        assert len(payload) < cap < oversized.stat().st_size
+
+        _mirror_credentials(monkeypatch)
+        metrics = ModelMetrics()
+
+        with (
+            patch("shutil.which", return_value=_ORAS_PATH),
+            patch("subprocess.run", side_effect=_FakeOras(artifacts=[oversized])),
+            caplog.at_level("ERROR", logger="model_fetcher"),
+        ):
+            loaded = acquire_and_load(
+                _FakeClassifier(),
+                cache_root=cache_root,
+                revision=DEFAULT_MODEL_REVISION,
+                manifest_path=manifest,
+                metrics=metrics,
+            )
+
+        assert loaded is False
+        assert f"{SOURCE_MIRROR}={OUTCOME_ARTIFACT_OVERSIZED}" in caplog.text
+        assert metrics.fetch_failures == 1
+
+    def test_a_decompression_bomb_is_refused_before_a_byte_is_written(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """`filter="data"` has nothing to say about an archive that is huge.
+
+        The mirror image of the test above: 200 KB of zeroes gzips to a few
+        hundred bytes, so the artifact sails under the on-disk bound and the
+        *declared* member sizes are what refuse it — before `extractall` is
+        called at all, which is the point. A bomb caught after extraction has
+        already filled the volume it was aimed at.
+        """
+        bomb = tmp_path / "bomb.tar.gz"
+        with tarfile.open(bomb, "w:gz") as archive:
+            payload = b"\x00" * 200_000
+            info = tarfile.TarInfo("model.safetensors")
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+        cache_root, manifest = _fetchable_cache(tmp_path)
+        pin = read_manifest_pin(manifest)
+        assert pin is not None
+        assert bomb.stat().st_size < staging_cap_bytes(pin) < len(payload)
+
+        _mirror_credentials(monkeypatch)
+        metrics = ModelMetrics()
+
+        with (
+            patch("shutil.which", return_value=_ORAS_PATH),
+            patch("subprocess.run", side_effect=_FakeOras(artifacts=[bomb])),
+            caplog.at_level("ERROR", logger="model_fetcher"),
+        ):
+            loaded = acquire_and_load(
+                _FakeClassifier(),
+                cache_root=cache_root,
+                revision=DEFAULT_MODEL_REVISION,
+                manifest_path=manifest,
+                metrics=metrics,
+            )
+
+        assert loaded is False
+        assert f"{SOURCE_MIRROR}={OUTCOME_ARTIFACT_OVERSIZED}" in caplog.text
+        assert [
+            path
+            for path in tmp_path.rglob("*")
+            if path.is_file() and path.stat().st_size >= len(payload)
+        ] == []
+
+    def test_the_leg_sweeps_its_own_staging_area(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Asserted at the leg's own boundary, not the pipeline's.
+
+        `acquire_and_load` sweeps staging in a `finally` of its own, which
+        makes the leg's cleanup look redundant — and a mutation that deletes it
+        passes every test driven through the pipeline. It is not redundant:
+        US-005's retry task is a second caller of this seam, and a leg that
+        leaks ~230 MiB per attempt into a backoff loop would fill the volume
+        long before it converged. So the guarantee is pinned where it is made.
+        """
+        cache_root, manifest = _fetchable_cache(tmp_path)
+        pin = read_manifest_pin(manifest)
+        assert pin is not None
+        _mirror_credentials(monkeypatch)
+
+        with (
+            patch("shutil.which", return_value=_ORAS_PATH),
+            patch(
+                "subprocess.run",
+                side_effect=_FakeOras(artifacts=[_mirror_tarball(tmp_path)]),
+            ),
+        ):
+            outcome = model_fetcher._fetch_from_mirror(
+                revision=DEFAULT_MODEL_REVISION,
+                cache_root=cache_root,
+                manifest=pin,
+                manifest_path=manifest,
+                metrics=ModelMetrics(),
+            )
+
+        assert outcome == "ok"
+        assert staging_root(cache_root).exists() is False
+
     @pytest.mark.parametrize("succeeds", [True, False])
     def test_the_staging_tree_never_survives_an_acquisition(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, succeeds: bool
@@ -3090,6 +3223,36 @@ class TestNoSourceProducedWeights:
         terminal = [line for line in errors if line.startswith("weights_unavailable")]
         assert loaded is False
         assert f"{SOURCE_MIRROR}={OUTCOME_NO_ARTIFACT}" in terminal[0]
+
+    def test_a_pull_that_leaves_several_files_is_refused_not_guessed_at(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Exactly one file is the contract; two is a question, not an answer.
+
+        Picking the first (or the one that looks like a tarball) would mean the
+        fetcher deciding, on its own, which of several remote-chosen files to
+        open — on the path whose entire purpose is that remote-chosen bytes are
+        not trusted.
+        """
+        first = _mirror_tarball(tmp_path, name="weights.tar.gz")
+        second = tmp_path / "extra.tar.gz"
+        second.write_bytes(first.read_bytes())
+        loaded, metrics, errors = self._acquire(
+            tmp_path,
+            monkeypatch,
+            caplog,
+            hf=None,
+            mirror=_MIRROR_TOKEN,
+            oras=_FakeOras(artifacts=[first, second]),
+        )
+
+        terminal = [line for line in errors if line.startswith("weights_unavailable")]
+        assert loaded is False
+        assert f"{SOURCE_MIRROR}={OUTCOME_NO_ARTIFACT}" in terminal[0]
+        assert metrics.fetch_failures == 1
 
     def test_the_ending_names_every_source_in_order(
         self,

@@ -46,6 +46,13 @@ The old `ARG HF_TOKEN` + `from_pretrained` bake block was removed in
 build means defeating both on purpose. Pass secrets at **runtime**, through the container
 environment (`docs/configuration.md`); Forage reads no secret store at boot either.
 
+`test_the_build_takes_no_arguments_at_all` asserts the *absolute*, not just the
+secret-shaped names, because the absolute is the part that survives review: once "the
+Dockerfile declares no ARG" stops being true, the next argument only has to clear "is it
+as harmless as that one?". `forage-model-bootstrap` US-004 is the worked example — it
+needed a per-architecture download, declined the conventional `ARG TARGETARCH`, and used
+`dpkg --print-architecture` inside the `RUN` instead.
+
 Two things that closure does not license:
 
 - **Publishing.** The image is secret-free, not public. The `publish` lane is live (US-007,
@@ -99,7 +106,7 @@ reason. Any new startup or cache code must preserve this.
 
 ```bash
 uv sync --extra dev     # environment (creates .venv)
-uv run pytest           # 1151 tests, all green, hermetic — blocking CI gate
+uv run pytest           # 1226 tests, all green, hermetic — blocking CI gate
 uv run ruff check .     # must stay clean — blocking CI gate
 uv run ruff format .    # must stay clean — blocking CI gate
 uv run pyright          # strict, ZERO errors — blocking CI gate
