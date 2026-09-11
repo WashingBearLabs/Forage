@@ -156,12 +156,12 @@ serves `info.version == CONTRACT_VERSION` and the posture description.
   surface.
 
 **Acceptance Criteria:**
-- [ ] `/metrics` fully typed (`extra="forbid"`), cgroup keys flat as today, parity test
+- [x] `/metrics` fully typed (`extra="forbid"`), cgroup keys flat as today, parity test
       green, `test_app.py` flat-key assertion untouched and green.
-- [ ] Live `info.version == CONTRACT_VERSION`; posture description served; docs updated.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run pyright` passes
+- [x] Live `info.version == CONTRACT_VERSION`; posture description served; docs updated.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run pyright` passes
 
 ### US-002: Generated contract file + pytest drift check
 
@@ -488,7 +488,7 @@ property required and described. `paths./metrics.get.responses.200` becomes
 `{"$ref": "#/components/schemas/MetricsResponse"}`. `info` becomes
 `{"title": "Forage", "description": "<posture paragraph>", "version": "1.1.0"}`. The
 component count goes 19 → 25; the generated document is ~38 KB (38,414 bytes as
-`json.dumps(..., sort_keys=True)`). Nothing else in `paths` moves.
+`json.dumps(..., sort_keys=True)`). Nothing else in `paths` moves except `paths./metrics.get.description` (the handler docstring grew and FastAPI publishes it as the operation description — verifier precision 2026-09-11; every other path item is byte-identical).
 
 **Docs.** `docs/configuration.md`'s "Deployment posture" gains a second table for the
 three documentation endpoints (each `none`), a note that Swagger also registers the inert
