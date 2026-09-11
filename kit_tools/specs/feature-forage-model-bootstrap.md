@@ -1581,6 +1581,54 @@ corrected `HF_HUB_OFFLINE` entry and the third `/metrics` state;
 three properties; `TESTING_GUIDE.md`, `SYNOPSIS.md`, `AGENT_README.md` and `CLAUDE.md` the
 suite count, which had drifted to 1226 against an actual 1227 before this story.
 
+### US-006: Third-party token documentation (2026-09-10)
+
+**Doc-only, as specced** — no code, no tests, no suite-count movement (no doc-guard test
+asserts the contents of `docs/weights.md` or the root `README.md`; verified by grep
+before writing). `sanitizer_revision` untouched.
+
+**Shape.** One new top-level section, `docs/weights.md` § **"Bring your own token"**,
+placed directly after "Why the mirror is private" — that section ends by saying the
+correct answer for anyone who is not us is Hugging Face, and the new section is that
+answer spelled out. Five subsections: the five-step walk-through (account → gated-repo
+access request/Meta approval → fine-grained read token → `HF_TOKEN` via env
+file/secret store → watch it converge), the three-state `/metrics` readout while
+converging, the honest no-token mode, the Llama license obligations, and an
+"outage insurance of your own" note (vendor to your own registry via
+`scripts/vendor_weights.py --repository`, which exists and defaults to ours; the
+visibility check is honestly flagged GHCR-specific).
+
+**Honesty decisions worth keeping:**
+
+- **The mirror is stated as unavailable to third parties, up front.** The section opens
+  with it, and a discoverability pointer in the page's top blockquote says the same —
+  a third party's fallback story is HF-only until they vendor their own mirror, and an
+  HF outage means degraded-and-retrying, not a fallback. No hedging.
+- **Monitoring guidance points at `/metrics`, not logs** (the root-logger gotcha; a
+  credential-less container emits a terminal ERROR per attempt, forever — deliberate,
+  documented as such, with "the fix is a token, not a log filter").
+- **Break-glass is framed as never-the-answer-to-a-missing-token**, with the full
+  caveat *linked* in `docs/configuration.md` § "Break-glass" rather than restated —
+  same link-don't-duplicate rule for the retry schedule and credential handling
+  (`configuration.md` § "Weights acquisition" / "Credential handling").
+- **Token scope:** fine-grained "read access to contents of all public gated repos" is
+  named as the narrowest working scope, classic `read` as the fallback — mirrors the
+  least-privilege posture of the existing "Tokens" section, which gained a cross-link.
+
+**README:** the PromptGuard-weights section links the new anchor (the AC's second
+clause). The stale `Still to come: download-at-start model bootstrap` line was removed
+from Status — the bootstrap shipped with US-001–US-005, and a README that links
+bring-your-own-token docs for it cannot also claim it does not exist yet. One-line
+truth fix, same file, same subject; nothing else touched.
+
+**Facts cross-checked against code before writing** (per the everything-must-be-true
+rule): `DEFAULT_MODEL_REVISION` = `11614a15…` (`model_fetcher.py:174`), the normative
+30→600 s schedule and ±20% jitter (`model_fetcher.py:1721/240`), the `/metrics`
+`model` field names (`retrieval_app.py:754–760`), `skipped_no_token` +
+`weights_unavailable` terminal record, exact-`1` break-glass semantics and both env
+names, `--repository` flag in `scripts/vendor_weights.py`, and NOTICE's Llama 4
+Community License framing.
+
 ## Refinement Notes
 
 ### Research Findings
