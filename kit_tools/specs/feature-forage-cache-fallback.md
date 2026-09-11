@@ -230,22 +230,22 @@ passes.
   the 1.1.0 contract.
 
 **Acceptance Criteria:**
-- [ ] `cache_backend` in `/health` + storage counters in `/metrics` (at `:669-673`, layer
+- [x] `cache_backend` in `/health` + storage counters in `/metrics` (at `:669-673`, layer
       distinction documented); the run matrix test-covered with named per-run assertions:
       memory-mode → `status`/`cache_backend`/`cache_connected` = `"healthy"`/`"memory"`/
       `true`; valkey-up → `"healthy"`/`"valkey"`/`true`; valkey-down → `"degraded"` with
       `cache_unavailable`/`"valkey"`/`false`; **and the `app.state.cache is None` case →
       `/health` responds non-500** (micro-verify: the fourth case lived only in a hint).
-- [ ] `cache_connected` clarified semantics carried in the field description +
+- [x] `cache_connected` clarified semantics carried in the field description +
       `docs/configuration.md`.
-- [ ] `cache_policy_fingerprint()` includes the derived sanitizer revision (kwarg added,
+- [x] `cache_policy_fingerprint()` includes the derived sanitizer revision (kwarg added,
       test-covered: revision rotation invalidates cache hits).
-- [ ] `CONTRACT_VERSION == "1.1.0"`; `golden/contract_1_1_0.json` present via the
+- [x] `CONTRACT_VERSION == "1.1.0"`; `golden/contract_1_1_0.json` present via the
       derivation mechanism, `contract_1_0_0.json` retained; rotation acknowledged in the
       commit message.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run pyright` passes
 
 ### US-004: Example compose fragments + mode docs
 
@@ -642,7 +642,7 @@ after:  fa4691c57449c52fe367208bdeeb650cbe474d93485c3b90cc8989b5e593547c
 ```
 
 Attribution was **measured**, not assumed — re-deriving with each edit reverted in turn
-gives `7bfbeed5…` (only `contract.py` reverted) and `b9b716c3…` (only `orchestrator.py`
+gives `b9b716c3…` (only `contract.py` reverted) and `7bfbeed5…` (only `orchestrator.py`
 reverted), so both edits are load-bearing and neither alone produces the shipped value.
 Recorded in `docs/bootstrap-notes.md` as the fifth rotation, with the same table;
 `kit_tools/docs/GOTCHAS.md`, `CLAUDE.md` and `kit_tools/arch/CODE_ARCH.md` were
@@ -716,13 +716,15 @@ the field did not exist yet, including the prod cross-ref, which now reads
 | M9 delete `golden/contract_1_1_0.json` | `test_contract_schema_matches_golden` |
 | M10 drop the `cache_connected` description | `test_contract_schema_matches_golden` |
 
-**M5 is the one worth reading.** Inverting `_configured_cache_backend()` **survives** the
-whole four-case matrix, because the first three cases go through the lifespan, which takes
-its name from `_select_cache_storage` and not from the helper. Two functions encode one
-rule — one for the lifespan, which needs a storage object, one for `/health`'s fallback,
-which has nowhere to put one — and the only thing holding them together is the drift test
-that asserts they agree for both environments. Without it the fallback could have reported
-the opposite backend for as long as nobody looked.
+**M5 is the one worth reading.** Inverting `_configured_cache_backend()` survives the
+first **three** cases of the matrix (they go through the lifespan, which takes its name
+from `_select_cache_storage`, not the helper) — *(supervisor correction 2026-09-13: the
+notes first claimed it survived all four and only the drift test caught it; the
+verifier's re-run shows case 4 — the no-cache path, which routes through the fallback —
+kills it too, so it is double-pinned: drift test + matrix case 4. The design is safer
+than first advertised.)* Two functions encode one rule — one for the lifespan, which
+needs a storage object, one for `/health`'s fallback, which has nowhere to put one — and
+the drift test asserts they agree for both environments.
 
 M7 is the wiring gate: `cache_policy_fingerprint` taking the revision is inert unless
 `/retrieve` passes the one this process derived, so the kill is at the route level (three

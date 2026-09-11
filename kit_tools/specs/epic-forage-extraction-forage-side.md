@@ -141,7 +141,8 @@ that something is missing here.
   type-ignore comments (269 real). Pyright's only carve-out is `reportPrivateUsage` for
   `tests/`, pinned by `tests/test_pyright_policy.py`.
 - **`sanitizer_revision` has deliberately diverged** from Poppy, and has now rotated four
-  times (`e6b2b56d…` → `2b8d7e9a…` → `cd00a8b4…` → `0537316d…` → **`5927038d…`**,
+  times (`e6b2b56d…` → `2b8d7e9a…` → `cd00a8b4…` → `0537316d…` → `5927038d…` →
+  **`fa4691c5…`**, 6th rotation at cache-fallback US-003,
   current). The fourth is the odd one out: no source byte moved, the hashed model identity
   became `MODEL_ID@revision` when weights became a runtime input (spec-2 US-001). The
   Poppy-side spec must not assume revision parity — compare contracts.

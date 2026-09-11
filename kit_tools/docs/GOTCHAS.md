@@ -459,3 +459,14 @@ The service module was renamed `app.py` → `retrieval_app.py` in Poppy (2026-08
 avoid a `sys.modules['app']` collision with the host application. In a standalone repo the
 collision cannot occur, but the flat filename is load-bearing for the Dockerfile and for
 `sanitizer_revision`'s hashed paths — **do not rename it back.**
+
+## Bare `.venv/bin/pyright` reports 34 phantom errors — always `uv run pyright`
+
+**Severity: medium** · **Found: 2026-09-13 (cache-fallback US-003)**
+
+Running the project's *own* venv binary directly (`./.venv/bin/pyright`) reports exactly
+34 errors that `uv run pyright` (0 errors, the CI gate) does not — foreign stubs resolve
+differently outside the uv environment. CONVENTIONS.md's "never a system-installed
+binary" rule reads as if the project venv binary were safe; it is not. Reproduced
+independently in a clean clone at verification. The only supported invocations are
+`uv run pyright` locally and the CI typecheck job.

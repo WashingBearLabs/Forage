@@ -194,10 +194,14 @@ def _resolved_cache_backend(state: State) -> CacheBackend:
     """Return the backend this app selected at start, or the one it would pick.
 
     The lifespan publishes ``cache_backend`` once, and every request reads that
-    — a process does not change backend while it runs. The fallback exists for
-    the same reason ``sanitizer_revision``'s does: a transport that never fires
-    lifespan events still has to get an honest answer out of ``/health``, and
-    answering it from the environment is the same question the lifespan asked.
+    — a process does not change backend while it runs. The fallback is
+    defensive and production-unreachable (any transport that skipped lifespan
+    events would 500 on the bare ``app.state.classifier`` read first, and the
+    lifespan publishes this field before that one) — the same property
+    ``sanitizer_revision``'s fallback has. It re-derives from the environment
+    because the field is *required* on the wire: with nothing published the
+    handler must still emit a literal, and re-deriving is the honest option.
+    The drift test plus matrix case 4 pin it to the lifespan's rule.
     """
     backend: CacheBackend | None = getattr(state, "cache_backend", None)
     return backend if backend is not None else _configured_cache_backend()
