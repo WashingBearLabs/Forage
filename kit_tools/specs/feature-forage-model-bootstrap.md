@@ -223,14 +223,14 @@ committed `weights_manifest.json`.
 - Commits the real `weights_manifest.json` (US-002 shipped only fixtures).
 
 **Acceptance Criteria:**
-- [ ] Weights artifact at `ghcr.io/washingbearlabs/forage-weights:<revision>` (private,
+- [x] Weights artifact at `ghcr.io/washingbearlabs/forage-weights:<revision>` (private,
       visibility verified post-push); committed `weights_manifest.json` matches a fresh pull
       via the US-002 verifier (proving the dereferenced tar carries real bytes).
-- [ ] `scripts/vendor_weights.py` committed and green under the repo's lint/type gates;
+- [x] `scripts/vendor_weights.py` committed and green under the repo's lint/type gates;
       allowlist enforced at generation time; token via env, never argv or logs.
-- [ ] `docs/weights.md` covers vendor/re-vendor, license rationale, mirror-token
+- [x] `docs/weights.md` covers vendor/re-vendor, license rationale, mirror-token
       least-privilege setup (dedicated read-only GHCR PAT; account-wide classic-PAT caveat).
-- [ ] **US-001's live timing half recorded here**: this supervised session (the one with a
+- [x] **US-001's live timing half recorded here**: this supervised session (the one with a
       real token) measures container start → `promptguard_loaded: true` on the reference
       envelope and records ≤ 5 min in Implementation Notes (micro-verify: the deferral
       previously had no landing AC).
@@ -997,70 +997,32 @@ nothing about sanitization behaviour changed.
 `ruff check`, `ruff format --check` and `pyright` (strict) all zero, with no new
 suppression and no dependency added.
 
-#### Supervised ops half — **pending**
+#### Supervised ops half — executed 2026-09-12 (supervisor session, owner credentials)
 
-The runbook below is what the supervised session executes; it fills this subsection in
-with the results and only then are the four acceptance criteria tickable. Nothing here
-has been run.
+Runbook followed with three corrections from the build-half verification (W1: `--dry-run`
+is not read-only — phases 1–4 run, so the rehearsal used `--manifest <scratch path>` to
+keep the committed placeholder's first-generation diff readable on the real run;
+`docs/weights.md` fixed in the same commit. W2: `--step all` includes the push — never
+used. W3: US-001's boxes were already ticked; its live half is recorded here as evidence,
+not as new ticks).
 
-**Prerequisites:** `HF_TOKEN` (gated-repo read, account approved by Meta), `GHCR_USER` +
-`GHCR_TOKEN` (`write:packages`), `GITHUB_TOKEN` (`read:packages`), `oras` on `PATH`,
-~1 GB free disk, and a built `forage` image for the timing measurement.
+| Step | Result |
+|---|---|
+| 1 Rehearse | `--dry-run --manifest <scratch>`: plan printed, phases 1–4 ran, push/visibility printed argv/URLs only. Mirror ref `ghcr.io/washingbearlabs/forage-weights:11614a155199674a0a95e6602d6ab0417b790ed0` |
+| 2 Download | 5 files, **292,006,923 bytes** total (`model.safetensors` 283,347,432 — the spec's figure is the weights file, not the snapshot): config.json 870 · model.safetensors 283,347,432 · special_tokens_map.json 286 · tokenizer.json 8,657,051 · tokenizer_config.json 1,284 |
+| 2 Manifest | First-generation `+` diff, all five entries allowlisted; **scratch and real runs produced byte-identical manifests** (independent downloads → same hashes: generation is deterministic end-to-end) |
+| 2 Tar + selfcheck | 233,577,795 bytes, 5 members; extracted tarball verifies via the real `model_fetcher.verify_weights` |
+| 3 Push | `oras push` (token via stdin, argv credential-free, logout in finally) → pushed |
+| 4 Visibility | **`ghcr.io/washingbearlabs/forage-weights is private`** — verified post-push via the API |
+| 5 Fresh pull | Clean directory, `oras pull`, digest `sha256:aa65280f…45ec96`; pulled tarball sha256 `973ce90aac79d5ad83c920e3ed1a8382b1c2cd308c1c5dc69a029e93d5284060` — **byte-identical to the built one**; published bytes verify via `--step selfcheck --tarball <pulled>`; `oras logout` after |
+| 6 Manifest commit | One-file commit `f8cd371`; suite **1151 green** with the real manifest (the swap rehearsal held) |
+| 7 Cold timing | Reference envelope (`--cpus 1 --memory 1024m`, fresh volume, real token): container start → `promptguard_loaded: true` in **19 s** (**AC ≤ 5 min: met ×15**). Max `/health` latency during the download **160 ms** (< 1 s at every poll). End state: `status: degraded` for `cache_unavailable` only (correct spec-slot semantics — no Valkey attached), `promptguard_unavailable` gone, `search_sanitization` advertised, revision `5927038d…19d111` served live, counters `fetch_failures/verify_failures/quarantines` all 0 |
+| 7 Warm timing | Same volume, **`--network none`**: loaded in **9 s** — the warm path provably requires zero network, a stronger form of US-005's upcoming AC than the socket-count it asks for. Only log noise: torch's `jit.script` deprecation FutureWarning |
 
-1. **Rehearse.** `uv run python -m scripts.vendor_weights --dry-run` — confirms the plan,
-   the revision, and the derived mirror ref without writing to any network.
-2. **Download + manifest + tar + selfcheck.**
-   `uv run python -m scripts.vendor_weights --step download` then `--step manifest`,
-   `--step tar`, `--step selfcheck`. **Read the manifest diff**: it should be a
-   first-generation `+` list (the placeholder pins nothing), every entry allowlisted, with
-   a total near **283,347,432 bytes**. Record the file list and the total.
-3. **Push.** `uv run python -m scripts.vendor_weights --step push`. Record the ref.
-4. **Visibility.** `uv run python -m scripts.vendor_weights --step visibility`. It must
-   report `private`; if it does not, fix the package's visibility in GitHub before
-   anything else consumes the artifact, then re-run.
-5. **Fresh pull, clean directory** (the Independent Test — do not skip it just because
-   step 2 passed; it is the only thing that proves the *published* bytes are the built
-   ones):
-   ```bash
-   mkdir /tmp/forage-pull && cd /tmp/forage-pull
-   echo "$GHCR_TOKEN" | oras login ghcr.io -u "$GHCR_USER" --password-stdin
-   oras pull ghcr.io/washingbearlabs/forage-weights:11614a155199674a0a95e6602d6ab0417b790ed0
-   cd /path/to/Forage
-   uv run python -m scripts.vendor_weights --step selfcheck \
-     --tarball /tmp/forage-pull/forage-weights-11614a155199674a0a95e6602d6ab0417b790ed0.tar.gz
-   ```
-   Record the pulled tarball's sha256 and confirm it equals the built one — the archive is
-   reproducible, so they must match exactly.
-6. **Commit the real manifest.** `git add weights_manifest.json` and commit. The revision
-   constant does not move (this vendors the pin already committed), so this is a
-   one-file commit. **Run `uv run pytest` after it**: the rehearsal above says it stays
-   1151 green, and if it does not, something about the real snapshot differs from what
-   was rehearsed and that is worth knowing before the PR.
-7. **US-001's live timing half** (its AC defers the measurement to this session).
-   With the real manifest committed and `HF_TOKEN` in the environment, on the reference
-   1-vCPU/1 GB envelope:
-   ```bash
-   docker build -t forage:us003 .
-   docker run -d --name forage-timing --cpus 1 --memory 1024m \
-     -e HF_TOKEN -v forage-model-cache:/app/model-cache \
-     -p 127.0.0.1:8020:8020 forage:us003
-   # poll until promptguard_loaded flips
-   while :; do curl -s localhost:8020/health | jq -c \
-     '{status, promptguard_loaded, degraded_reasons}'; sleep 5; done
-   ```
-   Record: container start → `promptguard_loaded: true` in seconds (**AC: ≤ 5 min**), the
-   `/metrics` `model` section across the run (`fetch_in_progress` should be true
-   throughout and the three counters zero), and that `/health` answered < 1 s at every
-   poll. Then repeat once on the **warm** volume for a second data point US-005 will want.
-8. **Fill in this subsection** with steps 2–7's recorded values, and only then tick the
-   four US-003 acceptance criteria.
-
-**What to watch for.** The `weights_pin_unusable` short-circuit means a container started
-before step 6's commit will refuse to fetch even with a valid token — that is correct, not
-a bug, and it is why the timing measurement comes after the manifest commit. And a plain
-`snapshot_download` would pull `README.md` and `.gitattributes` and then fail exact-set
-verification; the script passes `ALLOW_PATTERNS`, so this only bites if someone downloads
-by hand (`kit_tools/docs/GOTCHAS.md`).
+**Note for US-005:** the warm measurement above was taken with the network *absent*, so
+the `huggingface_hub` harness-registry background call (GOTCHAS) either did not fire or
+failed silently as designed — US-005's socket-guarded test should still pin the
+`HF_HUB_OFFLINE` behavior explicitly rather than citing this run alone.
 
 ## Refinement Notes
 

@@ -92,8 +92,12 @@ export GHCR_USER=<your-github-login>
 export GHCR_TOKEN=ghp_...          # write:packages
 export GITHUB_TOKEN=ghp_...        # read:packages
 
-# Rehearse: everything that only reads. Stops before the push and the API call.
-uv run python -m scripts.vendor_weights --dry-run
+# Rehearse. NOT read-only: --dry-run gates only the push and the API call —
+# phases 1–4 still run, which spends the ~270 MiB download AND regenerates
+# weights_manifest.json in place (US-003 verification finding). Point the
+# manifest at a scratch path so the real first-generation diff is still
+# yours to read on the real run:
+uv run python -m scripts.vendor_weights --dry-run --manifest /tmp/rehearsal-manifest.json
 
 # The real run.
 uv run python -m scripts.vendor_weights
