@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: forage-model-bootstrap
-status: active
+status: completed
 session_ready: true
 depends_on: [forage-ci-and-image]
 vision_ref: Secure Web Retrieval / provider-independent web access
@@ -12,7 +12,8 @@ epic_seq: 2
 epic_final: false
 execution_order: [US-002, US-001, US-003, US-004, US-005, US-006]
 created: 2026-09-02
-updated: 2026-09-10
+updated: 2026-09-12
+completed: 2026-09-12
 ---
 
 # Feature Spec: Forage Model Bootstrap — Download-at-Start Weights + Vendored Mirror
@@ -354,7 +355,7 @@ clean machine reaches a loaded classifier.
 - Doc-only story.
 
 **Acceptance Criteria:**
-- [ ] `docs/weights.md` third-party section complete (token walk-through, degraded-mode
+- [x] `docs/weights.md` third-party section complete (token walk-through, degraded-mode
       expectations, break-glass caveat, license obligations); README links it.
 
 ## Edge Cases
