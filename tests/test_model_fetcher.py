@@ -38,6 +38,7 @@ import socket
 import subprocess
 import tarfile
 import threading
+import time
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -4012,7 +4013,12 @@ class TestRetryTaskShutdown:
             patch.object(model_fetcher, "retry_delay", return_value=3600.0),
         ):
             task = asyncio.ensure_future(acquisition.run())
+            # Bounded: a regression that never arms a retry would otherwise
+            # hang the suite rather than fail it, which is the worst way for a
+            # background-task test to break.
+            deadline = time.monotonic() + 10.0
             while acquisition.next_retry_at is None:
+                assert time.monotonic() < deadline, "no retry was ever armed"
                 await asyncio.sleep(0.01)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
