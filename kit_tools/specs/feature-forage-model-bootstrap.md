@@ -1024,6 +1024,287 @@ the `huggingface_hub` harness-registry background call (GOTCHAS) either did not 
 failed silently as designed — US-005's socket-guarded test should still pin the
 `HF_HUB_OFFLINE` behavior explicitly rather than citing this run alone.
 
+### US-004: Mirror fallback fetch (2026-09-10)
+
+**Shape.** `model_fetcher.py` grew its second source, and with it the ending the
+pipeline never had:
+
+```python
+acquire_and_load(classifier, ...)          # verify cache → HF → mirror → one loud ERROR
+  _try_source(source, ...) -> str          # a closed outcome code per source
+  _fetch_from_mirror(...) -> str           # pull → bound → extract → verify → install
+```
+
+The legs no longer count their own failures. `_download_from_hub` returns an outcome
+code where it returned a bool, `_fetch_from_mirror` returns one too, and
+`_acquire_and_load` does the counting — because the skip-vs-fail matrix is one concept
+and it is far easier to keep honest in one place than in each leg. Nothing else about
+US-001's shape moved: the lifespan still tasks a thread, `verify_weights` is still the
+single verification entry point, and `_load_verified` is still the only thing that opens
+a classifier.
+
+**The skip-vs-fail matrix, which is the whole story's judgement call.** US-001's AC said
+a token-less run logs *no* error; the Goals say a container with neither source logs one
+ERROR naming both and moves `model.fetch_failures`. Both are satisfiable, and the
+reconciliation is that the two statements are about different layers: US-001's *leg*
+stays silent (it emits `weights_fetch_skipped` at WARNING and nothing else), and the
+*pipeline* — the only thing that knows whether a mirror was available either — emits the
+single ending. The rules, each pinned by a test in `TestNoSourceProducedWeights`:
+
+| Situation | `fetch_failures` | `verify_failures` | Terminal ERROR |
+|---|---|---|---|
+| No credential for a source (`skipped_no_token`) | — | — | names it |
+| `FORAGE_WEIGHTS_MIRROR` unusable (`misconfigured`) | — | — | names it |
+| Source reached, no bytes (`http_401`, `pull_failed`, `timeout`, `oras_missing`, `insufficient_space`, `no_artifact`, `artifact_oversized`, `extract_failed`, `install_failed`) | +1 per source | — | names it |
+| Bytes arrived and were refused (`refused_verification`) | — | +1 | names it |
+| **Nothing was attempted at all** | +1 | — | names both |
+| A source succeeded | — | — | none |
+
+The last-but-one row is the deliberate one. A skip is not a failure — that is US-001's
+carry-forward and it is correct — but an acquisition where *nothing* was even attempted
+still has to move something, or the stock image sits degraded with every counter at zero,
+which is exactly the silent path the Goals exist to close. Stated in one sentence: *the
+counter records failed attempts, and when there was nothing to attempt, the acquisition
+itself is the failed attempt.* The refused row is the other one worth naming: bytes that
+arrived and were refused are one event, and counting them in both counters would make the
+two mean the same thing.
+
+**Two landed assertions were rewritten, both sanctioned by the spec.**
+`test_without_a_token_the_fetch_is_skipped_and_nothing_errors` asserted zero ERROR
+records; its own docstring said the combined log belonged to US-004. It is now
+`test_without_a_token_the_hugging_face_leg_errors_nothing_of_its_own` and asserts the
+narrower, still-true half — no `weights_fetch_failed`, exactly one ERROR, and that one is
+the terminal line. `test_app.py`'s `test_a_token_less_boot_stays_degraded_and_keeps_serving`
+asserted `fetch_failures: 0` at the `/metrics` boundary; it is now
+`test_a_credential_less_boot_stays_degraded_and_says_so_once` and asserts `1` plus the
+shape of the ERROR. **The smoke's output changes with them** — a stock container now logs
+one ERROR line — and that is honest rather than incidental: it is the behaviour the Goals
+asked for. CI's `smoke` job asserts nothing about log content (it runs
+`contract_smoke.py`, which reads `/health` and `/metrics`), so no workflow change was
+needed; `contract_smoke.py` still reports **PASSED: degraded, honest, and on-contract**
+against the built image.
+
+**The transport, and what cannot be configured.** `oras pull <ref> --output <dir>
+--username <fixed> --password-stdin`, run as a list argv with no shell and a 1800 s
+timeout. Three properties are structural rather than careful:
+
+- **TLS is not negotiable.** There is no code path to `--plain-http` or `--insecure`, and
+  `FORAGE_WEIGHTS_MIRROR` is reduced to a bare lower-case `<registry>/<owner>/<name>`
+  before it can reach the argv — an `https://` prefix is accepted and stripped, any other
+  scheme, a userinfo component, a `:tag`, an `@digest`, an upper-case path and anything
+  flag-shaped are refused. `test_no_argument_can_weaken_the_transport` and nine
+  parametrized refusal cases pin it.
+- **The tag is ours.** The variable names a *repository*; the tag is always the pinned
+  revision, so redirecting the mirror cannot redirect which revision it serves — and if
+  it somehow did, the manifest refuses the bytes on arrival. This closes leg three of the
+  triple lock from the consumer's side: `mirror_reference()` here derives the same string
+  `scripts/vendor_weights.mirror_ref()` pushes.
+- **The token never reaches an argv, a log line or disk.** Stdin only. The subprocess's
+  captured streams are *never* logged at any level — `oras` echoes the reference on
+  failure and a registry can put anything in an error body — so an exit status plus a
+  closed reason code is all that comes back out, the same discipline `cache.py` applies
+  to `VALKEY_URL` and `_fetch_reason` applies to `huggingface_hub`.
+
+**Redaction is applied at the log site, not downstream of validation.** A userinfo-bearing
+reference is *refused* (so no credential can enter the argv) **and** redacted (so the line
+reporting the refusal cannot print it back). Those are two independent controls, and the
+one reference that most needs redacting is the malformed one being reported. Every log
+line naming a reference goes through `redact_reference()`.
+
+**Staging: 2x + 10%, and swept on every path.** The cap is `2 × manifest.total_bytes ×
+1.1` because the tarball and its extraction coexist at peak — the round-3 correction is
+right, and `test_the_cap_is_two_copies_plus_ten_percent` asserts the cap exceeds two
+copies so a future "tidy-up" to one copy fails rather than silently refusing every real
+fetch. It is enforced three times, and the first mutation pass proved that two of the
+three were covering for each other: free space before the pull, the pulled artifact's size
+on disk, and the *declared* member sizes before `extractall`. The two size checks now have
+fixtures that isolate them — an incompressible payload that is large on disk with small
+declared members, and 200 KB of zeroes that gzip to 301 bytes, which is the decompression
+bomb shape. Cleanup runs in `_fetch_from_mirror`'s own `finally` **and** in
+`acquire_and_load`'s, and the outer one also removes `$HF_HOME/xet/`; the inner one looked
+redundant (a mutation deleting it escaped) until a test drove the leg directly, which is
+how US-005's retry task will call it.
+
+**Safe extraction and the install.** `tarfile.extractall(..., filter="data")` explicitly —
+Python 3.12 still defaults to the permissive filter, and this is the one path in the
+service where a remote party chooses the member names. Extraction goes into
+`<cache>/staging/extracted/` in the hub's own layout, `verify_weights()` runs **there**,
+and only a pass is moved into place with `os.replace` — a rename, because staging is a
+sibling of `hub/` on the same filesystem and a 1 GB container has no room for a second
+copy. An existing snapshot at the destination is removed first: reaching the mirror means
+what was cached did not satisfy the pin, so whatever is there is partial or already
+refused.
+
+Two consequences worth stating plainly. **The installed snapshot is real files, not
+`blobs/` symlinks** — `try_to_load_from_cache` resolves `snapshots/<revision>/<file>`
+without needing `blobs/` or `refs/` when the revision is a commit sha, the verifier
+already handles a flat snapshot (`test_a_flat_snapshot_without_symlinks_also_verifies`,
+landed in US-002), and the end-to-end test proves a real `PromptGuardClassifier` opens it.
+And **a staged refusal counts a `quarantine`** — the shared verifier moves the refused set
+aside inside the staging tree, which is then swept, so the counter moves for something an
+operator cannot later inspect. The alternative was a second verification entry point that
+does not quarantine, and one verifier is worth more than one tidy counter; the log line
+names the staging path, so the record is self-explaining. Asserted deliberately rather
+than tolerated.
+
+**`oras` in the image, and the build argument that is not there.** The `Dockerfile` gains
+**oras 1.3.4** (released 2026-08-27), downloaded per architecture with the sha256 from the
+release's own `oras_1.3.4_checksums.txt` and verified with `sha256sum -c`:
+
+| Asset | sha256 |
+|---|---|
+| `oras_1.3.4_linux_amd64.tar.gz` | `f27adb935022d94df8dc77719c322dda592c78a0d57a6f7dcdd8d900b248c454` |
+| `oras_1.3.4_linux_arm64.tar.gz` | `15702c6e3a4a56a8bd8ac5c17efdbcab56d9bada661ccbcf017f5b10c1d89399` |
+
+Source: `https://github.com/oras-project/oras/releases/tag/v1.3.4`, asset
+`oras_1.3.4_checksums.txt`. Both architectures because ci.yml's `PUBLISH_PLATFORMS` is
+`linux/amd64,linux/arm64`; an unknown architecture exits non-zero rather than falling back.
+
+**The deliberate deviation from the hint.** The spec says "`TARGETARCH`-selected", and this
+uses `dpkg --print-architecture` instead. `ARG TARGETARCH` would have been the first build
+argument this file has ever declared, and `CLAUDE.md` invariant 2 / `docs/configuration.md`
+both state the absolute "no build arguments at all". That absolute is worth more than the
+convention precisely because it is mechanically checkable: once it becomes "no ARG except
+the harmless ones", the next argument only has to clear "is it as harmless as that one?",
+which is how an `HF_TOKEN` comes back. `dpkg --print-architecture` answers the same
+question from inside the build (under buildx the `RUN` executes in the *target* platform's
+rootfs, so it reports the target), in exactly the names oras publishes, and it works under
+the legacy builder where `TARGETARCH` would be empty. The property the hint asked for —
+per-architecture selection with per-architecture checksums — is delivered in full. The
+invariant was *strengthened* in the same change:
+`test_the_build_takes_no_arguments_at_all` now asserts zero `ARG` instructions, where the
+existing tests only caught secret-shaped names.
+
+**A fifth and sixth environment variable, argued for rather than added.**
+`FORAGE_WEIGHTS_MIRROR` and `FORAGE_MIRROR_TOKEN` join the AST exact-set test, which is
+renamed to `test_the_module_reads_exactly_five_environment_variables`. Note what is still
+absent: no override for the staging bound, the pull timeout, the registry username or the
+TLS posture. Those are decisions, not configuration, and an operator who could move them
+could move the security properties with them.
+
+**The registry username is a fixed, inert constant.** GHCR authenticates on the token, not
+the account name — GitHub's own Actions recipe logs in as `${{ github.actor }}` (whoever
+triggered the run) with a repository-scoped `GITHUB_TOKEN` that belongs to no user at all,
+which is a demonstration that the username need not match the credential's owner. So
+`MIRROR_USERNAME = "forage"` is a required-but-ignored field of basic auth, and a sixth
+environment variable for something no registry reads would have been worse. **This is the
+one claim in the story that mocked tests cannot settle** — see the optional live checks
+below.
+
+**A gotcha found while live-verifying, and recorded rather than fixed.** Nothing in this
+repo calls `logging.basicConfig()`, so the root logger keeps Python's default of WARNING —
+confirmed in a running container (`getEffectiveLevel()` → `30`). Every `logger.info` in
+the service is emitted and dropped, which means `weights_verified`, `weights_fetched`,
+`weights_loaded` and this story's `weights_fetch_attempt` are invisible to `docker logs`
+while every failure is loud. The AC's "each attempt logged with source/duration/outcome"
+is met at the record level (and `caplog` sees them), but an operator watching a cold start
+sees nothing until the ERROR or the `/health` flip — which is why `/metrics` carries
+`model.fetch_in_progress`. Changing the service's log level would alter output for every
+lane at once and is nobody's AC here, so it is in `kit_tools/docs/GOTCHAS.md` with the
+one-line fix (`uvicorn --log-level info`) rather than in this diff.
+
+**Suite hermeticity got one notch tighter.** `tests/conftest.py` gained an autouse fixture
+clearing `HF_TOKEN`, `HF_HOME`, `FORAGE_MODEL_REVISION`, `FORAGE_WEIGHTS_MIRROR` and
+`FORAGE_MIRROR_TOKEN`. A developer who exports those — the people who vendor the weights,
+which is to say the ones most likely to — would otherwise run a *different* suite from
+CI's: tests asserting "this source is skipped" would quietly take the configured branch.
+The socket guard would eventually catch a real fetch, but only after the branch diverged.
+
+**The mirror fixtures are built by the producer's own code.**
+`scripts.vendor_weights.build_tarball` is imported into the test module and used to build
+every well-formed artifact, so the consumer is tested against the thing that actually
+sits in GHCR rather than against a guess at its shape. A change to the archive breaks
+this test rather than the fallback, months later, during the outage that made someone
+reach for it. Hostile fixtures (traversal, a smuggled `.bin`, a bomb) are hand-built,
+necessarily — the generator refuses to produce them, which is itself US-003's point.
+
+**Mutation-verified guards** (each applied to the committed tree, mapped tests run, tree
+restored):
+
+| Mutation | Result |
+|---|---|
+| the mirror source is never tried | 1 fails |
+| extraction uses the permissive tar filter | 1 fails |
+| the artifact is installed before it is verified | 1 fails |
+| the token is passed as an argument | 1 fails |
+| the pull allows plain http | 1 fails |
+| any mirror reference is accepted | 1 fails |
+| the invalid reference is logged unredacted | 1 fails |
+| the staging cap is one copy plus slack | 1 fails |
+| there is no free-space check | 1 fails |
+| the staging tree is left behind by the leg | **escaped**, then 1 fails |
+| the `xet/` tree is not swept | 1 fails |
+| the terminal ERROR is not logged | 1 fails |
+| a wholly unattempted acquisition counts nothing | 1 fails |
+| a refused set is counted twice | 1 fails |
+| the mirror is tried before Hugging Face | 1 fails |
+| the pull's stderr is logged | 1 fails |
+| the pull has no timeout | 1 fails |
+| `oras` is assumed rather than resolved from PATH | 1 fails |
+| a pull leaving several files picks the first | **escaped**, then 1 fails |
+| the pulled tarball's size is unbounded | **escaped**, then 1 fails |
+| the declared member size is unbounded | **escaped**, then 1 fails |
+| `model_fetcher` reads a sixth environment variable | 1 fails |
+| the Dockerfile skips the checksum check | 1 fails |
+| both architectures share one digest | 1 fails |
+| the arm64 pin is dropped | 1 fails |
+| a build argument is introduced | 1 fails |
+| oras is downloaded from a floating tag | 1 errors |
+| an unknown architecture is tolerated | 1 fails |
+| the version comment disagrees with the URL | 1 fails |
+
+25 of 29 on the first pass, 29 of 29 after. The four escapes are left in the table because
+three of them share a diagnosis worth keeping: **two controls that cover for each other
+are one control with a spare.** The staging sweep in the leg was masked by the identical
+sweep in the pipeline; the tarball-size bound and the declared-size bound each caught the
+other's fixture. In every case the fix was a fixture that isolates the property, not a
+stronger assertion on the existing one. The fourth (a pull leaving several files) was a
+missing case rather than a masked one.
+
+**Live-verified on a built image** (`docker build` + `docker run`, arm64):
+
+| Run | Result |
+|---|---|
+| build | green; `oras version` in the image reports **1.3.4, linux/arm64**, mode `0755`, executable as `poppy` |
+| no credentials | startup yields first, then `weights_fetch_skipped` + `weights_mirror_skipped` at WARNING and **exactly one ERROR**: `weights_unavailable — … Attempts: huggingface=skipped_no_token, mirror=skipped_no_token`. `/health` degraded with `promptguard_unavailable`, `/metrics` `model.fetch_failures: 1`, `contract_smoke.py` **PASSED: degraded, honest, and on-contract** |
+| `FORAGE_MIRROR_TOKEN` set to an invalid token | the **real** `oras` ran against the **real** GHCR and failed: `weights_fetch_failed — source=mirror reference=ghcr.io/washingbearlabs/forage-weights:11614a15…790ed0 reason=pull_failed exit=1 (oras output is not logged…)`, then the one terminal ERROR with `mirror=pull_failed`. `fetch_failures: 1`. **`/app/model-cache` was empty afterwards** — the staging sweep held on the failure path, in the container, against a live registry |
+
+`sanitizer_revision` did not move, verified before and after:
+`5927038d64ed54a619e52b94899148f56bfede37d38f3c1a53c435edc719d111`, and confirmed live on
+the running container's `/health`. Correct — no `_REVISION_SOURCES` file was touched and
+neither `MODEL_ID` nor the revision changed. Nothing about sanitization behaviour changed:
+where the bytes came from is not part of what the weights *are*.
+
+#### Optional live checks (real mirror credentials, supervisor's session)
+
+The artifact exists and is pullable with a read token, so these are cheap — and one of
+them is the only claim in the story that mocked tests genuinely cannot settle. None is
+required by an AC; all are recorded here so the choice to skip them is a choice.
+
+1. **The registry username (the real unknown).** Run the image with a valid read-only
+   `FORAGE_MIRROR_TOKEN` and no `HF_TOKEN` and confirm the pull authenticates with
+   `MIRROR_USERNAME = "forage"`. The reasoning that any non-empty username works with a
+   PAT is sound and is what GitHub's own Actions recipe demonstrates, but it is reasoning,
+   not a measurement. If GHCR turns out to want a real login, the fix is one constant —
+   and the decision of whether that becomes a sixth environment variable belongs to
+   whoever finds out.
+2. **Mirror-only cold start, end to end on the reference envelope.** `--cpus 1 --memory
+   1024m`, fresh volume, mirror token only: container start → `promptguard_loaded: true`,
+   with the timing alongside US-003's 19 s Hugging Face figure. This is the AC's
+   "mirror-only fetch reaches a loaded classifier" against the real 233,577,795-byte
+   artifact rather than a fixture.
+3. **The staging bound against the real artifact.** During that run, watch
+   `/app/model-cache` peak and confirm it stays under `2 × 292,006,923 × 1.1 ≈ 642 MB`,
+   and that `staging/` and `xet/` are gone afterwards. The arithmetic is asserted against
+   the committed manifest; this is the arithmetic meeting the real bytes on a 1 GB box.
+4. **HF-first ordering with both credentials present.** Both tokens set, fresh volume:
+   `weights_fetched — source=huggingface` and no `oras` process. Proven by test; a
+   five-second confirmation against the real pair costs nothing.
+5. **A wrong-revision mirror.** `FORAGE_MODEL_REVISION` set to another 40-hex sha with the
+   committed manifest unchanged: the pull should 404 (`pull_failed`) rather than serve
+   something that then fails verification. Either outcome is correct and both are loud;
+   which one happens is a property of GHCR, not of this code.
+
 ## Refinement Notes
 
 ### Research Findings
