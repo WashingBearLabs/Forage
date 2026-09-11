@@ -26,7 +26,7 @@ from pydantic import BaseModel
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 import model_fetcher
-from cache import CacheMetrics, ContentCache
+from cache import CacheMetrics, ContentCache, cache_settings_from_config
 from model_fetcher import ModelMetrics
 from models import (
     ExtractedContent,
@@ -552,7 +552,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     _warn_if_break_glass_advertisement_enabled()
 
-    # Connect content cache
+    # Connect content cache. The `cache:` bounds are validated here whichever
+    # storage ends up selected — a typo fails the boot loudly, exactly as the
+    # `extraction:` block does, rather than silently widening a memory bound.
+    app.state.cache_settings = cache_settings_from_config(config)
     app.state.cache_metrics = CacheMetrics()
     cache = ContentCache(VALKEY_URL, metrics=app.state.cache_metrics)
     cache_ok = await cache.connect()
@@ -738,11 +741,21 @@ async def metrics(request: Request) -> dict[str, Any]:
             "blocked_by_reason": retrieve_metrics.blocked_by_reason,
             "promptguard_state": retrieve_metrics.promptguard_state,
         },
+        # Two layers share this response and are not duplicates of each other.
+        # `retrieve.cache_hits`/`cache_misses` above count *request* outcomes;
+        # the `storage_*` counters here count *storage operations* underneath
+        # the cache's policy layer, and only the in-memory storage can move
+        # `storage_evictions` / `storage_oversize_skips` (Valkey does its own
+        # eviction and has no byte bound of ours).
         "cache": {
             "reconnect_attempts": cache_metrics.reconnect_attempts,
             "reconnect_successes": cache_metrics.reconnect_successes,
             "reconnect_failures": cache_metrics.reconnect_failures,
             "operation_failures": cache_metrics.operation_failures,
+            "storage_hits": cache_metrics.storage_hits,
+            "storage_misses": cache_metrics.storage_misses,
+            "storage_evictions": cache_metrics.storage_evictions,
+            "storage_oversize_skips": cache_metrics.storage_oversize_skips,
         },
         # Weight acquisition (feature-forage-model-bootstrap). Additive:
         # `/metrics` is outside the frozen response-model surface, so this

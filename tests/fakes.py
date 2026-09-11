@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import socket
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
@@ -167,6 +168,102 @@ def weights_manifest_document(
             for name, payload in sorted(files.items())
         ],
     }
+
+
+class ManualClock:
+    """A monotonic clock a test advances by hand.
+
+    Storage-level TTL expiry is the one behaviour that genuinely differs
+    between the backends, and it is the one behaviour a test cannot observe
+    without controlling time — ``time.monotonic`` would need the suite to
+    actually sleep. Both :class:`FakeStorage` and ``InMemoryStorage`` take the
+    clock as a callable for exactly this reason.
+    """
+
+    def __init__(self, now: float = 0.0) -> None:
+        self._now = now
+
+    def __call__(self) -> float:
+        """Return the current fake time, in seconds."""
+        return self._now
+
+    def advance(self, seconds: float) -> None:
+        """Move the clock forward."""
+        self._now += seconds
+
+
+class FakeStorage:
+    """In-test ``CacheStorage``: a dict, a clock, and per-operation call counts.
+
+    Shape-faithful to ``InMemoryStorage`` on everything the policy layer can
+    observe — TTL expiry included — and deliberately *unbounded*, so a policy
+    test cannot be perturbed by an eviction it did not ask for. The call
+    counters are what let a test assert that a policy decision reached (or did
+    not reach) the storage at all, which is the assertion the old
+    ``mock_redis.set.assert_not_awaited()`` style used to make.
+    """
+
+    def __init__(
+        self,
+        *,
+        connected: bool = True,
+        metrics: CacheMetrics | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.connected = connected
+        self.metrics = metrics if metrics is not None else CacheMetrics()
+        self.entries: dict[str, tuple[bytes, float]] = {}
+        self.get_calls = 0
+        self.set_calls = 0
+        self.delete_calls = 0
+        self.last_ttl_seconds: int | None = None
+        self._clock = clock
+
+    async def connect(self) -> bool:
+        """Report the settable ``connected`` state."""
+        return self.connected
+
+    async def close(self) -> None:
+        """Drop every entry."""
+        self.entries.clear()
+
+    async def ping_if_due(self) -> bool:
+        """Report the settable ``connected`` state."""
+        return self.connected
+
+    async def get(self, key: str) -> bytes | None:
+        """Return live bytes for *key*, dropping it once its TTL has passed."""
+        self.get_calls += 1
+        if not self.connected:
+            return None
+        entry = self.entries.get(key)
+        if entry is None:
+            self.metrics.storage_misses += 1
+            return None
+        value, expires_at = entry
+        if expires_at <= self._clock():
+            del self.entries[key]
+            self.metrics.storage_misses += 1
+            return None
+        self.metrics.storage_hits += 1
+        return value
+
+    async def set(self, key: str, value: str, *, ttl_seconds: int) -> bool:
+        """Store *value* under *key* for *ttl_seconds*."""
+        self.set_calls += 1
+        self.last_ttl_seconds = ttl_seconds
+        if not self.connected:
+            return False
+        self.entries[key] = (value.encode(), self._clock() + ttl_seconds)
+        return True
+
+    async def delete(self, key: str) -> bool:
+        """Remove *key* if present."""
+        self.delete_calls += 1
+        if not self.connected:
+            return False
+        self.entries.pop(key, None)
+        return True
 
 
 class FakeContentCache:
