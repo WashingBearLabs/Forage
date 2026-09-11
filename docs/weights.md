@@ -222,10 +222,21 @@ This is the one that ships to a deployment, so it is the one to be strict about.
   attacker who can overwrite the mirror tag can serve weights of their choosing to every
   future cold start.
 
-The consuming side lands with US-004, which reads this token from `FORAGE_MIRROR_TOKEN`
-alongside `FORAGE_WEIGHTS_MIRROR`; `docs/configuration.md` gains both when they exist.
-Creating the token now is the right order — the least-privilege decision is easier to make
-before something is waiting on it.
+The consuming side landed with US-004. Forage reads this token from `FORAGE_MIRROR_TOKEN`
+and the repository from `FORAGE_WEIGHTS_MIRROR`; both are documented in
+`docs/configuration.md`. Three things about how it is consumed are worth knowing when you
+decide what to scope it to:
+
+- **Read is all it ever needs.** The runtime pulls; it never pushes, never tags and never
+  deletes.
+- **It reaches `oras` on stdin, never as an argument**, and no captured output from that
+  subprocess is logged — so it does not appear in `ps`, in shell history or in the
+  container's logs.
+- **The tag is not the token's to choose.** `FORAGE_WEIGHTS_MIRROR` names a *repository*;
+  the tag is always the pinned revision, and whatever arrives is verified against the
+  committed manifest before it is installed. A compromised read token cannot make the
+  service load different weights — only a compromised *write* token could, which is why
+  the two must never be the same credential.
 
 ### `GITHUB_TOKEN` — the visibility check
 
@@ -273,15 +284,24 @@ Inside it:
 │       ├── blobs/                     # the real bytes
 │       └── snapshots/<revision>/      # symlinks into blobs/ — what the loader opens
 ├── quarantine/                        # a refused set, one generation only
+├── staging/                           # a mirror pull in flight; never survives one
+├── xet/                               # huggingface_hub's chunk cache; swept after a fetch
 └── .agent_harnesses.json              # huggingface_hub's own cache; not ours, harmless
 ```
 
-Two things follow from that layout:
+Three things follow from that layout:
 
 - **`hub/`, not the volume root.** `HF_HUB_CACHE` is `$HF_HOME/hub`, and both the download
   and the load are handed that directory explicitly. Passing the volume root writes one
   level too high and the loader then reads a different tree — a failure that presents as
   "the download worked and the model still isn't there".
+- **Everything except `hub/` is disposable, and two of them are swept.** `staging/` holds
+  a mirror pull mid-flight — the tarball and its extraction, bounded to twice the
+  manifest total plus 10% — and `xet/` is `huggingface_hub`'s chunk-dedup cache. Both are
+  removed at the end of every acquisition, successful or not: they are caches for a *next*
+  download of a weight set that is fetched once, and on a 1 GB container they are the
+  space that next download would need. A mirror fetch that finds too little room refuses
+  before spending the bandwidth.
 - **Losing the volume costs a re-download, not a rebuild.** A container without the volume
   mounted still works; it just re-fetches on every recreate. That is documented behaviour,
   not an error.

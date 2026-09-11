@@ -8,7 +8,7 @@
 
 ## Overview
 
-Forage is a **single-process FastAPI service, 6,353 lines** (plus 1,146 lines of CI-only
+Forage is a **single-process FastAPI service, 6,968 lines** (plus 1,146 lines of CI-only
 smoke drivers and 1,124 lines of operator scripts under `scripts/`, none of which ship in
 any image; all figures measured outside `tests/`), with a deliberately flat
 module layout: the top-level modules sit at the repo root rather than inside a `forage/`
@@ -41,10 +41,11 @@ Design principles:
 ├── cache.py                 # Valkey/Redis content cache (closed log vocabulary)
 ├── url_validator.py         # SSRF defense: RFC1918 rejection, DNS-rebinding checks
 ├── model_fetcher.py         # Weight acquisition: the pinned revision, the HF fetch,
-│                            # exact-set manifest verification, safetensors-only
-│                            # allowlist, one-generation quarantine
-├── weights_manifest.json    # The committed weight pin (fail-closed placeholder
-│                            # until US-003's supervised vendoring run replaces it)
+│                            # the GHCR mirror fallback (oras), exact-set manifest
+│                            # verification, safetensors-only allowlist,
+│                            # one-generation quarantine
+├── weights_manifest.json    # The committed weight pin — the real five-entry
+│                            # manifest since US-003's supervised vendoring run
 ├── contract_smoke.py        # CI-only: asserts a running image's /health contract.
 ├── searxng_smoke.py         # CI-only: stands the companion image up beside a
 │                            # Valkey on an --internal network and probes it.
@@ -88,7 +89,7 @@ Design principles:
 | `pipeline/extraction_limits.py` | 181 | Resource limits from `config.yaml`'s `extraction:` block. |
 | `pipeline/stage1_upload.py` | 172 | Upload path for `/extract` (gated by `extract_route_enabled`). |
 | `promptguard/classifier.py` | 211 | Loads and runs Llama Prompt Guard 2 (`use_safetensors=True` — the loader can never fall back to a pickle); absent weights → degraded, never silent. |
-| `model_fetcher.py` | 1020 | Weight acquisition end to end. The one gate every source passes — fail-closed manifest verification, exact-set + safetensors-only allowlist, symlink-resolving hashing over `snapshots/<revision>/`, one-generation quarantine, the `ModelMetrics` counters `/metrics` exports — plus `acquire_and_load()`, the boot pipeline (verify → fetch → verify → load) the lifespan runs in a worker thread. Owns the revision pin and the `$HF_HOME/hub` resolution both the download and the loader are handed. |
+| `model_fetcher.py` | 1635 | Weight acquisition end to end. The one gate every source passes — fail-closed manifest verification, exact-set + safetensors-only allowlist, symlink-resolving hashing over `snapshots/<revision>/`, one-generation quarantine, the `ModelMetrics` counters `/metrics` exports — plus `acquire_and_load()`, the boot pipeline the lifespan runs in a worker thread: verify the cache, then **Hugging Face, then the GHCR mirror**, then one ERROR naming both. The mirror leg shells out to the image's pinned `oras`, extracts with `filter="data"` into a bounded staging area, verifies *there*, and installs by rename. Owns the revision pin, the `$HF_HOME/hub` resolution both the download and the loader are handed, and the five environment variables the acquisition path reads. |
 | `pipeline/stage1_pdf.py` | 156 | PDF branch of stage 1. |
 | `pipeline/stage3_promptguard.py` | 151 | ML injection scan; skipped for trusted domains. |
 | `pipeline/contract.py` | 100 | The versioned response contract (`contract_version`, currently **1.0.0**). |

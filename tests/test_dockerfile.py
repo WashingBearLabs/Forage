@@ -15,15 +15,19 @@ produced, and cannot run until an image exists; these tests run in every
 ``uv run pytest``, on a developer's machine and in the ``test`` lane, and fail
 the moment the path is written back — before anything is built or pushed.
 
-The rest of the module pins the three other properties US-003 established, each
-of which an ordinary-looking edit could silently undo:
+The rest of the module pins the other properties this file has to keep, each of
+which an ordinary-looking edit could silently undo:
 
 * the base image is digest-pinned (US-005's smoke and US-007's publish are only
   talking about the same image if it cannot move between their builds);
 * dependencies come from the committed ``uv.lock`` rather than a fresh
   resolution of unpinned ranges;
 * the build stays single-stage, which is what makes ``docker history`` cover
-  the whole build rather than only a final stage.
+  the whole build rather than only a final stage;
+* the ``oras`` client the runtime weights fetch shells out to is pinned to an
+  exact version with a per-architecture sha256, and the build takes **no** build
+  arguments at all — not even ``TARGETARCH``
+  (``feature-forage-model-bootstrap`` US-004).
 
 test_mapping:
   Dockerfile: tests/test_dockerfile.py
@@ -58,6 +62,19 @@ _TOKEN_SHAPE_RE = re.compile(r"hf_[A-Za-z0-9]{20,}")
 _BASE_IMAGE_RE = re.compile(r"^python:3\.12-slim@sha256:[0-9a-f]{64}$")
 _DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 _BASE_VERSION_RE = re.compile(r"\b3\.12\.\d+\b")
+
+# The `oras` install (feature-forage-model-bootstrap US-004). The two
+# architectures are the two this image is published for — ci.yml's
+# `PUBLISH_PLATFORMS` is `linux/amd64,linux/arm64` — and a pin that covered
+# only one would leave the mirror path dead on the other, discovered at
+# runtime during the outage that made someone need it.
+PUBLISHED_ARCHITECTURES = ("amd64", "arm64")
+_ORAS_URL_RE = re.compile(
+    r"https://github\.com/oras-project/oras/releases/download/"
+    r"v(?P<tag>\d+\.\d+\.\d+)/oras_(?P<file>\d+\.\d+\.\d+)_linux_"
+)
+_ORAS_ARCH_SHA_RE = re.compile(r"(?P<arch>[a-z0-9]+)\)\s*sha256=(?P<sha>[0-9a-f]{64})")
+_ORAS_VERSION_COMMENT_RE = re.compile(r"^#\s*oras\s+(?P<version>\d+\.\d+\.\d+)\b")
 
 
 def _raw() -> str:
@@ -106,6 +123,18 @@ def _declared_name(argument_text: str) -> str:
     return head.split("=", 1)[0]
 
 
+def _oras_instruction(lines: list[str]) -> str:
+    """The single build instruction that installs ``oras``."""
+    matches = [line for line in lines if _ORAS_URL_RE.search(line)]
+    assert len(matches) == 1, (
+        f"Expected exactly one instruction downloading oras; found "
+        f"{len(matches)}. The install is one RUN on purpose: the download, the "
+        "checksum check and the extraction have to live or die together, or a "
+        "layer cache can serve an unverified binary."
+    )
+    return matches[0]
+
+
 @pytest.fixture(scope="module")
 def raw() -> str:
     return _raw()
@@ -114,6 +143,11 @@ def raw() -> str:
 @pytest.fixture(scope="module")
 def instructions() -> list[str]:
     return _instruction_lines(_raw())
+
+
+@pytest.fixture(scope="module")
+def oras_install(instructions: list[str]) -> str:
+    return _oras_instruction(instructions)
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +232,30 @@ class TestNoSecretEntersTheBuild:
             "literal(s). Even in a comment, that is a committed credential."
         )
 
+    def test_the_build_takes_no_arguments_at_all(self, instructions: list[str]) -> None:
+        """Not "no secret-shaped ARG" — no ARG, full stop (CLAUDE.md 2).
+
+        The sibling tests above catch a *secret-shaped* name, which is the
+        failure everyone pictures. This one catches the way the path actually
+        comes back: an innocuous ARG lands for a good reason, "the Dockerfile
+        declares no ARG" stops being true, and the next argument only has to
+        clear "is it as harmless as that one?" rather than an absolute.
+
+        US-004 is the live example. `ARG TARGETARCH` is the conventional way to
+        select a per-architecture download, and it carries no secret — the
+        `oras` install uses `dpkg --print-architecture` instead precisely so
+        this assertion can stay absolute. `docs/configuration.md`'s
+        "Build-time arguments: there are none" is the same claim, made to
+        operators.
+        """
+        declared = _instructions_named(instructions, "ARG")
+        assert declared == [], (
+            f"Dockerfile declares build argument(s): {declared}. This file "
+            "takes none, by design — see CLAUDE.md invariant 2. If a genuinely "
+            "unavoidable one arrives, it is a decision to argue for here, in "
+            "CLAUDE.md and in docs/configuration.md, not a line to add."
+        )
+
 
 # ---------------------------------------------------------------------------
 # The base image is digest-pinned, and the build is single-stage
@@ -261,6 +319,151 @@ class TestBaseImagePin:
                 "tag. Every image this build consumes is pinned by digest, for "
                 "the same reason every action in ci.yml is pinned by SHA."
             )
+
+
+# ---------------------------------------------------------------------------
+# The oras client is version-pinned and checksum-verified, per architecture
+# ---------------------------------------------------------------------------
+
+
+class TestOrasIsPinnedPerArchitecture:
+    """`feature-forage-model-bootstrap` US-004.
+
+    The mirror fallback shells out to `oras`, so `oras` is now part of the
+    runtime's trusted computing base: whatever it pulls is what gets extracted,
+    verified and — if it verifies — loaded. Everything else the image trusts is
+    pinned by digest (the base, the uv layer, every GitHub Action), and a
+    `curl | tar` of a floating release would make the fetch *tool* the weakest
+    link in a chain whose whole point is that the fetched *bytes* are pinned
+    file-by-file.
+
+    These are text guards, like the rest of this module: they fail on a
+    developer's machine, in every `uv run pytest`, before anything is built.
+    """
+
+    def test_oras_is_installed(self, oras_install: str) -> None:
+        assert "oras" in oras_install
+        assert "/usr/local/bin/oras" in oras_install, (
+            "oras must land somewhere on PATH — `model_fetcher` resolves it "
+            "with `shutil.which`, and a mirror fetch that cannot find it "
+            "reports `oras_missing` and stays degraded"
+        )
+
+    def test_the_download_url_pins_an_exact_version(self, oras_install: str) -> None:
+        match = _ORAS_URL_RE.search(oras_install)
+        assert match is not None
+        assert match.group("tag") == match.group("file"), (
+            f"The release tag (v{match.group('tag')}) and the asset name "
+            f"(oras_{match.group('file')}_…) name different versions — one of "
+            "them was bumped and the other was not, and the checksums below "
+            "belong to only one of them."
+        )
+        assert "latest" not in oras_install, (
+            "`latest` is not a pin. The `smoke` job proves a specific image and "
+            "the `publish` job ships one; a tool that can move between them "
+            "breaks that argument exactly as a floating base image would."
+        )
+
+    def test_the_version_is_recorded_in_an_adjacent_comment(self, raw: str) -> None:
+        """The same courtesy the base-image digest gets, for the same reason.
+
+        A 64-hex digest and a URL buried in a shell `case` are both opaque at a
+        glance. The comment is what lets a reader answer "which oras is this,
+        and is it current?" without leaving the file.
+        """
+        lines = raw.splitlines()
+        install_index = next(
+            (i for i, line in enumerate(lines) if _ORAS_URL_RE.search(line)), None
+        )
+        assert install_index is not None
+        preceding = lines[max(0, install_index - 12) : install_index]
+        versions = [
+            match.group("version")
+            for line in preceding
+            if (match := _ORAS_VERSION_COMMENT_RE.match(line.strip())) is not None
+        ]
+        assert versions, (
+            "A comment line above the oras install must record the version, in "
+            f"the form `# oras X.Y.Z`. Got: {preceding[-4:]!r}"
+        )
+        url_match = _ORAS_URL_RE.search(lines[install_index])
+        assert url_match is not None
+        assert versions[-1] == url_match.group("tag"), (
+            f"The comment says oras {versions[-1]} and the URL downloads "
+            f"{url_match.group('tag')}. One of them is a lie, and the reader "
+            "has no way to tell which."
+        )
+
+    @pytest.mark.parametrize("architecture", PUBLISHED_ARCHITECTURES)
+    def test_every_published_architecture_has_its_own_checksum(
+        self, oras_install: str, architecture: str
+    ) -> None:
+        pinned = dict(_ORAS_ARCH_SHA_RE.findall(oras_install))
+        assert architecture in pinned, (
+            f"No pinned oras sha256 for {architecture}. ci.yml publishes "
+            f"{', '.join(PUBLISHED_ARCHITECTURES)}, so a missing arm only shows "
+            "up as a failed build (if the build fails closed) or a missing "
+            "binary at runtime (if it does not)."
+        )
+        assert len(pinned[architecture]) == 64
+
+    def test_the_checksums_differ_between_architectures(
+        self, oras_install: str
+    ) -> None:
+        """A copy-paste that reuses one digest fails every build but one.
+
+        The realistic mistake in a hand-maintained `case` is not a wrong
+        digest, it is the *same* digest in both arms — which looks right, and
+        is right for exactly one architecture.
+        """
+        pinned = dict(_ORAS_ARCH_SHA_RE.findall(oras_install))
+        digests = [pinned[arch] for arch in PUBLISHED_ARCHITECTURES if arch in pinned]
+        assert len(set(digests)) == len(digests), (
+            f"Two architectures share an oras sha256: {pinned}. They cannot "
+            "both be correct — the release publishes a different tarball for "
+            "each."
+        )
+
+    def test_the_download_is_checksum_verified(self, oras_install: str) -> None:
+        assert "sha256sum -c" in oras_install, (
+            "The downloaded tarball must be checked against the pinned digest "
+            "with `sha256sum -c`. Pinning a digest that nothing verifies is "
+            "documentation, not a control."
+        )
+
+    def test_the_download_is_https(self, oras_install: str) -> None:
+        assert "http://" not in oras_install
+        assert oras_install.count("https://github.com/oras-project/") >= 1
+
+    def test_an_unpinned_architecture_fails_the_build(self, oras_install: str) -> None:
+        """No silent fallback and no silent skip.
+
+        Both alternatives produce an image that builds green and has no `oras`,
+        and the mirror path then dies at runtime — on the fallback, which by
+        definition is being exercised because the primary source is already
+        down.
+        """
+        assert "*)" in oras_install and "exit 1" in oras_install, (
+            "The architecture `case` must have a default arm that exits "
+            f"non-zero. Got: {oras_install[:400]!r}"
+        )
+
+    def test_the_architecture_is_detected_rather_than_passed_in(
+        self, oras_install: str
+    ) -> None:
+        """`dpkg --print-architecture`, not `ARG TARGETARCH` — deliberately.
+
+        Under buildx the RUN executes in the *target* platform's rootfs, so
+        dpkg reports the target rather than the builder, in exactly the names
+        oras publishes. It also works under the legacy builder, where
+        `TARGETARCH` is simply empty and the `case` would fall through to its
+        failing arm. The reason it is written this way rather than the
+        conventional way is upstream of both, though: this file takes no build
+        arguments at all, and `test_the_build_takes_no_arguments_at_all` is
+        what keeps that absolute.
+        """
+        assert "dpkg --print-architecture" in oras_install
+        assert "TARGETARCH" not in oras_install
 
 
 # ---------------------------------------------------------------------------

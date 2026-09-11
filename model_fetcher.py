@@ -77,6 +77,41 @@ Four properties are load-bearing:
    `huggingface_hub`'s exceptions carry request context and `HF_TOKEN` must
    never reach a log line.
 
+**The mirror** (US-004). Hugging Face's PromptGuard repo is *gated*, which is
+one vendor decision away from unavailable, so US-003 vendored the pinned
+revision to a private OCI artifact at
+`ghcr.io/washingbearlabs/forage-weights:<revision>`. When Hugging Face cannot
+supply verified weights — no token, an outage, a 401, a download that fails
+verification — :func:`acquire_and_load` falls through to that mirror:
+
+* **`oras` is shipped in the image and shelled out to.** GHCR needs a bearer
+  token exchange even with a PAT; hand-rolling the OCI manifest/blob dance was
+  rejected in this spec's planning as a far bigger diff than the fallback
+  deserves. The binary is sha256-pinned per architecture in the `Dockerfile`.
+* **TLS is not negotiable.** The argv is a fixed tuple built here, run without
+  a shell, and there is no configuration path that can put `--plain-http` or
+  `--insecure` into it. `FORAGE_WEIGHTS_MIRROR` is validated down to a bare
+  lower-case `<registry>/<owner>/<name>` — no scheme but `https://`, no
+  userinfo, no tag — before it can reach the argv, and the tag is always the
+  pinned revision.
+* **Staging is bounded and always cleaned up.** The tarball and its extraction
+  coexist at peak, so the cap is **2x the manifest total plus 10% slack**, and
+  the staging tree is removed on every path — as is `huggingface_hub`'s own
+  `$HF_HOME/xet/` chunk cache, which the reference container's 1 GB volume
+  cannot afford to keep.
+* **Nothing unverified is ever installed.** The artifact is extracted with
+  `tarfile`'s `filter="data"` into a throwaway cache root, run through
+  :func:`verify_weights` there, and only then moved into the snapshot layout
+  `from_pretrained` resolves.
+* **`FORAGE_MIRROR_TOKEN` never reaches an argv, a log line or disk.** It
+  travels on `oras`'s stdin, and the subprocess's own streams are never
+  logged — an exit code and a closed reason code are all that come back out.
+
+**One loud ending.** If neither source produces verified weights the pipeline
+logs exactly one ERROR naming both sources and what each one did, and moves
+`model.fetch_failures`. That is the "zero silent paths" goal: a token-less
+container is a supported mode, but it is not a quiet one.
+
 test_mapping:
   model_fetcher.py: tests/test_model_fetcher.py
   weights_manifest.json: tests/test_model_fetcher.py
@@ -90,6 +125,8 @@ import logging
 import os
 import re
 import shutil
+import subprocess
+import tarfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -114,6 +151,17 @@ HUB_DIRNAME: Final = "hub"
 # tree, and a quarantine inside it is not a quarantine.
 QUARANTINE_DIRNAME: Final = "quarantine"
 
+# Where the mirror leg pulls and extracts before anything is installed. A
+# sibling of `hub/` for the same reason the quarantine is one — and on the same
+# filesystem, which is what makes the install a rename rather than a copy.
+STAGING_DIRNAME: Final = "staging"
+
+# `huggingface_hub`'s own chunk-dedup staging tree, verified present on the
+# live sidecar. It is a *cache*, not state, and on a 1 GB container it is
+# hundreds of megabytes that nothing will read again — so acquisition sweeps it
+# on the way out, whatever the outcome.
+XET_DIRNAME: Final = "xet"
+
 # The pinned upstream revision, measured on the live sidecar. `snapshot_download`
 # and `from_pretrained` both take it, the committed manifest repeats it, and
 # US-003 vendors the mirror artifact under exactly this tag — one value, three
@@ -121,20 +169,56 @@ QUARANTINE_DIRNAME: Final = "quarantine"
 # revision + manifest + mirror tag move in one commit.
 DEFAULT_MODEL_REVISION: Final = "11614a155199674a0a95e6602d6ab0417b790ed0"
 
-# The three environment variables this module reads. Named constants rather
+# The five environment variables this module reads. Named constants rather
 # than inline literals so `tests/test_model_fetcher.py` can assert the whole
 # set from the AST — the manifest path, notably, is *not* among them.
 MODEL_REVISION_ENV_VAR: Final = "FORAGE_MODEL_REVISION"
 CACHE_ROOT_ENV_VAR: Final = "HF_HOME"
 HF_TOKEN_ENV_VAR: Final = "HF_TOKEN"
+MIRROR_ENV_VAR: Final = "FORAGE_WEIGHTS_MIRROR"
+MIRROR_TOKEN_ENV_VAR: Final = "FORAGE_MIRROR_TOKEN"
 
 # Where the weights live when nothing says otherwise — the Dockerfile's
 # `ENV HF_HOME=/app/model-cache`, restated so a bare `python -c` run outside
 # the image resolves the same tree the image does.
 DEFAULT_CACHE_ROOT: Final = Path("/app/model-cache")
 
-# Acquisition sources, named once. US-004 adds `mirror`.
+# Acquisition sources, named once, and attempted in this order.
 SOURCE_HUGGINGFACE: Final = "huggingface"
+SOURCE_MIRROR: Final = "mirror"
+ACQUISITION_SOURCES: Final = (SOURCE_HUGGINGFACE, SOURCE_MIRROR)
+
+# The OCI repository US-003 vendored the pinned revision to. The *repository*
+# only: the tag is always the revision this process is pinned to, derived in
+# `mirror_reference()`, so an operator who redirects the mirror cannot also
+# silently redirect which revision it serves. Lower case because GHCR rejects
+# an upper-case path component (`scripts/vendor_weights.py` spells it out for
+# the same reason).
+DEFAULT_WEIGHTS_MIRROR: Final = "ghcr.io/washingbearlabs/forage-weights"
+
+# The OCI client, shipped in the image (sha256-pinned per architecture in the
+# `Dockerfile`) and resolved from `PATH` rather than hardcoded to an install
+# location.
+ORAS_BINARY: Final = "oras"
+
+# GHCR authenticates on the *token*, not on the account name: GitHub's own
+# Actions recipe logs in as `${{ github.actor }}` — whoever happened to trigger
+# the run — with a repository-scoped `GITHUB_TOKEN` that belongs to no user at
+# all. So the username is a required-but-inert field of basic auth, and a fixed
+# value that is obviously not a person beats inventing a sixth environment
+# variable for something no registry reads.
+MIRROR_USERNAME: Final = "forage"
+
+# A pull of ~230 MiB over a token exchange. Generous, because the cost of being
+# wrong is a container that never acquires weights; bounded, because a wedged
+# subprocess would hold `fetch_in_progress` true forever and make `/metrics`
+# lie about what is happening.
+ORAS_TIMEOUT_S: Final = 1800.0
+
+# The staging bound: the tarball and its extraction coexist at peak, so one
+# copy of the manifest total is not enough — 2x plus 10% slack is.
+_STAGING_COPIES: Final = 2
+_STAGING_SLACK: Final = 0.10
 
 # The format allowlist. `.safetensors` is the weights format that cannot
 # execute code on load; the rest are the inert tokenizer/config files a
@@ -170,6 +254,35 @@ REASON_UNREADABLE_FILE: Final = "unreadable_file"
 REASON_SYMLINK_ESCAPE: Final = "symlink_escape"
 REASON_DISALLOWED_ENTRY: Final = "disallowed_entry"
 
+# Per-source acquisition outcomes. A second closed vocabulary, for the same
+# reason as the first: these strings are what the single "no source produced
+# weights" ERROR names, so they are a wire format an operator reads under
+# pressure. `OUTCOME_OK` means "a verified weight set is now on disk at the
+# pinned revision" — nothing weaker.
+OUTCOME_OK: Final = "ok"
+# Skips: the source was never reached, so nothing failed. A skip is not a
+# fetch failure (US-001's AC, carried forward), but it is still named in the
+# terminal ERROR — "nobody tried" is exactly what an operator needs to read.
+OUTCOME_SKIPPED_NO_TOKEN: Final = "skipped_no_token"
+OUTCOME_MISCONFIGURED: Final = "misconfigured"
+# Attempted and failed.
+OUTCOME_TOOL_MISSING: Final = "oras_missing"
+OUTCOME_INSUFFICIENT_SPACE: Final = "insufficient_space"
+OUTCOME_PULL_FAILED: Final = "pull_failed"
+OUTCOME_TIMEOUT: Final = "timeout"
+OUTCOME_NO_ARTIFACT: Final = "no_artifact"
+OUTCOME_ARTIFACT_OVERSIZED: Final = "artifact_oversized"
+OUTCOME_EXTRACT_FAILED: Final = "extract_failed"
+OUTCOME_INSTALL_FAILED: Final = "install_failed"
+# Attempted, bytes arrived, and the verifier refused them. Counted by
+# `verify_failures`, never a second time by `fetch_failures`.
+OUTCOME_REFUSED: Final = "refused_verification"
+
+# A source that was never reached. Everything else is an attempt, and an
+# attempt that did not end in `OUTCOME_OK` or `OUTCOME_REFUSED` moves
+# `fetch_failures`.
+_SKIP_OUTCOMES: Final = frozenset({OUTCOME_SKIPPED_NO_TOKEN, OUTCOME_MISCONFIGURED})
+
 # Manifest-level reasons never quarantine: the weights may be fine and the
 # manifest broken.
 _MANIFEST_REASONS: Final = frozenset(
@@ -191,6 +304,16 @@ _SHA256_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 _REVISION_RE: Final = re.compile(r"^[0-9a-f]{40}$")
 _MODEL_ID_RE: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9._-]+)?$")
 _RELATIVE_PATH_SEGMENT_RE: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+# `<registry>[:<port>]/<owner>/<name>…`, lower case, and nothing else. What it
+# refuses is the point: a `user:password@` userinfo component, an `http://`
+# scheme, a `@sha256:` digest or a `:tag` (the tag is ours to derive), an
+# upper-case path GHCR would reject anyway, and any value that could be read as
+# another `oras` flag. Whatever survives this is safe to put in an argv.
+_MIRROR_REPOSITORY_RE: Final = re.compile(
+    r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?"
+    r"(/[a-z0-9]+([._-][a-z0-9]+)*)+$"
+)
+_HTTPS_PREFIX: Final = "https://"
 
 _HASH_CHUNK_BYTES: Final = 1024 * 1024
 _MAX_MANIFEST_BYTES: Final = 1024 * 1024
@@ -355,6 +478,17 @@ def hub_cache_dir(cache_root: Path | str) -> Path:
 def quarantine_root(cache_root: Path | str) -> Path:
     """Where refused weight sets are moved. A sibling of ``hub/``, never a child."""
     return Path(cache_root) / QUARANTINE_DIRNAME
+
+
+def staging_root(cache_root: Path | str) -> Path:
+    """Where the mirror pulls and extracts before anything is installed.
+
+    A sibling of ``hub/`` — outside the tree the verifier walks and the loader
+    scans — and on the same filesystem as it, which is what lets a verified
+    snapshot be moved into place with a rename instead of a second ~270 MiB
+    copy the container has no room for.
+    """
+    return Path(cache_root) / STAGING_DIRNAME
 
 
 # ---------------------------------------------------------------------------
@@ -782,10 +916,113 @@ def _fetch_reason(exc: BaseException) -> str:
     if isinstance(status, int):
         return f"http_{status}"
     if isinstance(exc, TimeoutError):
-        return "timeout"
+        return OUTCOME_TIMEOUT
     if isinstance(exc, OSError):
         return "io_failed"
     return "fetch_failed"
+
+
+def redact_reference(reference: str) -> str:
+    """Replace any credential-bearing userinfo in *reference* with a marker.
+
+    :func:`resolve_mirror_repository` refuses a reference carrying userinfo
+    outright, so a *resolved* mirror has nothing to redact. This exists anyway,
+    and every log line that names a reference goes through it, because the
+    guarantee "no credential reaches a log" should not rest on validation
+    having run first — the one reference that most needs redacting is the
+    malformed one being *reported*.
+    """
+    scheme, separator, remainder = reference.partition("://")
+    body = remainder if separator else reference
+    if "@" in body:
+        body = "***@" + body.rsplit("@", 1)[1]
+    return f"{scheme}{separator}{body}" if separator else body
+
+
+def resolve_mirror_repository() -> str | None:
+    """Return the OCI repository the mirror leg should pull from.
+
+    :data:`DEFAULT_WEIGHTS_MIRROR` unless :data:`MIRROR_ENV_VAR` names another,
+    and ``None`` when what it names cannot be used. Validation is strict
+    because the result goes straight into a subprocess argv and because the
+    transport's security properties are decided here rather than at the call:
+
+    * an ``https://`` prefix is accepted and stripped (OCI references carry no
+      scheme; ``oras`` speaks TLS unless told otherwise, and it never is);
+    * any other scheme — ``http://`` above all — is refused;
+    * a ``user:password@`` userinfo component is refused, so no credential can
+      arrive by this route and be logged by something downstream;
+    * a ``:tag`` or ``@digest`` is refused: the tag is the pinned revision,
+      derived in :func:`mirror_reference`, and not an operator's to redirect.
+
+    A refusal is an ERROR naming the offending value **redacted**, and the
+    mirror is then treated as unconfigured rather than as a failed attempt —
+    nothing was reached.
+    """
+    configured = os.environ.get(MIRROR_ENV_VAR, "").strip()
+    candidate = configured or DEFAULT_WEIGHTS_MIRROR
+    normalized = (
+        candidate[len(_HTTPS_PREFIX) :]
+        if candidate.startswith(_HTTPS_PREFIX)
+        else candidate
+    )
+    if _MIRROR_REPOSITORY_RE.match(normalized) is None:
+        logger.error(
+            "weights_mirror_invalid — %s must be a lower-case "
+            "<registry>/<owner>/<name> OCI repository, optionally prefixed "
+            "https://, with no credentials and no tag; got %s. The mirror is "
+            "unusable until it is fixed",
+            MIRROR_ENV_VAR,
+            redact_reference(candidate),
+        )
+        return None
+    return normalized
+
+
+def mirror_reference(repository: str, revision: str) -> str:
+    """The artifact reference for *revision* — the tag **is** the revision.
+
+    The other end of ``scripts/vendor_weights.mirror_ref()``: one fact
+    (``DEFAULT_MODEL_REVISION``) spelled in the constant, the committed
+    manifest and the mirror tag, so a mirror can only ever serve the revision
+    this process is pinned to. Anything else fails verification on arrival
+    rather than loading quietly.
+    """
+    return f"{repository}:{revision}"
+
+
+def _resolve_mirror_token() -> str | None:
+    """Return the mirror credential, or ``None`` when there is none.
+
+    Absence is a supported mode exactly as :data:`HF_TOKEN_ENV_VAR`'s is: the
+    private artifact is simply unreachable. The value is never logged, never
+    put in an argv, never written to disk, and never passed anywhere but
+    ``oras``'s stdin.
+    """
+    token = os.environ.get(MIRROR_TOKEN_ENV_VAR, "").strip()
+    return token or None
+
+
+def staging_cap_bytes(manifest: WeightsManifest) -> int:
+    """The most disk one mirror fetch may occupy: 2x the pin, plus 10% slack.
+
+    Two copies rather than one because the tarball and its extraction coexist
+    at peak — a one-copy bound would abort every real fetch — and the slack
+    covers gzip's worst case plus the directory overhead of a few files.
+    """
+    return int(manifest.total_bytes * _STAGING_COPIES * (1 + _STAGING_SLACK))
+
+
+def _purge_transient(cache_root: Path) -> None:
+    """Remove everything an acquisition leaves behind, on every path.
+
+    Two trees, both caches and neither state: our own mirror staging area, and
+    ``huggingface_hub``'s ``xet/`` chunk store (verified present on the live
+    sidecar). Keeping either buys a faster *next* fetch; on a 1 GB container it
+    costs the space the next fetch needs, and the weights are fetched once.
+    """
+    for path in (staging_root(cache_root), Path(cache_root) / XET_DIRNAME):
+        shutil.rmtree(path, ignore_errors=True)
 
 
 class SupportsWeightLoad(Protocol):
@@ -814,13 +1051,18 @@ def _download_from_hub(
     cache_root: Path,
     token: str,
     metrics: ModelMetrics,
-) -> bool:
+) -> str:
     """Download the pinned snapshot from Hugging Face into the hub cache.
 
     ``allow_patterns`` is :data:`ALLOW_PATTERNS` and not optional: a plain
     snapshot download also pulls ``README.md`` and ``.gitattributes``, which
     the exact-set verifier then refuses as extra files — a download that
     "succeeds" straight into a quarantine.
+
+    Returns :data:`OUTCOME_OK`, or the closed reason code for the failure. The
+    *counting* of that failure is the caller's, not this function's: a source
+    attempt is one concept and it is easier to keep the matrix honest in one
+    place than in each leg.
     """
     # Imported here rather than at module scope: verification is stdlib-only
     # and is exercised in contexts (US-003's generator, the fixture tests) that
@@ -838,15 +1080,15 @@ def _download_from_hub(
             token=token,
         )
     except Exception as exc:
-        metrics.record_fetch_failure()
+        reason = _fetch_reason(exc)
         logger.error(
             "weights_fetch_failed — source=%s revision=%s reason=%s duration=%.1fs",
             SOURCE_HUGGINGFACE,
             revision,
-            _fetch_reason(exc),
+            reason,
             time.monotonic() - started_at,
         )
-        return False
+        return reason
     finally:
         metrics.fetch_in_progress = False
     logger.info(
@@ -855,7 +1097,306 @@ def _download_from_hub(
         revision,
         time.monotonic() - started_at,
     )
+    return OUTCOME_OK
+
+
+# ---------------------------------------------------------------------------
+# The mirror leg: oras pull → safe extraction → verify → atomic install
+# ---------------------------------------------------------------------------
+
+
+def oras_pull_argv(*, oras: str, reference: str, destination: Path) -> tuple[str, ...]:
+    """The exact ``oras pull`` argv. No credential, and no way to disable TLS.
+
+    Both properties are structural rather than careful. The credential is not
+    here because it goes to stdin (``--password-stdin``); ``ps`` is
+    world-readable and a terminal's scrollback outlives the token in it. And
+    there is no configuration path to ``--plain-http`` or ``--insecure``,
+    because every element of this tuple is either a literal or a value
+    :func:`resolve_mirror_repository` has already reduced to a bare lower-case
+    repository — an operator cannot smuggle a flag through it, and no code
+    here would add one.
+    """
+    return (
+        oras,
+        "pull",
+        reference,
+        "--output",
+        str(destination),
+        "--username",
+        MIRROR_USERNAME,
+        "--password-stdin",
+    )
+
+
+def _run_oras_pull(*, oras: str, reference: str, destination: Path, token: str) -> str:
+    """Run one ``oras pull``, reporting a closed outcome code.
+
+    The subprocess's own streams are deliberately **not logged**, at any level.
+    ``oras`` echoes the reference it was given on failure, and a registry can
+    put anything it likes in an error body; an exit status plus one of our own
+    reason codes carries everything an operator can act on and nothing a
+    credential could hide in. Same discipline as ``cache.py``'s closed
+    vocabulary for ``VALKEY_URL``, and as :func:`_fetch_reason` above.
+    """
+    argv = oras_pull_argv(oras=oras, reference=reference, destination=destination)
+    try:
+        # No `shell=`: the argv is a fixed tuple built above, so there is no
+        # string for a shell to re-parse.
+        completed = subprocess.run(
+            argv,
+            input=token,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=ORAS_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        logger.error(
+            "weights_fetch_failed — source=%s reference=%s reason=%s after %.0fs",
+            SOURCE_MIRROR,
+            redact_reference(reference),
+            OUTCOME_TIMEOUT,
+            ORAS_TIMEOUT_S,
+        )
+        return OUTCOME_TIMEOUT
+    except OSError:
+        logger.error(
+            "weights_fetch_failed — source=%s reference=%s reason=%s (%s could "
+            "not be executed)",
+            SOURCE_MIRROR,
+            redact_reference(reference),
+            OUTCOME_PULL_FAILED,
+            ORAS_BINARY,
+        )
+        return OUTCOME_PULL_FAILED
+    if completed.returncode != 0:
+        logger.error(
+            "weights_fetch_failed — source=%s reference=%s reason=%s exit=%d "
+            "(%s output is not logged: it can echo the reference and the "
+            "registry's response)",
+            SOURCE_MIRROR,
+            redact_reference(reference),
+            OUTCOME_PULL_FAILED,
+            completed.returncode,
+            ORAS_BINARY,
+        )
+        return OUTCOME_PULL_FAILED
+    return OUTCOME_OK
+
+
+def _sole_artifact(directory: Path) -> Path | None:
+    """The one file a pull was supposed to leave behind, or ``None``.
+
+    Discovered rather than assumed: the producer
+    (``scripts/vendor_weights.py``) names the layer from the tarball's
+    filename, and a consumer that hardcoded that name would break the day the
+    producer's template changed — silently, on the fallback path, during the
+    outage that made someone reach for it. Exactly one regular file is the
+    contract; anything else is refused rather than guessed at.
+    """
+    try:
+        entries = sorted(directory.iterdir())
+    except OSError:
+        return None
+    files = [entry for entry in entries if entry.is_file() and not entry.is_symlink()]
+    return files[0] if len(files) == 1 else None
+
+
+def _extract_artifact(
+    tarball: Path, *, staged_root: Path, manifest: WeightsManifest, cap_bytes: int
+) -> str:
+    """Extract *tarball* into a throwaway cache root in the hub's own layout.
+
+    ``filter="data"`` is passed **explicitly** — Python 3.12 still defaults to
+    the permissive filter, and this is the one path in the service where a
+    remote party chooses the member names. It refuses absolute paths, ``..``
+    traversal, device nodes and links pointing out of the destination, which
+    is the whole class of "hostile tarball reaches ``/etc``".
+
+    The declared size of the members is checked against *cap_bytes* before a
+    byte is written, because ``filter="data"`` has nothing to say about a
+    decompression bomb that is merely enormous.
+    """
+    destination = snapshot_path(staged_root, manifest.model_id, manifest.revision)
+    try:
+        destination.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(tarball, "r:gz") as archive:
+            declared = sum(max(member.size, 0) for member in archive.getmembers())
+            if declared > cap_bytes:
+                logger.error(
+                    "weights_fetch_failed — source=%s reason=%s (%d declared "
+                    "byte(s) exceeds the %d-byte staging bound)",
+                    SOURCE_MIRROR,
+                    OUTCOME_ARTIFACT_OVERSIZED,
+                    declared,
+                    cap_bytes,
+                )
+                return OUTCOME_ARTIFACT_OVERSIZED
+            archive.extractall(destination, filter="data")
+    except (OSError, tarfile.TarError, ValueError):
+        logger.error(
+            "weights_fetch_failed — source=%s reason=%s (the artifact could not "
+            "be safely extracted)",
+            SOURCE_MIRROR,
+            OUTCOME_EXTRACT_FAILED,
+        )
+        return OUTCOME_EXTRACT_FAILED
+    return OUTCOME_OK
+
+
+def _install_snapshot(
+    *, staged_root: Path, cache_root: Path, manifest: WeightsManifest
+) -> bool:
+    """Move the verified staged snapshot into the tree the loader resolves.
+
+    A rename, not a copy: the staging area is a sibling of ``hub/`` on the same
+    filesystem, so this is atomic and free rather than a second ~270 MiB the
+    container has no room for. Any snapshot already sitting at the destination
+    is removed first — reaching here means the cached set did not satisfy the
+    pin, so whatever is there is partial, stale, or the set the verifier
+    already refused.
+    """
+    staged = snapshot_path(staged_root, manifest.model_id, manifest.revision)
+    final = snapshot_path(cache_root, manifest.model_id, manifest.revision)
+    try:
+        final.parent.mkdir(parents=True, exist_ok=True)
+        if final.exists():
+            shutil.rmtree(final)
+        os.replace(staged, final)
+    except OSError:
+        logger.error(
+            "weights_fetch_failed — source=%s reason=%s (the verified set could "
+            "not be moved to %s)",
+            SOURCE_MIRROR,
+            OUTCOME_INSTALL_FAILED,
+            final,
+        )
+        return False
     return True
+
+
+def _fetch_from_mirror(
+    *,
+    revision: str,
+    cache_root: Path,
+    manifest: WeightsManifest,
+    manifest_path: Path,
+    metrics: ModelMetrics,
+) -> str:
+    """Pull, extract, verify and install the mirrored weight set.
+
+    Returns :data:`OUTCOME_OK` only when a **verified** snapshot is on disk at
+    the pinned revision. Every other return is a closed outcome code, already
+    logged, and the staging tree is gone either way.
+    """
+    repository = resolve_mirror_repository()
+    if repository is None:
+        return OUTCOME_MISCONFIGURED
+
+    token = _resolve_mirror_token()
+    if token is None:
+        logger.warning(
+            "weights_mirror_skipped — no %s in the environment, so the private "
+            "weights mirror cannot be reached",
+            MIRROR_TOKEN_ENV_VAR,
+        )
+        return OUTCOME_SKIPPED_NO_TOKEN
+
+    oras = shutil.which(ORAS_BINARY)
+    if oras is None:
+        logger.error(
+            "weights_fetch_failed — source=%s reason=%s (`%s` is not on PATH; "
+            "the image is supposed to ship it)",
+            SOURCE_MIRROR,
+            OUTCOME_TOOL_MISSING,
+            ORAS_BINARY,
+        )
+        return OUTCOME_TOOL_MISSING
+
+    reference = mirror_reference(repository, revision)
+    cap_bytes = staging_cap_bytes(manifest)
+    staging = staging_root(cache_root)
+    started_at = time.monotonic()
+    metrics.fetch_in_progress = True
+    try:
+        shutil.rmtree(staging, ignore_errors=True)
+        pulled = staging / "artifact"
+        pulled.mkdir(parents=True)
+        free_bytes = shutil.disk_usage(staging).free
+        if free_bytes < cap_bytes:
+            logger.error(
+                "weights_fetch_failed — source=%s reason=%s (%d free byte(s) "
+                "under %s, %d needed for the tarball and its extraction)",
+                SOURCE_MIRROR,
+                OUTCOME_INSUFFICIENT_SPACE,
+                free_bytes,
+                cache_root,
+                cap_bytes,
+            )
+            return OUTCOME_INSUFFICIENT_SPACE
+
+        logger.info(
+            "weights_fetch_attempt — source=%s reference=%s",
+            SOURCE_MIRROR,
+            redact_reference(reference),
+        )
+        outcome = _run_oras_pull(
+            oras=oras, reference=reference, destination=pulled, token=token
+        )
+        if outcome != OUTCOME_OK:
+            return outcome
+
+        tarball = _sole_artifact(pulled)
+        if tarball is None:
+            logger.error(
+                "weights_fetch_failed — source=%s reference=%s reason=%s (the "
+                "pull left no single file behind)",
+                SOURCE_MIRROR,
+                redact_reference(reference),
+                OUTCOME_NO_ARTIFACT,
+            )
+            return OUTCOME_NO_ARTIFACT
+        if tarball.stat().st_size > cap_bytes:
+            logger.error(
+                "weights_fetch_failed — source=%s reason=%s (%d pulled byte(s) "
+                "exceeds the %d-byte staging bound)",
+                SOURCE_MIRROR,
+                OUTCOME_ARTIFACT_OVERSIZED,
+                tarball.stat().st_size,
+                cap_bytes,
+            )
+            return OUTCOME_ARTIFACT_OVERSIZED
+
+        staged_root = staging / "extracted"
+        outcome = _extract_artifact(
+            tarball, staged_root=staged_root, manifest=manifest, cap_bytes=cap_bytes
+        )
+        if outcome != OUTCOME_OK:
+            return outcome
+
+        # The same verifier, against the staged copy, *before* anything is
+        # installed: unverified bytes never enter the tree the loader scans.
+        verified = verify_weights(
+            staged_root, manifest_path=manifest_path, metrics=metrics
+        )
+        if not verified.ok:
+            return OUTCOME_REFUSED
+        if not _install_snapshot(
+            staged_root=staged_root, cache_root=cache_root, manifest=manifest
+        ):
+            return OUTCOME_INSTALL_FAILED
+    finally:
+        metrics.fetch_in_progress = False
+        shutil.rmtree(staging, ignore_errors=True)
+
+    logger.info(
+        "weights_fetched — source=%s reference=%s duration=%.1fs",
+        SOURCE_MIRROR,
+        redact_reference(reference),
+        time.monotonic() - started_at,
+    )
+    return OUTCOME_OK
 
 
 def _load_verified(
@@ -922,9 +1463,10 @@ def acquire_and_load(
     """Bring *classifier* to loaded, fetching the pinned weights if needed.
 
     The boot pipeline, in order: verify what is cached (skipping the fetch
-    entirely when it already satisfies the pin) → fetch the pinned revision
-    from Hugging Face → verify the download → load. Returns whether the
-    classifier ended up loaded.
+    entirely when it already satisfies the pin) → **Hugging Face** → **the
+    GHCR mirror** → give up loudly. Each source is verified before it is
+    loaded, and a source that fails hands over to the next. Returns whether
+    the classifier ended up loaded.
 
     **Blocking on purpose, and not to be awaited from the lifespan.**
     ``snapshot_download`` and ``from_pretrained`` are synchronous network and
@@ -941,12 +1483,11 @@ def acquire_and_load(
     pipeline without one, not a configuration surface.
     """
     metrics = metrics if metrics is not None else ModelMetrics()
+    root = Path(cache_root) if cache_root is not None else resolve_cache_root()
     try:
         return _acquire_and_load(
             classifier,
-            cache_root=(
-                Path(cache_root) if cache_root is not None else resolve_cache_root()
-            ),
+            cache_root=root,
             revision=revision if revision is not None else resolve_revision(),
             manifest_path=(
                 MANIFEST_PATH if manifest_path is None else Path(manifest_path)
@@ -960,6 +1501,11 @@ def acquire_and_load(
             "/health stays degraded"
         )
         return False
+    finally:
+        # Every path, including the crash and the warm start that fetched
+        # nothing: staging and `xet/` are caches, and the container's volume
+        # is the thing the next fetch needs.
+        _purge_transient(root)
 
 
 def _acquire_and_load(
@@ -982,23 +1528,16 @@ def _acquire_and_load(
             return _load_verified(classifier, cache_root=cache_root, revision=revision)
         if cached.manifest_failure:
             # The refusal is ours, not the weight set's. Another download
-            # cannot fix a manifest that blesses nothing.
+            # cannot fix a manifest that blesses nothing, and neither can
+            # another source — this is one cause and it gets one message.
             return False
 
-    token = _resolve_token()
-    if token is None:
-        # Not an error: a token-less deployment is a supported degraded mode,
-        # and the loud combined "every source failed" ERROR belongs to US-004,
-        # which is the story that knows whether a mirror was available.
-        logger.warning(
-            "weights_fetch_skipped — no %s in the environment, so the gated "
-            "repo cannot be reached; PromptGuard stays unavailable and /health "
-            "stays degraded",
-            HF_TOKEN_ENV_VAR,
-        )
-        return False
-
-    if read_manifest_pin(manifest_path) is None:
+    manifest = read_manifest_pin(manifest_path)
+    if manifest is None:
+        # Checked before any source is tried, and before the token, for two
+        # reasons: a pin that blesses nothing could never accept ~270 MiB from
+        # anywhere, and "no HF_TOKEN" on top of it would send an operator
+        # looking for a credential they do not need.
         logger.error(
             "weights_pin_unusable — %s pins no verifiable file set, so a "
             "download could never be blessed; refusing to fetch",
@@ -1006,15 +1545,91 @@ def _acquire_and_load(
         )
         return False
 
-    if not _download_from_hub(
+    attempts: list[str] = []
+    attempted_any = False
+    for source in ACQUISITION_SOURCES:
+        outcome = _try_source(
+            source,
+            revision=revision,
+            cache_root=cache_root,
+            manifest=manifest,
+            manifest_path=manifest_path,
+            metrics=metrics,
+        )
+        attempts.append(f"{source}={outcome}")
+        if outcome == OUTCOME_OK:
+            # A verified set is on disk. A loader that then refuses it is a
+            # different fault entirely (`weights_load_failed`, already logged)
+            # and another source would not help.
+            return _load_verified(classifier, cache_root=cache_root, revision=revision)
+        if outcome in _SKIP_OUTCOMES:
+            continue
+        attempted_any = True
+        if outcome != OUTCOME_REFUSED:
+            # `OUTCOME_REFUSED` means the bytes arrived and the verifier said
+            # no: `verify_failures` has already counted it, and counting it
+            # twice would make the two counters mean the same thing.
+            metrics.record_fetch_failure()
+
+    if not attempted_any:
+        # Nothing was reachable enough to fail. The acquisition itself is then
+        # the failed attempt — the alternative is a container that is degraded
+        # with every counter at zero, which is the silent path this spec's
+        # goals exist to close.
+        metrics.record_fetch_failure()
+    logger.error(
+        "weights_unavailable — no source produced verified weights at "
+        "revision=%s, so PromptGuard stays unavailable and /health stays "
+        "degraded. Attempts: %s",
+        revision,
+        ", ".join(attempts),
+    )
+    return False
+
+
+def _try_source(
+    source: str,
+    *,
+    revision: str,
+    cache_root: Path,
+    manifest: WeightsManifest,
+    manifest_path: Path,
+    metrics: ModelMetrics,
+) -> str:
+    """Try one source, returning its closed outcome code.
+
+    :data:`OUTCOME_OK` means a **verified** set for the pinned revision is in
+    the hub cache; the caller loads it. Everything else has already been
+    logged with the detail that is safe to log.
+    """
+    if source == SOURCE_MIRROR:
+        return _fetch_from_mirror(
+            revision=revision,
+            cache_root=cache_root,
+            manifest=manifest,
+            manifest_path=manifest_path,
+            metrics=metrics,
+        )
+
+    token = _resolve_token()
+    if token is None:
+        # Not an error *from this leg*: a token-less deployment is a supported
+        # degraded mode. The single loud ending belongs to the pipeline, which
+        # is the only thing that knows whether the mirror answered either.
+        logger.warning(
+            "weights_fetch_skipped — no %s in the environment, so the gated "
+            "repo cannot be reached",
+            HF_TOKEN_ENV_VAR,
+        )
+        return OUTCOME_SKIPPED_NO_TOKEN
+
+    outcome = _download_from_hub(
         revision=revision,
         cache_root=cache_root,
         token=token,
         metrics=metrics,
-    ):
-        return False
-
+    )
+    if outcome != OUTCOME_OK:
+        return outcome
     verified = verify_weights(cache_root, manifest_path=manifest_path, metrics=metrics)
-    if not verified.ok:
-        return False
-    return _load_verified(classifier, cache_root=cache_root, revision=revision)
+    return OUTCOME_OK if verified.ok else OUTCOME_REFUSED
