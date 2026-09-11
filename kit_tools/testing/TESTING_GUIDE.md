@@ -74,7 +74,7 @@ so `test_ci_workflow.py`, `test_pyright_policy.py`, `test_dependency_lock.py` an
 hermeticity canary all bit only on a developer's machine. The job runs `uv run pytest -q`
 with no selection filters, preceded by a named `uv run pytest -q
 tests/test_sanitizer_revision.py` step so the file-recall cache contract reports as its
-own red line instead of as nine failures inside a 1250-test log.
+own red line instead of as nine failures inside a 1251-test log.
 
 `pyright` runs with **no baseline and one carve-out**: `reportPrivateUsage` is off for
 `tests/` and nothing else is relaxed anywhere. Type-ignore comments are disabled
@@ -93,7 +93,7 @@ crash reads as a false regression.
 ## Test Structure
 
 27 files under `tests/`, flat, one module per subject, plus `fakes.py`, `golden/` and
-`fixtures/`. **1250 tests, all green** as of 2026-09-10.
+`fixtures/`. **1251 tests, all green** as of 2026-09-10.
 
 | Module | Tests | Covers |
 |--------|------:|--------|
@@ -107,7 +107,7 @@ crash reads as a false regression.
 | `tests/test_stage1_extraction.py` | 41 | HTML extraction, `raw_text` vs `main_content` |
 | `tests/test_stage4_structuring.py` | 39 | Response assembly + composite trust score |
 | `tests/test_models.py` | 31 | Pydantic request/response models |
-| `tests/test_app.py` | 40 | FastAPI endpoints, `/health` body, capability break-glass, the `/metrics` `model` counters, and the lifespan harness: startup yields immediately, `/health` latency during a fetch, the `promptguard_loaded` flip, and the retry task's cancellation at shutdown |
+| `tests/test_app.py` | 41 | FastAPI endpoints, `/health` body, capability break-glass, the `/metrics` `model` counters, and the lifespan harness: startup yields immediately, `/health` latency during a fetch, the `promptguard_loaded` flip, and the retry task's cancellation at shutdown |
 | `tests/test_stage3_promptguard.py` | 30 | ML scan; transformers/torch mocked |
 | `tests/test_ci_workflow.py` | 201 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane, image build + secret-grep gate, smoke job + artifact handoff, both publish lanes (tag policies evaluated, not matched) and the cross-fire guards between them |
 | `tests/test_contract_smoke.py` | 47 | `contract_smoke.py`: every `/health` clause, polling, and the single-source ties to the golden schema |
@@ -167,9 +167,9 @@ canary cannot check about itself: that it is committed and not skipped.
 **Async needs no decorator.** `asyncio_mode = "auto"` is set in `pyproject.toml`.
 
 **The exact count is a gate, not a floor.** The extraction verified *exactly* 531 tests
-moved (534 collected after alias parametrization); the suite has since grown to 1250 as CI
+moved (534 collected after alias parametrization); the suite has since grown to 1251 as CI
 guards landed (US-001 +33, US-006 +19, US-002 +21, US-003 +49, US-005 +75, US-007 +40; then
-`forage-model-bootstrap` US-002 +87, US-001 +56, US-003 +102, US-004 +76 and US-005 +23). A silently
+`forage-model-bootstrap` US-002 +87, US-001 +56, US-003 +102, US-004 +76 and US-005 +24). A silently
 dropped module cannot hide under a "≥ N passed" assertion. When you add tests, update the
 counts here.
 

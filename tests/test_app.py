@@ -1033,14 +1033,52 @@ async def test_a_credential_less_boot_stays_degraded_and_says_so_once(
     assert "mirror=skipped_no_token" in errors[0]
 
 
+async def test_the_running_acquisition_is_the_one_published_on_app_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`app.state.model_acquisition` must be the object holding the live lock.
+
+    Single-flight only means anything if every caller shares one
+    `WeightAcquisition`: a second caller that constructed its own would get its
+    own `asyncio.Lock` and start a second ~270 MiB download beside the first.
+    The published object is the *mechanism* by which they share it, so "it is
+    published" is not enough — this asserts it is the one the running task is
+    using, by reading `in_flight` while that task is provably parked inside an
+    acquisition.
+
+    Added after a mutation escape: replacing the published object with `None`
+    broke nothing, because the reason it exists lives in the next story rather
+    than in this diff.
+    """
+    release = threading.Event()
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _blocking_acquisition(release)
+    )
+    try:
+        async with _running_app():
+            await asyncio.sleep(0.05)
+            acquisition = cast(
+                "model_fetcher.WeightAcquisition", app.state.model_acquisition
+            )
+            model_task = cast("asyncio.Task[bool]", app.state.model_task)
+
+            assert acquisition.in_flight is True
+            assert acquisition.metrics is app.state.model_metrics
+            assert await acquisition.attempt_once() is False
+            assert model_task.done() is False
+    finally:
+        release.set()
+
+
 async def test_the_acquisition_task_does_not_outlive_the_lifespan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Shutdown cancels the handle it created — a leaked task hangs pytest.
 
-    US-005 owns the *retry* task's clean-shutdown AC; this is the same seam,
-    asserted for the acquisition task US-001 creates, because a task nothing
-    ever cancels is a defect to introduce rather than to inherit.
+    The retry loop has no ending short of a loaded classifier, so this is not
+    tidiness: cancellation is the only thing that stops it, and a task nothing
+    cancels outlives the lifespan — which under pytest is a hang rather than a
+    warning.
     """
     release = threading.Event()
     monkeypatch.setattr(
