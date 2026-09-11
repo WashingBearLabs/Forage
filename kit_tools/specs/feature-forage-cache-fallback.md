@@ -159,18 +159,18 @@ two reporting `degraded: cache_unavailable`.
   prod to memory-mode" path is closed on the Poppy side, note it here.
 
 **Acceptance Criteria:**
-- [ ] Fully-unset → memory; set-and-working → valkey; unreachable, unparseable, and
+- [x] Fully-unset → memory; set-and-working → valkey; unreachable, unparseable, and
       empty-string each → valkey-selected + `degraded: cache_unavailable` (all five cases
       tested).
-- [ ] No baked `VALKEY_URL` **env** default remains (behavioral test: env fully unset
+- [x] No baked `VALKEY_URL` **env** default remains (behavioral test: env fully unset
       selects memory mode, no connection attempt); `cache.py:192` constructor default
       explicitly exempted.
-- [ ] The new parse/selection path logs no URL under any of the five cases (test-asserted).
-- [ ] `docs/configuration.md` updated: `VALKEY_URL` semantics, `cache:` config keys, the
+- [x] The new parse/selection path logs no URL under any of the five cases (test-asserted).
+- [x] `docs/configuration.md` updated: `VALKEY_URL` semantics, `cache:` config keys, the
       prod-side valkey assertion cross-ref.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run pyright` passes
 
 ### US-003: Health/metrics surface + contract 1.1.0
 

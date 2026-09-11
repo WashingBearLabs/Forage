@@ -115,9 +115,13 @@ Consequences of memory mode, in one place:
   backend.
 
 > **Production deployments should set it.** Poppy — the consumer this service was
-> extracted from — runs Valkey and keeps doing so: its Forage environment file is
-> declared `required: true` on the Poppy side, so a missing or unmounted env file fails
-> that deployment loudly instead of quietly dropping it into memory mode, and the
+> extracted from — runs Valkey and keeps doing so: its Forage environment file **will
+> be** declared `required: true` on the Poppy side when it adopts this image (the
+> extraction epic's spec 6 — as of this story Poppy still builds the vendored tree and
+> its env_file is `required: false`; do NOT point Poppy at this image before that flag
+> flips, or a missing env file silently drops prod to memory mode), so a missing or
+> unmounted env file fails that deployment loudly instead of quietly dropping it into
+> memory mode, and the
 > epic's live checklist asserts the running backend is Valkey rather than trusting the
 > config. If you run more than one Forage replica, or want the cache to survive a
 > restart, set `VALKEY_URL`.
