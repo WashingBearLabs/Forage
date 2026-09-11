@@ -29,7 +29,7 @@ preserved). See `docs/bootstrap-notes.md` for the pin record.
 |--------|--------|
 | Maturity | Pre-1.0, freshly extracted (2026-09-07) |
 | Repo visibility | **Private** — flips public in `feature-forage-ci-and-image` after its gates pass |
-| Tests | 1226 collected, all green (`uv run pytest`), hermetic via `pytest-socket` — **enforced in CI** since US-002, with a committed hermeticity canary |
+| Tests | 1250 collected, all green (`uv run pytest`), hermetic via `pytest-socket` — **enforced in CI** since US-002, with a committed hermeticity canary |
 | Lint | `uv run ruff check .` and `ruff format --check .` both clean — **enforced in CI** |
 | Types | `uv run pyright` (strict) is **clean — 0 errors**, no baseline; **enforced in CI** |
 | CI | `.github/workflows/ci.yml` — `lint`, `typecheck` and `test` jobs live; build/publish land across the rest of `feature-forage-ci-and-image` |

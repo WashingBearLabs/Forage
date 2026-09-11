@@ -197,6 +197,47 @@ not a quiet one. The outcome codes are a closed set; `skipped_no_token` means no
 credential was configured for that source, `misconfigured` means `FORAGE_WEIGHTS_MIRROR`
 could not be used, and anything else means the source was reached and did not deliver.
 
+#### Warm starts, and what makes the second boot fast
+
+Once the volume holds a verified set at the pinned revision, start-up **verifies it and
+loads it, and that is all** — no download, no `oras`, and no request to Hugging Face at
+any point, so a warm start works on a container with no egress whatsoever. Measured on
+the reference envelope (1 vCPU / 1 GB): **19 s cold, 9 s warm** — the warm figure taken
+with `--network none`.
+
+The three environment variables above are the whole surface, and two of them only matter
+on a cold boot: `FORAGE_MODEL_REVISION` decides which set counts as "the" set (change it
+and the next start is cold again), while `HF_TOKEN` and `FORAGE_MIRROR_TOKEN` are simply
+never read for their purpose when the cache already satisfies the pin.
+
+> **If you do not mount a volume at `HF_HOME`, the cache lives in the container's writable
+> layer.** That works and is not an error — it just means every `docker run` is a cold
+> boot and re-fetches ~270 MiB. The volume is named `forage-model-cache` by convention;
+> `docs/weights.md` § "The model cache volume" is the canonical spelling and describes
+> what is inside it.
+
+#### When a source is only temporarily unavailable
+
+A failed acquisition is not final. The service retries in the background — **30 s,
+doubling to a 10-minute ceiling, with ±20% jitter** — until the classifier loads, so a
+Hugging Face outage, a registry hiccup, or a gated-repo approval that arrives an hour
+after the container started all converge **without a restart**. The schedule is fixed in
+code rather than configurable: it bounds the load a fleet of sidecars puts on someone
+else's registry, and that bound is worth more than the flexibility.
+
+Two things follow for an operator:
+
+- **`/metrics`' `model.retries_scheduled`** counts the retries armed so far. Combined with
+  `fetch_in_progress` it separates the three states `/health` reports identically:
+  `fetch_in_progress: true` is downloading, `retries_scheduled > 0` with
+  `fetch_in_progress: false` is waiting for the next attempt, and both at zero on a
+  degraded container means the first attempt has not finished yet. Each armed retry also
+  logs a WARNING naming the delay.
+- **A credential-less container keeps saying so.** It retries at the ceiling for as long
+  as it runs, logging its terminal ERROR each time. That is deliberate — a service that
+  has been missing a capability for six hours should still be saying so — and it is the
+  same choice the Valkey reconnect makes.
+
 #### Credentials in logs
 
 Neither token is ever logged. Failures are reported through closed reason vocabularies —

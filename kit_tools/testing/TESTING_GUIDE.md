@@ -2,7 +2,7 @@
 # TESTING_GUIDE.md
 
 > Last updated: 2026-09-10
-> Updated by: Claude (forage-model-bootstrap US-003, build half)
+> Updated by: Claude (forage-model-bootstrap US-005)
 
 ## Quick Start
 
@@ -74,7 +74,7 @@ so `test_ci_workflow.py`, `test_pyright_policy.py`, `test_dependency_lock.py` an
 hermeticity canary all bit only on a developer's machine. The job runs `uv run pytest -q`
 with no selection filters, preceded by a named `uv run pytest -q
 tests/test_sanitizer_revision.py` step so the file-recall cache contract reports as its
-own red line instead of as nine failures inside a 1226-test log.
+own red line instead of as nine failures inside a 1250-test log.
 
 `pyright` runs with **no baseline and one carve-out**: `reportPrivateUsage` is off for
 `tests/` and nothing else is relaxed anywhere. Type-ignore comments are disabled
@@ -93,11 +93,11 @@ crash reads as a false regression.
 ## Test Structure
 
 27 files under `tests/`, flat, one module per subject, plus `fakes.py`, `golden/` and
-`fixtures/`. **1226 tests, all green** as of 2026-09-10.
+`fixtures/`. **1250 tests, all green** as of 2026-09-10.
 
 | Module | Tests | Covers |
 |--------|------:|--------|
-| `tests/test_model_fetcher.py` | 188 | `model_fetcher.py`: fail-closed manifest verification, exact-set + safetensors-only allowlist, symlink-resolving hashing, one-generation quarantine, the loadable safetensors fixture, and the acquisition pipeline — revision pin, `$HF_HOME/hub` resolution, the mocked HF fetch, token redaction |
+| `tests/test_model_fetcher.py` | 212 | `model_fetcher.py`: fail-closed manifest verification, exact-set + safetensors-only allowlist, symlink-resolving hashing, one-generation quarantine, the loadable safetensors fixture, the acquisition pipeline (revision pin, `$HF_HOME/hub` resolution, the mocked HF fetch, the `oras` mirror leg, token redaction), and US-005's warm start + retry loop — the counted-attempt proof that a warm load reaches no network, the normative 30 s→10 min jittered schedule, quarantine→re-fetch→loaded recovery on the real loader, single-flight, and clean cancellation |
 | `tests/test_vendor_weights.py` | 102 | `scripts/vendor_weights.py`: the symlink-dereferenced tarball (built, extracted, bytes compared), tar determinism, generation-time allowlist refusal, the manifest round-trip through the real verifier, credential hygiene on the `oras` path, and the private-package visibility check — all fixture-driven, no registry and no token |
 | `tests/test_stage2_structural.py` | 78 | Deterministic regex injection scan |
 | `tests/test_orchestrator.py` | 61 | End-to-end pipeline drive, search + retrieve paths |
@@ -107,7 +107,7 @@ crash reads as a false regression.
 | `tests/test_stage1_extraction.py` | 41 | HTML extraction, `raw_text` vs `main_content` |
 | `tests/test_stage4_structuring.py` | 39 | Response assembly + composite trust score |
 | `tests/test_models.py` | 31 | Pydantic request/response models |
-| `tests/test_app.py` | 40 | FastAPI endpoints, `/health` body, capability break-glass, the `/metrics` `model` counters, and the lifespan harness: startup yields immediately, `/health` latency during a fetch, the `promptguard_loaded` flip |
+| `tests/test_app.py` | 40 | FastAPI endpoints, `/health` body, capability break-glass, the `/metrics` `model` counters, and the lifespan harness: startup yields immediately, `/health` latency during a fetch, the `promptguard_loaded` flip, and the retry task's cancellation at shutdown |
 | `tests/test_stage3_promptguard.py` | 30 | ML scan; transformers/torch mocked |
 | `tests/test_ci_workflow.py` | 201 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane, image build + secret-grep gate, smoke job + artifact handoff, both publish lanes (tag policies evaluated, not matched) and the cross-fire guards between them |
 | `tests/test_contract_smoke.py` | 47 | `contract_smoke.py`: every `/health` clause, polling, and the single-source ties to the golden schema |
@@ -127,7 +127,7 @@ Support files:
 | File | Purpose |
 |------|---------|
 | `tests/conftest.py` | Puts the repo root on `sys.path`; installs the autouse socket guard |
-| `tests/fakes.py` | Shared fakes and builders: the fake cache, `assert_frozen`, and the Hugging Face cache-layout helpers (`materialize_hub_snapshot`, `hub_download_double`, `weights_manifest_document`) that `test_model_fetcher.py` and `test_app.py` both build fixtures from |
+| `tests/fakes.py` | Shared fakes and builders: the fake cache, `assert_frozen`, the Hugging Face cache-layout helpers (`materialize_hub_snapshot`, `hub_download_double`, `weights_manifest_document`) that `test_model_fetcher.py` and `test_app.py` both build fixtures from, and `record_network_attempts` — which *counts* outbound attempts rather than only refusing them, because a library that swallows the guard's error makes "blocked" and "never tried" look identical |
 | `tests/fixtures/tiny_model/` | A real, loadable 2-layer DeBERTa-v2 classifier (~96 KB, safetensors only) — the fixture that lets the *actual* loader be exercised rather than mocked |
 | `tests/golden/contract_1_0_0.json` | Frozen contract fixture for `test_contract_schema.py` |
 
@@ -167,9 +167,9 @@ canary cannot check about itself: that it is committed and not skipped.
 **Async needs no decorator.** `asyncio_mode = "auto"` is set in `pyproject.toml`.
 
 **The exact count is a gate, not a floor.** The extraction verified *exactly* 531 tests
-moved (534 collected after alias parametrization); the suite has since grown to 1226 as CI
+moved (534 collected after alias parametrization); the suite has since grown to 1250 as CI
 guards landed (US-001 +33, US-006 +19, US-002 +21, US-003 +49, US-005 +75, US-007 +40; then
-`forage-model-bootstrap` US-002 +87 and US-001 +56). A silently
+`forage-model-bootstrap` US-002 +87, US-001 +56, US-003 +102, US-004 +76 and US-005 +23). A silently
 dropped module cannot hide under a "≥ N passed" assertion. When you add tests, update the
 counts here.
 

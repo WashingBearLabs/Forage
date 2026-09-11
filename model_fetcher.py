@@ -119,15 +119,19 @@ test_mapping:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 import os
+import random
 import re
 import shutil
 import subprocess
 import tarfile
 import time
+from collections.abc import Generator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Protocol, cast
@@ -219,6 +223,21 @@ ORAS_TIMEOUT_S: Final = 1800.0
 # copy of the manifest total is not enough — 2x plus 10% slack is.
 _STAGING_COPIES: Final = 2
 _STAGING_SLACK: Final = 0.10
+
+# The retry schedule (US-005). **Normative constants, not configuration.** A
+# deployment that could move these could move the load the reference container
+# puts on a gated repository during an outage, and the whole point of a bounded
+# backoff is that it is bounded for everyone. 30 s is short enough that a
+# transient failure costs one interval; the 10-minute cap is long enough that a
+# container which will never acquire weights (no credentials at all) is not
+# hammering anything, and short enough that a late credential — a gated-repo
+# approval that lands while the container runs — converges within one.
+RETRY_INITIAL_BACKOFF_S: Final = 30.0
+RETRY_MAX_BACKOFF_S: Final = 600.0
+# Jitter, as a fraction either side of the base interval. Applied to the sleep
+# and never fed back into the base, so a long-running container's schedule
+# cannot drift away from the doubling it is meant to follow.
+RETRY_JITTER_FRACTION: Final = 0.20
 
 # The format allowlist. `.safetensors` is the weights format that cannot
 # execute code on load; the rest are the inert tokenizer/config files a
@@ -338,6 +357,7 @@ class ModelMetrics:
     verify_failures: int = 0
     quarantines: int = 0
     fetch_in_progress: bool = False
+    retries_scheduled: int = 0
 
     def record_fetch_failure(self) -> None:
         """Record one failed acquisition attempt against a source."""
@@ -350,6 +370,18 @@ class ModelMetrics:
     def record_quarantine(self) -> None:
         """Record one weight set moved out of the loader's scan tree."""
         self.quarantines += 1
+
+    def record_retry_scheduled(self) -> None:
+        """Record one retry armed after an acquisition failed to load.
+
+        Mirrors :attr:`cache.CacheMetrics.reconnect_attempts`: it moves when
+        the next attempt is *armed*, not when it starts, because that is the
+        moment an operator can act on. A non-zero value with
+        ``fetch_in_progress`` false is the "waiting to try again" state —
+        which, on a container whose logs drop INFO, is otherwise invisible
+        between the `weights_retry_scheduled` WARNING lines.
+        """
+        self.retries_scheduled += 1
 
 
 # ---------------------------------------------------------------------------
@@ -1399,6 +1431,46 @@ def _fetch_from_mirror(
     return OUTCOME_OK
 
 
+@contextmanager
+def _offline_hub() -> Generator[None]:
+    """Forbid ``huggingface_hub`` any outbound call for the duration.
+
+    ``local_files_only=True`` governs *file resolution*; it does not stop
+    ``huggingface_hub`` 1.x from phoning home while it builds request headers.
+    ``build_hf_headers()`` calls ``detect_agent()``, which fetches an "agent
+    harness registry" from ``{ENDPOINT}/api/agent-harnesses`` — on every hub
+    call, a fully-cached ``from_pretrained(..., local_files_only=True)``
+    included. It is best-effort (3 s timeout, every error swallowed, cached
+    24 h), so nothing *breaks*. It is still an outbound attempt on the load
+    path, and US-005's warm start has to mean zero.
+
+    **The documented knob does not work at run time, and that is the finding.**
+    ``HF_HUB_OFFLINE=1`` is sampled **at import** into
+    ``huggingface_hub.constants.HF_HUB_OFFLINE``; setting the environment
+    variable from a running process changes nothing, measured both ways. What
+    the variable ultimately sets is that constant, so that is what this sets —
+    narrowly, around the load, and restored in a ``finally``.
+
+    Scoping it to the load rather than the process is not a nicety: the same
+    flag disables ``snapshot_download``, so a process-wide pin would turn every
+    cold start into a permanent degraded mode. By the time the load runs the
+    download has already finished, which is why this is safe on the cold path
+    and load-bearing on the warm one.
+
+    Nothing else in the service calls the hub, and :class:`WeightAcquisition`
+    allows one acquisition in flight at a time, so no concurrent caller can
+    observe the flipped constant.
+    """
+    from huggingface_hub import constants
+
+    previous = constants.HF_HUB_OFFLINE
+    constants.HF_HUB_OFFLINE = True
+    try:
+        yield
+    finally:
+        constants.HF_HUB_OFFLINE = previous
+
+
 def _load_verified(
     classifier: SupportsWeightLoad,
     *,
@@ -1410,14 +1482,17 @@ def _load_verified(
     ``local_files_only=True`` because the exact file set was verified a moment
     ago: there is nothing left for the loader to go and look for, and an etag
     round-trip would make a loaded classifier depend on the hub still being
-    reachable.
+    reachable. :func:`_offline_hub` closes the remaining gap — the
+    header-building telemetry call that flag does not cover — so a warm start
+    makes **zero** network attempts rather than one swallowed one.
     """
     started_at = time.monotonic()
-    loaded = classifier.load(
-        revision=revision,
-        cache_dir=hub_cache_dir(cache_root),
-        local_files_only=True,
-    )
+    with _offline_hub():
+        loaded = classifier.load(
+            revision=revision,
+            cache_dir=hub_cache_dir(cache_root),
+            local_files_only=True,
+        )
     if loaded:
         logger.info(
             "weights_loaded — revision=%s duration=%.1fs",
@@ -1633,3 +1708,165 @@ def _try_source(
         return outcome
     verified = verify_weights(cache_root, manifest_path=manifest_path, metrics=metrics)
     return OUTCOME_OK if verified.ok else OUTCOME_REFUSED
+
+
+# ---------------------------------------------------------------------------
+# The retry: converging a degraded sidecar to loaded, without a restart
+# ---------------------------------------------------------------------------
+
+
+def next_backoff(current: float) -> float:
+    """The next base interval: double *current*, capped at the ceiling.
+
+    Pure, so the whole normative schedule — 30, 60, 120, 240, 480, 600, 600 —
+    can be asserted exactly rather than inferred from elapsed time.
+    """
+    return min(current * 2, RETRY_MAX_BACKOFF_S)
+
+
+def retry_delay(backoff: float) -> float:
+    """*backoff* jittered by +/- :data:`RETRY_JITTER_FRACTION`.
+
+    Jitter exists so that a fleet restarted together does not re-converge into
+    a synchronised thundering herd against the gated repository. It is applied
+    to the sleep and deliberately **not** fed back into the base interval: a
+    schedule that jittered its own state would random-walk away from the
+    doubling it is supposed to follow, and after a dozen intervals nobody could
+    say what the cap meant any more.
+    """
+    return backoff * random.uniform(
+        1.0 - RETRY_JITTER_FRACTION, 1.0 + RETRY_JITTER_FRACTION
+    )
+
+
+class WeightAcquisition:
+    """Drives :func:`acquire_and_load` to a loaded classifier, and keeps trying.
+
+    The sidecar's first real background task. It exists because acquisition can
+    fail for reasons that heal on their own — a Hugging Face outage, a registry
+    hiccup, a gated-repo approval that lands an hour after the container
+    started — and the alternative to retrying is asking an operator to restart a
+    service that is otherwise running correctly.
+
+    Three properties are load-bearing, and each mirrors machinery this
+    repository already has:
+
+    1. **Single-flight.** One acquisition is in flight at a time, ever. The lock
+       is held for the whole of :meth:`attempt_once`, and a caller who finds it
+       held is told so and turned away rather than queued — the same choice
+       ``cache.ContentCache._ensure_client`` makes for its reconnect, for a
+       sharper reason here: queuing a second acquisition behind the first means
+       a second ~270 MiB download starting the instant the first one finishes.
+    2. **Bounded backoff with jitter**, on ``_backoff_s`` / ``_next_retry_at``
+       named after ``ContentCache``'s so the two read alike. A real task is
+       justified where the cache got away with request-driven ``ping_if_due``:
+       a ping is cheap and a fetch takes minutes, and nothing else in the
+       service is going to poke this on the way past.
+    3. **Cancellable.** :meth:`run` is an ordinary coroutine whose only
+       suspension points are the acquisition and the sleep, so the lifespan's
+       ``task.cancel()`` unwinds it at either. One honest limit, inherited from
+       US-001: cancelling during an acquisition stops the *await*, not the
+       worker thread ``asyncio.to_thread`` is running it on — the container's
+       stop grace period is what bounds that in production.
+    """
+
+    def __init__(
+        self,
+        classifier: SupportsWeightLoad,
+        *,
+        metrics: ModelMetrics | None = None,
+        cache_root: Path | str | None = None,
+        revision: str | None = None,
+        manifest_path: Path | str | None = None,
+    ) -> None:
+        self._classifier = classifier
+        self._metrics = metrics if metrics is not None else ModelMetrics()
+        self._cache_root = cache_root
+        self._revision = revision
+        self._manifest_path = manifest_path
+        self._lock = asyncio.Lock()
+        self._backoff_s: float = RETRY_INITIAL_BACKOFF_S
+        self._next_retry_at: float | None = None
+
+    @property
+    def metrics(self) -> ModelMetrics:
+        """The counters this acquisition moves, shared with ``/metrics``."""
+        return self._metrics
+
+    @property
+    def in_flight(self) -> bool:
+        """Whether an acquisition is running right now."""
+        return self._lock.locked()
+
+    @property
+    def next_retry_at(self) -> float | None:
+        """``time.monotonic()`` deadline of the armed retry, or ``None``."""
+        return self._next_retry_at
+
+    @property
+    def backoff_s(self) -> float:
+        """The base interval the next retry will be jittered around."""
+        return self._backoff_s
+
+    async def attempt_once(self) -> bool:
+        """Run one acquisition off the event loop, unless one is in flight.
+
+        Returns whether the classifier is now loaded. ``False`` covers both
+        "the acquisition failed" and "another one was already running", which
+        is the same answer to the only question a caller has — and the two are
+        told apart in the log, not in the return type.
+
+        The blocking work goes to a thread for the reason
+        :func:`acquire_and_load` documents: it is synchronous network and torch
+        work, and ``/health`` has to keep answering through it.
+        """
+        if self._lock.locked():
+            logger.warning(
+                "weights_acquisition_in_flight — an acquisition is already "
+                "running; not starting a second one"
+            )
+            return False
+        async with self._lock:
+            return await asyncio.to_thread(
+                acquire_and_load,
+                self._classifier,
+                cache_root=self._cache_root,
+                revision=self._revision,
+                manifest_path=self._manifest_path,
+                metrics=self._metrics,
+            )
+
+    async def run(self) -> bool:
+        """Acquire, and keep retrying on the normative schedule until loaded.
+
+        Returns ``True`` once the classifier is loaded. It has no other ending:
+        the loop stops on success or on cancellation, and nothing in between is
+        treated as permanent. That is deliberate even for the stock,
+        credential-less container, which will retry at the 10-minute cap for as
+        long as it runs — ``CLAUDE.md`` invariant 5 says degradation is loud and
+        never silent, and a service that has been missing a capability for six
+        hours should still be saying so. ``cache.py`` made the same call for
+        Valkey, at the same cost.
+        """
+        while True:
+            if await self.attempt_once():
+                self._next_retry_at = None
+                self._backoff_s = RETRY_INITIAL_BACKOFF_S
+                return True
+            delay = retry_delay(self._backoff_s)
+            self._next_retry_at = time.monotonic() + delay
+            self._metrics.record_retry_scheduled()
+            # WARNING, not INFO: nothing in this repository configures logging,
+            # so the root logger drops INFO in the container and this line is
+            # the only thing that tells an operator the difference between
+            # "wedged" and "waiting" (`kit_tools/docs/GOTCHAS.md`).
+            logger.warning(
+                "weights_retry_scheduled — no verified weights yet; retry %d in "
+                "%.0fs (base %.0fs, jittered +/-%d%%)",
+                self._metrics.retries_scheduled,
+                delay,
+                self._backoff_s,
+                int(RETRY_JITTER_FRACTION * 100),
+            )
+            self._backoff_s = next_backoff(self._backoff_s)
+            await asyncio.sleep(delay)

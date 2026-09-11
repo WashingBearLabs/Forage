@@ -39,7 +39,7 @@ listed below exists, and nothing is listed that doesn't.
 - [ ] Read `../CLAUDE.md` for the invariants
 - [ ] Check `specs/epic-forage-extraction-forage-side.md` for what's in flight
 - [ ] Scan `docs/GOTCHAS.md`
-- [ ] Confirm the environment: `uv sync --extra dev && uv run pytest` (expect ALL green, zero failures — the current count lives in `kit_tools/testing/TESTING_GUIDE.md`; 1226 as of spec-2 US-004)
+- [ ] Confirm the environment: `uv sync --extra dev && uv run pytest` (expect ALL green, zero failures — the current count lives in `kit_tools/testing/TESTING_GUIDE.md`; 1250 as of spec-2 US-005)
 
 **Flag anything that looks like:**
 - A new coupling back to Poppy → stop, it is forbidden

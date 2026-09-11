@@ -2,13 +2,13 @@
 # CODE_ARCH.md
 
 > Last updated: 2026-09-10
-> Updated by: Claude (forage-model-bootstrap US-001)
+> Updated by: Claude (forage-model-bootstrap US-005)
 
 ---
 
 ## Overview
 
-Forage is a **single-process FastAPI service, 6,968 lines** (plus 1,146 lines of CI-only
+Forage is a **single-process FastAPI service, 7,218 lines** (plus 1,146 lines of CI-only
 smoke drivers and 1,124 lines of operator scripts under `scripts/`, none of which ship in
 any image; all figures measured outside `tests/`), with a deliberately flat
 module layout: the top-level modules sit at the repo root rather than inside a `forage/`
@@ -43,7 +43,8 @@ Design principles:
 ├── model_fetcher.py         # Weight acquisition: the pinned revision, the HF fetch,
 │                            # the GHCR mirror fallback (oras), exact-set manifest
 │                            # verification, safetensors-only allowlist,
-│                            # one-generation quarantine
+│                            # one-generation quarantine, and the single-flight
+│                            # backoff retry that converges a degraded sidecar
 ├── weights_manifest.json    # The committed weight pin — the real five-entry
 │                            # manifest since US-003's supervised vendoring run
 ├── contract_smoke.py        # CI-only: asserts a running image's /health contract.
@@ -76,7 +77,7 @@ Design principles:
 | Module | Lines | Responsibility |
 |--------|------:|----------------|
 | `pipeline/orchestrator.py` | 853 | Drives the five stages end to end; owns the SearXNG engine list and `_DEFAULT_SEARXNG_URL`. The busiest file in the repo. |
-| `retrieval_app.py` | 892 | FastAPI app + the five endpoints, startup wiring, `/health` body assembly, the legacy-capability break-glass warning. |
+| `retrieval_app.py` | 905 | FastAPI app + the five endpoints, startup wiring, `/health` body assembly, the legacy-capability break-glass warning. |
 | `cache.py` | 456 | Valkey content cache. **Never logs the connection URL** — it may carry a password; enforced by a closed log vocabulary and a dedicated regression test. |
 | `models.py` | 313 | Pydantic models for every request and response shape. |
 | `pipeline/stage4_structuring.py` | 308 | Assembles the response object and the composite trust score. |
@@ -89,7 +90,7 @@ Design principles:
 | `pipeline/extraction_limits.py` | 181 | Resource limits from `config.yaml`'s `extraction:` block. |
 | `pipeline/stage1_upload.py` | 172 | Upload path for `/extract` (gated by `extract_route_enabled`). |
 | `promptguard/classifier.py` | 211 | Loads and runs Llama Prompt Guard 2 (`use_safetensors=True` — the loader can never fall back to a pickle); absent weights → degraded, never silent. |
-| `model_fetcher.py` | 1635 | Weight acquisition end to end. The one gate every source passes — fail-closed manifest verification, exact-set + safetensors-only allowlist, symlink-resolving hashing over `snapshots/<revision>/`, one-generation quarantine, the `ModelMetrics` counters `/metrics` exports — plus `acquire_and_load()`, the boot pipeline the lifespan runs in a worker thread: verify the cache, then **Hugging Face, then the GHCR mirror**, then one ERROR naming both. The mirror leg shells out to the image's pinned `oras`, extracts with `filter="data"` into a bounded staging area, verifies *there*, and installs by rename. Owns the revision pin, the `$HF_HOME/hub` resolution both the download and the loader are handed, and the five environment variables the acquisition path reads. |
+| `model_fetcher.py` | 1872 | Weight acquisition end to end. The one gate every source passes — fail-closed manifest verification, exact-set + safetensors-only allowlist, symlink-resolving hashing over `snapshots/<revision>/`, one-generation quarantine, the `ModelMetrics` counters `/metrics` exports — plus `acquire_and_load()`, the boot pipeline the lifespan runs in a worker thread: verify the cache, then **Hugging Face, then the GHCR mirror**, then one ERROR naming both. The mirror leg shells out to the image's pinned `oras`, extracts with `filter="data"` into a bounded staging area, verifies *there*, and installs by rename. Owns the revision pin, the `$HF_HOME/hub` resolution both the download and the loader are handed, and the five environment variables the acquisition path reads. `WeightAcquisition` wraps that pipeline in the service's only background loop: single-flight, 30 s→10 min jittered backoff, cancellable, and a hub-offline pin scoped to the load so a warm start makes zero network attempts. |
 | `pipeline/stage1_pdf.py` | 156 | PDF branch of stage 1. |
 | `pipeline/stage3_promptguard.py` | 151 | ML injection scan; skipped for trusted domains. |
 | `pipeline/contract.py` | 100 | The versioned response contract (`contract_version`, currently **1.0.0**). |
@@ -118,14 +119,26 @@ Nothing downstream may assume Poppy↔Forage revision parity.
 
 **Startup is non-blocking, and one background task is the reason.** The lifespan does its
 synchronous wiring, starts weight acquisition as
-`asyncio.create_task(asyncio.to_thread(model_fetcher.acquire_and_load, ...))`, and yields
-— it never awaits the fetch. uvicorn serves nothing until lifespan startup returns, so an
-`await` there would hold the port closed for the length of a ~270 MiB download and a
-compose healthcheck would restart-loop the container. The handle lives on
-`app.state.model_task` and is cancelled at shutdown. `/health` reads
-`classifier.loaded` per request, so `promptguard_loaded` flips in place when the load
-lands; `/metrics`' `model.fetch_in_progress` is what tells "downloading" from "wedged"
-while it has not.
+`asyncio.create_task(model_fetcher.WeightAcquisition(...).run())`, and yields — it never
+awaits the fetch. uvicorn serves nothing until lifespan startup returns, so an `await`
+there would hold the port closed for the length of a ~270 MiB download and a compose
+healthcheck would restart-loop the container. The handle lives on `app.state.model_task`
+and is cancelled at shutdown. `/health` reads `classifier.loaded` per request, so
+`promptguard_loaded` flips in place when the load lands; `/metrics`'
+`model.fetch_in_progress` is what tells "downloading" from "wedged" while it has not.
+
+**That task is a retry loop, and it has three properties worth knowing** (US-005).
+`WeightAcquisition.run()` retries acquisition on a **30 s backoff doubling to a 10-minute
+cap, jittered ±20%** — normative constants, deliberately not environment variables —
+until the classifier loads, so an outage or a late gated-repo approval converges without
+a restart; `model.retries_scheduled` and a per-retry WARNING are what distinguish
+"waiting" from "wedged". Exactly **one acquisition is in flight at a time**: the lock is
+held for the whole of `attempt_once()`, and a second caller is turned away rather than
+queued, because queuing means a second ~270 MiB download the moment the first ends
+(`app.state.model_acquisition` is the object any future caller must go through). And the
+load itself runs under a **scoped hub-offline pin** — `local_files_only=True` does not
+stop `huggingface_hub` from fetching its agent-harness registry while building headers,
+and a warm start has to mean zero attempts, not zero successes.
 
 **The response contract is versioned and consumers refuse on a mismatch.** Any change to
 a response shape is a contract change: bump `contract_version` in `pipeline/contract.py`,
