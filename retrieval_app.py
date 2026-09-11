@@ -22,7 +22,7 @@ from typing import Annotated, Any, Literal, get_args
 import yaml
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.datastructures import State
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -49,7 +49,12 @@ from pipeline.contract import (
     CONTRACT_VERSION,
     DEGRADED_CACHE_UNAVAILABLE,
     DEGRADED_PROMPTGUARD_UNAVAILABLE,
+    Admission413ErrorCode,
+    DegradedReason,
+    Extract422ErrorCode,
+    Pipeline422ErrorCode,
     PromptGuardState,
+    RateLimit429ErrorCode,
 )
 from pipeline.extraction_limits import (
     MAX_INPUT_BYTES,
@@ -256,7 +261,18 @@ class HealthResponse(BaseModel):
             "— read cache_backend for that."
         )
     )
-    capabilities: dict[str, int]
+    capabilities: dict[str, int] = Field(
+        description=(
+            "Sanitization capabilities this deployment advertises, as a "
+            "presence map: a key is present with the value 1 when the "
+            "capability is available and absent otherwise. One key is defined "
+            "in contract 1.1.0 — 'search_sanitization', present when "
+            "PromptGuard is loaded (or when the break-glass override is "
+            "armed; see docs/configuration.md). Deliberately a dict rather "
+            "than an enum: a consumer reads the keys it knows and ignores the "
+            "rest, so a future capability is an additive-safe MINOR change."
+        )
+    )
     sanitizer_revision: str
     contract_version: str
     cache_backend: CacheBackend = Field(
@@ -266,7 +282,177 @@ class HealthResponse(BaseModel):
             "contract 1.1.0."
         )
     )
-    degraded_reasons: list[str] = []
+    degraded_reasons: list[DegradedReason] = Field(
+        default=[],
+        description=(
+            "Why status is 'degraded', as closed-vocabulary reason codes. "
+            "Empty exactly when status is 'healthy'. The members are derived "
+            "from contract.DegradedReason, which is also what this field is "
+            "validated against on the way out — so a reason added to the "
+            "handler without being added to the alias fails response "
+            "validation loudly instead of reaching a consumer unannounced."
+        ),
+    )
+
+
+# The error bodies below are **mirrors**, not emitters. Every one of them
+# documents a shape some site in this module already puts on the wire, and not
+# one emission site was changed to route through them: ``responses=``
+# declarations make them visible in ``app.openapi()``, and
+# ``tests/test_contract_errors.py`` drives each site through the real routes
+# and asserts the model reproduces the emitted body byte-for-byte. That pairing
+# is the whole design — documentation follows the wire, and the parity test is
+# what stops it drifting. ``extra="forbid"`` is part of the leash: a field
+# appearing on the wire that the mirror does not carry fails the parity test at
+# validation rather than passing unnoticed.
+
+
+class Extract422ErrorResponse(BaseModel):
+    """``POST /extract`` document failure — the 422 ``PipelineError`` shape.
+
+    Emitted by :func:`pipeline_error_handler`, which appends
+    ``sanitizer_revision`` on ``/extract`` paths only. That fourth field is a
+    hard requirement of Poppy's client, which rejects a 422 without it as a
+    protocol failure (``poppy/core/retrieval/client.py``), so it is documented
+    here as required rather than left to be discovered from a rejection.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    error: Extract422ErrorCode = Field(
+        description="Stable machine-readable failure code."
+    )
+    reason: str = Field(description="Fixed, content-free user message for this code.")
+    request_id: str = Field(
+        description="Sidecar-generated id for correlating logs with this failure."
+    )
+    sanitizer_revision: str = Field(
+        description=(
+            "The pipeline revision that refused this document. Present on "
+            "every /extract 422 and on no other error body."
+        )
+    )
+
+
+class Pipeline422ErrorResponse(BaseModel):
+    """``POST /retrieve`` and ``POST /search`` refusal — the 422 shape.
+
+    The same handler as :class:`Extract422ErrorResponse`, minus the
+    ``sanitizer_revision`` it adds only on ``/extract`` paths.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    error: Pipeline422ErrorCode = Field(
+        description=(
+            "Stable machine-readable refusal code. The fetch and URL-validation "
+            "codes arrive on /retrieve, the searxng_* codes on /search."
+        )
+    )
+    reason: str = Field(
+        description=(
+            "Human-readable detail. Unlike the /extract reasons this is not "
+            "content-free: a /retrieve refusal echoes the requested URL, and "
+            "private_ip echoes the resolved address. Deployments exposing "
+            "Forage beyond a private network should treat it accordingly."
+        )
+    )
+    request_id: str = Field(
+        description="Sidecar-generated id for correlating logs with this refusal."
+    )
+
+
+class Admission413Response(BaseModel):
+    """``POST /extract`` streaming size refusal — the 413 shape.
+
+    :class:`DocumentSizeLimitMiddleware` rejects the request while its ASGI
+    body is still streaming, before any handler or request id exists. That is
+    why this body carries **no** ``request_id`` where every other coded error
+    does — the difference is real, not an oversight to be tidied away.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    error: Admission413ErrorCode = Field(
+        description="Always 'content_too_large' at this status."
+    )
+    reason: str = Field(
+        description="Fixed, content-free user message for the size limit."
+    )
+
+
+class RateLimit429Response(BaseModel):
+    """``POST /extract`` admission refusal — the 429 shape.
+
+    Emitted by :class:`ExtractionAdmissionMiddleware` when the bounded queue is
+    full. Four fields: the middleware mints a request id and reads the process
+    revision itself, so this body matches the /extract 422 shape even though it
+    never passes through the error handler.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    error: RateLimit429ErrorCode = Field(description="Always 'busy' at this status.")
+    reason: str = Field(
+        description="Fixed, content-free user message for the busy refusal."
+    )
+    request_id: str = Field(
+        description="Middleware-generated id for correlating logs with this refusal."
+    )
+    sanitizer_revision: str = Field(
+        description=(
+            "The pipeline revision of the process that refused admission. "
+            "Empty string if the request arrived before the lifespan "
+            "published one."
+        )
+    )
+
+
+class DetailResponse(BaseModel):
+    """The bare ``{\"detail\": ...}`` body, as FastAPI's ``HTTPException`` emits it.
+
+    Used by ``/extract`` for the release-gate 404 and the two admission 503s.
+    These three carry no ``error`` code at all — they are pre-pipeline
+    conditions rather than document failures, and homogenizing them into the
+    coded envelope would be a wire change this spec forbids.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    detail: str = Field(
+        description="Short reason phrase: 'Not Found' (404) or 'Unavailable' (503)."
+    )
+
+
+class ValidationErrorDetail(BaseModel):
+    """One entry of FastAPI's default request-validation error list.
+
+    Deliberately **not** ``extra=\"forbid\"``: pydantic adds ``input`` and
+    sometimes ``ctx``/``url`` per error type, and this model documents the
+    stable trio rather than pretending to close the set.
+    """
+
+    loc: list[str | int] = Field(
+        description="Path to the offending field within the request."
+    )
+    msg: str = Field(description="Human-readable validation message.")
+    type: str = Field(description="Pydantic error type, e.g. 'missing'.")
+
+
+class HTTPValidationError(BaseModel):
+    """FastAPI's default 422 body for a malformed request.
+
+    Mirrored here because declaring a 422 response stops FastAPI auto-adding
+    its own — verified against the locked FastAPI in
+    ``tests/test_contract_errors.py`` — and the service genuinely still returns
+    this body for a request that fails schema validation before any pipeline
+    code runs. Every declared 422 is therefore a union of the route's pipeline
+    shape and this one.
+    """
+
+    detail: list[ValidationErrorDetail] = Field(
+        default=[], description="One entry per failed field."
+    )
 
 
 _MAX_FILENAME_LENGTH = 255
@@ -789,6 +975,18 @@ async def pipeline_error_handler(
 
 
 # -- Routes --
+#
+# The ``responses=`` declarations below name exactly the route/status pairs
+# that emit an error body today, and no others. ``/health`` and ``/metrics``
+# get none: both only ever answer 200 — ``/health`` reports degradation in its
+# body by design (see :class:`HealthResponse`), and neither takes a request
+# body that could fail validation. The 404/413/429/503 declarations sit on
+# ``/extract`` alone because both middlewares gate on ``path == "/extract"``.
+
+_PIPELINE_422_DESCRIPTION = (
+    "Pipeline refusal (coded body) or request validation failure "
+    "(FastAPI's default body)."
+)
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -806,7 +1004,7 @@ async def health(request: Request) -> HealthResponse:
     sanitizer_revision = _resolved_sanitizer_revision(request.app.state)
 
     classifier_loaded = request.app.state.classifier.loaded
-    degraded_reasons: list[str] = []
+    degraded_reasons: list[DegradedReason] = []
     if not classifier_loaded:
         degraded_reasons.append(DEGRADED_PROMPTGUARD_UNAVAILABLE)
     if not cache_connected:
@@ -897,7 +1095,16 @@ async def metrics(request: Request) -> dict[str, Any]:
     }
 
 
-@app.post("/retrieve", response_model=RetrievedContent)
+@app.post(
+    "/retrieve",
+    response_model=RetrievedContent,
+    responses={
+        422: {
+            "model": Pipeline422ErrorResponse | HTTPValidationError,
+            "description": _PIPELINE_422_DESCRIPTION,
+        },
+    },
+)
 async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
     """Retrieve and sanitize web content through the full pipeline."""
     retrieve_metrics: RetrieveMetrics = request.app.state.retrieve_metrics
@@ -917,7 +1124,60 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
     return content
 
 
-@app.post("/extract", response_model=ExtractedContent)
+@app.post(
+    "/extract",
+    response_model=ExtractedContent,
+    responses={
+        400: {
+            "model": DetailResponse,
+            "description": (
+                "The request body could not be parsed as multipart form data. "
+                "FastAPI's own body-parsing guard produces this, with the "
+                "fixed detail 'There was an error parsing the body' — and it "
+                "is also what an over-sized upload actually receives today: "
+                "the guard catches the streaming size refusal below before it "
+                "can become a 413. Measured on the pinned FastAPI; see "
+                "kit_tools/docs/GOTCHAS.md."
+            ),
+        },
+        404: {
+            "model": DetailResponse,
+            "description": (
+                "The extract route is disabled for this deployment "
+                "(extract_route_enabled is false)."
+            ),
+        },
+        413: {
+            "model": Admission413Response,
+            "description": (
+                "The request body crossed the byte limit while streaming; "
+                "refused before multipart parsing, so no request_id exists. "
+                "Documented because DocumentSizeLimitMiddleware emits exactly "
+                "this shape, but currently shadowed on this route: see the "
+                "400 above."
+            ),
+        },
+        422: {
+            "model": Extract422ErrorResponse | HTTPValidationError,
+            "description": (
+                "Document failure (coded body, carrying sanitizer_revision) or "
+                "request validation failure (FastAPI's default body)."
+            ),
+        },
+        429: {
+            "model": RateLimit429Response,
+            "description": "Extraction is at capacity and the admission queue is full.",
+        },
+        503: {
+            "model": DetailResponse,
+            "description": (
+                "The extraction admission controller is not wired up — a "
+                "process that is starting, or one served by a transport that "
+                "never ran the lifespan."
+            ),
+        },
+    },
+)
 async def extract(
     request: Request,
     file: Annotated[UploadFile, File()],
@@ -1023,7 +1283,16 @@ async def extract(
             spool.path.unlink(missing_ok=True)
 
 
-@app.post("/search", response_model=SearchResponse)
+@app.post(
+    "/search",
+    response_model=SearchResponse,
+    responses={
+        422: {
+            "model": Pipeline422ErrorResponse | HTTPValidationError,
+            "description": _PIPELINE_422_DESCRIPTION,
+        },
+    },
+)
 async def search(request: Request, body: SearchRequest) -> SearchResponse:
     """Run a web search through SearXNG with snippet sanitization."""
     search_metrics: SearchMetrics = request.app.state.search_metrics
