@@ -65,7 +65,7 @@ services:
   forage:
     # ghcr.io/washingbearlabs/forage, tag 0.9.3-rc — the first tag TO BE published
     # carrying contract 1.1.0 + cache_backend (0.9.1-rc predates them; 0.9.2-rc
-    # failed its publish parity gate cold and was withdrawn). Superseded by v1.0.0 at
+    # failed its publish parity gate cold; its git tag was withdrawn, package-version deletion pending). Superseded by v1.0.0 at
     # `feature-forage-contract`; see the IMAGE PINS note above.
     image: ghcr.io/washingbearlabs/forage:0.9.3-rc
     restart: unless-stopped

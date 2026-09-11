@@ -290,10 +290,10 @@ reaches a working `/retrieve` + `/search` round-trip.
 - [ ] Both fragments committed with code-matching service hostnames; `config -q` green in
       CI for both; loopback-only port bindings; manual smoke transcript recorded (this AC
       is a **human gate** — marked supervised in the epic wrapper, round-2 finding).
-- [ ] README mode matrix + posture line; fragments referenced from the quickstart.
-- [ ] Tests written/updated for new functionality (the CI `config -q` step counts)
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run pyright` passes
+- [x] README mode matrix + posture line; fragments referenced from the quickstart.
+- [x] Tests written/updated for new functionality (the CI `config -q` step counts)
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run pyright` passes
 
 ## Edge Cases
 
@@ -886,12 +886,12 @@ touches is a `_REVISION_SOURCES` member.
 
 ---
 
-#### > **What the guards do NOT prove:** every fragment test in
+> **What the guards do NOT prove:** every fragment test in
 > `tests/test_compose_fragments.py` is parse-only — tag *shape*, service names, bindings —
 > with no registry call anywhere. A green suite is not a pullable pin; the pull happens
 > here, in this smoke, which is part of why it is a gate.
 
-**Manual smoke — HUMAN GATE, pending**
+#### Manual smoke — **HUMAN GATE, pending**
 
 > The AC's *"manual smoke transcript recorded"* clause. **Not executed by the
 > implementer.** The supervisor runs this with the owner and pastes the transcript
