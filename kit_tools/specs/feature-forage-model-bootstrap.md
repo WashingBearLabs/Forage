@@ -320,18 +320,18 @@ classifier loads on a later retry without restart.
   literal in one doc place (`docs/weights.md`) both specs cite.
 
 **Acceptance Criteria:**
-- [ ] Warm start: zero network (socket-guarded + `local_files_only=True`), verified, loaded
+- [x] Warm start: zero network (socket-guarded + `local_files_only=True`), verified, loaded
       <60 s.
-- [ ] Backoff retry (normative schedule) converges after transient failure without restart;
+- [x] Backoff retry (normative schedule) converges after transient failure without restart;
       the quarantine → re-fetch → loaded recovery path test-asserted end-to-end (round-2
       gap: claimed in Edge Cases with no AC); single-flight enforced; task cancels cleanly
       on shutdown (test-asserted).
-- [ ] `docs/configuration.md` updated with the three new env vars (`FORAGE_MODEL_REVISION`,
+- [x] `docs/configuration.md` updated with the three new env vars (`FORAGE_MODEL_REVISION`,
       `FORAGE_WEIGHTS_MIRROR`, `FORAGE_MIRROR_TOKEN`) — spec 1's "every env var" doc
       (round-2 gap).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run pyright` passes
 
 ### US-006: Third-party token documentation
 
@@ -1329,7 +1329,7 @@ warm `local_files_only=True` load of the committed fixture:
 
 | Mechanism | Outbound attempts | Loads? |
 |---|---|---|
-| none | **1** — `getaddrinfo('huggingface.co', 443)` | yes |
+| none | **1** — `create_connection(('huggingface.co', 443))` (httpx/httpcore; an earlier draft said getaddrinfo — corrected at verification) | yes |
 | `os.environ["HF_HUB_OFFLINE"] = "1"` at run time | **1** — unchanged | yes |
 | `huggingface_hub.constants.HF_HUB_OFFLINE = True` | **0** | yes |
 
@@ -1411,18 +1411,28 @@ the whole of `attempt_once()`; a caller that finds it held gets `False` and a WA
 This mirrors `cache.ContentCache._ensure_client` ("a caller that finds a reconnect already
 in flight gets an immediate miss rather than waiting on it") for a sharper reason: queuing
 here means a second ~270 MiB download starting the instant the first one finishes. The
-acquisition object lives on `app.state.model_acquisition` precisely so a future second
-caller — a `/reload` endpoint, spec 6's readiness poke — goes through the same lock rather
-than instantiating its own.
+acquisition object lives on `app.state.model_acquisition` so any future second caller
+goes through the same lock rather than instantiating its own. *(Supervisor correction
+2026-09-12: the callers this passage originally named were fictional — no `/reload`
+endpoint exists anywhere in the family, and spec 6's readiness wait is an external
+`/health` poll, not an in-process poke. The seam's real consumers today are the lifespan
+wiring and the identity-pinning test; it is cheap, pattern-consistent scaffolding, kept
+on those grounds.)*
 
 **It retries forever, and that is the deliberate half of the design.** The loop stops on a
 loaded classifier or on cancellation, and nothing in between is treated as permanent. The
 cost is real and worth stating plainly: the **stock, credential-less container retries at
 the 10-minute ceiling for as long as it runs**, logging US-004's terminal ERROR each time
-— roughly 144 lines a day where it previously logged one. Three things made that the right
-trade rather than a regression. `CLAUDE.md` invariant 5 says degradation is loud and never
+— measured at **576 log lines a day** (4 `weights_*` lines per attempt; 144 of them the
+terminal ERROR) where it previously logged one. Three things made that the right trade
+rather than a regression. `CLAUDE.md` invariant 5 says degradation is loud and never
 silent, and a service that has been missing a capability for six hours should still be
-saying so. `cache.py` already made the identical call for Valkey, at the identical cost.
+saying so. `cache.py` made the *same posture choice* for Valkey — keep signalling, never
+go quiet — though not an identical mechanism (its recovery is request-driven and idle
+means silent, caps at 30 s, and logs WARNING rather than ERROR; supervisor correction
+2026-09-12). A cheaper-noise variant (ERROR on state-change, WARNING heartbeat after) was
+weighed at verification and deliberately NOT taken now — the loud form is shipped and
+test-pinned; revisit in Epic 4 if operational noise proves real.
 And the alternative — classifying some failures as permanent — is wrong on the facts: the
 Overview's "late-credentialed" case is a token that is *present but not yet approved* for
 the gated repo, which heals in-process on a retry and on nothing else.

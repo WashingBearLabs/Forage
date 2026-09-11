@@ -192,7 +192,7 @@ sampled once at import into `huggingface_hub.constants.HF_HUB_OFFLINE`
 (`constants.py:192`) and `_fetch_registry` reads that constant, so setting the environment
 variable from a running process changes nothing at all. Measured on a cold `HF_HOME`:
 with `os.environ["HF_HUB_OFFLINE"] = "1"` the warm load still made one
-`getaddrinfo('huggingface.co', 443)`; with `constants.HF_HUB_OFFLINE = True` it made none,
+`create_connection(('huggingface.co', 443))` (httpx/httpcore; an earlier draft recorded getaddrinfo); with `constants.HF_HUB_OFFLINE = True` it made none,
 and loaded identically.
 
 **Mitigation:** `model_fetcher._offline_hub()` sets **the constant**, scoped to the
