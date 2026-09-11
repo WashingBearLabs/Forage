@@ -1,7 +1,7 @@
 <!-- Template Version: 2.0.0 -->
 # CODE_ARCH.md
 
-> Last updated: 2026-09-10
+> Last updated: 2026-09-11
 > Updated by: Claude (forage-model-bootstrap US-005)
 
 ---
@@ -117,7 +117,9 @@ pyright-strict burn-down retyped `stage1_extraction.py` and `stage2_structural.p
 pinned revision joined the identity (`0537316d…` → `5927038d…`, no source byte moved), and
 a fifth with the contract bump to `1.1.0` (`5927038d…` → `fa4691c5…`, `contract.py` +
 `orchestrator.py`) — the first rotation taken *for* the invalidation rather than despite
-it, now that the revision keys the content cache.
+it, now that the revision keys the content cache — and a sixth when the error vocabulary
+joined `contract.py` (`fa4691c5…` → `8b1b7f78…`, `forage-contract` US-001: typing and
+docstrings only, zero wire bytes changed, contract still `1.1.0`).
 Nothing downstream may assume Poppy↔Forage revision parity.
 
 **Startup is non-blocking, and one background task is the reason.** The lifespan does its

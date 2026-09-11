@@ -1,7 +1,7 @@
 <!-- Template Version: 2.0.0 -->
 # GOTCHAS.md
 
-> Last updated: 2026-09-10
+> Last updated: 2026-09-11
 > Updated by: Claude (forage-model-bootstrap US-004)
 
 ## Overview
@@ -217,6 +217,55 @@ contains only what we put there will be surprised by it.
 
 ---
 
+### An over-sized upload gets **400**, not the 413 the size middleware emits
+
+**Location:** `retrieval_app.py` (`DocumentSizeLimitMiddleware`), the `/extract` route
+**Severity:** 🟡 Medium
+**Added:** 2026-09-11 (`feature-forage-contract` US-001; measured on FastAPI 0.141.1)
+
+**What happens:**
+`DocumentSizeLimitMiddleware` refuses an over-sized body by raising
+`_RequestBodyTooLargeError` out of the ASGI `receive` callable it wraps, and catches it
+to emit `413 {"error": "content_too_large", "reason": ...}`. On `/extract` that
+exception is never its own to catch. The route is a multipart form route, so the first
+thing to pull from `receive` is FastAPI's `await request.form()` — and
+`fastapi/routing.py` wraps *any* exception out of that call in
+`HTTPException(400, "There was an error parsing the body")`. The 400 response is
+produced and sent inside the middleware's `await self._app(...)`, which then returns
+normally, so the `except _RequestBodyTooLargeError` block never runs.
+
+Measured three ways against the running app:
+
+| Request | Result |
+|---|---|
+| multipart upload over the limit | **400** `{"detail":"There was an error parsing the body"}` |
+| `application/x-www-form-urlencoded` body over the limit | **400**, same body |
+| `application/json` body over the limit | **422** validation error — starlette never streams the body for a non-form content type, so the byte counter never runs at all |
+
+**Why it matters:**
+The 413 reads like live behaviour in the source and in every design document that
+describes the admission path, and it is not reachable from outside. A consumer writing a
+handler for 413 will never see one; the code it must actually handle for an over-sized
+upload is a 400 whose body carries no `error` field at all. The byte *cap* still works —
+nothing over the limit is spooled or extracted — so this is a wrong-status bug, not a
+missing-limit one.
+
+**Mitigation:**
+Both statuses are declared on `/extract` in the OpenAPI contract, with the 413's
+description saying it is shadowed, so the document does not promise a response the
+service cannot send. Two tests hold the line:
+`tests/test_contract_errors.py::test_extract_oversized_upload_actually_receives_400`
+pins the real behaviour (a FastAPI change would make it red), and
+`test_extract_413_body_is_mirrored_and_carries_no_request_id` exercises the middleware at
+the ASGI seam, which is the only place the 413 shape can be produced.
+
+**If this is ever fixed**, it is a **wire change** — a status a consumer sees moves from
+400 to 413 — and it belongs to whoever owns the next contract bump, not to a passing
+refactor. `feature-forage-contract` is explicitly a zero-wire-byte spec and deliberately
+left the behaviour alone.
+
+---
+
 ### SearXNG `:latest` rots: stale scraper fingerprints get bot-blocked by every engine
 
 **Location:** `searxng/config/settings.yml`, the companion SearXNG image
@@ -310,7 +359,7 @@ recipe.
 
 **What happens:**
 `derive_sanitizer_revision()` hashes eight source files plus the model identity and the
-active threshold. Forage's revision has moved five times, each time at a boundary and each
+active threshold. Forage's revision has moved six times, each time at a boundary and each
 time deliberately:
 
 | When | Value | What moved it |
@@ -321,11 +370,12 @@ time deliberately:
 | `forage-ci-and-image` US-006 | `0537316d…e3e253` | pyright-strict burn-down retyped `stage1_extraction.py` + `stage2_structural.py` |
 | `forage-model-bootstrap` US-001 | `5927038d…19d111` | the hashed model identity became `MODEL_ID@revision` — **no source byte moved** |
 | `forage-cache-fallback` US-003 | `fa4691c5…93547c` | `contract.py` bumped to `1.1.0` **and** `orchestrator.py` threaded the revision into the cache key — the rotation whose *point* is the invalidation |
+| `forage-contract` US-001 | `8b1b7f78…196d7c` | `contract.py` gained the 17-code error vocabulary and `DegradedReason` as derived Literals — documentation only, contract still `1.1.0`, and the **one** rotation the whole of `feature-forage-contract` gets |
 
 Poppy's in-tree copy stayed on the original value throughout. Five of the eight sources
 are still byte-identical between the repos; the revision is not.
 
-**None of the five rotations changed sanitization behaviour** — but the fourth and fifth
+**None of the six rotations changed sanitization behaviour** — but the fourth and fifth
 are different *kinds* of rotation and worth reading as such. The first three moved because
 the hash is over bytes and someone reformatted or retyped a hashed file. The fourth moved
 because an **input changed**: weights are a runtime, per-deployment thing now
@@ -346,6 +396,13 @@ file rotates the revision and invalidates every cached sanitization keyed on it.
 deliberately, at a boundary, with the before/after recorded (as
 `docs/bootstrap-notes.md` does) — never as a drive-by inside a behavioural change, where
 it would be indistinguishable from a real sanitizer change.
+
+The sixth is the fifth's mechanism used as intended, one spec later:
+`feature-forage-contract` US-001 added the error vocabulary to `contract.py`, changed no
+wire byte (per-site parity tests prove it) and left `CONTRACT_VERSION` at `1.1.0` — and
+the cache flush it causes is the *correct* consequence, not a cost to apologise for.
+That spec acknowledged **one** rotation for all five of its stories, and this was it: the
+remaining stories must stay out of `_REVISION_SOURCES` or be content-neutral there.
 
 US-006's rotation is the one to read carefully: `stage2_structural.py` took an annotation
 only (`field(default_factory=list[FlaggedSpan])`), but `stage1_extraction.py` took a real

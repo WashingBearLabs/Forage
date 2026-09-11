@@ -1,7 +1,7 @@
 <!-- Template Version: 2.1.0 -->
 # TESTING_GUIDE.md
 
-> Last updated: 2026-09-10
+> Last updated: 2026-09-11
 > Updated by: Claude (forage-model-bootstrap US-005)
 
 ## Quick Start
@@ -92,8 +92,10 @@ crash reads as a false regression.
 
 ## Test Structure
 
-27 files under `tests/`, flat, one module per subject, plus `fakes.py`, `golden/` and
-`fixtures/`. **1251 tests, all green** as of 2026-09-10.
+28 files under `tests/`, flat, one module per subject, plus `fakes.py`, `golden/` and
+`fixtures/`. **1427 tests, all green** as of 2026-09-11 (`feature-forage-contract`
+US-001 added `test_contract_errors.py`'s 25; the per-module counts in the table below
+have not all been re-measured since 2026-09-10).
 
 | Module | Tests | Covers |
 |--------|------:|--------|
@@ -120,6 +122,7 @@ crash reads as a false regression.
 | `tests/test_hermeticity.py` | 8 | Executing canary for the autouse socket guard |
 | `tests/test_sanitizer_revision.py` | 9 | Revision hashing over `_REVISION_SOURCES` and the `MODEL_ID@revision` model identity |
 | `tests/test_dependency_lock.py` | 3 | `uv.lock` stays CPU-only (no `nvidia-*` wheels) |
+| `tests/test_contract_errors.py` | 25 | The documented error surface: the seventeen-code vocabulary swept from every raise site in the repo, pinned against Poppy's inlined allowlist; per-emission-site parity (each mirror model reproduces the live body byte-for-byte, driven through the real routes); the `responses=` declaration map; and the FastAPI 422-suppression behaviour the union declarations rest on |
 | `tests/test_contract_schema.py` | 1 | Golden contract fixture vs `pipeline/contract.py` |
 
 Support files:
@@ -129,7 +132,7 @@ Support files:
 | `tests/conftest.py` | Puts the repo root on `sys.path`; installs the autouse socket guard |
 | `tests/fakes.py` | Shared fakes and builders: the fake cache, `assert_frozen`, the Hugging Face cache-layout helpers (`materialize_hub_snapshot`, `hub_download_double`, `weights_manifest_document`) that `test_model_fetcher.py` and `test_app.py` both build fixtures from, and `record_network_attempts` — which *counts* outbound attempts rather than only refusing them, because a library that swallows the guard's error makes "blocked" and "never tried" look identical |
 | `tests/fixtures/tiny_model/` | A real, loadable 2-layer DeBERTa-v2 classifier (~96 KB, safetensors only) — the fixture that lets the *actual* loader be exercised rather than mocked |
-| `tests/golden/contract_1_0_0.json` | Frozen contract fixture for `test_contract_schema.py` |
+| `tests/golden/contract_1_0_0.json` | Frozen contract fixture for `test_contract_schema.py`; `contract_1_1_0.json` is the current one. The fixture pins `model_json_schema()`, which moves for description and enum-rendering changes as well as wire ones — regenerate it for a documentation-only change, bump `CONTRACT_VERSION` (new file alongside the old) for a real one |
 
 ### Testing the lifespan
 
@@ -202,12 +205,12 @@ Used by the KitTools orchestrator to pick the right tests for a changed file.
 
 ```yaml
 test_mapping:
-  "retrieval_app.py": ["tests/test_app.py", "tests/test_contract_smoke.py"]
-  "models.py": "tests/test_models.py"
+  "retrieval_app.py": ["tests/test_app.py", "tests/test_contract_smoke.py", "tests/test_contract_errors.py"]
+  "models.py": ["tests/test_models.py", "tests/test_contract_errors.py"]
   "cache.py": "tests/test_cache.py"
   "url_validator.py": "tests/test_url_validator.py"
   "pipeline/orchestrator.py": "tests/test_orchestrator.py"
-  "pipeline/contract.py": "tests/test_contract_schema.py"
+  "pipeline/contract.py": ["tests/test_contract_schema.py", "tests/test_contract_errors.py"]
   "pipeline/sanitizer_revision.py": "tests/test_sanitizer_revision.py"
   "model_fetcher.py": ["tests/test_model_fetcher.py", "tests/test_app.py"]
   "weights_manifest.json": "tests/test_model_fetcher.py"

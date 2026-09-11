@@ -310,6 +310,95 @@ run URL recorded).
 
 ## Implementation Notes
 
+### US-001 — Document the error surface as it exists (2026-09-11)
+
+**Shipped:** branch `story/ct-us-001-error-surface`. Suite 1402 → **1427** green
+(+25, all in the new `tests/test_contract_errors.py`); `ruff check`, `ruff format
+--check` and `uv run pyright` all zero. `CONTRACT_VERSION` unchanged at `1.1.0`.
+
+**The mirror models, and where they live.** Five per-shape models plus the validation
+mirror, all in `retrieval_app.py` beside `HealthResponse`:
+`Extract422ErrorResponse` (4 fields), `Pipeline422ErrorResponse` (3),
+`Admission413Response` (2), `RateLimit429Response` (4), `DetailResponse` (1), and
+`HTTPValidationError`/`ValidationErrorDetail`. Every coded one carries
+`extra="forbid"` — that, plus the parity tests' serialized-byte comparison, is what
+makes them mirrors rather than descriptions. **No emission site was rewritten to emit
+through a model**, per the round-2 ruling.
+
+**The vocabulary went into `contract.py` as nested Literals.** `Extract422ErrorCode`
+(9) / `Admission413ErrorCode` / `RateLimit429ErrorCode` compose into `ExtractErrorCode`
+(10); `RetrieveErrorCode` (6) and `SearchErrorCode` (2) compose into
+`Pipeline422ErrorCode` (8); both compose into `ErrorCode` (**17**, deduplicated —
+`content_too_large` is the one code two surfaces share). PEP 586 flattening of
+`Literal[SomeLiteralAlias, ...]` was verified to work both at runtime and under
+pyright strict, so the composites cannot drift from their parts. Each frozenset is
+`frozenset(get_args(...))` off its own alias.
+
+**`sanitizer_revision` rotated — once, here, as the spec acknowledged.**
+
+```
+before: fa4691c57449c52fe367208bdeeb650cbe474d93485c3b90cc8989b5e593547c
+after:  8b1b7f78e85f733ef3b8ace5194632a8cf92410131b2c1af995c456f20196d7c
+```
+
+Attribution measured by re-deriving with `pipeline/contract.py` swapped back to
+`main`'s bytes: all-eight-at-`main` (control) and only-`contract.py`-reverted both
+return `fa4691c5…93547c`, and `contract.py` is the only `_REVISION_SOURCES` file this
+story touched — one measurement, one conclusion, no intermediate value to transpose.
+Recorded in `docs/bootstrap-notes.md` ("The sixth rotation"), `kit_tools/docs/GOTCHAS.md`,
+`kit_tools/arch/CODE_ARCH.md`, `CLAUDE.md` and the epic wrapper. The cache invalidation
+it causes is **correct behaviour**: `cache_policy_fingerprint()` takes the revision since
+spec 3's US-003, so a rotation is the flush lever working as designed.
+**US-005, US-002, US-003 and US-004 must not rotate again** — keep their edits out of
+`pipeline/`'s eight hashed files, or content-neutral within them.
+
+**FastAPI behaviour, re-verified on the locked 0.141.1 and pinned by test.** Declaring
+a 422 does stop the automatic `HTTPValidationError` (`test_declaring_422_suppresses_
+fastapis_automatic_one` asserts both halves on a throwaway app). One consequence worth
+knowing: because all three body-taking routes now declare their 422, FastAPI injects
+neither `HTTPValidationError` nor `ValidationError` into components, and *our* mirror is
+the component the document carries —
+`test_our_validation_mirror_matches_fastapis_own_definition` ties its required fields to
+`fastapi.openapi.utils.validation_error_definition` so a FastAPI change to the validation
+body shows up here.
+
+**⚠ Finding: the spec's emission map is one shape short, and its 413 is unreachable.**
+`DocumentSizeLimitMiddleware` emits the documented
+`413 {"error": "content_too_large", "reason": ...}` to any downstream honouring the raw
+ASGI contract — but **not on `/extract`**. It refuses by raising through the `receive`
+callable, `fastapi/routing.py` wraps *any* exception out of `await request.form()` in
+`HTTPException(400, "There was an error parsing the body")`, and that response is
+produced inside the middleware's own `await self._app(...)` — so its
+`except _RequestBodyTooLargeError` never runs. Measured on the running app: a multipart
+or urlencoded body over the limit gets **400**; a JSON one gets 422 (starlette never
+streams a non-form body, so the counter never runs). The byte cap itself is unaffected —
+nothing oversized is spooled or extracted.
+
+Handled **without changing a wire byte**, and flagged rather than improvised on:
+`400 → DetailResponse` is declared on `/extract` alongside the 413, whose description
+now says it is shadowed; the 400 is parity-tested through the real route and the 413 at
+the ASGI seam (the only place it can be produced). A new GOTCHAS entry carries the
+measurements and the rule that *fixing* it would be a wire change belonging to a
+contract bump, not to this spec. **US-002 will therefore generate a contract carrying
+both statuses on `/extract`, and US-003's governance doc should classify the
+400→413 correction when someone wants it.**
+
+**Golden fixture regenerated in the same commit** (`tests/golden/contract_1_1_0.json`).
+The diff is three lines of sanctioned growth — `capabilities` and `omitted_by_reason`
+descriptions, and `degraded_reasons` items gaining their enum — with no field added,
+removed, renamed or retyped on the wire. `test_contract_schema.py`'s docstring no longer
+says "bump CONTRACT_VERSION"; it now explains that the fixture pins `model_json_schema()`
+(strictly more than the wire) and points at the documentation-only ruling.
+
+**Mutation-verified** (each mutation applied to a committed tree, then reverted): the
+handler dropping `sanitizer_revision` → 2 failures; the 429 body growing a field → 1;
+a raise site using an undocumented code → 1; the 413 declaration moved off its status →
+2; a `degraded_reasons` member outside the Literal → 2. Clean tree back to 25 passed.
+
+**Left for siblings:** `/metrics` is deliberately untyped and undeclared here (US-005);
+`FastAPI(title=..., version=CONTRACT_VERSION, description=...)` still reads
+`version="0.1.0"` (US-005); no `contract/` directory yet (US-002).
+
 ## Refinement Notes
 
 ### Research Findings

@@ -169,6 +169,8 @@ byte: the hashed model identity is `MODEL_ID@revision` since weights became a ru
 per-deployment input (`forage-model-bootstrap` US-001) — and a fifth time to
 `fa4691c5…` with the contract bump to `1.1.0`, the first rotation whose *point* is the
 invalidation (`forage-cache-fallback` US-003 made the revision an input to the content
-cache's key). `docs/bootstrap-notes.md` carries
+cache's key), and a sixth to `8b1b7f78…` when `contract.py` gained the seventeen-code
+error vocabulary (`forage-contract` US-001 — documentation only, contract still `1.1.0`,
+and the one rotation that whole spec gets). `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.
