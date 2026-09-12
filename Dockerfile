@@ -47,16 +47,22 @@ WORKDIR /app
 
 # System deps: curl for the container healthcheck.
 #
-# The three log files and the ldconfig cache are deleted for **reproducibility**,
-# not for size — they are the entire reason this layer used to differ between
-# two builds of the same commit. `apt` and `dpkg` write wall-clock timestamps
-# into their logs, and `ldconfig`'s `aux-cache` records inode metadata, so a
-# rebuild minutes later produces four different files and therefore a different
-# layer digest. That is what failed `publish`'s diff_ids parity gate on a cold
-# cache (kit_tools/docs/GOTCHAS.md, "A cold-cache publish fails its own parity
-# gate"); measured layer-by-layer at US-004, these four files were the whole of
-# this layer's drift. Nothing reads them: the image performs exactly one apt
-# transaction, at build time, and ships no package manager workflow.
+# The logs and the ldconfig cache are deleted for **reproducibility**, not for
+# size — they are the entire reason this layer used to differ between two builds
+# of the same commit. `apt` and `dpkg` write wall-clock timestamps into their
+# logs, and `ldconfig`'s `aux-cache` records inode metadata, so a rebuild minutes
+# later produces different files and therefore a different layer digest. That is
+# what failed `publish`'s diff_ids parity gate on a cold cache
+# (kit_tools/docs/GOTCHAS.md, "A cold-cache publish fails its own parity gate").
+#
+# Measured layer-by-layer at US-004, exactly four files drifted:
+# `/var/log/apt/history.log`, `/var/log/apt/term.log`, `/var/log/dpkg.log` and
+# `/var/cache/ldconfig/aux-cache`. `/var/log/alternatives.log` is removed too and
+# is precautionary rather than measured — same class, same one-line cost, and it
+# appears the moment a future package triggers `update-alternatives`.
+#
+# Nothing reads any of them: the image performs exactly one apt transaction, at
+# build time, and ships no package-manager workflow.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/* \
