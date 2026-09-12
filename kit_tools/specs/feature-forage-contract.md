@@ -235,9 +235,9 @@ compatibility window** — never a silent break).
   posture summary (round-2: public repo, no security policy).
 
 **Acceptance Criteria:**
-- [ ] GOVERNANCE.md with rules + the four recorded rulings + the six classification
+- [x] GOVERNANCE.md with rules + the five recorded rulings (a2 added at US-001 verification) + the six classification
       examples answerable from the doc alone; PR template created; SECURITY.md present.
-- [ ] Release-body regex step added to the publish workflow (asserted by the workflow-shape
+- [x] Release-body regex step added to the publish workflow (asserted by the workflow-shape
       tests); the step's job carries `contents: write` (named — round-3).
 
 ### US-004: Contract distribution — image + release asset, sha256-anchored

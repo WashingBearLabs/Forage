@@ -30,7 +30,7 @@ line below is here because forgetting it has cost this repository something.
 
 ## Standing invariants
 
-The ones that bite PR authors here, in the order they bite. `CLAUDE.md` carries all six.
+The ones that bite PR authors here, in the order they bite. (This list and `CLAUDE.md`'s Hard Invariants overlap but are not the same set — this one is scoped to what a PR author trips over.)
 
 - [ ] **No `ARG` in the `Dockerfile`.** The build takes no arguments at all — a build arg is
       not a secret, `docker history` reads it back out of any registry the image reaches.

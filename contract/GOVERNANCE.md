@@ -88,7 +88,7 @@ published once stays described. Re-cut the image, not the contract.
 
 ## Classifying a change
 
-Work down the table; the first row that matches wins.
+Work down the table; the first row that matches wins — with one boundary exception: before the freeze boundary (§ The freeze boundary), a documentation-only change that a row would classify as PATCH is **no bump**; the section below owns that call.
 
 | Class | The change | Consumer cost |
 |---|---|---|
