@@ -235,10 +235,18 @@ Two consequences worth knowing:
   instead of ~0.9 s, once per container start, against a 120 s health budget.
 - **The known bound is one UTC day.** `useradd` stamps a "last changed" day
   count into `/etc/shadow`, so two builds either side of UTC midnight differ in
-  that one layer. The parity gate compares two builds of the same run, minutes
-  apart, so it is unaffected; a "rebuild this image next year and get the same
-  digest" claim would not be, and is not made. (Reasoned from the field's
-  contents, not measured across a midnight.)
+  that one layer. The parity gate compares two builds of the same run — but
+  `publish` starts ~4–6 minutes after `build-amd64`, so a run STRADDLING UTC
+  midnight can genuinely trip the gate on this layer (verifier correction
+  2026-09-11: "unaffected" was too strong; exposure ≈0.3–0.5% of runs). A
+  parity failure within ~10 minutes of 00:00 UTC: check the two `passwd`-layer
+  timestamps FIRST, and re-run — that one is not a finding. A "rebuild this
+  image next year and get the same digest" claim would also not hold, and is
+  not made. Note also the clamp precondition: `rewrite-timestamp` CLAMPS
+  timestamps newer than `SOURCE_DATE_EPOCH` down to it — it does not raise
+  older ones — so reproducibility assumes checkout mtimes postdate the commit
+  (always true in CI checkouts; not necessarily for a hand-built tree with
+  backdated mtimes).
 
 A cold publish is therefore expected to pass. The **first** one to do so will be
 whichever release is cut after this change — until then the fix is proven

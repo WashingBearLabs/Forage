@@ -263,16 +263,16 @@ run URL recorded).
   section.
 
 **Acceptance Criteria:**
-- [ ] Contract + sha256 in-image (COPY landed, smoke extension green); the drift pytest
+- [x] Contract + sha256 in-image (COPY landed, smoke extension green); the drift pytest
       also asserts the committed anchor matches the committed file (the anchor↔file tie —
       round-3).
 - [ ] **Image `v1.0.0` cut as this story's final step** (supervised tag push after
       COPY + asset workflow land; run URL recorded) — the artifact spec 6 pins.
 - [ ] Release assets present on the `v1.0.0` release; three-way sha256 equality against
       the committed anchor verified and recorded; vendoring procedure documented.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check . && uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check . && uv run pyright` passes
 
 ## Edge Cases
 
@@ -972,7 +972,11 @@ green `main` build so `publish`'s rebuild hits a warm cache. The builds are repr
 now, so a tag cut at any time should pass — and the first cold cut is also the first live
 proof of that, which is a reason to watch the run rather than to wait for a warm one. If
 `publish`'s "Verify the published amd64 image is the gated filesystem" step fails anyway,
-**do not re-run blindly**: that failure is now a finding. Read the recovery in
+**do not re-run blindly**: that failure is now a finding — with ONE exception: a run
+straddling UTC midnight can trip the gate on the `/etc/shadow` day-count layer
+(releases.md § the known bound); if the failure lands within ~10 minutes of 00:00 UTC,
+check the passwd-layer timestamps first and re-run — only a non-midnight failure is a
+finding. Read the recovery in
 `kit_tools/docs/GOTCHAS.md` (delete the `index-publish-*` GHA cache entries so publish
 falls through to the gated scope) and treat the tag as withdrawn per `docs/releases.md`.
 
