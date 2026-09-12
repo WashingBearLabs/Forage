@@ -29,7 +29,7 @@ preserved). See `docs/bootstrap-notes.md` for the pin record.
 |--------|--------|
 | Maturity | Pre-1.0; the first `v1.0.0` is cut at `feature-forage-contract` US-004's owner gate — the build half (in-image contract, Release assets, reproducible exports) has landed |
 | Repo visibility | **Public** since the US-008 flip (2026-09-10), repository and both packages; `main` is PR-only, with six required status checks (audit-measured 2026-09-11 — this row said "Private" for a month after the flip) |
-| Tests | 1608 collected, all green (`uv run pytest`), hermetic via `pytest-socket` — **enforced in CI** since US-002, with a committed hermeticity canary |
+| Tests | 1610 collected, all green (`uv run pytest`), hermetic via `pytest-socket` — **enforced in CI** since US-002, with a committed hermeticity canary |
 | Lint | `uv run ruff check .` and `ruff format --check .` both clean — **enforced in CI** |
 | Types | `uv run pyright` (strict) is **clean — 0 errors**, no baseline; **enforced in CI** |
 | CI | `.github/workflows/ci.yml` — ten jobs in two lanes: `lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke`, `publish` for the service image, and `searxng-build`/`-smoke`/`-publish` for the companion |

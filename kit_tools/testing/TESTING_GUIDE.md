@@ -95,11 +95,11 @@ crash reads as a false regression.
 **29 `test_*.py` modules** under `tests/`, flat, one per subject — 32 Python files in all
 once `conftest.py`, `fakes.py` and `__init__.py` are counted — plus `golden/` and
 `fixtures/`. (Both numbers measured 2026-09-11; state the convention with the count, or
-the next person reconciles two different ones by increment.) **1608 tests, all green** as
+the next person reconciles two different ones by increment.) **1610 tests, all green** as
 of 2026-09-11 (`feature-forage-contract` US-001 added `test_contract_errors.py`'s 25,
 US-005 `test_contract_metrics.py`'s 20, US-002 `test_contract_export.py`'s 18, US-003
-`test_governance_docs.py`'s 41 plus 26 in `test_ci_workflow.py`, and US-004 another 76
-spread across four existing modules — 34 workflow-shape, 29 smoke, 11 Dockerfile, 2
+`test_governance_docs.py`'s 41 plus 26 in `test_ci_workflow.py`, and US-004 another 78
+spread across four existing modules — 36 workflow-shape, 29 smoke, 11 Dockerfile, 2
 governance; the per-module counts in the table below have not all been re-measured since
 2026-09-10).
 
@@ -117,7 +117,7 @@ governance; the per-module counts in the table below have not all been re-measur
 | `tests/test_models.py` | 31 | Pydantic request/response models |
 | `tests/test_app.py` | 60 | FastAPI endpoints, `/health` body, capability break-glass, the `/metrics` `model` counters, and the lifespan harness: startup yields immediately, `/health` latency during a fetch, the `promptguard_loaded` flip, and the retry task's cancellation at shutdown |
 | `tests/test_stage3_promptguard.py` | 30 | ML scan; transformers/torch mocked |
-| `tests/test_ci_workflow.py` | 269 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane, image build + secret-grep gate, smoke job + artifact handoff, both publish lanes (tag policies evaluated, not matched), the cross-fire guards between them, and — since US-003 — the image↔contract mapping: the version is read from the tagged tree, the Release body is written from it, the published body is read back and asserted, and no version literal may appear in the job's shell. US-004 adds the Release assets (attached by the create call, downloaded back and verified against the committed anchor) and the reproducible-export guards: one identical SOURCE_DATE_EPOCH script in all four building jobs, `rewrite-timestamp=true` on every exporter, and the longhand `type=docker` / `type=image,push=true` forms that can carry it |
+| `tests/test_ci_workflow.py` | 271 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane, image build + secret-grep gate, smoke job + artifact handoff, both publish lanes (tag policies evaluated, not matched), the cross-fire guards between them, and — since US-003 — the image↔contract mapping: the version is read from the tagged tree, the Release body is written from it, the published body is read back and asserted, and no version literal may appear in the job's shell. US-004 adds the Release assets (attached by the create call, downloaded back and verified against the committed anchor) and the reproducible-export guards: one identical SOURCE_DATE_EPOCH script in all four building jobs, `rewrite-timestamp=true` on every exporter, and the longhand `type=docker` / `type=image,push=true` forms that can carry it |
 | `tests/test_compose_fragments.py` | 56 | Compose fragments, parse-only shape guards (audit: row was missing) |
 | `tests/test_contract_smoke.py` | 76 | `contract_smoke.py`: every `/health` clause, polling, the single-source ties to the golden schema, and — since US-004 — the in-image contract checks: the `docker run --rm --entrypoint cat` argv it builds, the anchor comparisons against the committed trust root, and the `info.version` ↔ live `contract_version` claim, all driven through an injected runner so the suite never starts a container |
 | `tests/test_stage5_url_audit.py` | 28 | Outbound fetch + redirect-chain audit |
