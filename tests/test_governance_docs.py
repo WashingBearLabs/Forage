@@ -76,6 +76,20 @@ _SIX_EXAMPLES: tuple[tuple[str, tuple[str, ...]], ...] = (
 # (a) precisely because it is a different ruling about a different thing.
 _RULING_MARKERS = ("### (a) ", "### (a2) ", "### (b) ", "### (c) ", "### (d) ")
 
+# Counts these documents state in words. Both are read back out of the code —
+# the hashed-source count from `_REVISION_SOURCES`, the required-check count
+# from the jobs `publish` hangs off — so a number that goes stale is a red test
+# rather than a confidently wrong instruction.
+_NUMBER_WORDS = {
+    4: "four",
+    5: "five",
+    6: "six",
+    7: "seven",
+    8: "eight",
+    9: "nine",
+    10: "ten",
+}
+
 _MARKDOWN_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 _TABLE_ROW_RE = re.compile(r"^\|\s*(\d)\s*\|")
 
@@ -480,8 +494,7 @@ class TestPullRequestTemplate:
     def test_the_hashed_source_count_matches_the_code(self, pr_template: str) -> None:
         # The template tells an author how many files rotate the revision. That
         # number lives in pipeline/sanitizer_revision.py and has moved before.
-        words = {6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten"}
-        expected = words[len(_REVISION_SOURCES)]
+        expected = _NUMBER_WORDS[len(_REVISION_SOURCES)]
         # Flowed, because the template wraps at 92 columns and a phrase that
         # happens to straddle a line break is still the phrase.
         flowed = " ".join(pr_template.split())
@@ -499,13 +512,29 @@ class TestPullRequestTemplate:
         # jobs `publish` hangs off, and the template tells contributors so. A
         # seventh gate that never reaches this document leaves it telling a
         # shorter truth than the workflow enforces.
+        #
+        # Read out of *that sentence*, not out of the whole file: the mutation
+        # run caught the looser version passing while the sentence was a check
+        # short, because `secret-grep` is also named in the invariants section.
+        # Checking a document's vocabulary is not checking its claim — the same
+        # lesson the publish job's `if`-block assertions are written around.
         workflow: Any = yaml.safe_load(CI_WORKFLOW_PATH.read_text())
         needs: Any = workflow["jobs"]["publish"].get("needs", [])
         gates = [needs] if isinstance(needs, str) else [str(name) for name in needs]
-        listed = [gate for gate in gates if f"`{gate}`" in pr_template]
+        flowed = " ".join(pr_template.split())
+        sentence = re.search(r"The (\w+) checks required on `main` are (.+?) —", flowed)
+        assert sentence is not None, (
+            "The PR template must carry a sentence of the form 'The <n> checks "
+            "required on `main` are `a`, `b`, ... — ...'. It is the only place "
+            "a contributor learns what has to be green."
+        )
+        listed = re.findall(r"`([^`]+)`", sentence.group(2))
         assert sorted(listed) == sorted(gates), (
-            f"The PR template names {sorted(listed)} of the workflow's "
-            f"{sorted(gates)} publish gates. Those are the checks required on "
-            "`main`; a contributor reading a shorter list plans a shorter "
-            "round trip."
+            f"The PR template's required-checks sentence names {sorted(listed)}; "
+            f"the workflow hangs `publish` off {sorted(gates)}. Those are the "
+            "contexts required on `main`, so a contributor reading a shorter "
+            "list plans a shorter round trip."
+        )
+        assert sentence.group(1) == _NUMBER_WORDS[len(gates)], (
+            f"The sentence says {sentence.group(1)!r} checks and lists {len(gates)}."
         )
