@@ -1522,6 +1522,33 @@ class TestSmokeJob:
             "contract that can drift from the first — an AC of US-005."
         )
 
+    def test_smoke_reads_the_contract_out_of_the_candidate_image(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        """US-004: the in-image contract is checked, and against *this* image.
+
+        Without the flag the script runs its endpoint checks and skips the
+        image entirely — a green smoke that says nothing about the contract the
+        image ships. The reference has to be `IMAGE_REF`, the tag this job
+        loaded and started, so the document and the service being compared come
+        from one artifact.
+        """
+        run_text = _run_text(jobs, "smoke")
+        assert "--image" in run_text and "IMAGE_REF" in run_text, (
+            'The smoke must pass `--image "${IMAGE_REF}"` to contract_smoke.py '
+            "— `--image` is opt-in, and without it the in-image contract, its "
+            f"anchor and its version go unchecked. Script was:\n{run_text}"
+        )
+
+    def test_the_in_image_contract_path_is_not_restated_in_bash(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        # Same rule as the `/health` vocabulary above: the path lives in
+        # contract_smoke.py, which tests/test_contract_smoke.py ties to the
+        # Dockerfile's COPY destination. A copy here would be a second source
+        # for one path, free to keep passing after the first one moves.
+        assert "/app/contract" not in _run_text(jobs, "smoke")
+
     def test_smoke_budget_matches_the_scripts_default(self, workflow: Any) -> None:
         env_block: dict[str, Any] = workflow.get("env") or {}
         budget = float(str(env_block.get("SMOKE_TIMEOUT_SECONDS", "0")))
@@ -2632,7 +2659,9 @@ class TestReproducibleExports:
     def test_the_exporter_rewrites_timestamps(
         self, jobs: dict[str, Any], job: str
     ) -> None:
-        with_block: dict[str, Any] = _step_using(jobs, job, _BUILD_ACTION).get("with")
+        with_block: dict[str, Any] = (
+            _step_using(jobs, job, _BUILD_ACTION).get("with") or {}
+        )
         outputs = str(with_block.get("outputs", ""))
         assert "rewrite-timestamp=true" in outputs, (
             f"{job}'s exporter does not carry `rewrite-timestamp=true`; "
@@ -2645,7 +2674,9 @@ class TestReproducibleExports:
     def test_a_loading_job_exports_to_the_daemon_longhand(
         self, jobs: dict[str, Any], job: str
     ) -> None:
-        with_block: dict[str, Any] = _step_using(jobs, job, _BUILD_ACTION).get("with")
+        with_block: dict[str, Any] = (
+            _step_using(jobs, job, _BUILD_ACTION).get("with") or {}
+        )
         assert "type=docker" in str(with_block.get("outputs", "")), (
             f"{job} must export `type=docker` so the image lands in the "
             "runner's daemon and can be saved for the downstream jobs"
@@ -2660,7 +2691,9 @@ class TestReproducibleExports:
     def test_a_pushing_job_pushes_through_its_exporter(
         self, jobs: dict[str, Any], job: str
     ) -> None:
-        with_block: dict[str, Any] = _step_using(jobs, job, _BUILD_ACTION).get("with")
+        with_block: dict[str, Any] = (
+            _step_using(jobs, job, _BUILD_ACTION).get("with") or {}
+        )
         outputs = str(with_block.get("outputs", ""))
         assert "type=image" in outputs and "push=true" in outputs, (
             f"{job} must push through its own exporter entry; outputs={outputs!r}"
