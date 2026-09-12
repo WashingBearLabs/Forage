@@ -314,11 +314,6 @@ basename, so it verifies identically from a repository checkout, from a director
 downloaded Release assets, or from inside the image. Registry tags and Release assets are
 mutable; a checksum in the git history at a tag is not.
 
-```bash
-# From a checkout, or beside downloaded assets — same command either way.
-sha256sum -c openapi.yaml.sha256
-```
-
 | Route | How you get it |
 |---|---|
 | The git tag | `contract/openapi.yaml` + `openapi.yaml.sha256` at `v<version>` |
@@ -364,11 +359,9 @@ anchor covers `openapi.yaml` alone.
 6. **Record the tag** you vendored from beside the files, so "which contract is this?"
    is answerable without a registry lookup.
 
-At activation, compare **contracts, not revisions** (below) — and treat the contract as
-the compatibility statement, not the image tag: image `v1.0.0` serves contract `1.1.0`,
-and the two move for different reasons.
-
 At activation, compare **contracts, not revisions**: `/health` carries both
 `contract_version` and `sanitizer_revision`, and only the first is a compatibility
 statement. `sanitizer_revision` has deliberately diverged between Forage and Poppy's
-in-tree copy and says nothing about wire compatibility.
+in-tree copy and says nothing about wire compatibility. The **image tag** is not a
+compatibility statement either — image `v1.0.0` serves contract `1.1.0`, and the two move
+for different reasons ("Two semvers", above).
