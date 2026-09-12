@@ -792,6 +792,259 @@ document's vocabulary is not checking its claim. Committed as its own
   and is wrong, `gh release create` refuses a second one on the same tag, so fix it with
   `gh release edit` or delete the Release and re-run.
 
+### US-004 — Contract distribution, build half (2026-09-11)
+
+**Shipped:** branch `story/ct-us-004-distribution`. Suite 1532 → **1610** green (+78,
+all added to four existing modules: 36 in `tests/test_ci_workflow.py`, 29 in
+`tests/test_contract_smoke.py`, 11 in `tests/test_dockerfile.py`, 2 in
+`tests/test_governance_docs.py`); `ruff check`, `ruff format --check`, `uv run pyright`
+and `actionlint` all zero. `CONTRACT_VERSION` unchanged at `1.1.0`. **The `v1.0.0` tag is
+NOT cut** — it is the owner gate below.
+
+**`sanitizer_revision` did NOT rotate** —
+`8b1b7f78e85f733ef3b8ace5194632a8cf92410131b2c1af995c456f20196d7c` before and after,
+re-derived at both ends. `git diff --stat main -- pipeline/ models.py retrieval_app.py`
+is empty: no service source was opened. US-001 keeps the spec's one acknowledged
+rotation, and all four siblings have now left it alone.
+
+**AC-1's second clause was landed by US-002 and is verified, not re-implemented.** The
+anchor↔file tie is `test_the_committed_anchor_is_the_sha256_of_the_committed_contract`
+plus `test_the_anchor_is_sha256sum_verifiable_as_committed`, both comparing against the
+*committed bytes* rather than a fresh render. Read, re-run, left alone.
+
+**What ships, and what checks it.** The Dockerfile gains one line —
+`COPY contract/ /app/contract/`, the directory whole, so `GOVERNANCE.md` travels with the
+artifact it governs (the anchor still covers `openapi.yaml` alone). The publish job
+attaches `openapi.yaml` and `openapi.yaml.sha256` to every `v*` Release, from
+`gh release create` itself rather than a later upload, so a Release without them is a
+failed step instead of a quietly incomplete Release. Then both copies are *checked*:
+
+| Copy | Checked by | What it asserts |
+|---|---|---|
+| in-image `/app/contract/` | `smoke`, every push and PR | the pair is readable; the in-image anchor **is** this tree's committed anchor; the document hashes to it; `info.version` equals the running container's `/health.contract_version` |
+| Release assets | `publish`, on `v*` tags | the downloaded anchor is the anchor committed at the tag, then `sha256sum -c` on the downloaded pair |
+| git tag | the drift pytest, every run | US-002's anchor↔file tie |
+
+That is the three-way equality, mechanized on two of three legs rather than recorded by
+hand once. The comparison against the *committed* anchor is the load-bearing half of the
+Release check: a tampered document and anchor replaced together verify perfectly against
+each other.
+
+**The smoke extension went into the script, not into bash** (the `searxng_smoke.py`
+precedent). `contract_smoke.py --image <ref>` runs
+`docker run --rm --entrypoint cat <ref> /app/contract/openapi.yaml` — the exact command
+GOVERNANCE hands consumers — through an injected runner, so
+`tests/test_contract_smoke.py` drives all of it with no container and no daemon. The
+workflow step gained four words; no path and no version is restated in YAML, and
+`test_the_in_image_contract_path_is_not_restated_in_bash` keeps it that way. Two smaller
+choices worth knowing: `--image` is **opt-in**, because `docs/releases.md` tells arm64
+consumers to run this script against their own container and they may not have the image
+locally — which is why there is a separate guard that CI actually passes it (a green
+smoke that silently skipped the image would be the worst outcome available); and a
+`/health` body that yields no `contract_version` produces a failure rather than a skipped
+comparison.
+
+**Live-verified against a real container**, not only in tests. A container from a locally
+built image: `/health` 200, degraded, `sanitizer_revision 8b1b7f78…`, and the smoke
+PASSED with the in-image anchor reading
+`00b1dbaa5971895e7e7f1532f52ab46026df5e789ee5572380fd822f6bb295c0  openapi.yaml`,
+equal to the committed one. The negative direction too: pointed at an image built from
+`main` (before the COPY), it fails with two violations naming `COPY contract/` and
+`.dockerignore`.
+
+#### The cold-cache blocker is CLOSED — measured, not asserted
+
+GOTCHAS' "A cold-cache publish fails its own parity gate" was a spec-4 blocker on
+`v1.0.0`, and the brief was to attempt the durable fix and report honestly either way.
+It works, but **not** in the shape the brief guessed: `SOURCE_DATE_EPOCH` +
+`rewrite-timestamp=true` is necessary and **not sufficient**.
+
+Method: two `--no-cache` builds of the real image from two exports of the same tree with
+different file mtimes — which is what two CI checkouts of one commit are — comparing
+`RootFS.Layers` and then, for any layer that differed, every entry inside both layer
+tars.
+
+| Configuration | Layers identical |
+|---|---|
+| neither half | 7 of 19 |
+| `SOURCE_DATE_EPOCH` + `rewrite-timestamp=true` alone | 16 of 18 (pre-COPY tree) |
+| both halves | **19 of 19** |
+
+The two survivors of the middle row are the finding. `rewrite-timestamp` rewrites the
+timestamps in a layer tar's *headers*; a timestamp written *inside* a file is out of its
+reach, and this image wrote two kinds:
+
+- the apt layer: exactly four files — `/var/log/apt/history.log`, `/var/log/apt/term.log`,
+  `/var/log/dpkg.log`, `/var/cache/ldconfig/aux-cache`;
+- the build-time import check: **579** `.pyc`, each embedding its source's mtime.
+
+So the fix is one change in two files: the workflow half (all four building jobs compute
+one `SOURCE_DATE_EPOCH` from the commit's committer date with a byte-identical script,
+and every exporter is written longhand — `type=docker` / `type=image,push=true` — so it
+can carry `rewrite-timestamp=true`) and the Dockerfile half (the four files removed in
+the same `RUN` as the install; `PYTHONDONTWRITEBYTECODE=1` on the import check).
+
+**Two honest costs, both measured.** The image no longer ships a bytecode cache: the app
+imports in ~2.3 s instead of ~0.9 s, once per container start, against a 120 s health
+budget. That is a cost of `rewrite-timestamp`, not of dropping the `.pyc` — measured in a
+built image, the shipped `.pyc` record the build clock while their sources read
+`SOURCE_DATE_EPOCH`, so the cache was already void and the choice was between dead files
+that break the parity gate and no dead files. The future optimisation, if it ever
+matters, is hash-based `.pyc` (PEP 552) over the modules the app actually imports. And
+reproducibility is bounded by **one UTC day**: `useradd` stamps a day count into
+`/etc/shadow` (`poppy:!:20708::::::`), so two builds either side of midnight differ in
+that layer. The parity gate compares two builds of one run, so it is unaffected — but a
+"same digest next year" claim would be, and is not made. (Reasoned from the field, not
+measured across a midnight.)
+
+**What is still unproven:** a live cold publish. Everything above is local plus the
+workflow-shape tests, and `publish` never runs on a PR — so the exporter longhand, the
+epoch step and the asset assertion all execute for the first time at the `v1.0.0` push.
+`actionlint` is clean and the shapes are asserted, but watch the run.
+
+**Mutation-verified** (each applied to the committed tree, then reverted; clean tree back
+to 1610):
+
+| Mutation | Result |
+|---|---|
+| the `COPY contract/` line deleted | **2 failures** |
+| the COPY destination moved to `/app/spec/` | **1 failure** |
+| `contract/` added to `.dockerignore` | **3 failures** |
+| `PYTHONDONTWRITEBYTECODE=1` removed | **1 failure** |
+| the apt log scrub removed | **3 failures** |
+| `rewrite-timestamp=true` dropped from publish's exporter | **1 failure** |
+| publish reverted to the `push: true` shorthand | **2 failures** |
+| the epoch taken from `date +%s` instead of the commit | **2 failures** — including the four-jobs-agree tie |
+| build-amd64's build step loses its `SOURCE_DATE_EPOCH` env | **1 failure** |
+| the two assets dropped from `gh release create` | **2 failures** |
+| the Release-asset anchor comparison disabled | **2 failures** |
+| the smoke stops passing `--image` | **1 failure** |
+| the smoke stops comparing the in-image anchor | **2 failures** |
+| the smoke stops comparing versions | **3 failures** |
+| GOVERNANCE stops naming the in-image path | **1 failure** |
+
+**One guard was missing and is committed separately.** The first pass tested the script's
+in-image checks thoroughly and never asserted that the *workflow* passes `--image`. Since
+the flag is opt-in, a workflow edit could have left the smoke green while checking
+nothing. `test_smoke_reads_the_contract_out_of_the_candidate_image` closes it, in its own
+`test(...)` commit so the gap is visible in the history.
+
+**One shared helper was fixed.** `tests/test_governance_docs.py::_section` treated a
+shell comment at column 0 inside a ``` fence as a Markdown heading, silently truncating
+the Consumers section at its first code example — so a test of anything after that
+example failed for a reason unrelated to the text. It now tracks fences.
+
+**Docs touched.** `contract/GOVERNANCE.md` (the Consumers table's three routes with the
+command for each, what CI checks on two of them, and the six-step vendoring procedure —
+pin a tag, fetch, verify *before reading*, commit document and anchor together, re-run
+the verification in your own suite, record the tag). `docs/releases.md` (the assets, the
+mutability caveat, and a new "Reproducible builds" section with the measurements and the
+two costs). `kit_tools/docs/GOTCHAS.md` (the cold-cache entry rewritten: the incident and
+its cache-scope recovery kept, the fix and its measurements recorded, the bytecode and
+UTC-day caveats stated, and the live-cold-publish gap flagged). `CLAUDE.md` invariant 4
+(the three routes and which two are checked). `kit_tools/SYNOPSIS.md`,
+`kit_tools/arch/CODE_ARCH.md`, `kit_tools/testing/TESTING_GUIDE.md` (counts, the widened
+test mapping — `Dockerfile`, `contract/openapi.yaml` and its anchor now also run
+`tests/test_contract_smoke.py`).
+
+#### v1.0.0 cut — OWNER GATE, pending
+
+The last acceptance criterion of this story, and the last of the epic. It is a **tag push
+by the owner**, not something an implementer does: it moves `latest` for the first time in
+this repository's history, and a `v1.0.0` that goes wrong cannot be re-cut (a registry tag
+re-pushed at a different commit leaves consumers holding a digest that no longer matches
+— `docs/releases.md`).
+
+**Before tagging**
+
+1. This branch is merged and `main` is green — all six required checks on the merge
+   commit. The tagged tree must carry the `COPY contract/`, the Release-asset steps and
+   the reproducibility changes, or the tag ships a contract-less v1.0.0.
+2. `git switch main && git pull` and confirm `git log -1` is the commit you intend.
+3. `uv run python -m scripts.export_contract --check` — clean, i.e. the tagged tree's
+   contract, anchor and twin are current.
+4. Confirm the contract version you are about to advertise:
+   `grep CONTRACT_VERSION pipeline/contract.py` → `1.1.0`. Image `v1.0.0` serving contract
+   `1.1.0` is the intended, recorded mapping (GOVERNANCE, "Two semvers").
+
+**The warm-cache ritual is no longer required.** It was: cut the tag immediately after a
+green `main` build so `publish`'s rebuild hits a warm cache. The builds are reproducible
+now, so a tag cut at any time should pass — and the first cold cut is also the first live
+proof of that, which is a reason to watch the run rather than to wait for a warm one. If
+`publish`'s "Verify the published amd64 image is the gated filesystem" step fails anyway,
+**do not re-run blindly**: that failure is now a finding. Read the recovery in
+`kit_tools/docs/GOTCHAS.md` (delete the `index-publish-*` GHA cache entries so publish
+falls through to the gated scope) and treat the tag as withdrawn per `docs/releases.md`.
+
+**The cut**
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+gh run watch                     # or: gh run list --limit 3
+```
+
+**Watch four steps in `publish`, in this order** — three of them have never run:
+
+| Step | First run? | What a failure means |
+|---|---|---|
+| Verify the published amd64 image is the gated filesystem | no (has passed warm) | the reproducibility fix did not hold cold — a finding, not a flake |
+| Read the contract version from the tagged tree | **yes** | `CONTRACT_VERSION` unparseable at the tag |
+| Assert the Release body advertises the tagged tree's contract version | **yes** (US-003 wrote it; no tag since) | the body and the tree disagree — `gh release edit`, or delete the Release and re-run |
+| Assert the Release assets verify against the committed anchor | **yes** | the assets are not this tag's contract — `gh release upload --clobber`, or delete and re-run |
+
+**After the run: the three-way sha256 verification.** Run all three from the same tag and
+compare to `contract/openapi.yaml.sha256`, which is the answer, not one of the three:
+
+```bash
+# 0. the answer — the committed anchor at the tag
+git show v1.0.0:contract/openapi.yaml.sha256
+
+# 1. the repository copy
+git show v1.0.0:contract/openapi.yaml | shasum -a 256
+
+# 2. the Release assets (verify exactly as a consumer would)
+mkdir -p /tmp/v100 && gh release download v1.0.0 --repo WashingBearLabs/Forage \
+  --pattern 'openapi.yaml*' --dir /tmp/v100
+(cd /tmp/v100 && shasum -a 256 -c openapi.yaml.sha256)
+
+# 3. the image
+docker pull ghcr.io/washingbearlabs/forage:1.0.0
+docker run --rm --entrypoint cat ghcr.io/washingbearlabs/forage:1.0.0 \
+  /app/contract/openapi.yaml | shasum -a 256
+```
+
+All four values equal. (`shasum -a 256` on macOS; `sha256sum` on Linux — the anchor's
+`sha256sum -c` form works with both, and the basename in it is why the check runs
+unchanged in all three directories.)
+
+**Then the release-body line and `latest`:**
+
+```bash
+gh release view v1.0.0 --repo WashingBearLabs/Forage --json body --jq '.body' \
+  | grep -E '^contract: 1\.1\.0$'          # the mechanized mapping, seen by a human once
+gh release view v1.0.0 --json assets --jq '.assets[].name'   # openapi.yaml + .sha256
+docker buildx imagetools inspect ghcr.io/washingbearlabs/forage:latest --format '{{.Manifest.Digest}}'
+docker buildx imagetools inspect ghcr.io/washingbearlabs/forage:1.0.0  --format '{{.Manifest.Digest}}'
+```
+
+`latest` **exists for the first time** at this tag (every previous release was a `-rc`,
+which moves neither `latest` nor the `X.Y` alias) and must resolve to the same digest as
+`1.0.0`; `1.0` should too. A `latest` that appeared pointing anywhere else is the one
+outcome worth stopping for.
+
+**What to record** (in this section, replacing this checklist):
+
+- the tag, the run URL, and the published digest;
+- the four sha256 values, shown equal;
+- that the Release carries both assets and the body's `contract: 1.1.0` line;
+- that `latest`, `1.0`, and `1.0.0` resolve to one digest;
+- **whether the publish rebuild was cold or warm** — the first cold pass is the evidence
+  the reproducibility fix works in CI, and the first warm one leaves that still unproven;
+- anything the three never-run steps did that the workflow-shape tests could not predict.
+
+Then tick this story's remaining ACs and close the spec: `epic_final: true`.
+
 ## Refinement Notes
 
 ### Research Findings
