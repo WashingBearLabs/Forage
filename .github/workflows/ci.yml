@@ -912,6 +912,41 @@ jobs:
           printf '%s\n' "${PUSHED_TAGS}"
           echo "--- end tags ---"
 
+      - name: Read the contract version from the tagged tree
+        # The image tag and the wire contract are two independent semvers
+        # (contract/GOVERNANCE.md, "Two semvers"), and the mapping between them
+        # is the one integrity claim in this release path that used to be a
+        # human-authored sentence. It is not one any more: this step reads
+        # `CONTRACT_VERSION` out of the *tagged tree's* pipeline/contract.py,
+        # the Release body below is written from that value, and the step after
+        # it reads the published body back and asserts the two agree.
+        #
+        # Parsed with grep rather than imported: the publish job has no Python
+        # environment, and standing one up to read one string would be a
+        # minute of arm64-emulation budget for a `grep`. No version literal
+        # appears anywhere in this job's shell — a copy in bash would be a
+        # second contract, free to keep passing after the first one moves, and
+        # tests/test_ci_workflow.py asserts its absence.
+        id: contract
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          # `|| true` so a miss falls through to the check below with its own
+          # message: under `set -euo pipefail` a grep that matches nothing (or
+          # a SIGPIPE from `head`) would otherwise kill the step silently.
+          version="$(
+            grep -oE '^CONTRACT_VERSION = "[^"]+"' pipeline/contract.py \
+              | head -1 \
+              | cut -d'"' -f2 \
+              || true
+          )"
+          if ! printf '%s' "${version}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::could not read a semver CONTRACT_VERSION out of pipeline/contract.py (got '${version}') — the Release body's contract line has no source"
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "Tagged tree serves contract ${version}."
+
       - name: Create the GitHub Release
         # LAST, and only on a `v*` tag. The ordering is the contract: a Release
         # is created only after the image is pushed *and* verified, so a
@@ -939,6 +974,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
           RELEASE_REPO: ${{ github.repository }}
           PUSHED_DIGEST: ${{ steps.push.outputs.digest }}
+          CONTRACT_VERSION: ${{ steps.contract.outputs.version }}
         run: |
           set -euo pipefail
           # Same pre-release rule as the tag policy above, and deliberately the
@@ -954,6 +990,10 @@ jobs:
 
           Digest: \`${PUSHED_DIGEST}\`
           Platforms: \`${PUBLISH_PLATFORMS}\`
+          contract: ${CONTRACT_VERSION}
+
+          The image tag and the wire contract are independent semvers — see
+          [contract/GOVERNANCE.md](${GITHUB_SERVER_URL}/${RELEASE_REPO}/blob/${RELEASE_TAG}/contract/GOVERNANCE.md).
 
           Built and pushed by [run ${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${RELEASE_REPO}/actions/runs/${GITHUB_RUN_ID})
           after lint, typecheck, test, build-amd64, secret-grep and smoke all
@@ -963,6 +1003,53 @@ jobs:
           )"
           gh release create "${RELEASE_TAG}" "${release_args[@]}" --notes "${notes}"
           echo "Release ${RELEASE_TAG} created after the image push."
+
+      - name: Assert the Release body advertises the tagged tree's contract version
+        # The mechanization round 2 asked for. The line above is *emitted* from
+        # the tagged tree's CONTRACT_VERSION and this step reads the published
+        # body back out of the API and *checks* it — emit and assert in one job,
+        # off one value, so the claim and its check cannot drift apart.
+        #
+        # It reads the Release rather than the local `notes` string on purpose:
+        # a check against the variable this job just built would restate the
+        # heredoc, not verify what consumers actually see on the Release page.
+        #
+        # Lane: `v*` tags only, like the Release it checks. The companion
+        # image's `searxng-v*` tags never reach this job at all (the job `if:`
+        # above), and a push to main creates no Release to assert on.
+        #
+        # FAILURE MODE: the image is pushed and the Release exists, but its body
+        # does not advertise the contract — the run goes red and the Release is
+        # wrong rather than missing. Fix the body (`gh release edit "$TAG"
+        # --notes ...`) or delete the Release and re-run the job; `gh release
+        # create` refuses a tag that already has one.
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_REPO: ${{ github.repository }}
+          CONTRACT_VERSION: ${{ steps.contract.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The API hands bodies back with CRLF line endings; `$` would not
+          # match with the carriage return still attached.
+          body="$(
+            gh release view "${RELEASE_TAG}" --repo "${RELEASE_REPO}" --json body --jq '.body' \
+              | tr -d '\r'
+          )"
+          # Dots escaped so the version is matched as a version: unescaped,
+          # `X.Y.Z` in a regex also matches `XaYaZ`. Anchored at both ends so
+          # the line must be the whole line rather than the prefix of a longer
+          # one (a `-draft` suffix, say).
+          escaped="${CONTRACT_VERSION//./\\.}"
+          if ! printf '%s\n' "${body}" | grep -qE "^contract: ${escaped}$"; then
+            echo "::error::Release ${RELEASE_TAG} does not advertise 'contract: ${CONTRACT_VERSION}' — the published Release disagrees with the contract version in the tagged tree"
+            echo "--- release body ---"
+            printf '%s\n' "${body}"
+            echo "--- end release body ---"
+            exit 1
+          fi
+          echo "Release ${RELEASE_TAG} advertises contract ${CONTRACT_VERSION}, matching the tagged tree."
 
   # ==========================================================================
   # The companion image's lane (US-004)

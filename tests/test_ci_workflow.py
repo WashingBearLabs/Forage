@@ -88,6 +88,7 @@ import pytest
 import yaml
 
 import contract_smoke
+from pipeline.contract import CONTRACT_VERSION
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
@@ -2130,6 +2131,256 @@ class TestPublishJob:
             "has ever executed the emulated leg. A verification step that does "
             "not say what it excludes reads as covering everything."
         )
+
+
+# ---------------------------------------------------------------------------
+# The image ↔ contract mapping (feature-forage-contract US-003)
+# ---------------------------------------------------------------------------
+
+# Forage publishes two independent semvers — the image tag and
+# `CONTRACT_VERSION` — and until US-003 the only thing claiming which contract
+# an image serves would have been a sentence a human typed into a release note.
+# Three steps replace that claim with a measurement, and they only work as a
+# set: one *reads* the version out of the tagged tree, the Release body is
+# written from it, and the third reads the published body back and asserts the
+# two agree. Emit and assert in one job, off one value.
+#
+# The tests below guard the set. The one that matters most is the negative:
+# no version literal may appear in the job's shell, because a copy in bash is a
+# second contract and a second contract keeps passing after the first moves —
+# the same rule `TestSmokeJob` applies to the `/health` vocabulary.
+_CONTRACT_READ_STEP = "Read the contract version from the tagged tree"
+_RELEASE_STEP = "Create the GitHub Release"
+_CONTRACT_ASSERT_STEP = (
+    "Assert the Release body advertises the tagged tree's contract version"
+)
+_CONTRACT_STEPS = (_CONTRACT_READ_STEP, _RELEASE_STEP, _CONTRACT_ASSERT_STEP)
+
+# Where the read step gets its value. Spelled out because "the tagged tree's
+# CONTRACT_VERSION" is the whole of the claim: reading it from anywhere else —
+# an env var, a previously published release, the checked-out default branch —
+# would answer a different question than the one the Release body asks.
+_CONTRACT_SOURCE_FILE = "pipeline/contract.py"
+
+
+def _step_named(jobs: dict[str, Any], job_name: str, name: str) -> dict[str, Any]:
+    for step in _steps(jobs, job_name):
+        if str(step.get("name", "")) == name:
+            return step
+    raise AssertionError(
+        f"Job {job_name!r} has no step named {name!r}; step names are "
+        f"{[str(step.get('name', '')) for step in _steps(jobs, job_name)]}"
+    )
+
+
+class TestReleaseContractMapping:
+    """US-003: the Release says which contract it serves, and the job proves it."""
+
+    @pytest.mark.parametrize("name", _CONTRACT_STEPS)
+    def test_the_step_exists(self, jobs: dict[str, Any], name: str) -> None:
+        _step_named(jobs, "publish", name)  # raises with the step list if absent
+
+    def test_the_version_is_read_from_the_tagged_tree(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        step = _step_named(jobs, "publish", _CONTRACT_READ_STEP)
+        assert step.get("id") == "contract", (
+            "The read step needs an `id:` — the Release body and the assertion "
+            f"both consume its output; got id={step.get('id')!r}"
+        )
+        run = str(step.get("run", ""))
+        assert _CONTRACT_SOURCE_FILE in run and "CONTRACT_VERSION" in run, (
+            f"The read step must parse CONTRACT_VERSION out of "
+            f"{_CONTRACT_SOURCE_FILE} at the tagged commit. Reading it from "
+            "anywhere else answers a different question than the Release body "
+            f"asks. Script was:\n{run}"
+        )
+        assert "GITHUB_OUTPUT" in run, (
+            "The read step must publish the version as a step output; nothing "
+            "else in the job can reach a shell variable it set."
+        )
+
+    def test_an_unreadable_version_fails_the_step(self, jobs: dict[str, Any]) -> None:
+        # `|| true` on the parse means a miss reaches this branch instead of
+        # killing the step under `set -e` with no message — so the branch has
+        # to be the thing that exits, or a garbled contract.py would publish a
+        # Release advertising `contract: `.
+        body = _if_block_body(_run_text(jobs, "publish"), "version", "grep -qE")
+        assert body is not None, (
+            "The read step must validate what it parsed against a semver "
+            "pattern before publishing it as an output"
+        )
+        assert "exit 1" in body, (
+            "A CONTRACT_VERSION the read step could not parse must fail the "
+            f"run. Branch body was:\n{body}"
+        )
+
+    def test_no_version_literal_appears_in_the_publish_shell(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        run_text = _run_text(jobs, "publish")
+        assert CONTRACT_VERSION not in run_text, (
+            f"The publish job's shell mentions {CONTRACT_VERSION!r}. The "
+            "version must come from the tagged tree at run time; a literal in "
+            "bash is a second contract, and it keeps passing after the first "
+            "one moves. Same rule as the smoke job's `/health` vocabulary."
+        )
+
+    def test_the_release_body_emits_the_contract_line(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        release = _step_named(jobs, "publish", _RELEASE_STEP)
+        run = str(release.get("run", ""))
+        assert re.search(r"^contract: \$\{CONTRACT_VERSION\}$", run, re.MULTILINE), (
+            "The Release notes must carry a `contract: <version>` line on its "
+            f"own line, interpolated from the read step. Script was:\n{run}"
+        )
+        env_block: dict[str, Any] = release.get("env") or {}
+        assert "steps.contract.outputs.version" in str(
+            env_block.get("CONTRACT_VERSION", "")
+        ), (
+            "The Release step must take its version from the read step's "
+            f"output; its env is {env_block}"
+        )
+
+    def test_the_published_body_is_read_back_and_checked(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        step = _step_named(jobs, "publish", _CONTRACT_ASSERT_STEP)
+        run = str(step.get("run", ""))
+        assert "gh release view" in run and "--json body" in run, (
+            "The assertion must read the *published* Release body back out of "
+            "the API. Checking the local `notes` variable would restate the "
+            "heredoc rather than verify what consumers see, which is the "
+            f"unmechanized claim this step replaced. Script was:\n{run}"
+        )
+        assert "tr -d '\\r'" in run, (
+            "Strip carriage returns before matching: the API hands bodies back "
+            "with CRLF line endings and `$` will not match with the `\\r` "
+            "still attached — a green-looking check that is red in production."
+        )
+        env_block: dict[str, Any] = step.get("env") or {}
+        assert "steps.contract.outputs.version" in str(
+            env_block.get("CONTRACT_VERSION", "")
+        ), (
+            "The assertion must compare against the same read-step output the "
+            f"body was written from; its env is {env_block}"
+        )
+
+    def test_a_body_without_the_contract_line_fails_the_run(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        body = _if_block_body(_run_text(jobs, "publish"), "body", "grep", "contract:")
+        assert body is not None, (
+            "The assertion must grep the release body inside an `if` — the "
+            "comparison is the entire mechanization"
+        )
+        assert "exit 1" in body, (
+            "A Release whose body does not advertise the tagged tree's "
+            "contract must fail the run, not warn. Branch body was:\n" + body
+        )
+
+    def test_the_pattern_is_anchored_and_the_version_is_escaped(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        run = str(_step_named(jobs, "publish", _CONTRACT_ASSERT_STEP).get("run", ""))
+        assert r'escaped="${CONTRACT_VERSION//./\\.}"' in run, (
+            "The version's dots must be escaped before they go into a regex: "
+            "unescaped, `X.Y.Z` also matches `XaYaZ`, and a check that accepts "
+            f"a near-miss is not a check. Script was:\n{run}"
+        )
+        assert 'grep -qE "^contract: ${escaped}$"' in run, (
+            "The pattern must be anchored at both ends. Without `^` the line "
+            "matches inside another word; without `$` the version matches the "
+            f"prefix of a longer one (`X.Y.Z-draft`). Script was:\n{run}"
+        )
+
+    def test_the_emitted_line_and_the_asserted_pattern_use_one_token(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        # The failure this catches is the quiet one: someone tidies the Release
+        # body to `Contract: 1.1.0` and the assertion, still grepping for
+        # `^contract: `, goes red on a publish rather than at review — or worse,
+        # someone tidies both halves apart in opposite directions.
+        emitted = re.search(
+            r"^(\S+: )\$\{CONTRACT_VERSION\}$",
+            str(_step_named(jobs, "publish", _RELEASE_STEP).get("run", "")),
+            re.MULTILINE,
+        )
+        asserted = re.search(
+            r'grep -qE "\^(.+?)\$\{escaped\}\$"',
+            str(_step_named(jobs, "publish", _CONTRACT_ASSERT_STEP).get("run", "")),
+        )
+        assert emitted is not None and asserted is not None, (
+            f"Could not read both halves: emitted={emitted}, asserted={asserted}"
+        )
+        assert emitted.group(1) == asserted.group(1), (
+            f"The Release body emits {emitted.group(1)!r} and the assertion "
+            f"greps for {asserted.group(1)!r}. One token, two places: they are "
+            "the same claim and must be spelled the same way."
+        )
+
+    @pytest.mark.parametrize("name", _CONTRACT_STEPS)
+    @pytest.mark.parametrize(
+        ("ref", "expected"),
+        [
+            (_RELEASE_REF, True),
+            (_PRERELEASE_REF, True),
+            # A push to main publishes a `sha-` image and creates no Release,
+            # so there is no body to assert on.
+            (_MAIN_REF, False),
+            # Cross-fire: the companion image's tag never reaches this job at
+            # all (the job `if:`), and each step says so on its own as well.
+            (_SEARXNG_REF, False),
+        ],
+    )
+    def test_the_contract_steps_run_on_the_service_release_lane_only(
+        self, jobs: dict[str, Any], name: str, ref: str, expected: bool
+    ) -> None:
+        condition = str(_step_named(jobs, "publish", name).get("if", ""))
+        assert condition, f"Step {name!r} must carry its own `if:`"
+        assert _evaluate(condition, ref, "push") is expected, (
+            f"Step {name!r} evaluates to {not expected} for ref {ref!r}. "
+            f"Condition was:\n{condition}"
+        )
+
+    def test_the_assertion_runs_after_the_release_is_created(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        names = [str(step.get("name", "")) for step in _steps(jobs, "publish")]
+        assert (
+            names.index(_CONTRACT_READ_STEP)
+            < names.index(_RELEASE_STEP)
+            < names.index(_CONTRACT_ASSERT_STEP)
+        ), (
+            f"Step order is {names}. The version is read before the body is "
+            "written from it, and the body is read back only once it exists."
+        )
+
+    def test_the_job_can_create_and_read_the_release_it_asserts_on(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        # US-003's AC asks that the step's job carry `contents: write` *named*.
+        # It already does — for `gh release create` — and `gh release view`
+        # needs nothing more, so this verifies rather than grants. A future
+        # tidy-up that scopes the block down to `packages: write` would break
+        # the Release and this assertion together.
+        perms: dict[str, Any] = jobs["publish"].get("permissions") or {}
+        assert perms.get("contents") == "write", (
+            f"publish's permissions are {perms}. `contents: write` is what "
+            "creates the Release and reads it back; the assertion step adds no "
+            "new scope and must not need one."
+        )
+
+    def test_the_companion_lane_carries_no_contract_mapping(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        # `forage-searxng` is upstream's software at a pinned digest; it has no
+        # wire contract of this repository's and creates no Release. A contract
+        # line copy-pasted into that lane would be a claim about a version that
+        # does not describe it.
+        searxng_run = _run_text(jobs, "searxng-publish")
+        assert "CONTRACT_VERSION" not in searxng_run and "contract:" not in searxng_run
 
 
 # ---------------------------------------------------------------------------

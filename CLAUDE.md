@@ -80,10 +80,17 @@ is now load-bearing for the two consumers above.
 
 The response contract is versioned (`pipeline/contract.py`, `contract_version` currently
 **1.1.0**), and consumers are expected to refuse activation on a major mismatch rather
-than guess. Changing any response shape means: bump the version, update or add the golden
-fixture under `tests/golden/`, and note the change for the consuming repo.
-`feature-forage-contract` freezes the OpenAPI surface and formalises the bump policy —
-read it before touching `pipeline/contract.py` or the response models in `models.py`.
+than guess. Changing any response shape means: bump the version, add a golden fixture
+under `tests/golden/` (older ones are retained, never edited), and note the change for the
+consuming repo.
+
+**The bump policy is written down: [`contract/GOVERNANCE.md`](contract/GOVERNANCE.md).**
+Read it before touching `pipeline/contract.py` or the response models in `models.py`. It
+classifies any change, answers the six standing examples, and records the five rulings
+this epic already made — including the one that is not obvious from the code: the
+`/extract` 413 is documented but unreachable (FastAPI turns it into a 400), documenting it
+carried no bump, and *correcting* it is a MAJOR. `.github/pull_request_template.md` is the
+short form of the same checklist.
 
 Since US-002 the frozen surface is a file, `contract/openapi.yaml`, with a committed
 `openapi.yaml.sha256` anchor beside it — the trust root every other copy of the contract
@@ -114,7 +121,7 @@ reason. Any new startup or cache code must preserve this.
 
 ```bash
 uv sync --extra dev     # environment (creates .venv)
-uv run pytest           # full suite green, hermetic — blocking CI gate (count: TESTING_GUIDE.md; 1427 at contract US-001)
+uv run pytest           # full suite green, hermetic — blocking CI gate (count: TESTING_GUIDE.md; 1532 at contract US-003)
 uv run ruff check .     # must stay clean — blocking CI gate
 uv run ruff format .    # must stay clean — blocking CI gate
 uv run pyright          # strict, ZERO errors — blocking CI gate

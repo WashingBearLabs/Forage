@@ -235,9 +235,9 @@ compatibility window** — never a silent break).
   posture summary (round-2: public repo, no security policy).
 
 **Acceptance Criteria:**
-- [ ] GOVERNANCE.md with rules + the four recorded rulings + the six classification
+- [x] GOVERNANCE.md with rules + the five recorded rulings (a2 added at US-001 verification) + the six classification
       examples answerable from the doc alone; PR template created; SECURITY.md present.
-- [ ] Release-body regex step added to the publish workflow (asserted by the workflow-shape
+- [x] Release-body regex step added to the publish workflow (asserted by the workflow-shape
       tests); the step's job carries `contents: write` (named — round-3).
 
 ### US-004: Contract distribution — image + release asset, sha256-anchored
@@ -651,6 +651,146 @@ directory, the script's Key Modules row, the `scripts/` line count). `kit_tools/
 (test count, `contract/` and `scripts/` rows). `tests/fixtures/README.md` (what the twin is
 and why it is generated). `CLAUDE.md` invariant 4 gained the mechanical consequence: the
 frozen surface is a file now, both artifacts are generated, and the regen command is named.
+
+### US-003 — Semver governance, PR template, SECURITY.md (2026-09-11)
+
+**Shipped:** branch `story/ct-us-003-governance`. Suite 1465 → **1532** green (+67: 41 in
+the new `tests/test_governance_docs.py`, 26 added to `tests/test_ci_workflow.py`);
+`ruff check`, `ruff format --check`, `uv run pyright` and `actionlint` all zero.
+`CONTRACT_VERSION` unchanged at `1.1.0`.
+
+**`sanitizer_revision` did NOT rotate** —
+`8b1b7f78e85f733ef3b8ace5194632a8cf92410131b2c1af995c456f20196d7c` before and after,
+re-derived at both ends. Nothing this story touched is in `_REVISION_SOURCES`: no file
+under `pipeline/` was opened, and `git diff --stat main -- pipeline/ models.py
+retrieval_app.py` is empty. US-001 keeps the spec's one acknowledged rotation, and this
+story is the third in a row to leave it alone.
+
+**Three documents, and where each one lives is part of the design.**
+`contract/GOVERNANCE.md` (336 lines) sits beside the artifact it governs, so a consumer who
+vendors `openapi.yaml` from the git tag gets the rules in the same directory.
+`SECURITY.md` (116) is at the repo root because GitHub renders it as the repository's
+security policy only from there. `.github/pull_request_template.md` (65) is the short form
+of the same checklist, and it is the only one of the three a contributor is *made* to read.
+
+**The release-body mechanization, reconciled against what the body actually said.** The
+existing `publish` job's Release step wrote a five-line heredoc — image, digest, platforms,
+and the gate-chain sentence — and carried **no contract line at all** (read off the live
+`v0.9.0-rc` / `v0.9.3-rc` bodies with `gh release view`, not assumed from the workflow
+source). So "assert the body contains `contract: X.Y.Z`" could not be a pure assertion:
+there was nothing to assert on. It became three steps, on `v*` tags only:
+
+| Step | Does |
+|---|---|
+| `Read the contract version from the tagged tree` (`id: contract`) | parses `CONTRACT_VERSION` out of the tagged commit's `pipeline/contract.py`, validates it as a semver, publishes it as a step output |
+| `Create the GitHub Release` | writes `contract: ${CONTRACT_VERSION}` into the notes from that output |
+| `Assert the Release body advertises the tagged tree's contract version` | `gh release view --json body`, strip CRs, anchored `grep -qE "^contract: ${escaped}$"`, `exit 1` on a miss |
+
+Emitting and asserting off **one** value in **one** job is the whole of the mechanization
+the round-2 finding asked for: a human release-note line was the last unmechanized
+integrity claim, and two independent copies would just have been two of them. The
+assertion reads the *published* body rather than the local `notes` variable — checking the
+variable would restate the heredoc, not verify what a consumer sees. Three details are
+load-bearing and each is commented in place: `tr -d '\r'` (the API returns CRLF bodies and
+`$` will not match past a carriage return), the dot-escaping (`1.1.0` unescaped also
+matches `1a1a0`), and `|| true` on the parse (under `set -euo pipefail` a `grep` miss or a
+`head` SIGPIPE would kill the step before its own error message ran).
+
+**No new permission was granted.** The job already carries `contents: write` for
+`gh release create`, and `gh release view` needs nothing more — the AC's "named" half is a
+*verification*, and `test_the_job_can_create_and_read_the_release_it_asserts_on` records it
+as one. Cross-fire: all three steps carry the same `if: startsWith(github.ref,
+'refs/tags/v')` as the Release itself, inside a job whose own `if:` already excludes
+`searxng-v*`; the guard test *evaluates* each step's condition against `v1.0.0`,
+`v0.9.0-rc`, `main` and `searxng-v0.1.0` rather than reading it, and a separate test asserts
+the companion lane grew no contract line of its own.
+
+**The judgement calls the sources left open, and how they were closed.**
+
+- **(a2) is classified MAJOR.** GOTCHAS and the US-001 notes both say correcting 400 → 413
+  is "a wire change requiring a bump" without naming the class. Under GOVERNANCE's own
+  table — "a status code a client observes changes" — that is the MAJOR row, and saying so
+  is the difference between a document that answers the question and one that defers it.
+  The current state (both statuses declared, the 413's description saying it is shadowed)
+  is recorded as **no bump**, which is what US-001 shipped under.
+- **"Pre-freeze / post-freeze" needed a boundary.** Two of the six required examples answer
+  differently on either side of it, so the document defines it once: the freeze is the first
+  release that publishes `contract/openapi.yaml` as an artifact (image `v1.0.0` serving
+  contract `1.1.0`, US-004). Before it, no consumer held a copy to diff, so a doc-only change
+  moved nothing — ruling (a). After it, the document is an artifact with an anchor, and a
+  doc-only change is a PATCH.
+
+**Two audit findings, both measured rather than inferred.**
+
+1. **Private vulnerability reporting was OFF.** `gh api repos/WashingBearLabs/Forage/
+   private-vulnerability-reporting` returned `{"enabled": false}` — and this repository
+   publishes no security email and has no PGP key, so SECURITY.md would have advertised a
+   channel that 403s the first person to try it. Enabled it (`PUT` on the same endpoint,
+   re-read as `{"enabled": true}`) and dated the claim in the file. A policy naming a dead
+   channel is worse than no policy: it converts a would-be private report into a public
+   issue.
+2. **`docs/releases.md` said required status checks were "Not registered".** They are:
+   `gh api repos/WashingBearLabs/Forage/branches/main/protection` lists exactly `lint`,
+   `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke`, with PRs required
+   (`required_approving_review_count: 0`) and force-pushes and deletions blocked. The
+   section described the pre-flip deferral and was never updated at US-008. Corrected with
+   the measured table — and the PR template's "six checks required on `main`" sentence is
+   now tied to the workflow's own `publish` `needs:` by test, so the document cannot fall
+   behind a seventh gate.
+
+**Doc-count discipline, stated with its convention.** Measured, not incremented:
+**29 `test_*.py` modules** (32 Python files under `tests/` once `conftest.py`, `fakes.py`
+and `__init__.py` are counted), **1532 tests**, `test_ci_workflow.py` 209 → **235**.
+`SYNOPSIS.md` also carried three stale rows from earlier stories — "Repo visibility:
+**Private**", a CI row listing three jobs of ten, "Published image: **None yet**" — and its
+`docs/` row was missing `releases.md`, `weights.md` and `searxng.md`. Fixed against measured
+reality (`gh api`, `gh release list`, `ls`) and marked as audit corrections in place, since
+silently re-stating them would leave the next reader unable to tell a fix from a claim.
+
+**Mutation-verified** (each applied to the committed tree, then reverted; clean tree back to
+276 in the two modules):
+
+| Mutation | Result |
+|---|---|
+| the assertion step deleted entirely | **10 failures** |
+| the regex unanchored (`contract: ${escaped}`) | **2 failures** |
+| the version's dots left unescaped | **1 failure** |
+| the body emits `Contract:` while the grep still reads `^contract: ` | **2 failures** — including the one-token tie |
+| the version hardcoded as a literal in the notes | **3 failures** |
+| the assertion step's `if:` removed (fires on `main` and `searxng-v*` too) | **4 failures** |
+| the failure branch degraded from `exit 1` to a warning | **1 failure** |
+| GOVERNANCE's stated contract version bumped, code untouched | **1 failure** |
+| a required check dropped from the PR template's sentence | **1 failure** — *after* the guard was tightened; see below |
+| a worked-example row deleted | **2 failures** |
+| the PR template invents a seventh required check | **1 failure** |
+| the `contract:` line dropped from the body | **2 failures** |
+| SECURITY.md's reporting URL replaced with an email | **1 failure** |
+
+**One guard escaped its own mutation and was rewritten.** The first version of
+`test_it_lists_exactly_the_checks_the_workflow_requires` asked whether each gate's name
+appeared *anywhere* in the PR template — and stayed green with `secret-grep` deleted from
+the required-checks sentence, because the invariants section also names it. It now parses
+the sentence itself and compares the backticked names (and the number word) against the
+jobs `publish` hangs off. Same lesson this file already records for bash: checking a
+document's vocabulary is not checking its claim. Committed as its own
+`test(...)` commit so the escape is visible in the history.
+
+**Handoffs to US-004.**
+
+- `contract/GOVERNANCE.md` sits in the directory US-004 will `COPY contract/ /app/contract/`
+  into the image. That is deliberate — the governance travels with the artifact — and it
+  changes nothing about the three-way sha256 check, which is over `openapi.yaml` alone.
+- GOVERNANCE's **Consumers** table already lists the Release-asset and in-image routes,
+  marked *"with US-004"*. Flip those two rows when the assets land, and add the vendoring
+  specifics the spec assigns to that story.
+- **The release-body assertion has never run.** It fires only on a `v*` tag, and the next
+  one is US-004's `v1.0.0` cut. The step's shell was exercised locally against a rendered
+  copy of the real heredoc (match, plus rejection of `1a1a0` and `1.1.0-draft`), and
+  `actionlint` is clean — but the first live proof is that tag push, and it is worth
+  watching the step rather than only the tags.
+- If that assertion ever fails, the recovery is in `docs/releases.md`: the Release exists
+  and is wrong, `gh release create` refuses a second one on the same tag, so fix it with
+  `gh release edit` or delete the Release and re-run.
 
 ## Refinement Notes
 

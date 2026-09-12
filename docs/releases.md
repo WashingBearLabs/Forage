@@ -144,6 +144,37 @@ verification. That ordering is the contract: *a Release implies a pullable,
 gated image*. The reverse is not promised and does not need to be; a `main`
 push produces a `sha-` image and no Release at all.
 
+### The body says which contract the image serves
+
+Since `feature-forage-contract` US-003 every Release body carries a line:
+
+```
+contract: 1.1.0
+```
+
+The image tag and the wire contract are **independent semvers**
+([`contract/GOVERNANCE.md`](../contract/GOVERNANCE.md)), so the mapping between
+them has to be stated — and it is stated mechanically rather than typed by a
+human. Three steps in `publish` do it, on `v*` tags only:
+
+1. `Read the contract version from the tagged tree` parses `CONTRACT_VERSION`
+   out of the tagged commit's `pipeline/contract.py`;
+2. `Create the GitHub Release` writes the body from that value;
+3. `Assert the Release body advertises the tagged tree's contract version`
+   reads the published body back with `gh release view` and fails the run on an
+   anchored regex miss.
+
+Emitting and asserting off one value in one job is the point: the claim and its
+check cannot drift apart. No version literal appears anywhere in that job's
+shell, and `tests/test_ci_workflow.py::TestReleaseContractMapping` keeps it that
+way.
+
+**If step 3 fails**, the image is pushed and the Release exists but advertises
+the wrong contract — a red run with a wrong Release rather than a missing one.
+`gh release create` refuses a tag that already has a Release, so recovery is
+`gh release edit "$TAG" --notes ...` with the corrected body, or deleting the
+Release and re-running the job.
+
 ## Cutting a release
 
 ```
@@ -180,12 +211,26 @@ pull — is the one the ordering rules out.
 
 ## Required status checks
 
-Not registered. `WashingBearLabs` is on the GitHub **Free** plan and this
-repository is private, so both the branch-protection API and the rulesets API
-return `403 Upgrade to GitHub Pro or make this repository public`. The
-deferral, and the settings to apply at the public flip, are recorded in
-[`docs/bootstrap-notes.md`](bootstrap-notes.md).
+**Registered** — measured against the branch-protection API on 2026-09-11, not
+assumed. The deferral this section used to describe (Free plan + private
+repository → `403 Upgrade to GitHub Pro or make this repository public`, recorded
+in [`docs/bootstrap-notes.md`](bootstrap-notes.md)) ended at the US-008 public
+flip, and the settings were applied then; this section was simply not updated
+with them.
 
-Until then the compensating control is that the gates are `needs:` edges rather
-than merge policy: nothing can be published over a red gate whether or not a
-human can merge over one.
+On `main`:
+
+| Setting | Value |
+|---|---|
+| Required status checks | `lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke` — the six `publish` hangs off |
+| Pull request required | yes (`required_approving_review_count: 0` — a solo maintainer cannot approve their own PR) |
+| Force pushes / deletions | blocked |
+| Strict (up-to-date before merge) | off |
+
+`.github/pull_request_template.md` states that list to contributors, and
+`tests/test_governance_docs.py` ties its sentence to the workflow's own
+`publish` `needs:` so the document cannot fall behind a seventh gate.
+
+The complementary control remains that the gates are `needs:` edges rather than
+merge policy: nothing can be published over a red gate whether or not a human
+can merge over one.
