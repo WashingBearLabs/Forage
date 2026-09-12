@@ -227,5 +227,13 @@ no client-header trust) — behind its own hermetic cross-container smoke.
 [`docs/searxng.md`](docs/searxng.md) has the runbook. **The repository and both packages
 went public at the 2026-09-10 US-008 flip**; anonymous pulls verified at the gate.
 
-The optional in-memory cache shipped with contract `1.1.0`; still to come is the frozen
-OpenAPI contract.
+The optional in-memory cache shipped with contract `1.1.0`, and the **frozen OpenAPI
+contract** is in the tree: [`contract/openapi.yaml`](contract/openapi.yaml), generated and
+checked against a committed `openapi.yaml.sha256` anchor, with the versioning rules — what
+counts as MAJOR, MINOR, PATCH or no bump, and how to vendor a verified copy — in
+[`contract/GOVERNANCE.md`](contract/GOVERNANCE.md). Shipping it as a Release asset and
+inside the image is the last step before `v1.0.0`.
+
+**Security reports** go through GitHub private vulnerability reporting; the policy, the
+supported-versions rule and what is and is not in scope are in
+[`SECURITY.md`](SECURITY.md).

@@ -2,7 +2,7 @@
 # SYNOPSIS.md
 
 > Last updated: 2026-09-11
-> Updated by: Claude (forage-model-bootstrap US-002)
+> Updated by: Claude (forage-contract US-003)
 
 ---
 
@@ -27,13 +27,13 @@ preserved). See `docs/bootstrap-notes.md` for the pin record.
 
 | Aspect | Status |
 |--------|--------|
-| Maturity | Pre-1.0, freshly extracted (2026-09-07) |
-| Repo visibility | **Private** — flips public in `feature-forage-ci-and-image` after its gates pass |
-| Tests | 1465 collected, all green (`uv run pytest`), hermetic via `pytest-socket` — **enforced in CI** since US-002, with a committed hermeticity canary |
+| Maturity | Pre-1.0; the first `v1.0.0` is cut by `feature-forage-contract` US-004 |
+| Repo visibility | **Public** since the US-008 flip (2026-09-10), repository and both packages; `main` is PR-only, with six required status checks (audit-measured 2026-09-11 — this row said "Private" for a month after the flip) |
+| Tests | 1532 collected, all green (`uv run pytest`), hermetic via `pytest-socket` — **enforced in CI** since US-002, with a committed hermeticity canary |
 | Lint | `uv run ruff check .` and `ruff format --check .` both clean — **enforced in CI** |
 | Types | `uv run pyright` (strict) is **clean — 0 errors**, no baseline; **enforced in CI** |
-| CI | `.github/workflows/ci.yml` — `lint`, `typecheck` and `test` jobs live; build/publish land across the rest of `feature-forage-ci-and-image` |
-| Published image | **None yet** — same spec |
+| CI | `.github/workflows/ci.yml` — ten jobs in two lanes: `lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke`, `publish` for the service image, and `searxng-build`/`-smoke`/`-publish` for the companion |
+| Published image | `ghcr.io/washingbearlabs/forage` — pre-release tags only so far (`0.9.3-rc` at 2026-09-11); `latest` starts existing at the first non-pre-release tag |
 | Deployment | Poppy's in-tree copy is still the deployed source of truth (coexistence rule) |
 
 **Coexistence rule:** until Poppy pins a published Forage image, any fix to the extracted
@@ -95,14 +95,15 @@ path and yields a `promptguard_unavailable` degraded runtime.
 
 | Path | Contents |
 |------|----------|
-| repo root | `retrieval_app.py`, `models.py`, `cache.py`, `url_validator.py`, `model_fetcher.py`, `weights_manifest.json`, `config.yaml`, `Dockerfile` |
+| repo root | `retrieval_app.py`, `models.py`, `cache.py`, `url_validator.py`, `model_fetcher.py`, `weights_manifest.json`, `config.yaml`, `Dockerfile`, `SECURITY.md` |
 | `pipeline/` | The five sanitization stages, the orchestrator, and the response contract |
 | `promptguard/` | The Llama Prompt Guard 2 classifier wrapper |
 | `searxng/config/` | SearXNG `settings.yml` + `limiter.toml` |
-| `contract/` | The frozen wire contract: generated `openapi.yaml` + its committed `.sha256` anchor. Regenerate with `uv run python -m scripts.export_contract`; never hand-edit |
+| `contract/` | The frozen wire contract: generated `openapi.yaml` + its committed `.sha256` anchor, and `GOVERNANCE.md` — the semver rules, the five recorded rulings and the consumer vendoring procedure. Regenerate the two generated files with `uv run python -m scripts.export_contract`; never hand-edit |
 | `scripts/` | Operator-only, run by hand from a checkout; in no image |
-| `tests/` | 28 `test_*.py` modules, one per subject, plus `conftest.py`, `fakes.py`, `golden/` and `fixtures/` |
-| `docs/` | `configuration.md` (full env/config reference), `bootstrap-notes.md`, `bootstrap-scan.txt` |
+| `tests/` | 29 `test_*.py` modules, one per subject, plus `conftest.py`, `fakes.py`, `__init__.py`, `golden/` and `fixtures/` |
+| `docs/` | `configuration.md` (full env/config reference), `releases.md`, `weights.md`, `searxng.md`, `bootstrap-notes.md`, `bootstrap-scan.txt` (audit 2026-09-11: three were missing from this row) |
+| `.github/` | `workflows/ci.yml` and `pull_request_template.md` (the bump checklist + standing invariants) |
 | `kit_tools/` | This documentation framework + the feature specs |
 
 See `kit_tools/arch/CODE_ARCH.md` for the module map.

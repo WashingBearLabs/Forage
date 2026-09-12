@@ -2,7 +2,7 @@
 # CODE_ARCH.md
 
 > Last updated: 2026-09-11
-> Updated by: Claude (forage-contract US-002)
+> Updated by: Claude (forage-contract US-003)
 
 ---
 
@@ -64,12 +64,16 @@ Design principles:
 │                            # (digest-pinned base) + config/ (settings.yml, limiter.toml)
 ├── contract/                # the frozen wire contract: openapi.yaml (generated) and
 │                            # openapi.yaml.sha256, the committed anchor every other
-│                            # copy is verified against. Generated, never hand-edited
+│                            # copy is verified against (generated, never hand-edited),
+│                            # plus GOVERNANCE.md — the semver rules, the five recorded
+│                            # rulings, and the consumer vendoring procedure
+├── SECURITY.md              # reporting channel, supported versions, in/out of scope;
+│                            # the posture itself stays in README.md
 ├── scripts/                 # operator-only, run by hand: vendor_weights.py vendors the
 │                            # pinned weights to the private GHCR mirror;
 │                            # export_contract.py regenerates contract/. Ships in no
 │                            # image — the Dockerfile COPY list names nothing here
-├── tests/                   # 28 test_*.py modules (+ conftest.py, fakes.py, __init__.py); flat, one module per subject
+├── tests/                   # 29 test_*.py modules (+ conftest.py, fakes.py, __init__.py); flat, one module per subject
 ├── docs/                    # configuration.md, weights.md, releases.md, searxng.md,
 │                            # bootstrap-notes.md, bootstrap-scan.txt
 └── kit_tools/               # this documentation framework + feature specs
@@ -153,9 +157,15 @@ and a warm start has to mean zero attempts, not zero successes.
 
 **The response contract is versioned and consumers refuse on a mismatch.** Any change to
 a response shape is a contract change: bump `contract_version` in `pipeline/contract.py`,
-update `tests/golden/contract_1_0_0.json` (or add a new golden), and note it for the
-consuming repo. `feature-forage-contract` freezes the OpenAPI surface and formalizes this
-governance.
+add a new golden under `tests/golden/` (older ones are retained, never edited), regenerate
+`contract/` with `uv run python -m scripts.export_contract`, and note it for the consuming
+repo. Since `feature-forage-contract` US-003 the rules are written down rather than
+remembered: **`contract/GOVERNANCE.md`** classifies any change (MAJOR / MINOR / PATCH / no
+bump), carries the five rulings this epic recorded — the documentation pass taking no bump,
+the unreachable `/extract` 413 and what fixing it would cost, enum additions as MINOR with
+an announcement obligation, fixture retention, and the private-IP echo caveat — and states
+the image↔contract mapping that the `publish` job now emits into the Release body and
+asserts back out of it.
 
 **Health is a body, not a status code.** `/health` always returns 200. `status` is
 `healthy` or `degraded`, with machine-readable `degraded_reasons`

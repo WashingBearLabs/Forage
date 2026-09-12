@@ -1,7 +1,7 @@
 <!-- Template Version: 2.0.1 -->
 # AGENT_README.md
 
-> Last updated: 2026-09-07
+> Last updated: 2026-09-11
 > Updated by: Claude (forage-repo-bootstrap US-005)
 
 Navigation guide for AI assistants working in Forage. Forage is a ~5,100-line single
@@ -148,14 +148,20 @@ kit_tools/
 ```
 
 Repo-root docs that are **not** under `kit_tools/` but matter just as much:
-`../CLAUDE.md`, `../README.md`, `../NOTICE`, `../docs/configuration.md`,
-`../docs/bootstrap-notes.md`, `../docs/bootstrap-scan.txt`.
+`../CLAUDE.md`, `../README.md`, `../SECURITY.md`, `../NOTICE`,
+`../contract/GOVERNANCE.md`, `../.github/pull_request_template.md`,
+`../docs/configuration.md`, `../docs/releases.md`, `../docs/weights.md`,
+`../docs/searxng.md`, `../docs/bootstrap-notes.md`, `../docs/bootstrap-scan.txt`.
+
+`SECURITY.md` and `contract/GOVERNANCE.md` arrived with `feature-forage-contract` US-003
+and live at the **repo root / beside the artifact they govern**, not under `kit_tools/` —
+they are read by contributors and consumers, not only by agents. `tests/test_governance_docs.py`
+holds their mechanical claims to the code.
 
 Templates this project does not carry (and does not need): `DATA_MODEL.md` (no database),
-`SECURITY.md` (posture lives in the README and `CODE_ARCH.md`), `INFRA_ARCH.md`,
-`API_GUIDE.md` (the OpenAPI contract is the API doc; `feature-forage-contract` freezes it),
-`ENV_REFERENCE.md` (`../docs/configuration.md` is it), `UI_STYLE_GUIDE.md` (headless).
-Add one only when there is real content for it.
+`INFRA_ARCH.md`, `API_GUIDE.md` (the OpenAPI contract is the API doc, frozen at
+`../contract/openapi.yaml`), `ENV_REFERENCE.md` (`../docs/configuration.md` is it),
+`UI_STYLE_GUIDE.md` (headless). Add one only when there is real content for it.
 
 ---
 
@@ -176,7 +182,7 @@ Add one only when there is real content for it.
 Every `kit_tools/` doc carries, right under its title:
 
 ```markdown
-> Last updated: 2026-09-07
+> Last updated: 2026-09-11
 > Updated by: [Human/Claude]
 ```
 
