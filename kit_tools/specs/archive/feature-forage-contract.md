@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: forage-contract
-status: active
+status: completed
 session_ready: true
 depends_on: [forage-ci-and-image, forage-cache-fallback]
 vision_ref: Secure Web Retrieval / provider-independent web access
@@ -12,7 +12,8 @@ epic_seq: 4
 epic_final: true
 execution_order: [US-001, US-005, US-002, US-003, US-004]
 created: 2026-09-02
-updated: 2026-09-07
+updated: 2026-09-12
+completed: 2026-09-12
 ---
 
 # Feature Spec: Forage Contract — Documented Error Surface, Frozen OpenAPI + Governance
@@ -266,9 +267,9 @@ run URL recorded).
 - [x] Contract + sha256 in-image (COPY landed, smoke extension green); the drift pytest
       also asserts the committed anchor matches the committed file (the anchor↔file tie —
       round-3).
-- [ ] **Image `v1.0.0` cut as this story's final step** (supervised tag push after
+- [x] **Image `v1.0.0` cut as this story's final step** (supervised tag push after
       COPY + asset workflow land; run URL recorded) — the artifact spec 6 pins.
-- [ ] Release assets present on the `v1.0.0` release; three-way sha256 equality against
+- [x] Release assets present on the `v1.0.0` release; three-way sha256 equality against
       the committed anchor verified and recorded; vendoring procedure documented.
 - [x] Tests written/updated for new functionality
 - [x] Full test suite passes (`uv run pytest`)
@@ -947,7 +948,25 @@ UTC-day caveats stated, and the live-cold-publish gap flagged). `CLAUDE.md` inva
 test mapping — `Dockerfile`, `contract/openapi.yaml` and its anchor now also run
 `tests/test_contract_smoke.py`).
 
-#### v1.0.0 cut — OWNER GATE, pending
+#### v1.0.0 cut — EXECUTED 2026-09-12 (owner + supervisor)
+
+**Recorded (run 34667821482, tag at `f4c2b16`):**
+- Pre-flight: main green on the tagged commit (its sha-publish had already survived the
+  new epoch/reproducibility steps live), `export_contract --check` clean,
+  `CONTRACT_VERSION` 1.1.0 confirmed, 02:22 UTC — clear of the midnight window.
+- The run: **all jobs green, COLD** — no warm-cache ritual — including the three
+  never-before-run steps (epoch derivation, release-body `contract:` assertion,
+  Release-asset download-back + `sha256sum -c`). The first cold cut was itself the first
+  live proof of the reproducibility fix, as the runbook intended.
+- **Four-way sha256 equality**: committed anchor = repo file = Release asset
+  (self-verifying via `sha256sum -c`) = `docker run --entrypoint cat` of the anonymously
+  pulled image — all `00b1dbaa5971895e7e7f1532f52ab46026df5e789ee5572380fd822f6bb295c0`.
+- Release `v1.0.0`: `prerelease: false`, body carries `contract: 1.1.0` (the two-semver
+  mechanization's first live pass).
+- Registry: `latest` exists **for the first time**, beside `1.0` and `1.0.0`.
+- Live container: `/health` serves `contract_version 1.1.0`, `cache_backend memory`,
+  revision `8b1b7f78…196d7c`.
+- This is the artifact `feature-poppy-consume-forage-image` pins.
 
 The last acceptance criterion of this story, and the last of the epic. It is a **tag push
 by the owner**, not something an implementer does: it moves `latest` for the first time in

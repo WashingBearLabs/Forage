@@ -1,10 +1,10 @@
 <!-- Template Version: 2.1.0 -->
 ---
 epic: forage-extraction-forage-side
-status: active
+status: completed
 vision_ref: Secure Web Retrieval / provider-independent web access
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-12
 ---
 
 # Epic: Forage Extraction — Forage-Side Half
@@ -34,7 +34,7 @@ in-tree copy), which executes in Poppy.
 | 1 | [feature-forage-ci-and-image](archive/feature-forage-ci-and-image.md) | **✅ Completed 2026-09-10** (8/8, 1 attempt each; repo+images PUBLIC, branch protection live — main is PR-only now) | 8 | US-008 executed 2026-09-10 | — |
 | 2 | [feature-forage-model-bootstrap](archive/feature-forage-model-bootstrap.md) | **✅ Completed 2026-09-12** (6/6, 1 attempt each; mirror vendored + private; cold 19s / warm 9s network-none; revision rotated to 5927038d…) | 6 | forage-ci-and-image |
 | 3 | [feature-forage-cache-fallback](archive/feature-forage-cache-fallback.md) | **✅ Completed 2026-09-11** (4/4; Valkey optional live, contract 1.1.0, manual smoke green end-to-end; first FAIL verdict of the epic on US-004, healed in 3 passes; cold-cache publish finding → spec-4 blocker) | 4 | forage-model-bootstrap |
-| 4 | [feature-forage-contract](feature-forage-contract.md) | Planned | 5 | **US-004 cuts `v1.0.0`** — supervised tag push | forage-ci-and-image, forage-cache-fallback |
+| 4 | [feature-forage-contract](archive/feature-forage-contract.md) | **✅ Completed 2026-09-12** (5/5; v1.0.0 CUT — cold, all green, four-way sha equality, latest moved first time; contract 1.1.0 frozen + governed; cold-cache blocker closed with verifier-reproduced reproducible builds) | 5 | forage-ci-and-image, forage-cache-fallback |
 
 **Execution order:** 1 → 2 → 3 → 4 (**23 stories, fully sequential**). The {2, 3}
 parallelism was removed during Poppy's validation round 1: both touch `/metrics` and the

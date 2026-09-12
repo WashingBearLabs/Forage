@@ -178,7 +178,7 @@ body, the app metadata — is a **no bump**. The contract stays at `1.1.0`.
 codes. The corrected design mirrors each emission site and the parity tests hold the
 mirror to it, which is what turns "documentation only" from a claim into a measurement.
 
-**Source:** `kit_tools/specs/feature-forage-contract.md`, *Clarifications → Session
+**Source:** `kit_tools/specs/archive/feature-forage-contract.md`, *Clarifications → Session
 2026-09-02* ("does the typing/envelope pass bump the contract? → No — and round 2 tightened
 the ruling's premise: it holds only because the design now provably changes zero wire bytes
 (parity tests)"), and the US-001 / US-005 *Implementation Notes* in the same file.
@@ -210,7 +210,7 @@ you're in there".
 
 **Source:** `kit_tools/docs/GOTCHAS.md`, *"An over-sized upload gets 400, not the 413 the
 size middleware emits"* (the three measurements and the two tests that pin them), and
-`kit_tools/specs/feature-forage-contract.md`, US-001 *Implementation Notes* → "⚠ Finding:
+`kit_tools/specs/archive/feature-forage-contract.md`, US-001 *Implementation Notes* → "⚠ Finding:
 the spec's emission map is one shape short, and its 413 is unreachable".
 
 ### (b) New omission / degraded enum members are MINOR — with an announcement obligation
@@ -231,7 +231,7 @@ their own `Literal` aliases (`frozenset(get_args(...))`), so a new member update
 and the set atomically and cannot half-land. It *will* move `model_json_schema()` and the
 document: regenerate the contract and add the golden fixture in the same commit.
 
-**Source:** `kit_tools/specs/feature-forage-contract.md`, US-003 *Implementation Hints*
+**Source:** `kit_tools/specs/archive/feature-forage-contract.md`, US-003 *Implementation Hints*
 ruling (b), and US-001 *Implementation Notes* (the derived-Literal composition).
 
 ### (c) Golden fixtures are retained, never replaced
@@ -248,7 +248,7 @@ Note what the fixtures pin: `model_json_schema()`, which is strictly more than t
 it moves for description and enum-rendering changes too. A documentation-only change
 regenerates the *current* fixture (ruling (a)); a wire change adds a **new** file beside it.
 
-**Source:** `kit_tools/specs/feature-forage-contract.md`, US-003 *Implementation Hints*
+**Source:** `kit_tools/specs/archive/feature-forage-contract.md`, US-003 *Implementation Hints*
 ruling (c); the fixture semantics are recorded in US-001 *Implementation Notes* and
 `kit_tools/testing/TESTING_GUIDE.md`.
 
@@ -270,7 +270,7 @@ exposing internal name resolution with it. Redaction is a wire change (a `reason
 consumers may parse) and belongs to a contract bump, which is why it is not in this
 zero-wire-byte epic.
 
-**Source:** `kit_tools/specs/feature-forage-contract.md`, US-003 *Implementation Hints*
+**Source:** `kit_tools/specs/archive/feature-forage-contract.md`, US-003 *Implementation Hints*
 ruling (d) (round-2 security note); the emission path is `url_validator.py:174` →
 `pipeline/orchestrator.py`'s `private_ip` raise sites. Repeated for reporters in
 [`SECURITY.md`](../SECURITY.md).
