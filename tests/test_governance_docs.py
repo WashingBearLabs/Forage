@@ -110,16 +110,29 @@ def pr_template() -> str:
 
 
 def _section(text: str, heading: str) -> str:
-    """The body of one section, from its heading to the next of equal depth."""
+    """The body of one section, from its heading to the next of equal depth.
+
+    Fenced code blocks are skipped when looking for that next heading. A shell
+    comment at column 0 inside a ``` fence — ``# From a checkout…`` in the
+    Consumers section — is not a heading, and treating it as one silently
+    truncated the section body to whatever came before the example (found at
+    US-004, when a test of a line *after* the fence failed for a reason that
+    had nothing to do with the line).
+    """
     lines = text.splitlines()
     depth = len(heading) - len(heading.lstrip("#"))
     starts = [index for index, line in enumerate(lines) if line.startswith(heading)]
     assert len(starts) == 1, f"Expected exactly one {heading!r} heading; got {starts}"
     start = starts[0]
+    fenced = False
     for index in range(start + 1, len(lines)):
         stripped = lines[index]
+        if stripped.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
         if (
-            stripped.startswith("#")
+            not fenced
+            and stripped.startswith("#")
             and len(stripped) - len(stripped.lstrip("#")) <= depth
         ):
             return "\n".join(lines[start:index])
@@ -192,6 +205,37 @@ class TestGovernanceStaysTiedToTheCode:
                 "file, and a consumer reads it to learn which bytes are the "
                 "contract."
             )
+
+    def test_the_in_image_route_names_the_path_the_image_uses(
+        self, governance: str
+    ) -> None:
+        """US-004's Consumers table promises a path; the image has to use it.
+
+        The chain is worth stating because it is three files long and each link
+        is checked somewhere else: this asserts the document names the path
+        ``contract_smoke.py`` reads, ``tests/test_contract_smoke.py`` ties that
+        constant to the destination ``tests/test_dockerfile.py`` asserts on the
+        Dockerfile's ``COPY``. So a moved destination fails in the Dockerfile
+        guard *and* leaves this document's instruction false — which is the
+        failure a consumer actually meets.
+        """
+        import contract_smoke
+
+        consumers = _section(governance, "## Consumers")
+        assert contract_smoke.IMAGE_CONTRACT_PATH in consumers, (
+            f"GOVERNANCE.md's Consumers section does not name "
+            f"{contract_smoke.IMAGE_CONTRACT_PATH!r}, the path the image "
+            "actually carries the contract at. That line is the whole of the "
+            "in-image route for a reader."
+        )
+
+    def test_the_vendoring_procedure_names_the_verification_command(
+        self, governance: str
+    ) -> None:
+        # The procedure exists to make consumers run one command. If the
+        # section stops naming it, the rest is advice.
+        consumers = _section(governance, "## Consumers")
+        assert "sha256sum -c openapi.yaml.sha256" in consumers
 
     def test_every_relative_link_resolves(self) -> None:
         # A document whose cross-references 404 is a document people stop

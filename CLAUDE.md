@@ -100,6 +100,13 @@ Anything that moves the document — a response model, a `responses=` declaratio
 description, a FastAPI bump — is followed by `uv run python -m scripts.export_contract`,
 and `tests/test_contract_export.py` is red until it is.
 
+Since US-004 that file ships in three places — the git tag, the `v*` Release's assets, and
+`/app/contract/openapi.yaml` inside the image — and two of the three are *checked* rather
+than promised: the `smoke` job reads the in-image copy back out of the candidate image and
+the `publish` job reads the Release assets back out of the API, both verifying against the
+committed anchor. Consumers vendor by the procedure in `contract/GOVERNANCE.md`; the rule
+is always "verify against the anchor from the same tag, never against another copy".
+
 ### 5. Degradation is loud, never silent.
 
 `/health` always returns 200; the truth is in the body (`status`, `degraded_reasons`,

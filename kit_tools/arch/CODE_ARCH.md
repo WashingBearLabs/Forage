@@ -2,7 +2,7 @@
 # CODE_ARCH.md
 
 > Last updated: 2026-09-11
-> Updated by: Claude (forage-contract US-003)
+> Updated by: Claude (forage-contract US-004)
 
 ---
 
@@ -54,7 +54,9 @@ Design principles:
 │                            # Not in the image — the Dockerfile COPY list is explicit
 ├── config.yaml              # UA pool, trusted domains, blocklist, thresholds, limits
 ├── Dockerfile               # CPU-torch image; digest-pinned base, uv.lock install,
-│                            # secret-free (no build ARG, no baked weights)
+│                            # secret-free (no build ARG, no baked weights), ships
+│                            # contract/ at /app/contract/, and normalized for
+│                            # reproducibility (no apt logs, no import-time .pyc)
 ├── docker-entrypoint.sh     # 17 lines: `exec "$@"`. Vault-free by design.
 ├── pyproject.toml           # uv/hatchling/ruff/pyright/pytest config
 ├── uv.lock                  # CPU-pinned torch on Linux; `grep nvidia-` must stay empty
@@ -66,7 +68,8 @@ Design principles:
 │                            # openapi.yaml.sha256, the committed anchor every other
 │                            # copy is verified against (generated, never hand-edited),
 │                            # plus GOVERNANCE.md — the semver rules, the five recorded
-│                            # rulings, and the consumer vendoring procedure
+│                            # rulings, and the consumer vendoring procedure. Copied
+│                            # whole into the image and published as Release assets
 ├── SECURITY.md              # reporting channel, supported versions, in/out of scope;
 │                            # the posture itself stays in README.md
 ├── scripts/                 # operator-only, run by hand: vendor_weights.py vendors the
@@ -103,7 +106,7 @@ Design principles:
 | `pipeline/stage1_pdf.py` | 156 | PDF branch of stage 1. |
 | `pipeline/stage3_promptguard.py` | 151 | ML injection scan; skipped for trusted domains. |
 | `pipeline/contract.py` | 108 | The versioned response contract (`contract_version`, currently **1.1.0**). |
-| `contract_smoke.py` | 367 | CI's published-image smoke: polls a running container's `/health`, validates it against the same `HealthResponse` model the golden test pins, and reads every wire value from `pipeline/contract.py` at run time. Ships in no image. |
+| `contract_smoke.py` | 586 | CI's published-image smoke: polls a running container's `/health`, validates it against the same `HealthResponse` model the golden test pins, and reads every wire value from `pipeline/contract.py` at run time. With `--image` (US-004) it also `cat`s `/app/contract/openapi.yaml` out of the candidate image, hashes it against the committed anchor and compares its `info.version` with the version the container serves. Ships in no image. |
 | `searxng_smoke.py` | 779 | CI's companion-image smoke: creates an egress-free Docker network, runs SearXNG beside a Valkey and probes it from a third container. Docker goes through an injected runner and every judgement is a pure function, so `tests/test_searxng_smoke.py` covers the failure branches without a daemon. Ships in no image. |
 | `scripts/vendor_weights.py` | 1112 | Operator-only, supervised: downloads the pinned revision, generates `weights_manifest.json` with the safetensors allowlist enforced **at generation time**, builds a deterministic symlink-dereferenced tarball, self-checks it through the real verifier, `oras push`es it tagged by revision sha, and confirms the GHCR package is private. Every constant comes from `model_fetcher`; no credential ever reaches an argv. Ships in no image; `docs/weights.md` is the procedure. |
 | `scripts/export_contract.py` | 327 | Operator-only: renders `app.openapi()` into `contract/openapi.yaml` in a canonical form pinned here (JSON round-trip, no anchors, sorted keys, `width=88`), writes the sha256 anchor, and writes the drift check's own committed failure case. Byte-stable across processes and hash seeds — `tests/test_contract_export.py` calls `drift_report()` directly, so the gate runs on every `uv run pytest` rather than in a lane someone has to remember. |

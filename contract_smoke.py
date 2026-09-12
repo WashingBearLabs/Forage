@@ -16,6 +16,23 @@ weights-free image, the handshake Poppy depends on:
 * ``sanitizer_revision`` is present and derived, not the "unknown" fallback;
 * ``/metrics`` answers and carries the same ``contract_version``.
 
+Since ``feature-forage-contract`` US-004 the image also **carries the frozen
+contract** at ``/app/contract/``, and ``--image <ref>`` adds the checks that
+make that copy trustworthy rather than merely present:
+
+* the in-image ``openapi.yaml``'s ``info.version`` equals the version the
+  running container reports on ``/health`` — the document and the service in
+  one artifact, saying the same thing;
+* the in-image ``openapi.yaml.sha256`` is the anchor this tree committed, and
+  the in-image document hashes to it. That is ``sha256sum -c
+  openapi.yaml.sha256`` run against the image, which is the same check
+  ``contract/GOVERNANCE.md`` tells a consumer to run against whichever copy
+  they fetched.
+
+Those two together are the in-image leg of US-004's three-way sha256 equality
+(repo ↔ Release asset ↔ image); the Release-asset leg is asserted by the
+``publish`` job, against the same committed anchor.
+
 **One source of truth for the field expectations.** The shape check is
 ``HealthResponse.model_validate`` plus a field-name comparison against
 ``HealthResponse.model_fields`` — the very model
@@ -39,7 +56,11 @@ pure evaluators and an injected fetcher.
 Run it by hand against a container, or anything else serving the contract::
 
     docker run -d --name forage-smoke -p 8020:8020 forage:ci
-    uv run python contract_smoke.py --base-url http://127.0.0.1:8020
+    uv run python contract_smoke.py --base-url http://127.0.0.1:8020 \
+        --image forage:ci
+
+``--image`` is optional and needs a local Docker daemon that can see the
+reference; without it the endpoint checks run exactly as before.
 
 test_mapping:
   contract_smoke.py: tests/test_contract_smoke.py
@@ -49,17 +70,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
+import yaml
 from pydantic import ValidationError
 
 from pipeline.contract import CONTRACT_VERSION, DEGRADED_PROMPTGUARD_UNAVAILABLE
 from retrieval_app import CAPABILITY_SEARCH_SANITIZATION, HealthResponse
+from scripts.export_contract import ANCHOR_PATH, render_anchor
 
 # The model the golden-schema test pins. Bound to a name here so
 # tests/test_contract_smoke.py can assert it is the *same object*, which is
@@ -88,6 +112,20 @@ DEFAULT_BASE_URL = "http://127.0.0.1:8020"
 # costs one poll, not the whole window.
 REQUEST_TIMEOUT_SECONDS = 10.0
 
+# Where the Dockerfile puts the frozen contract (US-004).
+# `tests/test_dockerfile.py` asserts the Dockerfile's COPY destination and
+# `tests/test_contract_smoke.py` ties these two constants to it, so the path
+# this module reads and the path the image writes cannot drift apart.
+IMAGE_CONTRACT_PATH = "/app/contract/openapi.yaml"
+IMAGE_ANCHOR_PATH = "/app/contract/openapi.yaml.sha256"
+
+# Reading a file out of an image, without starting the service in it. `--rm`
+# because this leaves nothing behind, and `--entrypoint cat` because the
+# image's own entrypoint would serve HTTP instead. It is the exact command
+# `contract/GOVERNANCE.md` gives consumers, so what CI checks and what a
+# consumer runs are the same operation.
+IMAGE_READ_TIMEOUT_SECONDS = 120.0
+
 _BODY_EXCERPT_CHARS = 500
 
 
@@ -105,8 +143,23 @@ class HttpResponse:
     body: str
 
 
+@dataclass(frozen=True, slots=True)
+class CommandResult:
+    """One completed command: what it exited with, and what it wrote.
+
+    ``exit_code`` is ``-1`` when the command could not be run at all (no
+    ``docker`` on PATH, a timeout) — treated exactly like a non-zero exit, with
+    the reason in ``stderr``.
+    """
+
+    exit_code: int
+    stdout: str
+    stderr: str
+
+
 Fetcher = Callable[[str], HttpResponse]
 Logger = Callable[[str], None]
+Runner = Callable[[Sequence[str]], CommandResult]
 
 
 def http_get(url: str) -> HttpResponse:
@@ -264,6 +317,145 @@ def evaluate_health(response: HttpResponse) -> list[str]:
     return failures
 
 
+def run_command(argv: Sequence[str]) -> CommandResult:
+    """Run *argv*, never raising. A failure is a result, not an exception."""
+    try:
+        completed = subprocess.run(
+            list(argv),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=IMAGE_READ_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return CommandResult(-1, "", f"{type(exc).__name__}: {exc}")
+    return CommandResult(completed.returncode, completed.stdout, completed.stderr)
+
+
+def read_image_file(
+    image: str, path: str, *, run: Runner = run_command
+) -> CommandResult:
+    """Read *path* out of *image* with ``docker run --rm --entrypoint cat``."""
+    return run(["docker", "run", "--rm", "--entrypoint", "cat", image, path])
+
+
+def served_contract_version(response: HttpResponse) -> str | None:
+    """The ``contract_version`` in a ``/health`` body, or ``None``.
+
+    Deliberately silent about a body it cannot read: :func:`evaluate_health`
+    has already reported that, and a second copy of the same failure would
+    make one broken container look like two problems.
+    """
+    try:
+        payload: object = json.loads(response.body)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    version = cast(dict[str, object], payload).get("contract_version")
+    return version if isinstance(version, str) else None
+
+
+def _document_version(contract_text: str, failures: list[str]) -> str | None:
+    """Return the in-image document's ``info.version``, recording why if not."""
+    try:
+        document: object = yaml.safe_load(contract_text)
+    except yaml.YAMLError as exc:
+        failures.append(f"the in-image contract is not valid YAML: {exc}")
+        return None
+    if not isinstance(document, dict):
+        failures.append(
+            f"the in-image contract is a {type(document).__name__}, not a "
+            f"mapping: {contract_text[:_BODY_EXCERPT_CHARS]!r}"
+        )
+        return None
+    info = cast(dict[str, Any], document).get("info")
+    if not isinstance(info, dict):
+        failures.append("the in-image contract has no `info` object")
+        return None
+    version = cast(dict[str, Any], info).get("version")
+    if not isinstance(version, str):
+        failures.append(
+            f"the in-image contract's info.version is {version!r}, not a string"
+        )
+        return None
+    return version
+
+
+def evaluate_image_contract(
+    contract: CommandResult,
+    anchor: CommandResult,
+    *,
+    served_version: str | None,
+    committed_anchor: str,
+) -> list[str]:
+    """Return every way the image's own copy of the contract falls short.
+
+    Three claims, in the order a consumer would make them:
+
+    1. the files are **there** — a `COPY` that silently shipped an empty
+       directory (an over-broad `.dockerignore` does exactly that) fails here;
+    2. the in-image anchor is **this tree's** anchor, and the in-image document
+       hashes to it — together, that the shipped document is byte-identical to
+       the committed one;
+    3. the document's ``info.version`` is what the running container reports on
+       ``/health`` — the one claim that ties the artifact to the service.
+
+    Passing the *committed* anchor in, rather than re-deriving it from a fresh
+    render, is the point of an anchor: a rendered-vs-rendered comparison passes
+    on a tree where every copy is stale together.
+    """
+    failures: list[str] = []
+
+    for label, result in (
+        (IMAGE_CONTRACT_PATH, contract),
+        (IMAGE_ANCHOR_PATH, anchor),
+    ):
+        if result.exit_code != 0:
+            failures.append(
+                f"could not read {label} out of the image (exit "
+                f"{result.exit_code}): {result.stderr.strip()[:_BODY_EXCERPT_CHARS]!r}"
+                " — the image is expected to carry the frozen contract; check "
+                "the Dockerfile's `COPY contract/` and .dockerignore"
+            )
+    if failures:
+        return failures
+
+    if anchor.stdout != committed_anchor:
+        failures.append(
+            f"the image's {IMAGE_ANCHOR_PATH} is {anchor.stdout.strip()!r} but "
+            f"this tree committed {committed_anchor.strip()!r} — the image was "
+            "not built from this commit, or the anchor was not regenerated with "
+            "the contract"
+        )
+
+    rendered = render_anchor(contract.stdout)
+    if rendered != committed_anchor:
+        failures.append(
+            f"the image's {IMAGE_CONTRACT_PATH} hashes to {rendered.strip()!r}, "
+            f"which is not the committed anchor {committed_anchor.strip()!r}. "
+            "`sha256sum -c openapi.yaml.sha256` would refuse this copy."
+        )
+
+    version = _document_version(contract.stdout, failures)
+    if version is None:
+        return failures
+    if served_version is None:
+        failures.append(
+            f"the in-image contract declares info.version {version!r}, but "
+            "/health yielded no contract_version to compare it against (see "
+            "the /health failures above)"
+        )
+    elif version != served_version:
+        failures.append(
+            f"the in-image contract declares info.version {version!r} while the "
+            f"running container reports contract_version {served_version!r} — "
+            "the image is serving one contract and shipping another"
+        )
+
+    return failures
+
+
 def evaluate_metrics(response: HttpResponse) -> list[str]:
     """Return every way ``/metrics`` fails its part of the contract."""
     failures: list[str] = []
@@ -293,8 +485,10 @@ def run_smoke(
     *,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
+    image: str | None = None,
     fetch: Fetcher = http_get,
     sleep: Callable[[float], None] = time.sleep,
+    run: Runner = run_command,
     log: Logger = print,
 ) -> list[str]:
     """Poll, probe and evaluate. Returns the failure list (empty is a pass)."""
@@ -316,6 +510,20 @@ def run_smoke(
     log(f"--- GET /metrics -> {metrics.status} ---")
     log(metrics.body[:_BODY_EXCERPT_CHARS])
     failures.extend(evaluate_metrics(metrics))
+
+    if image is not None:
+        log(f"--- reading {IMAGE_CONTRACT_PATH} out of {image} ---")
+        contract = read_image_file(image, IMAGE_CONTRACT_PATH, run=run)
+        anchor = read_image_file(image, IMAGE_ANCHOR_PATH, run=run)
+        log(f"in-image anchor: {anchor.stdout.strip() or anchor.stderr.strip()}")
+        failures.extend(
+            evaluate_image_contract(
+                contract,
+                anchor,
+                served_version=served_contract_version(health),
+                committed_anchor=ANCHOR_PATH.read_text(encoding="utf-8"),
+            )
+        )
 
     return failures
 
@@ -342,15 +550,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=DEFAULT_POLL_INTERVAL_SECONDS,
         help="Delay between /health attempts",
     )
+    parser.add_argument(
+        "--image",
+        default=None,
+        help=(
+            "Image reference to read the frozen contract out of "
+            f"({IMAGE_CONTRACT_PATH}). Needs a Docker daemon that can see it; "
+            "omit to check the served endpoints only."
+        ),
+    )
     args = parser.parse_args(argv)
     base_url: str = args.base_url
     timeout_seconds: float = args.timeout_seconds
     poll_interval_seconds: float = args.poll_interval_seconds
+    image: str | None = args.image
 
     failures = run_smoke(
         base_url,
         timeout_seconds=timeout_seconds,
         poll_interval_seconds=poll_interval_seconds,
+        image=image,
     )
 
     if failures:

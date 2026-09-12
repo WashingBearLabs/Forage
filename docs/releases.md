@@ -175,6 +175,75 @@ the wrong contract — a red run with a wrong Release rather than a missing one.
 `gh release edit "$TAG" --notes ...` with the corrected body, or deleting the
 Release and re-running the job.
 
+### The Release carries the contract itself
+
+Since `feature-forage-contract` US-004 every `v*` Release has two assets:
+
+| Asset | What it is |
+|---|---|
+| `openapi.yaml` | the frozen wire contract at that tag |
+| `openapi.yaml.sha256` | its committed anchor — a `sha256sum`-format line naming the basename, so it verifies from any directory |
+
+They are attached by `gh release create` itself, not by a later upload step, so a
+Release that exists without them is a failed step rather than a quietly
+incomplete Release.
+
+**A Release asset is mutable.** Anyone with write access can replace one
+afterwards and nothing on the Release records it. That is the whole reason the
+anchor is *committed at the tag*, and why
+[`contract/GOVERNANCE.md`](../contract/GOVERNANCE.md)'s Consumers section tells
+you to verify against it rather than against another copy. The publish job runs
+that verification against the freshly published assets — downloading them back
+out of the API into a scratch directory, comparing the downloaded anchor against
+the committed one, then running the same `sha256sum -c` a consumer would. The
+comparison against the *committed* anchor is the load-bearing half: a tampered
+document and anchor replaced together verify perfectly against each other.
+
+The third copy — `/app/contract/openapi.yaml` inside the image — is checked by
+the `smoke` job on every run, against the same anchor and against the running
+container's own `contract_version`.
+
+## Reproducible builds
+
+`publish` rebuilds the amd64 leg and then asserts its layers are the ones
+`smoke` executed. Until US-004 that assertion only held while buildx served
+every layer from cache: the first tag cut after a cache eviction failed it
+twice, correctly, because two builds of the same commit genuinely produced
+different layers.
+
+Two normalizations make a cold rebuild reproducible, and both are required:
+
+| Where | What |
+|---|---|
+| `.github/workflows/ci.yml` | `SOURCE_DATE_EPOCH` (the commit's committer date) plus `rewrite-timestamp=true` on every building job's exporter — all four compute the epoch with the same script |
+| `Dockerfile` | the apt/dpkg logs and `ldconfig`'s `aux-cache` are removed, and the build-time import check runs under `PYTHONDONTWRITEBYTECODE=1` |
+
+The Dockerfile half is there because `rewrite-timestamp` rewrites timestamps in
+the layer's tar *headers*; a timestamp written *inside* a file — an apt log
+line, a `.pyc`'s recorded source mtime — is out of its reach.
+
+Measured at US-004, two `--no-cache` builds from two checkouts with different
+file mtimes, layers compared one at a time: **19 of 19 identical** with both
+halves; 16 of 18 with the exporter attribute alone; 7 of 19 with neither.
+
+Two consequences worth knowing:
+
+- **The image ships no bytecode cache.** It never had a usable one under
+  timestamp rewriting — the sources read `SOURCE_DATE_EPOCH` while the `.pyc`
+  recorded the build clock — so this drops dead files rather than a working
+  optimisation. Cost, measured in the image: importing the app takes ~2.3 s
+  instead of ~0.9 s, once per container start, against a 120 s health budget.
+- **The known bound is one UTC day.** `useradd` stamps a "last changed" day
+  count into `/etc/shadow`, so two builds either side of UTC midnight differ in
+  that one layer. The parity gate compares two builds of the same run, minutes
+  apart, so it is unaffected; a "rebuild this image next year and get the same
+  digest" claim would not be, and is not made. (Reasoned from the field's
+  contents, not measured across a midnight.)
+
+A cold publish is therefore expected to pass. The **first** one to do so will be
+whichever release is cut after this change — until then the fix is proven
+locally and by the workflow-shape tests, not by a live cold publish.
+
 ## Cutting a release
 
 ```

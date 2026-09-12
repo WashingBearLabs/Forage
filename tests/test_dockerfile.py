@@ -36,12 +36,14 @@ test_mapping:
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from fnmatch import fnmatch
+from pathlib import Path, PurePosixPath
 
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE_PATH = _REPO_ROOT / "Dockerfile"
+DOCKERIGNORE_PATH = _REPO_ROOT / ".dockerignore"
 
 # Variable names that must never be declared or assigned in a build
 # instruction. Deliberately broad: the point is to catch the *next* secret,
@@ -599,3 +601,207 @@ class TestRuntimeSourceIsCopied:
             if not (_REPO_ROOT / token).exists()
         ]
         assert missing == [], f"Dockerfile COPYs path(s) that do not exist: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# The frozen contract ships inside the image
+# ---------------------------------------------------------------------------
+
+# The in-image destination. It is part of the published interface — the spec's
+# own independent test is `docker run --rm --entrypoint cat <image>
+# /app/contract/openapi.yaml`, contract/GOVERNANCE.md's Consumers table names
+# it, and contract_smoke.py reads it out of the candidate image on every CI
+# run. A moved destination breaks all three and breaks nothing the build would
+# notice, because no module imports any of it.
+IMAGE_CONTRACT_DIR = "/app/contract/"
+
+# What has to arrive there. The document and its anchor are the pair the
+# three-way sha256 check is made of; GOVERNANCE.md rides along deliberately
+# (the rules travel with the artifact they govern) and is not part of any
+# checksum — the anchor covers `openapi.yaml` alone.
+CONTRACT_SOURCE_DIR = "contract/"
+CONTRACT_SHIPPED_FILES = ("openapi.yaml", "openapi.yaml.sha256")
+
+
+def _dockerignore_patterns() -> list[str]:
+    """The non-comment, non-negated patterns in ``.dockerignore``."""
+    return [
+        line.strip()
+        for line in DOCKERIGNORE_PATH.read_text().splitlines()
+        if line.strip() and not line.strip().startswith(("#", "!"))
+    ]
+
+
+def _would_exclude(pattern: str, path: str) -> bool:
+    """Whether *pattern* plausibly removes *path* from the build context.
+
+    A deliberate over-approximation of Docker's matcher: it errs toward
+    reporting an exclusion, because the failure this guards against is the
+    silent one — an ignored `contract/` produces an image with an empty
+    directory and no build error at all, and the first symptom is a consumer
+    `cat`-ing a file that is not there.
+    """
+    cleaned = pattern.rstrip("/")
+    if cleaned.startswith("**/"):
+        tail = cleaned[3:]
+        return fnmatch(path, tail) or fnmatch(PurePosixPath(path).name, tail)
+    return fnmatch(path, cleaned) or path.startswith(f"{cleaned}/")
+
+
+class TestTheContractShipsInTheImage:
+    """`feature-forage-contract` US-004: the contract is in the artifact.
+
+    A consumer already pulls the image; making them fetch the wire contract
+    from somewhere else — a repository they may not have, a Release page they
+    have to trust — is how a vendored contract goes stale without anyone
+    noticing. So the image carries it, at a fixed path, byte-identical to the
+    committed file its committed `.sha256` anchors.
+
+    These are text guards like the rest of this module. The complementary
+    *runtime* check is CI's `smoke` job, which reads the file back out of the
+    built image and compares it against both the committed anchor and the
+    running container's `/health.contract_version` (`contract_smoke.py`).
+    """
+
+    def test_the_contract_directory_is_copied_into_the_image(
+        self, instructions: list[str]
+    ) -> None:
+        copies = [
+            text
+            for text in _instructions_named(instructions, "COPY")
+            if text.split() and text.split()[0] == CONTRACT_SOURCE_DIR
+        ]
+        assert copies, (
+            f"No `COPY {CONTRACT_SOURCE_DIR} {IMAGE_CONTRACT_DIR}` in the "
+            "Dockerfile. Without it the image serves a contract it does not "
+            "carry, and the in-image route in contract/GOVERNANCE.md's "
+            "Consumers table is a promise nothing keeps."
+        )
+
+    def test_the_contract_lands_at_the_published_path(
+        self, instructions: list[str]
+    ) -> None:
+        (copy_text,) = [
+            text
+            for text in _instructions_named(instructions, "COPY")
+            if text.split() and text.split()[0] == CONTRACT_SOURCE_DIR
+        ]
+        destination = copy_text.split()[-1]
+        assert destination == IMAGE_CONTRACT_DIR, (
+            f"The contract is copied to {destination!r}, not "
+            f"{IMAGE_CONTRACT_DIR!r}. Nothing in the image imports it, so a "
+            "moved destination builds, boots and serves perfectly — and every "
+            "documented way of reading the contract out of the image fails."
+        )
+
+    @pytest.mark.parametrize("filename", CONTRACT_SHIPPED_FILES)
+    def test_the_shipped_pair_exists_in_the_repo(self, filename: str) -> None:
+        """The document and the anchor that verifies it, both committed.
+
+        `COPY contract/` ships whatever is in the directory, so "the anchor is
+        in the image" is a property of the repository, not of the Dockerfile.
+        Both files are generated together by `scripts/export_contract.py`;
+        `tests/test_contract_export.py` is what keeps them current.
+        """
+        assert (_REPO_ROOT / CONTRACT_SOURCE_DIR / filename).exists(), (
+            f"contract/{filename} is missing. The in-image copy is only useful "
+            "as a verified pair: the document, and the sha256 anchor a "
+            "consumer checks it against."
+        )
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            CONTRACT_SOURCE_DIR.rstrip("/"),
+            *(f"{CONTRACT_SOURCE_DIR}{name}" for name in CONTRACT_SHIPPED_FILES),
+        ],
+    )
+    def test_dockerignore_keeps_the_contract_in_the_build_context(
+        self, path: str
+    ) -> None:
+        """The silent failure mode, closed.
+
+        `.dockerignore` excludes `tests/`, `kit_tools/` and `scripts/`; adding
+        `contract/` to that list — or a broad pattern that catches it — would
+        not fail the build. COPY of a directory whose contents are all excluded
+        produces an empty directory, and the image would ship a `contract/`
+        with nothing in it.
+        """
+        offenders = [
+            pattern
+            for pattern in _dockerignore_patterns()
+            if _would_exclude(pattern, path)
+        ]
+        assert offenders == [], (
+            f".dockerignore pattern(s) {offenders} exclude {path!r} from the "
+            "build context. The COPY would then ship an empty directory, "
+            "silently — no build error, and the failure surfaces when a "
+            "consumer reads the contract out of the image."
+        )
+
+
+# ---------------------------------------------------------------------------
+# The image contents are reproducible
+# ---------------------------------------------------------------------------
+
+# Files whose *content* carries a wall-clock timestamp, so that two builds of
+# one commit produce two different layers. Measured at US-004 by diffing the
+# layers of two `--no-cache` builds: these four were the entire drift of the
+# apt layer.
+TIMESTAMPED_APT_ARTEFACTS = (
+    "/var/log/apt",
+    "/var/log/dpkg.log",
+    "/var/cache/ldconfig/aux-cache",
+)
+
+
+class TestReproducibleImageContents:
+    """The Dockerfile half of the cold-cache publish fix (US-004).
+
+    `publish` rebuilds the amd64 leg and asserts its layers are the ones
+    `smoke` executed. Buildx's `rewrite-timestamp` exporter attribute
+    normalizes every timestamp it can reach — but only the ones in the layer
+    tar's *headers*. A timestamp written *inside* a file is out of its reach,
+    and this image used to produce two kinds:
+
+    * apt and dpkg logs, plus `ldconfig`'s `aux-cache`;
+    * the `.pyc` the build-time import check wrote for ~580 dependency
+      modules, each embedding its source's mtime.
+
+    Measured: with the exporter attribute alone 16 of 18 layers matched across
+    two cold builds from two checkouts; with these two normalizations as well,
+    all 19 did. Both halves are load-bearing and neither is cosmetic, which is
+    why an "unnecessary `rm -rf`" or a "why is bytecode disabled?" tidy-up
+    fails here rather than at a release six weeks later.
+    """
+
+    @pytest.mark.parametrize("artefact", TIMESTAMPED_APT_ARTEFACTS)
+    def test_the_apt_layer_leaves_no_timestamped_artefact(
+        self, instructions: list[str], artefact: str
+    ) -> None:
+        apt_steps = [line for line in instructions if "apt-get install" in line]
+        assert apt_steps, "Expected an apt-get install instruction"
+        assert any(artefact in line for line in apt_steps), (
+            f"The apt instruction does not remove {artefact}. Its content "
+            "carries the build's wall clock, so it differs between two builds "
+            "of the same commit and takes the whole layer's digest with it — "
+            "which is what failed `publish`'s parity gate on a cold cache. "
+            "Nothing in this image reads it: there is exactly one apt "
+            "transaction, at build time."
+        )
+
+    def test_the_import_check_writes_no_bytecode(self, instructions: list[str]) -> None:
+        check = next(
+            (line for line in instructions if "import retrieval_app" in line), None
+        )
+        assert check is not None, "Expected the build-time import check"
+        assert "PYTHONDONTWRITEBYTECODE=1" in check, (
+            "The import check must not write `.pyc`. A timestamp-based `.pyc` "
+            "embeds its source's mtime, which differs between two checkouts of "
+            "the same commit — 579 files of drift in one layer, and unreachable "
+            "by the exporter's timestamp rewrite because the value is inside "
+            "the file. The cache it would leave is void anyway once timestamps "
+            "are rewritten: the sources then read SOURCE_DATE_EPOCH while the "
+            "`.pyc` still record the build clock, so Python recompiles on "
+            f"import regardless. Instruction was: {check[:120]!r}"
+        )

@@ -2,7 +2,7 @@
 # GOTCHAS.md
 
 > Last updated: 2026-09-11
-> Updated by: Claude (forage-contract US-005)
+> Updated by: Claude (forage-contract US-004)
 
 ## Overview
 
@@ -571,16 +571,46 @@ independently in a clean clone at verification. The only supported invocations a
 
 ## A cold-cache publish fails its own parity gate — and poisons the publish scope
 
-**Severity: high** · **Found: 2026-09-11 (v0.9.2-rc incident)** · **Spec-4 blocker on v1.0.0**
+**Severity: high** · **Found: 2026-09-11 (v0.9.2-rc incident)** · **Durable fix landed
+2026-09-11 (`feature-forage-contract` US-004); the recovery below still applies if a
+publish ever fails again**
 
-The image build is not byte-reproducible: the uv-sync/COPY layers embed timestamps, so a
-rebuild only matches the gated tarball when buildx reuses cached layers. Three publishes
-passed warm; the first tag cut hours after its commit's main build (cache evicted by PR
-churn) failed the diff_ids parity gate twice — correctly. Worse, the failed rebuild wrote
-its wrong layers to the `publish` GHA-cache scope, after which even main-push publishes
-failed: publish's `cache-from` prefers its own scope. Recovery that worked: delete the
-`index-publish-*` cache entries (`gh cache list/delete`) so publish falls through to the
-gated `buildkit` scope, re-run, then cut tags immediately after a green main build.
-The durable fix (reproducible builds via SOURCE_DATE_EPOCH-style normalization, or pushing
-the gated artifact for the amd64 leg) is spec 4's opening work — `v1.0.0` must not depend
-on warm-cache ritual. The withdrawn-tag rule lives in `docs/releases.md`.
+The image build was not byte-reproducible: the apt, uv-sync and COPY layers embedded
+timestamps, so a rebuild only matched the gated tarball when buildx reused cached layers.
+Three publishes passed warm; the first tag cut hours after its commit's main build (cache
+evicted by PR churn) failed the diff_ids parity gate twice — correctly. Worse, the failed
+rebuild wrote its wrong layers to the `publish` GHA-cache scope, after which even
+main-push publishes failed: publish's `cache-from` prefers its own scope. **Recovery that
+worked, and is still the recovery:** delete the `index-publish-*` cache entries (`gh cache
+list/delete`) so publish falls through to the gated `buildkit` scope, then re-run. The
+withdrawn-tag rule lives in `docs/releases.md`.
+
+**The fix, and why it is in two files.** `SOURCE_DATE_EPOCH` (the commit's committer date)
+plus `rewrite-timestamp=true` on every building job's exporter rewrites the file
+timestamps in every exported layer to one value. That is necessary and **not sufficient**:
+it rewrites the layer tar's *headers*, and this image also wrote timestamps *inside* files,
+where no exporter can reach them —
+
+| Inside-the-file timestamp | Fix, in the Dockerfile |
+|---|---|
+| `/var/log/apt/{history,term}.log`, `/var/log/dpkg.log`, `/var/cache/ldconfig/aux-cache` | removed in the same `RUN` as the install |
+| ~580 `.pyc` written by the build-time import check, each recording its source's mtime | `PYTHONDONTWRITEBYTECODE=1` on that `RUN` |
+
+Measured, two `--no-cache` builds from two checkouts with different file mtimes, layers
+compared one at a time: **7 of 19 layers identical** with neither half, **16 of 18** with
+the exporter attribute alone, **19 of 19** with both. `tests/test_ci_workflow.py::
+TestReproducibleExports` and `tests/test_dockerfile.py::TestReproducibleImageContents`
+hold each half, because both look like tidy-up-able noise to someone who does not know
+this entry exists.
+
+**Two things this does not say.** The image no longer ships a bytecode cache: importing
+the app costs ~2.3 s instead of ~0.9 s at container start (it shipped one before
+`rewrite-timestamp`, and that cache is *void* under timestamp rewriting anyway, so the
+choice was between dead files and no files). And reproducibility is bounded by one UTC
+day: `useradd` stamps a day count into `/etc/shadow`, so two builds either side of
+midnight differ in that layer. The parity gate compares two builds of one run and is
+unaffected; a "same digest a year later" claim would be, and is not made.
+
+**Still unproven:** a live cold publish. The evidence above is local, plus the
+workflow-shape tests. The first tag cut after this change is the first real exercise —
+watch `publish`'s verification step rather than only the tags.

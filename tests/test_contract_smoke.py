@@ -25,7 +25,8 @@ from __future__ import annotations
 
 import ast
 import json
-from collections.abc import Callable
+import sys
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -35,10 +36,14 @@ import pytest
 
 import contract_smoke
 from contract_smoke import (
+    CommandResult,
     HttpResponse,
     evaluate_health,
+    evaluate_image_contract,
     evaluate_metrics,
+    read_image_file,
     run_smoke,
+    served_contract_version,
     wait_for_health,
 )
 from pipeline import contract
@@ -49,6 +54,7 @@ from pipeline.contract import (
 )
 from promptguard.classifier import PromptGuardClassifier
 from retrieval_app import CAPABILITY_SEARCH_SANITIZATION, HealthResponse
+from scripts.export_contract import ANCHOR_PATH, CONTRACT_PATH, render_anchor
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SMOKE_PATH = _REPO_ROOT / "contract_smoke.py"
@@ -174,6 +180,38 @@ class TestSingleSourceOfTruth:
             "the drift this job exists to catch. (Docstrings are exempt; this "
             "looks only at code.)"
         )
+
+    def test_the_in_image_paths_are_where_the_dockerfile_puts_them(self) -> None:
+        """US-004's two constants, tied to the Dockerfile's COPY destination.
+
+        ``tests/test_dockerfile.py`` asserts the Dockerfile copies ``contract/``
+        to ``IMAGE_CONTRACT_DIR``; this ties the paths this module reads to that
+        same constant. Without it, moving the destination leaves the smoke
+        reading a path nothing writes — which fails loudly in CI, but only after
+        a build, and with a message about a missing file rather than a moved
+        one.
+        """
+        from tests.test_dockerfile import CONTRACT_SHIPPED_FILES, IMAGE_CONTRACT_DIR
+
+        read_paths = [
+            contract_smoke.IMAGE_CONTRACT_PATH,
+            contract_smoke.IMAGE_ANCHOR_PATH,
+        ]
+        assert read_paths == [
+            f"{IMAGE_CONTRACT_DIR}{name}" for name in CONTRACT_SHIPPED_FILES
+        ]
+
+    def test_the_anchor_format_is_the_exporters_own(self) -> None:
+        """One definition of "what an anchor line looks like", not two.
+
+        The smoke hashes the in-image document and compares the result to the
+        committed anchor; if it built that line itself, a change to the anchor
+        format would leave the smoke comparing against a shape nothing writes.
+        """
+        from scripts import export_contract
+
+        assert contract_smoke.render_anchor is export_contract.render_anchor
+        assert contract_smoke.ANCHOR_PATH is export_contract.ANCHOR_PATH
 
     async def test_capability_key_is_the_one_health_advertises(self) -> None:
         """The constant is tied to behaviour, not to a matching spelling.
@@ -356,6 +394,235 @@ class TestEvaluateMetrics:
 
 
 # ---------------------------------------------------------------------------
+# The contract the image itself carries (US-004)
+# ---------------------------------------------------------------------------
+
+_IMAGE = "forage:ci"
+
+
+def _committed_contract() -> str:
+    return CONTRACT_PATH.read_text(encoding="utf-8")
+
+
+def _committed_anchor() -> str:
+    return ANCHOR_PATH.read_text(encoding="utf-8")
+
+
+def _cat(text: str) -> CommandResult:
+    """A successful ``cat`` of *text* out of the image."""
+    return CommandResult(0, text, "")
+
+
+class _RecordingRunner:
+    """Serves a canned result per in-image path, recording every argv."""
+
+    def __init__(self, **by_path: CommandResult) -> None:
+        self.by_path = by_path
+        self.calls: list[list[str]] = []
+
+    def __call__(self, argv: Sequence[str]) -> CommandResult:
+        self.calls.append(list(argv))
+        path = argv[-1]
+        if path == contract_smoke.IMAGE_CONTRACT_PATH:
+            return self.by_path.get("contract", _cat(_committed_contract()))
+        return self.by_path.get("anchor", _cat(_committed_anchor()))
+
+
+class TestReadImageFile:
+    """The seam: one `docker run`, no service started, no container left."""
+
+    def test_it_cats_the_path_out_of_the_image(self) -> None:
+        runner = _RecordingRunner()
+        read_image_file(_IMAGE, contract_smoke.IMAGE_CONTRACT_PATH, run=runner)
+        assert runner.calls == [
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--entrypoint",
+                "cat",
+                _IMAGE,
+                contract_smoke.IMAGE_CONTRACT_PATH,
+            ]
+        ], (
+            "The read must override the entrypoint — the image's own CMD serves "
+            "HTTP — and must use --rm, because a smoke that leaves containers "
+            "behind on a shared runner is a slow leak. It is also the command "
+            "contract/GOVERNANCE.md hands consumers, so it is worth pinning."
+        )
+
+    def test_a_real_command_reports_its_output(self) -> None:
+        result = contract_smoke.run_command(
+            [sys.executable, "-c", "print('in-image bytes')"]
+        )
+        assert result.exit_code == 0
+        assert result.stdout.strip() == "in-image bytes"
+
+    def test_a_command_that_cannot_run_is_a_result_not_an_exception(self) -> None:
+        """No Docker on PATH must read as a failure, not a traceback.
+
+        The smoke's whole design is "collect every failure and report them
+        together"; an exception here would lose the endpoint findings that had
+        already been collected.
+        """
+        result = contract_smoke.run_command(["forage-no-such-binary-exists"])
+        assert result.exit_code != 0
+        assert result.stderr
+
+
+class TestEvaluateImageContract:
+    """Present, byte-identical to the committed file, and self-consistent."""
+
+    def test_the_committed_pair_passes(self) -> None:
+        assert (
+            evaluate_image_contract(
+                _cat(_committed_contract()),
+                _cat(_committed_anchor()),
+                served_version=CONTRACT_VERSION,
+                committed_anchor=_committed_anchor(),
+            )
+            == []
+        )
+
+    @pytest.mark.parametrize("missing", ("contract", "anchor"))
+    def test_a_file_the_image_does_not_carry_fails(self, missing: str) -> None:
+        absent = CommandResult(1, "", "cat: No such file or directory")
+        failures = evaluate_image_contract(
+            absent if missing == "contract" else _cat(_committed_contract()),
+            absent if missing == "anchor" else _cat(_committed_anchor()),
+            served_version=CONTRACT_VERSION,
+            committed_anchor=_committed_anchor(),
+        )
+        assert failures
+        assert "COPY contract/" in _joined(failures), (
+            "The failure must name the cause a reader can act on: an image "
+            "without the contract is a Dockerfile or .dockerignore problem, not "
+            "a service one"
+        )
+
+    def test_an_unreadable_image_reports_nothing_downstream(self) -> None:
+        """One cause, one failure — not a cascade of derived ones.
+
+        A missing file would otherwise also fail the anchor comparison, the
+        hash comparison and the version comparison, and the reader would have
+        to work out which of the four was the actual problem.
+        """
+        unreadable = CommandResult(-1, "", "FileNotFoundError: docker")
+        failures = evaluate_image_contract(
+            unreadable,
+            unreadable,
+            served_version=CONTRACT_VERSION,
+            committed_anchor=_committed_anchor(),
+        )
+        assert len(failures) == 2, failures
+
+    def test_an_image_anchor_that_is_not_this_trees_anchor_fails(self) -> None:
+        stale = f"{'0' * 64}  openapi.yaml\n"
+        failures = evaluate_image_contract(
+            _cat(_committed_contract()),
+            _cat(stale),
+            served_version=CONTRACT_VERSION,
+            committed_anchor=_committed_anchor(),
+        )
+        assert failures
+        assert "not built from this commit" in _joined(failures)
+
+    def test_an_edited_in_image_document_fails_the_hash(self) -> None:
+        """The check a consumer runs as `sha256sum -c`, run here for them."""
+        failures = evaluate_image_contract(
+            _cat(_committed_contract() + "# tampered\n"),
+            _cat(_committed_anchor()),
+            served_version=CONTRACT_VERSION,
+            committed_anchor=_committed_anchor(),
+        )
+        assert failures
+        assert "sha256sum -c" in _joined(failures)
+
+    def test_a_version_disagreement_with_the_running_service_fails(self) -> None:
+        """US-004's acceptance criterion, and the one that needs both halves.
+
+        The hash checks compare the image against the *repository*; only this
+        one compares the document the image ships against the contract the
+        container is actually serving.
+        """
+        failures = evaluate_image_contract(
+            _cat(_committed_contract()),
+            _cat(_committed_anchor()),
+            served_version="9.9.9",
+            committed_anchor=_committed_anchor(),
+        )
+        assert failures
+        assert "9.9.9" in _joined(failures)
+        assert CONTRACT_VERSION in _joined(failures)
+
+    def test_an_unreadable_health_body_is_reported_not_skipped(self) -> None:
+        failures = evaluate_image_contract(
+            _cat(_committed_contract()),
+            _cat(_committed_anchor()),
+            served_version=None,
+            committed_anchor=_committed_anchor(),
+        )
+        assert failures, (
+            "A /health body that yielded no contract_version must not make the "
+            "version comparison silently pass — the check would be green for "
+            "the one container it can say least about"
+        )
+
+    def test_a_document_that_is_not_yaml_fails(self) -> None:
+        failures = evaluate_image_contract(
+            CommandResult(0, "\tnot: [valid", ""),
+            _cat(_committed_anchor()),
+            served_version=CONTRACT_VERSION,
+            committed_anchor=_committed_anchor(),
+        )
+        assert failures
+        assert "not valid YAML" in _joined(failures)
+
+    @pytest.mark.parametrize(
+        ("document", "expected"),
+        (
+            ("- a list, not a mapping\n", "not a mapping"),
+            ("openapi: 3.1.0\n", "no `info` object"),
+            ("info:\n  version: 3\n", "not a string"),
+        ),
+    )
+    def test_a_document_without_a_usable_version_fails(
+        self, document: str, expected: str
+    ) -> None:
+        # The anchor is made to match so the only failure is the version's.
+        failures = evaluate_image_contract(
+            _cat(document),
+            _cat(render_anchor(document)),
+            served_version=CONTRACT_VERSION,
+            committed_anchor=render_anchor(document),
+        )
+        assert failures
+        assert expected in _joined(failures)
+
+    def test_every_violation_is_reported_not_just_the_first(self) -> None:
+        failures = evaluate_image_contract(
+            _cat(_committed_contract()),
+            _cat(f"{'0' * 64}  openapi.yaml\n"),
+            served_version="9.9.9",
+            committed_anchor=f"{'1' * 64}  openapi.yaml\n",
+        )
+        assert len(failures) == 3, failures
+
+
+class TestServedContractVersion:
+    def test_it_reads_the_version_the_container_reports(self) -> None:
+        assert served_contract_version(_health_response()) == CONTRACT_VERSION
+
+    @pytest.mark.parametrize(
+        "body", ("not json", "[]", '{"contract_version": 3}', "{}")
+    )
+    def test_an_unusable_body_yields_none_rather_than_a_second_failure(
+        self, body: str
+    ) -> None:
+        assert served_contract_version(HttpResponse(200, body)) is None
+
+
+# ---------------------------------------------------------------------------
 # Polling
 # ---------------------------------------------------------------------------
 
@@ -489,6 +756,76 @@ class TestRunSmoke:
         assert "http://host:8020/metrics" in fetch.urls
         assert failures != []
 
+    def test_no_image_is_read_unless_one_is_named(self) -> None:
+        """`--image` is opt-in: the endpoint checks must not need a daemon.
+
+        `docs/releases.md` tells arm64 consumers to run this script against
+        their own container, and they may be running it from a checkout with no
+        local copy of the image.
+        """
+        runner = _RecordingRunner()
+        fetch = _EndpointFetcher(_health_response(), HttpResponse(200, _metrics_body()))
+        failures = run_smoke(
+            "http://host:8020",
+            fetch=fetch,
+            run=runner,
+            sleep=lambda _: None,
+            log=lambda _: None,
+        )
+        assert failures == []
+        assert runner.calls == []
+
+    def test_naming_an_image_reads_both_contract_files_from_it(self) -> None:
+        runner = _RecordingRunner()
+        fetch = _EndpointFetcher(_health_response(), HttpResponse(200, _metrics_body()))
+        failures = run_smoke(
+            "http://host:8020",
+            image=_IMAGE,
+            fetch=fetch,
+            run=runner,
+            sleep=lambda _: None,
+            log=lambda _: None,
+        )
+        assert failures == []
+        assert [call[-1] for call in runner.calls] == [
+            contract_smoke.IMAGE_CONTRACT_PATH,
+            contract_smoke.IMAGE_ANCHOR_PATH,
+        ]
+        assert all(_IMAGE in call for call in runner.calls)
+
+    def test_an_image_carrying_the_wrong_contract_fails_the_run(self) -> None:
+        # The whole-run wiring, not the evaluator: a smoke that read the image
+        # and then dropped the findings would be the worst of both.
+        runner = _RecordingRunner(contract=_cat("info:\n  version: 9.9.9\n"))
+        fetch = _EndpointFetcher(_health_response(), HttpResponse(200, _metrics_body()))
+        failures = run_smoke(
+            "http://host:8020",
+            image=_IMAGE,
+            fetch=fetch,
+            run=runner,
+            sleep=lambda _: None,
+            log=lambda _: None,
+        )
+        assert failures
+        assert "9.9.9" in _joined(failures)
+
+    def test_endpoint_and_image_failures_are_reported_together(self) -> None:
+        runner = _RecordingRunner(anchor=CommandResult(1, "", "no such file"))
+        fetch = _EndpointFetcher(
+            _health_response(status="healthy", degraded_reasons=[]),
+            HttpResponse(200, _metrics_body()),
+        )
+        failures = run_smoke(
+            "http://host:8020",
+            image=_IMAGE,
+            fetch=fetch,
+            run=runner,
+            sleep=lambda _: None,
+            log=lambda _: None,
+        )
+        assert any("healthy" in failure for failure in failures)
+        assert any(contract_smoke.IMAGE_ANCHOR_PATH in failure for failure in failures)
+
     def test_the_log_carries_the_bodies(self) -> None:
         lines: list[str] = []
         fetch = _EndpointFetcher(_health_response(), HttpResponse(200, _metrics_body()))
@@ -536,6 +873,30 @@ class TestMain:
         )
         assert seen["base_url"] == "http://elsewhere:9"
         assert seen["timeout_seconds"] == 7.0
+
+    def test_the_image_reference_reaches_the_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, Any] = {}
+
+        def _capture(base_url: str, **kwargs: Any) -> list[str]:
+            seen.update(kwargs)
+            return []
+
+        monkeypatch.setattr(contract_smoke, "run_smoke", _capture)
+        contract_smoke.main(["--image", _IMAGE])
+        assert seen["image"] == _IMAGE
+
+    def test_no_image_is_read_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seen: dict[str, Any] = {}
+
+        def _capture(base_url: str, **kwargs: Any) -> list[str]:
+            seen.update(kwargs)
+            return []
+
+        monkeypatch.setattr(contract_smoke, "run_smoke", _capture)
+        contract_smoke.main([])
+        assert seen["image"] is None
 
     def test_the_default_budget_is_120_seconds(
         self, monkeypatch: pytest.MonkeyPatch
