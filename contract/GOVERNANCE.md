@@ -314,23 +314,54 @@ basename, so it verifies identically from a repository checkout, from a director
 downloaded Release assets, or from inside the image. Registry tags and Release assets are
 mutable; a checksum in the git history at a tag is not.
 
-```bash
-# From a checkout, or beside downloaded assets — same command either way.
-sha256sum -c openapi.yaml.sha256
-```
-
-| Route | Available |
+| Route | How you get it |
 |---|---|
-| The git tag — `contract/openapi.yaml` at `v<version>` | now |
-| Release assets — `openapi.yaml` + `openapi.yaml.sha256` on the `v*` Release | with US-004 |
-| In-image — `/app/contract/openapi.yaml` | with US-004 |
+| The git tag | `contract/openapi.yaml` + `openapi.yaml.sha256` at `v<version>` |
+| Release assets | `gh release download v<version> --pattern 'openapi.yaml*'` |
+| In-image | `docker run --rm --entrypoint cat <image> /app/contract/openapi.yaml` |
 
-**Vendoring procedure** (the shape Poppy's own copy follows): fetch the file from one of
-the routes above, verify it against the anchor from the *same tag*, commit the verified
-copy and the anchor together, and re-run the verification in your own test suite so a
-re-vendoring that skipped the check cannot land silently. Pin by tag, not by `latest`.
+All three are byte-identical by construction, and two of them are checked on every
+release rather than promised:
+
+- the **in-image** copy is read out of the candidate image by `contract_smoke.py` in CI's
+  `smoke` job, hashed against the committed anchor, and its `info.version` compared with
+  the `contract_version` the running container reports — so the document an image ships
+  and the contract it serves cannot disagree;
+- the **Release assets** are downloaded back out of the API by the `publish` job, their
+  anchor compared against the one committed at the tag, and then verified with the same
+  `sha256sum -c` you would run.
+
+The in-image `contract/` directory also carries this governance document, deliberately:
+the rules travel with the artifact they govern. It is not part of any checksum — the
+anchor covers `openapi.yaml` alone.
+
+**Vendoring procedure** (the shape Poppy's own copy follows):
+
+1. **Pick a tag**, not `latest`. Everything below is "from the same tag" — a document
+   from one tag verified against another tag's anchor proves nothing.
+2. **Fetch the document and the anchor** by any one of the three routes. They may come
+   from different routes, as long as both come from the same tag; the anchor from the
+   git tag is the strongest choice, because a registry tag and a Release asset are both
+   mutable and a commit is not.
+3. **Verify before you look at the content**:
+
+   ```bash
+   sha256sum -c openapi.yaml.sha256   # from the directory holding both files
+   ```
+
+4. **Commit the verified copy and the anchor together.** Two files, one commit: an
+   anchor committed without its document, or a document without its anchor, is a
+   re-vendoring nobody can check afterwards.
+5. **Re-run the verification in your own test suite.** This is the step that matters
+   most and the one most often skipped: without it, a future re-vendoring that forgot
+   step 3 lands silently, and the copy you are shipping against is whatever someone
+   pasted in.
+6. **Record the tag** you vendored from beside the files, so "which contract is this?"
+   is answerable without a registry lookup.
 
 At activation, compare **contracts, not revisions**: `/health` carries both
 `contract_version` and `sanitizer_revision`, and only the first is a compatibility
 statement. `sanitizer_revision` has deliberately diverged between Forage and Poppy's
-in-tree copy and says nothing about wire compatibility.
+in-tree copy and says nothing about wire compatibility. The **image tag** is not a
+compatibility statement either — image `v1.0.0` serves contract `1.1.0`, and the two move
+for different reasons ("Two semvers", above).

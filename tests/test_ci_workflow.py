@@ -1097,13 +1097,18 @@ class TestBuildAmd64Job:
         )
 
     def test_build_loads_the_image_into_the_daemon(self, jobs: dict[str, Any]) -> None:
+        # Written as `outputs: type=docker` since US-004 rather than as
+        # `load: true`: the two are the same exporter, and only the longhand can
+        # carry the `rewrite-timestamp` attribute that makes a cold rebuild
+        # reproducible. The claim under test is unchanged — the image has to
+        # land in this runner's daemon to be saved and handed on.
         with_block: dict[str, Any] = (
             _step_using(jobs, "build-amd64", _BUILD_ACTION).get("with") or {}
         )
-        assert with_block.get("load") is True, (
-            "`load: true` is what puts the built image in this runner's daemon "
-            "so it can be saved and handed on; without it the build produces "
-            "nothing any later job can inspect"
+        assert "type=docker" in str(with_block.get("outputs", "")), (
+            "The build must export to the local daemon (`load: true`, or "
+            "`outputs: type=docker` with no `dest`); without it the build "
+            f"produces nothing any later job can inspect. with: was {with_block}"
         )
 
     def test_build_never_pushes(self, jobs: dict[str, Any]) -> None:
@@ -1517,6 +1522,33 @@ class TestSmokeJob:
             "contract that can drift from the first — an AC of US-005."
         )
 
+    def test_smoke_reads_the_contract_out_of_the_candidate_image(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        """US-004: the in-image contract is checked, and against *this* image.
+
+        Without the flag the script runs its endpoint checks and skips the
+        image entirely — a green smoke that says nothing about the contract the
+        image ships. The reference has to be `IMAGE_REF`, the tag this job
+        loaded and started, so the document and the service being compared come
+        from one artifact.
+        """
+        run_text = _run_text(jobs, "smoke")
+        assert "--image" in run_text and "IMAGE_REF" in run_text, (
+            'The smoke must pass `--image "${IMAGE_REF}"` to contract_smoke.py '
+            "— `--image` is opt-in, and without it the in-image contract, its "
+            f"anchor and its version go unchecked. Script was:\n{run_text}"
+        )
+
+    def test_the_in_image_contract_path_is_not_restated_in_bash(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        # Same rule as the `/health` vocabulary above: the path lives in
+        # contract_smoke.py, which tests/test_contract_smoke.py ties to the
+        # Dockerfile's COPY destination. A copy here would be a second source
+        # for one path, free to keep passing after the first one moves.
+        assert "/app/contract" not in _run_text(jobs, "smoke")
+
     def test_smoke_budget_matches_the_scripts_default(self, workflow: Any) -> None:
         env_block: dict[str, Any] = workflow.get("env") or {}
         budget = float(str(env_block.get("SMOKE_TIMEOUT_SECONDS", "0")))
@@ -1777,12 +1809,17 @@ class TestPublishJob:
         assert images == images.lower()
 
     def test_publish_actually_pushes(self, jobs: dict[str, Any]) -> None:
+        # `outputs: type=image,push=true` since US-004 — the longhand of
+        # `push: true`, which is the only form that can also carry
+        # `rewrite-timestamp`. Same claim: this is the one job in the workflow
+        # that reaches the registry, and it must actually do so.
         with_block: dict[str, Any] = (
             _step_using(jobs, "publish", _BUILD_ACTION).get("with") or {}
         )
-        assert with_block.get("push") is True, (
-            "publish must set `push: true` — it is the only job in this "
-            "workflow permitted to, and the only one that should"
+        outputs = str(with_block.get("outputs", ""))
+        assert with_block.get("push") is True or "push=true" in outputs, (
+            "publish must push — it is the only job in this workflow permitted "
+            f"to, and the only one that should. with: was {with_block}"
         )
 
     def test_publish_builds_the_declared_platform_list(
@@ -2384,6 +2421,300 @@ class TestReleaseContractMapping:
 
 
 # ---------------------------------------------------------------------------
+# The contract ships as a Release asset (US-004)
+# ---------------------------------------------------------------------------
+
+_ASSET_ASSERT_STEP = "Assert the Release assets verify against the committed anchor"
+
+# The two files the Release carries, as repository paths. `openapi.yaml` is the
+# document consumers vendor; the `.sha256` beside it is the committed anchor
+# that makes the mutable asset trustworthy. Uploading one without the other
+# would publish a document with nothing to check it against.
+_RELEASE_ASSETS = ("contract/openapi.yaml", "contract/openapi.yaml.sha256")
+
+
+class TestReleaseContractAssets:
+    """US-004: the frozen contract is attached to the Release, and verified.
+
+    The Release asset is one of the three routes `contract/GOVERNANCE.md`
+    offers a consumer, and the only one that is *mutable* — anyone with write
+    access can replace an asset afterwards and nothing on the Release records
+    it. That is why the anchor is committed at the tag and why the assertion
+    step compares the downloaded anchor against the committed one before
+    running the checksum: a tampered pair verifies perfectly against itself.
+    """
+
+    @pytest.mark.parametrize("asset", _RELEASE_ASSETS)
+    def test_the_release_step_uploads_the_asset(
+        self, jobs: dict[str, Any], asset: str
+    ) -> None:
+        run = str(_step_named(jobs, "publish", _RELEASE_STEP).get("run", ""))
+        assert asset in run, (
+            f"`gh release create` does not attach {asset!r}. Both files are "
+            "uploaded by the create call itself rather than by a later upload "
+            "step, so a Release that exists without them is a failed step "
+            f"instead of a quietly incomplete Release. Script was:\n{run}"
+        )
+
+    @pytest.mark.parametrize("asset", _RELEASE_ASSETS)
+    def test_the_uploaded_asset_is_a_committed_file(self, asset: str) -> None:
+        assert (_REPO_ROOT / asset).exists(), (
+            f"{asset} is not in the repository, so the publish job would fail "
+            "at `gh release create` — after the image push, leaving a pushed "
+            "image with no Release"
+        )
+
+    def test_the_assets_are_verified_against_the_committed_anchor(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        run = str(_step_named(jobs, "publish", _ASSET_ASSERT_STEP).get("run", ""))
+        assert "gh release download" in run, (
+            "The assertion must read the *published* assets back, not re-check "
+            f"the files it just uploaded. Script was:\n{run}"
+        )
+        assert "contract/openapi.yaml.sha256" in run and "cmp -s" in run, (
+            "It must compare the downloaded anchor against the anchor committed "
+            "at this tag. Without that comparison a tampered document/anchor "
+            f"pair passes its own checksum. Script was:\n{run}"
+        )
+        assert "sha256sum -c" in run, (
+            "It must then run the same `sha256sum -c openapi.yaml.sha256` that "
+            "contract/GOVERNANCE.md tells consumers to run — the gate and the "
+            f"documented procedure are one operation. Script was:\n{run}"
+        )
+
+    def test_the_assets_are_downloaded_outside_the_checkout(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        run = str(_step_named(jobs, "publish", _ASSET_ASSERT_STEP).get("run", ""))
+        assert "mktemp -d" in run and "--dir" in run, (
+            "The download must land in a scratch directory. Downloading over "
+            "the checkout would replace `contract/` with what the API just "
+            "handed back, and the comparison would then be a copy of itself. "
+            f"Script was:\n{run}"
+        )
+
+    @pytest.mark.parametrize("marker", ("cmp -s", "sha256sum -c"))
+    def test_a_failed_verification_fails_the_run(
+        self, jobs: dict[str, Any], marker: str
+    ) -> None:
+        body = _if_block_body(
+            str(_step_named(jobs, "publish", _ASSET_ASSERT_STEP).get("run", "")),
+            marker,
+        )
+        assert body is not None, (
+            f"The {marker!r} check must sit in an `if` that can fail the run"
+        )
+        assert "exit 1" in body, (
+            f"A failed {marker!r} must exit non-zero, not warn: the Release "
+            "would otherwise advertise a contract nobody can verify. Branch "
+            "body was:\n" + body
+        )
+
+    @pytest.mark.parametrize(
+        ("ref", "expected"),
+        [
+            (_RELEASE_REF, True),
+            (_PRERELEASE_REF, True),
+            (_MAIN_REF, False),
+            (_SEARXNG_REF, False),
+        ],
+    )
+    def test_the_assertion_runs_on_the_service_release_lane_only(
+        self, jobs: dict[str, Any], ref: str, expected: bool
+    ) -> None:
+        condition = str(_step_named(jobs, "publish", _ASSET_ASSERT_STEP).get("if", ""))
+        assert condition, "The asset assertion must carry its own `if:`"
+        assert _evaluate(condition, ref, "push") is expected, (
+            f"The asset assertion evaluates to {not expected} for ref {ref!r}. "
+            f"Condition was:\n{condition}"
+        )
+
+    def test_the_assertion_runs_after_the_release_carrying_the_assets(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        names = [str(step.get("name", "")) for step in _steps(jobs, "publish")]
+        assert names.index(_RELEASE_STEP) < names.index(_ASSET_ASSERT_STEP), (
+            f"Step order is {names}; there is nothing to download until the "
+            "Release exists."
+        )
+
+    def test_the_companion_lane_publishes_no_contract_assets(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        # `forage-searxng` is upstream's software at a pinned digest. It has no
+        # wire contract of this repository's, creates no Release, and must not
+        # start attaching this one's.
+        assert "openapi.yaml" not in _run_text(jobs, "searxng-publish")
+
+
+# ---------------------------------------------------------------------------
+# Reproducible exports — the cold-cache publish fix (US-004)
+# ---------------------------------------------------------------------------
+
+_EPOCH_STEP = "Pin the build timestamp to the commit"
+
+# Every job that builds an image. All four normalize timestamps the same way,
+# and they have to: each lane's publish rebuilds its amd64 leg and asserts the
+# result equals the layers its build job produced, so two jobs normalizing
+# differently would fail that gate for a reason that has nothing to do with
+# what the gate is for.
+_BUILDING_JOBS = ("build-amd64", "publish", "searxng-build", "searxng-publish")
+
+# The jobs whose exporter loads into the local daemon, and the ones that push.
+_LOADING_JOBS = ("build-amd64", "searxng-build")
+_PUSHING_JOBS = ("publish", "searxng-publish")
+
+
+class TestReproducibleExports:
+    """The durable fix for "a cold-cache publish fails its own parity gate".
+
+    Measured at US-004 on the real image (two `--no-cache` builds from two
+    checkouts with different file mtimes, layers compared one by one):
+
+    * with neither half, the apt layer, the uv-sync layer and every COPY layer
+      drifted;
+    * with `SOURCE_DATE_EPOCH` + `rewrite-timestamp=true` alone, 16 of 18
+      layers matched — the survivors being apt's log files and the `.pyc` the
+      build-time import check wrote, both of which carry a timestamp *inside*
+      the file where no exporter can rewrite it;
+    * with the Dockerfile's two normalizations as well, all 19 layers matched.
+
+    So this is one fix in two files, and these tests hold the workflow half.
+    `tests/test_dockerfile.py::TestReproducibleImageContents` holds the other.
+    """
+
+    @pytest.mark.parametrize("job", _BUILDING_JOBS)
+    def test_the_job_pins_a_build_timestamp(
+        self, jobs: dict[str, Any], job: str
+    ) -> None:
+        step = _step_named(jobs, job, _EPOCH_STEP)
+        assert step.get("id") == "epoch", (
+            f"{job}'s timestamp step needs `id: epoch` — the build step reads "
+            f"its output; got id={step.get('id')!r}"
+        )
+
+    def test_every_building_job_computes_the_epoch_identically(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        scripts = {
+            job: str(_step_named(jobs, job, _EPOCH_STEP).get("run", ""))
+            for job in _BUILDING_JOBS
+        }
+        assert len(set(scripts.values())) == 1, (
+            "The four building jobs compute SOURCE_DATE_EPOCH with different "
+            "scripts. They must agree to the second, because the value is what "
+            "makes two builds of one commit produce identical layers; a "
+            "divergence here surfaces as a layer-identity failure at publish "
+            f"time, which reads as a supply-chain problem. Scripts:\n{scripts}"
+        )
+
+    def test_the_epoch_comes_from_the_commit_not_from_the_clock(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        run = str(_step_named(jobs, "build-amd64", _EPOCH_STEP).get("run", ""))
+        assert "git log -1 --format=%ct" in run and "GITHUB_SHA" in run, (
+            "The epoch must be the tagged commit's own committer date. Any "
+            "wall-clock source — `date +%s`, the run's start time — differs "
+            "between two jobs of the same run, which is exactly the drift this "
+            f"is fixing. Script was:\n{run}"
+        )
+        assert "date +%s" not in run
+        assert "GITHUB_OUTPUT" in run, (
+            "The epoch must be published as a step output; the build step "
+            "cannot see a shell variable this step set."
+        )
+
+    def test_an_unreadable_epoch_fails_the_step(self, jobs: dict[str, Any]) -> None:
+        body = _if_block_body(
+            str(_step_named(jobs, "build-amd64", _EPOCH_STEP).get("run", "")),
+            "epoch",
+            "grep -qE",
+        )
+        assert body is not None, (
+            "The epoch must be validated before it is published as an output"
+        )
+        assert "exit 1" in body, (
+            "An empty SOURCE_DATE_EPOCH must fail the build rather than "
+            "silently disable the normalization — buildx ignores an unset "
+            "value, and the publish would then fail its parity gate weeks "
+            "later with no clue why. Branch body was:\n" + body
+        )
+
+    @pytest.mark.parametrize("job", _BUILDING_JOBS)
+    def test_the_build_step_receives_the_epoch(
+        self, jobs: dict[str, Any], job: str
+    ) -> None:
+        step = _step_using(jobs, job, _BUILD_ACTION)
+        env_block: dict[str, Any] = step.get("env") or {}
+        assert "steps.epoch.outputs.value" in str(
+            env_block.get("SOURCE_DATE_EPOCH", "")
+        ), (
+            f"{job}'s build step must take SOURCE_DATE_EPOCH from its own epoch "
+            f"step; its env is {env_block}. buildx reads the variable from the "
+            "environment, and an unset one silently means 'do not normalize'."
+        )
+
+    @pytest.mark.parametrize("job", _BUILDING_JOBS)
+    def test_the_exporter_rewrites_timestamps(
+        self, jobs: dict[str, Any], job: str
+    ) -> None:
+        with_block: dict[str, Any] = (
+            _step_using(jobs, job, _BUILD_ACTION).get("with") or {}
+        )
+        outputs = str(with_block.get("outputs", ""))
+        assert "rewrite-timestamp=true" in outputs, (
+            f"{job}'s exporter does not carry `rewrite-timestamp=true`; "
+            f"outputs={outputs!r}. SOURCE_DATE_EPOCH alone sets the image's "
+            "created date and leaves every layer's file timestamps as they "
+            "were — which is the drift itself."
+        )
+
+    @pytest.mark.parametrize("job", _LOADING_JOBS)
+    def test_a_loading_job_exports_to_the_daemon_longhand(
+        self, jobs: dict[str, Any], job: str
+    ) -> None:
+        with_block: dict[str, Any] = (
+            _step_using(jobs, job, _BUILD_ACTION).get("with") or {}
+        )
+        assert "type=docker" in str(with_block.get("outputs", "")), (
+            f"{job} must export `type=docker` so the image lands in the "
+            "runner's daemon and can be saved for the downstream jobs"
+        )
+        assert "load" not in with_block, (
+            f"{job} sets `load:` as well as `outputs:`. The shorthand has "
+            "nowhere to carry the `rewrite-timestamp` attribute, and two "
+            "exporters would produce two exports of the same build."
+        )
+
+    @pytest.mark.parametrize("job", _PUSHING_JOBS)
+    def test_a_pushing_job_pushes_through_its_exporter(
+        self, jobs: dict[str, Any], job: str
+    ) -> None:
+        with_block: dict[str, Any] = (
+            _step_using(jobs, job, _BUILD_ACTION).get("with") or {}
+        )
+        outputs = str(with_block.get("outputs", ""))
+        assert "type=image" in outputs and "push=true" in outputs, (
+            f"{job} must push through its own exporter entry; outputs={outputs!r}"
+        )
+        assert with_block.get("push") is not True, (
+            f"{job} sets `push: true` as well as `outputs:`. That is a second "
+            "exporter for the same build — the longhand is what carries the "
+            "timestamp rewrite, so the shorthand has to go, not sit beside it."
+        )
+
+    def test_the_incident_and_the_fix_are_documented_in_the_workflow(
+        self, raw: str
+    ) -> None:
+        # The next person to meet `outputs: type=docker,rewrite-timestamp=true`
+        # will wonder why a plain `load: true` is not enough, and the answer is
+        # an incident, not a preference.
+        prose = _comment_prose(raw)
+        assert "rewrite-timestamp" in prose and "cold cache" in prose
+
+
+# ---------------------------------------------------------------------------
 # The image artifact handoff, across every consumer
 # ---------------------------------------------------------------------------
 
@@ -2617,9 +2948,11 @@ class TestSearxngBuildJob:
             "behind the smoke and the test lane and its own job-scoped "
             "`packages: write`."
         )
-        assert with_block.get("load") is True, (
-            "searxng-build must `load: true` — the image has to reach this "
-            "runner's daemon to be saved and handed on"
+        # `outputs: type=docker` since US-004 — the longhand of `load: true`,
+        # which is what can carry `rewrite-timestamp`. See the service lane.
+        assert "type=docker" in str(with_block.get("outputs", "")), (
+            "searxng-build must export to the local daemon — the image has to "
+            "reach this runner's daemon to be saved and handed on"
         )
 
     def test_it_builds_only_amd64(self, jobs: dict[str, Any]) -> None:

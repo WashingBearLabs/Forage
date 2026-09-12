@@ -2,7 +2,7 @@
 # SYNOPSIS.md
 
 > Last updated: 2026-09-11
-> Updated by: Claude (forage-contract US-003)
+> Updated by: Claude (forage-contract US-004)
 
 ---
 
@@ -27,9 +27,9 @@ preserved). See `docs/bootstrap-notes.md` for the pin record.
 
 | Aspect | Status |
 |--------|--------|
-| Maturity | Pre-1.0; the first `v1.0.0` is cut by `feature-forage-contract` US-004 |
+| Maturity | Pre-1.0; the first `v1.0.0` is cut at `feature-forage-contract` US-004's owner gate — the build half (in-image contract, Release assets, reproducible exports) has landed |
 | Repo visibility | **Public** since the US-008 flip (2026-09-10), repository and both packages; `main` is PR-only, with six required status checks (audit-measured 2026-09-11 — this row said "Private" for a month after the flip) |
-| Tests | 1532 collected, all green (`uv run pytest`), hermetic via `pytest-socket` — **enforced in CI** since US-002, with a committed hermeticity canary |
+| Tests | 1610 collected, all green (`uv run pytest`), hermetic via `pytest-socket` — **enforced in CI** since US-002, with a committed hermeticity canary |
 | Lint | `uv run ruff check .` and `ruff format --check .` both clean — **enforced in CI** |
 | Types | `uv run pyright` (strict) is **clean — 0 errors**, no baseline; **enforced in CI** |
 | CI | `.github/workflows/ci.yml` — ten jobs in two lanes: `lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke`, `publish` for the service image, and `searxng-build`/`-smoke`/`-publish` for the companion |
@@ -99,7 +99,7 @@ path and yields a `promptguard_unavailable` degraded runtime.
 | `pipeline/` | The five sanitization stages, the orchestrator, and the response contract |
 | `promptguard/` | The Llama Prompt Guard 2 classifier wrapper |
 | `searxng/config/` | SearXNG `settings.yml` + `limiter.toml` |
-| `contract/` | The frozen wire contract: generated `openapi.yaml` + its committed `.sha256` anchor, and `GOVERNANCE.md` — the semver rules, the five recorded rulings and the consumer vendoring procedure. Regenerate the two generated files with `uv run python -m scripts.export_contract`; never hand-edit |
+| `contract/` | The frozen wire contract: generated `openapi.yaml` + its committed `.sha256` anchor, and `GOVERNANCE.md` — the semver rules, the five recorded rulings and the consumer vendoring procedure. Regenerate the two generated files with `uv run python -m scripts.export_contract`; never hand-edit. The whole directory ships in the image at `/app/contract/` and the two generated files ship as `v*` Release assets (US-004) |
 | `scripts/` | Operator-only, run by hand from a checkout; in no image |
 | `tests/` | 29 `test_*.py` modules, one per subject, plus `conftest.py`, `fakes.py`, `__init__.py`, `golden/` and `fixtures/` |
 | `docs/` | `configuration.md` (full env/config reference), `releases.md`, `weights.md`, `searxng.md`, `bootstrap-notes.md`, `bootstrap-scan.txt` (audit 2026-09-11: three were missing from this row) |

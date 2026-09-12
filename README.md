@@ -231,8 +231,11 @@ The optional in-memory cache shipped with contract `1.1.0`, and the **frozen Ope
 contract** is in the tree: [`contract/openapi.yaml`](contract/openapi.yaml), generated and
 checked against a committed `openapi.yaml.sha256` anchor, with the versioning rules — what
 counts as MAJOR, MINOR, PATCH or no bump, and how to vendor a verified copy — in
-[`contract/GOVERNANCE.md`](contract/GOVERNANCE.md). Shipping it as a Release asset and
-inside the image is the last step before `v1.0.0`.
+[`contract/GOVERNANCE.md`](contract/GOVERNANCE.md). It now ships three ways — the git
+tag, the assets on every `v*` Release, and `/app/contract/openapi.yaml` inside the image
+(`docker run --rm --entrypoint cat <image> /app/contract/openapi.yaml`) — all verified
+against that one committed anchor, two of them by CI on every release. The first
+non-pre-release tag, `v1.0.0`, is the next step.
 
 **Security reports** go through GitHub private vulnerability reporting; the policy, the
 supported-versions rule and what is and is not in scope are in

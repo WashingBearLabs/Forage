@@ -2,7 +2,7 @@
 # TESTING_GUIDE.md
 
 > Last updated: 2026-09-11
-> Updated by: Claude (forage-contract US-002)
+> Updated by: Claude (forage-contract US-004)
 
 ## Quick Start
 
@@ -95,11 +95,13 @@ crash reads as a false regression.
 **29 `test_*.py` modules** under `tests/`, flat, one per subject — 32 Python files in all
 once `conftest.py`, `fakes.py` and `__init__.py` are counted — plus `golden/` and
 `fixtures/`. (Both numbers measured 2026-09-11; state the convention with the count, or
-the next person reconciles two different ones by increment.) **1532 tests, all green** as
+the next person reconciles two different ones by increment.) **1610 tests, all green** as
 of 2026-09-11 (`feature-forage-contract` US-001 added `test_contract_errors.py`'s 25,
-US-005 `test_contract_metrics.py`'s 20, US-002 `test_contract_export.py`'s 18 and US-003
-`test_governance_docs.py`'s 41 plus 26 in `test_ci_workflow.py`; the per-module counts in
-the table below have not all been re-measured since 2026-09-10).
+US-005 `test_contract_metrics.py`'s 20, US-002 `test_contract_export.py`'s 18, US-003
+`test_governance_docs.py`'s 41 plus 26 in `test_ci_workflow.py`, and US-004 another 78
+spread across four existing modules — 36 workflow-shape, 29 smoke, 11 Dockerfile, 2
+governance; the per-module counts in the table below have not all been re-measured since
+2026-09-10).
 
 | Module | Tests | Covers |
 |--------|------:|--------|
@@ -115,12 +117,12 @@ the table below have not all been re-measured since 2026-09-10).
 | `tests/test_models.py` | 31 | Pydantic request/response models |
 | `tests/test_app.py` | 60 | FastAPI endpoints, `/health` body, capability break-glass, the `/metrics` `model` counters, and the lifespan harness: startup yields immediately, `/health` latency during a fetch, the `promptguard_loaded` flip, and the retry task's cancellation at shutdown |
 | `tests/test_stage3_promptguard.py` | 30 | ML scan; transformers/torch mocked |
-| `tests/test_ci_workflow.py` | 235 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane, image build + secret-grep gate, smoke job + artifact handoff, both publish lanes (tag policies evaluated, not matched), the cross-fire guards between them, and — since US-003 — the image↔contract mapping: the version is read from the tagged tree, the Release body is written from it, the published body is read back and asserted, and no version literal may appear in the job's shell |
+| `tests/test_ci_workflow.py` | 271 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane, image build + secret-grep gate, smoke job + artifact handoff, both publish lanes (tag policies evaluated, not matched), the cross-fire guards between them, and — since US-003 — the image↔contract mapping: the version is read from the tagged tree, the Release body is written from it, the published body is read back and asserted, and no version literal may appear in the job's shell. US-004 adds the Release assets (attached by the create call, downloaded back and verified against the committed anchor) and the reproducible-export guards: one identical SOURCE_DATE_EPOCH script in all four building jobs, `rewrite-timestamp=true` on every exporter, and the longhand `type=docker` / `type=image,push=true` forms that can carry it |
 | `tests/test_compose_fragments.py` | 56 | Compose fragments, parse-only shape guards (audit: row was missing) |
-| `tests/test_contract_smoke.py` | 47 | `contract_smoke.py`: every `/health` clause, polling, and the single-source ties to the golden schema |
+| `tests/test_contract_smoke.py` | 76 | `contract_smoke.py`: every `/health` clause, polling, the single-source ties to the golden schema, and — since US-004 — the in-image contract checks: the `docker run --rm --entrypoint cat` argv it builds, the anchor comparisons against the committed trust root, and the `info.version` ↔ live `contract_version` claim, all driven through an injected runner so the suite never starts a container |
 | `tests/test_stage5_url_audit.py` | 28 | Outbound fetch + redirect-chain audit |
 | `tests/test_stage1_pdf.py` | 23 | PDF branch, subprocess isolation |
-| `tests/test_dockerfile.py` | 39 | `Dockerfile` text: no secret may enter the build, digest-pinned base, lock-driven install |
+| `tests/test_dockerfile.py` | 50 | `Dockerfile` text: no secret may enter the build, digest-pinned base, lock-driven install, and — since US-004 — that the frozen contract is COPYed to `/app/contract/` (with `.dockerignore` checked for a pattern that would silently empty it) and that the two reproducibility normalizations stay: no timestamped apt artefacts, no bytecode from the import check |
 | `tests/test_pyright_policy.py` | 12 | Type-checking policy: strict, one carve-out, no suppressions |
 | `tests/test_searxng_smoke.py` | 61 | `searxng_smoke.py`: every evaluator branch, the Docker argv it builds, and the `--internal` wiring |
 | `tests/test_searxng_docker.py` | 28 | `searxng/Dockerfile` + baked config: the negatives (no wildcard pass list, no baked secret, no header trust) and engine parity with `_SEARXNG_ENGINES` |
@@ -130,7 +132,7 @@ the table below have not all been re-measured since 2026-09-10).
 | `tests/test_contract_errors.py` | 25 | The documented error surface: the seventeen-code vocabulary swept from every raise site in the repo, pinned against Poppy's inlined allowlist; per-emission-site parity (each mirror model reproduces the live body byte-for-byte, driven through the real routes); the `responses=` declaration map; and the FastAPI 422-suppression behaviour the union declarations rest on |
 | `tests/test_contract_metrics.py` | 20 | The typed `/metrics` body and the served app metadata: parity between the handler's dict and the bytes the typed route sends (compared *outside* the model, so a reorder at any depth is caught), the flat cgroup keys in both wire and schema, the `extra="forbid"` failure mode and the permissive-model counterfactual it avoids, the dataclass-counter ↔ model field ties, `info.version == CONTRACT_VERSION`, and the mechanical check that every path FastAPI serves — `/docs`, `/redoc` and `/openapi.json` included — is acknowledged in `docs/configuration.md`'s posture section |
 | `tests/test_contract_export.py` | 18 | The frozen `contract/openapi.yaml`: that the committed bytes are what the app generates, that the committed `.sha256` anchor is the sha256 of those bytes in `sha256sum -c` form, that the render is byte-stable across processes and `PYTHONHASHSEED` values (measured in subprocesses, not asserted), that the canonical form round-trips and carries no YAML anchors, and that `/extract` is documented while `extract_route_enabled` is `false`. The drift check's own failure case is committed as `tests/fixtures/contract/unregenerated_openapi.yaml` and fed to the same checker |
-| `tests/test_governance_docs.py` | 41 | The three governance documents US-003 adds — `contract/GOVERNANCE.md`, `SECURITY.md`, `.github/pull_request_template.md` — held to the code they describe: the stated contract version against `CONTRACT_VERSION`, the regeneration command against `scripts.export_contract.REGEN_COMMAND`, the hashed-source count against `_REVISION_SOURCES`, the PR template's required-checks sentence against the jobs `publish` hangs off, the six worked examples parsed out of the table and checked for exactly one classification each (two are deliberately two-valued), the five recorded rulings present with a citation that resolves, and every relative link in all three files |
+| `tests/test_governance_docs.py` | 43 | The three governance documents US-003 adds — `contract/GOVERNANCE.md`, `SECURITY.md`, `.github/pull_request_template.md` — held to the code they describe: the stated contract version against `CONTRACT_VERSION`, the regeneration command against `scripts.export_contract.REGEN_COMMAND`, the hashed-source count against `_REVISION_SOURCES`, the PR template's required-checks sentence against the jobs `publish` hangs off, the six worked examples parsed out of the table and checked for exactly one classification each (two are deliberately two-valued), the five recorded rulings present with a citation that resolves, and every relative link in all three files |
 | `tests/test_contract_schema.py` | 1 | Golden contract fixture vs `pipeline/contract.py` |
 
 Support files:
@@ -254,14 +256,14 @@ test_mapping:
   "searxng_smoke.py": "tests/test_searxng_smoke.py"
   "tests/conftest.py": "tests/test_hermeticity.py"
   ".github/workflows/ci.yml": "tests/test_ci_workflow.py"
-  "Dockerfile": "tests/test_dockerfile.py"
+  "Dockerfile": ["tests/test_dockerfile.py", "tests/test_contract_smoke.py"]
   "contract_smoke.py": "tests/test_contract_smoke.py"
   "uv.lock": "tests/test_dependency_lock.py"
   "pyproject.toml": ["tests/test_dependency_lock.py", "tests/test_pyright_policy.py"]
   "typings/*": "tests/test_pyright_policy.py"
   "docs/configuration.md": "tests/test_contract_metrics.py"
-  "contract/openapi.yaml": "tests/test_contract_export.py"
-  "contract/openapi.yaml.sha256": "tests/test_contract_export.py"
+  "contract/openapi.yaml": ["tests/test_contract_export.py", "tests/test_contract_smoke.py"]
+  "contract/openapi.yaml.sha256": ["tests/test_contract_export.py", "tests/test_contract_smoke.py"]
   "scripts/export_contract.py": ["tests/test_contract_export.py", "tests/test_governance_docs.py"]
   "contract/GOVERNANCE.md": "tests/test_governance_docs.py"
   "SECURITY.md": "tests/test_governance_docs.py"
@@ -285,6 +287,13 @@ concerns: the CPU-only dependency lock and the type-checking policy.
 point of the drift check: the three files that can move the OpenAPI document must run the
 test that notices, or a response-model edit reaches a PR with `contract/openapi.yaml` still
 describing the old shape.
+
+US-004 widened three entries rather than adding a module. `Dockerfile` now also runs
+`tests/test_contract_smoke.py`, because the smoke's in-image paths are tied to the COPY
+destination `tests/test_dockerfile.py` asserts — move the destination and the tie is what
+notices. `contract/openapi.yaml` and its anchor gained it too: the smoke's in-image checks
+are driven against the *committed* pair, so a regeneration that left one of them behind
+fails there as well as in the export test.
 
 US-003 added three **Markdown** entries — `contract/GOVERNANCE.md`, `SECURITY.md` and
 `.github/pull_request_template.md` — for the same reason `docs/configuration.md` has one:

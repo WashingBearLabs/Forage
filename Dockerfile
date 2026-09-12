@@ -46,9 +46,28 @@ FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1
 WORKDIR /app
 
 # System deps: curl for the container healthcheck.
+#
+# The logs and the ldconfig cache are deleted for **reproducibility**, not for
+# size — they are the entire reason this layer used to differ between two builds
+# of the same commit. `apt` and `dpkg` write wall-clock timestamps into their
+# logs, and `ldconfig`'s `aux-cache` records inode metadata, so a rebuild minutes
+# later produces different files and therefore a different layer digest. That is
+# what failed `publish`'s diff_ids parity gate on a cold cache
+# (kit_tools/docs/GOTCHAS.md, "A cold-cache publish fails its own parity gate").
+#
+# Measured layer-by-layer at US-004, exactly four files drifted:
+# `/var/log/apt/history.log`, `/var/log/apt/term.log`, `/var/log/dpkg.log` and
+# `/var/cache/ldconfig/aux-cache`. `/var/log/alternatives.log` is removed too and
+# is precautionary rather than measured — same class, same one-line cost, and it
+# appears the moment a future package triggers `update-alternatives`.
+#
+# Nothing reads any of them: the image performs exactly one apt transaction, at
+# build time, and ships no package-manager workflow.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /var/log/apt /var/log/dpkg.log /var/log/alternatives.log \
+       /var/cache/ldconfig/aux-cache
 
 # uv itself, digest-pinned, at the same version CI's setup-uv installs
 # (ci.yml's `UV_VERSION`). Pinning the tag alone would leave the one tool that
@@ -147,8 +166,52 @@ COPY model_fetcher.py weights_manifest.json ./
 COPY promptguard/ ./promptguard/
 COPY pipeline/ ./pipeline/
 
+# The frozen wire contract, shipped *inside* the image so a consumer can read
+# it out of the artifact they already pull:
+#
+#     docker run --rm --entrypoint cat <image> /app/contract/openapi.yaml
+#
+# Three properties are deliberate. The directory is copied whole rather than
+# file-enumerated like the modules above, because `contract/` is a published
+# unit: `openapi.yaml`, the `openapi.yaml.sha256` anchor that verifies it, and
+# `GOVERNANCE.md` — the semver rules — travel together, and a consumer who
+# vendors the document from the image gets the rules that govern it in the same
+# directory. No module imports any of it: nothing in `retrieval_app` reads
+# `/app/contract/`, so a missing file here cannot break the service, which is
+# exactly why `tests/test_dockerfile.py` guards the COPY rather than relying on
+# the build-time import check to notice. And the bytes are the committed bytes —
+# `contract/openapi.yaml.sha256` is the trust anchor, so the in-image copy
+# verifies against the same `sha256sum -c openapi.yaml.sha256` as the Release
+# asset and the git tag (contract/GOVERNANCE.md, "Consumers"). CI's `smoke` job
+# checks that on every run, against the running container's own
+# `/health.contract_version`.
+COPY contract/ /app/contract/
+
 # Build-time import check — fails fast if the module is broken before it ships.
-RUN python -c "import retrieval_app"
+#
+# `PYTHONDONTWRITEBYTECODE=1` is the second half of the reproducibility fix, and
+# it costs nothing it was not already losing. Importing the app compiles ~580
+# dependency modules and writes their `.pyc` into the venv; a timestamp-based
+# `.pyc` embeds its source's mtime, which differs between two checkouts of the
+# same commit, so this layer drifted by 579 files. It could not be normalized at
+# export either: the mtime lives *inside* the `.pyc` bytes, not in the tar
+# header.
+#
+# The cache those writes left behind is void anyway once the export rewrites
+# timestamps — measured in a built image: every source reads
+# `SOURCE_DATE_EPOCH` while its `.pyc` still records the build clock, so Python
+# recompiles on import and cannot write the result back (the venv is root-owned
+# and the service runs as `poppy`). So the choice was never "cache or no cache";
+# it was "dead files that break the parity gate" or "no dead files". Measured
+# cost of the import with no usable cache: ~2.3 s against ~0.9 s warm, once per
+# container start, against a 120 s health budget.
+#
+# If that ever matters, the fix is hash-based `.pyc` (PEP 552,
+# `compileall --invalidation-mode unchecked-hash`) over the modules the app
+# actually imports — deterministic *and* valid. It is not here because
+# compiling the whole venv would add minutes to the build and hundreds of MB of
+# torch bytecode to the image.
+RUN PYTHONDONTWRITEBYTECODE=1 python -c "import retrieval_app"
 
 # The entrypoint is a bare `exec "$@"` shim. Forage takes all of its
 # configuration from the environment (docs/configuration.md) and never talks to

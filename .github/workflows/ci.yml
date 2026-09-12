@@ -337,26 +337,75 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
+      - name: Pin the build timestamp to the commit
+        # REPRODUCIBILITY — the fix for the cold-cache publish failure
+        # (`feature-forage-contract` US-004; the incident is in
+        # kit_tools/docs/GOTCHAS.md, "A cold-cache publish fails its own parity
+        # gate"). `publish` rebuilds the amd64 leg and asserts its layers are
+        # the ones this job produced and `smoke` executed. That held while
+        # buildx served every layer from cache, and failed — correctly — the
+        # first time a tag was cut after the cache had been evicted: the two
+        # builds embedded different timestamps, so they were genuinely
+        # different layers.
+        #
+        # `SOURCE_DATE_EPOCH` plus `rewrite-timestamp=true` on the exporter
+        # rewrites every file timestamp in every exported layer to one value,
+        # which makes two cold builds of one commit produce identical diff IDs.
+        # Measured at US-004 on the real image, two `--no-cache` builds from two
+        # checkouts with different file mtimes: 16 of 18 layers matched with
+        # this alone, and all 18 once the Dockerfile stopped writing apt logs
+        # and import-time `.pyc` (whose timestamps live inside the file, where
+        # no exporter can reach them). The Dockerfile says so at both places.
+        #
+        # The value is the commit's own committer date: deterministic per
+        # commit, identical in every job that checks the same SHA out, and it
+        # keeps the image's `created` date meaningful — a literal `0`, which is
+        # the common recipe, dates every published image to 1970.
+        #
+        # This script is byte-identical in all four building jobs and
+        # tests/test_ci_workflow.py asserts that. Two jobs computing the epoch
+        # differently would fail the parity gate in precisely the way the gate
+        # exists to catch, with a message about layers rather than about
+        # timestamps.
+        id: epoch
+        run: |
+          set -euo pipefail
+          epoch="$(git log -1 --format=%ct "${GITHUB_SHA}")"
+          if ! printf '%s' "${epoch}" | grep -qE '^[0-9]+$'; then
+            echo "::error::no commit timestamp for ${GITHUB_SHA} — SOURCE_DATE_EPOCH would be empty and the build would not be reproducible"
+            exit 1
+          fi
+          echo "value=${epoch}" >> "${GITHUB_OUTPUT}"
+          echo "SOURCE_DATE_EPOCH=${epoch}"
+
       - name: Build the amd64 service image
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        env:
+          SOURCE_DATE_EPOCH: ${{ steps.epoch.outputs.value }}
         with:
           context: .
           platforms: linux/amd64
           # Never push from this job. Publishing is US-007's, behind the full
           # gate chain and its own job-scoped permissions; this job exists to
           # produce one artifact that `secret-grep` and (US-005) `smoke` can
-          # inspect. `load: true` puts it in this runner's daemon so it can be
-          # saved.
+          # inspect.
           push: false
-          load: true
+          # `type=docker` with no `dest` is what `load: true` expands to — it
+          # puts the image in this runner's daemon so it can be saved — written
+          # out longhand because `rewrite-timestamp` is an exporter attribute
+          # and the shorthand has nowhere to carry one. See the step above for
+          # what it is for; it must stay in step with `publish`'s exporter, or
+          # the two builds normalize differently and the parity gate compares
+          # apples to oranges.
+          outputs: type=docker,rewrite-timestamp=true
           tags: ${{ env.IMAGE_REF }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # The docker exporter `load: true` uses cannot carry attestations.
-          # Leaving provenance on makes buildx build something it then cannot
-          # hand to the daemon; turning it off keeps the exported image exactly
-          # what gets saved, loaded and asserted downstream.
+          # The docker exporter cannot carry attestations. Leaving provenance
+          # on makes buildx build something it then cannot hand to the daemon;
+          # turning it off keeps the exported image exactly what gets saved,
+          # loaded and asserted downstream.
           provenance: false
 
       - name: Record the built image ID
@@ -593,18 +642,28 @@ jobs:
           docker run -d --name "${SMOKE_CONTAINER}" -p 8020:8020 "${IMAGE_REF}"
           docker ps --filter "name=${SMOKE_CONTAINER}" --format '{{.Names}} {{.Status}}'
 
-      - name: Assert the degraded /health contract
+      - name: Assert the degraded /health contract and the in-image contract
         # The field expectations are NOT enumerated here. `contract_smoke.py`
         # validates the live body against the same `HealthResponse` model the
         # golden-schema test pins, and reads every wire value it compares from
         # `pipeline/contract.py` at run time — one source of truth, checked by
         # tests/test_contract_smoke.py rather than asserted in a comment. A
         # hand-written field list in bash here would be a second contract.
+        #
+        # `--image` adds US-004's in-image leg, and it is passed to the script
+        # rather than implemented here for the same reason: the script reads
+        # `/app/contract/openapi.yaml` out of the candidate image, checks it
+        # against the anchor this tree committed, and checks its `info.version`
+        # against the `contract_version` the running container reports. Three
+        # comparisons, no paths or versions restated in bash. It is the same
+        # image this job is running, so the document and the service being
+        # compared are the same artifact.
         run: |
           set -euo pipefail
           uv run python contract_smoke.py \
             --base-url "http://127.0.0.1:8020" \
-            --timeout-seconds "${SMOKE_TIMEOUT_SECONDS}"
+            --timeout-seconds "${SMOKE_TIMEOUT_SECONDS}" \
+            --image "${IMAGE_REF}"
 
       - name: Dump the container log
         # Runs on any failure above — a contract violation, a container that
@@ -702,6 +761,24 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
+      - name: Pin the build timestamp to the commit
+        # The same script `build-amd64` runs, and that is the point: this job
+        # rebuilds the amd64 leg and then asserts its layers equal the ones that
+        # job produced, so the two builds must normalize their timestamps to the
+        # same value or the assertion can only pass on a warm cache. See
+        # `build-amd64`'s copy for the incident, the mechanism and the
+        # measurements.
+        id: epoch
+        run: |
+          set -euo pipefail
+          epoch="$(git log -1 --format=%ct "${GITHUB_SHA}")"
+          if ! printf '%s' "${epoch}" | grep -qE '^[0-9]+$'; then
+            echo "::error::no commit timestamp for ${GITHUB_SHA} — SOURCE_DATE_EPOCH would be empty and the build would not be reproducible"
+            exit 1
+          fi
+          echo "value=${epoch}" >> "${GITHUB_OUTPUT}"
+          echo "SOURCE_DATE_EPOCH=${epoch}"
+
       - name: Download the image artifact
         # This job is the *last* consumer of `build-amd64`'s artifact, and it
         # consumes it for a reason the other two do not share: it is the only
@@ -797,10 +874,18 @@ jobs:
       - name: Build and push the multi-arch image
         id: push
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        env:
+          SOURCE_DATE_EPOCH: ${{ steps.epoch.outputs.value }}
         with:
           context: .
           platforms: ${{ env.PUBLISH_PLATFORMS }}
-          push: true
+          # `type=image,push=true` is the longhand of `push: true`, written out
+          # so the exporter can carry `rewrite-timestamp` — the other half of
+          # the reproducibility fix, and the half that makes the verification
+          # step below hold on a cold cache instead of only on a warm one. The
+          # two exporters (here and in `build-amd64`) must normalize
+          # identically; a guard test ties them together.
+          outputs: type=image,push=true,rewrite-timestamp=true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
@@ -968,6 +1053,21 @@ jobs:
         #
         # `gh` is preinstalled on GitHub-hosted runners, so this needs no
         # fourth-party action for a two-line API call.
+        #
+        # THE ASSETS (US-004). `contract/openapi.yaml` and its committed
+        # `.sha256` anchor are uploaded with the Release, so a consumer can
+        # fetch the wire contract from the artifact list without cloning the
+        # repository or pulling the image. They are uploaded by `gh release
+        # create` itself rather than by a later `gh release upload`, so the
+        # Release and its assets arrive in one operation: a Release that exists
+        # without them is then a failed step, not a quietly incomplete one.
+        #
+        # A Release asset is MUTABLE — anyone with write access can replace it
+        # after the fact, and nothing about the Release records that. That is
+        # why the anchor is *committed* (`contract/openapi.yaml.sha256` at the
+        # tag) and why contract/GOVERNANCE.md tells consumers to verify against
+        # it rather than against another copy. The step after this one runs
+        # exactly that verification against the freshly published assets.
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1001,8 +1101,10 @@ jobs:
           identical to the image the contract smoke executed.
           EOF
           )"
-          gh release create "${RELEASE_TAG}" "${release_args[@]}" --notes "${notes}"
-          echo "Release ${RELEASE_TAG} created after the image push."
+          gh release create "${RELEASE_TAG}" "${release_args[@]}" --notes "${notes}" \
+            contract/openapi.yaml contract/openapi.yaml.sha256
+          echo "Release ${RELEASE_TAG} created after the image push, with the"
+          echo "contract and its anchor attached."
 
       - name: Assert the Release body advertises the tagged tree's contract version
         # The mechanization round 2 asked for. The line above is *emitted* from
@@ -1051,6 +1153,50 @@ jobs:
           fi
           echo "Release ${RELEASE_TAG} advertises contract ${CONTRACT_VERSION}, matching the tagged tree."
 
+      - name: Assert the Release assets verify against the committed anchor
+        # US-004's Release-asset leg of the three-way sha256 equality, run as a
+        # gate rather than recorded by hand at tag time.
+        #
+        # It does exactly what contract/GOVERNANCE.md tells a consumer to do —
+        # download the assets, run `sha256sum -c openapi.yaml.sha256` beside
+        # them — and adds the one thing a consumer cannot do: compare the
+        # downloaded anchor against the anchor committed at this tag. That
+        # second comparison is what makes the first one mean something. A
+        # Release asset is mutable, and a tampered pair (document and anchor
+        # replaced together) verifies perfectly against itself.
+        #
+        # The assets are downloaded into a scratch directory, never over the
+        # checkout: overwriting `contract/` with what the API just handed back
+        # would turn the comparison into a copy of itself.
+        #
+        # FAILURE MODE: the image is pushed and the Release exists, with assets
+        # that are not this tag's contract. Red run, wrong Release — fix it with
+        # `gh release upload --clobber` or delete the Release and re-run
+        # (`gh release create` refuses a tag that already has one).
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          assets="$(mktemp -d)"
+          gh release download "${RELEASE_TAG}" --repo "${RELEASE_REPO}" \
+            --pattern 'openapi.yaml' --pattern 'openapi.yaml.sha256' \
+            --dir "${assets}"
+          ls -l "${assets}"
+          if ! cmp -s "${assets}/openapi.yaml.sha256" contract/openapi.yaml.sha256; then
+            echo "::error::the published openapi.yaml.sha256 asset is not the anchor committed at ${RELEASE_TAG}"
+            echo "--- asset ---"; cat "${assets}/openapi.yaml.sha256"
+            echo "--- committed ---"; cat contract/openapi.yaml.sha256
+            exit 1
+          fi
+          if ! (cd "${assets}" && sha256sum -c openapi.yaml.sha256); then
+            echo "::error::the published openapi.yaml asset does not hash to the anchor beside it — a consumer following contract/GOVERNANCE.md would refuse this copy"
+            exit 1
+          fi
+          echo "Release ${RELEASE_TAG} carries the committed contract and its anchor."
+
   # ==========================================================================
   # The companion image's lane (US-004)
   #
@@ -1094,9 +1240,29 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
+      - name: Pin the build timestamp to the commit
+        # Byte-identical to the service lane's copy — see `build-amd64`. This
+        # lane has the same rebuild-and-compare gate on its own `publish`, so
+        # it has the same cold-cache exposure: the companion image is a pinned
+        # base plus `COPY config/`, and a COPY layer carries the checkout's
+        # mtimes. Cheap to normalize, and leaving one of two identical gates
+        # unfixed would only mean discovering this twice.
+        id: epoch
+        run: |
+          set -euo pipefail
+          epoch="$(git log -1 --format=%ct "${GITHUB_SHA}")"
+          if ! printf '%s' "${epoch}" | grep -qE '^[0-9]+$'; then
+            echo "::error::no commit timestamp for ${GITHUB_SHA} — SOURCE_DATE_EPOCH would be empty and the build would not be reproducible"
+            exit 1
+          fi
+          echo "value=${epoch}" >> "${GITHUB_OUTPUT}"
+          echo "SOURCE_DATE_EPOCH=${epoch}"
+
       - name: Build the amd64 companion image
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        env:
+          SOURCE_DATE_EPOCH: ${{ steps.epoch.outputs.value }}
         with:
           # `searxng/`, not the repo root: the companion image's build context
           # is its own directory, so the Dockerfile's `COPY config/` cannot
@@ -1104,7 +1270,9 @@ jobs:
           context: searxng
           platforms: linux/amd64
           push: false
-          load: true
+          # The longhand of `load: true`, carrying the timestamp rewrite — see
+          # the service lane's `build-amd64`.
+          outputs: type=docker,rewrite-timestamp=true
           tags: ${{ env.SEARXNG_IMAGE_REF }}
           # Its own cache scope. It cannot share `build-amd64`'s: that job
           # writes an amd64 service manifest on every run, and a shared scope
@@ -1324,6 +1492,21 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
+      - name: Pin the build timestamp to the commit
+        # Byte-identical to the other three — see `build-amd64`. The amd64 leg
+        # is rebuilt below and compared against the gated tarball, exactly as in
+        # the service lane, so both builds have to normalize to the same value.
+        id: epoch
+        run: |
+          set -euo pipefail
+          epoch="$(git log -1 --format=%ct "${GITHUB_SHA}")"
+          if ! printf '%s' "${epoch}" | grep -qE '^[0-9]+$'; then
+            echo "::error::no commit timestamp for ${GITHUB_SHA} — SOURCE_DATE_EPOCH would be empty and the build would not be reproducible"
+            exit 1
+          fi
+          echo "value=${epoch}" >> "${GITHUB_OUTPUT}"
+          echo "SOURCE_DATE_EPOCH=${epoch}"
+
       - name: Download the companion image artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -1413,10 +1596,15 @@ jobs:
       - name: Build and push the multi-arch companion image
         id: push
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        env:
+          SOURCE_DATE_EPOCH: ${{ steps.epoch.outputs.value }}
         with:
           context: searxng
           platforms: ${{ env.SEARXNG_PUBLISH_PLATFORMS }}
-          push: true
+          # The longhand of `push: true`, carrying the timestamp rewrite so the
+          # verification below holds on a cold cache — see the service lane's
+          # `publish`.
+          outputs: type=image,push=true,rewrite-timestamp=true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
