@@ -84,3 +84,149 @@
   (US-008 is a human gate).
 - Poppy's in-tree copy remains the deployed source of truth until it pins a Forage image.
   Replay any hotfix to the extracted paths across both repos until then.
+
+---
+
+## 2026-09-13 — kit_tools framework retrofit and documentation seeding
+
+**Duration:** ~2.5 hours wall clock (including two laptop-sleep stalls that each cost one seeder relaunch or wait)
+**Focus:** `/kit-tools:init-project` (merge mode) followed by `/kit-tools:seed-project`
+
+### Accomplished
+
+- **init-project (merge, API/Backend set, ERROR_HANDLING + LOGGING patterns):** 17 templates
+  added without touching the 14 existing docs; `kit_tools/hooks/` installed (7 automation
+  scripts plus the `_placeholders.py` helper two of them import);
+  `.claude/settings.local.json` created with the SessionStart / PostToolUse / PreCompact /
+  Stop registrations; Session Scratchpad section appended to `CLAUDE.md`; `.gitignore`
+  KitTools block and `worktree.yaml` were already correct; lint commands already recorded;
+  plugin doctor HEALTHY (0 errors, 0 warnings).
+- **seed-project:** six focused explorations run in parallel and cached under
+  `.seed_cache/` (tech-stack 206, infrastructure 208, dependencies 218, security 395,
+  operations 469, architecture 311 lines; all high confidence). Fourteen templates seeded
+  sequentially by tier, each written by a `generic-seeder` agent that verified names,
+  constants, and paths against source before writing.
+- **Validation:** all 21 seeded docs clean on the placeholder scan (the only two hits are
+  the intentional date-format examples in `AGENT_README.md` and this file's Log
+  Format block); ~1,085 backticked path references across the 14 new docs checked, every
+  one resolves or is a deliberate mention of an absent file (`arch/DATA_MODEL.md`,
+  `app.py` as the historical name, CI artifact names).
+
+### Documentation Updated
+
+- [x] New (seeded): `docs/LOCAL_DEV.md`, `arch/SERVICE_MAP.md`, `arch/INFRA_ARCH.md`,
+      `arch/SECURITY.md`, `docs/MONITORING.md`, `docs/CI_CD.md`, `docs/TROUBLESHOOTING.md`,
+      `docs/API_GUIDE.md`, `docs/ENV_REFERENCE.md`, `docs/DEPLOYMENT.md`,
+      `arch/patterns/ERROR_HANDLING.md`, `arch/patterns/LOGGING.md`, `arch/DECISIONS.md`
+      (19 entries, dates from source text or first-introducing commits)
+- [x] Rewritten: `AGENT_README.md` (read order for 26 docs, session-end checklist, stale
+      off-limits entries replaced, documentation tree, canonical-source rule)
+- [x] `CLAUDE.md` (scratchpad section only), `SEED_MANIFEST.json` (created)
+- [x] Deleted: `arch/DATA_MODEL.md` (no database; the template says to delete it)
+- [ ] Not touched: `SYNOPSIS.md`, `arch/CODE_ARCH.md`, `docs/CONVENTIONS.md`,
+      `docs/GOTCHAS.md`, `testing/TESTING_GUIDE.md`, `roadmap/*`, `PRODUCT_VISION.md`
+      (still the unfilled template; `/kit-tools:create-vision` owns it)
+
+### Decisions
+
+- **Pre-existing seeded docs were not re-seeded.** seed-project's default scope is "all
+  templates", but the seven docs seeded during the extraction epic are curated and passed
+  validation; overwriting them with agent output would have been destructive. They are
+  marked `seeded` in the manifest with a note.
+- **`arch/SECURITY.md` was seeded although `skip_if: no-auth` is literally met.** Forage's
+  security architecture is substantial and non-auth-centric; the auth sections were reframed
+  as "none by design, network placement is the control".
+- **`docs/API_GUIDE.md` and `docs/ENV_REFERENCE.md` are guides, not copies.**
+  `contract/openapi.yaml` and `docs/configuration.md` remain canonical; the guides add usage,
+  read sites, and traps, and must change in the same commit as their source.
+  `AGENT_README.md` records the rule (it previously listed both as deliberately absent).
+- **`arch/DECISIONS.md` is a retrospective log, labelled as such.** Where a source records
+  only the chosen path, "Options Considered" says "not recorded" rather than inventing
+  alternatives.
+- **Explorations parallel, seeding sequential.** No `--parallel` flag was given, so each tier
+  seeded one template at a time and later docs could cross-reference earlier ones.
+
+### Open / Next
+
+- **Owner rulings surfaced by the seeding** (recorded in the docs as observations, nothing
+  was changed in code or root docs):
+  1. `README.md` and `docs/configuration.md` say `/health` reports degraded without SearXNG;
+     the code has no probe and `DegradedReason` has only two members. Fix the docs, or add a
+     reason (a MINOR contract change).
+  2. `compose/minimal.yml` and `compose/full.yml` still pin `forage:0.9.3-rc` and
+     `forage-searxng:0.1.1-rc` although `v1.0.0` is tagged.
+  3. `contract_smoke.py` hard-codes `EXPECTED_STATUS = "degraded"`; its fitness as a
+     weights-loaded production probe needs a decision.
+  4. `/search` scans at the hard default threshold 0.85 and ignores `config.yaml`
+     `promptguard_threshold`; undocumented whether intentional.
+  5. `fetch_error` and `searxng_unavailable` wire bodies interpolate `str(exc)`;
+     `TooManyRedirectsError` collapses into generic `fetch_error`.
+  6. Logging is unconfigured (INFO invisible in containers): recorded, not fixed.
+  7. No container hardening in compose (`read_only`, `cap_drop`, `no-new-privileges`,
+     `pids_limit`), no dependency-vulnerability scanning, no image signing/SBOM.
+  8. Drift in the pre-existing `docs/GOTCHAS.md` (not re-seeded this run): the "uv.lock
+     must stay CPU-pinned" entry still says the image pip-installs from the CPU index and
+     never reads the lock, stale since `ci-and-image` US-003 (the Dockerfile runs
+     `uv sync --locked`); and it dates the `app.py` → `retrieval_app.py` rename to
+     2026-08-04 while the rewritten history shows commit `1baa58b` on 2026-06-12.
+     `arch/DECISIONS.md` follows the Dockerfile and git; `/kit-tools:sync-project` should
+     reconcile GOTCHAS.
+- Run `/kit-tools:create-vision` (PRODUCT_VISION.md is unfilled), then `/kit-tools:plan-epic`.
+- Commit the new `kit_tools/` files; `git status` shows them untracked. `.seed_cache/` is
+  gitignored by the existing `kit_tools/.*` rule; `SEED_MANIFEST.json` is meant to be committed.
+- `docs/API_GUIDE.md` embeds the contract anchor sha256 verbatim; update it whenever
+  `scripts.export_contract` regenerates the contract.
+
+---
+
+## 2026-09-15 — Vision + epic intake and `validate-epic search-providers` (five rounds)
+
+**Duration:** ~6 hours wall clock across two calendar days (one usage-limit interruption)
+**Focus:** Verify the injected vision and three epics, then validate `epic-search-providers` to
+execution readiness.
+
+### Accomplished
+
+- Verified the vision and the three epics / five feature specs another session injected: correct
+  locations, readable, schema-valid. Fixed every `vision_ref` (all pointed at a heading that did
+  not exist) to the vision's `T1.x`/`T2.x` headings, including the completed extraction epic.
+- Pre-validation alignment pass surfaced six design questions; owner rulings recorded as
+  epic rulings 8–11 (422 stays 422; env-var chain; `FORAGE_*` names; revision rotation).
+- `/kit-tools:validate-epic search-providers`, full six-reviewer panel, five rounds:
+  criticals 42 → 15 → 8 → 1 → 0. Rulings 12–34 recorded in the epic with a resolution map.
+  Owner decisions along the way: **no spend ceiling in this epic** (v2), failure taxonomy in
+  spec 1's seam, `search_unavailable` lands with the 1.2.0 bump, `capabilities` presence map for
+  key presence, restrict-only per-request policy, `unresponsive_engines` counts as a free-path
+  failure, no in-request retries, strict `date` validation, hardened release plumbing in a new
+  spec 5 US-004, `/metrics` counters as the observability floor, Brave sample capture declared
+  as a human gate, provider identity `brave` (name) vs `brave-api` (engine).
+- Final matrix: every cell ⚠️ or ✅, no 🔴; worst readiness 6 (brave-provider/security,
+  search-fallback/security, policy/completionist, release/codebase-fit). Overall: needs-work.
+  `kit_tools/.validate_epic_summary.json` written; 30 `spec.validate.scored` events emitted.
+
+### Documentation Updated
+
+- [x] `kit_tools/PRODUCT_VISION.md` (wording fixes only), `kit_tools/specs/epic-search-providers.md`
+      (rulings 8–34, resolution map, decomposition table), all five `feature-search-*.md` /
+      `feature-brave-provider.md` (rewritten in round 1, revised in rounds 2–5),
+      `kit_tools/specs/epic-forage-extraction-forage-side.md` (`vision_ref` only)
+- [x] `kit_tools/SEED_MANIFEST.json`, this log
+
+### Decisions
+
+- Pre-existing seeded docs were never re-seeded; the specs assign their updates to stories.
+- The remaining 121 warnings are accepted as execution-time detail; the reviewers are now
+  finding line-level items, and each round's criticals were verified resolved by the reviewer
+  that raised them.
+
+### Open / Next
+
+- Commit the whole `kit_tools/` tree (vision, epics, specs, seeded docs, manifest, hooks) — all
+  still untracked or modified.
+- Replay rulings 8–34 into Poppy's `EPIC3_SEARCH_RELIABILITY_SPLIT.md` at the next handoff
+  (one-way sync; Poppy's copy is stale on every ruling).
+- Spec 2 US-001's pre-flight human gate: the owner must capture the Brave sample before
+  execution reaches it.
+- Run `/kit-tools:execute-epic search-providers`.
+- `epic-forage-hardening` and `epic-forage-injection-corpus` remain on-hold stubs needing
+  `/kit-tools:plan-epic`.

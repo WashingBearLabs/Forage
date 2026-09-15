@@ -196,3 +196,17 @@ error vocabulary (`forage-contract` US-001 — documentation only, contract stil
 and the one rotation that whole spec gets). `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.
+
+---
+
+## Session Scratchpad
+
+After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:
+
+```
+[HH:MM] Brief description of what was done
+- Files: key files changed (if any)
+- Decision: any non-obvious choices (if applicable)
+```
+
+Keep notes terse — one line plus optional details. This file survives context refreshes and gets processed on session close.

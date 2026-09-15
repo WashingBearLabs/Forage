@@ -2,7 +2,7 @@
 ---
 epic: forage-extraction-forage-side
 status: completed
-vision_ref: Secure Web Retrieval / provider-independent web access
+vision_ref: "T1.1 — Extraction & sanitization pipeline; T1.2 — Packaging, contract & operability"
 created: 2026-09-07
 updated: 2026-09-12
 ---
