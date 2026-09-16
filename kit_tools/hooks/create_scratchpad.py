@@ -4,6 +4,8 @@ create_scratchpad.py - Creates SESSION_SCRATCH.md on session start.
 
 Trigger: SessionStart
 """
+
+import contextlib
 import json
 import os
 import sys
@@ -12,14 +14,21 @@ from pathlib import Path
 
 def main():
     # Consume stdin per hook protocol
-    try:
+    with contextlib.suppress(json.JSONDecodeError, EOFError):
         json.load(sys.stdin)
-    except (json.JSONDecodeError, EOFError):
-        pass
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
     if not project_dir:
-        print(json.dumps({"message": "Note: CLAUDE_PROJECT_DIR not set — skipping scratchpad creation."}))
+        print(
+            json.dumps(
+                {
+                    "message": (
+                        "Note: CLAUDE_PROJECT_DIR not set — "
+                        "skipping scratchpad creation."
+                    )
+                }
+            )
+        )
         return
 
     kit_tools_dir = Path(project_dir) / "kit_tools"
@@ -43,9 +52,17 @@ def main():
 """
         try:
             scratchpad.write_text(content)
-            print(json.dumps({"message": "Created SESSION_SCRATCH.md - ready to capture notes"}))
+            print(
+                json.dumps(
+                    {"message": "Created SESSION_SCRATCH.md - ready to capture notes"}
+                )
+            )
         except OSError as e:
-            print(json.dumps({"message": f"Warning: Could not create SESSION_SCRATCH.md: {e}"}))
+            print(
+                json.dumps(
+                    {"message": f"Warning: Could not create SESSION_SCRATCH.md: {e}"}
+                )
+            )
 
 
 if __name__ == "__main__":

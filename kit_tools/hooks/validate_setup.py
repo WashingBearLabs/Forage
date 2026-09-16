@@ -11,6 +11,7 @@ Can also be run manually: python3 hooks/validate_setup.py
 Placeholder detection logic is shared with validate_seeded_template.py
 via _placeholders.py so both hooks see the same coverage.
 """
+
 import json
 import os
 from pathlib import Path
@@ -31,7 +32,7 @@ def check_required_files(kit_tools_dir: Path) -> list[str]:
         "roadmap/BACKLOG.md",
     ]
 
-    missing = []
+    missing: list[str] = []
     for file in required:
         if not (kit_tools_dir / file).exists():
             missing.append(file)
@@ -76,7 +77,7 @@ def main():
     if not kit_tools_dir.is_dir():
         return
 
-    issues = []
+    issues: list[str] = []
 
     missing = check_required_files(kit_tools_dir)
     if missing:
@@ -88,17 +89,29 @@ def main():
     placeholders = check_placeholders(kit_tools_dir)
 
     if issues:
-        print(json.dumps({
-            "message": f"kit_tools setup issues: {'; '.join(issues)}. Run /kit-tools:seed-project to populate."
-        }))
+        print(
+            json.dumps(
+                {
+                    "message": (
+                        f"kit_tools setup issues: {'; '.join(issues)}. "
+                        "Run /kit-tools:seed-project to populate."
+                    )
+                }
+            )
+        )
     elif placeholders:
-        print(json.dumps({
-            "message": f"kit_tools initialized. {len(placeholders)} files have placeholder text - run /kit-tools:seed-project to populate."
-        }))
+        print(
+            json.dumps(
+                {
+                    "message": (
+                        f"kit_tools initialized. {len(placeholders)} files have "
+                        "placeholder text - run /kit-tools:seed-project to populate."
+                    )
+                }
+            )
+        )
     else:
-        print(json.dumps({
-            "message": "kit_tools setup validated successfully."
-        }))
+        print(json.dumps({"message": "kit_tools setup validated successfully."}))
 
 
 if __name__ == "__main__":

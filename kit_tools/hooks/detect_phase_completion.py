@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-detect_phase_completion.py - Detects checkbox completions in feature specs and roadmap files.
+detect_phase_completion.py - Detects checkbox completions in feature specs and
+roadmap files.
 
 Trigger: PostToolUse (Edit|Write)
 
@@ -8,8 +9,10 @@ When a checkbox is marked complete (- [ ] → - [x]) in:
 - kit_tools/specs/*.md (feature spec acceptance criteria)
 - kit_tools/roadmap/MILESTONES.md (milestone tasks)
 
-Outputs an advisory message. Suggests /kit-tools:validate-implementation only when all feature spec criteria are complete.
+Outputs an advisory message. Suggests /kit-tools:validate-implementation only
+when all feature spec criteria are complete.
 """
+
 import json
 import re
 import sys
@@ -34,9 +37,15 @@ def main():
         return
 
     # Determine file type
-    is_spec = "kit_tools/specs/" in file_path and file_path.endswith(".md") and "/archive/" not in file_path
+    is_spec = (
+        "kit_tools/specs/" in file_path
+        and file_path.endswith(".md")
+        and "/archive/" not in file_path
+    )
     is_roadmap = "kit_tools/roadmap/" in file_path and (
-        file_path.endswith("_TODO.md") or file_path.endswith("MILESTONES.md") or file_path.endswith("BACKLOG.md")
+        file_path.endswith("_TODO.md")
+        or file_path.endswith("MILESTONES.md")
+        or file_path.endswith("BACKLOG.md")
     )
 
     if not is_spec and not is_roadmap:
@@ -65,10 +74,15 @@ def main():
             # Feature spec acceptance criteria completed
             message = f"Acceptance criteria completed in {filename}."
             if completed_count > 0:
-                message = f"{completed_count} acceptance criteria completed in {filename}."
+                message = (
+                    f"{completed_count} acceptance criteria completed in {filename}."
+                )
             # Only suggest validate-implementation if no unchecked criteria remain
             if new_unchecked == 0:
-                message += " All criteria complete — consider running `/kit-tools:validate-implementation`."
+                message += (
+                    " All criteria complete — consider running"
+                    " `/kit-tools:validate-implementation`."
+                )
         else:
             # Roadmap TODO task completed
             message = f"Task(s) completed in {filename}."

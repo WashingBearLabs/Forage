@@ -160,9 +160,9 @@ async def test_connect_failure_never_logs_url_or_secret(
         ok = await c.connect()
 
     assert ok is False
-    assert caplog.text.strip()                 # canary: something was logged
-    assert "secret" not in caplog.text         # the password
-    assert "unreachable" not in caplog.text    # the host
+    assert caplog.text.strip()  # canary: something was logged
+    assert "secret" not in caplog.text  # the password
+    assert "unreachable" not in caplog.text  # the host
 ```
 
 Notes on the pattern:
