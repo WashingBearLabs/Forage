@@ -171,30 +171,30 @@ cache. No pipeline change is exercised yet.
   and the subpackage form to `kit_tools/docs/CONVENTIONS.md:52`'s Modules row.
 
 **Acceptance Criteria:**
-- [ ] `SearchProvider` (a `typing.Protocol` with `name: str`, `paid: bool`, `origin: str | None`, and `async search(query:
+- [x] `SearchProvider` (a `typing.Protocol` with `name: str`, `paid: bool`, `origin: str | None`, and `async search(query:
       str, max_results: int) -> ProviderSearchResult | ProviderFailure`), `ProviderSearchResult`,
       `ProviderFailure`, `FailureClass`, and `FAILURE_CLASSES` are defined in
       `pipeline/search_providers/` with the fields and types above; the protocol docstring states
       that `name` is the chain token and `engine` is provenance.
-- [ ] `FAILURE_CLASSES == {"rate_limited", "timeout", "hard_error", "auth", "quota"}` is asserted by
+- [x] `FAILURE_CLASSES == {"rate_limited", "timeout", "hard_error", "auth", "quota"}` is asserted by
       a test; `_REVISION_SOURCES` is unchanged (`tests/test_governance_docs.py`'s eight-file count
       passes).
-- [ ] A unit-test fake provider satisfies the protocol under `uv run pyright` (strict) and is driven
+- [x] A unit-test fake provider satisfies the protocol under `uv run pyright` (strict) and is driven
       through the success path (populated and empty `results`, both `ProviderSearchResult`) and the
       failure path (one `ProviderFailure` per `failure_class`); the test asserts an empty result
       list is a success, never a failure.
-- [ ] The protocol docstring states the six-point provider contract including the catch-all rule
+- [x] The protocol docstring states the six-point provider contract including the catch-all rule
       (`hard_error` / `unexpected`; wrong-shape body `hard_error` / `malformed_body`; providers
       never raise), `trust_env=False`, and the pre-parse body bound; a test asserts that no module
       under `pipeline/search_providers/` imports `pipeline.stage1_extraction`,
       `pipeline.stage2_structural`, `pipeline.stage3_promptguard`, `promptguard`, or `cache`.
-- [ ] `kit_tools/testing/TESTING_GUIDE.md`'s `test_mapping`, `kit_tools/arch/CODE_ARCH.md`'s
+- [x] `kit_tools/testing/TESTING_GUIDE.md`'s `test_mapping`, `kit_tools/arch/CODE_ARCH.md`'s
       module table, and `kit_tools/docs/CONVENTIONS.md`'s Modules row carry the new package and
       test module.
-- [ ] No wire model, no `run_search_pipeline` line, and no pre-existing test changes in this story.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
+- [x] No wire model, no `run_search_pipeline` line, and no pre-existing test changes in this story.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
 
 ### US-002: Extract `SearxngProvider` (behavior-preserving)
 
