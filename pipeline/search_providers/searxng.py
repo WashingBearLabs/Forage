@@ -32,6 +32,15 @@ from pipeline.search_providers.base import (
 
 logger = logging.getLogger(__name__)
 
+# The chain token this provider answers to, and the one identifier it carries:
+# the `FORAGE_SEARCH_PROVIDERS` entry an operator writes, the registry key, and
+# the name `orchestrator` compares against when deciding whether a refusal gets
+# the legacy `searxng_*` codes. A module constant rather than a read off
+# `SearxngProvider` because the comparison must survive a test that patches the
+# class as a factory — and because the token is a *configuration* string, not a
+# property of any one implementation of it.
+SEARXNG_PROVIDER_NAME = "searxng"
+
 # Default SearXNG URL (overridable via the SEARXNG_URL environment variable —
 # see docs/configuration.md). Deliberately a neutral service name: Forage has
 # no opinion about the compose project it is dropped into.
@@ -131,7 +140,7 @@ class SearxngProvider:
     in a catch-all (contract point 4).
     """
 
-    name = "searxng"
+    name = SEARXNG_PROVIDER_NAME
     paid = False
 
     def __init__(self, base_url: str = DEFAULT_SEARXNG_URL) -> None:

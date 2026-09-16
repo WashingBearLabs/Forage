@@ -15,7 +15,7 @@
 ## Overview
 
 Forage's error handling rests on five conventions. **The wire vocabulary is closed and
-versioned**: seventeen error codes live in `pipeline/contract.py` as nested `Literal`
+versioned**: eighteen error codes live in `pipeline/contract.py` as nested `Literal`
 types, each bound to a fixed HTTP status, and adding one is a contract change governed by
 `contract/GOVERNANCE.md`. **Exceptions are typed and mapped once**: stages raise their own
 domain exceptions, `pipeline/orchestrator.py` translates them into a `PipelineError` that
@@ -49,7 +49,8 @@ Reference"; the consumer-facing one is `kit_tools/docs/API_GUIDE.md` "Error resp
 | URL refused | `invalid_url`, `private_ip`, `blocked_domain` | `/retrieve` 422 | `url_validator.validate_url`, mapped in `run_retrieve_pipeline`; re-checked per redirect hop inside `fetch_url` | not logged |
 | Fetch failure | `fetch_timeout`, `content_too_large`, `fetch_error` | `/retrieve` 422 | `pipeline/stage5_url_audit.fetch_url`, mapped in `run_retrieve_pipeline` | not logged |
 | Document failure | `content_too_large`, `content_too_large_to_classify`, `extraction_failed`, `pdf_encrypted`, `pdf_no_text`, `unsupported_format` | `/extract` 422 | `document_failure()` in `run_extract_pipeline_from_file`; `_spool_upload` (size re-check); `UnsupportedFormatError` from the handler for an invalid `promptguard_threshold` | INFO `document extraction completed`, verdict `failure` |
-| Search backend failure | `searxng_error`, `searxng_unavailable` | `/search` 422 | `run_search_pipeline` | not logged |
+| Search backend failure (lone `searxng` chain) | `searxng_error`, `searxng_unavailable` | `/search` 422 | `run_search_pipeline` → `_searxng_pipeline_error` | not logged |
+| Search provider chain exhausted (any other chain) | `search_unavailable` | `/search` 422 | `run_search_pipeline` → `_search_unavailable_error`; reason is the closed `<provider_name>: <failure_class>` | not logged |
 | Capacity / admission | `busy` | `/extract` 429 | `ExtractionAdmissionMiddleware` (queue depth 1, 50 MiB queued-bytes reservation) | not logged; counted in `/metrics.extraction.busy_rejections` |
 | Upload size, streaming | `content_too_large` | `/extract` 413 declared, **400 observed** (see Observed rough edges) | `DocumentSizeLimitMiddleware` via `_RequestBodyTooLargeError` | not logged |
 | Route disabled / not wired | none (bare `detail`) | `/extract` 404 / 503 | `ExtractionAdmissionMiddleware`; the handler repeats the 404 as `HTTPException` | not logged |
@@ -99,7 +100,7 @@ HTTPValidationError          any POST route, 422 (schema-invalid request)
   detail             : list[ValidationErrorDetail]   -- FastAPI default: loc, msg, type
 ```
 
-`error` is the contract: the seventeen values are enumerated in `contract/openapi.yaml`
+`error` is the contract: the eighteen values are enumerated in `contract/openapi.yaml`
 and pinned by `tests/golden/`. `reason` is not: it is documented as descriptive, and
 `contract/GOVERNANCE.md` ruling (d) records that redacting it would itself be a wire change.
 `request_id` is a per-call uuid4 hex minted in the orchestrator, in the admission middleware
@@ -160,6 +161,13 @@ upload exception through `document_failure`, adds `OSError` to `extraction_faile
 `ProviderFailure`, and the orchestrator maps its closed `detail` token — a status-derived
 `http_<code>` to `searxng_error`, everything else (`timeout`, `connect_error`,
 `body_too_large`, `bad_json`, `malformed_body`, `unexpected`) to `searxng_unavailable`.
+
+That legacy pair is selected by the **configured chain**, not by the failing provider:
+`_is_legacy_searxng_chain` is true only for a chain of exactly one provider whose `name`
+is `searxng`, compared as a name and never with `isinstance` (ruling 28). Every other
+chain refuses with `search_unavailable` (contract `1.2.0`), whose reason is composed from
+two closed vocabularies — `f"{failure.provider_name}: {failure.failure_class}"` — so no
+endpoint, credential or upstream text can reach the body through it.
 
 The route handlers add bookkeeping, not decisions: `/retrieve` calls
 `RetrieveMetrics.record_error(exc.error)` and re-raises; `/extract` records the verdict
@@ -251,7 +259,7 @@ health semantics are in `kit_tools/docs/MONITORING.md` "Health Checks".
 | PromptGuard weights (no token, download pending, verification refused) | No substitute classifier. Fail-closed default: standard and untrusted content is quarantined (`unavailable_blocked`), search results are omitted (`promptguard_unavailable`). Fail-open callers get `unavailable_allowed` with a -0.1 penalty. Background loop keeps retrying. | `/health` `status: degraded`, `degraded_reasons` contains `promptguard_unavailable`, `promptguard_loaded: false`; `/metrics.model` (`fetch_in_progress`, `retries_scheduled`, `fetch_failures`, `verify_failures`, `quarantines`); `promptguard_state` per response; WARNING `weights_*` lines |
 | Valkey configured but unreachable | No fallback to memory. Every cache operation is a miss; requests proceed uncached; reconnect on backoff. | `/health` `degraded_reasons` contains `cache_unavailable`, `cache_connected: false`; `/metrics.cache.reconnect_*`; WARNING with a closed-vocabulary reason |
 | `VALKEY_URL` fully unset | Bounded in-memory LRU. This is selection, not fallback; memory mode cannot degrade. | `/health` `cache_backend: "memory"`, `cache_connected: true` |
-| SearXNG unreachable or erroring | No fallback engine. | `/search` 422 `searxng_unavailable` or `searxng_error`; not a `/health` field |
+| SearXNG unreachable or erroring | No fallback engine. | `/search` 422 `searxng_unavailable` or `searxng_error` on the default lone-`searxng` chain, `search_unavailable` on any other; not a `/health` field |
 | Target site slow, oversized, private, or over-redirecting | No fallback. | `/retrieve` 422 with `fetch_timeout`, `content_too_large`, `private_ip`, `blocked_domain`, `invalid_url`, or `fetch_error` |
 | Extraction capacity exhausted | Refused, not queued beyond depth 1. | `/extract` 429 `busy`; `/metrics.extraction.busy_rejections` |
 | `config.yaml` missing | Every key falls to its code default. | WARNING `config.yaml not found at ...` |
@@ -287,16 +295,18 @@ Recorded for the owner as observations, not decisions. Each has a place in
 
 ## Testing
 
-- **Vocabulary and handler parity**: `tests/test_contract_errors.py` (23 tests) drives
+- **Vocabulary and handler parity**: `tests/test_contract_errors.py` (25 tests) drives
   every emission site through real routes and asserts byte-for-byte parity with the mirror
-  models. Load-bearing names: `test_error_vocabulary_is_the_documented_seventeen`,
+  models. Load-bearing names: `test_error_vocabulary_is_the_documented_eighteen`,
+  `test_all_eighteen_codes_render_as_enums_in_the_schema`,
   `test_every_raise_site_in_the_repo_is_in_the_vocabulary`,
   `test_extract_vocabulary_matches_poppys_pinned_allowlist`,
   `test_declared_error_statuses_match_the_emission_map`,
   `test_extract_413_body_is_mirrored_and_carries_no_request_id`,
   `test_extract_oversized_upload_actually_receives_400`,
   `test_health_degraded_reasons_survive_response_validation`.
-- **Golden fixtures**: `tests/golden/contract_1_0_0.json` and `contract_1_1_0.json` are
+- **Golden fixtures**: `tests/golden/contract_1_0_0.json`, `contract_1_1_0.json` and
+  `contract_1_2_0.json` are
   `model_json_schema()` snapshots checked by
   `tests/test_contract_schema.py::test_contract_schema_matches_golden`; older files are
   retained, never edited (ruling (c)). `tests/test_contract_export.py` is red whenever a

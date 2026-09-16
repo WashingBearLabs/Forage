@@ -58,7 +58,7 @@ curl -s localhost:8020/health | jq
 | `cache_connected` | `true` | `false` only with `cache_backend: "valkey"`; memory mode is always `true` |
 | `cache_backend` | what you configured | `"memory"` in production means the env file was not mounted; `"valkey"` when you meant memory means `VALKEY_URL` is set (even to `""`) |
 | `capabilities` | `{"search_sanitization": 1}` | `{}` until weights load. The one field break-glass can make lie |
-| `contract_version` | `"1.1.0"` | Consumers compare MAJOR (see Consumer-Side Problems) |
+| `contract_version` | `"1.2.0"` | Consumers compare MAJOR (see Consumer-Side Problems) |
 | `sanitizer_revision` | 64-hex sha256 | `"unknown"` only when no lifespan ran (test transports) |
 
 **2. Read `/metrics`.** It is JSON, in-process, and resets on restart. The `model` section
@@ -68,7 +68,7 @@ three identically.
 ```bash
 curl -s localhost:8020/metrics | jq .model        # fetch_in_progress, retries_scheduled, fetch_failures, verify_failures, quarantines
 curl -s localhost:8020/metrics | jq .cache        # reconnect_attempts/successes/failures, operation_failures
-curl -s localhost:8020/metrics | jq .search       # errors.searxng_error / errors.searxng_unavailable, omitted_by_reason, unscanned_results
+curl -s localhost:8020/metrics | jq .search       # errors.searxng_error / errors.searxng_unavailable / errors.search_unavailable, omitted_by_reason, unscanned_results
 curl -s localhost:8020/metrics | jq .retrieve     # errors.<code>, promptguard_state.*, blocked_by_reason.*
 curl -s localhost:8020/metrics | jq .extraction   # busy_rejections, active, queued, verdicts, oom_proximity_ratio
 ```
@@ -148,10 +148,10 @@ retention is configured anywhere in the repo; the Docker daemon defaults apply.
 
 ## Error-Code Reference
 
-The complete wire vocabulary is the seventeen codes in `pipeline/contract.py`
+The complete wire vocabulary is the eighteen codes in `pipeline/contract.py`
 (`ErrorCode`), verified against the source at seeding time. `content_too_large` is one
 code emitted from three sites, which is why ten `/extract` codes plus six `/retrieve`
-codes plus two `/search` codes deduplicate to seventeen.
+codes plus three `/search` codes deduplicate to eighteen.
 
 | Code | HTTP | Route | What it means | First thing to check |
 |---|---|---|---|---|
@@ -169,6 +169,7 @@ codes plus two `/search` codes deduplicate to seventeen.
 | `pdf_encrypted` | 422 | `/extract` | The PDF is encrypted | Nothing server-side; the fixed reason says so |
 | `pdf_no_text` | 422 | `/extract` | No extractable text; OCR is not supported | A scanned document; nothing server-side |
 | `private_ip` | 422 | `/retrieve` | Hostname is `localhost` or ends in `.local`, or **any** resolved address is private, loopback, link-local, CGN, multicast, reserved, or IPv4-mapped IPv6 (`_PRIVATE_NETWORKS_*` in `url_validator.py`). Re-checked on every redirect hop. Reason echoes the resolved IP (GOVERNANCE ruling d) | Intended. A public name resolving privately from inside the container is split-horizon DNS or a rebinding attempt |
+| `search_unavailable` | 422 | `/search` | The configured provider chain could not serve the request and the chain is **not** a lone `searxng` — reason is the closed `<provider_name>: <failure_class>` pair (e.g. `brave: quota`), never a URL and never exception text. Added in contract `1.2.0` | Which providers `FORAGE_SEARCH_PROVIDERS` names. The `failure_class` is the diagnosis: `quota`/`auth` is the provider account, `rate_limited`/`timeout` is the provider, `hard_error` is Forage's log |
 | `searxng_error` | 422 | `/search` | SearXNG answered non-2xx; reason `SearXNG returned HTTP error (http_<n>)`. A **429** here means the SearXNG limiter is on | `SEARXNG_LIMITER` must stay unset. Persistent 4xx/5xx with the limiter off is engine rot: bump the digest pin (`docs/searxng.md`) |
 | `searxng_unavailable` | 422 | `/search` | Connection refused, DNS failure, 10 s timeout, an oversized body, or an unparseable envelope; reason `SearXNG not reachable at <scheme>://<host>:<port>: <detail>`, where `detail` is one of the closed tokens `timeout`, `connect_error`, `body_too_large`, `bad_json`, `malformed_body`, `unexpected` — no exception text, and no userinfo from `SEARXNG_URL` | Is the `searxng` container up? It exits 1 without `SEARXNG_SECRET`. `SEARXNG_URL` is read at import time: restart Forage after changing it |
 | `unsupported_format` | 422 | `/extract` | Upload is neither `%PDF-` nor valid UTF-8 text: empty, NUL bytes, invalid UTF-8, or no visible text (`pipeline/stage1_upload.py`) | The bytes, not the `mime_hint`; magic bytes decide |
@@ -391,8 +392,8 @@ different `sanitizer_revision` than before the deploy.
 
 **Cause:** expected, not a bug. `sanitizer_revision` hashes eight `pipeline/*.py` files, the
 model identity and `promptguard_threshold`, and it is part of the content-cache key
-fingerprint, so a rotation invalidates every existing entry on purpose. Six rotations are
-recorded in `docs/bootstrap-notes.md` (`e6b2b56d` → ... → `8b1b7f78`). Any consumer cache
+fingerprint, so a rotation invalidates every existing entry on purpose. Nine rotations are
+recorded in `docs/bootstrap-notes.md` (`e6b2b56d` → ... → `b7871b20`). Any consumer cache
 keyed on the revision must flush too.
 
 **Fix:** none needed. If the rotation surprised you, the bump was made as a drive-by inside
@@ -572,7 +573,9 @@ body.
 **Cause:** the wire contract is semver-versioned independently of the image tag
 (`CONTRACT_VERSION` in `pipeline/contract.py`, served as `/health.contract_version` and
 `/openapi.json` `info.version`). Consumers compare **MAJOR** and are expected to refuse on
-a mismatch rather than guess; MINOR is additive (`1.1.0` added `cache_backend`). Poppy also
+a mismatch rather than guess; MINOR is additive (`1.1.0` added `cache_backend`; `1.2.0`
+added `SearchResult.content_kind` and `SearchResult.date`, plus the `search_unavailable`
+code). Poppy also
 rejects an `/extract` 422 lacking `sanitizer_revision`, and pins the ten `/extract` codes as
 `_SIDECAR_EXTRACT_FAILURE_CODES`.
 

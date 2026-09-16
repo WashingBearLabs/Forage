@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from models import ExtractedContent, RetrievedContent, SearchResponse
+from models import ExtractedContent, RetrievedContent, SearchRequest, SearchResponse
 from pipeline.contract import CONTRACT_VERSION
-from retrieval_app import HealthResponse
+from retrieval_app import HealthResponse, Pipeline422ErrorResponse
 
 _GOLDEN_PATH = (
     Path(__file__).parent
@@ -15,11 +15,19 @@ _GOLDEN_PATH = (
     / f"contract_{CONTRACT_VERSION.replace('.', '_')}.json"
 )
 
+# The four response models the golden has always pinned, plus two surfaces a
+# response-only fixture cannot see: `SearchRequest`, so a request-model
+# addition (spec 4's per-request policy) is a recorded wire change rather than
+# an invisible one, and `Pipeline422ErrorResponse`, whose `error` enum is the
+# rendered form of the /search and /retrieve vocabulary — adding a code moves
+# this fixture, which is how `search_unavailable` became a classified change.
 _SCHEMA_MODELS = {
     "HealthResponse": HealthResponse,
+    "SearchRequest": SearchRequest,
     "SearchResponse": SearchResponse,
     "RetrievedContent": RetrievedContent,
     "ExtractedContent": ExtractedContent,
+    "Pipeline422ErrorResponse": Pipeline422ErrorResponse,
 }
 
 

@@ -52,6 +52,7 @@ from pipeline.search_providers.searxng import (
     DEFAULT_SEARXNG_URL,
     HTTP_STATUS_DETAIL_PREFIX,
     SEARXNG_ENGINES,
+    SEARXNG_PROVIDER_NAME,
     SearxngProvider,
 )
 from pipeline.stage1_extraction import ExtractionResult, extract_html
@@ -653,13 +654,36 @@ def _search_result_promptguard_input(title: str, url: str, snippet: str) -> str:
     return f"Title: {title}\nURL: {url}\nSnippet: {snippet}"
 
 
+def _is_legacy_searxng_chain(chain: Sequence[SearchProvider]) -> bool:
+    """Whether *chain* is the one configuration the ``searxng_*`` codes describe.
+
+    The legacy pair predates the provider seam, when SearXNG was the only
+    backend there was, and their wire text names SearXNG explicitly. They
+    therefore stay bound to exactly that deployment: a chain of one provider
+    whose ``name`` is ``"searxng"``. Every other chain — including one that
+    merely *starts* with SearXNG — refuses with ``search_unavailable``, whose
+    reason names whichever provider actually failed.
+
+    The test is a comparison on the chain's ``name`` token and never an
+    ``isinstance`` (ruling 28): ``name`` is the single identifier a provider
+    carries, the one the operator wrote in ``FORAGE_SEARCH_PROVIDERS``, and a
+    class check would make a drop-in replacement for ``SearxngProvider``
+    silently change the wire code an operator's dashboards are keyed on.
+
+    It reads the *configured* chain, not the failing provider: what a consumer
+    is told depends on how the deployment was set up, which is stable across
+    requests, rather than on which backend happened to be reached.
+    """
+    return len(chain) == 1 and chain[0].name == SEARXNG_PROVIDER_NAME
+
+
 def _searxng_pipeline_error(
     provider: SearchProvider,
     failure: ProviderFailure,
     *,
     request_id: str,
 ) -> PipelineError:
-    """Map a SearXNG ``ProviderFailure`` onto the two `/search` error codes.
+    """Map a SearXNG ``ProviderFailure`` onto the two legacy `/search` codes.
 
     The codes and the 422 are unchanged from the inline call; only the
     ``reason`` text narrowed. ``str(exc)`` is gone — ruling 13 keeps
@@ -678,6 +702,25 @@ def _searxng_pipeline_error(
     return PipelineError(
         error="searxng_unavailable",
         reason=f"SearXNG not reachable at {provider.origin}: {failure.detail}",
+        request_id=request_id,
+    )
+
+
+def _search_unavailable_error(
+    failure: ProviderFailure,
+    *,
+    request_id: str,
+) -> PipelineError:
+    """Map any non-legacy chain's ``ProviderFailure`` onto ``search_unavailable``.
+
+    The reason is composed from two closed vocabularies and nothing else — the
+    provider's registry ``name`` and its :class:`FailureClass` — so no
+    endpoint, credential, header or exception text can reach a 422 body
+    through this path, whatever a third-party API put in its response.
+    """
+    return PipelineError(
+        error="search_unavailable",
+        reason=f"{failure.provider_name}: {failure.failure_class}",
         request_id=request_id,
     )
 
@@ -739,7 +782,9 @@ async def run_search_pipeline(
     max_results = request.num_results if provider.paid else fetch_limit
     outcome = await provider.search(request.query, max_results)
     if isinstance(outcome, ProviderFailure):
-        raise _searxng_pipeline_error(provider, outcome, request_id=request_id)
+        if _is_legacy_searxng_chain(chain):
+            raise _searxng_pipeline_error(provider, outcome, request_id=request_id)
+        raise _search_unavailable_error(outcome, request_id=request_id)
 
     raw_results: list[dict[str, Any]] = outcome.results[:max_results]
     unresponsive_engines: list[str] = [
@@ -773,6 +818,10 @@ async def run_search_pipeline(
             max_length=_MAX_SEARCH_SNIPPET_LENGTH,
         )
         engine = raw.get("engine")
+        # `content_kind` describes the whole batch the provider returned;
+        # `date` is per-result and is filtered to a strict calendar date by
+        # `SearchResult` itself, so anything else becomes None there.
+        result_date = raw.get("date")
         suspicious = False
 
         # Stage 2: scan every model-visible field before exposing the result.
@@ -840,6 +889,8 @@ async def run_search_pipeline(
                 url=url,
                 snippet=snippet,
                 engine=engine if isinstance(engine, str) else None,
+                content_kind=outcome.content_kind,
+                date=result_date,
                 suspicious=suspicious,
             )
         )

@@ -416,7 +416,7 @@ class SearchMetricsResponse(BaseModel):
     errors: dict[str, int] = Field(
         description=(
             "Refusals keyed by the /search error code (searxng_error, "
-            "searxng_unavailable)."
+            "searxng_unavailable, search_unavailable)."
         )
     )
     omitted_by_reason: dict[str, int] = Field(
@@ -619,7 +619,8 @@ class Pipeline422ErrorResponse(BaseModel):
     error: Pipeline422ErrorCode = Field(
         description=(
             "Stable machine-readable refusal code. The fetch and URL-validation "
-            "codes arrive on /retrieve, the searxng_* codes on /search."
+            "codes arrive on /retrieve, the searxng_* codes and "
+            "search_unavailable on /search."
         )
     )
     reason: str = Field(
@@ -1615,7 +1616,7 @@ async def extract(
     },
 )
 async def search(request: Request, body: SearchRequest) -> SearchResponse:
-    """Run a web search through SearXNG with snippet sanitization."""
+    """Run a web search through the configured provider chain, sanitized."""
     search_metrics: SearchMetrics = request.app.state.search_metrics
     search_metrics.requests += 1
     try:

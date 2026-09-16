@@ -62,7 +62,7 @@ Forage listens on `0.0.0.0:8020` inside the container; the compose fragments pub
 | `cache_connected` | bool | `true`, `false` | Valkey mode: a live ping via `cache.ping_if_due()`, subject to reconnect backoff. Memory mode: always `true` (the backend is in-process). Not a statement that Valkey is present; read `cache_backend` for that. |
 | `capabilities` | dict | `{"search_sanitization": 1}` or `{}` | Presence map. `search_sanitization` is present when the classifier is loaded **or** when break-glass is armed (`FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION=1`, alias `POPPY_RETRIEVAL_LEGACY_CAPABILITY=1`, exact string `1`). Break-glass lies only here. |
 | `sanitizer_revision` | string | 64-hex sha256 | `derive_sanitizer_revision(config)`: hash of eight `pipeline/*.py` sources plus `MODEL_ID@revision` plus `promptguard_threshold`. The literal `unknown` appears only when no lifespan ran (test transports). |
-| `contract_version` | string | `1.1.0` | `pipeline.contract.CONTRACT_VERSION`; identical to `/metrics.contract_version` and `/openapi.json` `info.version`. |
+| `contract_version` | string | `1.2.0` | `pipeline.contract.CONTRACT_VERSION`; identical to `/metrics.contract_version` and `/openapi.json` `info.version`. |
 | `cache_backend` | string | `valkey`, `memory` | Decided once at start: `VALKEY_URL` fully unset gives `memory`; set to anything else, including the empty string, gives `valkey`. |
 | `degraded_reasons` | list | `promptguard_unavailable`, `cache_unavailable` | Closed vocabulary (`pipeline/contract.py` `DegradedReason`). Ordered `promptguard_unavailable` first. Empty iff `status` is `healthy`. |
 
@@ -79,7 +79,7 @@ Schema-style listing (field set and value domains as confirmed in `retrieval_app
   "cache_connected":    true | false,
   "capabilities":       {"search_sanitization": 1} | {},
   "sanitizer_revision": "<64-hex sha256>",
-  "contract_version":   "1.1.0",
+  "contract_version":   "1.2.0",
   "cache_backend":      "valkey" | "memory",
   "degraded_reasons":   [] | ["promptguard_unavailable"] | ["cache_unavailable"] | ["promptguard_unavailable", "cache_unavailable"]
 }
@@ -140,7 +140,7 @@ Backed by `retrieval_app.SearchMetrics`.
 | Counter | Kind | Increments when | A rising value means |
 |---------|------|-----------------|----------------------|
 | `requests` | counter | Every `/search` that reached the handler. | Load. |
-| `errors` | map | `record_error(exc.error)`; keys `searxng_error` (SearXNG answered non-2xx) and `searxng_unavailable` (connection refused, DNS, 10 s timeout, bad JSON). | The companion is down or throttling. `searxng_error` with reason "SearXNG returned HTTP error (http_429)" means the SearXNG limiter was turned on. |
+| `errors` | map | `record_error(exc.error)`; three keys. `searxng_error` (SearXNG answered non-2xx) and `searxng_unavailable` (connection refused, DNS, 10 s timeout, bad JSON) are raised only when the configured chain is a lone `searxng`; `search_unavailable` (contract `1.2.0`) covers every other chain, with reason `<provider_name>: <failure_class>`. | The companion is down or throttling. `searxng_error` with reason "SearXNG returned HTTP error (http_429)" means the SearXNG limiter was turned on. `search_unavailable` names its provider in the 422 `reason`, not in the counter key — read the logs or the response to tell which one failed. |
 | `omitted_by_reason` | map | Results dropped before return, keyed by `contract.OMISSION_REASONS`: `invalid_url`, `structural_blocked`, `injection_detected`, `promptguard_unavailable`; anything else lands in `other`. | `promptguard_unavailable` rising: fail-closed omissions on a degraded container — the consumer sees thin or empty results. |
 | `unscanned_results` | counter | `+= response.unscanned_results` — fail-open results returned without an ML scan. | Unsanitized results are reaching the consumer. |
 

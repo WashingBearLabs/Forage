@@ -66,7 +66,8 @@ those eight — so Forage's revision moved:
 | After the contract bump to `1.1.0` (`forage-cache-fallback` US-003) | `fa4691c5…93547c` |
 | After the error vocabulary joined `contract.py` (`forage-contract` US-001; contract still `1.1.0`) | `8b1b7f78…196d7c` |
 | After the `SearxngProvider` extraction (`search-provider-abstraction` US-002) | `ee4450d9…f63c3da` |
-| **Current (`search-provider-abstraction` US-003, the `providers=` chain seam)** | **`e7038672…3ce0cbf`** |
+| After the `providers=` chain seam (`search-provider-abstraction` US-003) | `e7038672…3ce0cbf` |
+| **Current (`search-provider-abstraction` US-004, the contract bump to `1.2.0`)** | **`b7871b20…ea6f2b`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -308,6 +309,50 @@ constructed unconditionally before. The hash moved because the hash is over byte
 the second rotation. Cache effect is the fifth rotation's mechanism unchanged: entries
 keyed on `ee4450d9…` become unreachable at the next start and age out on their own TTL —
 free in memory mode, one TTL of extra fetches in Valkey mode.
+
+### The ninth rotation: the contract bump to `1.2.0` (`search-provider-abstraction` US-004, 2026-09-15)
+
+```
+before: e70386726d4095d95bbd1dc839dfad28256244ed37c5dda8f46da39c53ce0cbf
+after:  b7871b204e4440b53938a8a0a5af519b57849cb5a68fb2afe6fbf3aa40ea6f2b
+```
+
+**Two `_REVISION_SOURCES` files moved, and both are load-bearing.** Measured the fifth
+rotation's way — re-derive with each edit reverted in turn, against a control that must
+reproduce the previous shipped value:
+
+| Tree | Derived |
+|---|---|
+| Both files as shipped (the rotation) | **`b7871b20…ea6f2b`** |
+| Only `contract.py` reverted | `d9d8843d…3e82da` |
+| Only `orchestrator.py` reverted | `89e987bf…0c6e75` |
+| Both reverted (control) | `e7038672…3ce0cbf` — the eighth rotation's shipped value |
+
+Neither file alone reproduces the rotation and the control lands exactly on the previous
+value, which is the proof that these two files and nothing else account for it.
+
+**What moved.** `pipeline/contract.py` gained the `ContentKind` Literal with its two
+constants and derived frozenset, took `search_unavailable` into `SearchErrorCode` (the
+nested Literals carry it into `Pipeline422ErrorCode` and `ErrorCode` in the same edit), and
+bumped `CONTRACT_VERSION` `1.1.0` → `1.2.0`. `pipeline/orchestrator.py` gained the
+chain-shaped failure predicate that chooses between the legacy `searxng_*` codes and
+`search_unavailable`, and copies `content_kind` off the batch and `date` off each raw dict
+onto every `SearchResult` it builds.
+
+`pipeline/search_providers/base.py` (which gained the `content_kind` field on
+`ProviderSearchResult`) and `searxng.py` (which gained `SEARXNG_PROVIDER_NAME`) are **not**
+hashed filenames — `_REVISION_SOURCES` is an explicit tuple read relative to `pipeline/`
+and never reaches into the subpackage — and `models.py`, which carries the two new wire
+fields, is not under `pipeline/` at all. That is measured above, not assumed: reverting the
+two hashed files alone is what returns the tree to `e7038672…`.
+
+**Sanitization behaviour is unchanged**; what changed is the wire shape the pipeline
+produces, which is what the contract bump records. Cache effect is the fifth rotation's
+mechanism unchanged: entries keyed on `e7038672…` become unreachable at the next start and
+age out on their own TTL — free in memory mode, one TTL of extra fetches in Valkey mode.
+This rotation is the *second* of the epic whose point is partly the invalidation: a cached
+extraction sanitized before the bump has no `content_kind` or `date`, and serving it beside
+a `1.2.0` response would be exactly the silent-mix the revision key exists to prevent.
 
 ## Deferred GitHub settings — for the spec 2 public flip
 

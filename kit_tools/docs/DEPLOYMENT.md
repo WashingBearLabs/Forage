@@ -112,9 +112,10 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
 
    `gh release download v$TAG --pattern 'openapi.yaml*'` is the alternative route to the
    same two files. The anchor at `HEAD` is
-   `00b1dbaa5971895e7e7f1532f52ab46026df5e789ee5572380fd822f6bb295c0`.
+   `7d297dfea6b329c361c34d5a6633fbac0884e1df59294cf70ba4c9e86fb226d1`.
 4. **Check contract compatibility.** The image tag and `contract_version` are independent
-   semvers (image `1.0.0` serves contract `1.1.0`). Compare the consumer's expected MAJOR
+   semvers (image `1.0.0` serves contract `1.1.0`; the tree is on `1.2.0`, which `v1.1.0`
+   will publish). Compare the consumer's expected MAJOR
    against `info.version` in the `openapi.yaml` you just extracted; a MAJOR mismatch means
    **do not deploy** (the consumer is expected to refuse activation, `CLAUDE.md`
    invariant 4). Compare contracts, never `sanitizer_revision`, which has deliberately
@@ -186,7 +187,8 @@ warning and every key falls back to its code default, while a malformed `extract
    `status: "degraded"` with `degraded_reasons: ["promptguard_unavailable"]` while the
    ~270 MiB weight set downloads (measured 19 s cold, 9 s warm on the 1 vCPU / 1 GB
    reference host). Once weights land, expect `promptguard_loaded: true`,
-   `capabilities: {"search_sanitization": 1}`, `contract_version: "1.1.0"`, and
+   `capabilities: {"search_sanitization": 1}`, `contract_version` matching the image's own
+   contract (`"1.1.0"` for `v1.0.0`, `"1.2.0"` once `v1.1.0` publishes it), and
    `cache_backend` reading `valkey` (with `cache_connected: true`) under `full.yml` or
    `memory` under `minimal.yml`. A failed acquisition retries in the background at 30 s,
    doubling to a 600 s ceiling with +/-20% jitter, forever; it converges in place without a
@@ -204,7 +206,7 @@ warning and every key falls back to its code default, while a malformed `extract
 
    ```bash
    curl -s http://127.0.0.1:8020/metrics | jq .model
-   curl -s http://127.0.0.1:8020/openapi.json | jq -r .info.version   # 1.1.0
+   curl -s http://127.0.0.1:8020/openapi.json | jq -r .info.version   # 1.1.0 on v1.0.0; 1.2.0 from this tree
    ```
 
 3. **Run the contract smoke** from a checkout at the deployed tag. It polls `/health` to

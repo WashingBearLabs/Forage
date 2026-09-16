@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import re
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from pipeline.contract import PromptGuardState
+from pipeline.contract import ContentKind, PromptGuardState
 
 MAX_CACHE_TTL_HOURS = 8_760
+
+# `SearchResult.date` is a strict calendar date and nothing else. The regex runs
+# *before* `date.fromisoformat`, which on its own also accepts the compact
+# (`20260915`) and ISO-week (`2026-W38-2`) forms — neither of which is the
+# `YYYY-MM-DD` shape the contract promises. Together they are a closed filter: a
+# value that survives both is a real day, so nothing free-form from a provider
+# can reach the wire through this field.
+_CALENDAR_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -269,10 +278,50 @@ class SearchResult(BaseModel):
     url: str = Field(..., description="Result URL")
     snippet: str = Field(..., description="Result snippet / description")
     engine: str | None = Field(default=None, description="Search engine used")
+    content_kind: ContentKind = Field(
+        default="snippet",
+        description=(
+            "What kind of content this result carries: 'snippet' for a search "
+            "engine's own summary (every SearXNG result), 'chunk' for a passage "
+            "a provider extracted from the page. Those two values are the whole "
+            "set. Added in contract 1.2.0."
+        ),
+    )
+    date: str | None = Field(
+        default=None,
+        description=(
+            "The result's publication date as a strict 'YYYY-MM-DD' calendar "
+            "date. Anything else — absent, a non-string, a different format, or "
+            "a day that does not exist — is null. Added in contract 1.2.0."
+        ),
+    )
     suspicious: bool = Field(
         default=False,
         description="Whether Stage 2 or Stage 3 flagged this result as suspicious",
     )
+
+    @field_validator("date", mode="before")
+    @classmethod
+    def _strict_calendar_date(cls, value: object) -> str | None:
+        """Keep *value* only if it is a real ``YYYY-MM-DD`` day; else ``None``.
+
+        Providers hand this field through from attacker-influenced upstream
+        JSON, so it is a filter rather than a parse: anything that is not a
+        `str` matching ``_CALENDAR_DATE_RE`` *and* accepted by
+        ``date.fromisoformat`` becomes ``None`` rather than raising. A refusal
+        here would let one malformed result fail a whole search response; the
+        result is served without its date instead.
+
+        Because nothing free-form survives, the field needs no injection scan
+        and no length cap — the ten-character shape is its own bound.
+        """
+        if not isinstance(value, str) or not _CALENDAR_DATE_RE.match(value):
+            return None
+        try:
+            date.fromisoformat(value)
+        except ValueError:
+            return None
+        return value
 
 
 class SearchResponse(BaseModel):

@@ -72,7 +72,7 @@ Forage is the only internal service. Its pipeline stages (`pipeline/stage1_*` th
 | **Runtime** | Python 3.12, FastAPI + uvicorn, one worker (`CMD` has no `--workers`); uv-managed lockfile; CPU-only torch/transformers loaded lazily by `promptguard/classifier.py`. |
 | **Port** | `8020` in-container (`EXPOSE 8020`, uvicorn `--host 0.0.0.0`); published as `127.0.0.1:8020` by both compose fragments. |
 | **Health Check** | `GET /health` — **always HTTP 200; the truth is in the body** (`status`, `degraded_reasons`, `promptguard_loaded`, `cache_connected`, `cache_backend`, `capabilities`, `sanitizer_revision`, `contract_version`). No `HEALTHCHECK` in `Dockerfile` and no `healthcheck:` in `compose/*.yml`; the "10 s x 5 `curl -f`" check referenced in code comments is Poppy's compose. |
-| **Contract** | `contract_version` **1.1.0** (`pipeline/contract.py`), frozen as `contract/openapi.yaml` with a committed `openapi.yaml.sha256` anchor. Image tag (`v1.0.0`) and contract version are independent semvers. |
+| **Contract** | `contract_version` **1.2.0** (`pipeline/contract.py`), frozen as `contract/openapi.yaml` with a committed `openapi.yaml.sha256` anchor. Image tag (`v1.0.0`) and contract version are independent semvers — no published image serves `1.2.0` yet; `v1.1.0` will. |
 | **Auth** | None on any route, including `/docs`, `/redoc`, `/openapi.json`. Network placement is the control (`docs/configuration.md`, `SECURITY.md`). |
 
 **Depends on:**
@@ -190,16 +190,16 @@ behaviour is described here from Forage's own docs and tests
 (`tests/test_contract_errors.py`, `docs/bootstrap-notes.md`); the Poppy repo was not read.
 
 **What Poppy must do:**
-- Compare `/health.contract_version` (**1.1.0**) on its **MAJOR** and refuse to activate on
+- Compare `/health.contract_version` (**1.2.0**) on its **MAJOR** and refuse to activate on
   a mismatch (`CLAUDE.md` invariant 4). **Never** compare `sanitizer_revision`: the two
-  repos' revisions diverged deliberately six times (Forage `8b1b7f78…`, Poppy still
+  repos' revisions diverged deliberately nine times (Forage `b7871b20…`, Poppy still
   `e6b2b56d…`).
 - Vendor the contract by the procedure in `contract/GOVERNANCE.md`: pick a tag (never
   `latest`); fetch `openapi.yaml` and `openapi.yaml.sha256` from the **same** tag (git
   tag, `gh release download v<ver> --pattern 'openapi.yaml*'`, or
   `docker run --rm --entrypoint cat <image> /app/contract/openapi.yaml`); run
   `sha256sum -c openapi.yaml.sha256`; commit both; record the tag. The anchor is
-  currently `00b1dbaa5971895e7e7f1532f52ab46026df5e789ee5572380fd822f6bb295c0`.
+  currently `7d297dfea6b329c361c34d5a6633fbac0884e1df59294cf70ba4c9e86fb226d1`.
 - Its client caches `sanitizer_revision` from `/health`, pins the ten `/extract` error
   codes, rejects an `/extract` 422 lacking `sanitizer_revision`, gates web search on
   `capabilities.search_sanitization`, and buckets unknown `omitted_by_reason` /
@@ -308,14 +308,15 @@ place at the next retry; restarting the container runs the first attempt immedia
 
 ## Failure Impact Matrix
 
-Every row is HTTP-level truth from `pipeline/contract.py`'s 17-code vocabulary and the
+Every row is HTTP-level truth from `pipeline/contract.py`'s 18-code vocabulary and the
 `/health` / `/metrics` models in `retrieval_app.py`. "Unaffected" means the endpoint's
 behaviour and status code do not change. Symptom-first remedies are in
 `kit_tools/docs/TROUBLESHOOTING.md`; counter semantics in `kit_tools/docs/MONITORING.md`.
 
 | Dependency down | User-visible effect per endpoint | `/health` change | `/metrics` counters that move | Recovery behaviour |
 |---|---|---|---|---|
-| **SearXNG** unreachable or erroring | `/search`: **422** `searxng_unavailable` (refused, DNS, 10 s timeout, bad JSON) or `searxng_error` (non-2xx; a 429 means the limiter is on). `/retrieve`, `/extract`: unaffected. | **None.** Still `healthy` — SearXNG is not probed (see the documented discrepancy above). | `search.requests`, `search.errors.searxng_unavailable` / `search.errors.searxng_error` | Stateless: the next `/search` succeeds as soon as SearXNG answers. No reconnect logic. A changed `SEARXNG_URL` needs a Forage restart (read at import). |
+| **SearXNG** unreachable or erroring | `/search`: **422** `searxng_unavailable` (refused, DNS, 10 s timeout, bad JSON) or `searxng_error` (non-2xx; a 429 means the limiter is on) on the default lone-`searxng` chain; any other configured chain refuses with `search_unavailable` instead, reason `<provider_name>: <failure_class>`. `/retrieve`, `/extract`: unaffected. | **None.** Still `healthy` — SearXNG is not probed (see the documented discrepancy above). | `search.requests`, `search.errors.searxng_unavailable` / `search.errors.searxng_error` / `search.errors.search_unavailable` | Stateless: the next `/search` succeeds as soon as SearXNG answers. No reconnect logic. A changed `SEARXNG_URL` needs a Forage restart (read at import). |
+| **A configured non-SearXNG provider** failing (any chain that is not exactly one `searxng`) | `/search`: **422** `search_unavailable`, reason `<provider_name>: <failure_class>` — the closed pair, never an endpoint or upstream text. `/retrieve`, `/extract`: unaffected. | **None.** Provider status is not a `/health` field in this spec. | `search.requests`, `search.errors.search_unavailable` | Stateless, per request; no in-request retries (ruling 18). Which provider failed is in the 422 `reason`, not the counter key. |
 | **Valkey** unreachable at boot or dropped mid-run (`VALKEY_URL` set) | `/retrieve`: **200**, served uncached (`cache_hit: false`), never an error. `/search`, `/extract`: unaffected. | `status: degraded`, `degraded_reasons: ["cache_unavailable"]`, `cache_connected: false`, `cache_backend: valkey` | `cache.reconnect_attempts`, `cache.reconnect_failures`, `cache.operation_failures` (mid-run), `retrieve.cache_misses`; WARNING `Valkey connection failed for content cache (connect_failed|timeout)` / `Content cache operation failed (…)` | Automatic, in place: reconnect with 1 s doubling to 30 s backoff, driven by traffic and by `/health` polls (`ping_if_due`), so recovery is detected even in zero-traffic windows; `cache.reconnect_successes` increments and `/health` returns to `healthy`. Changing `VALKEY_URL` needs a restart; `""` is not memory mode — unset it fully. |
 | **`VALKEY_URL` unset** (memory mode, `compose/minimal.yml`) | Not a failure: `/retrieve` cached per process, entries lost on restart and never shared across containers. | `cache_backend: memory`, `cache_connected: true` always; this mode **cannot** report `cache_unavailable`. | `cache.storage_evictions`, `cache.storage_oversize_skips` under pressure | Not applicable. Set `VALKEY_URL` and restart to switch backends. |
 | **PromptGuard weights unavailable** (no `HF_TOKEN`, token lacks gated-repo access, HF Hub down, mirror down, verification refused, load failed) | `/retrieve`: **200** but `standard`/`untrusted` content with the default `promptguard_fail_closed=true` is quarantined — content-free body, `injection_detected: true`, `injection_spans: ["promptguard_unavailable"]`, `promptguard_state: unavailable_blocked`, penalty -0.5; `trusted` domains unaffected (`skipped_trusted`); `verified` or `fail_closed=false` returns content with `unavailable_allowed`, -0.1. `/search`: results withheld via `omitted_by_reason.promptguard_unavailable` (fail-closed) or returned with `unscanned_results > 0`, `suspicious: true`, `promptguard_unavailable: true` (fail-open). `/extract`: **every** upload quarantined (`unavailable_blocked`) — uploads are always untrusted and fail-closed. | `status: degraded`, `degraded_reasons: ["promptguard_unavailable"]`, `promptguard_loaded: false`, `capabilities: {}` (unless break-glass is armed, in which case only `capabilities` lies) | `model.fetch_failures` (per reached-and-failed leg, or once when no leg was attempted), `model.verify_failures` + `model.quarantines` (refused set), `model.fetch_in_progress` (downloading now), `model.retries_scheduled` (waiting out backoff); `retrieve.promptguard_state.unavailable_blocked` / `unavailable_allowed`, `retrieve.blocked_by_reason.promptguard_unavailable`, `search.omitted_by_reason.promptguard_unavailable`, `search.unscanned_results` | The retry loop runs forever (30 s to 10 min, jittered); once a leg succeeds, `promptguard_loaded` flips in place, `capabilities` gains `search_sanitization`, and every existing cache entry is invalidated because `classifier_loaded` is in the key fingerprint. Remedy for the token-less case is a Hugging Face read token with the Meta license accepted, via env file — never the break-glass variable. |

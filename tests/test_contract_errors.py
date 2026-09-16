@@ -5,7 +5,7 @@ already emits **without changing one wire byte**. Two halves make that claim
 checkable rather than asserted:
 
 * the *vocabulary* half sweeps every raise site in the repo and pins the
-  seventeen-code set against Poppy's independently-maintained allowlist;
+  eighteen-code set against Poppy's independently-maintained allowlist;
 * the *parity* half drives each emission site through the real routes and
   asserts the mirroring model reproduces the emitted body byte-for-byte —
   same keys, same order, same serialization.
@@ -158,7 +158,7 @@ def assert_mirrors(model: type[BaseModel], response: httpx.Response) -> None:
 
 
 # ---------------------------------------------------------------------------
-# The vocabulary: seventeen codes, swept from the raise sites
+# The vocabulary: eighteen codes, swept from the raise sites
 # ---------------------------------------------------------------------------
 
 # Calls whose error code can be read straight off the call site. The value is
@@ -229,9 +229,9 @@ def _swept_error_codes(module_path: Path) -> set[str]:
     return found
 
 
-def test_error_vocabulary_is_the_documented_seventeen() -> None:
-    """The complete vocabulary is seventeen codes across the three surfaces."""
-    assert len(contract.ERROR_CODES) == 17
+def test_error_vocabulary_is_the_documented_eighteen() -> None:
+    """The complete vocabulary is eighteen codes across the three surfaces."""
+    assert len(contract.ERROR_CODES) == 18
     assert contract.ERROR_CODES == (
         contract.EXTRACT_ERROR_CODES
         | contract.RETRIEVE_ERROR_CODES
@@ -239,9 +239,9 @@ def test_error_vocabulary_is_the_documented_seventeen() -> None:
     )
     assert len(contract.EXTRACT_ERROR_CODES) == 10
     assert len(contract.RETRIEVE_ERROR_CODES) == 6
-    assert len(contract.SEARCH_ERROR_CODES) == 2
+    assert len(contract.SEARCH_ERROR_CODES) == 3
     # `content_too_large` is the one code two surfaces share, and it is why
-    # 10 + 6 + 2 documents seventeen codes rather than eighteen.
+    # 10 + 6 + 3 documents eighteen codes rather than nineteen.
     assert {
         "content_too_large"
     } == contract.EXTRACT_ERROR_CODES & contract.RETRIEVE_ERROR_CODES
@@ -605,7 +605,7 @@ def test_each_declaration_points_at_its_mirror_model() -> None:
         ]
 
 
-def test_all_seventeen_codes_render_as_enums_in_the_schema() -> None:
+def test_all_eighteen_codes_render_as_enums_in_the_schema() -> None:
     """Every code reaches the document as an enum member of some component."""
     components: dict[str, Any] = _openapi()["components"]["schemas"]
     rendered: set[str] = set()

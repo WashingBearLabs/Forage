@@ -26,7 +26,7 @@ listed below exists, and nothing is listed that doesn't.
 **Before changing code:**
 8. **`docs/CONVENTIONS.md`** — style, imports, logging, config, commit format
 9. **`testing/TESTING_GUIDE.md`** — commands, structure, the hermeticity rule
-10. **`arch/patterns/ERROR_HANDLING.md`** — the closed 17-code vocabulary, the exception
+10. **`arch/patterns/ERROR_HANDLING.md`** — the closed 18-code vocabulary, the exception
     hierarchy, loud degradation. Read before adding any error path.
 11. **`arch/patterns/LOGGING.md`** — closed log vocabularies, why INFO is invisible in a
     container, what may never be logged
@@ -137,7 +137,7 @@ listed below exists, and nothing is listed that doesn't.
 
 ### Error handling
 - `/health` is always 200; honesty lives in the **body** (`status`, `degraded_reasons`).
-- Errors are one of the 17 codes in `pipeline/contract.py`; adding one is a contract change
+- Errors are one of the 18 codes in `pipeline/contract.py`; adding one is a contract change
   (`../contract/GOVERNANCE.md`). Prefer machine-readable reason codes over prose in anything
   a consumer parses.
 - A degradation must never be silent. That failure mode ran for nine days in production
@@ -196,7 +196,7 @@ kit_tools/
 │   ├── SECURITY.md          # Posture, SSRF, injection signalling, secrets, supply chain
 │   ├── SERVICE_MAP.md       # Dependencies, consumer, failure impact matrix, cache key scheme
 │   └── patterns/
-│       ├── ERROR_HANDLING.md  # The 17-code vocabulary, exception hierarchy, degradation
+│       ├── ERROR_HANDLING.md  # The 18-code vocabulary, exception hierarchy, degradation
 │       └── LOGGING.md         # Closed vocabularies, levels, what never to log
 │
 ├── docs/

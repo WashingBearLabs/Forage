@@ -713,9 +713,13 @@ async def test_metrics_search_error_keys_are_content_free(
     # the "searxng_unavailable" error key, so the leak check needs a token that
     # only the URL can produce.
     searxng_url = "http://searxng:8080"
+    # The `reason` format US-002 narrowed to: an origin plus a closed detail
+    # token, never `str(exc)`. Written out by hand here because this test
+    # patches `run_search_pipeline` away — so if the real composition changes
+    # again, this fixture is what has to be brought back into step with it.
     exc = PipelineError(
         error="searxng_unavailable",
-        reason=f"SearXNG not reachable at {searxng_url}: Connection refused",
+        reason=f"SearXNG not reachable at {searxng_url}: connect_error",
         request_id="s3",
     )
     with patch("retrieval_app.run_search_pipeline", new=AsyncMock(side_effect=exc)):
@@ -728,6 +732,33 @@ async def test_metrics_search_error_keys_are_content_free(
     assert body["search"]["errors"] == {"searxng_unavailable": 1}
     assert body["search"]["requests"] == 1
     assert searxng_url not in json.dumps(body)
+
+
+async def test_metrics_counts_search_unavailable_under_its_own_key(
+    client: httpx.AsyncClient,
+) -> None:
+    """The 1.2.0 code reaches `/metrics` as itself, not as an overflow bucket.
+
+    `SearchMetrics.record_error` keys straight off `PipelineError.error` with
+    no closed-set filter, so a code added to the vocabulary is counted under
+    its own name today. This pins that: a filter introduced later — or a
+    mapping that folded the new code into the legacy pair — would fail here
+    rather than quietly changing what an operator's dashboard sums.
+    """
+    exc = PipelineError(
+        error="search_unavailable",
+        reason="brave: quota",
+        request_id="s4",
+    )
+    with patch("retrieval_app.run_search_pipeline", new=AsyncMock(side_effect=exc)):
+        resp = await client.post("/search", json={"query": "test"})
+    assert resp.status_code == 422
+    assert resp.json()["error"] == "search_unavailable"
+
+    metrics_resp = await client.get("/metrics")
+    body = metrics_resp.json()
+    assert body["search"]["errors"] == {"search_unavailable": 1}
+    assert body["search"]["requests"] == 1
 
 
 # ---------------------------------------------------------------------------

@@ -26,7 +26,7 @@ response, and does every name it already knows still mean what it meant?
 | Schema fixtures | `tests/golden/contract_X_Y_Z.json` | by hand, one per contract version |
 | What the running service serves | `/openapi.json` `info.version`, `/health`'s `contract_version` | from `CONTRACT_VERSION` at import |
 
-The current contract version is **1.1.0**. *(That sentence is checked against
+The current contract version is **1.2.0**. *(That sentence is checked against
 `pipeline/contract.py` by `tests/test_governance_docs.py`; a bump that leaves it stale is
 a red test, not a stale doc.)*
 
@@ -58,6 +58,13 @@ publishing a frozen, sha256-anchored contract for the first time, and a contract
 1.1.0 because freezing a document changes no wire byte. (That tag is cut by this spec's
 **US-004**, whose job it is to land the in-image `COPY` and the Release assets first; a
 `v1.0.0` tagged before them would ship a contract-less release that nothing can re-cut.)
+
+The mapping has moved once since, and is currently **pending**:
+`search-provider-abstraction` US-004 bumps `CONTRACT_VERSION` to `1.2.0` in the tree, and
+the image that serves it is `v1.1.0`, cut by that epic's release spec. Until then a
+process built from this tree reports `1.2.0` on `/health` while no published image
+advertises it — expected, not drift to chase, and it closes the way the first one did:
+the release spec lands the artifacts, then cuts the tag.
 
 A human line in a release note claiming "this image serves contract 1.1.0" would be the
 last unmechanized integrity claim in the release path, so it is not a human line. The
@@ -247,6 +254,16 @@ question instead of a diff of two committed files.
 Note what the fixtures pin: `model_json_schema()`, which is strictly more than the wire —
 it moves for description and enum-rendering changes too. A documentation-only change
 regenerates the *current* fixture (ruling (a)); a wire change adds a **new** file beside it.
+
+**The current version's own fixture is regenerated in place until that version ships.**
+Retention is about *published* contracts: a version nobody can pull is not yet a thing a
+consumer could have been written against. So while `1.2.0` is in the tree but unpublished
+— across `search-provider-abstraction` specs 2-4, until the `v1.1.0` image publishes it —
+`contract_1_2_0.json` is rewritten by each story that moves the shape, exactly as a
+documentation-only change rewrites the current fixture under ruling (a). The moment an
+image serves a version, its fixture freezes like every other. This is not a seventh worked
+example and adds no row to the table below (`test_there_are_exactly_six`); it is a
+qualification of *when* this ruling starts applying to a given file.
 
 **Source:** `kit_tools/specs/archive/feature-forage-contract.md`, US-003 *Implementation Hints*
 ruling (c); the fixture semantics are recorded in US-001 *Implementation Notes* and

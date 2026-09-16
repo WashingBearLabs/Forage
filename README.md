@@ -53,7 +53,7 @@ the numbering follows the sanitization order the contract reports.
 | `POST /retrieve` | Fetch and sanitize a single URL. |
 | `POST /extract` | Extract from an uploaded document (gated behind `extract_route_enabled` in `config.yaml`). |
 
-The response contract is versioned (`contract_version`, currently **1.1.0**). Consumers
+The response contract is versioned (`contract_version`, currently **1.2.0**). Consumers
 should refuse to activate on a mismatch rather than guess.
 
 ## Quickstart
@@ -227,7 +227,8 @@ no client-header trust) — behind its own hermetic cross-container smoke.
 [`docs/searxng.md`](docs/searxng.md) has the runbook. **The repository and both packages
 went public at the 2026-09-10 US-008 flip**; anonymous pulls verified at the gate.
 
-The optional in-memory cache shipped with contract `1.1.0`, and the **frozen OpenAPI
+The optional in-memory cache shipped with contract `1.1.0` (the current contract is
+`1.2.0`), and the **frozen OpenAPI
 contract** is in the tree: [`contract/openapi.yaml`](contract/openapi.yaml), generated and
 checked against a committed `openapi.yaml.sha256` anchor, with the versioning rules — what
 counts as MAJOR, MINOR, PATCH or no bump, and how to vendor a verified copy — in

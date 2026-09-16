@@ -40,7 +40,7 @@ reasoning; `docs/configuration.md` "Deployment posture" is the operator statemen
 `POST /extract` takes `multipart/form-data`. Datetimes are ISO 8601 in UTC.
 
 **Versioning signal.** The response contract has a hand-bumped semver, `contract_version`,
-currently **1.1.0** (`pipeline/contract.py`). It appears on `/health`, on `/metrics`, and
+currently **1.2.0** (`pipeline/contract.py`). It appears on `/health`, on `/metrics`, and
 as `info.version` in `/openapi.json`. Consumers compare the MAJOR component and refuse to
 activate on a mismatch; a MINOR difference is additive and safe. `/health` also carries
 `sanitizer_revision`, a hash of pipeline *behaviour*; never compare it for compatibility
@@ -107,7 +107,7 @@ Fields to read (all present; `degraded_reasons` defaults to `[]`):
 | `cache_connected` | bool | Live ping in `valkey` mode; always `true` in `memory` mode |
 | `cache_backend` | `"valkey"` or `"memory"` | Which storage was selected at start (added in 1.1.0). `memory` means `VALKEY_URL` was fully unset |
 | `capabilities` | dict of str to int | `{"search_sanitization": 1}` when the model is loaded (or break-glass advertising is armed), otherwise `{}` |
-| `contract_version` | str | `1.1.0`; the compatibility signal |
+| `contract_version` | str | `1.2.0`; the compatibility signal |
 | `sanitizer_revision` | str | Hash of pipeline behaviour; a cache-key input, not a compatibility signal |
 
 `/health` never probes SearXNG: a missing search backend surfaces per request on
@@ -206,9 +206,10 @@ POST /search
 Content-Type: application/json
 ```
 
-Runs one query through the SearXNG companion (`SEARXNG_URL`, default
-`http://searxng:8080`), then passes every result's title, URL and snippet through the
-same structural and Prompt Guard scans. Results that fail are omitted and counted, not
+Runs one query through the configured provider chain (`FORAGE_SEARCH_PROVIDERS`, default
+`searxng` — the SearXNG companion at `SEARXNG_URL`, default `http://searxng:8080`), then
+passes every result's title, URL and snippet through the same structural and Prompt Guard
+scans. Results that fail are omitted and counted, not
 returned. Never cached.
 
 Request fields (`SearchRequest`):
@@ -233,17 +234,21 @@ Response fields to read (`SearchResponse`):
 
 | Field | Type | Read it because |
 |---|---|---|
-| `results` | list of `{title, url, snippet, engine, suspicious}` | `suspicious: true` means the structural scan flagged it, the classifier scored above 0.5, or it was returned unscanned under fail-open. Title is at most 512 characters, URL 2048, snippet 2000 |
+| `results` | list of `{title, url, snippet, engine, content_kind, date, suspicious}` | `suspicious: true` means the structural scan flagged it, the classifier scored above 0.5, or it was returned unscanned under fail-open. Title is at most 512 characters, URL 2048, snippet 2000. `content_kind` (added in `1.2.0`) is `snippet` or `chunk` and nothing else. `date` (added in `1.2.0`) is a strict `YYYY-MM-DD` calendar date or `null` — anything a provider sends that is not one becomes `null`, so it never needs parsing defensively |
 | `omitted_results`, `omitted_by_reason` | int, dict of str to int | How many candidates were withheld and why; keys are only ever `invalid_url`, `structural_blocked`, `injection_detected`, `promptguard_unavailable`, and only non-zero counts appear |
 | `unscanned_results`, `promptguard_unavailable` | int, bool | Non-zero or `true` means results came back without the ML scan; treat the whole response as unscanned evidence |
 | `unresponsive_engines` | list of str | Passed through from SearXNG; a partial answer, not an error |
 | `request_id`, `query` | str, str | Correlation and echo |
 
-Failures are 422 with `{"error", "reason", "request_id"}`: `searxng_error` (SearXNG
-answered non-2xx; `reason` carries the status as `http_<code>`) or `searxng_unavailable`
+Failures are 422 with `{"error", "reason", "request_id"}`. Which code you get depends on
+the **configured chain**, not on which backend failed. A chain of exactly one provider
+named `searxng` — the default — keeps the legacy pair: `searxng_error` (SearXNG answered
+non-2xx; `reason` carries the status as `http_<code>`) or `searxng_unavailable`
 (connection refused, DNS, timeout, an oversized body, bad JSON; `reason` carries the
 scheme, host and port of the configured URL — userinfo stripped — and a closed `detail`
-token, never exception text). One request, 10 s timeout, no retries.
+token, never exception text). Any other chain refuses with `search_unavailable` (added in
+`1.2.0`), whose `reason` is the closed pair `<provider_name>: <failure_class>` and carries
+no endpoint at all. One request, 10 s timeout, no retries.
 
 ### POST /extract
 
@@ -371,7 +376,7 @@ by the code.
 | Admission 413 | `/extract` 413 (unreachable today) | `{"error": "content_too_large", "reason"}`, no `request_id` |
 | Bare detail | `/extract` 400, 404, 503 | `{"detail": "..."}` with no error code. Schema-validation failures on any POST are FastAPI's default `detail` list of `loc`, `msg`, `type` entries |
 
-Every coded body's `error` is one of the seventeen codes below and nothing else
+Every coded body's `error` is one of the eighteen codes below and nothing else
 (`pipeline/contract.py` `ERROR_CODES`; `tests/test_contract_errors.py` drives each
 emission site through the real routes and asserts parity).
 
@@ -393,8 +398,9 @@ emission site through the real routes and asserts parity).
 | `pdf_encrypted` | 422 | `/extract` | Encrypted PDF |
 | `pdf_no_text` | 422 | `/extract` | No extractable text; OCR is not supported |
 | `private_ip` | 422 | `/retrieve` | Resolves to a private or reserved address, `localhost` or a `.local` name |
-| `searxng_error` | 422 | `/search` | SearXNG returned a non-2xx status |
-| `searxng_unavailable` | 422 | `/search` | SearXNG unreachable, timed out, or returned bad JSON |
+| `search_unavailable` | 422 | `/search` | The configured provider chain failed and is not a lone `searxng`; `reason` is `<provider_name>: <failure_class>`. Added in `1.2.0` |
+| `searxng_error` | 422 | `/search` | SearXNG returned a non-2xx status (a lone `searxng` chain only) |
+| `searxng_unavailable` | 422 | `/search` | SearXNG unreachable, timed out, or returned bad JSON (a lone `searxng` chain only) |
 | `unsupported_format` | 422 | `/extract` | Neither a PDF nor valid UTF-8 text |
 
 First-thing-to-check guidance per code is in `kit_tools/docs/TROUBLESHOOTING.md`
@@ -412,7 +418,9 @@ host and port of the configured `SEARXNG_URL` (userinfo stripped, no exception t
 changes; MINOR when fields or enum members are only added. Compare MAJOR and refuse to
 activate on a mismatch. New members of `degraded_reasons`, `omitted_by_reason` or
 `promptguard_state` are MINOR, so bucket unknown members rather than failing on them.
-`1.0.0` is the frozen original surface; `1.1.0` added `/health.cache_backend`. Do not
+`1.0.0` is the frozen original surface; `1.1.0` added `/health.cache_backend`; `1.2.0`
+added `SearchResult.content_kind` and `SearchResult.date` and the `search_unavailable`
+error code. Do not
 compare `sanitizer_revision`: it has deliberately diverged between Forage and Poppy's
 in-tree copy and says nothing about wire compatibility. The image tag (for example
 `v1.0.0`) is a third, independent version.
@@ -429,7 +437,7 @@ in-tree copy and says nothing about wire compatibility. The image tag (for examp
 CI verifies two of the three on every release: the `smoke` job reads the in-image copy
 back out of the candidate image, and the `publish` job downloads the Release assets back
 from the API; both are checked against the anchor committed at the tag (currently
-`00b1dbaa5971895e7e7f1532f52ab46026df5e789ee5572380fd822f6bb295c0`).
+`7d297dfea6b329c361c34d5a6633fbac0884e1df59294cf70ba4c9e86fb226d1`).
 
 **Vendoring procedure** (`contract/GOVERNANCE.md` "Consumers"):
 

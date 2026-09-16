@@ -944,3 +944,75 @@ what it protects.
 **The fake-chain `/search` test needs `promptguard_fail_closed: false`.** The lifespan-free
 `client` fixture installs an unloaded `PromptGuardClassifier`, so a default-tier request
 fails closed and omits every result — the fake would look like it never served.
+
+### US-004 — wire schema alignment, `search_unavailable`, contract `1.2.0`
+
+**`SEARXNG_PROVIDER_NAME` is a new module constant, and the reason is not cosmetic.** The
+chain predicate has to compare a *name token* (ruling 28), and the obvious spelling —
+`chain[0].name == SearxngProvider.name` — silently breaks under the suite's own
+`_provider_patch`, which patches `pipeline.orchestrator.SearxngProvider` as a factory: the
+class attribute then resolves through a `MagicMock` and every legacy-chain test flips to
+`search_unavailable`. Read as design rather than as a test accident, the token is a
+*configuration* string (the `FORAGE_SEARCH_PROVIDERS` entry, the registry key) and not a
+property of one implementation, so it belongs in `pipeline/search_providers/searxng.py` as
+a constant with `SearxngProvider.name` referencing it. `DEFAULT_PROVIDER_NAME` in the
+package `__init__` was deliberately *not* reused: it means "the chain an operator who
+configured nothing gets", which is a different fact that happens to share a value today.
+
+**The predicate reads `chain`, the post-substitution local, not the `providers` parameter.**
+They give the same answer for every case — `providers=None` substitutes a one-element
+SearXNG chain — and `chain` is the sequence that actually served, so there is no path where
+the configured chain and the read chain disagree. The multi-provider test is the one that
+proves the predicate is *chain shape* rather than the failing provider's name: its
+`chain[0]` is named `searxng` and is the one that fails, so a "did SearXNG fail?" predicate
+would answer `searxng_error` there. Mutating the predicate to `chain[0].name == …` (dropping
+the length check) fails exactly that one test.
+
+**`content_kind` is per-batch, `date` is per-result.** One `search()` call reaches one
+backend in one mode, so the kind lives on `ProviderSearchResult` and the loop copies
+`outcome.content_kind` onto every result; `date` comes from each `raw.get("date")`
+independently. `SearchResult` filters the date itself, so the orchestrator passes it
+through unexamined.
+
+**The `date` validator applies the regex *before* `date.fromisoformat`.** `fromisoformat`
+alone accepts the compact (`20260915`) and ISO-week (`2026-W38-2`) forms, neither of which
+is the strict calendar shape the contract promises; the regex alone accepts `2026-02-30`.
+Both are needed, in that order. The validator returns `None` rather than raising: one
+malformed upstream date must not fail a whole search response. Because nothing free-form
+survives, the field needs no scan and no length cap (ruling 19) — a ten-character shape is
+its own bound, which `test_a_kept_date_is_bounded_by_its_own_shape` pins.
+
+**No inline type suppressions, so the ill-typed model tests go through a helper.**
+`tests/test_models.py::_search_result` builds through `SearchResult.model_validate` with an
+`object`-typed payload. `# pyright: ignore` would have been the quick route and is banned
+outright (`tests/test_pyright_policy.py`); the helper is the honest one and reads better at
+the call sites anyway.
+
+**Ninth sanitizer-revision rotation: `e7038672…` → `b7871b20…`**, the epic's only two-file
+rotation. Measured rather than argued, the fifth rotation's way: reverting `contract.py`
+alone gives `d9d8843d…`, `orchestrator.py` alone `89e987bf…`, and the both-reverted control
+lands exactly on `e7038672…` — the previous shipped value. `base.py` (which gained
+`content_kind`) and `searxng.py` (which gained the name constant) are not hashed filenames,
+and `models.py` — which carries both new wire fields — is not under `pipeline/` at all.
+Recorded in all three rotation tables plus the CODE_ARCH / GOTCHAS / SERVICE_MAP /
+TROUBLESHOOTING sweeps.
+
+**`kit_tools/docs/GOTCHAS.md`'s rotation table was three rotations behind** — it still read
+"moved six times" and was missing US-002's and US-003's, already shipped. Brought current
+here alongside the ninth rather than left to compound, since the fan-out sweep exists to
+catch exactly this. Its `forage-contract` row keeps its historical **17**-code claim (as do
+`CLAUDE.md`'s and `docs/bootstrap-notes.md`'s), reworded to "then-17-code": those three
+records describe what a past rotation added, not the current vocabulary.
+
+**`tests/test_app.py`'s hand-written `searxng_unavailable` fixture was refreshed here**, as
+US-002 deferred. It had `Connection refused` free text where the real composition now emits
+the closed token `connect_error`; the test patches `run_search_pipeline` away, so nothing
+else would have caught the drift. The neighbouring new test pins `/metrics`
+`search.errors` counting `search_unavailable` under its own key — `SearchMetrics.record_error`
+has no closed-set filter, so nothing else would notice one being introduced.
+
+**Suite-count bookkeeping was left to spec 5 US-003 (ruling 32)**, so `TESTING_GUIDE`'s
+per-module counts, `AGENT_README` and `SYNOPSIS.md` totals are untouched. Two TESTING_GUIDE
+*descriptions* were corrected, because this story is what made them wrong: the golden-fixture
+row (which named `1.1.0` as current) and the `test_search_providers.py` row's summary of the
+failure mapping.

@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, get_args
 
+from pipeline.contract import ContentKind
+
 FailureClass = Literal["rate_limited", "timeout", "hard_error", "auth", "quota"]
 """Closed vocabulary for how a provider's ``search()`` call failed.
 
@@ -43,11 +45,19 @@ class ProviderSearchResult:
 
     ``unresponsive_engines`` is SearXNG's vocabulary specifically: every other
     provider returns ``[]`` here.
+
+    ``content_kind`` describes the whole batch, not a result: one ``search()``
+    call reaches one backend in one mode, so every dict in ``results`` carries
+    the same kind and the orchestrator copies it onto each wire
+    ``SearchResult`` it builds. SearXNG returns engine summaries and leaves
+    the ``"snippet"`` default; a provider that returns extracted page passages
+    sets ``"chunk"``.
     """
 
     provider_name: str
     results: list[dict[str, Any]]
     unresponsive_engines: list[str]
+    content_kind: ContentKind = "snippet"
 
 
 @dataclass(frozen=True, slots=True)

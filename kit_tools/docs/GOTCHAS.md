@@ -400,7 +400,7 @@ recipe.
 
 **What happens:**
 `derive_sanitizer_revision()` hashes eight source files plus the model identity and the
-active threshold. Forage's revision has moved six times, each time at a boundary and each
+active threshold. Forage's revision has moved nine times, each time at a boundary and each
 time deliberately:
 
 | When | Value | What moved it |
@@ -411,12 +411,15 @@ time deliberately:
 | `forage-ci-and-image` US-006 | `0537316d…e3e253` | pyright-strict burn-down retyped `stage1_extraction.py` + `stage2_structural.py` |
 | `forage-model-bootstrap` US-001 | `5927038d…19d111` | the hashed model identity became `MODEL_ID@revision` — **no source byte moved** |
 | `forage-cache-fallback` US-003 | `fa4691c5…93547c` | `contract.py` bumped to `1.1.0` **and** `orchestrator.py` threaded the revision into the cache key — the rotation whose *point* is the invalidation |
-| `forage-contract` US-001 | `8b1b7f78…196d7c` | `contract.py` gained the 17-code error vocabulary and `DegradedReason` as derived Literals — documentation only, contract still `1.1.0`, and the **one** rotation the whole of `feature-forage-contract` gets |
+| `forage-contract` US-001 | `8b1b7f78…196d7c` | `contract.py` gained the then-17-code error vocabulary and `DegradedReason` as derived Literals — documentation only, contract still `1.1.0` then, and the **one** rotation the whole of `feature-forage-contract` gets |
+| `search-provider-abstraction` US-002 | `ee4450d9…f63c3da` | the inline SearXNG call left `orchestrator.py` for `SearxngProvider` — the provider module is **not** a hashed filename, so `orchestrator.py` is the only file that moved; wire codes unchanged, `reason` text narrowed |
+| `search-provider-abstraction` US-003 | `e7038672…3ce0cbf` | `run_search_pipeline` gained the `providers=` chain seam; `providers=None` is the previous behaviour unchanged |
+| `search-provider-abstraction` US-004 | `b7871b20…ea6f2b` | contract `1.2.0` — **two** hashed files: `contract.py` (`ContentKind`, `search_unavailable`, the version) and `orchestrator.py` (the chain-shaped failure predicate, the `content_kind`/`date` copy) |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**None of the six rotations changed sanitization behaviour** — but the fourth and fifth
+**None of the nine rotations changed sanitization behaviour** — but the fourth and fifth
 are different *kinds* of rotation and worth reading as such. The first three moved because
 the hash is over bytes and someone reformatted or retyped a hashed file. The fourth moved
 because an **input changed**: weights are a runtime, per-deployment thing now
@@ -440,10 +443,19 @@ it would be indistinguishable from a real sanitizer change.
 
 The sixth is the fifth's mechanism used as intended, one spec later:
 `feature-forage-contract` US-001 added the error vocabulary to `contract.py`, changed no
-wire byte (per-site parity tests prove it) and left `CONTRACT_VERSION` at `1.1.0` — and
+wire byte (per-site parity tests prove it) and left `CONTRACT_VERSION` at `1.1.0` then — and
 the cache flush it causes is the *correct* consequence, not a cost to apologise for.
 That spec acknowledged **one** rotation for all five of its stories, and this was it: the
 remaining stories must stay out of `_REVISION_SOURCES` or be content-neutral there.
+
+The seventh, eighth and ninth are `search-provider-abstraction`'s, and the ninth is the
+one to read: it is the second rotation whose invalidation is part of the *point*. The
+contract bump to `1.2.0` added `content_kind` and `date` to every search result, so a
+cached extraction sanitized before it carries neither — serving one beside a `1.2.0`
+response is exactly the silent mix the revision key exists to prevent. It is also the
+epic's only rotation with two hashed files moving, and the attribution was measured
+(revert each in turn; the both-reverted control must land on the previous shipped value)
+rather than argued. `docs/bootstrap-notes.md` carries that table.
 
 US-006's rotation is the one to read carefully: `stage2_structural.py` took an annotation
 only (`field(default_factory=list[FlaggedSpan])`), but `stage1_extraction.py` took a real

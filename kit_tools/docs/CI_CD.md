@@ -294,7 +294,7 @@ Steps, in order:
 7. **Published-config secret grep.** The same two patterns as `secret-grep`, run over the
    published image config JSON for all platforms.
 8. **On `v*` tags only — Release.** `CONTRACT_VERSION` is grepped out of the *tagged tree's*
-   `pipeline/contract.py` (currently `1.1.0`; a non-semver read fails the step), then
+   `pipeline/contract.py` (currently `1.2.0`; a non-semver read fails the step), then
    `gh release create <tag>` with `--prerelease` when the tag contains `-`, a body carrying
    the line `contract: X.Y.Z`, and the assets `contract/openapi.yaml` and
    `contract/openapi.yaml.sha256` uploaded by the same command. Ordering matters: the
@@ -413,7 +413,7 @@ of those bytes. The same file also verifies the checker can fail (a committed
 un-regenerated twin under `tests/fixtures/contract/`), that rendering is byte-stable across
 `PYTHONHASHSEED`s, and that `/extract` is in the document even though the route is off by default.
 
-The anchor (`00b1dbaa5971895e7e7f1532f52ab46026df5e789ee5572380fd822f6bb295c0` at HEAD) is
+The anchor (`7d297dfea6b329c361c34d5a6633fbac0884e1df59294cf70ba4c9e86fb226d1` at HEAD) is
 the trust root every other copy is verified against: `smoke` hashes the in-image copy
 against it, `publish` hashes the Release assets against it, and consumers verify the copy
 they vendor against the anchor *at the same tag*, never against another copy. Whether a
@@ -480,7 +480,7 @@ gh cache delete <id>                # delete each index-publish-* entry
 
 The git tag **is** the version (`pyproject.toml`'s `version` is inert packaging metadata),
 and the image tag and `contract_version` are independent semvers — image `v1.0.0` serves
-contract `1.1.0`.
+contract `1.1.0`, and the tree's current `1.2.0` is served by no published image yet.
 
 ```bash
 git switch main && git pull

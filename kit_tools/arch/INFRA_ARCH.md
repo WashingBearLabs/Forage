@@ -193,8 +193,8 @@ closeout, the first to move `latest`; the live registry state was not re-verifie
 document.
 
 The git tag **is** the version. `pyproject.toml`'s `version = "0.1.0"` is inert packaging
-metadata, and the image tag and `contract_version` (currently `1.1.0`) are independent
-semvers. **arm64 is built under QEMU but never executed in CI** — run `contract_smoke.py`
+metadata, and the image tag and `contract_version` (currently `1.2.0`, which no published
+image serves yet — the `v1.1.0` tag publishes it) are independent semvers. **arm64 is built under QEMU but never executed in CI** — run `contract_smoke.py`
 against your own arm64 container before trusting it.
 
 ### Registry access

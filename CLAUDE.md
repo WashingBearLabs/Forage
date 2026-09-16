@@ -79,7 +79,7 @@ is now load-bearing for the two consumers above.
 ### 4. A change to a response shape is a contract change.
 
 The response contract is versioned (`pipeline/contract.py`, `contract_version` currently
-**1.1.0**), and consumers are expected to refuse activation on a major mismatch rather
+**1.2.0**), and consumers are expected to refuse activation on a major mismatch rather
 than guess. Changing any response shape means: bump the version, add a golden fixture
 under `tests/golden/` (older ones are retained, never edited), and note the change for the
 consuming repo.
@@ -200,7 +200,12 @@ SearXNG `httpx` call left `orchestrator.py` for `SearxngProvider`
 was measured rather than assumed; the wire codes are unchanged and only the `reason` text
 narrowed), and an eighth to `e7038672…` when `run_search_pipeline` gained the `providers=`
 chain seam (`search-provider-abstraction` US-003 — again `orchestrator.py` alone; the
-default `providers=None` path is the previous behaviour unchanged).
+default `providers=None` path is the previous behaviour unchanged), and a ninth to
+`b7871b20…` with the contract bump to `1.2.0` (`search-provider-abstraction` US-004 — the
+first rotation of the epic with **two** hashed files moving: `contract.py` gained
+`ContentKind` and `search_unavailable` and the version bump, `orchestrator.py` gained the
+chain-shaped failure predicate and the `content_kind`/`date` copy; measured by reverting
+each in turn, with a both-reverted control landing on `e7038672…`).
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

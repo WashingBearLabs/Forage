@@ -346,6 +346,18 @@ These are recorded in the repo with a source and a reason; they are decisions, n
 | The break-glass switch makes `capabilities` lie for a transition window | `docs/configuration.md` "Break-glass" |
 | arm64 image built but never executed by CI | `docs/releases.md` |
 | No image signing, provenance, or SBOM | `.github/workflows/ci.yml` publish job comment |
+| `SearchResult.engine` is an unbounded `isinstance(engine, str)` pass-through — no length cap, no normalisation, no structural scan — and from contract `1.2.0` its provenance widens from the operator's own SearXNG to any provider in the chain, including spec 2's third-party API | `pipeline/orchestrator.py` (the sanitization loop); `search-provider-abstraction` US-004 |
+
+The `engine` row is the one that *changed shape* rather than merely being restated.
+`engine` is provenance, not identity (`SearchProvider.name` is identity), and it has always
+been passed through unbounded — but until contract `1.2.0` the only thing that could
+populate it was the operator's own SearXNG deployment. It is now whatever a chained
+provider puts in the field, which from spec 2 includes a third-party API's response. The
+risk is carried forward deliberately rather than fixed here: bounding `engine` is a wire
+change and belongs with the provider that first widens it. The two fields `1.2.0` *adds*
+are closed by construction — `content_kind` is a `Literal` validated on the way out, and
+`date` is filtered to a strict `YYYY-MM-DD` calendar date or `None`, so neither can carry
+free text (GOVERNANCE ruling 19 is why they need no scan).
 
 ### Observed absences (for the owner to rule on)
 

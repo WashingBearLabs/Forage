@@ -220,7 +220,9 @@ Not recorded; the source gives only the rule and the promise it serves.
 
 **Decision:**
 `pipeline/contract.py` carries a hand-bumped `CONTRACT_VERSION` (1.0.0 froze the Epic 1 surface;
-1.1.0 added the additive `/health.cache_backend`, a MINOR, on 2026-09-10), served as
+1.1.0 added the additive `/health.cache_backend`, a MINOR, on 2026-09-10; 1.2.0 added the additive
+`SearchResult.content_kind` and `SearchResult.date` plus the `search_unavailable` error code, a
+MINOR, on 2026-09-15), served as
 `/health.contract_version` and `/openapi.json` `info.version`. Any change to a response shape
 means: classify, bump, add a new golden fixture under `tests/golden/` (older ones retained, never
 edited — ruling (c)), and note it for the consuming repo. `contract.py` lives under `pipeline/` on
@@ -231,7 +233,8 @@ purpose, so it is a hashed `sanitizer_revision` source.
 X.*.*, and is expected to refuse to activate on a major mismatch rather than guess."
 
 **Consequences:**
-Two independent semvers — image tag (`v1.0.0`) and contract (`1.1.0`) move for different reasons;
+Two independent semvers — image tag (`v1.0.0`) and contract (now `1.2.0`, awaiting the `v1.1.0`
+image that publishes it) move for different reasons;
 `pyproject.toml`'s version is inert. A withdrawn image tag never withdraws a contract version.
 `.github/pull_request_template.md` carries the short-form checklist.
 
@@ -612,7 +615,8 @@ a rotation flushes Forage's own cache. Rotations to date, none changing sanitiza
 | `fa4691c5…` | contract `1.1.0` and the revision joined the cache key (2026-09-10) |
 | `8b1b7f78…` | error vocabulary added to `contract.py`; contract still `1.1.0` (2026-09-11) |
 | `ee4450d9…` | the inline SearXNG call extracted from `orchestrator.py` into `SearxngProvider`; wire codes unchanged, `reason` text narrowed (2026-09-15) |
-| `e7038672…` (current) | `run_search_pipeline` gained the `providers=` chain seam in `orchestrator.py`; no sanitization behaviour changed (2026-09-15) |
+| `e7038672…` | `run_search_pipeline` gained the `providers=` chain seam in `orchestrator.py`; no sanitization behaviour changed (2026-09-15) |
+| `b7871b20…` (current) | contract `1.2.0`: `contract.py` gained `ContentKind` and `search_unavailable`, `orchestrator.py` gained the chain-shaped failure predicate and the `content_kind`/`date` copy — both hashed files, measured (2026-09-15) |
 
 **Rationale:**
 `pipeline/sanitizer_revision.py`: "two containers running the same code can be scanning with
