@@ -324,24 +324,24 @@ reason; one asserts a provider returning 500 results for `num_results=5` drives 
   (~612–613).
 
 **Acceptance Criteria:**
-- [ ] The SearXNG HTTP call lives in `SearxngProvider.search()`
+- [x] The SearXNG HTTP call lives in `SearxngProvider.search()`
       (`pipeline/search_providers/searxng.py`); no `httpx` search call remains in
       `run_search_pipeline`; the provider opens `httpx.AsyncClient(timeout=10.0, trust_env=False)`
       per call through the `httpx` module attribute (no `from httpx import AsyncClient`, no client
       stored on the instance); a test modelled on `tests/test_stage5_url_audit.py:492` reads the
       constructor kwargs and asserts `trust_env is False`, `follow_redirects` absent or `False`,
       and `verify` not disabled.
-- [ ] `SearxngProvider(base_url)` sends the request to `f"{base_url}/search"`; a test with a
+- [x] `SearxngProvider(base_url)` sends the request to `f"{base_url}/search"`; a test with a
       non-default base URL asserts it appears in the outbound request URL. `DEFAULT_SEARXNG_URL` and
       `SEARXNG_ENGINES` are public in the provider module; `_DEFAULT_SEARXNG_URL` and
       `_SEARXNG_ENGINES` are assigned aliases in `pipeline/orchestrator.py` (no import of a private
       name); `tests/test_searxng_docker.py`, `tests/test_compose_fragments.py` and
       `tests/test_searxng_smoke.py` pass unmodified.
-- [ ] Every pre-existing `tests/test_orchestrator.py` search test keeps its assertions and its
+- [x] Every pre-existing `tests/test_orchestrator.py` search test keeps its assertions and its
       `run_search_pipeline(...)` arguments byte-for-byte; the only test-side edit in the story is
       `_searxng_client_patch`'s target string; `run_search_pipeline`'s docstring no longer
       describes the call as going through SearXNG directly.
-- [ ] `run_search_pipeline` keeps its signature (`searxng_url` kwarg, default
+- [x] `run_search_pipeline` keeps its signature (`searxng_url` kwarg, default
       `_DEFAULT_SEARXNG_URL`), computes `max_results = request.num_results if provider.paid else
       fetch_limit` (a test with a `paid=True` fake receives `request.num_results`, with `paid=False`
       `fetch_limit`), and maps a SearXNG `ProviderFailure` to `searxng_error` (status-derived
@@ -350,26 +350,26 @@ reason; one asserts a provider returning 500 results for `num_results=5` drives 
       contains scheme, host and port of the base URL and neither exception text nor userinfo — a
       test with `http://user:pass@unreachable:8080` asserts `"unreachable:8080" in reason` and
       `"pass" not in reason`.
-- [ ] `SearxngProvider` returns `ProviderFailure` with the specified (`failure_class`, `detail`)
+- [x] `SearxngProvider` returns `ProviderFailure` with the specified (`failure_class`, `detail`)
       pair for a timeout, a 429, another HTTP status, a transport error, an oversized body, a
       non-JSON body, a wrong-shape body (`{"results": {}}`), and a response whose `json()` raises
       an unrelated exception — eight tests, none of which sees an exception escape `search()`;
       every `detail` is a member of `_SEARXNG_FAILURE_DETAILS` or of the `http_` status family; a
       test with `caplog` asserts no log record carries the exception text or the base URL.
-- [ ] `ProviderSearchResult.results` dicts carry `date` from `publishedDate`; `unresponsive_engines`
+- [x] `ProviderSearchResult.results` dicts carry `date` from `publishedDate`; `unresponsive_engines`
       is populated exactly as today for both the list and the tuple forms (tests); a test feeding
       forty entries, one of them 500 characters with embedded control characters, sees at most
       sixteen entries of at most 64 clean characters on `SearchResponse.unresponsive_engines`.
-- [ ] The scan budget stays orchestrator-side: `fetch_limit` is computed as today and the slice
+- [x] The scan budget stays orchestrator-side: `fetch_limit` is computed as today and the slice
       re-applied after the provider returns; a test whose provider returns 500 results for
       `num_results=5`, every one blocked by Stage 2 so nothing is appended and the loop's
       `num_results` early exit never fires, counts exactly ten loop iterations (Stage 2 scans) and
       no Stage 3 pass — an exact count, not a ceiling.
-- [ ] `docs/bootstrap-notes.md`'s rotation table, `CLAUDE.md`'s coexistence narrative and
+- [x] `docs/bootstrap-notes.md`'s rotation table, `CLAUDE.md`'s coexistence narrative and
       `kit_tools/arch/DECISIONS.md`'s rotation table record the new `sanitizer_revision` (before,
       after, reason); `kit_tools/arch/CODE_ARCH.md`'s `pipeline/orchestrator.py` row no longer
       claims ownership of the two constants.
-- [ ] The documentation fan-out is applied: a grep of `kit_tools/` finds no statement that
+- [x] The documentation fan-out is applied: a grep of `kit_tools/` finds no statement that
       `/search` or `searxng_unavailable` interpolates `str(exc)` or exception text, no
       `SearXNG returned HTTP <n>` quoted as the current reason, and every mention of the engine
       list's home names `pipeline/search_providers/searxng.py` (`SEARXNG_ENGINES`); the nine
@@ -377,9 +377,9 @@ reason; one asserts a provider returning 500 results for `num_results=5` drives 
       ERROR_HANDLING's Rough Edge 1 name `/retrieve` `fetch_error` as the only remaining case;
       `kit_tools/docs/ENV_REFERENCE.md`'s `SEARXNG_URL` row records `trust_env=False` and the
       host:port-only echo.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
 
 ### US-003: Provider chain resolved from the environment
 
