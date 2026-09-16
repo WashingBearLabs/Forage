@@ -611,3 +611,49 @@ documented integration step, not a design question._
   **Not a `_REVISION_SOURCES` rotation:** `pipeline/search_providers/` is not hashed (ruling
   11) and `pipeline/orchestrator.py` was not touched, so `derive_sanitizer_revision()` is
   unchanged by this story.
+
+- **2026-09-16 — US-011 landed: hardening tests, budget assertions, doc rows.** All
+  eleven new tests in `tests/test_brave_provider.py` (37 total, up from 26) pass against
+  the US-010 module **unmodified** — no defect surfaced, so `brave.py` needed no fix.
+  `git diff --stat 05af5c6 -- pipeline/orchestrator.py` is empty, confirming the file is
+  still byte-identical to its US-010 state.
+  **Candidate budget.** A `_SpyingBraveProvider(BraveApiProvider)` subclass (records
+  `(query, max_results)` then delegates for real) driven through `run_search_pipeline`
+  with `num_results` 1, 5 and 20 confirms `search()` receives `request.num_results`
+  verbatim (never `min(num_results * 2, 20)`) and that the mocked `client.stream` call's
+  `params["count"]` carries the same value each time — an instance-attribute spy
+  (`provider.search = spy`) was avoided in favour of a subclass override, since pyright
+  strict has no carve-out for reassigning a bound method's type on an instance.
+  **Body bounds — the no-`Content-Length` case needed a real stream.** `_make_response`
+  (the `content=` helper) always yields a real, correct `Content-Length` header even when
+  a caller passes an inflated one only for the *fast-reject* case; the *no-header,
+  streamed-overrun* case needed a genuine `httpx.AsyncByteStream` subclass
+  (`_ChunkStream`, yielding chunks with no `content=` at all) passed via `stream=` on a
+  hand-built `httpx.Response`, with `response.headers.get("content-length") is None`
+  asserted as the test's own precondition per the story's hint. The **compressed** case
+  needed no such workaround: `httpx.Response(content=gzip.compress(raw), headers=
+  {"content-encoding": "gzip"})` reports a `Content-Length` equal to the *compressed*
+  size (well under the cap), while `aiter_bytes()` transparently decodes it back to the
+  oversized *raw* size — exactly the gap between the fast-reject path and the running
+  streamed cap that makes this a distinct test from the other two. All three assert a
+  `pipeline.search_providers.brave.json.loads` spy was never called.
+  **Caps.** A 50,000-character single chunk truncates to `chunk_max_chars` (2000);
+  a 5,000-character query truncates to `query_max_chars` (400) in the outbound `q` the
+  mocked client received, while `run_search_pipeline` completes with results rather than
+  raising — "no 422 from the app when driven end-to-end" is read, consistently with this
+  file's own `TestRunSearchPipelineIntegration` precedent, as "no `PipelineError` out of
+  `run_search_pipeline`" rather than a real ASGI request (this test module never spins up
+  the FastAPI app or a `TestClient`).
+  **Provenance, both directions.** One test runs `run_search_pipeline` once with a
+  `FakeSearchProvider` (`tests/fakes.py`) returning `engine="brave"` (SearXNG's own
+  sub-engine) and once with the real `BraveApiProvider` over the pinned sample, asserting
+  the wire `engine` values `"brave"` and `"brave-api"` both survive and differ — proving
+  neither the loop (`raw.get("engine")` is copied verbatim, `pipeline/orchestrator.py`
+  ~820) nor either provider normalizes one into the other.
+  **Docs.** Added the Brave egress row to `kit_tools/arch/INFRA_ARCH.md`'s table, the
+  `pipeline/search_providers/brave.py` row to `kit_tools/arch/CODE_ARCH.md`'s module
+  table, the `engine` clause naming both values to `kit_tools/docs/API_GUIDE.md`'s
+  `results` row, and a `tests/test_brave_provider.py` row plus `test_mapping` entry to
+  `kit_tools/testing/TESTING_GUIDE.md` — no suite-count totals elsewhere were touched
+  (ruling 32, spec 5 US-003's job). Full suite: 1845 passed; `ruff check`, `ruff format
+  --check` and `pyright` (strict) all clean.

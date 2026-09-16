@@ -9,10 +9,11 @@ budget *exhaustive* tests, and the doc rows, are US-011's.
 
 from __future__ import annotations
 
+import gzip
 import json
 import re
 import ssl
-from collections.abc import Generator
+from collections.abc import AsyncIterator, Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -30,10 +31,11 @@ from pipeline.orchestrator import (
     _sanitize_search_text,
     run_search_pipeline,
 )
-from pipeline.search_providers.base import ProviderSearchResult
+from pipeline.search_providers.base import ProviderFailure, ProviderSearchResult
 from pipeline.search_providers.brave import (
     _BRAVE_AUTH_HEADER,
     _BRAVE_LLM_CONTEXT_URL,
+    _BRAVE_MAX_RESPONSE_BYTES,
     BRAVE_PROVIDER_NAME,
     DEFAULT_BRAVE_CHUNK_MAX_CHARS,
     DEFAULT_BRAVE_QUERY_MAX_CHARS,
@@ -44,6 +46,7 @@ from pipeline.search_providers.brave import (
     brave_settings_from_config,
 )
 from retrieval_app import lifespan
+from tests.fakes import FakeSearchProvider
 
 # ---------------------------------------------------------------------------
 # Fixture provenance — the pre-flight gate stays satisfied
@@ -416,3 +419,266 @@ class TestLifespanCallsBraveSettingsUnconditionally:
         with pytest.raises(BraveConfigurationError):
             async with lifespan(probe_app):
                 pass
+
+
+# ---------------------------------------------------------------------------
+# Candidate budget (ruling 25) — US-011
+# ---------------------------------------------------------------------------
+
+
+class _SpyingBraveProvider(BraveApiProvider):
+    """Records every ``search()`` call's arguments, then delegates for real."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.calls: list[tuple[str, int]] = []
+
+    async def search(
+        self, query: str, max_results: int
+    ) -> ProviderSearchResult | ProviderFailure:
+        self.calls.append((query, max_results))
+        return await super().search(query, max_results)
+
+
+class TestCandidateBudget:
+    """The paid budget is `request.num_results`, forwarded to Brave verbatim.
+
+    `run_search_pipeline`'s `max_results = request.num_results if provider.paid
+    else fetch_limit` branch is spec 1 US-002's edit, asserted here rather than
+    written — `pipeline/orchestrator.py` is untouched by this story.
+    """
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize("num_results", [1, 5, 20])
+    async def test_the_provider_and_the_outbound_count_param_both_see_num_results(
+        self, num_results: int
+    ) -> None:
+        provider = _SpyingBraveProvider("sentinel-key")
+        with _client_patch(response=_make_response(content=_load_sample_bytes())) as (
+            _client_cls,
+            client,
+        ):
+            await run_search_pipeline(
+                SearchRequest(
+                    query="q", num_results=num_results, promptguard_fail_closed=False
+                ),
+                providers=[provider],
+                config=_INTEGRATION_CONFIG,
+            )
+
+        # Not `min(num_results * 2, 20)` — the free-provider fetch_limit.
+        assert provider.calls == [("q", num_results)]
+        stream_call = client.stream.call_args
+        assert stream_call.kwargs["params"]["count"] == num_results
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize("max_results", [1, 2])
+    async def test_more_sources_than_max_results_yields_at_most_that_many_dicts(
+        self, max_results: int
+    ) -> None:
+        """The pinned sample carries three sources."""
+        provider = BraveApiProvider("sentinel-key")
+        with _client_patch(response=_make_response(content=_load_sample_bytes())):
+            outcome = await provider.search("q", max_results)
+
+        assert isinstance(outcome, ProviderSearchResult)
+        assert len(outcome.results) == max_results
+
+
+# ---------------------------------------------------------------------------
+# Payload bounds — US-011
+# ---------------------------------------------------------------------------
+
+
+class _ChunkStream(httpx.AsyncByteStream):
+    """Yield fixed byte chunks with no synthesized ``Content-Length`` header."""
+
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self._chunks:
+            yield chunk
+
+
+class TestBodyBound:
+    """The response body is bounded before any ``json.loads`` call."""
+
+    @pytest.mark.asyncio()
+    async def test_content_length_over_cap_is_rejected_before_json_loads(
+        self,
+    ) -> None:
+        response = _make_response(
+            content=b"{}",
+            headers={"content-length": str(_BRAVE_MAX_RESPONSE_BYTES + 1)},
+        )
+        provider = BraveApiProvider("sentinel-key")
+        with (
+            _client_patch(response=response),
+            patch(
+                "pipeline.search_providers.brave.json.loads", wraps=json.loads
+            ) as loads_spy,
+        ):
+            outcome = await provider.search("q", 5)
+
+        loads_spy.assert_not_called()
+        assert isinstance(outcome, ProviderFailure)
+        assert outcome.failure_class == "hard_error"
+        assert outcome.detail == "body_too_large"
+
+    @pytest.mark.asyncio()
+    async def test_streamed_body_over_cap_with_no_content_length_is_rejected(
+        self,
+    ) -> None:
+        chunks = [b"X" * 400_000 for _ in range(3)]  # 1.2 MB total
+        response = httpx.Response(
+            200,
+            stream=_ChunkStream(chunks),
+            headers={"content-type": "application/json"},
+            request=httpx.Request("GET", _BRAVE_LLM_CONTEXT_URL),
+        )
+        # The precondition this test depends on: no Content-Length at all, so
+        # only the running-byte-cap path (not the fast-reject one) can catch it.
+        assert response.headers.get("content-length") is None
+
+        provider = BraveApiProvider("sentinel-key")
+        with (
+            _client_patch(response=response),
+            patch(
+                "pipeline.search_providers.brave.json.loads", wraps=json.loads
+            ) as loads_spy,
+        ):
+            outcome = await provider.search("q", 5)
+
+        loads_spy.assert_not_called()
+        assert isinstance(outcome, ProviderFailure)
+        assert outcome.failure_class == "hard_error"
+        assert outcome.detail == "body_too_large"
+
+    @pytest.mark.asyncio()
+    async def test_compressed_body_whose_decoded_length_exceeds_cap_is_rejected(
+        self,
+    ) -> None:
+        raw = b"A" * (_BRAVE_MAX_RESPONSE_BYTES + 1)
+        compressed = gzip.compress(raw)
+        response = httpx.Response(
+            200,
+            content=compressed,
+            headers={"content-encoding": "gzip", "content-type": "application/json"},
+            request=httpx.Request("GET", _BRAVE_LLM_CONTEXT_URL),
+        )
+        # The compressed body is well under the cap; only the decoded stream
+        # (read through `aiter_bytes()`, which transparently decompresses) is
+        # oversized — otherwise this would just be the fast-reject case again.
+        content_length = response.headers.get("content-length")
+        assert content_length is not None
+        assert int(content_length) <= _BRAVE_MAX_RESPONSE_BYTES
+
+        provider = BraveApiProvider("sentinel-key")
+        with (
+            _client_patch(response=response),
+            patch(
+                "pipeline.search_providers.brave.json.loads", wraps=json.loads
+            ) as loads_spy,
+        ):
+            outcome = await provider.search("q", 5)
+
+        loads_spy.assert_not_called()
+        assert isinstance(outcome, ProviderFailure)
+        assert outcome.failure_class == "hard_error"
+        assert outcome.detail == "body_too_large"
+
+
+class TestPayloadCaps:
+    """The chunk and query caps are payload bounds applied inside the provider."""
+
+    @pytest.mark.asyncio()
+    async def test_a_fifty_thousand_character_chunk_is_truncated_to_the_chunk_cap(
+        self,
+    ) -> None:
+        sample = _load_sample_dict()
+        sample["grounding"]["generic"][0]["snippets"] = ["Y" * 50_000]
+
+        provider = BraveApiProvider("sentinel-key")
+        with _client_patch(
+            response=_make_response(content=json.dumps(sample).encode())
+        ):
+            outcome = await provider.search("q", 3)
+
+        assert isinstance(outcome, ProviderSearchResult)
+        assert len(outcome.results[0]["content"]) == DEFAULT_BRAVE_CHUNK_MAX_CHARS
+
+    @pytest.mark.asyncio()
+    async def test_a_five_thousand_character_query_is_truncated_to_the_query_cap(
+        self,
+    ) -> None:
+        provider = BraveApiProvider("sentinel-key")
+        long_query = "q" * 5_000
+
+        with _client_patch(response=_make_response(content=_load_sample_bytes())) as (
+            _client_cls,
+            client,
+        ):
+            response = await run_search_pipeline(
+                SearchRequest(
+                    query=long_query, num_results=5, promptguard_fail_closed=False
+                ),
+                providers=[provider],
+                config=_INTEGRATION_CONFIG,
+            )
+
+        stream_call = client.stream.call_args
+        sent_query = stream_call.kwargs["params"]["q"]
+        assert len(sent_query) == DEFAULT_BRAVE_QUERY_MAX_CHARS
+        # Accepted end to end, not rejected — the bound lives in the
+        # provider's outbound copy, never on `SearchRequest.query` itself.
+        assert response.results
+
+
+# ---------------------------------------------------------------------------
+# Engine provenance stays distinct — US-011
+# ---------------------------------------------------------------------------
+
+
+class TestEngineProvenanceStaysDistinct:
+    """SearXNG's own `brave` sub-engine and Brave's `engine="brave-api"` never merge."""
+
+    @pytest.mark.asyncio()
+    async def test_searxng_side_brave_and_brave_api_stay_distinct(self) -> None:
+        searxng_shaped = FakeSearchProvider(
+            name="searxng",
+            paid=False,
+            outcome=ProviderSearchResult(
+                provider_name="searxng",
+                results=[
+                    {
+                        "title": "SearXNG via its own brave sub-engine",
+                        "url": "https://example.com/searxng-brave",
+                        "content": "content",
+                        "engine": "brave",
+                        "date": None,
+                    }
+                ],
+                unresponsive_engines=[],
+            ),
+        )
+        searxng_response = await run_search_pipeline(
+            SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
+            providers=[searxng_shaped],
+            config=_INTEGRATION_CONFIG,
+        )
+
+        brave_provider = BraveApiProvider("sentinel-key")
+        with _client_patch(response=_make_response(content=_load_sample_bytes())):
+            brave_response = await run_search_pipeline(
+                SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
+                providers=[brave_provider],
+                config=_INTEGRATION_CONFIG,
+            )
+
+        assert searxng_response.results
+        assert brave_response.results
+        # Both directions, so neither normalization could pass unnoticed.
+        assert searxng_response.results[0].engine == "brave"
+        assert brave_response.results[0].engine == "brave-api"
+        assert searxng_response.results[0].engine != brave_response.results[0].engine

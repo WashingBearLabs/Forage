@@ -1,7 +1,7 @@
 <!-- Template Version: 2.1.0 -->
 # TESTING_GUIDE.md
 
-> Last updated: 2026-09-15
+> Last updated: 2026-09-16
 > Updated by: Claude (forage-contract US-004)
 
 ## Quick Start
@@ -112,6 +112,7 @@ re-measured since 2026-09-10).
 | `tests/test_stage2_structural.py` | 78 | Deterministic regex injection scan |
 | `tests/test_orchestrator.py` | 63 | End-to-end pipeline drive, search + retrieve paths |
 | `tests/test_search_providers.py` | 103 | The `SearchProvider` seam and `SearxngProvider`: protocol shape, the closed failure vocabulary, the AST sweep that keeps provider code away from the sanitization stages and the cache, the extracted SearXNG call (request shape, hardened client kwargs, raw-dict pass-through, `publishedDate` → `date`, every failure mapping, credential-free logging, `origin` including its four malformed-URL fallbacks) and the orchestrator side (candidate budget, the re-applied slice as an exact count, the `unresponsive_engines` 16×64 bound, the chain-shaped `ProviderFailure` mapping — `searxng_error` / `searxng_unavailable` for a lone `searxng` chain, `search_unavailable` for every other — and the `content_kind` / `date` copy onto each wire result) |
+| `tests/test_brave_provider.py` | 37 | `BraveApiProvider` (`feature-brave-provider`): fixture-provenance guards, the pinned-sample parse, hardened client kwargs, the `config.yaml` tunables and the unconditional lifespan boot-refusal, the `chain[0]` candidate budget (spy provider + outbound `count` param, `num_results` 1/5/20), the three payload bounds (`Content-Length` fast-reject, a no-header streamed overrun, a compressed body whose decoded length overruns — all asserted never to reach `json.loads`), the chunk and query caps, and the `engine="brave"` (SearXNG) vs `engine="brave-api"` (Brave) provenance split in both directions |
 | `tests/test_url_validator.py` | 59 | SSRF defense: RFC1918, DNS rebinding, schemes |
 | `tests/test_cache.py` | 116 | Valkey cache incl. the never-log-the-URL invariant |
 | `tests/test_smart_extraction.py` | 45 | Summary mode / high-signal preservation |
@@ -256,6 +257,7 @@ test_mapping:
   "pipeline/search_providers/__init__.py": "tests/test_search_providers.py"
   "pipeline/search_providers/base.py": "tests/test_search_providers.py"
   "pipeline/search_providers/searxng.py": "tests/test_search_providers.py"
+  "pipeline/search_providers/brave.py": "tests/test_brave_provider.py"
   "promptguard/classifier.py": ["tests/test_stage3_promptguard.py", "tests/test_model_fetcher.py"]
   "searxng/config/*": "tests/test_searxng_docker.py"
   "searxng/Dockerfile": "tests/test_searxng_docker.py"

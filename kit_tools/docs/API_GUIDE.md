@@ -9,7 +9,7 @@
 
 > **TEMPLATE_INTENT:** Document API endpoints, CLI commands, or library interface. The external contract.
 
-> Last updated: 2026-09-13
+> Last updated: 2026-09-16
 > Updated by: Claude (seed-project)
 
 ---
@@ -234,7 +234,7 @@ Response fields to read (`SearchResponse`):
 
 | Field | Type | Read it because |
 |---|---|---|
-| `results` | list of `{title, url, snippet, engine, content_kind, date, suspicious}` | `suspicious: true` means the structural scan flagged it, the classifier scored above 0.5, or it was returned unscanned under fail-open. Title is at most 512 characters, URL 2048, snippet 2000. `content_kind` (added in `1.2.0`) is `snippet` or `chunk` and nothing else. `date` (added in `1.2.0`) is a strict `YYYY-MM-DD` calendar date or `null` — anything a provider sends that is not one becomes `null`, so it never needs parsing defensively |
+| `results` | list of `{title, url, snippet, engine, content_kind, date, suspicious}` | `suspicious: true` means the structural scan flagged it, the classifier scored above 0.5, or it was returned unscanned under fail-open. Title is at most 512 characters, URL 2048, snippet 2000. `engine` is whichever SearXNG sub-engine answered (e.g. `duckduckgo`, or SearXNG's own `brave` sub-engine) or, for a Brave-served result, `brave-api` — the two are deliberately never normalized into each other. `content_kind` (added in `1.2.0`) is `snippet` or `chunk` and nothing else. `date` (added in `1.2.0`) is a strict `YYYY-MM-DD` calendar date or `null` — anything a provider sends that is not one becomes `null`, so it never needs parsing defensively |
 | `omitted_results`, `omitted_by_reason` | int, dict of str to int | How many candidates were withheld and why; keys are only ever `invalid_url`, `structural_blocked`, `injection_detected`, `promptguard_unavailable`, and only non-zero counts appear |
 | `unscanned_results`, `promptguard_unavailable` | int, bool | Non-zero or `true` means results came back without the ML scan; treat the whole response as unscanned evidence |
 | `unresponsive_engines` | list of str | Passed through from SearXNG; a partial answer, not an error |

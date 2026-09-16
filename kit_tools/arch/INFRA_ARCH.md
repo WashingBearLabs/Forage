@@ -9,7 +9,7 @@
 
 > **TEMPLATE_INTENT:** Document cloud resources, networking, and infrastructure. The map of deployed systems.
 
-> Last updated: 2026-09-13
+> Last updated: 2026-09-16
 > Updated by: Claude (seed-project)
 
 ---
@@ -244,6 +244,7 @@ address is the operator's own reverse proxy and auth, outside this repo.
 | Compose-internal | `forage` | `valkey` | 6379 / RESP (`VALKEY_URL`, 2 s connect timeout) | `full.yml` only; start + per `/retrieve` |
 | Egress | `forage` | `huggingface.co` | 443 / HTTPS | at start, until a verified weight set is loaded; needs `HF_TOKEN` |
 | Egress | `forage` | `ghcr.io` (weights mirror, via `oras`) | 443 / HTTPS | fallback only when `FORAGE_MIRROR_TOKEN` is set |
+| Egress | `forage` | `api.search.brave.com` | 443 / HTTPS, direct (`trust_env=False`, no proxy) | one request per `/search`, only when `FORAGE_BRAVE_API_KEY` is set |
 | Egress | `forage` | arbitrary public web | 80/443 / HTTP(S) | per `/retrieve` request; private and loopback ranges refused by `url_validator.py` |
 | Egress | `searxng` | duckduckgo, brave, startpage, mojeek | 443 / HTTPS | per `/search` request |
 
