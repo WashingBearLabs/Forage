@@ -64,7 +64,8 @@ those eight — so Forage's revision moved:
 | After the pyright-strict burn-down (`forage-ci-and-image` US-006) | `0537316d…e3e253` |
 | After the weights pin joined the hashed identity (`forage-model-bootstrap` US-001) | `5927038d…19d111` |
 | After the contract bump to `1.1.0` (`forage-cache-fallback` US-003) | `fa4691c5…93547c` |
-| **Current (`forage-contract` US-001, error vocabulary; contract still `1.1.0`)** | **`8b1b7f78…196d7c`** |
+| After the error vocabulary joined `contract.py` (`forage-contract` US-001; contract still `1.1.0`) | `8b1b7f78…196d7c` |
+| **Current (`search-provider-abstraction` US-002, the `SearxngProvider` extraction)** | **`ee4450d9…f63c3da`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -246,6 +247,43 @@ installed on purpose, and a documentation pass that rotated the hash without flu
 the cache would be the broken outcome. Free in memory mode; one TTL of extra fetches in
 Valkey mode. Consumer-side is unchanged from the fourth and fifth rotations: Poppy
 re-extracts on next access, and spec 6 owns that transition.
+
+### The seventh rotation: the `SearxngProvider` extraction (`search-provider-abstraction` US-002, 2026-09-15)
+
+```
+before: 8b1b7f78e85f733ef3b8ace5194632a8cf92410131b2c1af995c456f20196d7c
+after:  ee4450d9202daae4f35799d3c0e2379dfcc1c04697cb98fa4a6cc7a4af63c3da
+```
+
+**Exactly one `_REVISION_SOURCES` file moved: `pipeline/orchestrator.py`.** That is a
+measurement, not an inference. The new `pipeline/search_providers/searxng.py` is not among
+the eight hashed filenames — `_REVISION_SOURCES` is an explicit tuple read relative to
+`pipeline/`, so it does not reach into the subpackage at all — and re-deriving with
+`orchestrator.py` reverted to its pre-story bytes while `searxng.py` stayed in place
+returned `8b1b7f78…196d7c` exactly.
+
+**What moved inside `orchestrator.py`.** The inline `httpx` block became a
+`SearxngProvider(searxng_url)` construction, a `provider.search(...)` call and a
+`ProviderFailure` → `PipelineError` mapping; `_DEFAULT_SEARXNG_URL` and `_SEARXNG_ENGINES`
+became aliases assigned from the now-public constants in the provider module; and
+`unresponsive_engines` gained a sixteen-entry cap with each entry passed through
+`_normalize_search_text(max_length=64)`. **No sanitization stage changed**, and the wire
+codes (`searxng_error`, `searxng_unavailable`) are byte-identical. Only the `reason` text
+narrowed: `str(exc)` is gone (ruling 13), the `searxng_error` reason names the status as
+`http_<code>`, and the endpoint echo is the userinfo-stripped scheme, host and port the
+provider computes once at construction.
+
+**Why the rotation was taken rather than avoided.** `orchestrator.py` is hashed because the
+per-result sanitization loop lives in it. Moving the SearXNG call out from beside that loop
+could not avoid touching the file the loop still occupies. The rotation is the price of the
+extraction, not evidence that sanitization behaviour changed — which is exactly what the
+attribution measurement above is for.
+
+**Blast radius.** The same mechanism as the fifth rotation: `cache_policy_fingerprint()`
+takes the revision as an input, so every extraction cached under `8b1b7f78…196d7c` becomes
+unreachable at the next start and ages out on its own TTL. Free in memory mode; one TTL of
+extra fetches in Valkey mode. Poppy re-extracts on next access; spec 6 owns that transition.
+**Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.
 
 ## Deferred GitHub settings — for the spec 2 public flip
 

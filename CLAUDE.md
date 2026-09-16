@@ -193,7 +193,12 @@ per-deployment input (`forage-model-bootstrap` US-001) — and a fifth time to
 invalidation (`forage-cache-fallback` US-003 made the revision an input to the content
 cache's key), and a sixth to `8b1b7f78…` when `contract.py` gained the seventeen-code
 error vocabulary (`forage-contract` US-001 — documentation only, contract still `1.1.0`,
-and the one rotation that whole spec gets). `docs/bootstrap-notes.md` carries
+and the one rotation that whole spec gets), and a seventh to `ee4450d9…` when the inline
+SearXNG `httpx` call left `orchestrator.py` for `SearxngProvider`
+(`search-provider-abstraction` US-002 — `pipeline/search_providers/searxng.py` is **not** a
+`_REVISION_SOURCES` member, so `orchestrator.py` is the only hashed file that moved, which
+was measured rather than assumed; the wire codes are unchanged and only the `reason` text
+narrowed). `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.
 

@@ -1,24 +1,40 @@
-"""Tests for the ``SearchProvider`` seam (US-001).
+"""Tests for the ``SearchProvider`` seam and its SearXNG implementation.
 
-No pipeline change is exercised here — ``run_search_pipeline`` still calls
-SearXNG inline; extracting it behind the protocol is US-002. These tests only
-pin the protocol shape, the closed failure vocabulary, and the boundary rule
-that provider code never imports a sanitization stage or the cache.
+US-001 pins the protocol shape, the closed failure vocabulary, and the
+boundary rule that provider code never imports a sanitization stage or the
+cache. US-002 adds ``SearxngProvider`` — the extracted SearXNG call — and the
+orchestrator side of the seam: the candidate budget, the re-applied slice, the
+``unresponsive_engines`` bound, and the ``ProviderFailure`` → wire-code
+mapping.
 
 test_mapping:
   pipeline/search_providers/__init__.py: tests/test_search_providers.py
   pipeline/search_providers/base.py: tests/test_search_providers.py
+  pipeline/search_providers/searxng.py: tests/test_search_providers.py
 """
 
 from __future__ import annotations
 
 import ast
+import logging
+from contextlib import contextmanager
 from dataclasses import fields
 from pathlib import Path
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 import pipeline.search_providers
+from pipeline import orchestrator
+from pipeline.orchestrator import (
+    _CONTROL_CHARS_RE,
+    PipelineError,
+    run_search_pipeline,
+)
+from pipeline.search_providers import searxng
 from pipeline.search_providers.base import (
     FAILURE_CLASSES,
     FailureClass,
@@ -26,7 +42,19 @@ from pipeline.search_providers.base import (
     ProviderSearchResult,
     SearchProvider,
 )
+from pipeline.search_providers.searxng import (
+    DEFAULT_SEARXNG_URL,
+    HTTP_STATUS_DETAIL_PREFIX,
+    SEARXNG_ENGINES,
+    UNPARSEABLE_ENDPOINT,
+    SearxngProvider,
+)
 from tests.fakes import FakeSearchProvider, assert_frozen
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
+
+from models import SearchRequest, Stage2Verdict
 
 # ---------------------------------------------------------------------------
 # Closed failure vocabulary
@@ -208,3 +236,684 @@ def test_no_search_provider_module_imports_a_sanitization_stage_or_the_cache() -
     for path in sorted(package_dir.glob("*.py")):
         offending = _imported_modules(path) & _FORBIDDEN_IMPORTS
         assert not offending, f"{path} imports forbidden modules: {offending}"
+
+
+# ---------------------------------------------------------------------------
+# US-002: SearxngProvider — the extracted SearXNG backend
+# ---------------------------------------------------------------------------
+
+_SEARXNG_CLIENT = "pipeline.search_providers.searxng.httpx.AsyncClient"
+
+_ORCHESTRATOR_CONFIG: dict[str, Any] = {
+    "user_agents": ["TestAgent/1.0"],
+    "news_domains": ["reuters.com"],
+    "seed_blocklist": [],
+    "extract_route_enabled": True,
+}
+
+
+def _response(
+    *,
+    json_value: Any = None,
+    json_error: Exception | None = None,
+    content: bytes = b"{}",
+    status_code: int = 200,
+    status_error: Exception | None = None,
+) -> MagicMock:
+    """A SearXNG response double with a real ``content`` length.
+
+    ``content`` is set explicitly here rather than left to ``MagicMock``'s
+    zero-length default, because the body bound is read off ``len()`` before
+    ``json()`` runs and a test that means to overrun it has to be able to.
+    """
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.content = content
+    if status_error is not None:
+        resp.raise_for_status.side_effect = status_error
+    else:
+        resp.raise_for_status.return_value = None
+    if json_error is not None:
+        resp.json.side_effect = json_error
+    else:
+        resp.json.return_value = json_value
+    return resp
+
+
+@contextmanager
+def _client_patch(
+    *,
+    response: MagicMock | None = None,
+    get_error: Exception | None = None,
+) -> Generator[tuple[MagicMock, AsyncMock]]:
+    """Intercept the provider's per-call ``httpx.AsyncClient``.
+
+    The patch target is the provider module's ``httpx`` attribute, which is
+    the *shared* ``httpx`` module object — the same one
+    ``pipeline.orchestrator.httpx`` names — so this and the orchestrator
+    suite's older dotted path replace the same class.
+    """
+    client = AsyncMock()
+    if get_error is not None:
+        client.get.side_effect = get_error
+    else:
+        client.get.return_value = response
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    with patch(_SEARXNG_CLIENT, return_value=client) as client_cls:
+        yield client_cls, client
+
+
+class TestSearxngProviderShape:
+    """Identity, defaults, and structural conformance to the protocol."""
+
+    def test_name_is_the_chain_token(self) -> None:
+        assert SearxngProvider().name == "searxng"
+
+    def test_searxng_is_the_free_floor(self) -> None:
+        assert SearxngProvider().paid is False
+
+    def test_satisfies_the_protocol(self) -> None:
+        # The annotation is the assertion: pyright (strict) fails this module
+        # if SearxngProvider ever stops matching SearchProvider.
+        provider: SearchProvider = SearxngProvider()
+        assert provider.name == "searxng"
+
+    def test_default_base_url_is_the_neutral_service_name(self) -> None:
+        assert DEFAULT_SEARXNG_URL == "http://searxng:8080"
+        assert SearxngProvider().base_url == DEFAULT_SEARXNG_URL
+
+    def test_orchestrator_aliases_are_the_same_objects(self) -> None:
+        """One definition, two assigned aliases — never a second copy."""
+        assert orchestrator._DEFAULT_SEARXNG_URL is DEFAULT_SEARXNG_URL
+        assert orchestrator._SEARXNG_ENGINES is SEARXNG_ENGINES
+
+    def test_engine_list_is_the_vetted_four(self) -> None:
+        assert set(SEARXNG_ENGINES.split(",")) == {
+            "duckduckgo",
+            "brave",
+            "startpage",
+            "mojeek",
+        }
+
+
+class TestSearxngProviderRequest:
+    """What goes out on the wire."""
+
+    @pytest.mark.asyncio()
+    async def test_a_non_default_base_url_reaches_the_request(self) -> None:
+        with _client_patch(response=_response(json_value={"results": []})) as (
+            _cls,
+            client,
+        ):
+            await SearxngProvider("http://custom-searxng:9999").search("q", 10)
+
+        assert client.get.call_args.args[0] == "http://custom-searxng:9999/search"
+
+    @pytest.mark.asyncio()
+    async def test_query_parameters_are_the_inline_call_s(self) -> None:
+        with _client_patch(response=_response(json_value={"results": []})) as (
+            _cls,
+            client,
+        ):
+            await SearxngProvider().search("weather in boston", 10)
+
+        params = client.get.call_args.kwargs["params"]
+        assert params == {
+            "q": "weather in boston",
+            "format": "json",
+            "pageno": 1,
+            "engines": SEARXNG_ENGINES,
+        }
+
+    @pytest.mark.asyncio()
+    async def test_the_client_is_constructed_hardened(self) -> None:
+        """Contract point 2, read off the patched class (the Stage 5 idiom)."""
+        with _client_patch(response=_response(json_value={"results": []})) as (
+            client_cls,
+            _client,
+        ):
+            await SearxngProvider().search("q", 10)
+
+        kwargs = client_cls.call_args.kwargs
+        assert kwargs["timeout"] == 10.0
+        assert kwargs["trust_env"] is False
+        assert kwargs.get("follow_redirects", False) is False
+        assert kwargs.get("verify", True) is not False
+
+
+class TestSearxngProviderSuccess:
+    """Raw dicts, straight through — the provider normalizes nothing."""
+
+    @pytest.mark.asyncio()
+    async def test_raw_result_dicts_pass_through_with_date(self) -> None:
+        raw = {
+            "title": "  Ragged   <b>title</b>  ",
+            "url": "https://example.com/1",
+            "content": "snippet",
+            "engine": "duckduckgo",
+            "publishedDate": "2026-09-01T00:00:00",
+            "extra_field": {"kept": True},
+        }
+        with _client_patch(response=_response(json_value={"results": [raw]})):
+            outcome = await SearxngProvider().search("q", 10)
+
+        assert isinstance(outcome, ProviderSearchResult)
+        assert outcome.provider_name == "searxng"
+        # Every original key survives verbatim — no trimming, no HTML
+        # stripping, no bounding. That is the orchestrator's job.
+        assert outcome.results == [{**raw, "date": "2026-09-01T00:00:00"}]
+
+    @pytest.mark.asyncio()
+    async def test_date_is_none_when_searxng_publishes_no_date(self) -> None:
+        with _client_patch(
+            response=_response(json_value={"results": [{"title": "t"}]})
+        ):
+            outcome = await SearxngProvider().search("q", 10)
+
+        assert isinstance(outcome, ProviderSearchResult)
+        assert outcome.results == [{"title": "t", "date": None}]
+
+    @pytest.mark.asyncio()
+    async def test_results_are_sliced_to_max_results(self) -> None:
+        many = [{"title": f"r{i}"} for i in range(50)]
+        with _client_patch(response=_response(json_value={"results": many})):
+            outcome = await SearxngProvider().search("q", 7)
+
+        assert isinstance(outcome, ProviderSearchResult)
+        assert len(outcome.results) == 7
+
+    @pytest.mark.asyncio()
+    async def test_a_missing_results_key_is_an_empty_success(self) -> None:
+        with _client_patch(response=_response(json_value={})):
+            outcome = await SearxngProvider().search("q", 10)
+
+        assert isinstance(outcome, ProviderSearchResult)
+        assert outcome.results == []
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            pytest.param(
+                [["mojeek", "timeout"], ["brave", "CAPTCHA"]],
+                ["mojeek", "brave"],
+                id="list-form",
+            ),
+            pytest.param(
+                [("mojeek", "timeout"), ("brave", "CAPTCHA")],
+                ["mojeek", "brave"],
+                id="tuple-form",
+            ),
+            pytest.param(["mojeek", "brave"], ["mojeek", "brave"], id="bare-name"),
+            pytest.param([], [], id="none-unresponsive"),
+        ],
+    )
+    async def test_unresponsive_engines_are_read_as_today(
+        self, raw: list[Any], expected: list[str]
+    ) -> None:
+        with _client_patch(
+            response=_response(json_value={"results": [], "unresponsive_engines": raw})
+        ):
+            outcome = await SearxngProvider().search("q", 10)
+
+        assert isinstance(outcome, ProviderSearchResult)
+        assert outcome.unresponsive_engines == expected
+
+
+# Every failure mode the provider maps, as (scenario id, patch kwargs,
+# expected failure_class, expected detail). One table, so the closed-
+# vocabulary and never-raises assertions below read off the same cases the
+# per-mapping assertions do.
+_FAILURE_CASES: list[tuple[str, dict[str, Any], str, str]] = [
+    (
+        "timeout",
+        {"get_error": httpx.TimeoutException("timed out")},
+        "timeout",
+        "timeout",
+    ),
+    (
+        "rate-limited-429",
+        {
+            "response": _response(
+                status_code=429,
+                status_error=httpx.HTTPStatusError(
+                    "Too Many Requests",
+                    request=MagicMock(),
+                    response=_response(status_code=429),
+                ),
+            )
+        },
+        "rate_limited",
+        "http_429",
+    ),
+    (
+        "server-error-500",
+        {
+            "response": _response(
+                status_code=500,
+                status_error=httpx.HTTPStatusError(
+                    "Server Error",
+                    request=MagicMock(),
+                    response=_response(status_code=500),
+                ),
+            )
+        },
+        "hard_error",
+        "http_500",
+    ),
+    (
+        "transport-error",
+        {"get_error": httpx.ConnectError("Connection refused")},
+        "hard_error",
+        "connect_error",
+    ),
+    (
+        "body-too-large",
+        {"response": _response(content=b"x" * (1024 * 1024 + 1), json_value={})},
+        "hard_error",
+        "body_too_large",
+    ),
+    (
+        "non-json-body",
+        {"response": _response(json_error=ValueError("not json"))},
+        "hard_error",
+        "bad_json",
+    ),
+    (
+        "json-raises-something-unrelated",
+        {"response": _response(json_error=RuntimeError("decoder exploded"))},
+        "hard_error",
+        "bad_json",
+    ),
+    (
+        "body-is-not-an-object",
+        {"response": _response(json_value=["not", "an", "object"])},
+        "hard_error",
+        "bad_json",
+    ),
+    (
+        "results-is-not-a-list",
+        {"response": _response(json_value={"results": {}})},
+        "hard_error",
+        "malformed_body",
+    ),
+    (
+        "results-element-is-not-an-object",
+        {"response": _response(json_value={"results": [{"title": "ok"}, "nope"]})},
+        "hard_error",
+        "malformed_body",
+    ),
+    (
+        "unexpected-exception",
+        {"get_error": RuntimeError("something nobody predicted")},
+        "hard_error",
+        "unexpected",
+    ),
+    (
+        "unresponsive-engines-wrong-shape",
+        {"response": _response(json_value={"results": [], "unresponsive_engines": 17})},
+        "hard_error",
+        "unexpected",
+    ),
+]
+
+
+class TestSearxngProviderFailures:
+    """Closed classes, closed tokens, and never an exception out of ``search()``."""
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize(
+        ("patch_kwargs", "failure_class", "detail"),
+        [
+            pytest.param(kwargs, cls, detail, id=case_id)
+            for case_id, kwargs, cls, detail in _FAILURE_CASES
+        ],
+    )
+    async def test_each_failure_maps_to_its_class_and_detail(
+        self, patch_kwargs: dict[str, Any], failure_class: str, detail: str
+    ) -> None:
+        with _client_patch(**patch_kwargs):
+            outcome = await SearxngProvider().search("q", 10)
+
+        assert isinstance(outcome, ProviderFailure)
+        assert outcome.provider_name == "searxng"
+        assert outcome.failure_class == failure_class
+        assert outcome.detail == detail
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize(
+        "patch_kwargs",
+        [
+            pytest.param(kwargs, id=case_id)
+            for case_id, kwargs, _c, _d in _FAILURE_CASES
+        ],
+    )
+    async def test_every_detail_is_in_the_closed_vocabulary(
+        self, patch_kwargs: dict[str, Any]
+    ) -> None:
+        with _client_patch(**patch_kwargs):
+            outcome = await SearxngProvider().search("q", 10)
+
+        assert isinstance(outcome, ProviderFailure)
+        assert outcome.failure_class in FAILURE_CLASSES
+        assert (
+            outcome.detail in searxng._SEARXNG_FAILURE_DETAILS
+            or outcome.detail.startswith(HTTP_STATUS_DETAIL_PREFIX)
+        )
+
+    def test_an_unregistered_detail_collapses_to_unexpected(self) -> None:
+        """The vocabulary is closed by construction, not by review."""
+        failure = SearxngProvider()._failure("hard_error", "a_brand_new_token")
+        assert failure.detail == "unexpected"
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize(
+        "patch_kwargs",
+        [
+            pytest.param(kwargs, id=case_id)
+            for case_id, kwargs, _c, _d in _FAILURE_CASES
+        ],
+    )
+    async def test_no_log_record_carries_exception_text_or_the_base_url(
+        self, patch_kwargs: dict[str, Any], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """CLAUDE.md invariant 6: SEARXNG_URL may carry a password."""
+        base_url = "http://searx-user:hunter2@searxng.internal:8080"
+        with caplog.at_level(logging.WARNING), _client_patch(**patch_kwargs):
+            outcome = await SearxngProvider(base_url).search("secret query", 10)
+
+        assert isinstance(outcome, ProviderFailure)
+        assert caplog.records, "a provider failure always logs exactly one WARNING"
+        for record in caplog.records:
+            rendered = " ".join(
+                [record.getMessage(), *(str(v) for v in record.__dict__.values())]
+            )
+            for forbidden in (
+                "hunter2",
+                "searx-user",
+                "searxng.internal",
+                "secret query",
+                "Connection refused",
+                "timed out",
+                "decoder exploded",
+                "something nobody predicted",
+            ):
+                assert forbidden not in rendered, (
+                    f"log record leaked {forbidden!r}: {rendered}"
+                )
+            assert record.exc_info is None
+
+
+class TestSearxngProviderOrigin:
+    """Contract point 7 — the only endpoint-shaped value the seam exposes."""
+
+    @pytest.mark.parametrize(
+        ("base_url", "expected"),
+        [
+            pytest.param("http://searxng:8080", "http://searxng:8080", id="default"),
+            pytest.param(
+                "https://searx.example.com",
+                "https://searx.example.com",
+                id="no-port",
+            ),
+            pytest.param(
+                "http://user:pass@unreachable:8080",
+                "http://unreachable:8080",
+                id="userinfo-stripped",
+            ),
+            pytest.param("http://[::1]:8080", "http://[::1]:8080", id="ipv6"),
+            pytest.param("http://host:99999", "http://host", id="port-out-of-range"),
+            pytest.param("http://host:notaport", "http://host", id="port-not-a-number"),
+            pytest.param("http://[::1", UNPARSEABLE_ENDPOINT, id="unterminated-ipv6"),
+            pytest.param("searxng:8080", UNPARSEABLE_ENDPOINT, id="no-scheme"),
+            pytest.param("", UNPARSEABLE_ENDPOINT, id="empty"),
+            pytest.param("   ", UNPARSEABLE_ENDPOINT, id="whitespace"),
+        ],
+    )
+    def test_origin_is_scheme_host_port_and_construction_never_raises(
+        self, base_url: str, expected: str
+    ) -> None:
+        provider = SearxngProvider(base_url)
+        assert provider.origin == expected
+
+    @pytest.mark.parametrize(
+        "base_url",
+        ["http://host:99999", "http://host:notaport", "http://[::1", "searxng:8080"],
+    )
+    def test_a_fallback_origin_never_echoes_the_raw_string(self, base_url: str) -> None:
+        """Never the raw base URL — it could carry userinfo."""
+        origin = SearxngProvider(f"http://user:pass@{base_url}").origin or ""
+        assert "pass" not in origin
+        assert "user" not in origin
+
+
+# ---------------------------------------------------------------------------
+# US-002: the orchestrator side of the seam
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _provider_patch(provider: FakeSearchProvider) -> Generator[MagicMock]:
+    """Make ``run_search_pipeline`` construct *provider* instead of the real one."""
+    with patch(
+        "pipeline.orchestrator.SearxngProvider", return_value=provider
+    ) as factory:
+        yield factory
+
+
+class TestOrchestratorCandidateBudget:
+    """Ruling 25 — the budget is a request to the provider, not a trusted bound."""
+
+    @pytest.mark.asyncio()
+    async def test_a_free_provider_is_asked_for_the_fetch_limit(self) -> None:
+        fake = FakeSearchProvider(name="searxng", paid=False)
+        with _provider_patch(fake):
+            await run_search_pipeline(
+                SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
+                config=_ORCHESTRATOR_CONFIG,
+            )
+
+        # fetch_limit = min(num_results * 2, _MAX_SEARCH_RESULTS_SCANNED)
+        assert fake.calls == [("q", 10)]
+
+    @pytest.mark.asyncio()
+    async def test_a_paid_provider_is_asked_for_num_results_only(self) -> None:
+        fake = FakeSearchProvider(name="pricey", paid=True)
+        with _provider_patch(fake):
+            await run_search_pipeline(
+                SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
+                config=_ORCHESTRATOR_CONFIG,
+            )
+
+        assert fake.calls == [("q", 5)]
+
+    @pytest.mark.asyncio()
+    async def test_the_fetch_limit_is_capped_at_the_scan_ceiling(self) -> None:
+        fake = FakeSearchProvider(name="searxng", paid=False)
+        with _provider_patch(fake):
+            await run_search_pipeline(
+                SearchRequest(query="q", num_results=20, promptguard_fail_closed=False),
+                config=_ORCHESTRATOR_CONFIG,
+            )
+
+        assert fake.calls == [("q", 20)]
+
+    @pytest.mark.asyncio()
+    async def test_a_provider_that_overruns_the_budget_is_resliced(self) -> None:
+        """An exact count, not a ceiling: 500 candidates, ten loop iterations.
+
+        Every result is BLOCKED at Stage 2, so nothing is appended and the
+        loop's ``num_results`` early exit never fires — which is what makes
+        the iteration count observable. If the orchestrator ever trusted the
+        provider's own slice instead of re-applying its own, this test sees
+        500 scans rather than ten. The pre-provider relative is
+        ``tests/test_orchestrator.py::
+        test_search_promptguard_work_is_capped_at_twenty_results``.
+        """
+        overrunning = FakeSearchProvider(
+            name="searxng",
+            paid=False,
+            outcome=ProviderSearchResult(
+                provider_name="searxng",
+                results=[
+                    {
+                        "title": f"Result {i}",
+                        "url": f"https://example.com/{i}",
+                        "content": "snippet",
+                        "engine": "duckduckgo",
+                        "date": None,
+                    }
+                    for i in range(500)
+                ],
+                unresponsive_engines=[],
+            ),
+        )
+        scans = 0
+
+        def counting_scan(text: str) -> Any:
+            nonlocal scans
+            scans += 1
+            return SimpleNamespace(verdict=Stage2Verdict.BLOCKED, flagged_spans=[])
+
+        promptguard = AsyncMock()
+        with (
+            _provider_patch(overrunning),
+            patch("pipeline.orchestrator.scan_structural", counting_scan),
+            patch("pipeline.orchestrator.run_promptguard", promptguard),
+        ):
+            response = await run_search_pipeline(
+                SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
+                config=_ORCHESTRATOR_CONFIG,
+            )
+
+        # Ten candidates asked for, ten resliced, ten iterations — one scan
+        # each, because the first field scanned (title) is already BLOCKED.
+        assert overrunning.calls == [("q", 10)]
+        assert scans == 10
+        assert promptguard.await_count == 0
+        assert response.results == []
+        assert response.omitted_results == 10
+
+
+class TestOrchestratorUnresponsiveEngineBound:
+    """The seam field is bounded in hashed orchestrator code, not the provider."""
+
+    @pytest.mark.asyncio()
+    async def test_forty_hostile_entries_are_capped_and_cleaned(self) -> None:
+        hostile = ["x" * 500 + "\x00\x07 injected\x1b[0m"] + [
+            f"engine-{i}" for i in range(39)
+        ]
+        fake = FakeSearchProvider(
+            name="searxng",
+            paid=False,
+            outcome=ProviderSearchResult(
+                provider_name="searxng",
+                results=[],
+                unresponsive_engines=hostile,
+            ),
+        )
+        with _provider_patch(fake):
+            response = await run_search_pipeline(
+                SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
+                config=_ORCHESTRATOR_CONFIG,
+            )
+
+        assert len(response.unresponsive_engines) <= 16
+        for name in response.unresponsive_engines:
+            assert isinstance(name, str)
+            assert len(name) <= 64
+            assert not _CONTROL_CHARS_RE.search(name)
+
+
+class TestOrchestratorFailureMapping:
+    """The two wire codes are unchanged; only the reason text narrowed."""
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize(
+        ("detail", "expected_error"),
+        [
+            pytest.param("http_429", "searxng_error", id="rate-limited"),
+            pytest.param("http_500", "searxng_error", id="server-error"),
+            pytest.param("timeout", "searxng_unavailable", id="timeout"),
+            pytest.param("connect_error", "searxng_unavailable", id="connect"),
+            pytest.param("body_too_large", "searxng_unavailable", id="too-large"),
+            pytest.param("bad_json", "searxng_unavailable", id="bad-json"),
+            pytest.param("malformed_body", "searxng_unavailable", id="malformed"),
+            pytest.param("unexpected", "searxng_unavailable", id="unexpected"),
+        ],
+    )
+    async def test_each_detail_maps_to_todays_code(
+        self, detail: str, expected_error: str
+    ) -> None:
+        fake = FakeSearchProvider(
+            name="searxng",
+            paid=False,
+            origin="http://test-searxng:8080",
+            outcome=ProviderFailure(
+                provider_name="searxng", failure_class="hard_error", detail=detail
+            ),
+        )
+        with _provider_patch(fake), pytest.raises(PipelineError) as exc_info:
+            await run_search_pipeline(
+                SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
+                config=_ORCHESTRATOR_CONFIG,
+            )
+
+        assert exc_info.value.error == expected_error
+        assert detail in exc_info.value.reason
+        assert exc_info.value.request_id
+
+    @pytest.mark.asyncio()
+    async def test_userinfo_never_reaches_the_searxng_unavailable_reason(self) -> None:
+        """End to end through the real provider: host:port echoed, credential not."""
+        with (
+            _client_patch(get_error=httpx.ConnectError("Connection refused")),
+            pytest.raises(PipelineError) as exc_info,
+        ):
+            await run_search_pipeline(
+                SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
+                searxng_url="http://user:pass@unreachable:8080",
+                config=_ORCHESTRATOR_CONFIG,
+            )
+
+        reason = exc_info.value.reason
+        assert exc_info.value.error == "searxng_unavailable"
+        assert "unreachable:8080" in reason
+        assert "pass" not in reason
+        assert "user" not in reason
+        # Ruling 13: exception text stays behind the seam.
+        assert "Connection refused" not in reason
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize(
+        "searxng_url",
+        [
+            pytest.param("http://host:99999", id="port-out-of-range"),
+            pytest.param("http://host:notaport", id="port-not-a-number"),
+            pytest.param("http://[::1", id="unterminated-ipv6"),
+            pytest.param("searxng:8080", id="no-scheme"),
+        ],
+    )
+    async def test_a_malformed_searxng_url_still_yields_a_422(
+        self, searxng_url: str
+    ) -> None:
+        """A typo in SEARXNG_URL is a 422 the operator can read, never a 500.
+
+        ``retrieval_app.py`` handles ``PipelineError`` and nothing else, and
+        the provider is constructed outside any ``try``, so a ``ValueError``
+        out of ``urlsplit()`` or its lazy ``.port`` parse would surface as an
+        unhandled 500 from inside the error path.
+        """
+        with (
+            _client_patch(get_error=httpx.ConnectError("Connection refused")),
+            pytest.raises(PipelineError) as exc_info,
+        ):
+            await run_search_pipeline(
+                SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
+                searxng_url=searxng_url,
+                config=_ORCHESTRATOR_CONFIG,
+            )
+
+        assert exc_info.value.error == "searxng_unavailable"
+        assert "connect_error" in exc_info.value.reason

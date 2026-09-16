@@ -875,7 +875,10 @@ def _searxng_client_patch(
         mock_client.get.return_value = mock_response
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
-    ctx = patch("pipeline.orchestrator.httpx.AsyncClient", return_value=mock_client)
+    ctx = patch(
+        "pipeline.search_providers.searxng.httpx.AsyncClient",
+        return_value=mock_client,
+    )
     return ctx
 
 

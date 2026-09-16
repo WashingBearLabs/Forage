@@ -160,9 +160,9 @@ async def test_connect_failure_never_logs_url_or_secret(
         ok = await c.connect()
 
     assert ok is False
-    assert caplog.text.strip()                 # canary: something was logged
-    assert "secret" not in caplog.text         # the password
-    assert "unreachable" not in caplog.text    # the host
+    assert caplog.text.strip()  # canary: something was logged
+    assert "secret" not in caplog.text  # the password
+    assert "unreachable" not in caplog.text  # the host
 ```
 
 Notes on the pattern:
@@ -180,7 +180,8 @@ Observations, not change proposals; each is either recorded elsewhere as a decis
 - `pipeline/stage5_url_audit.py:26` defines `logger` and never calls it. Harmless, but a reader may assume the fetch path logs something; it does not.
 - The stderr line format is inferred (`lastResort`, `%(message)s`); a container run has only ever confirmed the effective level. Anyone building log parsing on the format should measure it first.
 - `extra=` dicts on `document extraction completed`, `search_promptguard_complete`, and `search_promptguard_local_latency_target_exceeded` are never rendered; the last of these is WARNING and so prints as a bare marker with no duration.
-- Two *response* bodies interpolate exception text: `fetch_error` (`Failed to fetch <url>: <exc>`, `pipeline/orchestrator.py:328`) and `searxng_unavailable` (`SearXNG not reachable at <url>: <exc>`, `pipeline/orchestrator.py:697`). These are wire strings, not log lines, and neither path carries a credential; keep the two channels distinct and do not copy either into a log call.
+- One *response* body interpolates exception text: `fetch_error` (`Failed to fetch <url>: <exc>`, `pipeline/orchestrator.py`). It is a wire string, not a log line, and that path carries no credential; keep the two channels distinct and do not copy it into a log call. `searxng_unavailable` was the second case until `search-provider-abstraction` US-002 replaced its `str(exc)` with a closed provider `detail` token and its raw-URL echo with `SearxngProvider.origin`.
+- `pipeline/search_providers/searxng.py` emits one WARNING per failed search, `search_provider_failure`, carrying `provider`, `failure_class` and `detail` and nothing else — no `exc_info`, no `str(exc)`, no URL, because an httpx message embeds the request URL and with it the query string and any userinfo in `SEARXNG_URL`. `tests/test_search_providers.py` asserts it across every failure mode. Every future provider follows the same shape.
 - Line style is mixed: newer sites use `snake_case_event — detail` (`weights_*`, `break_glass_advertisement_active`, `search_promptguard_*`); older sites are prose with `%s` arguments. New lines should use the marker style.
 - `request_id` is never written to a visible log line, so a log line cannot be joined to a response; the uvicorn access log is the only per-request record.
 

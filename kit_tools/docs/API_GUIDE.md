@@ -240,9 +240,10 @@ Response fields to read (`SearchResponse`):
 | `request_id`, `query` | str, str | Correlation and echo |
 
 Failures are 422 with `{"error", "reason", "request_id"}`: `searxng_error` (SearXNG
-answered non-2xx; `reason` carries the status) or `searxng_unavailable` (connection
-refused, DNS, timeout, bad JSON; `reason` carries the configured URL and the exception
-text). One request, 10 s timeout, no retries.
+answered non-2xx; `reason` carries the status as `http_<code>`) or `searxng_unavailable`
+(connection refused, DNS, timeout, an oversized body, bad JSON; `reason` carries the
+scheme, host and port of the configured URL — userinfo stripped — and a closed `detail`
+token, never exception text). One request, 10 s timeout, no retries.
 
 ### POST /extract
 
@@ -398,9 +399,9 @@ emission site through the real routes and asserts parity).
 
 First-thing-to-check guidance per code is in `kit_tools/docs/TROUBLESHOOTING.md`
 "Error-Code Reference". Two observations for consumers that log or display `reason`:
-`fetch_error` and `searxng_unavailable` interpolate exception text, and
-`searxng_unavailable` also echoes the configured `SEARXNG_URL`; the `/extract` reasons
-never carry anything variable.
+`fetch_error` interpolates exception text, and `searxng_unavailable` echoes the scheme,
+host and port of the configured `SEARXNG_URL` (userinfo stripped, no exception text); the
+`/extract` reasons never carry anything variable.
 
 ---
 

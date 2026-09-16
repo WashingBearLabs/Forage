@@ -161,6 +161,10 @@
      `promptguard_threshold`; undocumented whether intentional.
   5. `fetch_error` and `searxng_unavailable` wire bodies interpolate `str(exc)`;
      `TooManyRedirectsError` collapses into generic `fetch_error`.
+     *(Resolved for search on 2026-09-15: `search-provider-abstraction` US-002 replaced
+     `searxng_unavailable`'s `str(exc)` with a closed provider `detail` token and its raw
+     `SEARXNG_URL` echo with a userinfo-stripped scheme/host/port. `fetch_error` and the
+     `TooManyRedirectsError` collapse are unchanged.)*
   6. Logging is unconfigured (INFO invisible in containers): recorded, not fixed.
   7. No container hardening in compose (`read_only`, `cap_drop`, `no-new-privileges`,
      `pids_limit`), no dependency-vulnerability scanning, no image signing/SBOM.

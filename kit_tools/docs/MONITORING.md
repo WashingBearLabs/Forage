@@ -140,7 +140,7 @@ Backed by `retrieval_app.SearchMetrics`.
 | Counter | Kind | Increments when | A rising value means |
 |---------|------|-----------------|----------------------|
 | `requests` | counter | Every `/search` that reached the handler. | Load. |
-| `errors` | map | `record_error(exc.error)`; keys `searxng_error` (SearXNG answered non-2xx) and `searxng_unavailable` (connection refused, DNS, 10 s timeout, bad JSON). | The companion is down or throttling. `searxng_error` with reason "SearXNG returned HTTP 429" means the SearXNG limiter was turned on. |
+| `errors` | map | `record_error(exc.error)`; keys `searxng_error` (SearXNG answered non-2xx) and `searxng_unavailable` (connection refused, DNS, 10 s timeout, bad JSON). | The companion is down or throttling. `searxng_error` with reason "SearXNG returned HTTP error (http_429)" means the SearXNG limiter was turned on. |
 | `omitted_by_reason` | map | Results dropped before return, keyed by `contract.OMISSION_REASONS`: `invalid_url`, `structural_blocked`, `injection_detected`, `promptguard_unavailable`; anything else lands in `other`. | `promptguard_unavailable` rising: fail-closed omissions on a degraded container — the consumer sees thin or empty results. |
 | `unscanned_results` | counter | `+= response.unscanned_results` — fail-open results returned without an ML scan. | Unsanitized results are reaching the consumer. |
 
@@ -334,7 +334,7 @@ These are **suggested watch points**, not configured alerts. No thresholds are d
 | Quarantine rate | — | `retrieve.blocked_by_reason.*` rising; `retrieve.promptguard_state.unavailable_blocked` rising on a degraded container (consumer sees content-free responses — the nine-day shape) | WARNING `Content quarantined for <url>`; `PromptGuard unavailable — fail-closed for <tier> tier` |
 | Search results silently thinning | — | `search.omitted_by_reason.promptguard_unavailable` rising (fail-closed) or `search.unscanned_results` rising (fail-open) | same `PromptGuard unavailable` WARNING per result |
 | Admission pressure on `/extract` | — | `extraction.busy_rejections` rising (callers get 429 `busy`); `semaphore_saturation` and `queued` rising first; `oom_proximity_ratio` approaching 1.0 (explorer suggested watching above 0.9) | — |
-| SearXNG failures | **no signal** — `/health` does not probe SearXNG | `search.errors.searxng_unavailable` / `searxng_error` rising; per-request 422 only | — (nothing first-party; the 422 `reason` echoes the `SEARXNG_URL` value and exception text to the caller) |
+| SearXNG failures | **no signal** — `/health` does not probe SearXNG | `search.errors.searxng_unavailable` / `searxng_error` rising; per-request 422 only | — (nothing first-party; the 422 `reason` echoes the scheme, host and port of `SEARXNG_URL` — userinfo stripped — plus a closed `detail` token, never exception text) |
 | Break-glass left armed | `capabilities.search_sanitization` present while `promptguard_loaded: false` | — | WARNING `break_glass_advertisement_active` at startup |
 | Boot failure | no answer on 8020 | — | traceback from `ExtractionConfigurationError` or the cache-settings validator; `docker inspect` shows the exit |
 

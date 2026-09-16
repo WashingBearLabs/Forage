@@ -92,16 +92,18 @@ crash reads as a false regression.
 
 ## Test Structure
 
-**29 `test_*.py` modules** under `tests/`, flat, one per subject — 32 Python files in all
+**30 `test_*.py` modules** under `tests/`, flat, one per subject — 33 Python files in all
 once `conftest.py`, `fakes.py` and `__init__.py` are counted — plus `golden/` and
-`fixtures/`. (Both numbers measured 2026-09-11; state the convention with the count, or
-the next person reconciles two different ones by increment.) **1610 tests, all green** as
-of 2026-09-11 (`feature-forage-contract` US-001 added `test_contract_errors.py`'s 25,
+`fixtures/`. (Both numbers measured 2026-09-15; state the convention with the count, or
+the next person reconciles two different ones by increment.) **1713 tests, all green** as
+of 2026-09-15 (`feature-forage-contract` US-001 added `test_contract_errors.py`'s 25,
 US-005 `test_contract_metrics.py`'s 20, US-002 `test_contract_export.py`'s 18, US-003
 `test_governance_docs.py`'s 41 plus 26 in `test_ci_workflow.py`, and US-004 another 78
 spread across four existing modules — 36 workflow-shape, 29 smoke, 11 Dockerfile, 2
-governance; the per-module counts in the table below have not all been re-measured since
-2026-09-10).
+governance; `search-provider-abstraction` US-001 then added the new
+`test_search_providers.py` module and US-002 grew it to 103 for `SearxngProvider` and the
+orchestrator side of the seam; the per-module counts in the table below have not all been
+re-measured since 2026-09-10).
 
 | Module | Tests | Covers |
 |--------|------:|--------|
@@ -109,6 +111,7 @@ governance; the per-module counts in the table below have not all been re-measur
 | `tests/test_vendor_weights.py` | 102 | `scripts/vendor_weights.py`: the symlink-dereferenced tarball (built, extracted, bytes compared), tar determinism, generation-time allowlist refusal, the manifest round-trip through the real verifier, credential hygiene on the `oras` path, and the private-package visibility check — all fixture-driven, no registry and no token |
 | `tests/test_stage2_structural.py` | 78 | Deterministic regex injection scan |
 | `tests/test_orchestrator.py` | 63 | End-to-end pipeline drive, search + retrieve paths |
+| `tests/test_search_providers.py` | 103 | The `SearchProvider` seam and `SearxngProvider`: protocol shape, the closed failure vocabulary, the AST sweep that keeps provider code away from the sanitization stages and the cache, the extracted SearXNG call (request shape, hardened client kwargs, raw-dict pass-through, `publishedDate` → `date`, every failure mapping, credential-free logging, `origin` including its four malformed-URL fallbacks) and the orchestrator side (candidate budget, the re-applied slice as an exact count, the `unresponsive_engines` 16×64 bound, and the `ProviderFailure` → `searxng_error` / `searxng_unavailable` mapping) |
 | `tests/test_url_validator.py` | 59 | SSRF defense: RFC1918, DNS rebinding, schemes |
 | `tests/test_cache.py` | 116 | Valkey cache incl. the never-log-the-URL invariant |
 | `tests/test_smart_extraction.py` | 45 | Summary mode / high-signal preservation |
@@ -125,7 +128,7 @@ governance; the per-module counts in the table below have not all been re-measur
 | `tests/test_dockerfile.py` | 50 | `Dockerfile` text: no secret may enter the build, digest-pinned base, lock-driven install, and — since US-004 — that the frozen contract is COPYed to `/app/contract/` (with `.dockerignore` checked for a pattern that would silently empty it) and that the two reproducibility normalizations stay: no timestamped apt artefacts, no bytecode from the import check |
 | `tests/test_pyright_policy.py` | 12 | Type-checking policy: strict, one carve-out, no suppressions |
 | `tests/test_searxng_smoke.py` | 61 | `searxng_smoke.py`: every evaluator branch, the Docker argv it builds, and the `--internal` wiring |
-| `tests/test_searxng_docker.py` | 28 | `searxng/Dockerfile` + baked config: the negatives (no wildcard pass list, no baked secret, no header trust) and engine parity with `_SEARXNG_ENGINES` |
+| `tests/test_searxng_docker.py` | 28 | `searxng/Dockerfile` + baked config: the negatives (no wildcard pass list, no baked secret, no header trust) and engine parity with `SEARXNG_ENGINES` (read through `pipeline/orchestrator.py`'s `_SEARXNG_ENGINES` alias) |
 | `tests/test_hermeticity.py` | 10 | Executing canary for the autouse socket guard |
 | `tests/test_sanitizer_revision.py` | 9 | Revision hashing over `_REVISION_SOURCES` and the `MODEL_ID@revision` model identity |
 | `tests/test_dependency_lock.py` | 3 | `uv.lock` stays CPU-only (no `nvidia-*` wheels) |
@@ -252,6 +255,7 @@ test_mapping:
   "pipeline/extraction_limits.py": "tests/test_stage1_extraction.py"
   "pipeline/search_providers/__init__.py": "tests/test_search_providers.py"
   "pipeline/search_providers/base.py": "tests/test_search_providers.py"
+  "pipeline/search_providers/searxng.py": "tests/test_search_providers.py"
   "promptguard/classifier.py": ["tests/test_stage3_promptguard.py", "tests/test_model_fetcher.py"]
   "searxng/config/*": "tests/test_searxng_docker.py"
   "searxng/Dockerfile": "tests/test_searxng_docker.py"

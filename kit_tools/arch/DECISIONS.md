@@ -8,7 +8,7 @@
 
 > **TEMPLATE_INTENT:** Record architectural decisions and their rationale. Explains the 'why' behind technical choices.
 
-> Last updated: 2026-09-13
+> Last updated: 2026-09-15
 > Updated by: Claude (seed-project)
 
 This file records significant architectural and technical decisions.
@@ -610,7 +610,8 @@ a rotation flushes Forage's own cache. Rotations to date, none changing sanitiza
 | `0537316d…` | pyright-strict burn-down retyped two hashed files (2026-09-07) |
 | `5927038d…` | identity became `MODEL_ID@revision` — no source byte moved (2026-09-10) |
 | `fa4691c5…` | contract `1.1.0` and the revision joined the cache key (2026-09-10) |
-| `8b1b7f78…` (current) | error vocabulary added to `contract.py`; contract still `1.1.0` (2026-09-11) |
+| `8b1b7f78…` | error vocabulary added to `contract.py`; contract still `1.1.0` (2026-09-11) |
+| `ee4450d9…` (current) | the inline SearXNG call extracted from `orchestrator.py` into `SearxngProvider`; wire codes unchanged, `reason` text narrowed (2026-09-15) |
 
 **Rationale:**
 `pipeline/sanitizer_revision.py`: "two containers running the same code can be scanning with

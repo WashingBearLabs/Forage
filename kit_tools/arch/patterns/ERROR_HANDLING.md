@@ -155,8 +155,11 @@ to `invalid_url`), then wraps `fetch_url` at step 3 with the same two plus
 upload exception through `document_failure`, adds `OSError` to `extraction_failed` and
 `PromptGuardBudgetExceededError` to `content_too_large_to_classify`, and raises
 `content_too_large_to_classify` itself when `raw_text` exceeds the classifiable budget.
-`run_search_pipeline` maps `httpx.HTTPStatusError` to `searxng_error` and anything else to
-`searxng_unavailable`.
+`run_search_pipeline` no longer catches HTTP exceptions at all: `SearxngProvider.search()`
+(`pipeline/search_providers/searxng.py`) classifies them behind the seam and returns a
+`ProviderFailure`, and the orchestrator maps its closed `detail` token — a status-derived
+`http_<code>` to `searxng_error`, everything else (`timeout`, `connect_error`,
+`body_too_large`, `bad_json`, `malformed_body`, `unexpected`) to `searxng_unavailable`.
 
 The route handlers add bookkeeping, not decisions: `/retrieve` calls
 `RetrieveMetrics.record_error(exc.error)` and re-raises; `/extract` records the verdict
@@ -204,9 +207,10 @@ pairs that emit a body today; `/health` and `/metrics` declare none.
   (`ERROR_CODES`, `DegradedReason`, `cache._closed_vocabulary_reason`, `model_fetcher`
   `REASON_*` and `OUTCOME_*`), and let unknown keys fold into `METRICS_OTHER_BUCKET`.
 - **Keep exception text out of wire bodies unless the vocabulary already allows it.**
-  `/extract` reasons are fixed strings by construction; the `/retrieve` and `/search`
-  `reason` fields that pass `str(exc)` through are the documented exception, not a
-  precedent to extend.
+  `/extract` reasons are fixed strings by construction; `/search` joined them in
+  `search-provider-abstraction` US-002 (closed provider `detail` tokens); `/retrieve`'s
+  `fetch_error` is the one remaining `str(exc)` on the wire — the documented exception,
+  not a precedent to extend.
 - **Retries only for background acquisition, never for user-facing requests.** Weights and
   the cache reconnect back off and retry; a page fetch or a SearXNG query gets one attempt
   and a coded refusal. The caller decides whether to try again.
@@ -260,10 +264,13 @@ health semantics are in `kit_tools/docs/MONITORING.md` "Health Checks".
 Recorded for the owner as observations, not decisions. Each has a place in
 `contract/GOVERNANCE.md` before anyone touches it.
 
-1. **`fetch_error` and `searxng_unavailable` interpolate `str(exc)` into the wire body.**
-   `run_retrieve_pipeline`'s catch-all builds `Failed to fetch <url>: <exc>` and
-   `run_search_pipeline`'s builds `SearXNG not reachable at <url>: <exc>`, so httpx
-   exception text reaches the consumer. The other `/retrieve` reasons pass the validator's
+1. **`fetch_error` interpolates `str(exc)` into the wire body.**
+   `run_retrieve_pipeline`'s catch-all builds `Failed to fetch <url>: <exc>`, so httpx
+   exception text reaches the consumer. It is the last such case: `searxng_unavailable`
+   used to build `SearXNG not reachable at <url>: <exc>` and now builds
+   `SearXNG not reachable at <scheme>://<host>:<port>: <detail>` from
+   `SearxngProvider.origin` and a closed token (`search-provider-abstraction` US-002).
+   The other `/retrieve` reasons pass the validator's
    own fixed-format messages through, including the resolved private IP that ruling (d)
    documents as a DNS-oracle caveat for deployments that break the private-network posture.
    Redaction is a `reason` change and therefore a contract decision.

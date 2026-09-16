@@ -845,3 +845,67 @@ _None outstanding._
 ## Open Questions
 
 _None (session_ready)._
+
+## Implementation Notes
+
+### US-002 — `SearxngProvider` extraction (2026-09-15)
+
+**`sanitizer_revision` rotation (seventh).**
+
+```
+before: 8b1b7f78e85f733ef3b8ace5194632a8cf92410131b2c1af995c456f20196d7c
+after:  ee4450d9202daae4f35799d3c0e2379dfcc1c04697cb98fa4a6cc7a4af63c3da
+```
+
+Attribution was **measured, not assumed**: with `pipeline/orchestrator.py` reverted to its
+pre-story bytes and the new `pipeline/search_providers/searxng.py` left in place,
+`derive_sanitizer_revision()` returns `8b1b7f78…196d7c` exactly — proving `orchestrator.py`
+is the only `_REVISION_SOURCES` member this story moved and that the provider module needs
+no `_REVISION_SOURCES` entry. Recorded in `docs/bootstrap-notes.md`, `CLAUDE.md`'s
+coexistence narrative and `kit_tools/arch/DECISIONS.md`.
+
+**Contract point 7's fallbacks are load-bearing, not decorative.** `urlsplit()` raises on
+an unterminated IPv6 literal and `SplitResult.port` raises on an out-of-range or
+non-numeric port — both from inside `__init__`, which `run_search_pipeline` calls outside
+any `try`, and `retrieval_app.py` handles only `PipelineError`. A naive `_compute_origin`
+therefore turns a typo in `SEARXNG_URL` from a readable 422 into an unhandled 500, and a
+scheme-less value (`searxng:8080`) puts the literal string `searxng://None` on the wire.
+Ten tests pin the four malformed shapes; mutating `_compute_origin` back to the naive form
+fails all ten.
+
+**Why `origin` is typed `str | None` on a class that never returns `None`.** A protocol's
+mutable attributes are **invariant** under pyright strict, so declaring `origin: str` on
+`SearxngProvider` would make it stop satisfying `SearchProvider` — the annotation has to
+match the protocol member exactly. Same reason the constants are *assigned* aliases rather
+than imported private names (`reportPrivateUsage` carves out `tests/` only).
+
+**pyright strict and `resp.json()`.** The `isinstance(parsed, dict)` → `.get(...)` →
+`isinstance(results, list)` narrowing chain trips `reportUnknownVariableType` even when
+intermediate variables carry an explicit annotation, because narrowing `Any` or `object`
+with `isinstance(x, dict)` produces `dict[Unknown, Unknown]`. `typing.cast` at each
+narrowing point is the fix; an annotated assignment is not.
+
+**Why the sixteen pre-existing mocked search tests needed no edit against the new body
+bound.** `MagicMock`'s auto-generated `__len__` returns 0 for an unconfigured `.content`,
+so `len(resp.content) > _MAX_SEARXNG_RESPONSE_BYTES` is false for every one of them.
+Verified directly. The new suite sets `.content` explicitly so a test that means to
+overrun the bound can.
+
+**The single permitted pre-existing test edit** was `_searxng_client_patch`'s target
+string. The three direct `patch("pipeline.orchestrator.httpx.AsyncClient")` sites kept
+working untouched: `orchestrator.py`'s `import httpx` (still needed on the retrieve path)
+and `searxng.py`'s `import httpx` name the *same module object*, so patching `AsyncClient`
+through either dotted path patches it for both.
+
+**Closed by construction, not by review.** `_failure()` collapses any `detail` that is
+neither a registered token nor a member of the `http_<status>` family to `unexpected`, so
+a future caller cannot widen what reaches the wire by passing a new string.
+
+**Out-of-scope breakage resolved to unblock the gates (recorded per the verifier's ask).**
+`kit_tools/hooks/*.py`, seeded in commit `41e01d8`, failed all three blocking gates before
+this story began — 29 `ruff check` errors, 9 files unformatted (one of them the Python
+sample inside `kit_tools/arch/patterns/LOGGING.md`), 22 `pyright` errors. `CLAUDE.md`
+forbids a baseline or an exclude, so the only decision that makes the gates honest is to
+fix them: done mechanically (formatter, safe lint autofix, `contextlib.suppress`, three
+missing annotations), behaviour-preserving, smoke-checked by importing and exercising each
+hook, and landed as a **separate `chore:` commit** so this story's diff stays reviewable.

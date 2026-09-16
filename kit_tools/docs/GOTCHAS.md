@@ -340,8 +340,8 @@ production. **A bump nobody performs re-arms this gotcha**, exactly as a bump jo
 stopped running would have. Rolling our own search image was considered and rejected —
 the community maintaining engine definitions weekly *is* the value.
 
-**Also note:** the engine list appears in two places — `pipeline/orchestrator.py`'s engine
-constant and `searxng/config/settings.yml`. Both live in this repo now, and
+**Also note:** the engine list appears in two places — `SEARXNG_ENGINES` in
+`pipeline/search_providers/searxng.py` and `searxng/config/settings.yml`. Both live in this repo now, and
 `tests/test_searxng_docker.py` now asserts the two sets are equal rather than asking
 anyone to keep them in sync by hand.
 
