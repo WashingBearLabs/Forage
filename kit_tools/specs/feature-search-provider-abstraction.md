@@ -483,45 +483,45 @@ lifespan-free client (save/restore idiom) and asserts `POST /search` served thro
   selects code paths, matching the `VALKEY_URL` paragraph there).
 
 **Acceptance Criteria:**
-- [ ] `parse_provider_names`, `build_provider_chain(names, *, searxng_url)` and
+- [x] `parse_provider_names`, `build_provider_chain(names, *, searxng_url)` and
       `SearchProviderConfigurationError(ValueError)` are defined in
       `pipeline/search_providers/__init__.py` (imported by `retrieval_app.py`; `pipeline/` imports
       nothing from the app module); resolution is a static-dictionary lookup with no dynamic
       import; tests cover unset, blank, whitespace-and-stray-comma, explicit `searxng`, duplicate,
       and unknown-name inputs.
-- [ ] The lifespan reads `FORAGE_SEARCH_PROVIDERS` once through `SEARCH_PROVIDERS_ENV_VAR` /
+- [x] The lifespan reads `FORAGE_SEARCH_PROVIDERS` once through `SEARCH_PROVIDERS_ENV_VAR` /
       `_configured_provider_names()`, publishes `app.state.search_providers` as a
       `list[SearchProvider]` in chain order, and logs the resolved names (and nothing else from the
       environment); a real-lifespan test (the `_running_app` pattern in `tests/test_app.py`, with
       save/restore) asserts the published chain objects and the log line; the set-but-blank WARNING
       is tested.
-- [ ] An unknown name raises `SearchProviderConfigurationError` out of the lifespan (boot refused);
+- [x] An unknown name raises `SearchProviderConfigurationError` out of the lifespan (boot refused);
       the message names the entry's position and the known names and contains neither the token
       nor the raw value — a value with an embedded newline yields a one-line message that does not
       contain the text after the newline (precedent `tests/test_model_fetcher.py:1307`); tested
       with `pytest.raises` around `lifespan(probe_app)` on a throwaway `probe_app = FastAPI()` (the
       `CacheConfigurationError` precedent at `tests/test_app.py:1162–1175`), never the module-global
       `app`.
-- [ ] `_resolved_search_providers(state)` and the module-scope `None` sentinel exist; every
+- [x] `_resolved_search_providers(state)` and the module-scope `None` sentinel exist; every
       pre-existing lifespan-free `/search` test passes with no fixture edit; a test with the
       sentinel in place pins the fallback to a one-element chain whose only provider has
       `name == "searxng"` and `origin == "http://searxng:8080"` (read through the protocol; no
       `isinstance`, no `base_url` access).
-- [ ] The `/search` handler passes the resolved chain as `providers=` into `run_search_pipeline`,
+- [x] The `/search` handler passes the resolved chain as `providers=` into `run_search_pipeline`,
       which tests `providers is None` (a `[]` argument raises `ValueError` — one test), uses
       `chain[0]`, and never reads the environment; a `POST /search` test with
       `app.state.search_providers = [fake]` (save/restore) proves the fake served the request and
       a following `/search` test still sees the real provider.
-- [ ] `SEARXNG_URL` reaches `SearxngProvider` through `build_provider_chain(..., searxng_url=...)`;
+- [x] `SEARXNG_URL` reaches `SearxngProvider` through `build_provider_chain(..., searxng_url=...)`;
       a test with a non-default value asserts the chain's provider carries it; `retrieval_app.py`
       defaults `SEARXNG_URL` to `DEFAULT_SEARXNG_URL`.
-- [ ] `docs/configuration.md` and `kit_tools/docs/ENV_REFERENCE.md` each carry a
+- [x] `docs/configuration.md` and `kit_tools/docs/ENV_REFERENCE.md` each carry a
       `FORAGE_SEARCH_PROVIDERS` row (grep-verifiable) with the query-egress sentence;
       `tests/conftest.py`'s `_CLEARED_ENV_VARS` and `tests/test_hermeticity.py`'s exact set both
       include it; no compose fragment changes.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
 
 ### US-004: Wire schema alignment, `search_unavailable`, and the contract bump to 1.2.0
 
