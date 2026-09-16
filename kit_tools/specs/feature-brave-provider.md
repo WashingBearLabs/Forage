@@ -10,9 +10,9 @@ size: M
 epic: search-providers
 epic_seq: 2
 epic_final: false
-execution_order: [US-001, US-002, US-003]
+execution_order: [US-010, US-011, US-002, US-003]
 created: 2026-09-14
-updated: 2026-09-14
+updated: 2026-09-16
 ---
 
 # Feature Spec: Brave Search Provider
@@ -78,208 +78,69 @@ caching flag (ruling 22).
 
 ## User Stories
 
-### US-001: `BraveApiProvider` over the LLM-Context endpoint (pre-flight owner gate)
+### US-001: [SPLIT — see US-010, US-011]
+
+> Split by supervisor: Retries exhausted at the M-size 900 s budget: attempts 1 and 3 timed out during implementation, attempt 2 finished with two minutes to spare and was judged correct in substance, failing verification only on test-hardening details. Scope too large for one session — split into the provider module + core tests (US-010) and the bound/budget/provenance tests + doc rows (US-011). The owner gate is already satisfied at 9794cba.
+
+### US-010: `BraveApiProvider` core — client, settings, parser over the pinned sample (split of US-001, part 1)
 
 **Priority:** P1
 
-**Description:** As an operator with a Brave key, I want Forage to query Brave's LLM-Context
-endpoint and return its chunks in the standard result shape so they flow through the same
-sanitization pipeline as SearXNG results. **Execution stops here and reports if the fixture is
-absent:** the sample capture is an owner-run pre-flight gate (ruling 24), exactly like spec 5
-US-002's tag push — it needs a live key and network egress the autonomous environment does not
-have, and a fixture written from memory is the failure the pinned-sample rule exists to prevent.
-The gate is satisfied when `tests/fixtures/brave/llm_context_sample.json` and its
-`tests/fixtures/README.md` section are committed; the story's code work starts only then.
+**Description:** As an operator with a Brave key, I want Forage to query Brave's LLM-Context endpoint and return its chunks in the standard result shape so they flow through the same sanitization pipeline as SearXNG results. This is the first half of the original US-001, split by the supervisor after the 900 s session budget was exhausted twice: it delivers the **complete provider module** and its **core tests**; US-011 carries the remaining hardening tests and the doc rows. **The owner gate (ruling 24) is already satisfied** — `tests/fixtures/brave/llm_context_sample.json`, its `tests/fixtures/README.md` section and the `kit_tools/arch/SECURITY.md` "Fixtures" sentence were committed at `9794cba`. Do not modify the fixture or its provenance note. Budget the session: implement the module fully, write only the tests this story's criteria name, and stop.
 
-**Independent Test:** Construct `BraveApiProvider` directly (a test key plus settings built from a
-`config.yaml` dict) and patch `pipeline.search_providers.brave.httpx.AsyncClient` to answer with the
-saved envelope `tests/fixtures/brave/llm_context_sample.json`. `provider.search("q", 5)` returns a
-`ProviderSearchResult` whose every dict carries `engine="brave-api"`; `run_search_pipeline` with the
-provider injected as `chain[0]` through the chain parameter spec 1 US-003 gave it (not through
-`FORAGE_SEARCH_PROVIDERS`, which is US-002's registration work) calls
-`provider.search(query, request.num_results)` and returns sanitized results with
-`content_kind="chunk"` and `title`/`url`/`snippet`/`date` populated from the envelope's synthetic
-values — the wire `snippet` being the chunk body carried as the internal `content` key — with at
-least one result not omitted.
-
-**Implementation Hints:**
-- **The owner gate, procedurally (ruling 24).** Before this story starts, the owner makes ONE
-  credentialed request to the LLM-Context endpoint from a shell — never a test, never CI. The key
-  is supplied through the environment and never on argv: write the header line into a `curl -K`
-  config file created under `umask 077` with a `printf` of the environment variable (the typed
-  line, which is what history records, names the variable, not the value) and delete the file
-  afterwards; a `-H "X-Subscription-Token: $KEY"` on the command line lands in shell history and
-  the process table, the hazard `docs/configuration.md` cites when it forbids inline `-e`. Use an
-  innocuous query. Then commit only the response **envelope**: keep every field name, the nesting,
-  the value types and the element counts exactly as captured, and replace every chunk body, title,
-  URL and date with an obviously synthetic value of representative length
-  (`"synthetic chunk 1 of 3"`, `https://example.invalid/synthetic-1`, `2026-01-01`) — never "fix"
-  an oddity in the real shape while substituting. No request headers, no key and no Brave-authored
-  text is committed. Save it as `tests/fixtures/brave/llm_context_sample.json` and add a section to
-  `tests/fixtures/README.md` (the provenance note): endpoint path, capture date, the docs URL, the
-  substitution rule, the raw response's byte size and source count, and the ToS reasoning (owner
-  decision 6). Add the fixture to `kit_tools/arch/SECURITY.md`'s "Fixtures" paragraph (~320) in
-  the same change.
-- **A mechanical guard on the fixture tree.** A test in `tests/test_brave_provider.py`, modelled on
-  `tests/test_dockerfile.py::TestNoSecretEntersTheBuild::test_no_token_shaped_literal_anywhere`,
-  walks `tests/fixtures/` and asserts no file contains `X-Subscription-Token` or
-  `Authorization`, and walks `tests/fixtures/brave/` **only** for a token-shaped literal (a run of
-  24 or more letters, digits, `_` or `-`). The generic-run check cannot be tree-wide: 26
-  legitimate identifiers already under `tests/fixtures/` match it
-  (`DebertaV2ForSequenceClassification`, `attention_probs_dropout_prob`, …), none of them hashes,
-  and the precedent it cites is prefix-anchored (`hf_[A-Za-z0-9]{20,}`) precisely so it needs no
-  allowlist. CI's `secret-grep` reads the image's layer
-  history and `.dockerignore` excludes `tests/`, so nothing else would ever look here.
-- **Wire names — expected now, verified by the sample.** From Brave's public documentation at
-  spec time: `GET https://api.search.brave.com/res/v1/llm/context`; auth header
-  `X-Subscription-Token`; query parameters `q`, `count` (default 20, max 50) and
-  `maximum_number_of_urls` (default 20, max 50) for the result budget, and
-  `maximum_number_of_snippets_per_url` / `maximum_number_of_tokens_per_url` for the per-source
-  payload; a response whose top level is `grounding` (holding `generic`, an ordered list of
-  objects with `url`, `title` and a `snippets` list of strings, beside `poi` and `map`) and
-  `sources` (a map keyed by URL whose values carry `title`, `hostname` and `age`). The capture
-  confirms or corrects these; a mismatch is recorded in this spec's Implementation Notes, and the
-  parser follows the sample, never this list. Brave also bounds `q` (documented at 400 characters
-  plus a word limit); ruling 30's cap below is sized to it.
-- New `pipeline/search_providers/brave.py` implementing the spec-1 `SearchProvider`:
-  `name = "brave"`, `paid = True` (ruling 23; the `engine` value is the only place `brave-api`
-  appears). Hold the key in a non-repr field (`dataclasses.field(repr=False)` or the equivalent)
-  and define `__repr__` to emit the name only. The key travels only in the auth header, never in
-  the URL or query string, so no URL-bearing log line can carry it.
-- The client mirrors `pipeline/stage5_url_audit.py` (~136):
-  `httpx.AsyncClient(timeout=<brave timeout>, follow_redirects=False, trust_env=False,
-  verify=ssl.create_default_context())` against a module constant `_BRAVE_LLM_CONTEXT_URL: Final`
-  (an `https://` URL; no env override — the constant is also the single patch seam for tests).
-  `trust_env=False` keeps ambient `HTTPS_PROXY`/`.netrc` away from a credential-bearing call —
-  which also means the Brave call needs direct HTTPS egress and ignores proxy variables by design
-  (US-002's doc row says so); `follow_redirects=False` keeps httpx from replaying a custom auth
-  header to a redirect target.
-- **Bound the body before parsing**, mirroring stage 5 (`stage5_url_audit.py` ~200–215): use
-  `client.stream(...)`, fast-reject on `Content-Length` over
-  `_BRAVE_MAX_RESPONSE_BYTES: Final = 1_048_576`, then stream `aiter_bytes()` (decoded bytes, so a
-  compressed body cannot expand past the cap) with a running byte cap, and only then
-  `json.loads`. An over-cap body is `ProviderFailure(failure_class="hard_error",
-  detail="body_too_large")`; US-003 owns the full mapping. The provenance note's byte size is the
-  reality check on the constant: it must be at least ten times the captured response.
-- **Outbound query bound (ruling 30).** The provider truncates *its outbound copy* of `query` to
-  `search_brave_query_max_chars` before egress. `SearchRequest.query` keeps its wire shape (adding
-  `max_length` would stop accepting a value accepted today — a MAJOR), so the bound lives here and
-  is no contract change.
-- **Tunables live in `config.yaml`** (ruling 9) as three top-level scalars (the
-  `promptguard_threshold` shape, not a block), read from the `_load_config()` dict by a
-  `brave_settings_from_config(config)` helper in `brave.py` on the `cache_settings_from_config`
-  model: `search_brave_timeout_seconds` (float, `1.0` to `60.0`, default `15.0`),
-  `search_brave_chunk_max_chars` (int, `200` to `2000`, default `2000`) and
-  `search_brave_query_max_chars` (int, `50` to `400`, default `400` — the ceiling is Brave's own
-  documented `q` limit, so the knob only tightens). All three ship in `config.yaml` with a comment.
-  The helper is called **unconditionally** in the lifespan beside `cache_settings_from_config`
-  (`retrieval_app.py` ~1086) — US-002 names the call — so a wrong-typed or out-of-range value
-  refuses boot on every deployment, chained or not, exactly as the `cache:` block does.
-- **The chunk cap, reconciled with spec 1.** Spec 1's provider contract (point 3) says providers
-  never normalize, bound or scan *text on its way to the wire* — the orchestrator loop is the only
-  path there. This cap is a *payload bound*, the same kind of guard as `_BRAVE_MAX_RESPONSE_BYTES`:
-  the provider applies `search_brave_chunk_max_chars` to its own raw response before the dict
-  leaves the provider, which bounds the normalization work a hostile payload can buy and gives the
-  operator a per-provider knob. Everything the loop does still happens afterwards: it
-  NFC-normalizes, whitespace-collapses and truncates every `content` to
-  `_MAX_SEARCH_SNIPPET_LENGTH = 2_000` (`pipeline/orchestrator.py` ~567, applied ~724), then scans
-  it. So Brave chunks are not "longer content" on the wire; the range's ceiling equals the loop
-  constant so the two bounds can never disagree. Raising the shared constant (which would move
-  SearXNG snippets too and change PromptGuard cost) is Epic 4's resource-envelope work.
-- **`max_results` (ruling 25).** `run_search_pipeline` chooses the candidate budget by provider
-  kind — `max_results = request.num_results if provider.paid else fetch_limit` — and that branch is
-  **written by spec 1 US-002**, the story that already edits `orchestrator.py`; this story asserts
-  it and edits no `_REVISION_SOURCES` file. Brave bills per query ($5/1,000 queries), not per
-  chunk, so the budget is not a cost saving: it is the candidate count ruling 25 fixed — one
-  extracted result per requested result, so a billed query buys exactly the scan work the caller
-  asked for. A BLOCKED result therefore shortens the returned set, and that is accepted (no
-  over-fetch, no retry — ruling 18). The Brave request carries `max_results` in its result-budget
-  parameters; only the first `max_results` sources of a response are mapped.
-- **Mapping.** One result dict per `grounding.generic` element (one per source URL):
-  `{title, url, content, engine: "brave-api", date}` with `content` the element's `snippets`
-  joined in order by a blank line and capped as above, and `date` from the calendar-date rendering
-  in `sources[url].age` when the sample shows one there, else `None`. If the sample nests
-  differently, the parent's `url`/`title`/`date` are lifted onto each result dict — the rule is
-  "one result carries one source's chunk", whatever the envelope calls it. A missing or non-string
-  field maps to `""` (`date` to `None`) and the loop's existing omission rules decide
-  (`invalid_url` and so on); an element that is not a JSON object is skipped. `date` goes through
-  spec 1's ISO-8601 calendar-date validator (ruling 19) — anything else becomes `None`, so the
-  field needs no scan. Set `content_kind="chunk"` on the `ProviderSearchResult`, where spec 1
-  US-004 reads it: that story changed the `SearchResult(...)` construction (`orchestrator.py`
-  ~789–795) to carry `content_kind` and `date`. This story does not edit the loop and adds no wire
-  field, so there is no contract regeneration here.
-- **Tests** go in a new `tests/test_brave_provider.py` (CONVENTIONS naming; add its row to
-  `kit_tools/testing/TESTING_GUIDE.md`'s module map). The streaming client needs the streaming
-  precedent, not `tests/test_orchestrator.py`'s `client.get()` helpers:
-  `tests/test_stage5_url_audit.py:69–82` (`_make_stream_cm`, `_stream_side_effect`, with
-  `_make_response` at ~43) for the streamed-body tests, `TestStreamingByteCap` (~526) as the
-  body-bound case template, and `TestTimeoutEnforcement::test_timeout_propagated` (~471) for the
-  constructor-kwargs test (patch `pipeline.search_providers.brave.httpx.AsyncClient`, read
-  `call_args.kwargs`). Copy the three helpers into the new module; lifting them into
-  `tests/fakes.py` is a refactor for the second paid provider. `tests/test_orchestrator.py` is the
-  reference only for the end-to-end `run_search_pipeline` assertions.
-- **Docs in the same change:** the Brave endpoint host joins `kit_tools/arch/INFRA_ARCH.md`'s
-  egress table (~245–248) — per `/search` request, only when `FORAGE_BRAVE_API_KEY` is set, direct
-  HTTPS with no proxy; `kit_tools/arch/CODE_ARCH.md`'s module table gains a
-  `pipeline/search_providers/brave.py` row beside spec 1's package row;
-  `kit_tools/docs/API_GUIDE.md`'s `results` row names both `engine` values.
+**Independent Test:** Construct `BraveApiProvider` directly (a test key plus settings built from a `config.yaml` dict) and patch `pipeline.search_providers.brave.httpx.AsyncClient` to answer with the saved envelope `tests/fixtures/brave/llm_context_sample.json`. `provider.search("q", 5)` returns a `ProviderSearchResult` whose every dict carries `engine="brave-api"`; `run_search_pipeline` with the provider injected as `chain[0]` through the chain parameter spec 1 US-003 gave it (not through `FORAGE_SEARCH_PROVIDERS`, which is US-002's registration work) calls `provider.search(query, request.num_results)` and returns sanitized results with `content_kind="chunk"` and `title`/`url`/`snippet`/`date` populated from the envelope's synthetic values — the wire `snippet` being the chunk body carried as the internal `content` key — with at least one result not omitted.
 
 **Acceptance Criteria:**
-- [ ] Pre-flight gate: `tests/fixtures/brave/llm_context_sample.json` and its
-      `tests/fixtures/README.md` section (endpoint path, capture date, docs URL, substitution rule,
-      raw byte size and source count, ToS reasoning) are committed before any parser code; the
-      fixture keeps the captured field names, nesting, types and counts and carries only synthetic
-      chunk bodies, titles, URLs and dates; when the fixture is absent, execution stops at this
-      story and reports the missing gate.
-- [ ] A test walks `tests/fixtures/` for `X-Subscription-Token` / `Authorization` and walks
-      `tests/fixtures/brave/` for a token-shaped literal (modelled on
-      `test_no_token_shaped_literal_anywhere`, scoped so the pre-existing model fixtures' long
-      identifiers cannot trip it); `kit_tools/arch/SECURITY.md`'s "Fixtures"
-      paragraph lists the new fixture.
-- [ ] The wire names (endpoint path, auth header, result-budget parameters, response envelope) are
-      recorded in this spec's Implementation Notes exactly as the sample shows them, with any
-      difference from the expected names noted; a test parses the fixture end-to-end through
-      `BraveApiProvider.search()`.
-- [ ] `BraveApiProvider.name == "brave"` — the same string `build_provider_chain`'s registry keys
-      it under (US-002) — and `paid is True`; `search(query, max_results)` returns a
-      `ProviderSearchResult` with `content_kind="chunk"` whose every dict carries
-      `engine="brave-api"` and `{title, url, content, date}` from the sample; `repr(provider)` and
-      `str(provider)` do not contain the key.
-- [ ] With the provider injected as `chain[0]`, `run_search_pipeline` returns `SearchResult`s with
-      `content_kind="chunk"`, `engine="brave-api"`, and `snippet` equal to the sanitized chunk
-      `content`, with at least one result not omitted; a chunk whose date is not an ISO 8601
-      calendar date yields `date=None`.
-- [ ] A test captures the `httpx.AsyncClient` constructor kwargs and asserts `trust_env=False`,
-      `follow_redirects=False`, a `verify` value that is an `ssl.SSLContext`, and
-      `timeout=search_brave_timeout_seconds`; the request goes to `_BRAVE_LLM_CONTEXT_URL` (scheme,
-      host and path), and the key appears only in the auth header.
-- [ ] With the provider as `chain[0]`, a provider spy sees `provider.search(query,
-      request.num_results)` (not `min(num_results * 2, 20)`) for `num_results` of `1`, `5` and
-      `20`, and the mocked outbound request's result-budget parameters carry the same value; a
-      response carrying more sources than `max_results` yields at most `max_results` dicts; this
-      story leaves `pipeline/orchestrator.py` byte-identical (the branch is spec 1 US-002's).
-- [ ] A response whose `Content-Length` exceeds `_BRAVE_MAX_RESPONSE_BYTES`, a streamed body that
-      exceeds it with no `Content-Length`, and a compressed body whose decoded length exceeds it
-      are all abandoned before any `json.loads` call (asserted on a `json.loads` spy) and return a
-      `ProviderFailure`; `_BRAVE_MAX_RESPONSE_BYTES` is at least ten times the raw byte size the
-      provenance note records. US-003 pins the `hard_error` / `body_too_large` pair.
-- [ ] `search_brave_timeout_seconds`, `search_brave_chunk_max_chars` and
-      `search_brave_query_max_chars` are read from `config.yaml` by `brave_settings_from_config`
-      with the stated defaults and ranges; an out-of-range value refuses boot (a test boots the
-      lifespan with a chain that omits `brave`); a 50,000-character chunk leaves the provider
-      truncated to the chunk cap; a 5,000-character query leaves the provider truncated to the
-      query cap (the mocked request's `q` has exactly `search_brave_query_max_chars` characters)
-      while the wire request is accepted unchanged (no 422).
-- [ ] A SearXNG result with `engine="brave"` and a Brave result with `engine="brave-api"` stay
-      distinct through the loop (test); `kit_tools/docs/API_GUIDE.md`'s `results` row names both
-      values.
-- [ ] `kit_tools/arch/INFRA_ARCH.md`'s egress table carries the Brave endpoint row (direct HTTPS,
-      only with the key set); `kit_tools/arch/CODE_ARCH.md`'s module table carries
-      `pipeline/search_providers/brave.py`; `kit_tools/testing/TESTING_GUIDE.md`'s module map
-      lists `tests/test_brave_provider.py`.
+- [ ] Pre-flight gate (already satisfied at `9794cba`): `tests/fixtures/brave/llm_context_sample.json` and its `tests/fixtures/README.md` section are present and left byte-identical by this story.
+- [ ] A test in `tests/test_brave_provider.py` walks `tests/fixtures/` for `X-Subscription-Token` / `Authorization` and walks `tests/fixtures/brave/` for a token-shaped literal (modelled on `test_no_token_shaped_literal_anywhere`, scoped so the pre-existing model fixtures' long identifiers cannot trip it); the `kit_tools/arch/SECURITY.md` "Fixtures" paragraph already names the fixture.
+- [ ] The wire names (endpoint path, auth header, result-budget parameters, response envelope) are recorded in this spec's Implementation Notes exactly as the sample shows them, extending the existing 2026-09-16 note and claiming only what the capture (`q` and `count=3`) actually confirmed — `maximum_number_of_urls` and the per-source parameters are docs-derived names the capture did not exercise, and the note says so; a test parses the fixture end-to-end through `BraveApiProvider.search()`.
+- [ ] `BraveApiProvider.name == "brave"` — the same string `build_provider_chain`'s registry keys it under (US-002) — and `paid is True`; `search(query, max_results)` returns a `ProviderSearchResult` with `content_kind="chunk"` whose every dict carries `engine="brave-api"` and `{title, url, content, date}` from the sample; `repr(provider)` and `str(provider)` do not contain the key.
+- [ ] With the provider injected as `chain[0]`, `run_search_pipeline` returns `SearchResult`s with `content_kind="chunk"`, `engine="brave-api"`, and `snippet` equal to the sanitized chunk `content` (assert equality, not `startswith`), with at least one result not omitted; a chunk whose date is not an ISO 8601 calendar date — including a regex-shaped but invalid one such as `2026-02-30` — yields `date=None` through `run_search_pipeline`.
+- [ ] A test captures the `httpx.AsyncClient` constructor kwargs and asserts `trust_env=False`, `follow_redirects=False`, a `verify` value that is an `ssl.SSLContext`, and `timeout=search_brave_timeout_seconds`; the request goes to `_BRAVE_LLM_CONTEXT_URL` (scheme, host and path), and the key appears only in the auth header.
+- [ ] `search_brave_timeout_seconds`, `search_brave_chunk_max_chars` and `search_brave_query_max_chars` ship in `config.yaml` with a comment and are read by `brave_settings_from_config` with the stated defaults and ranges; the helper is called unconditionally in the lifespan beside `cache_settings_from_config`, and an out-of-range value refuses boot (a test boots the lifespan with a chain that omits `brave`).
+- [ ] The provider implements the body bound (`_BRAVE_MAX_RESPONSE_BYTES`, streamed with a running byte cap before any `json.loads`), the outbound query truncation to `search_brave_query_max_chars`, the per-chunk cap `search_brave_chunk_max_chars`, and maps at most `max_results` sources; the exhaustive tests for those bounds and for the `max_results` budget belong to US-011, and this story leaves `pipeline/orchestrator.py` byte-identical.
 - [ ] Tests written/updated for new functionality.
 - [ ] Full test suite passes (`uv run pytest`).
 - [ ] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
+
+**Implementation Hints:**
+- **Wire names — pinned by the sample.** Endpoint `GET https://api.search.brave.com/res/v1/llm/context`; auth header `X-Subscription-Token`; the capture used only `q` and `count=3`. Brave's docs also list `maximum_number_of_urls` (default 20, max 50) for the result budget and `maximum_number_of_snippets_per_url` / `maximum_number_of_tokens_per_url` for the per-source payload — docs-derived, not capture-confirmed; say so in the Implementation Notes rather than claiming the capture verified them. Observed envelope (see the 2026-09-16 Implementation Note and `tests/fixtures/README.md`): top level `grounding` (with `generic`, a list of `{url, title, snippets}` where `snippets` is a list of strings, and `map`, an empty list; no `poi` key) and `sources` (a map keyed by URL, same order as `generic`, each value `{title, hostname, age, snippet}` where `age` is a **list of four strings** — long-form date, ten-character ISO date, relative "N days ago", ISO-8601 timestamp — and `snippet` is a short string). The parser follows the sample: `date` comes from the ten-character ISO element of `age`; tolerate an absent `poi`; ignore `map`. Brave bounds `q` (documented at 400 characters plus a word limit); ruling 30's cap is sized to it.
+- New `pipeline/search_providers/brave.py` implementing the spec-1 `SearchProvider`: `name = "brave"`, `paid = True` (ruling 23; the `engine` value is the only place `brave-api` appears). Hold the key in a non-repr field (`dataclasses.field(repr=False)` or the equivalent) and define `__repr__` to emit the name only. The key travels only in the auth header, never in the URL or query string, so no URL-bearing log line can carry it.
+- The client mirrors `pipeline/stage5_url_audit.py` (~136): `httpx.AsyncClient(timeout=<brave timeout>, follow_redirects=False, trust_env=False, verify=ssl.create_default_context())` against a module constant `_BRAVE_LLM_CONTEXT_URL: Final` (an `https://` URL; no env override — the constant is also the single patch seam for tests). `trust_env=False` keeps ambient `HTTPS_PROXY`/`.netrc` away from a credential-bearing call — the Brave call needs direct HTTPS egress and ignores proxy variables by design (US-002's doc row says so); `follow_redirects=False` keeps httpx from replaying a custom auth header to a redirect target.
+- **Bound the body before parsing**, mirroring stage 5 (`stage5_url_audit.py` ~200–215): use `client.stream(...)`, fast-reject on `Content-Length` over `_BRAVE_MAX_RESPONSE_BYTES: Final = 1_048_576`, then stream `aiter_bytes()` (decoded bytes, so a compressed body cannot expand past the cap) with a running byte cap, and only then `json.loads`. An over-cap body is `ProviderFailure(failure_class="hard_error", detail="body_too_large")`; US-003 owns the full mapping. The constant must be at least ten times the captured 30,344 bytes.
+- **Outbound query bound (ruling 30).** The provider truncates *its outbound copy* of `query` to `search_brave_query_max_chars` before egress. `SearchRequest.query` keeps its wire shape (adding `max_length` would be a MAJOR), so the bound lives here and is no contract change.
+- **Tunables live in `config.yaml`** (ruling 9) as three top-level scalars (the `promptguard_threshold` shape, not a block), read from the `_load_config()` dict by a `brave_settings_from_config(config)` helper in `brave.py` on the `cache_settings_from_config` model: `search_brave_timeout_seconds` (float, `1.0` to `60.0`, default `15.0`), `search_brave_chunk_max_chars` (int, `200` to `2000`, default `2000`) and `search_brave_query_max_chars` (int, `50` to `400`, default `400`). The helper is called **unconditionally** in the lifespan beside `cache_settings_from_config` (`retrieval_app.py` ~1086) so a wrong-typed or out-of-range value refuses boot on every deployment, chained or not, exactly as the `cache:` block does.
+- **The chunk cap, reconciled with spec 1.** Providers never normalize, bound or scan *text on its way to the wire* — the orchestrator loop is the only path there. This cap is a *payload bound* like `_BRAVE_MAX_RESPONSE_BYTES`: the provider applies `search_brave_chunk_max_chars` to its own raw response before the dict leaves the provider. The loop still NFC-normalizes, whitespace-collapses and truncates every `content` to `_MAX_SEARCH_SNIPPET_LENGTH = 2_000` (`pipeline/orchestrator.py` ~567, applied ~724), then scans it; the range's ceiling equals the loop constant so the two bounds can never disagree.
+- **`max_results` (ruling 25).** `run_search_pipeline` chooses `max_results = request.num_results if provider.paid else fetch_limit` — written by spec 1 US-002, so this story edits no `_REVISION_SOURCES` file. The Brave request carries `max_results` in its result-budget parameter(s); only the first `max_results` sources of a response are mapped. US-011 asserts this with a spy.
+- **Mapping.** One result dict per `grounding.generic` element (one per source URL): `{title, url, content, engine: "brave-api", date}` with `content` the element's `snippets` joined in order by a blank line and capped as above, and `date` from the ten-character ISO element of `sources[url].age`, else `None`. A missing or non-string field maps to `""` (`date` to `None`) and the loop's existing omission rules decide; an element that is not a JSON object is skipped (record that choice in the Implementation Notes). `date` goes through spec 1's ISO-8601 calendar-date validator (ruling 19). Set `content_kind="chunk"` on the `ProviderSearchResult`, where spec 1 US-004 reads it. This story does not edit the loop and adds no wire field, so there is no contract regeneration.
+- **Tests** go in a new `tests/test_brave_provider.py` (CONVENTIONS naming; US-011 adds its TESTING_GUIDE row). For the constructor-kwargs test follow `tests/test_stage5_url_audit.py::TestTimeoutEnforcement::test_timeout_propagated` (~471): patch `pipeline.search_providers.brave.httpx.AsyncClient`, read `call_args.kwargs`. Copy `_make_stream_cm` / `_stream_side_effect` / `_make_response` (`tests/test_stage5_url_audit.py:43–82`) into the new module for the streamed-envelope fixture path. `tests/test_orchestrator.py` is the reference for the end-to-end `run_search_pipeline` assertions. The boot-refusal test patches `_load_config` (or the config path) to return an out-of-range value and asserts the lifespan raises, with a chain that omits `brave`.
+
+### US-011: `BraveApiProvider` hardening tests, budget assertions and doc rows (split of US-001, part 2)
+
+**Priority:** P1
+
+**Description:** Second half of the original US-001 (split by the supervisor). US-010 delivered `pipeline/search_providers/brave.py` and its core tests; this story pins the three payload bounds, the candidate budget and the engine-provenance rule with tests, and lands the documentation rows. It changes no provider behaviour unless a test exposes a defect (fix minimally in `brave.py` and say so in the Implementation Notes), and it leaves `pipeline/orchestrator.py` byte-identical.
+
+**Independent Test:** `uv run pytest tests/test_brave_provider.py` exercises every case below against the US-010 module with `pipeline.search_providers.brave.httpx.AsyncClient` patched, and the three doc tables carry their rows.
+
+**Acceptance Criteria:**
+- [ ] With the provider as `chain[0]`, a provider spy sees `provider.search(query, request.num_results)` (not `min(num_results * 2, 20)`) for `num_results` of `1`, `5` and `20`, and the mocked outbound request's result-budget parameter(s) carry the same value; a response carrying more sources than `max_results` yields at most `max_results` dicts; `pipeline/orchestrator.py` is byte-identical to its US-010 state (the branch is spec 1 US-002's).
+- [ ] A response whose `Content-Length` exceeds `_BRAVE_MAX_RESPONSE_BYTES`, a streamed body that exceeds it with **no** `Content-Length` header (the test asserts `response.headers.get("content-length") is None` so the precondition cannot silently regress), and a compressed body whose decoded length exceeds it are all abandoned before any `json.loads` call (asserted on a `json.loads` spy) and return a `ProviderFailure`; `_BRAVE_MAX_RESPONSE_BYTES` is at least ten times the raw byte size the provenance note records (30,344). US-003 pins the `hard_error` / `body_too_large` pair.
+- [ ] A 50,000-character chunk leaves the provider truncated to `search_brave_chunk_max_chars`; a 5,000-character query leaves the provider truncated to `search_brave_query_max_chars` (the mocked request's `q` has exactly that many characters) while the wire request is accepted unchanged (no 422).
+- [ ] A SearXNG result with `engine="brave"` and a Brave result with `engine="brave-api"` stay distinct through the loop, asserted in both directions in one test — a SearXNG-side provider (a `FakeSearchProvider` or a mocked `SearxngProvider`) returning `engine="brave"` yields a wire result whose `engine == "brave"`, and the Brave-served result's `engine == "brave-api"` — so neither direction of normalization can pass; `kit_tools/docs/API_GUIDE.md`'s `results` row names both values.
+- [ ] `kit_tools/arch/INFRA_ARCH.md`'s egress table (~245–248) carries the Brave endpoint row (per `/search` request, only when `FORAGE_BRAVE_API_KEY` is set, direct HTTPS with no proxy); `kit_tools/arch/CODE_ARCH.md`'s module table carries `pipeline/search_providers/brave.py` beside spec 1's package row; `kit_tools/testing/TESTING_GUIDE.md`'s module map lists `tests/test_brave_provider.py`.
+- [ ] This spec's Implementation Notes record any bound-test learning and any minimal `brave.py` fix the tests forced.
+- [ ] Tests written/updated for new functionality.
+- [ ] Full test suite passes (`uv run pytest`).
+- [ ] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
+
+**Implementation Hints:**
+- **Body-bound tests.** Use the streaming precedent, not `tests/test_orchestrator.py`'s `client.get()` helpers: `tests/test_stage5_url_audit.py:69–82` (`_make_stream_cm`, `_stream_side_effect`, `_make_response` at ~43 — US-010 copied them into `tests/test_brave_provider.py`) and `TestStreamingByteCap` (~526) as the template. For the no-`Content-Length` case build the response so it truly has no such header — `httpx.Response(200, stream=<an httpx.AsyncByteStream subclass yielding chunks>, request=...)`, or delete the header after construction — and assert `response.headers.get("content-length") is None` inside the test. For the compressed case, `httpx.Response(content=<gzip-compressed bytes>, headers={"content-encoding": "gzip", ...})` decodes through `aiter_bytes()` even when constructed manually, which is what makes a realistic "decoded length exceeds the cap" test possible. Spy on `pipeline.search_providers.brave.json.loads` and assert it was never called in all three cases.
+- **Budget spy (ruling 25).** Inject a spying provider as `chain[0]` and drive `run_search_pipeline` with `num_results` 1, 5 and 20; assert the spy's `max_results` argument equals `request.num_results` each time and that the mocked outbound request's result-budget parameter(s) carry the same value; feed an envelope with more sources than `max_results` and assert the dict count. Assert `pipeline/orchestrator.py` is unchanged by comparing its bytes (or `git diff --stat`) against the US-010 commit.
+- **Caps.** Patch the envelope with one 50,000-character chunk body and assert the provider's outgoing `content` length equals `search_brave_chunk_max_chars`; send a 5,000-character query and read the mocked request's `q` from the patched client's call (query params), asserting its length equals `search_brave_query_max_chars` and that the request was accepted (no 422 from the app when driven end-to-end).
+- **Provenance test, both directions.** Run `run_search_pipeline` once with a SearXNG-shaped provider returning a result with `engine="brave"` and once with the Brave provider; assert the two wire `engine` values verbatim. The point is that neither the loop nor the provider normalizes `brave` to `brave-api` or back.
+- **Docs.** INFRA_ARCH egress table: host `api.search.brave.com`, direct HTTPS (`trust_env=False`, no proxy), only when `FORAGE_BRAVE_API_KEY` is set, one request per `/search`. CODE_ARCH module table: `pipeline/search_providers/brave.py` beside the spec-1 package row. API_GUIDE `results` row: `engine` is `searxng`'s engine name or `brave-api`. TESTING_GUIDE module map: `tests/test_brave_provider.py` with a one-line summary; leave the suite-count totals to spec 5 US-003 (ruling 32).
+
 
 ### US-002: Env-gated conditional registration (key-less floor)
 
