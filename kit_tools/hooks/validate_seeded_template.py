@@ -11,6 +11,7 @@ This provides fast feedback during seeding without running the full validator.
 Placeholder detection logic is shared with validate_setup.py via _placeholders.py
 so both hooks see the same coverage.
 """
+
 import json
 import os
 import sys
@@ -51,9 +52,9 @@ def main():
             full_path = file_path
 
         try:
-            with open(full_path, 'r', encoding='utf-8') as f:
+            with open(full_path, encoding="utf-8") as f:
                 content = f.read()
-        except (IOError, OSError):
+        except OSError:
             return
 
     if not content:
@@ -68,7 +69,9 @@ def main():
 
         filename = os.path.basename(file_path)
 
-        msg_parts = [f"Placeholder check: {len(issues)} unfilled placeholder(s) in {filename}:"]
+        msg_parts = [
+            f"Placeholder check: {len(issues)} unfilled placeholder(s) in {filename}:"
+        ]
         for issue in shown_issues:
             msg_parts.append(f"  Line {issue['line']}: {issue['type']}")
         if remaining > 0:

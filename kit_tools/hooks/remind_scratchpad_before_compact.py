@@ -8,6 +8,8 @@ This hook:
 1. Reminds Claude to capture notes before context is lost
 2. Auto-appends a compaction marker to the scratchpad for breadcrumb tracking
 """
+
+import contextlib
 import json
 import os
 from datetime import datetime
@@ -40,15 +42,20 @@ def main():
 
         # Only add marker if not already the last thing added
         if content and "Context compacted" not in content.strip().split("\n")[-3:]:
-            try:
+            with contextlib.suppress(OSError):
                 scratchpad.write_text(content + marker)
-            except OSError:
-                pass
 
     # Always remind before compaction
-    print(json.dumps({
-        "message": f"Context compacting at {now}. Ensure SESSION_SCRATCH.md captures work done so far."
-    }))
+    print(
+        json.dumps(
+            {
+                "message": (
+                    f"Context compacting at {now}. Ensure SESSION_SCRATCH.md "
+                    "captures work done so far."
+                )
+            }
+        )
+    )
 
 
 if __name__ == "__main__":

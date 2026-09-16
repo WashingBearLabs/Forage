@@ -4,6 +4,8 @@ update_doc_timestamps.py - Updates "Last updated:" in kit_tools docs.
 
 Trigger: PostToolUse (Edit|Write)
 """
+
+import contextlib
 import json
 import re
 import sys
@@ -26,7 +28,7 @@ def main():
     path = Path(file_path)
 
     # Only process markdown files in kit_tools/ (but not SESSION_SCRATCH)
-    if not path.suffix == ".md":
+    if path.suffix != ".md":
         return
     if "kit_tools" not in path.parts:
         return
@@ -50,14 +52,12 @@ def main():
         r"^(>\s*)?Last [Uu]pdated:.*$",
         rf"\g<1>Last updated: {today}",
         content,
-        flags=re.MULTILINE
+        flags=re.MULTILINE,
     )
 
     if count > 0 and new_content != content:
-        try:
+        with contextlib.suppress(OSError):
             path.write_text(new_content)
-        except OSError:
-            pass
 
 
 if __name__ == "__main__":
