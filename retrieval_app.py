@@ -78,6 +78,7 @@ from pipeline.search_providers import (
     parse_provider_names,
 )
 from pipeline.search_providers.base import SearchProvider
+from pipeline.search_providers.brave import brave_settings_from_config
 from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL, SearxngProvider
 from promptguard.classifier import PromptGuardClassifier
 
@@ -1151,6 +1152,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # never relies on `ContentCache`'s own Valkey default, which survives only
     # as the test-facing constructor convenience it always was.
     app.state.cache_settings = cache_settings_from_config(config)
+    # Read unconditionally, on the same posture as `cache_settings_from_config`
+    # above: whether or not "brave" is in the resolved chain, a wrong-typed or
+    # out-of-range value refuses boot rather than shipping dead
+    # (`feature-brave-provider` US-002/US-003 wire the result into a
+    # registered provider; this call alone is what makes the config.yaml
+    # knobs load-bearing from the day they land).
+    app.state.brave_settings = brave_settings_from_config(config)
     app.state.cache_metrics = CacheMetrics()
     storage, backend = _select_cache_storage(
         settings=app.state.cache_settings,

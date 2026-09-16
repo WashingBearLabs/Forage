@@ -575,3 +575,39 @@ documented integration step, not a design question._
   though the docs page lists an optional `description` instead. The parser follows the
   sample: treat `age` as a list (the ten-character ISO element is the natural `date`
   source), tolerate an absent `poi`, and ignore `map`.
+
+- **2026-09-16 — US-010 landed: `BraveApiProvider` core (client, settings, parser).**
+  `pipeline/search_providers/brave.py` implements the seam; core tests in
+  `tests/test_brave_provider.py` (26 tests, all pass; full suite 1834 passed;
+  `pipeline/orchestrator.py` left byte-identical, confirmed via `git diff --stat`).
+  **Wire names, stated precisely against what the capture actually confirmed** (the 2026-09-16
+  owner capture used only `q=history+of+the+bicycle&count=3` — nothing else): the endpoint
+  `GET https://api.search.brave.com/res/v1/llm/context`, the auth header
+  `X-Subscription-Token`, and the result-budget parameter `count` are **capture-confirmed** —
+  the provider sends `count=<max_results>` because that is the literal parameter the capture
+  used, not a guess. `maximum_number_of_urls` and the per-source parameters
+  (`maximum_number_of_snippets_per_url`, `maximum_number_of_tokens_per_url`) named in Brave's
+  documentation are **docs-derived only**; the capture never exercised them, and this provider
+  does not send them. The response envelope shape (`grounding.generic`, `sources` keyed by URL,
+  `age` as a four-element list) is exactly the observed shape recorded in the note above; this
+  story's parser and its `tests/test_brave_provider.py::TestParsesThePinnedSample` tests are
+  written against that shape and nothing else.
+  **The non-object `generic` element choice.** US-001's hints said a non-object element of
+  `grounding.generic` is "skipped"; US-003's hints (ruling 27) instead list "elements that are
+  not objects" under `malformed_body` for the whole response. The two disagree. This story
+  implements the `malformed_body`-for-the-whole-response reading (`_build_result` in
+  `brave.py`) because ruling 27 is the more specific, later-cited source and because a
+  per-element skip would silently narrow a response the caller asked `max_results` sources
+  from without any signal that one was dropped. US-003, which owns the failure taxonomy, is the
+  story to revisit this in if that reading turns out wrong.
+  **Config.** `search_brave_timeout_seconds` (1.0–60.0, default 15.0),
+  `search_brave_chunk_max_chars` (200–2000, default 2000) and `search_brave_query_max_chars`
+  (50–400, default 400) ship in `config.yaml` as top-level scalars with a comment;
+  `brave_settings_from_config` is called unconditionally in the lifespan beside
+  `cache_settings_from_config` (`retrieval_app.py`), so an out-of-range value refuses boot
+  whether or not `"brave"` is in the resolved chain — asserted by
+  `TestLifespanCallsBraveSettingsUnconditionally` with the default (`"brave"` not yet in
+  `build_provider_chain`'s registry, since registration is US-002's job).
+  **Not a `_REVISION_SOURCES` rotation:** `pipeline/search_providers/` is not hashed (ruling
+  11) and `pipeline/orchestrator.py` was not touched, so `derive_sanitizer_revision()` is
+  unchanged by this story.
