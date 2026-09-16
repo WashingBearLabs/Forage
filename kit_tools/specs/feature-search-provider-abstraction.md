@@ -650,7 +650,7 @@ named other than `searxng` returns a `ProviderFailure` raises `PipelineError` wi
   the CODE_ARCH / INFRA_ARCH / GOTCHAS sweeps both rows.
 
 **Acceptance Criteria:**
-- [ ] `SearchResult` carries `content_kind: ContentKind` (default `"snippet"`; the Literal,
+- [x] `SearchResult` carries `content_kind: ContentKind` (default `"snippet"`; the Literal,
       constants and `CONTENT_KINDS` are defined in `pipeline/contract.py`) and `date: str | None`
       (default `None`) with the before-validator, each with a `description` that names its rule and
       "Added in contract 1.2.0"; tests in `tests/test_models.py::TestSearchResult` cover the
@@ -658,7 +658,7 @@ named other than `searxng` returns a `ProviderFailure` raises `PipelineError` wi
       to `"snippet"` (the US-001 exactness test includes it) and the loop copies `content_kind`
       and `date` onto every result; SearXNG results carry `content_kind="snippet"`; the Stage 2
       field tuple and `_search_result_promptguard_input` are unchanged.
-- [ ] `search_unavailable` is a member of `SearchErrorCode`; `len(SEARCH_ERROR_CODES) == 3` and
+- [x] `search_unavailable` is a member of `SearchErrorCode`; `len(SEARCH_ERROR_CODES) == 3` and
       `len(ERROR_CODES) == 18`; the renamed "eighteen" tests, the raise-site sweep, and the parity
       tests pass; `run_search_pipeline` raises it (422) for a failing single provider whose `name`
       is not `searxng`, with reason `provider_name: failure_class`, and the discriminator is the
@@ -667,19 +667,19 @@ named other than `searxng` returns a `ProviderFailure` raises `PipelineError` wi
       `Pipeline422ErrorResponse.error` and `SearchMetricsResponse.errors` descriptions name it; the
       `/search` route docstring describes the provider chain; a test shows `/metrics`
       `search.errors` counting it under its own key.
-- [ ] `CONTRACT_VERSION == "1.2.0"` with the docstring entry described above (both reason-text
+- [x] `CONTRACT_VERSION == "1.2.0"` with the docstring entry described above (both reason-text
       changes and the held-version note); `tests/golden/contract_1_2_0.json` is added and
       `contract_1_1_0.json` and `contract_1_0_0.json` are byte-identical to before;
       `_SCHEMA_MODELS` includes `SearchRequest` and `Pipeline422ErrorResponse`; the three generated
       files are regenerated in the same commit; `tests/test_contract_export.py`,
       `tests/test_contract_schema.py` and `tests/test_governance_docs.py` pass.
-- [ ] `contract/GOVERNANCE.md` states `current contract version is **1.2.0**` and ruling (c) carries
+- [x] `contract/GOVERNANCE.md` states `current contract version is **1.2.0**` and ruling (c) carries
       the held-version sentence; the worked-examples table still has exactly six rows; the
       `## Two semvers` section (lines 46–88) gains one forward-looking sentence naming `1.2.0`
       while its historical `v1.0.0` / `1.1.0` worked example stays intact, because
       `tests/test_governance_docs.py:402` asserts both `v1.0.0` and the current `CONTRACT_VERSION`
       appear inside that section.
-- [ ] The documentation fan-out is applied: a grep of `README.md`, `CLAUDE.md`,
+- [x] The documentation fan-out is applied: a grep of `README.md`, `CLAUDE.md`,
       `contract/GOVERNANCE.md`, `docs/`, `kit_tools/docs/`, `kit_tools/arch/`, `kit_tools/testing/`
       and `kit_tools/AGENT_README.md` finds no statement that `1.1.0` is the current contract
       (`kit_tools/arch/CODE_ARCH.md:108`'s bold included), no seventeen-code or 17-code claim
@@ -693,12 +693,12 @@ named other than `searxng` returns a `ProviderFailure` raises `PipelineError` wi
       `API_GUIDE.md:236` shows `content_kind` and `date` in the result shape; ERROR_HANDLING names
       the renamed tests and the three retained goldens; `SECURITY.md` carries the `engine`
       accepted-risk entry.
-- [ ] `docs/bootstrap-notes.md`'s rotation table, `CLAUDE.md`'s coexistence narrative and
+- [x] `docs/bootstrap-notes.md`'s rotation table, `CLAUDE.md`'s coexistence narrative and
       `kit_tools/arch/DECISIONS.md`'s rotation table record this story's `sanitizer_revision`
       (before, after, reason) alongside US-002's.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
 
 ## Edge Cases
 
