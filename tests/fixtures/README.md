@@ -96,3 +96,47 @@ DebertaV2ForSequenceClassification(
 `tests/test_model_fetcher.py::TestLoadableFixture` is the guard: it loads the fixture
 with `use_safetensors=True`, refuses to accept any non-allowlisted filename in the
 directory, and runs it through the real verifier in a real Hugging Face cache layout.
+
+## `brave/llm_context_sample.json`
+
+The Brave LLM-Context response **envelope**, captured once by the owner on 2026-09-16
+(`feature-brave-provider` US-001's pre-flight gate, epic ruling 24). The parser in
+`pipeline/search_providers/brave.py` is written against this file and only this file —
+a fixture typed from memory of the docs is exactly the failure the pinned-sample rule
+exists to prevent.
+
+**Endpoint.** `GET https://api.search.brave.com/res/v1/llm/context` with
+`q=history+of+the+bicycle&count=3`. Documentation:
+<https://api-dashboard.search.brave.com/documentation/services/llm-context>.
+
+**Capture procedure.** One credentialed request from a shell — never a test, never CI.
+The auth header line was written into a `curl -K` config file created under `umask 077`
+from an environment variable and deleted afterwards, so the key never appeared on a
+command line, in shell history, or in the process table. The raw response (30,344 bytes,
+3 sources, 84 chunks: 35 / 27 / 22) was read locally for its shape and then deleted.
+
+**Substitution rule.** Every field name, the nesting, every value type and every element
+count are exactly as captured. Every chunk body, source snippet, title, URL, hostname and
+date was replaced by an obviously synthetic value: chunk and snippet bodies are
+`synthetic chunk j of m for source i of 3 …` padded to the captured string's exact
+length, so the byte profile is representative; URLs are
+`https://synthetic-i.example.invalid/…` (`.invalid` is reserved and can never resolve);
+dates are the first three days of January 2026 in the four captured formats. Nothing odd
+in the real shape was "fixed" while substituting. No request headers, no key and no
+Brave-authored text is committed (owner decision 6: Brave's terms do not license
+redistributing response text, and a shape fixture needs none of it).
+
+**Observed shape** — what the parser follows; the spec's pre-capture list was a guess:
+
+- `grounding` carries `generic` (a list of `{url, title, snippets}`, `snippets` a list of
+  strings) and `map` (an empty list in this capture). No `poi` key was present.
+- `sources` is a map keyed by URL, in the same order as `generic`, and each value is
+  `{title, hostname, age, snippet}`. `age` is a **list of four strings** — a long-form
+  date, a ten-character ISO date, a relative "N days ago", and an ISO-8601 timestamp —
+  not a single string. `snippet` is a short string (about 100–200 characters) that the
+  documentation page does not list (it documents an optional `description` instead).
+
+**Guard.** `tests/test_brave_provider.py` (US-001) walks `tests/fixtures/` and asserts no
+file carries an auth header name, and walks `tests/fixtures/brave/` for any token-shaped
+literal (24 or more letters, digits, `_` or `-` in a row). Re-capturing is a fixture
+change: repeat the procedure above and update this note's date, byte size and counts.

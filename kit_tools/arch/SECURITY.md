@@ -319,7 +319,7 @@ Forage has no audit log in the authentication sense; there is no identity to rec
 
 ### Fixtures
 
-`tests/golden/contract_1_0_0.json` and `tests/golden/contract_1_1_0.json` are schema goldens retained forever (a contract change adds one, never edits one). `tests/fixtures/tiny_model/` is a real, loadable safetensors DeBERTa for loader tests, and `tests/fixtures/contract/unregenerated_openapi.yaml` is the drift-check failure case.
+`tests/golden/contract_1_0_0.json` and `tests/golden/contract_1_1_0.json` are schema goldens retained forever (a contract change adds one, never edits one). `tests/fixtures/tiny_model/` is a real, loadable safetensors DeBERTa for loader tests, and `tests/fixtures/contract/unregenerated_openapi.yaml` is the drift-check failure case. `tests/fixtures/brave/llm_context_sample.json` is the Brave LLM-Context response **envelope** captured by the owner on 2026-09-16 with every chunk body, title, URL, hostname and date replaced by synthetic values — no Brave-authored text, no request headers, no key (provenance and the observed shape are in `tests/fixtures/README.md`); `tests/test_brave_provider.py` asserts nothing under `tests/fixtures/` carries an auth header name and nothing under `tests/fixtures/brave/` carries a token-shaped literal.
 
 ### Observations
 

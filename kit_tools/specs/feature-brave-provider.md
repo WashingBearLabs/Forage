@@ -696,3 +696,21 @@ _None (session_ready). The endpoint path, auth header name, query parameters and
 names are recorded in US-001 as expected values from Brave's public documentation; the captured
 envelope verifies them, and any difference is recorded in this spec's Implementation Notes — a
 documented integration step, not a design question._
+
+## Implementation Notes
+
+- **2026-09-16 — US-001 owner gate satisfied (ruling 24).** The owner captured the Brave
+  LLM-Context sample from a shell (`curl -K` config under `umask 077`, key from the
+  environment, config deleted afterwards; query `history of the bicycle`, `count=3`) and
+  the envelope-only fixture is committed as `tests/fixtures/brave/llm_context_sample.json`
+  with provenance in `tests/fixtures/README.md`. **Observed shape vs the "expected now"
+  list in US-001's hints:** (1) `grounding` carried `generic` and `map` (an empty list);
+  no `poi` key was present. (2) `generic[*]` is `{url, title, snippets}` with `snippets` a
+  list of strings, as expected — 35 / 27 / 22 chunks for the three sources, 74–608
+  characters each. (3) `sources` is keyed by URL in the same order as `generic`, and each
+  value is `{title, hostname, age, snippet}`: `age` is a **list of four strings** (a
+  long-form date, a ten-character ISO date, a relative "N days ago", an ISO-8601
+  timestamp), not a single string, and `snippet` (about 100–200 characters) is present
+  though the docs page lists an optional `description` instead. The parser follows the
+  sample: treat `age` as a list (the ten-character ISO element is the natural `date`
+  source), tolerate an absent `poi`, and ignore `map`.
