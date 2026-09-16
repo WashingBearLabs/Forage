@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-detect_phase_completion.py - Detects checkbox completions in feature specs
-and roadmap files.
+detect_phase_completion.py - Detects checkbox completions in feature specs and
+roadmap files.
 
 Trigger: PostToolUse (Edit|Write)
 
@@ -80,8 +80,8 @@ def main():
             # Only suggest validate-implementation if no unchecked criteria remain
             if new_unchecked == 0:
                 message += (
-                    " All criteria complete — consider running "
-                    "`/kit-tools:validate-implementation`."
+                    " All criteria complete — consider running"
+                    " `/kit-tools:validate-implementation`."
                 )
         else:
             # Roadmap TODO task completed

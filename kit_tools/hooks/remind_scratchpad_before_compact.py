@@ -50,8 +50,8 @@ def main():
         json.dumps(
             {
                 "message": (
-                    f"Context compacting at {now}. Ensure SESSION_SCRATCH.md "
-                    "captures work done so far."
+                    f"Context compacting at {now}. "
+                    "Ensure SESSION_SCRATCH.md captures work done so far."
                 )
             }
         )

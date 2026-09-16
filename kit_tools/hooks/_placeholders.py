@@ -11,7 +11,6 @@ its own pattern list).
 
 import re
 from pathlib import Path
-from typing import Any
 
 # Placeholder patterns that indicate unfilled template content.
 # Each entry: (compiled_pattern, human-readable type label).
@@ -25,8 +24,8 @@ PLACEHOLDER_PATTERNS = [
         "fill placeholder",
     ),
     # ALL-CAPS bracket placeholders (3+ chars): [PROJECT_NAME], [API_URL], etc.
-    # Excludes common legitimate markdown like [NOTE], [TIP], [OK] by
-    # requiring 3+ chars.
+    # Excludes common legitimate markdown like [NOTE], [TIP], [OK] by requiring
+    # 3+ chars.
     (re.compile(r"\[([A-Z][A-Z_]{2,})\]"), "bracket placeholder"),
     # Title-case literals common in older templates: [Feature Name],
     # [Project Name], [Your Name]
@@ -77,7 +76,7 @@ def should_validate_path(file_path: str) -> bool:
     return all(not pattern.search(file_path) for pattern in EXCLUDE_PATTERNS)
 
 
-def find_placeholders(content: str) -> list[dict[str, Any]]:
+def find_placeholders(content: str) -> list[dict[str, str | int]]:
     """Scan content for unfilled placeholders.
 
     Returns a list of issue dicts with keys: `line`, `type`, `match`.
@@ -87,7 +86,7 @@ def find_placeholders(content: str) -> list[dict[str, Any]]:
     FILL instruction comments) are skipped, since these are either
     intentional metadata or instructions meant for the seeder.
     """
-    issues: list[dict[str, Any]] = []
+    issues: list[dict[str, str | int]] = []
     for line_num, line in enumerate(content.split("\n"), 1):
         stripped = line.strip()
 

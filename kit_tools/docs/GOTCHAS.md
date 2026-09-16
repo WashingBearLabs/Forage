@@ -626,3 +626,20 @@ unaffected; a "same digest a year later" claim would be, and is not made.
 **Still unproven:** a live cold publish. The evidence above is local, plus the
 workflow-shape tests. The first tag cut after this change is the first real exercise —
 watch `publish`'s verification step rather than only the tags.
+
+### `kit_tools/hooks/*.py` sit inside the zero-tolerance ruff / pyright gates
+
+The KitTools automation hooks are plain Python files under `kit_tools/hooks/`, and
+`uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` (strict) walk
+the whole tree with **no excludes** (`CLAUDE.md` Development section;
+`tests/test_pyright_policy.py` pins the pyright config exactly, so an `exclude` is not an
+option). The plugin ships them unannotated: committing them as copied (2026-09-15,
+`41e01d8`) turned all three CI gates red until they were annotated and wrapped
+(`fix(kit_tools): make hook scripts pass ruff and pyright strict`). Two consequences:
+
+- `ruff format --check .` also reflows Python fences inside Markdown under `kit_tools/`,
+  so a seeded doc with a code block can fail the format gate on its own.
+- Re-running `/kit-tools:init-project` re-copies the plugin's hook scripts *unconditionally*
+  (hooks are installed regardless of the skip/merge/replace choice) and will reintroduce the
+  breakage. After any re-run, run the three gates before committing, or upstream the
+  annotated versions into the kit-tools plugin so the copies arrive clean.
