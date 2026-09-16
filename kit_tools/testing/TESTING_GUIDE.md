@@ -1,7 +1,7 @@
 <!-- Template Version: 2.1.0 -->
 # TESTING_GUIDE.md
 
-> Last updated: 2026-09-11
+> Last updated: 2026-09-15
 > Updated by: Claude (forage-contract US-004)
 
 ## Quick Start
@@ -250,6 +250,8 @@ test_mapping:
   "pipeline/stage5_url_audit.py": "tests/test_stage5_url_audit.py"
   "pipeline/smart_extraction.py": "tests/test_smart_extraction.py"
   "pipeline/extraction_limits.py": "tests/test_stage1_extraction.py"
+  "pipeline/search_providers/__init__.py": "tests/test_search_providers.py"
+  "pipeline/search_providers/base.py": "tests/test_search_providers.py"
   "promptguard/classifier.py": ["tests/test_stage3_promptguard.py", "tests/test_model_fetcher.py"]
   "searxng/config/*": "tests/test_searxng_docker.py"
   "searxng/Dockerfile": "tests/test_searxng_docker.py"
