@@ -909,3 +909,38 @@ forbids a baseline or an exclude, so the only decision that makes the gates hone
 fix them: done mechanically (formatter, safe lint autofix, `contextlib.suppress`, three
 missing annotations), behaviour-preserving, smoke-checked by importing and exercising each
 hook, and landed as a **separate `chore:` commit** so this story's diff stays reviewable.
+
+### US-003 — Provider chain resolved from the environment
+
+**`SEARCH_PROVIDERS_ENV_VAR` is defined in `pipeline/search_providers/__init__.py`, not
+`retrieval_app.py`.** The hint places it in the app module, but `build_provider_chain`'s
+error message must name the variable and `pipeline/` may not import the app module — so
+defining it there and re-exporting it by `from pipeline.search_providers import
+SEARCH_PROVIDERS_ENV_VAR` keeps the repo to **one copy of the literal** while still making
+`retrieval_app.SEARCH_PROVIDERS_ENV_VAR` resolve as the criterion requires. The dependency
+still runs one way only.
+
+**The set-but-blank WARNING lives in `_configured_provider_names()`.** That keeps the
+single read site single (it is the only place `os.environ` is asked for the variable) and
+still fires once per start, because the lifespan is its only caller. Blankness is detected
+as `raw is not None and not any(token.strip() for token in raw.split(","))` rather than by
+comparing the parsed list against the default — `FORAGE_SEARCH_PROVIDERS=searxng` is not
+blank and must not warn.
+
+**Eighth sanitizer-revision rotation: `ee4450d9…` → `e7038672…`.** `run_search_pipeline`
+gaining the `providers=` keyword moved `pipeline/orchestrator.py`, a `_REVISION_SOURCES`
+member. Neither `pipeline/search_providers/__init__.py` (not a hashed filename;
+`_REVISION_SOURCES` is an explicit tuple read relative to `pipeline/`) nor
+`retrieval_app.py` (not under `pipeline/`) contributes. No sanitization behaviour changed —
+the `providers=None` path builds exactly the provider the function built unconditionally
+before. Recorded in all three rotation tables plus `CLAUDE.md`.
+
+**Test-isolation gotcha.** `app.state.search_providers = None` is a *real published value*
+(the module-scope sentinel), so the save/restore helper restores "absent" with `delattr`
+and cannot use `None` to mean "was not set". `tests/test_app.py::_borrowed_search_providers`
+is that helper; the neighbouring `/search` tests that expect the real `SearxngProvider` are
+what it protects.
+
+**The fake-chain `/search` test needs `promptguard_fail_closed: false`.** The lifespan-free
+`client` fixture installs an unloaded `PromptGuardClassifier`, so a default-tier request
+fails closed and omits every result — the fake would look like it never served.

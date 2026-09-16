@@ -65,7 +65,8 @@ those eight — so Forage's revision moved:
 | After the weights pin joined the hashed identity (`forage-model-bootstrap` US-001) | `5927038d…19d111` |
 | After the contract bump to `1.1.0` (`forage-cache-fallback` US-003) | `fa4691c5…93547c` |
 | After the error vocabulary joined `contract.py` (`forage-contract` US-001; contract still `1.1.0`) | `8b1b7f78…196d7c` |
-| **Current (`search-provider-abstraction` US-002, the `SearxngProvider` extraction)** | **`ee4450d9…f63c3da`** |
+| After the `SearxngProvider` extraction (`search-provider-abstraction` US-002) | `ee4450d9…f63c3da` |
+| **Current (`search-provider-abstraction` US-003, the `providers=` chain seam)** | **`e7038672…3ce0cbf`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -284,6 +285,29 @@ takes the revision as an input, so every extraction cached under `8b1b7f78…196
 unreachable at the next start and ages out on its own TTL. Free in memory mode; one TTL of
 extra fetches in Valkey mode. Poppy re-extracts on next access; spec 6 owns that transition.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.
+
+### The eighth rotation: the `providers=` chain seam (`search-provider-abstraction` US-003, 2026-09-15)
+
+```
+before: ee4450d9202daae4f35799d3c0e2379dfcc1c04697cb98fa4a6cc7a4af63c3da
+after:  e70386726d4095d95bbd1dc839dfad28256244ed37c5dda8f46da39c53ce0cbf
+```
+
+**One `_REVISION_SOURCES` file moved again: `pipeline/orchestrator.py`.**
+`run_search_pipeline` gained a `providers: Sequence[SearchProvider] | None` keyword so the
+lifespan-resolved chain can be handed in, plus the `is None` / empty-sequence guard at the
+top of the function. `pipeline/search_providers/__init__.py`, which gained
+`parse_provider_names` / `build_provider_chain` / `SearchProviderConfigurationError` in the
+same story, is not a hashed filename — `_REVISION_SOURCES` is an explicit tuple read
+relative to `pipeline/` and never reaches into the subpackage — and neither is
+`retrieval_app.py`, which is not under `pipeline/` at all.
+
+**No sanitization behaviour changed.** The default path is byte-for-byte the previous one:
+`providers=None` builds `[SearxngProvider(searxng_url)]`, exactly what the function
+constructed unconditionally before. The hash moved because the hash is over bytes, as with
+the second rotation. Cache effect is the fifth rotation's mechanism unchanged: entries
+keyed on `ee4450d9…` become unreachable at the next start and age out on their own TTL —
+free in memory mode, one TTL of extra fetches in Valkey mode.
 
 ## Deferred GitHub settings — for the spec 2 public flip
 

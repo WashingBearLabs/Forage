@@ -71,6 +71,14 @@ from pipeline.orchestrator import (
     run_search_pipeline,
 )
 from pipeline.sanitizer_revision import derive_sanitizer_revision
+from pipeline.search_providers import (
+    DEFAULT_PROVIDER_NAME,
+    SEARCH_PROVIDERS_ENV_VAR,
+    build_provider_chain,
+    parse_provider_names,
+)
+from pipeline.search_providers.base import SearchProvider
+from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL, SearxngProvider
 from promptguard.classifier import PromptGuardClassifier
 
 logger = logging.getLogger(__name__)
@@ -79,7 +87,7 @@ logger = logging.getLogger(__name__)
 # variable at container start (see ``docs/configuration.md``). There is no
 # vault client and no secret-bearing config API — ``VALKEY_URL`` arrives
 # ready-made, credentials and all, from the operator's env or secret store.
-SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://searxng:8080")
+SEARXNG_URL = os.environ.get("SEARXNG_URL", DEFAULT_SEARXNG_URL)
 
 # Which storage the content cache runs over, named once: the selection below
 # returns it, the startup log says it, and ``HealthResponse.cache_backend``
@@ -154,6 +162,29 @@ def _configured_valkey_url() -> str | None:
     return os.environ.get("VALKEY_URL")
 
 
+def _configured_provider_names() -> list[str]:
+    """Return the search-provider chain names this start was configured with.
+
+    The **one** read site for ``FORAGE_SEARCH_PROVIDERS``, on
+    :func:`_configured_valkey_url`'s pattern: read once per start, in the
+    lifespan, and never again while the process runs.
+
+    A variable that is *set* but names no provider at all gets a WARNING
+    before the default applies. Silence there would be the same silent
+    substitution the refuse-boot rule exists to prevent — the operator asked
+    for something and got the default instead, so the log says so.
+    """
+    raw = os.environ.get(SEARCH_PROVIDERS_ENV_VAR)
+    if raw is not None and not any(token.strip() for token in raw.split(",")):
+        logger.warning(
+            "search_providers_blank — %s is set but names no provider; "
+            "the default chain (%s) applies",
+            SEARCH_PROVIDERS_ENV_VAR,
+            DEFAULT_PROVIDER_NAME,
+        )
+    return parse_provider_names(raw)
+
+
 def _configured_cache_backend() -> CacheBackend:
     """Name the backend this start selects, without building it.
 
@@ -219,6 +250,24 @@ def _resolved_sanitizer_revision(state: State) -> str:
         return revision
     config: dict[str, Any] | None = getattr(state, "config", None)
     return derive_sanitizer_revision(config) if config is not None else "unknown"
+
+
+def _resolved_search_providers(state: State) -> list[SearchProvider]:
+    """Return the chain this app resolved at start, or the default chain.
+
+    The lifespan publishes ``search_providers`` once — the chain **objects**,
+    in chain order, never their names (any name list is derived with
+    ``[p.name for p in chain]``). The fallback is defensive and
+    production-unreachable, the same property :func:`_resolved_cache_backend`'s
+    has: any transport that skipped lifespan events would 500 on the bare
+    ``app.state.classifier`` read first.
+
+    It is also **total** — it constructs the default provider directly rather
+    than resolving a name, so it cannot raise. A configuration error can only
+    ever surface at boot; the refuse-boot rule belongs to the lifespan alone.
+    """
+    chain: list[SearchProvider] | None = getattr(state, "search_providers", None)
+    return chain if chain is not None else [SearxngProvider(DEFAULT_SEARXNG_URL)]
 
 
 def _load_config() -> dict[str, Any]:
@@ -1076,6 +1125,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     _warn_if_break_glass_advertisement_enabled()
 
+    # Resolve the ordered search-provider chain from the environment, once.
+    # An unknown name raises `SearchProviderConfigurationError` straight out
+    # of the lifespan — the `extraction_settings_from_config` /
+    # `cache_settings_from_config` precedent: a typo fails the boot loudly
+    # rather than quietly running a chain the operator did not ask for.
+    search_providers = build_provider_chain(
+        _configured_provider_names(),
+        searxng_url=SEARXNG_URL,
+    )
+    app.state.search_providers = search_providers
+    # Names only — never the configured endpoint or any other environment
+    # value.
+    logger.info(
+        "Search providers resolved: %s",
+        ", ".join(provider.name for provider in search_providers),
+    )
+
     # Connect content cache. The `cache:` bounds are validated here whichever
     # storage ends up selected — a typo fails the boot loudly, exactly as the
     # `extraction:` block does, rather than silently widening a memory bound.
@@ -1194,6 +1260,9 @@ app.state.model_metrics = ModelMetrics()
 # suite's `client` fixture uses) — `None` means "no acquisition was started".
 app.state.model_task = None
 app.state.model_acquisition = None
+# `None` means "no lifespan resolved a chain"; `_resolved_search_providers`
+# reads it and falls back to the default one-element SearXNG chain.
+app.state.search_providers = None
 app.state.classification_semaphore = asyncio.Semaphore(
     _initial_extraction_settings.classification_concurrency
 )
@@ -1552,7 +1621,7 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
     try:
         response = await run_search_pipeline(
             body,
-            searxng_url=SEARXNG_URL,
+            providers=_resolved_search_providers(request.app.state),
             config=request.app.state.config,
             classifier=request.app.state.classifier,
         )

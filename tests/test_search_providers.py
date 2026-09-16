@@ -5,7 +5,9 @@ boundary rule that provider code never imports a sanitization stage or the
 cache. US-002 adds ``SearxngProvider`` — the extracted SearXNG call — and the
 orchestrator side of the seam: the candidate budget, the re-applied slice, the
 ``unresponsive_engines`` bound, and the ``ProviderFailure`` → wire-code
-mapping.
+mapping. US-003 adds the chain resolved from ``FORAGE_SEARCH_PROVIDERS``:
+name parsing, static-registry lookup, the refuse-boot error and its redaction
+rule, and ``run_search_pipeline``'s ``providers=`` seam.
 
 test_mapping:
   pipeline/search_providers/__init__.py: tests/test_search_providers.py
@@ -34,7 +36,13 @@ from pipeline.orchestrator import (
     PipelineError,
     run_search_pipeline,
 )
-from pipeline.search_providers import searxng
+from pipeline.search_providers import (
+    DEFAULT_PROVIDER_NAME,
+    SearchProviderConfigurationError,
+    build_provider_chain,
+    parse_provider_names,
+    searxng,
+)
 from pipeline.search_providers.base import (
     FAILURE_CLASSES,
     FailureClass,
@@ -917,3 +925,152 @@ class TestOrchestratorFailureMapping:
 
         assert exc_info.value.error == "searxng_unavailable"
         assert "connect_error" in exc_info.value.reason
+
+
+# ---------------------------------------------------------------------------
+# US-003: the provider chain resolved from the environment
+# ---------------------------------------------------------------------------
+
+
+class TestParseProviderNames:
+    """`FORAGE_SEARCH_PROVIDERS` normalized into an ordered list of names."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            pytest.param(None, ["searxng"], id="unset"),
+            pytest.param("", ["searxng"], id="blank"),
+            pytest.param("   ", ["searxng"], id="whitespace-only"),
+            pytest.param(",,", ["searxng"], id="commas-only"),
+            pytest.param("searxng", ["searxng"], id="explicit"),
+            pytest.param(" searxng, ", ["searxng"], id="whitespace-and-stray-comma"),
+            pytest.param("SearXNG", ["searxng"], id="case-folded"),
+            pytest.param("searxng,searxng", ["searxng"], id="duplicate-collapsed"),
+            pytest.param("a,b,a", ["a", "b"], id="duplicate-keeps-first-position"),
+            pytest.param("b, a", ["b", "a"], id="order-preserved"),
+        ],
+    )
+    def test_parsing(self, raw: str | None, expected: list[str]) -> None:
+        assert parse_provider_names(raw) == expected
+
+    def test_it_never_returns_an_empty_chain(self) -> None:
+        """There is no "no providers" configuration — blank means the default."""
+        assert parse_provider_names("  ,\t,  ") == [DEFAULT_PROVIDER_NAME]
+
+
+class TestBuildProviderChain:
+    """Static-registry resolution, and what an unknown name is allowed to say."""
+
+    def test_the_default_name_builds_a_searxng_provider(self) -> None:
+        chain = build_provider_chain(["searxng"], searxng_url=DEFAULT_SEARXNG_URL)
+
+        assert len(chain) == 1
+        assert chain[0].name == "searxng"
+        assert chain[0].paid is False
+        assert chain[0].origin == DEFAULT_SEARXNG_URL
+
+    def test_the_operators_searxng_url_reaches_the_provider(self) -> None:
+        """`SEARXNG_URL` arrives through the keyword, not a second read."""
+        chain = build_provider_chain(
+            ["searxng"], searxng_url="https://search.example.com:8443"
+        )
+
+        assert chain[0].origin == "https://search.example.com:8443"
+
+    def test_an_unknown_name_raises_a_configuration_error(self) -> None:
+        with pytest.raises(SearchProviderConfigurationError) as exc_info:
+            build_provider_chain(["searxng", "nope"], searxng_url=DEFAULT_SEARXNG_URL)
+
+        message = str(exc_info.value)
+        assert "FORAGE_SEARCH_PROVIDERS" in message
+        assert "entry 2" in message
+        assert "searxng" in message
+        assert "nope" not in message
+
+    def test_the_error_is_a_value_error(self) -> None:
+        """A `ValueError` subclass, so the lifespan's boot failure reads normally."""
+        assert issubclass(SearchProviderConfigurationError, ValueError)
+
+    def test_the_message_never_echoes_the_operators_token(self) -> None:
+        """The `model_fetcher.resolve_revision()` ruling, applied here.
+
+        The token is operator-supplied text heading straight for a log line,
+        so a value with an embedded newline must not put its second line into
+        the message.
+        """
+        raw = "searxng\nINFO: fake log line"
+        names = parse_provider_names(raw)
+
+        with pytest.raises(SearchProviderConfigurationError) as exc_info:
+            build_provider_chain(names, searxng_url=DEFAULT_SEARXNG_URL)
+
+        message = str(exc_info.value)
+        assert "\n" not in message
+        assert "fake log line" not in message
+
+    def test_resolution_is_a_static_dictionary_lookup(self) -> None:
+        """No `importlib`, `getattr`, or `eval` participates in name resolution.
+
+        Read off the module's own AST rather than argued in review: an
+        operator string selecting code by any path other than the dict
+        literal is the failure this rules out.
+        """
+        source = Path(pipeline.search_providers.__file__).read_text()
+        tree = ast.parse(source)
+
+        called = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert not (called & {"getattr", "eval", "exec", "__import__"})
+        assert "importlib" not in _imported_modules(
+            Path(pipeline.search_providers.__file__)
+        )
+
+
+class TestRunSearchPipelineProvidersArgument:
+    """`providers=` is the chain seam; `searxng_url=` is the legacy default."""
+
+    async def test_an_empty_chain_is_a_caller_error(self) -> None:
+        """`[]` raises rather than quietly serving the default chain.
+
+        The check is `providers is None`, never a falsy one: spec 4 raises
+        `policy_excluded_all_providers` in the handler *before* the call, and
+        a falsy check here would have silently masked that.
+        """
+        with pytest.raises(ValueError, match="empty provider chain"):
+            await run_search_pipeline(
+                SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
+                providers=[],
+                config=_ORCHESTRATOR_CONFIG,
+            )
+
+    async def test_the_first_provider_in_the_chain_serves(self) -> None:
+        first = FakeSearchProvider(name="first")
+        second = FakeSearchProvider(name="second")
+
+        response = await run_search_pipeline(
+            SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
+            providers=[first, second],
+            config=_ORCHESTRATOR_CONFIG,
+        )
+
+        assert [query for query, _ in first.calls] == ["q"]
+        assert second.calls == []
+        assert response.results == []
+
+    async def test_a_supplied_chain_makes_searxng_url_unused(self) -> None:
+        """No SearXNG client is opened when a chain is handed in."""
+        fake = FakeSearchProvider(name="fake")
+
+        with patch(_SEARXNG_CLIENT) as client_cls:
+            await run_search_pipeline(
+                SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
+                searxng_url="http://never-used:9999",
+                providers=[fake],
+                config=_ORCHESTRATOR_CONFIG,
+            )
+
+        client_cls.assert_not_called()
+        assert len(fake.calls) == 1

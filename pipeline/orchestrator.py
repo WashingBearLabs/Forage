@@ -16,6 +16,7 @@ import time
 import unicodedata
 import uuid
 from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlparse, urlsplit, urlunsplit
@@ -685,6 +686,7 @@ async def run_search_pipeline(
     request: SearchRequest,
     *,
     searxng_url: str = _DEFAULT_SEARXNG_URL,
+    providers: Sequence[SearchProvider] | None = None,
     config: dict[str, Any],
     classifier: Any = None,
     promptguard_threshold: float = 0.85,
@@ -704,7 +706,24 @@ async def run_search_pipeline(
     - SUSPICIOUS fields are included with a ``suspicious`` flag.
     - A provider failure raises :class:`PipelineError` with the SearXNG-era
       codes, composed from the provider's closed ``detail`` token.
+
+    *providers* is the chain the lifespan resolved from
+    ``FORAGE_SEARCH_PROVIDERS``; ``chain[0]`` serves and *searxng_url* is
+    unused. ``None`` means "no chain supplied" and builds the default
+    one-element SearXNG chain from *searxng_url* — the test call sites that
+    still pass ``searxng_url=`` take this path. The check is ``is None`` and
+    never a falsy one: an empty non-``None`` sequence is a caller programming
+    error with no wire code, and a falsy check would silently serve the
+    default chain instead of surfacing it.
+
+    This function never reads the environment.
     """
+    if providers is not None and len(providers) == 0:
+        raise ValueError(
+            "run_search_pipeline received an empty provider chain; a caller "
+            "with no provider to offer must not call the pipeline"
+        )
+
     request_id = uuid.uuid4().hex
 
     # -- Call the search provider --
@@ -713,7 +732,10 @@ async def run_search_pipeline(
     # the slice below is re-applied to whatever comes back, so
     # `_MAX_SEARCH_RESULTS_SCANNED` stays enforced on this side of the seam.
     fetch_limit = min(request.num_results * 2, _MAX_SEARCH_RESULTS_SCANNED)
-    provider: SearchProvider = SearxngProvider(searxng_url)
+    chain: Sequence[SearchProvider] = (
+        [SearxngProvider(searxng_url)] if providers is None else providers
+    )
+    provider: SearchProvider = chain[0]
     max_results = request.num_results if provider.paid else fetch_limit
     outcome = await provider.search(request.query, max_results)
     if isinstance(outcome, ProviderFailure):

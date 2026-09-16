@@ -198,7 +198,10 @@ SearXNG `httpx` call left `orchestrator.py` for `SearxngProvider`
 (`search-provider-abstraction` US-002 — `pipeline/search_providers/searxng.py` is **not** a
 `_REVISION_SOURCES` member, so `orchestrator.py` is the only hashed file that moved, which
 was measured rather than assumed; the wire codes are unchanged and only the `reason` text
-narrowed). `docs/bootstrap-notes.md` carries
+narrowed), and an eighth to `e7038672…` when `run_search_pipeline` gained the `providers=`
+chain seam (`search-provider-abstraction` US-003 — again `orchestrator.py` alone; the
+default `providers=None` path is the previous behaviour unchanged).
+`docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.
 

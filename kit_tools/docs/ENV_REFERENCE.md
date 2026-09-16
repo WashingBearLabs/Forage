@@ -39,6 +39,7 @@ Naming rule (`CLAUDE.md` invariant 1): the primary name of every Forage-specific
 |---|---|---|---|---|---|---|
 | `VALKEY_URL` | none | unset | no | **yes** (may embed a password: `redis://:PASSWORD@host:6379/4`) | `retrieval_app._configured_valkey_url()`, start | Bounded in-memory content cache; `/health.cache_backend` reads `"memory"`. **Only a fully unset variable means this.** |
 | `SEARXNG_URL` | none | `http://searxng:8080` | no | no | `retrieval_app.py` line 82, **import** | Default used; assumes a compose service literally named `searxng`. An unreachable SearXNG surfaces as `searxng_unavailable` on `/search`, never as a boot failure. The client is built with `trust_env=False` (`search-provider-abstraction` US-002), so an ambient `HTTP_PROXY` / `HTTPS_PROXY` / `.netrc` / `SSL_CERT_FILE` no longer affects the SearXNG call — the one deliberate behaviour change of that extraction. Only scheme, host and port are echoed on the wire. |
+| `FORAGE_SEARCH_PROVIDERS` | none | `searxng` | no | no | `retrieval_app._configured_provider_names()`, start | Default one-element chain `["searxng"]`. Ordered and comma-separated; parsed by `pipeline.search_providers.parse_provider_names` (strip, lower-case, drop empty tokens, collapse duplicates keeping the first) and resolved by `build_provider_chain` through a static dict literal — no dynamic import. Known names: `searxng` only. An unknown name raises `SearchProviderConfigurationError` out of the lifespan and **refuses the boot**; the message names the entry's 1-based position and the known names, never the token or the raw value. Set but blank: WARNING `search_providers_blank`, default applies. **Any entry other than `searxng` sends the caller's query to that provider.** The resolved names (and nothing else) are logged at start; `app.state.search_providers` holds the chain objects, never names. |
 | `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION` | `POPPY_RETRIEVAL_LEGACY_CAPABILITY` (deprecated, identical semantics) | unset | no | no | `retrieval_app._break_glass_arming_env_var()`, start (boot WARNING) and every `/health` | Override off. Armed only by the exact string `1`; then `/health.capabilities` advertises `search_sanitization` regardless of classifier state while `status`, `degraded_reasons`, and `promptguard_loaded` stay honest. |
 
 ### Model weights (`model_fetcher.py`)
@@ -68,7 +69,7 @@ Naming rule (`CLAUDE.md` invariant 1): the primary name of every Forage-specific
 
 ### Tests
 
-No test-only variables exist. `tests/conftest.py` autouse-clears `HF_TOKEN`, `HF_HOME`, `FORAGE_MODEL_REVISION`, `FORAGE_WEIGHTS_MIRROR`, `FORAGE_MIRROR_TOKEN`, and `VALKEY_URL` before every test and blocks the network. CI's `smoke` job runs the built image with **no environment at all** and asserts the degraded `/health` contract, so a token-less start is a tested mode, not an accident.
+No test-only variables exist. `tests/conftest.py` autouse-clears `HF_TOKEN`, `HF_HOME`, `FORAGE_MODEL_REVISION`, `FORAGE_WEIGHTS_MIRROR`, `FORAGE_MIRROR_TOKEN`, `VALKEY_URL`, and `FORAGE_SEARCH_PROVIDERS` before every test and blocks the network. CI's `smoke` job runs the built image with **no environment at all** and asserts the degraded `/health` contract, so a token-less start is a tested mode, not an accident.
 
 ---
 

@@ -114,7 +114,8 @@ async def test_async_test_runs_under_the_block() -> None:
 # The environment-clearing half of `conftest.py`. Every name below changes what
 # the suite *does*, not merely how fast it does it — a token takes the
 # "configured source" branch through the weight acquisition, and `VALKEY_URL`
-# selects a different cache storage entirely. A developer who exports one runs
+# selects a different cache storage entirely, while `FORAGE_SEARCH_PROVIDERS`
+# selects which search backends exist at all. A developer who exports one runs
 # a different suite from CI's, and the divergence is silent.
 
 
@@ -132,6 +133,7 @@ def test_the_cleared_environment_is_the_expected_exact_set() -> None:
         "FORAGE_WEIGHTS_MIRROR",
         "FORAGE_MIRROR_TOKEN",
         "VALKEY_URL",
+        "FORAGE_SEARCH_PROVIDERS",
     }
 
 

@@ -611,7 +611,8 @@ a rotation flushes Forage's own cache. Rotations to date, none changing sanitiza
 | `5927038d…` | identity became `MODEL_ID@revision` — no source byte moved (2026-09-10) |
 | `fa4691c5…` | contract `1.1.0` and the revision joined the cache key (2026-09-10) |
 | `8b1b7f78…` | error vocabulary added to `contract.py`; contract still `1.1.0` (2026-09-11) |
-| `ee4450d9…` (current) | the inline SearXNG call extracted from `orchestrator.py` into `SearxngProvider`; wire codes unchanged, `reason` text narrowed (2026-09-15) |
+| `ee4450d9…` | the inline SearXNG call extracted from `orchestrator.py` into `SearxngProvider`; wire codes unchanged, `reason` text narrowed (2026-09-15) |
+| `e7038672…` (current) | `run_search_pipeline` gained the `providers=` chain seam in `orchestrator.py`; no sanitization behaviour changed (2026-09-15) |
 
 **Rationale:**
 `pipeline/sanitizer_revision.py`: "two containers running the same code can be scanning with

@@ -8,8 +8,8 @@ import logging
 import tempfile
 import threading
 import time
-from collections.abc import AsyncGenerator, Callable
-from contextlib import ExitStack, asynccontextmanager
+from collections.abc import AsyncGenerator, Callable, Generator
+from contextlib import ExitStack, asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -52,6 +52,9 @@ from pipeline.extraction_limits import (
     extraction_settings_from_config,
 )
 from pipeline.orchestrator import PipelineError
+from pipeline.search_providers import SearchProviderConfigurationError
+from pipeline.search_providers.base import ProviderSearchResult, SearchProvider
+from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL
 from promptguard.classifier import (
     CHUNK_OVERLAP,
     MAX_SEQ_LEN,
@@ -71,6 +74,7 @@ from retrieval_app import (
 )
 from tests.fakes import (
     FakeContentCache,
+    FakeSearchProvider,
     hub_download_double,
     weights_manifest_document,
 )
@@ -1567,3 +1571,213 @@ async def test_the_lifespan_publishes_the_backend_it_selected(
         data = (await client.get("/health")).json()
 
     assert data["cache_backend"] == "memory"
+
+
+# ---------------------------------------------------------------------------
+# Search-provider chain from the environment (`search-provider-abstraction`
+# US-003)
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _borrowed_search_providers(
+    chain: list[SearchProvider] | None,
+) -> Generator[None, None, None]:
+    """Put *chain* on the module singleton and put the old value back.
+
+    The save/`delattr`/`finally`-restore idiom (ruling 26d): these tests share
+    one `app` object with every other test in the suite, and a chain left
+    behind would silently serve the neighbouring `/search` tests that expect
+    the real `SearxngProvider`. `None` is a real published value here — the
+    module-scope sentinel — so "absent" is restored with `delattr`, not by
+    assigning `None`.
+    """
+    had_attr = hasattr(app.state, "search_providers")
+    published = getattr(app.state, "search_providers", None)
+    app.state.search_providers = chain
+    try:
+        yield
+    finally:
+        if had_attr:
+            app.state.search_providers = published
+        else:
+            delattr(app.state, "search_providers")
+
+
+def test_the_searxng_url_default_is_the_providers_own_literal() -> None:
+    """One copy of the default in the repo, read through the provider module."""
+    assert retrieval_app.SEARXNG_URL == DEFAULT_SEARXNG_URL
+
+
+def test_the_env_var_name_is_the_one_read_site() -> None:
+    assert retrieval_app.SEARCH_PROVIDERS_ENV_VAR == "FORAGE_SEARCH_PROVIDERS"
+
+
+def test_configured_provider_names_defaults_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FORAGE_SEARCH_PROVIDERS", raising=False)
+
+    assert retrieval_app._configured_provider_names() == ["searxng"]
+
+
+def test_configured_provider_names_reads_the_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", " SearXNG , searxng,")
+
+    assert retrieval_app._configured_provider_names() == ["searxng"]
+
+
+def test_a_set_but_blank_variable_warns_and_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Set-but-blank is a silent substitution unless the log says otherwise."""
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", " , ")
+
+    with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+        names = retrieval_app._configured_provider_names()
+
+    assert names == ["searxng"]
+    assert "search_providers_blank" in caplog.text
+
+
+def test_an_unset_variable_does_not_warn(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.delenv("FORAGE_SEARCH_PROVIDERS", raising=False)
+
+    with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+        retrieval_app._configured_provider_names()
+
+    assert "search_providers_blank" not in caplog.text
+
+
+async def test_lifespan_publishes_the_resolved_chain_and_logs_its_names(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The chain objects reach `app.state`, and only their names reach the log."""
+    _park_the_retry(monkeypatch)
+    monkeypatch.delenv("FORAGE_SEARCH_PROVIDERS", raising=False)
+
+    with (
+        _borrowed_search_providers(None),
+        caplog.at_level(logging.INFO, logger="retrieval_app"),
+    ):
+        async with _running_app():
+            chain = cast("list[SearchProvider]", app.state.search_providers)
+
+            assert [provider.name for provider in chain] == ["searxng"]
+            assert chain[0].origin == retrieval_app.SEARXNG_URL
+
+    assert "Search providers resolved: searxng" in caplog.text
+
+
+async def test_lifespan_refuses_to_boot_on_an_unknown_provider_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unknown name fails the boot, and the message redacts the token.
+
+    Driven against a throwaway `probe_app` (the `CacheConfigurationError`
+    precedent above), never the module-global one: a lifespan that raises
+    part-way through would otherwise leave the shared app half-configured.
+    """
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng,nope\nINFO: fake line")
+
+    probe_app = FastAPI()
+    with pytest.raises(SearchProviderConfigurationError) as exc_info:
+        async with lifespan(probe_app):
+            pass
+
+    message = str(exc_info.value)
+    assert "FORAGE_SEARCH_PROVIDERS" in message
+    assert "entry 2" in message
+    assert "searxng" in message
+    assert "nope" not in message
+    assert "fake line" not in message
+    assert "\n" not in message
+    assert not hasattr(probe_app.state, "search_providers")
+
+
+def test_the_module_scope_sentinel_is_none_not_a_chain() -> None:
+    """The attribute exists for a transport that never fires lifespan events."""
+    source = Path(retrieval_app.__file__).read_text()
+
+    assert "app.state.search_providers = None" in source
+
+
+def test_the_fallback_is_a_one_element_searxng_chain() -> None:
+    """With the sentinel in place, `_resolved_search_providers` is still total.
+
+    Read through the protocol only — no `isinstance`, no `base_url` — because
+    the seam is what every consumer of `app.state.search_providers` gets.
+    """
+    with _borrowed_search_providers(None):
+        chain = retrieval_app._resolved_search_providers(app.state)
+
+    assert len(chain) == 1
+    assert chain[0].name == "searxng"
+    assert chain[0].origin == "http://searxng:8080"
+
+
+def test_the_fallback_returns_a_published_chain_untouched() -> None:
+    fake = FakeSearchProvider(name="fake")
+
+    with _borrowed_search_providers([fake]):
+        chain = retrieval_app._resolved_search_providers(app.state)
+
+    assert chain == [fake]
+
+
+async def test_post_search_serves_through_the_published_chain(
+    client: httpx.AsyncClient,
+) -> None:
+    """A fake chain on the lifespan-free client really serves `/search`."""
+    fake = FakeSearchProvider(
+        name="fake",
+        outcome=ProviderSearchResult(
+            provider_name="fake",
+            results=[
+                {
+                    "title": "Fake",
+                    "url": "https://example.com/fake",
+                    "content": "From the fake chain.",
+                    "engine": "fake-engine",
+                }
+            ],
+            unresponsive_engines=[],
+        ),
+    )
+
+    with _borrowed_search_providers([fake]):
+        resp = await client.post(
+            "/search",
+            json={"query": "chain test", "promptguard_fail_closed": False},
+        )
+
+    assert resp.status_code == 200
+    assert [query for query, _ in fake.calls] == ["chain test"]
+    assert resp.json()["results"][0]["url"] == "https://example.com/fake"
+
+
+async def test_a_following_search_still_sees_the_real_provider(
+    client: httpx.AsyncClient,
+) -> None:
+    """The save/restore idiom leaves no chain behind for the next test."""
+    with _borrowed_search_providers([FakeSearchProvider(name="fake")]):
+        await client.post("/search", json={"query": "chain test"})
+
+    with patch("pipeline.search_providers.searxng.httpx.AsyncClient") as client_cls:
+        inner = AsyncMock()
+        inner.get.side_effect = httpx.ConnectError("not available")
+        inner.__aenter__ = AsyncMock(return_value=inner)
+        inner.__aexit__ = AsyncMock(return_value=False)
+        client_cls.return_value = inner
+
+        resp = await client.post("/search", json={"query": "after"})
+
+    assert resp.status_code == 422
+    assert resp.json()["error"] == "searxng_unavailable"
