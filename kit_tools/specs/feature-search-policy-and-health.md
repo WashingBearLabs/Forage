@@ -785,6 +785,78 @@ No pydantic, handler, or contract code changed — the `contract/openapi.yaml` /
 `.sha256` / golden fixture were already correct from US-010/US-012 and are untouched.
 Full suite, `ruff check .`, `ruff format --check .`, and strict `pyright` all green.
 
+### US-002 — `/health` provider status (2026-09-16)
+
+`HealthResponse` gained `search_providers: list[str]` (required, description covering the
+key-gated-skip and configuration-echo-not-liveness points) and a rewritten `capabilities`
+description naming both `search_sanitization` (1.1.0, runtime claim, break-glass-forceable)
+and the new `brave_api_key` (1.2.0, environment fact, break-glass-immune). `retrieval_app.py`
+gained `CAPABILITY_BRAVE_API_KEY = "brave_api_key"` beside `CAPABILITY_SEARCH_SANITIZATION`,
+with the introducing comment block rewritten for two keys.
+
+**State seam.** The lifespan now evaluates `_resolve_brave_key()` once into a local `brave_key`
+and derives `app.state.search_key_capabilities: tuple[str, ...]` — `(CAPABILITY_BRAVE_API_KEY,)`
+when `brave_key is not None`, `()` otherwise — from that same value, alongside building
+`search_providers` with it. Since `_resolve_brave_key()` already returns `None` for absent,
+blank, and `brave_key_invalid` values (via `brave_key_present()`), this is the "one evaluation"
+the spec requires: advertisement and registration can never disagree. Declared `None` at module
+scope beside `app.state.search_providers = None`; read through a new
+`_resolved_search_key_capabilities(state)`, modelled on `_resolved_cache_backend` /
+`_resolved_sanitizer_revision`, returning `()` for `None` and never reading `os.environ`. The
+`/health` handler builds `search_providers` as `[p.name for p in
+_resolved_search_providers(state)]` (no separate name list) and folds
+`_resolved_search_key_capabilities(state)` into `capabilities` as a second, independent loop
+after the existing sanitization entry.
+
+**No rotation.** `retrieval_app.py` and `models.py` are not `pipeline/sanitizer_revision.py`
+`_REVISION_SOURCES` members, and this story touched no hashed file — `derive_sanitizer_revision({})`
+was re-measured before and after and stayed `dc3ff92a876885e8a8c1d9b0c5601818a6e4ccc208a87ab01f776482bf4eded9`
+throughout (US-011's recorded value). No rotation-table edit was made anywhere.
+
+**Contract.** Regenerated via `uv run python -m scripts.export_contract`; still `1.2.0`,
+purely additive (`search_providers` added to `HealthResponse` and its `required` list, the
+`capabilities` description text widened). `tests/golden/contract_1_2_0.json` regenerated in
+place by re-dumping `model_json_schema()` for `_SCHEMA_MODELS`. New anchor
+`10e6cfc65abf5a56c342b8952630f5b270198e29a058001b031b1158e5d602e8`, replacing the stale
+`e6be668f51eeaa80ba0830727e05bcfa5c87ef9283e9625210514b44bc7cdfdc` in all four anchor-embedding
+docs (found by grepping the old hex string, not by trusting the hints' line numbers, which were
+again off by 10-15 lines throughout this story). `tests/test_contract_smoke.py::_health_body`
+gained a `search_providers` key so its fixture bodies keep validating against the now-required
+field; `contract_smoke.py` itself needed no edit, as the spec predicted.
+
+**Tests.** `tests/test_app.py::_borrowed_search_providers` was extended to save/restore
+`app.state.search_key_capabilities` alongside `app.state.search_providers`, since the lifespan
+always publishes the two together and the existing brave-lifespan tests already rely on this
+helper to avoid leaking chain state across the shared `app` singleton — without this, the new
+capability tuple would leak across tests the same way an unrestored chain would. Twelve new
+tests cover every Independent Test case (key present and chained; key absent; empty/whitespace/
+control-character-invalid key shapes; keyed-but-not-chained; key present with PromptGuard
+unloaded; break-glass armed with no key; the key value never appearing in the body or logs; the
+chain-membership/capability pairing invariant with and without a key; the lifespan-free
+`ASGITransport` fallback via the existing client fixture's save/`delattr`/restore idiom; and
+that `status`/`degraded_reasons`/`promptguard_loaded`/`cache_connected`/`cache_backend` are
+unaffected). All built on the existing `_running_app()` + `_borrowed_search_providers(None)` +
+`_park_the_retry` real-lifespan idiom already used by the `feature-brave-provider` US-002
+lifespan tests, so PromptGuard's natural unloaded-by-default state served the "PromptGuard
+unloaded" case with no extra mocking.
+
+**Docs.** `kit_tools/docs/MONITORING.md` (field table row + rewritten `capabilities` row,
+schema listing, stock-image sentence, SearXNG-failures row wording, and the
+`policy_unknown_provider` disambiguation clause's forward-looking "(gains ... in US-002)"
+parenthetical resolved to present tense now that the fields exist), `kit_tools/docs/API_GUIDE.md`
+(`GET /health` field table), `docs/configuration.md` (`search_providers`-only "Verifying a
+running instance" row per the hint, and the break-glass "Only `capabilities` lies" line scoped
+to `capabilities.search_sanitization`), `README.md` (`GET /health` field list),
+`kit_tools/arch/SECURITY.md` (unauthenticated-disclosure sentence gained the search-chain/
+paid-key clause, a new "Documented non-vulnerabilities" row, and the Honest Degradation field
+list), `kit_tools/arch/SERVICE_MAP.md` (Health Check row, and the two `capabilities: {}`
+statements reworded as a presence map that may also carry `brave_api_key` per ruling 32). The
+`_break_glass_arming_env_var` docstring's "Only `capabilities` lies" was scoped to
+`capabilities['search_sanitization']` to match.
+
+Gates: 2043 tests (2031 + 12 new), `ruff check .`, `ruff format --check .`, and strict `pyright`
+all green.
+
 ## Refinement Notes
 
 Policy-not-keys is the invariant that lets Poppy build a settings UI safely, and restrict-only
