@@ -503,7 +503,7 @@ was called and also failed, both counters have advanced again although the reque
   `kit_tools/arch/DECISIONS.md` (ruling 32).
 
 **Acceptance Criteria:**
-- [ ] `SearchResponse` carries `provider_used: str` (required, the serving provider's `name`),
+- [x] `SearchResponse` carries `provider_used: str` (required, the serving provider's `name`),
       `fallback_fired: bool` (default `False`, `True` iff the traversal advanced past the first
       provider — set from the same local flag that increments `search.fallback_fired`, and not
       derivable from `provider_errors`, which also records an exhausted last provider) and
@@ -511,40 +511,40 @@ was called and also failed, both counters have advanced again although the reque
       (default empty, chain-order `"<provider.name>: <failure_class>"` entries); tests cover the
       SearXNG-served, Brave-after-SearXNG-failed and paid-first-then-free shapes, and no field
       description contains the word "paid".
-- [ ] Provider-level failures appear only in `provider_errors`: a response served after a SearXNG
+- [x] Provider-level failures appear only in `provider_errors`: a response served after a SearXNG
       failure has `omitted_results == 0` from that failure and `unresponsive_engines == []` when
       Brave served (test).
-- [ ] Every `SearchResult` carries `domain: str` equal to the lower-cased `urlsplit(url).hostname`
+- [x] Every `SearchResult` carries `domain: str` equal to the lower-cased `urlsplit(url).hostname`
       of its canonical `url`, without userinfo or port; tests cover an upper-case host, a host with
       a port, a userinfo URL (omitted as `invalid_url`, so no `domain` is ever derived from it),
       and an IPv6 literal, asserting deliberately that `url` carries `[2001:db8::1]` while
       `domain == "2001:db8::1"`. The field description states it is a hostname (not eTLD+1), a
       provenance signal, not a trust decision, and names the IPv6 case.
-- [ ] `/metrics` `search` carries `fallback_fired` and `paid_calls`, appended in the same position
+- [x] `/metrics` `search` carries `fallback_fired` and `paid_calls`, appended in the same position
       in the served dict and the mirror; `paid_calls` increments per call to a `paid=True`
       provider whether or not it served (a paid call ending in 422 is counted); `fallback_fired`
       increments once per request in which traversal advanced, including requests that end in
       422; a `searxng`-only chain never moves either counter. A test asserts both keys are
       present in the `search` section after one fallback request through the app;
       `tests/test_contract_metrics.py` passes, including its two key-order guards.
-- [ ] `run_search_pipeline` takes `search_metrics` typed as the orchestrator-side `Protocol` with
+- [x] `run_search_pipeline` takes `search_metrics` typed as the orchestrator-side `Protocol` with
       a null-object default; the `/search` handler passes the annotated local `search_metrics`,
       and `uv run pyright` checks `retrieval_app.SearchMetrics` against the Protocol at that call.
-- [ ] Contract regenerated under 1.2.0 (`CONTRACT_VERSION` unchanged); `contract/openapi.yaml`,
+- [x] Contract regenerated under 1.2.0 (`CONTRACT_VERSION` unchanged); `contract/openapi.yaml`,
       `.sha256`, `tests/fixtures/contract/unregenerated_openapi.yaml` and
       `tests/golden/contract_1_2_0.json` updated; `contract_1_1_0.json` and
       `contract_1_0_0.json` byte-identical to before; `tests/test_contract_export.py` green.
-- [ ] Telemetry is metadata-only: a test drives a fallback-served request with a sentinel string
+- [x] Telemetry is metadata-only: a test drives a fallback-served request with a sentinel string
       in the Brave result body and asserts the sentinel appears in no cache write, no log record,
       and no `/metrics` field.
-- [ ] `kit_tools/docs/MONITORING.md` (`search` table rows with the caveat, alert condition and
+- [x] `kit_tools/docs/MONITORING.md` (`search` table rows with the caveat, alert condition and
       remedy; failure-signals row), `kit_tools/docs/API_GUIDE.md` (`/search` response fields)
       and the four anchor-embedding documents named in the hints are updated in the same change;
       the rotation is recorded in `docs/bootstrap-notes.md`, `CLAUDE.md` and
       `kit_tools/arch/DECISIONS.md`.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
 
 ### US-004: Sanitization parity across providers + poisoned-metadata edge case
 
