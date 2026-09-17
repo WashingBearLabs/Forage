@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: search-policy-and-health
-status: active
+status: completed
 session_ready: true
 depends_on: [search-fallback]
 vision_ref: "T2.1 — Search-provider abstraction & reliable search"
@@ -12,7 +12,8 @@ epic_seq: 4
 epic_final: false
 execution_order: [US-012, US-011, US-002, US-003]
 created: 2026-09-14
-updated: 2026-09-14
+updated: 2026-09-17
+completed: 2026-09-17
 ---
 
 # Feature Spec: Per-Request Policy + Provider Health
