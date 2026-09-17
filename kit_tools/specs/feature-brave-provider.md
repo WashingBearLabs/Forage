@@ -645,3 +645,58 @@ documented integration step, not a design question._
   `test_orchestrator.py`): all passed; `ruff check`, `ruff format --check` and `pyright`
   (strict) all clean. US-013 carries sanitization parity, the no-persistence pin, and the
   operator docs.
+
+- **2026-09-16 — US-013 landed: sanitization parity, no-persistence pin, operator docs
+  (split of US-003, part 2).** No production defect surfaced — `brave.py` and
+  `pipeline/orchestrator.py` are both untouched by this story (confirmed via
+  `git diff --stat` against the US-012 commit for `orchestrator.py`, and `brave.py` is
+  not a `_REVISION_SOURCES` member regardless). All new tests live in
+  `tests/test_brave_provider.py`.
+  **Sanitization parity.** `TestSanitizationParity` drives the same raw dict shape through
+  both a `FakeSearchProvider` (SearXNG-shaped) and a real `BraveApiProvider` over a
+  hand-built one-source LLM-Context envelope (`_brave_envelope`), through
+  `run_search_pipeline` directly — no ASGI app needed, since the loop itself is the thing
+  under test. Six cases: structural-BLOCKED `content` (the existing
+  "ignore all previous instructions…" phrase) omitted under `structural_blocked` for both;
+  a classifier-flagged `content` (mocked `run_promptguard` returning
+  `INJECTION_DETECTED`, `skipped=False`) omitted under `injection_detected` for both; one
+  parametrized test covering both the SUSPICIOUS-only case (a `javascript:` substring,
+  which trips Stage 2's `suspicious_url` category without tripping any BLOCKED category)
+  and a clean-text control, both driven with `run_promptguard` mocked to a scanned SAFE
+  result (`skipped=False`, score `0.1`) so the fail-open branch cannot set `suspicious` on
+  its own — only a genuine Stage 2 verdict can, which is exactly what the control proves
+  absent and the suspicious case proves present; a poisoned `title` omitted under
+  `structural_blocked` for both; and a parametrized degenerate `url` (`javascript:`
+  scheme, embedded userinfo, an interior space) omitted under `invalid_url` for both. The
+  `_run_searxng`/`_run_brave` helpers share one request shape and an optional
+  `promptguard_result` override, so the six cases stay symmetric by construction rather
+  than by careful copy-pasting.
+  **No-persistence pin.** `TestNoPersistence` puts a real `ContentCache` over a fresh
+  `FakeStorage()` on `app.state.cache` (not the `client` fixture's default
+  `FakeContentCache`, which is a no-op double that can't distinguish "never called" from
+  "called but is a no-op", and not a bare `MagicMock`, which would pass unconditionally
+  since `ContentCache` has no `set` method to fail to implement) and drives a real
+  `POST /search` through the ASGI client with a Brave-served chunk carrying a unique
+  sentinel string. Asserts `storage.get_calls == storage.set_calls == storage.delete_calls
+  == 0` and that the sentinel is absent from `caplog.text` at INFO — both hold because
+  `run_search_pipeline` takes no `cache` parameter at all, so the negative was already
+  true; this test pins it.
+  **Docs.** `kit_tools/docs/TROUBLESHOOTING.md`'s error table gained four `brave: <class>`
+  rows (`auth`, `rate_limited`, `timeout`, `hard_error`, the last naming all six
+  `brave_search_failed` `detail`-token diagnoses from the story hint) immediately after
+  the `search_unavailable` row, and that row's stale `(e.g. brave: quota)` example —
+  `quota` is a reserved-but-unused token; `_failure_for_status` never emits it for a 429,
+  which maps to `rate_limited` instead — was corrected to `brave: auth`.
+  `kit_tools/arch/SERVICE_MAP.md` gained a `### Brave Search API` subsection (after
+  `### SearXNG`, same attribute-row shape) and a dedicated Failure Impact Matrix row
+  distinct from the generic "configured non-SearXNG provider" row, naming the four
+  failure classes and the read-once-at-boot key restart caveat. `kit_tools/arch/SECURITY.md`'s
+  outbound-request checklist item gained a carve-out clause pointing at the
+  `SearchProvider` protocol docstring's rule 1 (operator-configured or fixed-constant
+  endpoints are exempt from `validate_url` on that basis alone) rather than restating the
+  rule inline. No `pipeline/contract.py` field description moved, so no contract
+  regeneration was needed.
+  Full suite: 1943 passed; `ruff check`, `ruff format --check` and `pyright` (strict) all
+  clean. `derive_sanitizer_revision({})` measured `b7871b20…ea6f2b` before and after,
+  matching `docs/bootstrap-notes.md`'s latest record (US-004) — this story rotates
+  nothing.

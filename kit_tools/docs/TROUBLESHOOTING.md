@@ -9,7 +9,7 @@
 
 > **TEMPLATE_INTENT:** Document debugging procedures and common fixes. How to diagnose problems.
 
-> Last updated: 2026-09-13
+> Last updated: 2026-09-16
 > Updated by: Claude (seed-project)
 
 ---
@@ -169,7 +169,11 @@ codes plus three `/search` codes deduplicate to eighteen.
 | `pdf_encrypted` | 422 | `/extract` | The PDF is encrypted | Nothing server-side; the fixed reason says so |
 | `pdf_no_text` | 422 | `/extract` | No extractable text; OCR is not supported | A scanned document; nothing server-side |
 | `private_ip` | 422 | `/retrieve` | Hostname is `localhost` or ends in `.local`, or **any** resolved address is private, loopback, link-local, CGN, multicast, reserved, or IPv4-mapped IPv6 (`_PRIVATE_NETWORKS_*` in `url_validator.py`). Re-checked on every redirect hop. Reason echoes the resolved IP (GOVERNANCE ruling d) | Intended. A public name resolving privately from inside the container is split-horizon DNS or a rebinding attempt |
-| `search_unavailable` | 422 | `/search` | The configured provider chain could not serve the request and the chain is **not** a lone `searxng` — reason is the closed `<provider_name>: <failure_class>` pair (e.g. `brave: quota`), never a URL and never exception text. Added in contract `1.2.0` | Which providers `FORAGE_SEARCH_PROVIDERS` names. The `failure_class` is the diagnosis: `quota`/`auth` is the provider account, `rate_limited`/`timeout` is the provider, `hard_error` is Forage's log |
+| `search_unavailable` | 422 | `/search` | The configured provider chain could not serve the request and the chain is **not** a lone `searxng` — reason is the closed `<provider_name>: <failure_class>` pair (e.g. `brave: auth`), never a URL and never exception text. Added in contract `1.2.0` | Which providers `FORAGE_SEARCH_PROVIDERS` names. The `failure_class` is the diagnosis: `auth` is the provider account, `rate_limited`/`timeout` is the provider, `hard_error` is Forage's log |
+| `brave: auth` | 422 | `/search` | Brave rejected the key on the LLM-Context call — wrong, revoked, or not entitled (`401`/`403`) | Replace `FORAGE_BRAVE_API_KEY` and **restart the container** — `BraveApiProvider` reads the key once, at process start |
+| `brave: rate_limited` | 422 | `/search` | Brave answered `429` — a per-second limit and plan exhaustion share the same status | Retry after a pause; if it persists, check the Brave account's plan, since a transient limit and an exhausted quota look identical here |
+| `brave: timeout` | 422 | `/search` | The LLM-Context call exceeded `search_brave_timeout_seconds` (default 15 s) | Raise `search_brave_timeout_seconds` in `config.yaml`, or check egress latency to `api.search.brave.com` |
+| `brave: hard_error` | 422 | `/search` | Everything else — a non-2xx status, a redirect, an oversized or unparseable body, or an unexpected exception — collapsed to one class; the diagnosis is in the `brave_search_failed` log line's `detail` token | Grep the `brave_search_failed` line for `detail`: `transport_error` → egress/DNS/proxy, `redirect_refused` → the endpoint moved, `bad_json`/`malformed_body` → capture a fresh sample, `body_too_large` → the response bound, `http_5xx` → Brave-side, `unexpected` → file a bug report |
 | `searxng_error` | 422 | `/search` | SearXNG answered non-2xx; reason `SearXNG returned HTTP error (http_<n>)`. A **429** here means the SearXNG limiter is on | `SEARXNG_LIMITER` must stay unset. Persistent 4xx/5xx with the limiter off is engine rot: bump the digest pin (`docs/searxng.md`) |
 | `searxng_unavailable` | 422 | `/search` | Connection refused, DNS failure, 10 s timeout, an oversized body, or an unparseable envelope; reason `SearXNG not reachable at <scheme>://<host>:<port>: <detail>`, where `detail` is one of the closed tokens `timeout`, `connect_error`, `body_too_large`, `bad_json`, `malformed_body`, `unexpected` — no exception text, and no userinfo from `SEARXNG_URL` | Is the `searxng` container up? It exits 1 without `SEARXNG_SECRET`. `SEARXNG_URL` is read at import time: restart Forage after changing it |
 | `unsupported_format` | 422 | `/extract` | Upload is neither `%PDF-` nor valid UTF-8 text: empty, NUL bytes, invalid UTF-8, or no visible text (`pipeline/stage1_upload.py`) | The bytes, not the `mime_hint`; magic bytes decide |
