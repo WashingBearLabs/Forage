@@ -8,7 +8,7 @@
 
 > **TEMPLATE_INTENT:** Record architectural decisions and their rationale. Explains the 'why' behind technical choices.
 
-> Last updated: 2026-09-15
+> Last updated: 2026-09-16
 > Updated by: Claude (seed-project)
 
 This file records significant architectural and technical decisions.
@@ -616,7 +616,8 @@ a rotation flushes Forage's own cache. Rotations to date, none changing sanitiza
 | `8b1b7f78…` | error vocabulary added to `contract.py`; contract still `1.1.0` (2026-09-11) |
 | `ee4450d9…` | the inline SearXNG call extracted from `orchestrator.py` into `SearxngProvider`; wire codes unchanged, `reason` text narrowed (2026-09-15) |
 | `e7038672…` | `run_search_pipeline` gained the `providers=` chain seam in `orchestrator.py`; no sanitization behaviour changed (2026-09-15) |
-| `b7871b20…` (current) | contract `1.2.0`: `contract.py` gained `ContentKind` and `search_unavailable`, `orchestrator.py` gained the chain-shaped failure predicate and the `content_kind`/`date` copy — both hashed files, measured (2026-09-15) |
+| `b7871b20…` | contract `1.2.0`: `contract.py` gained `ContentKind` and `search_unavailable`, `orchestrator.py` gained the chain-shaped failure predicate and the `content_kind`/`date` copy — both hashed files, measured (2026-09-15) |
+| `55e2af1b…` (current) | `run_search_pipeline` gained free-first chain traversal in `orchestrator.py`: calls providers in order, advances on a `ProviderFailure`, stops at the first success, replace-not-merge; a one-provider chain is byte-identical to before (`search-fallback` US-001, 2026-09-16) |
 
 **Rationale:**
 `pipeline/sanitizer_revision.py`: "two containers running the same code can be scanning with

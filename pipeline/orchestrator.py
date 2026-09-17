@@ -47,7 +47,11 @@ from pipeline.pdf_subprocess import (
     PDFClassifiableTextLimitError,
     extract_pdf_in_subprocess,
 )
-from pipeline.search_providers.base import ProviderFailure, SearchProvider
+from pipeline.search_providers.base import (
+    ProviderFailure,
+    ProviderSearchResult,
+    SearchProvider,
+)
 from pipeline.search_providers.searxng import (
     DEFAULT_SEARXNG_URL,
     HTTP_STATUS_DETAIL_PREFIX,
@@ -654,7 +658,7 @@ def _search_result_promptguard_input(title: str, url: str, snippet: str) -> str:
     return f"Title: {title}\nURL: {url}\nSnippet: {snippet}"
 
 
-def _is_legacy_searxng_chain(chain: Sequence[SearchProvider]) -> bool:
+def _legacy_searxng_codes(chain: Sequence[SearchProvider]) -> bool:
     """Whether *chain* is the one configuration the ``searxng_*`` codes describe.
 
     The legacy pair predates the provider seam, when SearXNG was the only
@@ -670,8 +674,12 @@ def _is_legacy_searxng_chain(chain: Sequence[SearchProvider]) -> bool:
     class check would make a drop-in replacement for ``SearxngProvider``
     silently change the wire code an operator's dashboards are keyed on.
 
-    It reads the *configured* chain, not the failing provider: what a consumer
-    is told depends on how the deployment was set up, which is stable across
+    It reads the **configured** chain, never the per-request effective one:
+    ``run_search_pipeline`` feeds it *configured_chain* when the caller
+    supplies one, else *providers* — spec 4's per-request policy filtering
+    narrows *providers* but must never reach this predicate (ruling 28), so
+    no status code varies with a policy parameter. What a consumer is told
+    depends on how the deployment was set up, which is stable across
     requests, rather than on which backend happened to be reached.
     """
     return len(chain) == 1 and chain[0].name == SEARXNG_PROVIDER_NAME
@@ -707,20 +715,22 @@ def _searxng_pipeline_error(
 
 
 def _search_unavailable_error(
-    failure: ProviderFailure,
+    provider_errors: list[str],
     *,
     request_id: str,
 ) -> PipelineError:
-    """Map any non-legacy chain's ``ProviderFailure`` onto ``search_unavailable``.
+    """Map a non-legacy chain's exhaustion onto ``search_unavailable``.
 
-    The reason is composed from two closed vocabularies and nothing else — the
-    provider's registry ``name`` and its :class:`FailureClass` — so no
+    *provider_errors* is the chain-order list of ``"<provider.name>:
+    <failure_class>"`` entries built while traversing — one per provider
+    tried, each composed from two closed vocabularies and nothing else, so no
     endpoint, credential, header or exception text can reach a 422 body
-    through this path, whatever a third-party API put in its response.
+    through this path, whatever a third-party API put in its response. The
+    reason is those entries joined by ``"; "``.
     """
     return PipelineError(
         error="search_unavailable",
-        reason=f"{failure.provider_name}: {failure.failure_class}",
+        reason="; ".join(provider_errors),
         request_id=request_id,
     )
 
@@ -730,15 +740,16 @@ async def run_search_pipeline(
     *,
     searxng_url: str = _DEFAULT_SEARXNG_URL,
     providers: Sequence[SearchProvider] | None = None,
+    configured_chain: Sequence[SearchProvider] | None = None,
     config: dict[str, Any],
     classifier: Any = None,
     promptguard_threshold: float = 0.85,
 ) -> SearchResponse:
-    """Run a web search through a search provider with complete-result sanitization.
+    """Run a web search through a search provider chain with sanitized results.
 
     The backend is reached through the ``SearchProvider`` seam
-    (``pipeline/search_providers/``) — ``SearxngProvider`` here — so this
-    function owns orchestration, not HTTP. It then sanitizes every
+    (``pipeline/search_providers/``) — ``SearxngProvider``, ``BraveApiProvider``
+    — so this function owns orchestration, not HTTP. It then sanitizes every
     model-visible title, URL, and snippet through Stage 1 (HTML extraction),
     Stage 2 (structural scan), and one aggregate Stage 3 PromptGuard
     classification per result. At most ``_MAX_SEARCH_RESULTS_SCANNED``
@@ -747,17 +758,31 @@ async def run_search_pipeline(
 
     - BLOCKED result fields (Stage 2 or 3) omit the entire result.
     - SUSPICIOUS fields are included with a ``suspicious`` flag.
-    - A provider failure raises :class:`PipelineError` with the SearXNG-era
-      codes, composed from the provider's closed ``detail`` token.
+    - Providers are tried in chain order (free-first); the first to return a
+      :class:`ProviderSearchResult` serves the request and no later provider
+      is called. A :class:`ProviderFailure` — or an exception escaping
+      ``search()``, treated as ``hard_error`` — advances to the next
+      provider. Replace-not-merge: a served response's ``results`` and
+      ``unresponsive_engines`` come only from the serving provider; nothing
+      from a failed provider survives into it. An exhausted chain raises
+      :class:`PipelineError` — today's SearXNG-era codes, composed from the
+      provider's closed ``detail`` token, or ``search_unavailable`` with a
+      reason composed from every provider tried.
 
     *providers* is the chain the lifespan resolved from
-    ``FORAGE_SEARCH_PROVIDERS``; ``chain[0]`` serves and *searxng_url* is
-    unused. ``None`` means "no chain supplied" and builds the default
-    one-element SearXNG chain from *searxng_url* — the test call sites that
-    still pass ``searxng_url=`` take this path. The check is ``is None`` and
-    never a falsy one: an empty non-``None`` sequence is a caller programming
-    error with no wire code, and a falsy check would silently serve the
-    default chain instead of surfacing it.
+    ``FORAGE_SEARCH_PROVIDERS``, tried in order. ``None`` means "no chain
+    supplied" and builds the default one-element SearXNG chain from
+    *searxng_url* — the test call sites that still pass ``searxng_url=`` take
+    this path. The check is ``is None`` and never a falsy one: an empty
+    non-``None`` sequence is a caller programming error with no wire code,
+    and a falsy check would silently serve the default chain instead of
+    surfacing it.
+
+    *configured_chain* is what the exhausted-chain 422 code is chosen from —
+    the operator-**configured** chain, never the per-request effective one
+    (ruling 28), so no status code varies with a policy filter. Defaults to
+    *providers* when not supplied; spec 4 passes the configured chain
+    explicitly once per-request policy can narrow *providers*.
 
     This function never reads the environment.
     """
@@ -769,7 +794,7 @@ async def run_search_pipeline(
 
     request_id = uuid.uuid4().hex
 
-    # -- Call the search provider --
+    # -- Call the search provider chain, free-first --
     # Request extra results to compensate for any BLOCKED omissions. The
     # candidate budget is a *request* to the provider, never a trusted bound:
     # the slice below is re-applied to whatever comes back, so
@@ -778,15 +803,61 @@ async def run_search_pipeline(
     chain: Sequence[SearchProvider] = (
         [SearxngProvider(searxng_url)] if providers is None else providers
     )
-    provider: SearchProvider = chain[0]
-    max_results = request.num_results if provider.paid else fetch_limit
-    outcome = await provider.search(request.query, max_results)
-    if isinstance(outcome, ProviderFailure):
-        if _is_legacy_searxng_chain(chain):
-            raise _searxng_pipeline_error(provider, outcome, request_id=request_id)
-        raise _search_unavailable_error(outcome, request_id=request_id)
+    resolved_configured_chain: Sequence[SearchProvider] = (
+        chain if configured_chain is None else configured_chain
+    )
 
-    raw_results: list[dict[str, Any]] = outcome.results[:max_results]
+    outcome: ProviderSearchResult | None = None
+    serving_provider: SearchProvider | None = None
+    serving_max_results: int | None = None
+    provider_errors: list[str] = []
+    last_failure: ProviderFailure | None = None
+    last_provider: SearchProvider | None = None
+    for provider in chain:
+        max_results = request.num_results if provider.paid else fetch_limit
+        try:
+            call_outcome = await provider.search(request.query, max_results)
+        except Exception:
+            # Ruling 27 already guarantees every provider's own mapping ends
+            # in this catch-all; this guard is a second, orchestrator-side
+            # floor so a defect in provider *n* can never become a 500 or
+            # skip the free floor at *n+1*.
+            call_outcome = ProviderFailure(
+                provider_name=provider.name,
+                failure_class="hard_error",
+                detail="unexpected",
+            )
+
+        if isinstance(call_outcome, ProviderFailure):
+            provider_errors.append(f"{provider.name}: {call_outcome.failure_class}")
+            logger.warning(
+                "search_provider_failed provider=%s failure_class=%s detail=%s",
+                provider.name,
+                call_outcome.failure_class,
+                call_outcome.detail,
+            )
+            last_failure = call_outcome
+            last_provider = provider
+            continue
+
+        outcome = call_outcome
+        serving_provider = provider
+        serving_max_results = max_results
+        break
+
+    if outcome is None or serving_provider is None or serving_max_results is None:
+        if last_failure is None or last_provider is None:
+            raise ValueError(
+                "run_search_pipeline received an empty provider chain; a caller "
+                "with no provider to offer must not call the pipeline"
+            )
+        if _legacy_searxng_codes(resolved_configured_chain):
+            raise _searxng_pipeline_error(
+                last_provider, last_failure, request_id=request_id
+            )
+        raise _search_unavailable_error(provider_errors, request_id=request_id)
+
+    raw_results: list[dict[str, Any]] = outcome.results[:serving_max_results]
     unresponsive_engines: list[str] = [
         _normalize_search_text(name, max_length=_MAX_UNRESPONSIVE_ENGINE_LENGTH)
         for name in outcome.unresponsive_engines[:_MAX_UNRESPONSIVE_ENGINES]

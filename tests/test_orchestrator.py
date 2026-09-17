@@ -32,6 +32,13 @@ from pipeline.orchestrator import (
     run_retrieve_pipeline,
     run_search_pipeline,
 )
+from pipeline.search_providers.base import (
+    FAILURE_CLASSES,
+    ProviderFailure,
+    ProviderSearchResult,
+)
+from pipeline.search_providers.brave import BraveApiProvider
+from pipeline.search_providers.searxng import SearxngProvider
 from pipeline.stage1_extraction import ExtractionResult
 from pipeline.stage1_pdf import PDFExtractionError
 from pipeline.stage1_upload import (
@@ -42,7 +49,7 @@ from pipeline.stage1_upload import (
 from pipeline.stage2_structural import StructuralScanResult
 from pipeline.stage3_promptguard import PromptGuardResult
 from pipeline.stage5_url_audit import FetchResult
-from tests.fakes import FakeStorage
+from tests.fakes import FakeSearchProvider, FakeStorage
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -2108,3 +2115,280 @@ async def test_search_pins_the_vetted_engine_set() -> None:
         "startpage",
         "mojeek",
     }
+
+
+# ---------------------------------------------------------------------------
+# Chain traversal (US-001): free-first, replace-not-merge, exhausted-chain 422
+# ---------------------------------------------------------------------------
+
+
+class TestChainTraversal:
+    """Ordered provider-chain traversal in ``run_search_pipeline``."""
+
+    async def test_failure_advances_to_next_provider_with_its_own_budget(
+        self,
+    ) -> None:
+        """A ProviderFailure from provider n calls provider n+1, replace-not-merge."""
+        first = FakeSearchProvider(
+            name="searxng",
+            paid=False,
+            outcome=ProviderFailure(
+                provider_name="searxng",
+                failure_class="rate_limited",
+                detail="http_429",
+            ),
+        )
+        second = FakeSearchProvider(
+            name="brave",
+            paid=True,
+            outcome=ProviderSearchResult(
+                provider_name="brave",
+                results=[
+                    {
+                        "title": "Result",
+                        "url": "https://example.com/1",
+                        "content": "Snippet.",
+                        "engine": "brave-api",
+                    }
+                ],
+                unresponsive_engines=["engine-from-brave"],
+            ),
+        )
+        request = _make_search_request(num_results=5)
+
+        result = await run_search_pipeline(
+            request,
+            providers=[first, second],
+            config=_SAMPLE_CONFIG,
+        )
+
+        fetch_limit = min(request.num_results * 2, 20)
+        assert first.calls == [(request.query, fetch_limit)]
+        assert second.calls == [(request.query, request.num_results)]
+        # Replace-not-merge: only the serving provider's fields appear.
+        assert [r.url for r in result.results] == ["https://example.com/1"]
+        assert result.unresponsive_engines == ["engine-from-brave"]
+
+    async def test_success_stops_traversal_before_the_next_provider(self) -> None:
+        """A successful provider stops the chain; no later provider is called."""
+        first = FakeSearchProvider(
+            name="searxng",
+            paid=False,
+            outcome=ProviderSearchResult(
+                provider_name="searxng",
+                results=[
+                    {
+                        "title": "Result",
+                        "url": "https://example.com/1",
+                        "content": "Snippet.",
+                        "engine": "duckduckgo",
+                    }
+                ],
+                unresponsive_engines=[],
+            ),
+        )
+        second = FakeSearchProvider(name="brave", paid=True)
+
+        result = await run_search_pipeline(
+            _make_search_request(),
+            providers=[first, second],
+            config=_SAMPLE_CONFIG,
+        )
+
+        assert len(first.calls) == 1
+        assert second.calls == []
+        assert [r.url for r in result.results] == ["https://example.com/1"]
+
+    async def test_single_provider_chain_calls_exactly_once(self) -> None:
+        """A one-provider chain makes exactly one ``search()`` call."""
+        provider = FakeSearchProvider(
+            name="brave",
+            paid=True,
+            outcome=ProviderSearchResult(
+                provider_name="brave", results=[], unresponsive_engines=[]
+            ),
+        )
+
+        await run_search_pipeline(
+            _make_search_request(),
+            providers=[provider],
+            config=_SAMPLE_CONFIG,
+        )
+
+        assert len(provider.calls) == 1
+
+    async def test_raising_provider_is_recorded_as_hard_error_and_chain_advances(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A provider whose ``search()`` raises is treated as hard_error, not a 500."""
+
+        class RaisingProvider:
+            name = "custom"
+            paid = False
+            origin: str | None = None
+
+            async def search(
+                self, query: str, max_results: int
+            ) -> ProviderSearchResult | ProviderFailure:
+                raise RuntimeError("boom")
+
+        second = FakeSearchProvider(
+            name="brave",
+            paid=True,
+            outcome=ProviderSearchResult(
+                provider_name="brave", results=[], unresponsive_engines=[]
+            ),
+        )
+
+        with caplog.at_level(logging.WARNING, logger="pipeline.orchestrator"):
+            result = await run_search_pipeline(
+                _make_search_request(),
+                providers=[RaisingProvider(), second],
+                config=_SAMPLE_CONFIG,
+            )
+
+        assert len(second.calls) == 1
+        assert result.results == []
+        messages = [r.getMessage() for r in caplog.records]
+        assert any(
+            "search_provider_failed" in m
+            and "provider=custom" in m
+            and "failure_class=hard_error" in m
+            and "detail=unexpected" in m
+            for m in messages
+        )
+
+    async def test_search_unavailable_reason_is_chain_order_provider_errors(
+        self,
+    ) -> None:
+        """``search_unavailable``'s reason is the chain-order entries joined by "; "."""
+        searxng = FakeSearchProvider(
+            name="searxng",
+            paid=False,
+            outcome=ProviderFailure(
+                provider_name="searxng",
+                failure_class="rate_limited",
+                detail="http_429",
+            ),
+        )
+        brave = FakeSearchProvider(
+            name="brave",
+            paid=True,
+            outcome=ProviderFailure(
+                provider_name="brave", failure_class="timeout", detail="timeout"
+            ),
+        )
+
+        with pytest.raises(PipelineError) as exc_info:
+            await run_search_pipeline(
+                _make_search_request(),
+                providers=[searxng, brave],
+                config=_SAMPLE_CONFIG,
+            )
+
+        assert exc_info.value.error == "search_unavailable"
+        assert exc_info.value.reason == "searxng: rate_limited; brave: timeout"
+
+        chain_names = {"searxng", "brave"}
+        for entry in exc_info.value.reason.split("; "):
+            name, _, failure_class = entry.partition(": ")
+            assert name in chain_names
+            assert failure_class in FAILURE_CLASSES
+
+    async def test_provider_failure_logs_one_message_carried_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Each provider failure emits one WARNING with the tokens in the message."""
+        provider = FakeSearchProvider(
+            name="searxng",
+            paid=False,
+            outcome=ProviderFailure(
+                provider_name="searxng",
+                failure_class="rate_limited",
+                detail="http_429",
+            ),
+        )
+
+        with (
+            caplog.at_level(logging.WARNING, logger="pipeline.orchestrator"),
+            pytest.raises(PipelineError),
+        ):
+            await run_search_pipeline(
+                _make_search_request(),
+                providers=[provider],
+                config=_SAMPLE_CONFIG,
+            )
+
+        matching = [r for r in caplog.records if r.name == "pipeline.orchestrator"]
+        assert len(matching) == 1
+        message = matching[0].getMessage()
+        assert "search_provider_failed" in message
+        assert "provider=searxng" in message
+        assert "failure_class=rate_limited" in message
+        assert "detail=http_429" in message
+
+    async def test_provider_failures_leak_no_url_credential_or_exception_text(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Neither a SearXNG nor a Brave failure leaks a URL, key, or exception text.
+
+        In the style of
+        ``tests/test_cache.py::TestReconnect::test_connect_failure_never_logs_url_or_secret``.
+        """
+        sentinel = "sentinel-brave-key-do-not-leak"
+        searxng_url = "http://user:pass@unreachable:8080"
+
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = httpx.ConnectError(
+            f"Connection refused to {searxng_url}"
+        )
+        mock_client.stream = MagicMock(
+            side_effect=RuntimeError(f"boom token={sentinel}")
+        )
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        searxng = SearxngProvider(searxng_url)
+        brave = BraveApiProvider(sentinel)
+
+        with (
+            patch(
+                "pipeline.search_providers.searxng.httpx.AsyncClient",
+                return_value=mock_client,
+            ),
+            caplog.at_level(logging.WARNING),
+            pytest.raises(PipelineError) as exc_info,
+        ):
+            await run_search_pipeline(
+                _make_search_request(),
+                providers=[searxng, brave],
+                config=_SAMPLE_CONFIG,
+            )
+
+        assert exc_info.value.error == "search_unavailable"
+        assert exc_info.value.reason == "searxng: hard_error; brave: hard_error"
+        for leaked in (sentinel, "pass", "unreachable", "Connection refused", "boom"):
+            assert leaked not in exc_info.value.reason
+            assert leaked not in caplog.text
+
+        caplog.clear()
+
+        with (
+            patch(
+                "pipeline.search_providers.searxng.httpx.AsyncClient",
+                return_value=mock_client,
+            ),
+            caplog.at_level(logging.WARNING),
+            pytest.raises(PipelineError) as legacy_exc_info,
+        ):
+            await run_search_pipeline(
+                _make_search_request(),
+                searxng_url=searxng_url,
+                config=_SAMPLE_CONFIG,
+            )
+
+        assert legacy_exc_info.value.error == "searxng_unavailable"
+        assert "unreachable:8080" in legacy_exc_info.value.reason
+        for leaked in (sentinel, "pass", "user", "Connection refused", "boom"):
+            assert leaked not in legacy_exc_info.value.reason
+            assert leaked not in caplog.text

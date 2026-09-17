@@ -354,6 +354,43 @@ This rotation is the *second* of the epic whose point is partly the invalidation
 extraction sanitized before the bump has no `content_kind` or `date`, and serving it beside
 a `1.2.0` response would be exactly the silent-mix the revision key exists to prevent.
 
+### The tenth rotation: chain traversal, free-first (`search-fallback` US-001, 2026-09-16)
+
+```
+before: b7871b204e4440b53938a8a0a5af519b57849cb5a68fb2afe6fbf3aa40ea6f2b
+after:  55e2af1bf2ce230b7d66b1f5548cb3e3b3259825be573e7373896eb443bf47e4
+```
+
+**Exactly one `_REVISION_SOURCES` file moved: `pipeline/orchestrator.py`.** Measured the
+same way as the seventh and eighth rotations: reverting `orchestrator.py` alone to its
+pre-story bytes reproduces `b7871b20…ea6f2b` exactly. `pipeline/contract.py`, `models.py`
+and every file under `pipeline/search_providers/` are untouched by this story.
+
+**What moved.** `run_search_pipeline` now traverses the resolved provider chain in order
+instead of calling only `chain[0]`: on a `ProviderFailure` (or an exception escaping
+`provider.search()`, treated as `hard_error` by an orchestrator-side catch-all) it logs one
+`search_provider_failed` WARNING, records a `"<name>: <failure_class>"` entry, and advances;
+the first `ProviderSearchResult` stops the loop and serves the request, replace-not-merge —
+nothing from a failed provider's call survives into the response. The exhausted-chain
+predicate, renamed `_is_legacy_searxng_chain` → `_legacy_searxng_codes` (no behaviour
+change — same name-token comparison on the same argument), now reads a new
+`configured_chain` keyword (defaulting to `providers`) so a future per-request policy filter
+can narrow `providers` without ever narrowing what the predicate sees. `_search_unavailable_error`
+now composes its reason from the full chain-order `provider_errors` list joined by `"; "`
+instead of a single failure.
+
+**No sanitization behaviour changed.** A one-provider chain — the default deployment —
+still makes exactly one `search()` call and produces byte-identical wire output; every
+pre-existing search test in `tests/test_orchestrator.py` passes unchanged. The rotation is
+the price of the loop now living beside the per-result sanitization code it precedes, not
+evidence that sanitization itself moved.
+
+**Blast radius.** The same mechanism as the fifth rotation: `cache_policy_fingerprint()`
+takes the revision as an input, so every extraction cached under `b7871b20…` becomes
+unreachable at the next start and ages out on its own TTL — free in memory mode, one TTL of
+extra fetches in Valkey mode. **Do not assume Poppy↔Forage revision parity** — compare
+contracts, not revisions.
+
 ## Deferred GitHub settings — for the spec 2 public flip
 
 The `WashingBearLabs` org is on the **GitHub Free** plan, and this repository

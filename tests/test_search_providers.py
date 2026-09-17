@@ -1282,9 +1282,11 @@ class TestSearchUnavailableIsChainShaped:
     ) -> None:
         """The predicate reads the chain's *shape*, not the failing provider's name.
 
-        `chain[0]` here is named `searxng` and is the one that fails, so a
-        predicate that asked "did SearXNG fail?" would answer `searxng_*`.
-        The configured chain has two entries, so it does not.
+        `chain[0]` here is named `searxng` and is one of two providers that
+        fail, so a predicate that asked "did SearXNG fail?" would answer
+        `searxng_*`. The configured chain has two entries, so it does not —
+        US-001's traversal tries every provider in the chain (`brave` included)
+        before the chain-shaped predicate is ever consulted.
         """
         first = FakeSearchProvider(
             name="searxng",
@@ -1293,7 +1295,12 @@ class TestSearchUnavailableIsChainShaped:
                 provider_name="searxng", failure_class="timeout", detail="timeout"
             ),
         )
-        second = FakeSearchProvider(name="brave")
+        second = FakeSearchProvider(
+            name="brave",
+            outcome=ProviderFailure(
+                provider_name="brave", failure_class="quota", detail="quota_exhausted"
+            ),
+        )
 
         with pytest.raises(PipelineError) as exc_info:
             await run_search_pipeline(
@@ -1303,7 +1310,7 @@ class TestSearchUnavailableIsChainShaped:
             )
 
         assert exc_info.value.error == "search_unavailable"
-        assert exc_info.value.reason == "searxng: timeout"
+        assert exc_info.value.reason == "searxng: timeout; brave: quota"
 
     @pytest.mark.asyncio()
     async def test_the_default_chain_is_still_legacy_end_to_end(self) -> None:

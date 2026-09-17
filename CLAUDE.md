@@ -205,7 +205,11 @@ default `providers=None` path is the previous behaviour unchanged), and a ninth 
 first rotation of the epic with **two** hashed files moving: `contract.py` gained
 `ContentKind` and `search_unavailable` and the version bump, `orchestrator.py` gained the
 chain-shaped failure predicate and the `content_kind`/`date` copy; measured by reverting
-each in turn, with a both-reverted control landing on `e7038672…`).
+each in turn, with a both-reverted control landing on `e7038672…`), and a tenth to
+`55e2af1b…` when `run_search_pipeline` gained free-first chain traversal
+(`search-fallback` US-001 — `orchestrator.py` alone, measured; the loop calls providers in
+order, advances on a `ProviderFailure`, and stops at the first success, replace-not-merge; a
+one-provider chain still makes exactly one call and produces byte-identical wire output).
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.
