@@ -189,20 +189,20 @@ search tests pass unchanged.
   (ruling 32), following the sixth-rotation entry's format.
 
 **Acceptance Criteria:**
-- [ ] `run_search_pipeline` calls providers in chain order; a `ProviderFailure` from provider *n*
+- [x] `run_search_pipeline` calls providers in chain order; a `ProviderFailure` from provider *n*
       results in a call to provider *n+1*; a success stops traversal and no later provider is
       called. Each provider is called at most once per request, and the fakes record that the
       free provider was asked for `fetch_limit` and the paid provider for `request.num_results`
       (ruling 25).
-- [ ] A fake whose `search()` raises is recorded as `"<name>: hard_error"` and the next provider
+- [x] A fake whose `search()` raises is recorded as `"<name>: hard_error"` and the next provider
       is called; no `/search` request returns 500 because a provider raised.
-- [ ] Replace-not-merge: the response's `results` and `unresponsive_engines` come only from the
+- [x] Replace-not-merge: the response's `results` and `unresponsive_engines` come only from the
       serving provider; a failed provider contributes nothing but its entry in the
       orchestrator-local `provider_errors` list that composes the 422 reason (the wire field
       itself arrives in US-003).
-- [ ] A one-provider chain makes exactly one `search()` call; for the `searxng`-only chain every
+- [x] A one-provider chain makes exactly one `search()` call; for the `searxng`-only chain every
       pre-existing search test in `tests/test_orchestrator.py` passes unchanged.
-- [ ] Exhausted chain returns 422: `searxng_error` / `searxng_unavailable` with the `reason`
+- [x] Exhausted chain returns 422: `searxng_error` / `searxng_unavailable` with the `reason`
       strings exactly as spec 1 US-002 leaves them (`SearXNG returned HTTP error (<detail>)`,
       `SearXNG not reachable at <origin>: <detail>` with `origin` userinfo-stripped — a test with
       `http://user:pass@unreachable:8080` asserts `"unreachable:8080" in reason` and
@@ -212,31 +212,31 @@ search tests pass unchanged.
       `pipeline/orchestrator.py`, fed by `configured_chain` when supplied, else `providers`). No
       path returns
       200 with an empty list because providers failed.
-- [ ] The `search_unavailable` `reason` is exactly the chain-order entries
+- [x] The `search_unavailable` `reason` is exactly the chain-order entries
       `"<provider.name>: <failure_class>"` joined by `"; "` (test pins
       `"searxng: rate_limited; brave: timeout"`), and a test asserts every entry splits on
       `": "` into a name present in `[p.name for p in chain]` and a class in `FAILURE_CLASSES`.
-- [ ] A test in the style of
+- [x] A test in the style of
       `tests/test_cache.py::TestReconnect::test_connect_failure_never_logs_url_or_secret` drives a
       SearXNG failure and a Brave failure with a sentinel `FORAGE_BRAVE_API_KEY` value and asserts
       neither the SearXNG URL, the sentinel, nor any exception text appears in the 422 body or
       in any log record; the same test drives the configured `[searxng]` chain's 422 and asserts
       no exception text in its body or logs (the base-URL echo is the one named exception).
-- [ ] Each provider failure emits one WARNING whose `getMessage()` contains
+- [x] Each provider failure emits one WARNING whose `getMessage()` contains
       `search_provider_failed`, `provider=<name>`, `failure_class=<class>` and `detail=<token>`
       (asserted on the message text, not on `record.__dict__`).
-- [ ] `search_unavailable` is raised only from `pipeline/orchestrator.py` in this spec (spec 4 adds
+- [x] `search_unavailable` is raised only from `pipeline/orchestrator.py` in this spec (spec 4 adds
       the policy raise in `retrieval_app.py`; both files are inside the raise-site sweep);
       `pipeline/contract.py`,
       the `/search` `responses=` declaration and `contract/openapi.yaml` are untouched by this
       story (`git diff --stat` shows none of them).
-- [ ] `grep -n 'searxng: rate_limited; brave: timeout' kit_tools/docs/TROUBLESHOOTING.md` returns
+- [x] `grep -n 'searxng: rate_limited; brave: timeout' kit_tools/docs/TROUBLESHOOTING.md` returns
       the composite-format row.
-- [ ] The `sanitizer_revision` rotation is recorded in `docs/bootstrap-notes.md`, `CLAUDE.md`
+- [x] The `sanitizer_revision` rotation is recorded in `docs/bootstrap-notes.md`, `CLAUDE.md`
       and `kit_tools/arch/DECISIONS.md`.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
 
 ### US-002: Failure-class discrimination (per-request cost guard)
 
