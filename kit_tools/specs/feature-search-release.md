@@ -431,19 +431,19 @@ tests fail if that part alone is reverted.
   compose pin is unresolvable until US-002 publishes, and the fragments must say so.
 
 **Acceptance Criteria:**
-- [ ] (a) In `.github/workflows/ci.yml`, the publish read step extracts the docstring entry for the
+- [x] (a) In `.github/workflows/ci.yml`, the publish read step extracts the docstring entry for the
       version it read with POSIX awk into a file under `${RUNNER_TEMP}` and exits 1 with an
       `::error::` line when the file is empty; the step's `run:` contains no `python3`, `uv` or
       `scripts/`; its only `$GITHUB_OUTPUT` write is the existing single-line `version=`.
-- [ ] (a) The create step writes the unchanged heredoc text to a notes file, appends a `What
+- [x] (a) The create step writes the unchanged heredoc text to a notes file, appends a `What
       changed in contract ${CONTRACT_VERSION}:` heading and then the entry file with `cat`, and
       calls `gh release create … --notes-file`; the `publish` job's shell contains no
       `--notes "${notes}"` and no `eval`; the `contract: ${CONTRACT_VERSION}` line is still on its
       own line. `grep -c '1\.2\.0' .github/workflows/ci.yml` reports 0 and `publish` gains no
       toolchain-install step.
-- [ ] (a) The read-back step keeps `grep -qE "^contract: ${escaped}$"` as its first grep and then
+- [x] (a) The read-back step keeps `grep -qE "^contract: ${escaped}$"` as its first grep and then
       asserts every line of the entry file is present in the published body with `grep -qF`.
-- [ ] (a) `tests/test_ci_workflow.py::TestReleaseContractMapping` gains
+- [x] (a) `tests/test_ci_workflow.py::TestReleaseContractMapping` gains
       `test_the_current_contract_version_has_a_docstring_entry`,
       `test_the_extractor_is_exact_against_a_hostile_module`,
       `test_the_extractor_matches_the_whole_version` and
@@ -455,50 +455,50 @@ tests fail if that part alone is reverted.
       backtick span, `$(id)`, a mid-line `*`, an indented bullet look-alike, an `EOF` line, a
       `version=forged` line and a mid-line `"""`, and the asserted output is exact. Every
       pre-existing test in the class passes unmodified.
-- [ ] (a) `grep -n 'per-version entry' docs/releases.md kit_tools/docs/CI_CD.md` hits both;
+- [x] (a) `grep -n 'per-version entry' docs/releases.md kit_tools/docs/CI_CD.md` hits both;
       `grep -n 'contract: <version>' docs/releases.md` hits; `grep -n 'docstring entry'
       contract/GOVERNANCE.md` hits inside step 7 of "Bumping the contract"; `grep -n 'docstring
       entry' .github/pull_request_template.md` hits; `tests/test_governance_docs.py` passes
       unmodified.
-- [ ] (b) `uv run python contract_smoke.py --help` lists `--expect-status` with choices `healthy`
+- [x] (b) `uv run python contract_smoke.py --help` lists `--expect-status` with choices `healthy`
       and `degraded` and default `degraded`, and `--anchor` with the committed
       `contract/openapi.yaml.sha256` as its default; `grep -n 'never from the Release assets'
       contract_smoke.py` hits in the `--anchor` help text and in the module docstring; CI's smoke
       invocation is byte-identical and `tests/test_ci_workflow.py::TestSmokeJob` passes unmodified.
-- [ ] (b) `tests/test_contract_smoke.py` covers: a healthy body passes under `healthy`; a degraded
+- [x] (b) `tests/test_contract_smoke.py` covers: a healthy body passes under `healthy`; a degraded
       body fails under `healthy`; a healthy body fails under the default; `wait_for_health` under
       `healthy` keeps polling past a 200 `degraded` body and returns the first `healthy` one; it
       returns the last body when the deadline passes without one; the in-image anchor is compared
       against the `--anchor` file. `TestSingleSourceOfTruth` passes unmodified.
-- [ ] (b) `grep -n -i 'fails by design' kit_tools/docs/TROUBLESHOOTING.md` and `grep -n 'deploy
+- [x] (b) `grep -n -i 'fails by design' kit_tools/docs/TROUBLESHOOTING.md` and `grep -n 'deploy
       gate as-is' kit_tools/docs/MONITORING.md` return nothing; `grep -n -- '--expect-status'
       kit_tools/docs/MONITORING.md kit_tools/docs/TROUBLESHOOTING.md kit_tools/docs/LOCAL_DEV.md
       kit_tools/testing/TESTING_GUIDE.md kit_tools/arch/CODE_ARCH.md kit_tools/docs/DEPLOYMENT.md
       kit_tools/docs/CI_CD.md` hits every file.
-- [ ] (c) `grep -c 'image: ghcr.io/washingbearlabs/forage:1.1.0' compose/minimal.yml
+- [x] (c) `grep -c 'image: ghcr.io/washingbearlabs/forage:1.1.0' compose/minimal.yml
       compose/full.yml` reports 1 for each file; `grep -c 'forage-searxng:0.1.1-rc'
       compose/minimal.yml compose/full.yml` reports 1 for each file; `grep -c 'manifest unknown'
       compose/minimal.yml compose/full.yml` reports at least 1 for each file.
-- [ ] (c) `tests/test_compose_fragments.py` pins the forage tag literal `1.1.0` in both fragments
+- [x] (c) `tests/test_compose_fragments.py` pins the forage tag literal `1.1.0` in both fragments
       and asserts `FORAGE_SEARCH_PROVIDERS` and `FORAGE_BRAVE_API_KEY` are bare-name entries of the
       `forage` service in both.
-- [ ] (c) `grep -rn 'forage:0.9.3-rc' compose kit_tools/docs kit_tools/arch` returns nothing;
+- [x] (c) `grep -rn 'forage:0.9.3-rc' compose kit_tools/docs kit_tools/arch` returns nothing;
       `grep -n '0\.9\.3-rc' kit_tools/docs/CI_CD.md` returns nothing; `grep -c 'forage:1.1.0'
       kit_tools/arch/INFRA_ARCH.md kit_tools/arch/SERVICE_MAP.md kit_tools/docs/LOCAL_DEV.md
       kit_tools/docs/DEPLOYMENT.md` reports at least 1 for each file, and the INFRA_ARCH fragment
       table row names `FORAGE_SEARCH_PROVIDERS` and `FORAGE_BRAVE_API_KEY` beside `HF_TOKEN`.
-- [ ] (d) `grep -c 'FORAGE_BRAVE_API_KEY' .github/workflows/ci.yml` reports at least 2;
+- [x] (d) `grep -c 'FORAGE_BRAVE_API_KEY' .github/workflows/ci.yml` reports at least 2;
       `tests/test_ci_workflow.py::_REQUIRED_GREP_PATTERNS` is `("HF_TOKEN", "hf_[A-Za-z0-9]{20,}",
       "FORAGE_BRAVE_API_KEY")`, and both `test_secret_grep_pattern_set_is_defined_in_the_workflow`
       and `test_publish_greps_the_published_config_for_secrets` iterate it.
-- [ ] (d) `grep -c 'FORAGE_BRAVE_API_KEY' kit_tools/docs/DEPLOYMENT.md kit_tools/docs/CI_CD.md
+- [x] (d) `grep -c 'FORAGE_BRAVE_API_KEY' kit_tools/docs/DEPLOYMENT.md kit_tools/docs/CI_CD.md
       kit_tools/docs/GOTCHAS.md kit_tools/docs/TROUBLESHOOTING.md kit_tools/arch/SECURITY.md`
       reports at least 1 for each file; `grep -n 'two patterns' kit_tools/docs/CI_CD.md` returns
       nothing; the operator grep in DEPLOYMENT and the TROUBLESHOOTING Quick-commands row carry the
       same three patterns as `ci.yml`.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
 
 ### US-002: Cut + publish the v1.1.0 image (owner gate)
 
