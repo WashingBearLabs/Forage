@@ -69,7 +69,8 @@ those eight — so Forage's revision moved:
 | After the `providers=` chain seam (`search-provider-abstraction` US-003) | `e7038672…3ce0cbf` |
 | After the contract bump to `1.2.0` (`search-provider-abstraction` US-004) | `b7871b20…ea6f2b` |
 | After free-first chain traversal (`search-fallback` US-001) | `55e2af1b…bf47e4` |
-| **Current (`search-fallback` US-003, fallback telemetry + provenance)** | **`5249def6…89f24a`** |
+| After fallback telemetry + provenance (`search-fallback` US-003) | `5249def6…89f24a` |
+| **Current (`search-fallback` US-002, failure-class discrimination)** | **`f0b93318…70d62`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -424,6 +425,39 @@ under `55e2af1b…` becomes unreachable at the next start and ages out on its ow
 in memory mode, one TTL of extra fetches in Valkey mode. Search results are never cached,
 so this rotation's own new fields have no cache-key exposure of their own. **Do not assume
 Poppy↔Forage revision parity** — compare contracts, not revisions.
+
+### The twelfth rotation: failure-class discrimination (`search-fallback` US-002, 2026-09-16)
+
+```
+before: 5249def675524ca54946562beaf7fcb0d52080bde575b021ee94922d7689f24a
+after:  f0b93318ecb03e6348481a42341a8a8b66f95b3ca601f9f60de3d6437cb70d62
+```
+
+**Exactly one `_REVISION_SOURCES` file moved: `pipeline/orchestrator.py`.** Measured the
+same way as the seventh, eighth, tenth and eleventh rotations: reverting `orchestrator.py`
+alone to its pre-story bytes reproduces `5249def6…89f24a` exactly. `models.py` and every
+file under `pipeline/search_providers/` are untouched by this story.
+
+**What moved.** `run_search_pipeline`'s traversal loop now classifies a
+`ProviderSearchResult` with zero raw results and a non-empty `unresponsive_engines` list as
+a failure — SearXNG's real production failure shape (`kit_tools/docs/GOTCHAS.md` "SearXNG
+`:latest` rots"), which answers 200 and never raises — recording it as
+`"<provider.name>: rate_limited"` and logging the existing `search_provider_failed` WARNING
+with `detail=unresponsive_engines`, exactly as a `ProviderFailure` already was. Sufficiency
+is judged on raw provider results before sanitization, so a poisoned or fail-closed result
+set that the sanitization loop later empties out is still a success and never advances the
+chain. The one carve-out: a configured chain of exactly one `searxng` provider
+(`_legacy_searxng_codes`) has nothing to fall back to, so that shape is served exactly as
+before this story instead of advancing — the existing `test_search_unresponsive_engines_forwarded`
+and `test_search_no_unresponsive_engines_empty_list` pass unchanged. No `config.yaml` key
+was added; no threshold is tunable.
+
+**Blast radius.** The same mechanism as the fifth, tenth and eleventh rotations:
+`cache_policy_fingerprint()` takes the revision as an input, so every extraction cached
+under `5249def6…` becomes unreachable at the next start and ages out on its own TTL — free
+in memory mode, one TTL of extra fetches in Valkey mode. Search results are never cached,
+so this rotation's classification logic has no cache-key exposure of its own. **Do not
+assume Poppy↔Forage revision parity** — compare contracts, not revisions.
 
 ## Deferred GitHub settings — for the spec 2 public flip
 

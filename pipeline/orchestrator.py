@@ -796,15 +796,23 @@ async def run_search_pipeline(
     - BLOCKED result fields (Stage 2 or 3) omit the entire result.
     - SUSPICIOUS fields are included with a ``suspicious`` flag.
     - Providers are tried in chain order (free-first); the first to return a
-      :class:`ProviderSearchResult` serves the request and no later provider
-      is called. A :class:`ProviderFailure` — or an exception escaping
-      ``search()``, treated as ``hard_error`` — advances to the next
-      provider. Replace-not-merge: a served response's ``results`` and
-      ``unresponsive_engines`` come only from the serving provider; nothing
-      from a failed provider survives into it. An exhausted chain raises
-      :class:`PipelineError` — today's SearXNG-era codes, composed from the
-      provider's closed ``detail`` token, or ``search_unavailable`` with a
-      reason composed from every provider tried.
+      *sufficient* :class:`ProviderSearchResult` serves the request and no
+      later provider is called. A :class:`ProviderFailure` — or an exception
+      escaping ``search()``, treated as ``hard_error`` — advances to the next
+      provider, and so does a :class:`ProviderSearchResult` with zero raw
+      results and a non-empty ``unresponsive_engines`` list (recorded as
+      ``"<name>: rate_limited"``): this is how SearXNG actually fails in
+      production, a 200 that never raises. Sufficiency is judged on raw
+      results before sanitization, so a poisoned or fail-closed result set
+      that sanitization later empties out is still a success. A chain of
+      exactly one ``searxng`` provider has nothing to fall back to, so that
+      one shape is served as-is there instead of advancing. Replace-not-merge:
+      a served response's ``results`` and ``unresponsive_engines`` come only
+      from the serving provider; nothing from a failed provider survives into
+      it. An exhausted chain raises :class:`PipelineError` — today's
+      SearXNG-era codes, composed from the provider's closed ``detail``
+      token, or ``search_unavailable`` with a reason composed from every
+      provider tried.
 
     *providers* is the chain the lifespan resolved from
     ``FORAGE_SEARCH_PROVIDERS``, tried in order. ``None`` means "no chain
@@ -881,6 +889,35 @@ async def run_search_pipeline(
                 provider_name=provider.name,
                 failure_class="hard_error",
                 detail="unexpected",
+            )
+
+        if (
+            isinstance(call_outcome, ProviderSearchResult)
+            and not call_outcome.results
+            and call_outcome.unresponsive_engines
+        ):
+            # Ruling 17's headline rule: a 200 with zero raw results and every
+            # engine listed as unresponsive is how SearXNG actually fails in
+            # production (kit_tools/docs/GOTCHAS.md "SearXNG :latest rots") —
+            # it never raises, so it is only visible here. A chain of exactly
+            # one `searxng` provider has nothing to fall back to, so this
+            # shape is not a trigger there: it is served exactly as before
+            # the provider seam existed.
+            if _legacy_searxng_codes(resolved_configured_chain):
+                logger.warning(
+                    "search_provider_failed provider=%s failure_class=%s detail=%s",
+                    provider.name,
+                    "rate_limited",
+                    "unresponsive_engines",
+                )
+                outcome = call_outcome
+                serving_provider = provider
+                serving_max_results = max_results
+                break
+            call_outcome = ProviderFailure(
+                provider_name=provider.name,
+                failure_class="rate_limited",
+                detail="unresponsive_engines",
             )
 
         if isinstance(call_outcome, ProviderFailure):

@@ -1,7 +1,7 @@
 <!-- Template Version: 2.0.0 -->
 # GOTCHAS.md
 
-> Last updated: 2026-09-11
+> Last updated: 2026-09-16
 > Updated by: Claude (forage-contract US-004)
 
 ## Overview
@@ -323,6 +323,13 @@ rotted *engine definitions* are the tell. Worse, SearXNG's own healthcheck only 
 **Why it matters:**
 It presents as "web search is dead" with no error anywhere, and it comes back on a cadence
 rather than once.
+
+**In a multi-provider chain** (`search-fallback` US-002), this exact shape — a 200 with
+zero raw results and a non-empty `unresponsive_engines` — is a classified failure that
+advances to the next provider only when zero raw results come back; a partial answer
+(results plus a non-empty list) is served as-is and no fallback fires. A configured chain
+of exactly one `searxng` provider has nothing to fall back to, so it is still served as the
+200 above.
 
 **Mitigation and the pin-bump cadence:**
 The image must be **pulled and recreated on a schedule**, not pinned once and forgotten.

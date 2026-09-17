@@ -214,7 +214,14 @@ and an eleventh to `5249def6…` when `run_search_pipeline` gained fallback tele
 per-result provenance (`search-fallback` US-003 — `orchestrator.py` alone, measured;
 `models.py` gained `SearchResult.domain` and `SearchResponse.provider_used` /
 `fallback_fired` / `provider_errors` but is not a `_REVISION_SOURCES` member, so those wire
-additions do not move this hash on their own; no sanitization behaviour changed).
+additions do not move this hash on their own; no sanitization behaviour changed), and a
+twelfth to `f0b93318…` when `run_search_pipeline` gained failure-class discrimination
+(`search-fallback` US-002 — `orchestrator.py` alone, measured; a `ProviderSearchResult`
+with zero raw results and a non-empty `unresponsive_engines` list is now classified as a
+failure and advances the chain exactly as a `ProviderFailure` does — the recurring
+production shape SearXNG answers with a 200 and never raises — except on a configured
+`[searxng]`-only chain, which has nothing to fall back to and still serves that shape as
+before; sufficiency stays judged on raw results before sanitization).
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

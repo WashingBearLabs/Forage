@@ -9,7 +9,7 @@
 
 > **TEMPLATE_INTENT:** Document error handling patterns and conventions.
 
-> Last updated: 2026-09-13
+> Last updated: 2026-09-16
 > Updated by: Claude (seed-project)
 
 ## Overview
@@ -240,6 +240,7 @@ pairs that emit a body today; `/health` and `/metrics` declare none.
 |-----------|---------|---------|---------|--------|
 | Outbound page fetch (`fetch_url`) | 30 s (`DEFAULT_TIMEOUT`) per request; 10 MiB body cap; max 5 manual redirect hops | none | none | `pipeline/stage5_url_audit.py` |
 | SearXNG query | 10 s (`httpx.AsyncClient(timeout=10.0)`) | none | none | `pipeline/orchestrator.py` |
+| Provider chain traversal (`run_search_pipeline`) | sum of the per-provider timeouts (10 s SearXNG + `search_brave_timeout_seconds` when configured) | none | none | `pipeline/orchestrator.py` |
 | Valkey connect and reconnect | 2 s per attempt (`_RECONNECT_TIMEOUT_S`) | on the next operation once the backoff elapses; forever | 1 s doubling to 30 s (`_RECONNECT_INITIAL_BACKOFF_S`, `_RECONNECT_MAX_BACKOFF_S`); single-flight `_reconnect_lock`, concurrent callers get an immediate miss; `ping_if_due` from `/health` detects recovery in idle windows | `cache.py` |
 | Weights acquisition (`WeightAcquisition.run`) | 1800 s for an `oras` pull (`ORAS_TIMEOUT_S`) | forever until loaded; cancellable | 30 s doubling to 600 s, plus or minus 20% jitter applied to the sleep only (`RETRY_INITIAL_BACKOFF_S`, `RETRY_MAX_BACKOFF_S`, `RETRY_JITTER_FRACTION`); single-flight, a second caller is refused not queued | `model_fetcher.py` |
 | PDF extraction child | 90 s wall (`ITIMER_REAL`), 20 s CPU (`RLIMIT_CPU`), 384 MiB address space (`RLIMIT_AS`, Linux only) | none | none; `process.kill()` and `process.join()` in `finally` on every abnormal outcome | `pipeline/pdf_subprocess.py` |
@@ -259,7 +260,7 @@ health semantics are in `kit_tools/docs/MONITORING.md` "Health Checks".
 | PromptGuard weights (no token, download pending, verification refused) | No substitute classifier. Fail-closed default: standard and untrusted content is quarantined (`unavailable_blocked`), search results are omitted (`promptguard_unavailable`). Fail-open callers get `unavailable_allowed` with a -0.1 penalty. Background loop keeps retrying. | `/health` `status: degraded`, `degraded_reasons` contains `promptguard_unavailable`, `promptguard_loaded: false`; `/metrics.model` (`fetch_in_progress`, `retries_scheduled`, `fetch_failures`, `verify_failures`, `quarantines`); `promptguard_state` per response; WARNING `weights_*` lines |
 | Valkey configured but unreachable | No fallback to memory. Every cache operation is a miss; requests proceed uncached; reconnect on backoff. | `/health` `degraded_reasons` contains `cache_unavailable`, `cache_connected: false`; `/metrics.cache.reconnect_*`; WARNING with a closed-vocabulary reason |
 | `VALKEY_URL` fully unset | Bounded in-memory LRU. This is selection, not fallback; memory mode cannot degrade. | `/health` `cache_backend: "memory"`, `cache_connected: true` |
-| SearXNG unreachable or erroring | No fallback engine. | `/search` 422 `searxng_unavailable` or `searxng_error` on the default lone-`searxng` chain, `search_unavailable` on any other; not a `/health` field |
+| SearXNG unreachable or erroring | The next provider in the configured chain serves; `/search` is a 422 only when the chain is exhausted. | `/search` 422 `searxng_unavailable` or `searxng_error` on the default lone-`searxng` chain, `search_unavailable` on any other; not a `/health` field |
 | Target site slow, oversized, private, or over-redirecting | No fallback. | `/retrieve` 422 with `fetch_timeout`, `content_too_large`, `private_ip`, `blocked_domain`, `invalid_url`, or `fetch_error` |
 | Extraction capacity exhausted | Refused, not queued beyond depth 1. | `/extract` 429 `busy`; `/metrics.extraction.busy_rejections` |
 | `config.yaml` missing | Every key falls to its code default. | WARNING `config.yaml not found at ...` |

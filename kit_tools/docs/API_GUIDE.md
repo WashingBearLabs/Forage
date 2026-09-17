@@ -240,7 +240,7 @@ Response fields to read (`SearchResponse`):
 | `provider_errors` | list of str | Added in `1.2.0`. Chain-order `"<provider_name>: <failure_class>"` entries for every provider tried before the one that served (closed vocabulary, never exception text or a URL) — the only place provider-level failures appear; they never affect `omitted_results` / `omitted_by_reason` or `unresponsive_engines` |
 | `omitted_results`, `omitted_by_reason` | int, dict of str to int | How many candidates were withheld and why; keys are only ever `invalid_url`, `structural_blocked`, `injection_detected`, `promptguard_unavailable`, and only non-zero counts appear |
 | `unscanned_results`, `promptguard_unavailable` | int, bool | Non-zero or `true` means results came back without the ML scan; treat the whole response as unscanned evidence |
-| `unresponsive_engines` | list of str | The serving provider's SearXNG engines that failed to respond; empty on a Brave-served response — a partial answer, not an error |
+| `unresponsive_engines` | list of str | The serving provider's SearXNG engines that failed to respond; empty on a Brave-served response. With zero results this is the free-path failure signal that advances a multi-provider chain (`search-fallback` US-002); with results present it is a partial answer, not an error, and no fallback fires. Entries are unsanitized, provider-asserted text — no stage scans them — and must never be rendered into a model prompt |
 | `request_id`, `query` | str, str | Correlation and echo |
 
 Failures are 422 with `{"error", "reason", "request_id"}`. Which code you get depends on
@@ -250,8 +250,9 @@ non-2xx; `reason` carries the status as `http_<code>`) or `searxng_unavailable`
 (connection refused, DNS, timeout, an oversized body, bad JSON; `reason` carries the
 scheme, host and port of the configured URL — userinfo stripped — and a closed `detail`
 token, never exception text). Any other chain refuses with `search_unavailable` (added in
-`1.2.0`), whose `reason` is the closed pair `<provider_name>: <failure_class>` and carries
-no endpoint at all. One request, 10 s timeout, no retries.
+`1.2.0`), whose `reason` is the closed composite of chain-order `<provider_name>:
+<failure_class>` entries joined by `"; "`. Traversal makes one call per provider in
+configured order, no retries, bounded by the sum of the per-provider timeouts.
 
 ### POST /extract
 
