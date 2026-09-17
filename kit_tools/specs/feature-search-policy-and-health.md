@@ -394,38 +394,38 @@ addition (human-reviewed prose, not a gate).
   (spec 1 US-004 owns them; the sweep only confirms `search_unavailable` is named there).
 
 **Acceptance Criteria:**
-- [ ] The `/search` and `/retrieve` operation descriptions in `contract/openapi.yaml` state
+- [x] The `/search` and `/retrieve` operation descriptions in `contract/openapi.yaml` state
       the boundary and the per-endpoint policy knobs as written in hint (1), name
       `promptguard_fail_closed` as shared by both routes, neither names SearXNG as *the*
       backend, and each names the other route; tests in `tests/test_contract_export.py` assert
       the mutual naming and that `/search`'s description contains neither "through SearXNG" nor
       "via SearXNG".
-- [ ] `README.md`, `kit_tools/docs/API_GUIDE.md` and `docs/configuration.md` carry the same
+- [x] `README.md`, `kit_tools/docs/API_GUIDE.md` and `docs/configuration.md` carry the same
       boundary statement in the places named in hint (1) (grep-verifiable: each mentions
       `content_kind` beside `/search` and "one URL" beside `/retrieve`); the API_GUIDE `/search`
       summary row's limits and gate cells no longer contain "SearXNG must be reachable".
-- [ ] `contract/openapi.yaml` + `.sha256` regenerated and `tests/golden/contract_1_2_0.json`
+- [x] `contract/openapi.yaml` + `.sha256` regenerated and `tests/golden/contract_1_2_0.json`
       regenerated in place; `CONTRACT_VERSION` is `1.2.0` and no `1.2.1` fixture or version
       exists; the anchor hash in the four documentation pages matches the committed `.sha256`
       and the new test in `tests/test_governance_docs.py` asserts it;
       `tests/test_contract_export.py` passes.
-- [ ] A test in `tests/test_contract_schema.py` asserts both halves of hint (3): each of the
+- [x] A test in `tests/test_contract_schema.py` asserts both halves of hint (3): each of the
       fourteen additions is present, and the key-path diff of `contract_1_2_0.json` against
       `contract_1_1_0.json` (plus the exact pins for `SearchRequest`, the 422 enum and
       `SearchMetricsResponse.model_fields`) equals the enumerated set, so an unlisted addition
       fails; `MetricsResponse` is not in `_SCHEMA_MODELS`; `contract_1_0_0.json` and
       `contract_1_1_0.json` are byte-identical to `main`.
-- [ ] The `CONTRACT_VERSION` docstring's `1.2.0` entry names every addition in hint (3);
+- [x] The `CONTRACT_VERSION` docstring's `1.2.0` entry names every addition in hint (3);
       `contract/GOVERNANCE.md`'s current-version sentence reads 1.2.0; the worked-examples
       table has exactly six rows and the five ruling sections are untouched;
       `tests/test_governance_docs.py` passes in full.
-- [ ] The `sanitizer_revision` rotation (before, after, cause: the `CONTRACT_VERSION` docstring
+- [x] The `sanitizer_revision` rotation (before, after, cause: the `CONTRACT_VERSION` docstring
       entry in `contract.py`) is recorded in `docs/bootstrap-notes.md`, the three `kit_tools/`
       rotation tables (GOTCHAS, DECISIONS, CODE_ARCH) and `CLAUDE.md`'s "Coexistence with
       Poppy" paragraph.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
 
 ## Edge Cases
 
