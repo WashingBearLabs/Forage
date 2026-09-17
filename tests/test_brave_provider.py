@@ -14,8 +14,9 @@ import json
 import logging
 import re
 import ssl
-from collections.abc import AsyncIterator, Generator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Callable, Generator
+from contextlib import AbstractContextManager, contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -33,9 +34,14 @@ from pipeline.orchestrator import (
     run_search_pipeline,
 )
 from pipeline.search_providers import build_provider_chain
-from pipeline.search_providers.base import ProviderFailure, ProviderSearchResult
+from pipeline.search_providers.base import (
+    FailureClass,
+    ProviderFailure,
+    ProviderSearchResult,
+)
 from pipeline.search_providers.brave import (
     _BRAVE_AUTH_HEADER,
+    _BRAVE_FAILURE_DETAILS,
     _BRAVE_LLM_CONTEXT_URL,
     _BRAVE_MAX_RESPONSE_BYTES,
     BRAVE_API_KEY_ENV_VAR,
@@ -51,8 +57,9 @@ from pipeline.search_providers.brave import (
     brave_settings_from_config,
 )
 from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL
-from retrieval_app import lifespan
-from tests.fakes import FakeSearchProvider
+from promptguard.classifier import PromptGuardClassifier
+from retrieval_app import SearchMetrics, app, lifespan
+from tests.fakes import FakeContentCache, FakeSearchProvider
 
 # ---------------------------------------------------------------------------
 # Fixture provenance — the pre-flight gate stays satisfied
@@ -843,3 +850,366 @@ class TestEngineProvenanceStaysDistinct:
         assert searxng_response.results[0].engine == "brave"
         assert brave_response.results[0].engine == "brave-api"
         assert searxng_response.results[0].engine != brave_response.results[0].engine
+
+
+# ---------------------------------------------------------------------------
+# Failure taxonomy — closed-vocabulary mapping, loud 422, key-never-leaks
+# (feature-brave-provider US-012, split of US-003 part 1)
+# ---------------------------------------------------------------------------
+
+# A marker distinguishable from every fixed detail/failure-class token, so an
+# accidental substring match (e.g. "timeout" appearing in its own detail
+# token) can never hide a real `str(exc)` leak.
+_EXC_TEXT_MARKER = "EXC-TEXT-MARKER-must-never-reach-a-log-line"
+
+_BRAVE_ENDPOINT_HOST = "api.search.brave.com"
+
+
+@dataclass(frozen=True)
+class _FailureCase:
+    """One way `BraveApiProvider.search()` can fail, and what it must map to."""
+
+    id: str
+    failure_class: FailureClass
+    detail: str
+    make_patch: Callable[[], AbstractContextManager[Any]]
+
+
+def _status_patch(status_code: int) -> Callable[[], AbstractContextManager[Any]]:
+    def _factory() -> AbstractContextManager[Any]:
+        return _client_patch(response=_make_response(status_code=status_code))
+
+    return _factory
+
+
+def _body_patch(
+    content: bytes, headers: dict[str, str] | None = None
+) -> Callable[[], AbstractContextManager[Any]]:
+    def _factory() -> AbstractContextManager[Any]:
+        return _client_patch(response=_make_response(content=content, headers=headers))
+
+    return _factory
+
+
+def _raising_patch(exc: Exception) -> Callable[[], AbstractContextManager[Any]]:
+    @contextmanager
+    def _cm() -> Generator[None]:
+        with patch(_BRAVE_CLIENT) as client_cls:
+            client = MagicMock()
+            client.__aenter__ = AsyncMock(side_effect=exc)
+            client.__aexit__ = AsyncMock(return_value=False)
+            client_cls.return_value = client
+            yield
+
+    def _factory() -> AbstractContextManager[Any]:
+        return _cm()
+
+    return _factory
+
+
+def _malformed_body_content() -> bytes:
+    """`grounding.generic` present but not a list — ruling 27's shape."""
+    sample = _load_sample_dict()
+    sample["grounding"]["generic"] = "not-a-list"
+    return json.dumps(sample).encode()
+
+
+def _build_failure_cases(
+    *, unexpected_message: str = f"{_EXC_TEXT_MARKER} synthetic unexpected failure"
+) -> list[_FailureCase]:
+    """The one case per closed `detail` token, reused by every test below."""
+    return [
+        _FailureCase("http_401", "auth", "http_401", _status_patch(401)),
+        _FailureCase("http_403", "auth", "http_403", _status_patch(403)),
+        _FailureCase("http_429", "rate_limited", "http_429", _status_patch(429)),
+        _FailureCase("http_4xx", "hard_error", "http_4xx", _status_patch(404)),
+        _FailureCase("http_5xx", "hard_error", "http_5xx", _status_patch(503)),
+        _FailureCase(
+            "redirect_refused", "hard_error", "redirect_refused", _status_patch(301)
+        ),
+        _FailureCase(
+            "timeout",
+            "timeout",
+            "timeout",
+            _raising_patch(httpx.TimeoutException(f"{_EXC_TEXT_MARKER} timed out")),
+        ),
+        _FailureCase(
+            "transport_error",
+            "hard_error",
+            "transport_error",
+            _raising_patch(httpx.ConnectError(f"{_EXC_TEXT_MARKER} connect failed")),
+        ),
+        _FailureCase("bad_json", "hard_error", "bad_json", _body_patch(b"not-json{")),
+        _FailureCase(
+            "malformed_body",
+            "hard_error",
+            "malformed_body",
+            _body_patch(_malformed_body_content()),
+        ),
+        _FailureCase(
+            "body_too_large",
+            "hard_error",
+            "body_too_large",
+            _body_patch(
+                b"{}",
+                headers={"content-length": str(_BRAVE_MAX_RESPONSE_BYTES + 1)},
+            ),
+        ),
+        _FailureCase(
+            "unexpected",
+            "hard_error",
+            "unexpected",
+            _raising_patch(RuntimeError(unexpected_message)),
+        ),
+    ]
+
+
+_FAILURE_CASES = _build_failure_cases()
+
+
+class TestFailureTaxonomy:
+    """Every closed `detail` token, its `failure_class`, and its log line.
+
+    One parametrization satisfies both the mapping (class, detail, no raise,
+    membership in `_BRAVE_FAILURE_DETAILS`) and the log-content criterion
+    (exactly one WARNING, tokens in the message itself, no exception text, no
+    URL, no host, no header value) — the story hint names this as "the same
+    parametrization".
+    """
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize(
+        "case", _FAILURE_CASES, ids=[case.id for case in _FAILURE_CASES]
+    )
+    async def test_every_detail_token_maps_and_logs_exactly_once(
+        self, case: _FailureCase, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        sentinel_key = "taxonomy-test-key-should-never-leak"
+        provider = BraveApiProvider(sentinel_key)
+
+        with caplog.at_level(logging.WARNING), case.make_patch():
+            outcome = await provider.search("q", 3)
+
+        assert isinstance(outcome, ProviderFailure)
+        assert outcome.failure_class == case.failure_class
+        assert outcome.detail == case.detail
+        assert case.detail in _BRAVE_FAILURE_DETAILS
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        message = warnings[0].getMessage()
+        assert "brave_search_failed" in message
+        assert case.detail in message
+        assert _EXC_TEXT_MARKER not in message
+        assert "https://" not in message
+        assert _BRAVE_ENDPOINT_HOST not in message
+        assert sentinel_key not in message
+        assert _EXC_TEXT_MARKER not in caplog.text
+        assert sentinel_key not in caplog.text
+
+    def test_the_twelve_cases_exercise_every_closed_token(self) -> None:
+        assert {case.detail for case in _FAILURE_CASES} == set(_BRAVE_FAILURE_DETAILS)
+        assert len(_BRAVE_FAILURE_DETAILS) == 12
+
+
+# ---------------------------------------------------------------------------
+# The wire outcome — `POST /search` with `BraveApiProvider` as `chain[0]`
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _borrowed_search_providers(
+    chain: list[Any] | None,
+) -> Generator[None]:
+    """Put *chain* on the module singleton and put the old value back.
+
+    Copied from ``tests/test_app.py``'s helper of the same name (save/
+    `delattr`/`finally`-restore, ruling 26d): this module's tests share the
+    one `app` object with every other test in the suite, and a chain left
+    behind would silently serve the neighbouring `/search` tests.
+    """
+    had_attr = hasattr(app.state, "search_providers")
+    published = getattr(app.state, "search_providers", None)
+    app.state.search_providers = chain
+    try:
+        yield
+    finally:
+        if had_attr:
+            app.state.search_providers = published
+        else:
+            delattr(app.state, "search_providers")
+
+
+def _app_client() -> httpx.AsyncClient:
+    """A fresh ASGI client with `app.state` wired the way the lifespan would."""
+    app.state.classifier = PromptGuardClassifier()
+    app.state.cache = FakeContentCache()
+    app.state.config = {}
+    app.state.search_metrics = SearchMetrics()
+    transport = httpx.ASGITransport(app=app)
+    return httpx.AsyncClient(transport=transport, base_url="http://test")
+
+
+@pytest.fixture
+def client() -> httpx.AsyncClient:
+    return _app_client()
+
+
+class TestSearchUnavailableWireOutcome:
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize(
+        "case", _FAILURE_CASES, ids=[case.id for case in _FAILURE_CASES]
+    )
+    async def test_every_failure_class_yields_422_search_unavailable(
+        self, case: _FailureCase, client: httpx.AsyncClient
+    ) -> None:
+        provider = BraveApiProvider("sentinel-key")
+
+        with _borrowed_search_providers([provider]), case.make_patch():
+            resp = await client.post(
+                "/search",
+                json={"query": "q", "promptguard_fail_closed": False},
+            )
+
+        assert resp.status_code == 422
+        body = resp.json()
+        assert body["error"] == "search_unavailable"
+        assert body["reason"] == f"brave: {case.failure_class}"
+
+    def test_brave_module_never_raises_a_pipeline_error(self) -> None:
+        """The raise site for `search_unavailable` lives in `orchestrator.py` alone."""
+        brave_path = Path(__file__).resolve().parent.parent / (
+            "pipeline/search_providers/brave.py"
+        )
+        assert "PipelineError" not in brave_path.read_text()
+
+
+class TestZeroSourceIsACleanSuccess:
+    """A body with no sources is a success, never a `ProviderFailure`."""
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize(
+        "content",
+        [
+            pytest.param(b"{}", id="no-grounding"),
+            pytest.param(b'{"grounding": {}}', id="no-generic"),
+            pytest.param(b'{"grounding": {"generic": null}}', id="generic-null"),
+            pytest.param(b'{"grounding": {"generic": []}}', id="generic-empty"),
+        ],
+    )
+    async def test_search_returns_an_empty_success_directly(
+        self, content: bytes
+    ) -> None:
+        provider = BraveApiProvider("sentinel-key")
+        with _client_patch(response=_make_response(content=content)):
+            outcome = await provider.search("q", 5)
+
+        assert isinstance(outcome, ProviderSearchResult)
+        assert outcome.results == []
+        assert outcome.unresponsive_engines == []
+
+    @pytest.mark.asyncio()
+    async def test_post_search_returns_200_with_no_omissions(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        provider = BraveApiProvider("sentinel-key")
+        empty_body = b'{"grounding": {"generic": []}}'
+        with (
+            _borrowed_search_providers([provider]),
+            _client_patch(response=_make_response(content=empty_body)),
+        ):
+            resp = await client.post(
+                "/search",
+                json={"query": "q", "promptguard_fail_closed": False},
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["results"] == []
+        assert body["omitted_by_reason"] == {}
+        assert body["omitted_results"] == 0
+        assert body["unresponsive_engines"] == []
+
+    @pytest.mark.asyncio()
+    async def test_post_search_omission_fields_on_a_sample_served_response(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        """The same three omission fields, asserted on a non-empty response."""
+        provider = BraveApiProvider("sentinel-key")
+        with (
+            _borrowed_search_providers([provider]),
+            _client_patch(response=_make_response(content=_load_sample_bytes())),
+        ):
+            resp = await client.post(
+                "/search",
+                json={"query": "q", "promptguard_fail_closed": False},
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["results"]
+        assert body["omitted_by_reason"] == {}
+        assert body["omitted_results"] == 0
+        assert body["unresponsive_engines"] == []
+
+
+class TestKeyNeverLeaks:
+    """Modelled on ``TestReconnect::test_connect_failure_never_logs_url_or_secret``
+    (``tests/test_cache.py``).
+
+    A sentinel key drives every failure class end-to-end through
+    ``POST /search``; it — and the endpoint host, and (for the catch-all
+    case) the injected exception's own message — must appear in no log
+    record, no ``/search`` response body, no ``/metrics`` body, and no
+    ``str()``/``repr()`` of the provider or the ``ProviderFailure``.
+    """
+
+    _SENTINEL_KEY = "sentinel-brave-api-key-must-never-leak-anywhere"
+    _CASES = _build_failure_cases(
+        unexpected_message=(
+            f"synthetic upstream failure near {_BRAVE_ENDPOINT_HOST} "
+            f"key={_SENTINEL_KEY}"
+        )
+    )
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize("case", _CASES, ids=[case.id for case in _CASES])
+    async def test_no_surface_leaks_the_key_or_host(
+        self,
+        case: _FailureCase,
+        client: httpx.AsyncClient,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        provider = BraveApiProvider(self._SENTINEL_KEY)
+
+        with (
+            _borrowed_search_providers([provider]),
+            caplog.at_level(logging.WARNING),
+            case.make_patch(),
+        ):
+            resp = await client.post(
+                "/search",
+                json={"query": "q", "promptguard_fail_closed": False},
+            )
+
+        assert resp.status_code == 422
+        assert resp.json()["error"] == "search_unavailable"
+
+        metrics_resp = await client.get("/metrics")
+
+        with case.make_patch():
+            direct_outcome = await provider.search("q", 3)
+        assert isinstance(direct_outcome, ProviderFailure)
+
+        surfaces = [
+            caplog.text,
+            resp.text,
+            metrics_resp.text,
+            repr(provider),
+            str(provider),
+            repr(direct_outcome),
+            str(direct_outcome),
+        ]
+        for surface in surfaces:
+            assert self._SENTINEL_KEY not in surface
+            assert _BRAVE_ENDPOINT_HOST not in surface

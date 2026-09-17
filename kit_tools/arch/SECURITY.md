@@ -311,7 +311,7 @@ Forage has no audit log in the authentication sense; there is no identity to rec
 | SSRF | `tests/test_url_validator.py`, `tests/test_stage5_url_audit.py`, `tests/test_orchestrator.py` (refusal paths) |
 | Injection signalling and quarantine | `tests/test_stage1_extraction.py`, `tests/test_stage1_pdf.py`, `tests/test_stage2_structural.py`, `tests/test_stage3_promptguard.py`, `tests/test_orchestrator.py` |
 | Upload bounds and isolation | `tests/test_app.py`, `tests/test_contract_errors.py`, `tests/test_smart_extraction.py`, `tests/test_models.py` |
-| Secrets | `tests/test_dockerfile.py::TestNoSecretEntersTheBuild`, `tests/test_cache.py::TestReconnect`, `tests/test_app.py::test_no_selection_path_logs_the_valkey_url`, `tests/test_ci_workflow.py::TestSecretGrepJob` |
+| Secrets | `tests/test_dockerfile.py::TestNoSecretEntersTheBuild`, `tests/test_cache.py::TestReconnect`, `tests/test_app.py::test_no_selection_path_logs_the_valkey_url`, `tests/test_ci_workflow.py::TestSecretGrepJob`, `tests/test_brave_provider.py::TestKeyNeverLeaks` |
 | Supply chain | `tests/test_model_fetcher.py`, `tests/test_vendor_weights.py`, `tests/test_dependency_lock.py`, `tests/test_contract_export.py`, `tests/test_dockerfile.py` (pins, lock-driven install, contract in image), `tests/test_ci_workflow.py` (permissions, publish, release assets) |
 | Network placement | `tests/test_compose_fragments.py` |
 | Honest degradation | `tests/test_app.py` (the health tests above), `tests/test_ci_workflow.py::TestSmokeJob`, `contract_smoke.py` |

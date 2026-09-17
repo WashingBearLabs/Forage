@@ -605,3 +605,43 @@ documented integration step, not a design question._
   Full targeted suite (`test_brave_provider.py`, `test_search_providers.py`, `test_app.py`,
   `test_hermeticity.py`, `test_orchestrator.py`): 376 passed; `ruff check`, `ruff format
   --check` and `pyright` (strict) all clean.
+
+- **2026-09-16 — US-012 landed: failure taxonomy log line, 12-token parametrization,
+  zero-source variants, key-never-leaks (split of US-003, part 1).** The mapping, the wire
+  `search_unavailable` outcome, and the 429→`rate_limited` classification were already
+  correct and already landed (spec 1 US-004, this feature's US-010/US-011) — the only
+  production defect this story fixed was the log line itself: `_failure()` was passing
+  `failure_class`/`detail` as `extra={...}`, which `kit_tools/arch/patterns/LOGGING.md`
+  (~138) says nothing ever renders (no handler is configured, so first-party WARNING output
+  falls to `logging.lastResort`, whose format is bare `%(message)s`). An operator following
+  the `hard_error` row in `kit_tools/docs/TROUBLESHOOTING.md` would see only
+  `brave_search_failed` and nothing else. Fixed to
+  `logger.warning("brave_search_failed — %s (%s)", detail, failure_class)` — the tokens are
+  now in the message itself. `brave.py` is not a `pipeline/sanitizer_revision.py`
+  `_REVISION_SOURCES` member, so `derive_sanitizer_revision()` was measured unchanged
+  (`b7871b20…ea6f2b`, same as US-004) before and after.
+  **Tests added to `tests/test_brave_provider.py`.** One `_FailureCase` table (a dataclass
+  of `id`/`failure_class`/`detail`/a zero-arg context-manager factory) drives all three new
+  test classes: `TestFailureTaxonomy` (the 12-token parametrization — class, detail, no
+  raise, `detail in _BRAVE_FAILURE_DETAILS`, exactly one WARNING whose `getMessage()` carries
+  both tokens and no exception text/URL/host/key, plus a set-equality check against all
+  twelve), `TestSearchUnavailableWireOutcome` (every case reaches `POST /search` as 422
+  `search_unavailable` with `reason == f"brave: {failure_class}"`, plus a source-text check
+  that `brave.py` names no `PipelineError`), `TestZeroSourceIsACleanSuccess` (no-`grounding`,
+  no-`generic`, null-`generic`, empty-`generic` all assert
+  `ProviderSearchResult(results=[], unresponsive_engines=[])` directly, plus `POST /search`
+  200 with `results == [], omitted_by_reason == {}, omitted_results == 0,
+  unresponsive_engines == []` on both a zero-source and a sample-served response), and
+  `TestKeyNeverLeaks` (same 12 cases, driven through a real `POST /search` with the provider
+  on `app.state.search_providers` — a local `_borrowed_search_providers` save/restore
+  context manager, copied from `tests/test_app.py`'s helper of the same name since each test
+  module in this repo owns its own `app`-wiring fixtures rather than sharing one — asserting
+  a sentinel key and the endpoint host are absent from `caplog.text`, the 422 body, `GET
+  /metrics`, and `str()`/`repr()` of both the provider and a directly-obtained
+  `ProviderFailure`; the catch-all case's injected `RuntimeError` message embeds the sentinel
+  and the host to prove `_failure()`'s `except Exception:` branch never reads `str(exc)`).
+  Added the new test class to `kit_tools/arch/SECURITY.md`'s "Coverage by control" `Secrets`
+  row. Full targeted suite (`test_brave_provider.py`, `test_app.py`, `test_contract_errors.py`,
+  `test_orchestrator.py`): all passed; `ruff check`, `ruff format --check` and `pyright`
+  (strict) all clean. US-013 carries sanitization parity, the no-persistence pin, and the
+  operator docs.

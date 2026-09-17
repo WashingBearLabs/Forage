@@ -448,21 +448,15 @@ class BraveApiProvider:
 
         The vocabulary is closed *by construction* rather than by review: a
         ``detail`` that is not one of the twelve fixed tokens collapses to
-        ``unexpected`` here. The log line carries the failure class and the
-        detail token only — never a URL, a header value, or ``str(exc)``
-        (CLAUDE.md invariant 6).
+        ``unexpected`` here. The tokens go in the message itself, as ``%s``
+        arguments (``kit_tools/arch/patterns/LOGGING.md`` ~138: ``extra=``
+        renders nowhere an operator can see it) — never a URL, a header
+        value, or ``str(exc)`` (CLAUDE.md invariant 6).
         """
         if detail not in _BRAVE_FAILURE_DETAILS:
             failure_class = "hard_error"
             detail = "unexpected"
-        logger.warning(
-            "brave_search_failed",
-            extra={
-                "provider": self.name,
-                "failure_class": failure_class,
-                "detail": detail,
-            },
-        )
+        logger.warning("brave_search_failed — %s (%s)", detail, failure_class)
         return ProviderFailure(
             provider_name=self.name,
             failure_class=failure_class,
