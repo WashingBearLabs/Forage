@@ -53,7 +53,11 @@ from pipeline.extraction_limits import (
 )
 from pipeline.orchestrator import PipelineError
 from pipeline.search_providers import SearchProviderConfigurationError
-from pipeline.search_providers.base import ProviderSearchResult, SearchProvider
+from pipeline.search_providers.base import (
+    ProviderFailure,
+    ProviderSearchResult,
+    SearchProvider,
+)
 from pipeline.search_providers.brave import BRAVE_API_KEY_ENV_VAR
 from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL
 from promptguard.classifier import (
@@ -76,6 +80,7 @@ from retrieval_app import (
 from tests.fakes import (
     FakeContentCache,
     FakeSearchProvider,
+    FakeStorage,
     hub_download_double,
     weights_manifest_document,
 )
@@ -479,6 +484,8 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "errors": {},
         "omitted_by_reason": {},
         "unscanned_results": 0,
+        "fallback_fired": 0,
+        "paid_calls": 0,
     }
     assert body["retrieve"] == {
         "requests": 0,
@@ -668,6 +675,7 @@ async def test_metrics_search_records_omitted_and_unscanned_from_response(
         results=[],
         request_id="s1",
         query="test",
+        provider_used="searxng",
         omitted_results=1,
         omitted_by_reason={contract.OMIT_INVALID_URL: 1},
         unscanned_results=2,
@@ -693,6 +701,7 @@ async def test_metrics_search_omitted_by_reason_unknown_key_buckets_to_other(
         results=[],
         request_id="s2",
         query="test",
+        provider_used="searxng",
         omitted_by_reason={"unexpected_reason": 1},
     )
     with patch(
@@ -1813,6 +1822,141 @@ async def test_a_following_search_still_sees_the_real_provider(
 
     assert resp.status_code == 422
     assert resp.json()["error"] == "searxng_unavailable"
+
+
+# ---------------------------------------------------------------------------
+# search-fallback US-003: fallback telemetry + provenance (metadata only)
+# ---------------------------------------------------------------------------
+
+
+async def test_metrics_search_counts_fallback_and_paid_calls_through_the_app(
+    client: httpx.AsyncClient,
+) -> None:
+    """The Independent Test's counters, driven through a real /search + /metrics."""
+    failing = FakeSearchProvider(
+        name="searxng",
+        paid=False,
+        outcome=ProviderFailure(
+            provider_name="searxng", failure_class="rate_limited", detail="http_429"
+        ),
+    )
+    serving = FakeSearchProvider(
+        name="brave",
+        paid=True,
+        outcome=ProviderSearchResult(
+            provider_name="brave",
+            results=[{"title": "R", "url": "https://example.com/1", "content": "c"}],
+            unresponsive_engines=[],
+        ),
+    )
+
+    with _borrowed_search_providers([failing, serving]):
+        resp = await client.post(
+            "/search", json={"query": "q", "promptguard_fail_closed": False}
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["provider_used"] == "brave"
+    assert body["fallback_fired"] is True
+    assert body["provider_errors"] == ["searxng: rate_limited"]
+    assert body["results"][0]["domain"] == "example.com"
+
+    metrics_body = (await client.get("/metrics")).json()
+    assert metrics_body["search"]["fallback_fired"] == 1
+    assert metrics_body["search"]["paid_calls"] == 1
+
+    both_fail_first = FakeSearchProvider(
+        name="searxng",
+        paid=False,
+        outcome=ProviderFailure(
+            provider_name="searxng", failure_class="rate_limited", detail="http_429"
+        ),
+    )
+    both_fail_second = FakeSearchProvider(
+        name="brave",
+        paid=True,
+        outcome=ProviderFailure(
+            provider_name="brave", failure_class="timeout", detail="timeout"
+        ),
+    )
+    with _borrowed_search_providers([both_fail_first, both_fail_second]):
+        resp2 = await client.post(
+            "/search", json={"query": "q", "promptguard_fail_closed": False}
+        )
+    assert resp2.status_code == 422
+
+    metrics_body2 = (await client.get("/metrics")).json()
+    assert metrics_body2["search"]["fallback_fired"] == 2
+    assert metrics_body2["search"]["paid_calls"] == 2
+
+
+async def test_a_searxng_only_chain_never_moves_either_counter(
+    client: httpx.AsyncClient,
+) -> None:
+    fake = FakeSearchProvider(
+        name="searxng",
+        outcome=ProviderSearchResult(
+            provider_name="searxng", results=[], unresponsive_engines=[]
+        ),
+    )
+
+    with _borrowed_search_providers([fake]):
+        resp = await client.post("/search", json={"query": "q"})
+    assert resp.status_code == 200
+    assert resp.json()["fallback_fired"] is False
+
+    metrics_body = (await client.get("/metrics")).json()
+    assert metrics_body["search"]["fallback_fired"] == 0
+    assert metrics_body["search"]["paid_calls"] == 0
+
+
+async def test_fallback_telemetry_is_metadata_only(
+    client: httpx.AsyncClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A sentinel in the served Brave body never reaches a cache write, a log
+    line, or any `/metrics` field — telemetry stays a token/bool/count/hostname.
+    """
+    sentinel = "SENTINEL-FALLBACK-BODY-must-never-be-cached-logged-or-metriced"
+    storage = FakeStorage()
+    app.state.cache = ContentCache(storage=storage)
+    failing = FakeSearchProvider(
+        name="searxng",
+        paid=False,
+        outcome=ProviderFailure(
+            provider_name="searxng", failure_class="rate_limited", detail="http_429"
+        ),
+    )
+    serving = FakeSearchProvider(
+        name="brave",
+        paid=True,
+        outcome=ProviderSearchResult(
+            provider_name="brave",
+            results=[
+                {"title": "R", "url": "https://example.com/1", "content": sentinel}
+            ],
+            unresponsive_engines=[],
+        ),
+    )
+
+    with (
+        _borrowed_search_providers([failing, serving]),
+        caplog.at_level(logging.INFO),
+    ):
+        resp = await client.post(
+            "/search", json={"query": "q", "promptguard_fail_closed": False}
+        )
+
+    assert resp.status_code == 200
+    assert sentinel in resp.json()["results"][0]["snippet"]
+
+    assert storage.get_calls == 0
+    assert storage.set_calls == 0
+    assert storage.delete_calls == 0
+    assert sentinel not in caplog.text
+
+    metrics_body = (await client.get("/metrics")).json()
+    assert sentinel not in json.dumps(metrics_body)
 
 
 # ---------------------------------------------------------------------------

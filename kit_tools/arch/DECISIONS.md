@@ -617,7 +617,8 @@ a rotation flushes Forage's own cache. Rotations to date, none changing sanitiza
 | `ee4450d9…` | the inline SearXNG call extracted from `orchestrator.py` into `SearxngProvider`; wire codes unchanged, `reason` text narrowed (2026-09-15) |
 | `e7038672…` | `run_search_pipeline` gained the `providers=` chain seam in `orchestrator.py`; no sanitization behaviour changed (2026-09-15) |
 | `b7871b20…` | contract `1.2.0`: `contract.py` gained `ContentKind` and `search_unavailable`, `orchestrator.py` gained the chain-shaped failure predicate and the `content_kind`/`date` copy — both hashed files, measured (2026-09-15) |
-| `55e2af1b…` (current) | `run_search_pipeline` gained free-first chain traversal in `orchestrator.py`: calls providers in order, advances on a `ProviderFailure`, stops at the first success, replace-not-merge; a one-provider chain is byte-identical to before (`search-fallback` US-001, 2026-09-16) |
+| `55e2af1b…` | `run_search_pipeline` gained free-first chain traversal in `orchestrator.py`: calls providers in order, advances on a `ProviderFailure`, stops at the first success, replace-not-merge; a one-provider chain is byte-identical to before (`search-fallback` US-001, 2026-09-16) |
+| `5249def6…` (current) | `run_search_pipeline` gained fallback telemetry and per-result provenance in `orchestrator.py`: derives `SearchResult.domain`, populates `provider_used`/`fallback_fired`/`provider_errors`, and increments `paid_calls`/`fallback_fired` through a new `SearchMetricsSink` Protocol; `models.py` gained the matching wire fields but is not a `_REVISION_SOURCES` member, so `orchestrator.py` is the only hashed file that moved — measured, not sanitization behaviour (`search-fallback` US-003, 2026-09-16) |
 
 **Rationale:**
 `pipeline/sanitizer_revision.py`: "two containers running the same code can be scanning with

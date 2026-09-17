@@ -209,7 +209,12 @@ each in turn, with a both-reverted control landing on `e7038672…`), and a tent
 `55e2af1b…` when `run_search_pipeline` gained free-first chain traversal
 (`search-fallback` US-001 — `orchestrator.py` alone, measured; the loop calls providers in
 order, advances on a `ProviderFailure`, and stops at the first success, replace-not-merge; a
-one-provider chain still makes exactly one call and produces byte-identical wire output).
+one-provider chain still makes exactly one call and produces byte-identical wire output),
+and an eleventh to `5249def6…` when `run_search_pipeline` gained fallback telemetry and
+per-result provenance (`search-fallback` US-003 — `orchestrator.py` alone, measured;
+`models.py` gained `SearchResult.domain` and `SearchResponse.provider_used` /
+`fallback_fired` / `provider_errors` but is not a `_REVISION_SOURCES` member, so those wire
+additions do not move this hash on their own; no sanitization behaviour changed).
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

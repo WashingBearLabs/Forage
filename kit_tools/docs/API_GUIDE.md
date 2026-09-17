@@ -234,10 +234,13 @@ Response fields to read (`SearchResponse`):
 
 | Field | Type | Read it because |
 |---|---|---|
-| `results` | list of `{title, url, snippet, engine, content_kind, date, suspicious}` | `suspicious: true` means the structural scan flagged it, the classifier scored above 0.5, or it was returned unscanned under fail-open. Title is at most 512 characters, URL 2048, snippet 2000. `engine` is whichever SearXNG sub-engine answered (e.g. `duckduckgo`, or SearXNG's own `brave` sub-engine) or, for a Brave-served result, `brave-api` — the two are deliberately never normalized into each other. `content_kind` (added in `1.2.0`) is `snippet` or `chunk` and nothing else. `date` (added in `1.2.0`) is a strict `YYYY-MM-DD` calendar date or `null` — anything a provider sends that is not one becomes `null`, so it never needs parsing defensively |
+| `results` | list of `{title, url, domain, snippet, engine, content_kind, date, suspicious}` | `suspicious: true` means the structural scan flagged it, the classifier scored above 0.5, or it was returned unscanned under fail-open. Title is at most 512 characters, URL 2048, snippet 2000. `domain` (added in `1.2.0`) is the lower-cased hostname of `url` (`urlsplit(url).hostname`), never eTLD+1 — a provenance signal, not a trust decision; for an IPv6 literal `domain` is unbracketed (`2001:db8::1`) while `url` carries brackets (`[2001:db8::1]`), the one case where `domain` is not a substring of `url`. `engine` is whichever SearXNG sub-engine answered (e.g. `duckduckgo`, or SearXNG's own `brave` sub-engine) or, for a Brave-served result, `brave-api` — the two are deliberately never normalized into each other. `content_kind` (added in `1.2.0`) is `snippet` or `chunk` and nothing else. `date` (added in `1.2.0`) is a strict `YYYY-MM-DD` calendar date or `null` — anything a provider sends that is not one becomes `null`, so it never needs parsing defensively |
+| `provider_used` | str | Added in `1.2.0`. The serving provider's `name` — `searxng`, `brave`, or a future third token (open string, not an enum, so a new provider is additive) |
+| `fallback_fired` | bool | Added in `1.2.0`. `true` iff the provider chain advanced past the first provider before this response was served — the per-response face of the `search.fallback_fired` `/metrics` counter. It says nothing about which provider served: for a chain that tries a paid provider first, this is `true` when the free provider ends up serving |
+| `provider_errors` | list of str | Added in `1.2.0`. Chain-order `"<provider_name>: <failure_class>"` entries for every provider tried before the one that served (closed vocabulary, never exception text or a URL) — the only place provider-level failures appear; they never affect `omitted_results` / `omitted_by_reason` or `unresponsive_engines` |
 | `omitted_results`, `omitted_by_reason` | int, dict of str to int | How many candidates were withheld and why; keys are only ever `invalid_url`, `structural_blocked`, `injection_detected`, `promptguard_unavailable`, and only non-zero counts appear |
 | `unscanned_results`, `promptguard_unavailable` | int, bool | Non-zero or `true` means results came back without the ML scan; treat the whole response as unscanned evidence |
-| `unresponsive_engines` | list of str | Passed through from SearXNG; a partial answer, not an error |
+| `unresponsive_engines` | list of str | The serving provider's SearXNG engines that failed to respond; empty on a Brave-served response — a partial answer, not an error |
 | `request_id`, `query` | str, str | Correlation and echo |
 
 Failures are 422 with `{"error", "reason", "request_id"}`. Which code you get depends on
@@ -419,8 +422,9 @@ changes; MINOR when fields or enum members are only added. Compare MAJOR and ref
 activate on a mismatch. New members of `degraded_reasons`, `omitted_by_reason` or
 `promptguard_state` are MINOR, so bucket unknown members rather than failing on them.
 `1.0.0` is the frozen original surface; `1.1.0` added `/health.cache_backend`; `1.2.0`
-added `SearchResult.content_kind` and `SearchResult.date` and the `search_unavailable`
-error code. Do not
+added `SearchResult.content_kind` and `SearchResult.date`, the `search_unavailable`
+error code, and — additively, still `1.2.0` — `SearchResult.domain` and
+`SearchResponse.provider_used` / `fallback_fired` / `provider_errors`. Do not
 compare `sanitizer_revision`: it has deliberately diverged between Forage and Poppy's
 in-tree copy and says nothing about wire compatibility. The image tag (for example
 `v1.0.0`) is a third, independent version.
@@ -437,7 +441,7 @@ in-tree copy and says nothing about wire compatibility. The image tag (for examp
 CI verifies two of the three on every release: the `smoke` job reads the in-image copy
 back out of the candidate image, and the `publish` job downloads the Release assets back
 from the API; both are checked against the anchor committed at the tag (currently
-`7d297dfea6b329c361c34d5a6633fbac0884e1df59294cf70ba4c9e86fb226d1`).
+`aa5e94058b8d05de7e45c96145886928a2d31aa755e18c2c81e5ef486bf0cee8`).
 
 **Vendoring procedure** (`contract/GOVERNANCE.md` "Consumers"):
 

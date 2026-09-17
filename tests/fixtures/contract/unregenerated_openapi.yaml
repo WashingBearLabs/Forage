@@ -904,6 +904,14 @@ components:
             search_unavailable).
           title: Errors
           type: object
+        fallback_fired:
+          description: Per-process count of the per-response `fallback_fired` bool — how many
+            `/search` requests had their provider chain advance past the first provider, including
+            ones that ended in a 422. Moves only when the configured chain has more than one
+            provider; a `searxng`-only deployment's first-party signal is the `search_provider_failed`
+            WARNING instead.
+          title: Fallback Fired
+          type: integer
         omitted_by_reason:
           additionalProperties:
             type: integer
@@ -912,6 +920,12 @@ components:
             map without bound.
           title: Omitted By Reason
           type: object
+        paid_calls:
+          description: Count of calls made to a `paid=True` provider, incremented before the
+            call so a call that times out is still counted — whether or not it went on to
+            serve the response. Zero on a chain with no paid provider configured.
+          title: Paid Calls
+          type: integer
         requests:
           description: Search requests that reached the handler.
           title: Requests
@@ -925,6 +939,8 @@ components:
       - errors
       - omitted_by_reason
       - unscanned_results
+      - fallback_fired
+      - paid_calls
       title: SearchMetricsResponse
       type: object
     SearchRequest:
@@ -955,6 +971,15 @@ components:
     SearchResponse:
       description: Response wrapper for search results.
       properties:
+        fallback_fired:
+          default: false
+          description: 'True iff the provider chain advanced past the first provider before
+            this response was served — the per-response face of the `search.fallback_fired`
+            /metrics counter. It records chain advancement, not which provider ultimately
+            served: for a chain that tries a provider before a free one, this is True when
+            the free provider ends up serving.'
+          title: Fallback Fired
+          type: boolean
         omitted_by_reason:
           additionalProperties:
             type: integer
@@ -979,6 +1004,22 @@ components:
             not count
           title: Promptguard Unavailable
           type: boolean
+        provider_errors:
+          description: 'Chain-order ''<provider_name>: <failure_class>'' entries for every
+            provider tried before the one that served, from a closed failure-class vocabulary
+            — never exception text or a URL. The only home for provider-level failures: they
+            never affect omitted_results/omitted_by_reason or unresponsive_engines.'
+          items:
+            type: string
+          title: Provider Errors
+          type: array
+        provider_used:
+          description: 'The serving provider''s name (the token FORAGE_SEARCH_PROVIDERS names,
+            e.g. ''searxng'', ''brave''). An open string rather than an enum: a third provider
+            is an additive change, not a validation failure on an old client.'
+          minLength: 1
+          title: Provider Used
+          type: string
         query:
           description: Original query
           minLength: 1
@@ -1010,6 +1051,7 @@ components:
       required:
       - request_id
       - query
+      - provider_used
       title: SearchResponse
       type: object
     SearchResult:
@@ -1034,6 +1076,16 @@ components:
             Anything else — absent, a non-string, a different format, or a day that does not
             exist — is null. Added in contract 1.2.0.
           title: Date
+        domain:
+          description: Lower-cased hostname of `url` (`urlsplit(url).hostname`), with no userinfo
+            or port — a provenance signal, not a trust decision. This is the hostname, not
+            the registrable domain (eTLD+1); derive that yourself if you need it. For an IPv6
+            literal this is the unbracketed form ('2001:db8::1') while `url` carries the bracketed
+            form ('[2001:db8::1]') — the one case where `domain` is not a substring of `url`.
+            Added in contract 1.2.0.
+          minLength: 1
+          title: Domain
+          type: string
         engine:
           anyOf:
           - type: string
@@ -1060,6 +1112,7 @@ components:
       required:
       - title
       - url
+      - domain
       - snippet
       title: SearchResult
       type: object

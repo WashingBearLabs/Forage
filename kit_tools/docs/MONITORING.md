@@ -9,7 +9,7 @@
 
 > **TEMPLATE_INTENT:** Document logs, metrics, alerts, and dashboards. How to observe the system.
 
-> Last updated: 2026-09-13
+> Last updated: 2026-09-16
 > Updated by: Claude (seed-project)
 
 ---
@@ -143,6 +143,12 @@ Backed by `retrieval_app.SearchMetrics`.
 | `errors` | map | `record_error(exc.error)`; three keys. `searxng_error` (SearXNG answered non-2xx) and `searxng_unavailable` (connection refused, DNS, 10 s timeout, bad JSON) are raised only when the configured chain is a lone `searxng`; `search_unavailable` (contract `1.2.0`) covers every other chain, with reason `<provider_name>: <failure_class>`. | The companion is down or throttling. `searxng_error` with reason "SearXNG returned HTTP error (http_429)" means the SearXNG limiter was turned on. `search_unavailable` names its provider in the 422 `reason`, not in the counter key — read the logs or the response to tell which one failed. |
 | `omitted_by_reason` | map | Results dropped before return, keyed by `contract.OMISSION_REASONS`: `invalid_url`, `structural_blocked`, `injection_detected`, `promptguard_unavailable`; anything else lands in `other`. | `promptguard_unavailable` rising: fail-closed omissions on a degraded container — the consumer sees thin or empty results. |
 | `unscanned_results` | counter | `+= response.unscanned_results` — fail-open results returned without an ML scan. | Unsanitized results are reaching the consumer. |
+| `fallback_fired` | counter | Once per `/search` request whose provider chain advances past the first provider (`search-fallback` US-003; the per-process count of the per-response `fallback_fired` bool) — including a request that ends in a 422. | Free search is failing often enough that the chain is advancing; correlate with `search_provider_failed` WARNINGs and the `errors` map to see which provider is unreliable. |
+| `paid_calls` | counter | Once per call to a `paid=True` configured provider, incremented before the call so a call that times out is still counted — whether or not it served the response. | Spend. `paid_calls` rising **faster** than `fallback_fired` means the paid provider is first in someone's effective chain (a per-request `providers` policy can reorder relative to the boot-time default); rising together at 1:1 means a standard free-first chain is falling back to the paid provider every time it advances. |
+
+**Caveat — both counters move only when a chain can advance.** They are wired from the same local flags `run_search_pipeline` sets during traversal; a `searxng`-only deployment (the default, no paid key configured) never has a second provider to advance to, so both counters stay at zero forever. That deployment's first-party signal for free-search trouble is the `search_provider_failed` WARNING per failed call and `errors.searxng_unavailable` / `errors.searxng_error`, not a counter — see the `search` `errors` row above and the "SearXNG failures" row in Signals Worth Watching below.
+
+**Alert condition.** Watch `paid_calls`' rate over a rolling window (e.g. per day), sized against Brave's included query credit — roughly 1,000 queries/month per owner decision 2 (`kit_tools/specs/epic-search-providers.md`), i.e. an average budget of about 33/day before the $5/1,000 overage rate applies. A sustained rate above that budget means the paid provider is absorbing more of the traffic than the credit covers. **Remedy:** remove the paid provider's token from `FORAGE_SEARCH_PROVIDERS` and restart the container — the chain is resolved once, at boot, in the lifespan, so there is no live toggle.
 
 ### `retrieve`
 
@@ -334,7 +340,8 @@ These are **suggested watch points**, not configured alerts. No thresholds are d
 | Quarantine rate | — | `retrieve.blocked_by_reason.*` rising; `retrieve.promptguard_state.unavailable_blocked` rising on a degraded container (consumer sees content-free responses — the nine-day shape) | WARNING `Content quarantined for <url>`; `PromptGuard unavailable — fail-closed for <tier> tier` |
 | Search results silently thinning | — | `search.omitted_by_reason.promptguard_unavailable` rising (fail-closed) or `search.unscanned_results` rising (fail-open) | same `PromptGuard unavailable` WARNING per result |
 | Admission pressure on `/extract` | — | `extraction.busy_rejections` rising (callers get 429 `busy`); `semaphore_saturation` and `queued` rising first; `oom_proximity_ratio` approaching 1.0 (explorer suggested watching above 0.9) | — |
-| SearXNG failures | **no signal** — `/health` does not probe SearXNG | `search.errors.searxng_unavailable` / `searxng_error` rising; per-request 422 only | — (nothing first-party; the 422 `reason` echoes the scheme, host and port of `SEARXNG_URL` — userinfo stripped — plus a closed `detail` token, never exception text) |
+| SearXNG failures | **no signal** — `/health` does not probe SearXNG | `search.errors.searxng_unavailable` / `searxng_error` rising; per-request 422 only. On a `searxng`-only chain (the default), `search.fallback_fired` and `search.paid_calls` never move — there is no second provider to advance to — so they are not a signal here either. | `search_provider_failed` WARNING per failed call (nothing else first-party; the 422 `reason` echoes the scheme, host and port of `SEARXNG_URL` — userinfo stripped — plus a closed `detail` token, never exception text) |
+| Paid provider absorbing spend | — | `search.paid_calls` rate over a window climbing past Brave's ~1,000-query/month included credit (~33/day) | `search_provider_failed` WARNINGs naming the free provider precede a rising `paid_calls`; remedy is removing the paid provider from `FORAGE_SEARCH_PROVIDERS` and restarting (chain resolves once, at boot) |
 | Break-glass left armed | `capabilities.search_sanitization` present while `promptguard_loaded: false` | — | WARNING `break_glass_advertisement_active` at startup |
 | Boot failure | no answer on 8020 | — | traceback from `ExtractionConfigurationError` or the cache-settings validator; `docker inspect` shows the exit |
 

@@ -18,7 +18,7 @@ import uuid
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import unquote, urlparse, urlsplit, urlunsplit
 
 import httpx
@@ -608,8 +608,15 @@ def _sanitize_search_text(value: object, *, max_length: int) -> tuple[str, str]:
     )
 
 
-def _canonicalize_search_url(value: object) -> tuple[str, str] | None:
-    """Normalize a result URL and allow only canonical HTTP(S) URLs."""
+def _canonicalize_search_url(value: object) -> tuple[str, str, str] | None:
+    """Normalize a result URL and allow only canonical HTTP(S) URLs.
+
+    Returns ``(canonical_url, scanned_text, domain)``. ``domain`` is bound
+    from ``parsed.hostname`` before the IPv6 re-bracketing below, so an IPv6
+    literal reaches the wire unbracketed (``2001:db8::1``) even though
+    ``canonical_url`` carries the bracketed form (``[2001:db8::1]``) — the one
+    case where ``domain`` is not a substring of ``canonical_url``.
+    """
     normalized = _normalize_search_text(value, max_length=_MAX_SEARCH_URL_LENGTH)
     if not normalized or any(character.isspace() for character in normalized):
         return None
@@ -634,7 +641,8 @@ def _canonicalize_search_url(value: object) -> tuple[str, str] | None:
     ):
         return None
 
-    host = parsed.hostname.lower()
+    domain = parsed.hostname.lower()
+    host = domain
     if ":" in host:
         host = f"[{host}]"
     netloc = host if port is None else f"{host}:{port}"
@@ -650,6 +658,7 @@ def _canonicalize_search_url(value: object) -> tuple[str, str] | None:
     return (
         _normalize_search_text(canonical, max_length=_MAX_SEARCH_URL_LENGTH),
         scanned,
+        domain,
     )
 
 
@@ -735,12 +744,40 @@ def _search_unavailable_error(
     )
 
 
+class SearchMetricsSink(Protocol):
+    """The two ``/metrics`` search counters ``run_search_pipeline`` increments directly.
+
+    ``retrieval_app.SearchMetrics`` satisfies this structurally — neither
+    module imports the other. Declaring it here, on the consumer side, is the
+    same seam shape as :class:`SearchProvider`.
+    """
+
+    fallback_fired: int
+    paid_calls: int
+
+
+class _NullSearchMetrics:
+    """The ``search_metrics`` parameter's default — a real counter nobody reads.
+
+    Its counters are process-local scratch space, satisfying
+    :class:`SearchMetricsSink` structurally so every increment site below is
+    unconditional (the ``metrics if metrics is not None else CacheMetrics()``
+    idiom, ``cache.py``), with no ``is not None`` branch at the increment
+    site itself.
+    """
+
+    def __init__(self) -> None:
+        self.fallback_fired = 0
+        self.paid_calls = 0
+
+
 async def run_search_pipeline(
     request: SearchRequest,
     *,
     searxng_url: str = _DEFAULT_SEARXNG_URL,
     providers: Sequence[SearchProvider] | None = None,
     configured_chain: Sequence[SearchProvider] | None = None,
+    search_metrics: SearchMetricsSink | None = None,
     config: dict[str, Any],
     classifier: Any = None,
     promptguard_threshold: float = 0.85,
@@ -784,6 +821,14 @@ async def run_search_pipeline(
     *providers* when not supplied; spec 4 passes the configured chain
     explicitly once per-request policy can narrow *providers*.
 
+    *search_metrics* is incremented directly during traversal: ``paid_calls``
+    once per call to a ``paid=True`` provider (before the call, so a call that
+    times out is still counted), and ``fallback_fired`` once per request in
+    which traversal advances past the first provider — both move even when
+    the chain is ultimately exhausted and the call ends in a raised
+    :class:`PipelineError`. ``None`` (the default) is a private null object,
+    so every increment site is unconditional.
+
     This function never reads the environment.
     """
     if providers is not None and len(providers) == 0:
@@ -807,14 +852,24 @@ async def run_search_pipeline(
         chain if configured_chain is None else configured_chain
     )
 
+    metrics: SearchMetricsSink = (
+        search_metrics if search_metrics is not None else _NullSearchMetrics()
+    )
+
     outcome: ProviderSearchResult | None = None
     serving_provider: SearchProvider | None = None
     serving_max_results: int | None = None
     provider_errors: list[str] = []
     last_failure: ProviderFailure | None = None
     last_provider: SearchProvider | None = None
-    for provider in chain:
+    fallback_fired = False
+    for index, provider in enumerate(chain):
+        if index > 0 and not fallback_fired:
+            fallback_fired = True
+            metrics.fallback_fired += 1
         max_results = request.num_results if provider.paid else fetch_limit
+        if provider.paid:
+            metrics.paid_calls += 1
         try:
             call_outcome = await provider.search(request.query, max_results)
         except Exception:
@@ -883,7 +938,7 @@ async def run_search_pipeline(
             logger.info("Omitting search result with invalid URL")
             omitted_by_reason[contract.OMIT_INVALID_URL] += 1
             continue
-        url, url_scan_text = canonical_url
+        url, url_scan_text, domain = canonical_url
         snippet, snippet_scan_text = _sanitize_search_text(
             raw.get("content", ""),
             max_length=_MAX_SEARCH_SNIPPET_LENGTH,
@@ -958,6 +1013,7 @@ async def run_search_pipeline(
             SearchResult(
                 title=title,
                 url=url,
+                domain=domain,
                 snippet=snippet,
                 engine=engine if isinstance(engine, str) else None,
                 content_kind=outcome.content_kind,
@@ -1002,6 +1058,9 @@ async def run_search_pipeline(
         results=sanitized_results,
         request_id=request_id,
         query=request.query,
+        provider_used=serving_provider.name,
+        fallback_fired=fallback_fired,
+        provider_errors=provider_errors,
         unresponsive_engines=unresponsive_engines,
         omitted_results=omitted_results,
         omitted_by_reason=dict(omitted_by_reason),

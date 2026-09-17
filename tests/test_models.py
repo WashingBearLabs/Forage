@@ -41,6 +41,7 @@ def _search_result(**overrides: object) -> SearchResult:
     payload: dict[str, object] = {
         "title": "E",
         "url": "https://e.com",
+        "domain": "e.com",
         "snippet": "s",
     }
     payload.update(overrides)
@@ -294,7 +295,10 @@ class TestSearchResult:
 
     def test_valid_construction(self) -> None:
         sr = SearchResult(
-            title="Example", url="https://example.com", snippet="A snippet"
+            title="Example",
+            url="https://example.com",
+            domain="example.com",
+            snippet="A snippet",
         )
         assert sr.engine is None
 
@@ -302,16 +306,29 @@ class TestSearchResult:
         sr = SearchResult(
             title="Example",
             url="https://example.com",
+            domain="example.com",
             snippet="A snippet",
             engine="brave",
         )
         assert sr.engine == "brave"
 
+    # -- domain (contract 1.2.0) --
+
+    def test_domain_is_required(self) -> None:
+        with pytest.raises(ValidationError):
+            SearchResult.model_validate(
+                {"title": "E", "url": "https://e.com", "snippet": "s"}
+            )
+
+    def test_domain_rejects_the_empty_string(self) -> None:
+        with pytest.raises(ValidationError):
+            _search_result(domain="")
+
     # -- content_kind (contract 1.2.0) --
 
     def test_content_kind_defaults_to_snippet(self) -> None:
         """A result built without a kind is a snippet — the SearXNG-era shape."""
-        sr = SearchResult(title="E", url="https://e.com", snippet="s")
+        sr = SearchResult(title="E", url="https://e.com", domain="e.com", snippet="s")
         assert sr.content_kind == "snippet"
 
     @pytest.mark.parametrize("kind", sorted(CONTENT_KINDS))
@@ -338,7 +355,7 @@ class TestSearchResult:
     # -- date (contract 1.2.0): a strict calendar date, or None --
 
     def test_date_defaults_to_none(self) -> None:
-        sr = SearchResult(title="E", url="https://e.com", snippet="s")
+        sr = SearchResult(title="E", url="https://e.com", domain="e.com", snippet="s")
         assert sr.date is None
 
     @pytest.mark.parametrize(
@@ -351,7 +368,9 @@ class TestSearchResult:
         ],
     )
     def test_a_strict_calendar_date_is_kept(self, value: str) -> None:
-        sr = SearchResult(title="E", url="https://e.com", snippet="s", date=value)
+        sr = SearchResult(
+            title="E", url="https://e.com", domain="e.com", snippet="s", date=value
+        )
         assert sr.date == value
 
     @pytest.mark.parametrize(
@@ -402,7 +421,9 @@ class TestSearchResult:
     def test_a_kept_date_is_bounded_by_its_own_shape(self) -> None:
         """No length cap is needed: the only survivable shape is ten chars."""
         long_value = "2026-09-15" + "A" * 10_000
-        sr = SearchResult(title="E", url="https://e.com", snippet="s", date=long_value)
+        sr = SearchResult(
+            title="E", url="https://e.com", domain="e.com", snippet="s", date=long_value
+        )
         assert sr.date is None
 
 
@@ -412,27 +433,39 @@ class TestSearchResponse:
     def test_valid_construction(self) -> None:
         resp = SearchResponse(
             results=[
-                SearchResult(title="R1", url="https://r1.com", snippet="s1"),
+                SearchResult(
+                    title="R1", url="https://r1.com", domain="r1.com", snippet="s1"
+                ),
             ],
             request_id=str(uuid.uuid4()),
             query="test",
+            provider_used="searxng",
         )
         assert len(resp.results) == 1
 
     def test_empty_results(self) -> None:
-        resp = SearchResponse(results=[], request_id="abc123", query="nothing")
+        resp = SearchResponse(
+            results=[], request_id="abc123", query="nothing", provider_used="searxng"
+        )
         assert resp.results == []
 
     def test_serialization_roundtrip(self) -> None:
         resp = SearchResponse(
             results=[
                 SearchResult(
-                    title="R1", url="https://r1.com", snippet="s1", engine="brave"
+                    title="R1",
+                    url="https://r1.com",
+                    domain="r1.com",
+                    snippet="s1",
+                    engine="brave",
                 ),
-                SearchResult(title="R2", url="https://r2.com", snippet="s2"),
+                SearchResult(
+                    title="R2", url="https://r2.com", domain="r2.com", snippet="s2"
+                ),
             ],
             request_id="req-001",
             query="pydantic models",
+            provider_used="searxng",
         )
         restored = SearchResponse.model_validate_json(resp.model_dump_json())
         assert restored == resp
@@ -441,7 +474,9 @@ class TestSearchResponse:
 
     def test_omission_fields_default(self) -> None:
         """Backward-compatible defaults: no omissions, nothing unscanned."""
-        resp = SearchResponse(results=[], request_id="abc123", query="nothing")
+        resp = SearchResponse(
+            results=[], request_id="abc123", query="nothing", provider_used="searxng"
+        )
         assert resp.omitted_results == 0
         assert resp.omitted_by_reason == {}
         assert resp.unscanned_results == 0
@@ -452,6 +487,7 @@ class TestSearchResponse:
             results=[],
             request_id="req-002",
             query="test",
+            provider_used="searxng",
             omitted_results=3,
             omitted_by_reason={
                 OMIT_INVALID_URL: 1,
@@ -470,3 +506,40 @@ class TestSearchResponse:
 
         restored = SearchResponse.model_validate_json(resp.model_dump_json())
         assert restored == resp
+
+    # -- provider_used / fallback_fired / provider_errors (contract 1.2.0) --
+
+    def test_provider_used_is_required(self) -> None:
+        with pytest.raises(ValidationError):
+            SearchResponse.model_validate(
+                {"results": [], "request_id": "r1", "query": "q"}
+            )
+
+    def test_fallback_fired_and_provider_errors_default(self) -> None:
+        resp = SearchResponse(
+            results=[], request_id="abc123", query="nothing", provider_used="searxng"
+        )
+        assert resp.fallback_fired is False
+        assert resp.provider_errors == []
+
+    def test_fallback_fired_and_provider_errors_explicit(self) -> None:
+        resp = SearchResponse(
+            results=[],
+            request_id="req-003",
+            query="test",
+            provider_used="brave",
+            fallback_fired=True,
+            provider_errors=["searxng: rate_limited"],
+        )
+        assert resp.provider_used == "brave"
+        assert resp.fallback_fired is True
+        assert resp.provider_errors == ["searxng: rate_limited"]
+
+        restored = SearchResponse.model_validate_json(resp.model_dump_json())
+        assert restored == resp
+
+    def test_no_field_description_mentions_paid(self) -> None:
+        """`fallback_fired` records chain advancement, not "a paid provider ran"."""
+        for name, field in SearchResponse.model_fields.items():
+            assert field.description is not None, name
+            assert "paid" not in field.description.lower(), name

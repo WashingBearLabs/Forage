@@ -578,6 +578,12 @@
             "description": "The result's publication date as a strict 'YYYY-MM-DD' calendar date. Anything else \u2014 absent, a non-string, a different format, or a day that does not exist \u2014 is null. Added in contract 1.2.0.",
             "title": "Date"
           },
+          "domain": {
+            "description": "Lower-cased hostname of `url` (`urlsplit(url).hostname`), with no userinfo or port \u2014 a provenance signal, not a trust decision. This is the hostname, not the registrable domain (eTLD+1); derive that yourself if you need it. For an IPv6 literal this is the unbracketed form ('2001:db8::1') while `url` carries the bracketed form ('[2001:db8::1]') \u2014 the one case where `domain` is not a substring of `url`. Added in contract 1.2.0.",
+            "minLength": 1,
+            "title": "Domain",
+            "type": "string"
+          },
           "engine": {
             "anyOf": [
               {
@@ -616,6 +622,7 @@
         "required": [
           "title",
           "url",
+          "domain",
           "snippet"
         ],
         "title": "SearchResult",
@@ -624,6 +631,12 @@
     },
     "description": "Response wrapper for search results.",
     "properties": {
+      "fallback_fired": {
+        "default": false,
+        "description": "True iff the provider chain advanced past the first provider before this response was served \u2014 the per-response face of the `search.fallback_fired` /metrics counter. It records chain advancement, not which provider ultimately served: for a chain that tries a provider before a free one, this is True when the free provider ends up serving.",
+        "title": "Fallback Fired",
+        "type": "boolean"
+      },
       "omitted_by_reason": {
         "additionalProperties": {
           "type": "integer"
@@ -644,6 +657,20 @@
         "description": "PromptGuard was needed but did not run on at least one examined result (withheld or returned) \u2014 a stage-2 structural block never needed a scan and does not count",
         "title": "Promptguard Unavailable",
         "type": "boolean"
+      },
+      "provider_errors": {
+        "description": "Chain-order '<provider_name>: <failure_class>' entries for every provider tried before the one that served, from a closed failure-class vocabulary \u2014 never exception text or a URL. The only home for provider-level failures: they never affect omitted_results/omitted_by_reason or unresponsive_engines.",
+        "items": {
+          "type": "string"
+        },
+        "title": "Provider Errors",
+        "type": "array"
+      },
+      "provider_used": {
+        "description": "The serving provider's name (the token FORAGE_SEARCH_PROVIDERS names, e.g. 'searxng', 'brave'). An open string rather than an enum: a third provider is an additive change, not a validation failure on an old client.",
+        "minLength": 1,
+        "title": "Provider Used",
+        "type": "string"
       },
       "query": {
         "description": "Original query",
@@ -683,7 +710,8 @@
     },
     "required": [
       "request_id",
-      "query"
+      "query",
+      "provider_used"
     ],
     "title": "SearchResponse",
     "type": "object"

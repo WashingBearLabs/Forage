@@ -67,7 +67,9 @@ those eight — so Forage's revision moved:
 | After the error vocabulary joined `contract.py` (`forage-contract` US-001; contract still `1.1.0`) | `8b1b7f78…196d7c` |
 | After the `SearxngProvider` extraction (`search-provider-abstraction` US-002) | `ee4450d9…f63c3da` |
 | After the `providers=` chain seam (`search-provider-abstraction` US-003) | `e7038672…3ce0cbf` |
-| **Current (`search-provider-abstraction` US-004, the contract bump to `1.2.0`)** | **`b7871b20…ea6f2b`** |
+| After the contract bump to `1.2.0` (`search-provider-abstraction` US-004) | `b7871b20…ea6f2b` |
+| After free-first chain traversal (`search-fallback` US-001) | `55e2af1b…bf47e4` |
+| **Current (`search-fallback` US-003, fallback telemetry + provenance)** | **`5249def6…89f24a`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -390,6 +392,38 @@ takes the revision as an input, so every extraction cached under `b7871b20…` b
 unreachable at the next start and ages out on its own TTL — free in memory mode, one TTL of
 extra fetches in Valkey mode. **Do not assume Poppy↔Forage revision parity** — compare
 contracts, not revisions.
+
+### The eleventh rotation: fallback telemetry + provenance (`search-fallback` US-003, 2026-09-16)
+
+```
+before: 55e2af1bf2ce230b7d66b1f5548cb3e3b3259825be573e7373896eb443bf47e4
+after:  5249def675524ca54946562beaf7fcb0d52080bde575b021ee94922d7689f24a
+```
+
+**Exactly one `_REVISION_SOURCES` file moved: `pipeline/orchestrator.py`.** Measured the
+same way as the seventh, eighth and tenth rotations: reverting `orchestrator.py` alone to
+its pre-story bytes reproduces `55e2af1b…bf47e4` exactly. `models.py` gained
+`SearchResult.domain` and `SearchResponse.provider_used` / `fallback_fired` /
+`provider_errors`, but `models.py` is not a `_REVISION_SOURCES` member (only files under
+`pipeline/` are hashed), so those additions do not move this hash on their own.
+
+**What moved.** `run_search_pipeline` now derives `SearchResult.domain` inside
+`_canonicalize_search_url` (widened to a three-tuple), populates the wire
+`provider_used` / `fallback_fired` / `provider_errors` fields on the response it returns,
+and increments two counters — `paid_calls` before every call to a `paid=True` provider,
+`fallback_fired` once per request when traversal first advances past the first provider —
+through a new orchestrator-side `SearchMetricsSink` Protocol threaded in as the
+`search_metrics` keyword parameter (a private null object when the caller supplies none).
+No sanitization behaviour changed: a one-provider chain still makes exactly one `search()`
+call and produces byte-identical `results` content; the new fields are provenance and
+counters layered on top of the unchanged sanitization path.
+
+**Blast radius.** The same mechanism as the fifth and tenth rotations:
+`cache_policy_fingerprint()` takes the revision as an input, so every extraction cached
+under `55e2af1b…` becomes unreachable at the next start and ages out on its own TTL — free
+in memory mode, one TTL of extra fetches in Valkey mode. Search results are never cached,
+so this rotation's own new fields have no cache-key exposure of their own. **Do not assume
+Poppy↔Forage revision parity** — compare contracts, not revisions.
 
 ## Deferred GitHub settings — for the spec 2 public flip
 

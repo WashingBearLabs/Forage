@@ -927,6 +927,11 @@ async def test_search_with_mocked_searxng() -> None:
     assert result.omitted_results == 0
     assert result.unscanned_results == 2
     assert result.promptguard_unavailable is True
+    # search-fallback US-003: a lone-searxng chain never advances.
+    assert result.provider_used == "searxng"
+    assert result.fallback_fired is False
+    assert result.provider_errors == []
+    assert result.results[0].domain == "example.com"
 
 
 async def test_search_searxng_unavailable_raises_pipeline_error() -> None:
@@ -2392,3 +2397,274 @@ class TestChainTraversal:
         for leaked in (sentinel, "pass", "user", "Connection refused", "boom"):
             assert leaked not in legacy_exc_info.value.reason
             assert leaked not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Fallback telemetry + provenance (search-fallback US-003)
+# ---------------------------------------------------------------------------
+
+
+class TestFallbackTelemetry:
+    """``provider_used`` / ``fallback_fired`` / ``provider_errors`` / ``domain``."""
+
+    async def test_brave_served_after_searxng_failed(self) -> None:
+        """The Independent Test's second shape, verbatim."""
+        searxng = FakeSearchProvider(
+            name="searxng",
+            paid=False,
+            outcome=ProviderFailure(
+                provider_name="searxng",
+                failure_class="rate_limited",
+                detail="http_429",
+            ),
+        )
+        brave = FakeSearchProvider(
+            name="brave",
+            paid=True,
+            outcome=ProviderSearchResult(
+                provider_name="brave",
+                results=[
+                    {"title": "R", "url": "https://example.com/1", "content": "c"}
+                ],
+                unresponsive_engines=[],
+            ),
+        )
+
+        result = await run_search_pipeline(
+            _make_search_request(),
+            providers=[searxng, brave],
+            config=_SAMPLE_CONFIG,
+        )
+
+        assert result.provider_used == "brave"
+        assert result.fallback_fired is True
+        assert result.provider_errors == ["searxng: rate_limited"]
+        # Provider-level failures are the sole province of provider_errors —
+        # they never count as omissions and never taint the serving
+        # provider's (empty) unresponsive_engines.
+        assert result.omitted_results == 0
+        assert result.omitted_by_reason == {}
+        assert result.unresponsive_engines == []
+
+    async def test_fallback_fired_true_when_a_free_provider_serves_after_a_paid_one(
+        self,
+    ) -> None:
+        """Paid-first-then-free: fallback_fired tracks chain advancement, not spend."""
+        paid_first = FakeSearchProvider(
+            name="brave",
+            paid=True,
+            outcome=ProviderFailure(
+                provider_name="brave",
+                failure_class="rate_limited",
+                detail="http_429",
+            ),
+        )
+        free_second = FakeSearchProvider(
+            name="searxng",
+            paid=False,
+            outcome=ProviderSearchResult(
+                provider_name="searxng",
+                results=[
+                    {"title": "R", "url": "https://example.com/1", "content": "c"}
+                ],
+                unresponsive_engines=[],
+            ),
+        )
+
+        result = await run_search_pipeline(
+            _make_search_request(),
+            providers=[paid_first, free_second],
+            config=_SAMPLE_CONFIG,
+        )
+
+        assert result.provider_used == "searxng"
+        assert result.fallback_fired is True
+        assert result.provider_errors == ["brave: rate_limited"]
+
+    async def test_a_single_provider_chain_never_fires_fallback(self) -> None:
+        provider = FakeSearchProvider(
+            name="searxng",
+            outcome=ProviderSearchResult(
+                provider_name="searxng", results=[], unresponsive_engines=[]
+            ),
+        )
+
+        result = await run_search_pipeline(
+            _make_search_request(),
+            providers=[provider],
+            config=_SAMPLE_CONFIG,
+        )
+
+        assert result.provider_used == "searxng"
+        assert result.fallback_fired is False
+        assert result.provider_errors == []
+
+    async def test_domain_is_the_lower_cased_hostname_of_the_canonical_url(
+        self,
+    ) -> None:
+        """Upper-case host, a port, userinfo (omitted), and an IPv6 literal."""
+        provider = FakeSearchProvider(
+            name="fake",
+            outcome=ProviderSearchResult(
+                provider_name="fake",
+                results=[
+                    {
+                        "title": "Upper",
+                        "url": "https://EXAMPLE.com/path",
+                        "content": "c",
+                    },
+                    {
+                        "title": "Port",
+                        "url": "https://example.com:8443/path",
+                        "content": "c",
+                    },
+                    {
+                        "title": "Userinfo",
+                        "url": "https://user:pass@example.com/path",
+                        "content": "c",
+                    },
+                    {
+                        "title": "IPv6",
+                        "url": "https://[2001:db8::1]/path",
+                        "content": "c",
+                    },
+                ],
+                unresponsive_engines=[],
+            ),
+        )
+
+        result = await run_search_pipeline(
+            _make_search_request(num_results=4),
+            providers=[provider],
+            config=_SAMPLE_CONFIG,
+        )
+
+        by_title = {r.title: r for r in result.results}
+        assert by_title["Upper"].domain == "example.com"
+        assert by_title["Port"].domain == "example.com"
+        assert by_title["Port"].url == "https://example.com:8443/path"
+        assert "Userinfo" not in by_title
+        assert result.omitted_by_reason == {contract.OMIT_INVALID_URL: 1}
+        assert by_title["IPv6"].domain == "2001:db8::1"
+        assert by_title["IPv6"].url == "https://[2001:db8::1]/path"
+
+    async def test_paid_calls_and_fallback_fired_increment_on_the_search_metrics_sink(
+        self,
+    ) -> None:
+        """The orchestrator-side Protocol, driven directly (no FastAPI app)."""
+
+        class _RecordingMetrics:
+            def __init__(self) -> None:
+                self.fallback_fired = 0
+                self.paid_calls = 0
+
+        metrics = _RecordingMetrics()
+        searxng = FakeSearchProvider(
+            name="searxng",
+            paid=False,
+            outcome=ProviderFailure(
+                provider_name="searxng",
+                failure_class="rate_limited",
+                detail="http_429",
+            ),
+        )
+        brave = FakeSearchProvider(
+            name="brave",
+            paid=True,
+            outcome=ProviderSearchResult(
+                provider_name="brave", results=[], unresponsive_engines=[]
+            ),
+        )
+
+        await run_search_pipeline(
+            _make_search_request(),
+            providers=[searxng, brave],
+            config=_SAMPLE_CONFIG,
+            search_metrics=metrics,
+        )
+
+        assert metrics.fallback_fired == 1
+        assert metrics.paid_calls == 1
+
+    async def test_paid_calls_increments_even_when_the_paid_provider_fails(
+        self,
+    ) -> None:
+        """A billed call is billed whether or not it serves the response."""
+
+        class _RecordingMetrics:
+            def __init__(self) -> None:
+                self.fallback_fired = 0
+                self.paid_calls = 0
+
+        metrics = _RecordingMetrics()
+        searxng = FakeSearchProvider(
+            name="searxng",
+            paid=False,
+            outcome=ProviderFailure(
+                provider_name="searxng",
+                failure_class="rate_limited",
+                detail="http_429",
+            ),
+        )
+        brave = FakeSearchProvider(
+            name="brave",
+            paid=True,
+            outcome=ProviderFailure(
+                provider_name="brave", failure_class="timeout", detail="timeout"
+            ),
+        )
+
+        with pytest.raises(PipelineError):
+            await run_search_pipeline(
+                _make_search_request(),
+                providers=[searxng, brave],
+                config=_SAMPLE_CONFIG,
+                search_metrics=metrics,
+            )
+
+        assert metrics.fallback_fired == 1
+        assert metrics.paid_calls == 1
+
+    async def test_a_single_searxng_provider_never_moves_the_metrics_sink(
+        self,
+    ) -> None:
+        class _RecordingMetrics:
+            def __init__(self) -> None:
+                self.fallback_fired = 0
+                self.paid_calls = 0
+
+        metrics = _RecordingMetrics()
+        provider = FakeSearchProvider(
+            name="searxng",
+            outcome=ProviderSearchResult(
+                provider_name="searxng", results=[], unresponsive_engines=[]
+            ),
+        )
+
+        await run_search_pipeline(
+            _make_search_request(),
+            providers=[provider],
+            config=_SAMPLE_CONFIG,
+            search_metrics=metrics,
+        )
+
+        assert metrics.fallback_fired == 0
+        assert metrics.paid_calls == 0
+
+    async def test_no_search_metrics_sink_is_a_harmless_default(self) -> None:
+        """The null-object default: omitting ``search_metrics`` still works."""
+        provider = FakeSearchProvider(
+            name="brave",
+            paid=True,
+            outcome=ProviderSearchResult(
+                provider_name="brave", results=[], unresponsive_engines=[]
+            ),
+        )
+
+        result = await run_search_pipeline(
+            _make_search_request(),
+            providers=[provider],
+            config=_SAMPLE_CONFIG,
+        )
+
+        assert result.provider_used == "brave"

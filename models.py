@@ -276,6 +276,19 @@ class SearchResult(BaseModel):
 
     title: str = Field(..., description="Result title")
     url: str = Field(..., description="Result URL")
+    domain: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Lower-cased hostname of `url` (`urlsplit(url).hostname`), with no "
+            "userinfo or port — a provenance signal, not a trust decision. This "
+            "is the hostname, not the registrable domain (eTLD+1); derive that "
+            "yourself if you need it. For an IPv6 literal this is the "
+            "unbracketed form ('2001:db8::1') while `url` carries the bracketed "
+            "form ('[2001:db8::1]') — the one case where `domain` is not a "
+            "substring of `url`. Added in contract 1.2.0."
+        ),
+    )
     snippet: str = Field(..., description="Result snippet / description")
     engine: str | None = Field(default=None, description="Search engine used")
     content_kind: ContentKind = Field(
@@ -332,6 +345,37 @@ class SearchResponse(BaseModel):
     )
     request_id: str = Field(..., min_length=1, description="UUID for this search")
     query: str = Field(..., min_length=1, description="Original query")
+    provider_used: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "The serving provider's name (the token FORAGE_SEARCH_PROVIDERS "
+            "names, e.g. 'searxng', 'brave'). An open string rather than an "
+            "enum: a third provider is an additive change, not a validation "
+            "failure on an old client."
+        ),
+    )
+    fallback_fired: bool = Field(
+        default=False,
+        description=(
+            "True iff the provider chain advanced past the first provider "
+            "before this response was served — the per-response face of the "
+            "`search.fallback_fired` /metrics counter. It records chain "
+            "advancement, not which provider ultimately served: for a "
+            "chain that tries a provider before a free one, this is True "
+            "when the free provider ends up serving."
+        ),
+    )
+    provider_errors: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Chain-order '<provider_name>: <failure_class>' entries for every "
+            "provider tried before the one that served, from a closed "
+            "failure-class vocabulary — never exception text or a URL. The "
+            "only home for provider-level failures: they never affect "
+            "omitted_results/omitted_by_reason or unresponsive_engines."
+        ),
+    )
     unresponsive_engines: list[str] = Field(
         default_factory=list,
         description="SearXNG engines that failed to respond",

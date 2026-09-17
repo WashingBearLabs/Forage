@@ -466,6 +466,24 @@ class SearchMetricsResponse(BaseModel):
     unscanned_results: int = Field(
         description="Results returned without an ML injection scan (degraded mode)."
     )
+    fallback_fired: int = Field(
+        description=(
+            "Per-process count of the per-response `fallback_fired` bool — how "
+            "many `/search` requests had their provider chain advance past the "
+            "first provider, including ones that ended in a 422. Moves only "
+            "when the configured chain has more than one provider; a "
+            "`searxng`-only deployment's first-party signal is the "
+            "`search_provider_failed` WARNING instead."
+        )
+    )
+    paid_calls: int = Field(
+        description=(
+            "Count of calls made to a `paid=True` provider, incremented before "
+            "the call so a call that times out is still counted — whether or "
+            "not it went on to serve the response. Zero on a chain with no "
+            "paid provider configured."
+        )
+    )
 
 
 class RetrieveMetricsResponse(BaseModel):
@@ -813,6 +831,8 @@ class SearchMetrics:
         self.errors: dict[str, int] = {}
         self.omitted_by_reason: dict[str, int] = {}
         self.unscanned_results = 0
+        self.fallback_fired = 0
+        self.paid_calls = 0
 
     def record_error(self, error: str) -> None:
         """Record one content-free search error, keyed by ``PipelineError.error``."""
@@ -1428,6 +1448,8 @@ async def metrics(request: Request) -> dict[str, Any]:
             "errors": search_metrics.errors,
             "omitted_by_reason": search_metrics.omitted_by_reason,
             "unscanned_results": search_metrics.unscanned_results,
+            "fallback_fired": search_metrics.fallback_fired,
+            "paid_calls": search_metrics.paid_calls,
         },
         "retrieve": {
             "requests": retrieve_metrics.requests,
@@ -1674,6 +1696,7 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
             providers=_resolved_search_providers(request.app.state),
             config=request.app.state.config,
             classifier=request.app.state.classifier,
+            search_metrics=search_metrics,
         )
     except PipelineError as exc:
         search_metrics.record_error(exc.error)
