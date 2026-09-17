@@ -149,8 +149,11 @@ push produces a `sha-` image and no Release at all.
 Since `feature-forage-contract` US-003 every Release body carries a line:
 
 ```
-contract: 1.1.0
+contract: <version>
 ```
+
+where `<version>` is the tagged tree's `CONTRACT_VERSION` (`pipeline/contract.py`
+at the tagged commit) — never a number typed into the workflow.
 
 The image tag and the wire contract are **independent semvers**
 ([`contract/GOVERNANCE.md`](../contract/GOVERNANCE.md)), so the mapping between
@@ -169,8 +172,33 @@ check cannot drift apart. No version literal appears anywhere in that job's
 shell, and `tests/test_ci_workflow.py::TestReleaseContractMapping` keeps it that
 way.
 
+Since `search-release` US-004 the body also says **what changed**. Each version
+has a **per-version entry** in the docstring under `CONTRACT_VERSION` — one
+bullet at column 0 naming the version, continuation lines indented two spaces
+([`contract/GOVERNANCE.md`](../contract/GOVERNANCE.md), step 7 of "Bumping the
+contract"). Step 1 copies the tagged version's entry into
+`${RUNNER_TEMP}/contract-entry.md` with a POSIX `awk` program and fails the run
+when there is none: a release with an unannounced contract is the failure it
+exists to catch. Step 2 writes the body to a notes file,
+`${RUNNER_TEMP}/release-notes.md` — the fixed text with its `contract:` line,
+then a `What changed in contract <version>:` heading, then the entry appended
+byte-for-byte with `cat`, never interpolated into the shell — and publishes it
+with `gh release create --notes-file`. Step 3 checks every line of the entry is
+in the published body with a fixed-string `grep`. The version travels between
+steps as a step output; the entry travels only as that file.
+
+**`publish` executes nothing from the tagged tree.** It *reads* the tagged
+commit's files — `pipeline/contract.py`, the contract and its anchor — but runs
+no `python3`, no `uv` and no `scripts/` helper from it. It is the one job
+holding `contents: write`, `packages: write` and a token, and it pushes the
+public image; a helper script in the tree would let a merged docstring change
+plus a tag run arbitrary code there. A missing entry is caught earlier than the
+tag in any case: `test_the_current_contract_version_has_a_docstring_entry` runs
+the same `awk` program on the PR.
+
 **If step 3 fails**, the image is pushed and the Release exists but advertises
-the wrong contract — a red run with a wrong Release rather than a missing one.
+the wrong contract or is missing a line of its entry — a red run with a wrong
+Release rather than a missing one.
 `gh release create` refuses a tag that already has a Release, so recovery is
 `gh release edit "$TAG" --notes ...` with the corrected body, or deleting the
 Release and re-running the job.

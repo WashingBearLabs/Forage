@@ -444,12 +444,16 @@ components:
         capabilities:
           additionalProperties:
             type: integer
-          description: 'Sanitization capabilities this deployment advertises, as a presence
-            map: a key is present with the value 1 when the capability is available and absent
-            otherwise. One key is defined in contract 1.1.0 — ''search_sanitization'', present
-            when PromptGuard is loaded (or when the break-glass override is armed; see docs/configuration.md).
-            Deliberately a dict rather than an enum: a consumer reads the keys it knows and
-            ignores the rest, so a future capability is an additive-safe MINOR change.'
+          description: 'Capabilities this deployment advertises, as a presence map: a key
+            is present with the value 1 when the capability is available and absent otherwise.
+            Two keys are defined in contract 1.2.0. ''search_sanitization'' (contract 1.1.0)
+            is a runtime claim, present when PromptGuard is loaded — or when the break-glass
+            override is armed; see docs/configuration.md, which only ever forces this key.
+            ''brave_api_key'' (contract 1.2.0) is an environment fact, present when this start
+            resolved a usable FORAGE_BRAVE_API_KEY, independently of whether ''brave'' actually
+            appears in search_providers and untouched by the break-glass override. Deliberately
+            a dict rather than an enum: a consumer reads the keys it knows and ignores the
+            rest, so a future capability is an additive-safe MINOR change.'
           title: Capabilities
           type: object
         contract_version:
@@ -475,6 +479,17 @@ components:
         sanitizer_revision:
           title: Sanitizer Revision
           type: string
+        search_providers:
+          description: 'The resolved search-provider chain''s names, in traversal order —
+            the FORAGE_SEARCH_PROVIDERS entries this start resolved after key-gated skips
+            (a ''brave'' entry with no usable key is absent here, not just unusable). Configuration
+            echo fixed for the life of the process, not a liveness probe: it says what this
+            start resolved, never whether a provider is reachable right now. Added in contract
+            1.2.0.'
+          items:
+            type: string
+          title: Search Providers
+          type: array
         status:
           enum:
           - healthy
@@ -489,6 +504,7 @@ components:
       - sanitizer_revision
       - contract_version
       - cache_backend
+      - search_providers
       title: HealthResponse
       type: object
     MetricsResponse:
@@ -585,7 +601,7 @@ components:
       properties:
         error:
           description: Stable machine-readable refusal code. The fetch and URL-validation
-            codes arrive on /retrieve, the searxng_* codes on /search.
+            codes arrive on /retrieve, the searxng_* codes and search_unavailable on /search.
           enum:
           - blocked_domain
           - content_too_large
@@ -595,6 +611,7 @@ components:
           - private_ip
           - searxng_error
           - searxng_unavailable
+          - search_unavailable
           title: Error
           type: string
         reason:
@@ -699,7 +716,34 @@ components:
       title: RetrieveMetricsResponse
       type: object
     RetrieveRequest:
-      description: Inbound request to retrieve and sanitise a URL.
+      description: 'Inbound request to retrieve and sanitise a URL.
+
+
+        `/retrieve` fetches and sanitizes one caller-named URL through the full
+
+        pipeline, cached by `sanitizer_revision`; `/search` finds and returns
+
+        provider-extracted content for a query across sources — snippets or
+
+        chunks, per result `content_kind` — from the configured provider chain,
+
+        every result sanitized, never cached. `promptguard_fail_closed` is
+
+        honoured on both routes; this route additionally honours
+
+        `promptguard_threshold`, `trusted_domains`, `verified_domains`,
+
+        `blocked_domains` and `cache_ttl_hours`, while `/search` additionally
+
+        honours `providers` and `allow_paid_fallback` (contract 1.2.0) and scans
+
+        every result at the fixed 0.85 default at trust tier `standard`
+
+        (`config.yaml`''s `promptguard_threshold` is not applied there). This
+
+        documents today''s divergence; changing it belongs to
+
+        `epic-forage-hardening`.'
       properties:
         blocked_domains:
           description: Domains to block outright
@@ -900,9 +944,18 @@ components:
         errors:
           additionalProperties:
             type: integer
-          description: Refusals keyed by the /search error code (searxng_error, searxng_unavailable).
+          description: Refusals keyed by the /search error code (searxng_error, searxng_unavailable,
+            search_unavailable).
           title: Errors
           type: object
+        fallback_fired:
+          description: Per-process count of the per-response `fallback_fired` bool — how many
+            `/search` requests had their provider chain advance past the first provider, including
+            ones that ended in a 422. Moves only when the configured chain has more than one
+            provider; a `searxng`-only deployment's first-party signal is the `search_provider_failed`
+            WARNING instead.
+          title: Fallback Fired
+          type: integer
         omitted_by_reason:
           additionalProperties:
             type: integer
@@ -911,6 +964,18 @@ components:
             map without bound.
           title: Omitted By Reason
           type: object
+        paid_calls:
+          description: Count of calls made to a `paid=True` provider, incremented before the
+            call so a call that times out is still counted — whether or not it went on to
+            serve the response. Zero on a chain with no paid provider configured.
+          title: Paid Calls
+          type: integer
+        policy_unknown_provider:
+          description: Per-request `providers` entries ignored — beyond the first eight, or
+            matching no configured provider — never the offending name itself. Compare against
+            `/health` `search_providers` to tell a bad name from a missing key.
+          title: Policy Unknown Provider
+          type: integer
         requests:
           description: Search requests that reached the handler.
           title: Requests
@@ -924,11 +989,50 @@ components:
       - errors
       - omitted_by_reason
       - unscanned_results
+      - fallback_fired
+      - paid_calls
+      - policy_unknown_provider
       title: SearchMetricsResponse
       type: object
     SearchRequest:
-      description: Inbound request to run a web search.
+      description: 'Inbound request to run a web search.
+
+
+        `/search` finds and returns provider-extracted content for a query
+
+        across sources — snippets or chunks, per result `content_kind` — from
+
+        the configured provider chain, every result sanitized, never cached;
+
+        `/retrieve` fetches and sanitizes one caller-named URL through the full
+
+        pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` is
+
+        honoured on both routes; this route additionally honours `providers`
+
+        and `allow_paid_fallback` (contract 1.2.0) and scans every result at
+
+        the fixed 0.85 default at trust tier `standard` (`config.yaml`''s
+
+        `promptguard_threshold` is not applied here), while `/retrieve`
+
+        additionally honours `promptguard_threshold`, `trusted_domains`,
+
+        `verified_domains`, `blocked_domains` and `cache_ttl_hours`. This
+
+        documents today''s divergence; changing it belongs to
+
+        `epic-forage-hardening`.'
       properties:
+        allow_paid_fallback:
+          default: true
+          description: 'When False, excludes every paid provider from this request''s effective
+            chain regardless of `providers` — free providers always run. Applied after `providers`''
+            own normalise-then-ignore-and-count filtering (ruling 29). One-way: can only narrow
+            the configured chain, never widen, reorder, or key it. Honoured from contract
+            1.2.0.'
+          title: Allow Paid Fallback
+          type: boolean
         num_results:
           default: 5
           description: Number of results to return
@@ -942,6 +1046,18 @@ components:
             When False, allow with a suspicion marker (fail-open).
           title: Promptguard Fail Closed
           type: boolean
+        providers:
+          description: 'Restrict-only filter of the configured provider chain, in configured
+            order: can exclude paid providers only, never add, reorder, or key one — free
+            providers always run. Entries are matched after strip() and lower-casing against
+            the names /health''s `search_providers` publishes. Entries beyond the first eight,
+            and entries matching no configured provider, are ignored and counted on /metrics
+            `search.policy_unknown_provider` rather than rejected. Empty (the default) means
+            the configured chain runs unrestricted. Honoured from contract 1.2.0.'
+          items:
+            type: string
+          title: Providers
+          type: array
         query:
           description: Search query
           minLength: 1
@@ -954,6 +1070,15 @@ components:
     SearchResponse:
       description: Response wrapper for search results.
       properties:
+        fallback_fired:
+          default: false
+          description: 'True iff the provider chain advanced past the first provider before
+            this response was served — the per-response face of the `search.fallback_fired`
+            /metrics counter. It records chain advancement, not which provider ultimately
+            served: for a chain that tries a provider before a free one, this is True when
+            the free provider ends up serving.'
+          title: Fallback Fired
+          type: boolean
         omitted_by_reason:
           additionalProperties:
             type: integer
@@ -978,6 +1103,22 @@ components:
             not count
           title: Promptguard Unavailable
           type: boolean
+        provider_errors:
+          description: 'Chain-order ''<provider_name>: <failure_class>'' entries for every
+            provider tried before the one that served, from a closed failure-class vocabulary
+            — never exception text or a URL. The only home for provider-level failures: they
+            never affect omitted_results/omitted_by_reason or unresponsive_engines.'
+          items:
+            type: string
+          title: Provider Errors
+          type: array
+        provider_used:
+          description: 'The serving provider''s name (the token FORAGE_SEARCH_PROVIDERS names,
+            e.g. ''searxng'', ''brave''). An open string rather than an enum: a third provider
+            is an additive change, not a validation failure on an old client.'
+          minLength: 1
+          title: Provider Used
+          type: string
         query:
           description: Original query
           minLength: 1
@@ -1009,11 +1150,41 @@ components:
       required:
       - request_id
       - query
+      - provider_used
       title: SearchResponse
       type: object
     SearchResult:
       description: A single search result.
       properties:
+        content_kind:
+          default: snippet
+          description: 'What kind of content this result carries: ''snippet'' for a search
+            engine''s own summary (every SearXNG result), ''chunk'' for a passage a provider
+            extracted from the page. Those two values are the whole set. Added in contract
+            1.2.0.'
+          enum:
+          - snippet
+          - chunk
+          title: Content Kind
+          type: string
+        date:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: The result's publication date as a strict 'YYYY-MM-DD' calendar date.
+            Anything else — absent, a non-string, a different format, or a day that does not
+            exist — is null. Added in contract 1.2.0.
+          title: Date
+        domain:
+          description: Lower-cased hostname of `url` (`urlsplit(url).hostname`), with no userinfo
+            or port — a provenance signal, not a trust decision. This is the hostname, not
+            the registrable domain (eTLD+1); derive that yourself if you need it. For an IPv6
+            literal this is the unbracketed form ('2001:db8::1') while `url` carries the bracketed
+            form ('[2001:db8::1]') — the one case where `domain` is not a substring of `url`.
+            Added in contract 1.2.0.
+          minLength: 1
+          title: Domain
+          type: string
         engine:
           anyOf:
           - type: string
@@ -1040,6 +1211,7 @@ components:
       required:
       - title
       - url
+      - domain
       - snippet
       title: SearchResult
       type: object
@@ -1144,7 +1316,7 @@ info:
     Forage is not a trust boundary. A `healthy` Forage is not a promise that the content it
     returned is safe. See `docs/configuration.md`, "Deployment posture".'
   title: Forage
-  version: 1.1.0
+  version: 1.2.0
 openapi: 3.1.0
 paths:
   /extract:
@@ -1279,7 +1451,35 @@ paths:
       summary: Metrics
   /retrieve:
     post:
-      description: Retrieve and sanitize web content through the full pipeline.
+      description: 'Fetch and sanitize one caller-named URL through the full pipeline.
+
+
+        `/retrieve` fetches and sanitizes one caller-named URL through the full
+
+        pipeline, cached by `sanitizer_revision`; `/search` finds and returns
+
+        provider-extracted content for a query across sources — snippets or
+
+        chunks, per result `content_kind` — from the configured provider chain,
+
+        every result sanitized, never cached.
+
+
+        `promptguard_fail_closed` is honoured on both routes; `/retrieve`
+
+        additionally honours `promptguard_threshold`, `trusted_domains`,
+
+        `verified_domains`, `blocked_domains` and `cache_ttl_hours`, while
+
+        `/search` additionally honours `providers` and `allow_paid_fallback`
+
+        (contract 1.2.0) and scans every result at the fixed 0.85 default at
+
+        trust tier `standard` (`config.yaml`''s `promptguard_threshold` is not
+
+        applied there). This documents today''s divergence; changing it belongs
+
+        to `epic-forage-hardening`.'
       operationId: retrieve_retrieve_post
       requestBody:
         content:
@@ -1307,7 +1507,35 @@ paths:
       summary: Retrieve
   /search:
     post:
-      description: Run a web search through SearXNG with snippet sanitization.
+      description: 'Find and return provider-extracted content for a query, across sources.
+
+
+        `/search` finds and returns provider-extracted content for a query
+
+        across sources — snippets or chunks, per result `content_kind` — from
+
+        the configured provider chain, every result sanitized, never cached;
+
+        `/retrieve` fetches and sanitizes one caller-named URL through the full
+
+        pipeline, cached by `sanitizer_revision`.
+
+
+        `promptguard_fail_closed` is honoured on both routes; `/search`
+
+        additionally honours `providers` and `allow_paid_fallback` (contract
+
+        1.2.0) and scans every result at the fixed 0.85 default at trust tier
+
+        `standard` (`config.yaml`''s `promptguard_threshold` is not applied
+
+        here), while `/retrieve` additionally honours `promptguard_threshold`,
+
+        `trusted_domains`, `verified_domains`, `blocked_domains` and
+
+        `cache_ttl_hours`. This documents today''s divergence; changing it
+
+        belongs to `epic-forage-hardening`.'
       operationId: search_search_post
       requestBody:
         content:

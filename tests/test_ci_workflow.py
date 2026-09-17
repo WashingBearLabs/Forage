@@ -81,6 +81,7 @@ test_mapping:
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -1064,8 +1065,11 @@ _DOWNLOAD_ACTION = "actions/download-artifact"
 # The pattern set `secret-grep` applies to the built image's layer history.
 # `HF_TOKEN` is the variable name the deleted build-arg path used; the second
 # is the shape of a Hugging Face token itself, so a differently-named carrier
-# is caught too. tests/test_dockerfile.py applies the same two to the source.
-_REQUIRED_GREP_PATTERNS = ("HF_TOKEN", "hf_[A-Za-z0-9]{20,}")
+# is caught too. tests/test_dockerfile.py applies those two to the source.
+# `FORAGE_BRAVE_API_KEY` is the paid search provider's credential (ruling 20d):
+# the name only — no bare `BRAVE_API_KEY`, no key-shape regex. Both copies in
+# the workflow (secret-grep's heredoc and publish's config grep) iterate this.
+_REQUIRED_GREP_PATTERNS = ("HF_TOKEN", "hf_[A-Za-z0-9]{20,}", "FORAGE_BRAVE_API_KEY")
 
 
 class TestBuildAmd64Job:
@@ -2039,10 +2043,12 @@ class TestPublishJob:
             "A forbidden pattern in the published config must fail the run. "
             "Branch body was:\n" + body
         )
-        assert "hf_[A-Za-z0-9]{20,}" in run_text, (
-            "The published-config grep must use the same pattern set "
-            "secret-grep defines — one vocabulary, two vantage points"
-        )
+        for pattern in _REQUIRED_GREP_PATTERNS:
+            assert pattern in run_text, (
+                f"The published-config grep is missing {pattern!r}. It must use "
+                "the same pattern set secret-grep defines — one vocabulary, two "
+                "vantage points"
+            )
 
     def test_publish_verifies_before_it_releases(self, jobs: dict[str, Any]) -> None:
         names = [str(step.get("name", "")) for step in _steps(jobs, "publish")]
@@ -2208,6 +2214,61 @@ def _step_named(jobs: dict[str, Any], job_name: str, name: str) -> dict[str, Any
         f"Job {job_name!r} has no step named {name!r}; step names are "
         f"{[str(step.get('name', '')) for step in _steps(jobs, job_name)]}"
     )
+
+
+# The per-version entry the read step extracts (search-release US-004). Named by
+# this literal in every step that touches it — no step-level `env:` alias — so
+# the workflow text and these tests agree on one path.
+_ENTRY_FILE_LITERAL = '"${RUNNER_TEMP}/contract-entry.md"'
+_AWK_PROGRAM_OPENER = """awk -v v="${version}" '"""
+
+
+def _entry_awk_program(jobs: dict[str, Any]) -> str:
+    """The single-quoted awk program the read step runs, as text."""
+    run = str(_step_named(jobs, "publish", _CONTRACT_READ_STEP).get("run", ""))
+    start = run.find(_AWK_PROGRAM_OPENER)
+    assert start != -1, (
+        f"The read step has no `{_AWK_PROGRAM_OPENER}…'` program. Script was:\n{run}"
+    )
+    start += len(_AWK_PROGRAM_OPENER)
+    end = run.find("'", start)
+    assert end != -1, f"The awk program is not closed. Script was:\n{run}"
+    return run[start:end]
+
+
+def _run_entry_extractor(jobs: dict[str, Any], version: str, path: Path) -> str:
+    """Run the workflow's own awk program over ``path`` for ``version``."""
+    result = subprocess.run(
+        ["awk", "-v", f"v={version}", _entry_awk_program(jobs), str(path)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
+def _slice_entry(text: str, version: str) -> str:
+    """The entry for ``version`` as the docstring carries it, sliced in Python.
+
+    Same prefix rule as the awk program, but the slice steps over blank lines
+    and ends only at the first non-blank line not indented two spaces — so a
+    blank line inside an entry makes the two disagree instead of quietly
+    truncating the announcement.
+    """
+    prefix = f"* ``{version}`` "
+    lines = text.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if not line.startswith(prefix):
+            continue
+        entry = [line]
+        for follow in lines[index + 1 :]:
+            if follow.strip() and not follow.startswith("  "):
+                break
+            entry.append(follow)
+        while entry and not entry[-1].strip():
+            entry.pop()
+        return "".join(entry)
+    return ""
 
 
 class TestReleaseContractMapping:
@@ -2418,6 +2479,168 @@ class TestReleaseContractMapping:
         # does not describe it.
         searxng_run = _run_text(jobs, "searxng-publish")
         assert "CONTRACT_VERSION" not in searxng_run and "contract:" not in searxng_run
+
+    # -- The per-version entry (search-release US-004, ruling 31a) ------------
+    #
+    # The four tests below *execute* the awk program the read step carries —
+    # the first executing tests in this module, on purpose: a program embedded
+    # in a workflow can be proven no other way. It reads a local file and
+    # touches no network, so the socket guard is untouched.
+
+    def test_the_current_contract_version_has_a_docstring_entry(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        source = _REPO_ROOT / _CONTRACT_SOURCE_FILE
+        extracted = _run_entry_extractor(jobs, CONTRACT_VERSION, source)
+        expected = _slice_entry(source.read_text(encoding="utf-8"), CONTRACT_VERSION)
+        assert extracted.startswith(f"* ``{CONTRACT_VERSION}`` "), (
+            f"{_CONTRACT_SOURCE_FILE} has no per-version entry for contract "
+            f"{CONTRACT_VERSION}. The `publish` job appends that entry to the "
+            "Release body and fails the tag without it. Add a bullet "
+            f"`* ``{CONTRACT_VERSION}`` — …` at column 0 of the CONTRACT_VERSION "
+            "docstring, continuation lines indented two spaces, no blank line "
+            "inside (contract/GOVERNANCE.md, 'Bumping the contract', step 7). "
+            f"The extractor returned:\n{extracted!r}"
+        )
+        assert extracted == expected, (
+            f"The extractor read a different entry for {CONTRACT_VERSION} than "
+            "the docstring carries — most likely a blank line or an unindented "
+            "line inside the entry, which ends the read and would truncate the "
+            "published announcement. Keep the entry one bullet with every "
+            f"continuation line indented two spaces.\nextracted:\n{extracted}\n"
+            f"docstring:\n{expected}"
+        )
+
+    def test_the_extractor_is_exact_against_a_hostile_module(
+        self, jobs: dict[str, Any], tmp_path: Path
+    ) -> None:
+        entry = [
+            "* ``9.9.9`` — a `single-backtick span` and $(id) in prose,",
+            "  a mid-line * that is not a bullet,",
+            "  * ``9.9.8`` — an indented bullet look-alike that stays,",
+            "  EOF",
+            "  version=forged",
+            '  a mid-line """ that is not the terminator',
+        ]
+        module = "\n".join(
+            [
+                '"""Hostile module."""',
+                "",
+                'CONTRACT_VERSION = "9.9.9"',
+                '"""Docstring.',
+                "",
+                *entry,
+                "* ``9.9.8`` — the sibling bullet, not part of the entry.",
+                "  its continuation.",
+                '"""',
+                "",
+            ]
+        )
+        path = tmp_path / "contract.py"
+        path.write_text(module, encoding="utf-8")
+        assert _run_entry_extractor(jobs, "9.9.9", path) == "\n".join(entry) + "\n"
+
+    def test_the_extractor_matches_the_whole_version(
+        self, jobs: dict[str, Any], tmp_path: Path
+    ) -> None:
+        path = tmp_path / "contract.py"
+        path.write_text(
+            "\n".join(
+                [
+                    '"""Docstring.',
+                    "",
+                    "* ``9.9.10`` — the longer version.",
+                    "  its continuation.",
+                    "* ``9.9.1`` — the asked-for version.",
+                    "  its continuation.",
+                    '"""',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        assert _run_entry_extractor(jobs, "9.9.1", path) == (
+            "* ``9.9.1`` — the asked-for version.\n  its continuation.\n"
+        )
+
+    def test_the_extractor_returns_nothing_for_an_unannounced_version(
+        self, jobs: dict[str, Any], tmp_path: Path
+    ) -> None:
+        path = tmp_path / "contract.py"
+        path.write_text(
+            '"""Docstring.\n\n* ``9.9.1`` — announced.\n  more.\n"""\n',
+            encoding="utf-8",
+        )
+        assert _run_entry_extractor(jobs, "9.9.2", path) == ""
+
+    def test_the_read_step_extracts_the_entry_with_posix_awk(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        run = str(_step_named(jobs, "publish", _CONTRACT_READ_STEP).get("run", ""))
+        assert "awk" in run, f"The read step must extract the entry with awk:\n{run}"
+        for forbidden in ("python3", "scripts/"):
+            assert forbidden not in run, (
+                f"The read step mentions {forbidden!r}. publish holds write "
+                "scopes and a token and executes nothing from the tagged tree; "
+                f"it only reads files. Script was:\n{run}"
+            )
+        assert not re.search(r"\buv\b", run), (
+            f"The read step runs `uv` — no toolchain in publish. Script was:\n{run}"
+        )
+        assert _ENTRY_FILE_LITERAL in run, (
+            f"The entry must be written to {_ENTRY_FILE_LITERAL}, the literal "
+            f"every step that touches it names. Script was:\n{run}"
+        )
+        body = _if_block_body(run, "-s", "CONTRACT_ENTRY_FILE")
+        assert body is not None, (
+            "An empty entry file must be checked with `[ -s … ]` — a release "
+            "with an unannounced contract is the failure this exists to catch"
+        )
+        assert "::error::" in body and "exit 1" in body, (
+            f"A missing entry must fail the step loudly. Branch body was:\n{body}"
+        )
+        outputs = [line for line in run.splitlines() if "GITHUB_OUTPUT" in line]
+        assert len(outputs) == 1 and 'echo "version=' in outputs[0], (
+            "The read step's only $GITHUB_OUTPUT write must be the single-line "
+            "`version=`. A multi-line entry through the output file needs a "
+            "delimiter, and a delimiter line inside tagged-tree prose would "
+            f"forge a `version=`. GITHUB_OUTPUT lines: {outputs}"
+        )
+
+    def test_the_release_step_appends_the_entry_from_a_notes_file(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        run = str(_step_named(jobs, "publish", _RELEASE_STEP).get("run", ""))
+        assert "--notes-file" in run, (
+            f"The Release body must be passed as a notes file. Script was:\n{run}"
+        )
+        assert _ENTRY_FILE_LITERAL in run and 'cat "${CONTRACT_ENTRY_FILE}"' in run, (
+            "The entry must be copied into the notes file with `cat` — byte for "
+            f"byte, never interpolated into the heredoc. Script was:\n{run}"
+        )
+        publish_run = _run_text(jobs, "publish")
+        assert '--notes "${notes}"' not in publish_run, (
+            "publish still passes the body as a string argument"
+        )
+        assert not re.search(r"\beval\b", publish_run), (
+            "publish's shell must never `eval` — the body carries tagged-tree prose"
+        )
+
+    def test_the_read_back_checks_the_entry_with_a_fixed_string_grep(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        run = str(_step_named(jobs, "publish", _CONTRACT_ASSERT_STEP).get("run", ""))
+        extended = run.find("grep -qE")
+        fixed = run.find("grep -qF", extended + 1)
+        assert extended != -1 and fixed != -1, (
+            "The read-back must keep its `grep -qE` contract-line check first and "
+            "then check the entry with `grep -qF` — `-F` because the entry's first "
+            f"line starts with `*`, an invalid ERE. Script was:\n{run}"
+        )
+        assert _ENTRY_FILE_LITERAL in run[extended:], (
+            "The fixed-string grep must read its lines from the entry file. "
+            f"Script was:\n{run}"
+        )
 
 
 # ---------------------------------------------------------------------------

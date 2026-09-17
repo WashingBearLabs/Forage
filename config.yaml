@@ -13,6 +13,13 @@ news_domains:
   - cnn.com
 seed_blocklist: []
 promptguard_threshold: 0.85
+# Brave LLM-Context search provider tunables (feature-brave-provider US-010).
+# Read unconditionally at startup by brave_settings_from_config, whether or
+# not "brave" is in FORAGE_SEARCH_PROVIDERS, so an out-of-range value refuses
+# boot on every deployment.
+search_brave_timeout_seconds: 15.0
+search_brave_chunk_max_chars: 2000
+search_brave_query_max_chars: 400
 # Release gate: /extract remains invisible (404) until this is enabled and the
 # service is restarted. Forage ships no authentication, so once the gate is
 # open the route is reachable by anything that can reach port 8020 — network

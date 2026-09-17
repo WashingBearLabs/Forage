@@ -1,0 +1,742 @@
+{
+  "ExtractedContent": {
+    "$defs": {
+      "Stage2Verdict": {
+        "description": "Stage-2 (structural heuristic) injection verdict.",
+        "enum": [
+          "clean",
+          "suspicious",
+          "blocked"
+        ],
+        "title": "Stage2Verdict",
+        "type": "string"
+      },
+      "Stage3Verdict": {
+        "description": "Stage-3 (PromptGuard ML) injection verdict.",
+        "enum": [
+          "safe",
+          "injection_detected"
+        ],
+        "title": "Stage3Verdict",
+        "type": "string"
+      },
+      "TrustTier": {
+        "description": "Domain trust classification.",
+        "enum": [
+          "trusted",
+          "verified",
+          "standard",
+          "untrusted",
+          "blocked"
+        ],
+        "title": "TrustTier",
+        "type": "string"
+      },
+      "UploadProvenance": {
+        "description": "Display-only metadata for an untrusted uploaded document.\n\nDownstream consumers must treat ``filename`` and ``mime_hint`` as display\ntext only. They must never use either value as a filesystem path.",
+        "properties": {
+          "filename": {
+            "description": "Sanitized display filename",
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          },
+          "mime_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Caller hint only; never authoritative for type detection",
+            "title": "Mime Hint"
+          },
+          "source_type": {
+            "const": "upload",
+            "default": "upload",
+            "title": "Source Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filename"
+        ],
+        "title": "UploadProvenance",
+        "type": "object"
+      }
+    },
+    "description": "Sanitized content returned for an uploaded document.\n\nThis upload-only wire model deliberately does not reuse\n:class:`RetrievedContent`: uploads have no URL provenance.",
+    "properties": {
+      "body": {
+        "description": "Sanitized extracted document text",
+        "title": "Body",
+        "type": "string"
+      },
+      "content_type": {
+        "description": "Source format: 'pdf' or 'text'",
+        "title": "Content Type",
+        "type": "string"
+      },
+      "injection_detected": {
+        "default": false,
+        "description": "Whether prompt injection was detected",
+        "title": "Injection Detected",
+        "type": "boolean"
+      },
+      "injection_spans": {
+        "description": "Detected injection text spans",
+        "items": {
+          "type": "string"
+        },
+        "title": "Injection Spans",
+        "type": "array"
+      },
+      "promptguard_state": {
+        "default": "scanned",
+        "description": "How PromptGuard examined this content: scanned, skipped_trusted, structural_blocked, unavailable_blocked, or unavailable_allowed",
+        "enum": [
+          "scanned",
+          "skipped_trusted",
+          "structural_blocked",
+          "unavailable_blocked",
+          "unavailable_allowed"
+        ],
+        "title": "Promptguard State",
+        "type": "string"
+      },
+      "provenance": {
+        "$ref": "#/$defs/UploadProvenance"
+      },
+      "request_id": {
+        "description": "Extraction request ID",
+        "minLength": 1,
+        "title": "Request Id",
+        "type": "string"
+      },
+      "sanitizer_revision": {
+        "description": "Derived sanitization pipeline revision",
+        "minLength": 1,
+        "title": "Sanitizer Revision",
+        "type": "string"
+      },
+      "stage2_verdict": {
+        "$ref": "#/$defs/Stage2Verdict",
+        "description": "Stage-2 structural heuristic verdict"
+      },
+      "stage3_verdict": {
+        "$ref": "#/$defs/Stage3Verdict",
+        "description": "Stage-3 PromptGuard ML verdict"
+      },
+      "structural_flags": {
+        "description": "Structural heuristic flags raised",
+        "items": {
+          "type": "string"
+        },
+        "title": "Structural Flags",
+        "type": "array"
+      },
+      "title": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Extracted document title",
+        "title": "Title"
+      },
+      "truncation_notice": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Describes what was omitted when extract_mode='summary'",
+        "title": "Truncation Notice"
+      },
+      "trust_score": {
+        "description": "Composite trust score (0.0-1.0)",
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "title": "Trust Score",
+        "type": "number"
+      },
+      "trust_tier": {
+        "$ref": "#/$defs/TrustTier",
+        "description": "Resolved trust tier"
+      },
+      "word_count": {
+        "description": "Word count of body",
+        "minimum": 0,
+        "title": "Word Count",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "request_id",
+      "body",
+      "word_count",
+      "content_type",
+      "trust_score",
+      "trust_tier",
+      "stage2_verdict",
+      "stage3_verdict",
+      "provenance",
+      "sanitizer_revision"
+    ],
+    "title": "ExtractedContent",
+    "type": "object"
+  },
+  "HealthResponse": {
+    "description": "Response body for ``GET /health``.\n\nHTTP status is always 200, even when ``status == \"degraded\"`` (family\ndecision 11) \u2014 the compose healthcheck is a bare ``curl -f`` that only\ninspects the HTTP status code, so consumers must read ``status`` and\n``degraded_reasons`` rather than the response's non-2xx-ness.",
+    "properties": {
+      "cache_backend": {
+        "description": "Which storage the content cache selected at start: 'valkey' when VALKEY_URL was set, 'memory' when it was fully unset. Added in contract 1.1.0.",
+        "enum": [
+          "valkey",
+          "memory"
+        ],
+        "title": "Cache Backend",
+        "type": "string"
+      },
+      "cache_connected": {
+        "description": "Whether the selected cache backend is operational. In Valkey mode this is a live ping, subject to reconnect backoff. In memory mode it is always true: the backend is in this process and there is no connection to lose. It is not a statement that Valkey is present \u2014 read cache_backend for that.",
+        "title": "Cache Connected",
+        "type": "boolean"
+      },
+      "capabilities": {
+        "additionalProperties": {
+          "type": "integer"
+        },
+        "description": "Capabilities this deployment advertises, as a presence map: a key is present with the value 1 when the capability is available and absent otherwise. Two keys are defined in contract 1.2.0. 'search_sanitization' (contract 1.1.0) is a runtime claim, present when PromptGuard is loaded \u2014 or when the break-glass override is armed; see docs/configuration.md, which only ever forces this key. 'brave_api_key' (contract 1.2.0) is an environment fact, present when this start resolved a usable FORAGE_BRAVE_API_KEY, independently of whether 'brave' actually appears in search_providers and untouched by the break-glass override. Deliberately a dict rather than an enum: a consumer reads the keys it knows and ignores the rest, so a future capability is an additive-safe MINOR change.",
+        "title": "Capabilities",
+        "type": "object"
+      },
+      "contract_version": {
+        "title": "Contract Version",
+        "type": "string"
+      },
+      "degraded_reasons": {
+        "default": [],
+        "description": "Why status is 'degraded', as closed-vocabulary reason codes. Empty exactly when status is 'healthy'. The members are derived from contract.DegradedReason, which is also what this field is validated against on the way out \u2014 so a reason added to the handler without being added to the alias fails response validation loudly instead of reaching a consumer unannounced.",
+        "items": {
+          "enum": [
+            "promptguard_unavailable",
+            "cache_unavailable"
+          ],
+          "type": "string"
+        },
+        "title": "Degraded Reasons",
+        "type": "array"
+      },
+      "promptguard_loaded": {
+        "title": "Promptguard Loaded",
+        "type": "boolean"
+      },
+      "sanitizer_revision": {
+        "title": "Sanitizer Revision",
+        "type": "string"
+      },
+      "search_providers": {
+        "description": "The resolved search-provider chain's names, in traversal order \u2014 the FORAGE_SEARCH_PROVIDERS entries this start resolved after key-gated skips (a 'brave' entry with no usable key is absent here, not just unusable). Configuration echo fixed for the life of the process, not a liveness probe: it says what this start resolved, never whether a provider is reachable right now. Added in contract 1.2.0.",
+        "items": {
+          "type": "string"
+        },
+        "title": "Search Providers",
+        "type": "array"
+      },
+      "status": {
+        "enum": [
+          "healthy",
+          "degraded"
+        ],
+        "title": "Status",
+        "type": "string"
+      }
+    },
+    "required": [
+      "status",
+      "promptguard_loaded",
+      "cache_connected",
+      "capabilities",
+      "sanitizer_revision",
+      "contract_version",
+      "cache_backend",
+      "search_providers"
+    ],
+    "title": "HealthResponse",
+    "type": "object"
+  },
+  "Pipeline422ErrorResponse": {
+    "additionalProperties": false,
+    "description": "``POST /retrieve`` and ``POST /search`` refusal \u2014 the 422 shape.\n\nThe same handler as :class:`Extract422ErrorResponse`, minus the\n``sanitizer_revision`` it adds only on ``/extract`` paths.",
+    "properties": {
+      "error": {
+        "description": "Stable machine-readable refusal code. The fetch and URL-validation codes arrive on /retrieve, the searxng_* codes and search_unavailable on /search.",
+        "enum": [
+          "blocked_domain",
+          "content_too_large",
+          "fetch_error",
+          "fetch_timeout",
+          "invalid_url",
+          "private_ip",
+          "searxng_error",
+          "searxng_unavailable",
+          "search_unavailable"
+        ],
+        "title": "Error",
+        "type": "string"
+      },
+      "reason": {
+        "description": "Human-readable detail. Unlike the /extract reasons this is not content-free: a /retrieve refusal echoes the requested URL, and private_ip echoes the resolved address. Deployments exposing Forage beyond a private network should treat it accordingly.",
+        "title": "Reason",
+        "type": "string"
+      },
+      "request_id": {
+        "description": "Sidecar-generated id for correlating logs with this refusal.",
+        "title": "Request Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "error",
+      "reason",
+      "request_id"
+    ],
+    "title": "Pipeline422ErrorResponse",
+    "type": "object"
+  },
+  "RetrievedContent": {
+    "$defs": {
+      "Stage2Verdict": {
+        "description": "Stage-2 (structural heuristic) injection verdict.",
+        "enum": [
+          "clean",
+          "suspicious",
+          "blocked"
+        ],
+        "title": "Stage2Verdict",
+        "type": "string"
+      },
+      "Stage3Verdict": {
+        "description": "Stage-3 (PromptGuard ML) injection verdict.",
+        "enum": [
+          "safe",
+          "injection_detected"
+        ],
+        "title": "Stage3Verdict",
+        "type": "string"
+      },
+      "TrustTier": {
+        "description": "Domain trust classification.",
+        "enum": [
+          "trusted",
+          "verified",
+          "standard",
+          "untrusted",
+          "blocked"
+        ],
+        "title": "TrustTier",
+        "type": "string"
+      }
+    },
+    "description": "Sanitised web content returned to Poppy core.\n\nThis is the **sole** object that crosses the sidecar boundary.",
+    "properties": {
+      "body": {
+        "description": "Sanitised main content (never raw HTML/PDF bytes)",
+        "title": "Body",
+        "type": "string"
+      },
+      "cache_hit": {
+        "default": false,
+        "description": "Whether this result came from cache",
+        "title": "Cache Hit",
+        "type": "boolean"
+      },
+      "cached_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "When the result was cached (if cache_hit)",
+        "title": "Cached At"
+      },
+      "content_type": {
+        "description": "Source format: 'html' or 'pdf'",
+        "title": "Content Type",
+        "type": "string"
+      },
+      "domain": {
+        "description": "Domain of final_url",
+        "minLength": 1,
+        "title": "Domain",
+        "type": "string"
+      },
+      "domain_changed_on_redirect": {
+        "default": false,
+        "description": "Whether the domain changed between source_url and final_url",
+        "title": "Domain Changed On Redirect",
+        "type": "boolean"
+      },
+      "final_url": {
+        "description": "URL after redirects resolved",
+        "minLength": 1,
+        "title": "Final Url",
+        "type": "string"
+      },
+      "injection_detected": {
+        "default": false,
+        "description": "Whether prompt-injection was detected",
+        "title": "Injection Detected",
+        "type": "boolean"
+      },
+      "injection_spans": {
+        "description": "Detected injection text spans",
+        "items": {
+          "type": "string"
+        },
+        "title": "Injection Spans",
+        "type": "array"
+      },
+      "promptguard_state": {
+        "default": "scanned",
+        "description": "How PromptGuard examined this content: scanned, skipped_trusted, structural_blocked, unavailable_blocked, or unavailable_allowed",
+        "enum": [
+          "scanned",
+          "skipped_trusted",
+          "structural_blocked",
+          "unavailable_blocked",
+          "unavailable_allowed"
+        ],
+        "title": "Promptguard State",
+        "type": "string"
+      },
+      "redirect_chain": {
+        "description": "Ordered list of redirect URLs",
+        "items": {
+          "type": "string"
+        },
+        "title": "Redirect Chain",
+        "type": "array"
+      },
+      "request_id": {
+        "description": "UUID for this retrieval",
+        "minLength": 1,
+        "title": "Request Id",
+        "type": "string"
+      },
+      "retrieved_at": {
+        "description": "When the content was fetched (UTC)",
+        "format": "date-time",
+        "title": "Retrieved At",
+        "type": "string"
+      },
+      "source_url": {
+        "description": "Original URL requested",
+        "minLength": 1,
+        "title": "Source Url",
+        "type": "string"
+      },
+      "stage2_verdict": {
+        "$ref": "#/$defs/Stage2Verdict",
+        "description": "Stage-2 structural heuristic verdict"
+      },
+      "stage3_verdict": {
+        "$ref": "#/$defs/Stage3Verdict",
+        "description": "Stage-3 PromptGuard ML verdict"
+      },
+      "structural_flags": {
+        "description": "Structural heuristic flags raised",
+        "items": {
+          "type": "string"
+        },
+        "title": "Structural Flags",
+        "type": "array"
+      },
+      "title": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Page title",
+        "title": "Title"
+      },
+      "truncation_notice": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Describes what was omitted when extract_mode='summary'",
+        "title": "Truncation Notice"
+      },
+      "trust_score": {
+        "description": "Composite trust score (0.0-1.0)",
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "title": "Trust Score",
+        "type": "number"
+      },
+      "trust_tier": {
+        "$ref": "#/$defs/TrustTier",
+        "description": "Resolved trust tier"
+      },
+      "word_count": {
+        "description": "Word count of body",
+        "minimum": 0,
+        "title": "Word Count",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "request_id",
+      "source_url",
+      "final_url",
+      "body",
+      "word_count",
+      "content_type",
+      "trust_score",
+      "trust_tier",
+      "stage2_verdict",
+      "stage3_verdict",
+      "domain"
+    ],
+    "title": "RetrievedContent",
+    "type": "object"
+  },
+  "SearchRequest": {
+    "description": "Inbound request to run a web search.\n\n`/search` finds and returns provider-extracted content for a query\nacross sources \u2014 snippets or chunks, per result `content_kind` \u2014 from\nthe configured provider chain, every result sanitized, never cached;\n`/retrieve` fetches and sanitizes one caller-named URL through the full\npipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` is\nhonoured on both routes; this route additionally honours `providers`\nand `allow_paid_fallback` (contract 1.2.0) and scans every result at\nthe fixed 0.85 default at trust tier `standard` (`config.yaml`'s\n`promptguard_threshold` is not applied here), while `/retrieve`\nadditionally honours `promptguard_threshold`, `trusted_domains`,\n`verified_domains`, `blocked_domains` and `cache_ttl_hours`. This\ndocuments today's divergence; changing it belongs to\n`epic-forage-hardening`.",
+    "properties": {
+      "allow_paid_fallback": {
+        "default": true,
+        "description": "When False, excludes every paid provider from this request's effective chain regardless of `providers` \u2014 free providers always run. Applied after `providers`' own normalise-then-ignore-and-count filtering (ruling 29). One-way: can only narrow the configured chain, never widen, reorder, or key it. Honoured from contract 1.2.0.",
+        "title": "Allow Paid Fallback",
+        "type": "boolean"
+      },
+      "num_results": {
+        "default": 5,
+        "description": "Number of results to return",
+        "maximum": 20,
+        "minimum": 1,
+        "title": "Num Results",
+        "type": "integer"
+      },
+      "promptguard_fail_closed": {
+        "default": true,
+        "description": "When True, drop search results if PromptGuard is unavailable (fail-closed). When False, allow with a suspicion marker (fail-open).",
+        "title": "Promptguard Fail Closed",
+        "type": "boolean"
+      },
+      "providers": {
+        "description": "Restrict-only filter of the configured provider chain, in configured order: can exclude paid providers only, never add, reorder, or key one \u2014 free providers always run. Entries are matched after strip() and lower-casing against the names /health's `search_providers` publishes. Entries beyond the first eight, and entries matching no configured provider, are ignored and counted on /metrics `search.policy_unknown_provider` rather than rejected. Empty (the default) means the configured chain runs unrestricted. Honoured from contract 1.2.0.",
+        "items": {
+          "type": "string"
+        },
+        "title": "Providers",
+        "type": "array"
+      },
+      "query": {
+        "description": "Search query",
+        "minLength": 1,
+        "title": "Query",
+        "type": "string"
+      }
+    },
+    "required": [
+      "query"
+    ],
+    "title": "SearchRequest",
+    "type": "object"
+  },
+  "SearchResponse": {
+    "$defs": {
+      "SearchResult": {
+        "description": "A single search result.",
+        "properties": {
+          "content_kind": {
+            "default": "snippet",
+            "description": "What kind of content this result carries: 'snippet' for a search engine's own summary (every SearXNG result), 'chunk' for a passage a provider extracted from the page. Those two values are the whole set. Added in contract 1.2.0.",
+            "enum": [
+              "snippet",
+              "chunk"
+            ],
+            "title": "Content Kind",
+            "type": "string"
+          },
+          "date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The result's publication date as a strict 'YYYY-MM-DD' calendar date. Anything else \u2014 absent, a non-string, a different format, or a day that does not exist \u2014 is null. Added in contract 1.2.0.",
+            "title": "Date"
+          },
+          "domain": {
+            "description": "Lower-cased hostname of `url` (`urlsplit(url).hostname`), with no userinfo or port \u2014 a provenance signal, not a trust decision. This is the hostname, not the registrable domain (eTLD+1); derive that yourself if you need it. For an IPv6 literal this is the unbracketed form ('2001:db8::1') while `url` carries the bracketed form ('[2001:db8::1]') \u2014 the one case where `domain` is not a substring of `url`. Added in contract 1.2.0.",
+            "minLength": 1,
+            "title": "Domain",
+            "type": "string"
+          },
+          "engine": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Search engine used",
+            "title": "Engine"
+          },
+          "snippet": {
+            "description": "Result snippet / description",
+            "title": "Snippet",
+            "type": "string"
+          },
+          "suspicious": {
+            "default": false,
+            "description": "Whether Stage 2 or Stage 3 flagged this result as suspicious",
+            "title": "Suspicious",
+            "type": "boolean"
+          },
+          "title": {
+            "description": "Result title",
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "description": "Result URL",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "url",
+          "domain",
+          "snippet"
+        ],
+        "title": "SearchResult",
+        "type": "object"
+      }
+    },
+    "description": "Response wrapper for search results.",
+    "properties": {
+      "fallback_fired": {
+        "default": false,
+        "description": "True iff the provider chain advanced past the first provider before this response was served \u2014 the per-response face of the `search.fallback_fired` /metrics counter. It records chain advancement, not which provider ultimately served: for a chain that tries a provider before a free one, this is True when the free provider ends up serving.",
+        "title": "Fallback Fired",
+        "type": "boolean"
+      },
+      "omitted_by_reason": {
+        "additionalProperties": {
+          "type": "integer"
+        },
+        "description": "Withheld-result counts keyed by contract.OMIT_* reason. Four keys are defined in contract 1.1.0 \u2014 'invalid_url', 'structural_blocked', 'injection_detected' and 'promptguard_unavailable'. Only non-zero reasons appear. Deliberately a dict rather than an enum: a consumer sums the values and buckets keys it does not know (as /metrics does, under 'other'), so a future omission reason is an additive-safe MINOR change instead of a validation failure on an old client.",
+        "title": "Omitted By Reason",
+        "type": "object"
+      },
+      "omitted_results": {
+        "default": 0,
+        "description": "Examined candidate results the pipeline withheld, across all reasons",
+        "minimum": 0,
+        "title": "Omitted Results",
+        "type": "integer"
+      },
+      "promptguard_unavailable": {
+        "default": false,
+        "description": "PromptGuard was needed but did not run on at least one examined result (withheld or returned) \u2014 a stage-2 structural block never needed a scan and does not count",
+        "title": "Promptguard Unavailable",
+        "type": "boolean"
+      },
+      "provider_errors": {
+        "description": "Chain-order '<provider_name>: <failure_class>' entries for every provider tried before the one that served, from a closed failure-class vocabulary \u2014 never exception text or a URL. The only home for provider-level failures: they never affect omitted_results/omitted_by_reason or unresponsive_engines.",
+        "items": {
+          "type": "string"
+        },
+        "title": "Provider Errors",
+        "type": "array"
+      },
+      "provider_used": {
+        "description": "The serving provider's name (the token FORAGE_SEARCH_PROVIDERS names, e.g. 'searxng', 'brave'). An open string rather than an enum: a third provider is an additive change, not a validation failure on an old client.",
+        "minLength": 1,
+        "title": "Provider Used",
+        "type": "string"
+      },
+      "query": {
+        "description": "Original query",
+        "minLength": 1,
+        "title": "Query",
+        "type": "string"
+      },
+      "request_id": {
+        "description": "UUID for this search",
+        "minLength": 1,
+        "title": "Request Id",
+        "type": "string"
+      },
+      "results": {
+        "description": "Search results",
+        "items": {
+          "$ref": "#/$defs/SearchResult"
+        },
+        "title": "Results",
+        "type": "array"
+      },
+      "unresponsive_engines": {
+        "description": "SearXNG engines that failed to respond",
+        "items": {
+          "type": "string"
+        },
+        "title": "Unresponsive Engines",
+        "type": "array"
+      },
+      "unscanned_results": {
+        "default": 0,
+        "description": "Returned results PromptGuard did not scan",
+        "minimum": 0,
+        "title": "Unscanned Results",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "request_id",
+      "query",
+      "provider_used"
+    ],
+    "title": "SearchResponse",
+    "type": "object"
+  }
+}

@@ -1,7 +1,7 @@
 <!-- Template Version: 2.0.0 -->
 # CODE_ARCH.md
 
-> Last updated: 2026-09-11
+> Last updated: 2026-09-16
 > Updated by: Claude (forage-contract US-004)
 
 ---
@@ -88,7 +88,7 @@ Design principles:
 
 | Module | Lines | Responsibility |
 |--------|------:|----------------|
-| `pipeline/orchestrator.py` | 853 | Drives the five stages end to end; owns the SearXNG engine list and `_DEFAULT_SEARXNG_URL`. The busiest file in the repo. |
+| `pipeline/orchestrator.py` | 888 | Drives the five stages end to end. Since `search-provider-abstraction` US-002 it reaches search backends through the `SearchProvider` seam rather than calling SearXNG itself: it sets the candidate budget, re-applies its own slice, bounds `unresponsive_engines`, and maps a `ProviderFailure`'s closed `detail` onto `searxng_error` / `searxng_unavailable`. `_DEFAULT_SEARXNG_URL` and `_SEARXNG_ENGINES` survive here as **assigned aliases** of `pipeline/search_providers/searxng.py`'s public constants (three test modules import the private names from here); the definitions live in the provider. The busiest file in the repo. |
 | `retrieval_app.py` | 1563 | FastAPI app + the five endpoints, startup wiring, `/health` body assembly, the legacy-capability break-glass warning. Since `forage-contract` it also carries the documentation surface: the five per-shape error **mirrors** (US-001) and the six `/metrics` response models (US-005), all `extra="forbid"`, none of which any emission site routes through — the emission sites are unchanged and parity tests hold the models to them. The `FastAPI(...)` call serves `title="Forage"`, `version=CONTRACT_VERSION` and the no-auth/private-network posture, so `/openapi.json` cannot disagree with `/health` about which contract this process implements. |
 | `cache.py` | 860 | Valkey content cache. **Never logs the connection URL** — it may carry a password; enforced by a closed log vocabulary and a dedicated regression test. |
 | `models.py` | 313 | Pydantic models for every request and response shape. |
@@ -105,12 +105,15 @@ Design principles:
 | `model_fetcher.py` | 1872 | Weight acquisition end to end. The one gate every source passes — fail-closed manifest verification, exact-set + safetensors-only allowlist, symlink-resolving hashing over `snapshots/<revision>/`, one-generation quarantine, the `ModelMetrics` counters `/metrics` exports — plus `acquire_and_load()`, the boot pipeline the lifespan runs in a worker thread: verify the cache, then **Hugging Face, then the GHCR mirror**, then one ERROR naming both. The mirror leg shells out to the image's pinned `oras`, extracts with `filter="data"` into a bounded staging area, verifies *there*, and installs by rename. Owns the revision pin, the `$HF_HOME/hub` resolution both the download and the loader are handed, and the five environment variables the acquisition path reads. `WeightAcquisition` wraps that pipeline in the service's only background loop: single-flight, 30 s→10 min jittered backoff, cancellable, and a hub-offline pin scoped to the load so a warm start makes zero network attempts. |
 | `pipeline/stage1_pdf.py` | 156 | PDF branch of stage 1. |
 | `pipeline/stage3_promptguard.py` | 151 | ML injection scan; skipped for trusted domains. |
-| `pipeline/contract.py` | 108 | The versioned response contract (`contract_version`, currently **1.1.0**). |
-| `contract_smoke.py` | 586 | CI's published-image smoke: polls a running container's `/health`, validates it against the same `HealthResponse` model the golden test pins, and reads every wire value from `pipeline/contract.py` at run time. With `--image` (US-004) it also `cat`s `/app/contract/openapi.yaml` out of the candidate image, hashes it against the committed anchor and compares its `info.version` with the version the container serves. Ships in no image. |
+| `pipeline/contract.py` | 292 | The versioned response contract (`contract_version`, currently **1.2.0**), the 18-code error vocabulary, and the `ContentKind` Literal. |
+| `contract_smoke.py` | 725 | CI's published-image smoke: polls a running container's `/health`, validates it against the same `HealthResponse` model the golden test pins, and reads every wire value from `pipeline/contract.py` at run time. Two modes via `--expect-status`: `degraded` (the default, CI's weights-free image) and `healthy` (a container started with weights — the three PromptGuard-coupled checks invert, every other check is identical); the wait polls until `/health` answers 200 with the expected `status`, not merely the first 200. With `--image` (US-004) it also `cat`s `/app/contract/openapi.yaml` out of the candidate image, hashes it against the `--anchor` file (default the committed anchor) and compares its `info.version` with the version the container serves. Ships in no image. |
 | `searxng_smoke.py` | 779 | CI's companion-image smoke: creates an egress-free Docker network, runs SearXNG beside a Valkey and probes it from a third container. Docker goes through an injected runner and every judgement is a pure function, so `tests/test_searxng_smoke.py` covers the failure branches without a daemon. Ships in no image. |
 | `scripts/vendor_weights.py` | 1112 | Operator-only, supervised: downloads the pinned revision, generates `weights_manifest.json` with the safetensors allowlist enforced **at generation time**, builds a deterministic symlink-dereferenced tarball, self-checks it through the real verifier, `oras push`es it tagged by revision sha, and confirms the GHCR package is private. Every constant comes from `model_fetcher`; no credential ever reaches an argv. Ships in no image; `docs/weights.md` is the procedure. |
 | `scripts/export_contract.py` | 327 | Operator-only: renders `app.openapi()` into `contract/openapi.yaml` in a canonical form pinned here (JSON round-trip, no anchors, sorted keys, `width=88`), writes the sha256 anchor, and writes the drift check's own committed failure case. Byte-stable across processes and hash seeds — `tests/test_contract_export.py` calls `drift_report()` directly, so the gate runs on every `uv run pytest` rather than in a lane someone has to remember. |
 | `pipeline/sanitizer_revision.py` | 42 | Hashes eight source files into a `sanitizer_revision` string. See the gotcha below. |
+| `pipeline/search_providers/searxng.py` | 258 | `SearxngProvider` — the key-less free floor behind the protocol, and the home of `DEFAULT_SEARXNG_URL`, `SEARXNG_ENGINES`, `HTTP_STATUS_DETAIL_PREFIX` and the closed `_SEARXNG_FAILURE_DETAILS` vocabulary. A behavior-preserving extraction of the `httpx` block that used to sit inline in `run_search_pipeline`, with two recorded deviations: `trust_env=False` on the client and a `reason` text that no longer carries `str(exc)` or userinfo. Not in `_REVISION_SOURCES`, for the same reason as `base.py`. |
+| `pipeline/search_providers/base.py` | 146 | The `SearchProvider` protocol (`name`, `paid`, `origin`, `search()`) plus the internal `ProviderSearchResult` / `ProviderFailure` types and the closed `FailureClass` vocabulary every backend implements. First nested package under `pipeline/` (`pipeline/search_providers/__init__.py` is the package marker); not in `_REVISION_SOURCES` — provider code changes what is fetched, not how it is sanitized. |
+| `pipeline/search_providers/brave.py` | 417 | `BraveApiProvider` (`feature-brave-provider`) — the paid Brave LLM-Context backend, `paid = True`, returning content chunks (`content_kind="chunk"`, `engine="brave-api"`, deliberately distinct from SearXNG's own `brave` sub-engine) parsed against one owner-captured pinned sample (`tests/fixtures/brave/llm_context_sample.json`). A hardened per-call `httpx.AsyncClient` (`trust_env=False`, `follow_redirects=False`, TLS verified) against a fixed constant endpoint, a response body bounded before any `json.loads`, and `config.yaml`-tunable timeout/chunk/query caps read unconditionally in the lifespan. Not in `_REVISION_SOURCES`, for the same reason as the other two provider modules. |
 
 ---
 
@@ -132,8 +135,26 @@ a fifth with the contract bump to `1.1.0` (`5927038d…` → `fa4691c5…`, `con
 `orchestrator.py`) — the first rotation taken *for* the invalidation rather than despite
 it, now that the revision keys the content cache — and a sixth when the error vocabulary
 joined `contract.py` (`fa4691c5…` → `8b1b7f78…`, `forage-contract` US-001: typing and
-docstrings only, zero wire bytes changed, contract still `1.1.0`).
-Nothing downstream may assume Poppy↔Forage revision parity.
+docstrings only, zero wire bytes changed, contract still `1.1.0` then). The three most
+recent are `search-provider-abstraction`'s: a seventh when the inline SearXNG call left
+`orchestrator.py` for `SearxngProvider` (`8b1b7f78…` → `ee4450d9…`, US-002 — the provider
+module is not hashed, so `orchestrator.py` alone moved), an eighth for the `providers=`
+chain seam (`ee4450d9…` → `e7038672…`, US-003), and a ninth with the contract bump to
+`1.2.0` (`e7038672…` → `b7871b20…`, US-004 — `contract.py` + `orchestrator.py`, the epic's
+only two-file rotation, each file's contribution measured by reverting it in turn). Four
+more followed from `search-fallback` and `search-policy-and-health`: a tenth for free-first
+chain traversal (`b7871b20…` → `55e2af1b…`, US-001 — `orchestrator.py` alone), an eleventh
+for fallback telemetry and per-result provenance (`55e2af1b…` → `5249def6…`, US-003 —
+`orchestrator.py` alone; `models.py`'s matching wire fields are not hashed), a twelfth for
+failure-class discrimination (`5249def6…` → `f0b93318…`, US-002 — `orchestrator.py` alone,
+a lone-`searxng` chain carved out and unaffected), a thirteenth for the per-request
+policy literal (`f0b93318…` → `dc3ff92a…`, `search-policy-and-health` US-010 —
+`contract.py` alone; `retrieval_app.py`, where the new 422 is raised, is not hashed), and a
+fourteenth when `contract.py`'s `CONTRACT_VERSION` docstring gained the completed 1.2.0
+change record (`dc3ff92a…` → `41ac98ca…`, `search-policy-and-health` US-003 —
+`contract.py` alone; `retrieval_app.py` and `models.py`, where the new
+`/search`/`/retrieve` boundary text lives, are not hashed). Nothing downstream may assume
+Poppy↔Forage revision parity.
 
 **Startup is non-blocking, and one background task is the reason.** The lifespan does its
 synchronous wiring, starts weight acquisition as

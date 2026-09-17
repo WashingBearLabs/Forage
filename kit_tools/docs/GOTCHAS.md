@@ -1,7 +1,7 @@
 <!-- Template Version: 2.0.0 -->
 # GOTCHAS.md
 
-> Last updated: 2026-09-11
+> Last updated: 2026-09-16
 > Updated by: Claude (forage-contract US-004)
 
 ## Overview
@@ -324,6 +324,13 @@ rotted *engine definitions* are the tell. Worse, SearXNG's own healthcheck only 
 It presents as "web search is dead" with no error anywhere, and it comes back on a cadence
 rather than once.
 
+**In a multi-provider chain** (`search-fallback` US-002), this exact shape — a 200 with
+zero raw results and a non-empty `unresponsive_engines` — is a classified failure that
+advances to the next provider only when zero raw results come back; a partial answer
+(results plus a non-empty list) is served as-is and no fallback fires. A configured chain
+of exactly one `searxng` provider has nothing to fall back to, so it is still served as the
+200 above.
+
 **Mitigation and the pin-bump cadence:**
 The image must be **pulled and recreated on a schedule**, not pinned once and forgotten.
 Forage now publishes a companion `forage-searxng` image (digest-pinned base + baked
@@ -340,8 +347,8 @@ production. **A bump nobody performs re-arms this gotcha**, exactly as a bump jo
 stopped running would have. Rolling our own search image was considered and rejected —
 the community maintaining engine definitions weekly *is* the value.
 
-**Also note:** the engine list appears in two places — `pipeline/orchestrator.py`'s engine
-constant and `searxng/config/settings.yml`. Both live in this repo now, and
+**Also note:** the engine list appears in two places — `SEARXNG_ENGINES` in
+`pipeline/search_providers/searxng.py` and `searxng/config/settings.yml`. Both live in this repo now, and
 `tests/test_searxng_docker.py` now asserts the two sets are equal rather than asking
 anyone to keep them in sync by hand.
 
@@ -400,8 +407,8 @@ recipe.
 
 **What happens:**
 `derive_sanitizer_revision()` hashes eight source files plus the model identity and the
-active threshold. Forage's revision has moved six times, each time at a boundary and each
-time deliberately:
+active threshold. Forage's revision has moved fourteen times, each time at a boundary and
+each time deliberately:
 
 | When | Value | What moved it |
 |---|---|---|
@@ -411,12 +418,20 @@ time deliberately:
 | `forage-ci-and-image` US-006 | `0537316d…e3e253` | pyright-strict burn-down retyped `stage1_extraction.py` + `stage2_structural.py` |
 | `forage-model-bootstrap` US-001 | `5927038d…19d111` | the hashed model identity became `MODEL_ID@revision` — **no source byte moved** |
 | `forage-cache-fallback` US-003 | `fa4691c5…93547c` | `contract.py` bumped to `1.1.0` **and** `orchestrator.py` threaded the revision into the cache key — the rotation whose *point* is the invalidation |
-| `forage-contract` US-001 | `8b1b7f78…196d7c` | `contract.py` gained the 17-code error vocabulary and `DegradedReason` as derived Literals — documentation only, contract still `1.1.0`, and the **one** rotation the whole of `feature-forage-contract` gets |
+| `forage-contract` US-001 | `8b1b7f78…196d7c` | `contract.py` gained the then-17-code error vocabulary and `DegradedReason` as derived Literals — documentation only, contract still `1.1.0` then, and the **one** rotation the whole of `feature-forage-contract` gets |
+| `search-provider-abstraction` US-002 | `ee4450d9…f63c3da` | the inline SearXNG call left `orchestrator.py` for `SearxngProvider` — the provider module is **not** a hashed filename, so `orchestrator.py` is the only file that moved; wire codes unchanged, `reason` text narrowed |
+| `search-provider-abstraction` US-003 | `e7038672…3ce0cbf` | `run_search_pipeline` gained the `providers=` chain seam; `providers=None` is the previous behaviour unchanged |
+| `search-provider-abstraction` US-004 | `b7871b20…ea6f2b` | contract `1.2.0` — **two** hashed files: `contract.py` (`ContentKind`, `search_unavailable`, the version) and `orchestrator.py` (the chain-shaped failure predicate, the `content_kind`/`date` copy) |
+| `search-fallback` US-001 | `55e2af1b…bf47e4` | `run_search_pipeline` gained free-first chain traversal in `orchestrator.py`: calls providers in order, advances on a `ProviderFailure`, stops at the first success; a one-provider chain is byte-identical to before |
+| `search-fallback` US-003 | `5249def6…89f24a` | `run_search_pipeline` gained fallback telemetry and per-result provenance in `orchestrator.py` (`SearchResult.domain`, `provider_used`/`fallback_fired`/`provider_errors`, the `SearchMetricsSink` Protocol); `models.py` gained the matching wire fields but is not a `_REVISION_SOURCES` member |
+| `search-fallback` US-002 | `f0b93318…70d62` | `run_search_pipeline` classifies a zero-result, non-empty-`unresponsive_engines` `ProviderSearchResult` as a failure in `orchestrator.py` — SearXNG's real production failure shape; a lone-`searxng` chain is carved out and unaffected |
+| `search-policy-and-health` US-010 | `dc3ff92a…eded9` | `contract.py` gained `POLICY_EXCLUDED_ALL_PROVIDERS`, the fixed-literal `reason` the `/search` handler raises when the new `apply_request_policy` narrows a request's effective chain to empty; `retrieval_app.py`, where the raise site lives, is not a `_REVISION_SOURCES` member |
+| `search-policy-and-health` US-003 | `41ac98ca…b4e318` | `contract.py`'s `CONTRACT_VERSION` docstring gained the completed 1.2.0 change record (every field, counter and enum member specs 1-4 added, all additive) plus a note that the `/search`/`/retrieve` boundary text rides the same unpublished window; `retrieval_app.py` and `models.py`, where that boundary text lives, are not `_REVISION_SOURCES` members |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**None of the six rotations changed sanitization behaviour** — but the fourth and fifth
+**None of the fourteen rotations changed sanitization behaviour** — but the fourth and fifth
 are different *kinds* of rotation and worth reading as such. The first three moved because
 the hash is over bytes and someone reformatted or retyped a hashed file. The fourth moved
 because an **input changed**: weights are a runtime, per-deployment thing now
@@ -440,10 +455,19 @@ it would be indistinguishable from a real sanitizer change.
 
 The sixth is the fifth's mechanism used as intended, one spec later:
 `feature-forage-contract` US-001 added the error vocabulary to `contract.py`, changed no
-wire byte (per-site parity tests prove it) and left `CONTRACT_VERSION` at `1.1.0` — and
+wire byte (per-site parity tests prove it) and left `CONTRACT_VERSION` at `1.1.0` then — and
 the cache flush it causes is the *correct* consequence, not a cost to apologise for.
 That spec acknowledged **one** rotation for all five of its stories, and this was it: the
 remaining stories must stay out of `_REVISION_SOURCES` or be content-neutral there.
+
+The seventh, eighth and ninth are `search-provider-abstraction`'s, and the ninth is the
+one to read: it is the second rotation whose invalidation is part of the *point*. The
+contract bump to `1.2.0` added `content_kind` and `date` to every search result, so a
+cached extraction sanitized before it carries neither — serving one beside a `1.2.0`
+response is exactly the silent mix the revision key exists to prevent. It is also the
+epic's only rotation with two hashed files moving, and the attribution was measured
+(revert each in turn; the both-reverted control must land on the previous shipped value)
+rather than argued. `docs/bootstrap-notes.md` carries that table.
 
 US-006's rotation is the one to read carefully: `stage2_structural.py` took an annotation
 only (`field(default_factory=list[FlaggedSpan])`), but `stage1_extraction.py` took a real
@@ -528,11 +552,11 @@ guards keep it deleted, and both run on every PR:
 | Guard | Scope | Where |
 |---|---|---|
 | `tests/test_dockerfile.py` (20 tests) | the Dockerfile's **text** — no secret-shaped ARG/ENV/RUN assignment, no `from_pretrained`, no token-shaped literal | the `test` lane, and every local `uv run pytest` |
-| the `secret-grep` CI job | the **built image's** `docker history --no-trunc`, for `HF_TOKEN` and `hf_[A-Za-z0-9]{20,}` | `.github/workflows/ci.yml`, on the artifact `build-amd64` produced |
+| the `secret-grep` CI job | the **built image's** `docker history --no-trunc`, for `HF_TOKEN`, `hf_[A-Za-z0-9]{20,}` and `FORAGE_BRAVE_API_KEY` | `.github/workflows/ci.yml`, on the artifact `build-amd64` produced |
 
 Both were mutation-verified: re-adding `ARG HF_TOKEN` fails three of the source guards,
-and a deliberately-leaking canary image built with a synthetic token matched both grep
-patterns.
+and a deliberately-leaking canary image built with a synthetic token matched both Hugging
+Face grep patterns.
 
 **Two things this closure does NOT say.**
 
@@ -614,3 +638,20 @@ unaffected; a "same digest a year later" claim would be, and is not made.
 **Still unproven:** a live cold publish. The evidence above is local, plus the
 workflow-shape tests. The first tag cut after this change is the first real exercise —
 watch `publish`'s verification step rather than only the tags.
+
+### `kit_tools/hooks/*.py` sit inside the zero-tolerance ruff / pyright gates
+
+The KitTools automation hooks are plain Python files under `kit_tools/hooks/`, and
+`uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` (strict) walk
+the whole tree with **no excludes** (`CLAUDE.md` Development section;
+`tests/test_pyright_policy.py` pins the pyright config exactly, so an `exclude` is not an
+option). The plugin ships them unannotated: committing them as copied (2026-09-15,
+`41e01d8`) turned all three CI gates red until they were annotated and wrapped
+(`fix(kit_tools): make hook scripts pass ruff and pyright strict`). Two consequences:
+
+- `ruff format --check .` also reflows Python fences inside Markdown under `kit_tools/`,
+  so a seeded doc with a code block can fail the format gate on its own.
+- Re-running `/kit-tools:init-project` re-copies the plugin's hook scripts *unconditionally*
+  (hooks are installed regardless of the skip/merge/replace choice) and will reintroduce the
+  breakage. After any re-run, run the three gates before committing, or upstream the
+  annotated versions into the kit-tools plugin so the copies arrive clean.

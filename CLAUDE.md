@@ -79,7 +79,7 @@ is now load-bearing for the two consumers above.
 ### 4. A change to a response shape is a contract change.
 
 The response contract is versioned (`pipeline/contract.py`, `contract_version` currently
-**1.1.0**), and consumers are expected to refuse activation on a major mismatch rather
+**1.2.0**), and consumers are expected to refuse activation on a major mismatch rather
 than guess. Changing any response shape means: bump the version, add a golden fixture
 under `tests/golden/` (older ones are retained, never edited), and note the change for the
 consuming repo.
@@ -193,6 +193,59 @@ per-deployment input (`forage-model-bootstrap` US-001) — and a fifth time to
 invalidation (`forage-cache-fallback` US-003 made the revision an input to the content
 cache's key), and a sixth to `8b1b7f78…` when `contract.py` gained the seventeen-code
 error vocabulary (`forage-contract` US-001 — documentation only, contract still `1.1.0`,
-and the one rotation that whole spec gets). `docs/bootstrap-notes.md` carries
+and the one rotation that whole spec gets), and a seventh to `ee4450d9…` when the inline
+SearXNG `httpx` call left `orchestrator.py` for `SearxngProvider`
+(`search-provider-abstraction` US-002 — `pipeline/search_providers/searxng.py` is **not** a
+`_REVISION_SOURCES` member, so `orchestrator.py` is the only hashed file that moved, which
+was measured rather than assumed; the wire codes are unchanged and only the `reason` text
+narrowed), and an eighth to `e7038672…` when `run_search_pipeline` gained the `providers=`
+chain seam (`search-provider-abstraction` US-003 — again `orchestrator.py` alone; the
+default `providers=None` path is the previous behaviour unchanged), and a ninth to
+`b7871b20…` with the contract bump to `1.2.0` (`search-provider-abstraction` US-004 — the
+first rotation of the epic with **two** hashed files moving: `contract.py` gained
+`ContentKind` and `search_unavailable` and the version bump, `orchestrator.py` gained the
+chain-shaped failure predicate and the `content_kind`/`date` copy; measured by reverting
+each in turn, with a both-reverted control landing on `e7038672…`), and a tenth to
+`55e2af1b…` when `run_search_pipeline` gained free-first chain traversal
+(`search-fallback` US-001 — `orchestrator.py` alone, measured; the loop calls providers in
+order, advances on a `ProviderFailure`, and stops at the first success, replace-not-merge; a
+one-provider chain still makes exactly one call and produces byte-identical wire output),
+and an eleventh to `5249def6…` when `run_search_pipeline` gained fallback telemetry and
+per-result provenance (`search-fallback` US-003 — `orchestrator.py` alone, measured;
+`models.py` gained `SearchResult.domain` and `SearchResponse.provider_used` /
+`fallback_fired` / `provider_errors` but is not a `_REVISION_SOURCES` member, so those wire
+additions do not move this hash on their own; no sanitization behaviour changed), and a
+twelfth to `f0b93318…` when `run_search_pipeline` gained failure-class discrimination
+(`search-fallback` US-002 — `orchestrator.py` alone, measured; a `ProviderSearchResult`
+with zero raw results and a non-empty `unresponsive_engines` list is now classified as a
+failure and advances the chain exactly as a `ProviderFailure` does — the recurring
+production shape SearXNG answers with a 200 and never raises — except on a configured
+`[searxng]`-only chain, which has nothing to fall back to and still serves that shape as
+before; sufficiency stays judged on raw results before sanitization), and a thirteenth to
+`dc3ff92a…` when `contract.py` gained the `POLICY_EXCLUDED_ALL_PROVIDERS` literal for the
+new per-request policy 422 (`search-policy-and-health` US-010 — `contract.py` alone,
+measured against all eight `_REVISION_SOURCES` files; `retrieval_app.py`, where the raise
+site lives, is not hashed), and a fourteenth to `41ac98ca…` when `contract.py`'s
+`CONTRACT_VERSION` docstring gained the completed 1.2.0 change record — every field,
+counter and enum member the epic's specs 1-4 added, all additive, plus a note that the
+`/search`/`/retrieve` boundary text landed inside this same unpublished window
+(`search-policy-and-health` US-003 — `contract.py` alone, measured by reverting it to its
+pre-story bytes and reproducing `dc3ff92a…` exactly; `retrieval_app.py` and `models.py`,
+where the boundary text itself lives, are not `_REVISION_SOURCES` members).
+`docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.
+
+---
+
+## Session Scratchpad
+
+After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:
+
+```
+[HH:MM] Brief description of what was done
+- Files: key files changed (if any)
+- Decision: any non-obvious choices (if applicable)
+```
+
+Keep notes terse — one line plus optional details. This file survives context refreshes and gets processed on session close.

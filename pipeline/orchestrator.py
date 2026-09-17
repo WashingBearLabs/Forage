@@ -16,8 +16,9 @@ import time
 import unicodedata
 import uuid
 from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import unquote, urlparse, urlsplit, urlunsplit
 
 import httpx
@@ -45,6 +46,18 @@ from pipeline.extraction_limits import (
 from pipeline.pdf_subprocess import (
     PDFClassifiableTextLimitError,
     extract_pdf_in_subprocess,
+)
+from pipeline.search_providers.base import (
+    ProviderFailure,
+    ProviderSearchResult,
+    SearchProvider,
+)
+from pipeline.search_providers.searxng import (
+    DEFAULT_SEARXNG_URL,
+    HTTP_STATUS_DETAIL_PREFIX,
+    SEARXNG_ENGINES,
+    SEARXNG_PROVIDER_NAME,
+    SearxngProvider,
 )
 from pipeline.stage1_extraction import ExtractionResult, extract_html
 from pipeline.stage1_pdf import (
@@ -549,19 +562,24 @@ async def run_extract_pipeline_from_file(
 # Search pipeline
 # ---------------------------------------------------------------------------
 
-# Default SearXNG URL (overridable via the SEARXNG_URL environment variable —
-# see docs/configuration.md). Deliberately a neutral service name: Forage has
-# no opinion about the compose project it is dropped into.
-_DEFAULT_SEARXNG_URL = "http://searxng:8080"
+# Both constants are *defined* in `pipeline/search_providers/searxng.py`,
+# which owns the SearXNG call now; these are assigned aliases, not second
+# copies. They stay because three test modules import the private names from
+# here — `tests/test_searxng_docker.py` (the `searxng/config/settings.yml`
+# sync guard), `tests/test_compose_fragments.py` and
+# `tests/test_searxng_smoke.py`. Assigned rather than imported: importing a
+# private name across modules fails pyright strict's `reportPrivateUsage`,
+# whose only carve-out is `tests/`.
+_DEFAULT_SEARXNG_URL = DEFAULT_SEARXNG_URL
+_SEARXNG_ENGINES = SEARXNG_ENGINES
 _MAX_SEARCH_RESULTS_SCANNED = 20
 
-# Engines pinned on every SearXNG query. Without an explicit list SearXNG
-# fans out to every engine its image defaults enable — and with
-# `use_default_settings: true` on a :latest image, upstream releases keep
-# adding engines our config never vetted (observed live 2026-08-19: aol,
-# "karmasearch videos"). Must stay in sync with the enabled set in
-# searxng/config/settings.yml.
-_SEARXNG_ENGINES = "duckduckgo,brave,startpage,mojeek"
+# `unresponsive_engines` crosses the provider seam as a list of strings the
+# backend chose, so it is bounded here — in hashed orchestrator code — rather
+# than in the provider, which normalizes nothing (contract point 3). The
+# honest response names four engines, so no real body is touched.
+_MAX_UNRESPONSIVE_ENGINES = 16
+_MAX_UNRESPONSIVE_ENGINE_LENGTH = 64
 _MAX_SEARCH_TITLE_LENGTH = 512
 _MAX_SEARCH_URL_LENGTH = 2_048
 _MAX_SEARCH_SNIPPET_LENGTH = 2_000
@@ -590,8 +608,15 @@ def _sanitize_search_text(value: object, *, max_length: int) -> tuple[str, str]:
     )
 
 
-def _canonicalize_search_url(value: object) -> tuple[str, str] | None:
-    """Normalize a result URL and allow only canonical HTTP(S) URLs."""
+def _canonicalize_search_url(value: object) -> tuple[str, str, str] | None:
+    """Normalize a result URL and allow only canonical HTTP(S) URLs.
+
+    Returns ``(canonical_url, scanned_text, domain)``. ``domain`` is bound
+    from ``parsed.hostname`` before the IPv6 re-bracketing below, so an IPv6
+    literal reaches the wire unbracketed (``2001:db8::1``) even though
+    ``canonical_url`` carries the bracketed form (``[2001:db8::1]``) — the one
+    case where ``domain`` is not a substring of ``canonical_url``.
+    """
     normalized = _normalize_search_text(value, max_length=_MAX_SEARCH_URL_LENGTH)
     if not normalized or any(character.isspace() for character in normalized):
         return None
@@ -616,7 +641,8 @@ def _canonicalize_search_url(value: object) -> tuple[str, str] | None:
     ):
         return None
 
-    host = parsed.hostname.lower()
+    domain = parsed.hostname.lower()
+    host = domain
     if ":" in host:
         host = f"[{host}]"
     netloc = host if port is None else f"{host}:{port}"
@@ -632,6 +658,7 @@ def _canonicalize_search_url(value: object) -> tuple[str, str] | None:
     return (
         _normalize_search_text(canonical, max_length=_MAX_SEARCH_URL_LENGTH),
         scanned,
+        domain,
     )
 
 
@@ -640,63 +667,293 @@ def _search_result_promptguard_input(title: str, url: str, snippet: str) -> str:
     return f"Title: {title}\nURL: {url}\nSnippet: {snippet}"
 
 
+def _legacy_searxng_codes(chain: Sequence[SearchProvider]) -> bool:
+    """Whether *chain* is the one configuration the ``searxng_*`` codes describe.
+
+    The legacy pair predates the provider seam, when SearXNG was the only
+    backend there was, and their wire text names SearXNG explicitly. They
+    therefore stay bound to exactly that deployment: a chain of one provider
+    whose ``name`` is ``"searxng"``. Every other chain — including one that
+    merely *starts* with SearXNG — refuses with ``search_unavailable``, whose
+    reason names whichever provider actually failed.
+
+    The test is a comparison on the chain's ``name`` token and never an
+    ``isinstance`` (ruling 28): ``name`` is the single identifier a provider
+    carries, the one the operator wrote in ``FORAGE_SEARCH_PROVIDERS``, and a
+    class check would make a drop-in replacement for ``SearxngProvider``
+    silently change the wire code an operator's dashboards are keyed on.
+
+    It reads the **configured** chain, never the per-request effective one:
+    ``run_search_pipeline`` feeds it *configured_chain* when the caller
+    supplies one, else *providers* — spec 4's per-request policy filtering
+    narrows *providers* but must never reach this predicate (ruling 28), so
+    no status code varies with a policy parameter. What a consumer is told
+    depends on how the deployment was set up, which is stable across
+    requests, rather than on which backend happened to be reached.
+    """
+    return len(chain) == 1 and chain[0].name == SEARXNG_PROVIDER_NAME
+
+
+def _searxng_pipeline_error(
+    provider: SearchProvider,
+    failure: ProviderFailure,
+    *,
+    request_id: str,
+) -> PipelineError:
+    """Map a SearXNG ``ProviderFailure`` onto the two legacy `/search` codes.
+
+    The codes and the 422 are unchanged from the inline call; only the
+    ``reason`` text narrowed. ``str(exc)`` is gone — ruling 13 keeps
+    exception text behind the seam — and the endpoint echo is
+    ``provider.origin``, the userinfo-stripped scheme, host and port, so a
+    credential in ``SEARXNG_URL`` cannot reach a 422 body on an
+    unauthenticated route. Host and port still appear, which is what makes a
+    misconfigured deployment diagnosable from the response alone.
+    """
+    if failure.detail.startswith(HTTP_STATUS_DETAIL_PREFIX):
+        return PipelineError(
+            error="searxng_error",
+            reason=f"SearXNG returned HTTP error ({failure.detail})",
+            request_id=request_id,
+        )
+    return PipelineError(
+        error="searxng_unavailable",
+        reason=f"SearXNG not reachable at {provider.origin}: {failure.detail}",
+        request_id=request_id,
+    )
+
+
+def _search_unavailable_error(
+    provider_errors: list[str],
+    *,
+    request_id: str,
+) -> PipelineError:
+    """Map a non-legacy chain's exhaustion onto ``search_unavailable``.
+
+    *provider_errors* is the chain-order list of ``"<provider.name>:
+    <failure_class>"`` entries built while traversing — one per provider
+    tried, each composed from two closed vocabularies and nothing else, so no
+    endpoint, credential, header or exception text can reach a 422 body
+    through this path, whatever a third-party API put in its response. The
+    reason is those entries joined by ``"; "``.
+    """
+    return PipelineError(
+        error="search_unavailable",
+        reason="; ".join(provider_errors),
+        request_id=request_id,
+    )
+
+
+class SearchMetricsSink(Protocol):
+    """The two ``/metrics`` search counters ``run_search_pipeline`` increments directly.
+
+    ``retrieval_app.SearchMetrics`` satisfies this structurally — neither
+    module imports the other. Declaring it here, on the consumer side, is the
+    same seam shape as :class:`SearchProvider`.
+    """
+
+    fallback_fired: int
+    paid_calls: int
+
+
+class _NullSearchMetrics:
+    """The ``search_metrics`` parameter's default — a real counter nobody reads.
+
+    Its counters are process-local scratch space, satisfying
+    :class:`SearchMetricsSink` structurally so every increment site below is
+    unconditional (the ``metrics if metrics is not None else CacheMetrics()``
+    idiom, ``cache.py``), with no ``is not None`` branch at the increment
+    site itself.
+    """
+
+    def __init__(self) -> None:
+        self.fallback_fired = 0
+        self.paid_calls = 0
+
+
 async def run_search_pipeline(
     request: SearchRequest,
     *,
     searxng_url: str = _DEFAULT_SEARXNG_URL,
+    providers: Sequence[SearchProvider] | None = None,
+    configured_chain: Sequence[SearchProvider] | None = None,
+    search_metrics: SearchMetricsSink | None = None,
     config: dict[str, Any],
     classifier: Any = None,
     promptguard_threshold: float = 0.85,
 ) -> SearchResponse:
-    """Run a web search through SearXNG with complete-result sanitization.
+    """Run a web search through a search provider chain with sanitized results.
 
-    Queries SearXNG for results, then sanitizes every model-visible title,
-    URL, and snippet through Stage 1 (HTML extraction), Stage 2 (structural
-    scan), and one aggregate Stage 3 PromptGuard classification per result.
-    At most ``_MAX_SEARCH_RESULTS_SCANNED`` results are classified, bounding
-    search-path inference work to 20 PromptGuard passes.
+    The backend is reached through the ``SearchProvider`` seam
+    (``pipeline/search_providers/``) — ``SearxngProvider``, ``BraveApiProvider``
+    — so this function owns orchestration, not HTTP. It then sanitizes every
+    model-visible title, URL, and snippet through Stage 1 (HTML extraction),
+    Stage 2 (structural scan), and one aggregate Stage 3 PromptGuard
+    classification per result. At most ``_MAX_SEARCH_RESULTS_SCANNED``
+    results are classified, bounding search-path inference work to 20
+    PromptGuard passes.
 
     - BLOCKED result fields (Stage 2 or 3) omit the entire result.
     - SUSPICIOUS fields are included with a ``suspicious`` flag.
-    - SearXNG errors raise :class:`PipelineError` with a descriptive message.
+    - Providers are tried in chain order (free-first); the first to return a
+      *sufficient* :class:`ProviderSearchResult` serves the request and no
+      later provider is called. A :class:`ProviderFailure` — or an exception
+      escaping ``search()``, treated as ``hard_error`` — advances to the next
+      provider, and so does a :class:`ProviderSearchResult` with zero raw
+      results and a non-empty ``unresponsive_engines`` list (recorded as
+      ``"<name>: rate_limited"``): this is how SearXNG actually fails in
+      production, a 200 that never raises. Sufficiency is judged on raw
+      results before sanitization, so a poisoned or fail-closed result set
+      that sanitization later empties out is still a success. A chain of
+      exactly one ``searxng`` provider has nothing to fall back to, so that
+      one shape is served as-is there instead of advancing. Replace-not-merge:
+      a served response's ``results`` and ``unresponsive_engines`` come only
+      from the serving provider; nothing from a failed provider survives into
+      it. An exhausted chain raises :class:`PipelineError` — today's
+      SearXNG-era codes, composed from the provider's closed ``detail``
+      token, or ``search_unavailable`` with a reason composed from every
+      provider tried.
+
+    *providers* is the chain the lifespan resolved from
+    ``FORAGE_SEARCH_PROVIDERS``, tried in order. ``None`` means "no chain
+    supplied" and builds the default one-element SearXNG chain from
+    *searxng_url* — the test call sites that still pass ``searxng_url=`` take
+    this path. The check is ``is None`` and never a falsy one: an empty
+    non-``None`` sequence is a caller programming error with no wire code,
+    and a falsy check would silently serve the default chain instead of
+    surfacing it.
+
+    *configured_chain* is what the exhausted-chain 422 code is chosen from —
+    the operator-**configured** chain, never the per-request effective one
+    (ruling 28), so no status code varies with a policy filter. Defaults to
+    *providers* when not supplied; spec 4 passes the configured chain
+    explicitly once per-request policy can narrow *providers*.
+
+    *search_metrics* is incremented directly during traversal: ``paid_calls``
+    once per call to a ``paid=True`` provider (before the call, so a call that
+    times out is still counted), and ``fallback_fired`` once per request in
+    which traversal advances past the first provider — both move even when
+    the chain is ultimately exhausted and the call ends in a raised
+    :class:`PipelineError`. ``None`` (the default) is a private null object,
+    so every increment site is unconditional.
+
+    This function never reads the environment.
     """
+    if providers is not None and len(providers) == 0:
+        raise ValueError(
+            "run_search_pipeline received an empty provider chain; a caller "
+            "with no provider to offer must not call the pipeline"
+        )
+
     request_id = uuid.uuid4().hex
 
-    # -- Call SearXNG --
-    # Request extra results to compensate for any BLOCKED omissions.
+    # -- Call the search provider chain, free-first --
+    # Request extra results to compensate for any BLOCKED omissions. The
+    # candidate budget is a *request* to the provider, never a trusted bound:
+    # the slice below is re-applied to whatever comes back, so
+    # `_MAX_SEARCH_RESULTS_SCANNED` stays enforced on this side of the seam.
     fetch_limit = min(request.num_results * 2, _MAX_SEARCH_RESULTS_SCANNED)
-    raw_results: list[dict[str, Any]] = []
-    unresponsive_engines: list[str] = []
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{searxng_url}/search",
-                params={
-                    "q": request.query,
-                    "format": "json",
-                    "pageno": 1,
-                    "engines": _SEARXNG_ENGINES,
-                },
+    chain: Sequence[SearchProvider] = (
+        [SearxngProvider(searxng_url)] if providers is None else providers
+    )
+    resolved_configured_chain: Sequence[SearchProvider] = (
+        chain if configured_chain is None else configured_chain
+    )
+
+    metrics: SearchMetricsSink = (
+        search_metrics if search_metrics is not None else _NullSearchMetrics()
+    )
+
+    outcome: ProviderSearchResult | None = None
+    serving_provider: SearchProvider | None = None
+    serving_max_results: int | None = None
+    provider_errors: list[str] = []
+    last_failure: ProviderFailure | None = None
+    last_provider: SearchProvider | None = None
+    fallback_fired = False
+    for index, provider in enumerate(chain):
+        if index > 0 and not fallback_fired:
+            fallback_fired = True
+            metrics.fallback_fired += 1
+        max_results = request.num_results if provider.paid else fetch_limit
+        if provider.paid:
+            metrics.paid_calls += 1
+        try:
+            call_outcome = await provider.search(request.query, max_results)
+        except Exception:
+            # Ruling 27 already guarantees every provider's own mapping ends
+            # in this catch-all; this guard is a second, orchestrator-side
+            # floor so a defect in provider *n* can never become a 500 or
+            # skip the free floor at *n+1*.
+            call_outcome = ProviderFailure(
+                provider_name=provider.name,
+                failure_class="hard_error",
+                detail="unexpected",
             )
-            resp.raise_for_status()
-            data = resp.json()
-            raw_results = data.get("results", [])[:fetch_limit]
-            unresponsive_engines = [
-                e[0] if isinstance(e, (list, tuple)) else str(e)
-                for e in data.get("unresponsive_engines", [])
-            ]
-    except httpx.HTTPStatusError as exc:
-        raise PipelineError(
-            error="searxng_error",
-            reason=f"SearXNG returned HTTP {exc.response.status_code}",
-            request_id=request_id,
-        ) from exc
-    except Exception as exc:
-        raise PipelineError(
-            error="searxng_unavailable",
-            reason=f"SearXNG not reachable at {searxng_url}: {exc}",
-            request_id=request_id,
-        ) from exc
+
+        if (
+            isinstance(call_outcome, ProviderSearchResult)
+            and not call_outcome.results
+            and call_outcome.unresponsive_engines
+        ):
+            # Ruling 17's headline rule: a 200 with zero raw results and every
+            # engine listed as unresponsive is how SearXNG actually fails in
+            # production (kit_tools/docs/GOTCHAS.md "SearXNG :latest rots") —
+            # it never raises, so it is only visible here. A chain of exactly
+            # one `searxng` provider has nothing to fall back to, so this
+            # shape is not a trigger there: it is served exactly as before
+            # the provider seam existed.
+            if _legacy_searxng_codes(resolved_configured_chain):
+                logger.warning(
+                    "search_provider_failed provider=%s failure_class=%s detail=%s",
+                    provider.name,
+                    "rate_limited",
+                    "unresponsive_engines",
+                )
+                outcome = call_outcome
+                serving_provider = provider
+                serving_max_results = max_results
+                break
+            call_outcome = ProviderFailure(
+                provider_name=provider.name,
+                failure_class="rate_limited",
+                detail="unresponsive_engines",
+            )
+
+        if isinstance(call_outcome, ProviderFailure):
+            provider_errors.append(f"{provider.name}: {call_outcome.failure_class}")
+            logger.warning(
+                "search_provider_failed provider=%s failure_class=%s detail=%s",
+                provider.name,
+                call_outcome.failure_class,
+                call_outcome.detail,
+            )
+            last_failure = call_outcome
+            last_provider = provider
+            continue
+
+        outcome = call_outcome
+        serving_provider = provider
+        serving_max_results = max_results
+        break
+
+    if outcome is None or serving_provider is None or serving_max_results is None:
+        if last_failure is None or last_provider is None:
+            raise ValueError(
+                "run_search_pipeline received an empty provider chain; a caller "
+                "with no provider to offer must not call the pipeline"
+            )
+        if _legacy_searxng_codes(resolved_configured_chain):
+            raise _searxng_pipeline_error(
+                last_provider, last_failure, request_id=request_id
+            )
+        raise _search_unavailable_error(provider_errors, request_id=request_id)
+
+    raw_results: list[dict[str, Any]] = outcome.results[:serving_max_results]
+    unresponsive_engines: list[str] = [
+        _normalize_search_text(name, max_length=_MAX_UNRESPONSIVE_ENGINE_LENGTH)
+        for name in outcome.unresponsive_engines[:_MAX_UNRESPONSIVE_ENGINES]
+    ]
 
     # -- Sanitize complete results through Stages 1-3 --
     sanitized_results: list[SearchResult] = []
@@ -718,12 +975,16 @@ async def run_search_pipeline(
             logger.info("Omitting search result with invalid URL")
             omitted_by_reason[contract.OMIT_INVALID_URL] += 1
             continue
-        url, url_scan_text = canonical_url
+        url, url_scan_text, domain = canonical_url
         snippet, snippet_scan_text = _sanitize_search_text(
             raw.get("content", ""),
             max_length=_MAX_SEARCH_SNIPPET_LENGTH,
         )
         engine = raw.get("engine")
+        # `content_kind` describes the whole batch the provider returned;
+        # `date` is per-result and is filtered to a strict calendar date by
+        # `SearchResult` itself, so anything else becomes None there.
+        result_date = raw.get("date")
         suspicious = False
 
         # Stage 2: scan every model-visible field before exposing the result.
@@ -789,8 +1050,11 @@ async def run_search_pipeline(
             SearchResult(
                 title=title,
                 url=url,
+                domain=domain,
                 snippet=snippet,
                 engine=engine if isinstance(engine, str) else None,
+                content_kind=outcome.content_kind,
+                date=result_date,
                 suspicious=suspicious,
             )
         )
@@ -831,6 +1095,9 @@ async def run_search_pipeline(
         results=sanitized_results,
         request_id=request_id,
         query=request.query,
+        provider_used=serving_provider.name,
+        fallback_fired=fallback_fired,
+        provider_errors=provider_errors,
         unresponsive_engines=unresponsive_engines,
         omitted_results=omitted_results,
         omitted_by_reason=dict(omitted_by_reason),

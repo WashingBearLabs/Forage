@@ -64,7 +64,15 @@ those eight — so Forage's revision moved:
 | After the pyright-strict burn-down (`forage-ci-and-image` US-006) | `0537316d…e3e253` |
 | After the weights pin joined the hashed identity (`forage-model-bootstrap` US-001) | `5927038d…19d111` |
 | After the contract bump to `1.1.0` (`forage-cache-fallback` US-003) | `fa4691c5…93547c` |
-| **Current (`forage-contract` US-001, error vocabulary; contract still `1.1.0`)** | **`8b1b7f78…196d7c`** |
+| After the error vocabulary joined `contract.py` (`forage-contract` US-001; contract still `1.1.0`) | `8b1b7f78…196d7c` |
+| After the `SearxngProvider` extraction (`search-provider-abstraction` US-002) | `ee4450d9…f63c3da` |
+| After the `providers=` chain seam (`search-provider-abstraction` US-003) | `e7038672…3ce0cbf` |
+| After the contract bump to `1.2.0` (`search-provider-abstraction` US-004) | `b7871b20…ea6f2b` |
+| After free-first chain traversal (`search-fallback` US-001) | `55e2af1b…bf47e4` |
+| After fallback telemetry + provenance (`search-fallback` US-003) | `5249def6…89f24a` |
+| After failure-class discrimination (`search-fallback` US-002) | `f0b93318…70d62` |
+| After the per-request policy literal (`search-policy-and-health` US-010) | `dc3ff92a…eded9` |
+| **Current (`search-policy-and-health` US-003, completed 1.2.0 change record)** | **`41ac98ca…b4e318`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -246,6 +254,274 @@ installed on purpose, and a documentation pass that rotated the hash without flu
 the cache would be the broken outcome. Free in memory mode; one TTL of extra fetches in
 Valkey mode. Consumer-side is unchanged from the fourth and fifth rotations: Poppy
 re-extracts on next access, and spec 6 owns that transition.
+
+### The seventh rotation: the `SearxngProvider` extraction (`search-provider-abstraction` US-002, 2026-09-15)
+
+```
+before: 8b1b7f78e85f733ef3b8ace5194632a8cf92410131b2c1af995c456f20196d7c
+after:  ee4450d9202daae4f35799d3c0e2379dfcc1c04697cb98fa4a6cc7a4af63c3da
+```
+
+**Exactly one `_REVISION_SOURCES` file moved: `pipeline/orchestrator.py`.** That is a
+measurement, not an inference. The new `pipeline/search_providers/searxng.py` is not among
+the eight hashed filenames — `_REVISION_SOURCES` is an explicit tuple read relative to
+`pipeline/`, so it does not reach into the subpackage at all — and re-deriving with
+`orchestrator.py` reverted to its pre-story bytes while `searxng.py` stayed in place
+returned `8b1b7f78…196d7c` exactly.
+
+**What moved inside `orchestrator.py`.** The inline `httpx` block became a
+`SearxngProvider(searxng_url)` construction, a `provider.search(...)` call and a
+`ProviderFailure` → `PipelineError` mapping; `_DEFAULT_SEARXNG_URL` and `_SEARXNG_ENGINES`
+became aliases assigned from the now-public constants in the provider module; and
+`unresponsive_engines` gained a sixteen-entry cap with each entry passed through
+`_normalize_search_text(max_length=64)`. **No sanitization stage changed**, and the wire
+codes (`searxng_error`, `searxng_unavailable`) are byte-identical. Only the `reason` text
+narrowed: `str(exc)` is gone (ruling 13), the `searxng_error` reason names the status as
+`http_<code>`, and the endpoint echo is the userinfo-stripped scheme, host and port the
+provider computes once at construction.
+
+**Why the rotation was taken rather than avoided.** `orchestrator.py` is hashed because the
+per-result sanitization loop lives in it. Moving the SearXNG call out from beside that loop
+could not avoid touching the file the loop still occupies. The rotation is the price of the
+extraction, not evidence that sanitization behaviour changed — which is exactly what the
+attribution measurement above is for.
+
+**Blast radius.** The same mechanism as the fifth rotation: `cache_policy_fingerprint()`
+takes the revision as an input, so every extraction cached under `8b1b7f78…196d7c` becomes
+unreachable at the next start and ages out on its own TTL. Free in memory mode; one TTL of
+extra fetches in Valkey mode. Poppy re-extracts on next access; spec 6 owns that transition.
+**Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.
+
+### The eighth rotation: the `providers=` chain seam (`search-provider-abstraction` US-003, 2026-09-15)
+
+```
+before: ee4450d9202daae4f35799d3c0e2379dfcc1c04697cb98fa4a6cc7a4af63c3da
+after:  e70386726d4095d95bbd1dc839dfad28256244ed37c5dda8f46da39c53ce0cbf
+```
+
+**One `_REVISION_SOURCES` file moved again: `pipeline/orchestrator.py`.**
+`run_search_pipeline` gained a `providers: Sequence[SearchProvider] | None` keyword so the
+lifespan-resolved chain can be handed in, plus the `is None` / empty-sequence guard at the
+top of the function. `pipeline/search_providers/__init__.py`, which gained
+`parse_provider_names` / `build_provider_chain` / `SearchProviderConfigurationError` in the
+same story, is not a hashed filename — `_REVISION_SOURCES` is an explicit tuple read
+relative to `pipeline/` and never reaches into the subpackage — and neither is
+`retrieval_app.py`, which is not under `pipeline/` at all.
+
+**No sanitization behaviour changed.** The default path is byte-for-byte the previous one:
+`providers=None` builds `[SearxngProvider(searxng_url)]`, exactly what the function
+constructed unconditionally before. The hash moved because the hash is over bytes, as with
+the second rotation. Cache effect is the fifth rotation's mechanism unchanged: entries
+keyed on `ee4450d9…` become unreachable at the next start and age out on their own TTL —
+free in memory mode, one TTL of extra fetches in Valkey mode.
+
+### The ninth rotation: the contract bump to `1.2.0` (`search-provider-abstraction` US-004, 2026-09-15)
+
+```
+before: e70386726d4095d95bbd1dc839dfad28256244ed37c5dda8f46da39c53ce0cbf
+after:  b7871b204e4440b53938a8a0a5af519b57849cb5a68fb2afe6fbf3aa40ea6f2b
+```
+
+**Two `_REVISION_SOURCES` files moved, and both are load-bearing.** Measured the fifth
+rotation's way — re-derive with each edit reverted in turn, against a control that must
+reproduce the previous shipped value:
+
+| Tree | Derived |
+|---|---|
+| Both files as shipped (the rotation) | **`b7871b20…ea6f2b`** |
+| Only `contract.py` reverted | `d9d8843d…3e82da` |
+| Only `orchestrator.py` reverted | `89e987bf…0c6e75` |
+| Both reverted (control) | `e7038672…3ce0cbf` — the eighth rotation's shipped value |
+
+Neither file alone reproduces the rotation and the control lands exactly on the previous
+value, which is the proof that these two files and nothing else account for it.
+
+**What moved.** `pipeline/contract.py` gained the `ContentKind` Literal with its two
+constants and derived frozenset, took `search_unavailable` into `SearchErrorCode` (the
+nested Literals carry it into `Pipeline422ErrorCode` and `ErrorCode` in the same edit), and
+bumped `CONTRACT_VERSION` `1.1.0` → `1.2.0`. `pipeline/orchestrator.py` gained the
+chain-shaped failure predicate that chooses between the legacy `searxng_*` codes and
+`search_unavailable`, and copies `content_kind` off the batch and `date` off each raw dict
+onto every `SearchResult` it builds.
+
+`pipeline/search_providers/base.py` (which gained the `content_kind` field on
+`ProviderSearchResult`) and `searxng.py` (which gained `SEARXNG_PROVIDER_NAME`) are **not**
+hashed filenames — `_REVISION_SOURCES` is an explicit tuple read relative to `pipeline/`
+and never reaches into the subpackage — and `models.py`, which carries the two new wire
+fields, is not under `pipeline/` at all. That is measured above, not assumed: reverting the
+two hashed files alone is what returns the tree to `e7038672…`.
+
+**Sanitization behaviour is unchanged**; what changed is the wire shape the pipeline
+produces, which is what the contract bump records. Cache effect is the fifth rotation's
+mechanism unchanged: entries keyed on `e7038672…` become unreachable at the next start and
+age out on their own TTL — free in memory mode, one TTL of extra fetches in Valkey mode.
+This rotation is the *second* of the epic whose point is partly the invalidation: a cached
+extraction sanitized before the bump has no `content_kind` or `date`, and serving it beside
+a `1.2.0` response would be exactly the silent-mix the revision key exists to prevent.
+
+### The tenth rotation: chain traversal, free-first (`search-fallback` US-001, 2026-09-16)
+
+```
+before: b7871b204e4440b53938a8a0a5af519b57849cb5a68fb2afe6fbf3aa40ea6f2b
+after:  55e2af1bf2ce230b7d66b1f5548cb3e3b3259825be573e7373896eb443bf47e4
+```
+
+**Exactly one `_REVISION_SOURCES` file moved: `pipeline/orchestrator.py`.** Measured the
+same way as the seventh and eighth rotations: reverting `orchestrator.py` alone to its
+pre-story bytes reproduces `b7871b20…ea6f2b` exactly. `pipeline/contract.py`, `models.py`
+and every file under `pipeline/search_providers/` are untouched by this story.
+
+**What moved.** `run_search_pipeline` now traverses the resolved provider chain in order
+instead of calling only `chain[0]`: on a `ProviderFailure` (or an exception escaping
+`provider.search()`, treated as `hard_error` by an orchestrator-side catch-all) it logs one
+`search_provider_failed` WARNING, records a `"<name>: <failure_class>"` entry, and advances;
+the first `ProviderSearchResult` stops the loop and serves the request, replace-not-merge —
+nothing from a failed provider's call survives into the response. The exhausted-chain
+predicate, renamed `_is_legacy_searxng_chain` → `_legacy_searxng_codes` (no behaviour
+change — same name-token comparison on the same argument), now reads a new
+`configured_chain` keyword (defaulting to `providers`) so a future per-request policy filter
+can narrow `providers` without ever narrowing what the predicate sees. `_search_unavailable_error`
+now composes its reason from the full chain-order `provider_errors` list joined by `"; "`
+instead of a single failure.
+
+**No sanitization behaviour changed.** A one-provider chain — the default deployment —
+still makes exactly one `search()` call and produces byte-identical wire output; every
+pre-existing search test in `tests/test_orchestrator.py` passes unchanged. The rotation is
+the price of the loop now living beside the per-result sanitization code it precedes, not
+evidence that sanitization itself moved.
+
+**Blast radius.** The same mechanism as the fifth rotation: `cache_policy_fingerprint()`
+takes the revision as an input, so every extraction cached under `b7871b20…` becomes
+unreachable at the next start and ages out on its own TTL — free in memory mode, one TTL of
+extra fetches in Valkey mode. **Do not assume Poppy↔Forage revision parity** — compare
+contracts, not revisions.
+
+### The eleventh rotation: fallback telemetry + provenance (`search-fallback` US-003, 2026-09-16)
+
+```
+before: 55e2af1bf2ce230b7d66b1f5548cb3e3b3259825be573e7373896eb443bf47e4
+after:  5249def675524ca54946562beaf7fcb0d52080bde575b021ee94922d7689f24a
+```
+
+**Exactly one `_REVISION_SOURCES` file moved: `pipeline/orchestrator.py`.** Measured the
+same way as the seventh, eighth and tenth rotations: reverting `orchestrator.py` alone to
+its pre-story bytes reproduces `55e2af1b…bf47e4` exactly. `models.py` gained
+`SearchResult.domain` and `SearchResponse.provider_used` / `fallback_fired` /
+`provider_errors`, but `models.py` is not a `_REVISION_SOURCES` member (only files under
+`pipeline/` are hashed), so those additions do not move this hash on their own.
+
+**What moved.** `run_search_pipeline` now derives `SearchResult.domain` inside
+`_canonicalize_search_url` (widened to a three-tuple), populates the wire
+`provider_used` / `fallback_fired` / `provider_errors` fields on the response it returns,
+and increments two counters — `paid_calls` before every call to a `paid=True` provider,
+`fallback_fired` once per request when traversal first advances past the first provider —
+through a new orchestrator-side `SearchMetricsSink` Protocol threaded in as the
+`search_metrics` keyword parameter (a private null object when the caller supplies none).
+No sanitization behaviour changed: a one-provider chain still makes exactly one `search()`
+call and produces byte-identical `results` content; the new fields are provenance and
+counters layered on top of the unchanged sanitization path.
+
+**Blast radius.** The same mechanism as the fifth and tenth rotations:
+`cache_policy_fingerprint()` takes the revision as an input, so every extraction cached
+under `55e2af1b…` becomes unreachable at the next start and ages out on its own TTL — free
+in memory mode, one TTL of extra fetches in Valkey mode. Search results are never cached,
+so this rotation's own new fields have no cache-key exposure of their own. **Do not assume
+Poppy↔Forage revision parity** — compare contracts, not revisions.
+
+### The twelfth rotation: failure-class discrimination (`search-fallback` US-002, 2026-09-16)
+
+```
+before: 5249def675524ca54946562beaf7fcb0d52080bde575b021ee94922d7689f24a
+after:  f0b93318ecb03e6348481a42341a8a8b66f95b3ca601f9f60de3d6437cb70d62
+```
+
+**Exactly one `_REVISION_SOURCES` file moved: `pipeline/orchestrator.py`.** Measured the
+same way as the seventh, eighth, tenth and eleventh rotations: reverting `orchestrator.py`
+alone to its pre-story bytes reproduces `5249def6…89f24a` exactly. `models.py` and every
+file under `pipeline/search_providers/` are untouched by this story.
+
+**What moved.** `run_search_pipeline`'s traversal loop now classifies a
+`ProviderSearchResult` with zero raw results and a non-empty `unresponsive_engines` list as
+a failure — SearXNG's real production failure shape (`kit_tools/docs/GOTCHAS.md` "SearXNG
+`:latest` rots"), which answers 200 and never raises — recording it as
+`"<provider.name>: rate_limited"` and logging the existing `search_provider_failed` WARNING
+with `detail=unresponsive_engines`, exactly as a `ProviderFailure` already was. Sufficiency
+is judged on raw provider results before sanitization, so a poisoned or fail-closed result
+set that the sanitization loop later empties out is still a success and never advances the
+chain. The one carve-out: a configured chain of exactly one `searxng` provider
+(`_legacy_searxng_codes`) has nothing to fall back to, so that shape is served exactly as
+before this story instead of advancing — the existing `test_search_unresponsive_engines_forwarded`
+and `test_search_no_unresponsive_engines_empty_list` pass unchanged. No `config.yaml` key
+was added; no threshold is tunable.
+
+**Blast radius.** The same mechanism as the fifth, tenth and eleventh rotations:
+`cache_policy_fingerprint()` takes the revision as an input, so every extraction cached
+under `5249def6…` becomes unreachable at the next start and ages out on its own TTL — free
+in memory mode, one TTL of extra fetches in Valkey mode. Search results are never cached,
+so this rotation's classification logic has no cache-key exposure of its own. **Do not
+assume Poppy↔Forage revision parity** — compare contracts, not revisions.
+
+### The thirteenth rotation: the per-request policy literal (`search-policy-and-health` US-010, 2026-09-16)
+
+```
+before: f0b93318ecb03e6348481a42341a8a8b66f95b3ca601f9f60de3d6437cb70d62
+after:  dc3ff92a876885e8a8c1d9b0c5601818a6e4ccc208a87ab01f776482bf4eded9
+```
+
+**Exactly one `_REVISION_SOURCES` file moved: `pipeline/contract.py`.** Measured the same
+way as the seventh, eighth, tenth, eleventh and twelfth rotations: reverting
+`contract.py` alone to its pre-story bytes reproduces `f0b93318…70d62` exactly; the other
+seven `_REVISION_SOURCES` files are byte-identical (`git diff --stat` against all eight).
+`retrieval_app.py`, where the new 422 is actually raised, is not a `_REVISION_SOURCES`
+member — `_REVISION_SOURCES` names eight `pipeline/` files and nothing else — so the raise
+site itself moves nothing.
+
+**What moved.** `contract.py` gained `POLICY_EXCLUDED_ALL_PROVIDERS =
+"policy_excluded_all_providers"`, the fixed-literal `reason` the `/search` handler raises
+when `apply_request_policy` (`pipeline/search_providers/policy.py`, new in
+`search-policy-and-health` US-010) narrows the request's effective provider chain to empty
+before any provider is called. No
+sanitization behaviour changed; the wire `search_unavailable` code is unchanged, and this
+is a second, distinct `reason` value for it alongside the existing chain-order
+`<provider_name>: <failure_class>` form.
+
+**Blast radius.** The same mechanism as the fifth and every rotation since:
+`cache_policy_fingerprint()` takes the revision as an input, so every extraction cached
+under `f0b93318…` becomes unreachable at the next start and ages out on its own TTL — free
+in memory mode, one TTL of extra fetches in Valkey mode. Search results are never cached,
+so this rotation's new literal has no cache-key exposure of its own. **Do not assume
+Poppy↔Forage revision parity** — compare contracts, not revisions.
+
+### The fourteenth rotation: the completed 1.2.0 change record (`search-policy-and-health` US-003, 2026-09-16)
+
+```
+before: dc3ff92a876885e8a8c1d9b0c5601818a6e4ccc208a87ab01f776482bf4eded9
+after:  41ac98caf91572d06185ac0ce52e22ecec61c83c2a24ddd0bd8370e321b4e318
+```
+
+**Exactly one `_REVISION_SOURCES` file moved: `pipeline/contract.py`.** Measured the same
+way as the seventh, eighth, tenth, eleventh, twelfth and thirteenth rotations: reverting
+`contract.py` alone to its pre-story bytes reproduces `dc3ff92a…eded9` exactly; the other
+seven `_REVISION_SOURCES` files are untouched by this story. `retrieval_app.py` and
+`models.py`, where the new `/search`/`/retrieve` boundary text actually lives, are not
+`_REVISION_SOURCES` members.
+
+**What moved.** `contract.py`'s `CONTRACT_VERSION` docstring's `1.2.0` entry, left
+incomplete by `search-provider-abstraction` US-004, now names every wire addition the
+epic's specs 1-4 made — `SearchResult.domain`, `SearchResponse.provider_used` /
+`fallback_fired` / `provider_errors`, `SearchRequest.providers` / `allow_paid_fallback`,
+`HealthResponse.search_providers`, `capabilities`' `brave_api_key` key, and the three
+`/metrics` `search` counters — states that all are additive, and notes that this story's
+`/search`/`/retrieve` boundary-text edits to the route and model docstrings ride the same
+unpublished 1.2.0 window rather than counting as a separate PATCH. No sanitization
+behaviour changed and no wire byte moved; this is a documentation-only edit to a hashed
+file, the same shape as the sixth rotation.
+
+**Blast radius.** The same mechanism as the fifth and every rotation since:
+`cache_policy_fingerprint()` takes the revision as an input, so every extraction cached
+under `dc3ff92a…` becomes unreachable at the next start and ages out on its own TTL — free
+in memory mode, one TTL of extra fetches in Valkey mode. **Do not assume Poppy↔Forage
+revision parity** — compare contracts, not revisions.
 
 ## Deferred GitHub settings — for the spec 2 public flip
 

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Literal, get_args
 
-CONTRACT_VERSION = "1.1.0"
+CONTRACT_VERSION = "1.2.0"
 """The retrieval sidecar's wire-shape version, carried on ``/health``.
 
 Bump MAJOR when a field is removed/renamed or its semantics change; bump
@@ -30,6 +30,42 @@ MINOR when fields are only added.
   an additive field naming the storage the content cache selected at start
   (``feature-forage-cache-fallback`` US-003). Nothing was removed and no field
   changed meaning, so a consumer comparing MAJOR keeps working untouched.
+* ``1.2.0`` — ``/search``'s ``SearchResult`` gained ``content_kind``
+  (``"snippet"`` | ``"chunk"``, defaulted), ``date`` (a strict
+  ``YYYY-MM-DD`` calendar date or ``None``, defaulted) and ``domain`` (the
+  lower-cased hostname of ``url``, required); ``SearchResponse`` gained
+  ``provider_used`` (required — the serving provider's name),
+  ``fallback_fired`` (defaulted) and ``provider_errors`` (defaulted);
+  ``SearchRequest`` gained ``providers`` and ``allow_paid_fallback`` (both
+  defaulted — a restrict-only per-request policy over the configured
+  chain); ``HealthResponse`` gained ``search_providers`` (the resolved
+  chain's names, in traversal order) and its ``capabilities`` description
+  now names ``brave_api_key`` alongside ``search_sanitization``; and
+  ``search_unavailable`` joined the ``/search`` 422 vocabulary, naming an
+  exhausted provider chain — a new enum *member*, MINOR under
+  ``contract/GOVERNANCE.md`` ruling (b) and carrying that ruling's
+  announcement obligation. ``/metrics``'s ``search`` section gained three
+  counters — ``fallback_fired``, ``paid_calls`` and
+  ``policy_unknown_provider`` — pinned against the handler by
+  ``tests/test_contract_metrics.py`` rather than by the golden fixture.
+  Two ``/search`` refusal ``reason`` *texts* also narrowed in
+  ``search-provider-abstraction`` US-002 and ride this bump:
+  ``searxng_error`` now reads ``SearXNG returned HTTP error (http_<status>)``
+  and ``searxng_unavailable`` now reads ``SearXNG not reachable at
+  <scheme://host:port>: <detail>`` — no exception text, no userinfo — neither
+  changing a code, a status, or the body shape. Every addition above is
+  additive — a new field, a new enum member, or a new counter — so a
+  consumer comparing MAJOR keeps working untouched; nothing was removed and
+  no field changed meaning. The ``/search``/``/retrieve`` boundary text
+  written into both routes' descriptions and the
+  ``SearchRequest``/``RetrieveRequest`` model docstrings
+  (``search-policy-and-health`` US-003) landed inside this same unpublished
+  window and is not a separate PATCH: there is no vendored 1.2.0 copy yet to
+  re-vendor, so the description edits are subsumed by this unreleased
+  MINOR. This version is **held**: ``tests/golden/contract_1_2_0.json`` is
+  regenerated in place across ``search-provider-abstraction`` specs 2-4 and
+  every ``search-fallback``/``search-policy-and-health`` story that moved
+  this shape, until the ``v1.1.0`` image publishes it.
 
 This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy
@@ -83,6 +119,34 @@ OMISSION_REASONS = frozenset(
         OMIT_PROMPTGUARD_UNAVAILABLE,
     }
 )
+
+# ---------------------------------------------------------------------------
+# /search result content kind
+# ---------------------------------------------------------------------------
+
+ContentKind = Literal[
+    "snippet",
+    "chunk",
+]
+"""What kind of content one ``SearchResult`` carries (contract ``1.2.0``).
+
+``SearchResult.content_kind`` (``models.py``) is typed with this alias, so —
+like ``DegradedReason`` — it is a **response-validation gate** rather than
+documentation: a kind a provider invents that is not a member here fails
+FastAPI's response validation instead of reaching a consumer.
+
+``snippet`` is a search engine's own result summary (SearXNG's ``content``);
+``chunk`` is a passage a provider extracted from the page itself. The
+distinction is the consumer's, not the pipeline's: both kinds traverse the
+same sanitization loop under the same length bound. The set is closed at
+``1.2.0`` — ``chunk`` is declared here before it has a producer precisely so
+that the first provider to emit one is not a contract change.
+"""
+
+CONTENT_KIND_SNIPPET: ContentKind = "snippet"
+CONTENT_KIND_CHUNK: ContentKind = "chunk"
+
+CONTENT_KINDS = frozenset(get_args(ContentKind))
 
 # ---------------------------------------------------------------------------
 # Quarantine diagnostics
@@ -197,8 +261,19 @@ RETRIEVE_ERROR_CODES = frozenset(get_args(RetrieveErrorCode))
 SearchErrorCode = Literal[
     "searxng_error",
     "searxng_unavailable",
+    "search_unavailable",
 ]
-"""``POST /search`` upstream failure codes (all 422)."""
+"""``POST /search`` upstream failure codes (all 422).
+
+The two ``searxng_*`` codes are the legacy pair, and they are now
+*chain-shaped* rather than provider-shaped: ``orchestrator`` raises them only
+when the configured chain is exactly one provider named ``searxng``, which is
+the default deployment and the only one that existed before the
+``SearchProvider`` seam. ``search_unavailable`` (contract ``1.2.0``) is the
+general code for every other chain — its ``reason`` is the closed
+``"<provider_name>: <failure_class>"`` composition, never a URL and never
+exception text.
+"""
 
 SEARCH_ERROR_CODES = frozenset(get_args(SearchErrorCode))
 
@@ -222,10 +297,10 @@ ErrorCode = Literal[
     ExtractErrorCode,
     Pipeline422ErrorCode,
 ]
-"""Every error code the service can put on the wire — seventeen, deduplicated.
+"""Every error code the service can put on the wire — eighteen, deduplicated.
 
 Ten ``/extract`` codes, plus the five ``/retrieve``-only refusals
-(``content_too_large`` is shared), plus the two ``/search`` codes.
+(``content_too_large`` is shared), plus the three ``/search`` codes.
 """
 
 ERROR_CODES = frozenset(get_args(ErrorCode))
@@ -235,3 +310,18 @@ ERROR_CODES = frozenset(get_args(ErrorCode))
 # ---------------------------------------------------------------------------
 
 METRICS_OTHER_BUCKET = "other"
+
+# ---------------------------------------------------------------------------
+# /search per-request policy
+# ---------------------------------------------------------------------------
+
+POLICY_EXCLUDED_ALL_PROVIDERS = "policy_excluded_all_providers"
+"""The ``search_unavailable`` ``reason`` when per-request policy narrows the
+effective provider chain to nothing (``search-policy-and-health`` US-010).
+
+``search_unavailable``'s reason takes exactly two shapes: the chain-order
+``"<provider>: <failure_class>"`` list ``orchestrator.py`` composes on an
+exhausted chain, or this fixed literal, raised by ``retrieval_app.py`` before
+``run_search_pipeline`` is ever called, when a request's own ``providers`` /
+``allow_paid_fallback`` policy excludes every provider the deployment
+configured. Never a mix of the two."""

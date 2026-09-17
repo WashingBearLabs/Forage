@@ -26,6 +26,17 @@ design:
 | `POST /retrieve` | none |
 | `POST /extract` | none (and gated off by default — see `extract_route_enabled`) |
 
+`/search` finds and returns provider-extracted content for a query across sources —
+snippets or chunks, per result `content_kind` — from the configured provider chain, every
+result sanitized, never cached; `/retrieve` fetches and sanitizes one caller-named URL
+through the full pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` is
+honoured on both routes; `/retrieve` additionally honours `promptguard_threshold`,
+`trusted_domains`, `verified_domains`, `blocked_domains` and `cache_ttl_hours`, while
+`/search` additionally honours `providers` and `allow_paid_fallback` (contract 1.2.0) and
+scans every result at the fixed 0.85 default at trust tier `standard` (`config.yaml`'s
+`promptguard_threshold` is not applied on this route). This documents today's divergence;
+changing it belongs to `epic-forage-hardening`.
+
 **And so are the three documentation endpoints FastAPI serves alongside them** — easy to
 forget, because nothing in this repo declares them:
 
@@ -67,6 +78,12 @@ Consequences you must design around:
   mesh, or the consuming service itself). Forage will not grow it: adding a half-auth
   layer would invite exactly the "it's protected" assumption this section exists to
   prevent.
+- **A configured paid key raises the stakes.** With `FORAGE_BRAVE_API_KEY` set and
+  `brave` in `FORAGE_SEARCH_PROVIDERS`, anyone who can reach port 8020 can spend the
+  operator's money on Brave queries — Forage enforces no budget cap. Network placement and a front-side proxy or rate limit are your
+  controls; `/health` discloses key presence (`capabilities.brave_api_key`) to anyone who
+  can reach it. `/metrics` `search.paid_calls` and `search.fallback_fired` are how spend
+  is seen.
 
 The bundled SearXNG configuration (`searxng/config/`) makes the same assumption: its
 rate limiter is off and its `secret_key` is a non-secret placeholder, because that
@@ -82,6 +99,8 @@ instance is private-network-only and Forage is its only client.
 |----------|---------|---------|
 | `VALKEY_URL` | **unset** — the content cache runs in memory | Connection string for the Valkey/Redis content cache. Standard `redis://` URL, including the database index. Setting it selects the Valkey backend; leaving it unset selects the bounded in-memory one. **May carry a password — see credential handling below.** |
 | `SEARXNG_URL` | `http://searxng:8080` | Base URL of the SearXNG instance backing `POST /search`. |
+| `FORAGE_SEARCH_PROVIDERS` | `searxng` | Ordered, comma-separated chain of search backends `POST /search` resolves at container start. Known names are `searxng` and `brave`; **any entry other than `searxng` sends the caller's query to that provider**, so add one only if you mean to. An unknown name refuses the boot (the resolved names are in the startup log); a set-but-blank value logs a WARNING and resolves to the default. Read once at start — restart to apply. |
+| `FORAGE_BRAVE_API_KEY` | unset | API key for Brave's paid LLM-Context search endpoint. **Carries a credential** — supply it the same way as `VALKEY_URL`, with `--env-file` or an explicit `environment:` entry until spec 5 US-004 adds the compose passthrough. With it set, a `brave` entry in `FORAGE_SEARCH_PROVIDERS` sends the caller's query text — whatever the calling agent put in it, truncated to `search_brave_query_max_chars` — to Brave's API under the operator's account and terms; the call needs direct HTTPS egress and ignores proxy variables by design. A key-less `brave` entry is skipped (WARNING `brave_skipped_missing_key`) rather than refusing the boot, and a chain where every entry was skipped this way falls back to SearXNG alone (a second WARNING, `search_chain_defaulted_to_searxng`, marks the substitution): **no key means SearXNG-only, fully supported.** Read once at start — restart to apply. |
 | `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION` | unset | **Break-glass only** — see below. |
 | `POPPY_RETRIEVAL_LEGACY_CAPABILITY` | unset | Deprecated alias of `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION`, kept so a pre-extraction deployment keeps working. Identical semantics. |
 | `HF_HOME` | `/app/model-cache` (set by the image) | Hugging Face cache directory the PromptGuard weights are fetched into and read from. Override only if you mount the weights elsewhere. Mount a volume here or the weights are re-fetched on every container recreate. |
@@ -91,10 +110,14 @@ instance is private-network-only and Forage is its only client.
 | `FORAGE_MIRROR_TOKEN` | unset | Registry credential for `FORAGE_WEIGHTS_MIRROR`. Optional — without it the mirror is skipped exactly as a missing `HF_TOKEN` skips Hugging Face. **Carries a credential**; supply it the same way as `VALKEY_URL`. A **read-only** token, scoped as narrowly as your registry allows — see `docs/weights.md` § "The mirror read token". |
 
 `SEARXNG_URL`'s default is a deliberately neutral service name — it assumes a compose
-network with a service literally called `searxng`, and nothing more. If SearXNG is not
-reachable, Forage still starts and reports itself `degraded` rather than refusing to
-boot; the same is true of a missing PromptGuard (`promptguard_unavailable` on any
-token-less build).
+network with a service literally called `searxng`, and nothing more. On the default
+chain an unreachable SearXNG surfaces per request as a `/search` 422
+(`searxng_unavailable`), never as a `degraded_reasons` value — `/health` never probes
+SearXNG. Provider *status* is instead
+the `search_providers` field on `/health`: the resolved chain's names, a configuration
+echo rather than a liveness probe. A missing PromptGuard (`promptguard_unavailable`) or a
+configured-but-unreachable Valkey (`cache_unavailable`, see the table below) is what
+degrades the service.
 
 ### Cache backend selection
 
@@ -174,6 +197,65 @@ Do your half:
 - Rotating the password means restarting the container — the URL is read once per start,
   when the cache backend is selected.
 
+### Credential handling for `FORAGE_BRAVE_API_KEY`
+
+`FORAGE_BRAVE_API_KEY` is another variable that carries a secret, and the generic
+mechanics match `VALKEY_URL` above — that subsection is the fuller treatment; this one
+spends its length on what is Brave-specific.
+
+- **Runtime container environment only.** The key reaches Forage through the running
+  container's environment and nowhere else; Forage reads no secret store at boot.
+- **Never a build argument.** `Dockerfile` takes no build arguments at all (`CLAUDE.md`
+  invariant 2), so a `--build-arg FORAGE_BRAVE_API_KEY=…` attempt is the exact leak shape
+  the repo went private over: a build argument is recorded in the image's layer history,
+  where `docker history --no-trunc` reads it straight back out of any registry the image
+  reaches.
+- **Supply it through `compose/.env` (git-ignored) or a secret store, never an inline `-e`
+  flag** — the same shell-history and `ps` exposure as for `VALKEY_URL`, and `docker
+  inspect` shows it to anyone who can reach the Docker socket either way.
+- **Forage never logs the value, and `/health` shows presence only** — the
+  `capabilities.brave_api_key` entry (ruling 15), never the key and never its validity.
+- **Rotating the key is a restart.** It is read once, in the lifespan, so a new value
+  takes effect only when the container starts again.
+- **A leaked key is metered spend with no cap in Forage.** Brave bills per query with no
+  free tier ($5/1,000), and Forage enforces no spend ceiling (see "Consequences you must
+  design around" above) — whoever holds a leaked key spends on your account until you
+  revoke it with Brave.
+
+**Enablement is two variables.** `FORAGE_BRAVE_API_KEY` alone changes nothing about
+`/search`: the default chain is `searxng`, so the key takes effect only once `brave` is
+also named in `FORAGE_SEARCH_PROVIDERS` — `FORAGE_SEARCH_PROVIDERS=searxng,brave` plus
+`FORAGE_BRAVE_API_KEY=example-not-a-real-key` in the same env file. No key configured
+means **SearXNG-only**: fully supported, no error, no new required secret.
+
+**Data flow.** Forage sends the caller's verbatim query text (truncated to
+`search_brave_query_max_chars`), under the operator's account, to exactly one outbound
+host, `api.search.brave.com` — a fixed constant endpoint with no operator override, so an
+egress allowlist needs that host and no other for Brave traffic. What comes back is
+chunks (`content_kind: "chunk"`) that enter the unchanged sanitization pipeline; nothing
+paid is retained, and `/search` has never been cached (see "Consequences of memory mode"
+above). The key-less floor adds no outbound destination beyond the self-hosted SearXNG
+and its configured engines.
+
+**Per-provider ToS — a constraint on consumers, not a Forage cache.** Forage persists no
+search result from any provider; these terms govern what a downstream consumer of
+`/search` may keep. SearXNG-served results carry no persistence restriction. Brave
+forbids persisting or redistributing result payloads, so Forage's own telemetry stores
+metadata only — never a result body (decision 6) — and a consumer that stores Brave-served
+results is bound by Brave's terms, not Forage's.
+
+**Presence, not validity.** `capabilities.brave_api_key` reports presence, not validity: a
+rejected, expired or unentitled key never changes `/health` and surfaces only per request,
+as a `brave: <failure_class>` entry drawn from the closed failure-class vocabulary
+(`rate_limited`, `timeout`, `hard_error`, `auth`, `quota`). When every provider in the
+chain failed, the entries appear in the 422 `search_unavailable` error's `reason`
+(e.g. `searxng: rate_limited; brave: auth`); when a later provider served, they appear in
+the successful response's `provider_errors`. Brave maps a `401`/`403` to `auth`, and maps
+plan exhaustion to `rate_limited`, because Brave answers it with the same `429` as a
+per-second limit; `quota` is a class in the vocabulary that Brave does not emit today. The
+per-class diagnosis is in
+[`kit_tools/docs/TROUBLESHOOTING.md`](../kit_tools/docs/TROUBLESHOOTING.md).
+
 ### Break-glass: the sanitization-advertisement override
 
 `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION` (or its deprecated alias
@@ -186,8 +268,9 @@ classifier is not loaded.
   There is deliberately no truthiness parsing — a typo must fail safe.
 - **It fires a loud warning on every boot**, naming whichever variable actually armed
   it, so an operator reading the log knows which one to unset.
-- **Only `capabilities` lies.** `status`, `degraded_reasons`, and `promptguard_loaded`
-  stay honest — a Forage running with the override still reports itself `degraded` with
+- **Only `capabilities.search_sanitization` lies.** `status`, `degraded_reasons`,
+  `promptguard_loaded`, `search_providers`, and `capabilities.brave_api_key` all stay
+  honest — a Forage running with the override still reports itself `degraded` with
   `promptguard_unavailable`.
 
 > **Caveat — this is a break-glass switch, not a configuration option.**
@@ -353,6 +436,9 @@ that file sets, which is not always the code default.
 | `seed_blocklist` | list of strings | `[]` | `[]` | Domains merged into every request's `blocked_domains` before URL validation — a permanent, deployment-wide deny list. |
 | `promptguard_threshold` | float | `0.85` | `0.85` | Injection score at or above which stage 3 marks content as injected. Also feeds the `sanitizer_revision` hash, so changing it changes that value by design. |
 | `extract_route_enabled` | boolean | `false` | `false` | Release gate for `POST /extract`. While `false` the route returns **404** — it is invisible, not merely refused. Requires a restart to take effect. Remember there is no authentication in front of it. |
+| `search_brave_timeout_seconds` | float | `15.0` | `15.0` | Per-request timeout for the Brave LLM-Context HTTP call. This is `/search`'s worst-case latency on a Brave-only chain until spec 3's fallback exists. Out of range (1.0 to 60.0) or wrong-typed refuses boot. A caller's `/search` timeout must exceed the sum of the configured chain's per-provider timeouts — 10 s + this value for `searxng,brave` — so lower this value rather than raising the caller's. |
+| `search_brave_chunk_max_chars` | integer | `2000` | `2000` | Cap on each Brave result's extracted-chunk text before it reaches sanitization. Out of range (200 to 2000) or wrong-typed refuses boot. |
+| `search_brave_query_max_chars` | integer | `400` | `400` | Cap on the outbound query text sent to Brave. Out of range (50 to 400) or wrong-typed refuses boot. |
 | `cache` | mapping | `{}` (all defaults) | both keys at their defaults | Bounds for the bounded in-memory content-cache storage — see below. |
 | `extraction` | mapping | `{}` (all defaults) | all keys set to their maxima | Resource limits for untrusted document extraction — see below. |
 
@@ -454,6 +540,7 @@ curl -s localhost:8020/health | jq
 | `promptguard_loaded` | Always honest, even with the break-glass override set. |
 | `cache_connected` | "The selected backend is operational." A live ping in Valkey mode, subject to reconnect backoff; always `true` in memory mode, where there is no connection to lose. It is **not** a statement that Valkey is present — read `cache_backend` for that. |
 | `cache_backend` | `valkey` or `memory` — which storage the content cache selected at start, decided once from `VALKEY_URL` and fixed for the life of the process. Added in contract `1.1.0`. This is the field that separates "healthily in memory mode" from "silently lost its Valkey"; `cache_connected` alone reports `true` for both. |
+| `search_providers` | The resolved search-provider chain's names, in traversal order, after key-gated skips — e.g. `["searxng"]` or `["searxng", "brave"]`. Configuration echo fixed for the life of the process, not a liveness probe. Added in contract `1.2.0`. |
 | `sanitizer_revision` | Opaque hash of the sanitization sources, the model identity, and `promptguard_threshold`. Changes when sanitization behaviour changes. |
 | `contract_version` | Response-contract version. Consumers should refuse to activate on a mismatch rather than guess. |
 

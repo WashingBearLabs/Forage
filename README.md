@@ -20,6 +20,12 @@ agent's own security layer owns every trust decision. Treat Forage's output as
 > Forage is a good server-side-request-forgery target by nature: making outbound requests
 > is its job. It defends itself (RFC1918 rejection, DNS-rebinding checks, redirect
 > auditing), but network placement is your first control, not its.
+>
+> **A configured paid key raises the stakes.** With `FORAGE_BRAVE_API_KEY` set and `brave`
+> in the provider chain, anyone who can reach the port can spend the operator's money on
+> Brave queries — Forage enforces no budget cap. Network placement and a front-side proxy or rate limit are your controls;
+> `/health` discloses key presence to anyone who can reach it, and `/metrics`
+> `search.paid_calls` / `search.fallback_fired` are how spend is seen.
 
 ## Why "Forage"?
 
@@ -47,13 +53,13 @@ the numbering follows the sanitization order the contract reports.
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /health` | Always 200. Body carries `status` (`healthy`/`degraded`), `degraded_reasons`, `promptguard_loaded`, `cache_connected`, `cache_backend`, `sanitizer_revision`, `contract_version`. **Check the body, not the status code.** |
+| `GET /health` | Always 200. Body carries `status` (`healthy`/`degraded`), `degraded_reasons`, `promptguard_loaded`, `cache_connected`, `cache_backend`, `search_providers`, `sanitizer_revision`, `contract_version`. **Check the body, not the status code.** |
 | `GET /metrics` | Extraction, search, retrieve, and cache counters. |
-| `POST /search` | Search via SearXNG, with every result run through the pipeline. |
-| `POST /retrieve` | Fetch and sanitize a single URL. |
+| `POST /search` | Finds and returns provider-extracted content for a query across sources — snippets or chunks, per result `content_kind` — from the configured provider chain, every result sanitized, never cached. Honours `promptguard_fail_closed` (shared with `/retrieve`) and additionally `providers` and `allow_paid_fallback`; every result is scanned at the fixed 0.85 default at trust tier `standard` (`config.yaml`'s `promptguard_threshold` is not applied here). |
+| `POST /retrieve` | Fetches and sanitizes one caller-named URL through the full pipeline, cached by `sanitizer_revision`. Honours `promptguard_fail_closed` (shared with `/search`) and additionally `promptguard_threshold`, `trusted_domains`, `verified_domains`, `blocked_domains` and `cache_ttl_hours`. |
 | `POST /extract` | Extract from an uploaded document (gated behind `extract_route_enabled` in `config.yaml`). |
 
-The response contract is versioned (`contract_version`, currently **1.1.0**). Consumers
+The response contract is versioned (`contract_version`, currently **1.2.0**). Consumers
 should refuse to activate on a mismatch rather than guess.
 
 ## Quickstart
@@ -94,9 +100,13 @@ compose network with a service literally called `searxng` needs neither.
 
 ### The two cache modes
 
-Forage wants one companion and can use a second. **SearXNG** backs `/search`: without it
-Forage starts and reports itself `degraded`. **Valkey/Redis** backs the content cache and
-is genuinely optional — which mode you are in is `cache_backend` in `/health`:
+Forage wants one companion and can use a second. **SearXNG** backs `/search`: on the
+default chain an unreachable SearXNG surfaces per request as a `/search` 422
+(`searxng_unavailable`), never as a `degraded_reasons` value — `/health`'s
+`search_providers` field is the resolved chain's names, a configuration echo, not a
+liveness probe. **Valkey/Redis** backs the
+content cache and is genuinely optional — which mode you are in is `cache_backend` in
+`/health`:
 
 | | Memory mode | Valkey mode |
 |---|---|---|
@@ -138,6 +148,23 @@ runtime API, and no config database.
   is a configured Valkey that reports `cache_unavailable`. Supply it through an env file
   or your secret store, not an inline `-e` flag (shell history).
 - `SEARXNG_URL` (default `http://searxng:8080`) — SearXNG base URL for `/search`.
+- `FORAGE_SEARCH_PROVIDERS` (default `searxng`) — ordered, comma-separated chain of search
+  backends `POST /search` resolves once at container start; no `config.yaml` key.
+  `FORAGE_SEARCH_PROVIDERS=searxng,brave` tries SearXNG first and falls back to Brave.
+- `FORAGE_BRAVE_API_KEY` (unset by default) — API key for Brave's paid LLM-Context
+  (chunks) endpoint, under a per-provider name with no generic alias. The key alone
+  changes nothing about `/search`: enabling Brave takes both variables,
+  `FORAGE_SEARCH_PROVIDERS=searxng,brave` plus `FORAGE_BRAVE_API_KEY`. No key configured
+  means **SearXNG-only**, and a deployment with no key is fully supported — no error, no
+  new required secret. With Brave enabled, what Forage sends is the caller's verbatim query
+  text, under your account, to `api.search.brave.com` — the one outbound host an egress
+  allowlist needs for it. Brave has no free tier ($5/1,000 queries). Forage caches no
+  search result from any provider; the providers' terms bind what a consumer of `/search`
+  may keep, and Brave forbids persisting or redistributing result payloads, so Forage's
+  own telemetry stores metadata only (SearXNG-served results carry no such restriction).
+  Runtime environment only, never a build argument — see
+  [Credential handling for `FORAGE_BRAVE_API_KEY`](docs/configuration.md#credential-handling-for-forage_brave_api_key)
+  for the full credential, data-flow and spend posture.
 - `config.yaml` — user-agent pool, news-domain trust list, seed blocklist, PromptGuard
   threshold, the `extract_route_enabled` gate, and the `extraction:` resource limits.
 - SearXNG's own settings are baked into the companion image built from `searxng/`
@@ -227,7 +254,8 @@ no client-header trust) — behind its own hermetic cross-container smoke.
 [`docs/searxng.md`](docs/searxng.md) has the runbook. **The repository and both packages
 went public at the 2026-09-10 US-008 flip**; anonymous pulls verified at the gate.
 
-The optional in-memory cache shipped with contract `1.1.0`, and the **frozen OpenAPI
+The optional in-memory cache shipped with contract `1.1.0` (the current contract is
+`1.2.0`), and the **frozen OpenAPI
 contract** is in the tree: [`contract/openapi.yaml`](contract/openapi.yaml), generated and
 checked against a committed `openapi.yaml.sha256` anchor, with the versioning rules — what
 counts as MAJOR, MINOR, PATCH or no bump, and how to vendor a verified copy — in
@@ -235,7 +263,8 @@ counts as MAJOR, MINOR, PATCH or no bump, and how to vendor a verified copy — 
 tag, the assets on every `v*` Release, and `/app/contract/openapi.yaml` inside the image
 (`docker run --rm --entrypoint cat <image> /app/contract/openapi.yaml`) — all verified
 against that one committed anchor, two of them by CI on every release. The first
-non-pre-release tag, `v1.0.0`, is the next step.
+non-pre-release tag, `v1.0.0`, shipped 2026-09-12; [`docs/releases.md`](docs/releases.md)
+is the reference for the current release and the tag scheme.
 
 **Security reports** go through GitHub private vulnerability reporting; the policy, the
 supported-versions rule and what is and is not in scope are in

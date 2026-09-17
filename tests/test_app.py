@@ -8,8 +8,8 @@ import logging
 import tempfile
 import threading
 import time
-from collections.abc import AsyncGenerator, Callable
-from contextlib import ExitStack, asynccontextmanager
+from collections.abc import AsyncGenerator, Callable, Generator
+from contextlib import ExitStack, asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -52,6 +52,14 @@ from pipeline.extraction_limits import (
     extraction_settings_from_config,
 )
 from pipeline.orchestrator import PipelineError
+from pipeline.search_providers import SearchProviderConfigurationError
+from pipeline.search_providers.base import (
+    ProviderFailure,
+    ProviderSearchResult,
+    SearchProvider,
+)
+from pipeline.search_providers.brave import BRAVE_API_KEY_ENV_VAR
+from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL
 from promptguard.classifier import (
     CHUNK_OVERLAP,
     MAX_SEQ_LEN,
@@ -71,6 +79,8 @@ from retrieval_app import (
 )
 from tests.fakes import (
     FakeContentCache,
+    FakeSearchProvider,
+    FakeStorage,
     hub_download_double,
     weights_manifest_document,
 )
@@ -474,6 +484,9 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "errors": {},
         "omitted_by_reason": {},
         "unscanned_results": 0,
+        "fallback_fired": 0,
+        "paid_calls": 0,
+        "policy_unknown_provider": 0,
     }
     assert body["retrieve"] == {
         "requests": 0,
@@ -663,6 +676,7 @@ async def test_metrics_search_records_omitted_and_unscanned_from_response(
         results=[],
         request_id="s1",
         query="test",
+        provider_used="searxng",
         omitted_results=1,
         omitted_by_reason={contract.OMIT_INVALID_URL: 1},
         unscanned_results=2,
@@ -688,6 +702,7 @@ async def test_metrics_search_omitted_by_reason_unknown_key_buckets_to_other(
         results=[],
         request_id="s2",
         query="test",
+        provider_used="searxng",
         omitted_by_reason={"unexpected_reason": 1},
     )
     with patch(
@@ -709,9 +724,13 @@ async def test_metrics_search_error_keys_are_content_free(
     # the "searxng_unavailable" error key, so the leak check needs a token that
     # only the URL can produce.
     searxng_url = "http://searxng:8080"
+    # The `reason` format US-002 narrowed to: an origin plus a closed detail
+    # token, never `str(exc)`. Written out by hand here because this test
+    # patches `run_search_pipeline` away — so if the real composition changes
+    # again, this fixture is what has to be brought back into step with it.
     exc = PipelineError(
         error="searxng_unavailable",
-        reason=f"SearXNG not reachable at {searxng_url}: Connection refused",
+        reason=f"SearXNG not reachable at {searxng_url}: connect_error",
         request_id="s3",
     )
     with patch("retrieval_app.run_search_pipeline", new=AsyncMock(side_effect=exc)):
@@ -724,6 +743,33 @@ async def test_metrics_search_error_keys_are_content_free(
     assert body["search"]["errors"] == {"searxng_unavailable": 1}
     assert body["search"]["requests"] == 1
     assert searxng_url not in json.dumps(body)
+
+
+async def test_metrics_counts_search_unavailable_under_its_own_key(
+    client: httpx.AsyncClient,
+) -> None:
+    """The 1.2.0 code reaches `/metrics` as itself, not as an overflow bucket.
+
+    `SearchMetrics.record_error` keys straight off `PipelineError.error` with
+    no closed-set filter, so a code added to the vocabulary is counted under
+    its own name today. This pins that: a filter introduced later — or a
+    mapping that folded the new code into the legacy pair — would fail here
+    rather than quietly changing what an operator's dashboard sums.
+    """
+    exc = PipelineError(
+        error="search_unavailable",
+        reason="brave: quota",
+        request_id="s4",
+    )
+    with patch("retrieval_app.run_search_pipeline", new=AsyncMock(side_effect=exc)):
+        resp = await client.post("/search", json={"query": "test"})
+    assert resp.status_code == 422
+    assert resp.json()["error"] == "search_unavailable"
+
+    metrics_resp = await client.get("/metrics")
+    body = metrics_resp.json()
+    assert body["search"]["errors"] == {"search_unavailable": 1}
+    assert body["search"]["requests"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1566,4 +1612,1056 @@ async def test_the_lifespan_publishes_the_backend_it_selected(
         monkeypatch.setenv("VALKEY_URL", _WORKING_VALKEY_URL)
         data = (await client.get("/health")).json()
 
+    assert data["cache_backend"] == "memory"
+
+
+# ---------------------------------------------------------------------------
+# Search-provider chain from the environment (`search-provider-abstraction`
+# US-003)
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _borrowed_search_providers(
+    chain: list[SearchProvider] | None,
+) -> Generator[None, None, None]:
+    """Put *chain* on the module singleton and put the old value back.
+
+    The save/`delattr`/`finally`-restore idiom (ruling 26d): these tests share
+    one `app` object with every other test in the suite, and a chain left
+    behind would silently serve the neighbouring `/search` tests that expect
+    the real `SearxngProvider`. `None` is a real published value here — the
+    module-scope sentinel — so "absent" is restored with `delattr`, not by
+    assigning `None`.
+
+    Carries `search_key_capabilities` along for the same reason (US-002):
+    the lifespan always publishes the two together, so a real-lifespan test
+    borrowing this context and then restoring only the chain would leak the
+    capability tuple into whichever test runs next. Callers that only care
+    about the chain get `()` for free while borrowed.
+    """
+    had_attr = hasattr(app.state, "search_providers")
+    published = getattr(app.state, "search_providers", None)
+    had_capabilities_attr = hasattr(app.state, "search_key_capabilities")
+    published_capabilities = getattr(app.state, "search_key_capabilities", None)
+    app.state.search_providers = chain
+    app.state.search_key_capabilities = ()
+    try:
+        yield
+    finally:
+        if had_attr:
+            app.state.search_providers = published
+        else:
+            delattr(app.state, "search_providers")
+        if had_capabilities_attr:
+            app.state.search_key_capabilities = published_capabilities
+        else:
+            delattr(app.state, "search_key_capabilities")
+
+
+def test_the_searxng_url_default_is_the_providers_own_literal() -> None:
+    """One copy of the default in the repo, read through the provider module."""
+    assert retrieval_app.SEARXNG_URL == DEFAULT_SEARXNG_URL
+
+
+def test_the_env_var_name_is_the_one_read_site() -> None:
+    assert retrieval_app.SEARCH_PROVIDERS_ENV_VAR == "FORAGE_SEARCH_PROVIDERS"
+
+
+def test_configured_provider_names_defaults_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FORAGE_SEARCH_PROVIDERS", raising=False)
+
+    assert retrieval_app._configured_provider_names() == ["searxng"]
+
+
+def test_configured_provider_names_reads_the_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", " SearXNG , searxng,")
+
+    assert retrieval_app._configured_provider_names() == ["searxng"]
+
+
+def test_a_set_but_blank_variable_warns_and_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Set-but-blank is a silent substitution unless the log says otherwise."""
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", " , ")
+
+    with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+        names = retrieval_app._configured_provider_names()
+
+    assert names == ["searxng"]
+    assert "search_providers_blank" in caplog.text
+
+
+def test_an_unset_variable_does_not_warn(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.delenv("FORAGE_SEARCH_PROVIDERS", raising=False)
+
+    with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+        retrieval_app._configured_provider_names()
+
+    assert "search_providers_blank" not in caplog.text
+
+
+async def test_lifespan_publishes_the_resolved_chain_and_logs_its_names(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The chain objects reach `app.state`, and only their names reach the log."""
+    _park_the_retry(monkeypatch)
+    monkeypatch.delenv("FORAGE_SEARCH_PROVIDERS", raising=False)
+
+    with (
+        _borrowed_search_providers(None),
+        caplog.at_level(logging.INFO, logger="retrieval_app"),
+    ):
+        async with _running_app():
+            chain = cast("list[SearchProvider]", app.state.search_providers)
+
+            assert [provider.name for provider in chain] == ["searxng"]
+            assert chain[0].origin == retrieval_app.SEARXNG_URL
+
+    assert "Search providers resolved: searxng" in caplog.text
+
+
+async def test_lifespan_refuses_to_boot_on_an_unknown_provider_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unknown name fails the boot, and the message redacts the token.
+
+    Driven against a throwaway `probe_app` (the `CacheConfigurationError`
+    precedent above), never the module-global one: a lifespan that raises
+    part-way through would otherwise leave the shared app half-configured.
+    """
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng,nope\nINFO: fake line")
+
+    probe_app = FastAPI()
+    with pytest.raises(SearchProviderConfigurationError) as exc_info:
+        async with lifespan(probe_app):
+            pass
+
+    message = str(exc_info.value)
+    assert "FORAGE_SEARCH_PROVIDERS" in message
+    assert "entry 2" in message
+    assert "searxng" in message
+    assert "nope" not in message
+    assert "fake line" not in message
+    assert "\n" not in message
+    assert not hasattr(probe_app.state, "search_providers")
+
+
+def test_the_module_scope_sentinel_is_none_not_a_chain() -> None:
+    """The attribute exists for a transport that never fires lifespan events."""
+    source = Path(retrieval_app.__file__).read_text()
+
+    assert "app.state.search_providers = None" in source
+
+
+def test_the_fallback_is_a_one_element_searxng_chain() -> None:
+    """With the sentinel in place, `_resolved_search_providers` is still total.
+
+    Read through the protocol only — no `isinstance`, no `base_url` — because
+    the seam is what every consumer of `app.state.search_providers` gets.
+    """
+    with _borrowed_search_providers(None):
+        chain = retrieval_app._resolved_search_providers(app.state)
+
+    assert len(chain) == 1
+    assert chain[0].name == "searxng"
+    assert chain[0].origin == "http://searxng:8080"
+
+
+def test_the_fallback_returns_a_published_chain_untouched() -> None:
+    fake = FakeSearchProvider(name="fake")
+
+    with _borrowed_search_providers([fake]):
+        chain = retrieval_app._resolved_search_providers(app.state)
+
+    assert chain == [fake]
+
+
+async def test_post_search_serves_through_the_published_chain(
+    client: httpx.AsyncClient,
+) -> None:
+    """A fake chain on the lifespan-free client really serves `/search`."""
+    fake = FakeSearchProvider(
+        name="fake",
+        outcome=ProviderSearchResult(
+            provider_name="fake",
+            results=[
+                {
+                    "title": "Fake",
+                    "url": "https://example.com/fake",
+                    "content": "From the fake chain.",
+                    "engine": "fake-engine",
+                }
+            ],
+            unresponsive_engines=[],
+        ),
+    )
+
+    with _borrowed_search_providers([fake]):
+        resp = await client.post(
+            "/search",
+            json={"query": "chain test", "promptguard_fail_closed": False},
+        )
+
+    assert resp.status_code == 200
+    assert [query for query, _ in fake.calls] == ["chain test"]
+    assert resp.json()["results"][0]["url"] == "https://example.com/fake"
+
+
+async def test_a_following_search_still_sees_the_real_provider(
+    client: httpx.AsyncClient,
+) -> None:
+    """The save/restore idiom leaves no chain behind for the next test."""
+    with _borrowed_search_providers([FakeSearchProvider(name="fake")]):
+        await client.post("/search", json={"query": "chain test"})
+
+    with patch("pipeline.search_providers.searxng.httpx.AsyncClient") as client_cls:
+        inner = AsyncMock()
+        inner.get.side_effect = httpx.ConnectError("not available")
+        inner.__aenter__ = AsyncMock(return_value=inner)
+        inner.__aexit__ = AsyncMock(return_value=False)
+        client_cls.return_value = inner
+
+        resp = await client.post("/search", json={"query": "after"})
+
+    assert resp.status_code == 422
+    assert resp.json()["error"] == "searxng_unavailable"
+
+
+# ---------------------------------------------------------------------------
+# search-fallback US-003: fallback telemetry + provenance (metadata only)
+# ---------------------------------------------------------------------------
+
+
+async def test_metrics_search_counts_fallback_and_paid_calls_through_the_app(
+    client: httpx.AsyncClient,
+) -> None:
+    """The Independent Test's counters, driven through a real /search + /metrics."""
+    failing = FakeSearchProvider(
+        name="searxng",
+        paid=False,
+        outcome=ProviderFailure(
+            provider_name="searxng", failure_class="rate_limited", detail="http_429"
+        ),
+    )
+    serving = FakeSearchProvider(
+        name="brave",
+        paid=True,
+        outcome=ProviderSearchResult(
+            provider_name="brave",
+            results=[{"title": "R", "url": "https://example.com/1", "content": "c"}],
+            unresponsive_engines=[],
+        ),
+    )
+
+    with _borrowed_search_providers([failing, serving]):
+        resp = await client.post(
+            "/search", json={"query": "q", "promptguard_fail_closed": False}
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["provider_used"] == "brave"
+    assert body["fallback_fired"] is True
+    assert body["provider_errors"] == ["searxng: rate_limited"]
+    assert body["results"][0]["domain"] == "example.com"
+
+    metrics_body = (await client.get("/metrics")).json()
+    assert metrics_body["search"]["fallback_fired"] == 1
+    assert metrics_body["search"]["paid_calls"] == 1
+
+    both_fail_first = FakeSearchProvider(
+        name="searxng",
+        paid=False,
+        outcome=ProviderFailure(
+            provider_name="searxng", failure_class="rate_limited", detail="http_429"
+        ),
+    )
+    both_fail_second = FakeSearchProvider(
+        name="brave",
+        paid=True,
+        outcome=ProviderFailure(
+            provider_name="brave", failure_class="timeout", detail="timeout"
+        ),
+    )
+    with _borrowed_search_providers([both_fail_first, both_fail_second]):
+        resp2 = await client.post(
+            "/search", json={"query": "q", "promptguard_fail_closed": False}
+        )
+    assert resp2.status_code == 422
+
+    metrics_body2 = (await client.get("/metrics")).json()
+    assert metrics_body2["search"]["fallback_fired"] == 2
+    assert metrics_body2["search"]["paid_calls"] == 2
+
+
+async def test_a_searxng_only_chain_never_moves_either_counter(
+    client: httpx.AsyncClient,
+) -> None:
+    fake = FakeSearchProvider(
+        name="searxng",
+        outcome=ProviderSearchResult(
+            provider_name="searxng", results=[], unresponsive_engines=[]
+        ),
+    )
+
+    with _borrowed_search_providers([fake]):
+        resp = await client.post("/search", json={"query": "q"})
+    assert resp.status_code == 200
+    assert resp.json()["fallback_fired"] is False
+
+    metrics_body = (await client.get("/metrics")).json()
+    assert metrics_body["search"]["fallback_fired"] == 0
+    assert metrics_body["search"]["paid_calls"] == 0
+
+
+async def test_fallback_telemetry_is_metadata_only(
+    client: httpx.AsyncClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A sentinel in the served Brave body never reaches a cache write, a log
+    line, or any `/metrics` field — telemetry stays a token/bool/count/hostname.
+    """
+    sentinel = "SENTINEL-FALLBACK-BODY-must-never-be-cached-logged-or-metriced"
+    storage = FakeStorage()
+    app.state.cache = ContentCache(storage=storage)
+    failing = FakeSearchProvider(
+        name="searxng",
+        paid=False,
+        outcome=ProviderFailure(
+            provider_name="searxng", failure_class="rate_limited", detail="http_429"
+        ),
+    )
+    serving = FakeSearchProvider(
+        name="brave",
+        paid=True,
+        outcome=ProviderSearchResult(
+            provider_name="brave",
+            results=[
+                {"title": "R", "url": "https://example.com/1", "content": sentinel}
+            ],
+            unresponsive_engines=[],
+        ),
+    )
+
+    with (
+        _borrowed_search_providers([failing, serving]),
+        caplog.at_level(logging.INFO),
+    ):
+        resp = await client.post(
+            "/search", json={"query": "q", "promptguard_fail_closed": False}
+        )
+
+    assert resp.status_code == 200
+    assert sentinel in resp.json()["results"][0]["snippet"]
+
+    assert storage.get_calls == 0
+    assert storage.set_calls == 0
+    assert storage.delete_calls == 0
+    assert sentinel not in caplog.text
+
+    metrics_body = (await client.get("/metrics")).json()
+    assert sentinel not in json.dumps(metrics_body)
+
+
+# ---------------------------------------------------------------------------
+# search-policy-and-health US-010: per-request policy
+# ---------------------------------------------------------------------------
+
+
+def _searxng_result(**overrides: Any) -> ProviderSearchResult:
+    defaults: dict[str, Any] = {
+        "provider_name": "searxng",
+        "results": [{"title": "R", "url": "https://example.com/1", "content": "c"}],
+        "unresponsive_engines": [],
+    }
+    defaults.update(overrides)
+    return ProviderSearchResult(**defaults)
+
+
+async def test_omitted_policy_params_traverse_the_configured_chain(
+    client: httpx.AsyncClient,
+) -> None:
+    """Baseline: no `providers`/`allow_paid_fallback` behaves as spec 3 did."""
+    searxng = FakeSearchProvider(
+        name="searxng",
+        paid=False,
+        outcome=ProviderFailure(
+            provider_name="searxng", failure_class="rate_limited", detail="http_429"
+        ),
+    )
+    brave = FakeSearchProvider(
+        name="brave", paid=True, outcome=_searxng_result(provider_name="brave")
+    )
+
+    with _borrowed_search_providers([searxng, brave]):
+        resp = await client.post(
+            "/search", json={"query": "q", "promptguard_fail_closed": False}
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["provider_used"] == "brave"
+    assert resp.json()["fallback_fired"] is True
+    assert len(searxng.calls) == 1
+    assert len(brave.calls) == 1
+
+
+async def test_providers_naming_searxng_never_calls_brave(
+    client: httpx.AsyncClient,
+) -> None:
+    searxng = FakeSearchProvider(name="searxng", outcome=_searxng_result())
+    brave = FakeSearchProvider(name="brave", paid=True)
+
+    with _borrowed_search_providers([searxng, brave]):
+        resp = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "promptguard_fail_closed": False,
+                "providers": ["searxng"],
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["provider_used"] == "searxng"
+    assert brave.calls == []
+
+
+async def test_providers_naming_brave_keeps_the_full_effective_chain(
+    client: httpx.AsyncClient,
+) -> None:
+    """`providers: ["brave"]` restricts nothing — the free provider still runs."""
+    searxng = FakeSearchProvider(
+        name="searxng",
+        paid=False,
+        outcome=ProviderFailure(
+            provider_name="searxng", failure_class="rate_limited", detail="http_429"
+        ),
+    )
+    brave = FakeSearchProvider(
+        name="brave", paid=True, outcome=_searxng_result(provider_name="brave")
+    )
+
+    with _borrowed_search_providers([searxng, brave]):
+        resp = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "promptguard_fail_closed": False,
+                "providers": ["brave"],
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["provider_used"] == "brave"
+    assert len(searxng.calls) == 1
+    assert len(brave.calls) == 1
+
+
+async def test_providers_naming_an_unknown_provider_leaves_only_searxng(
+    client: httpx.AsyncClient,
+) -> None:
+    """`providers: ["tavily"]` excludes brave -- proven by a failing SearXNG.
+
+    A succeeding SearXNG would prove nothing here: free-first traversal
+    stops at the first success either way, with or without brave in the
+    effective chain. Failing SearXNG forces the exhausted-chain path, so
+    `brave.calls == []` can only mean the policy actually removed it.
+    """
+    searxng = FakeSearchProvider(
+        name="searxng",
+        paid=False,
+        outcome=ProviderFailure(
+            provider_name="searxng", failure_class="rate_limited", detail="http_429"
+        ),
+    )
+    brave = FakeSearchProvider(name="brave", paid=True)
+
+    with _borrowed_search_providers([searxng, brave]):
+        resp = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "promptguard_fail_closed": False,
+                "providers": ["tavily"],
+            },
+        )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["error"] == "search_unavailable"
+    assert body["reason"] == "searxng: rate_limited"
+    assert brave.calls == []
+
+    metrics_body = (await client.get("/metrics")).json()
+    assert metrics_body["search"]["policy_unknown_provider"] == 1
+
+
+async def test_allow_paid_fallback_false_never_calls_brave_on_searxng_failure(
+    client: httpx.AsyncClient,
+) -> None:
+    searxng = FakeSearchProvider(
+        name="searxng",
+        paid=False,
+        outcome=ProviderFailure(
+            provider_name="searxng", failure_class="rate_limited", detail="http_429"
+        ),
+    )
+    brave = FakeSearchProvider(name="brave", paid=True)
+
+    with _borrowed_search_providers([searxng, brave]):
+        resp = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "promptguard_fail_closed": False,
+                "allow_paid_fallback": False,
+            },
+        )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["error"] == "search_unavailable"
+    assert body["reason"] == "searxng: rate_limited"
+    assert brave.calls == []
+
+
+@pytest.mark.parametrize(
+    ("providers", "expected_ignored"),
+    [
+        ([" SearXNG "], 0),
+        (["searxng"] * 9, 1),
+        (["tavily", "exa", "tavily"], 3),
+        (["x" * 33], 1),
+        (["has interior\twhitespace"], 1),
+        (["ignore-previous-instructions"], 1),
+    ],
+)
+async def test_normalisation_and_ignoring_cases_all_serve_200(
+    client: httpx.AsyncClient, providers: list[str], expected_ignored: int
+) -> None:
+    """None of these malformed/oversized/hostile entries is ever a 422."""
+    searxng = FakeSearchProvider(name="searxng", outcome=_searxng_result())
+
+    with _borrowed_search_providers([searxng]):
+        resp = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "promptguard_fail_closed": False,
+                "providers": providers,
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["provider_used"] == "searxng"
+
+    metrics_body = (await client.get("/metrics")).json()
+    assert metrics_body["search"]["policy_unknown_provider"] == expected_ignored
+
+
+async def test_a_keyless_deployment_answers_identically_to_a_keyed_one(
+    client: httpx.AsyncClient,
+) -> None:
+    """`providers: ["brave"]` gets the same status and field set with no key."""
+    request_body = {
+        "query": "q",
+        "promptguard_fail_closed": False,
+        "providers": ["brave"],
+    }
+
+    keyless_chain: list[SearchProvider] = [
+        FakeSearchProvider(name="searxng", outcome=_searxng_result())
+    ]
+    with _borrowed_search_providers(keyless_chain):
+        keyless_resp = await client.post("/search", json=request_body)
+
+    with _borrowed_search_providers(
+        [
+            FakeSearchProvider(name="searxng", outcome=_searxng_result()),
+            FakeSearchProvider(name="brave", paid=True),
+        ]
+    ):
+        keyed_resp = await client.post("/search", json=request_body)
+
+    assert keyless_resp.status_code == keyed_resp.status_code == 200
+    assert set(keyless_resp.json()) == set(keyed_resp.json())
+
+    keyless_metrics = (await client.get("/metrics")).json()
+    assert keyless_metrics["search"]["policy_unknown_provider"] == 1
+
+
+async def test_policy_excludes_all_providers_via_allow_paid_fallback(
+    client: httpx.AsyncClient,
+) -> None:
+    """A paid-only configured chain plus `allow_paid_fallback: false` refuses."""
+    brave = FakeSearchProvider(name="brave", paid=True)
+
+    with _borrowed_search_providers([brave]):
+        resp = await client.post(
+            "/search", json={"query": "q", "allow_paid_fallback": False}
+        )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["error"] == "search_unavailable"
+    assert body["reason"] == "policy_excluded_all_providers"
+    assert brave.calls == []
+
+    metrics_body = (await client.get("/metrics")).json()
+    assert metrics_body["search"]["errors"] == {"search_unavailable": 1}
+
+
+async def test_policy_excludes_all_providers_via_an_unregistered_name(
+    client: httpx.AsyncClient,
+) -> None:
+    """A paid-only configured chain plus a `providers` naming nothing refuses."""
+    brave = FakeSearchProvider(name="brave", paid=True)
+
+    with _borrowed_search_providers([brave]):
+        resp = await client.post(
+            "/search", json={"query": "q", "providers": ["tavily"]}
+        )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["error"] == "search_unavailable"
+    assert body["reason"] == "policy_excluded_all_providers"
+    assert brave.calls == []
+
+    metrics_body = (await client.get("/metrics")).json()
+    assert metrics_body["search"]["errors"] == {"search_unavailable": 1}
+
+
+async def test_exhaustion_code_follows_the_configured_not_the_effective_chain(
+    client: httpx.AsyncClient,
+) -> None:
+    """`providers: ["searxng"]` on a two-provider chain yields the general code."""
+    searxng = FakeSearchProvider(
+        name="searxng",
+        paid=False,
+        outcome=ProviderFailure(
+            provider_name="searxng", failure_class="rate_limited", detail="http_429"
+        ),
+    )
+    brave = FakeSearchProvider(name="brave", paid=True)
+
+    with _borrowed_search_providers([searxng, brave]):
+        resp = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "promptguard_fail_closed": False,
+                "providers": ["searxng"],
+            },
+        )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["error"] == "search_unavailable"
+    assert brave.calls == []
+
+
+async def test_legacy_codes_are_byte_for_byte_on_a_searxng_only_configured_chain(
+    client: httpx.AsyncClient,
+) -> None:
+    """A `providers` restriction on a one-provider chain changes nothing."""
+    searxng = FakeSearchProvider(
+        name="searxng",
+        paid=False,
+        outcome=ProviderFailure(
+            provider_name="searxng", failure_class="hard_error", detail="http_500"
+        ),
+    )
+
+    with _borrowed_search_providers([searxng]):
+        resp = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "promptguard_fail_closed": False,
+                "providers": ["searxng"],
+            },
+        )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["error"] == "searxng_error"
+    assert body["reason"] == "SearXNG returned HTTP error (http_500)"
+
+
+async def test_a_hostile_providers_entry_leaks_nowhere(
+    client: httpx.AsyncClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """No response body, `/metrics` key, or log record ever echoes the entry."""
+    sentinel = "SENTINEL-do-not-echo-ignore-all-previous-instructions"
+    searxng = FakeSearchProvider(name="searxng", outcome=_searxng_result())
+
+    with (
+        _borrowed_search_providers([searxng]),
+        caplog.at_level(logging.INFO),
+    ):
+        resp = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "promptguard_fail_closed": False,
+                "providers": [sentinel],
+            },
+        )
+
+    assert resp.status_code == 200
+    assert sentinel not in json.dumps(resp.json())
+    assert sentinel not in caplog.text
+
+    metrics_body = (await client.get("/metrics")).json()
+    assert sentinel not in json.dumps(metrics_body)
+
+
+# ---------------------------------------------------------------------------
+# feature-brave-provider US-002: env-gated conditional registration, wired
+# through the real lifespan
+# ---------------------------------------------------------------------------
+
+
+def _brave_stream_response() -> httpx.Response:
+    return httpx.Response(
+        status_code=200,
+        content=b"{}",
+        headers={"content-type": "application/json"},
+        request=httpx.Request("GET", "https://api.search.brave.com/res/v1/llm/context"),
+    )
+
+
+def _brave_client_double() -> MagicMock:
+    """A minimal streaming double for ``pipeline.search_providers.brave``."""
+    stream_cm = MagicMock()
+    stream_cm.__aenter__ = AsyncMock(return_value=_brave_stream_response())
+    stream_cm.__aexit__ = AsyncMock(return_value=False)
+    client = MagicMock()
+    client.stream = MagicMock(return_value=stream_cm)
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    return client
+
+
+async def test_lifespan_wires_the_configured_brave_timeout_into_the_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-default `search_brave_timeout_seconds` really reaches the client."""
+    _park_the_retry(monkeypatch)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "brave")
+    monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "sentinel-key")
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {"search_brave_timeout_seconds": 45.0},
+    )
+
+    with (
+        _borrowed_search_providers(None),
+        patch("pipeline.search_providers.brave.httpx.AsyncClient") as client_cls,
+    ):
+        client_cls.return_value = _brave_client_double()
+
+        async with _running_app():
+            chain = cast("list[SearchProvider]", app.state.search_providers)
+            assert [provider.name for provider in chain] == ["brave"]
+            outcome = await chain[0].search("q", 3)
+
+    assert isinstance(outcome, ProviderSearchResult)
+    assert client_cls.call_args.kwargs["timeout"] == 45.0
+
+
+async def test_a_key_set_after_startup_does_not_change_the_resolved_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The variable is read once, in the lifespan — never again while running."""
+    _park_the_retry(monkeypatch)
+    monkeypatch.delenv("FORAGE_SEARCH_PROVIDERS", raising=False)
+    monkeypatch.delenv(BRAVE_API_KEY_ENV_VAR, raising=False)
+
+    with _borrowed_search_providers(None):
+        async with _running_app():
+            before = app.state.search_providers
+            assert [provider.name for provider in before] == ["searxng"]
+
+            monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "sentinel-key")
+            monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng,brave")
+
+            after = retrieval_app._resolved_search_providers(app.state)
+            assert after is before
+            assert [provider.name for provider in after] == ["searxng"]
+
+
+async def test_lifespan_logs_exactly_one_skip_warning_for_a_keyless_brave_entry(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng,brave")
+    monkeypatch.delenv(BRAVE_API_KEY_ENV_VAR, raising=False)
+
+    with (
+        _borrowed_search_providers(None),
+        caplog.at_level(logging.WARNING, logger="pipeline.search_providers"),
+    ):
+        async with _running_app():
+            chain = cast("list[SearchProvider]", app.state.search_providers)
+            assert [provider.name for provider in chain] == ["searxng"]
+
+    matching = [
+        record
+        for record in caplog.records
+        if "brave_skipped_missing_key" in record.message
+    ]
+    assert len(matching) == 1
+
+
+async def test_lifespan_never_leaks_an_invalid_brave_key_into_the_log(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unusable key is named by variable, never by value — even at boot."""
+    sentinel = "café-invalid-sentinel-key"
+    _park_the_retry(monkeypatch)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng,brave")
+    monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, sentinel)
+
+    with (
+        _borrowed_search_providers(None),
+        caplog.at_level(logging.WARNING, logger="retrieval_app"),
+    ):
+        async with _running_app():
+            chain = cast("list[SearchProvider]", app.state.search_providers)
+            assert [provider.name for provider in chain] == ["searxng"]
+
+    assert "brave_key_invalid" in caplog.text
+    assert sentinel not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# search-policy-and-health US-002: `/health` provider status
+# ---------------------------------------------------------------------------
+
+
+async def test_health_reports_the_chained_provider_and_the_present_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Key present and chained: `search_providers` and the capability both show it."""
+    _park_the_retry(monkeypatch)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng,brave")
+    monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "sentinel-brave-key")
+
+    with _borrowed_search_providers(None):
+        async with _running_app() as client:
+            data = (await client.get("/health")).json()
+
+    assert data["search_providers"] == ["searxng", "brave"]
+    assert data["capabilities"]["brave_api_key"] == 1
+
+
+async def test_health_reports_no_key_and_the_default_chain_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Key absent: `search_providers` is the key-less floor, no capability entry."""
+    _park_the_retry(monkeypatch)
+    monkeypatch.delenv("FORAGE_SEARCH_PROVIDERS", raising=False)
+    monkeypatch.delenv(BRAVE_API_KEY_ENV_VAR, raising=False)
+
+    with _borrowed_search_providers(None):
+        async with _running_app() as client:
+            data = (await client.get("/health")).json()
+
+    assert data["search_providers"] == ["searxng"]
+    assert "brave_api_key" not in data["capabilities"]
+
+
+@pytest.mark.parametrize(
+    "key_value",
+    ["", "   ", "café-invalid-\x01-sentinel"],
+    ids=["empty", "whitespace-only", "control-character"],
+)
+async def test_health_reports_no_key_for_every_absent_shaped_value(
+    monkeypatch: pytest.MonkeyPatch,
+    key_value: str,
+) -> None:
+    """Empty, whitespace-only, and `brave_key_invalid` values all report absent —
+    advertisement and registration come from the same evaluation."""
+    _park_the_retry(monkeypatch)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng,brave")
+    monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, key_value)
+
+    with _borrowed_search_providers(None):
+        async with _running_app() as client:
+            data = (await client.get("/health")).json()
+
+    assert data["search_providers"] == ["searxng"]
+    assert "brave_api_key" not in data["capabilities"]
+
+
+async def test_health_reports_the_present_key_even_when_not_chained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keyed but not chained: the capability names a key `search_providers` doesn't use.
+
+    Together the two fields show "keyed but not chained".
+    """
+    _park_the_retry(monkeypatch)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng")
+    monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "sentinel-brave-key")
+
+    with _borrowed_search_providers(None):
+        async with _running_app() as client:
+            data = (await client.get("/health")).json()
+
+    assert data["search_providers"] == ["searxng"]
+    assert data["capabilities"]["brave_api_key"] == 1
+
+
+async def test_health_capabilities_with_a_key_and_no_promptguard_is_key_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A present key with PromptGuard unloaded advertises only the key capability."""
+    _park_the_retry(monkeypatch)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "brave")
+    monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "sentinel-brave-key")
+
+    with _borrowed_search_providers(None):
+        async with _running_app() as client:
+            data = (await client.get("/health")).json()
+
+    assert data["capabilities"] == {"brave_api_key": 1}
+
+
+async def test_health_capabilities_with_break_glass_and_no_key_is_sanitization_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Break-glass forces only `search_sanitization`; it never touches the key entry."""
+    _clear_break_glass_env(monkeypatch)
+    monkeypatch.setenv("FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION", "1")
+    _park_the_retry(monkeypatch)
+    monkeypatch.delenv("FORAGE_SEARCH_PROVIDERS", raising=False)
+    monkeypatch.delenv(BRAVE_API_KEY_ENV_VAR, raising=False)
+
+    with _borrowed_search_providers(None):
+        async with _running_app() as client:
+            data = (await client.get("/health")).json()
+
+    assert data["capabilities"] == {"search_sanitization": 1}
+
+
+async def test_health_never_echoes_the_key_value_in_body_or_log(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sentinel = "sentinel-do-not-echo-brave-key"
+    _park_the_retry(monkeypatch)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng,brave")
+    monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, sentinel)
+
+    with (
+        _borrowed_search_providers(None),
+        caplog.at_level(logging.INFO),
+    ):
+        async with _running_app() as client:
+            resp = await client.get("/health")
+
+    assert sentinel not in json.dumps(resp.json())
+    assert sentinel not in caplog.text
+
+
+async def test_the_pairing_of_chain_membership_and_capability_holds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`'brave' in search_providers` and `'brave_api_key' in capabilities` agree.
+
+    Both come from the lifespan's single `brave_key_present()` verdict
+    (US-002's "one evaluation" rule), so they can never disagree — checked
+    with the key present and, separately, absent.
+    """
+    _park_the_retry(monkeypatch)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng,brave")
+
+    monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "sentinel-brave-key")
+    with _borrowed_search_providers(None):
+        async with _running_app() as client:
+            present = (await client.get("/health")).json()
+    assert ("brave" in present["search_providers"]) == (
+        "brave_api_key" in present["capabilities"]
+    )
+    assert "brave" in present["search_providers"]
+
+    monkeypatch.delenv(BRAVE_API_KEY_ENV_VAR, raising=False)
+    with _borrowed_search_providers(None):
+        async with _running_app() as client:
+            absent = (await client.get("/health")).json()
+    assert ("brave" in absent["search_providers"]) == (
+        "brave_api_key" in absent["capabilities"]
+    )
+    assert "brave" not in absent["search_providers"]
+
+
+async def test_health_without_a_lifespan_reports_the_default_chain_and_no_key(
+    client: httpx.AsyncClient,
+) -> None:
+    """A transport that never ran the lifespan still answers with the fallback.
+
+    Production-unreachable — the lifespan publishes both fields before it
+    yields — but the suite's `client` fixture builds its `ASGITransport` with
+    no lifespan event, so this is exercised directly. Saves, `delattr`s and
+    restores both attributes on the idiom
+    `test_health_without_a_cache_still_names_a_backend_and_never_500s` uses
+    for `cache_backend`, so this passes when run after a real-lifespan test
+    in the same session.
+    """
+    published_providers = getattr(app.state, "search_providers", None)
+    if published_providers is not None:
+        delattr(app.state, "search_providers")
+    published_capabilities = getattr(app.state, "search_key_capabilities", None)
+    if published_capabilities is not None:
+        delattr(app.state, "search_key_capabilities")
+    try:
+        resp = await client.get("/health")
+    finally:
+        if published_providers is not None:
+            app.state.search_providers = published_providers
+        if published_capabilities is not None:
+            app.state.search_key_capabilities = published_capabilities
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["search_providers"] == ["searxng"]
+    assert "brave_api_key" not in data["capabilities"]
+
+
+async def test_health_unrelated_fields_are_unaffected_by_search_provider_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`status`, `degraded_reasons`, `promptguard_loaded`, `cache_connected`, and
+    `cache_backend` are computed exactly as before, regardless of the search
+    provider chain or key presence."""
+    _park_the_retry(monkeypatch)
+    monkeypatch.delenv("VALKEY_URL", raising=False)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng,brave")
+    monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "sentinel-brave-key")
+
+    with _borrowed_search_providers(None):
+        async with _running_app() as client:
+            data = (await client.get("/health")).json()
+
+    assert data["status"] == "degraded"
+    assert data["degraded_reasons"] == ["promptguard_unavailable"]
+    assert data["promptguard_loaded"] is False
+    assert data["cache_connected"] is True
     assert data["cache_backend"] == "memory"

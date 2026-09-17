@@ -1,7 +1,7 @@
 <!-- Template Version: 2.0.0 -->
 # CONVENTIONS.md
 
-> Last updated: 2026-09-07
+> Last updated: 2026-09-15
 > Updated by: Claude (forage-repo-bootstrap US-005)
 
 ## Code Style
@@ -49,7 +49,7 @@ Read this before reaching for a suppression; there is a right place for every ca
 
 | Thing | Convention | Example |
 |-------|-----------|---------|
-| Modules | `snake_case.py`, flat at repo root or under `pipeline/` / `promptguard/` | `url_validator.py` |
+| Modules | `snake_case.py`, flat at repo root or under `pipeline/` / `promptguard/` (one nested subpackage: `pipeline/search_providers/`) | `url_validator.py`, `pipeline/search_providers/base.py` |
 | Pipeline stages | `stageN_<subject>.py` | `pipeline/stage2_structural.py` |
 | Test modules | `tests/test_<module>.py`, mirroring the module under test | `tests/test_cache.py` |
 | Private helpers | leading underscore | `_closed_vocabulary_reason` |

@@ -13,6 +13,7 @@ import pytest
 
 from cache import CacheMetrics
 from model_fetcher import repo_dirname
+from pipeline.search_providers.base import ProviderFailure, ProviderSearchResult
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -321,3 +322,42 @@ class FakeContentCache:
     async def close(self) -> None:
         """No-op; the fake owns no real connection."""
         return None
+
+
+class FakeSearchProvider:
+    """In-test ``SearchProvider``: returns a fixed outcome on every call.
+
+    *outcome* is a :class:`ProviderSearchResult` or :class:`ProviderFailure`
+    returned verbatim from ``search()`` (a populated ``ProviderSearchResult``
+    with no ``results`` when unset), so a test can drive both the success and
+    failure paths of anything that consumes the protocol without touching a
+    real backend. Every call is recorded on ``calls`` for assertions about
+    what a caller asked for.
+    """
+
+    def __init__(
+        self,
+        *,
+        name: str = "fake",
+        paid: bool = False,
+        origin: str | None = None,
+        outcome: ProviderSearchResult | ProviderFailure | None = None,
+    ) -> None:
+        self.name = name
+        self.paid = paid
+        self.origin = origin
+        self._outcome = outcome
+        self.calls: list[tuple[str, int]] = []
+
+    async def search(
+        self, query: str, max_results: int
+    ) -> ProviderSearchResult | ProviderFailure:
+        """Record the call and return the configured *outcome*."""
+        self.calls.append((query, max_results))
+        if self._outcome is not None:
+            return self._outcome
+        return ProviderSearchResult(
+            provider_name=self.name,
+            results=[],
+            unresponsive_engines=[],
+        )

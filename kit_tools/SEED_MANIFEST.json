@@ -1,0 +1,395 @@
+{
+  "$schema": "./SEED_MANIFEST.schema.json",
+  "_comment": "This manifest tracks seeding progress across sessions. Created by seed-project, updated during seeding.",
+  "version": "1.0.0",
+  "created": "2026-09-14T01:18:42Z",
+  "last_updated": "2026-09-14T03:38:13Z",
+  "project_root": "/Users/joshua/Documents/GitHub/Forage",
+  "config": {
+    "parallel_seeding": false,
+    "validation_mode": "strict",
+    "cache_ttl_minutes": 60
+  },
+  "exploration_cache": {
+    "tech-stack": {
+      "cached_at": "2026-09-14T01:24:44Z",
+      "cache_file": ".seed_cache/tech-stack_summary.md",
+      "status": "cached",
+      "lines": 206,
+      "confidence": "high"
+    },
+    "architecture": {
+      "cached_at": "2026-09-14T01:28:14Z",
+      "cache_file": ".seed_cache/architecture_summary.md",
+      "status": "cached",
+      "lines": 311,
+      "confidence": "high"
+    },
+    "infrastructure": {
+      "cached_at": "2026-09-14T01:25:17Z",
+      "cache_file": ".seed_cache/infrastructure_summary.md",
+      "status": "cached",
+      "lines": 208,
+      "confidence": "high"
+    },
+    "security": {
+      "cached_at": "2026-09-14T01:26:26Z",
+      "cache_file": ".seed_cache/security_summary.md",
+      "status": "cached",
+      "lines": 395,
+      "confidence": "high"
+    },
+    "testing": {
+      "cached_at": null,
+      "cache_file": ".seed_cache/testing_summary.md",
+      "status": "skipped",
+      "note": "TESTING_GUIDE.md was seeded before this manifest; no pending template needs this focus"
+    },
+    "operations": {
+      "cached_at": "2026-09-14T01:27:59Z",
+      "cache_file": ".seed_cache/operations_summary.md",
+      "status": "cached",
+      "lines": 469,
+      "confidence": "high"
+    },
+    "dependencies": {
+      "cached_at": "2026-09-14T01:26:14Z",
+      "cache_file": ".seed_cache/dependencies_summary.md",
+      "status": "cached",
+      "lines": 218,
+      "confidence": "high"
+    }
+  },
+  "templates": {
+    "PRODUCT_VISION.md": {
+      "tier": 1,
+      "path": "kit_tools/PRODUCT_VISION.md",
+      "status": "skipped",
+      "seeded_at": null,
+      "validated_at": null,
+      "validation_result": null,
+      "validation_issues": [],
+      "skipped_reason": "skip_if: always \u2014 created by create-vision skill"
+    },
+    "SYNOPSIS.md": {
+      "tier": 1,
+      "path": "kit_tools/SYNOPSIS.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-11T00:00:00Z",
+      "validated_at": "2026-09-14T01:18:42Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null,
+      "note": "Seeded during the forage-extraction epic before this manifest existed; placeholder scan clean on 2026-09-13; not re-seeded by seed-project"
+    },
+    "arch/CODE_ARCH.md": {
+      "tier": 1,
+      "path": "kit_tools/arch/CODE_ARCH.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-11T00:00:00Z",
+      "validated_at": "2026-09-14T01:18:42Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null,
+      "note": "Seeded during the forage-extraction epic before this manifest existed; placeholder scan clean on 2026-09-13; not re-seeded by seed-project"
+    },
+    "arch/SERVICE_MAP.md": {
+      "tier": 1,
+      "path": "kit_tools/arch/SERVICE_MAP.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-14T01:54:50Z",
+      "validated_at": "2026-09-14T01:54:50Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null,
+      "note": "First seeder stalled during a laptop sleep but completed its write at 18:51 local; a relaunched seeder verified the content against source (48 paths, constants) rather than rewriting."
+    },
+    "docs/LOCAL_DEV.md": {
+      "tier": 1,
+      "path": "kit_tools/docs/LOCAL_DEV.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-14T01:32:39Z",
+      "validated_at": "2026-09-14T01:32:39Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null
+    },
+    "BUMP_VERSION.md": {
+      "tier": 2,
+      "path": "kit_tools/BUMP_VERSION.md",
+      "status": "skipped",
+      "seeded_at": null,
+      "validated_at": null,
+      "validation_result": null,
+      "validation_issues": [],
+      "skipped_reason": "not installed by init-project (not in the API/Backend set)"
+    },
+    "arch/INFRA_ARCH.md": {
+      "tier": 2,
+      "path": "kit_tools/arch/INFRA_ARCH.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-14T01:59:08Z",
+      "validated_at": "2026-09-14T01:59:08Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null
+    },
+    "arch/SECURITY.md": {
+      "tier": 2,
+      "path": "kit_tools/arch/SECURITY.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-14T02:09:24Z",
+      "validated_at": "2026-09-14T02:09:24Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null,
+      "note": "skip_if: no-auth is literally met, but seeded deliberately: Forage's security architecture (network placement, SSRF defences, injection signalling, secrets hygiene, supply chain, honest degradation) is substantial and non-auth-centric; auth sections reframed as 'none by design'."
+    },
+    "docs/MONITORING.md": {
+      "tier": 2,
+      "path": "kit_tools/docs/MONITORING.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-14T02:16:07Z",
+      "validated_at": "2026-09-14T02:16:07Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null
+    },
+    "docs/CI_CD.md": {
+      "tier": 2,
+      "path": "kit_tools/docs/CI_CD.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-14T02:22:04Z",
+      "validated_at": "2026-09-14T02:22:04Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null
+    },
+    "docs/TROUBLESHOOTING.md": {
+      "tier": 2,
+      "path": "kit_tools/docs/TROUBLESHOOTING.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-14T02:30:29Z",
+      "validated_at": "2026-09-14T02:30:29Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null
+    },
+    "arch/DATA_MODEL.md": {
+      "tier": 3,
+      "path": "kit_tools/arch/DATA_MODEL.md",
+      "status": "skipped",
+      "seeded_at": null,
+      "validated_at": null,
+      "validation_result": null,
+      "validation_issues": [],
+      "skipped_reason": "skip_if: no-database \u2014 Forage has no relational or document store; the Valkey/in-memory content cache (key scheme ret:sha256(url:mode:fingerprint), JSON values, TTL rules) is documented in arch/SERVICE_MAP.md and cache.py. Template file deleted per its own instruction."
+    },
+    "docs/API_GUIDE.md": {
+      "tier": 3,
+      "path": "kit_tools/docs/API_GUIDE.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-14T02:36:53Z",
+      "validated_at": "2026-09-14T02:36:53Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null,
+      "note": "Seeded as a usage guide; contract/openapi.yaml remains the schema source of truth. Embeds the committed anchor sha256 verbatim, so it must be updated whenever export_contract regenerates the contract."
+    },
+    "docs/ENV_REFERENCE.md": {
+      "tier": 3,
+      "path": "kit_tools/docs/ENV_REFERENCE.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-14T02:43:05Z",
+      "validated_at": "2026-09-14T02:43:05Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null,
+      "note": "Seeded as an operator quick reference; docs/configuration.md remains canonical."
+    },
+    "docs/CONVENTIONS.md": {
+      "tier": 3,
+      "path": "kit_tools/docs/CONVENTIONS.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-11T00:00:00Z",
+      "validated_at": "2026-09-14T01:18:42Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null,
+      "note": "Seeded during the forage-extraction epic before this manifest existed; placeholder scan clean on 2026-09-13; not re-seeded by seed-project"
+    },
+    "docs/DEPLOYMENT.md": {
+      "tier": 3,
+      "path": "kit_tools/docs/DEPLOYMENT.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-14T02:49:15Z",
+      "validated_at": "2026-09-14T02:49:15Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null
+    },
+    "testing/TESTING_GUIDE.md": {
+      "tier": 3,
+      "path": "kit_tools/testing/TESTING_GUIDE.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-11T00:00:00Z",
+      "validated_at": "2026-09-14T01:18:42Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null,
+      "note": "Seeded during the forage-extraction epic before this manifest existed; placeholder scan clean on 2026-09-13; not re-seeded by seed-project"
+    },
+    "docs/UI_STYLE_GUIDE.md": {
+      "tier": 3,
+      "path": "kit_tools/docs/UI_STYLE_GUIDE.md",
+      "status": "skipped",
+      "seeded_at": null,
+      "validated_at": null,
+      "validation_result": null,
+      "validation_issues": [],
+      "skipped_reason": "not installed by init-project (headless service, no UI)"
+    },
+    "docs/GOTCHAS.md": {
+      "tier": 4,
+      "path": "kit_tools/docs/GOTCHAS.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-11T00:00:00Z",
+      "validated_at": "2026-09-14T01:18:42Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null,
+      "note": "Seeded during the forage-extraction epic before this manifest existed; placeholder scan clean on 2026-09-13; not re-seeded by seed-project"
+    },
+    "arch/DECISIONS.md": {
+      "tier": 4,
+      "path": "kit_tools/arch/DECISIONS.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-14T03:36:41Z",
+      "validated_at": "2026-09-14T03:36:41Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null,
+      "note": "Retrospective log: 19 entries reconstructed from CLAUDE.md, archived spec notes, bootstrap-notes, GOVERNANCE; dates from explicit source dates or first-introducing commits."
+    },
+    "roadmap/MILESTONES.md": {
+      "tier": 4,
+      "path": "kit_tools/roadmap/MILESTONES.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-11T00:00:00Z",
+      "validated_at": "2026-09-14T01:18:42Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null,
+      "note": "Seeded during the forage-extraction epic before this manifest existed; placeholder scan clean on 2026-09-13; not re-seeded by seed-project"
+    },
+    "AGENT_README.md": {
+      "tier": 5,
+      "path": "kit_tools/AGENT_README.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-14T03:38:13Z",
+      "validated_at": "2026-09-14T03:38:13Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null,
+      "note": "Targeted rewrite: read order, session-end checklist, off-limits (stale HF-token bake and public-flip entries replaced), documentation tree, canonical-source note for API_GUIDE/ENV_REFERENCE."
+    },
+    "arch/patterns/AUTH.md": {
+      "tier": 3,
+      "path": "kit_tools/arch/patterns/AUTH.md",
+      "status": "skipped",
+      "seeded_at": null,
+      "validated_at": null,
+      "validation_result": null,
+      "validation_issues": [],
+      "skipped_reason": "not installed by init-project (Forage ships no authentication by design)"
+    },
+    "arch/patterns/ERROR_HANDLING.md": {
+      "tier": 3,
+      "path": "kit_tools/arch/patterns/ERROR_HANDLING.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-14T03:21:03Z",
+      "validated_at": "2026-09-14T03:21:03Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null
+    },
+    "arch/patterns/LOGGING.md": {
+      "tier": 3,
+      "path": "kit_tools/arch/patterns/LOGGING.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-14T03:26:05Z",
+      "validated_at": "2026-09-14T03:26:05Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null
+    },
+    "roadmap/BACKLOG.md": {
+      "tier": 4,
+      "path": "kit_tools/roadmap/BACKLOG.md",
+      "status": "seeded",
+      "seeded_at": "2026-09-11T00:00:00Z",
+      "validated_at": "2026-09-14T01:18:42Z",
+      "validation_result": "PASS",
+      "validation_issues": [],
+      "skipped_reason": null,
+      "note": "Seeded during the forage-extraction epic before this manifest existed; placeholder scan clean on 2026-09-13; not re-seeded by seed-project"
+    },
+    "AUDIT_FINDINGS.md": {
+      "tier": 5,
+      "path": "kit_tools/AUDIT_FINDINGS.md",
+      "status": "skipped",
+      "seeded_at": null,
+      "validated_at": null,
+      "validation_result": null,
+      "validation_issues": [],
+      "skipped_reason": "skip_if: always \u2014 populated by validate-implementation skill"
+    },
+    "SESSION_LOG.md": {
+      "tier": 5,
+      "path": "kit_tools/SESSION_LOG.md",
+      "status": "skipped",
+      "seeded_at": null,
+      "validated_at": null,
+      "validation_result": null,
+      "validation_issues": [],
+      "skipped_reason": "skip_if: always \u2014 populated during sessions"
+    }
+  },
+  "summary": {
+    "total": 28,
+    "by_status": {
+      "pending": 0,
+      "seeded": 21,
+      "validated": 0,
+      "skipped": 7,
+      "failed": 0
+    },
+    "by_tier": {
+      "1": {
+        "total": 5,
+        "completed": 5
+      },
+      "2": {
+        "total": 6,
+        "completed": 6
+      },
+      "3": {
+        "total": 10,
+        "completed": 10
+      },
+      "4": {
+        "total": 4,
+        "completed": 4
+      },
+      "5": {
+        "total": 3,
+        "completed": 3
+      }
+    },
+    "validation": {
+      "passed": 21,
+      "warnings": 2,
+      "failed": 0
+    }
+  }
+}

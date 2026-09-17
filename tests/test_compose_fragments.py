@@ -72,6 +72,15 @@ _FRAGMENTS = sorted(_FRAGMENT_PATHS)
 _SEARXNG_SERVICE = "searxng"
 _FORAGE_SERVICE = "forage"
 
+# The forage release the fragments pin (search-release US-004). One edit here
+# at the next release, together with the two `image:` lines it checks.
+_FORAGE_RELEASE_TAG = "1.1.0"
+
+# Passed through to the forage service as bare names, like HF_TOKEN: set in
+# `compose/.env` they reach the container, left out they are genuinely unset
+# (the default `searxng` chain). The key is a credential and is never inline.
+_SEARCH_PASSTHROUGH_NAMES = ("FORAGE_SEARCH_PROVIDERS", "FORAGE_BRAVE_API_KEY")
+
 # `127.0.0.1:8020:8020` and nothing looser. A two-part `8020:8020` publishes on
 # every interface, which for an unauthenticated SSRF-capable service is the
 # whole of the deployment posture undone in one edit.
@@ -464,9 +473,8 @@ class TestImagePins:
             )
             assert not image.endswith(":latest"), (
                 f"compose/{name}.yml: {service_name} pulls {image!r}. `latest` "
-                "does not exist for either published image yet — it starts at "
-                "the first non-pre-release `v*` tag — and it is a moving "
-                "pointer when it does."
+                "is a moving pointer — an example must name the version it was "
+                "written against."
             )
 
     @pytest.mark.parametrize("name", _FRAGMENTS)
@@ -494,6 +502,17 @@ class TestImagePins:
             )
 
     @pytest.mark.parametrize("name", _FRAGMENTS)
+    def test_the_forage_image_is_the_current_release(
+        self, fragments: dict[str, dict[str, Any]], name: str
+    ) -> None:
+        expected = f"{_workflow_env('IMAGE_NAME')}:{_FORAGE_RELEASE_TAG}"
+        image = str(_services(fragments[name])[_FORAGE_SERVICE]["image"])
+        assert image == expected, (
+            f"compose/{name}.yml pulls {image!r}; the current forage release is "
+            f"{expected!r}. Move both fragments and _FORAGE_RELEASE_TAG together."
+        )
+
+    @pytest.mark.parametrize("name", _FRAGMENTS)
     def test_third_party_images_are_digest_pinned(
         self, fragments: dict[str, dict[str, Any]], name: str
     ) -> None:
@@ -509,6 +528,26 @@ class TestImagePins:
                 "means the image a reader runs is not one anyone here looked "
                 "at."
             )
+
+
+class TestSearchProviderPassthrough:
+    """The search-provider env contract reaches the container, unset by default."""
+
+    @pytest.mark.parametrize("variable", _SEARCH_PASSTHROUGH_NAMES)
+    @pytest.mark.parametrize("name", _FRAGMENTS)
+    def test_the_name_is_a_bare_passthrough_on_forage(
+        self, fragments: dict[str, dict[str, Any]], name: str, variable: str
+    ) -> None:
+        environment = _environment(_services(fragments[name])[_FORAGE_SERVICE])
+        assert variable in environment, (
+            f"compose/{name}.yml's forage service does not pass {variable} "
+            "through, so setting it in compose/.env does nothing"
+        )
+        assert environment[variable] is None, (
+            f"compose/{name}.yml sets {variable}={environment[variable]!r}. It "
+            "must be a bare name: unset is the default chain, and the key is a "
+            "credential that belongs in compose/.env, never inline."
+        )
 
 
 class TestMinimalIsGenuinelyValkeyFree:

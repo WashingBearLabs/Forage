@@ -49,25 +49,23 @@
 # reach 8020 can make Forage fetch arbitrary URLs on your behalf, and Forage is
 # a good SSRF target by nature because making outbound requests is its job.
 #
-# IMAGE PINS. Both images carry explicit pre-release tags. The searxng tag is
-# published; the forage tag 0.9.3-rc is cut IMMEDIATELY AFTER the PR that adds
-# this file merges (a compose up before that publish fails with `manifest
-# unknown` — that is sequencing, not breakage). `latest` does not exist for
-# either image yet. It
-# starts existing at the first non-pre-release `v*` tag, which
-# `feature-forage-contract` puts at `v1.0.0` — move these examples to it when
-# it lands. docs/releases.md has the tag scheme; docs/searxng.md has the
-# companion image's.
+# IMAGE PINS. Both images carry explicit version tags. The searxng tag
+# (0.1.1-rc) is published. The forage tag 1.1.0 — the release carrying contract
+# 1.2.0 and the search-provider chain — resolves once `v1.1.0` publishes
+# (search-release US-002); a compose up before that publish fails with
+# `manifest unknown` — that is sequencing, not breakage. Pin an explicit
+# version rather than `latest`, which is a moving pointer. docs/releases.md has
+# the tag scheme; docs/searxng.md has the companion image's.
 
 name: forage-minimal
 
 services:
   forage:
-    # ghcr.io/washingbearlabs/forage, tag 0.9.3-rc — the first tag TO BE published
-    # carrying contract 1.1.0 + cache_backend (0.9.1-rc predates them; 0.9.2-rc
-    # failed its publish parity gate cold; its git tag was withdrawn, package-version deletion pending). Superseded by v1.0.0 at
-    # `feature-forage-contract`; see the IMAGE PINS note above.
-    image: ghcr.io/washingbearlabs/forage:0.9.3-rc
+    # ghcr.io/washingbearlabs/forage, tag 1.1.0 — the release carrying contract
+    # 1.2.0 (the search-provider chain and Brave fallback). It resolves once
+    # `v1.1.0` publishes; until then a pull fails with `manifest unknown`. See
+    # the IMAGE PINS note above.
+    image: ghcr.io/washingbearlabs/forage:1.1.0
     restart: unless-stopped
     # Loopback only. See the DEPLOYMENT POSTURE note above; this binding is the
     # first control, not Forage's own SSRF defenses.
@@ -81,6 +79,14 @@ services:
       # itself `degraded` with `promptguard_unavailable` forever, honestly.
       # docs/weights.md § "Bring your own token" is the walk-through.
       - HF_TOKEN
+      # The search-provider chain (docs/configuration.md). Both are bare names
+      # for the same reason HF_TOKEN is: set them in `compose/.env` and they are
+      # passed through; leave them out and they are genuinely unset, which is
+      # the default chain — `searxng` alone, the key-less free floor.
+      # FORAGE_BRAVE_API_KEY is a credential: it belongs in `compose/.env`
+      # (git-ignored), never inline here and never as `NAME=value`.
+      - FORAGE_SEARCH_PROVIDERS
+      - FORAGE_BRAVE_API_KEY
       # SEARXNG_URL is deliberately NOT set. Forage's built-in default is
       # `http://searxng:8080`, a neutral service name — which is why the
       # service below is called `searxng` and not `forage-searxng`. Renaming it

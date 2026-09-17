@@ -49,6 +49,7 @@ from pipeline.contract import (
     CONTRACT_VERSION,
     DEGRADED_CACHE_UNAVAILABLE,
     DEGRADED_PROMPTGUARD_UNAVAILABLE,
+    POLICY_EXCLUDED_ALL_PROVIDERS,
     Admission413ErrorCode,
     DegradedReason,
     Extract422ErrorCode,
@@ -71,6 +72,21 @@ from pipeline.orchestrator import (
     run_search_pipeline,
 )
 from pipeline.sanitizer_revision import derive_sanitizer_revision
+from pipeline.search_providers import (
+    DEFAULT_PROVIDER_NAME,
+    SEARCH_PROVIDERS_ENV_VAR,
+    build_provider_chain,
+    parse_provider_names,
+)
+from pipeline.search_providers.base import SearchProvider
+from pipeline.search_providers.brave import (
+    BRAVE_API_KEY_ENV_VAR,
+    KEY_STRIP_CHARS,
+    brave_key_present,
+    brave_settings_from_config,
+)
+from pipeline.search_providers.policy import apply_request_policy
+from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL, SearxngProvider
 from promptguard.classifier import PromptGuardClassifier
 
 logger = logging.getLogger(__name__)
@@ -79,7 +95,7 @@ logger = logging.getLogger(__name__)
 # variable at container start (see ``docs/configuration.md``). There is no
 # vault client and no secret-bearing config API — ``VALKEY_URL`` arrives
 # ready-made, credentials and all, from the operator's env or secret store.
-SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://searxng:8080")
+SEARXNG_URL = os.environ.get("SEARXNG_URL", DEFAULT_SEARXNG_URL)
 
 # Which storage the content cache runs over, named once: the selection below
 # returns it, the startup log says it, and ``HealthResponse.cache_backend``
@@ -109,8 +125,9 @@ def _break_glass_arming_env_var() -> str | None:
     reopen a consuming agent's web-search capability gate if this contract
     reaches production before that consumer does. Exact-match ``== "1"``
     semantics on both names — no truthiness, so ``true``/``yes``/``0`` do not
-    arm it. Only ``capabilities`` lies under this flag; ``status``,
-    ``degraded_reasons``, and ``promptguard_loaded`` stay honest.
+    arm it. Only ``capabilities['search_sanitization']`` lies under this
+    flag; ``status``, ``degraded_reasons``, ``promptguard_loaded``, and
+    ``capabilities['brave_api_key']`` stay honest.
     """
     for name in _BREAK_GLASS_ENV_VARS:
         if os.environ.get(name) == "1":
@@ -152,6 +169,60 @@ def _configured_valkey_url() -> str | None:
     instead, where it fails loudly as ``degraded: cache_unavailable``.
     """
     return os.environ.get("VALKEY_URL")
+
+
+def _configured_provider_names() -> list[str]:
+    """Return the search-provider chain names this start was configured with.
+
+    The **one** read site for ``FORAGE_SEARCH_PROVIDERS``, on
+    :func:`_configured_valkey_url`'s pattern: read once per start, in the
+    lifespan, and never again while the process runs.
+
+    A variable that is *set* but names no provider at all gets a WARNING
+    before the default applies. Silence there would be the same silent
+    substitution the refuse-boot rule exists to prevent — the operator asked
+    for something and got the default instead, so the log says so.
+    """
+    raw = os.environ.get(SEARCH_PROVIDERS_ENV_VAR)
+    if raw is not None and not any(token.strip() for token in raw.split(",")):
+        logger.warning(
+            "search_providers_blank — %s is set but names no provider; "
+            "the default chain (%s) applies",
+            SEARCH_PROVIDERS_ENV_VAR,
+            DEFAULT_PROVIDER_NAME,
+        )
+    return parse_provider_names(raw)
+
+
+def _resolve_brave_key() -> str | None:
+    """Return the operator's Brave API key for this start, or ``None``.
+
+    The **one** read site for ``FORAGE_BRAVE_API_KEY``, on
+    :func:`_configured_provider_names`'s pattern: read once, in the
+    lifespan, and never again while the process runs.
+
+    A present-but-unusable value (see :func:`brave_key_present` for exactly
+    what "unusable" means) is treated the same as an absent one, after a
+    WARNING naming the variable — never the value — on the
+    ``model_fetcher.py`` ``model_revision_invalid`` / ``weights_mirror_invalid``
+    precedent (~898, ~1003). A value that is blank after a plain strip (the
+    ``FORAGE_BRAVE_API_KEY=`` compose-renders-unset shape) is silently
+    absent, exactly as a missing variable is: nothing was configured, so
+    there is nothing to warn about.
+    """
+    raw = os.environ.get(BRAVE_API_KEY_ENV_VAR)
+    if raw is None:
+        return None
+    if brave_key_present(raw):
+        return raw.strip(KEY_STRIP_CHARS)
+    if raw.strip():
+        logger.warning(
+            "brave_key_invalid — %s is set but is not usable as an API key "
+            "(must be ASCII, printable, and free of interior whitespace or "
+            "control characters)",
+            BRAVE_API_KEY_ENV_VAR,
+        )
+    return None
 
 
 def _configured_cache_backend() -> CacheBackend:
@@ -221,6 +292,40 @@ def _resolved_sanitizer_revision(state: State) -> str:
     return derive_sanitizer_revision(config) if config is not None else "unknown"
 
 
+def _resolved_search_providers(state: State) -> list[SearchProvider]:
+    """Return the chain this app resolved at start, or the default chain.
+
+    The lifespan publishes ``search_providers`` once — the chain **objects**,
+    in chain order, never their names (any name list is derived with
+    ``[p.name for p in chain]``). The fallback is defensive and
+    production-unreachable, the same property :func:`_resolved_cache_backend`'s
+    has: any transport that skipped lifespan events would 500 on the bare
+    ``app.state.classifier`` read first.
+
+    It is also **total** — it constructs the default provider directly rather
+    than resolving a name, so it cannot raise. A configuration error can only
+    ever surface at boot; the refuse-boot rule belongs to the lifespan alone.
+    """
+    chain: list[SearchProvider] | None = getattr(state, "search_providers", None)
+    return chain if chain is not None else [SearxngProvider(DEFAULT_SEARXNG_URL)]
+
+
+def _resolved_search_key_capabilities(state: State) -> tuple[str, ...]:
+    """Return the key-presence capability tuple published at start, or none.
+
+    Modelled on :func:`_resolved_cache_backend` / :func:`_resolved_sanitizer_revision`:
+    the lifespan publishes this once, from its single ``brave_key_present()``
+    verdict, and every request reads that. The fallback is defensive and
+    production-unreachable, the same property those two have, and it never
+    reads the environment — a transport that skipped lifespan events has no
+    key to report on.
+    """
+    capabilities: tuple[str, ...] | None = getattr(
+        state, "search_key_capabilities", None
+    )
+    return capabilities if capabilities is not None else ()
+
+
 def _load_config() -> dict[str, Any]:
     """Load sidecar configuration from ``config.yaml``."""
     config_path = Path(__file__).parent / "config.yaml"
@@ -233,12 +338,17 @@ def _load_config() -> dict[str, Any]:
 
 # -- Response models --
 
-# The one capability key ``/health`` advertises, named once so the CI contract
-# smoke (``contract_smoke.py``) can import it instead of restating the wire
-# string. The literal itself is still pinned by ``tests/test_app.py``, which
-# spells it out: the constant single-sources the *symbol*, those tests pin the
-# *value*, and renaming the value without meaning to fails them.
+# The two capability keys ``/health`` can advertise, named once so the CI
+# contract smoke (``contract_smoke.py``) can import the sanitization one
+# instead of restating the wire string. The literals are still pinned by
+# ``tests/test_app.py``, which spells them out: the constants single-source
+# the *symbol*, those tests pin the *value*, and renaming a value without
+# meaning to fails them. The two are computed independently (see
+# ``HealthResponse.capabilities``): ``search_sanitization`` is a runtime
+# claim the break-glass override can force, ``brave_api_key`` an environment
+# fact no override touches.
 CAPABILITY_SEARCH_SANITIZATION = "search_sanitization"
+CAPABILITY_BRAVE_API_KEY = "brave_api_key"
 
 
 class HealthResponse(BaseModel):
@@ -263,14 +373,20 @@ class HealthResponse(BaseModel):
     )
     capabilities: dict[str, int] = Field(
         description=(
-            "Sanitization capabilities this deployment advertises, as a "
-            "presence map: a key is present with the value 1 when the "
-            "capability is available and absent otherwise. One key is defined "
-            "in contract 1.1.0 — 'search_sanitization', present when "
-            "PromptGuard is loaded (or when the break-glass override is "
-            "armed; see docs/configuration.md). Deliberately a dict rather "
-            "than an enum: a consumer reads the keys it knows and ignores the "
-            "rest, so a future capability is an additive-safe MINOR change."
+            "Capabilities this deployment advertises, as a presence map: a "
+            "key is present with the value 1 when the capability is "
+            "available and absent otherwise. Two keys are defined in "
+            "contract 1.2.0. 'search_sanitization' (contract 1.1.0) is a "
+            "runtime claim, present when PromptGuard is loaded — or when "
+            "the break-glass override is armed; see docs/configuration.md, "
+            "which only ever forces this key. 'brave_api_key' (contract "
+            "1.2.0) is an environment fact, present when this start "
+            "resolved a usable FORAGE_BRAVE_API_KEY, independently of "
+            "whether 'brave' actually appears in search_providers and "
+            "untouched by the break-glass override. Deliberately a dict "
+            "rather than an enum: a consumer reads the keys it knows and "
+            "ignores the rest, so a future capability is an additive-safe "
+            "MINOR change."
         )
     )
     sanitizer_revision: str
@@ -280,6 +396,17 @@ class HealthResponse(BaseModel):
             "Which storage the content cache selected at start: 'valkey' when "
             "VALKEY_URL was set, 'memory' when it was fully unset. Added in "
             "contract 1.1.0."
+        )
+    )
+    search_providers: list[str] = Field(
+        description=(
+            "The resolved search-provider chain's names, in traversal "
+            "order — the FORAGE_SEARCH_PROVIDERS entries this start "
+            "resolved after key-gated skips (a 'brave' entry with no "
+            "usable key is absent here, not just unusable). Configuration "
+            "echo fixed for the life of the process, not a liveness probe: "
+            "it says what this start resolved, never whether a provider is "
+            "reachable right now. Added in contract 1.2.0."
         )
     )
     degraded_reasons: list[DegradedReason] = Field(
@@ -367,7 +494,7 @@ class SearchMetricsResponse(BaseModel):
     errors: dict[str, int] = Field(
         description=(
             "Refusals keyed by the /search error code (searxng_error, "
-            "searxng_unavailable)."
+            "searxng_unavailable, search_unavailable)."
         )
     )
     omitted_by_reason: dict[str, int] = Field(
@@ -379,6 +506,32 @@ class SearchMetricsResponse(BaseModel):
     )
     unscanned_results: int = Field(
         description="Results returned without an ML injection scan (degraded mode)."
+    )
+    fallback_fired: int = Field(
+        description=(
+            "Per-process count of the per-response `fallback_fired` bool — how "
+            "many `/search` requests had their provider chain advance past the "
+            "first provider, including ones that ended in a 422. Moves only "
+            "when the configured chain has more than one provider; a "
+            "`searxng`-only deployment's first-party signal is the "
+            "`search_provider_failed` WARNING instead."
+        )
+    )
+    paid_calls: int = Field(
+        description=(
+            "Count of calls made to a `paid=True` provider, incremented before "
+            "the call so a call that times out is still counted — whether or "
+            "not it went on to serve the response. Zero on a chain with no "
+            "paid provider configured."
+        )
+    )
+    policy_unknown_provider: int = Field(
+        description=(
+            "Per-request `providers` entries ignored — beyond the first eight, "
+            "or matching no configured provider — never the offending name "
+            "itself. Compare against `/health` `search_providers` to tell a "
+            "bad name from a missing key."
+        )
     )
 
 
@@ -570,7 +723,8 @@ class Pipeline422ErrorResponse(BaseModel):
     error: Pipeline422ErrorCode = Field(
         description=(
             "Stable machine-readable refusal code. The fetch and URL-validation "
-            "codes arrive on /retrieve, the searxng_* codes on /search."
+            "codes arrive on /retrieve, the searxng_* codes and "
+            "search_unavailable on /search."
         )
     )
     reason: str = Field(
@@ -726,6 +880,9 @@ class SearchMetrics:
         self.errors: dict[str, int] = {}
         self.omitted_by_reason: dict[str, int] = {}
         self.unscanned_results = 0
+        self.fallback_fired = 0
+        self.paid_calls = 0
+        self.policy_unknown_provider = 0
 
     def record_error(self, error: str) -> None:
         """Record one content-free search error, keyed by ``PipelineError.error``."""
@@ -1076,6 +1233,45 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     _warn_if_break_glass_advertisement_enabled()
 
+    # Resolved unconditionally, on the same posture as
+    # `cache_settings_from_config` below: whether or not "brave" is in the
+    # resolved chain, a wrong-typed or out-of-range value refuses boot
+    # rather than shipping dead (`feature-brave-provider` US-002). Read
+    # ahead of the chain build below because `build_provider_chain` needs
+    # the resolved settings to hand a registered `BraveApiProvider`.
+    app.state.brave_settings = brave_settings_from_config(config)
+
+    # Resolve the ordered search-provider chain from the environment, once.
+    # An unknown name raises `SearchProviderConfigurationError` straight out
+    # of the lifespan — the `extraction_settings_from_config` /
+    # `cache_settings_from_config` precedent: a typo fails the boot loudly
+    # rather than quietly running a chain the operator did not ask for. A
+    # `"brave"` entry with no usable key is skipped (WARNING), never a boot
+    # refusal — the key-less deployment is the supported floor.
+    # Evaluated exactly once — this single verdict feeds both the chain
+    # build below and `search_key_capabilities`, so the two can never
+    # disagree about whether the key is usable (US-002's "one evaluation"
+    # rule). `brave_key is not None` is that verdict: `_resolve_brave_key`
+    # already returns `None` for absent, blank, or `brave_key_invalid`
+    # values.
+    brave_key = _resolve_brave_key()
+    search_providers = build_provider_chain(
+        _configured_provider_names(),
+        searxng_url=SEARXNG_URL,
+        brave_api_key=brave_key,
+        brave_settings=app.state.brave_settings,
+    )
+    app.state.search_providers = search_providers
+    app.state.search_key_capabilities = (
+        (CAPABILITY_BRAVE_API_KEY,) if brave_key is not None else ()
+    )
+    # Names only — never the configured endpoint or any other environment
+    # value.
+    logger.info(
+        "Search providers resolved: %s",
+        ", ".join(provider.name for provider in search_providers),
+    )
+
     # Connect content cache. The `cache:` bounds are validated here whichever
     # storage ends up selected — a typo fails the boot loudly, exactly as the
     # `extraction:` block does, rather than silently widening a memory bound.
@@ -1194,6 +1390,12 @@ app.state.model_metrics = ModelMetrics()
 # suite's `client` fixture uses) — `None` means "no acquisition was started".
 app.state.model_task = None
 app.state.model_acquisition = None
+# `None` means "no lifespan resolved a chain"; `_resolved_search_providers`
+# reads it and falls back to the default one-element SearXNG chain.
+app.state.search_providers = None
+# `None` means "no lifespan evaluated brave_key_present()";
+# `_resolved_search_key_capabilities` reads it and falls back to `()`.
+app.state.search_key_capabilities = None
 app.state.classification_semaphore = asyncio.Semaphore(
     _initial_extraction_settings.classification_concurrency
 )
@@ -1264,6 +1466,11 @@ async def health(request: Request) -> HealthResponse:
         if classifier_loaded or _break_glass_advertisement_enabled()
         else {}
     )
+    # Computed independently of the sanitization entry above — from the
+    # lifespan's single `brave_key_present()` verdict, never re-read from
+    # the environment here.
+    for key in _resolved_search_key_capabilities(request.app.state):
+        capabilities[key] = 1
 
     return HealthResponse(
         status="degraded" if degraded_reasons else "healthy",
@@ -1273,6 +1480,9 @@ async def health(request: Request) -> HealthResponse:
         sanitizer_revision=sanitizer_revision,
         contract_version=CONTRACT_VERSION,
         cache_backend=_resolved_cache_backend(request.app.state),
+        search_providers=[
+            provider.name for provider in _resolved_search_providers(request.app.state)
+        ],
         degraded_reasons=degraded_reasons,
     )
 
@@ -1309,6 +1519,9 @@ async def metrics(request: Request) -> dict[str, Any]:
             "errors": search_metrics.errors,
             "omitted_by_reason": search_metrics.omitted_by_reason,
             "unscanned_results": search_metrics.unscanned_results,
+            "fallback_fired": search_metrics.fallback_fired,
+            "paid_calls": search_metrics.paid_calls,
+            "policy_unknown_provider": search_metrics.policy_unknown_provider,
         },
         "retrieve": {
             "requests": retrieve_metrics.requests,
@@ -1358,7 +1571,23 @@ async def metrics(request: Request) -> dict[str, Any]:
     },
 )
 async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
-    """Retrieve and sanitize web content through the full pipeline."""
+    """Fetch and sanitize one caller-named URL through the full pipeline.
+
+    `/retrieve` fetches and sanitizes one caller-named URL through the full
+    pipeline, cached by `sanitizer_revision`; `/search` finds and returns
+    provider-extracted content for a query across sources — snippets or
+    chunks, per result `content_kind` — from the configured provider chain,
+    every result sanitized, never cached.
+
+    `promptguard_fail_closed` is honoured on both routes; `/retrieve`
+    additionally honours `promptguard_threshold`, `trusted_domains`,
+    `verified_domains`, `blocked_domains` and `cache_ttl_hours`, while
+    `/search` additionally honours `providers` and `allow_paid_fallback`
+    (contract 1.2.0) and scans every result at the fixed 0.85 default at
+    trust tier `standard` (`config.yaml`'s `promptguard_threshold` is not
+    applied there). This documents today's divergence; changing it belongs
+    to `epic-forage-hardening`.
+    """
     retrieve_metrics: RetrieveMetrics = request.app.state.retrieve_metrics
     retrieve_metrics.requests += 1
     try:
@@ -1546,15 +1775,43 @@ async def extract(
     },
 )
 async def search(request: Request, body: SearchRequest) -> SearchResponse:
-    """Run a web search through SearXNG with snippet sanitization."""
+    """Find and return provider-extracted content for a query, across sources.
+
+    `/search` finds and returns provider-extracted content for a query
+    across sources — snippets or chunks, per result `content_kind` — from
+    the configured provider chain, every result sanitized, never cached;
+    `/retrieve` fetches and sanitizes one caller-named URL through the full
+    pipeline, cached by `sanitizer_revision`.
+
+    `promptguard_fail_closed` is honoured on both routes; `/search`
+    additionally honours `providers` and `allow_paid_fallback` (contract
+    1.2.0) and scans every result at the fixed 0.85 default at trust tier
+    `standard` (`config.yaml`'s `promptguard_threshold` is not applied
+    here), while `/retrieve` additionally honours `promptguard_threshold`,
+    `trusted_domains`, `verified_domains`, `blocked_domains` and
+    `cache_ttl_hours`. This documents today's divergence; changing it
+    belongs to `epic-forage-hardening`.
+    """
     search_metrics: SearchMetrics = request.app.state.search_metrics
     search_metrics.requests += 1
+    configured_chain = _resolved_search_providers(request.app.state)
+    effective_chain, ignored_count = apply_request_policy(configured_chain, body)
+    search_metrics.policy_unknown_provider += ignored_count
+    if not effective_chain:
+        search_metrics.record_error("search_unavailable")
+        raise PipelineError(
+            error="search_unavailable",
+            reason=POLICY_EXCLUDED_ALL_PROVIDERS,
+            request_id=uuid.uuid4().hex,
+        )
     try:
         response = await run_search_pipeline(
             body,
-            searxng_url=SEARXNG_URL,
+            providers=effective_chain,
+            configured_chain=configured_chain,
             config=request.app.state.config,
             classifier=request.app.state.classifier,
+            search_metrics=search_metrics,
         )
     except PipelineError as exc:
         search_metrics.record_error(exc.error)

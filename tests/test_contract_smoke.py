@@ -77,6 +77,7 @@ def _health_body(**overrides: object) -> str:
         # it reads has no `VALKEY_URL` and reports the memory backend
         # (`feature-forage-cache-fallback` US-002/US-003).
         "cache_backend": "memory",
+        "search_providers": ["searxng"],
         "degraded_reasons": [
             DEGRADED_PROMPTGUARD_UNAVAILABLE,
             DEGRADED_CACHE_UNAVAILABLE,
@@ -702,6 +703,223 @@ class TestWaitForHealth:
 
 
 # ---------------------------------------------------------------------------
+# --expect-status healthy (search-release US-004)
+# ---------------------------------------------------------------------------
+
+
+def _healthy_response(**overrides: object) -> HttpResponse:
+    """A weights-loaded ``/health`` body: PromptGuard up, sanitization offered."""
+    fields: dict[str, object] = {
+        "status": contract_smoke.STATUS_HEALTHY,
+        "promptguard_loaded": True,
+        "capabilities": {CAPABILITY_SEARCH_SANITIZATION: True},
+        "degraded_reasons": [],
+    }
+    fields.update(overrides)
+    return _health_response(**fields)
+
+
+class _Clock:
+    """An injected monotonic clock that advances one second per reading."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        self.now += 1.0
+        return self.now
+
+
+class TestExpectStatus:
+    def test_the_choices_are_the_two_health_states(self) -> None:
+        assert contract_smoke.EXPECT_STATUS_CHOICES == ("healthy", "degraded")
+        assert contract_smoke.EXPECTED_STATUS == "degraded"
+
+    def test_a_healthy_body_passes_under_healthy(self) -> None:
+        assert (
+            evaluate_health(
+                _healthy_response(), expect_status=contract_smoke.STATUS_HEALTHY
+            )
+            == []
+        )
+
+    def test_a_degraded_body_fails_under_healthy(self) -> None:
+        failures = evaluate_health(
+            _health_response(), expect_status=contract_smoke.STATUS_HEALTHY
+        )
+        joined = _joined(failures)
+        assert len(failures) == 3, joined
+        assert "'degraded', expected 'healthy'" in joined
+        assert DEGRADED_PROMPTGUARD_UNAVAILABLE in joined
+        assert CAPABILITY_SEARCH_SANITIZATION in joined
+
+    def test_a_healthy_body_fails_under_the_default(self) -> None:
+        failures = evaluate_health(_healthy_response())
+        joined = _joined(failures)
+        assert len(failures) == 3, joined
+        assert "'healthy', expected 'degraded'" in joined
+
+    def test_the_other_checks_are_identical_under_healthy(self) -> None:
+        failures = evaluate_health(
+            _healthy_response(contract_version="9.9.9"),
+            expect_status=contract_smoke.STATUS_HEALTHY,
+        )
+        assert len(failures) == 1 and "9.9.9" in failures[0]
+
+    def test_the_wait_keeps_polling_past_a_degraded_200(self) -> None:
+        fetch = _ScriptedFetcher(
+            _health_response(), _health_response(), _healthy_response()
+        )
+        delays: list[float] = []
+        result = wait_for_health(
+            "http://host:8020",
+            expect_status=contract_smoke.STATUS_HEALTHY,
+            fetch=fetch,
+            sleep=delays.append,
+            clock=_Clock(),
+            log=lambda _: None,
+        )
+        assert result == _healthy_response()
+        assert len(fetch.urls) == 3
+        assert len(delays) == 2
+
+    def test_an_unparseable_200_counts_as_not_yet(self) -> None:
+        fetch = _ScriptedFetcher(HttpResponse(200, "not json"), _healthy_response())
+        result = wait_for_health(
+            "http://host:8020",
+            expect_status=contract_smoke.STATUS_HEALTHY,
+            fetch=fetch,
+            sleep=lambda _: None,
+            clock=_Clock(),
+            log=lambda _: None,
+        )
+        assert result == _healthy_response()
+        assert len(fetch.urls) == 2
+
+    def test_the_wait_returns_the_last_body_at_the_deadline(self) -> None:
+        fetch = _ScriptedFetcher(_health_response())
+        clock = _Clock()
+        result = wait_for_health(
+            "http://host:8020",
+            expect_status=contract_smoke.STATUS_HEALTHY,
+            timeout_seconds=5.0,
+            fetch=fetch,
+            sleep=lambda _: None,
+            clock=clock,
+            log=lambda _: None,
+        )
+        assert result == _health_response()
+        assert clock.now >= 6.0, "the wait must run to the injected deadline"
+        failures = evaluate_health(result, expect_status=contract_smoke.STATUS_HEALTHY)
+        assert any("'degraded', expected 'healthy'" in f for f in failures)
+
+    def test_a_healthy_run_passes_end_to_end(self) -> None:
+        fetch = _EndpointFetcher(
+            _healthy_response(), HttpResponse(200, _metrics_body())
+        )
+        failures = run_smoke(
+            "http://host:8020",
+            expect_status=contract_smoke.STATUS_HEALTHY,
+            image=_IMAGE,
+            fetch=fetch,
+            run=_RecordingRunner(),
+            sleep=lambda _: None,
+            log=lambda _: None,
+        )
+        assert failures == []
+
+
+class TestAnchorFlag:
+    def test_the_in_image_anchor_is_compared_against_the_anchor_file(
+        self, tmp_path: Path
+    ) -> None:
+        # The image carries the committed pair; the --anchor file names another
+        # tag's anchor. The run must judge the image by the file it was handed,
+        # not by this checkout's committed anchor.
+        other = tmp_path / "openapi.yaml.sha256"
+        other.write_text(render_anchor("a different contract\n"), encoding="utf-8")
+        fetch = _EndpointFetcher(_health_response(), HttpResponse(200, _metrics_body()))
+        failures = run_smoke(
+            "http://host:8020",
+            anchor_path=other,
+            image=_IMAGE,
+            fetch=fetch,
+            run=_RecordingRunner(),
+            sleep=lambda _: None,
+            log=lambda _: None,
+        )
+        joined = _joined(failures)
+        assert failures, "an image that disagrees with the --anchor file must fail"
+        assert other.read_text(encoding="utf-8").strip() in joined
+
+    def test_a_matching_anchor_file_passes(self, tmp_path: Path) -> None:
+        copy = tmp_path / "openapi.yaml.sha256"
+        copy.write_text(_committed_anchor(), encoding="utf-8")
+        fetch = _EndpointFetcher(_health_response(), HttpResponse(200, _metrics_body()))
+        failures = run_smoke(
+            "http://host:8020",
+            anchor_path=copy,
+            image=_IMAGE,
+            fetch=fetch,
+            run=_RecordingRunner(),
+            sleep=lambda _: None,
+            log=lambda _: None,
+        )
+        assert failures == []
+
+    def test_an_unreadable_anchor_file_is_a_failure(self, tmp_path: Path) -> None:
+        fetch = _EndpointFetcher(_health_response(), HttpResponse(200, _metrics_body()))
+        failures = run_smoke(
+            "http://host:8020",
+            anchor_path=tmp_path / "missing.sha256",
+            image=_IMAGE,
+            fetch=fetch,
+            run=_RecordingRunner(),
+            sleep=lambda _: None,
+            log=lambda _: None,
+        )
+        assert any("--anchor" in failure for failure in failures)
+
+    def test_the_default_anchor_is_the_committed_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, Any] = {}
+
+        def _capture(base_url: str, **kwargs: Any) -> list[str]:
+            seen.update(kwargs)
+            return []
+
+        monkeypatch.setattr(contract_smoke, "run_smoke", _capture)
+        contract_smoke.main([])
+        assert seen["anchor_path"] == ANCHOR_PATH
+        assert seen["expect_status"] == "degraded"
+
+    def test_both_flags_reach_the_run(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        seen: dict[str, Any] = {}
+
+        def _capture(base_url: str, **kwargs: Any) -> list[str]:
+            seen.update(kwargs)
+            return []
+
+        monkeypatch.setattr(contract_smoke, "run_smoke", _capture)
+        anchor = tmp_path / "anchor.sha256"
+        contract_smoke.main(["--expect-status", "healthy", "--anchor", str(anchor)])
+        assert seen["expect_status"] == "healthy"
+        assert seen["anchor_path"] == anchor
+
+    def test_the_anchor_rule_is_stated_where_the_flag_is(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit):
+            contract_smoke.main(["--help"])
+        help_text = " ".join(capsys.readouterr().out.split())
+        assert "never from the Release assets" in help_text
+        assert "never from the Release assets" in (contract_smoke.__doc__ or "")
+
+
+# ---------------------------------------------------------------------------
 # The whole run
 # ---------------------------------------------------------------------------
 
@@ -733,8 +951,14 @@ class TestRunSmoke:
             _health_response(status="healthy", degraded_reasons=[]),
             HttpResponse(500, "boom"),
         )
+        # A zero budget: the wait is status-aware, so a body that never reports
+        # the expected status polls to the deadline before it is evaluated.
         failures = run_smoke(
-            "http://host:8020", fetch=fetch, sleep=lambda _: None, log=lambda _: None
+            "http://host:8020",
+            timeout_seconds=0.0,
+            fetch=fetch,
+            sleep=lambda _: None,
+            log=lambda _: None,
         )
         assert any("healthy" in failure for failure in failures)
         assert any("/metrics" in failure for failure in failures)
@@ -817,6 +1041,7 @@ class TestRunSmoke:
         )
         failures = run_smoke(
             "http://host:8020",
+            timeout_seconds=0.0,
             image=_IMAGE,
             fetch=fetch,
             run=runner,

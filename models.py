@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import re
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from pipeline.contract import PromptGuardState
+from pipeline.contract import ContentKind, PromptGuardState
 
 MAX_CACHE_TTL_HOURS = 8_760
+
+# `SearchResult.date` is a strict calendar date and nothing else. The regex runs
+# *before* `date.fromisoformat`, which on its own also accepts the compact
+# (`20260915`) and ISO-week (`2026-W38-2`) forms — neither of which is the
+# `YYYY-MM-DD` shape the contract promises. Together they are a closed filter: a
+# value that survives both is a real day, so nothing free-form from a provider
+# can reach the wire through this field.
+_CALENDAR_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -210,7 +219,22 @@ class ExtractedContent(BaseModel):
 
 
 class RetrieveRequest(BaseModel):
-    """Inbound request to retrieve and sanitise a URL."""
+    """Inbound request to retrieve and sanitise a URL.
+
+    `/retrieve` fetches and sanitizes one caller-named URL through the full
+    pipeline, cached by `sanitizer_revision`; `/search` finds and returns
+    provider-extracted content for a query across sources — snippets or
+    chunks, per result `content_kind` — from the configured provider chain,
+    every result sanitized, never cached. `promptguard_fail_closed` is
+    honoured on both routes; this route additionally honours
+    `promptguard_threshold`, `trusted_domains`, `verified_domains`,
+    `blocked_domains` and `cache_ttl_hours`, while `/search` additionally
+    honours `providers` and `allow_paid_fallback` (contract 1.2.0) and scans
+    every result at the fixed 0.85 default at trust tier `standard`
+    (`config.yaml`'s `promptguard_threshold` is not applied there). This
+    documents today's divergence; changing it belongs to
+    `epic-forage-hardening`.
+    """
 
     url: str = Field(..., min_length=1, description="URL to retrieve")
     extract_mode: Literal["summary", "full"] = Field(
@@ -247,7 +271,22 @@ class RetrieveRequest(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    """Inbound request to run a web search."""
+    """Inbound request to run a web search.
+
+    `/search` finds and returns provider-extracted content for a query
+    across sources — snippets or chunks, per result `content_kind` — from
+    the configured provider chain, every result sanitized, never cached;
+    `/retrieve` fetches and sanitizes one caller-named URL through the full
+    pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` is
+    honoured on both routes; this route additionally honours `providers`
+    and `allow_paid_fallback` (contract 1.2.0) and scans every result at
+    the fixed 0.85 default at trust tier `standard` (`config.yaml`'s
+    `promptguard_threshold` is not applied here), while `/retrieve`
+    additionally honours `promptguard_threshold`, `trusted_domains`,
+    `verified_domains`, `blocked_domains` and `cache_ttl_hours`. This
+    documents today's divergence; changing it belongs to
+    `epic-forage-hardening`.
+    """
 
     query: str = Field(..., min_length=1, description="Search query")
     num_results: int = Field(
@@ -260,6 +299,31 @@ class SearchRequest(BaseModel):
             "(fail-closed). When False, allow with a suspicion marker (fail-open)."
         ),
     )
+    providers: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Restrict-only filter of the configured provider chain, in "
+            "configured order: can exclude paid providers only, never add, "
+            "reorder, or key one — free providers always run. Entries are "
+            "matched after strip() and lower-casing against the names "
+            "/health's `search_providers` publishes. Entries beyond the "
+            "first eight, and entries matching no configured provider, are "
+            "ignored and counted on /metrics `search.policy_unknown_provider` "
+            "rather than rejected. Empty (the default) means the configured "
+            "chain runs unrestricted. Honoured from contract 1.2.0."
+        ),
+    )
+    allow_paid_fallback: bool = Field(
+        default=True,
+        description=(
+            "When False, excludes every paid provider from this request's "
+            "effective chain regardless of `providers` — free providers "
+            "always run. Applied after `providers`' own "
+            "normalise-then-ignore-and-count filtering (ruling 29). One-way: "
+            "can only narrow the configured chain, never widen, reorder, or "
+            "key it. Honoured from contract 1.2.0."
+        ),
+    )
 
 
 class SearchResult(BaseModel):
@@ -267,12 +331,65 @@ class SearchResult(BaseModel):
 
     title: str = Field(..., description="Result title")
     url: str = Field(..., description="Result URL")
+    domain: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Lower-cased hostname of `url` (`urlsplit(url).hostname`), with no "
+            "userinfo or port — a provenance signal, not a trust decision. This "
+            "is the hostname, not the registrable domain (eTLD+1); derive that "
+            "yourself if you need it. For an IPv6 literal this is the "
+            "unbracketed form ('2001:db8::1') while `url` carries the bracketed "
+            "form ('[2001:db8::1]') — the one case where `domain` is not a "
+            "substring of `url`. Added in contract 1.2.0."
+        ),
+    )
     snippet: str = Field(..., description="Result snippet / description")
     engine: str | None = Field(default=None, description="Search engine used")
+    content_kind: ContentKind = Field(
+        default="snippet",
+        description=(
+            "What kind of content this result carries: 'snippet' for a search "
+            "engine's own summary (every SearXNG result), 'chunk' for a passage "
+            "a provider extracted from the page. Those two values are the whole "
+            "set. Added in contract 1.2.0."
+        ),
+    )
+    date: str | None = Field(
+        default=None,
+        description=(
+            "The result's publication date as a strict 'YYYY-MM-DD' calendar "
+            "date. Anything else — absent, a non-string, a different format, or "
+            "a day that does not exist — is null. Added in contract 1.2.0."
+        ),
+    )
     suspicious: bool = Field(
         default=False,
         description="Whether Stage 2 or Stage 3 flagged this result as suspicious",
     )
+
+    @field_validator("date", mode="before")
+    @classmethod
+    def _strict_calendar_date(cls, value: object) -> str | None:
+        """Keep *value* only if it is a real ``YYYY-MM-DD`` day; else ``None``.
+
+        Providers hand this field through from attacker-influenced upstream
+        JSON, so it is a filter rather than a parse: anything that is not a
+        `str` matching ``_CALENDAR_DATE_RE`` *and* accepted by
+        ``date.fromisoformat`` becomes ``None`` rather than raising. A refusal
+        here would let one malformed result fail a whole search response; the
+        result is served without its date instead.
+
+        Because nothing free-form survives, the field needs no injection scan
+        and no length cap — the ten-character shape is its own bound.
+        """
+        if not isinstance(value, str) or not _CALENDAR_DATE_RE.match(value):
+            return None
+        try:
+            date.fromisoformat(value)
+        except ValueError:
+            return None
+        return value
 
 
 class SearchResponse(BaseModel):
@@ -283,6 +400,37 @@ class SearchResponse(BaseModel):
     )
     request_id: str = Field(..., min_length=1, description="UUID for this search")
     query: str = Field(..., min_length=1, description="Original query")
+    provider_used: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "The serving provider's name (the token FORAGE_SEARCH_PROVIDERS "
+            "names, e.g. 'searxng', 'brave'). An open string rather than an "
+            "enum: a third provider is an additive change, not a validation "
+            "failure on an old client."
+        ),
+    )
+    fallback_fired: bool = Field(
+        default=False,
+        description=(
+            "True iff the provider chain advanced past the first provider "
+            "before this response was served — the per-response face of the "
+            "`search.fallback_fired` /metrics counter. It records chain "
+            "advancement, not which provider ultimately served: for a "
+            "chain that tries a provider before a free one, this is True "
+            "when the free provider ends up serving."
+        ),
+    )
+    provider_errors: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Chain-order '<provider_name>: <failure_class>' entries for every "
+            "provider tried before the one that served, from a closed "
+            "failure-class vocabulary — never exception text or a URL. The "
+            "only home for provider-level failures: they never affect "
+            "omitted_results/omitted_by_reason or unresponsive_engines."
+        ),
+    )
     unresponsive_engines: list[str] = Field(
         default_factory=list,
         description="SearXNG engines that failed to respond",

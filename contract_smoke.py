@@ -33,6 +33,35 @@ Those two together are the in-image leg of US-004's three-way sha256 equality
 (repo ↔ Release asset ↔ image); the Release-asset leg is asserted by the
 ``publish`` job, against the same committed anchor.
 
+**Two modes (``search-release`` US-004).** ``--expect-status`` picks which
+container is under test, and the flag must match how the container was
+started:
+
+* ``--expect-status degraded`` (the default, and what CI runs) — a container
+  started with no Hugging Face token and no weights. The checks above apply as
+  written.
+* ``--expect-status healthy`` — a container started with weights (an
+  ``--env-file`` carrying the token, say). The three PromptGuard-coupled checks
+  invert: ``status`` is exactly ``"healthy"``, ``promptguard_unavailable`` is
+  *absent* from ``degraded_reasons``, and ``capabilities`` *does* advertise
+  ``search_sanitization``. Every other check — contract version, sanitizer
+  revision, ``/metrics``, the in-image contract and anchor — is identical.
+
+The wait knows what it is waiting for: ``/health`` answers 200 the moment
+uvicorn binds, while PromptGuard is still loading in the background, so the
+poll continues until the body's ``status`` equals the expected one (or the
+deadline passes, returning the last response for the evaluator to report).
+The default ``--timeout-seconds`` of 120 was sized for a token-less start;
+raise it for a container fetching weights cold.
+
+**``--anchor``** names the committed anchor the in-image copy is verified
+against — by default this checkout's ``contract/openapi.yaml.sha256``. To verify
+a release image from any checkout, pass the anchor committed at that tag
+(``git show v1.1.0:contract/openapi.yaml.sha256 > anchor.sha256``, or a clean
+checkout of the tag). Take it from the git history only —
+never from the Release assets and never from the image. Both are mutable
+copies, and a tampered document-plus-anchor pair verifies against itself.
+
 **One source of truth for the field expectations.** The shape check is
 ``HealthResponse.model_validate`` plus a field-name comparison against
 ``HealthResponse.model_fields`` — the very model
@@ -57,7 +86,13 @@ Run it by hand against a container, or anything else serving the contract::
 
     docker run -d --name forage-smoke -p 8020:8020 forage:ci
     uv run python contract_smoke.py --base-url http://127.0.0.1:8020 \
-        --image forage:ci
+        --image forage:ci --expect-status degraded
+
+    # a weights-loaded container, verified against the anchor at its tag
+    git show v1.1.0:contract/openapi.yaml.sha256 > /tmp/anchor.sha256
+    uv run python contract_smoke.py --base-url http://127.0.0.1:8020 \
+        --image <ref> --expect-status healthy --anchor /tmp/anchor.sha256 \
+        --timeout-seconds 600
 
 ``--image`` is optional and needs a local Docker daemon that can see the
 reference; without it the endpoint checks run exactly as before.
@@ -76,6 +111,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 import yaml
@@ -91,10 +127,16 @@ from scripts.export_contract import ANCHOR_PATH, render_anchor
 # than a comment.
 HEALTH_MODEL = HealthResponse
 
-# A weights-free image must report this and only this. The literal is spelled
-# out because it *is* the assertion; every other wire string in this module is
-# imported.
-EXPECTED_STATUS = "degraded"
+# The two `/health` states `--expect-status` can assert. The literals are
+# spelled out because they *are* the assertion; every other wire string in this
+# module is imported.
+STATUS_DEGRADED = "degraded"
+STATUS_HEALTHY = "healthy"
+EXPECT_STATUS_CHOICES = (STATUS_HEALTHY, STATUS_DEGRADED)
+
+# A weights-free image must report this and only this — the default mode, and
+# the one CI's smoke job runs.
+EXPECTED_STATUS = STATUS_DEGRADED
 
 # `retrieval_app.health` falls back to this string when it cannot derive a
 # revision. It is non-empty, so "non-empty" alone would accept the failure it
@@ -103,7 +145,8 @@ UNDERIVED_REVISION = "unknown"
 
 # 120 s, not 30: a cold start imports torch before uvicorn binds, and the
 # PromptGuard load attempt reaches Hugging Face and is refused before the app
-# can finish coming up.
+# can finish coming up. Sized for a token-less start: a `healthy` run against a
+# container fetching weights cold needs a larger `--timeout-seconds`.
 DEFAULT_TIMEOUT_SECONDS = 120.0
 DEFAULT_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_BASE_URL = "http://127.0.0.1:8020"
@@ -183,36 +226,59 @@ def http_get(url: str) -> HttpResponse:
     return HttpResponse(status, payload.decode("utf-8", "replace"))
 
 
+def reported_status(response: HttpResponse) -> str | None:
+    """The ``status`` in a ``/health`` body, or ``None`` if it cannot be read."""
+    try:
+        payload: object = json.loads(response.body)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    status = cast(dict[str, object], payload).get("status")
+    return status if isinstance(status, str) else None
+
+
 def wait_for_health(
     base_url: str,
     *,
+    expect_status: str = EXPECTED_STATUS,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
     fetch: Fetcher = http_get,
     sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
     log: Logger = print,
 ) -> HttpResponse:
-    """Poll ``/health`` until it answers 200 or the budget expires.
+    """Poll ``/health`` until it answers 200 reporting *expect_status*.
+
+    A 200 alone is not enough: ``/health`` answers 200 as soon as uvicorn
+    binds, while PromptGuard is still loading, so a ``healthy`` run that
+    stopped at the first 200 would fail a container seconds from healthy. A
+    body that does not parse counts as "not yet".
 
     Returns the last response seen either way — a timeout is reported by the
     evaluator as a contract failure with the last body attached, so the caller
     has one failure path rather than two.
     """
     url = f"{base_url.rstrip('/')}/health"
-    deadline = time.monotonic() + timeout_seconds
+    deadline = clock() + timeout_seconds
     response = HttpResponse(0, "no request was attempted")
     attempts = 0
 
     while True:
         attempts += 1
         response = fetch(url)
-        if response.status == 200:
-            log(f"/health answered 200 after {attempts} attempt(s)")
-            return response
-        if time.monotonic() >= deadline:
+        if response.status == 200 and reported_status(response) == expect_status:
             log(
-                f"/health never answered 200 within {timeout_seconds:g}s "
-                f"({attempts} attempt(s)); last status {response.status}"
+                f"/health answered 200 with status {expect_status!r} after "
+                f"{attempts} attempt(s)"
+            )
+            return response
+        if clock() >= deadline:
+            log(
+                f"/health never answered 200 with status {expect_status!r} within "
+                f"{timeout_seconds:g}s ({attempts} attempt(s)); last status "
+                f"{response.status}"
             )
             return response
         sleep(poll_interval_seconds)
@@ -237,11 +303,16 @@ def _json_object(
     return cast(dict[str, object], parsed)
 
 
-def evaluate_health(response: HttpResponse) -> list[str]:
-    """Return every way *response* violates the degraded ``/health`` contract.
+def evaluate_health(
+    response: HttpResponse, *, expect_status: str = EXPECTED_STATUS
+) -> list[str]:
+    """Return every way *response* violates the ``/health`` contract.
 
-    An empty list is a pass. Every check runs that can run, so one failing run
-    reports the whole picture instead of the first thing that broke.
+    *expect_status* selects the mode: under ``degraded`` (weights-free) and
+    ``healthy`` (weights loaded) the three PromptGuard-coupled checks invert;
+    every other check is identical. An empty list is a pass. Every check runs
+    that can run, so one failing run reports the whole picture instead of the
+    first thing that broke.
     """
     failures: list[str] = []
     excerpt = response.body[:_BODY_EXCERPT_CHARS]
@@ -281,19 +352,41 @@ def evaluate_health(response: HttpResponse) -> list[str]:
         )
         return failures
 
-    if health.status != EXPECTED_STATUS:
+    healthy = expect_status == STATUS_HEALTHY
+    if health.status != expect_status:
+        if healthy:
+            failures.append(
+                f"/health reports status {health.status!r}, expected "
+                f"{expect_status!r}. --expect-status healthy is for a container "
+                "started with weights; this one is not serving PromptGuard."
+            )
+        else:
+            failures.append(
+                f"/health reports status {health.status!r}, expected "
+                f"{expect_status!r}. A weights-free image has no PromptGuard, "
+                "and reporting anything else is the silent failure that ran "
+                "unnoticed for nine days in production. Against a container "
+                "started with weights, pass --expect-status healthy."
+            )
+    promptguard_reason = DEGRADED_PROMPTGUARD_UNAVAILABLE in health.degraded_reasons
+    if healthy and promptguard_reason:
         failures.append(
-            f"/health reports status {health.status!r}, expected "
-            f"{EXPECTED_STATUS!r}. A weights-free image has no PromptGuard, and "
-            "reporting anything else is the silent failure that ran unnoticed "
-            "for nine days in production."
+            f"/health degraded_reasons {health.degraded_reasons!r} contains "
+            f"{DEGRADED_PROMPTGUARD_UNAVAILABLE!r} under --expect-status healthy"
         )
-    if DEGRADED_PROMPTGUARD_UNAVAILABLE not in health.degraded_reasons:
+    if not healthy and not promptguard_reason:
         failures.append(
             f"/health degraded_reasons {health.degraded_reasons!r} does not "
             f"contain {DEGRADED_PROMPTGUARD_UNAVAILABLE!r}"
         )
-    if CAPABILITY_SEARCH_SANITIZATION in health.capabilities:
+    advertised = CAPABILITY_SEARCH_SANITIZATION in health.capabilities
+    if healthy and not advertised:
+        failures.append(
+            f"/health does not advertise {CAPABILITY_SEARCH_SANITIZATION!r} in "
+            f"capabilities {health.capabilities!r} under --expect-status "
+            "healthy — PromptGuard is not serving search sanitization"
+        )
+    if not healthy and advertised:
         failures.append(
             f"/health advertises {CAPABILITY_SEARCH_SANITIZATION!r} in "
             f"capabilities {health.capabilities!r} while PromptGuard is "
@@ -483,6 +576,8 @@ def evaluate_metrics(response: HttpResponse) -> list[str]:
 def run_smoke(
     base_url: str,
     *,
+    expect_status: str = EXPECTED_STATUS,
+    anchor_path: Path = ANCHOR_PATH,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
     image: str | None = None,
@@ -493,8 +588,10 @@ def run_smoke(
 ) -> list[str]:
     """Poll, probe and evaluate. Returns the failure list (empty is a pass)."""
     log(f"Expecting contract_version {CONTRACT_VERSION} (pipeline/contract.py)")
+    log(f"Expecting /health status {expect_status!r} (--expect-status)")
     health = wait_for_health(
         base_url,
+        expect_status=expect_status,
         timeout_seconds=timeout_seconds,
         poll_interval_seconds=poll_interval_seconds,
         fetch=fetch,
@@ -504,7 +601,7 @@ def run_smoke(
     log(f"--- GET /health -> {health.status} ---")
     log(health.body[:_BODY_EXCERPT_CHARS])
 
-    failures = evaluate_health(health)
+    failures = evaluate_health(health, expect_status=expect_status)
 
     metrics = fetch(f"{base_url.rstrip('/')}/metrics")
     log(f"--- GET /metrics -> {metrics.status} ---")
@@ -516,14 +613,23 @@ def run_smoke(
         contract = read_image_file(image, IMAGE_CONTRACT_PATH, run=run)
         anchor = read_image_file(image, IMAGE_ANCHOR_PATH, run=run)
         log(f"in-image anchor: {anchor.stdout.strip() or anchor.stderr.strip()}")
-        failures.extend(
-            evaluate_image_contract(
-                contract,
-                anchor,
-                served_version=served_contract_version(health),
-                committed_anchor=ANCHOR_PATH.read_text(encoding="utf-8"),
+        log(f"committed anchor: {anchor_path} (--anchor)")
+        try:
+            committed_anchor = anchor_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            failures.append(
+                f"could not read the --anchor file {anchor_path}: "
+                f"{type(exc).__name__}: {exc}"
             )
-        )
+        else:
+            failures.extend(
+                evaluate_image_contract(
+                    contract,
+                    anchor,
+                    served_version=served_contract_version(health),
+                    committed_anchor=committed_anchor,
+                )
+            )
 
     return failures
 
@@ -542,7 +648,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--timeout-seconds",
         type=float,
         default=DEFAULT_TIMEOUT_SECONDS,
-        help="How long to wait for /health to answer 200",
+        help=(
+            "How long to wait for /health to answer 200 with the expected status "
+            f"(default: {DEFAULT_TIMEOUT_SECONDS:g}, sized for a token-less start; "
+            "raise it for a container fetching weights cold)"
+        ),
     )
     parser.add_argument(
         "--poll-interval-seconds",
@@ -559,14 +669,43 @@ def main(argv: Sequence[str] | None = None) -> int:
             "omit to check the served endpoints only."
         ),
     )
+    parser.add_argument(
+        "--expect-status",
+        choices=EXPECT_STATUS_CHOICES,
+        default=EXPECTED_STATUS,
+        help=(
+            "Which /health status the container must report (default: "
+            f"{EXPECTED_STATUS}). Match how it was started: '{STATUS_DEGRADED}' "
+            "for a container with no token or weights (what CI runs), "
+            f"'{STATUS_HEALTHY}' for one started with weights."
+        ),
+    )
+    parser.add_argument(
+        "--anchor",
+        type=Path,
+        default=ANCHOR_PATH,
+        help=(
+            "The committed anchor the in-image contract is verified against "
+            "(default: this checkout's contract/openapi.yaml.sha256). For a "
+            "release image, pass the anchor committed at its tag — `git show "
+            "vX.Y.Z:contract/openapi.yaml.sha256` or a clean checkout of the "
+            "tag — never from the Release assets and never from the image: "
+            "both are mutable copies, and a tampered pair verifies against "
+            "itself."
+        ),
+    )
     args = parser.parse_args(argv)
     base_url: str = args.base_url
     timeout_seconds: float = args.timeout_seconds
     poll_interval_seconds: float = args.poll_interval_seconds
     image: str | None = args.image
+    expect_status: str = args.expect_status
+    anchor_path: Path = args.anchor
 
     failures = run_smoke(
         base_url,
+        expect_status=expect_status,
+        anchor_path=anchor_path,
         timeout_seconds=timeout_seconds,
         poll_interval_seconds=poll_interval_seconds,
         image=image,
@@ -578,7 +717,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Contract smoke FAILED with {len(failures)} violation(s).")
         return 1
 
-    print("Contract smoke PASSED: degraded, honest, and on-contract.")
+    print(f"Contract smoke PASSED: {expect_status}, honest, and on-contract.")
     return 0
 
 
