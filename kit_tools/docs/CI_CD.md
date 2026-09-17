@@ -9,7 +9,7 @@
 
 > **TEMPLATE_INTENT:** Document build pipelines, deployment triggers, and automation. How code gets to production.
 
-> Last updated: 2026-09-13
+> Last updated: 2026-09-17
 > Updated by: Claude (seed-project)
 
 ---
@@ -214,12 +214,15 @@ See `kit_tools/testing/TESTING_GUIDE.md` for the suite's layout and current coun
 
 Runs with **no checkout** — it downloads the artifact into an empty working directory,
 `docker load`s it, asserts the loaded ID equals the recorded ID, then runs
-`docker history --no-trunc forage:ci` and greps the output for two patterns: the literal
-`HF_TOKEN` (the variable name the deleted bake path used) and `hf_[A-Za-z0-9]{20,}` (the
-shape of a Hugging Face token). Scope is layer *metadata* — build-arg, `ENV` and `RUN`
-lines — which is exactly where a build ARG lands and exactly what `docker history` reads
-back out of any registry. It is not a filesystem scanner. This is the second of the two
-mechanical guards behind `CLAUDE.md` invariant 2; the first is `tests/test_dockerfile.py`.
+`docker history --no-trunc forage:ci` and greps the output for three patterns: the literal
+`HF_TOKEN` (the variable name the deleted bake path used), `hf_[A-Za-z0-9]{20,}` (the
+shape of a Hugging Face token), and the literal `FORAGE_BRAVE_API_KEY` (the Brave search
+credential's variable name — the name only, no key-shape regex). The set is pinned by
+`tests/test_ci_workflow.py::_REQUIRED_GREP_PATTERNS`. Scope is layer *metadata* —
+build-arg, `ENV` and `RUN` lines — which is exactly where a build ARG lands and exactly
+what `docker history` reads back out of any registry. It is not a filesystem scanner.
+This is the second of the two mechanical guards behind `CLAUDE.md` invariant 2; the first
+is `tests/test_dockerfile.py`.
 
 ### `smoke`
 
@@ -245,6 +248,19 @@ hashes it against the committed `contract/openapi.yaml.sha256`. The 120 s budget
 and a guard test ties the number to the script's own default. On failure the job dumps the
 container log; the container is removed either way. `kit_tools/docs/MONITORING.md` covers
 running the same probe against a deployment.
+
+CI passes neither `--expect-status` nor `--anchor` and relies on their defaults:
+`--expect-status degraded` (the weights-free contract above; `/health` is polled until it
+answers 200 *and* reports that status) and `--anchor` pointing at the committed
+`contract/openapi.yaml.sha256`. An operator probing a container started **with** weights
+(an `--env-file` carrying `HF_TOKEN`, or the mirror) passes `--expect-status healthy`,
+which inverts the three PromptGuard-coupled checks — `status: healthy`, no
+`promptguard_unavailable`, `search_sanitization` present — and should raise
+`--timeout-seconds` for a cold weights fetch. The rule is which flag matches which
+container: `degraded` for one started with no token or weights, `healthy` for one started
+with them. When verifying a release image from a checkout other than its tag, `--anchor`
+takes the file `git show vX.Y.Z:contract/openapi.yaml.sha256` prints — never a Release
+asset or the image's own copy.
 
 ---
 
@@ -291,17 +307,26 @@ Steps, in order:
    reference; the `linux/amd64` config's `rootfs.diff_ids` must equal `gated-layers.json`
    layer for layer, and the comparison is asserted non-vacuous. This is what makes the push
    a *release of the image the gates ran* rather than a rebuild that resembles it.
-7. **Published-config secret grep.** The same two patterns as `secret-grep`, run over the
-   published image config JSON for all platforms.
+7. **Published-config secret grep.** The same three patterns as `secret-grep` (`HF_TOKEN`,
+   `hf_[A-Za-z0-9]{20,}`, `FORAGE_BRAVE_API_KEY`), run over the published image config
+   JSON for all platforms.
 8. **On `v*` tags only — Release.** `CONTRACT_VERSION` is grepped out of the *tagged tree's*
-   `pipeline/contract.py` (currently `1.2.0`; a non-semver read fails the step), then
-   `gh release create <tag>` with `--prerelease` when the tag contains `-`, a body carrying
-   the line `contract: X.Y.Z`, and the assets `contract/openapi.yaml` and
-   `contract/openapi.yaml.sha256` uploaded by the same command. Ordering matters: the
-   Release exists only after the push and its verification, so a Release can never
-   advertise an image nobody can pull.
+   `pipeline/contract.py` (currently `1.2.0`; a non-semver read fails the step), and the
+   same step copies that version's **per-version entry** — its bullet at column 0 in the
+   `CONTRACT_VERSION` docstring plus the two-space-indented lines under it — into
+   `${RUNNER_TEMP}/contract-entry.md` with a POSIX `awk` program; an empty file (a contract
+   nobody announced) fails the step, and `$GITHUB_OUTPUT` still carries only `version=`.
+   The job *reads* the tagged tree and executes nothing from it — no `python3`, no `uv`, no
+   `scripts/`. The body is then written to `${RUNNER_TEMP}/release-notes.md`: the fixed
+   heredoc text with its line `contract: X.Y.Z`, a `What changed in contract X.Y.Z:`
+   heading, and the entry appended byte-for-byte with `cat` (never interpolated).
+   `gh release create <tag> --notes-file` publishes it, with `--prerelease` when the tag
+   contains `-` and the assets `contract/openapi.yaml` and `contract/openapi.yaml.sha256`
+   uploaded by the same command. Ordering matters: the Release exists only after the push
+   and its verification, so a Release can never advertise an image nobody can pull.
 9. **Read the Release back.** `gh release view --json body` must match `^contract: X.Y.Z$`
-   anchored; then `gh release download --pattern 'openapi.yaml*'` into a scratch directory,
+   anchored, and every line of the per-version entry must appear in it (`grep -qF`); then
+   `gh release download --pattern 'openapi.yaml*'` into a scratch directory,
    `cmp` the downloaded anchor against the committed `contract/openapi.yaml.sha256`, and
    `sha256sum -c openapi.yaml.sha256` beside the downloaded document.
 
@@ -309,10 +334,11 @@ Steps, in order:
 green on that commit; the published amd64 filesystem is layer-identical to the image
 `smoke` executed and `secret-grep` cleared; the published config carries no secret pattern;
 the Release exists only after push and verification; its body's contract line matches the
-tagged tree; its assets verify against the committed anchor. **What it does not prove:**
+tagged tree and carries that version's per-version entry; its assets verify against the
+committed anchor. **What it does not prove:**
 `linux/arm64` is built from the same commit and the same digest-pinned multi-arch base but
 is never executed by CI — a consumer on arm64 should run `contract_smoke.py` against their
-own container. The `v1.0.0` publish (commit `f4c2b16`, 2026-09-11) is recorded in the epic
+own container, with the `--expect-status` that matches how they started it. The `v1.0.0` publish (commit `f4c2b16`, 2026-09-11) is recorded in the epic
 wrapper as the first non-pre-release; whether the resulting `latest` and `1.0` tags are on
 GHCR could not be verified offline during this seed.
 
@@ -500,7 +526,8 @@ not a release.
 deploy stage to revert. Re-pin the previous tag in the consumer's compose file
 (`image: ghcr.io/washingbearlabs/forage:<previous>`) and `docker compose -f <file> up -d`.
 `kit_tools/docs/DEPLOYMENT.md` has the operator view, including the pull/pin/verify
-sequence and the note that the compose fragments in this repo still pin `0.9.3-rc`.
+sequence and the note that the compose fragments in this repo pin `1.1.0`, which resolves
+only once `v1.1.0` publishes.
 
 ---
 
@@ -520,7 +547,7 @@ Every cause below is one the workflow's own comments, `docs/releases.md`, or
 | `test` | `tests/test_sanitizer_revision.py` red (the named first step) | a hashed source or the model identity changed | if deliberate, update the pinned revision and record before/after in `docs/bootstrap-notes.md`; otherwise revert |
 | `test` | `tests/test_dockerfile.py` red | an `ARG`, a secret-shaped `ENV`, a lost digest pin, a second `FROM`, a missing `COPY` source | revert; the build takes no arguments, ever |
 | `test` | `tests/test_ci_workflow.py` red | unpinned action, widened permissions, `pull_request_target`, changed `needs:`/`if:` | restore the guarded property; the test names it |
-| `secret-grep` | `HF_TOKEN` or `hf_…` in `docker history` | a credential reached a build-arg, `ENV` or `RUN` line | remove it; secrets are runtime-only (`docs/configuration.md`) |
+| `secret-grep` | `HF_TOKEN`, `hf_…` or `FORAGE_BRAVE_API_KEY` in `docker history` | a credential reached a build-arg, `ENV` or `RUN` line | remove it; secrets are runtime-only (`docs/configuration.md`) |
 | `secret-grep` / `smoke` | loaded image ID differs from `image-id.txt` | artifact/identity mismatch | not a flake — investigate the artifact hand-off before re-running |
 | `smoke` | `/health` never reaches 200 within 120 s | the container did not bind (config error, import failure) | read the container log the job dumps on failure |
 | `smoke` | in-image contract sha256 or `info.version` mismatch | contract not re-exported, or `contract/` not copied | `uv run python -m scripts.export_contract`; check the `Dockerfile`'s `COPY contract/` line |

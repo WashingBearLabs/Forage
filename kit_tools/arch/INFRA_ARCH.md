@@ -143,7 +143,7 @@ docker compose -f minimal.yml up -d && curl -s localhost:8020/health | jq
 
 | Service | In | Image (as pinned today) | Ports | Volumes | Limits / env |
 |---------|----|-------------------------|-------|---------|--------------|
-| `forage` | both | `ghcr.io/washingbearlabs/forage:0.9.3-rc` | `127.0.0.1:8020:8020` | `forage-model-cache:/app/model-cache` | `mem_limit: 1024m`, `restart: unless-stopped`; bare `HF_TOKEN` pass-through (stays unset if unset); `SEARXNG_URL` not set (default `http://searxng:8080`) |
+| `forage` | both | `ghcr.io/washingbearlabs/forage:1.1.0` | `127.0.0.1:8020:8020` | `forage-model-cache:/app/model-cache` | `mem_limit: 1024m`, `restart: unless-stopped`; bare `HF_TOKEN`, `FORAGE_SEARCH_PROVIDERS` and `FORAGE_BRAVE_API_KEY` pass-through (each stays unset if unset; the Brave key is a credential and belongs in `compose/.env`, never inline); `SEARXNG_URL` not set (default `http://searxng:8080`) |
 | `forage` extras | full only | same | same | same | literal `VALKEY_URL=redis://valkey:6379/4` (DB 4 matches `ContentCache`'s default); minimal omits `VALKEY_URL` entirely so the cache runs in memory mode |
 | `searxng` | both | `ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc` | **none published** | none | `SEARXNG_SECRET: ${SEARXNG_SECRET:?...}` — unset is a hard start failure; service name `searxng` is load-bearing for Forage's default URL |
 | `valkey` | full only | `valkey/valkey:8@sha256:3fbd2e3e4b6e85e046c1e7c215e8f79087bc0357789184305806664e320996f3` (8.1.10) | none | `forage-valkey-data:/data` (project-scoped) | `valkey-server --save 60 1 --appendonly no`; no password |
@@ -156,10 +156,10 @@ Things both fragments deliberately lack:
 - **No CPU quota and no `pids_limit`**; `mem_limit` is the only resource control.
 - **No TLS, no auth.** The `127.0.0.1` binding is the deployment-posture control.
 
-**Pin drift (known):** both fragments still pin `forage:0.9.3-rc` and
-`forage-searxng:0.1.1-rc`. Their in-file comments say to move to `v1.0.0` when it lands; the
-`v1.0.0` tag exists on `main` (commit `f4c2b16`, 2026-09-11) but the pins have not been
-bumped yet.
+**Pin sequencing:** both fragments pin `forage:1.1.0` and `forage-searxng:0.1.1-rc`. The
+forage pin resolves once `v1.1.0` publishes (`search-release` US-002); a `docker compose up`
+before that fails with `manifest unknown` — sequencing, not breakage. The searxng pin stays a
+pre-release because no non-pre-release `searxng-v*` tag exists.
 
 ---
 

@@ -55,8 +55,10 @@ phases through `searxng_smoke.py`, while a `--live` probe that reaches real engi
 
 `smoke` is the only service-lane job that *runs*
 the image rather than inspecting it — it starts the built container with no Hugging Face
-token and asserts the degraded `/health` contract through `contract_smoke.py`. You can
-run exactly what it runs:
+token and asserts the degraded `/health` contract through `contract_smoke.py`, under the
+script's default `--expect-status degraded`. Its other mode, `--expect-status healthy`, is for a
+container started with weights (the three PromptGuard-coupled checks invert and the wait
+polls until `status` reads `healthy`); CI never runs it. You can run exactly what CI runs:
 
 ```bash
 docker build -t forage:ci .

@@ -16,7 +16,9 @@ line below is here because forgetting it has cost this repository something.
       meaning, a request field's requiredness). The parity tests in
       `tests/test_contract_errors.py` / `tests/test_contract_metrics.py` answer this for you.
 - [ ] **Which class is it?** MAJOR / MINOR / PATCH / no bump, per `contract/GOVERNANCE.md`'s
-      classification table — and `CONTRACT_VERSION` bumped if it is not "no bump".
+      classification table — and `CONTRACT_VERSION` bumped if it is not "no bump". A bump
+      also adds the new version's docstring entry under `CONTRACT_VERSION` (GOVERNANCE step 7):
+      `publish` copies it into the Release body and fails the tag without it.
 - [ ] **Regenerated the contract?** Anything that moves the document — a response model, a
       `responses=` declaration, a field description, a FastAPI bump — needs
       `uv run python -m scripts.export_contract`, which writes **three** files that must be

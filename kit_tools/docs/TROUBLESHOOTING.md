@@ -118,8 +118,8 @@ error; it is a quarantine (see Request Problems).
 | Container state | `docker inspect --format '{{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} restarts={{.RestartCount}}' <container>` | Crash loops, OOM kills, refused boots |
 | Image identity | `docker inspect --format '{{.Config.Image}}' <container>` | The tag or digest actually running |
 | In-image contract | `docker run --rm --entrypoint cat <image> /app/contract/openapi.yaml.sha256` | Compare with `git show <tag>:contract/openapi.yaml.sha256` |
-| Secret-free check | `docker history --no-trunc <image> \| grep -Ei 'HF_TOKEN\|hf_[A-Za-z0-9]{20,}'` | Must print nothing (CLAUDE.md invariant 2) |
-| Degraded-contract smoke | `uv run python contract_smoke.py --base-url http://127.0.0.1:8020 [--image <ref>]` | Asserts the token-less contract; **fails by design against a container that has loaded weights** (`EXPECTED_STATUS` is hard-coded `"degraded"`) |
+| Secret-free check | `docker history --no-trunc <image> \| grep -Ei 'HF_TOKEN\|hf_[A-Za-z0-9]{20,}\|FORAGE_BRAVE_API_KEY'` | Must print nothing (CLAUDE.md invariant 2); the same three patterns CI's `secret-grep` job greps |
+| Contract smoke | `uv run python contract_smoke.py --base-url http://127.0.0.1:8020 [--expect-status {healthy,degraded}] [--image <ref>]` | Asserts the `/health` contract for the container you started: `--expect-status degraded` (the default, CI's) for a token-less, weights-free container; `--expect-status healthy` for one started with weights. The wait is status-aware, so raise `--timeout-seconds` for a cold weights fetch |
 | SearXNG companion smoke | `uv run python searxng_smoke.py --image forage-searxng:ci [--live] [--keep]` | Secret, JSON envelope, budget, limiter phases |
 | Contract drift | `uv run python -m scripts.export_contract --check` | Exit 1 if `contract/openapi.yaml` no longer matches the app |
 | Reach a target from the container's network | `docker exec <container> curl -sI https://example.com/` | `curl` ships in the image; separates "Forage refused" from "network cannot reach" |
@@ -682,9 +682,10 @@ connected`, cache hits) is INFO and therefore invisible.
 **Symptom:** `docker compose pull` fails with `manifest unknown`, or a fresh deployment runs
 an older image than expected.
 
-**Cause:** `compose/minimal.yml` and `compose/full.yml` still pin
-`ghcr.io/washingbearlabs/forage:0.9.3-rc` and `forage-searxng:0.1.1-rc` although `v1.0.0` is
-tagged; their comments say to move once `1.0.0` lands. A pre-release tag that was withdrawn
+**Cause:** `compose/minimal.yml` and `compose/full.yml` pin
+`ghcr.io/washingbearlabs/forage:1.1.0` and `forage-searxng:0.1.1-rc`; the forage pin resolves
+once `v1.1.0` publishes (`search-release` US-002), and a pull before that fails with
+`manifest unknown` — sequencing, not breakage. A pre-release tag that was withdrawn
 (`v0.9.2-rc` was) or never published pulls nothing.
 
 **Fix:** pin a full semver (`1.0.0`) or the `@sha256` digest from the Release body, never

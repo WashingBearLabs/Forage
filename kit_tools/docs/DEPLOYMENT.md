@@ -9,7 +9,7 @@
 
 > **TEMPLATE_INTENT:** Document deployment procedures and rollback processes. How to ship safely.
 
-> Last updated: 2026-09-13
+> Last updated: 2026-09-17
 > Updated by: Claude (seed-project)
 
 ---
@@ -97,7 +97,7 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
    but are untrusted ("a red publish is not a release", `docs/releases.md`).
 3. **Pull and verify the image yourself.** The in-image contract is read back and checked
    against the anchor committed *at the same tag*, never against another copy
-   (`contract/GOVERNANCE.md`, Consumers). The history grep uses the same two patterns as
+   (`contract/GOVERNANCE.md`, Consumers). The history grep uses the same three patterns as
    CI's `secret-grep` job.
 
    ```bash
@@ -107,7 +107,7 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
    docker run --rm --entrypoint cat ghcr.io/washingbearlabs/forage:$TAG /app/contract/openapi.yaml.sha256 > openapi.yaml.sha256
    git show v$TAG:contract/openapi.yaml.sha256 | cmp - openapi.yaml.sha256   # anchor from the same tag
    sha256sum -c openapi.yaml.sha256                                          # macOS: shasum -a 256 -c
-   docker history --no-trunc ghcr.io/washingbearlabs/forage:$TAG | grep -Ei 'HF_TOKEN|hf_[A-Za-z0-9]{20,}'   # must print nothing
+   docker history --no-trunc ghcr.io/washingbearlabs/forage:$TAG | grep -Ei 'HF_TOKEN|hf_[A-Za-z0-9]{20,}|FORAGE_BRAVE_API_KEY'   # must print nothing
    ```
 
    `gh release download v$TAG --pattern 'openapi.yaml*'` is the alternative route to the
@@ -123,8 +123,9 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
 5. **Confirm the weights source is reachable** from the host: an `HF_TOKEN` with gated-repo
    access, or mirror credentials. Weights are fetched at runtime, so a wrong token is a
    `degraded` boot, not a failed one.
-6. **Confirm `compose/.env`** holds exactly `HF_TOKEN` and `SEARXNG_SECRET` (it is
-   gitignored) and that no variable is being passed inline with `-e`.
+6. **Confirm `compose/.env`** holds `HF_TOKEN` and `SEARXNG_SECRET`, plus
+   `FORAGE_SEARCH_PROVIDERS` and `FORAGE_BRAVE_API_KEY` only if you enable the Brave
+   fallback (it is gitignored), and that no variable is being passed inline with `-e`.
 7. **Confirm placement.** The `127.0.0.1:8020:8020` binding stays unless you have put your
    own access control in front; SearXNG and Valkey publish no ports at all.
 
@@ -136,15 +137,16 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
 
 Both fragments are standalone (no `extends`), validated by CI's `lint` job with
 `docker compose config -q`, and share the fixed-name volume `forage-model-cache`. **They
-currently pin `ghcr.io/washingbearlabs/forage:0.9.3-rc` and
-`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`, even though `v1.0.0` is tagged;** the
-in-file comments say to move them to `v1.0.0` when it lands, and that has not been done
-yet. Edit the `image:` lines to the tag you verified above before bringing them up.
+pin `ghcr.io/washingbearlabs/forage:1.1.0` and
+`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`.** The `forage` pin resolves once
+`v1.1.0` publishes; a `docker compose up` before that fails with `manifest unknown`, which
+is sequencing, not breakage. Edit the `image:` lines to the tag you verified above before
+bringing them up.
 
 | Fragment | Starts | Env it needs | Cache mode |
 |----------|--------|--------------|------------|
-| `compose/minimal.yml` (project `forage-minimal`) | `forage` + `searxng` | `HF_TOKEN` (bare pass-through, genuinely unset if absent), `SEARXNG_SECRET` (required-or-fail) | in-memory; `VALKEY_URL` is deliberately absent |
-| `compose/full.yml` (project `forage-full`) | `forage` + `searxng` + `valkey` (`valkey/valkey:8` digest-pinned, 8.1.10) | the same two | `VALKEY_URL=redis://valkey:6379/4` as a literal; Valkey persists to `forage-valkey-data` (`--save 60 1`, no password, no ports) |
+| `compose/minimal.yml` (project `forage-minimal`) | `forage` + `searxng` | `HF_TOKEN`, `FORAGE_SEARCH_PROVIDERS`, `FORAGE_BRAVE_API_KEY` (bare pass-through, genuinely unset if absent), `SEARXNG_SECRET` (required-or-fail) | in-memory; `VALKEY_URL` is deliberately absent |
+| `compose/full.yml` (project `forage-full`) | `forage` + `searxng` + `valkey` (`valkey/valkey:8` digest-pinned, 8.1.10) | the same | `VALKEY_URL=redis://valkey:6379/4` as a literal; Valkey persists to `forage-valkey-data` (`--save 60 1`, no password, no ports) |
 
 Common to both: `forage` publishes only `127.0.0.1:8020:8020`, runs with
 `restart: unless-stopped` and `mem_limit: 1024m`, mounts `forage-model-cache:/app/model-cache`,
@@ -209,22 +211,37 @@ warning and every key falls back to its code default, while a malformed `extract
    curl -s http://127.0.0.1:8020/openapi.json | jq -r .info.version   # 1.1.0 on v1.0.0; 1.2.0 from this tree
    ```
 
-3. **Run the contract smoke** from a checkout at the deployed tag. It polls `/health` to
-   200 (default budget 120 s), validates the body against `HealthResponse`, checks
-   `contract_version` against the checkout's `pipeline/contract.py`, checks `/metrics`
-   reports the same version, and with `--image` reads `/app/contract/openapi.yaml` out of
-   the image and hashes it against the committed anchor. Exit `0` prints
-   `Contract smoke PASSED: degraded, honest, and on-contract.`; exit `1` prints one
-   `::error::` line per violation. **Caveat:** it asserts the *weights-free* contract as
-   written (`EXPECTED_STATUS = "degraded"` is hard-coded), so against a container that has
-   loaded weights the status, reason, and capability checks fail by design. Use it for a
-   token-less bring-up or as the CI-equivalent image check, and rely on step 1 for a
-   healthy container until a maintainer decides otherwise.
+3. **Run the contract smoke** from a checkout at the deployed tag. It polls `/health` until
+   it answers 200 *and* reports the status you asked for (default budget 120 s), validates
+   the body against `HealthResponse`, checks `contract_version` against the checkout's
+   `pipeline/contract.py`, checks `/metrics` reports the same version, and with `--image`
+   reads `/app/contract/openapi.yaml` out of the image and hashes it against the anchor
+   `--anchor` names (default: the checkout's committed `contract/openapi.yaml.sha256`).
+   Pick `--expect-status` by how the container was started: `degraded` (the default, what
+   CI uses) for one with no token or weights, `healthy` for one started with them (an
+   `--env-file` carrying `HF_TOKEN`, or the mirror), which inverts the status,
+   `promptguard_unavailable` and `search_sanitization` checks — raise `--timeout-seconds`
+   for a cold weights fetch. Take the anchor from the committed file at the tag
+   (`git show` or a clean checkout), never from the Release assets or the image. Exit `0`
+   prints a PASSED line naming the mode it checked —
+   `Contract smoke PASSED: degraded, honest, and on-contract.` or
+   `Contract smoke PASSED: healthy, honest, and on-contract.`; exit `1` prints one
+   `::error::` line per violation. Both flags ship from `v1.1.0`; a checkout at an older
+   tag has neither and asserts only the weights-free contract.
 
    ```bash
+   TAG=1.1.0
+   git show v$TAG:contract/openapi.yaml.sha256 > anchor-v$TAG.sha256   # the committed anchor at the tag
+   # container started with no token or weights
    uv run python contract_smoke.py --base-url http://127.0.0.1:8020 \
+     --expect-status degraded --anchor anchor-v$TAG.sha256 \
      --timeout-seconds 120 --poll-interval-seconds 2 \
-     --image ghcr.io/washingbearlabs/forage:1.0.0
+     --image ghcr.io/washingbearlabs/forage:$TAG
+   # container started with weights: healthy, with room for a cold fetch
+   uv run python contract_smoke.py --base-url http://127.0.0.1:8020 \
+     --expect-status healthy --anchor anchor-v$TAG.sha256 \
+     --timeout-seconds 600 --poll-interval-seconds 2 \
+     --image ghcr.io/washingbearlabs/forage:$TAG
    ```
 
 4. **Smoke the companion image** if you changed its pin. `searxng_smoke.py` runs five
@@ -318,7 +335,7 @@ both keep it that way (`CLAUDE.md` invariant 2). Forage reads no secret store at
 container environment is the only channel.
 
 The credential-bearing variables Forage itself reads are `HF_TOKEN`, `FORAGE_MIRROR_TOKEN`,
-and `VALKEY_URL` (which may embed a password); the companion additionally needs
+`FORAGE_BRAVE_API_KEY`, and `VALKEY_URL` (which may embed a password); the companion additionally needs
 `SEARXNG_SECRET`. Provide them through `compose/.env`, `--env-file`, or your secret store,
 never as an inline `-e` flag (shell history, `ps`). Remember that `docker inspect` shows a
 container's full environment to anyone who can reach the Docker socket, and that rotating

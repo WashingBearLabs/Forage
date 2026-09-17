@@ -550,6 +550,7 @@ jobs:
           done <<'PATTERNS'
           HF_TOKEN
           hf_[A-Za-z0-9]{20,}
+          FORAGE_BRAVE_API_KEY
           PATTERNS
           if [ "${status}" -eq 0 ]; then
             echo "No forbidden pattern in the layer history of ${IMAGE_REF}."
@@ -988,7 +989,7 @@ jobs:
           # one place secret-grep's tarball read cannot see once the registry
           # copy exists. Same pattern set as secret-grep, applied to every
           # platform's published config (the inspect JSON carries them all).
-          if printf '%s' "${image_json}" | grep -E -q 'HF_TOKEN|hf_[A-Za-z0-9]{20,}'; then
+          if printf '%s' "${image_json}" | grep -E -q 'HF_TOKEN|hf_[A-Za-z0-9]{20,}|FORAGE_BRAVE_API_KEY'; then
             echo "::error::the published image config carries a forbidden pattern"
             exit 1
           fi
@@ -1012,6 +1013,19 @@ jobs:
         # appears anywhere in this job's shell — a copy in bash would be a
         # second contract, free to keep passing after the first one moves, and
         # tests/test_ci_workflow.py asserts its absence.
+        #
+        # THE PER-VERSION ENTRY (search-release US-004). The same step extracts
+        # the version's bullet from the docstring under `CONTRACT_VERSION` — the
+        # announcement contract/GOVERNANCE.md step 7 requires — into a file the
+        # Release step appends to the body. A version with no entry fails here:
+        # a release with an unannounced contract is what this exists to catch.
+        # POSIX awk (`BEGIN`, `index`, `substr`, `print`, `exit` only) so mawk,
+        # gawk and macOS awk run the program unchanged, and so the test suite
+        # runs this very program. Never a script, `python3` or `uv`: publish
+        # holds `contents: write`, `packages: write` and a token, and it reads
+        # files from the tagged tree but executes nothing from it. The entry
+        # never goes through `$GITHUB_OUTPUT` — a delimiter line inside tagged
+        # prose would end a multi-line value early and forge a `version=`.
         id: contract
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -1031,6 +1045,29 @@ jobs:
           fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "Tagged tree serves contract ${version}."
+          # The bullet `* ``X.Y.Z`` ` at column 0 plus every immediately
+          # following line indented two spaces; the first other line (the next
+          # bullet, a blank line, the closing quotes) ends it. `index` is a
+          # string comparison, so the dots stay literal, and the closing
+          # backticks plus the space keep `X.Y.Z` from matching `X.Y.Z0`.
+          CONTRACT_ENTRY_FILE="${RUNNER_TEMP}/contract-entry.md"
+          awk -v v="${version}" '
+          BEGIN { prefix = "* ``" v "`` "; found = 0 }
+          {
+            if (found) {
+              if (substr($0, 1, 2) != "  ") exit
+              print
+            } else if (index($0, prefix) == 1) {
+              found = 1
+              print
+            }
+          }
+          ' pipeline/contract.py > "${CONTRACT_ENTRY_FILE}"
+          if [ ! -s "${CONTRACT_ENTRY_FILE}" ]; then
+            echo "::error::pipeline/contract.py has no per-version entry for contract ${version} in the CONTRACT_VERSION docstring — an unannounced contract cannot be released (contract/GOVERNANCE.md, step 7)"
+            exit 1
+          fi
+          echo "Contract ${version} has a per-version entry."
 
       - name: Create the GitHub Release
         # LAST, and only on a `v*` tag. The ordering is the contract: a Release
@@ -1053,6 +1090,13 @@ jobs:
         #
         # `gh` is preinstalled on GitHub-hosted runners, so this needs no
         # fourth-party action for a two-line API call.
+        #
+        # THE BODY (search-release US-004) is a file. The heredoc below is
+        # written into it, then the per-version entry the read step extracted
+        # is appended with `cat` — copied byte-for-byte, never interpolated: the
+        # heredoc is unquoted, so a backtick or `$(` inside tagged-tree prose
+        # would be expanded here, and the entry is never re-parsed by the shell
+        # or used as a `printf` format either.
         #
         # THE ASSETS (US-004). `contract/openapi.yaml` and its committed
         # `.sha256` anchor are uploaded with the Release, so a consumer can
@@ -1085,7 +1129,9 @@ jobs:
           case "${RELEASE_TAG}" in
             *-*) release_args+=(--prerelease) ;;
           esac
-          notes="$(cat <<EOF
+          notes_file="${RUNNER_TEMP}/release-notes.md"
+          CONTRACT_ENTRY_FILE="${RUNNER_TEMP}/contract-entry.md"
+          cat > "${notes_file}" <<EOF
           Published image: \`${IMAGE_NAME}:${RELEASE_TAG#v}\`
 
           Digest: \`${PUSHED_DIGEST}\`
@@ -1100,8 +1146,9 @@ jobs:
           passed on this commit. The published amd64 layers were verified
           identical to the image the contract smoke executed.
           EOF
-          )"
-          gh release create "${RELEASE_TAG}" "${release_args[@]}" --notes "${notes}" \
+          printf '\nWhat changed in contract %s:\n\n' "${CONTRACT_VERSION}" >> "${notes_file}"
+          cat "${CONTRACT_ENTRY_FILE}" >> "${notes_file}"
+          gh release create "${RELEASE_TAG}" "${release_args[@]}" --notes-file "${notes_file}" \
             contract/openapi.yaml contract/openapi.yaml.sha256
           echo "Release ${RELEASE_TAG} created after the image push, with the"
           echo "contract and its anchor attached."
@@ -1112,9 +1159,13 @@ jobs:
         # body back out of the API and *checks* it — emit and assert in one job,
         # off one value, so the claim and its check cannot drift apart.
         #
-        # It reads the Release rather than the local `notes` string on purpose:
-        # a check against the variable this job just built would restate the
+        # It reads the Release rather than the local notes file on purpose: a
+        # check against the file this job just built would restate the
         # heredoc, not verify what consumers actually see on the Release page.
+        #
+        # The per-version entry is checked line by line with a fixed-string
+        # grep (search-release US-004): `-F` because the first line starts with
+        # `*`, an invalid ERE, and the prose carries `(`, `)` and `|`.
         #
         # Lane: `v*` tags only, like the Release it checks. The companion
         # image's `searxng-v*` tags never reach this job at all (the job `if:`
@@ -1151,7 +1202,18 @@ jobs:
             echo "--- end release body ---"
             exit 1
           fi
+          CONTRACT_ENTRY_FILE="${RUNNER_TEMP}/contract-entry.md"
+          while IFS= read -r line; do
+            if ! printf '%s\n' "${body}" | grep -qF -- "${line}"; then
+              echo "::error::Release ${RELEASE_TAG} is missing a line of contract ${CONTRACT_VERSION}'s per-version entry — the published body does not carry the announcement from the tagged tree"
+              echo "--- release body ---"
+              printf '%s\n' "${body}"
+              echo "--- end release body ---"
+              exit 1
+            fi
+          done < "${CONTRACT_ENTRY_FILE}"
           echo "Release ${RELEASE_TAG} advertises contract ${CONTRACT_VERSION}, matching the tagged tree."
+          echo "Every line of contract ${CONTRACT_VERSION}'s per-version entry is in the published body."
 
       - name: Assert the Release assets verify against the committed anchor
         # US-004's Release-asset leg of the three-way sha256 equality, run as a

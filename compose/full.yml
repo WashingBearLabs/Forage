@@ -37,11 +37,12 @@ name: forage-full
 
 services:
   forage:
-    # ghcr.io/washingbearlabs/forage, tag 0.9.3-rc — the first tag TO BE published
-    # carrying contract 1.1.0 + cache_backend (0.9.1-rc predates them; 0.9.2-rc
-    # failed its publish parity gate cold; its git tag was withdrawn, package-version deletion pending). Superseded by v1.0.0 at
-    # `feature-forage-contract`; docs/releases.md has the tag scheme.
-    image: ghcr.io/washingbearlabs/forage:0.9.3-rc
+    # ghcr.io/washingbearlabs/forage, tag 1.1.0 — the release carrying contract
+    # 1.2.0 (the search-provider chain and Brave fallback). It resolves once
+    # `v1.1.0` publishes (search-release US-002); a compose up before that
+    # fails with `manifest unknown` — that is sequencing, not breakage.
+    # docs/releases.md has the tag scheme.
+    image: ghcr.io/washingbearlabs/forage:1.1.0
     restart: unless-stopped
     # Loopback only — see the DEPLOYMENT POSTURE note above.
     ports:
@@ -51,6 +52,12 @@ services:
       # not. Running without it is a supported degraded mode — see
       # docs/weights.md § "Bring your own token".
       - HF_TOKEN
+      # The search-provider chain — bare names, like HF_TOKEN: passed through
+      # when set in `compose/.env`, genuinely unset (the default `searxng`
+      # chain) when not. FORAGE_BRAVE_API_KEY is a credential, so it belongs
+      # in `compose/.env`, never inline. See compose/minimal.yml.
+      - FORAGE_SEARCH_PROVIDERS
+      - FORAGE_BRAVE_API_KEY
       # The one line that distinguishes this fragment from `minimal.yml`, and
       # it is a LITERAL on purpose. `VALKEY_URL=${VALKEY_URL}` would render an
       # empty string whenever the host variable is unset, and an empty value is

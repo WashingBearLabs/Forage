@@ -317,7 +317,14 @@ ruling (d) (round-2 security note); the emission path is `url_validator.py:174` 
    line, `CLAUDE.md`'s invariant 4, `README.md`'s HTTP-surface section.
 7. **Announce**: the next Release body carries `contract: <version>` mechanically; a MAJOR,
    or a MINOR under ruling (b)'s announcement obligation, also gets a sentence saying what
-   changed and what a consumer must do.
+   changed and what a consumer must do. That sentence *is* the version's `CONTRACT_VERSION`
+   docstring entry from step 2 — not a separate note — and every version needs one: one
+   bullet at column 0 opening with the version in double backticks, continuation lines
+   indented two spaces, no blank line inside it (a blank line ends the entry). On the tag,
+   `publish` extracts that docstring entry, appends it to the Release body under
+   `What changed in contract <version>:`, and fails the tag when the version has none;
+   `tests/test_ci_workflow.py::TestReleaseContractMapping::test_the_current_contract_version_has_a_docstring_entry`
+   fails the PR first.
 
 ---
 

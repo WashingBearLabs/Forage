@@ -9,7 +9,7 @@
 
 > **TEMPLATE_INTENT:** Document logs, metrics, alerts, and dashboards. How to observe the system.
 
-> Last updated: 2026-09-16
+> Last updated: 2026-09-17
 > Updated by: Claude (seed-project)
 
 ---
@@ -87,7 +87,7 @@ Schema-style listing (field set and value domains as confirmed in `retrieval_app
 }
 ```
 
-A stock image with no `HF_TOKEN` and no `VALKEY_URL` reports `status: degraded`, `promptguard_loaded: false`, `cache_connected: true`, `cache_backend: memory`, `capabilities: {}`, `search_providers: ["searxng"]`, `degraded_reasons: ["promptguard_unavailable"]` — that is the supported token-less mode, and it is what `contract_smoke.py` asserts.
+A stock image with no `HF_TOKEN` and no `VALKEY_URL` reports `status: degraded`, `promptguard_loaded: false`, `cache_connected: true`, `cache_backend: memory`, `capabilities: {}`, `search_providers: ["searxng"]`, `degraded_reasons: ["promptguard_unavailable"]` — that is the supported token-less mode, and it is what `contract_smoke.py` asserts by default.
 
 ### Gating on it
 
@@ -359,25 +359,25 @@ Both scripts live at the repo root, run from a checkout via `uv run`, and are **
 ### `contract_smoke.py`
 
 ```bash
-uv run python contract_smoke.py --base-url http://127.0.0.1:8020 [--timeout-seconds 120] [--poll-interval-seconds 2] [--image <ref>]
+uv run python contract_smoke.py --base-url http://127.0.0.1:8020 [--expect-status {healthy,degraded}] [--anchor <path>] [--timeout-seconds 120] [--poll-interval-seconds 2] [--image <ref>]
 
 # Typical CI shape
 docker run -d --name forage-smoke -p 8020:8020 forage:ci
 uv run python contract_smoke.py --base-url http://127.0.0.1:8020 --image forage:ci
 ```
 
-It polls `/health` until it answers 200 (default budget `DEFAULT_TIMEOUT_SECONDS = 120`, the same number as CI's `SMOKE_TIMEOUT_SECONDS`), validates the body against `HealthResponse`, and asserts, for a **weights-free** container:
+It polls `/health` until it answers 200 with the expected `status` (default budget `DEFAULT_TIMEOUT_SECONDS = 120`, the same number as CI's `SMOKE_TIMEOUT_SECONDS`), validates the body against `HealthResponse`, and asserts, under the default `--expect-status degraded` (a **weights-free** container):
 
 - `status == "degraded"` and `promptguard_unavailable` in `degraded_reasons`;
 - no `search_sanitization` capability;
 - `contract_version` equals `pipeline.contract.CONTRACT_VERSION` of the checkout you ran it from;
 - `sanitizer_revision` present and not `unknown`;
 - `/metrics` answers with the same `contract_version`;
-- with `--image`: the in-image `/app/contract/openapi.yaml` `info.version` equals the served `contract_version`, the in-image `openapi.yaml.sha256` equals the committed anchor, and the document hashes to it.
+- with `--image`: the in-image `/app/contract/openapi.yaml` `info.version` equals the served `contract_version`, the in-image `openapi.yaml.sha256` equals the `--anchor` file, and the document hashes to it.
 
-Exit 0 prints `Contract smoke PASSED: degraded, honest, and on-contract.`; exit 1 prints one `::error::<violation>` line per failure.
+Exit 0 prints a `Contract smoke PASSED` line naming the mode it checked (under the default, `Contract smoke PASSED: degraded, honest, and on-contract.`); exit 1 prints one `::error::<violation>` line per failure.
 
-**Caveat.** `EXPECTED_STATUS = "degraded"` is hard-coded (`contract_smoke.py` line 97). Against a container that has `HF_TOKEN` and has loaded weights, the status, reason, and capability checks fail by design. It is a CI / token-less-image probe today; whether it should grow a healthy mode for production smoke is a maintainer decision and has not been confirmed. Do not wire it into a production deploy gate as-is.
+**Two modes.** `--expect-status` takes `healthy` or `degraded` (default `degraded`, what CI runs). Under `healthy` the three PromptGuard-coupled checks invert — `status == "healthy"`, `promptguard_unavailable` absent from `degraded_reasons`, `search_sanitization` present in `capabilities` — and every other check (contract version, sanitizer revision, `/metrics`, in-image contract and anchor) is identical. The wait is status-aware: it polls until `/health` answers 200 *and* the body's `status` equals the expected one, or the deadline passes (returning the last response, which then fails on `status`). `/health` answers 200 the moment uvicorn binds while PromptGuard loads in the background, so under `healthy` it waits through the load rather than failing on the first 200; raise `--timeout-seconds` for a cold weights fetch. Match the flag to the container: `--expect-status degraded` for a container started with no HF token and no weights (CI's weights-free image), `--expect-status healthy` for a container started with weights (e.g. `--env-file` carrying `HF_TOKEN`). `--anchor` defaults to the committed `contract/openapi.yaml.sha256`; to verify a release image from another checkout, pass a file holding the committed anchor at the tag (what `git show v1.1.0:contract/openapi.yaml.sha256` prints, or a clean checkout of it) — never from the Release assets and never from the image: both are mutable copies, and a tampered document-plus-anchor pair verifies against itself.
 
 ### `searxng_smoke.py`
 

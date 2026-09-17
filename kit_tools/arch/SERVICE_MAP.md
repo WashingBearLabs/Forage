@@ -186,7 +186,7 @@ Operator-side vendoring of a new revision to the mirror is `scripts/vendor_weigh
 | **Runtime use** | Only the weights-mirror fallback (`oras pull`), and only when `FORAGE_MIRROR_TOKEN` is set. A GHCR outage does not affect a running container beyond that leg (`pull_failed` / `timeout` outcomes). |
 | **Publish gates** | `.github/workflows/ci.yml` `publish` job needs `lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke`; the pushed amd64 image is verified layer-for-layer against the smoke-tested artifact; on `v*` tags a Release is created carrying `contract/openapi.yaml` and `openapi.yaml.sha256`, read back and checked against the committed anchor. |
 | **Tag scheme** | `v1.2.3` publishes `1.2.3`, `1.2`, `latest`; any tag containing `-` (e.g. `v0.9.3-rc`) publishes the exact tag only; push to `main` publishes `sha-<short>`. The git tag is the version; `pyproject.toml`'s `version` is inert. Reference: `docs/releases.md`. |
-| **Current state** | Local git tag `v1.0.0` exists (2026-09-11, first non-pre-release). Whether it published green and therefore whether `latest` now exists could not be verified offline. `compose/*.yml` still pin `forage:0.9.3-rc` and `forage-searxng:0.1.1-rc`; their in-file comments say to move to `v1.0.0`. `v0.9.2-rc` was withdrawn after failing the parity gate (package-version deletion recorded as pending). |
+| **Current state** | Local git tag `v1.0.0` exists (2026-09-11, first non-pre-release). Whether it published green and therefore whether `latest` now exists could not be verified offline. `compose/*.yml` pin `forage:1.1.0` and `forage-searxng:0.1.1-rc`; the forage pin resolves once `v1.1.0` publishes (`search-release` US-002), and a pull before that fails with `manifest unknown`. `v0.9.2-rc` was withdrawn after failing the parity gate (package-version deletion recorded as pending). |
 
 ---
 
@@ -369,17 +369,17 @@ binding, service names, volume literal, absent limiter, required secret) are ass
 |---|---|---|
 | **Starts** | `forage` + `searxng` | `forage` + `searxng` + `valkey` |
 | **Published ports** | `forage`: `127.0.0.1:8020:8020` only. `searxng`: none. | Same, plus `valkey`: none. |
-| **Forage env** | `HF_TOKEN` bare pass-through (genuinely unset if absent). `VALKEY_URL` deliberately absent (memory mode). `SEARXNG_URL` absent (default `http://searxng:8080` — the compose service name `searxng` is load-bearing). | Same, plus the literal `VALKEY_URL=redis://valkey:6379/4`. `SEARXNG_VALKEY_URL` is intentionally **not** wired (limiter stays off). |
+| **Forage env** | `HF_TOKEN`, `FORAGE_SEARCH_PROVIDERS` and `FORAGE_BRAVE_API_KEY` bare pass-through (genuinely unset if absent — unset is the default `searxng` chain). `VALKEY_URL` deliberately absent (memory mode). `SEARXNG_URL` absent (default `http://searxng:8080` — the compose service name `searxng` is load-bearing). | Same, plus the literal `VALKEY_URL=redis://valkey:6379/4`. `SEARXNG_VALKEY_URL` is intentionally **not** wired (limiter stays off). |
 | **Volumes** | `forage-model-cache:/app/model-cache` (explicit `name:`, shared across fragments) | Same, plus `forage-valkey-data:/data` (project-scoped) |
-| **Secrets** | `compose/.env` (gitignored): `HF_TOKEN` (optional), `SEARXNG_SECRET` (required-or-fail via `${SEARXNG_SECRET:?…}`) | Same |
+| **Secrets** | `compose/.env` (gitignored): `HF_TOKEN` (optional), `FORAGE_BRAVE_API_KEY` (optional), `SEARXNG_SECRET` (required-or-fail via `${SEARXNG_SECRET:?…}`) | Same |
 | **Limits** | `forage` `mem_limit: 1024m`, `restart: unless-stopped` | Same |
-| **Image pins** | `forage:0.9.3-rc`, `forage-searxng:0.1.1-rc` | Same |
+| **Image pins** | `forage:1.1.0`, `forage-searxng:0.1.1-rc` | Same |
 
-**Pin lag:** both fragments still pin `ghcr.io/washingbearlabs/forage:0.9.3-rc` and
-`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`. The in-file comments say to move the
-service pin to `v1.0.0` when it lands; the `v1.0.0` git tag exists locally (2026-09-11),
-but the fragments have not been moved and whether the tag published green was not
-verified offline. Treat the pins as "known good rc", not "current".
+**Pin sequencing:** both fragments pin `ghcr.io/washingbearlabs/forage:1.1.0` and
+`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`. The service pin resolves once `v1.1.0`
+publishes (`search-release` US-002); a `docker compose up` before that fails with
+`manifest unknown` — sequencing, not breakage. The searxng pin stays a pre-release because
+no non-pre-release `searxng-v*` tag exists.
 
 **Egress from the `forage` container:** `searxng:8080` and `valkey:6379` on the compose
 network; `huggingface.co` (HF leg, only with `HF_TOKEN`); `ghcr.io` (mirror leg, only

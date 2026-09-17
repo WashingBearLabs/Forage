@@ -226,13 +226,12 @@ curl -s localhost:8020/health | jq
 ```
 
 Two caveats. First, **the fragments pull published images; they do not build your
-working tree.** At the time of this seed both pin `ghcr.io/washingbearlabs/forage:0.9.3-rc`
-and `ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`, although `v1.0.0` is tagged and
-the in-file comments say to move the pin when it lands; the exploration could not verify
-offline whether `1.0.0` / `latest` were actually published. To run the image you just
-built, use the `docker run` form above. Second, neither fragment declares a
-`healthcheck:` and the `Dockerfile` has no `HEALTHCHECK` — the "10 s x 5 retries" check
-that source comments mention belongs to Poppy's compose, not this repo.
+working tree.** Both pin `ghcr.io/washingbearlabs/forage:1.1.0` and
+`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`; the forage pin resolves once `v1.1.0`
+publishes, and a `docker compose up` before that fails with `manifest unknown` — sequencing,
+not breakage. To run the image you just built, use the `docker run` form above. Second,
+neither fragment declares a `healthcheck:` and the `Dockerfile` has no `HEALTHCHECK` — the
+"10 s x 5 retries" check that source comments mention belongs to Poppy's compose, not this repo.
 
 #### Bare host (inferred — not a documented workflow)
 
@@ -300,8 +299,12 @@ uv run python contract_smoke.py --base-url http://127.0.0.1:8020
 docker rm -f forage-smoke
 ```
 
-`contract_smoke.py` asserts the *token-less, degraded* `/health` contract; run against a
-container that has loaded weights, its degraded assertions fail by design.
+`contract_smoke.py` asserts the `/health` contract in one of two modes:
+`--expect-status degraded` (the default, and what CI runs) for a *token-less, weights-free*
+container like the one above, and `--expect-status healthy` for a container started with
+weights (e.g. `--env-file` carrying `HF_TOKEN`). The wait is status-aware — under `healthy`
+it keeps polling through the background PromptGuard load — so raise `--timeout-seconds` for a
+cold weights fetch.
 
 ### Read the contract shipped inside an image
 

@@ -160,8 +160,19 @@
      `kit_tools/AGENT_README.md`.)*
   2. `compose/minimal.yml` and `compose/full.yml` still pin `forage:0.9.3-rc` and
      `forage-searxng:0.1.1-rc` although `v1.0.0` is tagged.
+     *(Resolved on 2026-09-17: `search-release` US-004 moved both fragments' `forage` pin to
+     `ghcr.io/washingbearlabs/forage:1.1.0` — it resolves once `v1.1.0` publishes (US-002), and
+     a `docker compose up` before that fails with `manifest unknown`, which is sequencing, not
+     breakage — and swept the old literal out of `kit_tools/docs` and `kit_tools/arch`. The
+     `forage-searxng:0.1.1-rc` pin stays: no non-pre-release `searxng-v*` tag exists.)*
   3. `contract_smoke.py` hard-codes `EXPECTED_STATUS = "degraded"`; its fitness as a
      weights-loaded production probe needs a decision.
+     *(Resolved on 2026-09-17: `search-release` US-004 added `--expect-status {healthy,degraded}`
+     (default `degraded`, so CI's invocation is unchanged) — under `healthy` the three
+     PromptGuard-coupled checks invert — and made the wait status-aware, polling until
+     `/health`'s `status` matches rather than returning on the first 200. `--anchor` lets a
+     release image be verified from any checkout against the committed anchor at the tag.
+     `degraded` matches a container started with no weights, `healthy` one started with them.)*
   4. `/search` scans at the hard default threshold 0.85 and ignores `config.yaml`
      `promptguard_threshold`; undocumented whether intentional.
   5. `fetch_error` and `searxng_unavailable` wire bodies interpolate `str(exc)`;
