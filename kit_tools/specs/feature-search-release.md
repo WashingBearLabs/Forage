@@ -6,7 +6,7 @@ session_ready: true
 depends_on: [search-policy-and-health]
 vision_ref: "T2.1 — Search-provider abstraction & reliable search"
 type: epic-child
-size: M
+size: L
 epic: search-providers
 epic_seq: 5
 epic_final: true

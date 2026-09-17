@@ -6,7 +6,7 @@ session_ready: true
 depends_on: [search-fallback]
 vision_ref: "T2.1 — Search-provider abstraction & reliable search"
 type: epic-child
-size: M
+size: L
 epic: search-providers
 epic_seq: 4
 epic_final: false
