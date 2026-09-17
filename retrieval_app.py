@@ -1571,7 +1571,23 @@ async def metrics(request: Request) -> dict[str, Any]:
     },
 )
 async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
-    """Retrieve and sanitize web content through the full pipeline."""
+    """Fetch and sanitize one caller-named URL through the full pipeline.
+
+    `/retrieve` fetches and sanitizes one caller-named URL through the full
+    pipeline, cached by `sanitizer_revision`; `/search` finds and returns
+    provider-extracted content for a query across sources — snippets or
+    chunks, per result `content_kind` — from the configured provider chain,
+    every result sanitized, never cached.
+
+    `promptguard_fail_closed` is honoured on both routes; `/retrieve`
+    additionally honours `promptguard_threshold`, `trusted_domains`,
+    `verified_domains`, `blocked_domains` and `cache_ttl_hours`, while
+    `/search` additionally honours `providers` and `allow_paid_fallback`
+    (contract 1.2.0) and scans every result at the fixed 0.85 default at
+    trust tier `standard` (`config.yaml`'s `promptguard_threshold` is not
+    applied there). This documents today's divergence; changing it belongs
+    to `epic-forage-hardening`.
+    """
     retrieve_metrics: RetrieveMetrics = request.app.state.retrieve_metrics
     retrieve_metrics.requests += 1
     try:
@@ -1759,7 +1775,23 @@ async def extract(
     },
 )
 async def search(request: Request, body: SearchRequest) -> SearchResponse:
-    """Run a web search through the configured provider chain, sanitized."""
+    """Find and return provider-extracted content for a query, across sources.
+
+    `/search` finds and returns provider-extracted content for a query
+    across sources — snippets or chunks, per result `content_kind` — from
+    the configured provider chain, every result sanitized, never cached;
+    `/retrieve` fetches and sanitizes one caller-named URL through the full
+    pipeline, cached by `sanitizer_revision`.
+
+    `promptguard_fail_closed` is honoured on both routes; `/search`
+    additionally honours `providers` and `allow_paid_fallback` (contract
+    1.2.0) and scans every result at the fixed 0.85 default at trust tier
+    `standard` (`config.yaml`'s `promptguard_threshold` is not applied
+    here), while `/retrieve` additionally honours `promptguard_threshold`,
+    `trusted_domains`, `verified_domains`, `blocked_domains` and
+    `cache_ttl_hours`. This documents today's divergence; changing it
+    belongs to `epic-forage-hardening`.
+    """
     search_metrics: SearchMetrics = request.app.state.search_metrics
     search_metrics.requests += 1
     configured_chain = _resolved_search_providers(request.app.state)

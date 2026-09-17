@@ -26,6 +26,17 @@ design:
 | `POST /retrieve` | none |
 | `POST /extract` | none (and gated off by default — see `extract_route_enabled`) |
 
+`/search` finds and returns provider-extracted content for a query across sources —
+snippets or chunks, per result `content_kind` — from the configured provider chain, every
+result sanitized, never cached; `/retrieve` fetches and sanitizes one caller-named URL
+through the full pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` is
+honoured on both routes; `/retrieve` additionally honours `promptguard_threshold`,
+`trusted_domains`, `verified_domains`, `blocked_domains` and `cache_ttl_hours`, while
+`/search` additionally honours `providers` and `allow_paid_fallback` (contract 1.2.0) and
+scans every result at the fixed 0.85 default at trust tier `standard` (`config.yaml`'s
+`promptguard_threshold` is not applied on this route). This documents today's divergence;
+changing it belongs to `epic-forage-hardening`.
+
 **And so are the three documentation endpoints FastAPI serves alongside them** — easy to
 forget, because nothing in this repo declares them:
 

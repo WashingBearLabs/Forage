@@ -49,8 +49,8 @@ the numbering follows the sanitization order the contract reports.
 |----------|---------|
 | `GET /health` | Always 200. Body carries `status` (`healthy`/`degraded`), `degraded_reasons`, `promptguard_loaded`, `cache_connected`, `cache_backend`, `search_providers`, `sanitizer_revision`, `contract_version`. **Check the body, not the status code.** |
 | `GET /metrics` | Extraction, search, retrieve, and cache counters. |
-| `POST /search` | Search via SearXNG, with every result run through the pipeline. |
-| `POST /retrieve` | Fetch and sanitize a single URL. |
+| `POST /search` | Finds and returns provider-extracted content for a query across sources — snippets or chunks, per result `content_kind` — from the configured provider chain, every result sanitized, never cached. Honours `promptguard_fail_closed` (shared with `/retrieve`) and additionally `providers` and `allow_paid_fallback`; every result is scanned at the fixed 0.85 default at trust tier `standard` (`config.yaml`'s `promptguard_threshold` is not applied here). |
+| `POST /retrieve` | Fetches and sanitizes one caller-named URL through the full pipeline, cached by `sanitizer_revision`. Honours `promptguard_fail_closed` (shared with `/search`) and additionally `promptguard_threshold`, `trusted_domains`, `verified_domains`, `blocked_domains` and `cache_ttl_hours`. |
 | `POST /extract` | Extract from an uploaded document (gated behind `extract_route_enabled` in `config.yaml`). |
 
 The response contract is versioned (`contract_version`, currently **1.2.0**). Consumers

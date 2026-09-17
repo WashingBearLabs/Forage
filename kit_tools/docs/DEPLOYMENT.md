@@ -112,7 +112,7 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
 
    `gh release download v$TAG --pattern 'openapi.yaml*'` is the alternative route to the
    same two files. The anchor at `HEAD` is
-   `10e6cfc65abf5a56c342b8952630f5b270198e29a058001b031b1158e5d602e8`.
+   `11435a17aabe7c11faf71aee0fd066a3784d5e9de557c451153e7f47d0d5615f`.
 4. **Check contract compatibility.** The image tag and `contract_version` are independent
    semvers (image `1.0.0` serves contract `1.1.0`; the tree is on `1.2.0`, which `v1.1.0`
    will publish). Compare the consumer's expected MAJOR

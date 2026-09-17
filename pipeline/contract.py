@@ -31,21 +31,41 @@ MINOR when fields are only added.
   (``feature-forage-cache-fallback`` US-003). Nothing was removed and no field
   changed meaning, so a consumer comparing MAJOR keeps working untouched.
 * ``1.2.0`` — ``/search``'s ``SearchResult`` gained ``content_kind``
-  (``"snippet"`` | ``"chunk"``, defaulted) and ``date`` (a strict
-  ``YYYY-MM-DD`` calendar date or ``None``), both additive and defaulted; and
+  (``"snippet"`` | ``"chunk"``, defaulted), ``date`` (a strict
+  ``YYYY-MM-DD`` calendar date or ``None``, defaulted) and ``domain`` (the
+  lower-cased hostname of ``url``, required); ``SearchResponse`` gained
+  ``provider_used`` (required — the serving provider's name),
+  ``fallback_fired`` (defaulted) and ``provider_errors`` (defaulted);
+  ``SearchRequest`` gained ``providers`` and ``allow_paid_fallback`` (both
+  defaulted — a restrict-only per-request policy over the configured
+  chain); ``HealthResponse`` gained ``search_providers`` (the resolved
+  chain's names, in traversal order) and its ``capabilities`` description
+  now names ``brave_api_key`` alongside ``search_sanitization``; and
   ``search_unavailable`` joined the ``/search`` 422 vocabulary, naming an
-  exhausted non-SearXNG provider chain — a new enum *member*, MINOR under
+  exhausted provider chain — a new enum *member*, MINOR under
   ``contract/GOVERNANCE.md`` ruling (b) and carrying that ruling's
-  announcement obligation. Two ``/search`` refusal ``reason`` *texts* also
-  narrowed in ``search-provider-abstraction`` US-002 and ride this bump:
+  announcement obligation. ``/metrics``'s ``search`` section gained three
+  counters — ``fallback_fired``, ``paid_calls`` and
+  ``policy_unknown_provider`` — pinned against the handler by
+  ``tests/test_contract_metrics.py`` rather than by the golden fixture.
+  Two ``/search`` refusal ``reason`` *texts* also narrowed in
+  ``search-provider-abstraction`` US-002 and ride this bump:
   ``searxng_error`` now reads ``SearXNG returned HTTP error (http_<status>)``
   and ``searxng_unavailable`` now reads ``SearXNG not reachable at
   <scheme://host:port>: <detail>`` — no exception text, no userinfo — neither
-  changing a code, a status, or the body shape. Nothing was removed and no
-  field changed meaning, so a consumer comparing MAJOR keeps working
-  untouched. This version is **held**: ``tests/golden/contract_1_2_0.json`` is
-  regenerated in place across ``search-provider-abstraction`` specs 2-4 until
-  the ``v1.1.0`` image publishes it.
+  changing a code, a status, or the body shape. Every addition above is
+  additive — a new field, a new enum member, or a new counter — so a
+  consumer comparing MAJOR keeps working untouched; nothing was removed and
+  no field changed meaning. The ``/search``/``/retrieve`` boundary text
+  written into both routes' descriptions and the
+  ``SearchRequest``/``RetrieveRequest`` model docstrings
+  (``search-policy-and-health`` US-003) landed inside this same unpublished
+  window and is not a separate PATCH: there is no vendored 1.2.0 copy yet to
+  re-vendor, so the description edits are subsumed by this unreleased
+  MINOR. This version is **held**: ``tests/golden/contract_1_2_0.json`` is
+  regenerated in place across ``search-provider-abstraction`` specs 2-4 and
+  every ``search-fallback``/``search-policy-and-health`` story that moved
+  this shape, until the ``v1.1.0`` image publishes it.
 
 This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy

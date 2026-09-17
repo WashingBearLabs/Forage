@@ -147,10 +147,14 @@ chain traversal (`b7871b20…` → `55e2af1b…`, US-001 — `orchestrator.py` a
 for fallback telemetry and per-result provenance (`55e2af1b…` → `5249def6…`, US-003 —
 `orchestrator.py` alone; `models.py`'s matching wire fields are not hashed), a twelfth for
 failure-class discrimination (`5249def6…` → `f0b93318…`, US-002 — `orchestrator.py` alone,
-a lone-`searxng` chain carved out and unaffected), and a thirteenth for the per-request
+a lone-`searxng` chain carved out and unaffected), a thirteenth for the per-request
 policy literal (`f0b93318…` → `dc3ff92a…`, `search-policy-and-health` US-010 —
-`contract.py` alone; `retrieval_app.py`, where the new 422 is raised, is not hashed).
-Nothing downstream may assume Poppy↔Forage revision parity.
+`contract.py` alone; `retrieval_app.py`, where the new 422 is raised, is not hashed), and a
+fourteenth when `contract.py`'s `CONTRACT_VERSION` docstring gained the completed 1.2.0
+change record (`dc3ff92a…` → `41ac98ca…`, `search-policy-and-health` US-003 —
+`contract.py` alone; `retrieval_app.py` and `models.py`, where the new
+`/search`/`/retrieve` boundary text lives, are not hashed). Nothing downstream may assume
+Poppy↔Forage revision parity.
 
 **Startup is non-blocking, and one background task is the reason.** The lifespan does its
 synchronous wiring, starts weight acquisition as

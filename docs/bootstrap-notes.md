@@ -71,7 +71,8 @@ those eight — so Forage's revision moved:
 | After free-first chain traversal (`search-fallback` US-001) | `55e2af1b…bf47e4` |
 | After fallback telemetry + provenance (`search-fallback` US-003) | `5249def6…89f24a` |
 | After failure-class discrimination (`search-fallback` US-002) | `f0b93318…70d62` |
-| **Current (`search-policy-and-health` US-010, per-request policy literal)** | **`dc3ff92a…eded9`** |
+| After the per-request policy literal (`search-policy-and-health` US-010) | `dc3ff92a…eded9` |
+| **Current (`search-policy-and-health` US-003, completed 1.2.0 change record)** | **`41ac98ca…b4e318`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -490,6 +491,37 @@ under `f0b93318…` becomes unreachable at the next start and ages out on its ow
 in memory mode, one TTL of extra fetches in Valkey mode. Search results are never cached,
 so this rotation's new literal has no cache-key exposure of its own. **Do not assume
 Poppy↔Forage revision parity** — compare contracts, not revisions.
+
+### The fourteenth rotation: the completed 1.2.0 change record (`search-policy-and-health` US-003, 2026-09-16)
+
+```
+before: dc3ff92a876885e8a8c1d9b0c5601818a6e4ccc208a87ab01f776482bf4eded9
+after:  41ac98caf91572d06185ac0ce52e22ecec61c83c2a24ddd0bd8370e321b4e318
+```
+
+**Exactly one `_REVISION_SOURCES` file moved: `pipeline/contract.py`.** Measured the same
+way as the seventh, eighth, tenth, eleventh, twelfth and thirteenth rotations: reverting
+`contract.py` alone to its pre-story bytes reproduces `dc3ff92a…eded9` exactly; the other
+seven `_REVISION_SOURCES` files are untouched by this story. `retrieval_app.py` and
+`models.py`, where the new `/search`/`/retrieve` boundary text actually lives, are not
+`_REVISION_SOURCES` members.
+
+**What moved.** `contract.py`'s `CONTRACT_VERSION` docstring's `1.2.0` entry, left
+incomplete by `search-provider-abstraction` US-004, now names every wire addition the
+epic's specs 1-4 made — `SearchResult.domain`, `SearchResponse.provider_used` /
+`fallback_fired` / `provider_errors`, `SearchRequest.providers` / `allow_paid_fallback`,
+`HealthResponse.search_providers`, `capabilities`' `brave_api_key` key, and the three
+`/metrics` `search` counters — states that all are additive, and notes that this story's
+`/search`/`/retrieve` boundary-text edits to the route and model docstrings ride the same
+unpublished 1.2.0 window rather than counting as a separate PATCH. No sanitization
+behaviour changed and no wire byte moved; this is a documentation-only edit to a hashed
+file, the same shape as the sixth rotation.
+
+**Blast radius.** The same mechanism as the fifth and every rotation since:
+`cache_policy_fingerprint()` takes the revision as an input, so every extraction cached
+under `dc3ff92a…` becomes unreachable at the next start and ages out on its own TTL — free
+in memory mode, one TTL of extra fetches in Valkey mode. **Do not assume Poppy↔Forage
+revision parity** — compare contracts, not revisions.
 
 ## Deferred GitHub settings — for the spec 2 public flip
 

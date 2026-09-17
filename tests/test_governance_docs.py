@@ -54,6 +54,18 @@ CI_WORKFLOW_PATH = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
 _DOCUMENTS = (GOVERNANCE_PATH, SECURITY_PATH, PR_TEMPLATE_PATH)
 
+# The four pages that quote the contract anchor in prose, refreshed by hand on
+# every regeneration (search-policy-and-health US-003 makes that refresh
+# mechanical: a stale hex string here is a red test, not a stale doc).
+_ANCHOR_QUOTING_PAGES = (
+    _REPO_ROOT / "kit_tools" / "docs" / "API_GUIDE.md",
+    _REPO_ROOT / "kit_tools" / "docs" / "CI_CD.md",
+    _REPO_ROOT / "kit_tools" / "docs" / "DEPLOYMENT.md",
+    _REPO_ROOT / "kit_tools" / "arch" / "SERVICE_MAP.md",
+)
+
+_ANCHOR_HEX_RE = re.compile(r"\b[0-9a-f]{64}\b")
+
 # The four classes the governance table defines. A worked example that names
 # none of them, or more than one, is not answerable without a human.
 _CLASSES = ("MAJOR", "MINOR", "PATCH", "no bump")
@@ -250,6 +262,35 @@ class TestGovernanceStaysTiedToTheCode:
                 if not (path.parent / link).resolve().exists():
                     broken.append(f"{path.name} -> {link}")
         assert broken == [], f"Broken relative links: {broken}"
+
+
+class TestTheAnchorHashStaysCurrent:
+    """The four pages that quote the contract anchor in prose (US-003).
+
+    Each page names the sha256 anchor as a literal hex string rather than
+    linking to it, so a regeneration that moves the anchor leaves these pages
+    quoting a value nobody can verify against. Reading the anchor back out of
+    each page and comparing it to the committed ``.sha256`` file makes that
+    refresh mechanical instead of a step someone remembers.
+    """
+
+    @pytest.mark.parametrize("path", _ANCHOR_QUOTING_PAGES, ids=lambda p: p.name)
+    def test_the_quoted_anchor_matches_the_committed_sha256(self, path: Path) -> None:
+        text = path.read_text()
+        found = _ANCHOR_HEX_RE.findall(text)
+        assert found, (
+            f"{path.name} names no 64-hex-character anchor. This page is one "
+            "of the four that quotes the contract anchor in prose; if it "
+            "stopped doing so, update _ANCHOR_QUOTING_PAGES rather than "
+            "leaving this test unable to check anything."
+        )
+        committed = ANCHOR_PATH.read_text(encoding="utf-8").split()[0]
+        stale = {value for value in found if value != committed}
+        assert not stale, (
+            f"{path.name} quotes {sorted(stale)}, which does not match the "
+            f"committed anchor {committed!r} in {ANCHOR_PATH.relative_to(_REPO_ROOT)}. "
+            f"Run {REGEN_COMMAND!r} and refresh this page's quoted hash."
+        )
 
 
 @pytest.fixture(scope="module")

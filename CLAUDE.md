@@ -225,7 +225,13 @@ before; sufficiency stays judged on raw results before sanitization), and a thir
 `dc3ff92a…` when `contract.py` gained the `POLICY_EXCLUDED_ALL_PROVIDERS` literal for the
 new per-request policy 422 (`search-policy-and-health` US-010 — `contract.py` alone,
 measured against all eight `_REVISION_SOURCES` files; `retrieval_app.py`, where the raise
-site lives, is not hashed).
+site lives, is not hashed), and a fourteenth to `41ac98ca…` when `contract.py`'s
+`CONTRACT_VERSION` docstring gained the completed 1.2.0 change record — every field,
+counter and enum member the epic's specs 1-4 added, all additive, plus a note that the
+`/search`/`/retrieve` boundary text landed inside this same unpublished window
+(`search-policy-and-health` US-003 — `contract.py` alone, measured by reverting it to its
+pre-story bytes and reproducing `dc3ff92a…` exactly; `retrieval_app.py` and `models.py`,
+where the boundary text itself lives, are not `_REVISION_SOURCES` members).
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

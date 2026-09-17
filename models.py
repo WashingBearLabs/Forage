@@ -219,7 +219,22 @@ class ExtractedContent(BaseModel):
 
 
 class RetrieveRequest(BaseModel):
-    """Inbound request to retrieve and sanitise a URL."""
+    """Inbound request to retrieve and sanitise a URL.
+
+    `/retrieve` fetches and sanitizes one caller-named URL through the full
+    pipeline, cached by `sanitizer_revision`; `/search` finds and returns
+    provider-extracted content for a query across sources — snippets or
+    chunks, per result `content_kind` — from the configured provider chain,
+    every result sanitized, never cached. `promptguard_fail_closed` is
+    honoured on both routes; this route additionally honours
+    `promptguard_threshold`, `trusted_domains`, `verified_domains`,
+    `blocked_domains` and `cache_ttl_hours`, while `/search` additionally
+    honours `providers` and `allow_paid_fallback` (contract 1.2.0) and scans
+    every result at the fixed 0.85 default at trust tier `standard`
+    (`config.yaml`'s `promptguard_threshold` is not applied there). This
+    documents today's divergence; changing it belongs to
+    `epic-forage-hardening`.
+    """
 
     url: str = Field(..., min_length=1, description="URL to retrieve")
     extract_mode: Literal["summary", "full"] = Field(
@@ -256,7 +271,22 @@ class RetrieveRequest(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    """Inbound request to run a web search."""
+    """Inbound request to run a web search.
+
+    `/search` finds and returns provider-extracted content for a query
+    across sources — snippets or chunks, per result `content_kind` — from
+    the configured provider chain, every result sanitized, never cached;
+    `/retrieve` fetches and sanitizes one caller-named URL through the full
+    pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` is
+    honoured on both routes; this route additionally honours `providers`
+    and `allow_paid_fallback` (contract 1.2.0) and scans every result at
+    the fixed 0.85 default at trust tier `standard` (`config.yaml`'s
+    `promptguard_threshold` is not applied here), while `/retrieve`
+    additionally honours `promptguard_threshold`, `trusted_domains`,
+    `verified_domains`, `blocked_domains` and `cache_ttl_hours`. This
+    documents today's divergence; changing it belongs to
+    `epic-forage-hardening`.
+    """
 
     query: str = Field(..., min_length=1, description="Search query")
     num_results: int = Field(

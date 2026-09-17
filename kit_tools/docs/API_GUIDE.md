@@ -55,7 +55,7 @@ activate on a mismatch; a MINOR difference is additive and safe. `/health` also 
 | GET | `/health` | Liveness plus honest degradation state | none | `HealthResponse` | always 200 | none |
 | GET | `/metrics` | In-process counters as JSON | none | `MetricsResponse` | reset on restart | none |
 | POST | `/retrieve` | Fetch, extract and sanitise one URL | `RetrieveRequest` (JSON) | `RetrievedContent` | 30 s fetch timeout, 5 redirects, 10 MiB response cap | none |
-| POST | `/search` | Web search via SearXNG, every result sanitised | `SearchRequest` (JSON) | `SearchResponse` | `num_results` 1..20; 10 s SearXNG timeout | SearXNG must be reachable |
+| POST | `/search` | Finds and returns provider-extracted content for a query across sources, sanitised, never cached | `SearchRequest` (JSON) | `SearchResponse` | `num_results` 1..20; 10 s per provider call | at least one provider of the configured chain (`/health` `search_providers`) reachable |
 | POST | `/extract` | Sanitise an uploaded PDF or UTF-8 text document | multipart form | `ExtractedContent` | 50 MiB upload, 500 PDF pages, admission queue depth 1 | `config.yaml` `extract_route_enabled` (shipped `false`; route answers 404) |
 
 Also present and unauthenticated: `GET /openapi.json`, `GET /docs`, `GET /redoc`. They
@@ -212,6 +212,17 @@ Runs one query through the configured provider chain (`FORAGE_SEARCH_PROVIDERS`,
 passes every result's title, URL and snippet through the same structural and Prompt Guard
 scans. Results that fail are omitted and counted, not
 returned. Never cached.
+
+`/search` finds and returns provider-extracted content for a query across sources —
+snippets or chunks, per result `content_kind` — from the configured provider chain, every
+result sanitized, never cached; `/retrieve` fetches and sanitizes one caller-named URL
+through the full pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` is
+honoured on both routes; this route additionally honours `providers` and
+`allow_paid_fallback` (contract 1.2.0) and scans every result at the fixed 0.85 default at
+trust tier `standard` (`config.yaml`'s `promptguard_threshold` is not applied here), while
+`/retrieve` additionally honours `promptguard_threshold`, `trusted_domains`,
+`verified_domains`, `blocked_domains` and `cache_ttl_hours`. This documents today's
+divergence; changing it belongs to `epic-forage-hardening`.
 
 Request fields (`SearchRequest`):
 
@@ -455,7 +466,7 @@ in-tree copy and says nothing about wire compatibility. The image tag (for examp
 CI verifies two of the three on every release: the `smoke` job reads the in-image copy
 back out of the candidate image, and the `publish` job downloads the Release assets back
 from the API; both are checked against the anchor committed at the tag (currently
-`10e6cfc65abf5a56c342b8952630f5b270198e29a058001b031b1158e5d602e8`).
+`11435a17aabe7c11faf71aee0fd066a3784d5e9de557c451153e7f47d0d5615f`).
 
 **Vendoring procedure** (`contract/GOVERNANCE.md` "Consumers"):
 

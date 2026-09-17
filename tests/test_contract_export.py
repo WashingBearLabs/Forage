@@ -178,6 +178,27 @@ class TestTheCommittedArtifacts:
         report = drift_report(SELF_TEST_PATH, render_twin())
         assert report is None, report
 
+    def test_search_and_retrieve_descriptions_name_the_boundary(self) -> None:
+        """The `/search`<->`/retrieve` boundary (US-003) lives in both descriptions.
+
+        Each operation's description is a consumer's only prose account of
+        where the two routes diverge, so each must name the other route
+        rather than describing itself in isolation. `/search`'s description
+        is also the one place the pre-abstraction "through SearXNG" /
+        "via SearXNG" phrasing must not survive — the route now serves a
+        configured provider chain, not SearXNG specifically.
+        """
+        document = cast(
+            dict[str, Any], yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
+        )
+        paths = cast(dict[str, Any], document["paths"])
+        search_description = cast(str, paths["/search"]["post"]["description"])
+        retrieve_description = cast(str, paths["/retrieve"]["post"]["description"])
+        assert "/retrieve" in search_description
+        assert "/search" in retrieve_description
+        assert "through SearXNG" not in search_description
+        assert "via SearXNG" not in search_description
+
 
 class TestTheDriftCheckCatchesDrift:
     """A gate nobody has seen fail is not yet a gate."""

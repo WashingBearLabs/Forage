@@ -530,7 +530,7 @@
     "type": "object"
   },
   "SearchRequest": {
-    "description": "Inbound request to run a web search.",
+    "description": "Inbound request to run a web search.\n\n`/search` finds and returns provider-extracted content for a query\nacross sources \u2014 snippets or chunks, per result `content_kind` \u2014 from\nthe configured provider chain, every result sanitized, never cached;\n`/retrieve` fetches and sanitizes one caller-named URL through the full\npipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` is\nhonoured on both routes; this route additionally honours `providers`\nand `allow_paid_fallback` (contract 1.2.0) and scans every result at\nthe fixed 0.85 default at trust tier `standard` (`config.yaml`'s\n`promptguard_threshold` is not applied here), while `/retrieve`\nadditionally honours `promptguard_threshold`, `trusted_domains`,\n`verified_domains`, `blocked_domains` and `cache_ttl_hours`. This\ndocuments today's divergence; changing it belongs to\n`epic-forage-hardening`.",
     "properties": {
       "allow_paid_fallback": {
         "default": true,

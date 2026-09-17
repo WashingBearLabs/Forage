@@ -407,7 +407,7 @@ recipe.
 
 **What happens:**
 `derive_sanitizer_revision()` hashes eight source files plus the model identity and the
-active threshold. Forage's revision has moved thirteen times, each time at a boundary and
+active threshold. Forage's revision has moved fourteen times, each time at a boundary and
 each time deliberately:
 
 | When | Value | What moved it |
@@ -426,11 +426,12 @@ each time deliberately:
 | `search-fallback` US-003 | `5249def6…89f24a` | `run_search_pipeline` gained fallback telemetry and per-result provenance in `orchestrator.py` (`SearchResult.domain`, `provider_used`/`fallback_fired`/`provider_errors`, the `SearchMetricsSink` Protocol); `models.py` gained the matching wire fields but is not a `_REVISION_SOURCES` member |
 | `search-fallback` US-002 | `f0b93318…70d62` | `run_search_pipeline` classifies a zero-result, non-empty-`unresponsive_engines` `ProviderSearchResult` as a failure in `orchestrator.py` — SearXNG's real production failure shape; a lone-`searxng` chain is carved out and unaffected |
 | `search-policy-and-health` US-010 | `dc3ff92a…eded9` | `contract.py` gained `POLICY_EXCLUDED_ALL_PROVIDERS`, the fixed-literal `reason` the `/search` handler raises when the new `apply_request_policy` narrows a request's effective chain to empty; `retrieval_app.py`, where the raise site lives, is not a `_REVISION_SOURCES` member |
+| `search-policy-and-health` US-003 | `41ac98ca…b4e318` | `contract.py`'s `CONTRACT_VERSION` docstring gained the completed 1.2.0 change record (every field, counter and enum member specs 1-4 added, all additive) plus a note that the `/search`/`/retrieve` boundary text rides the same unpublished window; `retrieval_app.py` and `models.py`, where that boundary text lives, are not `_REVISION_SOURCES` members |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**None of the thirteen rotations changed sanitization behaviour** — but the fourth and fifth
+**None of the fourteen rotations changed sanitization behaviour** — but the fourth and fifth
 are different *kinds* of rotation and worth reading as such. The first three moved because
 the hash is over bytes and someone reformatted or retyped a hashed file. The fourth moved
 because an **input changed**: weights are a runtime, per-deployment thing now
