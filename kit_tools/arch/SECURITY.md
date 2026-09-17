@@ -9,7 +9,7 @@
 
 > **TEMPLATE_INTENT:** Document authentication, authorization, and secrets management. Security architecture reference.
 
-> Last updated: 2026-09-13
+> Last updated: 2026-09-16
 > Updated by: Claude (seed-project)
 
 ---
@@ -218,6 +218,7 @@ Twelve-factor, runtime environment only. There is no Vault or OpenBao client, no
 | `HF_TOKEN` | Gated Hugging Face download of the PromptGuard weights | No; absent is the supported degraded mode | Read at runtime by `model_fetcher.py`; never a build argument |
 | `FORAGE_MIRROR_TOKEN` | Read-only credential for the private OCI weights mirror | No | Passed to `oras` on stdin, never argv, log, or disk |
 | `VALKEY_URL` | Content-cache connection string; may embed a password (`redis://:PASSWORD@host:6379/4`) | No; fully unset means the in-memory cache | Read once at start; never logged (closed vocabulary below) |
+| `FORAGE_BRAVE_API_KEY` | API key for Brave's paid LLM-Context search endpoint | No; absent means a `brave` entry in `FORAGE_SEARCH_PROVIDERS` is skipped and the chain falls back to SearXNG | Read once at start by the lifespan (`retrieval_app._resolve_brave_key()`); travels only in the `X-Subscription-Token` header, never a URL or query string; never logged (`pipeline/search_providers/brave.py`'s closed vocabulary) |
 | `SEARXNG_SECRET` | The companion SearXNG's own secret | Yes for the companion; `${SEARXNG_SECRET:?...}` in compose, no baked default | Never read by Forage itself |
 
 Related but not a secret: `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION` (alias `POPPY_RETRIEVAL_LEGACY_CAPABILITY`). Exactly `"1"` forces `/health.capabilities` to advertise `search_sanitization` during a consumer transition; `status`, `degraded_reasons`, and `promptguard_loaded` stay honest, and a WARNING is logged every boot (`docs/configuration.md` "Break-glass").

@@ -51,6 +51,11 @@ from pipeline.search_providers.base import (
     ProviderSearchResult,
     SearchProvider,
 )
+from pipeline.search_providers.brave import (
+    BRAVE_API_KEY_ENV_VAR,
+    BraveApiProvider,
+    BraveSettings,
+)
 from pipeline.search_providers.searxng import (
     DEFAULT_SEARXNG_URL,
     HTTP_STATUS_DETAIL_PREFIX,
@@ -1055,6 +1060,97 @@ class TestBuildProviderChain:
         assert "importlib" not in _imported_modules(
             Path(pipeline.search_providers.__file__)
         )
+
+
+# ---------------------------------------------------------------------------
+# feature-brave-provider US-002: env-gated conditional registration
+# ---------------------------------------------------------------------------
+
+
+class TestBuildProviderChainBraveRegistration:
+    """`"brave"` is a known name; it only ever registers with a key."""
+
+    def test_a_key_registers_the_brave_provider(self) -> None:
+        settings = BraveSettings(timeout_seconds=30.0)
+        chain = build_provider_chain(
+            ["brave"],
+            searxng_url=DEFAULT_SEARXNG_URL,
+            brave_api_key="sentinel-key",
+            brave_settings=settings,
+        )
+
+        assert len(chain) == 1
+        provider = chain[0]
+        assert isinstance(provider, BraveApiProvider)
+        assert provider.name == "brave"
+        assert provider.paid is True
+        assert provider.settings == settings
+
+    def test_a_searxng_and_brave_chain_with_a_key_registers_both_in_order(
+        self,
+    ) -> None:
+        chain = build_provider_chain(
+            ["searxng", "brave"],
+            searxng_url=DEFAULT_SEARXNG_URL,
+            brave_api_key="sentinel-key",
+        )
+
+        assert [provider.name for provider in chain] == ["searxng", "brave"]
+
+    def test_no_key_skips_brave_with_a_warning_and_keeps_searxng(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="pipeline.search_providers"):
+            chain = build_provider_chain(
+                ["searxng", "brave"], searxng_url=DEFAULT_SEARXNG_URL
+            )
+
+        assert [provider.name for provider in chain] == ["searxng"]
+        matching = [
+            r for r in caplog.records if "brave_skipped_missing_key" in r.message
+        ]
+        assert len(matching) == 1
+        assert BRAVE_API_KEY_ENV_VAR in matching[0].message
+        # No second warning: SearXNG alone already satisfies the chain.
+        assert "search_chain_defaulted_to_searxng" not in caplog.text
+
+    def test_brave_alone_with_no_key_defaults_to_searxng_with_a_second_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="pipeline.search_providers"):
+            chain = build_provider_chain(["brave"], searxng_url=DEFAULT_SEARXNG_URL)
+
+        assert len(chain) == 1
+        assert chain[0].name == "searxng"
+        assert "brave_skipped_missing_key" in caplog.text
+        assert "search_chain_defaulted_to_searxng" in caplog.text
+
+    def test_an_unknown_name_still_raises_and_names_brave_as_known(self) -> None:
+        with pytest.raises(SearchProviderConfigurationError) as exc_info:
+            build_provider_chain(["nope"], searxng_url=DEFAULT_SEARXNG_URL)
+
+        message = str(exc_info.value)
+        assert "brave" in message
+        assert "searxng" in message
+
+    def test_brave_unknown_name_refusal_never_fires_even_without_a_key(self) -> None:
+        """`"brave"` alone, key-less, is a skip — never an unknown-name refusal."""
+        chain = build_provider_chain(["brave"], searxng_url=DEFAULT_SEARXNG_URL)
+        assert chain[0].name == "searxng"
+
+    def test_a_present_key_with_brave_absent_from_the_chain_logs_nothing(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """An unused key is not a misconfiguration."""
+        with caplog.at_level(logging.WARNING, logger="pipeline.search_providers"):
+            chain = build_provider_chain(
+                ["searxng"],
+                searxng_url=DEFAULT_SEARXNG_URL,
+                brave_api_key="sentinel-key",
+            )
+
+        assert [provider.name for provider in chain] == ["searxng"]
+        assert caplog.records == []
 
 
 class TestRunSearchPipelineProvidersArgument:

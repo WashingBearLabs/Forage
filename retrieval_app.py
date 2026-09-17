@@ -78,7 +78,12 @@ from pipeline.search_providers import (
     parse_provider_names,
 )
 from pipeline.search_providers.base import SearchProvider
-from pipeline.search_providers.brave import brave_settings_from_config
+from pipeline.search_providers.brave import (
+    BRAVE_API_KEY_ENV_VAR,
+    KEY_STRIP_CHARS,
+    brave_key_present,
+    brave_settings_from_config,
+)
 from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL, SearxngProvider
 from promptguard.classifier import PromptGuardClassifier
 
@@ -184,6 +189,37 @@ def _configured_provider_names() -> list[str]:
             DEFAULT_PROVIDER_NAME,
         )
     return parse_provider_names(raw)
+
+
+def _resolve_brave_key() -> str | None:
+    """Return the operator's Brave API key for this start, or ``None``.
+
+    The **one** read site for ``FORAGE_BRAVE_API_KEY``, on
+    :func:`_configured_provider_names`'s pattern: read once, in the
+    lifespan, and never again while the process runs.
+
+    A present-but-unusable value (see :func:`brave_key_present` for exactly
+    what "unusable" means) is treated the same as an absent one, after a
+    WARNING naming the variable — never the value — on the
+    ``model_fetcher.py`` ``model_revision_invalid`` / ``weights_mirror_invalid``
+    precedent (~898, ~1003). A value that is blank after a plain strip (the
+    ``FORAGE_BRAVE_API_KEY=`` compose-renders-unset shape) is silently
+    absent, exactly as a missing variable is: nothing was configured, so
+    there is nothing to warn about.
+    """
+    raw = os.environ.get(BRAVE_API_KEY_ENV_VAR)
+    if raw is None:
+        return None
+    if brave_key_present(raw):
+        return raw.strip(KEY_STRIP_CHARS)
+    if raw.strip():
+        logger.warning(
+            "brave_key_invalid — %s is set but is not usable as an API key "
+            "(must be ASCII, printable, and free of interior whitespace or "
+            "control characters)",
+            BRAVE_API_KEY_ENV_VAR,
+        )
+    return None
 
 
 def _configured_cache_backend() -> CacheBackend:
@@ -1127,14 +1163,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     _warn_if_break_glass_advertisement_enabled()
 
+    # Resolved unconditionally, on the same posture as
+    # `cache_settings_from_config` below: whether or not "brave" is in the
+    # resolved chain, a wrong-typed or out-of-range value refuses boot
+    # rather than shipping dead (`feature-brave-provider` US-002). Read
+    # ahead of the chain build below because `build_provider_chain` needs
+    # the resolved settings to hand a registered `BraveApiProvider`.
+    app.state.brave_settings = brave_settings_from_config(config)
+
     # Resolve the ordered search-provider chain from the environment, once.
     # An unknown name raises `SearchProviderConfigurationError` straight out
     # of the lifespan — the `extraction_settings_from_config` /
     # `cache_settings_from_config` precedent: a typo fails the boot loudly
-    # rather than quietly running a chain the operator did not ask for.
+    # rather than quietly running a chain the operator did not ask for. A
+    # `"brave"` entry with no usable key is skipped (WARNING), never a boot
+    # refusal — the key-less deployment is the supported floor.
     search_providers = build_provider_chain(
         _configured_provider_names(),
         searxng_url=SEARXNG_URL,
+        brave_api_key=_resolve_brave_key(),
+        brave_settings=app.state.brave_settings,
     )
     app.state.search_providers = search_providers
     # Names only — never the configured endpoint or any other environment
@@ -1152,13 +1200,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # never relies on `ContentCache`'s own Valkey default, which survives only
     # as the test-facing constructor convenience it always was.
     app.state.cache_settings = cache_settings_from_config(config)
-    # Read unconditionally, on the same posture as `cache_settings_from_config`
-    # above: whether or not "brave" is in the resolved chain, a wrong-typed or
-    # out-of-range value refuses boot rather than shipping dead
-    # (`feature-brave-provider` US-002/US-003 wire the result into a
-    # registered provider; this call alone is what makes the config.yaml
-    # knobs load-bearing from the day they land).
-    app.state.brave_settings = brave_settings_from_config(config)
     app.state.cache_metrics = CacheMetrics()
     storage, backend = _select_cache_storage(
         settings=app.state.cache_settings,

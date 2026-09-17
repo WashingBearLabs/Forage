@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import logging
 import re
 import ssl
 from collections.abc import AsyncIterator, Generator
@@ -31,20 +32,25 @@ from pipeline.orchestrator import (
     _sanitize_search_text,
     run_search_pipeline,
 )
+from pipeline.search_providers import build_provider_chain
 from pipeline.search_providers.base import ProviderFailure, ProviderSearchResult
 from pipeline.search_providers.brave import (
     _BRAVE_AUTH_HEADER,
     _BRAVE_LLM_CONTEXT_URL,
     _BRAVE_MAX_RESPONSE_BYTES,
+    BRAVE_API_KEY_ENV_VAR,
     BRAVE_PROVIDER_NAME,
     DEFAULT_BRAVE_CHUNK_MAX_CHARS,
     DEFAULT_BRAVE_QUERY_MAX_CHARS,
     DEFAULT_BRAVE_TIMEOUT_SECONDS,
+    KEY_STRIP_CHARS,
     BraveApiProvider,
     BraveConfigurationError,
     BraveSettings,
+    brave_key_present,
     brave_settings_from_config,
 )
+from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL
 from retrieval_app import lifespan
 from tests.fakes import FakeSearchProvider
 
@@ -94,6 +100,110 @@ class TestFixtureCarriesNoSecret:
             assert matches == [], (
                 f"{path} contains {len(matches)} token-shaped literal(s): {matches}"
             )
+
+
+# ---------------------------------------------------------------------------
+# `brave_key_present` — the single shared presence predicate (US-002)
+# ---------------------------------------------------------------------------
+
+
+class TestBraveKeyPresent:
+    def test_the_env_var_name(self) -> None:
+        assert BRAVE_API_KEY_ENV_VAR == "FORAGE_BRAVE_API_KEY"
+
+    def test_none_is_absent(self) -> None:
+        assert brave_key_present(None) is False
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            pytest.param("", False, id="empty"),
+            pytest.param("   ", False, id="whitespace-only"),
+            pytest.param("sentinel-key", True, id="plain-key"),
+            pytest.param("  sentinel-key  ", True, id="leading-trailing-spaces"),
+            pytest.param("sentinel-key\n", True, id="trailing-lf"),
+            pytest.param("sentinel-key\t", True, id="trailing-tab"),
+            # A lone trailing CR — or the CR half of a CRLF once the LF is
+            # stripped — remains embedded and is refused as a control
+            # character, rather than being silently absorbed by a wider
+            # `str.strip()`.
+            pytest.param("key\r", False, id="trailing-cr"),
+            pytest.param("key\n", True, id="trailing-lf-short"),
+            pytest.param("key\r\n", False, id="crlf-leaves-a-bare-cr"),
+            pytest.param("sen\rtinel", False, id="interior-cr"),
+            pytest.param("sen tinel", False, id="interior-space"),
+            pytest.param("sen\ttinel", False, id="interior-tab"),
+            pytest.param("café-key", False, id="non-ascii"),
+            pytest.param("key“quoted”", False, id="smart-quotes"),
+            pytest.param("key\x00null", False, id="embedded-nul"),
+        ],
+    )
+    def test_presence(self, raw: str, expected: bool) -> None:
+        assert brave_key_present(raw) is expected
+
+
+# ---------------------------------------------------------------------------
+# `retrieval_app._resolve_brave_key()` — the one read site (US-002)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveBraveKey:
+    def test_unset_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv(BRAVE_API_KEY_ENV_VAR, raising=False)
+        assert retrieval_app._resolve_brave_key() is None
+
+    def test_blank_after_strip_is_none_and_does_not_warn(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """`FORAGE_BRAVE_API_KEY=` — compose rendering an unset shell variable."""
+        monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "")
+
+        with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+            resolved = retrieval_app._resolve_brave_key()
+
+        assert resolved is None
+        assert "brave_key_invalid" not in caplog.text
+
+    def test_a_present_key_is_returned_stripped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "  sentinel-key  ")
+        assert retrieval_app._resolve_brave_key() == "sentinel-key"
+
+    def test_a_trailing_lf_resolves_to_the_bare_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The file-backed-secret shape: `key\\n` resolves to `key`."""
+        monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "key\n")
+        assert retrieval_app._resolve_brave_key() == "key"
+
+    def test_an_invalid_value_resolves_to_none_and_warns_without_the_value(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        sentinel = "café-sentinel-key"
+        monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, sentinel)
+
+        with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+            resolved = retrieval_app._resolve_brave_key()
+
+        assert resolved is None
+        assert "brave_key_invalid" in caplog.text
+        assert BRAVE_API_KEY_ENV_VAR in caplog.text
+        assert sentinel not in caplog.text
+
+    def test_a_trailing_cr_resolves_to_none_and_warns(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "key\r")
+
+        with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+            resolved = retrieval_app._resolve_brave_key()
+
+        assert resolved is None
+        assert "brave_key_invalid" in caplog.text
+
+    def test_the_strip_chars_constant_excludes_carriage_return(self) -> None:
+        assert KEY_STRIP_CHARS == " \t\n"
 
 
 # ---------------------------------------------------------------------------
@@ -278,6 +388,57 @@ class TestClientHardening:
         # the query params, or anywhere else in what was sent.
         assert sentinel_key not in _BRAVE_LLM_CONTEXT_URL
         assert sentinel_key not in str(stream_call.kwargs.get("params", {}))
+
+
+# ---------------------------------------------------------------------------
+# No environment value can raise `UnicodeEncodeError` at request construction
+# (US-002): `brave_key_present` refuses anything that could, before a client
+# ever exists.
+# ---------------------------------------------------------------------------
+
+
+class TestNoUnicodeEncodeErrorAcrossEnvironmentValues:
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            pytest.param("café-key", id="non-ascii"),
+            pytest.param("key“quoted”", id="smart-quotes"),
+            pytest.param("key\r", id="lone-cr"),
+            pytest.param("key\n", id="trailing-lf"),
+            pytest.param("key\r\n", id="crlf"),
+            pytest.param("sen tinel", id="interior-space"),
+            # A NUL byte cannot round-trip through `os.environ` at all (POSIX
+            # env vars are NUL-terminated C strings) — `brave_key_present`'s
+            # own parametrized cases cover that shape directly instead.
+            pytest.param("plain-ascii-key", id="valid-key"),
+            pytest.param("  plain-ascii-key  ", id="valid-key-padded"),
+            pytest.param("", id="empty"),
+            pytest.param("   ", id="whitespace-only"),
+        ],
+    )
+    async def test_the_full_env_to_search_path_never_raises(
+        self, raw: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, raw)
+
+        key = retrieval_app._resolve_brave_key()
+        chain = build_provider_chain(
+            ["searxng", "brave"],
+            searxng_url=DEFAULT_SEARXNG_URL,
+            brave_api_key=key,
+        )
+
+        brave_providers = [p for p in chain if p.name == "brave"]
+        if not brave_providers:
+            # An unusable value never registers a provider, so there is
+            # nothing further to drive — the refusal already happened.
+            return
+
+        with _client_patch(response=_make_response(content=_load_sample_bytes())):
+            outcome = await brave_providers[0].search("q", 3)
+
+        assert isinstance(outcome, ProviderSearchResult | ProviderFailure)
 
 
 # ---------------------------------------------------------------------------

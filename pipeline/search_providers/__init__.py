@@ -14,10 +14,18 @@ app module, so the dependency runs one way only.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 
 from pipeline.search_providers.base import SearchProvider
+from pipeline.search_providers.brave import (
+    BRAVE_API_KEY_ENV_VAR,
+    BraveApiProvider,
+    BraveSettings,
+)
 from pipeline.search_providers.searxng import SearxngProvider
+
+logger = logging.getLogger(__name__)
 
 # Named here rather than in `retrieval_app.py` so the repo holds one copy of
 # the string: the error message below quotes the variable, and
@@ -28,6 +36,11 @@ SEARCH_PROVIDERS_ENV_VAR = "FORAGE_SEARCH_PROVIDERS"
 # The chain an operator who configured nothing gets: SearXNG alone, the
 # key-less free floor.
 DEFAULT_PROVIDER_NAME = "searxng"
+
+# Every name `build_provider_chain` recognises — a superset of the registry's
+# own keys, since "brave" is a known name even on a start with no key (it is
+# *skipped*, never treated as an unknown-name boot refusal).
+_KNOWN_PROVIDER_NAMES = frozenset({"searxng", "brave"})
 
 
 class SearchProviderConfigurationError(ValueError):
@@ -64,7 +77,11 @@ def parse_provider_names(raw: str | None) -> list[str]:
 
 
 def build_provider_chain(
-    names: Sequence[str], *, searxng_url: str
+    names: Sequence[str],
+    *,
+    searxng_url: str,
+    brave_api_key: str | None = None,
+    brave_settings: BraveSettings | None = None,
 ) -> list[SearchProvider]:
     """Resolve *names* into constructed providers, in chain order.
 
@@ -72,18 +89,49 @@ def build_provider_chain(
     ``getattr``, ``eval``, or entry-point discovery participates: an operator
     string never selects code by any path other than this table, so the set of
     reachable backends is the set written here and read in review.
+
+    ``"brave"`` is a **known** name whether or not *brave_api_key* is given —
+    an unknown-name boot refusal never fires for it — but it is only in the
+    registry, and so only ever constructed, when a key is present. Without
+    one, a ``"brave"`` entry is skipped with a single WARNING
+    (``brave_skipped_missing_key``); never raised for. If every configured
+    entry is skipped this way, the resolved chain would otherwise be empty,
+    so a second WARNING (``search_chain_defaulted_to_searxng``) marks the
+    substitution and the key-less SearXNG floor is used instead. A present
+    key with ``"brave"`` absent from *names* registers nothing and logs
+    nothing here — an unused key is not a misconfiguration.
     """
     registry: dict[str, Callable[[], SearchProvider]] = {
         "searxng": lambda: SearxngProvider(searxng_url),
     }
+    if brave_api_key is not None:
+        key = brave_api_key
+        settings = brave_settings
+        registry["brave"] = lambda: BraveApiProvider(key, settings)
+
     chain: list[SearchProvider] = []
     for position, name in enumerate(names, start=1):
-        factory = registry.get(name)
-        if factory is None:
+        if name not in _KNOWN_PROVIDER_NAMES:
             raise SearchProviderConfigurationError(
                 f"{SEARCH_PROVIDERS_ENV_VAR} entry {position} names a search "
                 f"provider Forage does not know; known providers are "
-                f"{', '.join(sorted(registry))}"
+                f"{', '.join(sorted(_KNOWN_PROVIDER_NAMES))}"
             )
+        factory = registry.get(name)
+        if factory is None:
+            logger.warning(
+                "brave_skipped_missing_key — no %s in the environment, so "
+                "the paid provider is not registered",
+                BRAVE_API_KEY_ENV_VAR,
+            )
+            continue
         chain.append(factory())
+
+    if not chain:
+        logger.warning(
+            "search_chain_defaulted_to_searxng — every configured search "
+            "provider was skipped, so the key-less SearXNG floor is used "
+            "instead"
+        )
+        chain = [SearxngProvider(searxng_url)]
     return chain

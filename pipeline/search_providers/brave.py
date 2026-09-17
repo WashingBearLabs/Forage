@@ -17,8 +17,11 @@ at it; the pinned sample is what closes that gap.
 
 Brave is a paid backend (``paid = True``) with no free tier: ``$5`` per 1,000
 queries, billed per query regardless of how many chunks come back. This
-module never registers itself — env-gated registration on
-``FORAGE_BRAVE_API_KEY`` is ``feature-brave-provider`` US-002's job.
+module never registers itself — the conditional wiring onto
+``FORAGE_SEARCH_PROVIDERS`` is
+``pipeline.search_providers.build_provider_chain``'s job
+(``feature-brave-provider`` US-002). It does define the one shared predicate
+for whether a key is usable at all: :func:`brave_key_present`.
 """
 
 from __future__ import annotations
@@ -45,6 +48,56 @@ logger = logging.getLogger(__name__)
 # prefix (`brave: <failure_class>`, US-003). Never confused with the
 # per-result `engine` value below, which is provenance, not identity.
 BRAVE_PROVIDER_NAME = "brave"
+
+# The environment variable naming this deployment's Brave API key, on
+# root-level `model_fetcher.py`'s `*_ENV_VAR` constant pattern (~179-183). No
+# alias (ruling 10) — a fresh `FORAGE_*` name, never a back-compat `POPPY_*`
+# one — and no vault or runtime key API: Forage is 12-factor and the
+# consumer injects the key into the environment.
+BRAVE_API_KEY_ENV_VAR: Final = "FORAGE_BRAVE_API_KEY"
+
+# Characters stripped from both ends before a key is judged present: space,
+# tab and line feed, but deliberately *not* carriage return. A file-backed
+# secret routinely carries a trailing LF (the `model_fetcher._resolve_token()`
+# rule, ~912); stripping only LF-family whitespace means a Windows-style CRLF
+# ending strips down to a bare trailing CR, which then fails
+# `brave_key_present` as an embedded control character rather than being
+# silently absorbed by a wider `str.strip()`.
+KEY_STRIP_CHARS: Final = " \t\n"
+
+
+def brave_key_present(raw: str | None) -> bool:
+    """Return whether *raw* is usable as a Brave API key.
+
+    The single definition of "a key is present" (ruling 28): registration in
+    `build_provider_chain` and `/health`'s `capabilities["brave_api_key"]`
+    (spec 4 US-002) both consume this, so the two can never disagree.
+
+    Three shapes are refused, all before any client exists:
+
+    - Empty after stripping `KEY_STRIP_CHARS` — compose routinely renders
+      `FORAGE_BRAVE_API_KEY=` from an unset shell variable, and a
+      file-backed secret carries a trailing newline.
+    - Not ASCII-only, or not printable (any control character, including a
+      lone carriage return) — httpx encodes header values as latin-1, so a
+      non-ASCII key would raise `UnicodeEncodeError` at request construction
+      with the offending character quoted in the message, and a CR/LF in a
+      header value is a client-side construction exception rather than an
+      HTTP outcome whose message could carry the value.
+    - Interior whitespace — `str.isprintable()` already excludes every
+      whitespace character except the ASCII space, so this is the one
+      remaining check needed to also refuse a pasted key with an embedded
+      space.
+    """
+    if raw is None:
+        return False
+    value = raw.strip(KEY_STRIP_CHARS)
+    if not value:
+        return False
+    if not value.isascii() or not value.isprintable():
+        return False
+    return " " not in value
+
 
 # A fixed `https://` endpoint — no environment override — so this constant is
 # also the one seam a test patches. Confirmed by the owner's capture

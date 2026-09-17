@@ -54,6 +54,7 @@ from pipeline.extraction_limits import (
 from pipeline.orchestrator import PipelineError
 from pipeline.search_providers import SearchProviderConfigurationError
 from pipeline.search_providers.base import ProviderSearchResult, SearchProvider
+from pipeline.search_providers.brave import BRAVE_API_KEY_ENV_VAR
 from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL
 from promptguard.classifier import (
     CHUNK_OVERLAP,
@@ -1812,3 +1813,125 @@ async def test_a_following_search_still_sees_the_real_provider(
 
     assert resp.status_code == 422
     assert resp.json()["error"] == "searxng_unavailable"
+
+
+# ---------------------------------------------------------------------------
+# feature-brave-provider US-002: env-gated conditional registration, wired
+# through the real lifespan
+# ---------------------------------------------------------------------------
+
+
+def _brave_stream_response() -> httpx.Response:
+    return httpx.Response(
+        status_code=200,
+        content=b"{}",
+        headers={"content-type": "application/json"},
+        request=httpx.Request("GET", "https://api.search.brave.com/res/v1/llm/context"),
+    )
+
+
+def _brave_client_double() -> MagicMock:
+    """A minimal streaming double for ``pipeline.search_providers.brave``."""
+    stream_cm = MagicMock()
+    stream_cm.__aenter__ = AsyncMock(return_value=_brave_stream_response())
+    stream_cm.__aexit__ = AsyncMock(return_value=False)
+    client = MagicMock()
+    client.stream = MagicMock(return_value=stream_cm)
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    return client
+
+
+async def test_lifespan_wires_the_configured_brave_timeout_into_the_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-default `search_brave_timeout_seconds` really reaches the client."""
+    _park_the_retry(monkeypatch)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "brave")
+    monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "sentinel-key")
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {"search_brave_timeout_seconds": 45.0},
+    )
+
+    with (
+        _borrowed_search_providers(None),
+        patch("pipeline.search_providers.brave.httpx.AsyncClient") as client_cls,
+    ):
+        client_cls.return_value = _brave_client_double()
+
+        async with _running_app():
+            chain = cast("list[SearchProvider]", app.state.search_providers)
+            assert [provider.name for provider in chain] == ["brave"]
+            outcome = await chain[0].search("q", 3)
+
+    assert isinstance(outcome, ProviderSearchResult)
+    assert client_cls.call_args.kwargs["timeout"] == 45.0
+
+
+async def test_a_key_set_after_startup_does_not_change_the_resolved_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The variable is read once, in the lifespan — never again while running."""
+    _park_the_retry(monkeypatch)
+    monkeypatch.delenv("FORAGE_SEARCH_PROVIDERS", raising=False)
+    monkeypatch.delenv(BRAVE_API_KEY_ENV_VAR, raising=False)
+
+    with _borrowed_search_providers(None):
+        async with _running_app():
+            before = app.state.search_providers
+            assert [provider.name for provider in before] == ["searxng"]
+
+            monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "sentinel-key")
+            monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng,brave")
+
+            after = retrieval_app._resolved_search_providers(app.state)
+            assert after is before
+            assert [provider.name for provider in after] == ["searxng"]
+
+
+async def test_lifespan_logs_exactly_one_skip_warning_for_a_keyless_brave_entry(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng,brave")
+    monkeypatch.delenv(BRAVE_API_KEY_ENV_VAR, raising=False)
+
+    with (
+        _borrowed_search_providers(None),
+        caplog.at_level(logging.WARNING, logger="pipeline.search_providers"),
+    ):
+        async with _running_app():
+            chain = cast("list[SearchProvider]", app.state.search_providers)
+            assert [provider.name for provider in chain] == ["searxng"]
+
+    matching = [
+        record
+        for record in caplog.records
+        if "brave_skipped_missing_key" in record.message
+    ]
+    assert len(matching) == 1
+
+
+async def test_lifespan_never_leaks_an_invalid_brave_key_into_the_log(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unusable key is named by variable, never by value — even at boot."""
+    sentinel = "café-invalid-sentinel-key"
+    _park_the_retry(monkeypatch)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng,brave")
+    monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, sentinel)
+
+    with (
+        _borrowed_search_providers(None),
+        caplog.at_level(logging.WARNING, logger="retrieval_app"),
+    ):
+        async with _running_app():
+            chain = cast("list[SearchProvider]", app.state.search_providers)
+            assert [provider.name for provider in chain] == ["searxng"]
+
+    assert "brave_key_invalid" in caplog.text
+    assert sentinel not in caplog.text

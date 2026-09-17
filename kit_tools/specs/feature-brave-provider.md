@@ -657,3 +657,53 @@ documented integration step, not a design question._
   `kit_tools/testing/TESTING_GUIDE.md` — no suite-count totals elsewhere were touched
   (ruling 32, spec 5 US-003's job). Full suite: 1845 passed; `ruff check`, `ruff format
   --check` and `pyright` (strict) all clean.
+
+- **2026-09-16 — US-002 landed: env-gated conditional registration (3rd attempt).** The
+  prior attempt's verifier flagged the story hint's `raw.strip()` as contradicting its own
+  worked example (`"key\r"` must be *not present*, but a plain `str.strip()` removes a
+  trailing CR, leaving a present-looking `"key"`). Resolved by narrowing the strip:
+  `brave_key_present` and `_resolve_brave_key()` both strip only `KEY_STRIP_CHARS = " \t\n"`
+  (space, tab, LF — deliberately not CR) before validating ASCII/printable/no-interior-
+  whitespace. A lone trailing CR, or the CR half of a CRLF once the LF is stripped, survives
+  as an embedded control character and is refused by `str.isprintable()`. Parametrized cases
+  pin the resolution: `"key\r"` → not present, `"key\n"` → present and resolves to `"key"`.
+  **Shared logic, not shared strip call.** `brave_key_present(raw: str | None) -> bool` lives
+  once in `pipeline/search_providers/brave.py`; `retrieval_app._resolve_brave_key()` imports
+  both it and the `KEY_STRIP_CHARS` constant rather than re-deriving the strip set, so the
+  two can never quietly diverge.
+  **Registry shape.** `"brave"` is tracked as a known name (`_KNOWN_PROVIDER_NAMES`) separate
+  from `build_provider_chain`'s registry dict — the registry only gains a `"brave"` entry
+  when a key is present, but an unknown-name boot refusal must never fire for `"brave"` even
+  key-less (that case is a skip-plus-WARNING, not a refusal). Under pyright strict, the
+  conditional `brave` factory closure needed `brave_api_key` reassigned to a fresh local
+  before capture — pyright does not propagate a parameter's `is not None` narrowing into a
+  nested lambda, but a freshly assigned local's inferred type is unaffected.
+  **Ordering.** `brave_settings_from_config(config)` (already unconditional since US-010)
+  moved earlier in the lifespan, immediately before the chain build, since
+  `build_provider_chain` now consumes the resolved `BraveSettings` — it is still a single,
+  unconditional call, just relocated ahead of `cache_settings_from_config`.
+  **Retry-feedback tests added.** A real-lifespan test drives `FORAGE_SEARCH_PROVIDERS=brave`
+  with a key and a patched `_load_config` returning a non-default
+  `search_brave_timeout_seconds`, asserting the value reaches the patched
+  `pipeline.search_providers.brave.httpx.AsyncClient`'s `timeout=` kwarg; a second boots the
+  lifespan, then mutates `FORAGE_BRAVE_API_KEY`/`FORAGE_SEARCH_PROVIDERS` post-boot and
+  asserts `app.state.search_providers` (read through `_resolved_search_providers`) is
+  unchanged — the read-once guarantee, verified rather than assumed; a third parametrizes
+  non-ASCII, CR/LF, interior-whitespace and valid values through
+  `_resolve_brave_key → build_provider_chain → provider.search()` against a patched client,
+  asserting no `UnicodeEncodeError` anywhere on the path (a NUL-byte case was dropped from
+  this round-trip test — POSIX environment variables cannot contain one at all, so
+  `monkeypatch.setenv` itself raises `ValueError`; `brave_key_present`'s own parametrized
+  cases cover that shape directly instead); a fourth and fifth assert exactly one
+  `brave_skipped_missing_key` WARNING record for a key-less `brave` entry and that an
+  invalid sentinel key never appears in `caplog.text`, both driven through the real lifespan
+  rather than `build_provider_chain` alone.
+  **Docs.** `FORAGE_BRAVE_API_KEY` rows added to `docs/configuration.md`'s variable table
+  (naming both `brave_skipped_missing_key` and `search_chain_defaulted_to_searxng`),
+  `kit_tools/docs/ENV_REFERENCE.md`'s per-variable table and its cleared-variable sentence,
+  and `kit_tools/arch/SECURITY.md`'s secrets inventory; the three `search_brave_*`
+  `config.yaml` tunables (already shipped since US-010) got their first doc rows, in both
+  `docs/configuration.md`'s and `ENV_REFERENCE.md`'s "Top-level keys" tables.
+  Full targeted suite (`test_brave_provider.py`, `test_search_providers.py`, `test_app.py`,
+  `test_hermeticity.py`, `test_orchestrator.py`): 376 passed; `ruff check`, `ruff format
+  --check` and `pyright` (strict) all clean.
