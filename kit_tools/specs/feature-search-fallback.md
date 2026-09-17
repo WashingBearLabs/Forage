@@ -333,43 +333,43 @@ once. The mocked envelopes are built with the existing
   in `docs/bootstrap-notes.md`, `CLAUDE.md` and `kit_tools/arch/DECISIONS.md` (ruling 32).
 
 **Acceptance Criteria:**
-- [ ] A SearXNG 200 with zero raw results and a non-empty `unresponsive_engines` list advances a
+- [x] A SearXNG 200 with zero raw results and a non-empty `unresponsive_engines` list advances a
       multi-provider chain and is recorded as `"searxng: rate_limited"` in `provider_errors`
       (test with the exact mocked body from the Independent Test); the WARNING for it carries
       `detail=unresponsive_engines`.
-- [ ] A SearXNG 200 with zero raw results and an empty `unresponsive_engines` list never advances
+- [x] A SearXNG 200 with zero raw results and an empty `unresponsive_engines` list never advances
       the chain: the response is 200, `results == []`, `fallback_fired == false`,
       `provider_errors == []`, and no later provider is called.
-- [ ] A `ProviderFailure` of any class (`rate_limited`, `timeout`, `hard_error`, `auth`, `quota`)
+- [x] A `ProviderFailure` of any class (`rate_limited`, `timeout`, `hard_error`, `auth`, `quota`)
       advances the chain (parametrised test over all five).
-- [ ] Sufficiency is pre-sanitization: a provider whose raw results are all omitted by the
+- [x] Sufficiency is pre-sanitization: a provider whose raw results are all omitted by the
       sanitization loop does not advance the chain; the response is 200 with `results == []` and
       the existing omission telemetry, and no later provider is called. The same holds when the
       classifier is unavailable and `promptguard_fail_closed` is `true`.
-- [ ] Results plus a non-empty `unresponsive_engines` list is served as a success with the list
+- [x] Results plus a non-empty `unresponsive_engines` list is served as a success with the list
       passed through; no later provider is called.
-- [ ] For the configured chain `[searxng]`, the 200-empty-plus-`unresponsive_engines` shape is
+- [x] For the configured chain `[searxng]`, the 200-empty-plus-`unresponsive_engines` shape is
       served as today's 200 with `provider_used == "searxng"`, `fallback_fired is False`,
       `provider_errors == []` and one `search_provider_failed` WARNING (the existing
       `test_search_unresponsive_engines_forwarded` and
       `test_search_no_unresponsive_engines_empty_list` pass unchanged); in a multi-provider chain
       that ends on this shape the result is 422 `search_unavailable`.
-- [ ] Every provider is awaited exactly once per request in every case above; no test patches a
+- [x] Every provider is awaited exactly once per request in every case above; no test patches a
       sleep because there is none.
-- [ ] No `config.yaml` key is added; `docs/configuration.md` changes only by the caller-timeout
+- [x] No `config.yaml` key is added; `docs/configuration.md` changes only by the caller-timeout
       sentence named in the hints.
-- [ ] `grep -n 'No fallback engine' kit_tools/arch/patterns/ERROR_HANDLING.md`,
+- [x] `grep -n 'No fallback engine' kit_tools/arch/patterns/ERROR_HANDLING.md`,
       `grep -n 'One request, 10 s timeout, no retries' kit_tools/docs/API_GUIDE.md` and
       `grep -n 'the exception text' kit_tools/docs/API_GUIDE.md` all return nothing;
       `grep -n 'The only search backend' kit_tools/arch/SERVICE_MAP.md` returns nothing.
-- [ ] `kit_tools/docs/API_GUIDE.md` (`unresponsive_engines` row and closing paragraph),
+- [x] `kit_tools/docs/API_GUIDE.md` (`unresponsive_engines` row and closing paragraph),
       `kit_tools/arch/patterns/ERROR_HANDLING.md` (both tables), `kit_tools/docs/GOTCHAS.md`
       ("SearXNG :latest rots"), `kit_tools/arch/SERVICE_MAP.md` (the two SearXNG rows) and
       `docs/configuration.md` carry the sentences named in the hints; the rotation is recorded in
       `docs/bootstrap-notes.md`, `CLAUDE.md` and `kit_tools/arch/DECISIONS.md`.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
 
 ### US-003: Fallback telemetry + provenance (metadata only)
 
