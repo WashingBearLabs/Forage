@@ -288,8 +288,10 @@ class SearchRequest(BaseModel):
         description=(
             "When False, excludes every paid provider from this request's "
             "effective chain regardless of `providers` — free providers "
-            "always run. One-way: can only narrow the configured chain, "
-            "never widen, reorder, or key it. Honoured from contract 1.2.0."
+            "always run. Applied after `providers`' own "
+            "normalise-then-ignore-and-count filtering (ruling 29). One-way: "
+            "can only narrow the configured chain, never widen, reorder, or "
+            "key it. Honoured from contract 1.2.0."
         ),
     )
 

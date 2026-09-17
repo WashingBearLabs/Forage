@@ -160,6 +160,23 @@ def _make_search_request(**overrides: Any) -> SearchRequest:
     return SearchRequest(**defaults)
 
 
+def _is_valid_search_unavailable_reason(reason: str, chain_names: set[str]) -> bool:
+    """True iff *reason* is one of ``search_unavailable``'s exactly two shapes.
+
+    Either the fixed ``contract.POLICY_EXCLUDED_ALL_PROVIDERS`` literal, or a
+    ``"; "``-joined list where every entry is ``"<chain name>: <failure
+    class>"``. Anything else -- a third shape -- is rejected.
+    """
+    if reason == contract.POLICY_EXCLUDED_ALL_PROVIDERS:
+        return True
+    entries = reason.split("; ")
+    for entry in entries:
+        name, sep, failure_class = entry.partition(": ")
+        if not sep or name not in chain_names or failure_class not in FAILURE_CLASSES:
+            return False
+    return True
+
+
 def _make_fetch_result(**overrides: Any) -> FetchResult:
     defaults: dict[str, Any] = {
         "final_url": "https://example.com/page",
@@ -2305,6 +2322,54 @@ class TestChainTraversal:
             name, _, failure_class = entry.partition(": ")
             assert name in chain_names
             assert failure_class in FAILURE_CLASSES
+        assert _is_valid_search_unavailable_reason(exc_info.value.reason, chain_names)
+
+    async def test_search_unavailable_reason_accepts_the_policy_literal(self) -> None:
+        """The fixed ``POLICY_EXCLUDED_ALL_PROVIDERS`` literal is also valid."""
+        assert _is_valid_search_unavailable_reason(
+            contract.POLICY_EXCLUDED_ALL_PROVIDERS, {"searxng", "brave"}
+        )
+
+    async def test_search_unavailable_reason_rejects_a_third_form(self) -> None:
+        """Neither the chain-order list nor the fixed literal -- reject it."""
+        assert not _is_valid_search_unavailable_reason(
+            "not a recognised reason", {"searxng", "brave"}
+        )
+        assert not _is_valid_search_unavailable_reason(
+            "searxng - rate_limited", {"searxng"}
+        )
+        assert not _is_valid_search_unavailable_reason(
+            "unknown: rate_limited", {"searxng"}
+        )
+        assert not _is_valid_search_unavailable_reason(
+            "searxng: not_a_failure_class", {"searxng"}
+        )
+
+    async def test_policy_literal_reaches_post_search_on_a_paid_only_chain(
+        self, monkeypatch: pytest.MonkeyPatch, client: httpx.AsyncClient
+    ) -> None:
+        """The fixed literal reaches `/search` on a paid-only configured chain.
+
+        ``allow_paid_fallback: false`` against a chain with no free provider
+        excludes everything, so the handler raises the policy 422 -- the
+        second of ``search_unavailable``'s two reason shapes -- before
+        `run_search_pipeline` is ever called.
+        """
+        from retrieval_app import app
+
+        brave = FakeSearchProvider(name="brave", paid=True)
+        monkeypatch.setattr(app.state, "search_providers", [brave], raising=False)
+
+        resp = await client.post(
+            "/search", json={"query": "q", "allow_paid_fallback": False}
+        )
+
+        assert resp.status_code == 422
+        body = resp.json()
+        assert body["error"] == "search_unavailable"
+        assert body["reason"] == contract.POLICY_EXCLUDED_ALL_PROVIDERS
+        assert _is_valid_search_unavailable_reason(body["reason"], {"brave"})
+        assert brave.calls == []
 
     async def test_provider_failure_logs_one_message_carried_warning(
         self, caplog: pytest.LogCaptureFixture

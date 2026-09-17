@@ -674,6 +674,50 @@ Contract regenerated (`uv run python -m scripts.export_contract`); still `1.2.0`
 `kit_tools/arch/SERVICE_MAP.md`) was deliberately left untouched here, per this story's
 Implementation Hints — that refresh, the doc rows, and the rotation-table entries are US-011's.
 
+### US-012 — Finish per-request policy: widen the reason-format test, close US-010's verifier items (2026-09-16)
+
+US-010's third attempt implemented the per-request policy completely and landed at `8f7dd0f`
+via supervisor fast-forward from the reflog (all four gates green, 2028 tests) after failing
+verification on two narrow items. This story made those two fixes plus the recommended
+hardening, with no reimplementation.
+
+**Fix 1 (widened reason-format test).** Added
+`_is_valid_search_unavailable_reason(reason, chain_names)` to `tests/test_orchestrator.py`,
+accepting exactly the two documented shapes: the fixed `contract.POLICY_EXCLUDED_ALL_PROVIDERS`
+literal, or a `"; "`-joined list of `"<chain name>: <FAILURE_CLASSES member>"` entries.
+`test_search_unavailable_reason_is_chain_order_provider_errors` keeps every existing assertion
+and gained one more calling this helper. Three sibling tests were added beside it:
+`test_search_unavailable_reason_accepts_the_policy_literal` (form 2 directly),
+`test_search_unavailable_reason_rejects_a_third_form` (four malformed shapes, all rejected),
+and `test_policy_literal_reaches_post_search_on_a_paid_only_chain`, which drives form 2 through
+a real `POST /search` — a single-provider paid-only chain (`FakeSearchProvider(name="brave",
+paid=True)` monkeypatched onto `app.state.search_providers`, the same restore-via-`monkeypatch`
+idiom already used at `tests/test_orchestrator.py`'s cache-rotation test) with
+`allow_paid_fallback: false`, asserting the 422, the reason, and `brave.calls == []`.
+
+**Fix 2 (stale docstring).** `tests/test_brave_provider.py::test_brave_module_never_raises_a_pipeline_error`
+claimed the `search_unavailable` raise site "lives in `orchestrator.py` alone" — no longer true
+since US-010 added the policy raise site in `retrieval_app.py`. Reworded to name both raise
+sites; the test body (asserting `brave.py` never contains `PipelineError`) was already correct
+and untouched.
+
+**Recommended items, all taken.** (1) `allow_paid_fallback`'s description gained one clause —
+"Applied after `providers`' own normalise-then-ignore-and-count filtering (ruling 29)." —
+followed by `uv run python -m scripts.export_contract` and an in-place regeneration of
+`tests/golden/contract_1_2_0.json` (still `1.2.0`; documentation-only, per
+`contract/GOVERNANCE.md`). (2) `test_providers_naming_an_unknown_provider_leaves_only_searxng`
+(`tests/test_app.py`) was given a failing SearXNG (`rate_limited`/`http_429`) instead of a
+succeeding one — a succeeding SearXNG proves nothing, since free-first traversal never reaches
+Brave either way; forcing exhaustion is what makes `brave.calls == []` actually demonstrate the
+policy removed it. (3) `test_legacy_codes_are_byte_for_byte_on_a_searxng_only_configured_chain`
+now also asserts the exact legacy reason bytes (`"SearXNG returned HTTP error (http_500)"`).
+
+None of the changed files (`models.py`, three test files, `contract/openapi.yaml` +
+`.sha256`, the golden fixture) are `pipeline/sanitizer_revision.py`'s `_REVISION_SOURCES`
+members, so no rotation occurred and no rotation-table entry is needed. Doc rows, the four
+anchor refreshes, and the rotation record remain US-011's, untouched here. Gates: 2031 tests
+(2028 + 3 new), `ruff check .`, `ruff format --check .`, and strict `pyright` all green.
+
 ## Refinement Notes
 
 Policy-not-keys is the invariant that lets Poppy build a settings UI safely, and restrict-only

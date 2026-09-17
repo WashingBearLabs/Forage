@@ -2057,7 +2057,20 @@ async def test_providers_naming_brave_keeps_the_full_effective_chain(
 async def test_providers_naming_an_unknown_provider_leaves_only_searxng(
     client: httpx.AsyncClient,
 ) -> None:
-    searxng = FakeSearchProvider(name="searxng", outcome=_searxng_result())
+    """`providers: ["tavily"]` excludes brave -- proven by a failing SearXNG.
+
+    A succeeding SearXNG would prove nothing here: free-first traversal
+    stops at the first success either way, with or without brave in the
+    effective chain. Failing SearXNG forces the exhausted-chain path, so
+    `brave.calls == []` can only mean the policy actually removed it.
+    """
+    searxng = FakeSearchProvider(
+        name="searxng",
+        paid=False,
+        outcome=ProviderFailure(
+            provider_name="searxng", failure_class="rate_limited", detail="http_429"
+        ),
+    )
     brave = FakeSearchProvider(name="brave", paid=True)
 
     with _borrowed_search_providers([searxng, brave]):
@@ -2070,8 +2083,10 @@ async def test_providers_naming_an_unknown_provider_leaves_only_searxng(
             },
         )
 
-    assert resp.status_code == 200
-    assert resp.json()["provider_used"] == "searxng"
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["error"] == "search_unavailable"
+    assert body["reason"] == "searxng: rate_limited"
     assert brave.calls == []
 
     metrics_body = (await client.get("/metrics")).json()
@@ -2266,7 +2281,9 @@ async def test_legacy_codes_are_byte_for_byte_on_a_searxng_only_configured_chain
         )
 
     assert resp.status_code == 422
-    assert resp.json()["error"] == "searxng_error"
+    body = resp.json()
+    assert body["error"] == "searxng_error"
+    assert body["reason"] == "SearXNG returned HTTP error (http_500)"
 
 
 async def test_a_hostile_providers_entry_leaks_nowhere(

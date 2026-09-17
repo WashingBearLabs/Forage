@@ -1347,7 +1347,8 @@ class TestSearchUnavailableWireOutcome:
         assert body["reason"] == f"brave: {case.failure_class}"
 
     def test_brave_module_never_raises_a_pipeline_error(self) -> None:
-        """The raise site for `search_unavailable` lives in `orchestrator.py` alone."""
+        """`search_unavailable` is raised by `orchestrator.py` (chain exhaustion)
+        and `retrieval_app.py` (per-request policy) -- never by this module."""
         brave_path = Path(__file__).resolve().parent.parent / (
             "pipeline/search_providers/brave.py"
         )
