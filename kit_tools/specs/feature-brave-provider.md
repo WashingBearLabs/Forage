@@ -10,7 +10,7 @@ size: M
 epic: search-providers
 epic_seq: 2
 epic_final: false
-execution_order: [US-010, US-011, US-002, US-003]
+execution_order: [US-010, US-011, US-002, US-003, US-012, US-013]
 created: 2026-09-14
 updated: 2026-09-16
 ---
@@ -266,161 +266,59 @@ no Brave record.
 - [x] Full test suite passes (`uv run pytest`).
 - [x] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
 
-### US-003: Brave failure taxonomy + sanitization parity + ToS (no raw payload persistence)
+### US-003: [SPLIT — see US-012, US-013]
+
+> Split by supervisor: Retries exhausted at the M-size 900 s budget: attempt 1 timed out, attempt 2 finished and was judged correct in substance but failed verification on test shape (log-token placement, a 12-token parametrization, zero-source variants, a fail-open mock), attempt 3 exhausted the last retry. Scope too large for one session — split into failure taxonomy + 422 + key-never-leaks (US-012) and sanitization parity + no-persistence pin + operator docs (US-013).
+
+### US-012: Brave failure taxonomy — closed-vocabulary mapping, loud 422, key-never-leaks (split of US-003, part 1)
 
 **Priority:** P1
 
-**Description:** As an operator, I want a Brave failure to be a loud 422 — never a 200 that looks
-like an empty search — with the key provably absent from every failure surface, Brave's chunks
-sanitized identically to SearXNG's snippets, and no raw Brave body persisted anywhere at runtime.
+**Description:** As an operator, I want a Brave failure to be a loud 422 — never a 200 that looks like an empty search — with the key provably absent from every failure surface. First half of the original US-003 (split by the supervisor after its 900 s budget was exhausted): the closed-vocabulary failure mapping, the log line, the wire 422, the zero-source success, and the key-never-leaks proof. US-013 carries sanitization parity, the no-persistence pin and the operator docs. Budget the session: implement the mapping and log line, write only the tests named below, and stop.
 
-**Independent Test:** With `BraveApiProvider` published as `chain[0]` on `app.state` and a sentinel
-key, mocked Brave answers of `401`, `403`, `429`, a timeout, a `503`, a truncated JSON body, a
-valid JSON body of the wrong shape, a `301` and an arbitrary non-httpx exception raised inside the
-call each make `POST /search` return 422 `{"error": "search_unavailable", "reason":
-"brave: <class>"}` with `auth`, `auth`, `rate_limited`, `timeout`, `hard_error`, `hard_error`,
-`hard_error`, `hard_error`, `hard_error` respectively; a mocked `200` with zero sources returns 200
-with `results: []`. After the failures, `caplog.text`, every response body, `GET /metrics`, and
-`str()`/`repr()` of the `ProviderFailure` contain neither the sentinel key, nor the endpoint host,
-nor the injected exception's message. The same poisoned text as a Brave chunk and as a SearXNG
-snippet produces identical `omitted_by_reason` and `suspicious` outcomes, and a real `ContentCache`
-over `tests/fakes.py::FakeStorage` on `app.state.cache` ends `/search` with
-`get_calls == set_calls == delete_calls == 0`.
-
-**Implementation Hints:**
-- **Mapping lives in `brave.py`**, into ruling 13's closed `failure_class` set, with `detail` one of
-  the fixed tokens `http_401`, `http_403`, `http_429`, `http_4xx`, `http_5xx`, `redirect_refused`,
-  `timeout`, `transport_error`, `bad_json`, `malformed_body`, `body_too_large`, `unexpected` —
-  never `str(exc)`, never a URL. `model_fetcher._fetch_reason` (~937) and
-  `cache._closed_vocabulary_reason` (~297) are the models; `orchestrator.py`'s
-  `f"SearXNG not reachable at {searxng_url}: {exc}"` is the documented exception, not a precedent
-  (`kit_tools/arch/patterns/ERROR_HANDLING.md` ~206).
-  - `401`/`403` → `auth`; `429` → `rate_limited` (Brave answers 429 for both a per-second rate
-    limit and plan exhaustion, and the status alone cannot tell them apart; `quota` is reserved
-    for an explicit plan-exhausted signal recorded at capture, if Brave sends one, and otherwise
-    stays unused by this provider); `httpx.TimeoutException` → `timeout`; `5xx`, any other
-    4xx, any 3xx (redirects are not followed), any other `httpx.HTTPError`, a body that is not
-    JSON (`bad_json`), valid JSON of the wrong shape — `grounding.generic` present but not a
-    list, or elements that are not objects (`malformed_body`, ruling 27) — and an over-cap body
-    → `hard_error`. A body with no `grounding` or no `generic` key, or `generic` null or empty,
-    is a **clean zero-result success**: the capture comes from a query that returned results, so
-    the empty shape is defined here rather than left to the sample.
-  - **The catch-all (ruling 27).** The mapping ends in `except Exception` →
-    `ProviderFailure(failure_class="hard_error", detail="unexpected")`; the vocabulary is closed
-    only because this residual exists. A key that could raise at header construction never
-    reaches a client (US-002's presence helper), so this branch is for programming surprises, and
-    its log line carries the token only.
-  - **Why Brave's 429 is `quota` while SearXNG's is `rate_limited`** (spec 1 US-002): Brave
-    answers 429 on a paid plan for plan exhaustion, and the operator's remedy is billing, not
-    waiting; SearXNG's 429 is an upstream engine's rate limit that clears on its own. The
-    asymmetry is deliberate — do not unify the two. The `detail` stays `http_429` either way.
-  - A `200` with zero sources is a `ProviderSearchResult` with an empty list — a success (ruling
-    13). Spec 3's cost-exhaustion guard depends on this distinction.
-  - `search()` never raises: every exception is caught inside the provider and becomes a
-    `ProviderFailure`, with exactly one WARNING `brave_search_failed — <detail>` per failure — the
-    operator's only signal until spec 3 (`/metrics` counters) and spec 4 (`/health`).
-- **The wire outcome.** A `ProviderFailure` from a `chain[0]` that is not SearXNG raises
-  `PipelineError(error="search_unavailable", reason=f"{provider_name}: {failure_class}")` from
-  `pipeline/orchestrator.py` — `brave: auth`, `brave: rate_limited`, `brave: timeout`,
-  `brave: hard_error` — the code landed in spec 1 US-004 (ruling 14); SearXNG-only chains keep
-  `searxng_error`/`searxng_unavailable` byte-for-byte (ruling 8). The raise-site sweep in
-  `tests/test_contract_errors.py` covers only `orchestrator.py` and `retrieval_app.py`, so
-  `brave.py` raises no `PipelineError` (ERROR_HANDLING: raise in stages, map at the orchestrator).
-  If spec 1 US-004 left the generic non-SearXNG branch unwritten, this story writes it — a few
-  lines — and that edit rotates `sanitizer_revision` (record before/after in
-  `docs/bootstrap-notes.md`). No contract change either way: `SearchMetrics.record_error` already
-  counts the 422 under `/metrics` `search.errors.search_unavailable`.
-- **Do not fold provider failures into `omitted_by_reason`** (per-result withholding;
-  `omitted_results` is its sum; keys outside `contract.OMISSION_REASONS` bucket to `other` in
-  `/metrics`, `retrieval_app.py` ~735–743) **or `unresponsive_engines`** (SearXNG sub-engines —
-  which already include one literally named `brave`). No Brave-specific omission token exists.
-- **Key-never-leaks**, in the style of
-  `tests/test_cache.py::TestReconnect::test_connect_failure_never_logs_url_or_secret`: a sentinel
-  key drives every failure class end-to-end through `POST /search` and the test asserts absence
-  from `caplog.text` (all loggers, WARNING), the 422 body, `GET /metrics`, and `str()`/`repr()` of
-  the `ProviderFailure` and of the provider — and the same for the endpoint host and for the
-  exception-message surface: the catch-all case injects an exception whose message contains the
-  sentinel key and asserts that message reaches none of those surfaces. Add the test to the
-  `Secrets` row of `kit_tools/arch/SECURITY.md`'s "Coverage by control" table (~313).
-- **Sanitization parity.** Chunks are `content` like any other result and traverse
-  `pipeline/stage2_structural.py`, `pipeline/stage3_promptguard.py` and `promptguard/classifier.py`
-  unchanged. Feed the same poisoned text as a SearXNG `content` and as a Brave chunk: a
-  structurally BLOCKED text is omitted under `structural_blocked` in both; a classifier-flagged text
-  (mock classifier) is omitted under `injection_detected` in both; a SUSPICIOUS-only text is
-  returned with `suspicious=True` in both. The loop scans `title` and `url` too (`orchestrator.py`
-  ~731–742), so the same holds for a poisoned Brave `title` and for a degenerate Brave `url`
-  (`javascript:` scheme, embedded userinfo, interior whitespace → `invalid_url`). `date` needs no
-  scan (ruling 19).
-- **ToS / no persistence.** Search results are never cached: `cache.py` is `/retrieve`-only (`ret:`
-  keys) and `run_search_pipeline` takes no cache. Pin it (ruling 26c): put a real `ContentCache`
-  over `tests/fakes.py::FakeStorage` on `app.state.cache` during a Brave-served `/search` whose
-  chunk carries a unique sentinel string, and assert `get_calls == set_calls == delete_calls == 0`
-  on the storage — `ContentCache`'s public surface is `get` (`cache.py` ~757), `delete` (~806) and
-  `put` (~821), and `put` writes through `storage.set`; there is no `ContentCache.set`, which is
-  why a bare `MagicMock` would pass unconditionally and is not acceptable here. Also assert the
-  sentinel is absent from `caplog.text`. Result URLs stay loggable on the existing omission paths
-  (`kit_tools/arch/patterns/LOGGING.md` ~137); chunk text never is.
-- **Docs.** `kit_tools/docs/TROUBLESHOOTING.md`'s error table (~173) gains the `search_unavailable`
-  reasons `brave: auth` (key wrong, revoked, or not entitled to the endpoint — replace the key
-  **and restart the container**, it is read once at start), `brave: rate_limited` (Brave answered 429 — retry the request after a
-  pause; if it persists, check the plan, since a per-second limit and plan exhaustion share the
-  status), `brave: timeout` (raise
-  `search_brave_timeout_seconds` or check egress) and `brave: hard_error` (grep the
-  `brave_search_failed` line for the `detail` token: `transport_error` → egress/DNS/proxy,
-  `redirect_refused` → endpoint moved, `bad_json`/`malformed_body` → capture a fresh sample,
-  `body_too_large` → the response bound, `http_5xx` → Brave-side, `unexpected` → a bug report).
-  `kit_tools/arch/SERVICE_MAP.md` gains a `### Brave Search API` subsection under
-  `## External Integrations` (after `### SearXNG`, ~99–118) with the document's attribute rows —
-  purpose, client/protocol (constant endpoint, `X-Subscription-Token` header, `trust_env=False`,
-  no redirects), configuration (`FORAGE_BRAVE_API_KEY`, the three `config.yaml` keys), timeouts
-  and retries (`search_brave_timeout_seconds`, zero retries), health signal (none until spec 4),
-  failure impact (`brave: <class>` 422s), rate limits (paid per query, no ceiling — ruling 12) —
-  **plus** a row in the `## Failure Impact Matrix` (~309; the matrix, not the SearXNG table's
-  `Failure impact` row at ~109). `kit_tools/arch/SECURITY.md`'s review-checklist item on outbound
-  requests (~378) gains the provider carve-out: operator-configured or constant endpoints, exempt
-  from `validate_url` on that basis alone, redirects never followed, results trusted by nothing —
-  pointing at the `SearchProvider` protocol docstring. No contract field description moves in
-  this story.
+**Independent Test:** With `BraveApiProvider` published as `chain[0]` on `app.state` and a sentinel key, mocked Brave answers of `401`, `403`, `429`, a timeout, a `503`, a truncated JSON body, a valid JSON body of the wrong shape, a `301` and an arbitrary non-httpx exception raised inside the call each make `POST /search` return 422 `{"error": "search_unavailable", "reason": "brave: <class>"}` with `auth`, `auth`, `rate_limited`, `timeout`, `hard_error`, `hard_error`, `hard_error`, `hard_error`, `hard_error` respectively; a mocked `200` with zero sources returns 200 with `results: []`. After the failures, `caplog.text`, every response body, `GET /metrics`, and `str()`/`repr()` of the `ProviderFailure` contain neither the sentinel key, nor the endpoint host, nor the injected exception's message.
 
 **Acceptance Criteria:**
-- [ ] `BraveApiProvider.search()` maps `401`/`403` → `auth`, `429` → `rate_limited`,
-      `httpx.TimeoutException` → `timeout`, and `5xx`, other 4xx, 3xx, other `httpx.HTTPError`,
-      non-JSON (`bad_json`), wrong-shape JSON (`malformed_body`), over-cap bodies and an arbitrary
-      non-httpx exception (`unexpected`) → `hard_error`, each with its fixed `detail` token;
-      `search()` raises for none of them (one test per class); every emitted `detail` is a member
-      of the twelve-token set (test).
-- [ ] Every failure emits exactly one WARNING containing `brave_search_failed` and its fixed
-      `detail` token, and the record contains no `str(exc)` text, no URL and no header value
-      (`caplog` test, one per class).
-- [ ] A `200` with zero sources is a `ProviderSearchResult` with an empty list — no
-      `ProviderFailure`, no `unresponsive_engines` entry — and `POST /search` returns 200 with
-      `results: []`.
-- [ ] With `BraveApiProvider` as `chain[0]`, every `ProviderFailure` makes `POST /search` return
-      422 `search_unavailable` with `reason == f"brave: {failure_class}"`; the raise site is in
-      `pipeline/orchestrator.py`; `pipeline/search_providers/brave.py` contains no `PipelineError`;
-      `tests/test_contract_errors.py`'s raise-site sweep passes.
-- [ ] Provider failures add nothing to `omitted_by_reason`, `omitted_results` or
-      `unresponsive_engines` (asserted on the zero-source 200 and on the sample-served 200).
-- [ ] A sentinel key, the endpoint host, and the message of an exception injected into the
-      catch-all path appear in no log record, no `/search` response body, no `/metrics` body, and
-      no `str()`/`repr()` of the provider or the `ProviderFailure`, across all failure classes
-      (test modelled on `test_connect_failure_never_logs_url_or_secret`); the test is listed in
-      `kit_tools/arch/SECURITY.md`'s "Coverage by control" `Secrets` row.
-- [ ] The same poisoned text as a SearXNG snippet and as a Brave chunk yields identical
-      `omitted_by_reason` and identical `suspicious` for structural-BLOCKED, classifier-flagged and
-      SUSPICIOUS-only inputs; a poisoned Brave `title` is omitted under `structural_blocked` and a
-      degenerate Brave `url` under `invalid_url`, exactly as the SearXNG equivalents (test).
-- [ ] A regression test with a real `ContentCache` over `tests/fakes.py::FakeStorage` on
-      `app.state.cache` asserts `get_calls == set_calls == delete_calls == 0` after a Brave-served
-      `/search` and that no chunk text was logged; no bare `MagicMock` stands in for the cache.
-- [ ] `kit_tools/docs/TROUBLESHOOTING.md` carries the four `brave: <class>` rows with the `detail`
-      tokens named; `kit_tools/arch/SERVICE_MAP.md` carries the `### Brave Search API` subsection
-      and the Failure Impact Matrix row; `kit_tools/arch/SECURITY.md`'s outbound-request checklist
-      item carries the provider carve-out; `docs/bootstrap-notes.md`'s latest `sanitizer_revision`
-      record matches `derive_sanitizer_revision()` after this story.
+- [ ] `BraveApiProvider.search()` maps `401`/`403` → `auth`, `429` → `rate_limited`, `httpx.TimeoutException` → `timeout`, and `5xx`, other 4xx, 3xx, other `httpx.HTTPError`, non-JSON (`bad_json`), wrong-shape JSON (`malformed_body`), over-cap bodies and an arbitrary non-httpx exception (`unexpected`) → `hard_error`, each with its fixed `detail` token; `search()` raises for none of them; one parametrized test covers all twelve `detail` tokens (`http_401`, `http_403`, `http_429`, `http_4xx`, `http_5xx`, `redirect_refused`, `timeout`, `transport_error`, `bad_json`, `malformed_body`, `body_too_large`, `unexpected`) asserting class, detail, no raise, and `detail in _BRAVE_FAILURE_DETAILS`, with a set-equality check that the cases exercise every token.
+- [ ] Every failure emits exactly one WARNING whose `record.getMessage()` contains `brave_search_failed` and the fixed `detail` token in the message itself (tokens as `%s` arguments, per `kit_tools/arch/patterns/LOGGING.md` ~138), and contains no `str(exc)` text, no `https://`, no endpoint host and no header value (`caplog` assertions in the same parametrization).
+- [ ] A `200` with zero sources — no `grounding`, no `generic`, `generic` null, and `generic` `[]` — is a `ProviderSearchResult(results=[], unresponsive_engines=[])` asserted directly (no `ProviderFailure`), and `POST /search` returns 200 with `results == []`, `omitted_by_reason == {}`, `omitted_results == 0`, `unresponsive_engines == []`; the same three omission fields are asserted on a sample-served `POST /search` 200.
+- [ ] With `BraveApiProvider` as `chain[0]`, every `ProviderFailure` makes `POST /search` return 422 `search_unavailable` with `reason == f"brave: {failure_class}"`; the raise site is in `pipeline/orchestrator.py`; `pipeline/search_providers/brave.py` contains no `PipelineError`; `tests/test_contract_errors.py`'s raise-site sweep passes.
+- [ ] A sentinel key, the endpoint host, and the message of an exception injected into the catch-all path appear in no log record, no `/search` response body, no `/metrics` body, and no `str()`/`repr()` of the provider or the `ProviderFailure`, across all failure classes (test modelled on `test_connect_failure_never_logs_url_or_secret`); the test is listed in `kit_tools/arch/SECURITY.md`'s "Coverage by control" `Secrets` row.
+- [ ] `docs/bootstrap-notes.md`'s latest `sanitizer_revision` record matches `derive_sanitizer_revision()` after this story (a new record only if `pipeline/orchestrator.py` changed; `brave.py` is not a `_REVISION_SOURCES` member).
 - [ ] Tests written/updated for new functionality.
 - [ ] Full test suite passes (`uv run pytest`).
 - [ ] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
+
+**Implementation Hints:**
+- **Mapping lives in `brave.py`**, into ruling 13's closed `failure_class` set, with `detail` one of the fixed tokens `http_401`, `http_403`, `http_429`, `http_4xx`, `http_5xx`, `redirect_refused`, `timeout`, `transport_error`, `bad_json`, `malformed_body`, `body_too_large`, `unexpected` — never `str(exc)`, never a URL. `model_fetcher._fetch_reason` (~937) and `cache._closed_vocabulary_reason` (~297) are the models. `401`/`403` → `auth`; `429` → `rate_limited` (Brave answers 429 for both a per-second limit and plan exhaustion; `quota` stays unused by this provider); `httpx.TimeoutException` → `timeout`; `5xx`, other 4xx, any 3xx (redirects are not followed), any other `httpx.HTTPError` (`transport_error` for `ConnectError`), non-JSON (`bad_json`), `grounding.generic` present but not a list or elements that are not objects (`malformed_body`, ruling 27), over-cap (`body_too_large`) → `hard_error`. The mapping ends in `except Exception` → `hard_error` / `unexpected`. A body with no `grounding` or no `generic`, or `generic` null or empty, is a **clean zero-result success**.
+- **The log line.** `search()` never raises; every failure becomes a `ProviderFailure` with exactly one WARNING per failure, e.g. `logger.warning("brave_search_failed — %s (%s)", detail, failure_class)` — the tokens go in the message itself so `record.getMessage()` carries them; no exception text, URL, host or header value ever reaches the record.
+- **The wire outcome.** A `ProviderFailure` from a `chain[0]` that is not SearXNG raises `PipelineError(error="search_unavailable", reason=f"{provider_name}: {failure_class}")` from `pipeline/orchestrator.py` (landed in spec 1 US-004, ruling 14); SearXNG-only chains keep `searxng_error`/`searxng_unavailable` byte-for-byte (ruling 8). `brave.py` raises no `PipelineError`. If the generic branch turns out unwritten, write it (a few lines) and record the `sanitizer_revision` rotation in `docs/bootstrap-notes.md`; otherwise `orchestrator.py` stays untouched and the revision is unchanged — confirm either way.
+- **Do not fold provider failures into `omitted_by_reason`** or `unresponsive_engines` (which already include a SearXNG sub-engine literally named `brave`). No Brave-specific omission token exists.
+- **Key-never-leaks**, in the style of `tests/test_cache.py::TestReconnect::test_connect_failure_never_logs_url_or_secret`: a sentinel key drives every failure class end-to-end through `POST /search`; assert absence from `caplog.text` (all loggers, WARNING), the 422 body, `GET /metrics`, and `str()`/`repr()` of the `ProviderFailure` and the provider — and the same for the endpoint host and for the exception-message surface (the catch-all case injects an exception whose message contains the sentinel key). Add the test to the `Secrets` row of `kit_tools/arch/SECURITY.md`'s "Coverage by control" table (~313).
+- **Tests** extend `tests/test_brave_provider.py` using its existing stream helpers; drive the 422 cases through the app with the provider on `app.state` as `chain[0]`.
+
+### US-013: Brave sanitization parity, no-persistence pin and operator docs (split of US-003, part 2)
+
+**Priority:** P1
+
+**Description:** Second half of the original US-003 (split by the supervisor). US-012 delivered the failure mapping, the log line, the wire 422 and the key-never-leaks proof; this story pins that Brave chunks are sanitized identically to SearXNG snippets, that no raw Brave body is persisted at runtime, and lands the operator documentation. It changes no provider behaviour unless a test exposes a defect (fix minimally in `brave.py` and say so in the Implementation Notes).
+
+**Independent Test:** The same poisoned text as a Brave chunk and as a SearXNG snippet produces identical `omitted_by_reason` and `suspicious` outcomes through `POST /search`; a real `ContentCache` over `tests/fakes.py::FakeStorage` on `app.state.cache` ends a Brave-served `/search` with `get_calls == set_calls == delete_calls == 0`; the three doc files carry their rows.
+
+**Acceptance Criteria:**
+- [ ] The same poisoned text as a SearXNG snippet and as a Brave chunk yields identical `omitted_by_reason` and identical `suspicious` for structural-BLOCKED, classifier-flagged and SUSPICIOUS-only inputs (for the SUSPICIOUS-only case mock `run_promptguard` to return a scanned SAFE result with `skipped=False` so the fail-open branch cannot set `suspicious`, and add a clean-text control asserting `suspicious is False` for both providers); a poisoned Brave `title` is omitted under `structural_blocked` and a degenerate Brave `url` (`javascript:` scheme, embedded userinfo, interior whitespace) under `invalid_url`, exactly as the SearXNG equivalents (test).
+- [ ] A regression test with a real `ContentCache` over `tests/fakes.py::FakeStorage` on `app.state.cache` asserts `get_calls == set_calls == delete_calls == 0` after a Brave-served `/search` whose chunk carries a unique sentinel string, and that the sentinel is absent from `caplog.text` (capture at INFO); no bare `MagicMock` stands in for the cache.
+- [ ] `kit_tools/docs/TROUBLESHOOTING.md`'s error table (~173) carries the four `brave: <class>` rows with the `detail` tokens named; `kit_tools/arch/SERVICE_MAP.md` carries a `### Brave Search API` subsection under `## External Integrations` (after `### SearXNG`) with the document's attribute rows, plus a row in the `## Failure Impact Matrix` (~309); `kit_tools/arch/SECURITY.md`'s outbound-request review-checklist item (~378) carries the provider carve-out.
+- [ ] `docs/bootstrap-notes.md`'s latest `sanitizer_revision` record still matches `derive_sanitizer_revision()` (this story edits no `_REVISION_SOURCES` file).
+- [ ] Tests written/updated for new functionality.
+- [ ] Full test suite passes (`uv run pytest`).
+- [ ] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
+
+**Implementation Hints:**
+- **Sanitization parity.** Chunks are `content` like any other result and traverse `pipeline/stage2_structural.py`, `pipeline/stage3_promptguard.py` and `promptguard/classifier.py` unchanged. Feed the same poisoned text as a SearXNG `content` and as a Brave chunk: a structurally BLOCKED text is omitted under `structural_blocked` in both; a classifier-flagged text (mock classifier) under `injection_detected` in both; a SUSPICIOUS-only text is returned with `suspicious=True` in both — mock `run_promptguard` to a scanned SAFE result (`skipped=False`, low score) for the clean control so the fail-open path cannot masquerade as suspicious. The loop scans `title` and `url` too (`orchestrator.py` ~731–742). `date` needs no scan (ruling 19).
+- **ToS / no persistence.** Search results are never cached: `cache.py` is `/retrieve`-only (`ret:` keys) and `run_search_pipeline` takes no cache. Pin it (ruling 26c) with a real `ContentCache` over `tests/fakes.py::FakeStorage` — `ContentCache`'s public surface is `get` (~757), `delete` (~806) and `put` (~821, writes through `storage.set`); there is no `ContentCache.set`, which is why a bare `MagicMock` would pass unconditionally. Result URLs stay loggable on the existing omission paths (`LOGGING.md` ~137); chunk text never is.
+- **Docs.** TROUBLESHOOTING rows: `brave: auth` (key wrong, revoked or not entitled — replace the key **and restart the container**, it is read once at start), `brave: rate_limited` (Brave answered 429 — retry after a pause; if it persists check the plan, since a per-second limit and plan exhaustion share the status), `brave: timeout` (raise `search_brave_timeout_seconds` or check egress), `brave: hard_error` (grep the `brave_search_failed` line for the `detail` token: `transport_error` → egress/DNS/proxy, `redirect_refused` → endpoint moved, `bad_json`/`malformed_body` → capture a fresh sample, `body_too_large` → the response bound, `http_5xx` → Brave-side, `unexpected` → a bug report). SERVICE_MAP `### Brave Search API`: purpose, client/protocol (constant endpoint, `X-Subscription-Token` header, `trust_env=False`, no redirects), configuration (`FORAGE_BRAVE_API_KEY`, the three `config.yaml` keys), timeouts and retries (`search_brave_timeout_seconds`, zero retries), health signal (none until spec 4), failure impact (`brave: <class>` 422s), rate limits (paid per query, no ceiling — ruling 12) — plus the Failure Impact Matrix row. SECURITY checklist carve-out: operator-configured or constant endpoints are exempt from `validate_url` on that basis alone, redirects never followed, results trusted by nothing — pointing at the `SearchProvider` protocol docstring. No contract field description moves.
+
 
 ## Edge Cases
 
