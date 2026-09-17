@@ -598,24 +598,24 @@ to those from Brave serving as `chain[0]`.
   truncated to the same string that is scanned. Do not raise the bound.
 
 **Acceptance Criteria:**
-- [ ] A stage-2 BLOCKED payload is omitted on both the SearXNG and Brave paths with
+- [x] A stage-2 BLOCKED payload is omitted on both the SearXNG and Brave paths with
       `omitted_by_reason == {"structural_blocked": 1}` and `results == []`.
-- [ ] A stage-2 SUSPICIOUS payload is returned on both paths with `suspicious == true`.
-- [ ] With `run_promptguard` mocked to INJECTION_DETECTED, the result is omitted on both paths with
+- [x] A stage-2 SUSPICIOUS payload is returned on both paths with `suspicious == true`.
+- [x] With `run_promptguard` mocked to INJECTION_DETECTED, the result is omitted on both paths with
       `omitted_by_reason == {"injection_detected": 1}`, and the mock received the identical
       `_search_result_promptguard_input` string on both paths.
-- [ ] A fallback-served result set (Brave after a SearXNG failure) produces `results`,
+- [x] A fallback-served result set (Brave after a SearXNG failure) produces `results`,
       `omitted_by_reason` and per-result `suspicious` flags equal to the same set served as
       `chain[0]`.
-- [ ] A chunk longer than `_MAX_SEARCH_SNIPPET_LENGTH` is returned and scanned as the same
+- [x] A chunk longer than `_MAX_SEARCH_SNIPPET_LENGTH` is returned and scanned as the same
       truncated string.
-- [ ] The story closes with zero open parity gaps: every criterion above is green against the
+- [x] The story closes with zero open parity gaps: every criterion above is green against the
       shipped `pipeline/orchestrator.py`, and this spec's Implementation Notes record each bypass
       the tests found together with the production change that closed it (an explicit "none
       found" entry when the diff touches only `tests/`).
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
 
 ## Edge Cases
 
