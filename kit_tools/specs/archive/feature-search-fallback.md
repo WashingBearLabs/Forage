@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: search-fallback
-status: active
+status: completed
 session_ready: true
 depends_on: [brave-provider]
 vision_ref: "T2.1 — Search-provider abstraction & reliable search"
@@ -12,7 +12,8 @@ epic_seq: 3
 epic_final: false
 execution_order: [US-001, US-003, US-002, US-004]
 created: 2026-09-14
-updated: 2026-09-14
+updated: 2026-09-17
+completed: 2026-09-17
 ---
 
 # Feature Spec: Free-First → Paid-on-Failure Fallback
