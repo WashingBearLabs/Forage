@@ -238,37 +238,37 @@ equal to `["searxng"]` and no `brave_api_key` entry. `status`, `degraded_reasons
   that may also carry `brave_api_key`, not a one-key claim (ruling 32).
 
 **Acceptance Criteria:**
-- [ ] `HealthResponse` carries `search_providers: list[str]` as a required field;
+- [x] `HealthResponse` carries `search_providers: list[str]` as a required field;
       `capabilities` carries `brave_api_key: 1` exactly when `brave_key_present()` was true at
       start — an empty, whitespace-only or control-character `FORAGE_BRAVE_API_KEY` yields no
       entry — and no `/health` field other than these two changes; the key value appears in
       no `/health` body and no log record (test in the
       `test_connect_failure_never_logs_url_or_secret` style).
-- [ ] Every lifespan case in the Independent Test (key present and chained; key absent; the
+- [x] Every lifespan case in the Independent Test (key present and chained; key absent; the
       three absent-shaped values; key present but not chained; key present with PromptGuard
       unloaded; break-glass armed with no key) returns the stated `search_providers` and
       `capabilities` values; the existing break-glass tests (`tests/test_app.py` ~242–271)
       pass unchanged.
-- [ ] `app.state.search_providers` keeps spec 1's shape (`list[SearchProvider]`, `None` at
+- [x] `app.state.search_providers` keeps spec 1's shape (`list[SearchProvider]`, `None` at
       module scope) and `/health` derives its names as
       `[p.name for p in _resolved_search_providers(state)]`; no name list exists on state; a
       lifespan-free `ASGITransport` client's `GET /health` returns 200 with `search_providers`
       equal to `["searxng"]` (spec 1's default chain) and no `brave_api_key` entry, and that
       test saves, `delattr`s and restores both attributes so it passes when run after a
       real-lifespan test in the same session.
-- [ ] `app.state.search_key_capabilities` is a tuple filled from the lifespan's single
+- [x] `app.state.search_key_capabilities` is a tuple filled from the lifespan's single
       `brave_key_present()` evaluation, `None` at module scope, read through
       `_resolved_search_key_capabilities(state)`; a real-lifespan test with `brave` configured
       asserts `("brave" in search_providers) == ("brave_api_key" in capabilities)` with and
       without a key.
-- [ ] `DegradedReason` still has exactly two members; `status`, `degraded_reasons`,
+- [x] `DegradedReason` still has exactly two members; `status`, `degraded_reasons`,
       `promptguard_loaded`, `cache_connected` and `cache_backend` are computed exactly as
       before (existing `/health` tests pass unchanged).
-- [ ] `contract/openapi.yaml` + `.sha256` and `tests/golden/contract_1_2_0.json` regenerated
+- [x] `contract/openapi.yaml` + `.sha256` and `tests/golden/contract_1_2_0.json` regenerated
       under 1.2.0; `tests/test_contract_export.py`, `tests/test_contract_schema.py` and
       `tests/test_contract_smoke.py` pass with no edit to `contract_smoke.py`; the embedded
       anchor hash in the four pages matches the committed `.sha256`.
-- [ ] `search_providers` is named in `kit_tools/docs/MONITORING.md`, `kit_tools/docs/API_GUIDE.md`,
+- [x] `search_providers` is named in `kit_tools/docs/MONITORING.md`, `kit_tools/docs/API_GUIDE.md`,
       `docs/configuration.md`, `README.md`, `kit_tools/arch/SECURITY.md` and
       `kit_tools/arch/SERVICE_MAP.md` (~74); `brave_api_key` is named wherever `capabilities` is
       documented (MONITORING, API_GUIDE, SECURITY, SERVICE_MAP ~150 and ~321) as one key of a
@@ -277,9 +277,9 @@ equal to `["searxng"]` and no `brave_api_key` entry. `status`, `degraded_reasons
       `_break_glass_arming_env_var` docstring scope the lie to `search_sanitization`;
       SECURITY's documented-non-vulnerabilities table carries the new row (all
       grep-verifiable).
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
 
 ### US-003: Contract governance finalize + `/search`↔`/retrieve` boundary doc
 
