@@ -78,6 +78,12 @@ Consequences you must design around:
   mesh, or the consuming service itself). Forage will not grow it: adding a half-auth
   layer would invite exactly the "it's protected" assumption this section exists to
   prevent.
+- **A configured paid key raises the stakes.** With `FORAGE_BRAVE_API_KEY` set and
+  `brave` in `FORAGE_SEARCH_PROVIDERS`, anyone who can reach port 8020 can spend the
+  operator's money on Brave queries — Forage enforces no budget cap. Network placement and a front-side proxy or rate limit are your
+  controls; `/health` discloses key presence (`capabilities.brave_api_key`) to anyone who
+  can reach it. `/metrics` `search.paid_calls` and `search.fallback_fired` are how spend
+  is seen.
 
 The bundled SearXNG configuration (`searxng/config/`) makes the same assumption: its
 rate limiter is off and its `secret_key` is a non-secret placeholder, because that
@@ -104,10 +110,14 @@ instance is private-network-only and Forage is its only client.
 | `FORAGE_MIRROR_TOKEN` | unset | Registry credential for `FORAGE_WEIGHTS_MIRROR`. Optional — without it the mirror is skipped exactly as a missing `HF_TOKEN` skips Hugging Face. **Carries a credential**; supply it the same way as `VALKEY_URL`. A **read-only** token, scoped as narrowly as your registry allows — see `docs/weights.md` § "The mirror read token". |
 
 `SEARXNG_URL`'s default is a deliberately neutral service name — it assumes a compose
-network with a service literally called `searxng`, and nothing more. If SearXNG is not
-reachable, Forage still starts and reports itself `degraded` rather than refusing to
-boot; the same is true of a missing PromptGuard (`promptguard_unavailable` on any
-token-less build).
+network with a service literally called `searxng`, and nothing more. On the default
+chain an unreachable SearXNG surfaces per request as a `/search` 422
+(`searxng_unavailable`), never as a `degraded_reasons` value — `/health` never probes
+SearXNG. Provider *status* is instead
+the `search_providers` field on `/health`: the resolved chain's names, a configuration
+echo rather than a liveness probe. A missing PromptGuard (`promptguard_unavailable`) or a
+configured-but-unreachable Valkey (`cache_unavailable`, see the table below) is what
+degrades the service.
 
 ### Cache backend selection
 
@@ -186,6 +196,65 @@ Do your half:
   accordingly.
 - Rotating the password means restarting the container — the URL is read once per start,
   when the cache backend is selected.
+
+### Credential handling for `FORAGE_BRAVE_API_KEY`
+
+`FORAGE_BRAVE_API_KEY` is another variable that carries a secret, and the generic
+mechanics match `VALKEY_URL` above — that subsection is the fuller treatment; this one
+spends its length on what is Brave-specific.
+
+- **Runtime container environment only.** The key reaches Forage through the running
+  container's environment and nowhere else; Forage reads no secret store at boot.
+- **Never a build argument.** `Dockerfile` takes no build arguments at all (`CLAUDE.md`
+  invariant 2), so a `--build-arg FORAGE_BRAVE_API_KEY=…` attempt is the exact leak shape
+  the repo went private over: a build argument is recorded in the image's layer history,
+  where `docker history --no-trunc` reads it straight back out of any registry the image
+  reaches.
+- **Supply it through `compose/.env` (git-ignored) or a secret store, never an inline `-e`
+  flag** — the same shell-history and `ps` exposure as for `VALKEY_URL`, and `docker
+  inspect` shows it to anyone who can reach the Docker socket either way.
+- **Forage never logs the value, and `/health` shows presence only** — the
+  `capabilities.brave_api_key` entry (ruling 15), never the key and never its validity.
+- **Rotating the key is a restart.** It is read once, in the lifespan, so a new value
+  takes effect only when the container starts again.
+- **A leaked key is metered spend with no cap in Forage.** Brave bills per query with no
+  free tier ($5/1,000), and Forage enforces no spend ceiling (see "Consequences you must
+  design around" above) — whoever holds a leaked key spends on your account until you
+  revoke it with Brave.
+
+**Enablement is two variables.** `FORAGE_BRAVE_API_KEY` alone changes nothing about
+`/search`: the default chain is `searxng`, so the key takes effect only once `brave` is
+also named in `FORAGE_SEARCH_PROVIDERS` — `FORAGE_SEARCH_PROVIDERS=searxng,brave` plus
+`FORAGE_BRAVE_API_KEY=example-not-a-real-key` in the same env file. No key configured
+means **SearXNG-only**: fully supported, no error, no new required secret.
+
+**Data flow.** Forage sends the caller's verbatim query text (truncated to
+`search_brave_query_max_chars`), under the operator's account, to exactly one outbound
+host, `api.search.brave.com` — a fixed constant endpoint with no operator override, so an
+egress allowlist needs that host and no other for Brave traffic. What comes back is
+chunks (`content_kind: "chunk"`) that enter the unchanged sanitization pipeline; nothing
+paid is retained, and `/search` has never been cached (see "Consequences of memory mode"
+above). The key-less floor adds no outbound destination beyond the self-hosted SearXNG
+and its configured engines.
+
+**Per-provider ToS — a constraint on consumers, not a Forage cache.** Forage persists no
+search result from any provider; these terms govern what a downstream consumer of
+`/search` may keep. SearXNG-served results carry no persistence restriction. Brave
+forbids persisting or redistributing result payloads, so Forage's own telemetry stores
+metadata only — never a result body (decision 6) — and a consumer that stores Brave-served
+results is bound by Brave's terms, not Forage's.
+
+**Presence, not validity.** `capabilities.brave_api_key` reports presence, not validity: a
+rejected, expired or unentitled key never changes `/health` and surfaces only per request,
+as a `brave: <failure_class>` entry drawn from the closed failure-class vocabulary
+(`rate_limited`, `timeout`, `hard_error`, `auth`, `quota`). When every provider in the
+chain failed, the entries appear in the 422 `search_unavailable` error's `reason`
+(e.g. `searxng: rate_limited; brave: auth`); when a later provider served, they appear in
+the successful response's `provider_errors`. Brave maps a `401`/`403` to `auth`, and maps
+plan exhaustion to `rate_limited`, because Brave answers it with the same `429` as a
+per-second limit; `quota` is a class in the vocabulary that Brave does not emit today. The
+per-class diagnosis is in
+[`kit_tools/docs/TROUBLESHOOTING.md`](../kit_tools/docs/TROUBLESHOOTING.md).
 
 ### Break-glass: the sanitization-advertisement override
 

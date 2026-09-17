@@ -153,6 +153,11 @@
   1. `README.md` and `docs/configuration.md` say `/health` reports degraded without SearXNG;
      the code has no probe and `DegradedReason` has only two members. Fix the docs, or add a
      reason (a MINOR contract change).
+     *(Resolved on 2026-09-16: `search-release` US-001 corrected both sentences — an
+     unreachable SearXNG surfaces per request as a `/search` 422 (`searxng_unavailable`),
+     never a `degraded_reasons` value — and closed out the same discrepancy recorded in
+     `kit_tools/docs/MONITORING.md`, `kit_tools/arch/SERVICE_MAP.md` and
+     `kit_tools/AGENT_README.md`.)*
   2. `compose/minimal.yml` and `compose/full.yml` still pin `forage:0.9.3-rc` and
      `forage-searxng:0.1.1-rc` although `v1.0.0` is tagged.
   3. `contract_smoke.py` hard-codes `EXPECTED_STATUS = "degraded"`; its fitness as a

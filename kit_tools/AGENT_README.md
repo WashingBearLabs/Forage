@@ -1,7 +1,7 @@
 <!-- Template Version: 2.0.1 -->
 # AGENT_README.md
 
-> Last updated: 2026-09-13
+> Last updated: 2026-09-16
 > Updated by: Claude (seed-project)
 
 Navigation guide for AI assistants working in Forage. Forage is a ~5,100-line single
@@ -160,9 +160,7 @@ Draft these, but do not apply without the owner's approval:
 - [ ] **Anything that weakens `url_validator.py` or the stage-5 redirect audit.**
 - [ ] **Changing the response contract** (`pipeline/contract.py`, `models.py` response
       shapes, a `responses=` declaration, a `degraded_reasons` value) — versioned, with a
-      consumer that refuses on a mismatch. Note the open ruling: README and
-      `../docs/configuration.md` claim `/health` reports degraded without SearXNG, but the
-      code has no such probe or reason; fixing either side is the owner's call.
+      consumer that refuses on a mismatch.
 - [ ] **Configuring logging** (adding `basicConfig`, raising the root level, uvicorn log
       flags) — it changes what operators see in `docker logs`. Recorded, not fixed;
       `arch/patterns/LOGGING.md`.

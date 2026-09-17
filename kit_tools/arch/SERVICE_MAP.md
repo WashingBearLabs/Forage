@@ -109,11 +109,8 @@ next start is a warm start (zero network, about 9 s on 1 vCPU / 1 GB).
 | **Failure impact** | `/search` returns **422** `{error, reason, request_id}` with `searxng_error` (non-2xx: `"SearXNG returned HTTP error (http_<code>)"`; a 429 here means the limiter was turned on) or `searxng_unavailable` (connect refused, DNS, timeout, oversized or unparseable body: `"SearXNG not reachable at <scheme>://<host>:<port>: <detail>"` — the reason echoes scheme, host and port, never userinfo and never exception text; `detail` is a closed token). `/retrieve` and `/extract` are unaffected. `/metrics.search.errors` is keyed by code. |
 | **Rate limits** | None on the shipped image; not built for direct exposure (no published ports in compose). |
 
-**Documented discrepancy (awaiting an owner decision):** `README.md` and
-`docs/configuration.md` say Forage "reports itself degraded" without SearXNG. The code
-does not — there is no probe and no reason string for it. Either the two sentences get
-corrected, or a reason is added, which is a MINOR contract change under
-`contract/GOVERNANCE.md`. This document describes the real behaviour (per-request 422).
+`README.md` and `docs/configuration.md` were corrected to match this real behaviour
+(per-request 422, never a `degraded_reasons` value) by `search-release` US-001.
 
 ### Brave Search API
 

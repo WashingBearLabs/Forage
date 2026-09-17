@@ -100,7 +100,7 @@ A consumer or deploy script should gate in this order:
 
 ### What `/health` does not tell you
 
-- **SearXNG.** `/health` never probes SearXNG, and there is no degraded reason for it. SearXNG absence surfaces only per request as a `/search` 422 (`searxng_unavailable` or `searxng_error`). `README.md` and `docs/configuration.md` currently say Forage "reports itself degraded" without SearXNG; the code does not, and that sentence is flagged for correction.
+- **SearXNG.** `/health` never probes SearXNG, and there is no degraded reason for it. SearXNG absence surfaces only per request as a `/search` 422 (`searxng_unavailable` or `searxng_error`). `README.md` and `docs/configuration.md` document this correctly.
 - **Whether the fetch is progressing.** See item 3 above.
 - **Anything about the consumer.** `/health` reports Forage's own state only.
 
