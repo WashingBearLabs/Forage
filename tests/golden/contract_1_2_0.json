@@ -523,6 +523,12 @@
   "SearchRequest": {
     "description": "Inbound request to run a web search.",
     "properties": {
+      "allow_paid_fallback": {
+        "default": true,
+        "description": "When False, excludes every paid provider from this request's effective chain regardless of `providers` \u2014 free providers always run. One-way: can only narrow the configured chain, never widen, reorder, or key it. Honoured from contract 1.2.0.",
+        "title": "Allow Paid Fallback",
+        "type": "boolean"
+      },
       "num_results": {
         "default": 5,
         "description": "Number of results to return",
@@ -536,6 +542,14 @@
         "description": "When True, drop search results if PromptGuard is unavailable (fail-closed). When False, allow with a suspicion marker (fail-open).",
         "title": "Promptguard Fail Closed",
         "type": "boolean"
+      },
+      "providers": {
+        "description": "Restrict-only filter of the configured provider chain, in configured order: can exclude paid providers only, never add, reorder, or key one \u2014 free providers always run. Entries are matched after strip() and lower-casing against the names /health's `search_providers` publishes. Entries beyond the first eight, and entries matching no configured provider, are ignored and counted on /metrics `search.policy_unknown_provider` rather than rejected. Empty (the default) means the configured chain runs unrestricted. Honoured from contract 1.2.0.",
+        "items": {
+          "type": "string"
+        },
+        "title": "Providers",
+        "type": "array"
       },
       "query": {
         "description": "Search query",

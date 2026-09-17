@@ -49,6 +49,7 @@ from pipeline.contract import (
     CONTRACT_VERSION,
     DEGRADED_CACHE_UNAVAILABLE,
     DEGRADED_PROMPTGUARD_UNAVAILABLE,
+    POLICY_EXCLUDED_ALL_PROVIDERS,
     Admission413ErrorCode,
     DegradedReason,
     Extract422ErrorCode,
@@ -84,6 +85,7 @@ from pipeline.search_providers.brave import (
     brave_key_present,
     brave_settings_from_config,
 )
+from pipeline.search_providers.policy import apply_request_policy
 from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL, SearxngProvider
 from promptguard.classifier import PromptGuardClassifier
 
@@ -484,6 +486,14 @@ class SearchMetricsResponse(BaseModel):
             "paid provider configured."
         )
     )
+    policy_unknown_provider: int = Field(
+        description=(
+            "Per-request `providers` entries ignored — beyond the first eight, "
+            "or matching no configured provider — never the offending name "
+            "itself. Compare against `/health` `search_providers` to tell a "
+            "bad name from a missing key."
+        )
+    )
 
 
 class RetrieveMetricsResponse(BaseModel):
@@ -833,6 +843,7 @@ class SearchMetrics:
         self.unscanned_results = 0
         self.fallback_fired = 0
         self.paid_calls = 0
+        self.policy_unknown_provider = 0
 
     def record_error(self, error: str) -> None:
         """Record one content-free search error, keyed by ``PipelineError.error``."""
@@ -1450,6 +1461,7 @@ async def metrics(request: Request) -> dict[str, Any]:
             "unscanned_results": search_metrics.unscanned_results,
             "fallback_fired": search_metrics.fallback_fired,
             "paid_calls": search_metrics.paid_calls,
+            "policy_unknown_provider": search_metrics.policy_unknown_provider,
         },
         "retrieve": {
             "requests": retrieve_metrics.requests,
@@ -1690,10 +1702,21 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
     """Run a web search through the configured provider chain, sanitized."""
     search_metrics: SearchMetrics = request.app.state.search_metrics
     search_metrics.requests += 1
+    configured_chain = _resolved_search_providers(request.app.state)
+    effective_chain, ignored_count = apply_request_policy(configured_chain, body)
+    search_metrics.policy_unknown_provider += ignored_count
+    if not effective_chain:
+        search_metrics.record_error("search_unavailable")
+        raise PipelineError(
+            error="search_unavailable",
+            reason=POLICY_EXCLUDED_ALL_PROVIDERS,
+            request_id=uuid.uuid4().hex,
+        )
     try:
         response = await run_search_pipeline(
             body,
-            providers=_resolved_search_providers(request.app.state),
+            providers=effective_chain,
+            configured_chain=configured_chain,
             config=request.app.state.config,
             classifier=request.app.state.classifier,
             search_metrics=search_metrics,

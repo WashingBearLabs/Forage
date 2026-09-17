@@ -264,6 +264,8 @@ class TestSearchRequest:
         req = SearchRequest(query="python pydantic")
         assert req.num_results == 5
         assert req.promptguard_fail_closed is True
+        assert req.providers == []
+        assert req.allow_paid_fallback is True
 
     def test_num_results_bounds(self) -> None:
         assert SearchRequest(query="q", num_results=1).num_results == 1
@@ -283,6 +285,43 @@ class TestSearchRequest:
         req = SearchRequest(query="test query", num_results=10)
         restored = SearchRequest.model_validate_json(req.model_dump_json())
         assert restored == req
+
+    def test_providers_and_allow_paid_fallback_roundtrip(self) -> None:
+        req = SearchRequest(
+            query="q", providers=["searxng", "brave"], allow_paid_fallback=False
+        )
+        restored = SearchRequest.model_validate_json(req.model_dump_json())
+        assert restored == req
+        assert restored.providers == ["searxng", "brave"]
+        assert restored.allow_paid_fallback is False
+
+    def test_arbitrary_string_provider_entry_validates(self) -> None:
+        """The shape rule lives in the policy function, not on this field."""
+        req = SearchRequest(
+            query="q",
+            providers=[
+                "  SearXNG  ",
+                "ignore-previous-instructions",
+                "x" * 33,
+                "has interior\twhitespace",
+                "",
+            ],
+        )
+        assert len(req.providers) == 5
+
+    def test_providers_field_carries_no_pydantic_constraint(self) -> None:
+        """No `maxItems`, no `maxLength`, no pattern — the policy function bounds it."""
+        schema = SearchRequest.model_json_schema()
+        providers_schema = schema["properties"]["providers"]
+
+        assert "maxItems" not in providers_schema
+        assert "maxLength" not in providers_schema.get("items", {})
+        assert "pattern" not in providers_schema.get("items", {})
+        assert "maxLength" not in providers_schema
+        assert "pattern" not in providers_schema
+
+    def test_no_search_request_field_carries_a_key(self) -> None:
+        assert "key" not in SearchRequest.model_fields
 
 
 # ---------------------------------------------------------------------------

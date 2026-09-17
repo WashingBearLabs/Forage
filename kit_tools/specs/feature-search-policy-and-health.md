@@ -612,6 +612,61 @@ addition (human-reviewed prose, not a gate).
   (`test_mapping`), `kit_tools/docs/GOTCHAS.md` (rotation record; the root-logger-at-WARNING
   trap that is why the unknown-name signal is a counter, not a log).
 
+## Implementation Notes
+
+### US-010 — Per-request policy: wire fields, `apply_request_policy`, handler wiring, counter, policy 422, contract regeneration (2026-09-16)
+
+`SearchRequest` gained `providers: list[str] = Field(default_factory=list)` and
+`allow_paid_fallback: bool = Field(default=True)` (`models.py` ~258–290), neither carrying any
+pydantic constraint. `apply_request_policy(chain, request)`
+(`pipeline/search_providers/policy.py`, new file) implements ruling 29's normalise → match →
+filter → allow_paid_fallback algorithm as a pure function. Its second parameter is typed
+`RequestPolicy`, a local `Protocol` declaring only `providers: list[str]` and
+`allow_paid_fallback: bool` — **not** `models.SearchRequest` — because
+`tests/test_search_providers.py::test_no_search_provider_module_imports_a_sanitization_stage_or_the_cache`
+mechanically sweeps every module under `pipeline/search_providers/` for a `models` import
+(ruling 11) and fails on it even under `TYPE_CHECKING`, since the sweep is a plain AST walk of
+import statements. `models.SearchRequest` satisfies the protocol structurally, the same seam
+shape `SearchProvider` itself already uses (`SearchMetricsSink` in `orchestrator.py` is the
+precedent for a consumer-side Protocol instead of an import).
+
+The `/search` handler (`retrieval_app.py`) now resolves the configured chain, applies the
+policy, folds the ignored count into `SearchMetrics.policy_unknown_provider`, and — only when
+the effective chain is empty — raises `PipelineError(error="search_unavailable",
+reason=POLICY_EXCLUDED_ALL_PROVIDERS)` itself with a fresh `request_id`, before
+`run_search_pipeline` is ever called, recording the error the same way the existing `except
+PipelineError` arm does. Otherwise it calls `run_search_pipeline` with `providers=` the
+effective chain and `configured_chain=` the full resolved chain, so spec 3's exhaustion-code
+predicate (ruling 28) keeps reading the configured shape regardless of any per-request
+narrowing. `POLICY_EXCLUDED_ALL_PROVIDERS = "policy_excluded_all_providers"` lives in
+`pipeline/contract.py` beside `METRICS_OTHER_BUCKET`. `policy_unknown_provider: int` was added
+to `SearchMetricsResponse` and the `/metrics` handler's dict in the same position (end of the
+`search` section, after `paid_calls`) in the same edit.
+
+No existing reason-format test needed widening: the two `search_unavailable` shapes never
+overlap in one code path — `pipeline/orchestrator.py`'s chain-order list is built and returned
+entirely inside `run_search_pipeline`, which the handler's policy branch never reaches (it
+raises first). `tests/test_orchestrator.py::test_search_unavailable_reason_is_chain_order_provider_errors`
+and `tests/test_search_providers.py`'s reason-format test both still exercise `run_search_pipeline`
+directly and are unaffected.
+
+**`sanitizer_revision` rotation (US-011 to record):** before `f0b93318ecb03e6348481a42341a8a8b66f95b3ca601f9f60de3d6437cb70d62`,
+after `dc3ff92a876885e8a8c1d9b0c5601818a6e4ccc208a87ab01f776482bf4eded9`. Cause: `pipeline/contract.py`
+gained `POLICY_EXCLUDED_ALL_PROVIDERS`. `orchestrator.py` — every other `_REVISION_SOURCES`
+member — is byte-identical (measured: `git diff --stat HEAD` against all eight hashed files
+shows only `contract.py` changed); `retrieval_app.py`, where the policy raise site actually
+lives, is not a hashed file. Both values were independently confirmed by hashing `git
+show HEAD:pipeline/contract.py` (before) and the working-tree file (after) through the same
+algorithm as `derive_sanitizer_revision`, and by calling `derive_sanitizer_revision({})`
+directly on the finished tree.
+
+Contract regenerated (`uv run python -m scripts.export_contract`); still `1.2.0`. Golden
+`tests/golden/contract_1_2_0.json` updated in place (additive diff: `providers` and
+`allow_paid_fallback` under `SearchRequest`). The anchor hash embedded in the four docs
+(`kit_tools/docs/API_GUIDE.md`, `kit_tools/docs/CI_CD.md`, `kit_tools/docs/DEPLOYMENT.md`,
+`kit_tools/arch/SERVICE_MAP.md`) was deliberately left untouched here, per this story's
+Implementation Hints — that refresh, the doc rows, and the rotation-table entries are US-011's.
+
 ## Refinement Notes
 
 Policy-not-keys is the invariant that lets Poppy build a settings UI safely, and restrict-only

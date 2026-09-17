@@ -269,6 +269,29 @@ class SearchRequest(BaseModel):
             "(fail-closed). When False, allow with a suspicion marker (fail-open)."
         ),
     )
+    providers: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Restrict-only filter of the configured provider chain, in "
+            "configured order: can exclude paid providers only, never add, "
+            "reorder, or key one — free providers always run. Entries are "
+            "matched after strip() and lower-casing against the names "
+            "/health's `search_providers` publishes. Entries beyond the "
+            "first eight, and entries matching no configured provider, are "
+            "ignored and counted on /metrics `search.policy_unknown_provider` "
+            "rather than rejected. Empty (the default) means the configured "
+            "chain runs unrestricted. Honoured from contract 1.2.0."
+        ),
+    )
+    allow_paid_fallback: bool = Field(
+        default=True,
+        description=(
+            "When False, excludes every paid provider from this request's "
+            "effective chain regardless of `providers` — free providers "
+            "always run. One-way: can only narrow the configured chain, "
+            "never widen, reorder, or key it. Honoured from contract 1.2.0."
+        ),
+    )
 
 
 class SearchResult(BaseModel):

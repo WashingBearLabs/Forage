@@ -486,6 +486,7 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "unscanned_results": 0,
         "fallback_fired": 0,
         "paid_calls": 0,
+        "policy_unknown_provider": 0,
     }
     assert body["retrieve"] == {
         "requests": 0,
@@ -1953,6 +1954,344 @@ async def test_fallback_telemetry_is_metadata_only(
     assert storage.get_calls == 0
     assert storage.set_calls == 0
     assert storage.delete_calls == 0
+    assert sentinel not in caplog.text
+
+    metrics_body = (await client.get("/metrics")).json()
+    assert sentinel not in json.dumps(metrics_body)
+
+
+# ---------------------------------------------------------------------------
+# search-policy-and-health US-010: per-request policy
+# ---------------------------------------------------------------------------
+
+
+def _searxng_result(**overrides: Any) -> ProviderSearchResult:
+    defaults: dict[str, Any] = {
+        "provider_name": "searxng",
+        "results": [{"title": "R", "url": "https://example.com/1", "content": "c"}],
+        "unresponsive_engines": [],
+    }
+    defaults.update(overrides)
+    return ProviderSearchResult(**defaults)
+
+
+async def test_omitted_policy_params_traverse_the_configured_chain(
+    client: httpx.AsyncClient,
+) -> None:
+    """Baseline: no `providers`/`allow_paid_fallback` behaves as spec 3 did."""
+    searxng = FakeSearchProvider(
+        name="searxng",
+        paid=False,
+        outcome=ProviderFailure(
+            provider_name="searxng", failure_class="rate_limited", detail="http_429"
+        ),
+    )
+    brave = FakeSearchProvider(
+        name="brave", paid=True, outcome=_searxng_result(provider_name="brave")
+    )
+
+    with _borrowed_search_providers([searxng, brave]):
+        resp = await client.post(
+            "/search", json={"query": "q", "promptguard_fail_closed": False}
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["provider_used"] == "brave"
+    assert resp.json()["fallback_fired"] is True
+    assert len(searxng.calls) == 1
+    assert len(brave.calls) == 1
+
+
+async def test_providers_naming_searxng_never_calls_brave(
+    client: httpx.AsyncClient,
+) -> None:
+    searxng = FakeSearchProvider(name="searxng", outcome=_searxng_result())
+    brave = FakeSearchProvider(name="brave", paid=True)
+
+    with _borrowed_search_providers([searxng, brave]):
+        resp = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "promptguard_fail_closed": False,
+                "providers": ["searxng"],
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["provider_used"] == "searxng"
+    assert brave.calls == []
+
+
+async def test_providers_naming_brave_keeps_the_full_effective_chain(
+    client: httpx.AsyncClient,
+) -> None:
+    """`providers: ["brave"]` restricts nothing — the free provider still runs."""
+    searxng = FakeSearchProvider(
+        name="searxng",
+        paid=False,
+        outcome=ProviderFailure(
+            provider_name="searxng", failure_class="rate_limited", detail="http_429"
+        ),
+    )
+    brave = FakeSearchProvider(
+        name="brave", paid=True, outcome=_searxng_result(provider_name="brave")
+    )
+
+    with _borrowed_search_providers([searxng, brave]):
+        resp = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "promptguard_fail_closed": False,
+                "providers": ["brave"],
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["provider_used"] == "brave"
+    assert len(searxng.calls) == 1
+    assert len(brave.calls) == 1
+
+
+async def test_providers_naming_an_unknown_provider_leaves_only_searxng(
+    client: httpx.AsyncClient,
+) -> None:
+    searxng = FakeSearchProvider(name="searxng", outcome=_searxng_result())
+    brave = FakeSearchProvider(name="brave", paid=True)
+
+    with _borrowed_search_providers([searxng, brave]):
+        resp = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "promptguard_fail_closed": False,
+                "providers": ["tavily"],
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["provider_used"] == "searxng"
+    assert brave.calls == []
+
+    metrics_body = (await client.get("/metrics")).json()
+    assert metrics_body["search"]["policy_unknown_provider"] == 1
+
+
+async def test_allow_paid_fallback_false_never_calls_brave_on_searxng_failure(
+    client: httpx.AsyncClient,
+) -> None:
+    searxng = FakeSearchProvider(
+        name="searxng",
+        paid=False,
+        outcome=ProviderFailure(
+            provider_name="searxng", failure_class="rate_limited", detail="http_429"
+        ),
+    )
+    brave = FakeSearchProvider(name="brave", paid=True)
+
+    with _borrowed_search_providers([searxng, brave]):
+        resp = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "promptguard_fail_closed": False,
+                "allow_paid_fallback": False,
+            },
+        )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["error"] == "search_unavailable"
+    assert body["reason"] == "searxng: rate_limited"
+    assert brave.calls == []
+
+
+@pytest.mark.parametrize(
+    ("providers", "expected_ignored"),
+    [
+        ([" SearXNG "], 0),
+        (["searxng"] * 9, 1),
+        (["tavily", "exa", "tavily"], 3),
+        (["x" * 33], 1),
+        (["has interior\twhitespace"], 1),
+        (["ignore-previous-instructions"], 1),
+    ],
+)
+async def test_normalisation_and_ignoring_cases_all_serve_200(
+    client: httpx.AsyncClient, providers: list[str], expected_ignored: int
+) -> None:
+    """None of these malformed/oversized/hostile entries is ever a 422."""
+    searxng = FakeSearchProvider(name="searxng", outcome=_searxng_result())
+
+    with _borrowed_search_providers([searxng]):
+        resp = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "promptguard_fail_closed": False,
+                "providers": providers,
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["provider_used"] == "searxng"
+
+    metrics_body = (await client.get("/metrics")).json()
+    assert metrics_body["search"]["policy_unknown_provider"] == expected_ignored
+
+
+async def test_a_keyless_deployment_answers_identically_to_a_keyed_one(
+    client: httpx.AsyncClient,
+) -> None:
+    """`providers: ["brave"]` gets the same status and field set with no key."""
+    request_body = {
+        "query": "q",
+        "promptguard_fail_closed": False,
+        "providers": ["brave"],
+    }
+
+    keyless_chain: list[SearchProvider] = [
+        FakeSearchProvider(name="searxng", outcome=_searxng_result())
+    ]
+    with _borrowed_search_providers(keyless_chain):
+        keyless_resp = await client.post("/search", json=request_body)
+
+    with _borrowed_search_providers(
+        [
+            FakeSearchProvider(name="searxng", outcome=_searxng_result()),
+            FakeSearchProvider(name="brave", paid=True),
+        ]
+    ):
+        keyed_resp = await client.post("/search", json=request_body)
+
+    assert keyless_resp.status_code == keyed_resp.status_code == 200
+    assert set(keyless_resp.json()) == set(keyed_resp.json())
+
+    keyless_metrics = (await client.get("/metrics")).json()
+    assert keyless_metrics["search"]["policy_unknown_provider"] == 1
+
+
+async def test_policy_excludes_all_providers_via_allow_paid_fallback(
+    client: httpx.AsyncClient,
+) -> None:
+    """A paid-only configured chain plus `allow_paid_fallback: false` refuses."""
+    brave = FakeSearchProvider(name="brave", paid=True)
+
+    with _borrowed_search_providers([brave]):
+        resp = await client.post(
+            "/search", json={"query": "q", "allow_paid_fallback": False}
+        )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["error"] == "search_unavailable"
+    assert body["reason"] == "policy_excluded_all_providers"
+    assert brave.calls == []
+
+    metrics_body = (await client.get("/metrics")).json()
+    assert metrics_body["search"]["errors"] == {"search_unavailable": 1}
+
+
+async def test_policy_excludes_all_providers_via_an_unregistered_name(
+    client: httpx.AsyncClient,
+) -> None:
+    """A paid-only configured chain plus a `providers` naming nothing refuses."""
+    brave = FakeSearchProvider(name="brave", paid=True)
+
+    with _borrowed_search_providers([brave]):
+        resp = await client.post(
+            "/search", json={"query": "q", "providers": ["tavily"]}
+        )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["error"] == "search_unavailable"
+    assert body["reason"] == "policy_excluded_all_providers"
+    assert brave.calls == []
+
+    metrics_body = (await client.get("/metrics")).json()
+    assert metrics_body["search"]["errors"] == {"search_unavailable": 1}
+
+
+async def test_exhaustion_code_follows_the_configured_not_the_effective_chain(
+    client: httpx.AsyncClient,
+) -> None:
+    """`providers: ["searxng"]` on a two-provider chain yields the general code."""
+    searxng = FakeSearchProvider(
+        name="searxng",
+        paid=False,
+        outcome=ProviderFailure(
+            provider_name="searxng", failure_class="rate_limited", detail="http_429"
+        ),
+    )
+    brave = FakeSearchProvider(name="brave", paid=True)
+
+    with _borrowed_search_providers([searxng, brave]):
+        resp = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "promptguard_fail_closed": False,
+                "providers": ["searxng"],
+            },
+        )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["error"] == "search_unavailable"
+    assert brave.calls == []
+
+
+async def test_legacy_codes_are_byte_for_byte_on_a_searxng_only_configured_chain(
+    client: httpx.AsyncClient,
+) -> None:
+    """A `providers` restriction on a one-provider chain changes nothing."""
+    searxng = FakeSearchProvider(
+        name="searxng",
+        paid=False,
+        outcome=ProviderFailure(
+            provider_name="searxng", failure_class="hard_error", detail="http_500"
+        ),
+    )
+
+    with _borrowed_search_providers([searxng]):
+        resp = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "promptguard_fail_closed": False,
+                "providers": ["searxng"],
+            },
+        )
+
+    assert resp.status_code == 422
+    assert resp.json()["error"] == "searxng_error"
+
+
+async def test_a_hostile_providers_entry_leaks_nowhere(
+    client: httpx.AsyncClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """No response body, `/metrics` key, or log record ever echoes the entry."""
+    sentinel = "SENTINEL-do-not-echo-ignore-all-previous-instructions"
+    searxng = FakeSearchProvider(name="searxng", outcome=_searxng_result())
+
+    with (
+        _borrowed_search_providers([searxng]),
+        caplog.at_level(logging.INFO),
+    ):
+        resp = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "promptguard_fail_closed": False,
+                "providers": [sentinel],
+            },
+        )
+
+    assert resp.status_code == 200
+    assert sentinel not in json.dumps(resp.json())
     assert sentinel not in caplog.text
 
     metrics_body = (await client.get("/metrics")).json()

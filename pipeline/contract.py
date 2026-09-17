@@ -290,3 +290,18 @@ ERROR_CODES = frozenset(get_args(ErrorCode))
 # ---------------------------------------------------------------------------
 
 METRICS_OTHER_BUCKET = "other"
+
+# ---------------------------------------------------------------------------
+# /search per-request policy
+# ---------------------------------------------------------------------------
+
+POLICY_EXCLUDED_ALL_PROVIDERS = "policy_excluded_all_providers"
+"""The ``search_unavailable`` ``reason`` when per-request policy narrows the
+effective provider chain to nothing (``search-policy-and-health`` US-010).
+
+``search_unavailable``'s reason takes exactly two shapes: the chain-order
+``"<provider>: <failure_class>"`` list ``orchestrator.py`` composes on an
+exhausted chain, or this fixed literal, raised by ``retrieval_app.py`` before
+``run_search_pipeline`` is ever called, when a request's own ``providers`` /
+``allow_paid_fallback`` policy excludes every provider the deployment
+configured. Never a mix of the two."""
