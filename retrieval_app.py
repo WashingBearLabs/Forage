@@ -125,8 +125,9 @@ def _break_glass_arming_env_var() -> str | None:
     reopen a consuming agent's web-search capability gate if this contract
     reaches production before that consumer does. Exact-match ``== "1"``
     semantics on both names — no truthiness, so ``true``/``yes``/``0`` do not
-    arm it. Only ``capabilities`` lies under this flag; ``status``,
-    ``degraded_reasons``, and ``promptguard_loaded`` stay honest.
+    arm it. Only ``capabilities['search_sanitization']`` lies under this
+    flag; ``status``, ``degraded_reasons``, ``promptguard_loaded``, and
+    ``capabilities['brave_api_key']`` stay honest.
     """
     for name in _BREAK_GLASS_ENV_VARS:
         if os.environ.get(name) == "1":
@@ -309,6 +310,22 @@ def _resolved_search_providers(state: State) -> list[SearchProvider]:
     return chain if chain is not None else [SearxngProvider(DEFAULT_SEARXNG_URL)]
 
 
+def _resolved_search_key_capabilities(state: State) -> tuple[str, ...]:
+    """Return the key-presence capability tuple published at start, or none.
+
+    Modelled on :func:`_resolved_cache_backend` / :func:`_resolved_sanitizer_revision`:
+    the lifespan publishes this once, from its single ``brave_key_present()``
+    verdict, and every request reads that. The fallback is defensive and
+    production-unreachable, the same property those two have, and it never
+    reads the environment — a transport that skipped lifespan events has no
+    key to report on.
+    """
+    capabilities: tuple[str, ...] | None = getattr(
+        state, "search_key_capabilities", None
+    )
+    return capabilities if capabilities is not None else ()
+
+
 def _load_config() -> dict[str, Any]:
     """Load sidecar configuration from ``config.yaml``."""
     config_path = Path(__file__).parent / "config.yaml"
@@ -321,12 +338,17 @@ def _load_config() -> dict[str, Any]:
 
 # -- Response models --
 
-# The one capability key ``/health`` advertises, named once so the CI contract
-# smoke (``contract_smoke.py``) can import it instead of restating the wire
-# string. The literal itself is still pinned by ``tests/test_app.py``, which
-# spells it out: the constant single-sources the *symbol*, those tests pin the
-# *value*, and renaming the value without meaning to fails them.
+# The two capability keys ``/health`` can advertise, named once so the CI
+# contract smoke (``contract_smoke.py``) can import the sanitization one
+# instead of restating the wire string. The literals are still pinned by
+# ``tests/test_app.py``, which spells them out: the constants single-source
+# the *symbol*, those tests pin the *value*, and renaming a value without
+# meaning to fails them. The two are computed independently (see
+# ``HealthResponse.capabilities``): ``search_sanitization`` is a runtime
+# claim the break-glass override can force, ``brave_api_key`` an environment
+# fact no override touches.
 CAPABILITY_SEARCH_SANITIZATION = "search_sanitization"
+CAPABILITY_BRAVE_API_KEY = "brave_api_key"
 
 
 class HealthResponse(BaseModel):
@@ -351,14 +373,20 @@ class HealthResponse(BaseModel):
     )
     capabilities: dict[str, int] = Field(
         description=(
-            "Sanitization capabilities this deployment advertises, as a "
-            "presence map: a key is present with the value 1 when the "
-            "capability is available and absent otherwise. One key is defined "
-            "in contract 1.1.0 — 'search_sanitization', present when "
-            "PromptGuard is loaded (or when the break-glass override is "
-            "armed; see docs/configuration.md). Deliberately a dict rather "
-            "than an enum: a consumer reads the keys it knows and ignores the "
-            "rest, so a future capability is an additive-safe MINOR change."
+            "Capabilities this deployment advertises, as a presence map: a "
+            "key is present with the value 1 when the capability is "
+            "available and absent otherwise. Two keys are defined in "
+            "contract 1.2.0. 'search_sanitization' (contract 1.1.0) is a "
+            "runtime claim, present when PromptGuard is loaded — or when "
+            "the break-glass override is armed; see docs/configuration.md, "
+            "which only ever forces this key. 'brave_api_key' (contract "
+            "1.2.0) is an environment fact, present when this start "
+            "resolved a usable FORAGE_BRAVE_API_KEY, independently of "
+            "whether 'brave' actually appears in search_providers and "
+            "untouched by the break-glass override. Deliberately a dict "
+            "rather than an enum: a consumer reads the keys it knows and "
+            "ignores the rest, so a future capability is an additive-safe "
+            "MINOR change."
         )
     )
     sanitizer_revision: str
@@ -368,6 +396,17 @@ class HealthResponse(BaseModel):
             "Which storage the content cache selected at start: 'valkey' when "
             "VALKEY_URL was set, 'memory' when it was fully unset. Added in "
             "contract 1.1.0."
+        )
+    )
+    search_providers: list[str] = Field(
+        description=(
+            "The resolved search-provider chain's names, in traversal "
+            "order — the FORAGE_SEARCH_PROVIDERS entries this start "
+            "resolved after key-gated skips (a 'brave' entry with no "
+            "usable key is absent here, not just unusable). Configuration "
+            "echo fixed for the life of the process, not a liveness probe: "
+            "it says what this start resolved, never whether a provider is "
+            "reachable right now. Added in contract 1.2.0."
         )
     )
     degraded_reasons: list[DegradedReason] = Field(
@@ -1209,13 +1248,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # rather than quietly running a chain the operator did not ask for. A
     # `"brave"` entry with no usable key is skipped (WARNING), never a boot
     # refusal — the key-less deployment is the supported floor.
+    # Evaluated exactly once — this single verdict feeds both the chain
+    # build below and `search_key_capabilities`, so the two can never
+    # disagree about whether the key is usable (US-002's "one evaluation"
+    # rule). `brave_key is not None` is that verdict: `_resolve_brave_key`
+    # already returns `None` for absent, blank, or `brave_key_invalid`
+    # values.
+    brave_key = _resolve_brave_key()
     search_providers = build_provider_chain(
         _configured_provider_names(),
         searxng_url=SEARXNG_URL,
-        brave_api_key=_resolve_brave_key(),
+        brave_api_key=brave_key,
         brave_settings=app.state.brave_settings,
     )
     app.state.search_providers = search_providers
+    app.state.search_key_capabilities = (
+        (CAPABILITY_BRAVE_API_KEY,) if brave_key is not None else ()
+    )
     # Names only — never the configured endpoint or any other environment
     # value.
     logger.info(
@@ -1344,6 +1393,9 @@ app.state.model_acquisition = None
 # `None` means "no lifespan resolved a chain"; `_resolved_search_providers`
 # reads it and falls back to the default one-element SearXNG chain.
 app.state.search_providers = None
+# `None` means "no lifespan evaluated brave_key_present()";
+# `_resolved_search_key_capabilities` reads it and falls back to `()`.
+app.state.search_key_capabilities = None
 app.state.classification_semaphore = asyncio.Semaphore(
     _initial_extraction_settings.classification_concurrency
 )
@@ -1414,6 +1466,11 @@ async def health(request: Request) -> HealthResponse:
         if classifier_loaded or _break_glass_advertisement_enabled()
         else {}
     )
+    # Computed independently of the sanitization entry above — from the
+    # lifespan's single `brave_key_present()` verdict, never re-read from
+    # the environment here.
+    for key in _resolved_search_key_capabilities(request.app.state):
+        capabilities[key] = 1
 
     return HealthResponse(
         status="degraded" if degraded_reasons else "healthy",
@@ -1423,6 +1480,9 @@ async def health(request: Request) -> HealthResponse:
         sanitizer_revision=sanitizer_revision,
         contract_version=CONTRACT_VERSION,
         cache_backend=_resolved_cache_backend(request.app.state),
+        search_providers=[
+            provider.name for provider in _resolved_search_providers(request.app.state)
+        ],
         degraded_reasons=degraded_reasons,
     )
 

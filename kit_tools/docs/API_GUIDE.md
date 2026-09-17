@@ -106,7 +106,8 @@ Fields to read (all present; `degraded_reasons` defaults to `[]`):
 | `promptguard_loaded` | bool | Whether the Prompt Guard model is loaded. Flips to `true` in place when weights land; no restart needed |
 | `cache_connected` | bool | Live ping in `valkey` mode; always `true` in `memory` mode |
 | `cache_backend` | `"valkey"` or `"memory"` | Which storage was selected at start (added in 1.1.0). `memory` means `VALKEY_URL` was fully unset |
-| `capabilities` | dict of str to int | `{"search_sanitization": 1}` when the model is loaded (or break-glass advertising is armed), otherwise `{}` |
+| `capabilities` | dict of str to int | Presence map, two keys as of 1.2.0: `search_sanitization` present when the model is loaded (or break-glass advertising is armed), `brave_api_key` present when this start resolved a usable `FORAGE_BRAVE_API_KEY` — independently of the sanitization key and untouched by break-glass |
+| `search_providers` | list of str | The resolved provider chain's names, in traversal order, after key-gated skips (added in 1.2.0). Configuration echo, not a liveness probe |
 | `contract_version` | str | `1.2.0`; the compatibility signal |
 | `sanitizer_revision` | str | Hash of pipeline behaviour; a cache-key input, not a compatibility signal |
 
@@ -454,7 +455,7 @@ in-tree copy and says nothing about wire compatibility. The image tag (for examp
 CI verifies two of the three on every release: the `smoke` job reads the in-image copy
 back out of the candidate image, and the `publish` job downloads the Release assets back
 from the API; both are checked against the anchor committed at the tag (currently
-`e6be668f51eeaa80ba0830727e05bcfa5c87ef9283e9625210514b44bc7cdfdc`).
+`10e6cfc65abf5a56c342b8952630f5b270198e29a058001b031b1158e5d602e8`).
 
 **Vendoring procedure** (`contract/GOVERNANCE.md` "Consumers"):
 

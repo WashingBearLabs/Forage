@@ -47,7 +47,7 @@ the numbering follows the sanitization order the contract reports.
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /health` | Always 200. Body carries `status` (`healthy`/`degraded`), `degraded_reasons`, `promptguard_loaded`, `cache_connected`, `cache_backend`, `sanitizer_revision`, `contract_version`. **Check the body, not the status code.** |
+| `GET /health` | Always 200. Body carries `status` (`healthy`/`degraded`), `degraded_reasons`, `promptguard_loaded`, `cache_connected`, `cache_backend`, `search_providers`, `sanitizer_revision`, `contract_version`. **Check the body, not the status code.** |
 | `GET /metrics` | Extraction, search, retrieve, and cache counters. |
 | `POST /search` | Search via SearXNG, with every result run through the pipeline. |
 | `POST /retrieve` | Fetch and sanitize a single URL. |

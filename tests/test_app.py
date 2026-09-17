@@ -1633,10 +1633,19 @@ def _borrowed_search_providers(
     the real `SearxngProvider`. `None` is a real published value here — the
     module-scope sentinel — so "absent" is restored with `delattr`, not by
     assigning `None`.
+
+    Carries `search_key_capabilities` along for the same reason (US-002):
+    the lifespan always publishes the two together, so a real-lifespan test
+    borrowing this context and then restoring only the chain would leak the
+    capability tuple into whichever test runs next. Callers that only care
+    about the chain get `()` for free while borrowed.
     """
     had_attr = hasattr(app.state, "search_providers")
     published = getattr(app.state, "search_providers", None)
+    had_capabilities_attr = hasattr(app.state, "search_key_capabilities")
+    published_capabilities = getattr(app.state, "search_key_capabilities", None)
     app.state.search_providers = chain
+    app.state.search_key_capabilities = ()
     try:
         yield
     finally:
@@ -1644,6 +1653,10 @@ def _borrowed_search_providers(
             app.state.search_providers = published
         else:
             delattr(app.state, "search_providers")
+        if had_capabilities_attr:
+            app.state.search_key_capabilities = published_capabilities
+        else:
+            delattr(app.state, "search_key_capabilities")
 
 
 def test_the_searxng_url_default_is_the_providers_own_literal() -> None:
@@ -2435,3 +2448,220 @@ async def test_lifespan_never_leaks_an_invalid_brave_key_into_the_log(
 
     assert "brave_key_invalid" in caplog.text
     assert sentinel not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# search-policy-and-health US-002: `/health` provider status
+# ---------------------------------------------------------------------------
+
+
+async def test_health_reports_the_chained_provider_and_the_present_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Key present and chained: `search_providers` and the capability both show it."""
+    _park_the_retry(monkeypatch)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng,brave")
+    monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "sentinel-brave-key")
+
+    with _borrowed_search_providers(None):
+        async with _running_app() as client:
+            data = (await client.get("/health")).json()
+
+    assert data["search_providers"] == ["searxng", "brave"]
+    assert data["capabilities"]["brave_api_key"] == 1
+
+
+async def test_health_reports_no_key_and_the_default_chain_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Key absent: `search_providers` is the key-less floor, no capability entry."""
+    _park_the_retry(monkeypatch)
+    monkeypatch.delenv("FORAGE_SEARCH_PROVIDERS", raising=False)
+    monkeypatch.delenv(BRAVE_API_KEY_ENV_VAR, raising=False)
+
+    with _borrowed_search_providers(None):
+        async with _running_app() as client:
+            data = (await client.get("/health")).json()
+
+    assert data["search_providers"] == ["searxng"]
+    assert "brave_api_key" not in data["capabilities"]
+
+
+@pytest.mark.parametrize(
+    "key_value",
+    ["", "   ", "café-invalid-\x01-sentinel"],
+    ids=["empty", "whitespace-only", "control-character"],
+)
+async def test_health_reports_no_key_for_every_absent_shaped_value(
+    monkeypatch: pytest.MonkeyPatch,
+    key_value: str,
+) -> None:
+    """Empty, whitespace-only, and `brave_key_invalid` values all report absent —
+    advertisement and registration come from the same evaluation."""
+    _park_the_retry(monkeypatch)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng,brave")
+    monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, key_value)
+
+    with _borrowed_search_providers(None):
+        async with _running_app() as client:
+            data = (await client.get("/health")).json()
+
+    assert data["search_providers"] == ["searxng"]
+    assert "brave_api_key" not in data["capabilities"]
+
+
+async def test_health_reports_the_present_key_even_when_not_chained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keyed but not chained: the capability names a key `search_providers` doesn't use.
+
+    Together the two fields show "keyed but not chained".
+    """
+    _park_the_retry(monkeypatch)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng")
+    monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "sentinel-brave-key")
+
+    with _borrowed_search_providers(None):
+        async with _running_app() as client:
+            data = (await client.get("/health")).json()
+
+    assert data["search_providers"] == ["searxng"]
+    assert data["capabilities"]["brave_api_key"] == 1
+
+
+async def test_health_capabilities_with_a_key_and_no_promptguard_is_key_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A present key with PromptGuard unloaded advertises only the key capability."""
+    _park_the_retry(monkeypatch)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "brave")
+    monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "sentinel-brave-key")
+
+    with _borrowed_search_providers(None):
+        async with _running_app() as client:
+            data = (await client.get("/health")).json()
+
+    assert data["capabilities"] == {"brave_api_key": 1}
+
+
+async def test_health_capabilities_with_break_glass_and_no_key_is_sanitization_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Break-glass forces only `search_sanitization`; it never touches the key entry."""
+    _clear_break_glass_env(monkeypatch)
+    monkeypatch.setenv("FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION", "1")
+    _park_the_retry(monkeypatch)
+    monkeypatch.delenv("FORAGE_SEARCH_PROVIDERS", raising=False)
+    monkeypatch.delenv(BRAVE_API_KEY_ENV_VAR, raising=False)
+
+    with _borrowed_search_providers(None):
+        async with _running_app() as client:
+            data = (await client.get("/health")).json()
+
+    assert data["capabilities"] == {"search_sanitization": 1}
+
+
+async def test_health_never_echoes_the_key_value_in_body_or_log(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sentinel = "sentinel-do-not-echo-brave-key"
+    _park_the_retry(monkeypatch)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng,brave")
+    monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, sentinel)
+
+    with (
+        _borrowed_search_providers(None),
+        caplog.at_level(logging.INFO),
+    ):
+        async with _running_app() as client:
+            resp = await client.get("/health")
+
+    assert sentinel not in json.dumps(resp.json())
+    assert sentinel not in caplog.text
+
+
+async def test_the_pairing_of_chain_membership_and_capability_holds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`'brave' in search_providers` and `'brave_api_key' in capabilities` agree.
+
+    Both come from the lifespan's single `brave_key_present()` verdict
+    (US-002's "one evaluation" rule), so they can never disagree — checked
+    with the key present and, separately, absent.
+    """
+    _park_the_retry(monkeypatch)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng,brave")
+
+    monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "sentinel-brave-key")
+    with _borrowed_search_providers(None):
+        async with _running_app() as client:
+            present = (await client.get("/health")).json()
+    assert ("brave" in present["search_providers"]) == (
+        "brave_api_key" in present["capabilities"]
+    )
+    assert "brave" in present["search_providers"]
+
+    monkeypatch.delenv(BRAVE_API_KEY_ENV_VAR, raising=False)
+    with _borrowed_search_providers(None):
+        async with _running_app() as client:
+            absent = (await client.get("/health")).json()
+    assert ("brave" in absent["search_providers"]) == (
+        "brave_api_key" in absent["capabilities"]
+    )
+    assert "brave" not in absent["search_providers"]
+
+
+async def test_health_without_a_lifespan_reports_the_default_chain_and_no_key(
+    client: httpx.AsyncClient,
+) -> None:
+    """A transport that never ran the lifespan still answers with the fallback.
+
+    Production-unreachable — the lifespan publishes both fields before it
+    yields — but the suite's `client` fixture builds its `ASGITransport` with
+    no lifespan event, so this is exercised directly. Saves, `delattr`s and
+    restores both attributes on the idiom
+    `test_health_without_a_cache_still_names_a_backend_and_never_500s` uses
+    for `cache_backend`, so this passes when run after a real-lifespan test
+    in the same session.
+    """
+    published_providers = getattr(app.state, "search_providers", None)
+    if published_providers is not None:
+        delattr(app.state, "search_providers")
+    published_capabilities = getattr(app.state, "search_key_capabilities", None)
+    if published_capabilities is not None:
+        delattr(app.state, "search_key_capabilities")
+    try:
+        resp = await client.get("/health")
+    finally:
+        if published_providers is not None:
+            app.state.search_providers = published_providers
+        if published_capabilities is not None:
+            app.state.search_key_capabilities = published_capabilities
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["search_providers"] == ["searxng"]
+    assert "brave_api_key" not in data["capabilities"]
+
+
+async def test_health_unrelated_fields_are_unaffected_by_search_provider_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`status`, `degraded_reasons`, `promptguard_loaded`, `cache_connected`, and
+    `cache_backend` are computed exactly as before, regardless of the search
+    provider chain or key presence."""
+    _park_the_retry(monkeypatch)
+    monkeypatch.delenv("VALKEY_URL", raising=False)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng,brave")
+    monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "sentinel-brave-key")
+
+    with _borrowed_search_providers(None):
+        async with _running_app() as client:
+            data = (await client.get("/health")).json()
+
+    assert data["status"] == "degraded"
+    assert data["degraded_reasons"] == ["promptguard_unavailable"]
+    assert data["promptguard_loaded"] is False
+    assert data["cache_connected"] is True
+    assert data["cache_backend"] == "memory"

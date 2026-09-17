@@ -444,12 +444,16 @@ components:
         capabilities:
           additionalProperties:
             type: integer
-          description: 'Sanitization capabilities this deployment advertises, as a presence
-            map: a key is present with the value 1 when the capability is available and absent
-            otherwise. One key is defined in contract 1.1.0 — ''search_sanitization'', present
-            when PromptGuard is loaded (or when the break-glass override is armed; see docs/configuration.md).
-            Deliberately a dict rather than an enum: a consumer reads the keys it knows and
-            ignores the rest, so a future capability is an additive-safe MINOR change.'
+          description: 'Capabilities this deployment advertises, as a presence map: a key
+            is present with the value 1 when the capability is available and absent otherwise.
+            Two keys are defined in contract 1.2.0. ''search_sanitization'' (contract 1.1.0)
+            is a runtime claim, present when PromptGuard is loaded — or when the break-glass
+            override is armed; see docs/configuration.md, which only ever forces this key.
+            ''brave_api_key'' (contract 1.2.0) is an environment fact, present when this start
+            resolved a usable FORAGE_BRAVE_API_KEY, independently of whether ''brave'' actually
+            appears in search_providers and untouched by the break-glass override. Deliberately
+            a dict rather than an enum: a consumer reads the keys it knows and ignores the
+            rest, so a future capability is an additive-safe MINOR change.'
           title: Capabilities
           type: object
         contract_version:
@@ -475,6 +479,17 @@ components:
         sanitizer_revision:
           title: Sanitizer Revision
           type: string
+        search_providers:
+          description: 'The resolved search-provider chain''s names, in traversal order —
+            the FORAGE_SEARCH_PROVIDERS entries this start resolved after key-gated skips
+            (a ''brave'' entry with no usable key is absent here, not just unusable). Configuration
+            echo fixed for the life of the process, not a liveness probe: it says what this
+            start resolved, never whether a provider is reachable right now. Added in contract
+            1.2.0.'
+          items:
+            type: string
+          title: Search Providers
+          type: array
         status:
           enum:
           - healthy
@@ -489,6 +504,7 @@ components:
       - sanitizer_revision
       - contract_version
       - cache_backend
+      - search_providers
       title: HealthResponse
       type: object
     MetricsResponse:

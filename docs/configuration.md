@@ -188,8 +188,9 @@ classifier is not loaded.
   There is deliberately no truthiness parsing — a typo must fail safe.
 - **It fires a loud warning on every boot**, naming whichever variable actually armed
   it, so an operator reading the log knows which one to unset.
-- **Only `capabilities` lies.** `status`, `degraded_reasons`, and `promptguard_loaded`
-  stay honest — a Forage running with the override still reports itself `degraded` with
+- **Only `capabilities.search_sanitization` lies.** `status`, `degraded_reasons`,
+  `promptguard_loaded`, `search_providers`, and `capabilities.brave_api_key` all stay
+  honest — a Forage running with the override still reports itself `degraded` with
   `promptguard_unavailable`.
 
 > **Caveat — this is a break-glass switch, not a configuration option.**
@@ -459,6 +460,7 @@ curl -s localhost:8020/health | jq
 | `promptguard_loaded` | Always honest, even with the break-glass override set. |
 | `cache_connected` | "The selected backend is operational." A live ping in Valkey mode, subject to reconnect backoff; always `true` in memory mode, where there is no connection to lose. It is **not** a statement that Valkey is present — read `cache_backend` for that. |
 | `cache_backend` | `valkey` or `memory` — which storage the content cache selected at start, decided once from `VALKEY_URL` and fixed for the life of the process. Added in contract `1.1.0`. This is the field that separates "healthily in memory mode" from "silently lost its Valkey"; `cache_connected` alone reports `true` for both. |
+| `search_providers` | The resolved search-provider chain's names, in traversal order, after key-gated skips — e.g. `["searxng"]` or `["searxng", "brave"]`. Configuration echo fixed for the life of the process, not a liveness probe. Added in contract `1.2.0`. |
 | `sanitizer_revision` | Opaque hash of the sanitization sources, the model identity, and `promptguard_threshold`. Changes when sanitization behaviour changes. |
 | `contract_version` | Response-contract version. Consumers should refuse to activate on a mismatch rather than guess. |
 

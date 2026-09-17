@@ -77,6 +77,7 @@ def _health_body(**overrides: object) -> str:
         # it reads has no `VALKEY_URL` and reports the memory backend
         # (`feature-forage-cache-fallback` US-002/US-003).
         "cache_backend": "memory",
+        "search_providers": ["searxng"],
         "degraded_reasons": [
             DEGRADED_PROMPTGUARD_UNAVAILABLE,
             DEGRADED_CACHE_UNAVAILABLE,
