@@ -10,7 +10,7 @@ size: M
 epic: search-providers
 epic_seq: 4
 epic_final: false
-execution_order: [US-001, US-002, US-003]
+execution_order: [US-010, US-011, US-002, US-003]
 created: 2026-09-14
 updated: 2026-09-14
 ---
@@ -62,236 +62,65 @@ response field set never vary with key presence for the same request body.
 
 ## User Stories
 
-### US-001: Per-request policy params on `SearchRequest`
+### US-001: [SPLIT — see US-010, US-011]
+
+> Split by supervisor: Retries exhausted at the M-size 900 s budget: attempts 1 and 2 timed out during implementation (17 criteria spanning wire model, pure policy function, handler wiring, metrics, a new 422 path, contract regeneration, six doc files and a revision rotation record). Scope too large for one session — split into code + contract regeneration + tests (US-010) and docs + anchor refresh + rotation record (US-011).
+
+### US-010: Per-request policy — wire fields, `apply_request_policy`, handler wiring, counter, policy 422 and contract regeneration (split of US-001, part 1)
 
 **Priority:** P1
 
-**Description:** As the Poppy consumer, I want to restrict which configured providers a single
-`/search` call may use and to switch the paid step off for that call, so the operator's
-settings take effect per request without changing Forage's configuration, touching a key, or
-ever making a call cost more than the configured chain already would.
+**Description:** As the Poppy consumer, I want to restrict which configured providers a single `/search` call may use and to switch the paid step off for that call, so the operator's settings take effect per request without changing Forage's configuration, touching a key, or ever making a call cost more than the configured chain already would. First half of the original US-001 (split by the supervisor after the 900 s budget was exhausted): the wire fields, the pure policy function, the handler wiring, the counter, the policy 422, the contract regeneration and the tests that pin them. US-011 carries the documentation rows, the four doc anchor refreshes and the `sanitizer_revision` rotation record. Budget the session: implement, regenerate the contract, write only the tests named below, and stop.
 
-**Independent Test:** Against a deployment whose configured chain is `["searxng", "brave"]`
-(key present) and spec 3's mocked traversal, each request below produces the stated outcome,
-asserted on `provider_used`, on the mocks' call logs, and on `/metrics`. Omitted params: the
-configured chain traverses exactly as spec 3's baseline. `providers: ["searxng"]`: effective
-chain `["searxng"]`, Brave never called. `providers: ["brave"]`: effective chain
-`["searxng", "brave"]` in configured order — free providers are never excluded, so Brave still
-runs only as spec 3's fallback. `providers: ["tavily"]`: effective chain `["searxng"]`,
-`search.policy_unknown_provider` up by one, the name stored nowhere;
-`providers: ["tavily", "exa", "tavily"]`: up by three. `providers: [" SearXNG "]`: normalises
-to `searxng`, effective chain `["searxng"]`, the counter unmoved. Nine entries: the ninth is
-ignored and counted whatever it says. A 33-character entry, an entry with interior whitespace,
-and `ignore-previous-instructions` are each ignored and counted; none is a 422, and none
-appears in any response body, `/metrics` key or log record. `allow_paid_fallback: false` with
-SearXNG failing: the failure is returned as spec 3's `search_unavailable` for the two-provider
-*configured* chain (reason `"searxng: <failure_class>"`), Brave never called. The same
-`providers: ["brave"]` body against a key-less deployment (configured chain `["searxng"]`)
-returns the identical status code and response field set, and increments
-`search.policy_unknown_provider` by one (on the keyed deployment `brave` is registered, so
-nothing is ignored there). Against a paid-only configured chain (`FORAGE_SEARCH_PROVIDERS=brave`,
-key present): `allow_paid_fallback: false`, and separately `providers: ["tavily"]`, each yield
-422 `search_unavailable` with reason `policy_excluded_all_providers` and no provider called. No
-request field carries a key.
-
-**Implementation Hints:**
-- Fields on the **wire** `SearchRequest` (`models.py` ~249–262), following the model's
-  concrete-default convention — `promptguard_fail_closed: bool = True` is the analogue and the
-  `RetrieveRequest` domain lists are `Field(default_factory=list)` — never `X | None`, which
-  renders an `anyOf`/`null` tri-state the repo has no precedent for. Concretely:
-  `providers: list[str] = Field(default_factory=list)` and
-  `allow_paid_fallback: bool = Field(default=True)`. The items carry **no** `StringConstraints`,
-  no regular-expression constraint and no length constraint (ruling 29): any pydantic
-  constraint on them turns a malformed entry into a FastAPI 422 whose `detail[].input` echoes
-  the caller's bytes verbatim
-  and unbounded (`/search` has no body cap, and `ValidationErrorDetail`'s docstring already
-  notes that pydantic adds `input`) — the security review reproduced it. The shape rule
-  therefore lives in the policy function, where a non-matching entry is ignored, never
-  rejected. The only 422 `providers` can produce is pydantic's type error for a non-list or a
-  non-string item, which every field already has today; no string value is ever rejected. Field
-  descriptions are wire text (they land in `contract/openapi.yaml`) and must state: a
-  restrict-only filter of the configured chain, in configured order, that can exclude paid
-  providers only — free providers always run; entries matched after `strip()` and lower-casing
-  against the names `/health` `search_providers` publishes (US-002 adds that field; the forward
-  reference is expected and resolves before US-003 freezes the wire); entries beyond the first
-  eight and entries matching no provider are ignored and counted on `/metrics`, never
-  rejected; empty means the configured behaviour; honoured from contract 1.2.0. Extend
-  `tests/test_models.py::TestSearchRequest` (the class `kit_tools/arch/SECURITY.md` names as the
-  request-bounds pin) with the defaults (`providers == []`, `allow_paid_fallback is True`), a
-  serialization round-trip, and a case proving an arbitrary string item validates.
-- The policy is a pure function, `apply_request_policy(chain, request)` in
-  `pipeline/search_providers/policy.py` (tests in `tests/test_search_policy.py`, per
-  CONVENTIONS' `tests/test_<module>.py`), returning the effective chain and the number of
-  entries it ignored. Providers carry `name` and `paid` (ruling 13, spec 1 US-001). The
-  algorithm (ruling 29), in order: (1) **normalise** — `strip()` and `lower()` every entry and
-  keep the first eight; every entry past the eighth is ignored and counted; (2) **match** —
-  each kept entry that equals no `name` in the resolved chain, whether an unknown name, a
-  malformed entry, or a provider skipped at start for want of a key, is ignored and counted,
-  and nothing anywhere distinguishes the causes; the matched names form the named set. **One
-  counter rule, used everywhere:** one increment per ignored entry, duplicates included
-  (`["tavily", "tavily"]` counts two; a duplicate of a matching name counts nothing);
-  (3) **filter**, only when `providers` is non-empty — remove from the configured chain every
-  `paid=True` provider whose name is not in the named set; free providers are never removed and
-  nothing is reordered, so when every entry was ignored every paid provider is removed and the
-  free providers remain. When `providers` is empty this step is skipped and step (4) still
-  applies, so `allow_paid_fallback: false` is honoured with `providers` omitted;
-  (4) `allow_paid_fallback: false` removes every remaining `paid=True` provider and never a free
-  one. The function can never add, reorder, promote or key a provider and never removes a free
-  one, so its output is always the configured chain minus a subset of its paid providers —
-  cost-monotonic for any chain. The request-meets-configuration precedent is the
-  `blocked_domains` merge at `pipeline/orchestrator.py` ~233–239; here the merge is a pure
-  function called by the handler because the handler owns the metrics.
-- Increment site for the counter: the `/search` handler in `retrieval_app.py`, beside
-  `search_metrics.requests += 1`. It applies the policy to the chain it already passes to
-  `run_search_pipeline` (spec 1 US-003, ruling 22), adds the ignored count to
-  `SearchMetrics.policy_unknown_provider`, and passes the effective chain on. The counter is a
-  plain `int`: ignored entries are never stored, so no per-name map exists and no
-  `omitted_by_reason`-style `METRICS_OTHER_BUCKET` folding is needed. Add
-  `policy_unknown_provider: int` to `SearchMetricsResponse` (`extra="forbid"`; the description
-  says what is counted — one per ignored entry — and that the names are not kept) and the
-  `"policy_unknown_provider"` key to the `/metrics` handler's dict in the same edit, **at the
-  same relative position in both**: `tests/test_contract_metrics.py` has a set-based gate
-  (`test_every_section_the_handler_emits_has_a_model`) and an order-sensitive one
-  (`test_metrics_mirror_round_trips_the_served_body`, ruling 26e). The signal is a counter, not
-  a log line: the root logger sits at WARNING with no `basicConfig()`
-  (`kit_tools/docs/GOTCHAS.md`), and not a response field, which would be a new wire field
-  carrying a caller-controlled name.
-- `run_search_pipeline` traverses the effective chain with spec 3's loop unchanged: failure
-  classification, sufficiency, `provider_used`, `fallback_fired` and `provider_errors` apply to
-  the effective chain. Which exhaustion code applies is spec 3's rule on the **configured**
-  chain, never the per-request effective chain (ruling 28) — the handler passes the configured
-  chain as `configured_chain=` (spec 3's keyword on `run_search_pipeline`) beside the effective
-  chain as `providers=`, so `_legacy_searxng_codes` never sees the filtered list: with
-  `FORAGE_SEARCH_PROVIDERS=searxng`
-  the legacy `searxng_error` / `searxng_unavailable` codes apply byte-for-byte as today; on any
-  other configured chain an exhausted effective chain is `search_unavailable` with spec 3's
-  chain-order reason — so `providers: ["searxng"]` on `["searxng", "brave"]` whose SearXNG call
-  fails yields `search_unavailable`, reason `"searxng: <failure_class>"`, and no status varies
-  with policy. An **empty** effective chain arises only when the configured chain has no free
-  provider and the request excluded every paid one (by `allow_paid_fallback: false` or by naming
-  none of them). The **handler** (`retrieval_app.py`, inside ruling 14's raise-site sweep)
-  checks the effective chain right after `apply_request_policy` and raises
-  `PipelineError(error="search_unavailable", reason=POLICY_EXCLUDED_ALL_PROVIDERS)` itself,
-  before `run_search_pipeline` is called; spec 1's contract that `run_search_pipeline(providers=[])`
-  raises `ValueError` (a caller bug, never a request outcome) stays untouched and its test stays
-  green. The literal
-  `POLICY_EXCLUDED_ALL_PROVIDERS = "policy_excluded_all_providers"` lives in
-  `pipeline/contract.py` beside `METRICS_OTHER_BUCKET` (ruling 28; that module's docstring makes
-  it the single home of every literal that crosses the wire) and is imported by
-  `retrieval_app.py`, where this raise lives (`retrieval_app.py` and `orchestrator.py` are the two
-  files ruling 14's raise-site sweep covers). The
-  `search_unavailable` reason vocabulary therefore has exactly two disjoint forms — spec 3's
-  chain-order failure list, or this one fixed literal — and spec 3's reason-format test is
-  widened to accept the literal, not deleted. The handler increments
-  `search.errors.search_unavailable` **itself** in the policy branch
-  (`search_metrics.record_error("search_unavailable")` beside the raise, with a fresh
-  `request_id = uuid.uuid4().hex` because `PipelineError` requires one and `/search` ids are
-  otherwise minted inside `run_search_pipeline`): the only existing
-  `record_error` call sits in the `except PipelineError` arm around `run_search_pipeline`
-  (`retrieval_app.py` ~1548–1562), so a raise before that call would otherwise leave the counter
-  unmoved and the refusal invisible. The fixed reason is what tells the two forms apart in the
-  body, and that conflation is by design. `contract.py` is in `_REVISION_SOURCES` (the policy
-  literal), so this story rotates `sanitizer_revision` once; `retrieval_app.py`, where the raise
-  lives, is not hashed (Technical Considerations).
-- Caller-supplied strings are never echoed: nothing sent through `providers` reaches
-  `provider_errors`, a 422 `reason`, a `/metrics` key or a log record — those carry registered
-  names only. A hostile entry such as `ignore-previous-instructions` appears in no response
-  body, no `/metrics` map and no log record — one test, in the style of
-  `tests/test_cache.py::TestReconnect::test_connect_failure_never_logs_url_or_secret`. The
-  pre-existing `searxng_unavailable` reason (which carries `SEARXNG_URL` and exception text on
-  the `searxng`-only configured chain) is the documented exception and stays: it echoes
-  configuration, not caller input, and changing it is wire text under GOVERNANCE.
-- Regenerate the contract (`uv run python -m scripts.export_contract`) — still 1.2.0, additive
-  — and the current golden `tests/golden/contract_1_2_0.json` (`SearchRequest` is pinned there
-  since spec 1 US-004 extended `_SCHEMA_MODELS`). Refresh the anchor hash embedded in
-  `kit_tools/docs/API_GUIDE.md`, `kit_tools/docs/CI_CD.md`, `kit_tools/docs/DEPLOYMENT.md` and
-  `kit_tools/arch/SERVICE_MAP.md` (~202; ruling 32).
-- Docs in the same change: the `SearchRequest` field table under `### POST /search` in
-  `kit_tools/docs/API_GUIDE.md` gains both rows plus one sentence that a consumer sources its
-  selectable names from `/health` `search_providers` and reconciles there (there is no
-  per-request signal); the `search_unavailable` rows in `kit_tools/docs/TROUBLESHOOTING.md`,
-  `kit_tools/arch/patterns/ERROR_HANDLING.md` and API_GUIDE's `/search` 422 row gain
-  `policy_excluded_all_providers` as the second reason form (policy-excluded, not
-  provider-failure); `kit_tools/docs/MONITORING.md`'s `/metrics` `search` table gains
-  `policy_unknown_provider` with the unit (one per ignored entry) and the disambiguation
-  procedure (compare the consumer's names against `/health` `search_providers`; a rising
-  counter with no `brave_api_key` entry means the key, not the name); `kit_tools/arch/SECURITY.md`'s
-  "Input Validation and Resource Bounds" inventory states that the items carry no pydantic
-  bound by design and that the bound (first eight, matched or ignored) is in the policy
-  function; `kit_tools/testing/TESTING_GUIDE.md`'s `test_mapping` gains
-  `pipeline/search_providers/policy.py` → `tests/test_search_policy.py` (suite counts are spec 5
-  US-003's close-out, ruling 32); the rotation record (Technical Considerations).
+**Independent Test:** Against a deployment whose configured chain is `["searxng", "brave"]` (key present) and spec 3's mocked traversal, each request below produces the stated outcome, asserted on `provider_used`, on the mocks' call logs, and on `/metrics`. Omitted params: the configured chain traverses exactly as spec 3's baseline. `providers: ["searxng"]`: effective chain `["searxng"]`, Brave never called. `providers: ["brave"]`: effective chain `["searxng", "brave"]` in configured order. `providers: ["tavily"]`: effective chain `["searxng"]`, `search.policy_unknown_provider` up by one, the name stored nowhere; `providers: ["tavily", "exa", "tavily"]`: up by three. `providers: [" SearXNG "]`: normalises to `searxng`, counter unmoved. Nine entries: the ninth is ignored and counted. A 33-character entry, an entry with interior whitespace, and `ignore-previous-instructions` are each ignored and counted; none is a 422, and none appears in any response body, `/metrics` key or log record. `allow_paid_fallback: false` with SearXNG failing: `search_unavailable` for the two-provider *configured* chain (reason `"searxng: <failure_class>"`), Brave never called. `providers: ["brave"]` on a key-less deployment returns the identical status code and response field set and increments the counter by one. Against a paid-only configured chain: `allow_paid_fallback: false`, and separately `providers: ["tavily"]`, each yield 422 `search_unavailable` with reason `policy_excluded_all_providers` and no provider called.
 
 **Acceptance Criteria:**
-- [ ] `SearchRequest` carries `providers: list[str]` (default `[]`) and `allow_paid_fallback:
-      bool` (default `True`); neither is `Optional`; the items carry no pydantic constraint of
-      any kind (a test asserts the field's JSON schema carries no `maxItems`, no `maxLength`
-      and no regular expression); no request field carries a key; both descriptions state the
-      paid-only restrict rule, the normalise-then-ignore-and-count rule, and "honoured from
-      contract 1.2.0"; `tests/test_models.py::TestSearchRequest` covers the defaults, a
-      round-trip, and that an arbitrary string item validates.
-- [ ] `apply_request_policy` is a pure function; a property-style test over configured chains
-      of free and paid fakes (one to four providers, any mix, any order) and request policies
-      asserts the actual claim: the effective chain equals the configured chain with a subset of
-      its `paid=True` providers removed — every `paid=False` provider present, in configured
-      position, and the effective chain a subsequence of the configured chain — and that
-      `allow_paid_fallback: false` leaves no paid provider.
-- [ ] On configured chain `["searxng", "brave"]`: omitted params traverse the configured chain
-      (same `provider_used` / `fallback_fired` as spec 3's baseline); `providers: ["searxng"]`
-      never calls Brave; `providers: ["brave"]` yields effective chain `["searxng", "brave"]`;
-      `providers: ["tavily"]` yields `["searxng"]`; `allow_paid_fallback: false` with a failing
-      SearXNG returns `search_unavailable` with reason `"searxng: <failure_class>"` and never
-      calls Brave (mock call logs asserted).
-- [ ] Normalisation and ignoring: `[" SearXNG "]` matches `searxng` with the counter unmoved;
-      nine entries leave the ninth ignored and counted; a 33-character entry, an entry with
-      interior whitespace, and a hostile entry are each ignored and counted; `["tavily", "exa",
-      "tavily"]` adds three; every one of these requests reaches the handler and is served by
-      SearXNG with status 200 — none is a 422.
-- [ ] `providers: ["brave"]` on a key-less deployment (configured chain `["searxng"]`) returns
-      the same status code and the same response field set as on the keyed deployment above; a
-      test asserts equality of the status and of `set(body)` between the two.
-- [ ] `search.policy_unknown_provider` rises by exactly one per ignored entry, unknown and
-      key-absent alike, and no entry is stored; `/metrics` `search` carries
-      `policy_unknown_provider` at the same position in `SearchMetricsResponse` and in the
-      handler's dict; `tests/test_contract_metrics.py` passes in full.
-- [ ] On a paid-only configured chain, `allow_paid_fallback: false` and, separately,
-      `providers` naming no registered provider each return 422 `search_unavailable` with
-      `reason` equal to `policy_excluded_all_providers`, call no provider, and never return 200
-      with an empty list — the 422 is raised by the `/search` handler before
-      `run_search_pipeline` is called; `run_search_pipeline(providers=[])` still raises
-      `ValueError` (spec 1's test unchanged) while `providers=None` builds spec 1's default chain
-      (`is None`, ruling 29);
-      the count assertions in `tests/test_contract_errors.py` are unchanged (no new code).
-- [ ] The exhaustion code follows the configured chain (ruling 28), which the handler passes as
-      `configured_chain=` beside the effective `providers=`: `providers: ["searxng"]` on
-      `["searxng", "brave"]` with SearXNG failing is `search_unavailable`, never
-      `searxng_error`; on configured `["searxng"]` the legacy codes are byte-for-byte as today.
-- [ ] `POLICY_EXCLUDED_ALL_PROVIDERS` is defined in `pipeline/contract.py` and imported by
-      `retrieval_app.py` (the policy raise site); `search_unavailable` is raised from
-      `pipeline/orchestrator.py` (exhaustion) and `retrieval_app.py` (policy), both inside the
-      raise-site sweep; spec 3's
-      reason-format test accepts exactly the two forms (chain-order list, fixed literal).
-- [ ] A hostile `providers` entry appears in no response body, no `/metrics` key and no log
-      record (test).
-- [ ] `contract/openapi.yaml` + `.sha256` regenerated under 1.2.0;
-      `tests/test_contract_export.py` and `tests/test_contract_schema.py` pass; the anchor
-      hash in `kit_tools/docs/API_GUIDE.md`, `CI_CD.md`, `DEPLOYMENT.md` and
-      `kit_tools/arch/SERVICE_MAP.md` matches the committed `.sha256`.
-- [ ] `kit_tools/docs/API_GUIDE.md`'s `SearchRequest` table, `kit_tools/docs/MONITORING.md`'s
-      `/metrics` `search` table and `kit_tools/arch/SECURITY.md`'s request-bounds inventory
-      each name the new fields; TROUBLESHOOTING, ERROR_HANDLING and API_GUIDE's `/search` 422
-      row each name `policy_excluded_all_providers`; TESTING_GUIDE's `test_mapping` names
-      `policy.py` (all grep-verifiable).
-- [ ] The `sanitizer_revision` rotation (before, after, cause: the policy literal in
-      `contract.py`; `retrieval_app.py`, where the raise lives, is not hashed) is recorded in
-      `docs/bootstrap-notes.md`, the three `kit_tools/` rotation tables (GOTCHAS, DECISIONS,
-      CODE_ARCH) and `CLAUDE.md`'s "Coexistence with Poppy" paragraph.
-- [ ] A test asserts the policy 422 increments `search.errors.search_unavailable` exactly once
-      per refused request (the handler calls `record_error` in the policy branch), so the refusal
-      is visible on `/metrics`.
+- [ ] `SearchRequest` carries `providers: list[str]` (default `[]`) and `allow_paid_fallback: bool` (default `True`); neither is `Optional`; the items carry no pydantic constraint of any kind (a test asserts the field's JSON schema carries no `maxItems`, no `maxLength` and no regular expression); no request field carries a key; both descriptions state the paid-only restrict rule, the normalise-then-ignore-and-count rule, and "honoured from contract 1.2.0"; `tests/test_models.py::TestSearchRequest` covers the defaults, a round-trip, and that an arbitrary string item validates.
+- [ ] `apply_request_policy(chain, request)` in `pipeline/search_providers/policy.py` is a pure function returning the effective chain and the ignored count; a property-style test in `tests/test_search_policy.py` over configured chains of free and paid fakes (one to four providers, any mix, any order) and request policies asserts the effective chain equals the configured chain with a subset of its `paid=True` providers removed — every `paid=False` provider present, in configured position, the effective chain a subsequence of the configured chain — and that `allow_paid_fallback: false` leaves no paid provider.
+- [ ] On configured chain `["searxng", "brave"]`: omitted params traverse the configured chain (same `provider_used` / `fallback_fired` as spec 3's baseline); `providers: ["searxng"]` never calls Brave; `providers: ["brave"]` yields effective chain `["searxng", "brave"]`; `providers: ["tavily"]` yields `["searxng"]`; `allow_paid_fallback: false` with a failing SearXNG returns `search_unavailable` with reason `"searxng: <failure_class>"` and never calls Brave (mock call logs asserted).
+- [ ] Normalisation and ignoring: `[" SearXNG "]` matches `searxng` with the counter unmoved; nine entries leave the ninth ignored and counted; a 33-character entry, an entry with interior whitespace, and a hostile entry are each ignored and counted; `["tavily", "exa", "tavily"]` adds three; every one of these requests reaches the handler and is served by SearXNG with status 200 — none is a 422.
+- [ ] `providers: ["brave"]` on a key-less deployment (configured chain `["searxng"]`) returns the same status code and the same response field set as on the keyed deployment; a test asserts equality of the status and of `set(body)` between the two.
+- [ ] `search.policy_unknown_provider` rises by exactly one per ignored entry, unknown and key-absent alike, and no entry is stored; `/metrics` `search` carries `policy_unknown_provider` at the same position in `SearchMetricsResponse` and in the handler's dict; `tests/test_contract_metrics.py` passes in full.
+- [ ] On a paid-only configured chain, `allow_paid_fallback: false` and, separately, `providers` naming no registered provider each return 422 `search_unavailable` with `reason` equal to `policy_excluded_all_providers`, call no provider, and never return 200 with an empty list — the 422 is raised by the `/search` handler before `run_search_pipeline` is called, and a test asserts it increments `search.errors.search_unavailable` exactly once per refused request (the handler calls `record_error` in the policy branch); `run_search_pipeline(providers=[])` still raises `ValueError` (spec 1's test unchanged) while `providers=None` builds spec 1's default chain; the count assertions in `tests/test_contract_errors.py` are unchanged.
+- [ ] The exhaustion code follows the configured chain (ruling 28), which the handler passes as `configured_chain=` beside the effective `providers=`: `providers: ["searxng"]` on `["searxng", "brave"]` with SearXNG failing is `search_unavailable`, never `searxng_error`; on configured `["searxng"]` the legacy codes are byte-for-byte as today.
+- [ ] `POLICY_EXCLUDED_ALL_PROVIDERS` is defined in `pipeline/contract.py` and imported by `retrieval_app.py` (the policy raise site); `search_unavailable` is raised from `pipeline/orchestrator.py` (exhaustion) and `retrieval_app.py` (policy), both inside the raise-site sweep; spec 3's reason-format test accepts exactly the two forms (chain-order list, fixed literal).
+- [ ] A hostile `providers` entry appears in no response body, no `/metrics` key and no log record (test in the style of `test_connect_failure_never_logs_url_or_secret`).
+- [ ] `contract/openapi.yaml` + `.sha256` and the current golden `tests/golden/contract_1_2_0.json` are regenerated under 1.2.0 (`uv run python -m scripts.export_contract`); `tests/test_contract_export.py` and `tests/test_contract_schema.py` pass. The four doc anchor refreshes, the doc rows and the rotation record are US-011's.
 - [ ] Tests written/updated for new functionality.
 - [ ] Full test suite passes (`uv run pytest`).
 - [ ] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
+
+**Implementation Hints:**
+- Fields on the **wire** `SearchRequest` (`models.py` ~249–262), following the model's concrete-default convention — `promptguard_fail_closed: bool = True` is the analogue and the `RetrieveRequest` domain lists are `Field(default_factory=list)` — never `X | None`. Concretely: `providers: list[str] = Field(default_factory=list)` and `allow_paid_fallback: bool = Field(default=True)`. The items carry **no** `StringConstraints`, no regex and no length constraint (ruling 29): any pydantic constraint turns a malformed entry into a FastAPI 422 whose `detail[].input` echoes the caller's bytes verbatim. The shape rule lives in the policy function, where a non-matching entry is ignored, never rejected. Field descriptions are wire text and must state: a restrict-only filter of the configured chain, in configured order, that can exclude paid providers only — free providers always run; entries matched after `strip()` and lower-casing against the names `/health` `search_providers` publishes (US-002 adds that field); entries beyond the first eight and entries matching no provider are ignored and counted on `/metrics`, never rejected; empty means the configured behaviour; honoured from contract 1.2.0.
+- The policy is a pure function, `apply_request_policy(chain, request)` in `pipeline/search_providers/policy.py` (tests in `tests/test_search_policy.py`), returning the effective chain and the number of ignored entries. Algorithm (ruling 29), in order: (1) **normalise** — `strip()` and `lower()` every entry and keep the first eight; every entry past the eighth is ignored and counted; (2) **match** — each kept entry that equals no `name` in the resolved chain is ignored and counted (one increment per ignored entry, duplicates included; a duplicate of a matching name counts nothing); the matched names form the named set; (3) **filter**, only when `providers` is non-empty — remove from the configured chain every `paid=True` provider whose name is not in the named set; free providers are never removed and nothing is reordered; (4) `allow_paid_fallback: false` removes every remaining `paid=True` provider. Output is always the configured chain minus a subset of its paid providers.
+- Increment site for the counter: the `/search` handler in `retrieval_app.py`, beside `search_metrics.requests += 1`. It applies the policy to the chain it already passes to `run_search_pipeline`, adds the ignored count to `SearchMetrics.policy_unknown_provider` (a plain `int`; no per-name map), and passes the effective chain on. Add `policy_unknown_provider: int` to `SearchMetricsResponse` (`extra="forbid"`) and the `"policy_unknown_provider"` key to the `/metrics` handler's dict in the same edit, **at the same relative position in both** (`tests/test_contract_metrics.py` has a set-based gate and an order-sensitive one).
+- `run_search_pipeline` traverses the effective chain with spec 3's loop unchanged. Which exhaustion code applies is spec 3's rule on the **configured** chain (ruling 28) — the handler passes `configured_chain=` beside the effective `providers=`. An **empty** effective chain arises only when the configured chain has no free provider and the request excluded every paid one: the **handler** checks the effective chain right after `apply_request_policy` and raises `PipelineError(error="search_unavailable", reason=POLICY_EXCLUDED_ALL_PROVIDERS)` itself, before `run_search_pipeline`, with `search_metrics.record_error("search_unavailable")` beside the raise and a fresh `request_id = uuid.uuid4().hex` (the only existing `record_error` call sits in the `except PipelineError` arm around `run_search_pipeline`, ~1548–1562). `POLICY_EXCLUDED_ALL_PROVIDERS = "policy_excluded_all_providers"` lives in `pipeline/contract.py` beside `METRICS_OTHER_BUCKET`. Spec 3's reason-format test is widened to accept the literal, not deleted.
+- Caller-supplied strings are never echoed: nothing sent through `providers` reaches `provider_errors`, a 422 `reason`, a `/metrics` key or a log record. The pre-existing `searxng_unavailable` reason on the `searxng`-only configured chain is the documented exception and stays.
+- Regenerate the contract (`uv run python -m scripts.export_contract`) — still 1.2.0, additive — and the current golden `tests/golden/contract_1_2_0.json`. `contract.py` is in `_REVISION_SOURCES`, so this story rotates `sanitizer_revision` once; note the before/after values in the Implementation Notes for US-011 to record (US-011 owns `docs/bootstrap-notes.md`, the three `kit_tools/` rotation tables, `CLAUDE.md`'s paragraph and the four doc anchor refreshes). Leave the anchor hash embedded in the docs alone here — no test pins it.
+
+### US-011: Per-request policy — doc rows, contract anchor refresh and `sanitizer_revision` rotation record (split of US-001, part 2)
+
+**Priority:** P1
+
+**Description:** Second half of the original US-001 (split by the supervisor). US-010 delivered the per-request policy fields, the policy function, the handler wiring, the counter, the policy 422 and the regenerated contract. This story lands the documentation that makes the change legible: the doc anchor refreshes, the API, monitoring, troubleshooting, error-handling and security rows, the test-mapping row, and the `sanitizer_revision` rotation record. It changes no code unless a doc claim exposes a defect (fix minimally and say so in the Implementation Notes).
+
+**Independent Test:** Every claim below is grep-verifiable: the anchor hash in the four docs equals the committed `contract/openapi.yaml.sha256`; each named table carries its row; `docs/bootstrap-notes.md`'s latest record equals `derive_sanitizer_revision()`; the full suite and the three static gates stay green.
+
+**Acceptance Criteria:**
+- [ ] The anchor hash embedded in `kit_tools/docs/API_GUIDE.md`, `kit_tools/docs/CI_CD.md`, `kit_tools/docs/DEPLOYMENT.md` and `kit_tools/arch/SERVICE_MAP.md` (~202) matches the committed `contract/openapi.yaml.sha256` (ruling 32).
+- [ ] `kit_tools/docs/API_GUIDE.md`'s `SearchRequest` field table under `### POST /search` gains both rows plus one sentence that a consumer sources its selectable names from `/health` `search_providers` and reconciles there; `kit_tools/docs/MONITORING.md`'s `/metrics` `search` table gains `policy_unknown_provider` with the unit (one per ignored entry) and the disambiguation procedure (compare the consumer's names against `/health` `search_providers`; a rising counter with no `brave_api_key` entry means the key, not the name); `kit_tools/arch/SECURITY.md`'s "Input Validation and Resource Bounds" inventory states that the items carry no pydantic bound by design and that the bound (first eight, matched or ignored) is in the policy function.
+- [ ] The `search_unavailable` rows in `kit_tools/docs/TROUBLESHOOTING.md`, `kit_tools/arch/patterns/ERROR_HANDLING.md` and API_GUIDE's `/search` 422 row each name `policy_excluded_all_providers` as the second reason form (policy-excluded, not provider-failure); `kit_tools/testing/TESTING_GUIDE.md`'s `test_mapping` gains `pipeline/search_providers/policy.py` → `tests/test_search_policy.py` (suite counts stay spec 5 US-003's, ruling 32).
+- [ ] The `sanitizer_revision` rotation (before, after, cause: the policy literal in `contract.py`; `retrieval_app.py`, where the raise lives, is not hashed) is recorded in `docs/bootstrap-notes.md`, the three `kit_tools/` rotation tables (GOTCHAS, DECISIONS, CODE_ARCH) and `CLAUDE.md`'s "Coexistence with Poppy" paragraph, and the recorded after-value equals `derive_sanitizer_revision()` on this branch.
+- [ ] Tests written/updated for new functionality (documentation-only stories satisfy this with the existing suite green).
+- [ ] Full test suite passes (`uv run pytest`).
+- [ ] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
+
+**Implementation Hints:**
+- Read US-010's Implementation Notes first: it records the `sanitizer_revision` before/after values and the exact contract anchor; verify both with `uv run python -c "from pipeline.sanitizer_revision import derive_sanitizer_revision; print(derive_sanitizer_revision())"` and `cat contract/openapi.yaml.sha256` rather than trusting the note.
+- Anchor refresh: the four docs quote the sha256 of `contract/openapi.yaml`; replace the old hash with the committed one in all four (grep for the old value to find every site, including any prose sentence that quotes it).
+- Rotation record: follow the existing entry shape in `docs/bootstrap-notes.md` (before, after, cause, the story) and the three `kit_tools/` tables; `CLAUDE.md`'s "Coexistence with Poppy" paragraph gets one more clause in the running sentence. `ruff format` reflows Python fences inside Markdown, so keep any code fence you touch formatted.
+- Doc rows: API_GUIDE's `SearchRequest` table (both fields, wire-text descriptions consistent with `models.py`); MONITORING's `/metrics` `search` table; SECURITY's request-bounds inventory; TROUBLESHOOTING / ERROR_HANDLING / API_GUIDE 422 rows naming `policy_excluded_all_providers`; TESTING_GUIDE `test_mapping` row for `policy.py`. Keep placeholder-checker-safe prose (no bracketed template tokens).
+
 
 ### US-002: `/health` provider status
 
