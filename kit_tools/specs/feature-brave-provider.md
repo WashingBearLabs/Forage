@@ -230,41 +230,41 @@ no Brave record.
   compose passthrough and the CI secret-grep patterns (ruling 20 c–d).
 
 **Acceptance Criteria:**
-- [ ] `FORAGE_BRAVE_API_KEY` is read exactly once per process, in the lifespan, via
+- [x] `FORAGE_BRAVE_API_KEY` is read exactly once per process, in the lifespan, via
       `BRAVE_API_KEY_ENV_VAR`; a test sets the variable after startup and asserts the resolved
       chain is unchanged; the chain attribute is declared in the module-scope `app.state` mirror
       and the existing lifespan-free route tests pass unchanged.
-- [ ] `brave_key_present()` is defined once in `pipeline/search_providers/brave.py` and is the
+- [x] `brave_key_present()` is defined once in `pipeline/search_providers/brave.py` and is the
       only presence rule: `""`, `"  "`, `"ke y"`, `"key\r"` and a key containing a non-ASCII
       character are not present; `"key\n"` is present and resolves to `"key"`; a non-empty value
       that fails the predicate logs `brave_key_invalid` (variable name, never the value, never the
       offending character) and registers nothing; no `UnicodeEncodeError` can be raised by the
       provider for any environment value (test).
-- [ ] `"brave"` in the chain registers `BraveApiProvider` only with a present key; otherwise
+- [x] `"brave"` in the chain registers `BraveApiProvider` only with a present key; otherwise
       `build_provider_chain` emits exactly one WARNING containing `brave_skipped_missing_key` and
       `FORAGE_BRAVE_API_KEY`, and `caplog.text` does not contain a sentinel key value.
-- [ ] `build_provider_chain(names, *, searxng_url, brave_api_key, brave_settings)` is called from
+- [x] `build_provider_chain(names, *, searxng_url, brave_api_key, brave_settings)` is called from
       the lifespan with the result of an unconditional `brave_settings_from_config(config)`; a
       real-lifespan test with a non-default `search_brave_timeout_seconds` in the config dict
       asserts the registered provider's `httpx.AsyncClient` receives that timeout; an out-of-range
       value refuses boot on a chain without `brave`.
-- [ ] `FORAGE_SEARCH_PROVIDERS=searxng,brave` without a key runs SearXNG-only with no error;
+- [x] `FORAGE_SEARCH_PROVIDERS=searxng,brave` without a key runs SearXNG-only with no error;
       `FORAGE_SEARCH_PROVIDERS=brave` without a key resolves to `[SearxngProvider]` and emits the
       `search_chain_defaulted_to_searxng` WARNING.
-- [ ] With the key set and `brave` absent from `FORAGE_SEARCH_PROVIDERS`, the resolved chain
+- [x] With the key set and `brave` absent from `FORAGE_SEARCH_PROVIDERS`, the resolved chain
       contains no `BraveApiProvider` and `caplog` holds no Brave record (test).
-- [ ] `FORAGE_BRAVE_API_KEY` is in `tests/conftest.py::_CLEARED_ENV_VARS` and in the exact set
+- [x] `FORAGE_BRAVE_API_KEY` is in `tests/conftest.py::_CLEARED_ENV_VARS` and in the exact set
       pinned by `tests/test_hermeticity.py::test_the_cleared_environment_is_the_expected_exact_set`,
       which passes.
-- [ ] `docs/configuration.md` (the variable table and the `config.yaml` "Top-level keys" table),
+- [x] `docs/configuration.md` (the variable table and the `config.yaml` "Top-level keys" table),
       `kit_tools/docs/ENV_REFERENCE.md` (variable table, cleared-variable sentence, and the
       `config.yaml` table) and `kit_tools/arch/SECURITY.md`'s secrets inventory carry the new rows
       for `FORAGE_BRAVE_API_KEY`, `search_brave_timeout_seconds`, `search_brave_chunk_max_chars`
       and `search_brave_query_max_chars` (grep-verifiable); the configuration row names the proxy
       posture and the `search_chain_defaulted_to_searxng` marker.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pyright` (strict) pass.
 
 ### US-003: Brave failure taxonomy + sanitization parity + ToS (no raw payload persistence)
 
