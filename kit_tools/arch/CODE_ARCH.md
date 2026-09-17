@@ -141,7 +141,15 @@ recent are `search-provider-abstraction`'s: a seventh when the inline SearXNG ca
 module is not hashed, so `orchestrator.py` alone moved), an eighth for the `providers=`
 chain seam (`ee4450d9…` → `e7038672…`, US-003), and a ninth with the contract bump to
 `1.2.0` (`e7038672…` → `b7871b20…`, US-004 — `contract.py` + `orchestrator.py`, the epic's
-only two-file rotation, each file's contribution measured by reverting it in turn).
+only two-file rotation, each file's contribution measured by reverting it in turn). Four
+more followed from `search-fallback` and `search-policy-and-health`: a tenth for free-first
+chain traversal (`b7871b20…` → `55e2af1b…`, US-001 — `orchestrator.py` alone), an eleventh
+for fallback telemetry and per-result provenance (`55e2af1b…` → `5249def6…`, US-003 —
+`orchestrator.py` alone; `models.py`'s matching wire fields are not hashed), a twelfth for
+failure-class discrimination (`5249def6…` → `f0b93318…`, US-002 — `orchestrator.py` alone,
+a lone-`searxng` chain carved out and unaffected), and a thirteenth for the per-request
+policy literal (`f0b93318…` → `dc3ff92a…`, `search-policy-and-health` US-010 —
+`contract.py` alone; `retrieval_app.py`, where the new 422 is raised, is not hashed).
 Nothing downstream may assume Poppy↔Forage revision parity.
 
 **Startup is non-blocking, and one background task is the reason.** The lifespan does its

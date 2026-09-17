@@ -407,8 +407,8 @@ recipe.
 
 **What happens:**
 `derive_sanitizer_revision()` hashes eight source files plus the model identity and the
-active threshold. Forage's revision has moved nine times, each time at a boundary and each
-time deliberately:
+active threshold. Forage's revision has moved thirteen times, each time at a boundary and
+each time deliberately:
 
 | When | Value | What moved it |
 |---|---|---|
@@ -422,11 +422,15 @@ time deliberately:
 | `search-provider-abstraction` US-002 | `ee4450d9…f63c3da` | the inline SearXNG call left `orchestrator.py` for `SearxngProvider` — the provider module is **not** a hashed filename, so `orchestrator.py` is the only file that moved; wire codes unchanged, `reason` text narrowed |
 | `search-provider-abstraction` US-003 | `e7038672…3ce0cbf` | `run_search_pipeline` gained the `providers=` chain seam; `providers=None` is the previous behaviour unchanged |
 | `search-provider-abstraction` US-004 | `b7871b20…ea6f2b` | contract `1.2.0` — **two** hashed files: `contract.py` (`ContentKind`, `search_unavailable`, the version) and `orchestrator.py` (the chain-shaped failure predicate, the `content_kind`/`date` copy) |
+| `search-fallback` US-001 | `55e2af1b…bf47e4` | `run_search_pipeline` gained free-first chain traversal in `orchestrator.py`: calls providers in order, advances on a `ProviderFailure`, stops at the first success; a one-provider chain is byte-identical to before |
+| `search-fallback` US-003 | `5249def6…89f24a` | `run_search_pipeline` gained fallback telemetry and per-result provenance in `orchestrator.py` (`SearchResult.domain`, `provider_used`/`fallback_fired`/`provider_errors`, the `SearchMetricsSink` Protocol); `models.py` gained the matching wire fields but is not a `_REVISION_SOURCES` member |
+| `search-fallback` US-002 | `f0b93318…70d62` | `run_search_pipeline` classifies a zero-result, non-empty-`unresponsive_engines` `ProviderSearchResult` as a failure in `orchestrator.py` — SearXNG's real production failure shape; a lone-`searxng` chain is carved out and unaffected |
+| `search-policy-and-health` US-010 | `dc3ff92a…eded9` | `contract.py` gained `POLICY_EXCLUDED_ALL_PROVIDERS`, the fixed-literal `reason` the `/search` handler raises when the new `apply_request_policy` narrows a request's effective chain to empty; `retrieval_app.py`, where the raise site lives, is not a `_REVISION_SOURCES` member |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**None of the nine rotations changed sanitization behaviour** — but the fourth and fifth
+**None of the thirteen rotations changed sanitization behaviour** — but the fourth and fifth
 are different *kinds* of rotation and worth reading as such. The first three moved because
 the hash is over bytes and someone reformatted or retyped a hashed file. The fourth moved
 because an **input changed**: weights are a runtime, per-deployment thing now

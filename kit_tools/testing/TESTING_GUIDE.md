@@ -258,6 +258,7 @@ test_mapping:
   "pipeline/search_providers/base.py": "tests/test_search_providers.py"
   "pipeline/search_providers/searxng.py": "tests/test_search_providers.py"
   "pipeline/search_providers/brave.py": "tests/test_brave_provider.py"
+  "pipeline/search_providers/policy.py": "tests/test_search_policy.py"
   "promptguard/classifier.py": ["tests/test_stage3_promptguard.py", "tests/test_model_fetcher.py"]
   "searxng/config/*": "tests/test_searxng_docker.py"
   "searxng/Dockerfile": "tests/test_searxng_docker.py"

@@ -169,7 +169,9 @@ The `/search` handler makes one stage-3 pass over the title, URL, and snippet of
 
 ### Request models
 
-`models.py` (Pydantic v2) bounds every request field: `RetrieveRequest.url` has `min_length=1`, `extract_mode` is a `Literal`, `cache_ttl_hours` is 0 to 8760, `promptguard_threshold` is 0.0 to 1.0; `SearchRequest.query` has `min_length=1` and `num_results` is 1 to 20. Response `content_type` validators restrict to `html`, `pdf`, or `text`. Pinned by `tests/test_models.py::TestRetrieveRequest` and `::TestSearchRequest`.
+`models.py` (Pydantic v2) bounds every request field but one (`SearchRequest.providers`, below): `RetrieveRequest.url` has `min_length=1`, `extract_mode` is a `Literal`, `cache_ttl_hours` is 0 to 8760, `promptguard_threshold` is 0.0 to 1.0; `SearchRequest.query` has `min_length=1` and `num_results` is 1 to 20. Response `content_type` validators restrict to `html`, `pdf`, or `text`. Pinned by `tests/test_models.py::TestRetrieveRequest` and `::TestSearchRequest`.
+
+`SearchRequest.providers` and its items carry no pydantic bound by design — no `maxItems`, no `maxLength`, no pattern (`allow_paid_fallback` is a plain `bool`). A validation 422 echoes the offending value verbatim under `detail[].input`, which would make the field an unbounded reflector of caller text on a service whose contract is that every returned string was sanitized; the only 422 the field can produce is pydantic's type error, shared with every field. The bound lives in the policy function instead, `apply_request_policy` in `pipeline/search_providers/policy.py`: it normalises each entry (`strip()`, lower-case), considers only the first eight, and every considered entry either matches a configured provider or is ignored; ignored entries, including every one past the eighth, are counted on `/metrics` `search.policy_unknown_provider` and never stored, echoed or logged (`search-policy-and-health` US-010). Pinned by `tests/test_models.py::TestSearchRequest` (no schema bound) and `tests/test_search_policy.py`.
 
 ### The `/extract` release gate
 

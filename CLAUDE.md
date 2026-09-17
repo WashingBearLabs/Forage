@@ -221,7 +221,11 @@ with zero raw results and a non-empty `unresponsive_engines` list is now classif
 failure and advances the chain exactly as a `ProviderFailure` does — the recurring
 production shape SearXNG answers with a 200 and never raises — except on a configured
 `[searxng]`-only chain, which has nothing to fall back to and still serves that shape as
-before; sufficiency stays judged on raw results before sanitization).
+before; sufficiency stays judged on raw results before sanitization), and a thirteenth to
+`dc3ff92a…` when `contract.py` gained the `POLICY_EXCLUDED_ALL_PROVIDERS` literal for the
+new per-request policy 422 (`search-policy-and-health` US-010 — `contract.py` alone,
+measured against all eight `_REVISION_SOURCES` files; `retrieval_app.py`, where the raise
+site lives, is not hashed).
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

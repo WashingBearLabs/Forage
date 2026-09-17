@@ -718,6 +718,73 @@ members, so no rotation occurred and no rotation-table entry is needed. Doc rows
 anchor refreshes, and the rotation record remain US-011's, untouched here. Gates: 2031 tests
 (2028 + 3 new), `ruff check .`, `ruff format --check .`, and strict `pyright` all green.
 
+### US-011 — Doc rows, contract anchor refresh and `sanitizer_revision` rotation record (2026-09-16)
+
+Verified rather than trusted US-010's recorded values before writing anything:
+`derive_sanitizer_revision({})` on this branch returns
+`dc3ff92a876885e8a8c1d9b0c5601818a6e4ccc208a87ab01f776482bf4eded9`, matching the "after"
+value US-010 recorded; `contract/openapi.yaml.sha256` is
+`e6be668f51eeaa80ba0830727e05bcfa5c87ef9283e9625210514b44bc7cdfdc`. Both were stale in the
+docs (the anchor was still the pre-US-002 value `aa5e94058b8d05de7e45c96145886928a2d31aa755e18c2c81e5ef486bf0cee8`).
+
+**Anchor refresh.** Replaced the stale anchor in all four named sites
+(`kit_tools/docs/API_GUIDE.md`, `kit_tools/docs/CI_CD.md`, `kit_tools/docs/DEPLOYMENT.md`,
+`kit_tools/arch/SERVICE_MAP.md`) with the current committed hash — a single literal string,
+found by grepping for the old hex value rather than trusting line numbers.
+
+**Doc rows.** API_GUIDE's `SearchRequest` table gained `providers` and
+`allow_paid_fallback` rows plus a sentence that a consumer sources selectable provider
+names from `/health` `search_providers` and reconciles there. MONITORING's `/metrics`
+`search` table gained `policy_unknown_provider` (unit: one per ignored entry) with the
+disambiguation procedure: compare the consumer's `providers` names against `/health`
+`search_providers`; for a missing `brave`, `/health` `capabilities` decides — no
+`brave_api_key` entry is a key problem (absent or invalid), `brave_api_key: 1` with no
+`brave` in `search_providers` is keyed-but-not-chained (`FORAGE_SEARCH_PROVIDERS` leaves it
+out); any other missing name is a bad name; entries past the eighth count whatever they
+name. Both `/health` fields land in US-002, so the row says so rather than implying they
+exist today. SECURITY's "Request models" paragraph no longer claims pydantic bounds every
+request field, and gained the reason `providers` carries no pydantic bound (a validation
+422 echoes the caller's bytes under `detail[].input`) and where the bound lives (first
+eight, matched or ignored, in `apply_request_policy`). TROUBLESHOOTING's, ERROR_HANDLING's
+and API_GUIDE's `search_unavailable` rows each name `policy_excluded_all_providers` as the
+second reason form (policy-excluded, not provider failure); ERROR_HANDLING gained its own
+row because the raise site differs (`retrieval_app.search`, before `run_search_pipeline`
+is called). TESTING_GUIDE's `test_mapping` gained `pipeline/search_providers/policy.py` →
+`tests/test_search_policy.py`; suite counts left alone (ruling 32).
+
+**Attempt 2 (after a verifier FAIL on the MONITORING procedure).** Attempt 1's row swapped
+the criterion's `brave_api_key` signal for "no `brave` in `search_providers`", which
+misdiagnoses a keyed-but-unchained deployment as a missing key; rewritten as above. The
+same pass fixed stale claims sitting in the tables this story edits, none of them code:
+MONITORING's `paid_calls` row said a per-request policy "can reorder" the chain (ruling 29:
+it only removes paid providers, so paid-first is a configured-chain property); the
+"both counters" caveat now names `fallback_fired` and `paid_calls` and says
+`policy_unknown_provider` moves on a `searxng`-only deployment; MONITORING's `errors` row
+and API_GUIDE's route-summary row and `/search` failure prose each gained the policy
+form; the thirteenth rotation record in `docs/bootstrap-notes.md` no longer says "only
+files under `pipeline/` are hashed" (eight named files are). Re-measured, not copied:
+reverting `contract.py` alone to `8f7dd0f^` reproduces `f0b93318…`, reverting
+`orchestrator.py` alone leaves `dc3ff92a…`.
+
+**Rotation record.** Recorded in `docs/bootstrap-notes.md` (new "thirteenth rotation"
+section plus the summary table's "Current" marker moved), `kit_tools/arch/DECISIONS.md`
+(new table row, "(current)" marker moved), and `CLAUDE.md`'s "Coexistence with Poppy"
+paragraph (new clause). `kit_tools/docs/GOTCHAS.md` and `kit_tools/arch/CODE_ARCH.md`'s
+rotation tables/prose had fallen three rotations behind (missing all of `search-fallback`
+US-001/US-002/US-003 — they still stopped at `search-provider-abstraction` US-004's
+`b7871b20…`, saying "moved nine times" and "a ninth"), a gap that predates this story. Left
+uncorrected in place it would have made this story's own addition either wrong (labeling
+`dc3ff92a…` "a tenth" when other docs call it the thirteenth) or silently incomplete
+(appending without updating the count), so both were backfilled with the three missing
+`search-fallback` entries plus this story's own, bringing every rotation-history doc back
+into agreement at "thirteen" / "a thirteenth". No code changed; this is a documentation
+gap closed while touching the same paragraphs the story already required editing, not a
+new investigation.
+
+No pydantic, handler, or contract code changed — the `contract/openapi.yaml` /
+`.sha256` / golden fixture were already correct from US-010/US-012 and are untouched.
+Full suite, `ruff check .`, `ruff format --check .`, and strict `pyright` all green.
+
 ## Refinement Notes
 
 Policy-not-keys is the invariant that lets Poppy build a settings UI safely, and restrict-only

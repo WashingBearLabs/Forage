@@ -73,7 +73,7 @@ declare only 200.
 | `GET /health` | 200 | Always 200; degradation is in the body |
 | `GET /metrics` | 200 | An unmodelled counter would be a loud 500 by design, never a silently dropped key |
 | `POST /retrieve` | 200, 422 | 422 is a coded refusal or FastAPI's schema-validation body |
-| `POST /search` | 200, 422 | 422 is a SearXNG failure or a schema-validation body |
+| `POST /search` | 200, 422 | 422 is a provider failure (`searxng_error`, `searxng_unavailable`, or `search_unavailable` with a `<provider_name>: <failure_class>` reason), a policy refusal (`search_unavailable` with reason `policy_excluded_all_providers`), or a schema-validation body |
 | `POST /extract` | 200, 400, 404, 413, 422, 429, 503 | 404 = route disabled; 429 = admission refused; 413 is documented but unreachable (an oversized upload receives 400); 503 = application state not wired |
 
 Two things that are **not** errors: prompt-injection quarantine (a 200 with a content-free
@@ -219,6 +219,12 @@ Request fields (`SearchRequest`):
 | `query` | str | required | non-empty | |
 | `num_results` | int | 5 | 1..20 | Forage asks SearXNG for up to `min(2 * num_results, 20)` candidates and scans at most 20 |
 | `promptguard_fail_closed` | bool | `true` | | When the model is absent: `true` withholds results (`omitted_by_reason.promptguard_unavailable`), `false` returns them marked `suspicious` and counts them in `unscanned_results` |
+| `providers` | list of str | `[]` | at most 8 honoured, rest ignored | Restrict-only filter of the configured chain, in configured order: can exclude paid providers only, never add, reorder, or key one — free providers always run, and a non-empty list removes every paid provider it does not name. Matched after `strip()` and lower-casing; entries beyond the first eight, and entries matching no configured provider, are ignored and counted on `/metrics` `search.policy_unknown_provider` rather than rejected. Empty (the default) runs the configured chain unrestricted |
+| `allow_paid_fallback` | bool | `true` | | When `false`, excludes every paid provider from this request's effective chain regardless of `providers` — free providers always run. Applied after `providers`' own filtering, one-way: can only narrow the configured chain, never widen, reorder, or key it |
+
+A consumer sources the names it may put in `providers` from `/health`'s `search_providers`
+and reconciles against that field, not against `FORAGE_SEARCH_PROVIDERS` or any other
+local copy of the chain.
 
 There is no per-request threshold on `/search`: every result is scanned at the hard
 default 0.85 at trust tier `standard` (observation from `pipeline/orchestrator.py`;
@@ -253,6 +259,12 @@ token, never exception text). Any other chain refuses with `search_unavailable` 
 `1.2.0`), whose `reason` is the closed composite of chain-order `<provider_name>:
 <failure_class>` entries joined by `"; "`. Traversal makes one call per provider in
 configured order, no retries, bounded by the sum of the per-provider timeouts.
+
+The second `search_unavailable` form is a policy refusal, not a provider failure: when a
+request's `providers` / `allow_paid_fallback` leaves its effective chain empty — possible
+only on a configured chain with no free provider — the handler refuses before any provider
+is called, with the fixed literal `reason` `policy_excluded_all_providers`
+(`search-policy-and-health` US-010).
 
 ### POST /extract
 
@@ -402,7 +414,7 @@ emission site through the real routes and asserts parity).
 | `pdf_encrypted` | 422 | `/extract` | Encrypted PDF |
 | `pdf_no_text` | 422 | `/extract` | No extractable text; OCR is not supported |
 | `private_ip` | 422 | `/retrieve` | Resolves to a private or reserved address, `localhost` or a `.local` name |
-| `search_unavailable` | 422 | `/search` | The configured provider chain failed and is not a lone `searxng`; `reason` is `<provider_name>: <failure_class>`. Added in `1.2.0` |
+| `search_unavailable` | 422 | `/search` | Two reason forms: `<provider_name>: <failure_class>` when the configured provider chain failed and is not a lone `searxng`, or the fixed literal `policy_excluded_all_providers` when `providers` / `allow_paid_fallback` narrowed the effective chain to empty before any provider was called. Added in `1.2.0`; the policy form added in `search-policy-and-health` US-010 |
 | `searxng_error` | 422 | `/search` | SearXNG returned a non-2xx status (a lone `searxng` chain only) |
 | `searxng_unavailable` | 422 | `/search` | SearXNG unreachable, timed out, or returned bad JSON (a lone `searxng` chain only) |
 | `unsupported_format` | 422 | `/extract` | Neither a PDF nor valid UTF-8 text |
@@ -442,7 +454,7 @@ in-tree copy and says nothing about wire compatibility. The image tag (for examp
 CI verifies two of the three on every release: the `smoke` job reads the in-image copy
 back out of the candidate image, and the `publish` job downloads the Release assets back
 from the API; both are checked against the anchor committed at the tag (currently
-`aa5e94058b8d05de7e45c96145886928a2d31aa755e18c2c81e5ef486bf0cee8`).
+`e6be668f51eeaa80ba0830727e05bcfa5c87ef9283e9625210514b44bc7cdfdc`).
 
 **Vendoring procedure** (`contract/GOVERNANCE.md` "Consumers"):
 

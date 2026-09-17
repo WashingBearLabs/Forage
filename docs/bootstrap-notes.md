@@ -70,7 +70,8 @@ those eight — so Forage's revision moved:
 | After the contract bump to `1.2.0` (`search-provider-abstraction` US-004) | `b7871b20…ea6f2b` |
 | After free-first chain traversal (`search-fallback` US-001) | `55e2af1b…bf47e4` |
 | After fallback telemetry + provenance (`search-fallback` US-003) | `5249def6…89f24a` |
-| **Current (`search-fallback` US-002, failure-class discrimination)** | **`f0b93318…70d62`** |
+| After failure-class discrimination (`search-fallback` US-002) | `f0b93318…70d62` |
+| **Current (`search-policy-and-health` US-010, per-request policy literal)** | **`dc3ff92a…eded9`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -458,6 +459,37 @@ under `5249def6…` becomes unreachable at the next start and ages out on its ow
 in memory mode, one TTL of extra fetches in Valkey mode. Search results are never cached,
 so this rotation's classification logic has no cache-key exposure of its own. **Do not
 assume Poppy↔Forage revision parity** — compare contracts, not revisions.
+
+### The thirteenth rotation: the per-request policy literal (`search-policy-and-health` US-010, 2026-09-16)
+
+```
+before: f0b93318ecb03e6348481a42341a8a8b66f95b3ca601f9f60de3d6437cb70d62
+after:  dc3ff92a876885e8a8c1d9b0c5601818a6e4ccc208a87ab01f776482bf4eded9
+```
+
+**Exactly one `_REVISION_SOURCES` file moved: `pipeline/contract.py`.** Measured the same
+way as the seventh, eighth, tenth, eleventh and twelfth rotations: reverting
+`contract.py` alone to its pre-story bytes reproduces `f0b93318…70d62` exactly; the other
+seven `_REVISION_SOURCES` files are byte-identical (`git diff --stat` against all eight).
+`retrieval_app.py`, where the new 422 is actually raised, is not a `_REVISION_SOURCES`
+member — `_REVISION_SOURCES` names eight `pipeline/` files and nothing else — so the raise
+site itself moves nothing.
+
+**What moved.** `contract.py` gained `POLICY_EXCLUDED_ALL_PROVIDERS =
+"policy_excluded_all_providers"`, the fixed-literal `reason` the `/search` handler raises
+when `apply_request_policy` (`pipeline/search_providers/policy.py`, new in
+`search-policy-and-health` US-010) narrows the request's effective provider chain to empty
+before any provider is called. No
+sanitization behaviour changed; the wire `search_unavailable` code is unchanged, and this
+is a second, distinct `reason` value for it alongside the existing chain-order
+`<provider_name>: <failure_class>` form.
+
+**Blast radius.** The same mechanism as the fifth and every rotation since:
+`cache_policy_fingerprint()` takes the revision as an input, so every extraction cached
+under `f0b93318…` becomes unreachable at the next start and ages out on its own TTL — free
+in memory mode, one TTL of extra fetches in Valkey mode. Search results are never cached,
+so this rotation's new literal has no cache-key exposure of its own. **Do not assume
+Poppy↔Forage revision parity** — compare contracts, not revisions.
 
 ## Deferred GitHub settings — for the spec 2 public flip
 
