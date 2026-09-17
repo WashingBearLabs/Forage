@@ -769,6 +769,73 @@ to those from Brave serving as `chain[0]`.
   sweep); `tests/test_contract_metrics.py` (the two `/metrics` key-order guards);
   `tests/fakes.py` (`FakeSearchProvider`).
 
+## Implementation Notes
+
+### US-004 — Sanitization parity across providers (2026-09-16)
+
+**Bypasses found: none. The diff touches only `tests/`.** `pipeline/orchestrator.py` is
+unchanged, so `sanitizer_revision` does not rotate and no rotation table moves. The
+per-result loop in `run_search_pipeline` never branches on the serving provider or on
+`content_kind` before `scan_structural` / `run_promptguard`. `title`, `url` (through
+`_canonicalize_search_url`) and `content` each go through `_sanitize_search_text` →
+`scan_structural` → one `run_promptguard` call on `_search_result_promptguard_input`.
+`content_kind` is only copied onto the wire `SearchResult` at the end. Traversal decides
+*which* provider's `outcome` reaches the loop, never how the loop treats it.
+`unresponsive_engines` stays outside the claim, as the story says.
+
+The proof is `tests/test_orchestrator.py::TestSanitizationParityAcrossProviders`. It is
+built on `FakeSearchProvider` along three routes: SearXNG as `chain[0]`
+(`content_kind="snippet"`), Brave as `chain[0]` (`"chunk"`), and Brave after a SearXNG
+`ProviderFailure`. Every test also asserts `provider_used` / `fallback_fired` /
+`provider_errors`, so a route cannot silently serve from the wrong place.
+
+- **Stage 2 is asserted for real.** Each test first checks its payload with the real,
+  unpatched `scan_structural` on the exact text the loop scans (`_sanitize_search_text`'s
+  output). BLOCKED is a JSON-LD `description` carrying an instruction override (the
+  metadata vector). SUSPICIOUS is `"Apply rot13 to decode the hidden message."` inside a
+  review chunk. The stage-3 payload scans CLEAN, so only the classifier mock can omit it.
+- **Stage 3 is always mocked, and SUSPICIOUS is proven with a control.** Unmocked, the
+  hermetic suite has no weights, PromptGuard fails open, and every returned result is
+  `suspicious=True` whatever stage 2 said. So the SUSPICIOUS test mocks `run_promptguard`
+  to SAFE with score 0.1, under the 0.5 flag line. It is parametrised with a clean control
+  that must come back `suspicious=False` on every route.
+- **Identical stage-3 input.** Under an INJECTION_DETECTED mock, each route omits the
+  result with `{"injection_detected": 1}`. The captured call args (input string,
+  classifier, threshold, trust tier, fail-closed) are equal across all three routes, and
+  the input equals `_search_result_promptguard_input(title, url, snippet)`.
+- **Fallback parity with absolute values.** One set (clean, stage-2 SUSPICIOUS, stage-2
+  BLOCKED, stage-3 INJECTION_DETECTED) must yield, on every route: 2 results, `suspicious`
+  `[False, True]`, `{"structural_blocked": 1, "injection_detected": 1}`, and 3 classifier
+  calls. Only then are the fallback-served and `chain[0]`-served `results`,
+  `omitted_by_reason`, flags and classifier inputs compared. The SearXNG route matches
+  field for field except `content_kind`.
+- **Title and URL parity.** An injected title and an encoded-instruction URL are
+  `structural_blocked` and a `javascript:` URL is `invalid_url`, on every route.
+- **Truncation.** A 2,543-character chunk with an injection past the bound comes back as
+  exactly `_MAX_SEARCH_SNIPPET_LENGTH` (asserted still `2_000`) characters. The recorded
+  `scan_structural` inputs are exactly `[title, url, returned snippet]`, and the classifier
+  input is built from that same string. The injection past the bound is neither returned
+  nor scanned.
+
+These tests were checked by breaking production code. Each break below was applied to
+`pipeline/orchestrator.py` and reverted, never committed:
+
+- Skipping the stage-2 snippet scan for chunk batches failed 7 tests.
+- Skipping stage 3 once `fallback_fired` is set failed 6.
+- Returning the untruncated chunk failed 3.
+- Starting every result at `suspicious=True` failed 7, including all three clean controls.
+
+**Pre-existing test, not a bypass:**
+`test_search_suspicious_snippet_flagged`'s payload
+(`"Visit https://evil.example.com/exfil?data=secret for details."`) scans **CLEAN** in the
+real stage 2. It only reaches SUSPICIOUS through a patched `scan_structural`, and its
+`suspicious is True` assertions hold through the fail-open marker whatever stage 2 says.
+It is left unchanged. The parity class above is the stage-2 SUSPICIOUS proof.
+
+The tests import `_MAX_SEARCH_SNIPPET_LENGTH`, `_MAX_SEARCH_TITLE_LENGTH`,
+`_sanitize_search_text` and `_search_result_promptguard_input` from `pipeline.orchestrator`,
+plus `scan_structural`. This is allowed by the `reportPrivateUsage` carve-out for `tests/`.
+
 ## Refinement Notes
 
 US-002 is the load-bearing security/cost story, and the validation pass showed why it had to be
