@@ -183,41 +183,41 @@ docs/configuration.md` hits both; `uv run pytest` stays green.
   greps in the criteria.
 
 **Acceptance Criteria:**
-- [ ] `README.md` and `docs/configuration.md` each state the two-variable enablement recipe
+- [x] `README.md` and `docs/configuration.md` each state the two-variable enablement recipe
       verbatim — `FORAGE_SEARCH_PROVIDERS=searxng,brave` **and** `FORAGE_BRAVE_API_KEY` — and say
       that the key alone changes nothing (grep-verifiable, see the Independent Test).
-- [ ] `README.md` "## Configuration" carries one bullet for `FORAGE_SEARCH_PROVIDERS` and one for
+- [x] `README.md` "## Configuration" carries one bullet for `FORAGE_SEARCH_PROVIDERS` and one for
       `FORAGE_BRAVE_API_KEY`; `grep -n 'SearXNG-only' README.md` hits, and the sentence states that
       a deployment with no key is fully supported.
-- [ ] `grep -n '^### Credential handling for `FORAGE_BRAVE_API_KEY`' docs/configuration.md` hits
+- [x] `grep -n '^### Credential handling for `FORAGE_BRAVE_API_KEY`' docs/configuration.md` hits
       once; the subsection states, each in its own sentence: runtime env only; never a build
       argument; `compose/.env` rather than an inline `-e` flag; never logged and `/health` shows
       presence only; rotation is a restart; a leaked key is metered spend with no cap in Forage.
       Every example uses a synthetic placeholder; `git diff --stat` for the story touches no
       `.gitleaksignore`.
-- [ ] The README `FORAGE_BRAVE_API_KEY` bullet links to that subsection (`grep -n 'Credential
+- [x] The README `FORAGE_BRAVE_API_KEY` bullet links to that subsection (`grep -n 'Credential
       handling for `FORAGE_BRAVE_API_KEY`' README.md` hits).
-- [ ] Per-provider ToS: `grep -n -i 'persist' README.md docs/configuration.md` hits both, in a
+- [x] Per-provider ToS: `grep -n -i 'persist' README.md docs/configuration.md` hits both, in a
       sentence stating Brave forbids persisting or redistributing result payloads and Forage stores
       metadata only; `grep -n 'has never been cached' README.md` still hits.
-- [ ] Data flow: `grep -n 'brave.com' README.md docs/configuration.md` hits both, in a sentence
+- [x] Data flow: `grep -n 'brave.com' README.md docs/configuration.md` hits both, in a sentence
       naming the outbound host and stating the query text is what is sent.
-- [ ] Bad key: `grep -n 'presence, not validity' docs/configuration.md` hits; that paragraph names
+- [x] Bad key: `grep -n 'presence, not validity' docs/configuration.md` hits; that paragraph names
       `auth` and `quota` and links `kit_tools/docs/TROUBLESHOOTING.md`.
-- [ ] Stale claim: `grep -n 'starts and reports itself' README.md docs/configuration.md` returns
+- [x] Stale claim: `grep -n 'starts and reports itself' README.md docs/configuration.md` returns
       nothing; `grep -n 'searxng_unavailable' README.md docs/configuration.md` hits both.
-- [ ] Close-out: `grep -n 'flagged for correction' kit_tools/docs/MONITORING.md`, `grep -n 'awaiting
+- [x] Close-out: `grep -n 'flagged for correction' kit_tools/docs/MONITORING.md`, `grep -n 'awaiting
       an owner decision' kit_tools/arch/SERVICE_MAP.md` and `grep -n 'open ruling'
       kit_tools/AGENT_README.md` each return nothing; `grep -n 'never probes SearXNG'
       kit_tools/docs/MONITORING.md kit_tools/arch/SERVICE_MAP.md` still hits both.
-- [ ] Exposure: `grep -n 'search.paid_calls' README.md docs/configuration.md` hits both, inside the
+- [x] Exposure: `grep -n 'search.paid_calls' README.md docs/configuration.md` hits both, inside the
       posture blockquote and the "Consequences" list respectively; each sentence says Forage
       enforces no budget cap and that `/health` discloses key presence. The posture tables in
       `docs/configuration.md` are byte-identical before and after.
-- [ ] `grep -n 'Search via SearXNG' README.md` and `grep -n 'is the next step' README.md` return
+- [x] `grep -n 'Search via SearXNG' README.md` and `grep -n 'is the next step' README.md` return
       nothing; the `POST /search` row names the provider chain; the release sentence points at
       `docs/releases.md`.
-- [ ] `uv run pytest` passes — specifically
+- [x] `uv run pytest` passes — specifically
       `tests/test_compose_fragments.py::TestTheFragmentsAreDocumented` (README literals) and
       `tests/test_contract_metrics.py::test_every_served_path_is_acknowledged_in_the_posture_doc`
       plus `::test_posture_doc_states_the_docs_endpoints_are_unauthenticated` (posture section), the
