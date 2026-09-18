@@ -84,13 +84,13 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
 
 ## Pre-deploy Checklist
 
-1. **Pick a tag.** Pin a full semver (`1.0.0`) or the `@sha256:` digest from the Release
+1. **Pick a tag.** Pin a full semver (`1.1.0`) or the `@sha256:` digest from the Release
    body; never pin `latest`, and treat `sha-<short>` tags from `main` as unreleased. Tags
    present at the time of writing: `v0.9.0-rc`, `v0.9.1-rc`, `v0.9.3-rc`, `v1.0.0`
-   (2026-09-11, the first non-pre-release); `v0.9.2-rc` was withdrawn after failing the
-   cold parity gate and must not be deployed. Whether the `v1.0.0` publish run went green,
-   and therefore whether `latest` and `1.0` resolve on GHCR, could not be verified offline
-   during this seed.
+   (2026-09-12, the first non-pre-release), `v1.1.0` (2026-09-18, contract `1.2.0`);
+   `v0.9.2-rc` was withdrawn after failing the cold parity gate and must not be deployed.
+   `latest`, `1.1` and `1.1.0` resolve to one digest on GHCR (`docs/releases.md` §
+   "Released versions").
 2. **Confirm the tag published green.** The tag's workflow run must show `publish` green
    and, for a `v*` tag, a GitHub Release carrying `openapi.yaml`, `openapi.yaml.sha256`, and
    a `contract: X.Y.Z` line in its body. A red `publish` after a push means the tags exist
@@ -101,7 +101,7 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
    CI's `secret-grep` job.
 
    ```bash
-   TAG=1.0.0
+   TAG=1.1.0
    docker pull ghcr.io/washingbearlabs/forage:$TAG
    docker run --rm --entrypoint cat ghcr.io/washingbearlabs/forage:$TAG /app/contract/openapi.yaml > openapi.yaml
    docker run --rm --entrypoint cat ghcr.io/washingbearlabs/forage:$TAG /app/contract/openapi.yaml.sha256 > openapi.yaml.sha256
@@ -114,8 +114,7 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
    same two files. The anchor at `HEAD` is
    `11435a17aabe7c11faf71aee0fd066a3784d5e9de557c451153e7f47d0d5615f`.
 4. **Check contract compatibility.** The image tag and `contract_version` are independent
-   semvers (image `1.0.0` serves contract `1.1.0`; the tree is on `1.2.0`, which `v1.1.0`
-   will publish). Compare the consumer's expected MAJOR
+   semvers — image `1.1.0` serves contract `1.2.0` (`1.0.0` served `1.1.0`). Compare the consumer's expected MAJOR
    against `info.version` in the `openapi.yaml` you just extracted; a MAJOR mismatch means
    **do not deploy** (the consumer is expected to refuse activation, `CLAUDE.md`
    invariant 4). Compare contracts, never `sanitizer_revision`, which has deliberately

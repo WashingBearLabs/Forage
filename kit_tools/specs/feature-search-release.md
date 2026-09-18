@@ -1127,3 +1127,122 @@ form:
 - **The smokes ran from the `main` checkout at `06b01b1`, not `git switch --detach v1.1.0`.** That
   is the same commit, so `CONTRACT_VERSION` and the default anchor are the tag's. The detached
   checkout is still the form to copy, because `main` will not always sit on the tag.
+
+### US-003 — Post-release verification (third-party view) + Poppy handoff record, 2026-09-18
+
+Executed against the published `v1.1.0` image with the Docker daemon and GHCR access this
+worktree's owner made available. Nothing here repeats a US-002 check; every command below is
+the third-party view — no authenticated Docker keychain, no tagged checkout.
+
+**Credential-free pull.**
+
+```
+$ docker logout ghcr.io
+Removing login credentials for ghcr.io
+$ docker pull ghcr.io/washingbearlabs/forage@sha256:e1b875ccbf6505d674e70802c07eeb5ad6c62548ae14dde0a18be0bf9cb47a52
+ghcr.io/washingbearlabs/forage@sha256:e1b875ccbf6505d674e70802c07eeb5ad6c62548ae14dde0a18be0bf9cb47a52: Pulling from washingbearlabs/forage
+Digest: sha256:e1b875ccbf6505d674e70802c07eeb5ad6c62548ae14dde0a18be0bf9cb47a52
+Status: Image is up to date for ghcr.io/washingbearlabs/forage@sha256:e1b875ccbf6505d674e70802c07eeb5ad6c62548ae14dde0a18be0bf9cb47a52
+```
+
+Both commands exited 0. `skopeo` is not installed on this workstation, so the daemon-independent
+second witness was not run; the anonymous `docker pull` above is the sole credential-free proof.
+Docker was logged back in to `ghcr.io` afterward (via the owner's `gh` token) so the workstation
+was left as it was found — it was not left logged out.
+
+**Key-less floor**, brought up from `compose/minimal.yml` at `1.1.0` with only `SEARXNG_SECRET` in
+`compose/.env` (no `FORAGE_SEARCH_PROVIDERS`, no `FORAGE_BRAVE_API_KEY`):
+
+```
+$ curl -s localhost:8020/health | jq '{contract_version, search_providers, capabilities}'
+{
+  "contract_version": "1.2.0",
+  "search_providers": ["searxng"],
+  "capabilities": {}
+}
+```
+
+`capabilities` is `{}` (no `HF_TOKEN` was configured for this run, so `search_sanitization` is
+also absent — a capability, not a degraded state) — critically, no `brave_api_key` key, matching
+the criterion.
+
+**`/search` round-trip** against the same container — the first query succeeded, no retry needed:
+
+```
+$ curl -s -X POST localhost:8020/search -H 'Content-Type: application/json' -d '{"query": "what is the capital of france"}'
+```
+
+Telemetry only (no result body recorded): HTTP `200`, `provider_used: "searxng"`,
+`fallback_fired: false`, `provider_errors: []`.
+
+**Key plumbing at zero spend.** The key-less container was stopped
+(`docker compose -f compose/minimal.yml down`); the same pulled digest was then started once with
+`docker run --rm -d -p 127.0.0.1:8020:8020 --name forage-us003-keyed --env-file "$TMPDIR/keyed.env" ghcr.io/washingbearlabs/forage@sha256:e1b875ccbf6505d674e70802c07eeb5ad6c62548ae14dde0a18be0bf9cb47a52`,
+where `$TMPDIR/keyed.env` held exactly one line,
+`FORAGE_BRAVE_API_KEY=placeholder-not-a-key`, printed nowhere and deleted after the run.
+`FORAGE_SEARCH_PROVIDERS` stayed unset.
+
+```
+$ curl -s localhost:8020/health | jq '{contract_version, search_providers, capabilities}'
+{
+  "contract_version": "1.2.0",
+  "search_providers": ["searxng"],
+  "capabilities": {"brave_api_key": 1}
+}
+```
+
+Leak check — `grep -c 'placeholder-not-a-key'` over three surfaces, each **0**:
+
+| Surface | Command | Count |
+|---|---|---|
+| `/health` body | `curl -s localhost:8020/health \| grep -c 'placeholder-not-a-key'` | 0 |
+| `/metrics` body | `curl -s localhost:8020/metrics \| grep -c 'placeholder-not-a-key'` | 0 |
+| container logs | `docker logs forage-us003-keyed 2>&1 \| grep -c 'placeholder-not-a-key'` | 0 |
+
+No `/search` was issued against the keyed container — no request reached Brave, so this run cost
+nothing. The paid path itself is verified against the committed envelope sample (spec 2, ruling
+24) and by this packaging check alone; no live Brave request was made through the image in this
+epic. The container was then stopped and the throwaway env file deleted.
+
+**The handoff record.** This is the table the Poppy `epic-search-policy` session reads to pin a
+digest; recording into Poppy's own pin record happens in that session (one-way sync — nothing
+here pushes). Poppy's re-vendor fetches `openapi.yaml` + `openapi.yaml.sha256` from the `v1.1.0`
+Release assets (`gh release download v1.1.0 --pattern 'openapi.yaml*'`) and verifies against the
+anchor below, never against another copy (`contract/GOVERNANCE.md` "Consumers").
+
+| Field | Value |
+|---|---|
+| Image tag | `1.1.0` |
+| OCI index digest | `sha256:e1b875ccbf6505d674e70802c07eeb5ad6c62548ae14dde0a18be0bf9cb47a52` (`latest`, `1.1`, `1.1.0` all resolve here) |
+| Contract version | `1.2.0` |
+| Anchor sha256 | `11435a17aabe7c11faf71aee0fd066a3784d5e9de557c451153e7f47d0d5615f` (`git show v1.1.0:contract/openapi.yaml.sha256`) |
+| Tagged commit sha | `06b01b145d592787b32eb0425061fa8c1914d31f` |
+| Publish run URL | https://github.com/WashingBearLabs/Forage/actions/runs/35300914458 |
+| Anonymous pull | `docker logout ghcr.io` then `docker pull ghcr.io/washingbearlabs/forage@sha256:e1b875cc…` — both exit 0, recorded verbatim above |
+| Key-less `/health` | `contract_version: "1.2.0"`, `search_providers: ["searxng"]`, `capabilities: {}` (no `brave_api_key` key) |
+| `/search` telemetry | HTTP 200, `provider_used: "searxng"`, `fallback_fired: false`, `provider_errors: []` |
+| Placeholder-key `/health` | `capabilities.brave_api_key: 1`, `search_providers: ["searxng"]` |
+| Leak check | `placeholder-not-a-key` appears 0 times in `/health`, 0 in `/metrics`, 0 in `docker logs` |
+| Spend posture | With `FORAGE_BRAVE_API_KEY` set, anyone who can reach port 8020 can spend the operator's money; Forage enforces no budget cap by decision (ruling 12). The observability floor is `/metrics` `search.paid_calls` and `search.fallback_fired`. The budget breaker is the consumer's (`epic-search-policy`) to build — see `README.md`'s "Deployment posture — read before you run it" blockquote, not restated here. |
+| Paid-path evidence | Verified against the committed envelope sample (spec 2, ruling 24) and by this story's placeholder-key packaging check; no live Brave request was made through the image in this epic. |
+
+**Suite-count bookkeeping.** `uv run pytest` on this tree (byte-identical to the `v1.1.0` tagged
+tree apart from this file) reports **2089 passed**. `test_ci_workflow.py` collects 279,
+`test_compose_fragments.py` 62, `test_contract_smoke.py` 91 — all grown by `search-release`
+US-004. `kit_tools/testing/TESTING_GUIDE.md`, `kit_tools/SYNOPSIS.md`, `kit_tools/AGENT_README.md`
+and `CLAUDE.md`'s parenthetical now all state 2089.
+
+**Docs closed out in the same change:** `docs/releases.md` gained a "Released versions" section
+(`v1.0.0` and `v1.1.0`, each with contract/anchor/digest/commit and a "What shipped" list) and
+lost the stale "`latest` therefore does not exist yet" claim; `kit_tools/SYNOPSIS.md`'s Maturity,
+Published image and Tests rows; `kit_tools/docs/DEPLOYMENT.md`'s tag inventory, `TAG=` example and
+contract-mapping sentence; `kit_tools/docs/CI_CD.md`'s two stale image↔contract sentences; and
+`kit_tools/arch/INFRA_ARCH.md`'s tag list and contract-mapping sentence all now read `v1.1.0` /
+`1.2.0` as shipped fact rather than as a forecast. `kit_tools/specs/epic-search-providers.md`'s six
+Completion Criteria are ticked — this story is the epic's last piece. `kit_tools/SESSION_LOG.md`,
+`kit_tools/roadmap/MILESTONES.md` and `kit_tools/PRODUCT_VISION.md`'s T2.1 status were updated per
+`kit_tools/AGENT_README.md`'s session-end table.
+
+**Edge case not hit.** The `/search` round-trip succeeded on its first attempt (`kit_tools/docs/GOTCHAS.md`
+"SearXNG :latest rots" describes the retry-with-another-query path for a `searxng_error` /
+`searxng_unavailable` 422; not needed here).

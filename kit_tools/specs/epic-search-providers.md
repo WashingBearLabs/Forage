@@ -349,21 +349,21 @@ US-004 so request-model and error-body additions are pinned, not just the four r
 
 ## Completion Criteria
 
-- [ ] `SearchProvider` seam extracted; SearXNG served through `SearxngProvider`; provider chain resolved
+- [x] `SearchProvider` seam extracted; SearXNG served through `SearxngProvider`; provider chain resolved
       from `FORAGE_SEARCH_PROVIDERS` (default `searxng`); result schema carries `content_kind`
       + provenance.
-- [ ] `BraveApiProvider` (LLM-Context) registers only when its env key is present; key-less deployments
+- [x] `BraveApiProvider` (LLM-Context) registers only when its env key is present; key-less deployments
       run SearXNG-only with no error.
-- [ ] Free-first→paid-on-failure fallback fires only on a classified free-path failure (rulings 13, 17 —
+- [x] Free-first→paid-on-failure fallback fires only on a classified free-path failure (rulings 13, 17 —
       including SearXNG's 200-with-empty-plus-unresponsive shape), never on a clean zero-result, with no
       in-request retries (ruling 18); `provider_used`/`fallback_fired`/`provider_errors`/provenance on
       `SearchResponse` and `search.fallback_fired`/`search.paid_calls` on `/metrics` (metadata only — no
       raw paid payloads persisted).
-- [ ] Per-request policy params on `SearchRequest` (restrict-only, ruling 16); `/health` provider status
+- [x] Per-request policy params on `SearchRequest` (restrict-only, ruling 16); `/health` provider status
       (ruling 15); `/search`↔`/retrieve` boundary documented.
-- [ ] Contract at **1.2.0**, drift gate green, GOVERNANCE updated; `FORAGE_SEARCH_PROVIDERS`/`FORAGE_BRAVE_API_KEY`
+- [x] Contract at **1.2.0**, drift gate green, GOVERNANCE updated; `FORAGE_SEARCH_PROVIDERS`/`FORAGE_BRAVE_API_KEY`
       documented in `README.md` + `docs/configuration.md` + `kit_tools/docs/ENV_REFERENCE.md`.
-- [ ] Release plumbing landed before the tag (ruling 20: mechanical announcement, smoke flags, compose
+- [x] Release plumbing landed before the tag (ruling 20: mechanical announcement, smoke flags, compose
       pins at `1.1.0`, secret-grep patterns); `v1.1.0` image cut + published through the gated lane
       (owner gate), advertising contract 1.2.0; Poppy's `epic-search-policy` can pin it.
 
