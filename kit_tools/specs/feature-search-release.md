@@ -998,7 +998,7 @@ greps: (b) `--expect-status` and the "never from the Release assets" rule presen
 `contract_smoke.py`; (c) `forage:1.1.0` pinned exactly once in `compose/minimal.yml` and
 `compose/full.yml`; (d) `FORAGE_BRAVE_API_KEY` referenced at least twice in `ci.yml`. Sibling
 rows: both variables have a row in `docs/configuration.md` and `kit_tools/docs/ENV_REFERENCE.md`;
-the `**1.1.0**` sweep returns nothing outside the two rulings-32 sites; the anchor
+the `**1.1.0**` sweep returns nothing in any of the six files, the ruling-32 sites included; the anchor
 `11435a17aabe7c11faf71aee0fd066a3784d5e9de557c451153e7f47d0d5615f` appears exactly once in
 API_GUIDE, CI_CD, DEPLOYMENT and SERVICE_MAP.
 
@@ -1057,8 +1057,9 @@ typecheck, test, build-amd64, secret-grep, smoke, publish (the three `searxng-*`
 the companion image is unchanged). "Verify the published amd64 image is the gated filesystem",
 "Read the contract version from the tagged tree", "Create the GitHub Release" and both
 Release assertions passed on their first live run for this tag. **The publish rebuild was warm**
-(45 `CACHED` build lines in the run log, no cache misses), so this cut does not add a cold-cache
-proof of the reproducibility fix.
+(all 30 build-step lines of publish's "Build and push the multi-arch image" read `CACHED`, 45
+across the whole run log, no cache misses), so this cut does not add a cold-cache proof of the
+reproducibility fix.
 
 **OCI index digest** (`docker buildx imagetools inspect`, `Digest:` line): `latest`, `1.1` and
 `1.1.0` all resolve to `sha256:e1b875ccbf6505d674e70802c07eeb5ad6c62548ae14dde0a18be0bf9cb47a52` — one digest for all three; `latest`
@@ -1099,3 +1100,30 @@ file of the `v1.1.0` checkout) both times:**
    `search_providers: ["searxng"]`, and `capabilities` without `brave_api_key` (no key was
    configured — a capability, not a degraded state). `$TMPDIR/hf.env` held only the `HF_TOKEN`
    line, was never printed, and was deleted after the run.
+
+**Independent re-verification (story-implementer, 2026-09-18 03:05 UTC).** Every artifact above was
+read back from GitHub, GHCR and the tag, not taken on trust. `git diff v1.1.0 92cc618` is empty, so
+the tagged tree is byte-identical to the epic head the earlier stand-in pre-flight measured.
+
+| Claim | Measured |
+|---|---|
+| Tag and `main` | `git ls-remote` puts `refs/tags/v1.1.0` and `origin/main` on `06b01b145d592787b32eb0425061fa8c1914d31f`, where `CONTRACT_VERSION = "1.2.0"`. The only `searxng-v*` tags are the old `searxng-v0.1.0-rc` and `searxng-v0.1.1-rc` |
+| Six required checks | `main` protection requires `lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke`. The commit's check-runs show all six `success` in both run 35278601546 (push to `main`) and run 35300914458 (the tag) |
+| Publish run | 35300914458: `event: push`, `headBranch: v1.1.0`, `conclusion: success`, created 02:50:19Z. Every `publish` step is `success`, including the six the hints list; `searxng-*` jobs `skipped` |
+| Pre-flight on the `v1.1.0` tree (`git show v1.1.0:<file>`) | US-001 3 / 4 / 1 / 0 hits for "starts and reports itself"; US-004(b) 12, with "never from the Release assets" at lines 62 and 692; (c) 1 / 1; (d) 2; variable rows 1 / 1 / 1 / 1; bold `**1.1.0**` sweep 0 lines; anchor `11435a17…` ×1 in each of the four docs. `export_contract --check` → `export_contract OK — committed artifacts are current`; the extractor tests → `4 passed, 275 deselected` |
+| Extractor | The program was sliced out of `v1.1.0:.github/workflows/ci.yml` (sha256 `03b288f1c55207b40654015fb5c2b14919f3e756481783b048d0a0ff7ebfea87`) and run on `v1.1.0:pipeline/contract.py`. It gives 36 lines, sha256 `d8b80fdfa9289df1edd551e9cf45747b699650f369f430d3546ef70d03cdc2b2`, the value the stand-in rehearsal predicted. `cmp` against the verbatim block above passes. It shares no line with the 4-line `1.1.0` entry (`grep -Fxf` rc 1) |
+| Release | `v1.1.0` is neither draft nor prerelease. Assets are `openapi.yaml` and `openapi.yaml.sha256`. The body has `^contract: 1\.2\.0$` ×1, and a `grep -F` of each of the 36 extracted lines misses none. The body also records `Digest: sha256:e1b875cc…` and `Platforms: linux/amd64,linux/arm64` |
+| Three tags, one index | `imagetools inspect` resolves `latest`, `1.1` and `1.1.0` each to `sha256:e1b875ccbf6505d674e70802c07eeb5ad6c62548ae14dde0a18be0bf9cb47a52` with manifests `amd64`, `arm64`. `1.0.0` stays on `sha256:d83639cc…`, so `latest` did move |
+| Four-way sha256 | The anchor, `git show v1.1.0:contract/openapi.yaml \| shasum -a 256`, the Release asset (`shasum -a 256 -c` → `openapi.yaml: OK`) and `cat /app/contract/openapi.yaml` out of the image pulled by digest all give `11435a17aabe7c11faf71aee0fd066a3784d5e9de557c451153e7f47d0d5615f` |
+| Secret greps | The tag's run log has `No forbidden pattern in the layer history of forage:ci.` (secret-grep, over `HF_TOKEN`, `hf_[A-Za-z0-9]{20,}`, `FORAGE_BRAVE_API_KEY`) and `No forbidden pattern in the published image config.` (publish, the same three patterns in one `grep -E`) |
+| Degraded smoke, re-run | Re-run in this worktree, whose tree differs from `v1.1.0` only in this file, with the recorded command byte for byte. Result: `Contract smoke PASSED: degraded, honest, and on-contract.`, exit 0. `/health` read `status: degraded`, `degraded_reasons: ["promptguard_unavailable"]`, `search_providers: ["searxng"]`, `contract_version: "1.2.0"`. Not re-run: the healthy smoke, which needs the owner's token; the owner's record above is its evidence |
+| Token grep | `grep -nE 'hf_[A-Za-z0-9]{20,}'` over this file returns nothing (rc 1). Every `--anchor` in these notes is `contract/openapi.yaml.sha256` |
+
+Two deviations from the hints, both harmless here. The next cut should still take the hints'
+form:
+
+- **The healthy smoke ran with `--timeout-seconds 540`, not the hinted `600`.** It passed with the
+  warm `forage-model-cache` volume mounted. For a cold weights fetch, use `600`.
+- **The smokes ran from the `main` checkout at `06b01b1`, not `git switch --detach v1.1.0`.** That
+  is the same commit, so `CONTRACT_VERSION` and the default anchor are the tag's. The detached
+  checkout is still the form to copy, because `main` will not always sit on the tag.
