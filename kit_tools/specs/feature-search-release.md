@@ -978,3 +978,124 @@ _None outstanding._
 ## Open Questions
 
 _None (session_ready)._
+
+## Implementation Notes
+
+### US-002 — v1.1.0 cut and publish (owner gate), 2026-09-17
+
+Executed by the owner with the supervising session's hands; every command below was run from the
+`main` checkout at the tagged commit (which is the `v1.1.0` tree), never from a Release download.
+
+**Pre-flight on `main` at the commit to be tagged (all pass):** PR #23 merged with a merge
+commit; the six required checks were green on the merge commit's own CI run
+(https://github.com/WashingBearLabs/Forage/actions/runs/35278601546 — lint, typecheck, test,
+build-amd64, secret-grep, smoke; the publish lane also ran green there). `uv run python -m
+scripts.export_contract --check` clean; `grep CONTRACT_VERSION pipeline/contract.py` prints
+`1.2.0`; the `1.2.0` docstring entry names `search_unavailable`. US-001 greps: README names
+`FORAGE_SEARCH_PROVIDERS` and `FORAGE_BRAVE_API_KEY`, `docs/configuration.md` carries the
+credential-handling paragraph, and `starts and reports itself` is gone from both files. US-004
+greps: (b) `--expect-status` and the "never from the Release assets" rule present in
+`contract_smoke.py`; (c) `forage:1.1.0` pinned exactly once in `compose/minimal.yml` and
+`compose/full.yml`; (d) `FORAGE_BRAVE_API_KEY` referenced at least twice in `ci.yml`. Sibling
+rows: both variables have a row in `docs/configuration.md` and `kit_tools/docs/ENV_REFERENCE.md`;
+the `**1.1.0**` sweep returns nothing outside the two rulings-32 sites; the anchor
+`11435a17aabe7c11faf71aee0fd066a3784d5e9de557c451153e7f47d0d5615f` appears exactly once in
+API_GUIDE, CI_CD, DEPLOYMENT and SERVICE_MAP.
+
+**Pre-flight, US-004(a):** `uv run pytest tests/test_ci_workflow.py -k 'extractor or
+docstring_entry'` collected 4 tests, all passed. The by-hand `awk -v v=1.2.0 '<program from the
+"Read the contract version from the tagged tree" step>' pipeline/contract.py` printed, verbatim:
+
+```text
+* ``1.2.0`` — ``/search``'s ``SearchResult`` gained ``content_kind``
+  (``"snippet"`` | ``"chunk"``, defaulted), ``date`` (a strict
+  ``YYYY-MM-DD`` calendar date or ``None``, defaulted) and ``domain`` (the
+  lower-cased hostname of ``url``, required); ``SearchResponse`` gained
+  ``provider_used`` (required — the serving provider's name),
+  ``fallback_fired`` (defaulted) and ``provider_errors`` (defaulted);
+  ``SearchRequest`` gained ``providers`` and ``allow_paid_fallback`` (both
+  defaulted — a restrict-only per-request policy over the configured
+  chain); ``HealthResponse`` gained ``search_providers`` (the resolved
+  chain's names, in traversal order) and its ``capabilities`` description
+  now names ``brave_api_key`` alongside ``search_sanitization``; and
+  ``search_unavailable`` joined the ``/search`` 422 vocabulary, naming an
+  exhausted provider chain — a new enum *member*, MINOR under
+  ``contract/GOVERNANCE.md`` ruling (b) and carrying that ruling's
+  announcement obligation. ``/metrics``'s ``search`` section gained three
+  counters — ``fallback_fired``, ``paid_calls`` and
+  ``policy_unknown_provider`` — pinned against the handler by
+  ``tests/test_contract_metrics.py`` rather than by the golden fixture.
+  Two ``/search`` refusal ``reason`` *texts* also narrowed in
+  ``search-provider-abstraction`` US-002 and ride this bump:
+  ``searxng_error`` now reads ``SearXNG returned HTTP error (http_<status>)``
+  and ``searxng_unavailable`` now reads ``SearXNG not reachable at
+  <scheme://host:port>: <detail>`` — no exception text, no userinfo — neither
+  changing a code, a status, or the body shape. Every addition above is
+  additive — a new field, a new enum member, or a new counter — so a
+  consumer comparing MAJOR keeps working untouched; nothing was removed and
+  no field changed meaning. The ``/search``/``/retrieve`` boundary text
+  written into both routes' descriptions and the
+  ``SearchRequest``/``RetrieveRequest`` model docstrings
+  (``search-policy-and-health`` US-003) landed inside this same unpublished
+  window and is not a separate PATCH: there is no vendored 1.2.0 copy yet to
+  re-vendor, so the description edits are subsumed by this unreleased
+  MINOR. This version is **held**: ``tests/golden/contract_1_2_0.json`` is
+  regenerated in place across ``search-provider-abstraction`` specs 2-4 and
+  every ``search-fallback``/``search-policy-and-health`` story that moved
+  this shape, until the ``v1.1.0`` image publishes it.
+```
+
+(The first line begins `* \`\`1.2.0\`\``, it names `search_unavailable`, and no line of the
+`1.1.0` entry is present; the entry's own mention of "the `v1.1.0` image" is part of the 1.2.0
+text.)
+
+**The cut.** `git tag v1.1.0 && git push origin v1.1.0` from `main` at 02:50 UTC on 2026-09-18
+(clear of the 00:00 UTC window); no `searxng-v*` tag pushed. Tagged commit sha
+`06b01b145d592787b32eb0425061fa8c1914d31f`. Publish run:
+https://github.com/WashingBearLabs/Forage/actions/runs/35300914458 — every job green: lint,
+typecheck, test, build-amd64, secret-grep, smoke, publish (the three `searxng-*` jobs skipped, as
+the companion image is unchanged). "Verify the published amd64 image is the gated filesystem",
+"Read the contract version from the tagged tree", "Create the GitHub Release" and both
+Release assertions passed on their first live run for this tag. **The publish rebuild was warm**
+(45 `CACHED` build lines in the run log, no cache misses), so this cut does not add a cold-cache
+proof of the reproducibility fix.
+
+**OCI index digest** (`docker buildx imagetools inspect`, `Digest:` line): `latest`, `1.1` and
+`1.1.0` all resolve to `sha256:e1b875ccbf6505d674e70802c07eeb5ad6c62548ae14dde0a18be0bf9cb47a52` — one digest for all three; `latest`
+moved off the 1.0.0 image and `1.1` was minted, both landing on the 1.1.0 index.
+
+**Four-way sha256 at `v1.1.0`** — all equal to the committed anchor:
+
+| copy | sha256 |
+|---|---|
+| 0. committed anchor (`git show v1.1.0:contract/openapi.yaml.sha256`) | `11435a17aabe7c11faf71aee0fd066a3784d5e9de557c451153e7f47d0d5615f` |
+| 1. repository copy (`git show v1.1.0:contract/openapi.yaml \| shasum -a 256`) | `11435a17aabe7c11faf71aee0fd066a3784d5e9de557c451153e7f47d0d5615f` |
+| 2. Release asset (`gh release download` then `shasum -a 256 -c openapi.yaml.sha256` → `openapi.yaml: OK`) | `11435a17aabe7c11faf71aee0fd066a3784d5e9de557c451153e7f47d0d5615f` |
+| 3. in-image `/app/contract/openapi.yaml` (`docker run --rm --entrypoint cat ghcr.io/washingbearlabs/forage:1.1.0 …`) | `11435a17aabe7c11faf71aee0fd066a3784d5e9de557c451153e7f47d0d5615f` |
+
+**Release body and assets.** `gh release view v1.1.0 --json body --jq '.body' | tr -d '\r'`
+matches `^contract: 1\.2\.0$` (the line reads `contract: 1.2.0`) and contains every one of the 36
+non-blank lines of the extraction above (`grep -F` per line); assets: `openapi.yaml`,
+`openapi.yaml.sha256`.
+
+**Secret grep, both lines as logged on the tag's run:**
+`No forbidden pattern in the published image config.` (publish → "Verify the published amd64
+image is the gated filesystem") and `No forbidden pattern in the layer history of forage:ci.`
+(secret-grep → "Grep the layer history for baked secrets"), with the three-pattern set covering
+`FORAGE_BRAVE_API_KEY`.
+
+**Smoke, twice, from the tagged checkout, `--anchor contract/openapi.yaml.sha256` (the committed
+file of the `v1.1.0` checkout) both times:**
+
+1. Degraded (no env file, no volume):
+   `docker run --rm -d -p 127.0.0.1:8020:8020 --name forage-rel ghcr.io/washingbearlabs/forage@sha256:e1b875ccbf6505d674e70802c07eeb5ad6c62548ae14dde0a18be0bf9cb47a52`
+   then `uv run python contract_smoke.py --image ghcr.io/washingbearlabs/forage@sha256:e1b875ccbf6505d674e70802c07eeb5ad6c62548ae14dde0a18be0bf9cb47a52 --expect-status degraded --anchor contract/openapi.yaml.sha256`
+   → `Contract smoke PASSED: degraded, honest, and on-contract.`, **exit code 0**.
+2. Healthy (weights):
+   `docker run --rm -d -p 127.0.0.1:8020:8020 --name forage-rel --env-file "$TMPDIR/hf.env" -v forage-model-cache:/app/model-cache ghcr.io/washingbearlabs/forage@sha256:e1b875ccbf6505d674e70802c07eeb5ad6c62548ae14dde0a18be0bf9cb47a52`
+   then `uv run python contract_smoke.py --image ghcr.io/washingbearlabs/forage@sha256:e1b875ccbf6505d674e70802c07eeb5ad6c62548ae14dde0a18be0bf9cb47a52 --expect-status healthy --timeout-seconds 540 --anchor contract/openapi.yaml.sha256`
+   → `Contract smoke PASSED: healthy, honest, and on-contract.`, **exit code 0**. `/health` reported
+   `status: healthy`, `promptguard_loaded: true`, `degraded_reasons: []`,
+   `search_providers: ["searxng"]`, and `capabilities` without `brave_api_key` (no key was
+   configured — a capability, not a degraded state). `$TMPDIR/hf.env` held only the `HF_TOKEN`
+   line, was never printed, and was deleted after the run.
