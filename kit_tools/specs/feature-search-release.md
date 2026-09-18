@@ -598,39 +598,39 @@ and with `--expect-status healthy` against a weights-loaded one started with `--
   exit codes.
 
 **Acceptance Criteria:**
-- [ ] Pre-flight recorded in the Implementation Notes: six checks green on the tagged commit;
+- [x] Pre-flight recorded in the Implementation Notes: six checks green on the tagged commit;
       `export_contract --check` clean; `CONTRACT_VERSION` is `1.2.0`; the `1.2.0` docstring entry
       names `search_unavailable`; the four US-001 greps pass; the US-004 greps (b), (c) and (d)
       pass.
-- [ ] Pre-flight, US-004(a): `uv run pytest tests/test_ci_workflow.py -k 'extractor or
+- [x] Pre-flight, US-004(a): `uv run pytest tests/test_ci_workflow.py -k 'extractor or
       docstring_entry'` collected at least four tests and passed on the tagged commit, and the
       by-hand `awk` run on that commit's `pipeline/contract.py` printed the `1.2.0` entry — first
       line beginning `* ``1.2.0`` `, naming `search_unavailable`, no line of the `1.1.0` entry —
       recorded verbatim.
-- [ ] Pre-flight, sibling-owned work: the four variable-row greps report at least 1 for each file
+- [x] Pre-flight, sibling-owned work: the four variable-row greps report at least 1 for each file
       and variable; no bold `**1.1.0**` in `README.md`, `CLAUDE.md`, `contract/GOVERNANCE.md`,
       `kit_tools/docs/API_GUIDE.md`, `kit_tools/arch/CODE_ARCH.md`, `kit_tools/arch/SERVICE_MAP.md`;
       the four embedded anchors (API_GUIDE, CI_CD, DEPLOYMENT, SERVICE_MAP) equal
       `contract/openapi.yaml.sha256`.
-- [ ] `v1.1.0` is cut by the owner and no `searxng-v*` tag is pushed; `publish` is green; the
+- [x] `v1.1.0` is cut by the owner and no `searxng-v*` tag is pushed; `publish` is green; the
       multi-arch `1.1.0` image is on GHCR; run URL, tagged commit sha and OCI index digest recorded.
-- [ ] Four-way sha256 equality at `v1.1.0` (committed anchor, repository file, Release asset via
+- [x] Four-way sha256 equality at `v1.1.0` (committed anchor, repository file, Release asset via
       `sha256sum -c`, in-image `/app/contract/openapi.yaml`) verified and the values recorded.
-- [ ] `gh release view v1.1.0 --json body --jq '.body' | tr -d '\r'` matches `^contract: 1\.2\.0$`
+- [x] `gh release view v1.1.0 --json body --jq '.body' | tr -d '\r'` matches `^contract: 1\.2\.0$`
       and contains every line of the rehearsal extraction output (`grep -F` per line); the publish
       step "Assert the Release body advertises the tagged tree's contract version" is green.
-- [ ] `docker buildx imagetools inspect` prints one identical index digest for `latest`, `1.1` and
+- [x] `docker buildx imagetools inspect` prints one identical index digest for `latest`, `1.1` and
       `1.1.0`; recorded.
-- [ ] From the `v1.1.0` checkout, `uv run python contract_smoke.py --image <ref> --anchor
+- [x] From the `v1.1.0` checkout, `uv run python contract_smoke.py --image <ref> --anchor
       contract/openapi.yaml.sha256` exits 0 with `--expect-status degraded` against the container
       started with no `--env-file` and no volume, and exits 0 with `--expect-status healthy`
       against the container started with `--env-file "$TMPDIR/hf.env"`; both commands and exit codes
       are recorded; the recorded commands carry `--env-file "$TMPDIR/hf.env"` and no token value, and
       `grep -nE 'hf_[A-Za-z0-9]{20,}' kit_tools/specs/feature-search-release.md` returns nothing.
-- [ ] Every `--anchor` value recorded in the Implementation Notes is `contract/openapi.yaml.sha256`
+- [x] Every `--anchor` value recorded in the Implementation Notes is `contract/openapi.yaml.sha256`
       of the `v1.1.0` checkout — never a file written by `gh release download` and never the
       in-image copy.
-- [ ] `secret-grep` and the publish config grep are green on the tag's run with the three-pattern
+- [x] `secret-grep` and the publish config grep are green on the tag's run with the three-pattern
       set; the two "No forbidden pattern" log lines recorded.
 
 ### US-003: Post-release verification (third-party view) + Poppy handoff record
