@@ -735,41 +735,41 @@ sentence.
   `CLAUDE.md:131` follows the same number.
 
 **Acceptance Criteria:**
-- [ ] `docker logout ghcr.io` followed by `docker pull
+- [x] `docker logout ghcr.io` followed by `docker pull
       ghcr.io/washingbearlabs/forage@sha256:<index-digest>` succeeds; both commands and their output
       are recorded in the Implementation Notes.
-- [ ] Against the pulled image with no `FORAGE_SEARCH_PROVIDERS` and no `FORAGE_BRAVE_API_KEY` set,
+- [x] Against the pulled image with no `FORAGE_SEARCH_PROVIDERS` and no `FORAGE_BRAVE_API_KEY` set,
       `GET /health` reports `contract_version: "1.2.0"`, `search_providers: ["searxng"]`, and a
       `capabilities` object with no `brave_api_key` key; the excerpt is recorded.
-- [ ] One `POST /search` against that container (brought up from `compose/minimal.yml` at `1.1.0`)
+- [x] One `POST /search` against that container (brought up from `compose/minimal.yml` at `1.1.0`)
       returns HTTP 200 with `provider_used: "searxng"` and `fallback_fired: false`; the telemetry
       fields are recorded and no result body is.
-- [ ] Against the same image started with an `--env-file` carrying
+- [x] Against the same image started with an `--env-file` carrying
       `FORAGE_BRAVE_API_KEY=placeholder-not-a-key` and no `FORAGE_SEARCH_PROVIDERS`, `GET /health`
       reports `capabilities.brave_api_key: 1` and `search_providers: ["searxng"]`; `grep -c
       'placeholder-not-a-key'` over the `/health` body, the `/metrics` body and `docker logs`
       reports 0 for each; no `/search` was issued in that run; the excerpt and the three counts
       are recorded.
-- [ ] `## Implementation Notes` in this file carries a field/value table with image tag `1.1.0`, OCI
+- [x] `## Implementation Notes` in this file carries a field/value table with image tag `1.1.0`, OCI
       index digest, contract version `1.2.0`, the anchor sha256 from `git show
       v1.1.0:contract/openapi.yaml.sha256`, the tagged commit sha and the publish run URL,
       introduced as the table the Poppy session reads; its `Spend posture` row states that Forage
       enforces no budget cap (ruling 12), names `search.paid_calls` and `search.fallback_fired`,
       and says the budget breaker is the consumer's; its `Paid-path evidence` row states that no
       live Brave request was made through the image.
-- [ ] `docs/releases.md` has a `## Released versions` section with `### v1.0.0` and `### v1.1.0`
+- [x] `docs/releases.md` has a `## Released versions` section with `### v1.0.0` and `### v1.1.0`
       entries in the defined format (`contract:`, `anchor:`, `index digest:`, `tagged commit:` lines
       and one "What shipped" bullet per capability, the Brave bullet carrying the spend-posture
       sentence); `grep -n 'does not exist yet' docs/releases.md` returns nothing.
-- [ ] `grep -n 'v1.1.0' kit_tools/SYNOPSIS.md kit_tools/docs/DEPLOYMENT.md kit_tools/docs/CI_CD.md
+- [x] `grep -n 'v1.1.0' kit_tools/SYNOPSIS.md kit_tools/docs/DEPLOYMENT.md kit_tools/docs/CI_CD.md
       kit_tools/arch/INFRA_ARCH.md` hits every file; the DEPLOYMENT mapping sentence reads image
       `1.1.0` serves contract `1.2.0`; `grep -nE 'currently .1\.1\.0.' kit_tools/docs/CI_CD.md`
       returns nothing.
-- [ ] `grep -n '1610 tests' kit_tools/testing/TESTING_GUIDE.md`, `grep -n '1610 collected'
+- [x] `grep -n '1610 tests' kit_tools/testing/TESTING_GUIDE.md`, `grep -n '1610 collected'
       kit_tools/SYNOPSIS.md` and `grep -n '1610 as of' kit_tools/AGENT_README.md` return nothing,
       and the three state the one count `uv run pytest` reports on the tagged commit.
-- [ ] Every Completion Criterion in `kit_tools/specs/epic-search-providers.md` is ticked.
-- [ ] `uv run pytest` passes (doc-only edits; the release-doc guards stay green).
+- [x] Every Completion Criterion in `kit_tools/specs/epic-search-providers.md` is ticked.
+- [x] `uv run pytest` passes (doc-only edits; the release-doc guards stay green).
 
 ## Edge Cases
 
