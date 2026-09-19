@@ -1760,13 +1760,7 @@ async def test_post_search_endpoint_success(client: httpx.AsyncClient) -> None:
         ],
     }
 
-    with patch("pipeline.orchestrator.httpx.AsyncClient") as mock_client_cls:
-        mock_inner = AsyncMock()
-        mock_inner.get.return_value = mock_resp
-        mock_inner.__aenter__ = AsyncMock(return_value=mock_inner)
-        mock_inner.__aexit__ = AsyncMock(return_value=False)
-        mock_client_cls.return_value = mock_inner
-
+    with _searxng_client_patch(mock_resp):
         resp = await client.post("/search", json={"query": "test"})
 
     assert resp.status_code == 200
@@ -1779,13 +1773,7 @@ async def test_post_search_endpoint_success(client: httpx.AsyncClient) -> None:
 
 async def test_post_search_endpoint_searxng_error(client: httpx.AsyncClient) -> None:
     """POST /search returns 422 when SearXNG is unavailable."""
-    with patch("pipeline.orchestrator.httpx.AsyncClient") as mock_client_cls:
-        mock_inner = AsyncMock()
-        mock_inner.get.side_effect = httpx.ConnectError("not available")
-        mock_inner.__aenter__ = AsyncMock(return_value=mock_inner)
-        mock_inner.__aexit__ = AsyncMock(return_value=False)
-        mock_client_cls.return_value = mock_inner
-
+    with _searxng_client_patch(side_effect=httpx.ConnectError("not available")):
         resp = await client.post("/search", json={"query": "test"})
 
     assert resp.status_code == 422
@@ -2122,18 +2110,15 @@ async def test_search_pins_the_vetted_engine_set() -> None:
     2026-08-19: aol, "karmasearch videos").
     """
     mock_resp = _mock_searxng_response([])
-    mock_client = AsyncMock()
-    mock_client.get.return_value = mock_resp
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("pipeline.orchestrator.httpx.AsyncClient", return_value=mock_client):
+    with _searxng_client_patch(mock_resp) as mock_client_cls:
         await run_search_pipeline(
             _make_search_request(),
             searxng_url="http://test-searxng:8080",
             config=_SAMPLE_CONFIG,
         )
 
+    mock_client = mock_client_cls.return_value
     params = mock_client.get.call_args.kwargs["params"]
     # The literal set IS the contract — it must stay in sync with the
     # enabled engines in searxng/config/settings.yml (see _SEARXNG_ENGINES).

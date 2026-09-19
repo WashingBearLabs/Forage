@@ -533,6 +533,10 @@ jobs:
         # checked-out script. `HF_TOKEN` is the variable name the deleted path
         # used; `hf_[A-Za-z0-9]{20,}` is the shape of a Hugging Face token
         # itself, so a differently-named carrier is caught too.
+        # `FORAGE_BRAVE_API_KEY` is the paid search provider's credential
+        # (ruling 20d): the name only — no bare `BRAVE_API_KEY`, and no
+        # key-shape regex, since Brave publishes no token format to match.
+        # The `publish` job's config grep iterates the same three patterns.
         run: |
           set -euo pipefail
           layer_history="$(docker history --no-trunc "${IMAGE_REF}")"
@@ -988,8 +992,10 @@ jobs:
           # with identical diff_ids and a leaked history line — which is the
           # one place secret-grep's tarball read cannot see once the registry
           # copy exists. Same pattern set as secret-grep, applied to every
-          # platform's published config (the inspect JSON carries them all).
-          if printf '%s' "${image_json}" | grep -E -q 'HF_TOKEN|hf_[A-Za-z0-9]{20,}|FORAGE_BRAVE_API_KEY'; then
+          # platform's published config (the inspect JSON carries them all),
+          # and the same case-insensitive mode: one vocabulary, one matching
+          # rule, two vantage points.
+          if printf '%s' "${image_json}" | grep -Eiq 'HF_TOKEN|hf_[A-Za-z0-9]{20,}|FORAGE_BRAVE_API_KEY'; then
             echo "::error::the published image config carries a forbidden pattern"
             exit 1
           fi

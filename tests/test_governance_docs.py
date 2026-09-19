@@ -64,7 +64,11 @@ _ANCHOR_QUOTING_PAGES = (
     _REPO_ROOT / "kit_tools" / "arch" / "SERVICE_MAP.md",
 )
 
-_ANCHOR_HEX_RE = re.compile(r"\b[0-9a-f]{64}\b")
+# Backtick-wrapped bare hex only: every real anchor quotation on the four pages
+# is written that way, and the narrower shape keeps an image digest
+# (`@sha256:…`) or a full `sanitizer_revision` on the same page from being read
+# as a stale anchor with the misleading advice to re-run the export.
+_ANCHOR_HEX_RE = re.compile(r"`([0-9a-f]{64})`")
 
 # The four classes the governance table defines. A worked example that names
 # none of them, or more than one, is not answerable without a human.

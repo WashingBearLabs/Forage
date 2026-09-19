@@ -16,7 +16,11 @@ a parser that matches Brave's real shape from one that only matches a guess
 at it; the pinned sample is what closes that gap.
 
 Brave is a paid backend (``paid = True``) with no free tier: ``$5`` per 1,000
-queries, billed per query regardless of how many chunks come back. This
+queries, billed per query regardless of how many chunks come back. It is also
+a privacy boundary: with a key configured, the caller's query — truncated to
+``search_brave_query_max_chars`` — leaves the container for
+``api.search.brave.com`` under the operator's Brave account and Brave's terms
+(``docs/configuration.md`` records the same trade-off on the key's row). This
 module never registers itself — the conditional wiring onto
 ``FORAGE_SEARCH_PROVIDERS`` is
 ``pipeline.search_providers.build_provider_chain``'s job
@@ -28,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import ssl
 from dataclasses import dataclass
 from typing import Any, Final, cast
@@ -49,6 +54,13 @@ logger = logging.getLogger(__name__)
 # per-result `engine` value below, which is provenance, not identity.
 BRAVE_PROVIDER_NAME = "brave"
 
+# The per-result `engine` provenance stamped on every mapped result —
+# deliberately not `BRAVE_PROVIDER_NAME`, because `brave` is also SearXNG's own
+# sub-engine name for the same upstream (`SEARXNG_ENGINES`), and the two must
+# stay distinct on the wire (ruling 23). One definition, so the wire-visible
+# literal is written here and nowhere else.
+BRAVE_ENGINE: Final = "brave-api"
+
 # The environment variable naming this deployment's Brave API key, on
 # root-level `model_fetcher.py`'s `*_ENV_VAR` constant pattern (~179-183). No
 # alias (ruling 10) — a fresh `FORAGE_*` name, never a back-compat `POPPY_*`
@@ -63,7 +75,7 @@ BRAVE_API_KEY_ENV_VAR: Final = "FORAGE_BRAVE_API_KEY"
 # ending strips down to a bare trailing CR, which then fails
 # `brave_key_present` as an embedded control character rather than being
 # silently absorbed by a wider `str.strip()`.
-KEY_STRIP_CHARS: Final = " \t\n"
+BRAVE_KEY_STRIP_CHARS: Final = " \t\n"
 
 
 def brave_key_present(raw: str | None) -> bool:
@@ -75,7 +87,7 @@ def brave_key_present(raw: str | None) -> bool:
 
     Three shapes are refused, all before any client exists:
 
-    - Empty after stripping `KEY_STRIP_CHARS` — compose routinely renders
+    - Empty after stripping `BRAVE_KEY_STRIP_CHARS` — compose routinely renders
       `FORAGE_BRAVE_API_KEY=` from an unset shell variable, and a
       file-backed secret carries a trailing newline.
     - Not ASCII-only, or not printable (any control character, including a
@@ -91,12 +103,25 @@ def brave_key_present(raw: str | None) -> bool:
     """
     if raw is None:
         return False
-    value = raw.strip(KEY_STRIP_CHARS)
+    value = raw.strip(BRAVE_KEY_STRIP_CHARS)
     if not value:
         return False
     if not value.isascii() or not value.isprintable():
         return False
     return " " not in value
+
+
+def usable_brave_key(raw: str | None) -> str | None:
+    """The key as it will be sent, or ``None`` when :func:`brave_key_present` says no.
+
+    The one place the strip happens: ``build_provider_chain`` registers the
+    provider with this value, and ``retrieval_app._resolve_brave_key`` hands
+    the environment through it, so neither re-derives the strip set or can
+    disagree with the presence predicate about what "usable" means.
+    """
+    if raw is None or not brave_key_present(raw):
+        return None
+    return raw.strip(BRAVE_KEY_STRIP_CHARS)
 
 
 # A fixed `https://` endpoint — no environment override — so this constant is
@@ -109,6 +134,14 @@ _BRAVE_LLM_CONTEXT_URL: Final = "https://api.search.brave.com/res/v1/llm/context
 # only here — never in the URL or query string — so no URL-bearing log line
 # can carry it.
 _BRAVE_AUTH_HEADER: Final = "X-Subscription-Token"
+
+# The shape of the one `sources[url].age` element `_map_generic_entry` takes
+# `date` from. Brave sends the age as a list of renderings of the same instant
+# (a long form, the ISO calendar date, a relative form, an ISO timestamp), and
+# the capture pinned their order — but the mapping selects by shape rather than
+# by position so a reordered list still yields the date instead of silently
+# dropping every one. Calendar validity is `SearchResult`'s job (`models.py`).
+_ISO_CALENDAR_DATE_RE: Final = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 # The captured envelope was 30,344 bytes; this is at least ten times that,
 # checked against `Content-Length` before any read and against a running
@@ -367,7 +400,7 @@ class BraveApiProvider:
         )
 
         results = [
-            self._map_source(cast("dict[str, Any]", entry), sources)
+            self._map_generic_entry(cast("dict[str, Any]", entry), sources)
             for entry in generic_list[:max_results]
         ]
         return ProviderSearchResult(
@@ -377,7 +410,7 @@ class BraveApiProvider:
             content_kind=CONTENT_KIND_CHUNK,
         )
 
-    def _map_source(
+    def _map_generic_entry(
         self, entry: dict[str, Any], sources: dict[str, Any]
     ) -> dict[str, Any]:
         """Map one ``grounding.generic`` element to a raw result dict.
@@ -385,10 +418,11 @@ class BraveApiProvider:
         A missing or non-string ``title``/``url`` maps to ``""``; the loop's
         existing omission rules (``pipeline/orchestrator.py``) decide from
         there. ``content`` is the element's ``snippets`` joined in order by a
-        blank line and capped to ``settings.chunk_max_chars``. ``date`` comes
-        from the ten-character ISO element (index 1) of ``sources[url].age``,
-        else ``None`` — validated as a strict calendar date by
-        ``SearchResult`` itself (``models.py``), not re-validated here.
+        blank line and capped to ``settings.chunk_max_chars``. ``date`` is the
+        first element of ``sources[url].age`` shaped like an ISO calendar date
+        (``_ISO_CALENDAR_DATE_RE``), else ``None`` — validated as a *real*
+        calendar date by ``SearchResult`` itself (``models.py``), not
+        re-validated here.
         """
         url = entry.get("url")
         title = entry.get("title")
@@ -405,16 +439,22 @@ class BraveApiProvider:
         source = sources.get(url) if isinstance(url, str) else None
         if isinstance(source, dict):
             age = cast("dict[str, Any]", source).get("age")
-            if isinstance(age, list) and len(cast("list[Any]", age)) >= 2:
-                candidate = cast("list[Any]", age)[1]
-                if isinstance(candidate, str):
-                    date = candidate
+            if isinstance(age, list):
+                date = next(
+                    (
+                        candidate
+                        for candidate in cast("list[Any]", age)
+                        if isinstance(candidate, str)
+                        and _ISO_CALENDAR_DATE_RE.fullmatch(candidate)
+                    ),
+                    None,
+                )
 
         return {
             "title": title if isinstance(title, str) else "",
             "url": url if isinstance(url, str) else "",
             "content": content,
-            "engine": "brave-api",
+            "engine": BRAVE_ENGINE,
             "date": date,
         }
 

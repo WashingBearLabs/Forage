@@ -1,10 +1,14 @@
-"""Tests for ``BraveApiProvider`` (``feature-brave-provider`` US-010).
+"""Tests for ``BraveApiProvider`` (``feature-brave-provider``, all stories).
 
-US-010 delivers the complete provider module — client hardening, the
-``config.yaml`` tunables, and the parser over the owner-captured pinned
-sample (``tests/fixtures/brave/llm_context_sample.json``) — plus this
-story's core tests. The payload-bound, query/chunk-cap and ``max_results``
-budget *exhaustive* tests, and the doc rows, are US-011's.
+US-010 delivered the provider module — client hardening, the ``config.yaml``
+tunables, and the parser over the owner-captured pinned sample
+(``tests/fixtures/brave/llm_context_sample.json``) — with its core tests;
+US-011 the exhaustive payload-bound, query/chunk-cap and ``max_results``
+budget tests; US-002 the env-gated registration, ``brave_key_present`` and
+the lifespan wiring; US-012 the closed failure taxonomy, the wire 422 for a
+Brave-only chain and the key-never-leaks sweep; US-013 sanitization parity
+with SearXNG snippets and the never-cached pin. Registry-level chain tests
+live in ``tests/test_search_providers.py``.
 """
 
 from __future__ import annotations
@@ -47,11 +51,12 @@ from pipeline.search_providers.brave import (
     _BRAVE_LLM_CONTEXT_URL,
     _BRAVE_MAX_RESPONSE_BYTES,
     BRAVE_API_KEY_ENV_VAR,
+    BRAVE_ENGINE,
+    BRAVE_KEY_STRIP_CHARS,
     BRAVE_PROVIDER_NAME,
     DEFAULT_BRAVE_CHUNK_MAX_CHARS,
     DEFAULT_BRAVE_QUERY_MAX_CHARS,
     DEFAULT_BRAVE_TIMEOUT_SECONDS,
-    KEY_STRIP_CHARS,
     BraveApiProvider,
     BraveConfigurationError,
     BraveSettings,
@@ -213,7 +218,7 @@ class TestResolveBraveKey:
         assert "brave_key_invalid" in caplog.text
 
     def test_the_strip_chars_constant_excludes_carriage_return(self) -> None:
-        assert KEY_STRIP_CHARS == " \t\n"
+        assert BRAVE_KEY_STRIP_CHARS == " \t\n"
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +323,7 @@ class TestParsesThePinnedSample:
         assert len(outcome.results) == 3
         for result in outcome.results:
             assert set(result) == {"title", "url", "content", "engine", "date"}
-            assert result["engine"] == "brave-api"
+            assert result["engine"] == BRAVE_ENGINE
 
     @pytest.mark.asyncio()
     async def test_fields_match_the_sample_values(self) -> None:
@@ -392,7 +397,12 @@ class TestClientHardening:
         stream_call = client.stream.call_args
         assert stream_call.args[0] == "GET"
         assert stream_call.args[1] == _BRAVE_LLM_CONTEXT_URL
-        assert _BRAVE_LLM_CONTEXT_URL.startswith("https://api.search.brave.com")
+        # The capture-confirmed target, pinned as literals rather than read
+        # back from the constant the provider itself uses.
+        target = httpx.URL(stream_call.args[1])
+        assert target.scheme == "https"
+        assert target.host == "api.search.brave.com"
+        assert target.path == "/res/v1/llm/context"
         assert stream_call.kwargs["headers"] == {_BRAVE_AUTH_HEADER: sentinel_key}
         # The key appears only in the auth header value — never in the URL,
         # the query params, or anywhere else in what was sent.
@@ -474,7 +484,7 @@ class TestRunSearchPipelineIntegration:
         assert response.results, "expected at least one result to survive sanitization"
         for result in response.results:
             assert result.content_kind == "chunk"
-            assert result.engine == "brave-api"
+            assert result.engine == BRAVE_ENGINE
 
     @pytest.mark.asyncio()
     async def test_wire_snippet_equals_the_sanitized_chunk_content_exactly(
@@ -502,11 +512,27 @@ class TestRunSearchPipelineIntegration:
         assert response.results[0].snippet == expected_snippet
 
     @pytest.mark.asyncio()
-    async def test_an_invalid_calendar_date_reaches_the_wire_as_none(self) -> None:
-        """A regex-shaped but non-existent day (2026-02-30) yields date=None."""
+    @pytest.mark.parametrize(
+        "age",
+        [
+            pytest.param(["2026-02-30"], id="regex-shaped-but-not-a-day"),
+            pytest.param(["Thursday, January 1, 2026"], id="long-form-only"),
+            pytest.param(["100 days ago"], id="relative-only"),
+            pytest.param(["2026-01-01T00:00:00Z"], id="timestamp-only"),
+        ],
+    )
+    async def test_an_invalid_calendar_date_reaches_the_wire_as_none(
+        self, age: list[str]
+    ) -> None:
+        """Nothing but a real `YYYY-MM-DD` day reaches the wire as `date`.
+
+        A regex-shaped but non-existent day (2026-02-30) is refused by
+        `SearchResult`'s validator; a long-form, relative or timestamp
+        rendering is never selected by the mapper in the first place.
+        """
         sample = _load_sample_dict()
         first_url = sample["grounding"]["generic"][0]["url"]
-        sample["sources"][first_url]["age"][1] = "2026-02-30"
+        sample["sources"][first_url]["age"] = age
 
         provider = BraveApiProvider("sentinel-key")
         with _client_patch(
@@ -520,6 +546,31 @@ class TestRunSearchPipelineIntegration:
 
         assert response.results
         assert response.results[0].date is None
+
+    @pytest.mark.asyncio()
+    async def test_the_date_is_selected_by_shape_not_by_position(self) -> None:
+        """A reordered `age` list still yields the ISO calendar date."""
+        sample = _load_sample_dict()
+        first_url = sample["grounding"]["generic"][0]["url"]
+        sample["sources"][first_url]["age"] = [
+            "100 days ago",
+            "Thursday, January 1, 2026",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01",
+        ]
+
+        provider = BraveApiProvider("sentinel-key")
+        with _client_patch(
+            response=_make_response(content=json.dumps(sample).encode())
+        ):
+            response = await run_search_pipeline(
+                SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
+                providers=[provider],
+                config=_INTEGRATION_CONFIG,
+            )
+
+        assert response.results
+        assert response.results[0].date == "2026-01-01"
 
 
 # ---------------------------------------------------------------------------
@@ -576,9 +627,9 @@ class TestLifespanCallsBraveSettingsUnconditionally:
 
         `FORAGE_SEARCH_PROVIDERS` is unset (cleared by the autouse fixture in
         `tests/conftest.py`), so the resolved chain is the default
-        `["searxng"]` — `"brave"` is not even in `build_provider_chain`'s
-        registry yet (US-002's job). The boot still refuses, because this
-        call is unconditional.
+        `["searxng"]` and `"brave"` is never registered (no key, and it is
+        not named). The boot still refuses, because this call is
+        unconditional.
         """
         monkeypatch.setattr(
             retrieval_app,
@@ -851,7 +902,7 @@ class TestEngineProvenanceStaysDistinct:
         assert brave_response.results
         # Both directions, so neither normalization could pass unnoticed.
         assert searxng_response.results[0].engine == "brave"
-        assert brave_response.results[0].engine == "brave-api"
+        assert brave_response.results[0].engine == BRAVE_ENGINE == "brave-api"
         assert searxng_response.results[0].engine != brave_response.results[0].engine
 
 

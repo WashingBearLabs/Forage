@@ -9,7 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from pipeline.contract import ContentKind, PromptGuardState
+from pipeline.contract import CONTENT_KIND_SNIPPET, ContentKind, PromptGuardState
 
 MAX_CACHE_TTL_HOURS = 8_760
 
@@ -347,7 +347,7 @@ class SearchResult(BaseModel):
     snippet: str = Field(..., description="Result snippet / description")
     engine: str | None = Field(default=None, description="Search engine used")
     content_kind: ContentKind = Field(
-        default="snippet",
+        default=CONTENT_KIND_SNIPPET,
         description=(
             "What kind of content this result carries: 'snippet' for a search "
             "engine's own summary (every SearXNG result), 'chunk' for a passage "

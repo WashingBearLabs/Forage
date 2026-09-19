@@ -234,22 +234,26 @@ class SearxngProvider:
         future caller can widen what reaches the wire by passing a new
         string.
 
-        The log line carries the failure class and the detail token and
-        nothing else: no ``exc_info``, no ``str(exc)``, no URL (CLAUDE.md
-        invariant 6 — ``SEARXNG_URL`` may carry a password, and an httpx
-        message embeds the request URL).
+        The log line carries the provider name, the failure class and the
+        detail token in its message and nothing else: no ``exc_info``, no
+        ``str(exc)``, no URL (CLAUDE.md invariant 6 — ``SEARXNG_URL`` may
+        carry a password, and an httpx message embeds the request URL).
         """
         if detail not in _SEARXNG_FAILURE_DETAILS and not detail.startswith(
             HTTP_STATUS_DETAIL_PREFIX
         ):
             detail = "unexpected"
+        # The three tokens go in the message itself, as `%s` arguments — not
+        # in `extra=`, which no configured formatter renders
+        # (`kit_tools/arch/patterns/LOGGING.md`): an operator reading the
+        # bare marker could not tell a timeout from a 429 from a malformed
+        # body. All three are closed vocabulary, so nothing here can carry a
+        # credential or an endpoint.
         logger.warning(
-            "search_provider_failure",
-            extra={
-                "provider": self.name,
-                "failure_class": failure_class,
-                "detail": detail,
-            },
+            "search_provider_failure — provider=%s failure_class=%s detail=%s",
+            self.name,
+            failure_class,
+            detail,
         )
         return ProviderFailure(
             provider_name=self.name,

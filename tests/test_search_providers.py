@@ -648,6 +648,23 @@ class TestSearxngProviderFailures:
         failure = SearxngProvider()._failure("hard_error", "a_brand_new_token")
         assert failure.detail == "unexpected"
 
+    def test_the_failure_warning_carries_the_three_tokens_in_its_message(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The tokens are in `getMessage()`, not `extra=`, which nothing renders."""
+        with caplog.at_level(logging.WARNING, logger="pipeline.search_providers"):
+            SearxngProvider()._failure("rate_limited", "http_429")
+
+        messages = [
+            record.getMessage()
+            for record in caplog.records
+            if "search_provider_failure" in record.getMessage()
+        ]
+        assert len(messages) == 1
+        assert "provider=searxng" in messages[0]
+        assert "failure_class=rate_limited" in messages[0]
+        assert "detail=http_429" in messages[0]
+
     @pytest.mark.asyncio()
     @pytest.mark.parametrize(
         "patch_kwargs",
@@ -1124,6 +1141,54 @@ class TestBuildProviderChainBraveRegistration:
         assert chain[0].name == "searxng"
         assert "brave_skipped_missing_key" in caplog.text
         assert "search_chain_defaulted_to_searxng" in caplog.text
+
+    @pytest.mark.parametrize(
+        "raw_key",
+        [
+            pytest.param("", id="empty"),
+            pytest.param("  \n", id="whitespace-and-newline"),
+            pytest.param("\t", id="tab"),
+            pytest.param("has an interior space", id="interior-space"),
+        ],
+    )
+    def test_an_unusable_key_never_registers_brave(
+        self, raw_key: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Registration is gated by `brave_key_present`, not by `is not None`.
+
+        A direct caller handing over the compose-renders-unset shape (`""`)
+        or a whitespace-only value must get the same skip the lifespan gives
+        it — never a provider that fails every request with no boot warning.
+        """
+        with caplog.at_level(logging.WARNING, logger="pipeline.search_providers"):
+            chain = build_provider_chain(
+                ["searxng", "brave"],
+                searxng_url=DEFAULT_SEARXNG_URL,
+                brave_api_key=raw_key,
+            )
+
+        assert [provider.name for provider in chain] == ["searxng"]
+        assert caplog.text.count("brave_skipped_missing_key") == 1
+
+    def test_the_registered_provider_receives_the_stripped_key(self) -> None:
+        """The strip happens once, in `usable_brave_key`, before construction."""
+        chain = build_provider_chain(
+            ["brave"],
+            searxng_url=DEFAULT_SEARXNG_URL,
+            brave_api_key="  sentinel-key\n",
+        )
+
+        assert len(chain) == 1
+        provider = chain[0]
+        assert isinstance(provider, BraveApiProvider)
+        assert provider._api_key == "sentinel-key"
+
+    def test_the_registry_keys_are_the_providers_own_chain_tokens(self) -> None:
+        """One copy of each token: the registry is keyed by the constants."""
+        source = Path(pipeline.search_providers.__file__).read_text()
+        assert 'registry["' not in source and "registry['" not in source
+        assert "SEARXNG_PROVIDER_NAME: lambda" in source
+        assert "registry[BRAVE_PROVIDER_NAME]" in source
 
     def test_an_unknown_name_still_raises_and_names_brave_as_known(self) -> None:
         with pytest.raises(SearchProviderConfigurationError) as exc_info:
