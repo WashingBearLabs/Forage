@@ -233,8 +233,8 @@ purpose, so it is a hashed `sanitizer_revision` source.
 X.*.*, and is expected to refuse to activate on a major mismatch rather than guess."
 
 **Consequences:**
-Two independent semvers — image tag (`v1.0.0`) and contract (now `1.2.0`, awaiting the `v1.1.0`
-image that publishes it) move for different reasons;
+Two independent semvers — image tag (`v1.1.0`) and contract (now `1.2.0`, first published by
+the `v1.1.0` image on 2026-09-18) move for different reasons;
 `pyproject.toml`'s version is inert. A withdrawn image tag never withdraws a contract version.
 `.github/pull_request_template.md` carries the short-form checklist.
 

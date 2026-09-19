@@ -49,22 +49,23 @@
 # reach 8020 can make Forage fetch arbitrary URLs on your behalf, and Forage is
 # a good SSRF target by nature because making outbound requests is its job.
 #
-# IMAGE PINS. Both images carry explicit version tags. The searxng tag
-# (0.1.1-rc) is published. The forage tag 1.1.0 — the release carrying contract
-# 1.2.0 and the search-provider chain — resolves once `v1.1.0` publishes
-# (search-release US-002); a compose up before that publish fails with
-# `manifest unknown` — that is sequencing, not breakage. Pin an explicit
-# version rather than `latest`, which is a moving pointer. docs/releases.md has
-# the tag scheme; docs/searxng.md has the companion image's.
+# IMAGE PINS. Both images carry explicit version tags and both are published:
+# the searxng tag (0.1.1-rc) and the forage tag 1.1.0 — the release carrying
+# contract 1.2.0 and the search-provider chain, published by `v1.1.0` on
+# 2026-09-18 (search-release US-002). A pin that runs ahead of the newest
+# published tag fails with `manifest unknown` until that tag publishes — that
+# is sequencing, not breakage. Pin an explicit version rather than `latest`,
+# which is a moving pointer. docs/releases.md has the tag scheme;
+# docs/searxng.md has the companion image's.
 
 name: forage-minimal
 
 services:
   forage:
     # ghcr.io/washingbearlabs/forage, tag 1.1.0 — the release carrying contract
-    # 1.2.0 (the search-provider chain and Brave fallback). It resolves once
-    # `v1.1.0` publishes; until then a pull fails with `manifest unknown`. See
-    # the IMAGE PINS note above.
+    # 1.2.0 (the search-provider chain and Brave fallback), published by
+    # `v1.1.0` on 2026-09-18. See the IMAGE PINS note above for what a
+    # `manifest unknown` on a pull means.
     image: ghcr.io/washingbearlabs/forage:1.1.0
     restart: unless-stopped
     # Loopback only. See the DEPLOYMENT POSTURE note above; this binding is the

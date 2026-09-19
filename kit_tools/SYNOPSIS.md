@@ -29,7 +29,7 @@ preserved). See `docs/bootstrap-notes.md` for the pin record.
 |--------|--------|
 | Maturity | `v1.1.0` published (2026-09-18, `search-release` US-002) — the search-provider abstraction, Brave fallback and per-request policy shipped, advertising contract `1.2.0`; `v1.0.0` (2026-09-11) remains the first non-pre-release cut |
 | Repo visibility | **Public** since the US-008 flip (2026-09-10), repository and both packages; `main` is PR-only, with six required status checks (audit-measured 2026-09-11 — this row said "Private" for a month after the flip) |
-| Tests | 2089 collected, all green (`uv run pytest`), hermetic via `pytest-socket` — **enforced in CI** since US-002, with a committed hermeticity canary |
+| Tests | 2105 collected, all green (`uv run pytest`), hermetic via `pytest-socket` — **enforced in CI** since US-002, with a committed hermeticity canary |
 | Lint | `uv run ruff check .` and `ruff format --check .` both clean — **enforced in CI** |
 | Types | `uv run pyright` (strict) is **clean — 0 errors**, no baseline; **enforced in CI** |
 | CI | `.github/workflows/ci.yml` — ten jobs in two lanes: `lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke`, `publish` for the service image, and `searxng-build`/`-smoke`/`-publish` for the companion |
