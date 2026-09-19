@@ -1,16 +1,18 @@
 <!-- Template Version: 2.0.0 -->
 # Milestones
 
-> Last updated: 2026-09-17
-> Updated by: Claude (forage-repo-bootstrap US-005)
+> Last updated: 2026-09-19
+> Updated by: Claude (plan-epic forage-hardening)
 
-**Current target:** Forage `v1.0.0` — a published, secret-free, contract-frozen image a
-third party can run.
-**Status:** In Progress
+**Current target:** Forage `v1.2.0` — the hardened image (`epic-forage-hardening`, T2.2):
+`/retrieve` parity, search-text and URL audit in attacker-controlled forms, signed cache
+entries, bounded providers, an operator-sizable envelope, and Prompt Guard 2 86M as an
+opt-in — at contract **1.3.0**.
+**Status:** Planned (2026-09-19; `/kit-tools:validate-epic forage-hardening` next)
 
-The four specs below are the Forage half of the Web Access family's extraction epic; the
-Poppy half (consuming the image, then deleting the in-tree copy) executes in Poppy. See
-`../specs/epic-forage-extraction-forage-side.md`.
+`v1.0.0` (extraction epic) and `v1.1.0` (search providers) are done below. The Poppy halves
+of both families (consuming the pinned image, the policy UI, the trust boundary) execute in
+Poppy.
 
 ---
 
@@ -31,15 +33,15 @@ Poppy half (consuming the image, then deleting the in-tree copy) executes in Pop
 
 ## Must Have (P0)
 
-- [ ] **CI + published images** (`feature-forage-ci-and-image`) — GitHub-hosted CI
+- [x] **CI + published images** (`feature-forage-ci-and-image`) — GitHub-hosted CI
       (lint + format + pyright-strict + the full suite), the format/pyright backlog burnt
       down, multi-arch `ghcr.io/washingbearlabs/forage` + `forage-searxng` published
       behind a gated chain, the `ARG HF_TOKEN` build path removed, and the **public flip**
       (US-008 — human gate).
-- [ ] **Model bootstrap** (`feature-forage-model-bootstrap`) — download-at-start weights
+- [x] **Model bootstrap** (`feature-forage-model-bootstrap`) — download-at-start weights
       with a vendored GHCR mirror fallback, replacing bake-at-build. US-003 (vendoring)
       is **supervised** — it needs the owner's HF token and GHCR credentials.
-- [ ] **Frozen contract** (`feature-forage-contract`) — documented error surface, frozen
+- [x] **Frozen contract** (`feature-forage-contract`) — documented error surface, frozen
       OpenAPI, drift check in CI, governance for version bumps. Its final story cuts
       **`v1.0.0`** (supervised tag push).
 
@@ -47,7 +49,14 @@ Poppy half (consuming the image, then deleting the in-tree copy) executes in Pop
 
 ## Should Have (P1)
 
-- [ ] **Optional cache** (`feature-forage-cache-fallback`) — bounded in-memory backend
+- [ ] **v1.2.0 / T2.2 Forage hardening** (`epic-forage-hardening`, planned 2026-09-19, eight
+      specs) — search-text and URL scanning in wire form, `/retrieve` budgets and isolation,
+      dot-boundary hostname matching, `FORAGE_CACHE_HMAC_KEY` cache integrity, provider body /
+      timeout / query bounds, `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` envelope, `FORAGE_MODEL_ID`
+      with contiguity gating, contract `1.2.0` → `1.3.0`. Two human gates: the PromptGuard
+      benchmark run (spec 7 US-004) and the `v1.2.0` cut (spec 8 US-003). See
+      `../specs/epic-forage-hardening.md`.
+- [x] **Optional cache** (`feature-forage-cache-fallback`) — bounded in-memory backend
       when `VALKEY_URL` is unset (healthy), while configured-but-unreachable stays
       `degraded: cache_unavailable`. Carries a manual-smoke half (human gate) and the
       example `docker-compose.yml` that makes the quickstart real.
@@ -56,15 +65,15 @@ Poppy half (consuming the image, then deleting the in-tree copy) executes in Pop
 
 ## Exit Criteria for `v1.0.0`
 
-- [ ] Published image contains **no HF token and no baked weights** — `docker history`
+- [x] Published image contains **no HF token and no baked weights** — `docker history`
       shows no secret.
-- [ ] Repository is public, with secret scanning + push protection + branch protection
+- [x] Repository is public, with secret scanning + push protection + branch protection
       applied (the three settings deferred at bootstrap — see `../../docs/bootstrap-notes.md`).
-- [ ] CI green on every lane: `ruff check`, `ruff format --check`, `pyright` strict, full
+- [x] CI green on every lane: `ruff check`, `ruff format --check`, `pyright` strict, full
       suite.
-- [ ] A third party can `docker compose up` from the example fragment with only
+- [x] A third party can `docker compose up` from the example fragment with only
       `HF_TOKEN` (+ `SEARXNG_SECRET`) set and get a working `/search` + `/retrieve`.
-- [ ] Contract drift check passes; `contract_version` frozen at `1.1.0` with a documented
+- [x] Contract drift check passes; `contract_version` frozen at `1.1.0` with a documented
       bump policy (`1.0.0` → `1.1.0` in `forage-cache-fallback` US-003, the additive
       `/health` field `cache_backend`, before the freeze).
 
@@ -74,6 +83,7 @@ Poppy half (consuming the image, then deleting the in-tree copy) executes in Pop
 
 Poppy pins the published images and deletes its in-tree copy (both specs execute in
 Poppy). Once that lands, the coexistence rule ends and this repo becomes the sole source
-of truth. Later Forage-side work — search-provider abstraction, `/retrieve` hardening, the
-86M model, a `forage/` package rename — is planned in Poppy's Web Access family and
-re-homed here as it is scheduled.
+of truth. Forage-side sequence after `v1.1.0`: `epic-forage-hardening` (`v1.2.0`, planned
+above), then `epic-forage-injection-corpus` (T2.3, still a stub — it measures what the
+hardening epic builds), then the T3 items (additional providers, provenance hooks) and the
+deferred `forage/` package rename.
