@@ -38,10 +38,10 @@ name: forage-full
 services:
   forage:
     # ghcr.io/washingbearlabs/forage, tag 1.1.0 — the release carrying contract
-    # 1.2.0 (the search-provider chain and Brave fallback). It resolves once
-    # `v1.1.0` publishes (search-release US-002); a compose up before that
-    # fails with `manifest unknown` — that is sequencing, not breakage.
-    # docs/releases.md has the tag scheme.
+    # 1.2.0 (the search-provider chain and Brave fallback), published by
+    # `v1.1.0` on 2026-09-18 (search-release US-002). A pin that runs ahead of
+    # the newest published tag fails with `manifest unknown` until it publishes
+    # — that is sequencing, not breakage. docs/releases.md has the tag scheme.
     image: ghcr.io/washingbearlabs/forage:1.1.0
     restart: unless-stopped
     # Loopback only — see the DEPLOYMENT POSTURE note above.

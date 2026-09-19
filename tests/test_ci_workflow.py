@@ -2049,6 +2049,20 @@ class TestPublishJob:
                 "the same pattern set secret-grep defines — one vocabulary, two "
                 "vantage points"
             )
+        condition = next(
+            line
+            for line in run_text.splitlines()
+            if line.strip().startswith("if ")
+            and "image_json" in line
+            and "grep" in line
+            and "HF_TOKEN" in line
+        )
+        assert "grep -Eiq" in condition, (
+            "The published-config grep must be case-insensitive like "
+            "secret-grep's (`grep -Eiq`): the two gates share one vocabulary, so "
+            "a lower- or mixed-case carrier that the first gate catches must not "
+            f"pass the second. Condition was:\n{condition}"
+        )
 
     def test_publish_verifies_before_it_releases(self, jobs: dict[str, Any]) -> None:
         names = [str(step.get("name", "")) for step in _steps(jobs, "publish")]
@@ -2640,6 +2654,16 @@ class TestReleaseContractMapping:
         assert _ENTRY_FILE_LITERAL in run[extended:], (
             "The fixed-string grep must read its lines from the entry file. "
             f"Script was:\n{run}"
+        )
+        body = _if_block_body(run, "grep -qF")
+        assert body is not None, (
+            "The per-line `grep -qF` must be the condition of an `if` whose "
+            f"body fails the step. Script was:\n{run}"
+        )
+        assert "::error::" in body and "exit 1" in body, (
+            "A missing entry line must fail the read-back, not merely warn: "
+            "without the `exit 1` in this branch the announcement gate degrades "
+            f"to a log line. Branch body was:\n{body}"
         )
 
 

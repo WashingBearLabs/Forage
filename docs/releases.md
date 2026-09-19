@@ -31,14 +31,16 @@ What shipped:
   lifespan.
 - The Brave LLM-Context paid provider behind `FORAGE_BRAVE_API_KEY`. With the key set,
   anyone who can reach port 8020 can spend the operator's money — Forage enforces no
-  budget cap. Network placement and a front-side proxy or rate limit are your controls;
+  budget cap by decision (ruling 12); the budget breaker is the consumer's. Network
+  placement and a front-side proxy or rate limit are your controls;
   `/health` discloses key presence to anyone who can reach it, and `/metrics`
   `search.paid_calls` / `search.fallback_fired` are how spend is seen.
 - Free-first, paid-on-failure fallback, with the `search_unavailable` code added to the
   `/search` 422 vocabulary for an exhausted provider chain.
 - Per-request search policy on `SearchRequest` and provider status (`search_providers`) on
   `/health`.
-- Two new `/metrics` `search.*` counters: `search.paid_calls` and `search.fallback_fired`.
+- Three new `/metrics` `search.*` counters: `search.paid_calls`, `search.fallback_fired`
+  and `search.policy_unknown_provider`.
 
 ### v1.0.0 — 2026-09-12
 
@@ -237,21 +239,28 @@ with `gh release create --notes-file`. Step 3 checks every line of the entry is
 in the published body with a fixed-string `grep`. The version travels between
 steps as a step output; the entry travels only as that file.
 
-**`publish` executes nothing from the tagged tree.** It *reads* the tagged
-commit's files — `pipeline/contract.py`, the contract and its anchor — but runs
-no `python3`, no `uv` and no `scripts/` helper from it. It is the one job
-holding `contents: write`, `packages: write` and a token, and it pushes the
-public image; a helper script in the tree would let a merged docstring change
-plus a tag run arbitrary code there. A missing entry is caught earlier than the
-tag in any case: `test_the_current_contract_version_has_a_docstring_entry` runs
+**`publish` runs nothing from the tagged tree in its job shell, and nothing
+from the tree sees the token.** The job *reads* the tagged commit's files —
+`pipeline/contract.py`, the contract and its anchor — but runs no `python3`, no
+`uv` and no `scripts/` helper from it. That is a narrower claim than "executes
+nothing": the tagged `Dockerfile`'s `RUN` steps do execute, inside BuildKit,
+which has no `GH_TOKEN`; and on a tag push the workflow file itself is the
+tagged copy. The boundary that actually holds is **who can push a `v*` tag**.
+`publish` is the one job holding `contents: write`, `packages: write` and a
+token, and it pushes the public image, so tag-push rights are publish rights; a
+helper script run in the job shell would let a merged docstring change plus a
+tag run arbitrary code with that token, which is why none is. A missing entry
+is caught earlier than the tag in any case: `test_the_current_contract_version_has_a_docstring_entry` runs
 the same `awk` program on the PR.
 
 **If step 3 fails**, the image is pushed and the Release exists but advertises
 the wrong contract or is missing a line of its entry — a red run with a wrong
 Release rather than a missing one.
 `gh release create` refuses a tag that already has a Release, so recovery is
-`gh release edit "$TAG" --notes ...` with the corrected body, or deleting the
-Release and re-running the job.
+`gh release edit "$TAG" --notes-file <file>` with the corrected body — the entry
+extracted locally from the tagged tree (`git show "$TAG":pipeline/contract.py`
+through the same `awk` program) so the Release carries it verbatim — or
+deleting the Release and re-running the job.
 
 ### The Release carries the contract itself
 
@@ -360,9 +369,22 @@ before re-running — a genuine mismatch means the publish build did not come
 from the cache the gates filled, which is a finding, not a flake.
 
 **The Release step fails after a successful push.** The image is live and the
-Release is missing. That is the harmless direction and re-running the job fixes
-it. The direction that would matter — a Release advertising an image nobody can
-pull — is the one the ordering rules out.
+Release is missing or wrong. The direction that would matter — a Release
+advertising an image nobody can pull — is the one the ordering rules out.
+Whether re-running helps depends on which step failed; the announcement steps
+split two ways:
+
+- **`gh release create` itself failed (network, API) with a correct entry.**
+  Re-running the job is safe: the push skips every blob the registry already
+  holds and the Release is created on the second pass.
+- **The extractor found no entry, or the read-back found the wrong one.** A
+  re-run reads the same immutable tagged tree and fails the same way. If the
+  docstring entry is correct and only the extraction or read-back misfired,
+  extract the entry locally from the tagged tree and repair the Release body
+  with `gh release edit "$TAG" --notes-file <file>`; the tags stay. If the
+  docstring entry is wrong or missing, no re-run can help: withdraw the tag
+  (see "Withdrawn tags" above) and cut the next patch version with the
+  corrected entry.
 
 ## Required status checks
 

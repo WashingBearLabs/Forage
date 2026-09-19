@@ -753,6 +753,23 @@ class TestExpectStatus:
         assert DEGRADED_PROMPTGUARD_UNAVAILABLE in joined
         assert CAPABILITY_SEARCH_SANITIZATION in joined
 
+    def test_a_cache_degraded_body_under_healthy_names_the_cache_not_promptguard(
+        self,
+    ) -> None:
+        """A weights-loaded container with an unreachable Valkey is degraded for
+        the cache; the status-mismatch message must say so rather than blame
+        PromptGuard, which the three PromptGuard-coupled checks show is fine."""
+        failures = evaluate_health(
+            _healthy_response(
+                status="degraded", degraded_reasons=[DEGRADED_CACHE_UNAVAILABLE]
+            ),
+            expect_status=contract_smoke.STATUS_HEALTHY,
+        )
+        assert len(failures) == 1, _joined(failures)
+        assert "'degraded', expected 'healthy'" in failures[0]
+        assert DEGRADED_CACHE_UNAVAILABLE in failures[0]
+        assert "PromptGuard" not in failures[0]
+
     def test_a_healthy_body_fails_under_the_default(self) -> None:
         failures = evaluate_health(_healthy_response())
         joined = _joined(failures)
@@ -880,6 +897,30 @@ class TestAnchorFlag:
         )
         assert any("--anchor" in failure for failure in failures)
 
+    def test_a_non_utf8_anchor_file_is_a_failure_reported_before_any_image_read(
+        self, tmp_path: Path
+    ) -> None:
+        """A failure is a result, not a traceback — and the trust root is read
+        first, so a bad --anchor is reported before a single `docker run`."""
+        garbage = tmp_path / "anchor.sha256"
+        garbage.write_bytes(b"\xff\xfe not utf-8 \x80")
+        runner = _RecordingRunner()
+        fetch = _EndpointFetcher(_health_response(), HttpResponse(200, _metrics_body()))
+        failures = run_smoke(
+            "http://host:8020",
+            anchor_path=garbage,
+            image=_IMAGE,
+            fetch=fetch,
+            run=runner,
+            sleep=lambda _: None,
+            log=lambda _: None,
+        )
+        assert any(
+            "--anchor" in failure and "UnicodeDecodeError" in failure
+            for failure in failures
+        ), _joined(failures)
+        assert runner.calls == [], "the image is not read once the anchor failed"
+
     def test_the_default_anchor_is_the_committed_one(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -951,30 +992,35 @@ class TestRunSmoke:
             _health_response(status="healthy", degraded_reasons=[]),
             HttpResponse(500, "boom"),
         )
-        # A zero budget: the wait is status-aware, so a body that never reports
-        # the expected status polls to the deadline before it is evaluated.
+        # An injected clock: the wait is status-aware, so a body that never
+        # reports the expected status polls to the deadline before it is
+        # evaluated — on the fake clock, not the real one.
+        clock = _Clock()
         failures = run_smoke(
             "http://host:8020",
-            timeout_seconds=0.0,
+            timeout_seconds=3.0,
             fetch=fetch,
             sleep=lambda _: None,
+            clock=clock,
             log=lambda _: None,
         )
+        assert clock.now >= 4.0, "the wait must run to the injected deadline"
         assert any("healthy" in failure for failure in failures)
         assert any("/metrics" in failure for failure in failures)
 
     def test_metrics_is_probed_even_when_health_never_comes_up(self) -> None:
-        # A zero budget stands in for "the container never answered": the run
-        # must still probe /metrics and report both, not stop at the first
-        # failure.
+        # A deadline on the injected clock stands in for "the container never
+        # answered": the run must still probe /metrics and report both, not
+        # stop at the first failure.
         fetch = _EndpointFetcher(
             HttpResponse(500, "boom"), HttpResponse(200, _metrics_body())
         )
         failures = run_smoke(
             "http://host:8020",
-            timeout_seconds=0.0,
+            timeout_seconds=3.0,
             fetch=fetch,
             sleep=lambda _: None,
+            clock=_Clock(),
             log=lambda _: None,
         )
         assert "http://host:8020/metrics" in fetch.urls
@@ -1041,15 +1087,36 @@ class TestRunSmoke:
         )
         failures = run_smoke(
             "http://host:8020",
-            timeout_seconds=0.0,
+            timeout_seconds=3.0,
             image=_IMAGE,
             fetch=fetch,
             run=runner,
             sleep=lambda _: None,
+            clock=_Clock(),
             log=lambda _: None,
         )
         assert any("healthy" in failure for failure in failures)
         assert any(contract_smoke.IMAGE_ANCHOR_PATH in failure for failure in failures)
+
+    def test_the_run_forwards_sleep_and_clock_together(self) -> None:
+        """`run_smoke` hands both seams to the wait, so a test never spins for real."""
+        fetch = _EndpointFetcher(
+            _health_response(status="healthy", degraded_reasons=[]),
+            HttpResponse(200, _metrics_body()),
+        )
+        clock = _Clock()
+        delays: list[float] = []
+        run_smoke(
+            "http://host:8020",
+            timeout_seconds=2.0,
+            poll_interval_seconds=0.25,
+            fetch=fetch,
+            sleep=delays.append,
+            clock=clock,
+            log=lambda _: None,
+        )
+        assert clock.now >= 3.0, "the wait read the injected clock to its deadline"
+        assert delays and set(delays) == {0.25}, "every pause went through `sleep`"
 
     def test_the_log_carries_the_bodies(self) -> None:
         lines: list[str] = []

@@ -4,8 +4,8 @@
 digest plus the baked configuration in `searxng/config/`. Nothing is forked, no
 entrypoint is wrapped, and the whole Dockerfile is a `FROM` and a `COPY`.
 
-Forage's search stage is a JSON API client: `pipeline/orchestrator.py` calls
-`GET /search?format=json&engines=…`. This image exists so that call works out
+Forage's search stage is a JSON API client: `SearxngProvider`
+(`pipeline/search_providers/searxng.py`) calls `GET /search?format=json&engines=…`. This image exists so that call works out
 of the box, on defaults that are safe to publish. Written by
 `forage-ci-and-image` US-004; the service image's own lane is in
 `docs/releases.md`.
@@ -202,12 +202,13 @@ reachable only by a caller who asks for them.
 With `use_default_settings: true`, an entry is what stops an upstream release
 re-enabling something. Upstream keeps adding engines this repository has never
 vetted (observed live 2026-08-19: `aol`, `karmasearch videos`), and
-`pipeline/orchestrator.py` names its engines on every query precisely so a new
-default cannot change what a Forage search fans out to.
+`SearxngProvider` (`pipeline/search_providers/searxng.py`) names its engines on every
+query precisely so a new default cannot change what a Forage search fans out to.
 
-The *named-enabled* set and `_SEARXNG_ENGINES` in `pipeline/orchestrator.py`
-are a contract with two ends, and `tests/test_searxng_docker.py` asserts they
-are the same set — the parity is over the entries this file declares, not over
+The *named-enabled* set and `SEARXNG_ENGINES` in `pipeline/search_providers/searxng.py`
+(the definition; `pipeline/orchestrator.py` keeps `_SEARXNG_ENGINES` as an assigned alias,
+which is the name `tests/test_searxng_docker.py` reads) are a contract with two ends, and
+that test asserts they are the same set — the parity is over the entries this file declares, not over
 everything the merged config enables. An engine Forage asks for that is
 disabled here is a request answered with nothing, and it surfaces as thin
 results rather than as an error.

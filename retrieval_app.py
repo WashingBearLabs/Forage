@@ -81,9 +81,8 @@ from pipeline.search_providers import (
 from pipeline.search_providers.base import SearchProvider
 from pipeline.search_providers.brave import (
     BRAVE_API_KEY_ENV_VAR,
-    KEY_STRIP_CHARS,
-    brave_key_present,
     brave_settings_from_config,
+    usable_brave_key,
 )
 from pipeline.search_providers.policy import apply_request_policy
 from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL, SearxngProvider
@@ -213,8 +212,9 @@ def _resolve_brave_key() -> str | None:
     raw = os.environ.get(BRAVE_API_KEY_ENV_VAR)
     if raw is None:
         return None
-    if brave_key_present(raw):
-        return raw.strip(KEY_STRIP_CHARS)
+    key = usable_brave_key(raw)
+    if key is not None:
+        return key
     if raw.strip():
         logger.warning(
             "brave_key_invalid — %s is set but is not usable as an API key "
@@ -1797,14 +1797,17 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
     configured_chain = _resolved_search_providers(request.app.state)
     effective_chain, ignored_count = apply_request_policy(configured_chain, body)
     search_metrics.policy_unknown_provider += ignored_count
-    if not effective_chain:
-        search_metrics.record_error("search_unavailable")
-        raise PipelineError(
-            error="search_unavailable",
-            reason=POLICY_EXCLUDED_ALL_PROVIDERS,
-            request_id=uuid.uuid4().hex,
-        )
     try:
+        # The policy 422 is raised inside the same `try` as the pipeline's
+        # own, so one `except` records every `search_unavailable` from the
+        # exception's typed `error` — there is no second, string-literal
+        # recording path to drift from `ErrorCode`.
+        if not effective_chain:
+            raise PipelineError(
+                error="search_unavailable",
+                reason=POLICY_EXCLUDED_ALL_PROVIDERS,
+                request_id=uuid.uuid4().hex,
+            )
         response = await run_search_pipeline(
             body,
             providers=effective_chain,

@@ -2268,6 +2268,48 @@ async def test_exhaustion_code_follows_the_configured_not_the_effective_chain(
     assert resp.status_code == 422
     body = resp.json()
     assert body["error"] == "search_unavailable"
+    assert body["reason"] == "searxng: rate_limited"
+    assert brave.calls == []
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        pytest.param({"providers": ["searxng"]}, id="providers-restricts-to-searxng"),
+        pytest.param({"allow_paid_fallback": False}, id="paid-fallback-forbidden"),
+    ],
+)
+async def test_a_policy_restricted_chain_treats_unresponsive_engines_as_exhaustion(
+    client: httpx.AsyncClient, policy: dict[str, Any]
+) -> None:
+    """The recurring production shape under a policy that leaves only SearXNG.
+
+    SearXNG answers 200 with zero raw results and a non-empty
+    `unresponsive_engines` — a classified failure (ruling 17) — and the policy
+    keeps Brave out of the effective chain. The exhaustion code follows the
+    *configured* chain (ruling 28): two providers are configured, so this is
+    the general `search_unavailable`, never an empty 200 and never a legacy
+    `searxng_*` code, whichever chain the orchestrator's legacy predicate is
+    handed. Brave is never called.
+    """
+    searxng = FakeSearchProvider(
+        name="searxng",
+        paid=False,
+        outcome=_searxng_result(results=[], unresponsive_engines=["google"]),
+    )
+    brave = FakeSearchProvider(name="brave", paid=True)
+
+    with _borrowed_search_providers([searxng, brave]):
+        resp = await client.post(
+            "/search",
+            json={"query": "q", "promptguard_fail_closed": False, **policy},
+        )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["error"] == "search_unavailable"
+    assert body["reason"] == "searxng: rate_limited"
+    assert len(searxng.calls) == 1
     assert brave.calls == []
 
 

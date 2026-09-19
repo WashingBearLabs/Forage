@@ -100,7 +100,7 @@ next start is a warm start (zero network, about 9 s on 1 vCPU / 1 GB).
 
 | Attribute | Value |
 |-----------|-------|
-| **Purpose** | The free search backend for `POST /search`, tried first in the configured chain. Terminal for `/search` only when the configured chain is exactly `[searxng]` (`search-fallback` epic) — any other chain advances to the next provider on failure instead. Every result's title, URL and snippet is run through pipeline stages 1-3 before it is returned. |
+| **Purpose** | The free search backend for `POST /search`, tried at its configured position in the chain. Terminal for `/search` only when the configured chain is exactly `[searxng]` (`search-fallback` epic) — any other chain advances to the next provider on failure instead. Every result's title, URL and snippet is run through pipeline stages 1-3 before it is returned. |
 | **Client / protocol** | `httpx.AsyncClient(timeout=10.0, trust_env=False)` GET `{SEARXNG_URL}/search` with `q`, `format=json`, `pageno=1`, `engines=duckduckgo,brave,startpage,mojeek` (`SEARXNG_ENGINES` in `pipeline/search_providers/searxng.py`, which owns the call since `search-provider-abstraction` US-002; `pipeline/orchestrator.py` keeps `_SEARXNG_ENGINES` as an assigned alias). One request per `/search`; the response body is bounded at 1 MiB before it is parsed; at most `min(num_results*2, 20)` candidates are scanned; `unresponsive_engines` is passed through from the JSON envelope, capped at sixteen entries of 64 clean characters orchestrator-side. |
 | **Configuration** | `SEARXNG_URL` — default `http://searxng:8080`, read **once at import** in `retrieval_app.py` (changing it needs a restart). Forage reads no other SearXNG variable. The companion container reads `SEARXNG_SECRET` (**secret, required**; unset means the container exits 1), `SEARXNG_VALKEY_URL` (optional) and `SEARXNG_LIMITER` (optional, off by design — a working limiter 429s Forage's client and caps API formats at 4 requests/hour). Canonical reference: `docs/configuration.md`, `docs/searxng.md`. |
 | **Companion image** | `ghcr.io/washingbearlabs/forage-searxng` — `searxng/Dockerfile` (digest-pinned upstream) plus `searxng/config/settings.yml` (`formats: [html, json]`, port 8080, `limiter: false`, four engines with 5 s timeout each) and `searxng/config/limiter.toml`. Engine parity with `SEARXNG_ENGINES` is asserted by `tests/test_searxng_docker.py` (which reads it through `pipeline/orchestrator.py`'s `_SEARXNG_ENGINES` alias). Own tag lane `searxng-v*`. |
@@ -120,7 +120,7 @@ next start is a warm start (zero network, about 9 s on 1 vCPU / 1 GB).
 | **Client / protocol** | `httpx.AsyncClient(timeout=<search_brave_timeout_seconds>, follow_redirects=False, trust_env=False, verify=ssl.create_default_context())` GET the fixed constant `https://api.search.brave.com/res/v1/llm/context` (`_BRAVE_LLM_CONTEXT_URL`, no operator override — no `SEARXNG_URL`-style env var exists for it) with `q` (truncated to `search_brave_query_max_chars` before egress) and `count=<max_results>`; auth via the `X-Subscription-Token` header only, never the URL or query string. The response body is bounded at 1 MiB (`_BRAVE_MAX_RESPONSE_BYTES`) before it is parsed, and each mapped chunk is capped to `search_brave_chunk_max_chars` before it reaches the orchestrator. One request per `/search` on a Brave-served chain; zero retries (ruling 18). |
 | **Configuration** | `FORAGE_BRAVE_API_KEY` — **secret**, optional, read exactly once in the lifespan; unset (or not present per `brave_key_present()`) means the `brave` chain entry is skipped with one WARNING (`brave_skipped_missing_key`) and the deployment falls back to SearXNG. `config.yaml` top-level scalars, read **unconditionally** at boot so an out-of-range value refuses boot whether or not `brave` is in the chain: `search_brave_timeout_seconds` (1.0-60.0, default 15.0), `search_brave_chunk_max_chars` (200-2000, default 2000), `search_brave_query_max_chars` (50-400, default 400). Canonical reference: `docs/configuration.md`, `kit_tools/docs/ENV_REFERENCE.md`. |
 | **Timeouts / retries** | `search_brave_timeout_seconds` httpx timeout (default 15 s); **zero retries** (ruling 18) — `/search` on a Brave-only chain makes at most one paid call. |
-| **Health signal** | **None.** `/health` has no Brave field until spec 4; a failing or missing key surfaces only per request. |
+| **Health signal** | `/health` reports `search_providers` (the resolved chain) and `capabilities.brave_api_key: 1` when a usable key is set, absent otherwise (`search-policy-and-health` US-002, shipped in `v1.1.0`); a failing key still surfaces only per request, as `brave: auth` in `provider_errors`. |
 | **Failure impact** | `/search` returns **422** `{error, reason, request_id}` with `search_unavailable`, reason `brave: <failure_class>` — `auth` (rejected key), `rate_limited` (`429`), `timeout`, or `hard_error` (everything else, diagnosed by the `brave_search_failed` log line's `detail` token) — never the key, the endpoint, or exception text. `/retrieve` and `/extract` are unaffected. `/metrics.search.errors.search_unavailable` counts it. See `kit_tools/docs/TROUBLESHOOTING.md`. |
 | **Rate limits** | None enforced by Forage — no spend ceiling and no in-request retry (ruling 12, ruling 18). Brave is billed per query (`$5`/1,000, no free tier); the operator's own account/plan is the only ceiling. |
 
@@ -186,7 +186,7 @@ Operator-side vendoring of a new revision to the mirror is `scripts/vendor_weigh
 | **Runtime use** | Only the weights-mirror fallback (`oras pull`), and only when `FORAGE_MIRROR_TOKEN` is set. A GHCR outage does not affect a running container beyond that leg (`pull_failed` / `timeout` outcomes). |
 | **Publish gates** | `.github/workflows/ci.yml` `publish` job needs `lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke`; the pushed amd64 image is verified layer-for-layer against the smoke-tested artifact; on `v*` tags a Release is created carrying `contract/openapi.yaml` and `openapi.yaml.sha256`, read back and checked against the committed anchor. |
 | **Tag scheme** | `v1.2.3` publishes `1.2.3`, `1.2`, `latest`; any tag containing `-` (e.g. `v0.9.3-rc`) publishes the exact tag only; push to `main` publishes `sha-<short>`. The git tag is the version; `pyproject.toml`'s `version` is inert. Reference: `docs/releases.md`. |
-| **Current state** | Local git tag `v1.0.0` exists (2026-09-11, first non-pre-release). Whether it published green and therefore whether `latest` now exists could not be verified offline. `compose/*.yml` pin `forage:1.1.0` and `forage-searxng:0.1.1-rc`; the forage pin resolves once `v1.1.0` publishes (`search-release` US-002), and a pull before that fails with `manifest unknown`. `v0.9.2-rc` was withdrawn after failing the parity gate (package-version deletion recorded as pending). |
+| **Current state** | Two non-pre-release tags published, both verified against GHCR: `v1.0.0` (2026-09-12 UTC, commit `f4c2b16`) minted `latest`, `1.0` and `1.0.0` at index digest `sha256:d83639cc…`; `v1.1.0` (2026-09-18 UTC, commit `06b01b14`) moved `latest` and minted `1.1` and `1.1.0` at `sha256:e1b875cc…`, serving contract `1.2.0` (`docs/releases.md` § "Released versions" has the full digests). `compose/*.yml` pin `forage:1.1.0` and `forage-searxng:0.1.1-rc`, and both pins resolve. `v0.9.2-rc` was withdrawn after failing the parity gate (package-version deletion recorded as pending). |
 
 ---
 
@@ -201,8 +201,8 @@ behaviour is described here from Forage's own docs and tests
 **What Poppy must do:**
 - Compare `/health.contract_version` (**1.2.0**) on its **MAJOR** and refuse to activate on
   a mismatch (`CLAUDE.md` invariant 4). **Never** compare `sanitizer_revision`: the two
-  repos' revisions diverged deliberately eleven times (Forage `5249def6…`, Poppy still
-  `e6b2b56d…`).
+  repos' revisions diverged deliberately fourteen times (Forage `41ac98ca…`, Poppy still
+  `e6b2b56d…`; `docs/bootstrap-notes.md` is the running record, not this count).
 - Vendor the contract by the procedure in `contract/GOVERNANCE.md`: pick a tag (never
   `latest`); fetch `openapi.yaml` and `openapi.yaml.sha256` from the **same** tag (git
   tag, `gh release download v<ver> --pattern 'openapi.yaml*'`, or
@@ -376,9 +376,10 @@ binding, service names, volume literal, absent limiter, required secret) are ass
 | **Image pins** | `forage:1.1.0`, `forage-searxng:0.1.1-rc` | Same |
 
 **Pin sequencing:** both fragments pin `ghcr.io/washingbearlabs/forage:1.1.0` and
-`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`. The service pin resolves once `v1.1.0`
-publishes (`search-release` US-002); a `docker compose up` before that fails with
-`manifest unknown` — sequencing, not breakage. The searxng pin stays a pre-release because
+`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`. The service pin resolves: `v1.1.0`
+published on 2026-09-18 (`search-release` US-002), so the `manifest unknown` a
+`docker compose up` returned before that date was sequencing, not breakage — the failure any
+pin to a not-yet-published tag produces. The searxng pin stays a pre-release because
 no non-pre-release `searxng-v*` tag exists.
 
 **Egress from the `forage` container:** `searxng:8080` and `valkey:6379` on the compose

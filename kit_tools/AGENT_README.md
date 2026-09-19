@@ -69,7 +69,7 @@ listed below exists, and nothing is listed that doesn't.
       2026-09-11; new specs land here via `/kit-tools:plan-epic`)
 - [ ] Scan `docs/GOTCHAS.md`
 - [ ] Confirm the environment: `uv sync --extra dev && uv run pytest` (expect ALL green, zero
-      failures — the current count lives in `testing/TESTING_GUIDE.md`; 2089 as of
+      failures — the current count lives in `testing/TESTING_GUIDE.md`; 2105 as of
       `search-release` US-003)
 
 **Flag anything that looks like:**

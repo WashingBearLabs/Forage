@@ -231,7 +231,7 @@ Checks the repository out (so `contract_smoke.py` imports the *same commit's*
 loads it and asserts identity, then:
 
 ```bash
-docker run -d --name forage-smoke -p 8020:8020 forage:ci      # no environment at all
+docker run -d --name forage-smoke -p 127.0.0.1:8020:8020 forage:ci   # no environment at all; loopback only
 uv run python contract_smoke.py \
   --base-url http://127.0.0.1:8020 \
   --timeout-seconds 120 \
@@ -338,9 +338,11 @@ tagged tree and carries that version's per-version entry; its assets verify agai
 committed anchor. **What it does not prove:**
 `linux/arm64` is built from the same commit and the same digest-pinned multi-arch base but
 is never executed by CI — a consumer on arm64 should run `contract_smoke.py` against their
-own container, with the `--expect-status` that matches how they started it. The `v1.0.0` publish (commit `f4c2b16`, 2026-09-11) is recorded in the epic
-wrapper as the first non-pre-release; whether the resulting `latest` and `1.0` tags are on
-GHCR could not be verified offline during this seed.
+own container, with the `--expect-status` that matches how they started it. Two publishes have run green through this lane, both
+verified against GHCR afterwards rather than assumed: `v1.0.0` (commit `f4c2b16`, 2026-09-12 UTC)
+minted `latest`, `1.0` and `1.0.0` at index digest `sha256:d83639cc…`, and `v1.1.0` (commit
+`06b01b14`, 2026-09-18 UTC) moved `latest` and minted `1.1` and `1.1.0` at `sha256:e1b875cc…`.
+`docs/releases.md` § "Released versions" carries the full digests, anchors and tagged commits.
 
 ---
 

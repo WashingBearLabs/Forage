@@ -49,8 +49,8 @@ Reference"; the consumer-facing one is `kit_tools/docs/API_GUIDE.md` "Error resp
 | URL refused | `invalid_url`, `private_ip`, `blocked_domain` | `/retrieve` 422 | `url_validator.validate_url`, mapped in `run_retrieve_pipeline`; re-checked per redirect hop inside `fetch_url` | not logged |
 | Fetch failure | `fetch_timeout`, `content_too_large`, `fetch_error` | `/retrieve` 422 | `pipeline/stage5_url_audit.fetch_url`, mapped in `run_retrieve_pipeline` | not logged |
 | Document failure | `content_too_large`, `content_too_large_to_classify`, `extraction_failed`, `pdf_encrypted`, `pdf_no_text`, `unsupported_format` | `/extract` 422 | `document_failure()` in `run_extract_pipeline_from_file`; `_spool_upload` (size re-check); `UnsupportedFormatError` from the handler for an invalid `promptguard_threshold` | INFO `document extraction completed`, verdict `failure` |
-| Search backend failure (lone `searxng` chain) | `searxng_error`, `searxng_unavailable` | `/search` 422 | `run_search_pipeline` → `_searxng_pipeline_error` | not logged |
-| Search provider chain exhausted (any other chain) | `search_unavailable` | `/search` 422 | `run_search_pipeline` → `_search_unavailable_error`; reason is the closed `<provider_name>: <failure_class>` | not logged |
+| Search backend failure (lone `searxng` chain) | `searxng_error`, `searxng_unavailable` | `/search` 422 | `run_search_pipeline` → `_searxng_pipeline_error` | WARNING `search_provider_failed provider=searxng failure_class=<class> detail=<token>` from the orchestrator, paired with the provider's own WARNING (`pipeline/search_providers/searxng.py`) |
+| Search provider chain exhausted (any other chain) | `search_unavailable` | `/search` 422 | `run_search_pipeline` → `_search_unavailable_error`; reason is one closed `<provider_name>: <failure_class>` entry per failed provider, in chain order, joined by `"; "` (e.g. `searxng: rate_limited; brave: timeout` — `kit_tools/docs/TROUBLESHOOTING.md` shows the composite) | one WARNING `search_provider_failed provider=… failure_class=… detail=…` per failed provider, in chain order, each paired with that provider's own WARNING |
 | Search chain policy-excluded | `search_unavailable` | `/search` 422 | `retrieval_app.search`, before `run_search_pipeline` is called: `apply_request_policy` narrows the configured chain to empty for this request; reason is the fixed literal `policy_excluded_all_providers` — no provider was tried (`search-policy-and-health` US-010) | not logged |
 | Capacity / admission | `busy` | `/extract` 429 | `ExtractionAdmissionMiddleware` (queue depth 1, 50 MiB queued-bytes reservation) | not logged; counted in `/metrics.extraction.busy_rejections` |
 | Upload size, streaming | `content_too_large` | `/extract` 413 declared, **400 observed** (see Observed rough edges) | `DocumentSizeLimitMiddleware` via `_RequestBodyTooLargeError` | not logged |
@@ -164,11 +164,12 @@ upload exception through `document_failure`, adds `OSError` to `extraction_faile
 `body_too_large`, `bad_json`, `malformed_body`, `unexpected`) to `searxng_unavailable`.
 
 That legacy pair is selected by the **configured chain**, not by the failing provider:
-`_is_legacy_searxng_chain` is true only for a chain of exactly one provider whose `name`
+`_legacy_searxng_codes` is true only for a chain of exactly one provider whose `name`
 is `searxng`, compared as a name and never with `isinstance` (ruling 28). Every other
 chain refuses with `search_unavailable` (contract `1.2.0`), whose reason is composed from
-two closed vocabularies — `f"{failure.provider_name}: {failure.failure_class}"` — so no
-endpoint, credential or upstream text can reach the body through it.
+two closed vocabularies — one `<provider_name>: <failure_class>` entry per failed
+provider, in chain order, joined by `"; "` — so no endpoint, credential or upstream text
+can reach the body through it.
 
 The route handlers add bookkeeping, not decisions: `/retrieve` calls
 `RetrieveMetrics.record_error(exc.error)` and re-raises; `/extract` records the verdict
@@ -240,7 +241,8 @@ pairs that emit a body today; `/health` and `/metrics` declare none.
 | Operation | Timeout | Retries | Backoff | Source |
 |-----------|---------|---------|---------|--------|
 | Outbound page fetch (`fetch_url`) | 30 s (`DEFAULT_TIMEOUT`) per request; 10 MiB body cap; max 5 manual redirect hops | none | none | `pipeline/stage5_url_audit.py` |
-| SearXNG query | 10 s (`httpx.AsyncClient(timeout=10.0)`) | none | none | `pipeline/orchestrator.py` |
+| SearXNG query | 10 s (`httpx.AsyncClient(timeout=10.0)`) | none | none | `pipeline/search_providers/searxng.py` |
+| Brave LLM-Context query | `search_brave_timeout_seconds` (`config.yaml`, default 15 s) | none | none | `pipeline/search_providers/brave.py` |
 | Provider chain traversal (`run_search_pipeline`) | sum of the per-provider timeouts (10 s SearXNG + `search_brave_timeout_seconds` when configured) | none | none | `pipeline/orchestrator.py` |
 | Valkey connect and reconnect | 2 s per attempt (`_RECONNECT_TIMEOUT_S`) | on the next operation once the backoff elapses; forever | 1 s doubling to 30 s (`_RECONNECT_INITIAL_BACKOFF_S`, `_RECONNECT_MAX_BACKOFF_S`); single-flight `_reconnect_lock`, concurrent callers get an immediate miss; `ping_if_due` from `/health` detects recovery in idle windows | `cache.py` |
 | Weights acquisition (`WeightAcquisition.run`) | 1800 s for an `oras` pull (`ORAS_TIMEOUT_S`) | forever until loaded; cancellable | 30 s doubling to 600 s, plus or minus 20% jitter applied to the sleep only (`RETRY_INITIAL_BACKOFF_S`, `RETRY_MAX_BACKOFF_S`, `RETRY_JITTER_FRACTION`); single-flight, a second caller is refused not queued | `model_fetcher.py` |

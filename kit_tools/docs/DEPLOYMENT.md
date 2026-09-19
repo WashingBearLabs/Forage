@@ -118,7 +118,7 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
    against `info.version` in the `openapi.yaml` you just extracted; a MAJOR mismatch means
    **do not deploy** (the consumer is expected to refuse activation, `CLAUDE.md`
    invariant 4). Compare contracts, never `sanitizer_revision`, which has deliberately
-   diverged from Poppy's six times.
+   diverged from Poppy's fourteen times (`docs/bootstrap-notes.md` keeps the record).
 5. **Confirm the weights source is reachable** from the host: an `HF_TOKEN` with gated-repo
    access, or mirror credentials. Weights are fetched at runtime, so a wrong token is a
    `degraded` boot, not a failed one.
@@ -137,10 +137,10 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
 Both fragments are standalone (no `extends`), validated by CI's `lint` job with
 `docker compose config -q`, and share the fixed-name volume `forage-model-cache`. **They
 pin `ghcr.io/washingbearlabs/forage:1.1.0` and
-`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`.** The `forage` pin resolves once
-`v1.1.0` publishes; a `docker compose up` before that fails with `manifest unknown`, which
-is sequencing, not breakage. Edit the `image:` lines to the tag you verified above before
-bringing them up.
+`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`.** Both pins resolve — `v1.1.0`
+published on 2026-09-18; the `manifest unknown` a `docker compose up` returned before that
+date was sequencing, not breakage. Edit the `image:` lines to the tag you verified above
+before bringing them up.
 
 | Fragment | Starts | Env it needs | Cache mode |
 |----------|--------|--------------|------------|
@@ -189,7 +189,7 @@ warning and every key falls back to its code default, while a malformed `extract
    ~270 MiB weight set downloads (measured 19 s cold, 9 s warm on the 1 vCPU / 1 GB
    reference host). Once weights land, expect `promptguard_loaded: true`,
    `capabilities: {"search_sanitization": 1}`, `contract_version` matching the image's own
-   contract (`"1.1.0"` for `v1.0.0`, `"1.2.0"` once `v1.1.0` publishes it), and
+   contract (`"1.1.0"` for `v1.0.0`, `"1.2.0"` for `v1.1.0`), and
    `cache_backend` reading `valkey` (with `cache_connected: true`) under `full.yml` or
    `memory` under `minimal.yml`. A failed acquisition retries in the background at 30 s,
    doubling to a 600 s ceiling with +/-20% jitter, forever; it converges in place without a

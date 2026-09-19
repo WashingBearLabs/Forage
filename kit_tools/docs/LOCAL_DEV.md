@@ -227,9 +227,10 @@ curl -s localhost:8020/health | jq
 
 Two caveats. First, **the fragments pull published images; they do not build your
 working tree.** Both pin `ghcr.io/washingbearlabs/forage:1.1.0` and
-`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`; the forage pin resolves once `v1.1.0`
-publishes, and a `docker compose up` before that fails with `manifest unknown` — sequencing,
-not breakage. To run the image you just built, use the `docker run` form above. Second,
+`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`; both pins resolve (`v1.1.0` published
+2026-09-18 — the `manifest unknown` a `docker compose up` returned before then was
+sequencing, not breakage). To run the image you just built, use the `docker run` form
+above. Second,
 neither fragment declares a `healthcheck:` and the `Dockerfile` has no `HEALTHCHECK` — the
 "10 s x 5 retries" check that source comments mention belongs to Poppy's compose, not this repo.
 
@@ -294,7 +295,7 @@ a contract change (CLAUDE.md invariant 4).
 
 ```bash
 docker build -t forage:ci .
-docker run -d --name forage-smoke -p 8020:8020 forage:ci
+docker run -d --name forage-smoke -p 127.0.0.1:8020:8020 forage:ci   # loopback only -- no auth exists
 uv run python contract_smoke.py --base-url http://127.0.0.1:8020
 docker rm -f forage-smoke
 ```

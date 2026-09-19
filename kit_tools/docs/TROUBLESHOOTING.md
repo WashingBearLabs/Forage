@@ -173,7 +173,7 @@ codes plus three `/search` codes deduplicate to eighteen.
 | `brave: auth` | 422 | `/search` | Brave rejected the key on the LLM-Context call — wrong, revoked, or not entitled (`401`/`403`) | Replace `FORAGE_BRAVE_API_KEY` and **restart the container** — `BraveApiProvider` reads the key once, at process start |
 | `brave: rate_limited` | 422 | `/search` | Brave answered `429` — a per-second limit and plan exhaustion share the same status | Retry after a pause; if it persists, check the Brave account's plan, since a transient limit and an exhausted quota look identical here |
 | `brave: timeout` | 422 | `/search` | The LLM-Context call exceeded `search_brave_timeout_seconds` (default 15 s) | Raise `search_brave_timeout_seconds` in `config.yaml`, or check egress latency to `api.search.brave.com` |
-| `brave: hard_error` | 422 | `/search` | Everything else — a non-2xx status, a redirect, an oversized or unparseable body, or an unexpected exception — collapsed to one class; the diagnosis is in the `brave_search_failed` log line's `detail` token | Grep the `brave_search_failed` line for `detail`: `transport_error` → egress/DNS/proxy, `redirect_refused` → the endpoint moved, `bad_json`/`malformed_body` → capture a fresh sample, `body_too_large` → the response bound, `http_5xx` → Brave-side, `unexpected` → file a bug report |
+| `brave: hard_error` | 422 | `/search` | Everything else — a non-2xx status, a redirect, an oversized or unparseable body, or an unexpected exception — collapsed to one class; the diagnosis is in the `brave_search_failed` log line's `detail` token | Grep the `brave_search_failed` line for `detail`: `transport_error` → egress/DNS/proxy, `redirect_refused` → the endpoint moved, `bad_json`/`malformed_body` → capture a fresh sample, `body_too_large` → the response bound, `http_4xx` → a 4xx other than 401/403/429, so the request shape or endpoint changed (capture a fresh sample), `http_5xx` → Brave-side, `unexpected` → file a bug report |
 | `searxng_error` | 422 | `/search` | SearXNG answered non-2xx; reason `SearXNG returned HTTP error (http_<n>)`. A **429** here means the SearXNG limiter is on | `SEARXNG_LIMITER` must stay unset. Persistent 4xx/5xx with the limiter off is engine rot: bump the digest pin (`docs/searxng.md`) |
 | `searxng_unavailable` | 422 | `/search` | Connection refused, DNS failure, 10 s timeout, an oversized body, or an unparseable envelope; reason `SearXNG not reachable at <scheme>://<host>:<port>: <detail>`, where `detail` is one of the closed tokens `timeout`, `connect_error`, `body_too_large`, `bad_json`, `malformed_body`, `unexpected` — no exception text, and no userinfo from `SEARXNG_URL` | Is the `searxng` container up? It exits 1 without `SEARXNG_SECRET`. `SEARXNG_URL` is read at import time: restart Forage after changing it |
 | `unsupported_format` | 422 | `/extract` | Upload is neither `%PDF-` nor valid UTF-8 text: empty, NUL bytes, invalid UTF-8, or no visible text (`pipeline/stage1_upload.py`) | The bytes, not the `mime_hint`; magic bytes decide |
@@ -396,9 +396,9 @@ different `sanitizer_revision` than before the deploy.
 
 **Cause:** expected, not a bug. `sanitizer_revision` hashes eight `pipeline/*.py` files, the
 model identity and `promptguard_threshold`, and it is part of the content-cache key
-fingerprint, so a rotation invalidates every existing entry on purpose. Nine rotations are
-recorded in `docs/bootstrap-notes.md` (`e6b2b56d` → ... → `b7871b20`). Any consumer cache
-keyed on the revision must flush too.
+fingerprint, so a rotation invalidates every existing entry on purpose. Fourteen rotations
+are recorded in `docs/bootstrap-notes.md` (`e6b2b56d` → ... → `41ac98ca`); that file, not
+this count, is the record. Any consumer cache keyed on the revision must flush too.
 
 **Fix:** none needed. If the rotation surprised you, the bump was made as a drive-by inside
 a behavioural change instead of at a boundary; record it in `docs/bootstrap-notes.md`.
@@ -614,7 +614,7 @@ git show v1.0.0:contract/openapi.yaml.sha256 | diff - openapi.yaml.sha256 && sha
 **Symptom:** someone concludes the two deployments are "out of sync" because the revisions
 differ.
 
-**Cause:** wrong measure. Forage's revision has deliberately diverged from Poppy's six times
+**Cause:** wrong measure. Forage's revision has deliberately diverged from Poppy's fourteen times
 (recorded in `docs/bootstrap-notes.md`); it hashes source bytes, model identity and the
 threshold, not the wire shape.
 
@@ -683,12 +683,13 @@ connected`, cache hits) is INFO and therefore invisible.
 an older image than expected.
 
 **Cause:** `compose/minimal.yml` and `compose/full.yml` pin
-`ghcr.io/washingbearlabs/forage:1.1.0` and `forage-searxng:0.1.1-rc`; the forage pin resolves
-once `v1.1.0` publishes (`search-release` US-002), and a pull before that fails with
-`manifest unknown` — sequencing, not breakage. A pre-release tag that was withdrawn
-(`v0.9.2-rc` was) or never published pulls nothing.
+`ghcr.io/washingbearlabs/forage:1.1.0` and `forage-searxng:0.1.1-rc`; both resolve today
+(`v1.1.0` published 2026-09-18, `search-release` US-002). A pin that runs ahead of the newest
+published tag fails with `manifest unknown` until that tag publishes — sequencing, not
+breakage — and a pre-release tag that was withdrawn (`v0.9.2-rc` was) or never published
+pulls nothing.
 
-**Fix:** pin a full semver (`1.0.0`) or the `@sha256` digest from the Release body, never
+**Fix:** pin a full semver (`1.1.0`) or the `@sha256` digest from the Release body, never
 `latest`; then `docker compose -f <file> up -d`. Rollback is the same command with the
 previous tag; a rollback across a `sanitizer_revision` rotation flushes the content cache,
 which is expected.

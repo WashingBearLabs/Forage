@@ -62,7 +62,7 @@ polls until `status` reads `healthy`); CI never runs it. You can run exactly wha
 
 ```bash
 docker build -t forage:ci .
-docker run -d --name forage-smoke -p 8020:8020 forage:ci
+docker run -d --name forage-smoke -p 127.0.0.1:8020:8020 forage:ci   # loopback only -- no auth exists
 uv run python contract_smoke.py --base-url http://127.0.0.1:8020
 docker rm -f forage-smoke
 ```
@@ -94,10 +94,10 @@ crash reads as a false regression.
 
 ## Test Structure
 
-**30 `test_*.py` modules** under `tests/`, flat, one per subject — 33 Python files in all
+**32 `test_*.py` modules** under `tests/`, flat, one per subject — 35 Python files in all
 once `conftest.py`, `fakes.py` and `__init__.py` are counted — plus `golden/` and
-`fixtures/`. (Both numbers measured 2026-09-15; state the convention with the count, or
-the next person reconciles two different ones by increment.) **2089 tests, all green** as
+`fixtures/`. (Both numbers measured 2026-09-19; state the convention with the count, or
+the next person reconciles two different ones by increment.) **2105 tests, all green** as
 of 2026-09-18 (`search-release` US-003, the `v1.1.0` tagged commit — `feature-forage-contract`
 US-001 added `test_contract_errors.py`'s 25, US-005 `test_contract_metrics.py`'s 20, US-002
 `test_contract_export.py`'s 18, US-003 `test_governance_docs.py`'s 41 plus 26 in
@@ -107,8 +107,9 @@ then added the new `test_search_providers.py` module and US-002 grew it to 103 f
 `SearxngProvider` and the orchestrator side of the seam; `search-release` US-004 grew three
 more — `test_ci_workflow.py` to 279 (the awk-extractor tests), `test_compose_fragments.py`
 to 62 (the two-variable passthrough tests) and `test_contract_smoke.py` to 91 (the
-status-aware `wait_for_health` and `--anchor` tests); the per-module counts in the table
-below have not all been re-measured since 2026-09-10).
+status-aware `wait_for_health` and `--anchor` tests); the `test_search_providers.py` and
+`test_brave_provider.py` rows below were re-measured on 2026-09-19 (`pytest --collect-only`),
+the rest not since 2026-09-10).
 
 | Module | Tests | Covers |
 |--------|------:|--------|
@@ -116,8 +117,8 @@ below have not all been re-measured since 2026-09-10).
 | `tests/test_vendor_weights.py` | 102 | `scripts/vendor_weights.py`: the symlink-dereferenced tarball (built, extracted, bytes compared), tar determinism, generation-time allowlist refusal, the manifest round-trip through the real verifier, credential hygiene on the `oras` path, and the private-package visibility check — all fixture-driven, no registry and no token |
 | `tests/test_stage2_structural.py` | 78 | Deterministic regex injection scan |
 | `tests/test_orchestrator.py` | 63 | End-to-end pipeline drive, search + retrieve paths |
-| `tests/test_search_providers.py` | 103 | The `SearchProvider` seam and `SearxngProvider`: protocol shape, the closed failure vocabulary, the AST sweep that keeps provider code away from the sanitization stages and the cache, the extracted SearXNG call (request shape, hardened client kwargs, raw-dict pass-through, `publishedDate` → `date`, every failure mapping, credential-free logging, `origin` including its four malformed-URL fallbacks) and the orchestrator side (candidate budget, the re-applied slice as an exact count, the `unresponsive_engines` 16×64 bound, the chain-shaped `ProviderFailure` mapping — `searxng_error` / `searxng_unavailable` for a lone `searxng` chain, `search_unavailable` for every other — and the `content_kind` / `date` copy onto each wire result) |
-| `tests/test_brave_provider.py` | 37 | `BraveApiProvider` (`feature-brave-provider`): fixture-provenance guards, the pinned-sample parse, hardened client kwargs, the `config.yaml` tunables and the unconditional lifespan boot-refusal, the `chain[0]` candidate budget (spy provider + outbound `count` param, `num_results` 1/5/20), the three payload bounds (`Content-Length` fast-reject, a no-header streamed overrun, a compressed body whose decoded length overruns — all asserted never to reach `json.loads`), the chunk and query caps, and the `engine="brave"` (SearXNG) vs `engine="brave-api"` (Brave) provenance split in both directions |
+| `tests/test_search_providers.py` | 161 | The `SearchProvider` seam and `SearxngProvider`: protocol shape, the closed failure vocabulary, the AST sweep that keeps provider code away from the sanitization stages and the cache, the extracted SearXNG call (request shape, hardened client kwargs, raw-dict pass-through, `publishedDate` → `date`, every failure mapping, credential-free logging, `origin` including its four malformed-URL fallbacks) and the orchestrator side (candidate budget, the re-applied slice as an exact count, the `unresponsive_engines` 16×64 bound, the chain-shaped `ProviderFailure` mapping — `searxng_error` / `searxng_unavailable` for a lone `searxng` chain, `search_unavailable` for every other — and the `content_kind` / `date` copy onto each wire result) |
+| `tests/test_brave_provider.py` | 128 | `BraveApiProvider` (`feature-brave-provider`, US-010 → US-013 plus US-002): fixture-provenance guards, the pinned-sample parse, hardened client kwargs, the `config.yaml` tunables and the unconditional lifespan boot-refusal, the `chain[0]` candidate budget (spy provider + outbound `count` param, `num_results` 1/5/20), the three payload bounds (`Content-Length` fast-reject, a no-header streamed overrun, a compressed body whose decoded length overruns — all asserted never to reach `json.loads`), the chunk and query caps, the `engine="brave"` (SearXNG) vs `engine="brave-api"` (Brave) provenance split in both directions; then US-002's lifespan registration (`brave_key_present`, the `brave_skipped_missing_key` skip, `_CLEARED_ENV_VARS` exact set), US-012's failure taxonomy — every status and transport outcome to its closed `ProviderFailure`, the Brave-only-chain 422 `search_unavailable` on the wire, and key-never-leaks across the log line, the 422 body and `/metrics` on each failure path — and US-013's sanitization parity (a Brave chunk through stages 1-3 exactly as a SearXNG snippet) and the no-cache-write pin (`ContentCache.get`/`put`/`delete` spied through `FakeStorage`) |
 | `tests/test_url_validator.py` | 59 | SSRF defense: RFC1918, DNS rebinding, schemes |
 | `tests/test_cache.py` | 116 | Valkey cache incl. the never-log-the-URL invariant |
 | `tests/test_smart_extraction.py` | 45 | Summary mode / high-signal preservation |

@@ -64,7 +64,7 @@ Forage listens on `0.0.0.0:8020` inside the container; the compose fragments pub
 | `sanitizer_revision` | string | 64-hex sha256 | `derive_sanitizer_revision(config)`: hash of eight `pipeline/*.py` sources plus `MODEL_ID@revision` plus `promptguard_threshold`. The literal `unknown` appears only when no lifespan ran (test transports). |
 | `contract_version` | string | `1.2.0` | `pipeline.contract.CONTRACT_VERSION`; identical to `/metrics.contract_version` and `/openapi.json` `info.version`. |
 | `cache_backend` | string | `valkey`, `memory` | Decided once at start: `VALKEY_URL` fully unset gives `memory`; set to anything else, including the empty string, gives `valkey`. |
-| `search_providers` | list | `["searxng"]`, `["searxng", "brave"]`, ... | The resolved provider chain's names, in traversal order, after key-gated skips (contract 1.2.0, `search-policy-and-health` US-002). Configuration echo fixed for the life of the process — not a liveness probe, and not a statement that any provider is reachable right now. |
+| `search_providers` | list | `["searxng"]`, `["searxng", "brave"]`, ... | The resolved provider chain's names, in traversal order, after key-gated skips (contract 1.2.0, `search-policy-and-health` US-002). Configuration echo fixed for the life of the process — not a liveness probe, and not a statement that any provider is reachable right now. The check is to compare it against `FORAGE_SEARCH_PROVIDERS`: a configured `brave` that is missing here was skipped at boot for want of a usable key, and the startup signal for that is the WARNING `brave_skipped_missing_key`; `/health` itself cannot tell "configured but skipped" from "never configured" — by design, key presence is published, never a second differential channel (ruling 15). |
 | `degraded_reasons` | list | `promptguard_unavailable`, `cache_unavailable` | Closed vocabulary (`pipeline/contract.py` `DegradedReason`). Ordered `promptguard_unavailable` first. Empty iff `status` is `healthy`. |
 
 The two reasons are the complete set. `promptguard_unavailable` means the classifier is not loaded (no token, download in flight, verification refused, or load failed). `cache_unavailable` means `VALKEY_URL` is configured (set, even empty or unparseable) and the ping fails; it never appears in memory mode. The response is validated against `DegradedReason` on the way out, so a reason added to the handler without being added to the Literal fails loudly (500) rather than reaching a consumer unannounced.
@@ -362,7 +362,7 @@ Both scripts live at the repo root, run from a checkout via `uv run`, and are **
 uv run python contract_smoke.py --base-url http://127.0.0.1:8020 [--expect-status {healthy,degraded}] [--anchor <path>] [--timeout-seconds 120] [--poll-interval-seconds 2] [--image <ref>]
 
 # Typical CI shape
-docker run -d --name forage-smoke -p 8020:8020 forage:ci
+docker run -d --name forage-smoke -p 127.0.0.1:8020:8020 forage:ci   # loopback only when run by hand
 uv run python contract_smoke.py --base-url http://127.0.0.1:8020 --image forage:ci
 ```
 

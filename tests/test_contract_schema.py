@@ -345,8 +345,24 @@ def test_pipeline_422_error_code_is_pinned_to_nine_members() -> None:
     """
     golden = json.loads(_GOLDEN_PATH.read_text())
     enum = set(golden["Pipeline422ErrorResponse"]["properties"]["error"]["enum"])
+    # A literal set, not `set(PIPELINE_422_ERROR_CODES)`: the golden is
+    # regenerated from the code, so comparing code to code would let a renamed
+    # member — a MAJOR change — pass. The sibling `SearchRequest` and
+    # `SearchMetricsResponse` pins are literal for the same reason.
+    assert enum == {
+        # `/retrieve`'s six
+        "blocked_domain",
+        "content_too_large",
+        "fetch_error",
+        "fetch_timeout",
+        "invalid_url",
+        "private_ip",
+        # `/search`'s three
+        "searxng_error",
+        "searxng_unavailable",
+        "search_unavailable",
+    }
     assert enum == set(PIPELINE_422_ERROR_CODES)
-    assert len(enum) == 9
 
 
 def test_search_metrics_response_1_2_0_field_set_is_pinned_exactly() -> None:

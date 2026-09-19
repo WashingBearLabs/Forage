@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, get_args
 
-from pipeline.contract import ContentKind
+from pipeline.contract import CONTENT_KIND_SNIPPET, ContentKind
 
 FailureClass = Literal["rate_limited", "timeout", "hard_error", "auth", "quota"]
 """Closed vocabulary for how a provider's ``search()`` call failed.
@@ -57,7 +57,7 @@ class ProviderSearchResult:
     provider_name: str
     results: list[dict[str, Any]]
     unresponsive_engines: list[str]
-    content_kind: ContentKind = "snippet"
+    content_kind: ContentKind = CONTENT_KIND_SNIPPET
 
 
 @dataclass(frozen=True, slots=True)
