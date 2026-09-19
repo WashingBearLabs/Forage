@@ -14,7 +14,8 @@ updated: 2026-09-19
 > stub carried the 2026-08-28 holistic review's punch lists (WA-B cache items, WA-D, WA-E), the
 > 2026-08-30 PromptGuard research and the Epic-2 resource-envelope finding; this plan adds the 20
 > hardening findings the `epic-search-providers` validation runs surfaced (audit ids cited per story)
-> and drops everything the extraction and search epics already closed (chunk budget and semaphore on
+> and drops everything the extraction and search epics already closed; validation round 1 (48
+> reviews, 51 criticals) revised rulings 8, 10, 13–19 and added 21–35 (chunk budget and semaphore on
 > `/extract`, cache keys carrying `sanitizer_revision`, the honest `/health`, the 64-token chunk
 > overlap, the engine-list parity test). Runs **in Forage**; the Poppy trust-boundary consolidation
 > is family Epic 5 and executes in Poppy.
@@ -35,13 +36,13 @@ contiguity gating against chunk-boundary evasion — all measured, all recorded,
 | Seq | Feature Spec | Status | Stories | Human gate | Dependencies |
 |-----|-------------|--------|---------|------------|--------------|
 | 1 | [feature-hardening-search-sanitization](feature-hardening-search-sanitization.md) | Planned | 4 | — | — |
-| 2 | [feature-hardening-retrieve-parity](feature-hardening-retrieve-parity.md) | Planned | 4 | — | hardening-search-sanitization |
-| 3 | [feature-hardening-hostname-and-config](feature-hardening-hostname-and-config.md) | Planned | 4 | — | hardening-retrieve-parity |
+| 2 | [feature-hardening-retrieve-parity](feature-hardening-retrieve-parity.md) | Planned | 5 | — | hardening-search-sanitization |
+| 3 | [feature-hardening-hostname-and-config](feature-hardening-hostname-and-config.md) | Planned | 6 | — | hardening-retrieve-parity |
 | 4 | [feature-hardening-cache-integrity](feature-hardening-cache-integrity.md) | Planned | 3 | — | hardening-hostname-and-config |
-| 5 | [feature-hardening-provider-bounds](feature-hardening-provider-bounds.md) | Planned | 3 | — | hardening-cache-integrity |
-| 6 | [feature-hardening-resource-envelope](feature-hardening-resource-envelope.md) | Planned | 3 | — | hardening-provider-bounds |
-| 7 | [feature-hardening-promptguard-86m](feature-hardening-promptguard-86m.md) | Planned | 4 | **US-004** (owner runs the benchmark with the gated weights) | hardening-resource-envelope |
-| 8 | [feature-hardening-release](feature-hardening-release.md) | Planned | 3 | **US-003** (owner-gated `v1.2.0` cut) | hardening-promptguard-86m |
+| 5 | [feature-hardening-provider-bounds](feature-hardening-provider-bounds.md) | Planned | 4 | — | hardening-cache-integrity |
+| 6 | [feature-hardening-resource-envelope](feature-hardening-resource-envelope.md) | Planned | 4 | — | hardening-provider-bounds |
+| 7 | [feature-hardening-promptguard-86m](feature-hardening-promptguard-86m.md) | Planned | 6 | **US-005** (owner vendors the 86M weights with the HF token) and **US-004** (owner runs the benchmark) | hardening-resource-envelope |
+| 8 | [feature-hardening-release](feature-hardening-release.md) | Planned | 4 | **US-003** (owner-gated `v1.2.0` cut) | hardening-promptguard-86m |
 
 Spec 6 precedes spec 7 so the benchmark can run at `FORAGE_CPUS=1` and `4` through the envelope
 knobs. Spec 1 opens the contract window (ruling 5) so every later wire addition lands inside it.
@@ -79,24 +80,38 @@ knobs. Spec 1 opens the contract window (ruling 5) so every later wire addition 
 6. **Every rotation is recorded, none is avoided.** A story editing a `_REVISION_SOURCES` file
    (`contract.py`, `stage1_*.py`, `stage2_structural.py`, `stage3_promptguard.py`,
    `stage4_structuring.py`, `orchestrator.py`) measures the new `derive_sanitizer_revision({})` by
-   revert-and-reproduce and records before/after in `docs/bootstrap-notes.md`, `CLAUDE.md` and
-   `kit_tools/arch/DECISIONS.md`. `cache.py`, `url_validator.py`, `retrieval_app.py`, `models.py`,
+   revert-and-reproduce and records before/after at the five sites the repo's rotation protocol
+   names — `docs/bootstrap-notes.md`, `CLAUDE.md`, `kit_tools/arch/DECISIONS.md`,
+   `kit_tools/docs/GOTCHAS.md` (the divergence table) and `kit_tools/arch/CODE_ARCH.md`. `cache.py`, `url_validator.py`, `retrieval_app.py`, `models.py`,
    `promptguard/*`, `pipeline/search_providers/*` and `pipeline/extraction_limits.py` are not hashed.
 7. **No DNS at search time.** The search-result URL audit checks literal IP hosts with the synchronous
    `_is_private_ip` helpers and hostnames against the blocklist and suffix rules only; DNS-pinned
    validation stays a fetch-time (`validate_url`) concern. A search result is never fetched to audit it.
-8. **Hostname matching is dot-boundary suffix matching everywhere.** One helper in `url_validator.py`:
-   an entry matches a host when equal, or when the host ends with `"." + entry`. `evil.com` matches
-   `www.evil.com`, never `notevil.com`. Applied to `blocked_domains`, `trusted_domains`,
-   `verified_domains` (trust tier) and `news_domains` (TTL). Bare hosts still match themselves.
-9. **The omission vocabulary grows by one token, `blocked_url`** (private-IP literal, blocklisted host,
-   forbidden host code point, IPv6 zone id, or a request `blocked_domains` match). `invalid_url` keeps
-   its meaning (unparseable, wrong scheme, userinfo, forbidden characters). Closed set in
+8. **Hostname matching is asymmetric by direction** (revised in validation round 1). Denylists —
+   the `blocked_domains` request field, `config.yaml` `seed_blocklist`, the private-suffix list —
+   match by dot-boundary suffix unconditionally: `evil.com` blocks `evil.com` and every subdomain.
+   Allowlists (`trusted_domains`, `verified_domains`, `news_domains`) keep exact matching for bare
+   entries; an entry written with a leading dot (`.example.com`) matches the apex and every
+   subdomain — a form today's exact matcher can never match, so no existing entry changes meaning
+   and no MAJOR arises. Every entry and every host is normalised (strip, lower, trailing dot
+   removed, IDNA-encoded) before comparison; an entry needs at least two labels; single-label,
+   empty-label, over-long and non-IDNA entries are ignored and counted
+   (`policy_invalid_domain_entry`), never a 422. `hostname_matches` lives in `url_validator.py` and
+   is pinned by a parametrised test that includes TLD-shaped entries. `seed_blocklist` applies to
+   `/search` results too.
+9. **The omission vocabulary grows by one token, `blocked_url`** — policy omissions only: a
+   private/loopback/link-local literal, a blocklisted host, a `blocked_domains` or `seed_blocklist`
+   match. `invalid_url` keeps its meaning and covers every malformed URL (unparseable, wrong scheme,
+   userinfo, forbidden characters, forbidden host code points, IPv6 zone ids — ruling 25). Closed set in
    `pipeline/contract.py`.
-10. **Threshold single-sourcing.** `promptguard_threshold` is honoured on `/search` (the handler never
-    passes it today, so the pipeline's 0.85 default always wins); on both routes the request field
-    becomes `float | None = None`, meaning "use `config.yaml` `promptguard_threshold`"; `/extract`
-    already reads config. A consumer that sent an explicit value sees no change.
+10. **Threshold single-sourcing keeps `/extract`'s path** (revised). `promptguard_threshold` is
+    honoured on `/search`; on `/retrieve` and `/search` the request field becomes `float | None =
+    None`, meaning "use `config.yaml` `promptguard_threshold`" (validated at boot, 0.0–1.0, refuse
+    boot otherwise); `/extract` keeps its existing read. An operator ceiling
+    `promptguard_threshold_ceiling` (default `1.0`, no cap) bounds what a caller may request, and
+    both responses report `effective_promptguard_threshold` beside
+    `effective_promptguard_fail_closed` (spec 2 US-005). A consumer that sent an explicit value
+    below the ceiling sees no change.
 11. **The engine list is already single-sourced by test** —
     `tests/test_searxng_docker.py::test_enabled_engines_match_the_orchestrator` pins
     `searxng/config/settings.yml` to `SEARXNG_ENGINES`. WA-E's duplication item is closed; spec 3 only
@@ -105,47 +120,142 @@ knobs. Spec 1 opens the contract window (ruling 5) so every later wire addition 
     keys (top-level and nested) is asserted at boot: an unknown key logs one WARNING
     `config_unknown_key — key=<name>` and never refuses boot (an operator typo must not take the service
     down); a test asserts every registered key has a row in `docs/configuration.md`.
-13. **Provider bodies are streamed and capped before decode.** SearXNG mirrors Brave's incremental
-    counter; both providers send `Accept-Encoding: identity` and treat a non-identity
-    `Content-Encoding` as a failure; both wrap the whole request in `asyncio.timeout(...)` mapped to
-    `failure_class="timeout"` so the configured timeout is a wall-clock budget, not a per-socket one.
-    SearXNG's outbound `q` is truncated to `search_searxng_query_max_chars` (default 400). No wire
-    change.
-14. **Cost-monotonicity holds by construction.** `apply_request_policy` keeps only a *prefix* of the
-    configured paid providers; a property test with two paid fakes asserts no request can produce a
-    paid call the configured chain would not make first. `policy_unknown_provider` counts one increment
-    per request with any ignored name (documented unit change, inside the window).
-15. **The `orchestrator.py` cleanup is one rotation, one story** (spec 5 US-003): extract the provider
-    loop, one failure-log helper, `_legacy_searxng_codes` computed once, the duplicate `ValueError`
-    sites merged, the `searxng_url=` legacy parameter dropped with its 19 test call sites migrated to
-    `providers=`, omission INFO lines logging the closed reason and validated `domain` (never the
-    result URL), and `provider_errors` composition enforcing the closed `failure_class` / detail
-    vocabulary. Wire output byte-identical on the existing fixtures.
-16. **Envelope knobs are env-substituted compose values with today's numbers as defaults.**
-    `cpus: ${FORAGE_CPUS:-1}`, `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` and a `healthcheck` in both
-    fragments; `classification_concurrency` range 1–8; `promptguard_threads` (default 1) applied via
-    `torch.set_num_threads` at load; the two orchestrator latency constants become `config.yaml` keys;
-    overruns counted on `/metrics` because the WARNING never renders (GOTCHAS: nothing configures
-    logging); a sizing table in `docs/configuration.md` whose classifier column spec 7 fills.
-17. **Contiguity gating sits beside the max rule, never replaces it.** The classifier exposes
-    per-window scores; stage 3's verdict is INJECTION when `max_score > threshold` **or** at least
-    `promptguard_contiguity_windows` (default 2) consecutive windows score
-    `>= promptguard_contiguity_threshold` (default 0.5); `0` windows disables the rule;
-    `flagged_chunks` carries the contiguous run.
-18. **The benchmark is an owner gate.** The harness is autonomous and hermetic; the *run* needs the
-    gated weights, an HF token supplied only through an env file referenced by path, and the reference
-    container, so spec 7 US-004 is a declared human gate like the Brave capture and the `v1.1.0` cut.
-    Numbers recorded: RSS after load, cold and warm p50/p95 classify latency for a 512-token and a
-    64-chunk input, 22M and 86M, at `FORAGE_CPUS=1` and `4`.
-19. **The validation 422 body loses `input`/`ctx`/`url`** via an app-level `RequestValidationError`
-    handler re-emitting `{loc, msg, type}` — the documented `ValidationErrorDetail` shape. The dropped
-    keys were never in the documented schema, so this is a PATCH-class tightening announced inside the
-    1.3.0 window; the ruling is recorded in GOVERNANCE.md and the SECURITY.md reflector note moves to
-    "closed".
+13. **Provider bodies are streamed and capped before decode, and a compressed body is never
+    refused** (revised). Both providers request `Accept-Encoding: identity`; when a non-identity
+    encoding arrives anyway the body is decoded incrementally and the existing 1 MiB cap counts
+    decoded bytes chunk by chunk, with the event counted (`search.provider_compressed_body`) — a
+    compressing proxy in front of SearXNG must not turn the free floor into paid traffic. Each
+    request is wrapped in `asyncio.timeout(...)` mapped to `failure_class="timeout"`. SearXNG
+    gains a `SearxngSettings` dataclass mirroring Brave's (`search_searxng_timeout_seconds`,
+    `search_searxng_query_max_chars` default 400 within 50–400, `max_response_bytes`) wired
+    through `build_provider_chain`. The `get`→`stream` migration owns its test seam (the existing
+    stream double promoted into `tests/fakes.py`; no `httpx.MockTransport`). No wire change.
+14. **Cost-monotonicity holds by construction** (revised). `apply_request_policy` keeps only a
+    *prefix* of the configured paid providers; a property test with two paid fakes asserts no
+    request can produce a paid call the configured chain would not make first.
+    `policy_unknown_provider` keeps its per-entry unit (no contract or MONITORING change); the
+    amplification is recorded as an accepted risk in `kit_tools/arch/SECURITY.md`.
+15. **The `orchestrator.py` cleanup is one rotation, one story** (spec 5 US-005): extract the
+    provider loop into `_query_provider_chain`, one failure-log helper, `_legacy_searxng_codes`
+    computed once, the duplicate `ValueError` sites merged, the `searxng_url=` legacy parameter of
+    `run_search_pipeline` dropped with its 19 test call sites migrated to `providers=` (the
+    `build_provider_chain(*, searxng_url=)` keyword stays), omission INFO lines logging the closed
+    reason and validated `domain` (never the result URL), and `provider_errors` composition
+    enforcing the closed vocabulary. Behaviour preserved: `SearchResponse.model_dump()` with
+    `request_id` excluded is identical across at least three existing fixtures.
+16. **The envelope changes nothing at the defaults** (revised). `cpus: ${FORAGE_CPUS:-0}` (`0`
+    = no limit, verified as a criterion) and `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` plus a
+    liveness `healthcheck` in both fragments; `promptguard_threads` defaults to `0` (torch's
+    default), a positive value applied before the classifier loads and outside `load()`'s blanket
+    `except`; `classification_concurrency` widens to 1–8 under a **memory** rule
+    (`FORAGE_MEM_LIMIT ≥ 512 MiB + concurrency × 384 MiB`, the reason the pin existed); the two
+    orchestrator latency constants become `config.yaml` keys and overruns are counted on `/metrics`
+    (`search.promptguard_latency_target_exceeded`) because the WARNING never renders; `/search`
+    acquires the classification semaphore (spec 2 US-001 — it acquires none today). A sizing table
+    in `docs/configuration.md` states which knobs the compose path can set and how to mount a
+    `config.yaml` for the rest; the classifier column is filled by spec 7. No criterion records
+    rendered compose config (ruling 33).
+17. **Contiguity gating sits beside the max rule and ships off** (revised). The classifier
+    exposes per-window scores; stage 3's verdict is INJECTION when `max_score > threshold` **or**
+    at least `promptguard_contiguity_windows` consecutive windows score
+    `>= promptguard_contiguity_threshold`. `promptguard_contiguity_windows` defaults to `0`
+    (disabled); the enabling recipe (`2` at `0.5`) is documented and tested; the corpus epic
+    (T2.3) flips the default after measuring the false-positive rate. `flagged_chunks` carries the
+    contiguous run.
+18. **The benchmark is an owner gate that measures the service** (revised). The harness runs on
+    the host against the running container (`.dockerignore` excludes `scripts/`): it drives
+    `POST /extract` with a mounted benchmark config (the URL validator refuses loopback fixtures on
+    `/retrieve`), reports p50/p95 wall-clock for a 512-token page and a max-budget page, cold and
+    warm, and reads container RSS from `docker stats`. The
+    *run* needs the gated weights and an HF token supplied only through an env file referenced by
+    path, so spec 7 US-004 is a declared human gate, preceded by the vendoring gate US-005
+    (ruling 29). Numbers recorded: a 2×2×2 matrix (22M/86M × `FORAGE_CPUS=1`/`4` × two inputs)
+    plus RSS rows.
+19. **The validation 422 body loses `input`/`ctx`/`url`** via an app-level
+    `RequestValidationError` handler re-emitting `{loc, msg, type}` — the documented
+    `ValidationErrorDetail` shape. The dropped keys were never in the documented schema, so this is
+    a PATCH-class tightening announced inside the 1.3.0 window; the ruling is recorded in
+    GOVERNANCE.md. Editing that docstring moves the document and the anchor, so spec 8 US-001 owns
+    its own regenerate, golden and four-page anchor refresh (revised); the pipeline 422 `reason`
+    stays what the search epic's ruling (d) made it — SECURITY.md never claims every 422 is
+    echo-free.
 20. **Release plumbing repeats the `v1.1.0` runbook verbatim**: compose pins and `_FORAGE_RELEASE_TAG`
     move to `1.2.0` before the tag, both smoke modes run with `--anchor`, the credential-free pull
     follows `docker image rm` (audit -014), and the handoff table copies the shape of the archived
     `feature-search-release.md` record.
+
+### Rulings from `/kit-tools:validate-epic` round 1 (2026-09-19; 48 reviews, 51 criticals resolved here)
+
+21. **The cache MAC binds the key.** `HMAC-SHA256(key, "v1" || cache_key || payload)`, envelope
+    `v1.<mac>.<payload>`, recomputed under the key being read, so a signed envelope moved to
+    another key never verifies; the secret is at least 32 bytes after strip (refuse boot below,
+    never echoing it); `ValkeyStorage.get` bounds the read with `STRLEN` before verification
+    (`cache.max_value_bytes`, default 2 MiB); `CacheMetrics` is mirrored on `/metrics`, so
+    `integrity_rejects` and `corrupt_entries` are window changes; MONITORING says a rising
+    `integrity_rejects` is active tampering.
+22. **The `/retrieve` chunk budget is a pre-checked refusal**, not a clamp: its own key
+    `retrieve.max_promptguard_chunks` (default 256), windows counted before classification, over
+    budget → 422 `content_too_large` with the closed reason `promptguard_budget`; the classifier's
+    `PromptGuardBudgetExceededError` is caught on the route and mapped to the same 422.
+23. **Fetched PDFs go through the worker from a spooled file** under a new
+    `retrieve.pdf_concurrency` semaphore, never the `/extract` admission middleware or
+    `route_enabled`; the worker's five typed errors map to one existing `/retrieve` code with closed
+    reasons — in practice exactly one new member `extraction_failed` inside the window, since no
+    existing member means "the fetched document could not be turned into text". HTML extraction and `scan_structural` run under `asyncio.to_thread` on both routes.
+24. **`effective_*` fields are computed in the handler and cached faithfully.** Both are inputs to
+    `cache_policy_fingerprint`, so a cache hit always reports the request's current effective
+    values; `effective_promptguard_fail_closed` means "the fail-closed policy applied", never
+    "content was scanned" (trusted-tier content still skips the classifier by design).
+25. **The URL scan is a direct structural scan** on the raw provider value (after `html.unescape`)
+    and on its `unquote`, never through `extract_html`; character rules run on the raw value;
+    malformed URLs (control characters, whitespace, RFC-3986-forbidden characters, forbidden host
+    code points, IPv6 zone ids) are `invalid_url`; `blocked_url` is reserved for policy —
+    private/loopback/link-local literals, blocklisted hosts, `blocked_domains` / `seed_blocklist`
+    matches (ruling 9 clarified).
+26. **One normalisation, wire ⊆ scan by construction.** NFC → control-strip → `html.unescape` →
+    Stage 1 prose extraction as today → newline-preserving whitespace collapse → truncate at the
+    cap = the scan form; the wire form is the whitespace-collapse of the truncated scan form, so
+    padding can never push a marker past the scan.
+27. **Hosts are canonicalised before audit**: one trailing dot stripped; all-digit hosts must be
+    a dotted quad `ipaddress` parses (decimal, octal, short and hex forms → `invalid_url`);
+    IPv4-mapped IPv6 and the transition ranges are private if their embedded address is.
+28. **Anchor sweeps never touch released records**: only the four anchor-quoting pages the
+    governance test names; `docs/releases.md` entries and archived specs keep the anchor of the
+    release they record.
+29. **The model id reaches every consumer, and 86M is vendored before it is benchmarked.** One
+    resolver feeds `model_fetcher`, `sanitizer_revision`, `vendor_weights` and the classifier's two
+    `from_pretrained` calls (`load(*, model_id=...)`) — spec 7 US-001; the `FORAGE_MODEL_ID`
+    allowlist, refuse-boot, load-time assertion and `/health` `promptguard_model` are US-006;
+    `weights_manifest.json` is keyed by model id with one exact-set file allowlist per model;
+    verification is never skipped (a model with no entry refuses boot); spec 7 US-005 (owner gate)
+    vendors the 86M and commits its entry before US-004 runs; `/health` reports the id actually
+    loaded.
+30. **The release spec closes the window mechanically**: spec 8 US-002 owns the 1.3.0 coverage
+    sweep in `tests/test_contract_schema.py` (`_SCHEMA_MODELS` there is the golden's producer),
+    the "held → published" tense flip for the 1.2.0 and 1.3.0 entries, and one enumerated window
+    list; the `v1.2.0` smoke adds a Valkey-backed run of `compose/full.yml` with a placeholder
+    `FORAGE_CACHE_HMAC_KEY` so the cache-integrity posture row is witnessed; the leak check greps
+    the whole tree.
+31. **Story splits from round 1**: spec 3 gains US-005 (threshold honoured + config default) and
+    US-006 (engine-sync and docs sentences); spec 5's US-002 splits into US-002 (egress bound) and US-004 (paid-prefix
+    policy) with `SearxngSettings` born in US-001, the cleanup is US-005 (no US-003); spec 6 gains US-004
+    (latency targets + counter); spec 7 gains US-006 (`FORAGE_MODEL_ID` resolver, refuse-boot,
+    `/health` field, revision hash) and US-005 (vendoring gate); spec 8 gains US-004 (pins, counts,
+    release-notes draft). Each spec's
+    `execution_order` records the resulting walk.
+32. **The rotation ledger is honest**: any story that appends a `CONTRACT_VERSION` docstring line
+    or edits `orchestrator.py` rotates; every "rotates nothing" claim was corrected and each spec's
+    ledger lists which hashed files move per story.
+33. **No secret-bearing capture, ever**: no criterion records rendered compose config,
+    `docker inspect` output, environment dumps or any env value in a tracked file; captures are
+    placeholder excerpts rendered under `env -i`; the healthcheck uses `curl -o /dev/null`;
+    criteria reference `--env-file`, never a value.
+34. **Docstring entry format**: new `CONTRACT_VERSION` lines follow the `* ``1.3.0`` — …` bullet
+    format the CI awk extractor and `tests/test_ci_workflow.py` pin.
+35. **Spec 1 definitions**: "wire form" is the raw provider value before any normalisation;
+    "decoded form" is its `unquote`; the `engine` bound normalises then truncates to 64 characters
+    like `title`; rule (3)'s host character set is the WHATWG forbidden host code points; US-004
+    is P2 but still runs before US-003 by `execution_order`.
 
 ### Resolution map (which story owns which finding)
 
@@ -156,9 +266,9 @@ knobs. Spec 1 opens the contract window (ruling 5) so every later wire addition 
 | WA-E "search result URLs never checked against private-IP or blocklist rules" | Spec 1 US-003 |
 | Audit -014 unbounded `engine` pass-through; contract window opens | Spec 1 US-004 |
 | WA-D `/retrieve` chunk budget and semaphore | Spec 2 US-001 |
-| WA-D sync PDF/HTML/structural scan on the event loop, un-sandboxed PDF | Spec 2 US-002 |
-| WA-D corrupted cache entry → 500 | Spec 2 US-003 |
-| WA-D fail-closed policy caller-controlled (owner decision 3) | Spec 2 US-004 |
+| WA-D sync PDF/HTML/structural scan on the event loop, un-sandboxed PDF | Spec 2 US-002, US-003 |
+| WA-D corrupted cache entry → 500 | Spec 2 US-004 |
+| WA-D fail-closed policy caller-controlled (owner decision 3); threshold ceiling (ruling 10) | Spec 2 US-005 |
 | WA-E exact-hostname matching (blocklist, trust tiers, news TTL) | Spec 3 US-001 |
 | WA-E `blocked_domains` never applies to search; `promptguard_threshold` dead on `/search` | Spec 3 US-002 |
 | WA-E config sprawl (key registry) | Spec 3 US-003 |
@@ -172,17 +282,25 @@ knobs. Spec 1 opens the contract window (ruling 5) so every later wire addition 
 | Research 2026-08-30 / scorecard #11: Prompt Overflow chunk-boundary evasion | Spec 7 US-002 |
 | Audit -055 validation 422 echoes `detail[].input` | Spec 8 US-001 |
 | Audit -056/-057 wire description and docstring wording (PATCH-class, deferred at housekeeping) | Spec 8 US-002 |
-| Audit -010 mutable tag in compose examples, -014 pull proof | Spec 8 US-002, US-003 |
+| Audit -010 mutable tag in compose examples, -014 pull proof | Spec 8 US-004, US-003 |
+| Round 1: key-bound MAC, bounded reads, mirrored counters (21) | Spec 4 US-001, US-002 |
+| Round 1: `/retrieve` budget refusal (22), spooled PDF worker + error mapping (23), effective fields (24), threshold ceiling (10) | Spec 2 US-001, US-002, US-003, US-005 |
+| Round 1: direct URL scan (25), wire ⊆ scan (26), host canonicalisation (27), anchor scope (28), definitions (35) | Spec 1 US-001–US-004 |
+| Round 1: asymmetric hostname matching, IDNA, `seed_blocklist` on search (8); honoured threshold (10); seven-copy guard (31) | Spec 3 US-001, US-002, US-004, US-005 |
+| Round 1: compressed bodies never refused, `SearxngSettings`, test seam (13); per-entry unit kept (14); implementable proofs (15) | Spec 5 US-001, US-002, US-004, US-005 |
+| Round 1: defaults unchanged, memory rule, search semaphore parity (16); placeholder captures (33) | Spec 6 US-001, US-002, US-004; Spec 2 US-001 |
+| Round 1: contiguity off (17), service-level benchmark (18), model-id plumbing + vendoring gate (29) | Spec 7 US-001, US-002, US-003, US-005, US-006 |
+| Round 1: anchor ownership (19), mechanical close-out + Valkey-backed smoke (30) | Spec 8 US-001, US-002, US-004, US-003 |
 
 ## Contract versioning (governance approach for this epic)
 
 One MINOR bump, `1.2.0` → `1.3.0`, opened early (ruling 5) and closed by spec 8 US-002. Additions:
 `blocked_url` omission reason (spec 1), bounded `engine` (spec 1, tightening of what Forage emits),
-`effective_promptguard_fail_closed` on `RetrievedContent` and `SearchResponse` (spec 2),
-`CacheMetrics.corrupt_entries` / `integrity_rejects` (specs 2, 4), `SearchRequest.blocked_domains` and
+`effective_promptguard_fail_closed` and `effective_promptguard_threshold` on `RetrievedContent` and `SearchResponse` (spec 2), the `promptguard_budget` reason literal and one `RetrieveErrorCode` member `extraction_failed` with closed reasons (spec 2), `policy_invalid_domain_entry` counters and the leading-dot allowlist form in three field descriptions (spec 3),
+`CacheMetrics.corrupt_entries` / `integrity_rejects` and the third `capabilities` key (specs 2, 4), `SearchRequest.blocked_domains` and
 `promptguard_threshold: float | None` on both request models (spec 3), `cache_unauthenticated`
-`DegradedReason` (spec 4), `policy_unknown_provider` per-request unit (spec 5),
-`search.promptguard_latency_target_exceeded` (spec 6), `/health` `promptguard_model` (spec 7), and the
+`DegradedReason` (spec 4), `search.provider_compressed_body` (spec 5),
+`search.promptguard_latency_target_exceeded` and `promptguard_latency_max_ms` (spec 6), `/health` `promptguard_model` and three contiguity-gating counters (spec 7), and the
 `{loc, msg, type}`-only validation 422 (spec 8, PATCH-class inside the same window). Every line is in the
 `CONTRACT_VERSION` docstring entry and therefore in the `v1.2.0` Release body. Poppy's consuming epic
 mirrors the defaulted fields; nothing here removes or redefines a member.
@@ -195,14 +313,16 @@ mirrors the defaulted fields; nothing here removes or redefines a member.
   zone id never reaches the wire: omitted under `blocked_url` or `invalid_url`, zero DNS lookups.
 - A 65-chunk page on `/retrieve` classifies at most 64 chunks; two concurrent `/retrieve` classifications
   serialise; a concurrent `/health` completes while a slow extraction runs.
-- With `FORAGE_CACHE_HMAC_KEY` set, a hand-written Valkey value is served zero times; without it and
-  with `VALKEY_URL` set, `/health` lists `cache_unauthenticated`.
+- With `FORAGE_CACHE_HMAC_KEY` set, a hand-written Valkey value and a signed envelope copied to
+  another key are each served zero times; without the key and with `VALKEY_URL` set, `/health` lists
+  `cache_unauthenticated`.
 - A 2 MiB SearXNG body, a gzip-bombed Brave body and a trickling Brave response each produce a
   classified `ProviderFailure` within the configured wall-clock timeout, never an unbounded read.
 - `FORAGE_CPUS=4 FORAGE_MEM_LIMIT=4g docker compose up` runs the same image with the documented knob
   values; the sizing table carries measured classifier numbers for 22M and 86M at 1 and 4 CPUs.
-- `FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-86M` boots, reports `promptguard_model`, and a
-  two-window `0.6, 0.6` sequence is INJECTION while `0.6, 0.2, 0.6` is not.
+- `FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-86M` boots after the vendoring gate and reports
+  `promptguard_model`; with `promptguard_contiguity_windows: 2` a `0.6, 0.6` window sequence is
+  INJECTION while `0.6, 0.2, 0.6` is not, and at the default (`0`) neither fires.
 - `v1.2.0` is published at contract `1.3.0` with the handoff table, both smoke modes green.
 
 ## Completion Criteria
