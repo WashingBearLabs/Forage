@@ -96,8 +96,8 @@ Link to feature specs / epics as they are created.
 
 #### T2.2 — Forage hardening
 - **Description:** `/retrieve` sanitization parity with `/search`; cache integrity (HMAC); hostname matching; search-result URL audit; PromptGuard 2 **86M** upgrade + **contiguity gating** against chunk-boundary evasion; config single-sourcing; and a **configurable resource envelope** (CPU/mem sizing + classifier latency target as documented operator config, not baked to any one host).
-- **Feature Spec(s):** `epic-forage-hardening` (stub — Web Access family Epic 4, Forage half)
-- **Status:** Planned (stub)
+- **Feature Spec(s):** `epic-forage-hardening` (Web Access family Epic 4, Forage half — eight feature specs, planned 2026-09-19)
+- **Status:** Planned
 
 #### T2.3 — Injection regression corpus (CI)
 - **Description:** A curated indirect-injection attack corpus + classifier/pipeline gates wired into Forage CI, so injection-defense efficacy is *measured on every change* rather than asserted.
