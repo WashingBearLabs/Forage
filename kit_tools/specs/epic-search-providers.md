@@ -80,9 +80,9 @@ repo + a frozen contract 1.1.0) already shipped in `epic-forage-extraction-forag
 
 ### Forage-side rulings (review against the seeded `kit_tools/` docs, 2026-09-14)
 
-Made by the owner in the Forage session after `/kit-tools:seed-project`; **not yet in Poppy's split
-doc** — replay them into `EPIC3_SEARCH_RELIABILITY_SPLIT.md` at the next handoff (one-way sync means
-Poppy's copy is stale on these points until then).
+Made by the owner in the Forage session after `/kit-tools:seed-project`; replayed into Poppy's
+`EPIC3_SEARCH_RELIABILITY_SPLIT.md` on 2026-09-19, together with rulings 12–34 and the `v1.1.0` handoff
+record (one-way sync, Forage → Poppy's record, at handoff only).
 
 8. **An exhausted chain is a 422, never a 200 with an empty list.** GOVERNANCE's MAJOR row ("a status
    code a client observes changes") forbids turning today's 422 into a 200, and a 200-empty is the exact
