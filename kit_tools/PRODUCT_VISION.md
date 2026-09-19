@@ -9,7 +9,7 @@
 
 > **TEMPLATE_INTENT:** Singular strategic document capturing the product's why, who, and what. Guides feature planning and prioritization. One per project.
 
-> Last updated: 2026-09-14
+> Last updated: 2026-09-17
 > Updated by: Claude (drafted from the Poppy Web Access family context — landing `WEB_ACCESS_FAMILY.md`, the 2026-08-28 provider-independence ADR, and the 2026-09-12 §10 "extraction + telemetry service, not a trust boundary" ADR)
 
 ---
@@ -91,8 +91,8 @@ Link to feature specs / epics as they are created.
 
 #### T2.1 — Search-provider abstraction & reliable search
 - **Description:** A pluggable `SearchProvider` seam over the (currently hardwired) SearXNG client; an optional paid backend (Brave, via its LLM-Context endpoint) behind an env-var key; free-first → paid-on-failure fallback with failure-class discrimination; provider/fallback telemetry (metadata only, per ToS) + per-request policy params + `/health` provider status; a documented third-party env contract (`FORAGE_SEARCH_PROVIDERS`, `FORAGE_BRAVE_API_KEY`). SearXNG stays the key-less free floor.
-- **Feature Spec(s):** `epic-search-providers` (this epic — planned 2026-09-14; Web Access family Epic 3, Forage half)
-- **Status:** Planned
+- **Feature Spec(s):** `epic-search-providers` (Web Access family Epic 3, Forage half; shipped 2026-09-18 at `v1.1.0`, contract `1.2.0`)
+- **Status:** Shipped
 
 #### T2.2 — Forage hardening
 - **Description:** `/retrieve` sanitization parity with `/search`; cache integrity (HMAC); hostname matching; search-result URL audit; PromptGuard 2 **86M** upgrade + **contiguity gating** against chunk-boundary evasion; config single-sourcing; and a **configurable resource envelope** (CPU/mem sizing + classifier latency target as documented operator config, not baked to any one host).
@@ -139,7 +139,7 @@ Link to feature specs / epics as they are created.
 ### Suggested Build Sequence
 
 1. **Phase 1 (done):** T1.1 + T1.2 — extraction, packaging, contract, v1.0.0.
-2. **Phase 2:** T2.1 — search-provider abstraction + reliable search (this epic).
+2. **Phase 2 (done):** T2.1 — search-provider abstraction + reliable search, v1.1.0.
 3. **Phase 3:** T2.2 — hardening (incl. PG-86M + configurable resource envelope).
 4. **Phase 4:** T2.3 — injection regression corpus in CI.
 5. **Later:** T3.x — more providers/adapters, provenance/datamarking hooks, image ingestion (post trust-review).

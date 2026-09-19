@@ -1,7 +1,7 @@
 <!-- Template Version: 2.1.0 -->
 # TESTING_GUIDE.md
 
-> Last updated: 2026-09-16
+> Last updated: 2026-09-17
 > Updated by: Claude (forage-contract US-004)
 
 ## Quick Start
@@ -97,15 +97,18 @@ crash reads as a false regression.
 **30 `test_*.py` modules** under `tests/`, flat, one per subject — 33 Python files in all
 once `conftest.py`, `fakes.py` and `__init__.py` are counted — plus `golden/` and
 `fixtures/`. (Both numbers measured 2026-09-15; state the convention with the count, or
-the next person reconciles two different ones by increment.) **1713 tests, all green** as
-of 2026-09-15 (`feature-forage-contract` US-001 added `test_contract_errors.py`'s 25,
-US-005 `test_contract_metrics.py`'s 20, US-002 `test_contract_export.py`'s 18, US-003
-`test_governance_docs.py`'s 41 plus 26 in `test_ci_workflow.py`, and US-004 another 78
-spread across four existing modules — 36 workflow-shape, 29 smoke, 11 Dockerfile, 2
-governance; `search-provider-abstraction` US-001 then added the new
-`test_search_providers.py` module and US-002 grew it to 103 for `SearxngProvider` and the
-orchestrator side of the seam; the per-module counts in the table below have not all been
-re-measured since 2026-09-10).
+the next person reconciles two different ones by increment.) **2089 tests, all green** as
+of 2026-09-18 (`search-release` US-003, the `v1.1.0` tagged commit — `feature-forage-contract`
+US-001 added `test_contract_errors.py`'s 25, US-005 `test_contract_metrics.py`'s 20, US-002
+`test_contract_export.py`'s 18, US-003 `test_governance_docs.py`'s 41 plus 26 in
+`test_ci_workflow.py`, and US-004 another 78 spread across four existing modules — 36
+workflow-shape, 29 smoke, 11 Dockerfile, 2 governance; `search-provider-abstraction` US-001
+then added the new `test_search_providers.py` module and US-002 grew it to 103 for
+`SearxngProvider` and the orchestrator side of the seam; `search-release` US-004 grew three
+more — `test_ci_workflow.py` to 279 (the awk-extractor tests), `test_compose_fragments.py`
+to 62 (the two-variable passthrough tests) and `test_contract_smoke.py` to 91 (the
+status-aware `wait_for_health` and `--anchor` tests); the per-module counts in the table
+below have not all been re-measured since 2026-09-10).
 
 | Module | Tests | Covers |
 |--------|------:|--------|
@@ -123,9 +126,9 @@ re-measured since 2026-09-10).
 | `tests/test_models.py` | 31 | Pydantic request/response models |
 | `tests/test_app.py` | 60 | FastAPI endpoints, `/health` body, capability break-glass, the `/metrics` `model` counters, and the lifespan harness: startup yields immediately, `/health` latency during a fetch, the `promptguard_loaded` flip, and the retry task's cancellation at shutdown |
 | `tests/test_stage3_promptguard.py` | 30 | ML scan; transformers/torch mocked |
-| `tests/test_ci_workflow.py` | 271 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane, image build + secret-grep gate, smoke job + artifact handoff, both publish lanes (tag policies evaluated, not matched), the cross-fire guards between them, and — since US-003 — the image↔contract mapping: the version is read from the tagged tree, the Release body is written from it, the published body is read back and asserted, and no version literal may appear in the job's shell. US-004 adds the Release assets (attached by the create call, downloaded back and verified against the committed anchor) and the reproducible-export guards: one identical SOURCE_DATE_EPOCH script in all four building jobs, `rewrite-timestamp=true` on every exporter, and the longhand `type=docker` / `type=image,push=true` forms that can carry it |
-| `tests/test_compose_fragments.py` | 56 | Compose fragments, parse-only shape guards (audit: row was missing) |
-| `tests/test_contract_smoke.py` | 76 | `contract_smoke.py`: every `/health` clause, polling, the single-source ties to the golden schema, and — since US-004 — the in-image contract checks: the `docker run --rm --entrypoint cat` argv it builds, the anchor comparisons against the committed trust root, and the `info.version` ↔ live `contract_version` claim, all driven through an injected runner so the suite never starts a container |
+| `tests/test_ci_workflow.py` | 279 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane, image build + secret-grep gate, smoke job + artifact handoff, both publish lanes (tag policies evaluated, not matched), the cross-fire guards between them, and — since US-003 — the image↔contract mapping: the version is read from the tagged tree, the Release body is written from it, the published body is read back and asserted, and no version literal may appear in the job's shell. US-004 adds the Release assets (attached by the create call, downloaded back and verified against the committed anchor), the reproducible-export guards: one identical SOURCE_DATE_EPOCH script in all four building jobs, `rewrite-timestamp=true` on every exporter, and the longhand `type=docker` / `type=image,push=true` forms that can carry it, and (`search-release` US-004) the `CONTRACT_VERSION` docstring-entry extractor: the POSIX awk program sliced out of the publish job's read step is run through `subprocess` against the real `pipeline/contract.py` and against a hostile synthetic module (a backtick span, `$(id)`, a mid-line `*`, an indented bullet look-alike, an `EOF` line, a `version=forged` line and a mid-line `"""`), plus the static assertions that the read step uses no `python3`/`uv`/`scripts/`, the create step appends the entry from a notes file via `--notes-file`, and the read-back checks it with a fixed-string `grep -qF` |
+| `tests/test_compose_fragments.py` | 62 | Compose fragments, parse-only shape guards (audit: row was missing), and (`search-release` US-004) the `forage:1.1.0` pin and the `FORAGE_SEARCH_PROVIDERS` / `FORAGE_BRAVE_API_KEY` bare-name passthrough on the `forage` service in both fragments |
+| `tests/test_contract_smoke.py` | 91 | `contract_smoke.py`: every `/health` clause, polling, the single-source ties to the golden schema, and — since US-004 — the in-image contract checks: the `docker run --rm --entrypoint cat` argv it builds, the anchor comparisons against the committed trust root, and the `info.version` ↔ live `contract_version` claim, all driven through an injected runner so the suite never starts a container. `search-release` US-004 adds the status-aware `--expect-status`/`--anchor` coverage: a healthy body passes under `healthy` and fails under the default, a degraded body fails under `healthy`, `wait_for_health` under `healthy` keeps polling past a 200 `degraded` body until a `healthy` one arrives (or returns the last body once the deadline passes), and the in-image anchor is compared against the `--anchor` file rather than a hard-coded path |
 | `tests/test_stage5_url_audit.py` | 28 | Outbound fetch + redirect-chain audit |
 | `tests/test_stage1_pdf.py` | 23 | PDF branch, subprocess isolation |
 | `tests/test_dockerfile.py` | 50 | `Dockerfile` text: no secret may enter the build, digest-pinned base, lock-driven install, and — since US-004 — that the frozen contract is COPYed to `/app/contract/` (with `.dockerignore` checked for a pattern that would silently empty it) and that the two reproducibility normalizations stay: no timestamped apt artefacts, no bytecode from the import check |

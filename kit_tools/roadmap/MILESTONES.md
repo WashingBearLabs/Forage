@@ -1,7 +1,7 @@
 <!-- Template Version: 2.0.0 -->
 # Milestones
 
-> Last updated: 2026-09-07
+> Last updated: 2026-09-17
 > Updated by: Claude (forage-repo-bootstrap US-005)
 
 **Current target:** Forage `v1.0.0` — a published, secret-free, contract-frozen image a
@@ -18,6 +18,14 @@ Poppy half (consuming the image, then deleting the in-tree copy) executes in Pop
 
 - [x] **Repo bootstrap** (`forage-repo-bootstrap`, executed in Poppy, 2026-09-07) —
       history-preserving split, identity, vault-free config, green suite, this scaffold.
+- [x] **v1.0.0** (`feature-forage-contract`, cut 2026-09-12) — the extraction epic's Exit
+      Criteria below, all met: secret-free image, public repo, green CI, `docker compose up`
+      with only `HF_TOKEN` + `SEARXNG_SECRET`, contract frozen at `1.1.0`.
+- [x] **v1.1.0 / T2.1 search-provider abstraction** (`epic-search-providers`, cut 2026-09-18)
+      — the `SearchProvider` seam, `SearxngProvider`, the optional Brave LLM-Context paid
+      backend behind `FORAGE_BRAVE_API_KEY`, free-first/paid-on-failure fallback, per-request
+      policy and `/health` provider status, contract bumped to `1.2.0`. See
+      `../specs/epic-search-providers.md` and `../../docs/releases.md` § "Released versions".
 
 ---
 

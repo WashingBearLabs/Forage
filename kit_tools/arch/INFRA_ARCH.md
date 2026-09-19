@@ -9,7 +9,7 @@
 
 > **TEMPLATE_INTENT:** Document cloud resources, networking, and infrastructure. The map of deployed systems.
 
-> Last updated: 2026-09-16
+> Last updated: 2026-09-17
 > Updated by: Claude (seed-project)
 
 ---
@@ -156,9 +156,8 @@ Things both fragments deliberately lack:
 - **No CPU quota and no `pids_limit`**; `mem_limit` is the only resource control.
 - **No TLS, no auth.** The `127.0.0.1` binding is the deployment-posture control.
 
-**Pin sequencing:** both fragments pin `forage:1.1.0` and `forage-searxng:0.1.1-rc`. The
-forage pin resolves once `v1.1.0` publishes (`search-release` US-002); a `docker compose up`
-before that fails with `manifest unknown` — sequencing, not breakage. The searxng pin stays a
+**Pins:** both fragments pin `forage:1.1.0` and `forage-searxng:0.1.1-rc`. The forage pin
+resolves — `v1.1.0` published it (`search-release` US-002). The searxng pin stays a
 pre-release because no non-pre-release `searxng-v*` tag exists.
 
 ---
@@ -186,15 +185,15 @@ Tag scheme (`docker/metadata-action` with `flavor: latest=false` and four explic
 | tag `searxng-vX.Y.Z` | nothing on this image; `X.Y.Z`, `X.Y`, `latest` on `forage-searxng` | none |
 
 Tags present at the time of writing: `v0.9.0-rc`, `v0.9.1-rc`, `v0.9.3-rc`, `v1.0.0`,
-`searxng-v0.1.0-rc`, `searxng-v0.1.1-rc`. `v0.9.2-rc` was withdrawn after failing the
-post-push layer-parity gate; deletion of its GHCR package version is recorded as pending and
-was not verifiable offline. `v1.0.0` is the first non-pre-release tag and, per the epic
-closeout, the first to move `latest`; the live registry state was not re-verified for this
-document.
+`v1.1.0`, `searxng-v0.1.0-rc`, `searxng-v0.1.1-rc`. `v0.9.2-rc` was withdrawn after failing
+the post-push layer-parity gate; deletion of its GHCR package version is recorded as pending.
+`v1.0.0` is the first non-pre-release tag and the first to move `latest`; `v1.1.0`
+(`search-release` US-002) moved it again, alongside `1.1`. `docs/releases.md` §
+"Released versions" has the digests.
 
 The git tag **is** the version. `pyproject.toml`'s `version = "0.1.0"` is inert packaging
-metadata, and the image tag and `contract_version` (currently `1.2.0`, which no published
-image serves yet — the `v1.1.0` tag publishes it) are independent semvers. **arm64 is built under QEMU but never executed in CI** — run `contract_smoke.py`
+metadata, and the image tag and `contract_version` (`1.2.0`, served by `v1.1.0`; `v1.0.0`
+served `1.1.0`) are independent semvers. **arm64 is built under QEMU but never executed in CI** — run `contract_smoke.py`
 against your own arm64 container before trusting it.
 
 ### Registry access

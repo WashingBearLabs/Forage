@@ -505,8 +505,8 @@ gh cache delete <id>                # delete each index-publish-* entry
 ## Cutting a Release and Rolling Back
 
 The git tag **is** the version (`pyproject.toml`'s `version` is inert packaging metadata),
-and the image tag and `contract_version` are independent semvers — image `v1.0.0` serves
-contract `1.1.0`, and the tree's current `1.2.0` is served by no published image yet.
+and the image tag and `contract_version` are independent semvers — image `v1.1.0` serves
+contract `1.2.0` (`v1.0.0` served `1.1.0`).
 
 ```bash
 git switch main && git pull
@@ -526,8 +526,8 @@ not a release.
 deploy stage to revert. Re-pin the previous tag in the consumer's compose file
 (`image: ghcr.io/washingbearlabs/forage:<previous>`) and `docker compose -f <file> up -d`.
 `kit_tools/docs/DEPLOYMENT.md` has the operator view, including the pull/pin/verify
-sequence and the note that the compose fragments in this repo pin `1.1.0`, which resolves
-only once `v1.1.0` publishes.
+sequence and the note that the compose fragments in this repo pin `1.1.0`, published by
+`v1.1.0`.
 
 ---
 

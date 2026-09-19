@@ -250,3 +250,53 @@ execution readiness.
 - Run `/kit-tools:execute-epic search-providers`.
 - `epic-forage-hardening` and `epic-forage-injection-corpus` remain on-hold stubs needing
   `/kit-tools:plan-epic`.
+
+---
+
+## 2026-09-18 — `search-release` US-003: post-release verification + Poppy handoff
+
+**Duration:** ~1 hour
+**Focus:** Verify the published `v1.1.0` image the way a third party reaches it, and record the
+handoff table `epic-search-providers`' Poppy counterpart pins from.
+
+### Accomplished
+
+- `docker logout ghcr.io` + anonymous `docker pull` of the `v1.1.0` digest, both recorded.
+- Brought the pulled image up from `compose/minimal.yml` on the key-less floor: `/health` reports
+  `contract_version: "1.2.0"`, `search_providers: ["searxng"]`, no `brave_api_key` in
+  `capabilities`; one `/search` round-trip returned `provider_used: "searxng"`,
+  `fallback_fired: false` on the first try.
+- Re-ran the same image with a placeholder `FORAGE_BRAVE_API_KEY` via a throwaway `--env-file`:
+  `capabilities.brave_api_key: 1`, and the placeholder appears zero times across `/health`,
+  `/metrics` and `docker logs`. No `/search` issued in that run — zero spend.
+- Completed `kit_tools/specs/feature-search-release.md`'s Implementation Notes with the handoff
+  table (tag, index digest, contract, anchor, spend posture, paid-path evidence) and ticked every
+  Completion Criterion in `kit_tools/specs/epic-search-providers.md` — the epic's last piece.
+- `docs/releases.md` gained a "Released versions" section (`v1.0.0`, `v1.1.0`) and lost the stale
+  "`latest` therefore does not exist yet" claim.
+- Suite-count bookkeeping: `uv run pytest` now reports 2089 (was 1610/1713 in stale docs);
+  updated `testing/TESTING_GUIDE.md`, `SYNOPSIS.md`, `AGENT_README.md` and `../CLAUDE.md`.
+
+### Documentation Updated
+
+- [x] `kit_tools/specs/feature-search-release.md` (US-003 Implementation Notes),
+      `kit_tools/specs/epic-search-providers.md` (Completion Criteria, all six)
+- [x] `docs/releases.md`, `kit_tools/SYNOPSIS.md`, `kit_tools/docs/DEPLOYMENT.md`,
+      `kit_tools/docs/CI_CD.md`, `kit_tools/arch/INFRA_ARCH.md` (v1.1.0 as shipped fact)
+- [x] `kit_tools/testing/TESTING_GUIDE.md`, `kit_tools/AGENT_README.md`, `../CLAUDE.md` (test count)
+- [x] `kit_tools/PRODUCT_VISION.md` (T2.1 → Shipped), `kit_tools/roadmap/MILESTONES.md` (Done entries)
+
+### Decisions
+
+- Docker was logged back into `ghcr.io` after the anonymous-pull proof (via the owner's `gh`
+  token) rather than left logged out, so the workstation's push access for future releases was
+  not disturbed by this story's verification step.
+- `skopeo` is not installed on this workstation; the anonymous `docker pull` is the sole
+  credential-free witness recorded (the hint's second witness is optional and skipped).
+
+### Open / Next
+
+- `epic-search-providers` is complete; Poppy's `epic-search-policy` session reads the handoff
+  table in `feature-search-release.md` to pin the `v1.1.0` digest — nothing here pushes to Poppy.
+- `epic-forage-hardening` and `epic-forage-injection-corpus` remain on-hold stubs needing
+  `/kit-tools:plan-epic`.

@@ -10,6 +10,55 @@ lane and is documented separately in `docs/searxng.md` (US-004).
 > **Public since US-008's 2026-09-10 flip** — repository and packages; anonymous
 > pulls verified at the gate.
 
+## Released versions
+
+Every non-pre-release tag, newest first. The `contract:`, `anchor:`, `index digest:` and
+`tagged commit:` lines are the same fields `search-release` US-003's handoff record carries
+into `kit_tools/specs/feature-search-release.md`'s Implementation Notes — that table is what
+the Poppy `epic-search-policy` session reads to pin a digest; nothing here pushes to Poppy.
+
+### v1.1.0 — 2026-09-18
+
+- contract: 1.2.0
+- anchor: `11435a17aabe7c11faf71aee0fd066a3784d5e9de557c451153e7f47d0d5615f`
+- index digest: `sha256:e1b875ccbf6505d674e70802c07eeb5ad6c62548ae14dde0a18be0bf9cb47a52`
+- tagged commit: `06b01b145d592787b32eb0425061fa8c1914d31f`
+
+What shipped:
+
+- The `SearchProvider` seam and `FORAGE_SEARCH_PROVIDERS` — an ordered, comma-separated
+  provider chain (default `searxng`, the key-less free floor), resolved once in the
+  lifespan.
+- The Brave LLM-Context paid provider behind `FORAGE_BRAVE_API_KEY`. With the key set,
+  anyone who can reach port 8020 can spend the operator's money — Forage enforces no
+  budget cap. Network placement and a front-side proxy or rate limit are your controls;
+  `/health` discloses key presence to anyone who can reach it, and `/metrics`
+  `search.paid_calls` / `search.fallback_fired` are how spend is seen.
+- Free-first, paid-on-failure fallback, with the `search_unavailable` code added to the
+  `/search` 422 vocabulary for an exhausted provider chain.
+- Per-request search policy on `SearchRequest` and provider status (`search_providers`) on
+  `/health`.
+- Two new `/metrics` `search.*` counters: `search.paid_calls` and `search.fallback_fired`.
+
+### v1.0.0 — 2026-09-12
+
+- contract: 1.1.0
+- anchor: `00b1dbaa5971895e7e7f1532f52ab46026df5e789ee5572380fd822f6bb295c0`
+- index digest: `sha256:d83639ccb0c186d1eeb0b67dce784348c6243a29a157a23b3e2e37f7e0c178da`
+- tagged commit: `f4c2b16ae634b35814831e5d7a358ea3e8a739de`
+
+What shipped:
+
+- The first published, secret-free, multi-arch Forage image (extracted from the Poppy
+  monorepo), minting `latest`, `1.0` and `1.0.0` for the first time.
+- The frozen, versioned OpenAPI contract (`contract/openapi.yaml`) with a committed
+  sha256 anchor, verified across the repository copy, the Release assets and the in-image
+  copy.
+- Reproducible, byte-identical multi-arch builds: a commit-derived `SOURCE_DATE_EPOCH`,
+  an apt log scrub, and `rewrite-timestamp=true` on every exporter.
+- `contract_smoke.py`, verifying a running container's `/health` against the contract and,
+  with `--image`, the in-image contract against the committed anchor.
+
 ## Withdrawn tags
 
 A publish run that fails the layer-identity gate leaves its tag pointing at an image
@@ -55,9 +104,10 @@ consumer follows and a release candidate is by definition not something to be
 followed into. The corresponding GitHub Release is created with
 `--prerelease`, which also keeps GitHub's own "latest release" pointer off it.
 
-`latest` therefore **does not exist yet**. It starts existing at the first
-non-pre-release `v*` tag, which `feature-forage-contract` puts at `v1.0.0`
-once the OpenAPI contract is frozen. Everything before that is `0.x` or `-rc`.
+`latest` has existed since `v1.0.0` — the first non-pre-release `v*` tag,
+cut by `feature-forage-contract` once the OpenAPI contract froze. `v1.1.0`
+(`search-release` US-002) moved it again, alongside `1.1`. See "Released
+versions" above for what each tag serves.
 
 ## What has to be green first
 
