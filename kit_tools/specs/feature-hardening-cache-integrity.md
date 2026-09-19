@@ -26,7 +26,7 @@ updated: 2026-09-19
 > in-memory backend needs no key and reports nothing.
 > Context: WA-B punch list ("Valkey content-cache is poisonable from any poppy-net container";
 > "cache hit re-enters the model without re-running any sanitization stage"); owner decision 2 and
-> rulings 5, 6, 21, 32, 33, 36, 37, 39, 40, 41 are binding here; spec 2 US-004 (a corrupt entry is a
+> rulings 5, 6, 21, 32, 33, 36, 37, 39, 40, 41, 43 are binding here; spec 2 US-004 (a corrupt entry is a
 > miss) and spec 1 US-004 (the 1.3.0 window) are assumed landed. Every line number in this spec was
 > measured before its `depends_on` specs landed (spec 2 US-004 edits `cache.py` above every anchor
 > here); re-locate every anchor by the symbol or quoted string beside it, never by the number.
@@ -52,7 +52,7 @@ version tag, the cache key and the payload (ruling 21), and a relocated envelope
 
 Second, how the read is bounded. The adversary who can `SET` can also swap a small value for a
 512 MiB one between two commands, so a `STRLEN`-then-`GET` probe is a race the attacker wins.
-The read is therefore one atomic `GETRANGE key 0 max` (ruling 21, corrected in rounds 2 and 3):
+The read is therefore one atomic `GETRANGE key 0 max` (ruling 21, corrected in rounds 2–4):
 one read never allocates more than the bound plus one byte, and a full-length return *is* the
 oversize verdict. `GETRANGE` differs from `GET` in one way that matters: on a missing key it
 returns an empty string, never nil — so an empty return is a **miss** (counted on
@@ -61,9 +61,12 @@ bytes long, "empty" is unambiguously "absent" (an adversary who plants `SET key 
 refetch and nothing else). A `WRONGTYPE` reply (the key holds a list or a hash) proves the
 connection is healthy and the value is not ours: it is an integrity reject, never a disconnect.
 The same byte bound applies on the write side — `put` refuses to store a value it would reject,
-measured in UTF-8 bytes on both sides — so `integrity_rejects` keeps meaning "someone other than
-Forage wrote this", which is what the operator guidance in US-003 needs it to mean; the bound is
-per read, and Technical Considerations states the aggregate.
+measured in UTF-8 bytes on both sides, and deletes the superseded entry before it skips (round 4) —
+so `integrity_rejects` keeps meaning "someone other than Forage wrote this" **for a fleet that
+keeps `cache.max_value_bytes` equal across replicas and does not lower it**: the bound is not a
+cache-key input, so lowering it turns Forage's own larger past writes into `oversize` rejects, which
+the runbook in US-003 names as the one reason that is not tampering; the bound is per read, and
+Technical Considerations states the aggregate.
 
 Third, what happens when no key is configured. "Sign with a random per-process key" would make
 every restart a cold cache; "sign only when a key is set, and stay quiet" would let a keyless
@@ -99,9 +102,11 @@ brave_key_present`).
 - A round trip through `put` then `get` under the same key and cache key returns the identical
   `RetrievedContent`, and `integrity_rejects` is still 0 afterwards.
 - Forage never writes a value it would reject: a serialised value over `cache.max_value_bytes`
-  **UTF-8 bytes** is skipped on the write side and counted on `storage_oversize_skips` (which
-  therefore moves on both backends — the exported description that says "always 0 on Valkey" is
-  corrected in the same window), never on `integrity_rejects`.
+  **UTF-8 bytes** is skipped on the write side — the existing entry under that key is deleted
+  first, so a stale signed value is never served in the new one's place — and counted on
+  `storage_oversize_skips` (which therefore moves on both backends — the exported description that
+  says "always 0 on Valkey" is corrected in the same window and the widening is a recorded
+  GOVERNANCE ruling, documentation-only, no bump), never on `integrity_rejects`.
 - A `FORAGE_CACHE_HMAC_KEY` under 32 UTF-8 bytes, or carrying interior whitespace, control or
   non-printable-ASCII characters, refuses boot with `cache.CacheConfigurationError` naming the
   variable and never the value.
@@ -147,8 +152,11 @@ planted `b""` produces `get → None` with **no** delete and no increment (a mis
 `oversize`; (ii) `getrange` returning `b""` → `None`, `storage_misses` + 1, `storage_hits`
 unchanged, no delete, no reject, no WARNING; (iii) `getrange` raising `redis.exceptions.ResponseError
 ("WRONGTYPE …")` → `None`, one `delete`, `integrity_rejects` + 1 with reason `wrong_type`,
-`connected` still true, `operation_failures` unchanged. With `hmac_key=None` the stored value is
-bare JSON as today and every existing `tests/test_cache.py` test passes apart from the named
+`connected` still true, `operation_failures` unchanged; (iv) `aioredis.from_url` is called with
+`decode_responses=False`. A `put` over the bound for a key that already holds a small valid
+envelope deletes that entry before skipping (`storage.entries` no longer has the key,
+`storage.delete_calls` + 1, `storage_oversize_skips` + 1, `integrity_rejects` unchanged). With
+`hmac_key=None` the stored value is bare JSON as today and every existing `tests/test_cache.py` test passes apart from the named
 Valkey doubles gaining `getrange` (the seam list below).
 
 **Implementation Hints:**
@@ -166,17 +174,30 @@ Valkey doubles gaining `getrange` (the seam list below).
   `object.__repr__` already omits the key; the criterion is a regression guard against a future
   dataclass conversion (state that in the test's docstring). Counters go through `self._metrics`
   (`cache.py:720`); there is no `metrics` property.
-- `put` (`cache.py:821`): `payload = content.model_dump_json().encode()` once; when a key is set,
-  `mac = hmac.new(self._hmac_key, b"v1\0" + key.encode() + b"\0" + payload, hashlib.sha256)
-  .hexdigest()` and the stored value is `f"v1.{mac}.".encode() + payload`. `key` is the
+- `put` (`cache.py:821`): `json_text = content.model_dump_json()` once and `payload =
+  json_text.encode()` for the MAC input; when a key is set, `mac = hmac.new(self._hmac_key, b"v1\0"
+  + key.encode() + b"\0" + payload, hashlib.sha256).hexdigest()` and the value handed to
+  `CacheStorage.set` is the **`str`** `f"v1.{mac}." + json_text` — `set(key, value: str, *,
+  ttl_seconds)` at `cache.py:348` fixes the type, and the storage layer is what encodes
+  (`InMemoryStorage.set`, `cache.py:643-644`); the round-3 hint's `bytes` expression would have been
+  a pyright-strict error against that signature (round 4, codebase fit). `key` is the
   `cache_key(...)` already computed at the top of `put`/`get`, so the binding costs one
-  concatenation. **Write-side bound, in bytes:** the check runs on the encoded value (`len(payload)`
-  in the keyless path, the envelope's byte length in the keyed path — the precedent is
-  `InMemoryStorage.set`'s `payload = value.encode(); size = len(payload)` at `cache.py:643-644`; a
-  `str` length counts characters and a CJK page is ~2.6× more bytes than characters); over
-  `self._max_value_bytes` → `self._metrics.storage_oversize_skips += 1` (the existing counter,
-  `cache.py:210`), log nothing, return `False`; the request is served uncached exactly as an
-  in-memory oversize is today. Never `integrity_rejects`.
+  concatenation. **Write-side bound, in bytes:** measure `len(b"v1." + mac.encode() + b".") +
+  len(payload)` in the keyed path and `len(payload)` in the keyless path (the precedent is
+  `InMemoryStorage.set`'s `payload = value.encode(); size = len(payload)`; a `str` length counts
+  characters and a CJK page is ~2.6× more bytes than characters); over `self._max_value_bytes` →
+  **delete the existing entry for that key first** (`await self._storage.delete(key)` — the
+  invariant `InMemoryStorage.set`'s docstring states, "a superseded payload can never be served in
+  the new one's place"; without it a page that was 3 MiB yesterday and 5 MiB today keeps serving
+  the stale signed envelope for the rest of its TTL — round 4), then
+  `self._metrics.storage_oversize_skips += 1` (the existing counter, `cache.py:210`), log nothing,
+  return `False`; the request is served uncached exactly as an in-memory oversize is today. Never
+  `integrity_rejects`. After this story the counter has **two producers**: `ContentCache.put` at
+  `cache.max_value_bytes` (the one reachable through the cache on both backends) and
+  `InMemoryStorage.set` at `cache.max_bytes` (reachable through the cache only when an operator sets
+  `max_value_bytes` above `max_bytes` — see the WARNING below — and from the direct-drive tests at
+  `tests/test_cache.py:1302`, `:1320`); US-003's `MONITORING.md` / `docs/configuration.md` wording
+  names the `max_value_bytes` threshold, not just "Forage's own write-side refusals".
 - The `CacheStorage` protocol (`cache.py:344-354`, `set(key, value: str, *, ttl_seconds)`,
   `get -> bytes | None`) is unchanged for the envelope (ASCII prefix + JSON passes through `set` as
   `str` and comes back as `bytes`); `InMemoryStorage` (`:546`) needs no edit and the
@@ -200,8 +221,11 @@ Valkey doubles gaining `getrange` (the seam list below).
   (`cache.py:385`) gains `max_value_bytes: int = DEFAULT_CACHE_MAX_VALUE_BYTES` (keyword-only,
   beside `metrics`); (c) both storage construction sites pass it — `retrieval_app._select_cache_storage`
   (`retrieval_app.py:240-266`, which today hands `CacheSettings` only to `InMemoryStorage`) passes
-  `settings.max_value_bytes`, and the `ContentCache(valkey_url=...)` convenience constructor passes
-  the default; (d) the Valkey doubles stub `getrange` **returning `b""` for a miss, never `None`**
+  `settings.max_value_bytes`, and the `ContentCache(valkey_url=...)` convenience constructor forwards
+  **`self._max_value_bytes`** to the `ValkeyStorage` it builds (never the module default — otherwise
+  `ContentCache(valkey_url=..., max_value_bytes=512 * 2**10)` reads at 4 MiB and rejects at 512 KiB,
+  a split-brain bound; a criterion asserts the two bounds are equal after construction through both
+  paths — round 4); (d) the Valkey doubles stub `getrange` **returning `b""` for a miss, never `None`**
   (a `None` stub would hide the miss bug in every test): `tests/test_cache.py:85 _mock_valkey_client()`
   (docstring "The five-command Valkey surface" → six) and `tests/test_app.py:1248 _valkey_double()`;
   (e) `ContentCache.get` additionally treats `raw == b""` from any storage as a miss (no count at
@@ -209,19 +233,37 @@ Valkey doubles gaining `getrange` (the seam list below).
   inside `_unwrap` — defence in depth for a backend that cannot pre-bound (`FakeStorage` is
   "deliberately unbounded", `tests/fakes.py:200`; `InMemoryStorage` is write-bounded by `max_bytes`,
   `:648`), tested on `FakeStorage`; the parity harness's memory side never produces an oversize
-  value — say so in the test.
+  value — say so in the test; (f) `ValkeyStorage._attempt_connect` passes `decode_responses=False`
+  **explicitly** to `aioredis.from_url` (`cache.py:411`): redis-py's `parse_url` forwards unknown
+  query parameters to the connection constructor verbatim, so `VALKEY_URL=redis://valkey:6379/4?
+  decode_responses=1` would otherwise turn every reply into `str`, make `len(reply)` a character
+  count against a server-side byte index, and raise `UnicodeDecodeError` on a truncated multibyte
+  boundary into the disconnect path (round 4, security); `ValkeyStorage.get` additionally asserts
+  the seam is bytes — a non-`bytes` reply is encoded to UTF-8 before the length check (belt and
+  braces) — and a test asserts the `from_url` keyword.
 - `cache.max_value_bytes` is a new `config.yaml` key in the `cache:` block (the block comment
   currently frames the block as in-memory-only — reword it), read by `cache_settings_from_config`
   (`cache.py:267`) with `_bounded_int` (`:244`): default **4 MiB**, range 512 KiB – **8 MiB**;
-  `cache_settings_from_config` also refuses boot with `CacheConfigurationError` when
-  `max_value_bytes > max_bytes` (the same way every other bound in that block fails). The default
+  when `max_value_bytes > max_bytes`, `cache_settings_from_config` **boots** and logs one WARNING
+  `cache_bounds_inverted — cache.max_value_bytes exceeds cache.max_bytes; the in-memory storage
+  applies cache.max_bytes` (keys in the message, never values; the marker joins MONITORING's
+  startup-lines table and LOGGING.md's inventory) — round 4 replaced the round-3 boot refusal,
+  which would have stopped every deployment that pinned `cache.max_bytes` under the new 4 MiB
+  default (a documented, in-range value) on a key it never configured, and which coupled a Valkey
+  read bound to an in-memory total that is dead weight on Valkey. The default
   sits above the largest value Forage can author — `MAX_EXTRACTED_OUTPUT_BYTES` is 2 MiB
   (`pipeline/extraction_limits.py:12`) plus JSON escaping, metadata and the 67-byte prefix — so a
   legitimate `full`-mode page is never skipped at the default; the `docs/configuration.md` cache
-  table row states that relationship, the `max_bytes` relationship, **and the container-memory
-  one** (peak cache-read allocation is `max_value_bytes × in-flight /retrieve requests`, and cache
-  reads sit under no concurrency bound; cross-reference `feature-hardening-resource-envelope`'s
-  sizing table, whose formula gains a cache-read term). `CacheSettings` (`cache.py:237`) gains the
+  table row states that relationship, the `max_bytes` relationship (a WARNING, not a refusal),
+  **the container-memory one** (peak cache-read allocation is `max_value_bytes × in-flight
+  /retrieve requests`, and cache reads sit under no concurrency bound; cross-reference
+  `feature-hardening-resource-envelope`'s sizing table, whose formula gains a cache-read term),
+  **and the fleet one** (round 4): the bound is not a cache-key input (`derive_sanitizer_revision`
+  hashes sources, the model identity and the threshold — `pipeline/sanitizer_revision.py:38-42` —
+  never the cache block), so every replica over one shared Valkey must carry the same
+  `cache.max_value_bytes` for the same reason every replica must carry the same key, and lowering
+  the value produces a bounded burst of `oversize` rejects against Forage's own larger past writes
+  — a tuning consequence the row states, not tampering. `CacheSettings` (`cache.py:237`) gains the
   field and its docstring widens from "one `InMemoryStorage`" to "one cache storage";
   `tests/test_cache.py:869 test_the_shipped_config_yaml_pins_the_documented_defaults` asserts the
   third field; spec 3 US-003's `KNOWN_CONFIG_KEYS` registers the key.
@@ -259,11 +301,17 @@ Valkey doubles gaining `getrange` (the seam list below).
   ours") and the `storage_oversize_skips` Field description (`:600-604`, "Always 0 on Valkey") —
   both ship in `contract/openapi.yaml` (`:82`, `:118-119`); after this story
   `storage_oversize_skips` counts Forage's own write-side refusals on both backends and
-  `storage_evictions` stays memory-only. `tests/test_contract_metrics.py::
+  `storage_evictions` stays memory-only. The widening is recorded as a **GOVERNANCE recorded
+  ruling** (round 4): the counter's meaning — values Forage itself refused to store as over a
+  per-entry byte bound — is unchanged; what changes is the set of backends that can produce one and
+  the description that said only one could; a counter documented as always 0 on Valkey moving off
+  0 is additive behaviour, not a redefinition of the name, so it is documentation-only within the
+  1.3.0 window and carries no bump — the ruling names Example 4 as considered and says why it does
+  not apply. `tests/test_contract_metrics.py::
   test_dataclass_counters_and_their_models_carry_the_same_fields` (`:305`) and
   `::test_metrics_schema_is_fully_rendered` enforce the field. One counter, six reasons: the
-  counter cannot separate a first-enable/rotation burst (`unsigned`, `bad_mac` on old entries) from
-  tampering (`bad_mac` on fresh ones); the log line's reason token and key digest are the
+  counter cannot separate a key-enable/rotation burst on a running fleet (`unsigned`, `bad_mac` on
+  old entries) or a bound reduction (`oversize`) from tampering (`bad_mac` on fresh ones); the log line's reason token and key digest are the
   discriminator, and US-003 says so in as many words (a per-reason `/metrics` breakdown is
   recorded as a non-blocking question).
 - Key material: the stripped environment value is used as UTF-8 bytes, **never base64-decoded**;
@@ -302,12 +350,18 @@ Valkey doubles gaining `getrange` (the seam list below).
   edit — say so. Starting counts: `grep -c "\.get = AsyncMock" tests/test_cache.py` is 5 before and
   0 after; `grep -rcE 'five[ -](Valkey )?(operations|command)' cache.py tests/test_cache.py
   tests/test_app.py` sums to 2 before (`cache.py:358`, `tests/test_cache.py:86`) and 0 after.
+  Three further tests (round 4): an oversize `put` for a key already holding a small valid envelope
+  deletes it before skipping; `ContentCache(valkey_url=..., max_value_bytes=N)._storage` carries the
+  same `max_value_bytes` as the cache, and so does the lifespan-built pair; `_attempt_connect` calls
+  `aioredis.from_url` with `decode_responses=False` (patch `cache.aioredis` as `tests/test_app.py`'s
+  Valkey tests do and read `call_args.kwargs`).
 
 **Acceptance Criteria:**
 - [ ] `ContentCache(hmac_key=..., max_value_bytes=...)` accepts `bytes | None` / `int`, defaults to
       `None` / `DEFAULT_CACHE_MAX_VALUE_BYTES`, and both reach the instance from the lifespan
       construction site (`retrieval_app.py:1288`, `settings.max_value_bytes`) as well as the
-      convenience constructor and the parity fixture (defaults); with `hmac_key=None` the stored
+      convenience constructor and the parity fixture (defaults); the cache's bound and its
+      `ValkeyStorage`'s bound are equal after construction through both paths; with `hmac_key=None` the stored
       value and every existing `tests/test_cache.py` test are unchanged apart from the named seam
       migration.
 - [ ] With a key, `put` stores `v1.<64 hex chars>.<json>` and the MAC verifies as HMAC-SHA256 over
@@ -334,16 +388,23 @@ Valkey doubles gaining `getrange` (the seam list below).
       double's docstring describes the surface as "five" (the corrected grep returns 0); the five
       inline `.get = AsyncMock` stubs in `tests/test_cache.py` are migrated to `getrange` as named.
 - [ ] `put` never stores a value longer than `cache.max_value_bytes` **UTF-8 bytes**: the skip
-      advances `storage_oversize_skips`, leaves `integrity_rejects` and the storage untouched, and
-      the request is served uncached — asserted with an ASCII payload and with a non-ASCII payload
+      deletes any existing entry under that key first (a previously cached small value is gone after
+      an oversize `put` for the same key), advances `storage_oversize_skips`, leaves
+      `integrity_rejects` untouched and stores nothing, and the request is served uncached — asserted with an ASCII payload and with a non-ASCII payload
       that is under the bound in characters and over it in bytes.
 - [ ] `cache.max_value_bytes` exists in `config.yaml`'s `cache:` block (default 4 MiB, range
-      512 KiB – 8 MiB, `_bounded_int`), `cache_settings_from_config` refuses boot when it exceeds
-      `cache.max_bytes`, it reaches `ValkeyStorage.__init__` and `ContentCache.__init__` from their
-      construction sites, is registered in `KNOWN_CONFIG_KEYS`, is asserted by
+      512 KiB – 8 MiB, `_bounded_int`), `cache_settings_from_config` boots and logs one
+      `cache_bounds_inverted` WARNING (keys only) when it exceeds `cache.max_bytes` — a shipped-range
+      `cache.max_bytes: 1048576` with the default `max_value_bytes` is a supported, warned start —
+      it reaches `ValkeyStorage.__init__` and `ContentCache.__init__` from their construction sites,
+      is registered in `KNOWN_CONFIG_KEYS`, is asserted by
       `test_the_shipped_config_yaml_pins_the_documented_defaults`, and its `docs/configuration.md`
-      row states the `MAX_EXTRACTED_OUTPUT_BYTES`, `cache.max_bytes` and container-memory
-      relationships with the cross-reference to spec 6's sizing table.
+      row states the `MAX_EXTRACTED_OUTPUT_BYTES`, `cache.max_bytes` (WARNING), container-memory
+      and same-across-replicas relationships, the lowering consequence, and the cross-reference to
+      spec 6's sizing table.
+- [ ] `ValkeyStorage._attempt_connect` calls `aioredis.from_url` with `decode_responses=False`
+      (asserted on `call_args.kwargs`), and `ValkeyStorage.get` measures and parses bytes even when
+      a double returns `str`.
 - [ ] Every rejection logs exactly one WARNING whose `getMessage()` contains
       `cache_integrity_reject`, one member of `CACHE_INTEGRITY_REASONS` and the `ret:` cache-key
       digest; the secret bytes, the raw value, the URL and the Valkey URL appear in no record
@@ -353,11 +414,16 @@ Valkey doubles gaining `getrange` (the seam list below).
 - [ ] `CacheMetrics.integrity_rejects`, the `CacheMetricsResponse` field and the `/metrics` handler
       dict entry exist; the field-parity test passes; the `/metrics` body carries the key; the
       class docstring and the `storage_oversize_skips` description no longer say the counter is
-      memory-only (`grep -c "Always 0 on Valkey" retrieval_app.py contract/openapi.yaml` sums to 0
-      after export).
+      memory-only — `grep -c 'bound. Always 0 on Valkey' retrieval_app.py` returns 0 (1 today,
+      `retrieval_app.py:603`; the `storage_evictions` description at `:597` keeps its own "Always 0
+      on Valkey" because that counter **stays** memory-only, and the exported `contract/openapi.yaml`
+      folds descriptions across lines, so a single-line grep on it sees neither — R43) and the
+      `storage_oversize_skips` Field description no longer contains `in-memory storage`; the
+      GOVERNANCE recorded ruling on the widened counter is written.
 - [ ] 1.3.0 window (ruling 36): docstring line appended (covering `integrity_rejects` and the
       widened `storage_oversize_skips`), contract regenerated, `tests/golden/contract_1_3_0.json`
-      re-created via `_SCHEMA_MODELS`, the field appended to `_EXPECTED_ONE_THREE_ZERO_DIFF`, the
+      re-created via `_SCHEMA_MODELS`, the field appended to `_EXPECTED_ONE_THREE_ZERO_DIFF` (the
+      description change is golden-only — R36 corrected), the
       four anchor-quoting pages refreshed, `uv run python -m scripts.export_contract --check` green,
       `tests/golden/contract_1_2_0.json` unchanged.
 - [ ] The `sanitizer_revision` rotation (`pipeline/contract.py`) is measured by revert-and-reproduce
@@ -437,7 +503,11 @@ sentinel appears zero times in `/health`, `/metrics`, `caplog.text` and `repr(ap
   `pipeline/contract.py`'s `DegradedReason` literal (`:82-100`, a response-validation gate) appended
   after `cache_unavailable` when the backend is Valkey and signing is not active;
   `tests/test_contract_errors.py::test_degraded_reasons_derive_from_one_source` (`:282`) is an
-  exact set and gains the member in the same edit. `CAPABILITY_CACHE_HMAC_KEY = "cache_hmac_key"`
+  exact set and gains the member in the same edit, and so does
+  `::test_degraded_reasons_and_dict_vocabularies_are_documented` (`:643`), which pins the
+  **generated** enum list (`health["degraded_reasons"]["items"]["enum"]`) to the two members and
+  asserts `CAPABILITY_SEARCH_SANITIZATION` is in the `capabilities` description — the rewrite of
+  that description must keep it (round 4, codebase fit). `CAPABILITY_CACHE_HMAC_KEY = "cache_hmac_key"`
   beside `CAPABILITY_BRAVE_API_KEY` (`:351`), present as `1` iff signing is active. The
   `capabilities` Field description (`retrieval_app.py:374-390`, "Two keys are defined in contract
   1.2.0" at `:378`) and the block comment at `:341-351` are part of the exported document —
@@ -457,7 +527,8 @@ sentinel appears zero times in `/health`, `/metrics`, `caplog.text` and `repr(ap
   stays healthy, and its `valkey-down-degraded` param (`:1491-1498`) expects
   `["cache_unavailable", "cache_unauthenticated"]`; the `Case N of 5` docstring series in the same
   file (`:1332`, `:1357`, `:1387`) is renumbered to six cases with the new keyless sibling as its
-  own case; `kit_tools/arch/SECURITY.md:293` cites the second test by name and needs no change
+  own case (anchored grep: `grep -c 'Case . of 5' tests/test_app.py` is 3 today — the naive `'of 5'`
+  is 4 because `tests/test_app.py:179` says "500ing" — R43); `kit_tools/arch/SECURITY.md:293` cites the second test by name and needs no change
   unless it is renamed. Starting count: `grep -n 'degraded_reasons"\]' tests/test_app.py` (14 hits
   today, which also catches the parametrised form that `== \[` misses).
 - Boot WARNING when Valkey is configured and no key: `cache_hmac_key_missing — %s is unset; cached
@@ -468,7 +539,9 @@ sentinel appears zero times in `/health`, `/metrics`, `caplog.text` and `repr(ap
 - Contract window (ruling 36 — copy exactly): one `* ``1.3.0`` — …` docstring line for the new
   `DegradedReason` member and the capability, `uv run python -m scripts.export_contract`, re-create
   `tests/golden/contract_1_3_0.json` via `_SCHEMA_MODELS` keeping US-001's line, append
-  `cache_unauthenticated` / `cache_hmac_key` to `_EXPECTED_ONE_THREE_ZERO_DIFF`, refresh the four
+  `cache_unauthenticated` (a new enum member) to `_EXPECTED_ONE_THREE_ZERO_DIFF` — `cache_hmac_key`
+  is a key inside the `capabilities` dict, not a schema path, and is not appended (R36 corrected)
+  — refresh the four
   anchor-quoting pages, `--check` green. `pipeline/contract.py` rotates — measure and record at the
   five protocol sites.
 
@@ -482,8 +555,9 @@ sentinel appears zero times in `/health`, `/metrics`, `caplog.text` and `repr(ap
       `FORAGE_CACHE_HMAC_KEY` and does not contain the value, and exactly one WARNING carrying
       `cache_hmac_key_too_short` or `cache_hmac_key_invalid` is emitted; the refusal docstring
       states that the floor is length, not entropy, and names the CSPRNG recipe.
-- [ ] `cache_unauthenticated` is a member of `pipeline/contract.py`'s `DegradedReason`, the
-      exact-set test in `tests/test_contract_errors.py` includes it, and it appears in
+- [ ] `cache_unauthenticated` is a member of `pipeline/contract.py`'s `DegradedReason`, both
+      exact-set tests in `tests/test_contract_errors.py` (`:282`, `:643`) include it and the `:643`
+      capability-description assertion still holds, and it appears in
       `degraded_reasons` iff the backend is Valkey and signing is not active; `/health` still
       returns HTTP 200 in that state.
 - [ ] `capabilities["cache_hmac_key"] == 1` iff a usable key was resolved **and** the backend is
@@ -498,16 +572,18 @@ sentinel appears zero times in `/health`, `/metrics`, `caplog.text` and `repr(ap
       `test_a_broken_valkey_url_degrades_and_never_falls_back_to_memory` expects
       `["cache_unavailable", "cache_unauthenticated"]`;
       `test_health_names_the_backend_it_selected_for_this_start`'s two Valkey params are updated as
-      named; the `Case N of 5` docstring series is renumbered to six (`grep -c 'of 5' tests/test_app.py`
-      returns 0); `SECURITY.md:293`'s citation still resolves.
+      named; the `Case N of 5` docstring series is renumbered to six (`grep -c 'Case . of 5'
+      tests/test_app.py` returns 0; 3 today); `SECURITY.md:293`'s citation still resolves.
 - [ ] `_CLEARED_ENV_VARS` contains `FORAGE_CACHE_HMAC_KEY` and the exact-set test in
       `tests/test_hermeticity.py` is updated in this story.
 - [ ] Sentinel: the key value appears zero times in `/health`, `/metrics`, every log record and
       `repr(app.state.cache)` across the four starts.
 - [ ] `contract_smoke.py`'s healthy-mode docstring names `cache_unauthenticated`.
 - [ ] 1.3.0 window (ruling 36): docstring line appended, contract regenerated,
-      `tests/golden/contract_1_3_0.json` re-created with US-001's line intact, the two names
-      appended to `_EXPECTED_ONE_THREE_ZERO_DIFF`, the four anchor-quoting pages refreshed,
+      `tests/golden/contract_1_3_0.json` re-created with US-001's line intact,
+      `cache_unauthenticated` appended to `_EXPECTED_ONE_THREE_ZERO_DIFF` as a new enum member
+      (`cache_hmac_key` is a dict key, not a schema path — R36 corrected), the four anchor-quoting
+      pages refreshed,
       `--check` green, `contract_1_2_0.json` unchanged.
 - [ ] The `sanitizer_revision` rotation (`pipeline/contract.py`) is measured by revert-and-reproduce
       and recorded at the five protocol sites.
@@ -528,8 +604,7 @@ a reachable Valkey is `healthy` on its own.
 **Independent Test:** The `### Credential handling for FORAGE_CACHE_HMAC_KEY` subsection of
 `docs/configuration.md` contains the generation command, the CSPRNG-not-passphrase sentence, the
 UTF-8-never-decoded rule, the 32-byte floor, the `/health` behaviour without the key, the boot
-refusal, and the rotation consequence; the by-value sweep (ruling 39, criterion 5) returns exactly
-the allowed remainder; the doc-scanning tests pass.
+refusal, and the rotation consequence; the by-value sweep (ruling 39, criterion 5) returns nothing; the doc-scanning tests pass.
 
 **Implementation Hints:**
 - `docs/configuration.md`: a row in `### Runtime` (`| Variable | Default | Purpose |`) and the new
@@ -545,28 +620,44 @@ the allowed remainder; the doc-scanning tests pass.
   metrics rows gain `integrity_rejects`, and "Only the in-memory storage can move the last two"
   becomes "`storage_evictions` is memory-only; `storage_oversize_skips` counts Forage's own
   write-side refusals on both backends" — US-001 widened it), `:539` ("two keys" / "two reasons"),
-  and the `cache.max_value_bytes` row (if US-001 has not already added it) with its three
-  relationships.
+  and the `cache.max_value_bytes` row (if US-001 has not already added it) with its four
+  relationships and the same-across-replicas / lowering sentence.
 - `kit_tools/docs/ENV_REFERENCE.md` `### Runtime service` table (seven columns, the
   `FORAGE_BRAVE_API_KEY` row at `:43` is the shape) gains the row with `Secret: **yes**` and read
   site `retrieval_app._resolve_cache_hmac_key(), start`.
 - `kit_tools/docs/MONITORING.md`: the `capabilities` row (`:63`), the `degraded_reasons` row (`:68`)
   and "The two reasons are the complete set" (`:70`), the body-shape block (`:81`), the runbook item
   (`:99`), the cache counter table (`:170-177`) with a row for `cache.integrity_rejects`, the
-  `### Startup lines you may see` table (`:229`) with all four markers (`cache_hmac_key_missing`,
+  `### Startup lines you may see` table (`:229`) with all five markers (`cache_hmac_key_missing`,
   `cache_hmac_key_unused`, `cache_hmac_key_too_short`, `cache_hmac_key_invalid` — the last two are
-  what an operator whose container will not start is decoding), the `storage_oversize_skips` row
-  (`:177`, "`InMemoryStorage` only; always 0 on Valkey" → both backends, Forage's own refusals),
+  what an operator whose container will not start is decoding — and `cache_bounds_inverted`), the
+  `storage_oversize_skips` row (`:177`, "`InMemoryStorage` only; always 0 on Valkey" → both
+  backends, Forage's own write-side refusals at `cache.max_value_bytes`, plus `InMemoryStorage`'s
+  own `cache.max_bytes` check),
   and `### Closed vocabularies` → `cache.py` (`:242`, "exactly one of `connect_failed`, …") extended
-  with the six `cache_integrity_reject` reasons. Incident guidance: a one-time burst bounded by the working set
-  is expected when the key is first set or rotated; a sustained non-zero `integrity_rejects` rate
-  with a key set and no rotation in flight means something other than Forage is writing to the
-  Valkey — treat it as a security event (rotate the key, audit Valkey ACL and network placement),
-  not a cache-health blip; **the counter cannot separate the two by itself** — the reason token
-  and the `ret:` key digest in the `cache_integrity_reject` log line are the discriminator
-  (`unsigned` spread across many keys = migration; `bad_mac` on fresh keys = tampering;
-  `wrong_type` = someone planted a non-string); a Forage-authored page over the bound is a
-  `storage_oversize_skips` increment, never an integrity reject, so it is not this signal; and **a
+  with the six `cache_integrity_reject` reasons. Incident guidance (round 4 — two scenarios,
+  stated separately, because the round-3 text told operators to shrug off the one signal that can
+  only mean a foreign writer): **(a) upgrading to the 1.3.0 image** — US-001 and US-002 append to
+  `pipeline/contract.py`, a `_REVISION_SOURCES` member, so `sanitizer_revision` rotates,
+  `cache_policy_fingerprint` changes and **every cache key changes**; legacy bare-JSON entries are
+  orphaned under keys the new code never asks for, not rejected; there is **no first-enable
+  burst** on this path — expect a cold cache and a near-zero `unsigned` count, and after the
+  upgrade an `unsigned` or `bad_mac` reject is a foreign writer; **(b) enabling or rotating
+  `FORAGE_CACHE_HMAC_KEY` on an already-running 1.3.0 fleet with no code change** — the keys do
+  not change, so a one-time burst bounded by the working set follows (`unsigned` on first enable,
+  `bad_mac` on rotation), and the stop-all rotation procedure is what bounds it. In either case a
+  sustained non-zero `integrity_rejects` rate with a key set and no rotation in flight means
+  something other than Forage is writing to the Valkey — treat it as a security event (rotate the
+  key, audit Valkey ACL and network placement), not a cache-health blip; **the counter cannot
+  separate the cases by itself** — the reason token and the `ret:` key digest in the
+  `cache_integrity_reject` log line are the discriminator (`unsigned` spread across many keys
+  right after a key enable on a running fleet = migration; `bad_mac` on fresh keys = tampering;
+  `wrong_type` = someone planted a non-string; **`oversize` = a value larger than
+  `cache.max_value_bytes`** — a burst bounded by the working set follows a bound reduction, a
+  sustained rate means a replica with a mismatched bound, and it is the weakest of the six as
+  tamper evidence; the security-event sentence names `unsigned`, `bad_mac` and `wrong_type` only);
+  a Forage-authored page over the bound is a `storage_oversize_skips` increment at write time,
+  never an integrity reject, so a new write is not this signal; and **a
   flat `integrity_rejects` is not evidence of an unpoisoned cache when key compromise is
   suspected** — a forged envelope under the real key verifies and counts nothing (the fourth
   residual in SECURITY.md). The digest is described as an opaque, credential-free correlation
@@ -574,7 +665,9 @@ the allowed remainder; the doc-scanning tests pass.
   `cache_unauthenticated`: cached `/retrieve` content cannot be proven to be Forage's own and is
   served without re-sanitization; on a shared Valkey treat it as an open cache-poisoning path
   until a key is set (not "a configuration signal").
-- `kit_tools/docs/TROUBLESHOOTING.md`: `:56` ("Exactly two values exist") and `:60`; a narrative
+- `kit_tools/docs/TROUBLESHOOTING.md`: `:56` ("Exactly two values exist"), `:60` and `:121` (the
+  Secret-free check row's "the same three patterns" → four, naming the variable — round 4); a
+  narrative
   `### cache_unauthenticated: Valkey configured without a signing key` section beside the
   `cache_unavailable` one (`:345`); and a `### The container exits at start: FORAGE_CACHE_HMAC_KEY
   refused` section — what the operator sees (exit, no `/health`), which marker to grep for, the
@@ -585,7 +678,8 @@ the allowed remainder; the doc-scanning tests pass.
   (`:147-149`); `kit_tools/arch/CODE_ARCH.md:198` (the exhaustive parenthetical).
 - `README.md:115` (the cache-mode matrix's "`/health` when the cache is fine" row splits keyed /
   key-less) and the configuration section's mention of the variable in the same sentence as
-  `VALKEY_URL`; `kit_tools/docs/DEPLOYMENT.md:220` and the runnable block at `:239-241`
+  `VALKEY_URL`; `kit_tools/docs/DEPLOYMENT.md:100` ("The history grep uses the same three patterns as" → four,
+  round 4), `:220` and the runnable block at `:239-241`
   (`--expect-status healthy` on a Valkey-backed container now needs the key in the env file) plus
   the variable beside `VALKEY_URL`.
 - `kit_tools/arch/SECURITY.md`: a `FORAGE_CACHE_HMAC_KEY` row in the Secrets inventory table
@@ -597,7 +691,8 @@ the allowed remainder; the doc-scanning tests pass.
   stating: with an **uncompromised, CSPRNG-generated** key, integrity and authenticity of cached
   values are assured; **four** residuals remain — availability (an attacker can still delete or
   overwrite, forcing misses and outbound fetches plus classifier inference; the concurrency and
-  latency bounds of spec 6 are the control that bounds it), confidentiality, replay (a captured
+  latency bounds of spec 6 are the control that bounds it — spec 6 is later in the epic, so until
+  it lands the residual is stated as unbounded), confidentiality, replay (a captured
   valid envelope restored under the same key pins one Forage-authored snapshot; the signed
   `retrieved_at` plus the TTL check bound the window to `cache_ttl_hours`, which is a reason not to
   raise that value casually on a shared Valkey), and **key compromise** (a leaked or weak key lets
@@ -618,9 +713,12 @@ the allowed remainder; the doc-scanning tests pass.
 - `kit_tools/PRODUCT_VISION.md` Success Criteria: the "Fails loud, never silent" row ("a missing
   paid key is a supported mode, never a degraded state") and the "Key-less floor" row ("no new
   required secret, no degradation of the default path") are scoped to the paid *search* key and to
-  the default (memory-backed) path, so the vision and the shipped `/health` contract agree.
-- The `kit_tools/PRODUCT_VISION.md` edit is an owner-level scoping of two Success Criteria rows;
-  flag it for explicit owner sign-off in this story's Implementation Notes.
+  the default (memory-backed) path, so the vision and the shipped `/health` contract agree; `:173`
+  ("a key-less deployment is a first-class supported mode") is scoped the same way — key-less on
+  the memory-backed default path is first-class, key-less on Valkey is `degraded` with a named
+  reason (round 4; none of criterion 5's patterns would have caught that line).
+- The `kit_tools/PRODUCT_VISION.md` edit is an owner-level scoping of three lines (`:63`, `:65`,
+  `:173`); flag it for explicit owner sign-off in this story's Implementation Notes.
 - Doc-only story: no code; the doc-scanning suite is the gate; nothing rotates.
 
 **Acceptance Criteria:**
@@ -629,13 +727,16 @@ the allowed remainder; the doc-scanning tests pass.
       refusal, stop-all-replicas rotation) and the split Valkey row in the backend-selection table;
       `kit_tools/docs/ENV_REFERENCE.md` carries the seven-column row.
 - [ ] `kit_tools/docs/MONITORING.md` names three capability keys, three degraded reasons (row, body
-      shape, runbook), the `cache.integrity_rejects` counter row with the burst-versus-sustained
-      guidance, the "the log line is the discriminator" sentence and the "a flat counter is not
-      evidence under suspected key compromise" sentence, the corrected `storage_oversize_skips`
-      row, the four startup markers, and the extended `cache.py` closed vocabulary (six reasons);
-      the `cache_unauthenticated` wording states the consequence.
+      shape, runbook), the `cache.integrity_rejects` counter row with the two-scenario guidance
+      (upgrade: cold cache, no burst; key enable or rotation on a running fleet: a bounded burst),
+      the `oversize` discriminator entry, the "the log line is the discriminator" sentence and the
+      "a flat counter is not evidence under suspected key compromise" sentence, the corrected
+      `storage_oversize_skips` row naming the threshold, the five startup markers, and the extended
+      `cache.py` closed vocabulary (six reasons); the `cache_unauthenticated` wording states the
+      consequence.
 - [ ] `kit_tools/docs/TROUBLESHOOTING.md` and `kit_tools/docs/API_GUIDE.md` no longer say two values /
-      two keys; TROUBLESHOOTING has both new sections.
+      two keys; TROUBLESHOOTING has both new sections; TROUBLESHOOTING `:121` and DEPLOYMENT `:100`
+      say four patterns and name the variable.
 - [ ] `kit_tools/arch/SECURITY.md` has the Secrets-inventory row, the four-pattern sentence, the
       corrected conftest cleared-variable bullet, the three-reason enumeration, and the
       cache-poisoning entry with four residuals (key compromise included), the spec 6
@@ -643,15 +744,18 @@ the allowed remainder; the doc-scanning tests pass.
       six reasons, the four boot markers and refreshed `cache.py` citations;
       `kit_tools/arch/SERVICE_MAP.md`, `kit_tools/arch/CODE_ARCH.md`, `README.md`,
       `kit_tools/docs/DEPLOYMENT.md`, `kit_tools/docs/CI_CD.md`, `kit_tools/docs/GOTCHAS.md` and
-      `kit_tools/PRODUCT_VISION.md` carry the named edits.
+      `kit_tools/PRODUCT_VISION.md` (three lines, `:173` included) carry the named edits.
 - [ ] By-value sweep (ruling 39), run as one command at the story's start (record the count) and at
       its end: `grep -rn -iE -e 'two keys' -e 'the two reasons' -e 'exactly two values' -e 'exactly
       one of .connect_failed' -e 'exactly three strings' -e 'three patterns' -e 'is exactly
       .promptguard_unavailable' -e 'Always 0 on Valkey' -e 'Only the in-memory storage can move' -e
       'in-memory storage refused' -e 'InMemoryStorage. only' -e 'Set and reachable' -e 'when the
-      cache is fine' docs kit_tools README.md .github/workflows/ci.yml` returns only hits outside the
-      `/health` capability, `degraded_reasons`, `cache.py` closed-vocabulary, secret-grep,
-      oversize-skip and cache-mode vocabularies (list each remaining hit in Implementation Notes);
+      cache is fine' docs kit_tools/docs kit_tools/arch README.md .github/workflows/ci.yml` returns
+      **nothing** at the end (17 hits at the start, measured in round 4, every one inside this
+      story's named edit list; the path set excludes `kit_tools/specs/`, `kit_tools/.seed_cache/`,
+      `kit_tools/AUDIT_FINDINGS.md` and the `.validate_epic_*.json` artifacts by construction —
+      R43; a hit that is genuinely outside the six vocabularies is listed in Implementation Notes
+      with the reason it stays);
       `grep -rn FORAGE_CACHE_HMAC_KEY README.md kit_tools/docs/DEPLOYMENT.md` each return at least
       one line.
 - [ ] Full test suite passes (`uv run pytest`).
@@ -682,8 +786,10 @@ legitimately names — `scripts/export_contract.py:263-270` writes it on every e
 - The on-switch: `compose/full.yml` `environment:` gains `- FORAGE_CACHE_HMAC_KEY` as a bare name
   with a comment on the `FORAGE_BRAVE_API_KEY` pattern (credential → `compose/.env`, never inline)
   and a note that a healthy status now needs it; the header quickstart recipe (`:11-16`, the
-  `{ echo HF_TOKEN=...; echo SEARXNG_SECRET=...; } > .env` lines) gains the
-  `FORAGE_CACHE_HMAC_KEY=` line so the documented happy path still reaches `healthy`
+  `{ echo HF_TOKEN=...; echo SEARXNG_SECRET=...; } > .env` lines) gains a
+  `FORAGE_CACHE_HMAC_KEY=$(head -c 32 /dev/urandom | base64)` line — a generated value, never a
+  literal and never an empty assignment, which US-002 treats as absent and would leave the
+  documented happy path `degraded` (round 4) — so the documented happy path still reaches `healthy`
   (`feature-hardening-release` US-004 adds the *upgrade* sentence to the same files — different
   edit, no collision). `compose/minimal.yml` is Valkey-free (`TestMinimalIsGenuinelyValkeyFree`,
   `tests/test_compose_fragments.py:553`) and must not carry it; extend
@@ -707,7 +813,9 @@ legitimately names — `scripts/export_contract.py:263-270` writes it on every e
   `cache.py:496-537` swallow every storage exception and `orchestrator.py:286-304` continues
   uncached), and a `/health` + `/metrics` read with the sentinel; assert it is absent from
   `caplog.text` (all loggers), every body, and `repr(app.state.cache)`. Fixture-tree guard: a
-  **new** walk in `tests/test_cache.py` asserting the sentinel value appears in no file under
+  **new** walk in `tests/test_cache.py` on the shape of
+  `tests/test_brave_provider.py::TestFixtureCarriesNoSecret` (`:95-117`, `_FIXTURES_DIR.rglob`;
+  cite it in the docstring) asserting the sentinel value appears in no file under
   `tests/fixtures/`, and the literal `FORAGE_CACHE_HMAC_KEY` in no file under `tests/fixtures/`
   **excluding `tests/fixtures/contract/`** (generated contract prose names the variable by design;
   it is not a credential) — do not touch `tests/test_brave_provider.py:80 _AUTH_HEADER_NAMES`, a
@@ -716,7 +824,8 @@ legitimately names — `scripts/export_contract.py:263-270` writes it on every e
 
 **Acceptance Criteria:**
 - [ ] `compose/full.yml` passes `FORAGE_CACHE_HMAC_KEY` through as a bare name with the comment and
-      its header recipe includes the `FORAGE_CACHE_HMAC_KEY=` line; `compose/minimal.yml` does not
+      its header recipe includes a `FORAGE_CACHE_HMAC_KEY=$(…)` line that generates the value (the
+      test asserts the line is not an empty assignment); `compose/minimal.yml` does not
       carry the name; `tests/test_compose_fragments.py` asserts all three; no rendered config or
       env value is recorded anywhere (ruling 33).
 - [ ] `_REQUIRED_GREP_PATTERNS` and both `ci.yml` grep copies carry the name, the `ci.yml:532-539`
@@ -733,9 +842,23 @@ legitimately names — `scripts/export_contract.py:263-270` writes it on every e
 
 ## Edge Cases
 
-- Key configured, storage holds a legacy bare-JSON value → `unsigned` reject, delete, miss; the
-  next `put` re-signs. Key rotated (single process) → every old entry is `bad_mac` once, then gone.
-  US-001.
+- Key configured on an already-running 1.3.0 fleet, storage holds a bare-JSON value under a current
+  key → `unsigned` reject, delete, miss; the next `put` re-signs. Upgrading to the 1.3.0 image →
+  `sanitizer_revision` rotates and every cache key changes, so legacy entries are orphaned, never
+  read, never rejected (no burst). Key rotated (single process) → every old entry is `bad_mac`
+  once, then gone. US-001, US-003.
+- `cache.max_value_bytes` lowered (or one replica carrying a lower value) → Forage's own past writes
+  between the two bounds come back as `oversize` rejects (deleted, counted) — bounded by the working
+  set after a lowering, sustained while a replica's bound differs; not tampering. US-001, US-003.
+- `put` of a value over the bound for a key that already holds a small valid envelope → the old
+  entry is deleted first, then the skip; the stale value is never served. US-001.
+- `cache.max_bytes` (in-memory total) below `cache.max_value_bytes` — a config that is legal today →
+  boots with one `cache_bounds_inverted` WARNING; on the memory backend the storage's own
+  `max_bytes` check is the effective per-entry bound. US-001.
+- `VALKEY_URL` carrying `?decode_responses=1` → ignored: `_attempt_connect` pins
+  `decode_responses=False` after the URL is parsed, so replies stay bytes. US-001.
+- `compose/full.yml`'s header recipe with an empty `FORAGE_CACHE_HMAC_KEY=` → absent, `degraded`;
+  the shipped recipe generates the value. US-004.
 - Two replicas over one Valkey with different keys (a rolling rotation), or a mixed keyed/keyless
   fleet → each deletes the other's entries for as long as both run; the cache never warms; the docs
   say stop-all-then-rotate. US-003.
@@ -806,6 +929,9 @@ legitimately names — `scripts/export_contract.py:263-270` writes it on every e
 - The `CacheStorage` protocol's signature is unchanged; `ValkeyStorage.get` swaps `GET` for a
   bounded `GETRANGE` behind it and maps an empty return to a miss; `InMemoryStorage` is untouched;
   `_ValkeyClient` widens by one method as a deliberate act.
+- `VALKEY_URL` is a wider configuration surface than host/port/db/password because redis-py forwards
+  unknown query arguments to the connection constructor, which is why the byte mode is pinned in
+  code rather than assumed.
 - `CacheMetrics` is mirrored on `/metrics` under `extra="forbid"` with exact field parity enforced
   by test (verified: `retrieval_app.py:568`, `tests/test_contract_metrics.py:305`).
 - No healthcheck ships in this repo's `Dockerfile` or compose fragments today
@@ -817,7 +943,19 @@ legitimately names — `scripts/export_contract.py:263-270` writes it on every e
 - **Rotation ledger (ruling 32).** US-001 and US-002 each append a `CONTRACT_VERSION` docstring
   line, so both rotate `sanitizer_revision` through `pipeline/contract.py`; `cache.py`,
   `retrieval_app.py`, `models.py`, the compose fragments, `ci.yml` and the tests are not hashed;
-  US-003 and US-004 rotate nothing. Record each rotation at the five protocol sites.
+  US-003 and US-004 rotate nothing. Record each rotation at the five protocol sites. **The rotation
+  is also the invalidation** (round 4): because every cache key changes, every pre-epic entry is
+  orphaned at upgrade — the content cache cold-starts once for the epic, an operational consequence
+  US-003's runbook states, not only a ledger entry.
+- **`storage_oversize_skips` has two producers** after US-001: `ContentCache.put` at
+  `cache.max_value_bytes` (reachable through the cache on both backends) and `InMemoryStorage.set`
+  at `cache.max_bytes` (reachable through the cache only under an inverted configuration, and from
+  the direct-drive tests); the documentation names the threshold each fires at.
+- **Generated files at merge.** Every window story in this epic regenerates `contract/openapi.yaml`,
+  re-derives `contract/openapi.yaml.sha256` and re-creates `tests/golden/contract_1_3_0.json`. On
+  any merge that conflicts in one of them, take neither side: re-run `uv run python -m
+  scripts.export_contract` and re-create the golden from `_SCHEMA_MODELS` on the merged tree, then
+  `--check`. A hand-resolved `.sha256` is a silently wrong trust anchor (CLAUDE.md invariant 4).
 - **MAC input.** `b"v1\0" + cache_key + b"\0" + payload`: the version tag domain-separates future
   envelope formats, the cache key (`ret:<sha256hex>`, a fixed alphabet, so the separator is
   unambiguous) binds the value to its URL / mode / policy fingerprint, and the payload is the exact
@@ -837,7 +975,9 @@ legitimately names — `scripts/export_contract.py:263-270` writes it on every e
   in-flight /retrieve requests`, cache reads sit under no concurrency bound (the classification
   semaphore covers stage 3, which a hit short-circuits), and `cache.py:214-222` documents ~128 MiB
   of headroom — so the sizing table in `feature-hardening-resource-envelope` gains a cache-read
-  term and the config row cross-references it.
+  term and the config row cross-references it. The bound is a per-deployment input, not a
+  cache-key input: keep it equal across replicas; lowering it is a self-inflicted `oversize` burst
+  the runbook names (round 4).
 - **Constant-time comparison** via `hmac.compare_digest` on bytes; the reject log carries only the
   closed reason token and the key digest (`kit_tools/arch/patterns/LOGGING.md`; GOTCHAS "Nothing
   configures logging" — the token goes in the message).
@@ -935,6 +1075,15 @@ in `retrieval_app.py` — rejected, the repo owns errors per setting module.
   ceiling dropped to 8 MiB with the aggregate stated; the hermeticity line moved into US-002; the
   fixture walk exempts the generated contract twin; the fourth residual (key compromise) and the
   `ci.yml` comment joined the fan-out.
+- Validation round 4 (R21 corrected, R43): the write-side skip deletes the superseded entry first;
+  the `max_value_bytes > max_bytes` boot refusal became a WARNING (`cache_bounds_inverted`); the
+  runbook states the two scenarios (upgrade: no burst; key enable/rotation on a running fleet: a
+  bounded burst) and `oversize` joined the discriminator list; `decode_responses=False` is pinned;
+  the convenience constructor forwards the cache's bound; the widened counter is a recorded
+  GOVERNANCE ruling; the `put` hint's value is the `str` the protocol accepts; the by-value sweep's
+  path set and the two counted greps were corrected to measured values; `:643` joined the named
+  tests; TROUBLESHOOTING `:121`, DEPLOYMENT `:100` and PRODUCT_VISION `:173` joined the fan-out;
+  the compose recipe generates the key value.
 
 ### Decisions Made
 
@@ -987,6 +1136,36 @@ in `retrieval_app.py` — rejected, the repo owns errors per setting module.
   surface for an operational convenience no operator has yet asked for; stays an open question.
   Dropped: the `model_dump_json()` call-count assertion (a global patch on a pydantic method for a
   performance property); the observable round-trip half stays.
+- Round 4 (R21 corrected): the write-side skip deletes the superseded entry first
+  (`InMemoryStorage.set`'s stated invariant) — a bound that refused an update while serving the
+  stale signed value was a correctness hole no counter would show.
+- Round 4 (R21 corrected): `max_value_bytes > max_bytes` is a WARNING, not a refusal — a refusal
+  would have stopped every deployment that pinned `cache.max_bytes` under 4 MiB on a key it never
+  configured. Overruled: the salty engineer's alternative of raising `_MIN_CACHE_MAX_BYTES` to the
+  new default, which would itself refuse today's legal configs.
+- Round 4 (R21 corrected): the bound is documented as fleet-uniform and `oversize` is the one
+  discriminator entry that is not tampering; the security-event sentence names `unsigned`,
+  `bad_mac` and `wrong_type` only. The runbook's round-3 "expect a burst when the key is first
+  set" sentence is gone from the upgrade path, where the rotation orphans every legacy entry and
+  the only reachable `unsigned` is a foreign writer; the burst is real only for a key enable or
+  rotation on an already-running 1.3.0 fleet, and the runbook says which is which.
+- Round 4 (R21 corrected): `decode_responses=False` is passed explicitly — the byte bound's
+  correctness rested on an unstated assumption a `VALKEY_URL` query string could silently break.
+- Round 4: the widened `storage_oversize_skips` is a recorded GOVERNANCE ruling, documentation-only
+  and no bump: the name's meaning (Forage's own write-side refusals) is unchanged and the set of
+  backends that can produce one widened; Example 4 was considered and does not apply because no
+  consumer reading the name learns something false from it — a counter that was always 0 on one
+  backend can now move there.
+- Round 4 (R43): the by-value sweep's path set drops the `kit_tools/` machine trees (the spec, the
+  archive, the seed cache, this epic's own validation artifacts were 52 of 69 hits), the `Case N of
+  5` grep is anchored (`tests/test_app.py:179`'s "500ing" matched the naive form), and the
+  `Always 0 on Valkey` grep is scoped to the counter it means because the `storage_evictions`
+  description legitimately keeps the phrase.
+- Round 4 (R36 corrected): US-001 appends `integrity_rejects` (a property); US-002 appends
+  `cache_unauthenticated` (an enum member); the description changes and the `cache_hmac_key`
+  capability key are golden-only.
+- Round 4: the compose header recipe generates the key value; an empty assignment is the absent
+  shape and would ship the quickstart `degraded`.
 
 ## Clarifications
 
@@ -1034,6 +1213,23 @@ in `retrieval_app.py` — rejected, the repo owns errors per setting module.
 - Q: What if the key itself leaks? → A: Forged envelopes verify and the counter stays flat; the
   response is the fleet-wide stop-all rotation; a key id in the envelope is the open question that
   would make scoped revocation possible.
+
+### Session 2026-09-19 (validation round 4)
+- Rulings applied: 21 (corrected — no first-enable burst on the upgrade path, the two scenarios
+  stated; delete-before-skip; the fleet-uniform bound and `oversize` in the discriminator list; the
+  inverted-bounds WARNING; `decode_responses=False`; the counter widening as a recorded GOVERNANCE
+  ruling; the corrected grep baselines and sweep path set), 36 (corrected — properties and enum
+  members append, descriptions and dict keys do not), 43 (greps scoped and executed), and the
+  round-3 salty / codebase-fit / security findings (the `str`-typed `put` value; the `:643` test;
+  the bound forwarded by the convenience constructor; the three fan-out lines; the generated
+  recipe value).
+- Q: Does enabling the key on an existing deployment produce an `unsigned` burst? → A: Not on the
+  upgrade path — the rotation orphans every legacy entry. Only a key enable or rotation on an
+  already-running 1.3.0 fleet produces the bounded burst.
+- Q: What does a sustained `oversize` rate mean? → A: A replica with a lower `cache.max_value_bytes`
+  than its peers, or a recent lowering — a configuration fact, not tampering.
+- Q: Does a `cache.max_bytes` under 4 MiB still boot? → A: Yes, with one `cache_bounds_inverted`
+  WARNING; the memory backend's own `max_bytes` check is then the effective per-entry bound.
 
 ## Open Questions
 

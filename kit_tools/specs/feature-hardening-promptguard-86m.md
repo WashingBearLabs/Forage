@@ -26,13 +26,15 @@ updated: 2026-09-19
 > harness** that measures the running service (ruling R18), then two owner gates in order: **US-005
 > vendors the 86M weights** (and only then adds the 86M to the allowlist) and **US-004 runs the
 > benchmark** on the reference container. Binding: owner decision 4; rulings 5, 6, R17, R18, R29,
-> R32, R33, R34, R36, R37, R39, R40, R41. Context: Poppy's `WEB_ACCESS_FAMILY.md` § "PromptGuard research
-> (2026-08-30)". Validation rounds 1, 2 and 3 (2026-09-19) applied — see Clarifications.
+> R32, R33, R34, R36, R37, R39, R40, R41, R43. Context: Poppy's `WEB_ACCESS_FAMILY.md` § "PromptGuard research
+> (2026-08-30)". Validation rounds 1, 2, 3 and 4 (2026-09-19) applied — see Clarifications.
 >
 > **Assumed landed** (upstream seams this spec consumes by name): spec 3 US-003's `KNOWN_CONFIG_KEYS`
 > registry, spec 3 US-005's per-route threshold resolver, spec 6 US-002's sizing table in
 > `docs/configuration.md`, and spec 1 US-004's `_EXPECTED_ONE_THREE_ZERO_DIFF` set in
-> `tests/test_contract_schema.py` (ruling R36). If any has landed with a different shape, the
+> `tests/test_contract_schema.py` (ruling R36) — **and the 1.3.0 window is already open**
+> (`CONTRACT_VERSION == "1.3.0"` in `pipeline/contract.py`, bumped by spec 1 US-004; this spec's two
+> window stories append to that entry and never bump). If any has landed with a different shape, the
 > implementer matches the shape that exists and records the difference in Implementation Notes.
 
 ## Overview
@@ -105,8 +107,10 @@ shipped" unless US-005's record says so.
   `tests/test_sanitizer_revision.py::test_the_hashed_model_identity_is_model_id_at_revision`, `:95-118`,
   extended with the id); a second allowlisted id produces a different `sanitizer_revision`; any value
   outside the allowlist refuses boot with a closed reason and the value is echoed 0 times.
-- With `FORAGE_MODEL_ID=<a second allowlisted id>` and a stubbed auto-class, the lifespan passes the
-  resolved id to `acquire_and_load` and **both** `from_pretrained` calls receive it (asserted on the
+- With `FORAGE_MODEL_ID=<a second allowlisted id>` and a stubbed auto-class, the lifespan constructs
+  `model_fetcher.WeightAcquisition(..., model_id=<resolved>)` (`retrieval_app.py:1322-1329` — the
+  lifespan never calls `acquire_and_load` itself; `attempt_once` does, `model_fetcher.py:1830-1837`),
+  `acquire_and_load` receives that id and **both** `from_pretrained` calls receive it (asserted on the
   mock through the ASGI lifespan, not only through the parameter); a warm snapshot of a different
   model, or of the same model at a different revision, on the same volume is never loaded.
 - A model id with no manifest entry refuses to acquire (closed reason `manifest_model_unknown`) even
@@ -171,10 +175,18 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
   (`model_fetcher.py:139`, `pipeline/sanitizer_revision.py:10`, `scripts/vendor_weights.py:107`,
   `tests/test_model_fetcher.py:120`, `tests/test_sanitizer_revision.py:12`, `tests/test_vendor_weights.py:55`,
   **and `tests/test_app.py:66`**, used at `:883` in the lifespan manifest fixture) migrate in this
-  story and the alias is deleted at the end of it. The closing check is `grep -rn 'MODEL_ID'
-  --include='*.py' . | grep -v DEFAULT_MODEL_ID` returning nothing (a `\b`-anchored grep cannot
-  match `DEFAULT_MODEL_ID` — the `_` before `MODEL_ID` is a word character); the three prose
-  mentions — `pipeline/sanitizer_revision.py:27`, `scripts/vendor_weights.py:29`,
+  story and the alias is deleted at the end of it. **The closing check is scoped and anchored**
+  (ruling R29 as corrected in round 4, R43; salty, round 3 — the round-3 whole-tree `grep -rn
+  'MODEL_ID' | grep -v DEFAULT_MODEL_ID` returned 100 hits, matching `_MODEL_ID_RE` and every
+  test-local `_MODEL_ID` name): `grep -n '\bMODEL_ID\b' model_fetcher.py pipeline/sanitizer_revision.py
+  scripts/vendor_weights.py promptguard/classifier.py` — the four production consumers — returns
+  **nothing** (the `\b` anchor excludes `DEFAULT_MODEL_ID` because `_` is a word character, and it
+  excludes `_MODEL_ID_RE` for the same reason; executed 2026-09-19 before the story: **20 hits**
+  across the four files — `model_fetcher.py:139,1108,1525`, `pipeline/sanitizer_revision.py:10,27,40`,
+  `promptguard/classifier.py:23,85,99` and eleven in `scripts/vendor_weights.py` — every one of which
+  this story rewrites); and `grep -rnw MODEL_ID tests --include='*.py'` returns nothing (pre-story
+  47 hits, all imports and the assertions below; test-local `_MODEL_ID` names never match `-w`). The
+  three prose mentions — `pipeline/sanitizer_revision.py:27`, `scripts/vendor_weights.py:29`,
   `tests/test_sanitizer_revision.py:102` — are rewritten too, and the `tests/test_vendor_weights.py:228`
   identity assertion `vendor_weights.MODEL_ID is MODEL_ID` is rewritten, not just re-imported.
 - **The loader takes the id.** `PromptGuardClassifier.load(*, model_id: str | None = None, revision,
@@ -183,40 +195,61 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
   (`:1060-1077`) gains the same keyword; `_load_verified()` (`:1474`) and `acquire_and_load()` /
   `_acquire_and_load()` (`:1530`, `:1586`) pass it down; `_verify_cached()` (`:1511`, the
   `snapshot_path(cache_root, MODEL_ID, revision)` at `:1525`) and `_download_from_hub()` (`:1080`,
-  `:1108`) take it as a parameter. `classifier.py` must **not** import `model_fetcher` (cycle via
-  `model_fetcher.py:139`). Extend `tests/test_model_fetcher.py:790-791` (today asserts both
-  `from_pretrained` calls receive `MODEL_ID`) to assert they receive the id passed to `load`.
+  `:1108`) take it as a parameter. **The lifespan seam is `WeightAcquisition`, not
+  `acquire_and_load`** (ruling R29 as corrected in round 4; codebase-fit, round 3): the lifespan
+  constructs `model_fetcher.WeightAcquisition(classifier, metrics=app.state.model_metrics)`
+  (`retrieval_app.py:1322-1329`) and `attempt_once` (`model_fetcher.py:1811`) is the only caller of
+  `acquire_and_load` (`asyncio.to_thread(acquire_and_load, self._classifier, cache_root=…,
+  revision=…, manifest_path=…, metrics=…)`, `:1830-1837`). `WeightAcquisition.__init__`
+  (`:1773-1781`) gains `model_id: str | None = None` stored as `self._model_id` and `attempt_once`
+  forwards `model_id=self._model_id`; US-006 passes the resolved id at construction. `classifier.py`
+  must **not** import `model_fetcher` (cycle via `model_fetcher.py:139`). Extend
+  `tests/test_model_fetcher.py:790-791` (today asserts both `from_pretrained` calls receive `MODEL_ID`)
+  to assert they receive the id passed to `load`, and add one `WeightAcquisition` test asserting
+  `attempt_once` forwards `model_id` (a recording `acquire_and_load` double, the
+  `tests/test_app.py:1183` `monkeypatch.setattr(model_fetcher, "acquire_and_load", _record)` shape).
 - **The verifier and the loader agree on one directory (security, round 1).** `verify_weights(cache_root,
   *, manifest_path, metrics, model_id, revision)` verifies the snapshot at the **requested**
   `(model_id, revision)` pair and refuses with the new closed reason `weights_revision_unpinned` when
   `revision` is not that model's manifest entry revision — it never verifies one directory and hands
-  another to `_load_verified`. `_load_verified` receives the verified snapshot path and asserts
-  `loaded_path == verified_path` before `from_pretrained`. `_walk_snapshot` (`:653`) is unchanged.
-- **Loaded-identity assertion, outside the blanket `except`.** `load()` (`classifier.py:63-116`) wraps
-  its body in one `except Exception` that logs the generic "PromptGuard model not available". The
-  identity check and US-006's label check must be **explicit early-return blocks after
-  `from_pretrained` succeeds** (`if not ok: logger.warning("model_identity_mismatch"); return False`),
-  placed so the broad `except` cannot relabel them; each has a test asserting the *specific* log
-  message, not just `loaded is False`. The check: the resolved snapshot directory lies under
-  `repo_dirname(model_id)` at `revision` (`model_fetcher.py:479-481` — the classifier has `cache_dir`
-  and `revision`, so it computes `Path(cache_dir) / HUB_DIRNAME / repo_dirname(model_id) / "snapshots" /
-  revision` with a private two-line copy of the helper). **Path comparison only** (security, round
-  2): `model.config._name_or_path` is read out of the very directory the check distrusts and is
-  commonly set from the `from_pretrained` argument, so it is not an alternative and not a layer. The
-  private copy is pinned to the original by a test asserting it equals `model_fetcher.repo_dirname`
-  for every `ALLOWED_MODEL_IDS` entry and for an id with a slash; moving `repo_dirname`/`HUB_DIRNAME`
-  into a dependency-free leaf module both files import is an acceptable alternative (second opinion).
-  Pin the dangerous case with `tests/fakes.py::materialize_hub_snapshot(cache_root, files, *, model_id,
-  revision, symlinks)` (`:47-81`): a warm `acme/tiny-guard` snapshot with `model_id="acme/other"`
-  requested → not loaded, `model_identity_mismatch` logged, no path in the record.
+  another to `_load_verified`. **The loaded-identity check is an existence-plus-equality check in
+  `_load_verified`** (ruling R29 as corrected in round 4): `_load_verified(classifier, *, cache_root,
+  model_id, revision, verified_path)` (`:1474-1479` today takes `cache_root` and `revision` only)
+  computes the manifest-derived path `snapshot_path(cache_root, model_id, <that model's manifest
+  revision>)` (`:484`) and, **before** calling `load()`, asserts it `== verified_path` (the directory
+  `verify_weights` hashed) and `.is_dir()`; on either failure it logs the closed reason
+  `model_identity_mismatch` (no path in the message), returns `False`, and `load()` is never
+  called. `_walk_snapshot` (`:653`) is unchanged.
+- **The classifier side is an existence check only — and the residual is written down** (ruling R29
+  as corrected in round 4; security, round 3). `load()` (`classifier.py:63-116`) wraps its body in one
+  `except Exception` that logs the generic "PromptGuard model not available". The classifier does
+  **not** recompute the snapshot path (no private `repo_dirname` copy, no parity test — the round-3
+  design is withdrawn; `classifier.py` cannot import `model_fetcher`, and a second path derivation
+  would be a second thing to keep in step): its only pre-flight is `Path(cache_dir).is_dir()` before
+  the first `from_pretrained`, an explicit early-return block outside the blanket `except`
+  (`logger.warning("model_cache_dir_missing"); return False`, a closed reason, no path). The identity
+  guarantee lives in `_load_verified` (previous hint), and `kit_tools/arch/SECURITY.md`'s stage-3
+  paragraph records the residual honestly: **"the classifier trusts the path the verifier handed
+  it"** — the verifier/loader agreement is one check in one function, not two independent
+  observations. **Path comparison only** (security, round 2): `model.config._name_or_path` is read
+  out of the very directory the check distrusts and is commonly set from the `from_pretrained`
+  argument, so it is not an alternative and not a layer. US-006's label check keeps the
+  early-return-block pattern inside `load()`. Pin the dangerous case in `tests/test_model_fetcher.py`
+  against `_load_verified` with `tests/fakes.py::materialize_hub_snapshot(cache_root, files, *,
+  model_id, revision, symlinks)` (`:47-81`): a warm `acme/tiny-guard` snapshot on the volume with
+  `model_id="acme/other"` requested → `load()` never called (recording double),
+  `model_identity_mismatch` logged, no path in the record.
 - **Per-model manifest.** `weights_manifest.json` becomes `{"_comment": [...], "models": {"<model
   id>": {"revision": ..., "files": [...]}}}` — the 22M entry's `revision` and `files` are today's
   content unchanged. `_load_manifest()` (`:566-630`) validates the map and returns the entry for a
   requested id (`read_manifest_pin(path, model_id=...)` `:924`); a document with no `models` map, an
   entry with no `files`, or a file entry missing `path`/`sha256`/`size` keeps today's `manifest_invalid`
   / `manifest_empty` reasons; a requested id with no entry is the new closed reason
-  `manifest_model_unknown`. `verify_weights` selects that entry and **never falls back to another
-  model's entry**; `_acquire_and_load` keeps `weights_pin_unusable` (`:1617`) for an entry with an
+  `manifest_model_unknown`. **Scope of a rejection** (security, round 3): a document-level defect (no
+  `models` map, unparseable JSON) is `manifest_invalid` / `manifest_unparseable` for **every** model;
+  an entry-level defect (a file entry missing `path`/`sha256`/`size`, an empty `files`) refuses only
+  the model whose entry is defective and leaves the other entries loadable — tested both ways.
+  `verify_weights` selects that entry and **never falls back to another model's entry**; `_acquire_and_load` keeps `weights_pin_unusable` (`:1617`) for an entry with an
   empty file set. `mirror_reference(repository, revision)` (`:1014`) stays revision-keyed — two models
   coexist in one mirror repository because their revisions differ; `docs/weights.md` § "The three
   places the revision appears" (`:27`) says so, **per model**.
@@ -233,11 +266,16 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
   (1) the `FORAGE_MODEL_REVISION` override, **shape-checked against `_REVISION_RE` first, exactly as
   today** (`model_fetcher.py:892-902`; the docstring's reason stands — the value is interpolated into a
   filesystem path): a malformed value logs the existing ERROR `model_revision_invalid` (no echo) and
-  falls through to step 2, today's loud fallback; a well-formed override that is **not** the selected
-  model's pin is refused with the closed reason `weights_revision_unpinned` **in the resolver / at the
-  top of `_acquire_and_load`, before any `snapshot_path()` is computed and before any source is tried**
-  (the same placement as `manifest_model_unknown`) — `FORAGE_MODEL_REVISION=main` never reaches a
-  path or a download; (2) the manifest entry's revision for that model; (3) `DEFAULT_MODEL_REVISION`
+  falls through to step 2, today's loud fallback; a well-formed override is **returned as-is by the
+  resolver** (total, exactly as today — so `derive_sanitizer_revision` never raises and a deployment
+  with an unpinned override hashes `model_id@<override>` while serving degraded, the honest value);
+  the **refusal** of a well-formed override that is not the selected model's pin lives in **exactly
+  one place — the top of `_acquire_and_load`**, which compares `resolve_revision(model_id)` with the
+  manifest entry's revision and refuses with the closed reason `weights_revision_unpinned` before any
+  `snapshot_path()` is computed and before any source is tried (the same placement as
+  `manifest_model_unknown`; salty, round 3 — the round-3 "in the resolver / at the top" wording named
+  two places, which contradicted "total") — `FORAGE_MODEL_REVISION=main` never reaches a path or a
+  download; (2) the manifest entry's revision for that model; (3) `DEFAULT_MODEL_REVISION`
   (`:174`, stays the 22M constant) **for the default model only**, with one WARNING
   `manifest_pin_unavailable — reason=<manifest_missing|manifest_unreadable|manifest_unparseable|manifest_invalid|manifest_empty>`
   (the closed `_load_manifest` reasons, `:260-265`), so an unreadable manifest at runtime **never
@@ -248,7 +286,11 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
   and already reads the eight hashed source files on every call, `pipeline/sanitizer_revision.py:38-39`,
   so "no manifest read on that path" is the whole claim, never "no I/O"). `unpinned` never reaches a
   path: `_acquire_and_load` refuses `manifest_model_unknown` before any snapshot or hub call, and the
-  hash input `f"{model_id}@unpinned"` is deterministic and honest. A test asserts
+  hash input `f"{model_id}@unpinned"` is deterministic and honest. **The memo has a reset seam**
+  (salty, round 3): the manifest read is a private `_manifest_entry(manifest_path: Path, model_id:
+  str)` under `functools.lru_cache`, and `tests/conftest.py` gains an autouse fixture (beside the two
+  at `:57` and `:63`) calling `model_fetcher._manifest_entry.cache_clear()` so no test sees another
+  test's manifest; the open-counting test names the seam. A test asserts
   `DEFAULT_MODEL_REVISION == <the 22M manifest entry's revision>`. `tests/test_model_fetcher.py::
   TestRevisionPin` (eight tests, `:1279+`): the two shape-check tests
   (`test_an_unusable_override_falls_back_to_the_pin`, `test_an_invalid_override_is_reported_without_echoing_it`)
@@ -259,8 +301,16 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
   well-formed value that is not that pin refuses to verify (`weights_revision_unpinned`)" — and the
   same sentence lands at the four pages that describe the override today
   (`kit_tools/arch/SERVICE_MAP.md:157`, `kit_tools/arch/patterns/LOGGING.md:30,61,101`,
-  `kit_tools/docs/TROUBLESHOOTING.md:100` and `docs/configuration.md:108`; ruling R39 — the grep is
-  `grep -rn 'FORAGE_MODEL_REVISION' --include='*.md' docs kit_tools README.md`).
+  `kit_tools/docs/TROUBLESHOOTING.md:100` and `docs/configuration.md:108`; ruling R39). **The grep is
+  scoped** (R43; codebase-fit, round 3 — the round-3 `docs kit_tools README.md` form pulled in
+  `kit_tools/specs/` and 23 files): `grep -rln 'FORAGE_MODEL_REVISION' --include='*.md' docs
+  kit_tools/docs kit_tools/arch README.md` — executed 2026-09-19: **13 files** — of which
+  `docs/bootstrap-notes.md`, `kit_tools/arch/DECISIONS.md` and the GOTCHAS rotation row are history
+  (classified, untouched); the six pages that *describe the override* (`ENV_REFERENCE.md`,
+  `SERVICE_MAP.md`, `LOGGING.md`, `TROUBLESHOOTING.md`, `docs/configuration.md`, `docs/weights.md`)
+  each carry the sentence (`grep -c weights_revision_unpinned <page>` ≥ 1 each); the remaining hits
+  (`DEPLOYMENT.md`, `LOCAL_DEV.md`, `MONITORING.md`, `kit_tools/arch/SECURITY.md`, GOTCHAS outside the
+  table) are classified in Implementation Notes as mention-only or rewritten.
 - **The generator writes the map — and diffs it.** `scripts/vendor_weights.py` gains `--model-id`
   (default `DEFAULT_MODEL_ID` — the supply-chain tool does **not** read `FORAGE_MODEL_ID`; an explicit
   flag always wins), `generate_manifest()` (`:446`) writes or replaces that model's entry and keeps the
@@ -287,27 +337,37 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
 **Acceptance Criteria:**
 - [ ] `load(*, model_id=...)` exists on `PromptGuardClassifier` and on `SupportsWeightLoad`; a test with
       a stubbed auto-class asserts both `from_pretrained` calls receive the requested id
-      (`tests/test_model_fetcher.py:790-791` extended); `acquire_and_load(..., model_id=...)` threads
-      the id and the resolved revision through `_verify_cached`, `_download_from_hub`, `_try_source`
-      and `_load_verified` (asserted on a recording double).
+      (`tests/test_model_fetcher.py:790-791` extended); `WeightAcquisition(..., model_id=...)` stores
+      the id and `attempt_once` forwards it to `acquire_and_load` (recording double, the
+      `tests/test_app.py:1183` monkeypatch shape); `acquire_and_load(..., model_id=...)` threads the
+      id and the resolved revision through `_verify_cached`, `_download_from_hub`, `_try_source` and
+      `_load_verified` (asserted on a recording double).
 - [ ] `verify_weights(..., model_id=, revision=)` verifies the requested pair; a `FORAGE_MODEL_REVISION`
-      that is not the pin yields `weights_revision_unpinned` (closed reason, no path in the log) and
-      `_load_verified` asserts the loaded path equals the verified path — the two-directory test from
-      the Independent Test passes and the unpinned directory's files are never opened.
-- [ ] The loaded-identity check is an explicit early-return block outside the blanket `except`; a warm
-      snapshot of a different model under the requested id yields `model_identity_mismatch`,
-      `loaded is False`, and a test asserts that specific message.
+      that is not the pin yields `weights_revision_unpinned` (closed reason, no path in the log) from
+      the top of `_acquire_and_load` — the one refusal site — and `_load_verified` asserts the
+      manifest-derived `snapshot_path(...)` equals the verified path and exists before `load()` —
+      the two-directory test from the Independent Test passes and the unpinned directory's files are
+      never opened.
+- [ ] The loaded-identity check lives in `_load_verified` (existence plus equality): a warm snapshot
+      of a different model under the requested id yields `model_identity_mismatch`, `load()` is never
+      called (recording double), and a test asserts that specific message; the classifier's own
+      pre-flight is the `cache_dir` existence check as an early-return block outside the blanket
+      `except` (`model_cache_dir_missing`, tested); `kit_tools/arch/SECURITY.md`'s stage-3 paragraph
+      carries the residual sentence "the classifier trusts the path the verifier handed it"
+      (`grep -c 'trusts the path' kit_tools/arch/SECURITY.md` is 1).
 - [ ] `weights_manifest.json` is a per-model map; the 22M entry's `revision` and `files` are
       byte-identical to today's; `_load_manifest` / `read_manifest_pin(model_id=...)` /
       `verify_weights(..., model_id=...)` select the entry; a missing entry yields `manifest_model_unknown`
       even with `FORAGE_MODEL_REVISION` set (test); `manifest_invalid` / `manifest_empty` semantics
       unchanged (tests); `tests/fakes.py::weights_manifest_document` builds the map and
       `tests/test_app.py:878-892` passes against it.
-- [ ] `resolve_revision(model_id)` is total in the four-step order above; a test asserts
-      `DEFAULT_MODEL_REVISION == <the 22M manifest entry's revision>`; `resolve_revision` reads the
-      manifest at most once per `(manifest_path, model_id)` — a test counts opens **of the manifest
-      file** (not all opens: `pipeline/sanitizer_revision.py:38-39` reads eight sources per call by
-      design) across two `derive_sanitizer_revision({})` calls; `derive_sanitizer_revision({})` never
+- [ ] `resolve_revision(model_id)` is total in the four-step order above (a well-formed override is
+      returned, never refused, by the resolver); a test asserts `DEFAULT_MODEL_REVISION == <the 22M
+      manifest entry's revision>`; `resolve_revision` reads the manifest at most once per
+      `(manifest_path, model_id)` through `_manifest_entry` under `lru_cache` — a test counts opens
+      **of the manifest file** (not all opens: `pipeline/sanitizer_revision.py:38-39` reads eight
+      sources per call by design) across two `derive_sanitizer_revision({})` calls, and
+      `tests/conftest.py`'s autouse `cache_clear()` fixture is the reset seam (named); `derive_sanitizer_revision({})` never
       raises for any id; with the manifest unreadable, the default model resolves to
       `DEFAULT_MODEL_REVISION` with one `manifest_pin_unavailable` WARNING and the hash value is the
       pre-story value (test).
@@ -321,17 +381,21 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
       keyed shape; a round-trip test parses the output with `_load_manifest`.
 - [ ] `ALLOWED_SUFFIXES == frozenset({".safetensors", ".json", ".txt", ".model"})` and `ALLOW_PATTERNS`
       are asserted unchanged; `grep -n 'use_safetensors=True' promptguard/classifier.py` returns 1 hit.
-- [ ] `grep -rn 'MODEL_ID' --include='*.py' . | grep -v DEFAULT_MODEL_ID` returns nothing (alias
-      removed, the three prose sites rewritten); `derive_sanitizer_revision({})` equals the pre-story
-      value at the default model (revert-and-reproduce, recorded in Implementation Notes; `git diff
-      --stat` against the eight `_REVISION_SOURCES` files is empty); the classifier's private
-      `repo_dirname` copy equals `model_fetcher.repo_dirname` for every allowlisted id and a slash id
-      (test), and the loaded-identity check compares paths only.
+- [ ] `grep -n '\bMODEL_ID\b' model_fetcher.py pipeline/sanitizer_revision.py scripts/vendor_weights.py
+      promptguard/classifier.py` returns nothing (pre-story 20 hits, recorded) and `grep -rnw MODEL_ID
+      tests --include='*.py'` returns nothing (pre-story 47) — alias removed, the three prose sites
+      rewritten; `derive_sanitizer_revision({})` equals the pre-story value at the default model
+      (revert-and-reproduce, recorded in Implementation Notes; `git diff --stat` against the eight
+      `_REVISION_SOURCES` files is empty); the loaded-identity check compares paths only and no
+      `repo_dirname` copy exists outside `model_fetcher.py` (`grep -rn 'def repo_dirname' --include='*.py'
+      . --exclude-dir=.venv` returns the one definition).
 - [ ] `docs/weights.md` and `ENV_REFERENCE.md:52` describe the per-model manifest, the per-model pin
       and the `weights_revision_unpinned` refusal (`grep -c 'per model' docs/weights.md` ≥ 1,
       `grep -c weights_revision_unpinned docs/weights.md kit_tools/docs/ENV_REFERENCE.md` ≥ 1 each);
-      every page `grep -rn 'FORAGE_MODEL_REVISION' --include='*.md' docs kit_tools README.md` finds
-      carries the malformed-vs-unpinned sentence; `kit_tools/docs/TROUBLESHOOTING.md` names
+      the scoped grep `grep -rln 'FORAGE_MODEL_REVISION' --include='*.md' docs kit_tools/docs
+      kit_tools/arch README.md` (13 files pre-story) has every hit classified — the six
+      override-describing pages each `grep -c weights_revision_unpinned` ≥ 1, history sites untouched,
+      the rest classified in Implementation Notes; `kit_tools/docs/TROUBLESHOOTING.md` names
       `manifest_model_unknown` and `weights_revision_unpinned` (`grep -c` ≥ 1 each) and `:270-271` is
       per-model; the SECURITY.md non-vulnerabilities row is present; the R40 start and end counts are
       in Implementation Notes.
@@ -350,8 +414,10 @@ allowlist entry that nothing can serve is never shipped.
 
 **Independent Test:** With the allowlist monkeypatched to include a second id (`acme/second-guard`,
 so the test does not depend on US-005) and a recording `SupportsWeightLoad` double,
-`FORAGE_MODEL_ID=acme/second-guard` makes the ASGI lifespan call `acquire_and_load(...,
-model_id="acme/second-guard")`, both stubbed `from_pretrained` calls receive it, `/health` reports
+`FORAGE_MODEL_ID=acme/second-guard` makes the ASGI lifespan construct `WeightAcquisition(...,
+model_id="acme/second-guard")` whose first `attempt_once` calls `acquire_and_load(...,
+model_id="acme/second-guard")` (recorded through the `tests/test_app.py:1183` monkeypatch), both
+stubbed `from_pretrained` calls receive it, `/health` reports
 `promptguard_model == "acme/second-guard"`, and `derive_sanitizer_revision({})` differs from the unset
 value; with `FORAGE_MODEL_ID=evil/model` the lifespan raises `ModelConfigurationError` before the app
 serves, the log carries the closed reason `model_id_not_allowed` and a sentinel value 0 times; with the
@@ -366,31 +432,43 @@ id unset the hash input is byte-identical to explicitly setting the 22M id; at t
   (salty, round 1; this refines the *mechanism* of owner decision 4, not its intent). Default
   `DEFAULT_MODEL_ID`; **set-but-blank is identical to unset** (`os.environ.get(...,"").strip()` then
   the default — the `resolve_revision` / `resolve_cache_root` / `_resolve_token` convention in the
-  same module), never a refusal. The resolver is **total** for allowlisted values and returns `(model_id, ok)`
-  (or the default plus a WARNING `model_id_not_allowed`, never echoing the value) so the per-request
-  `derive_sanitizer_revision` fallbacks (`retrieval_app.py:292,1421,1728`) can never 500; the
+  same module), never a refusal. **The return shape, exactly** (salty, round 3): `resolve_model_id()
+  -> tuple[str, bool]` — `(<id>, True)` for unset, blank or an allowlisted value; `(DEFAULT_MODEL_ID,
+  False)` plus one WARNING `model_id_not_allowed` (never echoing the value) for anything else — so
+  the resolver is total and the per-request `derive_sanitizer_revision` fallbacks
+  (`retrieval_app.py:292,1421,1728`), which read element 0 only, can never 500; the
   **lifespan** performs the one refusing check and raises `ModelConfigurationError(ValueError)` (new, in
   `model_fetcher.py`, on the `CacheConfigurationError` `cache.py:232` /
   `SearchProviderConfigurationError` `pipeline/search_providers/__init__.py:50` pattern —
   `tests/test_app.py:1208-1221` shows the lifespan-refusal test shape). `_MODEL_ID_RE` (`:324`) stays a
   shape check. Tests that need a second allowlisted id monkeypatch `ALLOWED_MODEL_IDS` (parametrised),
   so US-005's later addition changes no test.
-- **Feed every consumer through the lifespan** (completionist, round 1): the lifespan calls
-  `acquire_and_load(..., model_id=resolved)`; `pipeline/sanitizer_revision.py:40` hashes
+- **Feed every consumer through the lifespan** (completionist, round 1; seam corrected in round 4):
+  the lifespan passes `model_id=resolved` to `model_fetcher.WeightAcquisition(...)`
+  (`retrieval_app.py:1322-1329`, the constructor US-001 extended) — it never calls `acquire_and_load`
+  itself; `pipeline/sanitizer_revision.py:40` hashes
   `f"{resolved}@{resolve_revision(resolved)}"` (the module is not in `_REVISION_SOURCES` `:12-21`, so
   the source edit rotates nothing; the *input* changes only when a non-default id is configured);
   `scripts/vendor_weights.py` keeps `DEFAULT_MODEL_ID` as its `--model-id` default (US-001). Update
   `tests/test_sanitizer_revision.py:51-61` (monkeypatches `sanitizer_revision.MODEL_ID` — a name that no
   longer exists) and `:95-118`. The end-to-end assertion runs through the ASGI lifespan with a
-  recording double (not only through the parameter).
+  recording double in the `tests/test_app.py:1171-1183` shape (`_record(classifier, *, metrics=None,
+  **kwargs)` monkeypatched over `model_fetcher.acquire_and_load`; assert `kwargs["model_id"]`), not
+  only through the parameter. **Allowlisted ⇒ serveable is a test, not a convention** (security,
+  round 3): `test_every_allowlisted_model_has_a_manifest_entry` iterates `ALLOWED_MODEL_IDS` and
+  asserts `read_manifest_pin(<committed manifest>, model_id=...)` returns an entry for each — one
+  member today; US-005's commit keeps it green by adding the entry and the id together.
 - **Assert `id2label` at load, don't assume index 1** — an explicit early-return block after
   `from_pretrained`, outside the blanket `except` (US-001's pattern). `classifier.py:27-29` says "the
   older 86M had 3 classes" — that was Prompt Guard *1*. Read `model.config.id2label`: exactly one label
   `INJECTION` and one `BENIGN` (case-insensitive); set the instance attribute
   `_injection_label_index` from it — the module constant `_INJECTION_LABEL_INDEX` (`classifier.py:29`)
   becomes that attribute's default, the read at `:198` moves with the loop into `classify_windows`
-  (US-002), and the stale comment at `:27-28` is corrected in the same edit; otherwise `loaded` stays
-  `False`, WARNING `model_labels_unexpected` (a test asserts that specific message).
+  (US-002), and the stale comment at `:27-28` is corrected in the same edit; **cardinality is part of
+  the check** (ruling R29 as corrected in round 4; security, round 3): `len(id2label) == 2` exactly —
+  a three-label config with `INJECTION` and `BENIGN` present is refused too; otherwise `loaded` stays
+  `False`, WARNING `model_labels_unexpected` (a test asserts that specific message; negative cases:
+  `{LABEL_0, LABEL_1}` and a three-label `{BENIGN, INJECTION, JAILBREAK}`).
   `tests/fixtures/tiny_model/config.json` already declares `{"0": "BENIGN", "1": "INJECTION"}`, so the
   real-loader tests keep passing; the negative case uses a fake config on the mocked auto-class.
 - **`/health.promptguard_model` reports the configured id, unconditionally** (second opinion and salty,
@@ -445,12 +523,17 @@ id unset the hash input is byte-identical to explicitly setting the 22M id; at t
       lifespan raise `ModelConfigurationError`; the log carries `model_id_not_allowed`; a sentinel value
       appears 0 times in captured logs; `derive_sanitizer_revision` never raises for any allowlisted
       id (test); `ALLOWED_MODEL_IDS` contains exactly the 22M id at the end of this story.
-- [ ] An app-startup test with `FORAGE_MODEL_ID=<second id>` and a recording `SupportsWeightLoad`
-      double asserts `acquire_and_load` received the resolved id and both `from_pretrained` calls saw
-      it (through the ASGI lifespan).
-- [ ] `load()` derives the injection index from `model.config.id2label` (exactly one `INJECTION` and
-      one `BENIGN`, case-insensitive) and refuses `{LABEL_0, LABEL_1}` — `loaded` stays `False`, WARNING
-      `model_labels_unexpected`, the specific message asserted (test).
+- [ ] An app-startup test with `FORAGE_MODEL_ID=<second id>` asserts the lifespan's
+      `WeightAcquisition` carries the resolved id and `acquire_and_load` received it (the
+      `tests/test_app.py:1183` monkeypatch shape), and a recording `SupportsWeightLoad` double shows
+      both `from_pretrained` calls saw it (through the ASGI lifespan); `resolve_model_id()` returns
+      `tuple[str, bool]` as specified (tests for unset, blank, allowlisted, disallowed).
+- [ ] `load()` derives the injection index from `model.config.id2label` (exactly two labels: one
+      `INJECTION` and one `BENIGN`, case-insensitive) and refuses `{LABEL_0, LABEL_1}` and a
+      three-label config — `loaded` stays `False`, WARNING `model_labels_unexpected`, the specific
+      message asserted (both negative tests).
+- [ ] `test_every_allowlisted_model_has_a_manifest_entry` exists and passes against the committed
+      `weights_manifest.json` for every `ALLOWED_MODEL_IDS` member.
 - [ ] `/health.promptguard_model` reports the configured id unconditionally, read from `app.state` and
       never re-read in the handler (test); its description carries the publishable-identity clause
       ("not published", never "not inferable"); `kit_tools/arch/SECURITY.md`'s `/health` paragraph
@@ -467,9 +550,11 @@ id unset the hash input is byte-identical to explicitly setting the 22M id; at t
       compose/minimal.yml compose/full.yml docs/configuration.md kit_tools/docs/ENV_REFERENCE.md` ≥ 1
       each; `grep -c promptguard_model kit_tools/docs/API_GUIDE.md kit_tools/docs/MONITORING.md` ≥ 1
       each; `docs/configuration.md`'s row states the 86M is added by the vendoring gate;
-      `kit_tools/docs/TROUBLESHOOTING.md:636` names `ModelConfigurationError` and
-      `grep -c 'model_id_not_allowed\|model_identity_mismatch\|model_labels_unexpected'
-      kit_tools/docs/TROUBLESHOOTING.md` ≥ 3; the GOTCHAS sentence is present.
+      `kit_tools/docs/TROUBLESHOOTING.md:636` names `ModelConfigurationError` and each of
+      `grep -c model_id_not_allowed`, `grep -c model_identity_mismatch` and `grep -c
+      model_labels_unexpected` over `kit_tools/docs/TROUBLESHOOTING.md` is ≥ 1 (three separate
+      counts — `grep -c` with an alternation counts lines, not tokens; salty, round 3); the GOTCHAS
+      sentence is present.
 - [ ] Tests written/updated for new functionality
 - [ ] Full test suite passes (`uv run pytest`)
 - [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
@@ -549,7 +634,7 @@ tokens → 1 window (measured, round 2).
 - **The rule lives in stage 3** (`pipeline/stage3_promptguard.py:128-150`, hashed → ruling 6): call
   `classify_windows` (US-002); verdict is `INJECTION_DETECTED` when `max_score > threshold` **or** when
   any run of at least `contiguity_windows` consecutive scores is `>= contiguity_threshold`.
-  `PromptGuardResult` (`:35`) gains `rule: Literal["max_score", "contiguity", "both"] | None`;
+  `PromptGuardResult` (`:31`) gains `rule: Literal["max_score", "contiguity", "both"] | None`;
   `flagged_chunks` is the max-scoring chunks, the contiguous run, or their union in document order
   (deduplicated); `score` stays `max_score`. `PromptGuardResult` is **not** internal:
   `pipeline/stage4_structuring.py:165` copies `flagged_chunks` into `injection_spans`, and only
@@ -559,7 +644,10 @@ tokens → 1 window (measured, round 2).
   union). `stage4_structuring.py` is byte-unchanged (`git diff --stat`), so the ledger's three-file claim
   is checked, not assumed. The orchestrator's omission log at `orchestrator.py:1032` names the rule.
 - **Config keys** (`config.yaml` beside `promptguard_threshold` `:15`): `promptguard_contiguity_windows`
-  (int, **default `0` = disabled**, range 0–8) and `promptguard_contiguity_threshold` (float, default
+  (int, **default `0` = disabled**, otherwise **2–8** — `1` refuses boot with
+  `PromptGuardConfigurationError`, because a one-window run is nothing but a second max rule at a
+  lower threshold, which the max rule's own key already expresses; salty and security, round 3) and
+  `promptguard_contiguity_threshold` (float, default
   `0.5`, range 0.0–1.0, **absolute and server-side** — it does not track a per-request
   `promptguard_threshold`; the docs say a caller who lowers the max threshold below the contiguity
   threshold gets the stricter of the two, and that this is why the rule ships off). Read through the
@@ -567,16 +655,20 @@ tokens → 1 window (measured, round 2).
   PromptGuardSettings` builder and a `PromptGuardConfigurationError(ValueError)` **in
   `pipeline/stage3_promptguard.py`** (the rule's home), called once from the lifespan beside
   `retrieval_app.py:1215/1242/1282`, **re-stating the bounded-read idiom locally** the way
-  `brave.py:224-242` does — the `_bounded_*` helpers are private per module by decision
-  (`brave.py:234-235`) and pyright strict forbids cross-module private use — registered in
-  `KNOWN_CONFIG_KEYS` (spec 3 US-003).
+  `brave.py`'s `_bounded_float` (`:206`) and `_bounded_int` (`:224`) do — the `_bounded_*` helpers
+  are private per module by decision and pyright strict forbids cross-module private use —
+  registered in `KNOWN_CONFIG_KEYS` (spec 3 US-003).
   Configuration-only by design: both values enter the content-cache key through
-  `derive_sanitizer_revision` (append them to the digest the way `promptguard_threshold` is at
-  `pipeline/sanitizer_revision.py:41`); a test pins `cache_policy_fingerprint()`'s inputs so a future
+  `derive_sanitizer_revision` — appended to the digest **after** `promptguard_threshold`
+  (`pipeline/sanitizer_revision.py:41`), windows then threshold, as ASCII — and the independent
+  recomputation in `tests/test_sanitizer_revision.py::test_the_hashed_model_identity_is_model_id_at_revision`
+  (`:95-116`; `expected.update(b"0.85")` at `:111`) is extended with the same two updates in the
+  same order (codebase-fit, round 3); a test pins `cache_policy_fingerprint()`'s inputs so a future
   per-request override cannot slip past the cache key.
 - **All three routes.** Thread both values through the threshold seam spec 3 US-005 creates to
-  `run_promptguard(...)` (`:42-48`) from `sanitize_and_structure` (`orchestrator.py:160-207` — serves
-  `/retrieve` `:368` and both `/extract` paths `:464`, `:540`) and the `/search` loop (`:969-997`).
+  `run_promptguard(...)` (`:42-48`) from `sanitize_and_structure` (`orchestrator.py:160-207`, the call
+  at `:182` — serves `/retrieve` `:368` and both `/extract` paths `:464`, `:540`) and the `/search`
+  loop's call (`orchestrator.py:1012-1037`, `run_promptguard` at `:1014`).
   **The rule can fire on `/search`** (codebase-fit, round 1): `_search_result_promptguard_input`
   (`:665-667`) concatenates title, url and snippet capped at 512 / 2,048 / 2,000 characters
   (`orchestrator.py:583-585`, sum 4,583). **Window count is a property of tokenisation density, not
@@ -600,7 +692,14 @@ tokens → 1 window (measured, round 2).
   and window count only, never a score list or text — INFO never renders in the container, GOTCHAS
   "Nothing configures logging", so a rule with a documented false-positive residual must be visible
   when it fires; security, round 2); the docs say `/metrics` is the aggregate signal and the WARNING
-  the per-event one. Decision
+  the per-event one. **MONITORING fan-out, by value** (salty, round 3; R39/R43):
+  `kit_tools/docs/MONITORING.md`'s three section tables (`### extraction` `:121`, `### search`
+  `:138`, `### retrieve` `:156`) each gain the counter row; its `sanitizer_revision` row (`:64`,
+  "`MODEL_ID@revision` plus `promptguard_threshold`") reads "`model_id@revision` plus
+  `promptguard_threshold` plus the two contiguity values"; and its log-lines table (`:285-290`)
+  gains `promptguard_contiguity_verdict` — `grep -c promptguard_contiguity_detections
+  kit_tools/docs/MONITORING.md` is 3 and `grep -c promptguard_contiguity_verdict` ≥ 1 (both 0 today).
+  Decision
   recorded: dedicated counters rather than a new key in `retrieve.blocked_by_reason` /
   `search.omitted_by_reason` (`retrieval_app.py:554-559`, `:500-506`), following the flat-counter
   precedent of `fallback_fired` / `paid_calls` / `policy_unknown_provider` (`:510-535`) and avoiding a
@@ -613,9 +712,12 @@ tokens → 1 window (measured, round 2).
   under GOVERNANCE row 3, no property moves), and `docs/configuration.md`'s row says the same.
 - **Window block (ruling R36):** docstring line (R34 format); `uv run python -m scripts.export_contract`;
   `tests/golden/contract_1_3_0.json` re-created from `_SCHEMA_MODELS` (the counters are pinned by
-  `tests/test_contract_metrics.py`, not the golden — say "golden unchanged, expected" if so);
-  `_EXPECTED_ONE_THREE_ZERO_DIFF` gains any golden-visible addition (none expected); four anchor pages;
-  `--check`.
+  `tests/test_contract_metrics.py`, not the golden, and the `promptguard_threshold` description edit
+  is description-only — so the golden moves by that description and nothing else);
+  **this story appends nothing to `_EXPECTED_ONE_THREE_ZERO_DIFF`** (ruling R36 as corrected in round
+  4: `_added_paths` sees new properties and enum members only; a description or bound move appends
+  nothing, and its gate is `test_contract_schema_matches_golden` after the golden is re-created —
+  US-006, which adds a field, is the story that appends a path); four anchor pages; `--check`.
 - **Rotation (ruling 6):** `stage3_promptguard.py` + `orchestrator.py` + the `contract.py` docstring
   line + the two new hash inputs — one measured, recorded rotation for everyone (the default changes
   because the hash inputs grow, even with the rule off); `stage4_structuring.py` untouched.
@@ -633,7 +735,8 @@ tokens → 1 window (measured, round 2).
       score exactly at `contiguity_threshold` counts (`>=`), a score exactly at `promptguard_threshold`
       does not fire the max rule (`>`), and an empty text (`SAFE`) are pinned by tests.
 - [ ] Both keys validated at boot (out-of-range refuses like
-      `tests/test_app.py::test_lifespan_refuses_an_out_of_range_cache_bound`), defaults `0` / `0.5`,
+      `tests/test_app.py::test_lifespan_refuses_an_out_of_range_cache_bound`; `windows: 1` refuses
+      with `PromptGuardConfigurationError`, tested), defaults `0` / `0.5`,
       registered in `KNOWN_CONFIG_KEYS`, documented in `docs/configuration.md` with the enabling recipe
       and the absolute-threshold note.
 - [ ] All three routes apply the rule (one end-to-end test per route through the ASGI app with the
@@ -646,15 +749,18 @@ tokens → 1 window (measured, round 2).
       `tests/test_orchestrator.py:2038,2068` shape extended to a multi-chunk union);
       `stage4_structuring.py` is byte-unchanged.
 - [ ] The three counters exist on the named section models, are pinned by
-      `tests/test_contract_metrics.py`; the window block is done (docstring line, regenerate, golden,
-      diff set, anchor pages, `--check` clean).
-- [ ] `derive_sanitizer_revision` includes both values; a test pins `cache_policy_fingerprint()`'s
-      inputs; the rotation is measured and recorded at the five sites (`docs/bootstrap-notes.md`,
+      `tests/test_contract_metrics.py`; the window block is done (docstring line, regenerate, golden
+      re-created, **nothing appended** to `_EXPECTED_ONE_THREE_ZERO_DIFF` — stated in Implementation
+      Notes — anchor pages, `--check` clean).
+- [ ] `derive_sanitizer_revision` includes both values after `promptguard_threshold`;
+      `tests/test_sanitizer_revision.py:95-116` recomputes them in the same order; a test pins
+      `cache_policy_fingerprint()`'s inputs; the rotation is measured and recorded at the five sites (`docs/bootstrap-notes.md`,
       `CLAUDE.md`, `kit_tools/arch/DECISIONS.md`, `kit_tools/docs/GOTCHAS.md`'s rotation table,
       `kit_tools/arch/CODE_ARCH.md`).
 - [ ] SECURITY.md's stage-3 paragraph names both rules and both residual directions; GOTCHAS entry
       present and states that `/metrics` is the aggregate signal and the WARNING the per-event one;
-      the corpus-epic handoff line in Implementation Notes names both shapes and says `/search`
+      `kit_tools/docs/MONITORING.md` carries the three counter rows, the `:64` hash-input sentence and
+      the WARNING row (the two `grep -c` counts above); the corpus-epic handoff line in Implementation Notes names both shapes and says `/search`
       coverage is content-dependent; `kit_tools/arch/CODE_ARCH.md`'s stage-3 row names the rule; the
       config triple (`promptguard_settings_from_config`, `PromptGuardConfigurationError`, one lifespan
       call) exists and an out-of-range value refuses boot with that error.
@@ -674,7 +780,8 @@ benchmark configuration and every failure path defined, so the 22M-vs-86M questi
 **Independent Test:** `uv run pytest tests/test_bench_promptguard.py` passes under the socket guard with
 injected fakes (no Docker, no network, no weights) and `uv run python -m scripts.bench_promptguard
 --help` exits 0; the percentile test pins p50 = 10 and p95 = 19 for samples `[1..20]`; a fake
-`/extract` returning 403 makes `main` exit 2 with a stderr line naming the status and the benchmark
+`/extract` returning 404 (the gated route's status, `retrieval_app.py:1688`, documented at
+`:1624-1628` — never 403) makes `main` exit 2 with a stderr line naming the status and the benchmark
 config mount, writing no JSON; `bench/config.yaml` parses through `_load_config` and every key is a
 `KNOWN_CONFIG_KEYS` member.
 
@@ -689,18 +796,27 @@ config mount, writing no JSON; `bench/config.yaml` parses through `_load_config`
   codebase-fit, round 2): `http_get` and `wait_for_health` are reused for the `/health` reads only
   (`http_get` is urllib, GET-only, with a module-level `REQUEST_TIMEOUT_SECONDS = 10.0` at `:171` and no
   parameter), `run_command` for `docker stats`; the multipart `POST /extract` is **new code** in this
-  module — urllib with a hand-built boundary carrying the `file` part (filename, content type,
-  `retrieval_app.py:1664`), the required `filename` form field (`:1665`) and `extract_mode=full`
-  (`:1667`) — behind the injectable seam `post_fn(url, *, file_name: str, file_bytes: bytes,
-  fields: dict[str, str], timeout_seconds: float) -> HttpResponse`, with a unit test pinning the
-  encoded body against a fixed boundary. Importing `contract_smoke` pulls `retrieval_app`, the
+  module — **`httpx.post(url, files={"file": (name, bytes, "text/plain")}, data={"filename": name,
+  "extract_mode": "full"}, timeout=...)`**, the `tests/test_orchestrator.py:1891-1898` `files=`/`data=`
+  shape (codebase-fit, round 3; `httpx` is a runtime dependency, `pyproject.toml:14`, already imported
+  by `pipeline/search_providers/searxng.py`, so no hand-built boundary and no encoded-body test) —
+  carrying the `file` part (`retrieval_app.py:1664`), the required `filename` form field (`:1665`)
+  and `extract_mode=full` (`:1667`) — behind the injectable seam `post_fn(url, *, file_name: str,
+  file_bytes: bytes, fields: dict[str, str], timeout_seconds: float) -> HttpResponse`; the unit tests
+  inject a fake `post_fn` and never construct an `httpx` client. Importing `contract_smoke` pulls `retrieval_app`, the
   `pipeline` package, pydantic and `scripts.export_contract` in transitively (`contract_smoke.py:129-134`);
   that is accepted (nothing at module scope reads config or the network, so `--help` still exits 0
   offline) and `searxng_smoke.py`'s self-contained `run_command` (`:196`) is a known divergence, not the
   precedent. `scripts/bench_promptguard.py` imports those pieces (`from contract_smoke import ...` —
   the repo root is on `sys.path` under `uv run python -m`); the injectable seams are `post_fn`,
   `stats_fn` and `clock`, and
-  the `clock` double is `tests/fakes.py::ManualClock` (`:174-193`). `tests/test_contract_smoke.py` is
+  the `clock` double is `tests/fakes.py::ManualClock` (`:174-193`). **The harness does its own health
+  wait** (codebase-fit, round 3): `--health-timeout-seconds` (default 900) feeds one call
+  `wait_for_health(base_url, expect_status=STATUS_HEALTHY, timeout_seconds=<that>,
+  poll_interval_seconds=5, fetch=<the injected GET>)` (signature `contract_smoke.py:256-266`; the
+  default `expect_status` is `degraded`, `:154`, which would return on the first 200 before the model
+  loads) before the cold request, and a unit test with an injected `fetch` asserts the call's
+  `expect_status == STATUS_HEALTHY`; US-004's recipe relies on it. `tests/test_contract_smoke.py` is
   the hermetic test pattern ("pure evaluators plus an injectable fetcher"). The module goes in
   `scripts/` because it is owner tooling like `vendor_weights.py`; both `scripts/` (`.dockerignore:26`)
   and the root drivers (`Dockerfile:158-160`'s enumerated COPY list, guarded by
@@ -712,7 +828,8 @@ config mount, writing no JSON; `bench/config.yaml` parses through `_load_config`
   `--runs` (default 20; **no hard floor** — a value below 5 is accepted and runs, and `warm_p95_*` is
   then `null` because a nearest-rank p95 needs at least five samples), `--json <path>`, `--label`
   (free text copied into the JSON, e.g. `22m-cpus1`), `--timeout-seconds` (per request, on the new
-  `post_fn`; default 300 — sized for the budget document of the 86M on 1 vCPU). Every subprocess is a
+  `post_fn`; default 300 — sized for the budget document of the 86M on 1 vCPU),
+  `--health-timeout-seconds` (default 900, the health wait above). Every subprocess is a
   list argv with `shell=False`.
 - **The route**: drive `POST /extract` (multipart, `extract_mode=full`) — `/retrieve` cannot fetch a
   host-local fixture server (the URL validator refuses private and loopback IPs by design). `/extract`
@@ -723,11 +840,18 @@ config mount, writing no JSON; `bench/config.yaml` parses through `_load_config`
   `extract_route_enabled: true`, the two contiguity keys at their shipped defaults plus a commented
   line for US-004's optional FPR smoke, and as its **first comment line**: "BENCHMARK ONLY — enables
   the release-gated upload route on a throwaway, loopback-bound container; never a deployment config."
-  A test parses it through `_load_config` and asserts every key is a `KNOWN_CONFIG_KEYS` member and
-  the only differences from `config.yaml` are those keys. `bench/*.json` is gitignored (the outputs
+  **The test cannot go through `_load_config()`** — it takes no path (`retrieval_app.py:329`;
+  codebase-fit, round 3) — so it `yaml.safe_load`s `bench/config.yaml`, runs the house validators
+  over the mapping (`extraction_settings_from_config`, `cache_settings_from_config`,
+  `brave_settings_from_config` — `retrieval_app.py:1215,1242,1282` — and US-007's
+  `promptguard_settings_from_config`), asserts every key is a `KNOWN_CONFIG_KEYS` member, asserts the
+  key set equals `config.yaml`'s, and asserts the **only** key whose value differs is
+  `extract_route_enabled`. `bench/*.json` is gitignored (the outputs
   live beside it). The mount replaces the file wholesale, so a partial file would silently benchmark
-  a non-reference configuration — that is why it is a full copy. `bench/` is inside the build context
-  but the Dockerfile's enumerated COPY list never copies it (`tests/test_dockerfile.py:559-603`).
+  a non-reference configuration — that is why it is a full copy. `bench/` joins `.dockerignore`
+  (one line, `bench/`, beside `scripts/` at `:26`; security, round 3) so it is outside the build
+  context as well as outside the enumerated COPY list (`tests/test_dockerfile.py:559-603`;
+  `_dockerignore_patterns()` at `:626` reads the file).
 - **Inputs are deterministic and synthetic**: generated in code from a fixed seed — one plain-text
   document of ≈512 tokens (≈2,000 characters of seeded lorem) and one sized **at or just under the
   derived classification ceiling**, taken from the repo's single source
@@ -739,16 +863,22 @@ config mount, writing no JSON; `bench/config.yaml` parses through `_load_config`
   within 1 % under the value that same call returns.
 - **Measurements**: cold = wall-clock of the first request after container start; warm p50/p95 =
   nearest-rank percentiles (`sorted(samples)[math.ceil(p / 100 * n) - 1]`) over `--runs` further
-  requests per input, `time.perf_counter`; container RSS = `docker stats --no-stream --format
-  '{{.MemUsage}}' <container>` sampled after the warm-up loop, parsed to MiB (label: "container
-  memory after warm-up"); the exit code and OOM state are recorded by US-004, not the harness. The
+  requests per input, `time.perf_counter`; **memory from the service's own cgroup reading first**
+  (salty, round 3): after the warm-up loop the harness GETs `/metrics` through `http_get` and copies
+  `extraction.cgroup_memory_current_bytes` (to MiB) and `extraction.oom_proximity_ratio`
+  (`retrieval_app.py:468,480`, computed at `:1010-1028`; `null` outside a cgroup) into the JSON as
+  `cgroup_mem_mib` / `oom_proximity_ratio`; `docker stats --no-stream --format '{{.MemUsage}}'
+  <container>`, parsed to MiB, is the optional cross-check (`container_mem_mib`, only with
+  `--container`). Both are labelled "after warm-up, not peak" — the OOM/exit-code line US-004
+  records is the peak signal; the harness never claims one. The
   published numbers are **single-in-flight latency** — the harness fires one request at a time and
   never exercises `classification_concurrency`; the JSON carries `"concurrency": 1` and the docs say
   the table does not characterise behaviour at `classification_concurrency > 1` (second opinion,
   round 1; a `--concurrent N` mode is a follow-up, not this story).
 - **Failure behaviour is defined — two taxonomies** (story quality, round 1; salty, round 2).
   *Configuration failures*, before any successful sample: a non-2xx from the very first `/extract`
-  request (a 403 means the bench config was not mounted), a connection error at `--base-url`, a bad
+  request (a **404** means the bench config was not mounted — `retrieval_app.py:1688` raises 404, not
+  403, for the disabled route), a connection error at `--base-url`, a bad
   argument — exit 2, a stderr line naming the status / the URL / the `bench/config.yaml` mount, **no
   JSON**. *Service failures during measurement*, after at least one successful sample: a non-2xx, a
   timed-out sample, the container gone — the harness **writes the JSON** with `"outcome":
@@ -760,7 +890,7 @@ config mount, writing no JSON; `bench/config.yaml` parses through `_load_config`
 - **Output**: one JSON object with fixed keys — `label`, `base_url`, `runs`, `concurrency`,
   `outcome` (`"ok"` or the closed service-failure token), `cold_ms_512`, `warm_p50_ms_512`,
   `warm_p95_ms_512`, `cold_ms_budget`, `warm_p50_ms_budget`, `warm_p95_ms_budget`, `samples_collected`,
-  `container_mem_mib`, `promptguard_model` and `contract_version` (read from `/health` so a row can
+  `cgroup_mem_mib`, `oom_proximity_ratio`, `container_mem_mib`, `promptguard_model` and `contract_version` (read from `/health` so a row can
   never be mislabelled).
 - Docs: the "Benchmarking the classifier" subsection lives in **`docs/weights.md`** (owner tooling,
   next to the vendoring procedure), not the operator-facing `docs/configuration.md` — it states in-line
@@ -772,26 +902,32 @@ config mount, writing no JSON; `bench/config.yaml` parses through `_load_config`
 **Acceptance Criteria:**
 - [ ] `scripts/bench_promptguard.py` reuses `contract_smoke.py`'s `http_get` and `wait_for_health` for
       the `/health` reads, `run_command` and the dataclasses (imports, not copies), implements the
-      multipart POST behind `post_fn` with a unit test pinning the encoded body, accepts the arguments
-      above (`--runs 4` runs and reports p95 `null`), validates `--base-url` and `--container` shapes,
-      runs subprocesses as list argv with `shell=False`, reads `promptguard_model` and
-      `contract_version` from `/health` into the JSON, and writes the fixed-key JSON including
+      multipart POST behind `post_fn` with `httpx.post(files=, data=)` (no hand-built boundary),
+      waits for `healthy` through `wait_for_health(..., expect_status=STATUS_HEALTHY,
+      poll_interval_seconds=5)` under `--health-timeout-seconds` (unit test on the injected `fetch`),
+      accepts the arguments above (`--runs 4` runs and reports p95 `null`), validates `--base-url` and
+      `--container` shapes, runs subprocesses as list argv with `shell=False`, reads
+      `promptguard_model` and `contract_version` from `/health` and `cgroup_mem_mib` /
+      `oom_proximity_ratio` from `/metrics` into the JSON, and writes the fixed-key JSON including
       `"concurrency": 1` and `"outcome"`.
 - [ ] Both inputs are generated from a seed; the unit test asserts determinism and that the budget
       document is within 1 % under `max_extracted_characters(settings.max_promptguard_chunks)`;
       percentile maths is nearest-rank and pinned (`[1..20]` → 10 / 19; `--runs 4` → p95 `null`).
-- [ ] Failure paths are pinned by unit tests with injected fakes: first-request non-2xx → exit 2
-      naming the status and the config mount, no JSON; connection error → exit 2 naming the URL, no
+- [ ] Failure paths are pinned by unit tests with injected fakes: first-request non-2xx (the 404
+      case included) → exit 2 naming the status and the config mount, no JSON; connection error → exit 2 naming the URL, no
       JSON; a non-2xx or timeout **after** a successful sample → JSON written with `"outcome"`, the
       samples so far and null percentiles, non-zero exit; `--container` omitted / `docker stats`
       failure → `container_mem_mib: null` + one WARNING and a complete run; no token or env value in
       any message.
 - [ ] `bench/config.yaml` is committed with the first-line warning, `extract_route_enabled: true`, the
-      contiguity keys, and a test proving it parses through `_load_config` with only
-      `KNOWN_CONFIG_KEYS` members; `bench/*.json` is gitignored.
-- [ ] `.dockerignore`, `Dockerfile` and `tests/test_dockerfile.py` are unchanged (`git diff --stat` on
-      the three is empty); positively, `grep -c bench Dockerfile` is 0 and `grep -rl 'bench/config'
-      compose/` is empty (the benchmark config can never be deployed; security, round 2).
+      contiguity keys, and a test that `yaml.safe_load`s it, runs the four `*_settings_from_config`
+      validators over it, asserts only `KNOWN_CONFIG_KEYS` members, the same key set as `config.yaml`
+      and `extract_route_enabled` as the only differing value; `bench/*.json` is gitignored.
+- [ ] `Dockerfile` and `tests/test_dockerfile.py` are unchanged (`git diff --stat` on the two is
+      empty); `.dockerignore` gains exactly the line `bench/` (`grep -c '^bench/$' .dockerignore` is 1;
+      `git diff --stat .dockerignore` is one line); positively, `grep -c bench Dockerfile` is 0 (today
+      0) and `grep -rl 'bench/config' compose/` is empty (today empty) — the benchmark config can
+      never be deployed (security, rounds 2 and 3).
 - [ ] `docs/weights.md` carries the benchmark subsection with the throwaway/loopback warning;
       `docs/configuration.md`'s sizing table carries the cross-reference and the single-in-flight caveat;
       TESTING_GUIDE lists the module; the module docstring carries a `test_mapping:` block.
@@ -828,9 +964,10 @@ no other change; the story stops and reports, and nothing is asserted.
   f="$(mktemp)"; trap 'rm -f "$f"' EXIT`, then for each name `printf 'NAME='; read -rs V; echo;
   printf 'NAME=%s\n' "$V" >> "$f"; unset V` — mode 0600, deleted on exit, sourced by the vendoring
   shell (`set -a; . "$f"; set +a`) or passed as `--env-file "$f"`; never on a command line, never
-  `export NAME=<value>` typed interactively, never in this file. `docs/weights.md:92-98`'s
-  `export GHCR_TOKEN=ghp_…` block is rewritten to this form in this story. Record the file mode and
-  deletion for every credential, never a value.
+  `export NAME=<value>` typed interactively, never in this file. **Both** `docs/weights.md` blocks
+  that type a value after `export` — `:92-98` (`HF_TOKEN=hf_…`, `GHCR_TOKEN=ghp_…`, `GITHUB_TOKEN=ghp_…`)
+  and `:155-157` (`GHCR_TOKEN=ghp_…` for the `oras login`; salty, round 3) — are rewritten to this
+  form in this story. Record the file mode and deletion for every credential, never a value.
 - **The run** is `docs/weights.md` § "Vendoring: the procedure" (`:75-147`) with `--model-id
   meta-llama/Llama-Prompt-Guard-2-86M --revision <sha from the model card>`: download (allow-patterns
   only — a file outside `ALLOWED_SUFFIXES` is refused; then stop and record, do not widen the set),
@@ -861,8 +998,12 @@ no other change; the story stops and reports, and nothing is asserted.
 - [ ] The mirror holds `forage-weights:<86M revision>`; `docs/weights.md` states both pins, that the
       mirror tag is the revision, and carries the one-file credential recipe (no `export …=` of a value).
 - [ ] `NOTICE` names both model ids; the credential file was mode 0600 and is recorded as deleted;
-      `grep -nE 'hf_[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_|(HF_TOKEN|GHCR_TOKEN|GITHUB_TOKEN)=[^ ]'
-      kit_tools/specs/feature-hardening-promptguard-86m.md docs/weights.md NOTICE` returns nothing.
+      the secret grep is **token shapes only over the story's produced artifacts** (ruling R29 as
+      corrected in round 4, R43 — the spec file and `kit_tools/` are excluded because the round-3
+      form self-matched its own pattern text): `grep -nE 'hf_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}'
+      weights_manifest.json docs/weights.md docs/configuration.md NOTICE model_fetcher.py` returns
+      nothing (executed 2026-09-19: nothing — `docs/weights.md`'s `hf_...`/`ghp_...` placeholders do
+      not match the shapes); `grep -c 'export GHCR_TOKEN=' docs/weights.md` is 0.
 
 ### US-004: Run the benchmark on the reference container and record it (owner gate)
 
@@ -893,10 +1034,12 @@ the tree changes; the story stops and reports.
   --name bench-<model>-<cpus> --cpus "$cpus" --memory "${FORAGE_MEM_LIMIT:-1024m}" --env-file "$f"
   -e FORAGE_MODEL_ID=<id> -e FORAGE_CPUS=$cpus -v forage-model-cache:/app/model-cache -v
   "$PWD/bench/config.yaml:/app/config.yaml:ro" -p 127.0.0.1:8020:8020 forage:bench`, built with
-  `docker build -t forage:bench .` (no build args). **Bounded wait, the exact call** (codebase-fit,
-  round 2): `wait_for_health(base_url, expect_status=STATUS_HEALTHY, timeout_seconds=900,
-  poll_interval_seconds=5)` — the helper compares only the top-level `status` (`contract_smoke.py:244-253`)
-  and its default is `degraded` (`:154`), which would return on the first 200 before the model loads.
+  `docker build -t forage:bench .` (no build args). **Bounded wait — the harness's own** (codebase-fit,
+  rounds 2 and 3): `scripts/bench_promptguard.py --health-timeout-seconds 900` performs
+  `wait_for_health(base_url, expect_status=STATUS_HEALTHY, timeout_seconds=900,
+  poll_interval_seconds=5)` itself (US-003) — the helper compares only the top-level `status`
+  (`contract_smoke.py:286`) and its default is `degraded` (`:154`), which would return on the first
+  200 before the model loads.
   `healthy` is a valid proxy for `promptguard_loaded: true` **only because the bench container sets no
   `VALKEY_URL`** (the in-memory backend's `ping_if_due()` is unconditionally true, `cache.py:598-600`),
   so the recipe must never gain one. The first 86M start downloads through the verified path; record
@@ -914,7 +1057,13 @@ the tree changes; the story stops and reports.
   cold 512-tok (ms) | warm p50/p95 512-tok (ms) | cold budget (ms) | warm p50/p95 budget (ms) |
   container memory after warm-up (MiB) | OOMKilled | exit code`. Four required rows. A separate line
   records the measured size the 86M set adds to the `forage-model-cache` volume (`docker run --rm -v
-  forage-model-cache:/c alpine du -sm /c`).
+  forage-model-cache:/c alpine du -sm /c`). **Real-tokenizer window counts, per model** (salty,
+  round 3; US-007 hint (c)): while each container is up, `docker exec bench-<model>-<cpus> python -c
+  '…'` loads `PromptGuardClassifier` from `/app/model-cache` at the running revision and prints
+  `len(classify_windows(text, max_chunks=64)[0])` for three texts — the harness's 512-token
+  document, its budget document, and a maximum-length prose `/search`-shaped text (title 512, url
+  2,048, snippet 2,000 characters) — one line per model under the table (`22M: 1 / n / m`, `86M: …`);
+  the two models tokenise differently, so the count is measured per model, never copied.
 - **Optional FPR smoke** (cheap, the container is running): enable the contiguity rule via the
   committed benchmark config's commented line (`promptguard_contiguity_windows: 2`), post the harness's
   long benign document 20 times to each model and record how many verdicts were `injection_detected`
@@ -947,9 +1096,12 @@ the tree changes; the story stops and reports.
       wait was `wait_for_health(..., expect_status=STATUS_HEALTHY, ...)` and the recipe carried no
       `VALKEY_URL` (both recorded).
 - [ ] The optional FPR smoke, if run, is recorded with its counts and the config used.
-- [ ] `grep -nE 'hf_[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_|HF_TOKEN=[^ ]'` over this
-      file, `docs/configuration.md` and `docs/weights.md` returns nothing; the token file is recorded
-      as mode 0600 and deleted.
+- [ ] The per-model window-count line (three texts per model, measured in the container with the
+      real tokenizer) is under the table.
+- [ ] `grep -nE 'hf_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}' docs/configuration.md docs/weights.md
+      bench/config.yaml` returns nothing (token shapes only over the story's artifacts; the spec
+      file and `kit_tools/` excluded — ruling R29 as corrected in round 4, R43; executed 2026-09-19:
+      nothing); the token file is recorded as mode 0600 and deleted.
 
 ## Edge Cases
 
@@ -968,11 +1120,16 @@ the tree changes; the story stops and reports.
 - `FORAGE_MODEL_REVISION` set to a sha that is not the selected model's manifest pin —
   `weights_revision_unpinned`, nothing loaded, degraded, closed reason (US-001).
 - A warm snapshot of a different model, or of the same model at another revision, on the volume —
-  never loaded under the requested pair (`model_identity_mismatch` / the path equality assertion) (US-001).
+  never loaded under the requested pair (`model_identity_mismatch` — `_load_verified`'s
+  existence-plus-equality check; `load()` is never called) (US-001).
+- The verified cache directory vanishes between verification and load — the classifier's `cache_dir`
+  existence pre-flight returns `False` with `model_cache_dir_missing`; never the blanket `except` (US-001).
 - `resolve_revision` for a model with no entry — the literal `unpinned`; never reaches a path (US-001).
 - A loaded model whose `id2label` is `{0: "LABEL_0", 1: "LABEL_1"}` — refused, `loaded` stays `False`,
   closed reason logged (US-006).
 - `contiguity_windows` larger than the chunk count — the rule cannot fire; the max rule still can (US-007).
+- `promptguard_contiguity_windows: 1` — refused at boot with `PromptGuardConfigurationError`; the legal
+  values are `0` (off) and `2–8` (US-007).
 - A per-request `promptguard_threshold` below `promptguard_contiguity_threshold` — the contiguity rule is
   the stricter one; documented, and the rule is off by default (US-007).
 - Both rules fire on `[0.9, 0.6, 0.6]` — `rule == "both"`, all three chunks flagged in document order,
@@ -986,7 +1143,8 @@ the tree changes; the story stops and reports.
 - `--runs` below 5 — accepted, runs, p95 reported as `null` (US-003).
 - `/extract` times out or answers non-2xx after a successful sample — the JSON is written with
   `outcome` and the partial samples; US-004 enters it as the row's result (US-003, US-004).
-- `/extract` answers 403 because the benchmark config was not mounted — exit 2 naming the mount (US-003).
+- `/extract` answers 404 because the benchmark config was not mounted (`retrieval_app.py:1688`) — exit 2
+  naming the mount (US-003).
 - `docker stats` unavailable — `container_mem_mib: null`, run completes, one WARNING (US-003).
 - The 86M repo carries a file outside `ALLOWED_SUFFIXES` — vendoring refuses; stop and record (US-005).
 - HF returns 403 for the 86M repo — recorded as `access pending`; the 22M rows still land (US-005, US-004).
@@ -1187,6 +1345,30 @@ pattern (validation round 1, codebase-fit).
 - Overruled: "the 100 % `/search` inertness" (this spec's own round-1 text) — withdrawn on the measured
   caps; the rule can fire on `/search` and a test says so.
 - The 2 vCPU sizing row is `not measured` unless the owner runs the optional pair.
+- Overruled (round 4): "pass `expected_snapshot_path` from `_load_verified` into `load()`" (security,
+  round 3, alternative (a)) and this spec's own round-3 private `repo_dirname` copy with its parity
+  test — ruling R29 as corrected in round 4: the identity check is `_load_verified`'s
+  existence-plus-equality on the manifest-derived path, the classifier side is an existence check
+  only, and `kit_tools/arch/SECURITY.md` records the residual ("the classifier trusts the path the
+  verifier handed it") rather than a second observation that would only re-derive the same path.
+- Corrected (round 4): ruling R29's "the scoped `MODEL_ID` grep returns only the default constant's
+  definition" — a `\b`-anchored grep cannot match `DEFAULT_MODEL_ID` (`_` is a word character), so
+  the executed expectation is **nothing**; the ruling's intent (scoped to the four consumers,
+  anchored, executed before the count is written) is kept and its pre-story count (20) recorded.
+- Overruled (round 4): "state the memory figure as peak" (salty, round 3, alternative) — the harness
+  reads the service's own cgroup figures from `/metrics` after warm-up and labels them as such; the
+  OOM/exit-code line US-004 records is the only peak signal, and the harness never claims one.
+- Overruled (round 4): "range 0–8 with `1` documented" (this spec's own round-3 text) — `1` refuses
+  boot: a one-window run is a second max rule at a lower threshold (salty and security, round 3).
+- Adopted, narrowing an earlier criterion (round 4): `.dockerignore` gains `bench/` (security, round
+  3); the round-2 "three files unchanged" criterion now covers `Dockerfile` and its test only.
+- Overruled (round 4): "`resolve_revision` refuses an unpinned override" (this spec's own round-3
+  wording) — the resolver is total and returns the override; `_acquire_and_load` is the one refusal
+  site (salty, round 3).
+- Overruled (round 4): "include the spec file in the owner-gate secret greps" (this spec's own
+  round-3 form) — ruling R29 as corrected: the greps run over the stories' produced artifacts with
+  token shapes only, so they can return nothing; the epic-level rule that no token-shaped literal
+  appears in a spec is held by the epic wrapper, not by a self-matching criterion.
 
 ## Clarifications
 
@@ -1214,6 +1396,30 @@ pattern (validation round 1, codebase-fit).
   both shapes are pinned and the real-tokenizer count is measured at the gate.
 - Q: What does the harness do when the service fails mid-matrix? → A: Writes the JSON with `outcome`
   and the partial samples and exits non-zero; the row is a result.
+
+### Session 2026-09-19 (validation round 4)
+- Rulings applied: R29 (corrected — `WeightAcquisition` gains `model_id` and is named in US-001 and
+  US-006 as the lifespan seam; the `\bMODEL_ID\b` closing grep scoped to the four consumer files
+  and executed (20 pre-story hits, expected nothing); the owner-gate secret greps run over produced
+  artifacts with token shapes only, the spec file and `kit_tools/` excluded; the loaded-identity
+  check is `_load_verified`'s existence-plus-equality on the manifest-derived path, the classifier
+  side an existence check, the residual recorded in SECURITY.md; `id2label` cardinality; a test that
+  every `ALLOWED_MODEL_IDS` entry has a manifest entry), R43 (every grep criterion names its path
+  set and exclusions and was executed on 2026-09-19 with its pre-story count recorded), R41, R37
+  (no splits). Round-3 findings applied: the total resolver with one refusal site, the
+  `resolve_model_id()` return shape, `windows: 1` refused, the `/metrics` cgroup memory figure, the
+  MONITORING fan-out, per-model window counts at the gate, the `lru_cache` reset seam, 404 not 403,
+  `httpx.post(files=, data=)`, `--health-timeout-seconds`, the `yaml.safe_load` bench-config test,
+  `tests/test_sanitizer_revision.py:95-116` named, `docs/weights.md:155-157`, `bench/` in
+  `.dockerignore`, the manifest rejection scope, the corrected citations (`PromptGuardResult` `:31`,
+  `brave.py:206-242`, `orchestrator.py:1012-1037`).
+- Q: Where does the `weights_revision_unpinned` refusal live? → A: At the top of `_acquire_and_load`,
+  once; `resolve_revision` is total and returns a well-formed override as today.
+- Q: What does `resolve_model_id()` return? → A: `tuple[str, bool]` — `(id, True)` for unset, blank
+  or allowlisted; `(DEFAULT_MODEL_ID, False)` plus one WARNING otherwise; the lifespan raises on `False`.
+- Q: Is `promptguard_contiguity_windows: 1` legal? → A: No — `0` or `2–8`; `1` refuses boot.
+- Q: Who checks that the loaded directory is the verified one? → A: `_load_verified`, before `load()`;
+  the classifier checks only that `cache_dir` exists, and SECURITY.md says so.
 
 ### Session 2026-09-19 (validation round 2)
 - Rulings applied: R29 (corrected — per-model revision, verifier/loader agreement, `manifest_diff`

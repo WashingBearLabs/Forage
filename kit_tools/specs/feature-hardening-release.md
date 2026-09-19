@@ -29,8 +29,8 @@ updated: 2026-09-19
 > so the cache-integrity posture Poppy pins is witnessed on the released image (R30). Binding: rulings
 > 5, 6, 19/R19, 20, R30, R33, R36, R37, R39; `contract/GOVERNANCE.md`'s bump procedure (`:297-330`);
 > the `v1.1.0` runbook as executed (`kit_tools/specs/archive/feature-search-release.md` US-002/US-003
-> Implementation Notes); rulings R41, R42. Validation rounds 1, 2 and 3 (2026-09-19) applied — see
-> Clarifications.
+> Implementation Notes); rulings R41, R42, R43. Validation rounds 1, 2, 3 and 4 (2026-09-19) applied —
+> see Clarifications.
 >
 > **Line numbers** in the hints were measured before specs 1–7 executed; those specs add rulings to
 > GOVERNANCE.md, fields to `models.py` and sentences to SECURITY.md, so an implementer anchors by the
@@ -50,10 +50,12 @@ appending its golden-visible field to `_EXPECTED_ONE_THREE_ZERO_DIFF` and re-cre
   reflector (`kit_tools/arch/SECURITY.md:174`). The shipped `ValidationErrorDetail` description
   (`contract/openapi.yaml:1271-1278`, in the `v1.1.0` Release and image) **says so explicitly** —
   "pydantic adds `input` and sometimes `ctx`/`url`" — so removing them is a documented-behaviour change:
-  a **MINOR** inside the open window with a stated compatibility window, recorded as the next-lettered
-  GOVERNANCE ruling **and reconciled by name with GOVERNANCE § "Example 6 in full: expedited security
-  changes"** (round 3). Its description edits **move the document and the anchor**, so the story runs
-  the full window block.
+  an **expedited MINOR with a compatibility window** — the category GOVERNANCE's own MINOR row names
+  (`contract/GOVERNANCE.md:103`, "An expedited security tightening shipped with a compatibility window";
+  table row 6 at `:148`) — recorded as the next-lettered GOVERNANCE ruling **and answered against
+  § "Example 6 in full: expedited security changes" by name** (rounds 3 and 4: one framing, not
+  "plain MINOR under (b)" beside it). Its description edits **move the document and the anchor**, so
+  the story runs the full window block.
 - **US-002 (contract close-out, autonomous)** — the `1.3.0` record in its final form, the 1.3.0
   coverage sweep beside the 1.2.0 pair spec 1 already pinned, the golden frozen, the stale
   publication-state sentence removed from the `1.2.0` entry (publication state is not the docstring's
@@ -85,7 +87,8 @@ bare count.
   pydantic's stock text for the error type and whose `loc` carries no caller-chosen segment — proven
   by tests, including a marker fuzz that **provokes a validator failure** on every request-model field
   (each field's own case produces at least one `detail` entry) and asserts the marker appears 0 times
-  in the body, and a guard-of-the-guard that turns the fuzz red against an interpolating validator;
+  in `response.text` — the whole serialized body, so every `msg`, `loc` and `type` (ruling R30/R19
+  as corrected in round 4) — and a guard-of-the-guard that turns the fuzz red against an interpolating validator;
   the handler is total (a malformed error entry still yields a 422, never a 500) and no value from the
   request reaches any logger, including uvicorn's, from the request-validation path.
 - `CONTRACT_VERSION == "1.3.0"`; the docstring entry is one well-formed bullet naming exactly the
@@ -123,12 +126,15 @@ appear 0 times in the body; `assert_mirrors(HTTPValidationError, response)` hold
 the regenerated `contract/openapi.yaml` differs only in **description text on the validation-422
 surface** — `ValidationErrorDetail` (`retrieval_app.py:806-811`; the required edit: its "pydantic adds
 `input` and sometimes `ctx`/`url`" sentence is replaced by the trio-and-cap statement),
-`HTTPValidationError` (`:821-830`; drops its per-error-keys sentence), `_PIPELINE_422_DESCRIPTION`
+`HTTPValidationError` (`:821-830`; drops its per-error-keys sentence) **and its `detail` field
+description** (`:831-833`, "One entry per failed field." → "One entry per failed field, at most
+`_MAX_VALIDATION_ERRORS` (100) entries."; salty, round 3), `_PIPELINE_422_DESCRIPTION`
 (`:1438`, used at `:1569` and `:1773`; re-grounds the validation arm of the 422 union, the pipeline
 arm's `reason` wording byte-identical) and the **`/extract` route's inline 422 literal**
-(`retrieval_app.py:1643-1647`, a separate string, not the constant) — published at **five**
-`openapi.yaml` sites (`:392-403`, `:1272-1278`, `:1394-1396`, `:1504-1506`, `:1560-1562`) — with no
-property added, removed or retyped anywhere; the anchor moves and the four anchor-quoting pages are
+(`retrieval_app.py:1643-1647`, a separate string, not the constant) — **five** description edits
+published at **six** `openapi.yaml` sites (`:392-403`, `:1272-1278`, `:1394-1396`, `:1504-1506`,
+`:1560-1562`, and the `detail` property description under the `HTTPValidationError` schema,
+anchored by its text, never by a line) — with no property added, removed or retyped anywhere; the anchor moves and the four anchor-quoting pages are
 refreshed; `uv run pytest` is green in this story's own scope.
 
 **Implementation Hints:**
@@ -144,10 +150,24 @@ refreshed; `uv run pytest` is green in this story's own scope.
   is declared beside the other `_MAX_*` constants (`retrieval_app.py:836-839`; the
   `_MAX_POLICY_ENTRIES` precedent at `pipeline/search_providers/policy.py:17`) and quoted **by name** in
   the field description, the ruling and SECURITY.md. `loc` items are `str | int`; **the handler
-  enforces the `loc` invariant at runtime too** (second opinion, round 2): a segment that is an `int`
-  passes; a `str` segment passes only if it is a field name of the matched request model (or one of
-  the fixed framework segments `body`, `query`, `path`, `header`); anything else is replaced by the
-  fixed token `"?"` — the structural test below stays as the canary, the handler as the guarantee.
+  enforces the `loc` invariant at runtime too, from a stated source of truth, failing closed** (second
+  opinion, round 2; ruling R30/R19 as corrected in round 4; salty, codebase-fit and security, round
+  3): a module-level map built once at import from the models this repo owns —
+  `_ROUTE_LOC_ALLOWLIST: dict[str, frozenset[str]] = {"/search": frozenset(SearchRequest.model_fields),
+  "/retrieve": frozenset(RetrieveRequest.model_fields), "/extract": frozenset({"file", "filename",
+  "mime_hint", "extract_mode", "request_id", "timeout_s"})}` (the `/extract` `Form`/`File` parameter
+  names, `retrieval_app.py:1664-1667`) — keyed by the closed route token, plus the fixed framework
+  segments `{"body", "query", "path", "header"}`. The handler reads the matched route from
+  `request.scope.get("route")` (the locked FastAPI sets `child_scope["route"] = self` in
+  `APIRoute.matches`, `fastapi/routing.py:836`; `exc.endpoint_path`, `fastapi/exceptions.py:186`,
+  carries the same fact and is an acceptable alternative — pick one and say which) and never a
+  FastAPI internal such as `route.body_field`. The rule: an `int` segment passes; a `str` segment
+  passes only if it is a framework segment or in the matched route's set; **any other `str` segment
+  is dropped** — not replaced (the round-3 `"?"` token is withdrawn) — and **no route in scope, or a
+  route outside the map, drops every non-framework `str` segment** (fail closed, never pass-through).
+  Drops are counted: one WARNING `validation_422_loc_dropped — dropped=<n> route=<token>` per request
+  that dropped anything (closed vocabulary; it joins `validation_422_truncated` at every
+  documentation home below). The structural test stays as the canary, the handler as the guarantee.
   **The cap bounds the response body only** — `DocumentSizeLimitMiddleware` gates on `/extract`
   (`:1041`), so a 50,000-item body on `/search` is still fully parsed before the slice; that cost falls
   under the existing "resource exhaustion by an admitted caller" row, which the closure prose
@@ -157,11 +177,18 @@ refreshed; `uv run pytest` is green in this story's own scope.
   "/retrieve", "/extract"}` with the fixed fallback `other` — never `request.url.path` (invariant 6 is
   closed by construction, not by today's route table; salty and security, round 2). WARNING renders
   without logging configuration, INFO does not (GOTCHAS "Nothing configures logging"), so the
-  truncation is loud without a wire change (Decisions Made). Tests: a `caplog` test on the
+  truncation is loud without a wire change (Decisions Made); it is emitted **at most once per
+  request** and its volume falls under the same accepted exhaustion row (network placement is the
+  control) — the closure prose says so (security, round 3). Tests: a `caplog` test on the
   `retrieval_app` logger asserts the record's route token is a member of the closed set and no record
-  contains the marker; a second capture on **uvicorn's error logger** (`logging.getLogger("uvicorn.error")`)
-  asserts nothing is emitted from the validation path; a third feeds the handler an error entry with
-  `loc` missing and asserts a 422 with `loc == []`, not a 500.
+  contains the marker; a **root-level** capture (`caplog.set_level(logging.DEBUG)`, every propagating
+  logger) asserts the marker appears in no captured record's `getMessage()` or `args` on **any**
+  logger (security, round 3); a third feeds the handler an error entry with `loc` missing and asserts
+  a 422 with `loc == []`, not a 500 — **that never-raises test is the uvicorn guarantee**: under
+  `httpx.ASGITransport` no uvicorn runs, so the round-3 "uvicorn error logger emits nothing"
+  assertion was a tautology and is withdrawn (salty, round 3); the only way a value reaches uvicorn's
+  `str(exc)` rendering is a raise inside the handler, and the runtime witness is US-005's `docker
+  logs` check on the released container.
 - **The `msg` invariant, tested by provoking validators** (salty, round 1). Pydantic renders a custom
   validator's `ValueError` as `msg = "Value error, <message>"`, so the invariant is: no request-model
   validator (`RetrieveRequest`, `SearchRequest`, the `/extract` `Form` params) may interpolate the
@@ -175,12 +202,19 @@ refreshed; `uv run pytest` is green in this story's own scope.
   the validator is actually entered — pydantic v2 runs after-validators only once coercion succeeds;
   for a field whose only bound is `min_length` (`query`, `url` — the two long attacker-chosen fields)
   the marker rides inside a **wrong-typed container** (`{"query": {"marker": 1}}`) so a `string_type`
-  error is provoked while the marker still reaches `exc.errors()[].input`. **Liveness is per field**:
+  error is provoked while the marker still reaches `exc.errors()[].input`. **Those two clauses are
+  worked examples, not the closed set** (security, round 3): for each field, choose whatever value
+  shape provokes at least one `detail` entry for that field while the marker still reaches
+  `exc.errors()[].input` (a wrong-typed container works for the domain lists and the booleans; a field
+  with an after-validator takes the type-valid marker). **Liveness is per field**:
   every field of both request models and the `/extract` `Form` params must produce at least one
   `detail` entry in its own case (a field that produced none fails the test), and every field that
   carries a validator must produce `value_error` **or** `assertion_error` (a bare `assert` renders as
   "Assertion failed, <message>" and can carry a value too) in its own case — never an aggregate
-  "somewhere in the run". The marker is absent from every `msg`. **Guard of the guard:** a temporary
+  "somewhere in the run". The marker is absent from `response.text` — every `msg`, `loc` and `type`
+  (ruling R30/R19 as corrected in round 4; `type` is pydantic's fixed identifier set, and no
+  request-model validator may raise `PydanticCustomError` with an interpolated code). **Guard of the
+  guard:** a temporary
   in-test model (or a monkeypatched validator on the real request model) that raises with the value
   interpolated must turn the fuzz red — a guard that has never failed is not a guard. The covered
   field set is enumerated in Implementation Notes so a field added later without a fuzz case is
@@ -191,11 +225,16 @@ refreshed; `uv run pytest` is green in this story's own scope.
   sets `model_config = ConfigDict(extra="forbid")` (`extra_forbidden` puts the attacker-chosen field
   name into `loc`) or carries a mapping-typed field. Neither exists today (`models.py:221`, `:273`
   declare no `model_config` and no dict-typed field), but `extra="forbid"` is house style elsewhere
-  (`retrieval_app.py:798`, `:568`). Pin it structurally in the same module: one assertion over
-  `RetrieveRequest` and `SearchRequest` that `model_config` sets no `extra="forbid"` and no field
-  annotation is a mapping type — and enforce it at runtime in the handler (the allowlist above), with
-  a test that a synthetic error entry carrying a caller-shaped `loc` segment comes back as `"?"`;
-  state the invariant beside the `msg` one in the ruling and SECURITY.md.
+  (`retrieval_app.py:436,491,541,580,618,660,697,721` — the metrics and response models). Pin it
+  structurally **where those models' bounds are already pinned** (codebase-fit, round 3):
+  `tests/test_models.py::TestRetrieveRequest` (`:185`) and `::TestSearchRequest` (`:260`) each gain
+  one assertion that `model_config` sets no `extra="forbid"` and no field annotation is a mapping
+  type; the handler tests stay in `tests/test_contract_errors.py`: a synthetic error entry carrying a
+  caller-shaped `loc` segment comes back with that segment **dropped**, and a handler invocation with
+  no `route` in `request.scope` (or a route outside the map) drops every non-framework `str` segment
+  and emits the `validation_422_loc_dropped` WARNING (the deny-by-default branch, tested; security,
+  round 3); `kit_tools/arch/SECURITY.md:174`'s "Pinned by" sentence names both modules; state the
+  invariant beside the `msg` one in the ruling and SECURITY.md.
 - **Both middlewares stay first.** `DocumentSizeLimitMiddleware` and `ExtractionAdmissionMiddleware`
   refuse before routing; the handler only sees requests that reached a route. The `/extract` case is
   a **well-formed multipart** request with `extract_mode=bogus` (a wrong-typed body on the multipart
@@ -235,36 +274,55 @@ refreshed; `uv run pytest` is green in this story's own scope.
   before the Release body freezes it. Add the marker to `tests/test_governance_docs.py:93`
   `_RULING_MARKERS` (and its introducing comment `:90-92`) in the same commit (it drives
   `test_the_ruling_has_a_section` `:358` and `test_the_ruling_cites_a_source_file_that_exists` `:367`;
-  a criterion checks it has no duplicate). **The ruling answers `contract/GOVERNANCE.md` § "Example 6
-  in full: expedited security changes" (`:150-167`) by name**: steps 1–4 govern a tightening in which
-  "a value that used to be accepted must stop being accepted"; this trim is response-side — nothing
-  the caller *sends* stops being accepted and no schema property is removed — so it is a MINOR under
-  ruling (b) with a **stated compatibility window** rather than a bare note: the keys stop being
-  emitted immediately (keeping them would keep the reflector), and the docstring line and
-  `docs/releases.md` name the release after which the compatibility note is retired ("consumers reading
-  `detail[].input` must stop; the note is retired at the next MINOR"). The ruling states why a MAJOR
-  was not chosen, the `msg` and `loc` invariants (stated as "no value from the request reaches a log
+  a criterion checks it has no duplicate). **The derived letter is written once** (salty, round 3):
+  the first act of the story records `letter: (<x>)` under `### US-001` in Implementation Notes, and
+  every site copies that recorded value — never re-derived per site. **The classification is one
+  framing** (salty, round 3 — the round-3 text said "MINOR under ruling (b)" and "reconciled with
+  Example 6" side by side): the trim is an **expedited MINOR with a compatibility window**, the
+  category GOVERNANCE's MINOR row already names (`:103`; table row 6, `:148`), and the ruling answers
+  § "Example 6 in full: expedited security changes" (`:150-167`) **by name**: its trigger is "a value
+  that used to be accepted must stop being accepted", and this trim is the response-side mirror —
+  nothing the caller *sends* stops being accepted, but something the caller *received* stops arriving
+  — so steps 1–4 are applied to what consumers read: the keys stop being emitted immediately
+  (keeping them for a window would keep the reflector; an opt-in flag was rejected for the same
+  reason), and the compatibility window is the note's lifetime — the docstring line and
+  `docs/releases.md` name the release after which it is retired ("consumers reading `detail[].input`
+  must stop; the note is retired at the next MINOR"). Ruling (b) is **not** the basis (it governs enum
+  members). The ruling states why a MAJOR was not chosen (no schema property is removed or renamed —
+  `loc`, `msg`, `type` were the only declared properties; the extra keys were admitted by a
+  description, never declared), the `msg` and `loc` invariants (stated as "no value from the request reaches a log
   or a traceback from the request-validation path", naming `exc.body` and `str(exc)`/`repr(exc)` as
   the carriers), the cap by constant name and that it bounds the response only, and the closed route
   token. **The count word moves by artifact, not by literal** (ruling R39; salty and codebase-fit,
   round 2): spell `_NUMBER_WORDS[len(_RULING_MARKERS)]` as it stands **before** this story's addition,
-  grep for that word **case-insensitively** (`grep -rniE '<word> (recorded )?rulings' --include='*.md'
-  --include='*.py' . --exclude-dir=kit_tools/specs` — today `five` hits `contract/GOVERNANCE.md:174`
-  "**F**ive rulings", `tests/test_governance_docs.py:90` and `:355`, `kit_tools/testing/TESTING_GUIDE.md:145`,
+  grep for that word **case-insensitively over an explicit path set** (R43 — `--exclude-dir` matches
+  basenames, so the round-3 `--exclude-dir=kit_tools/specs` excluded nothing): `grep -rniE
+  '\b<word> (recorded )?rulings' --include='*.md' --include='*.py' contract tests kit_tools/testing
+  kit_tools/arch kit_tools/docs kit_tools/AGENT_README.md kit_tools/SYNOPSIS.md CLAUDE.md README.md
+  docs` — executed 2026-09-19 for `five`: **9 hits** — `contract/GOVERNANCE.md:174` ("**F**ive
+  rulings"), `tests/test_governance_docs.py:90` and `:355`, `kit_tools/testing/TESTING_GUIDE.md:145`,
   `CLAUDE.md:89`, `kit_tools/AGENT_README.md:53`, `kit_tools/SYNOPSIS.md:102`,
-  `kit_tools/arch/CODE_ARCH.md:190` and `kit_tools/arch/DECISIONS.md:778`), and every hit **except
-  `kit_tools/arch/DECISIONS.md`'s dated ADR heading** becomes the new count; zero hits means the word
-  already moved and the sweep is re-derived, never ticked. Pin it: extend
+  `kit_tools/arch/CODE_ARCH.md:190` and `kit_tools/arch/DECISIONS.md:778` — and every hit **except
+  `kit_tools/arch/DECISIONS.md`'s dated ADR heading** becomes the new count; `GOVERNANCE.md:174`'s
+  scope clause "this epic" is rewritten to name both epics ("six rulings — five from
+  `feature-forage-contract`, one from `epic-forage-hardening`", or whatever the derived count is;
+  salty, round 3); zero hits means the word already moved and the sweep is re-derived, never ticked. Pin it: extend
   `tests/test_governance_docs.py::_NUMBER_WORDS` (`:99-107`, already carrying `6: "six"`) with one
   assertion that § "Recorded rulings" states `_NUMBER_WORDS[len(_RULING_MARKERS)]`, the way
-  `test_the_hashed_source_count_matches_the_code` (`:583-595`) pins `_REVISION_SOURCES`.
+  `test_the_hashed_source_count_matches_the_code` (`:583-595`) pins `_REVISION_SOURCES`;
+  `_NUMBER_WORDS` (`:99-107`) maps **4–10 only** today — extend it through `20: "twenty"` here, the
+  once-only edit the rotation-count rule below also needs (codebase-fit, round 3).
 - **Security docs.** `kit_tools/arch/SECURITY.md:174` argues that `SearchRequest.providers` carries no
   pydantic bound *because* the 422 echoes `detail[].input`; the rewritten paragraph must still
   establish that `providers` remains unbounded at the schema, that the bound lives in
   `apply_request_policy`, and that the echo risk that motivated the split is now **closed by the new
   ruling (by its derived letter)** rather than merely unmentioned — scoped to the **request-validation** 422 on the three routes, with a
   cross-reference that the pipeline 422's `reason` is unchanged (ruling (d): `/retrieve` still echoes
-  the resolved private IP by design). The non-vulnerabilities table (`:336-356`, two columns `| Item |
+  the resolved private IP by design); the rewritten `providers` paragraph also states the
+  **surviving** rationale for leaving the field unbounded at the schema (a request-side bound is a
+  tightening under § "Example 6 in full"; the effect is bounded in `apply_request_policy`; the parse
+  cost stays under the accepted exhaustion row) so the decision is re-derived, not orphaned
+  (security, round 3). The non-vulnerabilities table (`:336-356`, two columns `| Item |
   Source |`, no status column) loses the 422-echo row at `:353`; the closure is recorded in prose the
   way `:373` records the `searxng_unavailable` one, citing the ruling by its derived letter, this
   story, the response-only scope of the cap and the unchanged exhaustion row. **The marker's homes**
@@ -274,9 +332,11 @@ refreshed; `uv run pytest` is green in this story's own scope.
   `kit_tools/docs/MONITORING.md`'s log-lines table (`:233-266`) and § "Closed vocabularies" (`:240`)
   with the operator meaning (a caller sent more than `_MAX_VALIDATION_ERRORS` validation failures; the
   response was truncated; the request was still fully parsed), and
-  `kit_tools/docs/TROUBLESHOOTING.md:100`'s grep alternation — proven by value: `grep -rn
-  'validation_422_truncated' --include='*.md' --include='*.py' . --exclude-dir=kit_tools/specs` hits
-  the source, the test and each documentation site. Root `SECURITY.md` needs no change here (its "Not
+  `kit_tools/docs/TROUBLESHOOTING.md:100`'s grep alternation — **both** tokens,
+  `validation_422_truncated` and `validation_422_loc_dropped`, at every home — proven by value over
+  an explicit path set (R43): `grep -rn 'validation_422_' --include='*.md' --include='*.py'
+  retrieval_app.py tests kit_tools/arch kit_tools/docs` hits the source, the tests and each
+  documentation site for each token (0 hits today). Root `SECURITY.md` needs no change here (its "Not
   vulnerabilities here" list is pinned by `tests/test_governance_docs.py:527`). The DNS-oracle rows in
   both files survive untouched (criterion).
 - **Window block (rulings 5, R34, R36), copied verbatim into the criteria:** append one `* ``1.3.0``` —
@@ -292,16 +352,22 @@ refreshed; `uv run pytest` is green in this story's own scope.
   (`kit_tools/docs/API_GUIDE.md`, `CI_CD.md`, `DEPLOYMENT.md`, `kit_tools/arch/SERVICE_MAP.md`) with
   `anchor=$(cut -d' ' -f1 contract/openapi.yaml.sha256)` — copied, never retyped; run `--check`.
   `contract.py` is hashed → measure and record the rotation (ruling 6) at the five sites. **The
-  rotation-count sentences move by artifact** (salty and codebase-fit, round 2): the pre-story count is
-  the row count of `kit_tools/docs/GOTCHAS.md`'s rotation table (equivalently `docs/bootstrap-notes.md`'s
-  numbered headings) at execution time — never the word this spec was written with — spelled with
-  `_NUMBER_WORDS`, grepped case-insensitively (`grep -rniE '<word> (times|rotations)' --include='*.md'
-  . --exclude-dir=kit_tools/specs`; today `fourteen` hits `kit_tools/docs/GOTCHAS.md:410,434`,
+  rotation-count sentences move by artifact, and the artifact is named exactly** (salty and
+  codebase-fit, rounds 2 and 3; the round-4 Addendum): the pre-story count is **the ordinal of the
+  last `### The <ordinal> rotation:` heading in `docs/bootstrap-notes.md`** (today `fourteenth`,
+  `:495`) — **not** the number of those headings: they start at the fourth (`:111`; rotations 1–3
+  share the split section at `:50`), so there are 11 headings for 14 rotations — cross-checked
+  against `kit_tools/docs/GOTCHAS.md`'s rotation table **rows minus the `At split` origin row**
+  (`:415`; 15 − 1 = 14 today); the two must agree or the story stops. Spell it with the extended
+  `_NUMBER_WORDS` and grep **digit-or-word, case-insensitively, over an explicit path set** (R43):
+  `grep -rniE '\b(<word>|<digits>) (times|rotations)\b' --include='*.md' docs kit_tools/docs
+  kit_tools/arch kit_tools/testing kit_tools/AGENT_README.md kit_tools/SYNOPSIS.md CLAUDE.md README.md`
+  — executed 2026-09-19 for `(fourteen|14)`: **6 hits** — `kit_tools/docs/GOTCHAS.md:410,434`,
   `kit_tools/arch/SERVICE_MAP.md:204`, `kit_tools/docs/TROUBLESHOOTING.md:399` ("**F**ourteen") and
-  `:617`, `kit_tools/docs/DEPLOYMENT.md:121`), every hit outside the dated ordinal lines in `CLAUDE.md`,
-  `kit_tools/arch/CODE_ARCH.md` and `docs/bootstrap-notes.md` headings rewritten to the new count; the
-  "previous revision" literal at `kit_tools/arch/SERVICE_MAP.md:204` is whatever spec 7 last recorded,
-  read from the table, not `41ac98ca…`; zero hits is a failure, not a pass.
+  `:617`, `kit_tools/docs/DEPLOYMENT.md:121` — every hit outside the dated ordinal lines in
+  `CLAUDE.md`, `kit_tools/arch/CODE_ARCH.md` and `docs/bootstrap-notes.md` headings rewritten to the
+  new count; the "previous revision" literal at `kit_tools/arch/SERVICE_MAP.md:204` is whatever spec 7
+  last recorded, read from the table, not `41ac98ca…`; zero hits is a failure, not a pass.
 
 **Acceptance Criteria:**
 - [ ] A `RequestValidationError` handler is registered with `_MAX_VALIDATION_ERRORS = 100` as a named
@@ -314,51 +380,69 @@ refreshed; `uv run pytest` is green in this story's own scope.
       fields; inside a wrong-typed container for `min_length`-only fields), asserts every field of both
       request models and the `/extract` `Form` params produced at least one `detail` entry in its own
       case, asserts every validated field produced `value_error` or `assertion_error` in its own case,
-      asserts the marker appears 0 times in every `msg`, and enumerates the covered fields in
-      Implementation Notes.
+      asserts the marker appears 0 times in `response.text` (every `msg`, `loc` and `type`), and
+      enumerates the covered fields in Implementation Notes.
 - [ ] A guard-of-the-guard (an interpolating validator monkeypatched onto a real request model) turns
       the fuzz red.
-- [ ] The `loc` structural test asserts neither request model sets `extra="forbid"` or carries a
-      mapping-typed field, and a handler test shows a caller-shaped `loc` segment comes back as `"?"`.
+- [ ] `_ROUTE_LOC_ALLOWLIST` is a module-level map built from `SearchRequest.model_fields`,
+      `RetrieveRequest.model_fields` and the six `/extract` parameter names, keyed by the closed route
+      token, read through `request.scope["route"]` (or `exc.endpoint_path`, stated) and no FastAPI
+      internal; the structural assertions in `tests/test_models.py::TestRetrieveRequest` and
+      `::TestSearchRequest` show neither request model sets `extra="forbid"` or carries a
+      mapping-typed field; handler tests in `tests/test_contract_errors.py` show a caller-shaped `loc`
+      segment is dropped, and that with no `route` in scope every non-framework `str` segment is
+      dropped with one `validation_422_loc_dropped` WARNING (deny by default).
 - [ ] A 50,000-item list yields at most 100 entries and one `validation_422_truncated` WARNING whose
       route token is a member of `{"/search", "/retrieve", "/extract", "other"}` (`caplog`); no
-      `retrieval_app` record contains the marker; the uvicorn error logger emits nothing from the
-      validation path; a malformed error entry (missing `loc`) yields 422, not 500.
+      `retrieval_app` record contains the marker; a root-level `caplog` capture shows the marker in no
+      record on any logger; a malformed error entry (missing `loc`) yields 422, not 500 (the
+      never-raises guarantee; no uvicorn-logger assertion — it is vacuous under `ASGITransport`).
 - [ ] The middleware-raised 4xx paths still bypass the handler
       (`tests/test_orchestrator.py::test_post_retrieve_error_response`, the 413 and 404 tests pass untouched);
       `test_our_validation_mirror_matches_fastapis_own_definition` passes with its docstring re-grounded.
-- [ ] `contract/GOVERNANCE.md` gains the next-lettered ruling with **Ruling** and **Source** (MINOR
-      classification argued from `openapi.yaml:1271-1278` **and reconciled by name with § "Example 6
-      in full"**, the stated compatibility window and why not a MAJOR, both invariants naming
-      `exc.body` and `str(exc)` as the carriers, the cap by name and its response-only scope, the closed
-      route token); `_RULING_MARKERS` includes it with no duplicate; the letter recorded here is the
-      letter written in the docstring clause, the field description and the SECURITY.md closure (the
-      closing grep finds no stale `(e)` unless `(e)` is the derived letter); the pre-story ruling-count
-      word (from `_NUMBER_WORDS[len(_RULING_MARKERS)]`) is grepped case-insensitively and every hit
-      except `kit_tools/arch/DECISIONS.md`'s dated heading reads the new count, `contract/GOVERNANCE.md:174`
-      included; `_NUMBER_WORDS` pins the ruling count; `tests/test_governance_docs.py` green.
+- [ ] `contract/GOVERNANCE.md` gains the next-lettered ruling with **Ruling** and **Source** (an
+      **expedited MINOR with a compatibility window** — the MINOR row's own category — argued from
+      `openapi.yaml:1271-1278` **and answering § "Example 6 in full" by name**, never "under ruling
+      (b)"; why not a MAJOR; the rejected opt-in flag; both invariants naming `exc.body` and
+      `str(exc)` as the carriers; the cap by name, its response-only scope and its once-per-request
+      WARNING under the exhaustion row; the closed route token; the fail-closed `loc` allowlist);
+      `_RULING_MARKERS` includes it with no duplicate; the letter is recorded once in Implementation
+      Notes and copied to the docstring clause, the field description and the SECURITY.md closure
+      (the closing grep finds no stale `(e)` unless `(e)` is the derived letter); the pre-story
+      ruling-count word (from `_NUMBER_WORDS[len(_RULING_MARKERS)]`) is grepped case-insensitively
+      over the explicit path set (9 hits today) and every hit except `kit_tools/arch/DECISIONS.md`'s
+      dated heading reads the new count, `contract/GOVERNANCE.md:174` included with its scope clause
+      naming both epics; `_NUMBER_WORDS` extends through twenty and pins the ruling count;
+      `tests/test_governance_docs.py` green.
 - [ ] `kit_tools/arch/SECURITY.md`: `grep -c 'echoes the offending value verbatim' kit_tools/arch/SECURITY.md`
-      is 0; the rewritten `providers` paragraph names `apply_request_policy` as the bound and the new
-      ruling (derived letter) as the closure; the closure prose cross-references the unchanged
-      exhaustion row; the DNS-oracle rows in `kit_tools/arch/SECURITY.md` and root `SECURITY.md` are
-      byte-unchanged; root `SECURITY.md` unchanged by this story; `validation_422_truncated` is
-      documented at the LOGGING.md, MONITORING.md and TROUBLESHOOTING.md sites (`grep -rn` by value
-      hits source, test and each site).
+      is 0; the rewritten `providers` paragraph names `apply_request_policy` as the bound, the new
+      ruling (derived letter) as the closure and the surviving rationale for no schema bound, and its
+      "Pinned by" sentence names `tests/test_models.py` and `tests/test_contract_errors.py`; the
+      closure prose cross-references the unchanged exhaustion row and states the truncation WARNING
+      is once per request; the DNS-oracle rows in `kit_tools/arch/SECURITY.md` and root
+      `SECURITY.md` are byte-unchanged; root `SECURITY.md` unchanged by this story;
+      `validation_422_truncated` and `validation_422_loc_dropped` are each documented at the
+      LOGGING.md, MONITORING.md and TROUBLESHOOTING.md sites (`grep -rn 'validation_422_'` over the
+      explicit path set hits source, tests and each site for both tokens).
 - [ ] Contract regenerated: the docstring clause appended with the derived letter; `uv run python -m
-      scripts.export_contract` run; the document differs only in the four validation-422 descriptions
-      (`ValidationErrorDetail`, `HTTPValidationError`, `_PIPELINE_422_DESCRIPTION`, the `/extract`
-      inline literal) at the five `openapi.yaml` sites, with no property added, removed or retyped;
+      scripts.export_contract` run; the document differs only in the five validation-422 descriptions
+      (`ValidationErrorDetail`, `HTTPValidationError`, its `detail` field, `_PIPELINE_422_DESCRIPTION`,
+      the `/extract` inline literal) at the six `openapi.yaml` sites (anchored by text), with no
+      property added, removed or retyped;
       golden unchanged (expected); `_EXPECTED_ONE_THREE_ZERO_DIFF` unchanged (expected); the four
       anchor-quoting pages equal `contract/openapi.yaml.sha256`; `--check` clean.
 - [ ] Rotation recorded: the measured before/after in `docs/bootstrap-notes.md`, `CLAUDE.md`,
       `kit_tools/arch/DECISIONS.md`, `kit_tools/docs/GOTCHAS.md`'s rotation table and
-      `kit_tools/arch/CODE_ARCH.md`; the pre-story rotation-count word (from the GOTCHAS table's row
-      count) grepped case-insensitively over `(times|rotations)` with every hit outside the dated
+      `kit_tools/arch/CODE_ARCH.md`; the pre-story rotation count (the ordinal of the last
+      bootstrap-notes rotation heading, cross-checked against GOTCHAS rows minus the origin row —
+      14 today, both sources recorded) grepped digit-or-word, case-insensitively over
+      `(times|rotations)` on the explicit path set (6 hits today) with every hit outside the dated
       ordinal lines rewritten (`kit_tools/docs/TROUBLESHOOTING.md:399` included); zero hits is a
       failure.
-- [ ] The marker fuzz, the guard-of-the-guard, the `loc` structural test and its handler test, the cap
-      test, the three log-capture tests and the malformed-entry test are new tests in
-      `tests/test_contract_errors.py`; no existing test in that module was deleted.
+- [ ] The marker fuzz, the guard-of-the-guard, the two `loc` handler tests (dropped segment; no
+      route in scope), the cap test, the two log-capture tests and the malformed-entry test are new
+      tests in `tests/test_contract_errors.py`, and the two `loc` structural assertions are new in
+      `tests/test_models.py`; no existing test in either module was deleted.
 - [ ] Full test suite passes (`uv run pytest`)
 - [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
 
@@ -393,21 +477,45 @@ passes with `_EXPECTED_ONE_THREE_ZERO_DIFF` equal to the golden-visible subset o
   entry's stale "held … until the `v1.1.0` image publishes it" (`:65-68`) is in the other direction.
   Publication state lives in `docs/releases.md` and GOVERNANCE § "Two semvers", which US-005 flips
   after the cut without touching a hashed file; the `1.2.0` entry's "held" sentence is **removed**,
-  not re-dated.
-- **The tense guard reuses the existing parser** (codebase-fit, round 1): add the assertion to
+  not re-dated — and so is its second publication-state clause, `:63`'s "there is no vendored 1.2.0
+  copy yet to re-vendor" (false since `v1.1.0` shipped it; salty, round 3), rewritten to the timeless
+  fact ("the description edits landed inside the same unreleased window and are subsumed by this
+  MINOR"); `grep -c 'no vendored' pipeline/contract.py` is 0 afterwards. **The `.py` sources are
+  swept too** (salty, round 3 — US-004's sweep covers docs only): `grep -rn '1\.2\.0' retrieval_app.py
+  models.py model_fetcher.py cache.py url_validator.py pipeline promptguard scripts contract_smoke.py`
+  — executed 2026-09-19: **19 hits** — classified here: contract-provenance phrases ("added in
+  contract 1.2.0", `models.py:313-363`, `pipeline/contract.py:131,142,272`, `brave.py:5`, `policy.py:1`,
+  `retrieval_app.py:409,1586,1788`) stay; `pipeline/contract.py:22,33,63` are this story's;
+  **current-value statements in field descriptions** — `retrieval_app.py:378-379` ("Two keys are
+  defined in contract 1.2.0", the `HealthResponse.capabilities` description, three keys with spec 4's
+  `cache_hmac_key`) and `:383` — become `1.3.0` inside **this** story's regenerate (a description-only
+  move: ruling R36 as corrected in round 4 — nothing is appended to `_EXPECTED_ONE_THREE_ZERO_DIFF`;
+  the gate is `test_contract_schema_matches_golden` after the golden is re-created) unless spec 4
+  already moved them (confirm by value); the pre-flight records the regenerated `openapi.yaml` diff.
+- **The tense guard reuses the existing parser and inspects whole bullets** (codebase-fit, round 1;
+  salty and codebase-fit, round 3; the round-4 Addendum): add the assertion to
   `tests/test_ci_workflow.py::TestReleaseContractMapping` (`:2288`), walking every `* ``X.Y.Z`` `
-  bullet with `_slice_entry` (`:2264`) — the only place in the suite that already parses those
-  entries; the story's own `-k` selector collects it. The three checks are concrete patterns (salty,
-  round 2): `re.search(r"\bheld\b(?=[^.]*\b(until|for|pending)\b)", entry)`,
-  `re.search(r"\buntil\b[^.]*\bpublish(es|ed)\b", entry)` and `"published by" in entry`; the failure
-  message names publication state as the banned thing ("docstring entries carry no publication state
-  — it lives in docs/releases.md and GOVERNANCE § Two semvers; rephrase, do not delete the guard") so
-  an innocent "held in memory" is rephrased, not the guard removed.
+  bullet with `_slice_entry` (`:2264` — it returns the bullet from its `* ``X.Y.Z`` ` prefix to the
+  first non-blank line not indented two spaces, i.e. the next bullet or the docstring end) — the only
+  place in the suite that already parses those entries; the story's own `-k` selector collects it.
+  **The round-3 patterns never matched**: their `[^.]*` sentence bound is broken by the periods inside
+  `contract_1_2_0.json` and `v1.1.0`, which sit between "held" and "until" in the real entry. The
+  three checks run over the **whole sliced bullet** with no sentence bound (`re.S`):
+  `re.search(r"\bheld\b.*\b(until|pending)\b", entry, re.S)`, `re.search(r"\buntil\b.*\bpublish(es|ed)\b",
+  entry, re.S)` and `"published by" in entry`; the failure message names publication state as the
+  banned thing ("docstring entries carry no publication state — it lives in docs/releases.md and
+  GOVERNANCE § Two semvers; rephrase, do not delete the guard") so an innocent "held in memory" is
+  rephrased, not the guard removed. **Guard of the guard, on the real stale entry** (as US-001's
+  fuzz): the test is written and run **first**, against the unmodified `pipeline/contract.py:65-68`
+  ("This version is **held**: … until the ``v1.1.0`` image publishes it"), and its red run is
+  recorded verbatim in Implementation Notes; only then is the sentence removed and the test goes
+  green — a guard that has never failed is not a guard.
 - **The coverage sweep**: spec 1 US-004 pinned the 1.2.0 pair to the literal `contract_1_2_0.json`
   (`feature-hardening-search-sanitization.md`, its window criterion), so that pair is **green and
   stays byte-alone** — there is no "retire" branch. The **completeness half already exists from spec 1
   US-004** (`_EXPECTED_ONE_THREE_ZERO_DIFF` and `test_the_1_2_0_to_1_3_0_diff_has_no_unlisted_additions`,
-  `feature-hardening-search-sanitization.md:563-566`) — confirm, reconcile the set against the
+  `feature-hardening-search-sanitization.md:802-808`, its criteria at `:850-858` — the round-3
+  `:563-566` citation pointed at spec 1's `idna` hint; codebase-fit, round 3) — confirm, reconcile the set against the
   docstring, freeze; this story **adds** the presence half (`test_the_N_1_3_0_additions_are_all_golden_pinned`)
   and `_ONE_THREE_ZERO_DIFFED_SCHEMAS` / `_diff_against_1_2_0(current)` if spec 1's sweep did not
   already introduce them (codebase-fit, round 2). **The counters get a symmetric one-liner**
@@ -444,9 +552,13 @@ passes with `_EXPECTED_ONE_THREE_ZERO_DIFF` equal to the golden-visible subset o
       list, with the additive sentence and **no** publication-state clause; `_run_entry_extractor`
       prints it verbatim (recorded in Implementation Notes) with no `1.2.0` line; `uv run pytest
       tests/test_ci_workflow.py -k 'extractor or docstring_entry or tense'` green.
-- [ ] The `1.2.0` entry's "held … until" sentence is removed; a `TestReleaseContractMapping` test
-      walking every entry with `_slice_entry` applies the three patterns with the named failure
-      message; GOVERNANCE § "Two semvers" records `v1.1.0` shipped and `v1.2.0` pending, keeps
+- [ ] The `1.2.0` entry's "held … until" sentence and its "no vendored 1.2.0 copy yet" clause are
+      removed (`grep -c 'no vendored' pipeline/contract.py` is 0); a `TestReleaseContractMapping` test
+      walking every entry with `_slice_entry` applies the three whole-bullet patterns with the named
+      failure message, and its recorded red run against the pre-story `1.2.0` entry is in
+      Implementation Notes; the `.py` `1\.2\.0` sweep (19 hits today) is classified there and the
+      description-only current-value hits moved inside this story's regenerate with nothing appended
+      to `_EXPECTED_ONE_THREE_ZERO_DIFF`; GOVERNANCE § "Two semvers" records `v1.1.0` shipped and `v1.2.0` pending, keeps
       `v1.0.0` in the table, the `US-004` reference and `1.3.0`
       (`test_the_independence_is_stated_with_its_worked_example` green).
 - [ ] `tests/test_contract_schema.py` carries the 1.2.0 → 1.3.0 pair (spec 1's completeness half
@@ -471,11 +583,13 @@ tag I am about to publish, so the pre-flight finds nothing and the quickstart is
 tag exists. This story changes no runtime behaviour, but US-003's pre-flight depends on it, so it is
 **not** trimmable.
 
-**Independent Test:** Two by-value greps over `README.md CLAUDE.md contract/ kit_tools/ docs/ compose/
-contract_smoke.py` excluding `kit_tools/specs/` — `grep -rn '1\.2\.0'` and `grep -rn '1\.1\.0'` —
-return only hits classified in Implementation Notes as (a) history rows and rotation records, (b)
-contract-provenance phrases ("added in contract 1.1.0"), or (c) sentences naming the **image**
-`v1.2.0` / `forage:1.2.0`; zero unclassified hits; `grep -c 'forage:1.2.0' compose/minimal.yml
+**Independent Test:** Two by-value greps over the **explicit human-written path set** `README.md
+CLAUDE.md contract/ docs/ compose/ contract_smoke.py kit_tools/docs kit_tools/arch kit_tools/testing
+kit_tools/roadmap kit_tools/SYNOPSIS.md kit_tools/AGENT_README.md kit_tools/PRODUCT_VISION.md` —
+`grep -rn '1\.2\.0'` and `grep -rn '1\.1\.0'` — return only hits classified in Implementation Notes
+as (a) history rows and rotation records, (b) contract-provenance phrases ("added in contract
+1.1.0"), (c) sentences naming the **image** `v1.2.0` / `forage:1.2.0`, or (d) compose comment blocks
+naming the pinned tag (rewritten with the pin); zero unclassified hits; `grep -c 'forage:1.2.0' compose/minimal.yml
 compose/full.yml` reports 1 each and `tests/test_compose_fragments.py` passes with
 `_FORAGE_RELEASE_TAG = "1.2.0"`; the four total suite counts and every touched per-module row equal
 `uv run pytest --collect-only -q`.
@@ -483,9 +597,15 @@ compose/full.yml` reports 1 each and `tests/test_compose_fragments.py` passes wi
 **Implementation Hints:**
 - **Two sweeps, by value, not by bold** (ruling R39; completionist, round 1). This release moves two
   strings: the contract version (`1.2.0` → `1.3.0`) and the image tag (`1.1.0` → `1.2.0`). The named
-  site list is a starting point; the criterion is the grep. Contract statements become `1.3.0`;
-  release statements become `v1.2.0` / `forage:1.2.0`; `docs/releases.md` released-version entries and
-  archived specs are never edited (ruling R28).
+  site list is a starting point; the criterion is the grep. **The scope is the human-written tree**
+  (R43; codebase-fit, round 3 — a bare `kit_tools/` pulled 326 hits from machine-written trees):
+  the path set in the Independent Test; **excluded and named**: `kit_tools/specs/` (this epic's own
+  specs and the archive, ruling R28), `kit_tools/.seed_cache/`, `kit_tools/EXECUTION_LOG.md` and
+  `kit_tools/SESSION_SCRATCH.md` (append-only history), `kit_tools/.validate_epic_*` result files and
+  `tests/golden/`. Contract statements become `1.3.0`; release statements become `v1.2.0` /
+  `forage:1.2.0`; `docs/releases.md` released-version entries and archived specs are never edited
+  (ruling R28). A fourth bucket (salty, round 3): compose fragments carry comment blocks that name the
+  image tag beside the `image:` line — rewrite sites, classified (d), not history.
   - Contract sites: `README.md:62` ("currently **1.2.0**") and `:257-258`; `CLAUDE.md:82` (invariant 4)
     and the Coexistence rotation history (`:204,229` — **append**, never rewrite);
     `contract/GOVERNANCE.md:29,:61-67` (US-002 did these — confirm); `kit_tools/arch/CODE_ARCH.md:108`;
@@ -498,11 +618,14 @@ compose/full.yml` reports 1 each and `tests/test_compose_fragments.py` passes wi
     being the current one … regenerated in place" → `contract_1_3_0.json`, frozen).
   - **The secret-grep pattern count, by value** (codebase-fit, round 2): spec 4 changes the two grep
     alternations only and hands the prose off; `.github/workflows/ci.yml:539` ("iterates the same three
-    patterns") is the one site outside spec 4's sweep scope (`docs kit_tools README.md`), so this story
-    sweeps `grep -rniE 'three patterns' .github kit_tools docs README.md` and every hit reads the
-    count `tests/test_ci_workflow.py::_REQUIRED_GREP_PATTERNS` has at execution time (four after spec
-    4) — `ci.yml:539`, and any of `kit_tools/docs/CI_CD.md:217,:310`, `kit_tools/docs/DEPLOYMENT.md:100`,
-    `kit_tools/docs/TROUBLESHOOTING.md:121` spec 4 left behind.
+    patterns") is the one site outside spec 4's sweep scope (`docs kit_tools README.md`), and **spec 4
+    US-004 owns that line** (codebase-fit, round 3) — so this story **confirms**, editing only what
+    spec 4 left behind: `grep -rniE 'three patterns' .github kit_tools/docs kit_tools/arch
+    kit_tools/testing docs README.md SECURITY.md` (R43; executed 2026-09-19: **6 hits** — `ci.yml:539`,
+    `kit_tools/docs/TROUBLESHOOTING.md:121`, `kit_tools/docs/CI_CD.md:217,310`,
+    `kit_tools/docs/DEPLOYMENT.md:100` and `kit_tools/arch/SECURITY.md:233`, the site the round-3
+    list omitted) and every hit reads the count `tests/test_ci_workflow.py::_REQUIRED_GREP_PATTERNS`
+    (`:1072`) has at execution time (four after spec 4).
   - Release sites (the `1.1.0` grep): `kit_tools/docs/LOCAL_DEV.md:229-230` (both pins resolve);
     `kit_tools/docs/TROUBLESHOOTING.md:686-692` (the compose-pin paragraph, "pin a full semver");
     `kit_tools/SYNOPSIS.md:30` (Maturity row) and `:36` (Published image row — its digest and
@@ -553,15 +676,18 @@ compose/full.yml` reports 1 each and `tests/test_compose_fragments.py` passes wi
   "What shipped" block also carries **one upgrade action** (security, round 2): any deployment with an
   external Valkey sets `FORAGE_CACHE_HMAC_KEY` — without it cached content is served unsigned and
   `/health` reports `cache_unauthenticated` — so the operator-facing action appears in the artifact
-  read at the cut, not only in the fragment's comment; and the compatibility-window sentence for the
-  validation-422 trim (US-001) names the release at which the note is retired.
+  read at the cut, not only in the fragment's comment — the action points at spec 4's
+  `docs/configuration.md` section for how the key is generated and rotated and says in one clause that
+  it must be a high-entropy, per-deployment value (the verification placeholder is not one; security,
+  round 3); and the compatibility-window sentence for the validation-422 trim (US-001) names the
+  release at which the note is retired.
 - **GOTCHAS rotation table** (`kit_tools/docs/GOTCHAS.md:410-434`): the count sentence and rows are
   complete for every rotation this epic recorded (confirm against `docs/bootstrap-notes.md`).
 
 **Acceptance Criteria:**
 - [ ] Both by-value greps' hits are classified in Implementation Notes (history / rotation record /
-      contract provenance / image tag), with zero unclassified hits over `README.md CLAUDE.md contract/
-      kit_tools/ docs/ compose/ contract_smoke.py` minus `kit_tools/specs/`; every named contract and
+      contract provenance / image tag / compose comment block), with zero unclassified hits over the
+      explicit path set in the Independent Test and the named exclusions recorded; every named contract and
       release site above is updated; `kit_tools/docs/API_GUIDE.md:449` carries a `1.3.0` line;
       `MONITORING.md` says three `capabilities` keys; `kit_tools/SYNOPSIS.md:30` reads `v1.2.0` /
       `1.3.0`; root `SECURITY.md`'s supported-versions table is unchanged and `:36` no longer says
@@ -570,9 +696,11 @@ compose/full.yml` reports 1 each and `tests/test_compose_fragments.py` passes wi
       is `"1.2.0"`; `tests/test_compose_fragments.py` green; the pinned-ahead sentence, the
       pinnable-digest sentence, the `FORAGE_CACHE_HMAC_KEY` upgrade action and the 422
       compatibility-window sentence are in `docs/releases.md`'s draft; the consequence-and-remedy
-      sentence for `FORAGE_CACHE_HMAC_KEY` is in `compose/full.yml` and `README.md`; every
-      `three patterns` hit (case-insensitive, `.github` included) reads the `_REQUIRED_GREP_PATTERNS`
-      count.
+      sentence for `FORAGE_CACHE_HMAC_KEY` is in `compose/full.yml` and `README.md`, and the upgrade
+      action points at spec 4's configuration section and says high-entropy, per-deployment; every
+      `three patterns` hit over the explicit path set (case-insensitive, `.github` and
+      `kit_tools/arch/SECURITY.md:233` included; 6 today) reads the `_REQUIRED_GREP_PATTERNS` count
+      (confirmation of spec 4's work, edits only for leftovers).
 - [ ] If the cut will not happen in this sitting, the completion PR's description names the
       unpublished-tag window on `main` as an outstanding item with the `git revert <pin commit>`
       instruction (recorded in Implementation Notes with the commit sha).
@@ -619,20 +747,26 @@ the story stops and reports, and nothing is asserted.
   the companion image is unchanged this epic.
 - **Watch these `publish` steps live**, in order: "Verify the published amd64 image is the gated
   filesystem"; "Read the contract version from the tagged tree"; the published-config secret grep —
-  **read the pattern set out of the tagged tree, not the log** (codebase-fit, round 1): `git show
-  v1.2.0:.github/workflows/ci.yml | sed -n '998p'` must carry four alternatives (`HF_TOKEN`,
-  `hf_[A-Za-z0-9]{20,}`, `FORAGE_BRAVE_API_KEY`, `FORAGE_CACHE_HMAC_KEY`) — the prose count at
-  `ci.yml:539` is US-004's by-value sweep, not a gate assertion (codebase-fit, round 2); in the run log
-  only the success line (`ci.yml:1002`, "No forbidden pattern in the published image config.")
+  **read the pattern set out of the tagged tree, not the log — and find it by value, never by line**
+  (codebase-fit, rounds 1 and 3; the round-4 Addendum): `git show v1.2.0:.github/workflows/ci.yml |
+  grep -n "grep -Eiq '"` returns exactly one line (today `:998`; the layer-history loop at `:549`
+  greps `-- "${pattern}"` and does not match the quoted form) and its alternation equals, in order,
+  `_REQUIRED_GREP_PATTERNS` read from the **same tagged tree** (`git show
+  v1.2.0:tests/test_ci_workflow.py | grep -n '^_REQUIRED_GREP_PATTERNS'`; four after spec 4, with
+  `FORAGE_CACHE_HMAC_KEY`) — the prose count at `ci.yml:539` is spec 4's and US-004's by-value sweep,
+  not a gate assertion (codebase-fit, rounds 2 and 3); in the run log only the success line (found by
+  value: `grep -n 'No forbidden pattern in the published image config'` on the tagged `ci.yml`)
   appears; "Create the GitHub Release"; both Release assertions. Record cold/warm (count `CACHED`
   lines).
 - **After the run:** the four-way sha256 table (committed anchor `git show v1.2.0:contract/
   openapi.yaml.sha256`; repository copy `git show v1.2.0:contract/openapi.yaml | shasum -a 256`;
   Release asset via `gh release download v1.2.0 --pattern 'openapi.yaml*'` then `shasum -a 256 -c
-  openapi.yaml.sha256` → `openapi.yaml: OK`; in-image `docker run --rm --entrypoint cat
-  ghcr.io/washingbearlabs/forage:1.2.0 /app/contract/openapi.yaml | shasum -a 256`); the Release body
-  check; `docker buildx imagetools inspect ghcr.io/washingbearlabs/forage:<tag>` for `latest`, `1.2`,
-  `1.2.0` — read the `Digest:` line (the `--format '{{.Manifest.Digest}}'` form printed whole blocks at
+  openapi.yaml.sha256` → `openapi.yaml: OK`; in-image **by digest, not by tag** — `docker run --rm
+  --entrypoint cat ghcr.io/washingbearlabs/forage@sha256:<index digest> /app/contract/openapi.yaml |
+  shasum -a 256`, ordered **after** the `imagetools inspect` step below establishes the digest, the
+  ref recorded beside the four values so the table names what it measured (security, round 3));
+  the Release body check; `docker buildx imagetools inspect ghcr.io/washingbearlabs/forage:<tag>` for
+  `latest`, `1.2`, `1.2.0` — read the `Digest:` line (the `--format '{{.Manifest.Digest}}'` form printed whole blocks at
   `v1.1.0`); `latest` moves off the `1.1.0` image and `1.2` is minted — a pointer landing anywhere
   else is the one outcome to stop for.
 - **Recovery after a pushed tag** (completionist, round 1): a red `publish` on a pushed tag is fixed
@@ -654,15 +788,17 @@ the story stops and reports, and nothing is asserted.
       `1.2.0` line); the cut time is outside 23:55–00:05 UTC.
 - [ ] `v1.2.0` is cut by the owner and no `searxng-v*` tag is pushed; `publish` is green; the
       multi-arch `1.2.0` image is on GHCR; run URL, tagged commit sha and OCI index digest recorded.
-- [ ] Four-way sha256 equality at `v1.2.0` verified and the four values recorded.
+- [ ] Four-way sha256 equality at `v1.2.0` verified and the four values recorded, the in-image leg
+      read through the `@sha256:<index digest>` ref (the ref recorded).
 - [ ] `gh release view v1.2.0 --json body --jq '.body' | tr -d '\r'` matches `^contract: 1\.3\.0$` and
       contains every line of the rehearsal extraction (`grep -F` per line); both Release assertions
       green; assets `openapi.yaml` and `openapi.yaml.sha256` present.
 - [ ] `docker buildx imagetools inspect` prints one identical index digest for `latest`, `1.2` and
       `1.2.0`; recorded.
-- [ ] `secret-grep` and the publish config grep are green; the tagged `ci.yml:998` carries four
-      alternatives; both success lines recorded; the rehearsal extraction's ruling letter equals the
-      `### (` heading US-001 added to `contract/GOVERNANCE.md`.
+- [ ] `secret-grep` and the publish config grep are green; the tagged `ci.yml`'s one `grep -Eiq '`
+      line (found by value) carries exactly the tagged tree's `_REQUIRED_GREP_PATTERNS` alternatives;
+      both success lines recorded; the rehearsal extraction's ruling letter equals the `### (`
+      heading US-001 added to `contract/GOVERNANCE.md`.
 
 ### US-005: Post-release verification and the v1.2.0 handoff record (owner-executed)
 
@@ -719,9 +855,10 @@ Implementation Notes carry `### US-005 — gate not run, <date>` naming the miss
   (`cache_hit: true`) — a fetch failure on both targets is a verification-environment problem, not a
   release failure: retry against the alternate before stopping. Both transcripts recorded with the key
   and secret values absent; **`docker compose -f compose/full.yml down` afterwards — never `down -v`**:
-  `-v` would delete the shared fixed-name `forage-model-cache` volume every local bring-up depends on
-  (the project-scoped `forage-valkey-data` may be removed explicitly with `docker volume rm` if
-  desired).
+  `-v` would delete the shared fixed-name `forage-model-cache` volume every local bring-up depends on;
+  the project-scoped `forage-valkey-data` **is** removed explicitly (`docker volume rm
+  <project>_forage-valkey-data`, name read from `docker volume ls`) as a teardown step, because it
+  holds entries signed with the placeholder key (security, round 3).
 - **Third-party view** (the `v1.1.0` US-003 procedure): `docker logout ghcr.io`, then **`docker image
   rm <ref>` before the pull** so the anonymous pull proves more than manifest resolution (audit -014),
   `docker pull <ref>`, then the login state decided and recorded (security, round 2): `gh auth token |
@@ -732,7 +869,11 @@ Implementation Notes carry `### US-005 — gate not run, <date>` naming the miss
   `compose/minimal.yml` at `1.2.0` showing `contract_version: "1.3.0"`, `promptguard_model`, no
   `brave_api_key`, no `cache_unauthenticated` (memory backend); one `/search` round-trip; the
   placeholder-key packaging run at zero spend with the leak check over `/health`, `/metrics`, `docker
-  logs` for **both** placeholders (the Brave placeholder and the HMAC placeholder) — four zeros.
+  logs` for **both** placeholders (the Brave placeholder and the HMAC placeholder) — four zeros; and
+  **the validation-422 runtime witness** (salty, round 3 — the only place uvicorn actually runs):
+  one `POST /search` with `{"query": "<marker>", "providers": "<marker>"}` against the released
+  container, then `docker logs forage-rel 2>&1 | grep -c '<marker>'` is 0 and the 422 body carries
+  `loc`/`msg`/`type` only — a fifth zero in the leak table.
 - **Whole-tree leak check** before pushing the record: `git diff <pre-record commit>..HEAD | grep -nE
   'HF_TOKEN=|hf_[A-Za-z0-9]{20,}|FORAGE_BRAVE_API_KEY=|FORAGE_CACHE_HMAC_KEY=|SEARXNG_SECRET=|VALKEY_URL=[^[:space:]]*:[^[:space:]]*@|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_'`
   returns nothing (bare variable *names* in prose are fine; `NAME=` followed by a value is not — the
@@ -771,13 +912,14 @@ Implementation Notes carry `### US-005 — gate not run, <date>` naming the miss
       of that checkout; run (3) is recorded as its own command block with `--env-file "$g"` written
       from placeholders, `--no-deps valkey forage`, the shared fixed-name volume (warm or cold, stated),
       `cache_unauthenticated` key-less and `healthy` + `capabilities.cache_hmac_key: 1` + a cache hit
-      keyed, ending with `docker compose down` **without `-v`**; commands and exit codes recorded; every
+      keyed, ending with `docker compose down` **without `-v`** and the explicit `docker volume rm` of
+      the project-scoped Valkey volume; commands and exit codes recorded; every
       credential reached a container only through `--env-file`; no `docker compose config` /
       `docker inspect` / `docker ps --no-trunc` output in the record.
 - [ ] Credential-free pull after `docker image rm` recorded (both exit 0); the GHCR login state at the
       end of the story is recorded (restored with a scoped token, or logged out); key-less `/health`
       shows `contract_version: "1.3.0"` and `promptguard_model`; the placeholder leak check is four
-      zeros.
+      zeros and the validation-422 marker witness (`docker logs` count 0, trio-only body) is the fifth.
 - [ ] The whole-tree leak grep (with the `SEARXNG_SECRET=` and `VALKEY_URL` credential patterns) over
       the record's diff returns nothing; both token files were mode 0600 and are recorded as deleted.
 - [ ] The handoff table with the four new posture rows is in the Implementation Notes;
@@ -796,7 +938,13 @@ Implementation Notes carry `### US-005 — gate not run, <date>` naming the miss
 - A validation error whose `loc` contains an integer index (`providers[3]`) — kept as `int` (US-001).
 - A body producing thousands of validation errors — `detail` capped at `_MAX_VALIDATION_ERRORS`, one
   WARNING, the request still fully parsed (the exhaustion row, unchanged) (US-001).
-- A future request model with `extra="forbid"` — the `loc` structural test goes red (US-001).
+- A future request model with `extra="forbid"` — the `loc` structural test in `tests/test_models.py`
+  goes red (US-001).
+- The handler runs with no `route` in `request.scope`, or for a route outside `_ROUTE_LOC_ALLOWLIST`
+  — every non-framework `str` segment is dropped and one `validation_422_loc_dropped` WARNING is
+  emitted; never a pass-through (US-001).
+- A future validator raises `PydanticCustomError` with an interpolated code — the fuzz over
+  `response.text` catches it in `type` (US-001).
 - The `1.3.0` docstring entry accidentally contains a blank line — the extractor stops early and the
   read-back fails on the tag; `tests/test_ci_workflow.py` and US-003's rehearsal catch it before the
   push (US-002/US-003).
@@ -871,9 +1019,14 @@ Implementation Notes carry `### US-005 — gate not run, <date>` naming the miss
   descriptions (spec 8 US-001). Golden-visible items are the request/response model fields and enum
   members; counters and `CacheMetrics` fields are pinned by `tests/test_contract_metrics.py`.
 - **Rotations (ruling 6):** US-001 and US-002 each edit `pipeline/contract.py` — two measured,
-  recorded rotations at the five sites, with the count sentences moved by artifact (the GOTCHAS table's
-  row count, spelled through `_NUMBER_WORDS`, grepped case-insensitively), never by a word this spec
-  was written with. US-004, US-003 and US-005 rotate nothing (no hashed file; the tense flip lives in
+  recorded rotations at the five sites, with the count sentences moved by artifact (the ordinal of
+  the last `docs/bootstrap-notes.md` rotation heading, cross-checked against the GOTCHAS table's rows
+  minus its origin row, spelled through the extended `_NUMBER_WORDS`, grepped digit-or-word and
+  case-insensitively), never by a word this spec was written with. Two rotations rather than one
+  (salty, round 3): the R36 window block makes each window story's verifier see its own docstring
+  line and recorded rotation; US-001 appends its clause, US-002 rewrites the entry into final form —
+  two small, attributable invalidations over one unattributable one (the same reasoning spec 7
+  records for US-006/US-007); a per-bucket summary in Implementation Notes is welcome. US-004, US-003 and US-005 rotate nothing (no hashed file; the tense flip lives in
   unhashed docs).
 - **Anchor ownership (R19, R36):** every story in this epic that regenerates the document refreshes the
   four anchor-quoting pages in its own commit; US-002 confirms, US-003's pre-flight re-verifies.
@@ -913,10 +1066,12 @@ the handoff table. -->
 
 ### Research Findings
 
-**Decision:** The validation 422 tightening is a **MINOR** with a stated compatibility window inside
-the 1.3.0 window, reconciled by name with GOVERNANCE § "Example 6 in full" (its steps govern request-side
-acceptance; this trim is response-side with no schema property removed), with a named cap, a total
-handler, and stated `msg` and `loc` invariants enforced both by test and at runtime.
+**Decision:** The validation 422 tightening is an **expedited MINOR with a compatibility window**
+(the category GOVERNANCE's MINOR row names, `:103`, row 6) inside the 1.3.0 window, answering
+§ "Example 6 in full" by name (its trigger is request-side acceptance; this trim is the response-side
+mirror with no schema property removed, so its steps are applied to what consumers read), with a
+named cap, a total handler, and stated `msg` and `loc` invariants enforced both by test and at runtime
+— the `loc` allowlist from a module-level per-route map, failing closed.
 **Rationale:** `contract/openapi.yaml:1271-1278` — the description shipped in the `v1.1.0` Release and
 image — tells consumers "pydantic adds `input` and sometimes `ctx`/`url`", so the trim removes
 documented behaviour and the round-1 "never documented, hence PATCH" claim was false (validation round
@@ -925,7 +1080,10 @@ compatibility note names the one consumer behaviour that changes. Dropping `inpu
 echo; the cap closes response-volume amplification (and only that); the `msg` and `loc` invariants
 keep the echo closed once spec 3 adds request-side validation.
 **Alternatives considered:** Leaving it (an unbounded reflector); `extra="forbid"` without a handler
-(would 500 on FastAPI's own body); PATCH classification (contradicted by the shipped description).
+(would 500 on FastAPI's own body); PATCH classification (contradicted by the shipped description);
+an opt-in flag that keeps emitting `input` for a window (rejected: it keeps the reflector for exactly
+the consumers who never read the note); a plain MINOR under ruling (b) (rejected in round 4: (b)
+governs enum members, and the two framings side by side read as a contradiction).
 **Source:** `retrieval_app.py:805-834,1410,1438,1569,1643-1647,1773`;
 `contract/openapi.yaml:392-403,1272-1278,1394-1396,1504-1506,1560-1562`;
 `contract/GOVERNANCE.md:143-148,150-167`; `models.py:134,206,221,273,371`;
@@ -1016,6 +1174,29 @@ manifest resolution (audit finding 2026-09-17-014).
 - Accepted: a runtime `loc` allowlist in the handler beside the structural test (second opinion, round
   2); the counters-in-docstring one-liner in `tests/test_contract_metrics.py` (completionist, round 2).
 - Kept the boilerplate test criterion on US-001 only, made concrete (the five named new tests).
+- Overruled (round 4): "split US-001" (salty, round 3, oversized) — ruling R37 as corrected: no
+  further splits; the handler, its tests, the ruling and the window block cannot land green apart,
+  and the size is stated as the cost; the derived letter is now written once and copied.
+- Overruled (round 4): "`extra="forbid"` on `ValidationErrorDetail`" (salty, round 3, INFO) — it
+  adds `additionalProperties: false` to the published schema, which is outside the description-only
+  diff US-001 is allowed; `assert_mirrors` already rejects a stray key by dict equality.
+- Overruled (round 4): "the `"?"` replacement token" and "the uvicorn error-logger capture" (this
+  spec's own round-3 text) — ruling R30/R19 as corrected: a foreign `loc` segment is dropped and
+  counted, and the uvicorn assertion is vacuous under `ASGITransport`; the never-raises test and
+  US-005's `docker logs` witness replace it.
+- Overruled (round 4): "one closed allowlist as the union of every model's fields" (security, round
+  3) — adopted as a **per-route** map keyed by the closed token, which is strictly narrower and is
+  what the ruling's "derived from the matched route's request model" means; the fail-closed default
+  is the ruling's.
+- Corrected (round 4): the Addendum's "count the `docs/bootstrap-notes.md` rotation headings" — the
+  file has 11 `### The <ordinal> rotation:` headings for 14 rotations (the first three share the
+  split section), so the count is the **ordinal of the last heading**, cross-checked against GOTCHAS
+  rows minus the origin row; the Addendum's intent (an artifact, not a literal; digit-or-word) is kept.
+- Overruled (round 4): "write the 1.3.0 clause once, in US-002" (salty, round 3) — the R36 uniform
+  window block; reasoning in Technical Considerations § Rotations.
+- Overruled (round 4): "decide the tag-vs-digest question at this cut" (security, round 3, via the
+  in-image leg) — the leg now reads by digest, which is a measurement choice; the pin policy stays
+  deferred (Out of Scope).
 
 ## Clarifications
 
@@ -1047,6 +1228,38 @@ manifest resolution (audit finding 2026-09-17-014).
   with a stated compatibility window and the ruling says why a MAJOR was not chosen.
 - Q: Is run (3) cold? → A: No — `full.yml` shares the fixed-name `forage-model-cache` volume; warm after
   run (2), cold only on a clean host; never `down -v`.
+
+### Session 2026-09-19 (validation round 4)
+- Rulings applied: R30/R19 (corrected — the marker fuzz asserts over `response.text`, so every
+  `msg`, `loc` and `type`; the runtime `loc` allowlist is `_ROUTE_LOC_ALLOWLIST`, a module-level
+  per-route map from the request models' `model_fields` and the `/extract` parameter names, looked
+  up through `request.scope["route"]`, dropping any foreign segment and every non-framework segment
+  when no route matches — fail closed, counted by `validation_422_loc_dropped`), the Addendum (the
+  tense guard anchored on the `* ``X.Y.Z`` ` bullet and inspecting the whole sliced bullet, proved
+  red on the real stale `1.2.0` entry before the fix; the rotation count from the last
+  bootstrap-notes rotation heading's ordinal cross-checked against GOTCHAS rows minus the origin
+  row, matched digit-or-word, `_NUMBER_WORDS` extended through twenty; by-value sweeps over an
+  explicit human-written path set with the machine-written `kit_tools/` trees named as excluded;
+  US-003's config-grep anchor by value, never `sed -n '998p'`), R43 (every grep names its path set —
+  `--exclude-dir=kit_tools/specs` never excluded anything — and was executed on 2026-09-19 with its
+  hit count recorded: 9 for `five rulings`, 6 for `fourteen`, 6 for `three patterns`, 19 for the
+  `.py` `1.2.0` sweep), R41, R37 (no splits). Round-3 findings applied: the expedited-MINOR framing as
+  one framing; the `HTTPValidationError.detail` description in the permitted diff (five
+  descriptions, six sites); the `.py` version sweep in US-002; the `:63` "no vendored" clause; the
+  structural `loc` test in `tests/test_models.py`; the citation repoints (`:802-808`, `:580`);
+  `kit_tools/arch/SECURITY.md:233` in the `three patterns` sweep; the GOVERNANCE:174 scope clause;
+  the letter written once; the in-image sha256 leg by digest; the `docs/releases.md` upgrade action's
+  pointer; the placeholder-keyed Valkey volume removed at teardown; the `docker logs` marker witness.
+- Q: Is the 422 trim "MINOR under ruling (b)" or an expedited MINOR? → A: An expedited MINOR with a
+  compatibility window — the MINOR row's own category, answering Example 6 by name; (b) governs enum
+  members and is not the basis.
+- Q: What happens to a `loc` segment the allowlist does not know? → A: Dropped and counted; with no
+  matched route every non-framework string segment is dropped. Never `"?"`, never passed through.
+- Q: Why did the round-3 tense-guard patterns never match? → A: `[^.]*` stops at the period inside
+  `contract_1_2_0.json`; the guard now inspects the whole bullet and was proved red on the real entry.
+- Q: What is the rotation count's artifact? → A: The ordinal of the last bootstrap-notes rotation
+  heading (14 today), cross-checked against GOTCHAS rows minus the origin row — not the heading
+  count, which is 11.
 
 ### Session 2026-09-19 (validation round 2)
 - Rulings applied: R19 (corrected — MINOR; the `msg` fuzz provokes validators and includes

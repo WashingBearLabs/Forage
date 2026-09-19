@@ -19,14 +19,14 @@ updated: 2026-09-19
 
 > **Spec 3 of `epic-forage-hardening`.** Make every hostname-against-a-list comparison in the
 > service mean one written-down thing — suffix matching for denylists, opt-in suffix matching for
-> allowlists (ruling R8, corrected in validation rounds 2 and 3) — give `/search` the domain-policy and
+> allowlists (ruling R8, corrected in validation rounds 2–4) — give `/search` the domain-policy and
 > threshold knobs `/retrieve` already has (rulings 9, R10 corrected), and put the `config.yaml`
 > surface behind one key registry so an operator typo is a WARNING and every key has a documented
 > row (ruling 12). Ruling 11 records that the SearXNG engine list is *already* single-sourced by
 > test. Context: WA-E punch list ("Exact-hostname matching breaks blocklists, trust tiers, and news
 > TTLs", "`blocked_domains` applies to fetch but never search", "`promptguard_threshold` is dead
 > for 2 of 3 endpoints", "Nine distinct config surfaces"), audit finding 2026-09-16-058, and the
-> epic's rulings 5, 6, 9, 11, 12, R8, R10, R24, R31, R32, R36, R37, R39, R40, R41 are binding here.
+> epic's rulings 5, 6, 9, 11, 12, R8, R10, R24, R31, R32, R36, R37, R39, R40, R41, R43, R44 are binding here.
 > Every line number in this spec was measured before its `depends_on` specs landed; re-locate every
 > anchor by the symbol or quoted string beside it, never by the number alone.
 
@@ -37,7 +37,8 @@ Three exact-match sites decide security-relevant things today, and all three rea
 (`url_validator.py:145-146`, `lower_host in lower_blocked`), `_resolve_request_trust_tier`
 (`pipeline/orchestrator.py:1114`) and `_effective_ttl_hours`'s `news_domains` check
 (`cache.py:176`). Blocking `evil.com` therefore does not block `www.evil.com`, and the one-hour news
-TTL never applies to a `www.`-prefixed host.
+TTL never applies to a `www.`-prefixed host — the second is closed here by rewriting the shipped
+`news_domains` entries to the leading-dot form, not by widening the allowlist matcher (round 4).
 
 The load-bearing decision is **ruling R8, and it is asymmetric by direction.** Suffix matching
 *narrows* what a denylist lets through, so `blocked_domains`, the operator's `seed_blocklist` and
@@ -51,12 +52,13 @@ an entry written with a leading dot (`.example.com`) opts into the apex plus eve
 leading-dot form is one today's exact matcher can never match, so **no existing allowlist entry
 changes meaning; every existing multi-label denylist entry now also covers its subdomains** (a
 tightening in the safe direction, classified against GOVERNANCE's Example 6 and carried by an
-upgrade note). Every entry in every caller- or operator-supplied list must have at least two
-labels after any leading dot is removed; single-label, empty-label, over-long and non-IDNA entries
-are ignored and counted (request lists) or dropped with one boot WARNING (config lists) — never a
-422. That rule has one loosening the upgrade note must state: a single-label denylist entry
-(`seed_blocklist: ["intranet"]`, `blocked_domains: ["wiki"]`) matched exactly today and is no
-longer enforced after this spec. The built-in private-name list (`localhost`, `.localhost`, `.local`)
+upgrade note). Every **allowlist** entry must have at least two labels after any leading dot is
+removed — the two-label minimum guards privilege grants; a **single-label denylist entry**
+(`seed_blocklist: ["intranet"]`, `blocked_domains: ["wiki"]`) is accepted and keeps **exact-only**
+matching (suffix widening applies only to entries with two or more labels), so no existing denylist
+entry stops matching and no security-window classification is needed (R8 corrected, round 4).
+Empty-label, over-long and non-IDNA entries are ignored and counted (request lists) or dropped with
+one boot WARNING naming them (config lists — the operator's own file) — never a 422. The built-in private-name list (`localhost`, `.localhost`, `.local`)
 is **not** a domain list: it keeps its own single-label check ahead of every list comparison, so the
 two-label minimum never touches it (R8 corrected, round 3). An IP-literal host matches an entry only
 by equality, never by suffix, at every site.
@@ -70,12 +72,16 @@ are normalised in the handler, once, and reach the pipeline through the same req
 spec 2 US-005 introduced (R24). Config lists (`seed_blocklist`, `news_domains`) are normalised once
 in the lifespan and published on `app.state`. The comparison sites keep a cheap `.lower()` over the
 entries they receive until US-007 lands the handler normalisation, so no intermediate commit ships a
-denylist that stops matching a mixed-case caller entry. Denylists are never truncated below the
-operator's list: the operator's entries merge first and can never be evicted; a caller's denylist is
-bounded at 4,096 entries (work bound — each entry costs one UTS-46 encode and one comparison per
-result or hop on an unauthenticated route with no body cap) and entries beyond it are counted, not
-enforced. Allowlists keep a 64-entry cap because truncating an allowlist only narrows privilege;
-the operator's own `news_domains` file is trusted input and carries no count cap.
+denylist that stops matching a mixed-case caller entry. Caller lists are bounded by **bytes, never
+by entry count** (R8 corrected, round 4; R44): the joined raw entries of each request list are
+measured before any normalisation against `policy_domain_entries_max_bytes` (`config.yaml`, default
+64 KiB), so the UTS-46 work a request can buy is bounded by the budget and the host is encoded once
+per call site, never once per entry. A denylist over budget **refuses the request** with the closed
+reason `policy_domain_list_too_large` on each route's existing 422 code (ruling 42) — a denylist is
+never partially enforced; an allowlist over budget is truncated at the budget boundary and the
+remainder counted, because truncating an allowlist only narrows privilege. The operator's entries
+merge first and can never be evicted; the operator's own lists are trusted input and carry no
+budget.
 
 The second decision is policy parity between the two routes. `SearchRequest` (`models.py:273`)
 carries no domain list and no threshold field (verified: its fields are `query`, `num_results`,
@@ -108,14 +114,20 @@ writes that fact down (ruling 11).
   and `www.evil.com` and never `notevil.com` or `evil.com.attacker.net`; that a bare `example.com`
   allowlist entry matches only `example.com`; that `.example.com` matches `example.com` and
   `a.b.example.com`; that `straße.de` and `xn--strae-oqa.de` match each other (UTS-46 via the `idna`
-  package); that an IP-literal host matches only by equality; and that `com`, `.com`, `""`,
-  `bad..entry` and a non-IDNA entry are rejected by the normaliser. The private-name check stays
-  its own step: `localhost`, `localhost.`, `anything.localhost`, `printer.local` and
-  `deep.sub.myhost.local` are refused before DNS after the story exactly as before it.
+  package); that an IP-literal host matches only by equality; that `com`, `.com`, `""`,
+  `bad..entry` and a non-IDNA entry are rejected by the normaliser for an allowlist; and that a
+  single-label denylist entry is accepted exact-only. The private-name check stays its own step:
+  `localhost`, `localhost.`, `anything.localhost`, `printer.local` and `deep.sub.myhost.local` are
+  refused before DNS after the story; `localhost.` and `anything.localhost` are newly refused at
+  that stage (trailing-dot canonicalisation and `.localhost` in `_BLOCKED_SUFFIXES`), the other
+  three exactly as before.
 - Config-sourced lists survive the change: `seed_blocklist: [" Evil.COM. "]` blocks `www.evil.com`
   and `news_domains: ["BBC.co.uk"]` still shortens the TTL for `bbc.co.uk` after the story lands;
-  a malformed or single-label config entry is dropped with one boot WARNING naming the key and the
-  count, never a value; an un-canonicalisable fetch host is refused whether or not any blocklist is
+  a malformed config entry (or a single-label `news_domains` entry) is dropped with one boot WARNING
+  naming the key, the count and the dropped entries — the operator's own file, not caller bytes; a
+  single-label `seed_blocklist` entry is kept exact-only; the shipped `config.yaml`'s six
+  `news_domains` entries are rewritten to the leading-dot form so `www.bbc.co.uk` gets the one-hour
+  TTL on the default deployment; an un-canonicalisable fetch host is refused whether or not any blocklist is
   configured.
 - Dropped domain-list entries and wildcard-caused classifier skips are observable on `/metrics`, per
   entry, with the offending entry never stored.
@@ -127,7 +139,8 @@ writes that fact down (ruling 11).
 - Zero silent config keys: every key `config.yaml` can carry is in `KNOWN_CONFIG_KEYS`, every
   registry key has a row in `docs/configuration.md`, every key the code reads is in the registry,
   an unknown key produces exactly one `config_unknown_key` WARNING naming the key (never its value),
-  and a malformed top-level document never raises.
+  and `_warn_unknown_config_keys` never raises on a malformed document (the readers' own typed boot
+  refusals for a non-mapping block are unchanged).
 - The `/search`↔`/retrieve` boundary text cannot drift again: a test derives each route's
   route-specific **and** shared knob sets from `model_fields` and fails when a knob is missing from
   any of the seven authored copies or a shared knob is attributed to one route.
@@ -158,12 +171,14 @@ sites will receive them) — proves the rules above; `https://localhost/`, `http
 `https://anything.localhost/`, `https://printer.local/` and `https://deep.sub.myhost.local/` still
 raise `PrivateIPError` at the hostname stage before DNS, with `blocked_domains=None` and with a
 non-empty list; `https://xn--/` (un-encodable) is refused by `validate_url` with no blocklist
-configured; a lifespan test with `_load_config` patched to `seed_blocklist: [" Evil.COM. ", "com",
-"intranet"]` and `news_domains: ["BBC.co.uk", ".Example.ORG"]` shows `app.state.config["seed_blocklist"]
-== ["evil.com"]`, `app.state.config["news_domains"] == ["bbc.co.uk", ".example.org"]`, and exactly one
-WARNING per list whose `getMessage()` contains `config_invalid_value`, the key name and `dropped=2` /
-`dropped=0` (no record for a list with no drops), and no entry text; every pre-existing test in
-`tests/test_url_validator.py` (including `TestLocalhostAndLocal`, `:193-218`),
+configured; a lifespan test with `_load_config` patched to `seed_blocklist: [" Evil.COM. ",
+"bad..entry", "intranet"]` and `news_domains: ["BBC.co.uk", ".Example.ORG", "com"]` shows
+`app.state.config["seed_blocklist"] == ["evil.com", "intranet"]` (a single-label denylist entry is
+kept, exact-only: `intranet` is refused, `wiki.intranet` is not), `app.state.config["news_domains"]
+== ["bbc.co.uk", ".example.org"]`, and exactly one WARNING per list whose `getMessage()` contains
+`config_invalid_value`, the key name, `dropped=1` and the dropped entry (`bad..entry` / `com` — the
+operator's own file, so the entry is named; a list with no drops logs nothing); every pre-existing
+test in `tests/test_url_validator.py` (including `TestHostnameRejection`, `:197`),
 `tests/test_stage5_url_audit.py`, `tests/test_orchestrator.py` and `tests/test_cache.py` passes
 with no call-site change, because every one already passes lower-cased strings.
 
@@ -171,23 +186,39 @@ with no call-site change, because every one already passes lower-cased strings.
 - **Anchors.** Every `file:line` below was measured before specs 1 and 2 landed; locate by the
   symbol or quoted string, never by the number.
 - **Reuse spec 1's canonicaliser; add no second IDNA rule.** Spec 1 US-003 lands
-  `canonicalize_host(host) -> CanonicalHost` in `url_validator.py`, returning the encoded host **and
-  its class** (name, IPv4 literal, IPv6 literal) and raising `idna.IDNAError` on an un-encodable
-  name (confirm the final signature from spec 1's Implementation Notes). `normalize_domain_entries`
-  calls it per entry after removing and remembering one leading dot: an `IDNAError` makes the entry
-  invalid; a name-class result must then split into ≥ 2 labels with **no empty label** (checked on
-  the split labels — `"".encode("idna")` succeeds, so the encode step alone never catches
-  `bad..entry`) and total ≤ 253 characters; an IP-literal-class result is accepted as an
-  **exact-only** entry (a leading dot on an IP literal is invalid). `hostname_matches` applies the
-  same function to a raw host and treats an IP-literal-class host as equality-only at every site.
-  `idna` is already a direct dependency (spec 1 US-003's criterion) — verify it is listed in
-  `pyproject.toml` `dependencies` and do not re-lock; a criterion pins that exactly one IDNA call
-  site exists across the two files.
+  `canonicalize_host(host) -> CanonicalHost | HostRejection` in `url_validator.py` (R27 corrected,
+  round 4): a `CanonicalHost` carries the encoded host and its `kind` (`name`, `ipv4`, `ipv6`); a
+  `HostRejection` carries the closed token (`idna`, `numeric_host`, `zone_id`, …) and **nothing
+  raises** — confirm the final shape from spec 1's Implementation Notes, which are the tie-breaker.
+  `normalize_domain_entries` calls it per entry after removing and remembering one leading dot: a
+  `HostRejection` makes the entry invalid (no exception handling anywhere in the normaliser — a
+  reviewer showed a `try/except idna.IDNAError` written against the old description would never
+  fire and would let the rejection flow on as a host string, which is the fail-open direction); a
+  `name`-class result must then split into labels with **no empty label** (checked on the split
+  labels — `"".encode("idna")` succeeds, so the encode step alone never catches `bad..entry`) and
+  total ≤ 253 characters, with **at least two labels for an allowlist entry** and any label count
+  for a denylist entry (single-label denylist entries are exact-only); an IP-literal-class result
+  is accepted as an **exact-only** entry (a leading dot on an IP literal is invalid).
+  `hostname_matches` takes an **already-canonical** host and never canonicalises: the three sites
+  canonicalise their host once per call (`validate_url` at its top; the `/retrieve` pipeline once
+  where `domain` is derived, ahead of the resolver and the TTL helper; `/search` results arrive
+  canonical from spec 1 US-003), so a request's UTS-46 work is one encode per host plus one per
+  raw entry within the byte budget, never entries × results. An IP-literal-class host is
+  equality-only at every site. `idna` is already a direct dependency (spec 1 US-003's criterion;
+  `uv.lock` already resolves it as httpx's dependency, so no re-lock) — verify it is listed in
+  `pyproject.toml` `dependencies`; a criterion pins that exactly one IDNA call site exists across
+  the two files.
 - Add to `url_validator.py` (not a `_REVISION_SOURCES` member) beside `_check_hostname_blocklist`
   (today `:95`; spec 1 will have moved it): `normalize_domain_entries(entries: Sequence[str], *,
-  limit: int | None) -> tuple[list[str], int]` returning **canonical strings** (leading dot kept
-  for a wildcard entry) plus the dropped count, and `hostname_matches(host: str, entry: str, *,
-  allow_suffix: bool) -> bool`, which reads the leading-dot marker off `entry` itself. `DomainEntry`
+  denylist: bool, budget_bytes: int | None) -> tuple[list[str], int]` returning **canonical
+  strings** (leading dot kept for a wildcard allowlist entry; stripped on a denylist, where suffix
+  matching is unconditional) plus the dropped count; `hostname_matches(host: str, entry: str, *,
+  allow_suffix: bool) -> bool`, which reads the leading-dot marker off `entry` itself and applies
+  the suffix rule only to entries with two or more labels; `matched_entry(host: str, entries:
+  Sequence[str]) -> str | None` (the entry that matched under the allowlist rule, for US-007's
+  counter — the resolver's own return stays a bare tier string); and `domain_list_bytes(entries:
+  Sequence[str]) -> int` (the raw UTF-8 length of the entries joined by `\n`, measured before any
+  normalisation — the budget's unit). `DomainEntry`
   (`@dataclass(frozen=True, slots=True)`, `name: str`, `wildcard: bool`; the repo's idiom, no
   `NamedTuple`) is the normaliser's **internal** return and never crosses a function boundary: the
   request fields stay `list[str]`, `validate_url(blocked_domains: list[str] | None)`,
@@ -196,9 +227,14 @@ with no call-site change, because every one already passes lower-cased strings.
   `strip().lower()` over already-canonical strings (idempotent; the leading dot survives verbatim,
   a criterion asserts it), and pyright strict is satisfied with no ignore. Normalisation order:
   strip → remember and remove one leading dot → `canonicalize_host` → label/length rules → re-attach
-  the dot. `limit=None` means no count cap.
-- Matching: `hostname_matches(host, entry, allow_suffix=True)` is equal, or `host` ends with `"." +
-  entry_name`; denylist sites pass `allow_suffix=True` unconditionally; allowlist sites pass
+  the dot (allowlists). `budget_bytes=None` means no budget (config lists); with a budget, an
+  allowlist is consumed in order until the next raw entry would take the running byte total over
+  the budget, and everything from that entry on is dropped and counted; a denylist is never
+  truncated here — the handler measures it with `domain_list_bytes` and refuses the request before
+  calling (US-007, US-002).
+- Matching: `hostname_matches(host, entry, allow_suffix=True)` is equal, or — when `entry_name` has
+  two or more labels — `host` ends with `"." + entry_name`; a single-label entry is equal-only
+  whatever the flag; denylist sites pass `allow_suffix=True` unconditionally; allowlist sites pass
   `allow_suffix=entry.startswith(".")`. **The host is canonicalised before any list comparison and
   regardless of whether a list is configured**: `validate_url` canonicalises first, ahead of the
   `if blocked_domains:` block (`url_validator.py:143`), and an un-canonicalisable host raises the
@@ -206,7 +242,13 @@ with no call-site change, because every one already passes lower-cased strings.
   (`pipeline/orchestrator.py:268-284`) and stage 5 refuses on the hop
   (`pipeline/stage5_url_audit.py:144`) — the refusal never depends on an unrelated config value. On
   `/search` spec 1 US-002/US-003 already rejected such hosts. At the two allowlist sites an
-  un-canonicalisable host simply matches nothing.
+  un-canonicalisable host simply matches nothing. **Precedence change and its wire effect** (round
+  4): today the `blocked_domains` comparison runs before the private-name check
+  (`url_validator.py:143-149`); after this story the private-name check runs first, so a host that
+  is both denylisted and private-named (`blocked_domains: ["evil.local"]`, `https://evil.local/`)
+  maps to `private_ip` instead of `blocked_domain` (`pipeline/orchestrator.py:268-284`) — a value
+  swap between two existing 422 codes on one input shape, no shape change; the GOVERNANCE ruling
+  classifies it, the 1.3.0 docstring line announces it and a criterion pins it.
 - **The private-name list is not a domain list.** `_check_hostname_blocklist`
   (`url_validator.py:95-102`) keeps its own `==` / `endswith` check and runs unconditionally, before
   any list comparison, on the canonical host; it gains `".localhost"` beside `".local"` in
@@ -214,38 +256,56 @@ with no call-site change, because every one already passes lower-cased strings.
   bare host `local` stays allowed exactly as today. Spec 1 US-003's `is_blocklisted_hostname`
   wraps this same helper — do not route it through `hostname_matches`; the two-label minimum
   guards caller- and operator-supplied lists only, and a criterion pins that
-  `normalize_domain_entries` still rejects every single-label entry so the guard cannot be relaxed
-  to make a private-name test green.
+  `normalize_domain_entries` still rejects every single-label **allowlist** entry so the guard
+  cannot be relaxed to make a private-name test green (single-label denylist entries are accepted
+  exact-only and never reach this check).
 - Replace the three comparisons: `url_validator.py:145-146` (keep raising `BlockedDomainError`
   with the same message shape; `validate_url` runs on every redirect hop — `pipeline/stage5_url_audit.py:
   144` — so a hop onto `www.blocked.example` is now refused), `pipeline/orchestrator.py:1114`
-  (`blocked` still wins over `trusted` over `verified`; the resolver also returns **which entry
-  matched** so US-007 can count wildcard-caused trusted skips), `cache.py:176` (`min(1, ttl_hours)`
+  (`blocked` still wins over `trusted` over `verified`; the resolver's signature and bare-`str`
+  return are **unchanged** — US-007 finds the matching entry with the separate `matched_entry`
+  helper, called only when the tier resolved to `trusted` or `verified`; R8 corrected, round 4), `cache.py:176` (`min(1, ttl_hours)`
   unchanged). Each site keeps a `[e.lower() for e in entries]` pass over the strings it receives
   (interim; US-007 deletes it once the handler normalises — a criterion there). `cache.py` may
   import from `url_validator`; `url_validator.py` must not import `cache` or `pipeline.orchestrator`.
 - **Config-sourced lists are normalised once in the lifespan** (R8 corrected): after `_load_config`,
   run `seed_blocklist` (denylist) and `news_domains` (allowlist) through `normalize_domain_entries`
-  with `limit=None` — the operator's file is trusted input; the 64-entry cap is for caller lists —
+  with `budget_bytes=None` (`denylist=True` for `seed_blocklist`, `False` for `news_domains`) — the
+  operator's file is trusted input; the byte budget is for caller lists —
   write the canonical spellings back into the published config dict
   (`app.state.config["seed_blocklist"]` / `["news_domains"]`) so `pipeline/orchestrator.py:249` and
   `:262` keep reading them through the existing `config.get` with no signature change; log one
-  `logger.warning("config_invalid_value — key=%s dropped=%d", key, n)` per list **with drops**
-  (tokens in the message, never `extra=`, never an entry; a list with zero drops logs nothing).
+  `logger.warning("config_invalid_value — key=%s dropped=%d entries=%s", key, n, ",".join(dropped))`
+  per list **with drops** (tokens in the message, never `extra=`; the dropped entries **are named**
+  because they come from the operator's own mounted file, not from a caller — CLAUDE.md invariant 6
+  is about credential-bearing values, and a count with no entry is a WARNING nobody can act on; the
+  request path stays count-only; a list with zero drops logs nothing). **The shipped
+  `config.yaml`'s six `news_domains` entries are rewritten to the leading-dot form** (`.reuters.com`,
+  `.apnews.com`, `.bbc.co.uk`, `.nytimes.com`, `.theguardian.com`, `.cnn.com`) so the default
+  deployment gives `www.bbc.co.uk` the one-hour TTL the docs promise — the punch-list item this spec
+  cites is not closed by the matcher alone; `docs/configuration.md`'s `news_domains` row carries the
+  upgrade note (an operator's own bare entries stay exact; add the dot to cover subdomains).
   The per-request counters (US-007) do not tick for config entries. The raw config value stays
   untouched for `pipeline/sanitizer_revision.py:41`'s hash input.
 - Contract window (ruling 5, R36 — copy exactly): the three `RetrieveRequest` list descriptions
   (`models.py:249-257`) gain the rule ("bare entries match exactly; a leading dot covers the apex
   and every subdomain; `blocked_domains` always covers subdomains; an IP literal matches only
-  itself") **and, on `trusted_domains` and `verified_domains`, the consequence and the caution**:
-  a leading-dot `trusted_domains` entry skips injection classification for every host under that
-  suffix and must never name a multi-tenant or registry-level apex (`.co.uk`, `.github.io`,
-  `.s3.amazonaws.com`); `policy_suffix_trusted_skip` is the operator's signal for the form — a
-  criterion pins that text in `contract/openapi.yaml`. Append one `* ``1.3.0`` — …` docstring
+  itself") **and, on `trusted_domains` and `verified_domains`, each tier's own consequence and the
+  caution**: a leading-dot `trusted_domains` entry skips injection classification for every host
+  under that suffix; a leading-dot `verified_domains` entry makes every host under the suffix
+  **degrade open** when the classifier is unavailable — including under spec 2's
+  `promptguard_fail_closed_floor` and the load-triggered wait timeout of spec 2 US-006 (round 4,
+  security); neither may name a multi-tenant or registry-level apex (`.co.uk`, `.github.io`,
+  `.s3.amazonaws.com`); `policy_suffix_trusted_skip` counts a wildcard-caused resolution to either
+  tier and is the operator's signal for the form — a criterion asserts the caution text in **both**
+  exported descriptions. Append one `* ``1.3.0`` — …` docstring
   line to `pipeline/contract.py`'s `CONTRACT_VERSION` entry (read `:26-68` for the bullet shape);
   `uv run python -m scripts.export_contract`; re-create `tests/golden/contract_1_3_0.json` through
-  `tests/test_contract_schema.py::_SCHEMA_MODELS`; append the three descriptions to
-  `_EXPECTED_ONE_THREE_ZERO_DIFF`; refresh the four anchor-quoting pages
+  `tests/test_contract_schema.py::_SCHEMA_MODELS`; **nothing is appended to
+  `_EXPECTED_ONE_THREE_ZERO_DIFF`** — `_added_paths` (`tests/test_contract_schema.py:130`) reports
+  new properties and enum members only, and this story moves descriptions, so its gate is
+  `test_contract_schema_matches_golden` after the golden is re-created (R36 corrected, round 4);
+  refresh the four anchor-quoting pages
   `tests/test_governance_docs.py::_ANCHOR_QUOTING_PAGES` names; `--check` green.
 - GOVERNANCE recorded ruling (`contract/GOVERNANCE.md` "Recorded rulings"): name **Example 6
   ("expedited security changes", `:150-167`) explicitly** — the multi-label denylist widening is a
@@ -253,8 +313,12 @@ with no call-site change, because every one already passes lower-cased strings.
   ship (a leading-dot opt-in for denylists too) was considered and declined because it would leave
   `www.evil.com` unblocked for every existing entry, which is the bug; what stands in for step 2's
   compatibility window is the upgrade note in `docs/configuration.md` plus the Release-body line
-  spec 8 lifts; the single-label loosening is stated in the same ruling. Bare allowlist entries are
-  unchanged; the leading-dot form is additive. Use "the 1.3.0 window" for the version window
+  spec 8 lifts; there is **no** single-label loosening — single-label denylist entries keep exact-only matching,
+  so the ruling records a pure tightening (round 4); the same ruling classifies the
+  `blocked_domain` → `private_ip` precedence swap for a host that is both denylisted and
+  private-named (a value swap between two existing codes, no shape change) and records
+  `policy_domain_list_too_large` as a new closed reason on each route's existing 422 code (ruling
+  42). Bare allowlist entries are unchanged; the leading-dot form is additive. Use "the 1.3.0 window" for the version window
   everywhere in this spec and "compatibility window" only for Example 6's.
 - Rotation (ruling 6, R32): `pipeline/orchestrator.py` and `pipeline/contract.py` move. Read
   `kit_tools/arch/DECISIONS.md`'s rotation ADR as found — spec 1 US-001 may already have amended its
@@ -268,7 +332,8 @@ with no call-site change, because every one already passes lower-cased strings.
   if a sibling branch took the number first. Add a one-line comment above `hostname_matches`
   saying any change to its semantics must be paired with a rotation, because matching semantics
   are a cache-key input in substance.
-- Tests (R40): `tests/test_url_validator.py` (blocklist and `TestLocalhostAndLocal` `:193-218`),
+- Tests (R40): `tests/test_url_validator.py` (`TestBlockedDomains` `:226-260` and
+  `TestHostnameRejection` `:197` — the round-3 name `TestLocalhostAndLocal` never existed),
   `tests/test_stage5_url_audit.py::TestBlocklistDuringFetch` (`:173`, redirect hop), new direct
   unit tests for `_resolve_request_trust_tier` (none exist — `grep -rn _resolve_request_trust_tier
   tests/` is empty; nearest
@@ -286,19 +351,29 @@ with no call-site change, because every one already passes lower-cased strings.
   are excluded — the specs quote the old wording deliberately). Each states the two-direction rule
   with the `evil.com` / `www.evil.com` / `notevil.com` and `example.com` / `.example.com` examples;
   the `trusted_domains` / `verified_domains` rows carry the multi-tenant caution; the `seed_blocklist`
-  row and the `/retrieve` `blocked_domains` description carry an **upgrade note in both directions**
-  written so spec 8 can lift it (existing multi-label entries now cover subdomains — review apex
-  entries before upgrading, a multi-tenant apex in a denylist removes every tenant; **single-label
-  entries are no longer enforced** and must be rewritten before upgrading) and the sentence that
+  row and the `/retrieve` `blocked_domains` description carry an **upgrade note** written so spec 8
+  can lift it (existing multi-label entries now cover subdomains — review apex entries before
+  upgrading, a multi-tenant apex in a denylist removes every tenant; single-label entries keep
+  matching exactly as before); the `news_domains` row (`docs/configuration.md:435`) carries its own
+  note (bare entries stay exact; the shipped entries now carry the dot) and the sentence that
   the list is observable through `/search`'s `blocked_url` counts and `/retrieve`'s refusal
   message, so it is policy, not a secret. `kit_tools/docs/MONITORING.md` `### Startup lines you may
-  see` (`| Level | Line | When |`) gains a `WARNING` row whose Line cell names `config_invalid_value`;
+  see` (`| Level | Line | When |`) gains a `WARNING` row whose Line cell names `config_invalid_value`
+  (and says the domain-list form names the dropped entries);
   `kit_tools/arch/patterns/LOGGING.md`'s `retrieval_app` inventory line (`:45`) and its
   "Operator-facing misconfiguration at boot" bullet gain the marker (US-003 does the same for
   `config_unknown_key`).
 
 **Acceptance Criteria:**
-- [ ] `hostname_matches`, `normalize_domain_entries` and `DomainEntry` exist in `url_validator.py`;
+- [ ] Pre-flight (this is the first story in `execution_order`): before any other work, a check
+      asserts each assumed seam exists with the assumed shape — `canonicalize_host` importable from
+      `url_validator` and returning `CanonicalHost | HostRejection`; `pipeline.config_bounds.
+      bounded_float` and `bounded_int` importable; `contract.OMIT_BLOCKED_URL in OMISSION_REASONS`;
+      `tests/golden/contract_1_3_0.json` present; the operator-policy resolver locatable in
+      `retrieval_app.py` by `promptguard_threshold_ceiling`. A failing pre-flight stops the spec
+      (recorded in Implementation Notes) instead of surfacing in US-005.
+- [ ] `hostname_matches`, `normalize_domain_entries`, `matched_entry`, `domain_list_bytes` and
+      `DomainEntry` exist in `url_validator.py`;
       the three list sites call `hostname_matches` on canonical strings (`grep -c hostname_matches`
       ≥ 1 in `url_validator.py`, `pipeline/orchestrator.py` and `cache.py`); the three inline
       expressions are gone (`grep -n "lower_host in lower_blocked" url_validator.py`, `grep -n "in
@@ -315,8 +390,10 @@ with no call-site change, because every one already passes lower-cased strings.
       leading-dot allowlist entry; an IPv4 and an IPv6 literal host matching an identical entry and
       never a suffix-shaped one (`.2.3.4` is invalid; `1.2.3.4` vs `11.2.3.4` no match); and the
       rejected shapes `com`, `.com`, `""`, `bad..entry`, a 254-char entry, a non-encodable label —
-      each dropped and counted. A separate test asserts `normalize_domain_entries` rejects every
-      single-label entry (the private-name guard is closed by test).
+      each dropped and counted on an allowlist; on a denylist `com` and `intranet` are accepted
+      exact-only (`intranet` matches `intranet` and never `wiki.intranet`) and `.com`, `""`,
+      `bad..entry` are still dropped. A separate test asserts `normalize_domain_entries(...,
+      denylist=False)` rejects every single-label entry (the private-name guard is closed by test).
 - [ ] `validate_url("https://www.evil.com/x", blocked_domains=["evil.com"])` raises
       `BlockedDomainError`; `blocked_domains=["notevil.com"]` does not; a redirect hop onto
       `www.blocked.example` under `blocked.example` is refused
@@ -326,20 +403,26 @@ with no call-site change, because every one already passes lower-cased strings.
 - [ ] `https://localhost/`, `https://localhost./`, `https://anything.localhost/`,
       `https://printer.local/` and `https://deep.sub.myhost.local/` raise `PrivateIPError` at the
       hostname stage before DNS, with and without a blocklist; `https://local/` is unchanged
-      (allowed at the hostname stage); `TestLocalhostAndLocal` passes unchanged; `_BLOCKED_SUFFIXES`
-      contains `.localhost` and `.local` and is not read through `hostname_matches`.
+      (allowed at the hostname stage); `TestHostnameRejection` passes unchanged; `_BLOCKED_SUFFIXES`
+      contains `.localhost` and `.local` and is not read through `hostname_matches`; a host that is
+      both denylisted and private-named (`blocked_domains=["evil.local"]`, `https://evil.local/`)
+      raises `PrivateIPError`, so `/retrieve` maps it to `private_ip` (the precedence the
+      GOVERNANCE ruling records).
 - [ ] `_resolve_request_trust_tier("www.example.com", ["example.com"], [], [])` returns `"standard"`;
       with `[".example.com"]` it returns `"trusted"`; with `blocked_domains=["example.com"]` as well
       it returns `"blocked"`; `trusted_domains=["com"]` never reaches the resolver (rejected by the
       normaliser) and `a.com` is `"standard"`.
 - [ ] `_effective_ttl_hours(24, domain="www.bbc.co.uk", news_domains=["bbc.co.uk"])` returns `24`
       and with `[".bbc.co.uk"]` returns `1`; `["bbc.co.uk"]` with `domain="bbc.co.uk"` returns `1`.
-- [ ] Lifespan normalisation: `seed_blocklist: [" Evil.COM. ", "com", "intranet"]` and
-      `news_domains: ["BBC.co.uk", ".Example.ORG"]` publish `["evil.com"]` and `["bbc.co.uk",
-      ".example.org"]`; `www.evil.com` is refused on `/retrieve` and `bbc.co.uk` gets the one-hour
-      TTL; exactly one `config_invalid_value` WARNING for `seed_blocklist` naming the key and
-      `dropped=2`, none for `news_domains`, none containing entry text; a 70-entry `news_domains`
-      publishes all 70 valid entries; the shipped `config.yaml` logs no such WARNING.
+- [ ] Lifespan normalisation: `seed_blocklist: [" Evil.COM. ", "bad..entry", "intranet"]` and
+      `news_domains: ["BBC.co.uk", ".Example.ORG", "com"]` publish `["evil.com", "intranet"]` and
+      `["bbc.co.uk", ".example.org"]`; `www.evil.com` and `intranet` are refused on `/retrieve`,
+      `wiki.intranet` is not, and `bbc.co.uk` gets the one-hour TTL; exactly one
+      `config_invalid_value` WARNING per list naming the key, `dropped=1` and the dropped entry
+      (`bad..entry` / `com`); a 70-entry `news_domains` publishes all 70 valid entries; the shipped
+      `config.yaml` logs no such WARNING and its six `news_domains` entries carry the leading dot,
+      so `_effective_ttl_hours(24, domain="www.bbc.co.uk",
+      news_domains=app.state.config["news_domains"])` returns `1`.
 - [ ] `trusted_domains=["example.com"]` and `trusted_domains=[".example.com"]` produce different
       `cache_policy_fingerprint` values for the same URL (the marker reaches the fingerprint as a
       string), and two spellings of one entry (`"Example.COM "` / `"example.com"`) produce the same
@@ -352,18 +435,23 @@ with no call-site change, because every one already passes lower-cased strings.
       kit_tools/arch README.md` returns nothing (nine line sites at the start); the six files
       state the two-direction rule (`grep -c notevil.com` ≥ 1 in `docs/configuration.md`,
       `kit_tools/docs/API_GUIDE.md` and `kit_tools/arch/SECURITY.md`); the multi-tenant caution is on
-      the `trusted_domains` row; the `seed_blocklist` row carries the two-direction upgrade note
-      (subdomain widening; single-label entries no longer enforced) and the observability sentence;
-      MONITORING has the `config_invalid_value` row and LOGGING.md lists the marker.
+      the `trusted_domains` and `verified_domains` rows with each tier's consequence; the
+      `seed_blocklist` row carries the upgrade note (subdomain widening; single-label entries
+      unchanged) and the observability sentence; the `news_domains` row carries its note; MONITORING
+      has the `config_invalid_value` row and LOGGING.md lists the marker.
 - [ ] 1.3.0 window (R36): the docstring line for the three list descriptions is appended in the
       `* ``1.3.0`` — …` format; `uv run python -m scripts.export_contract` run;
-      `tests/golden/contract_1_3_0.json` re-created via `_SCHEMA_MODELS`; the three field descriptions
-      appended to `_EXPECTED_ONE_THREE_ZERO_DIFF` in `tests/test_contract_schema.py`; the four
-      anchor-quoting pages refreshed; `uv run python -m scripts.export_contract --check` green;
-      `tests/golden/contract_1_2_0.json` unchanged; `grep -c "multi-tenant" contract/openapi.yaml`
-      ≥ 1 and the `trusted_domains` description names `policy_suffix_trusted_skip`; the GOVERNANCE
-      recorded ruling names Example 6, the declined step-1 alternative, the upgrade note as the
-      step-2 window, and the single-label loosening.
+      `tests/golden/contract_1_3_0.json` re-created via `_SCHEMA_MODELS`; nothing appended to
+      `_EXPECTED_ONE_THREE_ZERO_DIFF` (a description-only move; `test_contract_schema_matches_golden`
+      is the gate — R36 corrected); the four anchor-quoting pages refreshed; `uv run python -m
+      scripts.export_contract --check` green; `tests/golden/contract_1_2_0.json` unchanged; a test
+      reads `contract/openapi.yaml` and asserts the multi-tenant caution appears in **both** the
+      `trusted_domains` and `verified_domains` descriptions, that the `trusted_domains` one says
+      classification is skipped, that the `verified_domains` one says the tier degrades open when
+      the classifier is unavailable, and that both name `policy_suffix_trusted_skip`; the
+      GOVERNANCE recorded ruling names Example 6, the declined step-1 alternative, the upgrade note
+      as the step-2 window, the absence of any single-label loosening, the `blocked_domain` →
+      `private_ip` precedence swap and the new `policy_domain_list_too_large` reason.
 - [ ] The `sanitizer_revision` rotation (`pipeline/orchestrator.py`, `pipeline/contract.py`) is
       measured by revert-and-reproduce and recorded at the five sites (`docs/bootstrap-notes.md`,
       `CLAUDE.md`, `kit_tools/arch/DECISIONS.md` table and preamble as found,
@@ -377,24 +465,30 @@ with no call-site change, because every one already passes lower-cased strings.
 **Priority:** P1
 
 **Description:** As a consumer, I want `/retrieve`'s three request lists normalised once in the
-handler under a written-down cap rule, and as an operator I want to see dropped entries and
+handler under a written-down byte budget, and as an operator I want to see dropped entries and
 wildcard-caused classifier skips on `/metrics`, so that a truncated or malformed list is observable
 and a leading-dot trust entry's blast radius is measurable rather than asserted. This story moves
 the normalisation the sites did inline (US-001's interim `.lower()`) into the handler and makes its
 drops observable.
 
 **Independent Test:** A `/retrieve` request whose `trusted_domains` holds 70 entries including `"com"`
-and `" .Example.COM. "` applies exactly 64 valid normalised entries and `/metrics`
-`retrieve.policy_invalid_domain_entry` advances by the dropped count (invalid plus over-cap), with
+and `" .Example.COM. "` applies every valid normalised entry (69 — no entry count is enforced) and
+`/metrics` `retrieve.policy_invalid_domain_entry` advances by one, with no 422; a `trusted_domains`
+list whose raw entries join to more than `policy_domain_entries_max_bytes` (64 KiB by default)
+applies the entries up to the budget boundary, counts the rest under the same counter, and returns
 no 422; a `/retrieve` request carrying 500 valid junk `blocked_domains` entries plus a
 `seed_blocklist` domain in config still refuses that domain (the operator list merges first and
-every one of the 500 is enforced); a request carrying 5,000 valid junk `blocked_domains` entries
-enforces the first 4,096, counts the remaining 904 under `retrieve.policy_invalid_domain_entry`, still
-refuses the operator's domain, and returns no 422; a `/retrieve` for `www.example.com` with
-`trusted_domains: [".example.com"]` and a loaded classifier reports `promptguard_state ==
-"skipped_trusted"` and advances `retrieve.policy_suffix_trusted_skip` by one, while
-`["www.example.com"]` advances it by zero; `/metrics` serves `search.policy_invalid_domain_entry` and
-`search.policy_suffix_trusted_skip` at `0` before US-002 lands.
+every one of the 500 is enforced); a `blocked_domains` list whose raw entries join to more than the
+budget is refused with 422 `content_too_large`, reason `policy_domain_list_too_large`, before any
+entry is encoded (a patched `canonicalize_host` records zero calls), and the `/metrics` retrieve
+error count for `content_too_large` advances (keyed on the code, as
+`test_metrics_retrieve_error_keys_on_error_code_not_reason` pins); a `/retrieve` for
+`www.example.com` with `trusted_domains: [".example.com"]` and a loaded classifier reports
+`promptguard_state == "skipped_trusted"` and advances `retrieve.policy_suffix_trusted_skip` by one,
+while `["www.example.com"]` advances it by zero, and `verified_domains: [".example.com"]` with the
+classifier unavailable advances it by one as well; `/metrics` serves
+`search.policy_invalid_domain_entry` and `search.policy_suffix_trusted_skip` at `0` before US-002
+lands.
 
 **Implementation Hints:**
 - `/retrieve`'s three lists (`models.py:249-257`) are normalised in the handler and reach the
@@ -405,16 +499,35 @@ refuses the operator's domain, and returns no 422; a `/retrieve` for `www.exampl
   config, sanitizer_revision)` (`pipeline/orchestrator.py:208-215`) and reads the lists off the
   request at `:248`, `:254-255` and `:363-364`; no new kwarg; `model_copy(update=)` does not
   validate, which is fine because the replacement values are `list[str]`.
-- Cap rule (R8 corrected, round 3): `trusted_domains` / `verified_domains` →
-  `normalize_domain_entries(entries, limit=64)`; `blocked_domains` → `limit=4096` — a **work bound**,
-  not a policy cap: `DocumentSizeLimitMiddleware` returns immediately for every path but `/extract`
-  (`retrieval_app.py:1041`), so `/retrieve` and `/search` accept bodies of any length and each entry
-  costs one UTS-46 encode plus one comparison per result or hop; entries past the bound are counted,
-  not enforced, and no 422 is raised (search-epic ruling 29). The merge in `run_retrieve_pipeline`
-  (`:247-252`) becomes operator-first: `seed_blocklist` (already canonical, US-001) then the caller's
-  list; the cap applies to the caller's list alone, so a criterion proves no caller entry can evict
-  an operator entry. Delete US-001's interim `[e.lower() for e in ...]` pass at the three sites in
-  the same story (a criterion greps for it).
+- Budget rule (R8 corrected, round 4; R44 — bounds on caller lists are **byte budgets, never entry
+  counts**): a new top-level `config.yaml` key `policy_domain_entries_max_bytes` (default 65536,
+  range 4 KiB – 1 MiB, read at boot beside `promptguard_threshold_from_config` through spec 2
+  US-001's `pipeline/config_bounds.bounded_int` with the same warn-and-fall-back treatment —
+  `config_invalid_value — key=policy_domain_entries_max_bytes`, default applied, never a boot
+  refusal — published on `app.state.policy_domain_entries_max_bytes`; registered in
+  `KNOWN_CONFIG_KEYS` by US-003; a `docs/configuration.md` top-level row here) bounds **each**
+  request list separately, measured with `domain_list_bytes` on the raw entries **before any
+  normalisation** — the reason it is a byte bound: `DocumentSizeLimitMiddleware` returns
+  immediately for every path but `/extract` (`retrieval_app.py:1041`), so `/retrieve` and `/search`
+  accept bodies of any length, and an entry count applied after normalisation would encode every
+  entry before dropping any. Allowlists (`trusted_domains`, `verified_domains`) →
+  `normalize_domain_entries(entries, denylist=False, budget_bytes=B)`: consumed in order up to the
+  budget boundary, the remainder dropped and counted (truncating an allowlist only narrows
+  privilege), no 422. Denylist (`blocked_domains`) → measured first; over budget → `raise
+  PipelineError(error="content_too_large", reason=POLICY_DOMAIN_LIST_TOO_LARGE, request_id=...)`
+  inside the handler's existing `try`, so the metrics recording path keys it on the code (the
+  `/search` handler's `POLICY_EXCLUDED_ALL_PROVIDERS` precedent, `retrieval_app.py:1801-1809`);
+  under budget → `normalize_domain_entries(entries, denylist=True, budget_bytes=None)` — a denylist
+  is **never partially enforced**. `POLICY_DOMAIN_LIST_TOO_LARGE = "policy_domain_list_too_large"`
+  is declared in `pipeline/contract.py` beside `POLICY_EXCLUDED_ALL_PROVIDERS` (`:318`) with a
+  docstring naming both routes' codes — `content_too_large` on `/retrieve` (the request's own bytes
+  are what is over a bound; its `RetrieveErrorCode` docstring gains that second raise site) and
+  `search_unavailable` on `/search` (whose "exactly two shapes" docstring becomes three) — declared
+  per route (ruling 42). The merge in `run_retrieve_pipeline` (`:247-252`) becomes operator-first:
+  `seed_blocklist` (already canonical, US-001) then the caller's list; the budget applies to the
+  caller's list alone, so a criterion proves no caller entry can evict an operator entry. Delete
+  US-001's interim `[e.lower() for e in ...]` pass at the three sites in the same story (a
+  criterion greps for it).
 - Counters: `SearchMetrics` (`retrieval_app.py:875`) and `RetrieveMetrics` (`:903`) are plain
   `__init__` counter classes, not dataclasses; each gains `policy_invalid_domain_entry` and
   `policy_suffix_trusted_skip`; `RetrieveMetricsResponse` (`:538`) and `SearchMetricsResponse`
@@ -427,29 +540,49 @@ refuses the operator's domain, and returns no 422; a `/retrieve` for `www.exampl
   increments `policy_invalid_domain_entry`; `search.policy_suffix_trusted_skip` stays `0` — `/search`
   has no trust tiers — and is documented as reserved for parity) so the `/metrics` document moves
   once for this concern.
-- `policy_suffix_trusted_skip` increments when `run_promptguard`'s trusted-tier skip was caused by a
-  wildcard (leading-dot) entry: US-001's `_resolve_request_trust_tier` returns the matching entry
-  string; the pipeline passes `entry.startswith(".")` into the metrics increment beside the existing
-  `promptguard_state` accounting. One counter conflates "invalid" and "over-cap" drops
-  deliberately: both narrow an allowlist (safe), and over-bound denylist entries are unenforced but
-  counted; say so in the MONITORING row and the TROUBLESHOOTING section.
+- `policy_suffix_trusted_skip` increments when the tier resolved to `trusted` **or** `verified`
+  through a wildcard (leading-dot) entry: the pipeline calls `matched_entry(domain,
+  request.trusted_domains)` (or `verified_domains`) only when `_resolve_request_trust_tier` returned
+  that tier — the resolver itself is untouched (R8 corrected, round 4) — and increments when the
+  returned entry starts with `.`, beside the existing `promptguard_state` accounting; the
+  `/metrics` description says it covers both tiers (a wildcard `verified` entry degrades open under
+  classifier unavailability, which is why it is counted). One counter conflates "invalid" and
+  "over-budget" allowlist drops deliberately: both only narrow an allowlist (safe), and a denylist
+  is never truncated — over budget it is refused, so nothing fail-open is left to separate; say so
+  in the MONITORING row and the TROUBLESHOOTING section.
 - Contract window (R36 — copy exactly): one `* ``1.3.0`` — …` docstring line for the four counters
-  (read `pipeline/contract.py:26-68` for the shape); `uv run python -m scripts.export_contract`;
-  re-create `tests/golden/contract_1_3_0.json` via `_SCHEMA_MODELS`; append the four counters to
-  `_EXPECTED_ONE_THREE_ZERO_DIFF`; refresh the four anchor-quoting pages; `--check` green.
+  and the new `policy_domain_list_too_large` reason on `/retrieve`'s `content_too_large` (read
+  `pipeline/contract.py:26-68` for the shape); `uv run python -m scripts.export_contract`;
+  re-create `tests/golden/contract_1_3_0.json` via `_SCHEMA_MODELS`; append the four counters (new
+  properties) to `_EXPECTED_ONE_THREE_ZERO_DIFF` — the reason string is not a schema path and is
+  not appended (R36 corrected); refresh the four anchor-quoting pages; `--check` green.
   MONITORING `### retrieve` and `### search` counter tables gain rows on the
   `policy_unknown_provider` row's shape (`:150`): per-entry unit (one increment per dropped entry,
-  not per request), the allowlist cap and the 4,096 denylist work bound as causes, the offending
-  entry never stored; the suffix-skip row states what it measures.
+  not per request), invalid entries and the allowlist byte budget as the two causes, the offending
+  entry never stored; the suffix-skip row states what it measures and that it covers both tiers.
+  `docs/configuration.md` gains the `policy_domain_entries_max_bytes` row (default, range, the
+  per-list unit, and that a denylist over budget is a 422 while an allowlist is truncated).
   `kit_tools/docs/TROUBLESHOOTING.md` gains a narrative `### policy_invalid_domain_entry` section
   (what makes it tick; the two causes; why the entry is not logged; the per-route difference —
-  `/retrieve` counts over-cap allowlist drops and over-bound denylist entries, `/search` only
-  invalid or over-bound denylist entries; what to check on the consumer side), matching the
-  treatment US-003 gives `config_unknown_key`.
+  `/retrieve` counts invalid and over-budget allowlist drops, `/search` counts invalid denylist
+  entries only; an over-budget denylist is a 422 with reason `policy_domain_list_too_large` on
+  either route, never a count; what to check on the consumer side), matching the treatment US-003
+  gives `config_unknown_key`.
 - Rotation (R32): `pipeline/orchestrator.py` (the merge order and the wildcard flag) and
   `pipeline/contract.py` (docstring line) move; record on the five-site protocol.
-- Tests (R40): `tests/test_app.py` `/retrieve` handler tests (`:1523`, `:1593`, `:1734` region);
-  `tests/test_contract_metrics.py`; `tests/test_orchestrator.py` trust-tier test at the name above.
+- Tests (R40): the four `/retrieve` handler tests in `tests/test_app.py` —
+  `test_metrics_retrieve_records_cache_hit_and_promptguard_state` (`:548`),
+  `..._records_blocked_by_reason_from_diagnostic` (`:583`),
+  `..._blocked_by_reason_unknown_diagnostic_buckets_to_other` (`:615`),
+  `..._error_keys_on_error_code_not_reason` (`:646`) — every one patches
+  `retrieval_app.run_retrieve_pipeline` with an `AsyncMock`, so the "lists reach the pipeline as
+  canonical strings, normalised once" assertion reads the request object off `mock.call_args` (the
+  round-3 anchors `:1523`, `:1593`, `:1734` were a `/health` Valkey test, a `_select_cache_storage`
+  test and a lifespan test — corrected in round 4); the end-to-end cases (500 caller entries plus a
+  `seed_blocklist` domain still refusing; the budget refusal's 422 body) belong in
+  `tests/test_orchestrator.py`, which drives `run_retrieve_pipeline` for real with `_SAMPLE_CONFIG`
+  (`:702-708`), and in `tests/test_app.py` for the handler-raised 422; `tests/test_contract_metrics.py`;
+  `tests/test_orchestrator.py` trust-tier test at the name above.
 
 **Acceptance Criteria:**
 - [ ] The `/retrieve` handler contains exactly one `body.model_copy(update=...)` call, carrying the
@@ -457,24 +590,37 @@ refuses the operator's domain, and returns no 422; a `/retrieve` for `www.exampl
       the handler function's source, not a whole-file `grep -c`); the pipeline never normalises;
       `grep -n "e.lower() for e in" url_validator.py pipeline/orchestrator.py cache.py` returns
       nothing (US-001's interim pass is gone).
-- [ ] 70 `trusted_domains` entries → 64 valid normalised entries applied, `retrieve.policy_invalid_domain_entry`
-      advanced by the dropped count, no 422; the same for `verified_domains`.
+- [ ] 70 `trusted_domains` entries including `"com"` → 69 valid normalised entries applied (no entry
+      count), `retrieve.policy_invalid_domain_entry` advanced by one, no 422; an allowlist over
+      `policy_domain_entries_max_bytes` → entries up to the budget boundary applied, the remainder
+      counted, no 422; the same for `verified_domains`; `grep -n "budget_bytes=" retrieval_app.py`
+      shows the two allowlist calls and `grep -rn "limit=64\|limit=4096" retrieval_app.py pipeline
+      url_validator.py` returns nothing.
 - [ ] 500 valid junk `blocked_domains` plus a config `seed_blocklist` domain → the seed domain is
-      refused and all 500 caller entries are enforced; 5,000 valid junk entries → the first 4,096
-      enforced, 904 counted, the seed domain still refused, no 422 (`grep -n "limit=4096"
-      retrieval_app.py` shows the denylist call); the merge in `pipeline/orchestrator.py` lists the
-      operator entries first.
-- [ ] `retrieve.policy_suffix_trusted_skip` advances by one for a wildcard-caused trusted skip and by
-      zero for an exact-entry skip; `promptguard_state` is `skipped_trusted` in both.
+      refused and all 500 caller entries are enforced; a `blocked_domains` list over the budget →
+      422 `content_too_large` with reason `policy_domain_list_too_large`, raised before any entry is
+      canonicalised (a patched `canonicalize_host` records zero calls) and recorded on `/metrics`
+      under the code; `POLICY_DOMAIN_LIST_TOO_LARGE` lives in `pipeline/contract.py` and
+      `content_too_large`'s docstring names the second raise site; the merge in
+      `pipeline/orchestrator.py` lists the operator entries first; `policy_domain_entries_max_bytes`
+      is read at boot with `bounded_int`, a malformed value warns (`config_invalid_value`) and falls
+      back to 65536, and the shipped `config.yaml` carries the key.
+- [ ] `retrieve.policy_suffix_trusted_skip` advances by one for a wildcard-caused trusted skip, by
+      one for a wildcard-caused `verified` resolution, and by zero for an exact-entry match of
+      either tier; `promptguard_state` is `skipped_trusted` for both trusted cases;
+      `_resolve_request_trust_tier`'s signature and `str` return are unchanged and `matched_entry`
+      is called only on the trusted/verified branches (a `standard` resolution never calls it).
 - [ ] All four counters exist on the counter classes, the response models and the handler dicts;
       `test_an_unmodeled_counter_fails_loudly` and `test_served_metrics_are_the_handlers_dict_serialized`
       pass; `GET /metrics` serves the `search.*` pair at `0`.
-- [ ] MONITORING has the four rows with the per-entry unit, the cap and the work bound;
-      TROUBLESHOOTING has the `### policy_invalid_domain_entry` section with the two causes and the
-      per-route difference.
+- [ ] MONITORING has the four rows with the per-entry unit and the two causes;
+      `docs/configuration.md` has the `policy_domain_entries_max_bytes` row; TROUBLESHOOTING has the
+      `### policy_invalid_domain_entry` section with the two causes, the per-route difference and
+      the 422 sentence.
 - [ ] 1.3.0 window (R36): docstring line appended; `uv run python -m scripts.export_contract` run;
       `tests/golden/contract_1_3_0.json` re-created via `_SCHEMA_MODELS`; the four counters appended
-      to `_EXPECTED_ONE_THREE_ZERO_DIFF`; the four anchor-quoting pages refreshed; `--check` green;
+      to `_EXPECTED_ONE_THREE_ZERO_DIFF` (the new reason is announced in the docstring line and not
+      appended — R36 corrected); the four anchor-quoting pages refreshed; `--check` green;
       `contract_1_2_0.json` unchanged.
 - [ ] The `sanitizer_revision` rotation (`pipeline/orchestrator.py`, `pipeline/contract.py`) is
       measured and recorded at the five sites.
@@ -506,9 +652,15 @@ equal the committed pre-story baseline's.
 **Implementation Hints:**
 - `SearchRequest.blocked_domains: list[str] = Field(default_factory=list, ...)` beside
   `providers`. **No pydantic `pattern`, `max_length` or item validation** — a FastAPI 422 would echo
-  the caller's bytes (search-epic ruling 29). The handler runs `normalize_domain_entries(...,
-  limit=4096)` (US-007's denylist work bound; canonical strings out) and increments
-  `SearchMetrics.policy_invalid_domain_entry` by the dropped count.
+  the caller's bytes (search-epic ruling 29). The handler measures the list with `domain_list_bytes`
+  against `app.state.policy_domain_entries_max_bytes` (US-007's budget) and, over budget, raises
+  `PipelineError(error="search_unavailable", reason=POLICY_DOMAIN_LIST_TOO_LARGE, ...)` inside the
+  same `try` as the `POLICY_EXCLUDED_ALL_PROVIDERS` raise (`retrieval_app.py:1801-1809`), before
+  any entry is encoded; under budget it runs `normalize_domain_entries(..., denylist=True,
+  budget_bytes=None)` (canonical strings out) and increments
+  `SearchMetrics.policy_invalid_domain_entry` by the dropped count. `pipeline/contract.py`'s
+  `POLICY_EXCLUDED_ALL_PROVIDERS` docstring ("exactly two shapes", `:319-325`) becomes three
+  shapes, naming the new literal.
 - Merge the operator list first: `run_search_pipeline` already receives `config=`
   (`retrieval_app.py:1815`, signature `pipeline/orchestrator.py:781`); read the canonical
   `config.get("seed_blocklist", [])` (US-001 normalised it at boot), then the request list, into
@@ -516,7 +668,8 @@ equal the committed pre-story baseline's.
   (canonical strings, R8 corrected). No caller entry can evict an operator entry (criterion).
 - In the per-result loop, immediately after `_canonicalize_search_url` yields `domain` (already
   canonical from spec 1 US-003 — do not re-canonicalise) and after spec 1's audit, test
-  `any(hostname_matches(domain, e, allow_suffix=True) for e in effective_blocklist)` and omit with
+  `any(hostname_matches(domain, e, allow_suffix=True) for e in effective_blocklist)` (`domain` is
+  canonical and encoded once; `hostname_matches` never encodes) and omit with
   `contract.OMIT_BLOCKED_URL` (spec 1 US-004's token; assert `OMISSION_REASONS` carries it before
   starting) through the reason channel spec 1 US-002 added to the canonicaliser's return.
   Sufficiency for fallback is judged on raw provider results before this omission (search-epic
@@ -562,11 +715,13 @@ equal the committed pre-story baseline's.
 
 **Acceptance Criteria:**
 - [ ] `SearchRequest.blocked_domains` exists, defaults to `[]`, carries no pydantic validation; a
-      test sends 70 entries including `" BLOCKED.example. "` and `"com"` and asserts the match
-      fires, `search.policy_invalid_domain_entry` advances by the dropped count (one, for `com`), and
+      test sends 70 entries including `" BLOCKED.example. "`, `"com"` and `"bad..entry"` and asserts
+      the match fires, `com` is applied exact-only (a result on `com` itself is omitted, one on
+      `a.com` is not), `search.policy_invalid_domain_entry` advances by one (for `bad..entry`), and
       no 422 occurs; 500 valid caller entries plus a `seed_blocklist` domain still omit the seed
-      domain; 5,000 valid caller entries enforce the first 4,096, count 904, and still omit the seed
-      domain.
+      domain; a list over `policy_domain_entries_max_bytes` → 422 `search_unavailable` with reason
+      `policy_domain_list_too_large`, raised before any entry is encoded, and the seed domain is
+      never partially enforced.
 - [ ] A result whose `domain` matches a request entry or a `seed_blocklist` entry is omitted with
       `blocked_url`, counted in `omitted_by_reason`, after URL canonicalisation and before stage 2/3;
       `fallback_fired` is `False` and the paid fake's `calls == []`; each omission logs one INFO
@@ -650,7 +805,15 @@ table carries a `promptguard_threshold` row and its response table an
   **Never refuses boot** (R10 corrected: a value that boots today must still boot). Publish the
   validated default on `app.state.promptguard_threshold_default`; the resolver never re-reads
   `config`. The raw config value is left in place, so `/extract`'s guard and
-  `pipeline/sanitizer_revision.py:41`'s hash input are unchanged. Log the resolved default once at
+  `pipeline/sanitizer_revision.py:41`'s hash input are unchanged. **The `/extract` divergence is
+  documented, not closed** (round 4): `/extract`'s own read (`retrieval_app.py:1702-1704`,
+  `float(...)` then the `0.0 <= threshold <= 1.0` guard) turns a YAML boolean `true` into `1.0`,
+  which passes its range check — so after this story `promptguard_threshold: true` warns and
+  resolves to `0.85` on `/retrieve` and `/search` while `/extract` classifies at `1.0`; ruling R10
+  keeps `/extract` out of the resolver, so the divergence is pinned by a test and stated in
+  `docs/configuration.md`'s `promptguard_threshold` row (the three routes read the key differently,
+  and which reading each gets) and in `kit_tools/docs/GOTCHAS.md` (a YAML boolean disables blocking
+  on `/extract` only); closing it is an open question. Log the resolved default once at
   boot at **INFO**, `promptguard_threshold_resolved — value=%s` (not a credential); it joins
   MONITORING's "Dropped (INFO)" line and LOGGING.md's inventory (a criterion), and the
   `config_invalid_value` marker joins LOGGING.md's `retrieval_app` inventory line and its
@@ -715,8 +878,12 @@ table carries a `promptguard_threshold` row and its response table an
       files); the GOVERNANCE ruling recorded.
 - [ ] `kit_tools/docs/API_GUIDE.md`'s `/search` request table has the `promptguard_threshold` row
       and its response table the `effective_promptguard_threshold` row.
-- [ ] `docs/configuration.md`'s `promptguard_threshold` row carries the two-direction upgrade note
-      and names `promptguard_threshold_ceiling` as the bound.
+- [ ] `docs/configuration.md`'s `promptguard_threshold` row carries the two-direction upgrade note,
+      names `promptguard_threshold_ceiling` as the bound and states the three-route reading.
+- [ ] A test pins the `/extract` divergence as known-and-unchanged: `promptguard_threshold: true`
+      boots with one `config_invalid_value` WARNING, resolves to `0.85` on `/retrieve` and
+      `/search`, and still reaches `/extract`'s `float()` coercion at `1.0`;
+      `kit_tools/docs/GOTCHAS.md` states it.
 - [ ] The `sanitizer_revision` rotation is measured and recorded on the five-site protocol.
 - [ ] Tests written/updated for new functionality.
 - [ ] Full test suite passes (`uv run pytest`).
@@ -735,8 +902,11 @@ to return the shipped config plus `promtguard_threshold: "SENTINEL-VALUE"`, `ext
 {max_pagse: 1}` and `retrieve: {max_promptguard_chnuks: 1}`, the lifespan starts, `caplog` holds
 exactly three WARNING records whose `getMessage()` contains `config_unknown_key` and the offending
 dotted key, `SENTINEL-VALUE` appears nowhere in `caplog.text`, and `/health` is unaffected; a
-top-level YAML list, and a `cache: "yes"` block value, each start the service with no
-`config_unknown_key` WARNING and no exception; a docs-parity test asserts `KNOWN_CONFIG_KEYS`
+**unit test on `_warn_unknown_config_keys` alone** (never a boot) shows a top-level YAML list, a
+scalar, and a config whose `cache:` value is `"yes"` each return `[]`, log no `config_unknown_key`
+record and raise nothing — booting with such a document is unchanged and still refuses through the
+block's own reader (`cache.py:275`, `pipeline/extraction_limits.py:105`; R8 corrected, round 4); a
+docs-parity test asserts `KNOWN_CONFIG_KEYS`
 equals the first-column keys of every `config.yaml` table `docs/configuration.md` carries
 (discovered by heading) and is a superset of the shipped `config.yaml`'s keys; an AST sweep asserts
 every string-literal key the readers pass to `config.get(...)` / `config[...]` is in the registry.
@@ -745,7 +915,7 @@ every string-literal key the readers pass to `config.get(...)` / `config[...]` i
 - `KNOWN_CONFIG_KEYS: frozenset[str]` of dotted names next to `_load_config` (`retrieval_app.py:329`).
   Members: every top-level key (`user_agents`, `news_domains`, `seed_blocklist`,
   `promptguard_threshold`, `promptguard_fail_closed_floor`, `promptguard_threshold_ceiling`,
-  `search_brave_*`, `extract_route_enabled`, …), every bare block name (`cache`, `extraction`,
+  `policy_domain_entries_max_bytes` (US-007), `search_brave_*`, `extract_route_enabled`, …), every bare block name (`cache`, `extraction`,
   `retrieve` — spec 2's block — and any later one), and the dotted leaves the readers consume
   (`cache_settings_from_config` `cache.py:~267`, `extraction_settings_from_config`
   `pipeline/extraction_limits.py:98-151`, `brave_settings_from_config`
@@ -762,15 +932,19 @@ every string-literal key the readers pass to `config.get(...)` / `config[...]` i
   (`kit_tools/arch/patterns/LOGGING.md`); call it in the lifespan right after `_load_config`. Never
   raise, never exit. A known key with a bad *value* still refuses boot through its reader's typed
   error (`ExtractionConfigurationError`, `CacheConfigurationError`) — except the keys this epic
-  made warn-and-fall-back (`promptguard_threshold`, the two domain lists); the docs paragraph
-  states that split.
+  made warn-and-fall-back (`promptguard_threshold`, `policy_domain_entries_max_bytes`, the two
+  domain lists); the docs paragraph states that split.
 - Docs-parity test in `tests/test_contract_metrics.py` (the module `kit_tools/testing/
   TESTING_GUIDE.md:279` maps `docs/configuration.md` to; it already holds `_CONFIGURATION_DOC`
   (`:59`) and `_posture_section()` (`:379`)); the section slicer and cell reader today live as
   private helpers in `tests/test_governance_docs.py` (`_section` `:128`, fence-aware, `startswith`
-  + exactly-one-heading assert; `_cells` `:158`) and no test module imports a sibling test module
-  (`grep '^from tests' tests/*.py` hits only `tests.fakes` / `tests.conftest`) — move both into a
-  new `tests/docs_helpers.py` as public `section` / `cells` and import them from both modules.
+  + exactly-one-heading assert; `_cells` `:158`) — **borrow them by the repo's own precedent**
+  rather than moving them: `tests/test_contract_smoke.py:146` does a function-scoped `from
+  tests.test_contract_schema import _SCHEMA_MODELS` inside the test that needs it, with a docstring
+  arguing the single-source point; do the same here (`from tests.test_governance_docs import
+  _section, _cells` inside the parity test, docstring citing that precedent). The round-3 plan to
+  extract both into a `tests/docs_helpers.py` is dropped (round 4): it rewrote 20 call sites in a
+  module that is itself a contract guard, for no gain the precedent does not already give.
   Discover the tables under `## `config.yaml``: `### Top-level keys` plus every heading matching
   ``### The `<name>:` block`` (quote headings **with their backticks** — today `### The `cache:`
   block` at `:445` and `### The `extraction:` block` at `:471`; spec 2 adds `retrieve:`); **first
@@ -782,8 +956,11 @@ every string-literal key the readers pass to `config.get(...)` / `config[...]` i
   vocabulary — this one must follow aliases). Walk the AST of `retrieval_app.py`, `cache.py`,
   `pipeline/extraction_limits.py`, `pipeline/search_providers/brave.py`, `pipeline/orchestrator.py`,
   `pipeline/sanitizer_revision.py`, spec 2's retrieve reader and `pipeline/config_bounds.py`
-  (spec 2 US-001). The real call shapes (R8 corrected, round 3): (a) `config.get("<key>", …)` /
-  `config["<key>"]` on the top-level mapping — literal at argument 0; (b) the bounded helpers take
+  (spec 2 US-001). The real call shapes (R8 corrected, rounds 3–4): (a) `config.get("<key>", …)` /
+  `config["<key>"]` where the receiver is a bare `config` **or an attribute chain whose last
+  attribute is `config`** (`request.app.state.config.get("promptguard_threshold", 0.85)` at
+  `retrieval_app.py:1703`, `app.state.config[...]` in the lifespan — normalise the receiver by its
+  trailing name, never require a `Name` node) — literal at argument 0; (b) the bounded helpers take
   the **mapping as argument 0 and the key literal as argument 1**: `_bounded_int(cache_config,
   "max_entries", …)` (`cache.py:244-250`, `:279-291`), `_bounded_int(extraction_config,
   "max_input_bytes", …)` (`pipeline/extraction_limits.py:78-85`, `:111-151`), `_bounded_float(config,
@@ -794,10 +971,13 @@ every string-literal key the readers pass to `config.get(...)` / `config[...]` i
   every literal read through such a local with `<block>.`; reads through the top-level `config`
   stay bare (`brave_settings_from_config` passes `config` straight through, so its keys are
   top-level). Assert the collected set is a subset of `KNOWN_CONFIG_KEYS`, **and** that the sweep
-  found at least the twelve non-test read sites counted today (`retrieval_app.py:1703`,
-  `cache.py:259`, `:274`, `pipeline/orchestrator.py:249`, `:262`, `:307`, `brave.py:215`, `:237`,
-  `sanitizer_revision.py:41`, `extraction_limits.py:88`, `:100`, `:104` — four of which read a
-  variable key and are skipped by name) and at least one dotted leaf per registered block, so an
+  found at least the **eight** literal-key shape-(a) read sites counted today
+  (`retrieval_app.py:1703`, `cache.py:274`, `pipeline/orchestrator.py:249`, `:262`, `:307`,
+  `sanitizer_revision.py:41`, `extraction_limits.py:100`, `:104`; the four variable-key sites
+  `cache.py:259`, `brave.py:215`, `:237`, `extraction_limits.py:88` are a named skip list and never
+  count — round 3 wrote "twelve" against a list of which four were skipped, an arithmetically
+  unsatisfiable floor) plus at least one shape-(b) site per bounded reader and at least one dotted
+  leaf per registered block, so an
   empty or broken walk goes red; a companion test plants an unregistered `config.get("planted_key")`
   read in a temporary module and asserts the sweep reports it.
 - Docs: `docs/configuration.md` gains a paragraph under `## `config.yaml`` stating the WARNING, that
@@ -812,22 +992,26 @@ every string-literal key the readers pass to `config.get(...)` / `config[...]` i
 
 **Acceptance Criteria:**
 - [ ] `KNOWN_CONFIG_KEYS` is a frozenset of dotted key names (plus the bare block names, `retrieve`
-      included) in `retrieval_app.py`; a test asserts it is a superset of every key in the shipped
-      `config.yaml`.
+      included, and `policy_domain_entries_max_bytes`) in `retrieval_app.py`; a test asserts it is a
+      superset of every key in the shipped `config.yaml`.
 - [ ] The docs-parity test discovers every `config.yaml` table by heading (backticks verbatim),
       asserts each slice is non-empty, and asserts `KNOWN_CONFIG_KEYS` equals the union of their
       first-column keys with the prefixing rule (a key without a row, or a row without a key, is
       red).
 - [ ] The AST sweep over the reader modules reads the key from the bounded helpers' second argument,
-      prefixes leaves read through a block-local mapping with the block name, asserts every literal
-      config key read is in the registry, asserts it found ≥ twelve read sites and ≥ one dotted leaf
-      per registered block, and reports a planted unregistered key.
+      prefixes leaves read through a block-local mapping with the block name, matches the
+      attribute-chain receiver shape, asserts every literal config key read is in the registry,
+      asserts it found ≥ eight literal-key read sites (the named list, with the four variable-key
+      sites in a named skip list), ≥ one shape-(b) site per bounded reader and ≥ one dotted leaf per
+      registered block, and reports a planted unregistered key.
 - [ ] Booting with an unknown top-level key, an unknown `extraction.` key and an unknown `retrieve.`
       key logs exactly one WARNING per key whose `getMessage()` contains `config_unknown_key` and the
       dotted key and never the value; the service starts; `/health` status is unchanged.
-- [ ] Booting with a `config.yaml` whose top level is a list or a scalar, or whose `cache:` value
-      is not a mapping, starts the service, logs no `config_unknown_key` record and raises nothing
-      from `_warn_unknown_config_keys`.
+- [ ] `_warn_unknown_config_keys` called directly with a list, a scalar, and a mapping whose
+      `cache:` value is not a mapping returns `[]`, logs no `config_unknown_key` record and raises
+      nothing (a unit test on the function — never a boot: the readers' typed refusals for a
+      non-mapping block are unchanged, and a test asserts `cache: "yes"` still refuses boot with
+      `CacheConfigurationError`).
 - [ ] Booting with the shipped `config.yaml` logs no `config_unknown_key` record.
 - [ ] `docs/configuration.md`'s `## `config.yaml`` section states the warn-and-ignore rule and the
       bad-value split; MONITORING's startup-lines table has the `WARNING` / `config_unknown_key`
@@ -871,7 +1055,12 @@ set in one copy makes it fail twice.
   `docs/configuration.md`. Wrap each Markdown copy in HTML comment fences
   `<!-- boundary-text:start -->` / `<!-- boundary-text:end -->` and slice between them; the test
   asserts exactly one fenced region per file (zero or two is red), the way
-  `tests/test_governance_docs.py::_section` asserts exactly one heading.
+  `tests/test_governance_docs.py::_section` asserts exactly one heading. **Placement per file**
+  (round 4): in `kit_tools/docs/API_GUIDE.md` and `docs/configuration.md` the fences wrap the
+  boundary paragraph; in `README.md` the copy is two rows of the HTTP-surface GFM table (`:58-59`),
+  and an HTML comment on its own line inside a table body terminates the table — so the README
+  fences wrap the **whole** table (the slice carries extra rows, harmless for a name-presence
+  assertion). A fence line must never land between two rows of a table.
 - After US-002 and US-005 the sets are: `/retrieve`-only `cache_ttl_hours`, `extract_mode`,
   `trusted_domains`, `verified_domains`; `/search`-only `allow_paid_fallback`, `num_results`,
   `providers`; shared `blocked_domains`, `promptguard_threshold`, `promptguard_fail_closed` —
@@ -936,10 +1125,12 @@ and the same for `kit_tools/arch/SERVICE_MAP.md` each return at least `1`; the f
 - Allowlist entry `example.com`, host `www.example.com` → no match (bare entries stay exact);
   entry `.example.com` → match; entry `.example.com`, host `example.com` → match (apex included).
   US-001.
-- Entry `com`, `.com`, `co` — fewer than two labels after the leading dot is removed → rejected by
-  the normaliser (request lists: counted; config lists: one boot WARNING); `co.uk` bare matches only
-  the host `co.uk`; `.co.uk` is a deliberate operator opt-in covering every `.co.uk` host (the docs
-  caution names this). US-001.
+- Allowlist entry `com`, `.com`, `co` — fewer than two labels after the leading dot is removed →
+  rejected by the normaliser (request lists: counted; config lists: one boot WARNING naming it);
+  denylist entry `com` or `intranet` → accepted, exact-only (`intranet` blocks `intranet`, never
+  `wiki.intranet`); `co.uk` bare on an allowlist matches only the host `co.uk`, on a denylist every
+  `.co.uk` host; `.co.uk` on an allowlist is a deliberate operator opt-in (the docs caution names
+  this). US-001.
 - Empty, whitespace-only, `bad..entry` (caught on the split labels, not by the encode step),
   254-character, or non-IDNA-encodable entry → rejected; never a 422. US-001, US-007, US-002.
 - Host `straße.de` versus entry `xn--strae-oqa.de` (and the reverse), `münchen.de` versus
@@ -952,8 +1143,16 @@ and the same for `kit_tools/arch/SERVICE_MAP.md` each return at least `1`; the f
 - An IP-literal host (`1.2.3.4`, `2001:db8::1`) matches an entry only by equality at every site;
   `.2.3.4` is an invalid entry. US-001.
 - A single-label denylist entry (`seed_blocklist: ["intranet"]`, `blocked_domains: ["wiki"]`) matched
-  exactly today and is dropped after this spec (config: one boot WARNING; request: counted) — the
-  upgrade note states it. US-001, US-007.
+  exactly today and still does — exact-only, never suffix-widened; no upgrade note is needed for
+  it. US-001, US-007.
+- A host that is both denylisted and private-named (`blocked_domains: ["evil.local"]`,
+  `https://evil.local/`) → `private_ip`, not `blocked_domain` (the private-name check now runs
+  first; classified in the GOVERNANCE ruling). US-001.
+- `verified_domains: [".example.com"]` with the classifier unavailable → every host under the suffix
+  is served unscanned (VERIFIED degrades open, including under the operator floor);
+  `policy_suffix_trusted_skip` += 1; the exported description says so. US-001, US-007.
+- Shipped `config.yaml` after this spec: the `news_domains` entries carry the leading dot, so
+  `www.reuters.com` gets the one-hour TTL. US-001.
 - An un-canonicalisable fetch host with **no** blocklist configured → still refused by `validate_url`
   (canonicalisation precedes the `if blocked_domains:` block). US-001.
 - A host on both `blocked_domains` and `trusted_domains` → `blocked` (existing precedence). US-001.
@@ -962,11 +1161,13 @@ and the same for `kit_tools/arch/SERVICE_MAP.md` each return at least `1`; the f
 - Config `seed_blocklist: [" Evil.COM. "]` / `news_domains: ["BBC.co.uk"]` → normalised at boot;
   still match; an invalid config entry → dropped with one `config_invalid_value` WARNING per list
   (count, never text). US-001.
-- More than 64 entries in a **request allowlist** → the first 64 valid entries apply; the rest are
-  counted under `policy_invalid_domain_entry`; no 422; the operator's `news_domains` has no count
-  cap. A caller denylist of any length up to 4,096 → every valid entry applies; beyond 4,096 the
-  rest are counted, not enforced; the operator's list is merged first and can never be evicted.
-  US-007 (`/retrieve`), US-002 (`/search`).
+- A **request allowlist** whose raw entries exceed `policy_domain_entries_max_bytes` → the entries
+  up to the budget boundary apply; the rest are counted under `policy_invalid_domain_entry`; no
+  422; no entry count is ever enforced (R44); the operator's `news_domains` has no budget. A caller
+  denylist under the budget → every valid entry applies; over the budget → 422 with reason
+  `policy_domain_list_too_large` before any entry is encoded, never partial enforcement; the
+  operator's list is merged first and can never be evicted. US-007 (`/retrieve`), US-002
+  (`/search`).
 - `trusted_domains=[".example.com"]` and `["example.com"]` for the same URL → different cache keys
   (the marker reaches the fingerprint). US-001.
 - A wildcard-caused trusted skip → `promptguard_state == "skipped_trusted"` and
@@ -981,8 +1182,9 @@ and the same for `kit_tools/arch/SERVICE_MAP.md` each return at least `1`; the f
   guard is unchanged and still reachable. US-005.
 - Unknown key inside `cache:`, `extraction:` or `retrieve:` → dotted WARNING; an unknown top-level
   block → one WARNING for the block name, its children not walked; a registered block whose value is
-  not a mapping → skipped, no WARNING, no exception; a top-level list or scalar → no walk, no
-  WARNING, no exception. US-003.
+  not a mapping → the helper skips it (no WARNING, no exception) and the block's own reader still
+  refuses boot; a top-level list or scalar → the helper returns `[]` with no WARNING and no
+  exception (the boot outcome for such a document is unchanged and not this story's). US-003.
 - A knob added to one request model without prose in every copy, or a shared knob attributed to one
   route → US-004's guard is red; a file with zero or two fenced regions → red. US-004.
 
@@ -1003,13 +1205,19 @@ and the same for `kit_tools/arch/SERVICE_MAP.md` each return at least `1`; the f
 - The fail-closed floor, the threshold ceiling's `/retrieve` half and `effective_promptguard_fail_closed`
   (spec 2 US-005, ruling R10); this spec adds only the `/search` half of the ceiling.
 - The resource-envelope keys (spec 6) and contiguity keys (spec 7) — they register themselves.
+- Any entry-count cap on a caller list (R44); the byte budget is the only bound.
+- Rejecting a YAML boolean in `/extract`'s own `promptguard_threshold` read (R10: `/extract` is
+  untouched; the divergence is documented and an open question).
+- Making boot survive a non-mapping `config.yaml` document or block (the readers' typed refusals
+  are the documented posture).
 
 ## Assumptions
 
 - Spec 1 US-004 opened the 1.3.0 window and added `OMIT_BLOCKED_URL = "blocked_url"` to
   `pipeline/contract.py`'s `OMISSION_REASONS`; spec 1 US-002 added a reason channel to
   `_canonicalize_search_url`'s return; spec 1 US-003 landed the public host canonicaliser in
-  `url_validator.py` and the `search_url_blocked host_class=` log line; spec 2 **US-005** added
+  `url_validator.py` (`canonicalize_host(host) -> CanonicalHost | HostRejection`, non-raising —
+  R27 corrected) and the `search_url_blocked host_class=` log line; spec 2 **US-005** added
   `promptguard_fail_closed_floor`, `promptguard_threshold_ceiling`, the operator-policy resolver in
   `retrieval_app.py` (R24: `body.model_copy(update={...})`) and the `/retrieve` `effective_*`
   fields; spec 2 added the `config.yaml` `retrieve:` block.
@@ -1017,12 +1225,12 @@ and the same for `kit_tools/arch/SERVICE_MAP.md` each return at least `1`; the f
   client that never sends them sees no change **provided** its `config.yaml` carries the shipped
   `promptguard_threshold: 0.85` (an operator who tuned it sees the documented upgrade effect in
   either direction).
-- Hosts reaching `hostname_matches` on `/search` are already canonical (spec 1 US-003); on
-  `/retrieve` they come from `urlsplit().hostname` and the helper canonicalises them with the same
-  function — idempotent on canonical input.
+- Hosts reaching `hostname_matches` are always already canonical: on `/search` from spec 1 US-003;
+  on `/retrieve` the pipeline canonicalises `urlsplit().hostname` once where `domain` is derived,
+  and `validate_url` canonicalises once at its top — the matcher never encodes.
 - The three settings readers stay `.get(key, default)`-shaped; the registry is asserted beside
   them, not woven into them.
-- `/retrieve`'s request lists and `/search`'s share one normaliser and one cap rule; the
+- `/retrieve`'s request lists and `/search`'s share one normaliser and one byte-budget rule; the
   `providers` normaliser in `pipeline/search_providers/policy.py:35` (`_MAX_POLICY_ENTRIES = 8` at
   `:17`; no trailing-dot or IDNA rule) is a different function and stays separate.
 - `idna` is already installed (httpx's dependency, `uv.lock`); listing it in `pyproject.toml` adds
@@ -1061,6 +1269,24 @@ and the same for `kit_tools/arch/SERVICE_MAP.md` each return at least `1`; the f
   `sanitizer_revision`, so a semantics change is invalidated by the rotation and a wildcard entry
   never shares a key with a bare one. The comment above `hostname_matches` says any later semantics
   change must be paired with a rotation.
+- **Work bound (round 4).** The UTS-46 cost of a request is bounded twice: the host is encoded once
+  per call site (never inside `hostname_matches`), and the raw bytes of each request list are
+  measured against `policy_domain_entries_max_bytes` before any entry is encoded — so the encode
+  work a caller can buy is at most the budget per list, and a `/search` with 20 results against a
+  64 KiB denylist costs 20 host encodes plus one pass over the entries, not entries × results. The
+  round-3 claim that a 4,096-entry count closed the amplification was wrong on both counts (the
+  host was re-encoded per comparison and the count was applied after normalisation); the budget
+  replaces it.
+- **Reason precedence in `validate_url`.** Private-name check first, then the denylist: a host that
+  is both maps to `private_ip`. The GOVERNANCE ruling classifies the swap; it is a value change
+  between two existing 422 codes on one input shape and carries no shape change.
+- **Generated files at merge.** Every window story in this epic regenerates `contract/openapi.yaml`,
+  re-derives `contract/openapi.yaml.sha256` and re-creates `tests/golden/contract_1_3_0.json`, and
+  specs 1, 2 and 4–8 do the same to the same three files. On any merge that conflicts in one of
+  them, take neither side: re-run `uv run python -m scripts.export_contract` and re-create the
+  golden from `_SCHEMA_MODELS` on the merged tree, then `--check`. A hand-resolved `.sha256` is a
+  silently wrong trust anchor (CLAUDE.md invariant 4), which is why the three files are named here
+  on the same footing as the rotation ordinal.
 - **Threshold resolution and the cache key.** The resolver runs in the handler before anything
   reaches the cache; `None` never reaches `cache_policy_fingerprint`; the ceiling clamps the config
   default as well as a caller's value.
@@ -1103,9 +1329,10 @@ this spec exists to end.
 matcher-local IDNA rule — rejected in round 2.
 **Source:** explorer report 2026-09-19, item 4; WA-E punch list; validation rounds 1–2.
 
-**Decision:** Suffix matching is unconditional for denylists and opt-in (leading dot) for
-allowlists (ruling R8); config lists are normalised once at boot; denylists are uncapped and
-operator-first.
+**Decision:** Suffix matching is unconditional for multi-label denylist entries and opt-in (leading
+dot) for allowlists (ruling R8); single-label denylist entries are exact-only; config lists are
+normalised once at boot; denylists are never truncated and operator-first; caller lists are bounded
+by bytes, never by count (round 4).
 **Rationale:** `trusted` skips stage 3 entirely (`pipeline/stage3_promptguard.py:77-88`); a uniform
 suffix rule would let `trusted_domains: ["com"]` disable the classifier. Today's inline lower-casing
 at the comparison sites is what keeps mixed-case config entries matching; once the sites stop
@@ -1150,6 +1377,13 @@ ship it.
   `/search` half of the operator ceiling and `effective_promptguard_threshold` on `SearchResponse`
   moved here from spec 2 (the field it depends on is added here).
 - The WA-E engine-duplication item was dropped from code work (ruling 11).
+- Validation round 4 (R8 corrected, R44): the 64-entry allowlist cap and the 4,096-entry denylist
+  work bound were replaced by one byte budget per list (`policy_domain_entries_max_bytes`) with
+  truncation for allowlists and a 422 refusal (`policy_domain_list_too_large`) for denylists;
+  single-label denylist entries are kept exact-only, deleting the upgrade loosening; the
+  `tests/docs_helpers.py` extraction was dropped for the sibling-import precedent; the shipped
+  `news_domains` entries are rewritten to the leading-dot form; `matched_entry` and
+  `domain_list_bytes` were added so the resolver's signature really is unchanged.
 
 ### Decisions Made
 
@@ -1185,10 +1419,9 @@ ship it.
   them all with no signature change).
 - Round 3: the operator's `news_domains` carries no count cap (`limit=None`) — the 64-cap is a
   guard on caller input, and a `config_invalid_value` line about six well-formed domains would have
-  been a misleading token; over-bound *caller* denylist entries (past 4,096) are counted under
-  `policy_invalid_domain_entry` and never enforced, closing the CPU amplification the security
-  review measured on the uncapped, body-unbounded `/search` and `/retrieve` routes without
-  evicting an operator entry (a deviation from R8's "uncapped in count", recorded for the wrapper).
+  been a misleading token; over-bound *caller* denylist entries (past 4,096) were counted under
+  `policy_invalid_domain_entry` and never enforced — **superseded in round 4** by the byte budget
+  and the refusal (below): the count neither bounded the work nor kept the denylist honest.
 - Round 3: `validate_url` canonicalises the host before any list comparison, so an un-canonicalisable
   host is refused with or without a blocklist (the security behaviour no longer depends on an
   unrelated config value).
@@ -1209,6 +1442,43 @@ ship it.
   and the counter are this epic's guard).
 - The baseline fixture is narrowed to five fields, moved under `tests/fixtures/search/` and given a
   README section, because whole-response equality would go red on every later window story.
+- Round 4 (R8 corrected): single-label denylist entries are exact-only — the two-label minimum
+  guards privilege grants, and over-matching a denylist only narrows access, so nothing needs the
+  guard on that side; the salty engineer's Example 6 step-4 reading was correct and is closed by
+  removing the loosening rather than classifying it.
+- Round 4 (R8 corrected, R44): bounds on caller lists are byte budgets measured before
+  normalisation. A denylist over budget is refused, never partially enforced — the security review
+  was right that "counted, not enforced" was fail-open and that the round-2 "moot, denylists are
+  uncapped" overruling had gone stale; the count-only 422 it asked for is exactly what ships, with
+  a closed reason and no echo of caller bytes. `content_too_large` is the `/retrieve` code (the
+  request's own bytes are over a bound; `blocked_domain` was declined because a consumer maps it
+  to "the site is blocked"); `search_unavailable` is the `/search` code on the
+  `POLICY_EXCLUDED_ALL_PROVIDERS` precedent.
+- Round 4: the config-list WARNING names the dropped entries. CLAUDE.md invariant 6 protects
+  credential-bearing values; `seed_blocklist` and `news_domains` are hostnames from the operator's
+  own mounted file, and a count with no entry is a WARNING nobody can act on. The request path
+  stays count-only (caller bytes). This narrows R8's "never an entry" to caller input — recorded
+  for the wrapper.
+- Round 4: `news_domains` stays an allowlist (exact by default, R8) — its blast radius is only a
+  shorter TTL, but one matcher rule per direction is the point of the spec; the shipped entries are
+  rewritten with the dot so the default deployment gets the documented TTL, and the Overview no
+  longer presents the punch-list item as fixed by matching alone.
+- Round 4: the private-name check runs before the denylist; the `blocked_domain` → `private_ip`
+  swap for a host that is both is classified in the GOVERNANCE ruling rather than avoided by
+  keeping the old order (canonicalisation must precede both anyway, and `private_ip` is the more
+  specific refusal).
+- Round 4 (R36 corrected): US-001 and US-004 move descriptions only and append nothing to
+  `_EXPECTED_ONE_THREE_ZERO_DIFF`; US-007, US-002 and US-005 add properties and do; the new 422
+  reason is announced in a docstring line and never appended.
+- Round 4 (R43): the AST sweep's floor is eight literal-key sites with a named skip list and a
+  third receiver shape; every grep in this spec names its path set and was run before its expected
+  count was written.
+- Overruled (round 4, ruling 37): the salty engineer's US-003 → US-003a/b/c split — no further
+  splits; the story shrank instead (the helper extraction is gone, the sweep's floor is arithmetic
+  that can pass).
+- Overruled (round 4, R10): rejecting a YAML boolean in `/extract`'s own read — `/extract` is
+  untouched; the divergence is pinned by test, documented in two places and recorded as an open
+  question.
 
 ## Clarifications
 
@@ -1256,8 +1526,27 @@ ship it.
   `DomainEntry` never leaves the normaliser.
 - Q: Does the two-label minimum apply to `localhost` / `.local`? → A: No — that list is not a domain
   list; it keeps its own check, which gains `.localhost`.
-- Q: Is a caller's denylist really unbounded? → A: Enforced up to 4,096 entries, counted beyond;
-  the operator's entries are never evicted.
+- Q: Is a caller's denylist really unbounded? → A: (Round 3) Enforced up to 4,096 entries, counted
+  beyond — superseded in round 4 by the byte budget and the refusal; the operator's entries are
+  never evicted.
+
+### Session 2026-09-19 (validation round 4)
+- Rulings applied: R8 corrected (the resolver's return is unchanged and `matched_entry` is a
+  separate helper; single-label denylist entries are exact-only; the caller-list bound is a byte
+  budget with truncation for allowlists and a 422 refusal for denylists; `verified_domains`
+  wildcard consequence documented and counted; US-003's malformed-config criterion scoped to the
+  function), R27 corrected (the `CanonicalHost | HostRejection` contract), R36 corrected
+  (description-only window stories append nothing), R43 (greps scoped and executed), R44 (no
+  entry-count caps), and the round-4 per-spec directives (test anchors and the
+  `TestHostnameRejection` name fixed; the `/extract` boolean divergence documented).
+- Q: Why is a too-large denylist a 422 when a too-large allowlist is truncated? → A: Truncating an
+  allowlist only narrows privilege; truncating a denylist would silently fail open, so it is
+  refused with a closed reason and no echo of caller bytes.
+- Q: Which 422 code carries `policy_domain_list_too_large`? → A: `content_too_large` on `/retrieve`
+  and `search_unavailable` on `/search` — each route's existing code, declared per route (ruling
+  42); no new code, no shape change.
+- Q: Does a single-label denylist entry still match after the spec? → A: Yes, exactly as today
+  (exact-only); only multi-label denylist entries gain subdomain coverage.
 
 ## Open Questions
 
@@ -1269,3 +1558,8 @@ ship it.
 - [ ] Whether a shipped list of multi-tenant apexes should refuse leading-dot allowlist entries
       outright (non-blocking; the two-label rule, the docs caution and `policy_suffix_trusted_skip`
       are the guard for this epic; the corpus epic is the natural owner if the counter shows use).
+- [ ] Whether `/extract`'s own `promptguard_threshold` read should reject a YAML boolean the way
+      the bounded readers do (non-blocking; R10 keeps `/extract` untouched in this epic, and the
+      divergence is pinned by test and documented).
+- [ ] Whether `policy_suffix_trusted_skip` should be renamed now that it also counts wildcard
+      `verified` resolutions (non-blocking; the description says what it counts).

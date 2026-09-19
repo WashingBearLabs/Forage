@@ -27,8 +27,12 @@ updated: 2026-09-19
 > reported on the response.
 > Context: holistic review WA-D (`/retrieve` vs `/extract` hardening asymmetry); epic rulings 3, 5,
 > 6 and validation-round rulings R10, R16, R22, R23 (corrected in round 3: route-aware status,
-> pipeline-side Protocol, bodies released before the wait, characters-only budget), R24, R32, R33,
-> R34, R36–R42 are binding here.
+> pipeline-side Protocol, bodies released before the wait, characters-only budget; corrected again
+> in round 4: the controller is used as it is — constructor and handoff unchanged, no timer around
+> its acquisition, `AdmissionSlot` with `async def release` — `build_retrieved_content` untouched,
+> a lazily created 0700 spool directory, no cache write on a fail-open wait timeout, the
+> `suspicious` description corrected), R24, R32, R33, R34, R36 (corrected in round 4: only added
+> fields and enum members enter the diff set), R37–R43 are binding here.
 > Execution order is declared in the frontmatter: the semaphore story (US-006) runs second because
 > US-002 and US-003 build on the signature and sink it finishes.
 
@@ -70,30 +74,44 @@ when left implicit:
   `content_too_large` code and a new closed reason `promptguard_budget`. Honestly stated: today
   `/retrieve` passes no budget, so an over-budget page is classified in full and served; after
   US-001 it is refused. That is a new refusal condition on an accepting route. Its governance
-  lane is written down, not waved off: `contract/GOVERNANCE.md`'s worked example 6 (`:150-167`)
-  requires a security tightening to ship as an expedited MINOR with a stated compatibility window
-  or to be a MAJOR. This one is an expedited MINOR whose compatibility mechanism is the knob
-  (`retrieve.max_promptguard_chunks` up to 1024 ≈ 1.8 M characters) and whose window is
-  explicitly **none**, for a reason the story records: the refused class — a page whose extracted
-  text exceeds the classification budget — is a resource-exhaustion vector of the same kind the
-  existing 10 MiB `content_too_large` refusal already closes, pages above the knob's ceiling
-  cannot be served safely under any configuration, and keeping the old behaviour available would
-  keep the vector open; the docstring line announces it (ruling (b)'s announcement obligation
-  covers `promptguard_budget`, `busy` and `extraction_failed` — each story appends its own line
-  and spec 8 US-002's record is the owner of the whole).
+  lane is written down, not waved off, and reconciled with the text it cites: `contract/
+  GOVERNANCE.md`'s worked example 6 (`:150-167`) requires a security tightening to ship as an
+  expedited MINOR with a **stated** compatibility window (step 2: at minimum one further minor
+  release; "it will change soon" is not a window) or, if it cannot be fixed compatibly, to be a
+  MAJOR (step 4). This one is an expedited MINOR whose compatibility mechanism **and window** is
+  the knob: `retrieve.max_promptguard_chunks` (up to 1024 ≈ 1.8 M characters) keeps every page
+  served today servable, and the key is guaranteed through at least contract 1.4.0 — a window
+  with a named end, satisfying step 2. Step 4's MAJOR lane does not apply because the fix *is*
+  compatible through the knob. What moves without a window is the **default**, for three reasons
+  the story records: the refused class — a page whose extracted text exceeds the classification
+  budget — is a resource-exhaustion vector of the same kind the existing 10 MiB
+  `content_too_large` refusal already closes; pages above the knob's ceiling cannot be served
+  safely under any configuration; and shipping the pre-check disabled by default would keep the
+  vector open on every deployment that never reads the release note. The round-3 sentence "whose
+  window is explicitly none" is withdrawn as contradicting step 2. The docstring line announces it
+  (ruling (b)'s announcement obligation covers `promptguard_budget`, `busy` and
+  `extraction_failed` — each story appends its own line and spec 8 US-002's record is the owner of
+  the whole).
 - **Parity by reuse: the controller, never the middleware (R23, corrected in round 3).**
   `ExtractionAdmissionController` (`retrieval_app.py:939-1007`) is a plain, path-free, status-free
   class that bounds active slots, queue depth and conservatively reserved queued bytes and counts
   saturation; every objection the first draft raised — path gating, the `route_enabled` 404, the
   429 — belongs to `ExtractionAdmissionMiddleware` (`:1080-1126`), a different class. `/retrieve`
-  gets a **second controller instance** built from a `retrieve:` config block, acquired **before
-  the fetch** with a bounded wait, released at the end of stage 1 **together with the fetched
-  body**, and a refused admission is a 422 `busy` — the same closed literal `/extract` emits as a
-  429. Two things round 3 pinned: the pipeline sees the controller only through a pipeline-side
-  `AdmissionSlot` Protocol (`pipeline/` never imports `retrieval_app`; `SearchMetricsSink` is the
-  precedent), and the app-wide `pipeline_error_handler` (`retrieval_app.py:1411-1426`) picks 429
-  for `busy` by *code alone* today (`:1424`), so it becomes route-aware — `/extract` keeps 429,
-  `/retrieve` answers 422 — with both halves tested (R42).
+  gets a **second controller instance** built from a `retrieve:` config block through an adapter
+  (the constructor's `(settings, metrics)` shape and the eight existing construction sites are
+  untouched — R23 corrected in round 4), acquired **before the fetch** exactly as the controller
+  is written — no `asyncio.timeout` around `acquire()`: its bounded queue depth and reserved
+  queued bytes are the backpressure, a full queue refuses at once, and a timer would leak a slot,
+  because `release()`'s handoff (`retrieval_app.py:1000-1007`) pops a waiter and returns without
+  decrementing `_active`, so a waiter cancelled after its grant takes the slot with it — released
+  at the end of stage 1 **together with the fetched body**, and a refused admission is a 422 `busy`
+  — the same closed literal `/extract` emits as a 429. Two things round 3 pinned: the pipeline sees
+  the controller only through a pipeline-side `AdmissionSlot` Protocol (`async def acquire() ->
+  bool` / `async def release() -> None` — `release` is a coroutine today, `retrieval_app.py:998`;
+  `pipeline/` never imports `retrieval_app`; `SearchMetricsSink` is the precedent), and the
+  app-wide `pipeline_error_handler` (`retrieval_app.py:1411-1426`) picks 429 for `busy` by *code
+  alone* today (`:1424`), so it becomes route-aware — `/extract` keeps 429, `/retrieve` answers
+  422 — with both halves tested (R42).
 - **Three gates, three scopes.** The admission slot covers the fetch and stage 1 (HTML extraction or
   the PDF worker). The classification semaphore covers **stage 3 only**: `sanitize_and_structure`
   takes it as a parameter and acquires it around `run_promptguard`; the `/extract` file route keeps
@@ -140,13 +158,26 @@ when left implicit:
 
 Wire changes in the 1.3.0 window from this spec: the `promptguard_budget` reason (US-001);
 `retrieve.classification_wait_timeouts` and `search.classification_wait_timeouts` (US-006);
-`retrieve.semaphore_saturation`, `retrieve.busy_rejections` and `busy` on `/retrieve` (422, reasons
-`admission_queue_full` / `admission_wait_timeout`) (US-002); `extraction_failed` on `/retrieve`
-with its reasons (US-003); `CacheMetrics.corrupt_entries` (US-004);
-`effective_promptguard_fail_closed` on `RetrievedContent` and `SearchResponse`, and
-`effective_promptguard_threshold` on `RetrievedContent` (US-005). Every one follows the R36 block
-(docstring line, regenerate, golden via `_SCHEMA_MODELS`, `_EXPECTED_ONE_THREE_ZERO_DIFF`, anchor
-pages, `--check`). The golden was created by spec 1 US-004; this spec runs after it per `depends_on`.
+`retrieve.semaphore_saturation`, `retrieve.busy_rejections` and `busy` on `/retrieve` (422, reason
+`admission_queue_full`) (US-002); `extraction_failed` on `/retrieve` with its reasons (US-003);
+`CacheMetrics.corrupt_entries` (US-004); `effective_promptguard_fail_closed` on `RetrievedContent`
+and `SearchResponse`, and `effective_promptguard_threshold` on `RetrievedContent` (US-005). Every
+one follows the R36 block (docstring line, regenerate, golden via `_SCHEMA_MODELS`, anchor pages,
+`--check`), and each block says which half of R36 (corrected) applies: `_added_paths`
+(`tests/test_contract_schema.py:130`) sees new `properties` keys and new `enum` members of the six
+`_SCHEMA_MODELS` only, so the `busy` and `extraction_failed` enum members
+(`Pipeline422ErrorResponse.error[enum]=<code>`) and US-005's three fields append their paths to
+`_EXPECTED_ONE_THREE_ZERO_DIFF`, while every `/metrics` counter (the `*MetricsResponse` models are
+not in `_SCHEMA_MODELS` — verified), every reason string and every description rewrite appends
+**nothing** and is gated by `export_contract --check`, the two `/metrics` order guards
+(`tests/test_contract_metrics.py:135`, `:161`) or `test_contract_schema_matches_golden`. One more
+consequence stated up front: `Pipeline422ErrorCode` is `Literal[RetrieveErrorCode,
+SearchErrorCode]` (`pipeline/contract.py:280-283`) and `Pipeline422ErrorResponse` is the declared
+422 body of both `/retrieve` (`retrieval_app.py:1568`) and `/search` (`:1772`), so `busy` and
+`extraction_failed` widen the `/search` 422 enum in `contract/openapi.yaml` as well — one diff
+path covers both routes — and the field's description (`:723`, which enumerates codes per route)
+is rewritten by US-002 and US-003 to say the two new codes arrive on `/retrieve` only. The golden
+was created by spec 1 US-004; this spec runs after it per `depends_on`.
 
 ## Goals
 
@@ -160,15 +191,21 @@ pages, `--check`). The golden was created by spec 1 US-004; this spec runs after
   and stays unguarded); the permit count is identical before and after an over-budget refusal, a raised
   classifier, a timed-out wait and a cancellation; a waiter that exceeds `promptguard_wait_seconds`
   follows its route's classifier-unavailable branch under the effective fail-closed policy and is
-  counted once per request; a cache hit never waits; with no classifier loaded nothing is acquired.
+  counted once per request; a cache hit never waits; with no classifier loaded nothing is acquired;
+  a trusted-tier request acquires nothing (`run_promptguard` returns `skip_reason="trusted_tier"`
+  before any inference, `pipeline/stage3_promptguard.py:77-88`); a body served unscanned because
+  the wait expired is never written to the content cache.
 - During a slow fetched-page extraction (fake extractor blocking for 2 s), five sequential `/health`
   requests each complete in under 1 s (the shape of `tests/test_app.py::
   test_health_answers_while_the_fetch_is_in_flight`); at most `retrieve.fetch_concurrency` fetched
   bodies are alive during fetch and stage 1 and **none** while a request waits on classification
   (the body reference is dropped with the slot; a waiter holds at most the extracted text), a
-  queued `/retrieve` holds no body, a request beyond the bounded queue is refused 422 `busy` within
-  one event-loop turn, and a queued request that outlives `retrieve.admission_wait_seconds` is
-  refused 422 `busy` / `admission_wait_timeout` — no wait in this spec is unbounded.
+  queued `/retrieve` holds no body, and a request beyond the bounded queue (depth or reserved
+  bytes) is refused 422 `busy` / `admission_queue_full` within one event-loop turn. Every wait in
+  this spec is bounded: the classification wait by the `promptguard_wait_seconds` timer, the
+  admission queue by construction — at most `admission_queue_depth / fetch_concurrency` slot
+  holds ahead of a waiter, each hold bounded by the 30 s fetch timeout plus stage 1 (the PDF
+  worker's wall clock; HTML extraction by the 10 MB cap) — not by a timer (R23 corrected).
 - A fetched PDF is parsed in the spawned worker under the same `child_cpu_seconds` /
   `child_address_space_bytes` / `wall_clock_seconds` limits as an uploaded one, from a 0600 temp
   file in the named spool directory that is gone on every exit path; every fetched-PDF failure
@@ -211,15 +248,20 @@ was computed against the tree; there is no byte-limb case — see Decisions Made
 - New un-hashed module `pipeline/retrieve_limits.py` with a frozen `RetrieveSettings` dataclass and
   `retrieve_settings_from_config(config) -> RetrieveSettings`, modelled on
   `pipeline/extraction_limits.py` (`:48-58` dataclass, `:98-151` reader, `:100-102` the top-level-key
-  read precedent). Keys, all in a new `config.yaml` `retrieve:` block: `max_promptguard_chunks` (default 256, range 1–1024), `fetch_concurrency` (default **1**, range
-  1–8; consumed by US-002 — default 1 until spec 6 sizes it, because a fetched PDF spawns the same
-  pypdf worker `/extract` does, so the worker population is `extraction.extraction_concurrency +
-  retrieve.fetch_concurrency` against a memory reservation written for one worker), `admission_queue_depth`
+  read precedent). Keys, all in a new `config.yaml` `retrieve:` block: `max_promptguard_chunks`
+  (default 256, range 1–1024), `fetch_concurrency` (default **1**, range **1–1** — pinned exactly
+  as `extraction.extraction_concurrency` is (`pipeline/extraction_limits.py:153-166`;
+  `docs/configuration.md:488`: the memory reservation assumes exactly one worker), because a
+  fetched PDF spawns the same worker `/extract` does under the same
+  `child_address_space_bytes` rlimit, so N fetch slots would put N × 384 MiB of worker address
+  space in a 1 GiB container — the constraint is worker address space, not fetched-body size;
+  spec 6 widens the range when it sizes the envelope; consumed by US-002), `admission_queue_depth`
   (default 4, range 0–16; US-002), `max_queued_fetch_bytes` (default 31457280 = 3 ×
   `DEFAULT_MAX_CONTENT_BYTES`, range 10485760–167772160 (16 ×); US-002 — the default is deliberately
   **not** `admission_queue_depth × 10 MB`, so the byte bound binds before the depth bound at the
-  shipped defaults and both bounds are exercisable), `admission_wait_seconds` (float, default
-  `30.0`, range 0.05–300.0; US-002). Plus two top-level keys read by the same function because it
+  shipped defaults and both bounds are exercisable). There is no `admission_wait_seconds`: the
+  admission queue is bounded by its depth and bytes and by the slot hold, not by a timer (R23
+  corrected; US-002 says why). Plus two top-level keys read by the same function because it
   owns the boot-validated fetch-route policy (US-005 wires them; US-001 only reads and stores them
   at their defaults): `promptguard_fail_closed_floor` (bool, default `false`) and
   `promptguard_threshold_ceiling` (float, 0.0–1.0, default `1.0`), and one top-level key for both
@@ -227,8 +269,10 @@ was computed against the tree; there is no byte-limb case — see Decisions Made
   0.05–300.0 — a float so `sanitize_and_structure`'s `classification_wait_seconds: float | None`
   and US-006's sub-second test values are in range). Ranges: the `extraction:` block is bounded
   at its defaults on every key but two because its memory reservation assumes exactly one worker
-  (`pipeline/extraction_limits.py:153-166`); the `retrieve:` keys are deliberately raisable
-  (fetched bodies are 10 MB, not 50 MiB, and spec 6 owns sizing) — say so in the table preamble.
+  (`pipeline/extraction_limits.py:153-166`); of the `retrieve:` keys, `fetch_concurrency` is pinned
+  for the same worker reason and the other three are raisable (they bound queued and classified
+  text, which the 10 MB fetch cap already bounds per body; spec 6 owns sizing) — say so in the
+  table preamble.
   Bound checking: there is no bounded-float helper in the repo and two private `_bounded_int`
   copies already exist (`pipeline/extraction_limits.py:79-96`, `cache.py:244-264`) — add
   `pipeline/config_bounds.py` with `bounded_int` and `bounded_float` taking the exception class as a
@@ -253,9 +297,14 @@ was computed against the tree; there is no byte-limb case — see Decisions Made
   `extraction_settings: ExtractionSettings`. Required, exactly as `run_extract_pipeline_from_file`
   (`:485-500`) — a defaulted parameter would be the second, unbounded limits path this spec exists
   to prevent. `AdmissionSlot` is a consumer-side `Protocol` declared in `pipeline/orchestrator.py`
-  beside `SearchMetricsSink` (`:747-757`) — `async def acquire(self) -> bool` / `def release(self)
-  -> None` — which `retrieval_app.ExtractionAdmissionController` (`:939-1006`; its `acquire()` /
-  `release()` are already exactly that shape and status-free) satisfies structurally. **`pipeline/`
+  beside `SearchMetricsSink` (`:747-757`) — `async def acquire(self) -> bool` / `async def
+  release(self) -> None` — which `retrieval_app.ExtractionAdmissionController` satisfies
+  structurally **without edits**: `:972` is `async def acquire(self) -> bool` and `:998` is `async
+  def release(self) -> None`, awaited at `retrieval_app.py:1124`, `tests/test_app.py:456`, `:458`
+  and `tests/test_contract_errors.py:464` (verified; round 3's text calling `release` synchronous
+  is withdrawn — pyright strict rejects a `Coroutine`-returning member against a `-> None`
+  Protocol, and a sync-typed call site would leak the slot on every request). The release site in
+  `run_retrieve_pipeline` is `await admission.release()` inside `finally`. **`pipeline/`
   never imports `retrieval_app`**: `retrieval_app.py:65` imports the pipeline, nothing under
   `pipeline/` imports back (`grep -rn "retrieval_app" pipeline/` finds only `contract.py`'s
   docstring prose), and `SearchMetricsSink`'s docstring ("neither module imports the other") and
@@ -298,20 +347,36 @@ was computed against the tree; there is no byte-limb case — see Decisions Made
 - Governance note for the docstring line: "`/retrieve` 422 `content_too_large` gains the reason
   `promptguard_budget`; a fetched page over `retrieve.max_promptguard_chunks` (default 256) is now
   refused rather than classified in full — an expedited security tightening (GOVERNANCE worked
-  example 6) shipped with no compatibility window; operators who need larger pages raise the key
+  example 6) whose compatibility window is the knob itself: `retrieve.max_promptguard_chunks`
+  stays available through at least contract 1.4.0, and operators who need larger pages raise it
   (up to 1024)". Record the classification in `contract/GOVERNANCE.md`'s recorded rulings as the
-  epic's ruling for new refusal conditions on accepting routes, stating the three reasons the
-  Overview gives for choosing the expedited-MINOR lane over a MAJOR, and naming the two later
-  refusals that fall under the same ruling (`busy` in US-002, `extraction_failed` in US-003) so the
-  consumer note spec 8 carries lists all three.
+  epic's ruling for new refusal conditions on accepting routes — as its own `### (<letter>) `
+  section with a `**Source:**` line (the next free marker letter at story start; spec 1 adds `(e)`
+  and `(f)` first per the epic's order, so `(g)` is the expected letter), appended to
+  `_RULING_MARKERS` in `tests/test_governance_docs.py:93` with `contract/GOVERNANCE.md:174`'s count
+  sentence updated, because `TestTheRecordedRulings` (`:354-389`) gates every marker in that tuple
+  and a ruling outside it is ungated — citing `contract/GOVERNANCE.md:150-167` by step (step 2:
+  the knob is the stated window; step 4: not the "cannot be fixed compatibly" case), stating the
+  three reasons the Overview gives for moving the default without a window, and naming the two
+  later refusals that fall under the same ruling (`busy` in US-002, `extraction_failed` in US-003)
+  so the consumer note spec 8 carries lists all three.
 - Docs: `docs/configuration.md` gains the `retrieve:` block table (`| Key | Default | Allowed range
   | Purpose |`) and the three top-level rows, each row saying which route it governs
   (`promptguard_wait_seconds`: both fetch routes); `docs/configuration.md:487-489` keep describing
   `extraction.max_promptguard_chunks` as `/extract`'s and fetched PDFs' (US-003) ceiling;
   `kit_tools/arch/SECURITY.md:143` gains the sentence that `/retrieve` pre-checks under
   `retrieve.max_promptguard_chunks` and refuses with `content_too_large` / `promptguard_budget`;
-  `kit_tools/docs/API_GUIDE.md:197-199` and `kit_tools/docs/TROUBLESHOOTING.md:168`'s `/retrieve`
-  422 table name the new reason. How an operator sets any of these in a deployed container is the
+  `kit_tools/docs/API_GUIDE.md:197-199` (which tells consumers `reason` "echoes the requested
+  URL") now states that `/retrieve`'s `content_too_large` carries either the fetch-cap prose reason
+  or the fixed literal `promptguard_budget` — two reason shapes under one code, in the shape of
+  `SearchErrorCode`'s two-reason-forms row in `TROUBLESHOOTING.md` — and `kit_tools/docs/
+  TROUBLESHOOTING.md:168`'s `/retrieve` 422 table names the new reason.
+  `kit_tools/testing/TESTING_GUIDE.md`'s `test_mapping` block is exhaustive (every source file has
+  a row; a gap makes the orchestrator fall back to a heuristic glob) and gains two rows:
+  `pipeline/retrieve_limits.py` → `tests/test_app.py` (the boot-refusal and reader tests live
+  beside `test_lifespan_refuses_an_out_of_range_cache_bound`) and `pipeline/config_bounds.py` →
+  `tests/test_stage1_extraction.py` (beside `extraction_limits.py`'s row at `:262`, where the
+  migrated bound tests land). How an operator sets any of these in a deployed container is the
   bind-mount procedure spec 6 documents (`config.yaml` is copied into the image; there is no env
   override — say so in the table's preamble and cross-reference spec 6).
 - Rotates `sanitizer_revision` (`orchestrator.py` — signature, pre-check, sink; `contract.py` —
@@ -321,8 +386,9 @@ was computed against the tree; there is no byte-limb case — see Decisions Made
 **Acceptance Criteria:**
 - [ ] `pipeline/retrieve_limits.py` defines `RetrieveSettings` (with a derived
       `max_extracted_characters` property), `RetrieveConfigurationError` and
-      `retrieve_settings_from_config` with the eight keys, defaults and ranges above (`fetch_concurrency`
-      default 1; `promptguard_wait_seconds` and `admission_wait_seconds` floats, range 0.05–300.0);
+      `retrieve_settings_from_config` with the seven keys, defaults and ranges above
+      (`fetch_concurrency` default 1, range 1–1, with the worker-address-space reason in the table
+      preamble; `promptguard_wait_seconds` a float, range 0.05–300.0; no `admission_wait_seconds`);
       `pipeline/config_bounds.py` provides `bounded_int` and `bounded_float` and
       `pipeline/extraction_limits.py` uses them (its private copy is gone; `cache.py`'s stays with
       its comment); an out-of-range or wrong-type value for any key refuses boot with a
@@ -334,10 +400,13 @@ was computed against the tree; there is no byte-limb case — see Decisions Made
       as the pipeline-side `AdmissionSlot` Protocol; `AdmissionMetrics`, `RetrieveMetricsSink` and
       `_NullRetrieveMetrics` exist beside the search sinks; `RetrieveMetrics` carries the three new
       counters (not yet mirrored); the handler passes all five; no module under `pipeline/` imports
-      `retrieval_app` (`grep -rn "^from retrieval_app\|^import retrieval_app" pipeline/` is empty);
-      all 16 pre-existing `run_retrieve_pipeline(` sites in `tests/test_orchestrator.py` (count
-      recorded at story start) and every site this story adds pass the kwargs through one shared
-      helper — no site passes them inline; a test asserts the kwargs reach the pipeline.
+      `retrieval_app` (`grep -rn "^from retrieval_app\|^import retrieval_app" pipeline/` is empty —
+      path set `pipeline/`; empty today, verified, while `grep -rn "retrieval_app" pipeline/` finds
+      only docstring prose in `contract.py`, `orchestrator.py:750` and `search_providers/`); all 16
+      pre-existing `run_retrieve_pipeline(` sites in `tests/test_orchestrator.py` (16 today,
+      verified; `grep -l` finds no other test file; re-counted at story start) and every site this
+      story adds pass the kwargs through one shared helper — no site passes them inline; a test
+      asserts the kwargs reach the pipeline.
 - [ ] A fetched page one character over `max_extracted_characters(retrieve.max_promptguard_chunks)`
       is refused with 422 `content_too_large` / `promptguard_budget` before `classify` is called
       (spy-that-raises on a real classifier); a page exactly at the limit classifies; a classifier
@@ -346,13 +415,20 @@ was computed against the tree; there is no byte-limb case — see Decisions Made
       tests are unchanged.
 - [ ] `PROMPTGUARD_BUDGET` is a constant in `pipeline/contract.py` beside
       `POLICY_EXCLUDED_ALL_PROVIDERS`; the governance ruling (expedited security-tightening MINOR,
-      no compatibility window, the three reasons, the two later refusals it also covers) is
-      recorded in `contract/GOVERNANCE.md`'s recorded rulings.
+      the knob as the stated window through at least 1.4.0, example 6 cited by step, the three
+      reasons for moving the default, the two later refusals it also covers) is recorded in
+      `contract/GOVERNANCE.md` as a `### (<letter>) ` section with a `**Source:**` line, the letter
+      is appended to `_RULING_MARKERS` (`tests/test_governance_docs.py:93`) and the count sentence
+      at `contract/GOVERNANCE.md:174` is updated; `kit_tools/testing/TESTING_GUIDE.md`'s
+      `test_mapping` carries rows for `pipeline/retrieve_limits.py` and `pipeline/config_bounds.py`
+      naming the test modules above; `API_GUIDE.md:197-199` states the two reason shapes under
+      `content_too_large`.
 - [ ] Window mechanics (R36): the `* ``1.3.0`` — …` docstring line is appended; `uv run python -m
       scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via
-      `_SCHEMA_MODELS`; the reason recorded in `_EXPECTED_ONE_THREE_ZERO_DIFF` in
-      `tests/test_contract_schema.py`; the four anchor-quoting pages refreshed;
-      `uv run python -m scripts.export_contract --check` green.
+      `_SCHEMA_MODELS`; **nothing** appended to `_EXPECTED_ONE_THREE_ZERO_DIFF` (a reason string is
+      free text on `Pipeline422ErrorResponse.reason`, not a property or enum member — R36
+      corrected; the docstring line and `--check` are the gate); the four anchor-quoting pages
+      refreshed; `uv run python -m scripts.export_contract --check` green.
 - [ ] `grep -n 'promptguard_budget' docs/configuration.md kit_tools/arch/SECURITY.md
       kit_tools/docs/API_GUIDE.md kit_tools/docs/TROUBLESHOOTING.md` returns at least one hit per
       file (R39), and `docs/configuration.md`'s `retrieve:` table preamble names the bind-mount
@@ -398,11 +474,19 @@ at zero. A cache hit is served without acquiring.
   asyncio.timeout(seconds): await semaphore.acquire()` inside a `try`, with the release in
   `finally` **only when acquired** (a timeout cancels the `acquire()` before it succeeds; a late grant
   after cancellation is the case the "timeout-then-late-grant" test pins). Never a bare `acquire()`
-  at a call site.
+  at a call site. The in-repo precedent for the shape — a fixed-deadline `async with
+  asyncio.timeout(…)` paired with a closed-token WARNING — is `cache.py:405-425`
+  (`_attempt_connect`, routed through `_closed_vocabulary_reason` at `:297-305`); this helper reads
+  as that pattern, not a new one.
 - Scope: stage 3 only, on all three routes. `sanitize_and_structure` (`:160-176`) gains
   `classification_semaphore: asyncio.Semaphore | None = None` and `classification_wait_seconds:
   float | None = None` and wraps its `run_promptguard` call (`:23` of the body) in `_bounded_permit`
-  when given one (`None` seconds = wait without a deadline); on `False` it proceeds exactly as
+  when given one (`None` seconds = wait without a deadline) — **acquired only under the condition
+  `run_promptguard` itself classifies on**: the classifier is loaded **and** the tier is not
+  `TRUSTED`. `pipeline/stage3_promptguard.py:77-88` returns `skip_reason="trusted_tier"` before the
+  `classifier is None` branch and before any inference, so a `trusted_domains` `/retrieve` must
+  never queue behind a 256-chunk page for work it will not do; with either condition false nothing
+  is acquired and no counter moves. On `False` it proceeds exactly as
   `classifier is None` (the existing `promptguard_state` `unavailable_blocked` /
   `unavailable_allowed` derivation in `pipeline/stage4_structuring.py:96-119`;
   `tests/test_orchestrator.py:618,653`) **and** logs one WARNING at the timeout site with the closed
@@ -424,12 +508,17 @@ at zero. A cache hit is served without acquiring.
   = 47, `tests/test_search_providers.py` = 14, `tests/test_brave_provider.py` = 12) do not change;
   the handler (`:1811-1817`) always passes both. One **deadline** per request, not one timeout
   scope: compute `deadline = loop.time() + classification_wait_seconds` before the result loop and,
-  at each per-result acquisition (`:1014`), call `_bounded_permit(semaphore, max(0.0, deadline -
-  loop.time()))` — `asyncio.timeout` appears in exactly one place, inside `_bounded_permit`, scoped to
-  a single `acquire()`, and never around the result loop (an `asyncio.timeout` around the loop would
-  raise `TimeoutError` out of whatever is awaiting and unwind the loop, the opposite of the stated
-  behaviour); once the deadline has passed, that result and every remaining one take the
-  classifier-unavailable branch at
+  **before** each per-result acquisition (`:1014`), test `loop.time() >= deadline` explicitly —
+  once it is true, that result and every remaining one take the classifier-unavailable branch
+  **unconditionally**, without touching the semaphore. The explicit test is what makes that
+  sentence true: `asyncio.Semaphore.acquire()` returns without yielding when a permit is free, so
+  `asyncio.timeout(0)` around it never fires, and a permit released mid-loop after the deadline
+  would otherwise be taken and the result classified (round-3 finding — the Independent Test's
+  held-permit fixture could not see the divergence). Otherwise call `_bounded_permit(semaphore,
+  deadline - loop.time())` — `asyncio.timeout` appears in exactly one place, inside
+  `_bounded_permit`, scoped to a single `acquire()`, and never around the result loop (an
+  `asyncio.timeout` around the loop would raise `TimeoutError` out of whatever is awaiting and
+  unwind the loop, the opposite of the stated behaviour). The branch itself is the existing one at
   `:1012-1046` under the **effective** fail-closed value — fail-closed → omitted
   `OMIT_PROMPTGUARD_UNAVAILABLE` (`:1028-1029`); fail-open → served unscanned with
   `suspicious=True`, `unscanned_results += 1`, `promptguard_unavailable = True` (`:1043`) — and
@@ -438,6 +527,36 @@ at zero. A cache hit is served without acquiring.
   `SearchMetricsResponse` (`:488`) mirror it. Until US-005 lands, the effective value is the request
   value (the floor defaults `false`); US-005's `model_copy` makes it the floored value with no change
   here.
+- **A wait-timeout body never enters the content cache.** On the fail-open timeout path the body
+  carries `promptguard_state == "unavailable_allowed"` (`pipeline/stage4_structuring.py:119`) with
+  a −0.1 penalty — not `injection_detected`, tier not `UNTRUSTED`/`BLOCKED` — so Step 8 of
+  `run_retrieve_pipeline` (`orchestrator.py:392-410`) would store it under a key whose
+  `classifier_loaded=True`. `cache.py:128-133` records why that is exactly the entry the key
+  exists to keep out: today an unscanned body can only exist while `classifier_loaded` is
+  `False`, and the model loading orphans it; after this story a saturation event lasting
+  `promptguard_wait_seconds` would let an in-network caller pin an attacker-chosen unscanned body
+  for `cache_ttl_hours` and replay it to every later request, including ones the free permit would
+  have classified (round-3 security finding). Step 8 therefore gains the condition `not
+  (content.promptguard_state == "unavailable_allowed" and classifier_loaded)` — the combination
+  only a wait timeout produces (`classifier_loaded` is the same `classifier is not None and
+  classifier.loaded` the fingerprint already computes) — so the absent-classifier fail-open body
+  is still cached under its `classifier_loaded=False` key exactly as today. The reasoning is
+  written beside `cache.py:128-133`'s note, and `SECURITY.md`'s Security Considerations paragraph
+  on the wait-timeout route names the interaction.
+- **`SearchResult.suspicious` says what it means, and partial classification is stated.** Today's
+  fail-open pass-through serves an unscanned result with `suspicious=True`, `unscanned_results +=
+  1` and `promptguard_unavailable = True` (`orchestrator.py:1040-1044`, verified) — all or nothing,
+  because the classifier is either loaded or not. This story's per-request deadline makes that
+  state **partial** for the first time (two results scanned, eight unscanned), and the field's
+  description (`models.py:365-368`, "Whether Stage 2 or Stage 3 flagged this result as
+  suspicious") mis-describes a result that was never scanned. No per-result marker is added
+  (Decisions Made): the description is rewritten to say the flag is also set for every result
+  PromptGuard did not scan — classifier absent, or the classification wait expired — with
+  `promptguard_unavailable` saying whether any result in the response was unscanned and
+  `unscanned_results` how many, and the consumer rule stated in the description and in
+  `kit_tools/docs/API_GUIDE.md`: on `promptguard_unavailable: true`, treat every `suspicious`
+  result as unscanned. A description move appends nothing to the diff set (R36 corrected);
+  `test_contract_schema_matches_golden` is the gate; spec 8's consumer note names the partial case.
 - With `classifier is None` no route touches the semaphore (the `unavailable_*` path is unchanged
   and the counter stays zero). The three routes now serialise behind `classification_concurrency`
   (`config.yaml:46`, size 1) — `/extract`'s admission bound no longer bounds its classification wait
@@ -471,7 +590,10 @@ at zero. A cache hit is served without acquiring.
   hold, which is `retrieve.max_promptguard_chunks` (256) × the per-window classify latency on the
   operator's CPU (spec 7 US-004 fills the per-window number for the reference envelope) — a wait
   timeout under ordinary mixed traffic means the permit holder exceeded the wait, and the fix is to
-  raise `promptguard_wait_seconds` or lower `retrieve.max_promptguard_chunks`;
+  raise `promptguard_wait_seconds` or lower `retrieve.max_promptguard_chunks` — and, until spec 7
+  measures, a conservative provisional pairing is stated (the arithmetic at an assumed per-window
+  latency, with the instruction that an operator who cannot meet it lowers
+  `retrieve.max_promptguard_chunks` rather than raising the wait);
   `kit_tools/arch/SECURITY.md:196-198`'s admission table already claims the classification semaphore
   covers "all routes" — a pre-existing inaccuracy this story makes true — and gains the sentence
   under Security Considerations below; `MONITORING.md` gains both counter rows and the head-of-line
@@ -497,15 +619,29 @@ at zero. A cache hit is served without acquiring.
       `unavailable_*` row distinguishes classifier-absent from permit-contention by that line.
 - [ ] Two concurrent classifications (`/retrieve`+`/retrieve`, `/retrieve`+`/search`,
       `/extract`+`/retrieve`) serialise through the shared semaphore; a cache hit is served without
-      acquiring; with `classifier is None` the semaphore is never acquired and the counters stay zero.
+      acquiring; with `classifier is None` the semaphore is never acquired and the counters stay
+      zero; a `trusted_domains` `/retrieve` under a held permit is served at once with
+      `skip_reason="trusted_tier"` and no counter moves (tested).
+- [ ] A fail-open `/retrieve` whose classification wait timed out is served, marked
+      `unavailable_allowed`, and **not** written to the content cache (`cache.put` asserted
+      uncalled); a following request for the same URL with the permit free reaches `run_promptguard`
+      and is classified; the absent-classifier fail-open body is still cached under its
+      `classifier_loaded=False` key as today; the reasoning is recorded beside `cache.py:128-133`
+      and in `SECURITY.md`.
+- [ ] `SearchResult.suspicious`'s description states that the flag is also set for results
+      PromptGuard did not scan (absent classifier or expired wait) and the consumer rule on
+      `promptguard_unavailable: true`; `API_GUIDE.md` carries the rule; the re-created golden pins
+      the description (`test_contract_schema_matches_golden`); nothing is appended to
+      `_EXPECTED_ONE_THREE_ZERO_DIFF` for it.
 - [ ] A `/retrieve` waiter exceeding `promptguard_wait_seconds` reports `unavailable_blocked`
       (effective fail-closed) or `unavailable_allowed` (effective fail-open), never a 500, and
       `retrieve.classification_wait_timeouts` increments once; `/search` spends one wait budget per
       request, and after it expires every remaining result follows the classifier-unavailable branch
-      under the effective policy (omitted, or served marked) with
-      `search.classification_wait_timeouts` incremented once per request; the Independent Test's
-      3-of-10 case asserts `len(results)`, `omitted_by_reason["promptguard_unavailable"]` and the
-      fail-open `suspicious` / `promptguard_unavailable` shape.
+      under the effective policy (omitted, or served marked) **unconditionally** — a test releases
+      the permit mid-loop after the deadline and asserts the remaining results are still unscanned —
+      with `search.classification_wait_timeouts` incremented once per request; the Independent
+      Test's 3-of-10 case asserts `len(results)`, `omitted_by_reason["promptguard_unavailable"]` and
+      the fail-open `suspicious` / `promptguard_unavailable` / `unscanned_results` shape.
 - [ ] `run_search_pipeline`'s two new parameters are defaulted, so no pre-existing call site is
       edited: the story's diff touches none of the 47 / 14 / 12 existing `run_search_pipeline(`
       sites in `tests/test_orchestrator.py`, `tests/test_search_providers.py` and
@@ -517,16 +653,19 @@ at zero. A cache hit is served without acquiring.
       counters appear on `/metrics`.
 - [ ] Window mechanics (R36): the `* ``1.3.0`` — …` docstring line is appended; `uv run python -m
       scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via
-      `_SCHEMA_MODELS`; both counters appended to `_EXPECTED_ONE_THREE_ZERO_DIFF` in
-      `tests/test_contract_schema.py`; the four anchor-quoting pages refreshed;
-      `uv run python -m scripts.export_contract --check` green.
+      `_SCHEMA_MODELS`; **nothing** appended to `_EXPECTED_ONE_THREE_ZERO_DIFF` (the `/metrics`
+      models are not in `_SCHEMA_MODELS` — R36 corrected; the counters' gates are `--check` and the
+      two `/metrics` order guards, `tests/test_contract_metrics.py:135`, `:161`); the four
+      anchor-quoting pages refreshed; `uv run python -m scripts.export_contract --check` green.
 - [ ] `grep -n 'classification_wait_timeouts' docs/configuration.md kit_tools/arch/SECURITY.md
       kit_tools/docs/MONITORING.md kit_tools/docs/TROUBLESHOOTING.md` returns at least one hit per
       file; `SECURITY.md` carries the Security Considerations sentence about a saturated semaphore
       and fail-open requests, the interim-posture sentence, and the one-directional `/extract`
       coupling sentence (`grep -n 'no wait timeout' kit_tools/arch/SECURITY.md kit_tools/docs/MONITORING.md`
       hits both); `docs/configuration.md` carries the `promptguard_wait_seconds` /
-      `retrieve.max_promptguard_chunks` sizing rule.
+      `retrieve.max_promptguard_chunks` sizing rule and the provisional pairing; every grep in this
+      story names its file list explicitly (no recursive sweep; nothing under `kit_tools/specs/`,
+      `tests/golden/` or `kit_tools/.seed_cache/`).
 - [ ] `sanitizer_revision` rotation measured (revert `orchestrator.py` and `contract.py` each in
       turn, both-reverted control) and recorded at the five sites.
 - [ ] Tests written/updated for new functionality.
@@ -539,8 +678,8 @@ at zero. A cache hit is served without acquiring.
 
 **Description:** As an operator, I want HTML extraction, the structural scan and the structuring
 pass to run off the event loop, with `/retrieve`'s fetch-and-extract work bounded by a second
-admission controller that queues without holding bodies, waits no longer than a configured bound,
-refuses beyond a bounded queue with a 422 the route already declares, and lets go of the fetched body
+admission controller that queues without holding bodies behind a queue bounded in depth and bytes,
+refuses beyond it with a 422 the route already declares, and lets go of the fetched body
 before the classification wait, so a pathological page cannot stall `/health` and N slow pages cannot
 hold N × 10 MB in memory.
 
@@ -553,8 +692,12 @@ third is refused **422** `busy` / `admission_queue_full` within one loop turn wi
 `Pipeline422ErrorResponse` body (`{error, reason, request_id}`, no `sanitizer_revision`), and that
 `retrieve.semaphore_saturation == 2` and `retrieve.busy_rejections == 1` on `/metrics`; with
 `max_queued_fetch_bytes: 10485760` and depth 4, assert the byte bound refuses the second queued
-request; with `admission_wait_seconds: 0.1`, assert a queued request is refused 422 `busy` /
-`admission_wait_timeout` and the controller's waiter list no longer references it; assert the
+request; cancel a queued request while it is still queued and assert `controller.active`,
+`controller.queued` and `controller.queued_bytes` are back at their pre-request values and the next
+`/retrieve` still fetches; drive the queue-full refusal, a fetch error, an extraction exception, a
+cancellation while holding the slot and a cancellation while queued N+1 = 5 times each against
+`fetch_concurrency: 1` and assert the same three counters after each and that the next `/retrieve`
+still fetches (US-006's discipline, applied to the gate this story adds); assert the
 patched `extract_html`, `scan_structural` and `structure_sanitization_result` each run on a
 non-event-loop thread; with the fake fetch returning a body that is a `bytearray` subclass (weak-
 referenceable) and the classification permit held by another request, assert the weak reference to
@@ -572,35 +715,68 @@ existing fixture corpus are byte-identical.
 - The gate is a second `ExtractionAdmissionController` (`retrieval_app.py:939-1007`) — read it
   before rebuilding anything: it bounds active slots, queue depth and reserved queued bytes, counts
   `semaphore_saturation` on every acquisition that found no free slot and `busy_rejections` when
-  the queue is full, and its `acquire() -> bool` / `release()` are status-free. Its `__init__`
-  (`:942-956`) takes `(settings: ExtractionSettings, metrics: ExtractionMetrics)` and reads four
-  fields off the settings object, so **restructure `__init__` to take the five primitives**
-  (`limit`, `queue_depth`, `max_queued_bytes`, `reservation_bytes`, `metrics: AdmissionMetrics` —
-  the narrow Protocol US-001 declared) and add a `from_settings(settings, metrics)` classmethod
-  for `/extract`'s construction site (which moves by one line; the criterion is that `/extract`'s
-  admission *behaviour* is unchanged — its tests pass without edits — not that the line is). Build
-  `app.state.retrieve_admission = ExtractionAdmissionController(limit=retrieve_settings.
-  fetch_concurrency, queue_depth=…admission_queue_depth, max_queued_bytes=…max_queued_fetch_bytes,
-  reservation_bytes=DEFAULT_MAX_CONTENT_BYTES (`pipeline/stage5_url_audit.py:30`),
-  metrics=retrieve_metrics)` in the lifespan plus the module-level fallback; `run_retrieve_pipeline`
-  already takes it as `admission: AdmissionSlot` (US-001) and never names the concrete class.
+  the queue is full, and its `async def acquire() -> bool` / `async def release() -> None` are
+  status-free. **Use it as it is (R23 corrected in round 4).** Its `__init__` (`:942-956`) takes
+  `(settings: ExtractionSettings, metrics: ExtractionMetrics)` positionally and reads exactly four
+  fields off the settings object (`extraction_concurrency`, `admission_queue_depth`,
+  `max_queued_upload_bytes`, `max_input_bytes`, `:947-950`). It is constructed at **eight** sites —
+  `retrieval_app.py:1218` (lifespan), `:1381` (module-level fallback) and six positional test
+  sites: `tests/test_app.py:99`, `:397`, `:446`, `tests/test_orchestrator.py:1498`,
+  `tests/test_contract_errors.py:112`, `tests/test_contract_metrics.py:100` (verified by grep) —
+  so the round-3 "five primitives" restructure would have broken every test site while claiming
+  they pass unedited. Instead: a classmethod `from_retrieve_settings(cls, settings:
+  RetrieveSettings, metrics: AdmissionMetrics) -> ExtractionAdmissionController` builds the
+  `ExtractionSettings`-shaped view the controller reads —
+  `dataclasses.replace(extraction_settings_from_config({}), extraction_concurrency=settings.
+  fetch_concurrency, admission_queue_depth=settings.admission_queue_depth,
+  max_queued_upload_bytes=settings.max_queued_fetch_bytes, max_input_bytes=DEFAULT_MAX_CONTENT_BYTES
+  (`pipeline/stage5_url_audit.py:30`))` — and calls `cls(view, metrics)`; the only edit to the
+  class is widening `__init__`'s `metrics` annotation from the concrete `ExtractionMetrics` to the
+  `AdmissionMetrics` Protocol US-001 declared (`RetrieveMetrics` is not an `ExtractionMetrics`, and
+  pyright strict would reject it), which changes neither arity nor order, so all eight sites are
+  untouched. Build `app.state.retrieve_admission = ExtractionAdmissionController.
+  from_retrieve_settings(retrieve_settings, retrieve_metrics)` in the lifespan plus the
+  module-level fallback beside `:1381-1384`; `run_retrieve_pipeline` already takes it as
+  `admission: AdmissionSlot` (US-001) and never names the concrete class.
 - Acquire **after the cache read and before the fetch** (a hit never waits; a waiter holds no body),
-  **with a bound**: `acquire()` awaits its waiter future with no timeout (`retrieval_app.py:971-996`
-  was written for a middleware whose request lifecycle was the bound), so wrap the acquisition in
-  `asyncio.timeout(settings.admission_wait_seconds)`; on expiry the controller must **dequeue the
-  cancelled waiter** (check the future's cancellation path in `acquire()` and add the removal if it
-  is missing — a test asserts the waiter list is empty after a timed-out wait) and the request is
-  refused `PipelineError(error="busy", reason=RETRIEVE_ADMISSION_WAIT_TIMEOUT)`, counted under
-  `busy_rejections`. Hold the slot through stage 1 (HTML extraction, or US-003's PDF worker), then
-  release in `finally` — every path, including a fetch error, an extraction exception and
-  cancellation — and **release the body with the slot**: destructure the three post-stage-1 fields
-  (`final_url`, `redirect_chain`, `domain_changed_on_redirect`, read at `:379-396`) into locals
-  before the release, `del fetch_result` (and the `response_body` local), and change
-  `build_retrieved_content` to take the extracted text and those three values rather than the
-  `fetch_result` object, so a request parked on the classification permit (US-006, up to
-  `promptguard_wait_seconds`) holds at most the extracted text (≤ `max_extracted_characters(
-  retrieve.max_promptguard_chunks)` characters). `acquire()` returning `False` (queue full in depth
-  or bytes) raises `PipelineError(error="busy", reason=RETRIEVE_ADMISSION_QUEUE_FULL)`.
+  **unwrapped — no timer around `acquire()`**. Round 3 proposed `asyncio.timeout(settings.
+  admission_wait_seconds)` around the acquisition and a test that the waiter list is empty after a
+  timeout; both are withdrawn, because the reviewer ran it: `release()` (`:1000-1007`) does a
+  **handoff** — it pops a waiter, sets its result and returns *without* decrementing `_active`, the
+  woken waiter inheriting the slot — and `acquire()`'s `except BaseException` (`:991-996`) restores
+  accounting only for a waiter still in `_waiters`. A waiter cancelled after its grant (the timer
+  firing in that window, or a future already cancelled when `release()` pops it) therefore leaves
+  `active == limit` with nobody holding a slot, and at `fetch_concurrency: 1` one occurrence wedges
+  `/retrieve` for the life of the process. The controller is not modified (R23 corrected: used as
+  it is); its bounded queue depth and reserved queued bytes are the backpressure, a full queue
+  refuses at once — `acquire()` returning `False` raises `PipelineError(error="busy",
+  reason=RETRIEVE_ADMISSION_QUEUE_FULL)`, counted under `busy_rejections` by the controller — and a
+  queued request's wait is bounded by construction (at most `admission_queue_depth /
+  fetch_concurrency` slot holds ahead of it, each bounded by the 30 s fetch timeout plus stage 1).
+  The handoff race itself is **pre-existing and recorded, not fixed here**: latent on `/extract`
+  (the route ships disabled) and reachable on `/retrieve` only by task cancellation — server
+  shutdown; Starlette does not cancel a handler task when an HTTP client disconnects — never by a
+  timer, because this story adds none. It goes into `kit_tools/docs/GOTCHAS.md` and `SECURITY.md`
+  as an accepted residual with the fix direction (make the handoff idempotent: `release()`
+  decrements and the woken waiter re-increments under the lock) and into Open Questions for spec
+  6's envelope work, flagged for the epic wrapper. Hold the slot through stage 1 (HTML extraction,
+  or US-003's PDF worker), then `await admission.release()` in `finally` — every path, including a
+  fetch error, an extraction exception and cancellation while holding; a single delivered
+  `CancelledError` does not interrupt an `await` inside `finally` (asyncio delivers it once) and
+  the lock is uncontended on the release path, so no `asyncio.shield` is needed — and the
+  cancellation tests assert the controller's three counters afterwards, not merely that no
+  exception escaped. **Release the body with the slot**: `build_retrieved_content` already takes
+  the three post-stage-1 values as keyword-only scalars (`pipeline/stage4_structuring.py:219-230`:
+  `final_url`, `redirect_chain`, `domain_changed_on_redirect`, beside `sanitization`, which carries
+  the text) — it has never taken `fetch_result`; only the call site (`orchestrator.py:385-393`)
+  reads them off `fetch_result` at call time (also read at `:358`, `:376`). So read the three into
+  locals before the release, then `del fetch_result` and the decoded `html_text` local (`:354`, a
+  second `str`-sized copy of the body) — **no signature change, and `pipeline/stage4_structuring.py`
+  is untouched**: it is a `_REVISION_SOURCES` member (`pipeline/sanitizer_revision.py:12-21`), and
+  editing it would add an unmeasured third hashed file to a story whose rotation criterion names
+  two. A request parked on the classification permit (US-006, up to `promptguard_wait_seconds`)
+  then holds at most the extracted text (≤ `max_extracted_characters(retrieve.
+  max_promptguard_chunks)` characters).
 - **The status is route-aware (R23 corrected, R42).** `busy` is the existing `RateLimit429ErrorCode`
   literal (`pipeline/contract.py:225`) and the app-wide `pipeline_error_handler`
   (`retrieval_app.py:1411-1426`) picks its status **by code alone** — `status_code=429 if
@@ -621,8 +797,13 @@ existing fixture corpus are byte-identical.
   code `ExtractionAdmissionMiddleware` emits, at 429") and `tests/test_contract_errors.py:271-273`'s
   comment. `retrieve.busy_rejections`' description must **not** copy `extraction.busy_rejections`'
   "Requests refused with 429" wording (`contract/openapi.yaml:327-329`); it says "refused 422
-  `busy`". Reason literals `RETRIEVE_ADMISSION_QUEUE_FULL = "admission_queue_full"` and
-  `RETRIEVE_ADMISSION_WAIT_TIMEOUT = "admission_wait_timeout"` sit beside `PROMPTGUARD_BUDGET`.
+  `busy`". The one reason literal, `RETRIEVE_ADMISSION_QUEUE_FULL = "admission_queue_full"`, sits
+  beside `PROMPTGUARD_BUDGET`. `Pipeline422ErrorResponse.error`'s description (`retrieval_app.py:
+  723`, "The fetch and URL-validation codes arrive on /retrieve, the searxng_* codes and
+  search_unavailable on /search") is part of the frozen document and goes stale here: rewrite it
+  to add that `busy` arrives on `/retrieve` only (US-003 adds `extraction_failed` to the same
+  sentence), and say in the window block that the `/search` 422 enum widens as a consequence of
+  the shared model.
 - **The memory sentence, honestly.** At most `retrieve.fetch_concurrency` bodies are alive during
   fetch and stage 1; a queued request holds nothing; the queue is bounded in depth and reserved
   bytes; a request waiting on the classification permit holds only its extracted text. What is
@@ -630,23 +811,41 @@ existing fixture corpus are byte-identical.
   `--limit-concurrency` (`Dockerfile:227`) and both middlewares are `/extract`-gated, so admission
   bounds the rate through stage 1, not the number of requests past it; with bodies released, each
   such waiter costs at most `max_extracted_characters(256)` ≈ 459 KB of text for at most
-  `promptguard_wait_seconds`. Document exactly that in the `retrieve:` table (`fetch_concurrency ×
-  10 MB` for bodies, plus `arrival rate × promptguard_wait_seconds × ≤ 0.5 MB` for waiters), name
-  `--limit-concurrency` as the envelope knob spec 6 owns, and add the measurement as a criterion
-  (below). `asyncio.to_thread` is uncancellable and the default executor is shared with stage 3
-  (`min(32, cpu + 4)` threads); the slot is what keeps hostile pages from starving the classifier.
-  A wall clock on HTML extraction is deliberately **not** added (the 30 s fetch timeout and 10 MB
-  cap bound the input); spec 6 sizes the slot. Worst-case queue latency is a derived number in the
-  table: `min(admission_wait_seconds, admission_queue_depth / fetch_concurrency × max(fetch timeout
-  30 s, PDF wall clock))`.
+  `promptguard_wait_seconds`. Document exactly that in the `retrieve:` table, with the stage-1
+  peak stated honestly: `fetch_concurrency × (10 MB body + its decoded `str` + the
+  `ExtractionResult`'s `raw_text` and `main_content`)` — `orchestrator.py:352-355` holds the body
+  and its decoded copy simultaneously, so an in-flight page is three to five times the body term
+  while stage 1 runs, and the 10 MB cap is the body term only — plus `arrival rate ×
+  promptguard_wait_seconds × ≤ 0.5 MB` for waiters; name `--limit-concurrency` as the envelope
+  knob spec 6 owns, and add the measurement as a criterion (below). `asyncio.to_thread` is
+  uncancellable and the default executor is shared with stage 3 (`min(32, cpu + 4)` threads); the
+  slot is what keeps hostile pages from starving the classifier. A wall clock on HTML extraction
+  is deliberately **not** added (the 30 s fetch timeout and 10 MB cap bound the input); spec 6
+  sizes the slot. Worst-case queue latency is a derived number in the table:
+  `admission_queue_depth / fetch_concurrency × max(fetch timeout 30 s, PDF wall clock)`.
+- **The counter name is kept, and the row disambiguates.** After this story `/retrieve` has two
+  gates and `retrieve.semaphore_saturation` counts the admission controller, not the
+  classification semaphore (that one is `retrieve.classification_wait_timeouts`). The name stays —
+  the controller increments `metrics.semaphore_saturation` by attribute (R23: used as it is), and
+  `extraction.semaphore_saturation` counts the same admission class on `/extract`, so the two
+  routes read alike — and the `MONITORING.md` row says in its first sentence which gate each
+  counter watches, so an operator reading a climbing `semaphore_saturation` is sent to
+  `fetch_concurrency`, not to PromptGuard.
+- **The admission tests own their controller.** The module-level fallback is one process-wide
+  instance shared by every lifespan-free test in the session (`retrieval_app.py:1381-1384` is
+  exactly that for `/extract`), and this story's tests deliberately saturate it: each constructs
+  its own controller or resets `app.state.retrieve_admission` in an autouse fixture (the shape the
+  suite already uses for `app.state`), and asserts `active`, `queued` and `queued_bytes` back at
+  zero at the end, so an off-by-one cannot present as an unrelated downstream timeout.
 - Contract-test edits for the `busy` member: `tests/test_contract_errors.py:241` (6 → 7 here, 7 → 8
   after US-003), the intersection assertion and its `10 + 6 + 3` comment at `:244-247`
   (`{"content_too_large"} == EXTRACT & RETRIEVE` gains `busy`), `tests/test_contract_schema.py:339`'s
   pin (renamed from `…_nine_members` to its new count), `RetrieveErrorCode`'s docstring
   (`contract.py:250-258`), and the three old-premise sites above. The second refusal this story adds
   (load-triggered `busy` on traffic served today) is recorded under US-001's GOVERNANCE ruling for
-  new refusal conditions, with `retrieve.fetch_concurrency`, `admission_queue_depth` and
-  `admission_wait_seconds` as the compatibility knobs, and named in the consumer note spec 8 carries.
+  new refusal conditions, with `retrieve.fetch_concurrency` (spec 6 widens it),
+  `admission_queue_depth` and `max_queued_fetch_bytes` as the compatibility knobs, and named in the
+  consumer note spec 8 carries.
 - Tests: the responsiveness test mirrors `tests/test_app.py:958-993` and its `_running_app` (`:797`)
   / `_blocking_acquisition` (`:898`) helpers (connected cache required — its docstring says why); a
   thread-identity test (`threading.get_ident()` differs from the loop's) for all three threaded
@@ -660,9 +859,10 @@ existing fixture corpus are byte-identical.
   second admission controller (`retrieve.fetch_concurrency`, queue depth, queued bytes, a bounded
   wait) with a 422 `busy` refusal, and the waiter-population sentence; `SECURITY.md:50` (the two
   middlewares gate on `/extract`) stays true; `docs/configuration.md` `retrieve:` table gains the
-  four admission rows, the honest memory sentence, the queue-latency number and the disk note;
-  `MONITORING.md` gains `retrieve.semaphore_saturation` / `busy_rejections` rows; `API_GUIDE.md` and
-  `TROUBLESHOOTING.md`'s `/retrieve` 422 tables gain the `busy` row with both reasons.
+  three admission rows, the honest memory sentence, the queue-latency number and the disk note;
+  `MONITORING.md` gains `retrieve.semaphore_saturation` / `busy_rejections` rows (each naming its
+  gate); `API_GUIDE.md` and `TROUBLESHOOTING.md`'s `/retrieve` 422 tables gain the `busy` row with
+  its reason; the `Pipeline422ErrorResponse.error` description is rewritten as above.
 - Rotates `sanitizer_revision` (`orchestrator.py`, `contract.py`), ruling 6 / R32.
 
 **Acceptance Criteria:**
@@ -672,27 +872,42 @@ existing fixture corpus are byte-identical.
       non-event-loop thread.
 - [ ] Five sequential `/health` requests each complete in under 1 s while a fetched-page
       `extract_html` is blocked (the `:958` shape, connected cache).
-- [ ] `ExtractionAdmissionController.__init__` takes the five primitives with `metrics:
-      AdmissionMetrics`, `from_settings` builds `/extract`'s instance, and `/extract`'s admission
-      behaviour is unchanged (its middleware and tests pass without edits); `/retrieve` acquires
-      `app.state.retrieve_admission` after the cache read and before the fetch under
-      `admission_wait_seconds`, releases it on every path (success, fetch error, extraction
-      exception, cancellation — each tested), and a timed-out waiter is removed from the controller's
-      queue; a queued `/retrieve` has not fetched; a request beyond the depth bound and one beyond
-      the byte bound (under `max_queued_fetch_bytes: 10485760`, depth 4) are each refused 422 `busy`
-      / `admission_queue_full` within one loop turn; a wait past the bound is refused 422 `busy` /
-      `admission_wait_timeout`; `retrieve.semaphore_saturation` and `retrieve.busy_rejections`
-      increment and appear on `/metrics`.
-- [ ] The fetched body is released with the slot: `build_retrieved_content` takes the extracted text
-      and the three post-stage-1 fields, not `fetch_result`; a weak reference to a `bytearray`-subclass
-      body is dead while the request waits on a held classification permit; the `retrieve:` table
-      states the two-term memory sentence and names `--limit-concurrency` as spec 6's knob.
+- [ ] `ExtractionAdmissionController`'s constructor keeps its `(settings, metrics)` arity and order
+      (the `metrics` annotation is the `AdmissionMetrics` Protocol), `from_retrieve_settings` builds
+      `/retrieve`'s instance, and the eight construction sites are untouched (`grep -n
+      'ExtractionAdmissionController(' retrieval_app.py tests/*.py` lists the same eight lines as
+      at story start — path set: those files; today `retrieval_app.py:1218`, `:1381`,
+      `tests/test_app.py:99`, `:397`, `:446`, `tests/test_orchestrator.py:1498`,
+      `tests/test_contract_errors.py:112`, `tests/test_contract_metrics.py:100`, verified);
+      `/extract`'s admission behaviour and tests are unchanged; `/retrieve` acquires
+      `app.state.retrieve_admission` after the cache read and before the fetch with **no timer**
+      around `acquire()` (`grep -c 'asyncio.timeout' pipeline/orchestrator.py` is 1 — the
+      `_bounded_permit` site), releases it via `await admission.release()` in `finally` on every
+      path (success, fetch error, extraction exception, cancellation while holding — each tested
+      N+1 = 5 times with `active`, `queued` and `queued_bytes` asserted back at their pre-request
+      values and the next `/retrieve` fetching); a cancellation while queued leaves the queue empty
+      with the counters restored; a queued `/retrieve` has not fetched; a request beyond the depth
+      bound and one beyond the byte bound (under `max_queued_fetch_bytes: 10485760`, depth 4) are
+      each refused 422 `busy` / `admission_queue_full` within one loop turn;
+      `retrieve.semaphore_saturation` and `retrieve.busy_rejections` increment and appear on
+      `/metrics`; the admission tests construct their own controller or reset
+      `app.state.retrieve_admission` per test and assert the counters at zero afterwards; the
+      handoff residual is recorded in `GOTCHAS.md` and `SECURITY.md` with its fix direction.
+- [ ] The fetched body is released with the slot: `build_retrieved_content`'s signature and
+      `pipeline/stage4_structuring.py` are unchanged (`git diff --stat` shows no change to it — this
+      story touches no hashed file other than `orchestrator.py` and `contract.py`); the three
+      scalars are read into locals and `fetch_result` and `html_text` are deleted before the
+      classification wait; a weak reference to a `bytearray`-subclass body is dead while the
+      request waits on a held classification permit; the `retrieve:` table states the stage-1 peak
+      honestly (body + decoded copy + extraction result per slot) and the waiter term, and names
+      `--limit-concurrency` as spec 6's knob.
 - [ ] `pipeline_error_handler` is route-aware: `/retrieve`'s admission refusal is 422 with a
       `Pipeline422ErrorResponse` body and no `sanitizer_revision`; `/extract`'s middleware refusal is
       429 with a byte-identical `RateLimit429Response`; `tests/test_contract_errors.py:567` asserts
       both at runtime; the three old-premise docstrings/comments are rewritten.
-- [ ] `busy` is a member of `RetrieveErrorCode`; `RETRIEVE_ADMISSION_QUEUE_FULL` and
-      `RETRIEVE_ADMISSION_WAIT_TIMEOUT` are constants in `pipeline/contract.py`;
+- [ ] `busy` is a member of `RetrieveErrorCode`; `RETRIEVE_ADMISSION_QUEUE_FULL` is a constant in
+      `pipeline/contract.py`; `Pipeline422ErrorResponse.error`'s description names `busy` as
+      `/retrieve`-only at 422;
       `tests/test_contract_errors.py:241` and `:244-247` (and its comment),
       `tests/test_contract_schema.py:339`'s pin and `RetrieveErrorCode`'s docstring are updated; the
       deduplicated `ERROR_CODES` total stays eighteen (`:234`); `retrieve.busy_rejections`'
@@ -702,13 +917,17 @@ existing fixture corpus are byte-identical.
       (existing tests unchanged).
 - [ ] Window mechanics (R36): the `* ``1.3.0`` — …` docstring line is appended; `uv run python -m
       scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via
-      `_SCHEMA_MODELS`; the two counters and the `busy` member appended to
-      `_EXPECTED_ONE_THREE_ZERO_DIFF`; the four anchor-quoting pages refreshed; `--check` green.
-- [ ] `grep -n 'busy_rejections\|admission_queue_full\|admission_wait_timeout' docs/configuration.md
+      `_SCHEMA_MODELS`; `Pipeline422ErrorResponse.error[enum]=busy` appended to
+      `_EXPECTED_ONE_THREE_ZERO_DIFF` — one path, covering the `/search` 422 as well through the
+      shared model — while the two counters (`/metrics` models are not in `_SCHEMA_MODELS`), the
+      reason literal and the description rewrite append nothing (R36 corrected); the four
+      anchor-quoting pages refreshed; `--check` green.
+- [ ] `grep -n 'busy_rejections\|admission_queue_full' docs/configuration.md
       kit_tools/arch/SECURITY.md kit_tools/docs/MONITORING.md kit_tools/docs/API_GUIDE.md
-      kit_tools/docs/TROUBLESHOOTING.md` returns at least one hit per file; the `SECURITY.md:198`
-      row for `/retrieve` no longer reads "none | not applicable"; the queue-latency number is in
-      the `retrieve:` table.
+      kit_tools/docs/TROUBLESHOOTING.md` returns at least one hit per file (path set: those five
+      files; zero hits today); the `SECURITY.md:198` row for `/retrieve` no longer reads "none | not
+      applicable"; the queue-latency number is in the `retrieve:` table; the `MONITORING.md`
+      `semaphore_saturation` row names the admission gate.
 - [ ] `sanitizer_revision` rotation measured (revert-and-reproduce) and recorded at the five sites.
 - [ ] Tests written/updated for new functionality.
 - [ ] Full test suite passes (`uv run pytest`).
@@ -726,9 +945,13 @@ so a hostile PDF can neither stall the service nor crash the request.
 **Independent Test:** With `fetch_url` patched to return `application/pdf` bytes and
 `extract_pdf_in_subprocess` patched to record its arguments, assert it is called with a `Path` under
 `pipeline.pdf_subprocess.spool_dir()` (the process-private `forage-spool-<uid>` directory) and
-`app.state.extraction_settings`, that the file has mode `0600` while the worker runs, that the
-lifespan created the spool directory with mode `0700` owned by the process and refuses boot when
-the directory exists with other permissions or another owner, and that no `forage-retrieve-*` file
+`app.state.extraction_settings`, that the file has mode `0600` while the worker runs, that
+`spool_dir()` created the directory with mode `0700` owned by the process on first use (the
+lifespan calls it once, so a bad directory refuses boot; a lifespan-free `httpx.ASGITransport`
+client gets it on its first spool) and refuses — at boot and at use time — when the path exists as
+a symlink, a non-directory, another user's directory, or one with any group or other bit set
+(tested with a pre-created 0755 directory, which is refused, never repaired), and that no
+`forage-retrieve-*` file
 remains under the spool directory after a success, after each of the four worker outcomes, after a simulated rlimit kill, after
 `tempfile.NamedTemporaryFile` raising `OSError`, and after `asyncio.CancelledError` raised inside the
 worker call; for each row of the table assert a 422 with the stated `error` and `reason`; a
@@ -753,23 +976,50 @@ whose text exceeds `max_extracted_characters(extraction.max_promptguard_chunks)`
   and rlimit wiring — not memory isolation, which `/retrieve` cannot have). Add
   `extract_pdf_bytes_in_subprocess(data: bytes, settings: ExtractionSettings) ->
   ExtractionResult` to the **un-hashed** `pipeline/pdf_subprocess.py`, and a function
-  `spool_dir() -> Path` returning `Path(tempfile.gettempdir()) / f"forage-spool-{os.getuid()}"` —
+  `spool_dir() -> Path` returning `Path(tempfile.gettempdir()) / f"forage-spool-{os.geteuid()}"` —
   resolved **per call**, not at import, so a `TMPDIR` set after import still applies and the tests'
   monkeypatch seam is `tempfile.gettempdir` (a module-level constant would freeze `/extract`'s
-  upload path at import, a behaviour change the story must not make). The lifespan creates that
-  directory with `mode=0o700` (`mkdir(exist_ok=True)`, then `chmod`) and verifies it is a
-  directory, owned by the process, with no group or other bits — refusing boot with a
-  closed-vocabulary `RetrieveConfigurationError` otherwise — so "process-private" is enforced by
-  construction: the child re-opens the spool file by path inside a directory nobody else can enter,
-  which closes the re-open window without depending on the sticky bit of `/tmp`. `_spool_upload`
-  (`retrieval_app.py:1127-1152`) passes the same `dir=spool_dir()` (its `poppy-extract-` prefix is
-  pre-existing and out of scope), so both routes' spool files share the private directory.
+  upload path at import, a behaviour change the story must not make). **The directory is created
+  lazily and verified on every call, never repaired (R23 corrected in round 4).** `spool_dir()`
+  does `path.mkdir(mode=0o700)` with `exist_ok=False` inside a `try` — umask can only clear bits,
+  so the directory is never wider than 0700 at any instant, which is what closes the
+  mkdir-then-chmod window round 3's `mkdir(exist_ok=True)` + `chmod` left open (a dirfd opened in
+  that window survives the chmod); on `FileExistsError` it runs `st = os.lstat(path)` (never
+  `stat`, which follows a planted symlink) and raises `SpoolDirectoryError(OSError)` with a closed
+  token — `spool_dir_symlink` if `stat.S_ISLNK(st.st_mode)`, `spool_dir_not_directory` if not
+  `stat.S_ISDIR`, `spool_dir_foreign_owner` if `st.st_uid != os.geteuid()`, `spool_dir_mode` if
+  `st.st_mode & 0o077` — and **never `chmod`s** an existing directory: repair-then-verify would make
+  the pre-created-0755 test pass by repairing what it should refuse, and a directory already
+  present with the wrong mode is evidence, not a state to fix. The lifespan calls `spool_dir()`
+  once and re-raises `SpoolDirectoryError` as `RetrieveConfigurationError(str(exc))` so boot
+  refusals keep one closed vocabulary; at use time the same check re-runs on every call (the
+  round-3 note: a directory verified at boot inside a world-writable, non-sticky `TMPDIR` can be
+  removed and re-created by another local user afterwards — the per-call `lstat` re-establishes
+  owner and mode before each spool, and `docs/configuration.md` states the parent requirement:
+  `TMPDIR` must be sticky or not writable by other users), and a use-time failure on `/retrieve`
+  reaches the `pdf_spool_error` row through the existing `except OSError`. "Process-private" is
+  therefore enforced by construction: the child re-opens the spool file by path inside a directory
+  nobody else can enter, which closes the re-open window without depending on the sticky bit of
+  `/tmp`. `_spool_upload` (`retrieval_app.py:1127-1152`) passes the same `dir=spool_dir()` (its
+  `poppy-extract-` prefix is pre-existing and out of scope), so both routes' spool files share the
+  private directory — and its two lifespan-free callers pass **unedited** because the directory is
+  created on first use: `tests/test_app.py:366-387`
+  (`test_bounded_upload_read_rejects_file_over_limit`, a direct call with no lifespan) and `:411`
+  (`test_extract_benign_text_over_classification_budget_is_not_injection`, a real multipart upload
+  through the plain `client` fixture, whose `httpx.ASGITransport` fires no lifespan events —
+  `retrieval_app.py:1380-1383` documents exactly that hazard). A `/extract` spool failure
+  propagates as it does today (out of scope).
   `tempfile.NamedTemporaryFile(prefix="forage-retrieve-", dir=spool_dir(), delete=False)`,
   `os.fchmod(fd, 0o600)`, write, close, call the path variant, and `path.unlink(missing_ok=True)`
   in a `finally` that also covers `asyncio.CancelledError` and a worker exception; an `OSError`
-  from the create or the write is mapped by the caller to the `pdf_spool_error` row (the file, if
-  created, is still unlinked). `TMPDIR` is an operator input: `docs/configuration.md` states the
-  requirement (tmpfs recommended; the private subdirectory is created for you), the **combined**
+  from `spool_dir()`, the create or the write is mapped by the caller to the `pdf_spool_error` row
+  (the file, if created, is still unlinked). `TMPDIR` is an operator input: `docs/configuration.md`
+  states the requirement (tmpfs recommended; the private subdirectory is created for you; the
+  parent must be sticky or not other-writable) **and why**, in the confidentiality dimension too —
+  the spool file holds fetched third-party content, possibly from an internal or authenticated
+  URL the agent was asked to read; it is 0600 inside a 0700 directory and unlinked on every normal
+  exit path; a tmpfs `TMPDIR` keeps fetched content off durable storage; orphans after a SIGKILL
+  are content-bearing — beside the **combined**
   worst-case spool footprint — `/extract`'s existing reservation (`extraction_concurrency ×
   max_input_bytes` + `admission_queue_depth × max_input_bytes`, ≈ 100 MB at the defaults) plus
   `/retrieve`'s (`fetch_concurrency × 10 MB` active + `max_queued_fetch_bytes` queued) — beside the
@@ -815,7 +1065,10 @@ whose text exceeds `max_extracted_characters(extraction.max_promptguard_chunks)`
   `busy`, at `:241`; the intersection assertion at `:245-247` becomes `{content_too_large,
   extraction_failed, busy}` and its `10 + 6 + 3` comment is rewritten; `tests/test_contract_schema.py:
   339`'s pin is renamed to its new member count; `RetrieveErrorCode`'s docstring at `:250-258` is
-  rewritten). Reasons are token-shaped constants beside `PROMPTGUARD_BUDGET` following
+  rewritten; `Pipeline422ErrorResponse.error`'s description (`retrieval_app.py:723`) adds
+  `extraction_failed` to its `/retrieve`-only list beside US-002's `busy`, and the `/search` 422
+  enum widens through the shared model). Reasons are token-shaped constants beside
+  `PROMPTGUARD_BUDGET` following
   `POLICY_EXCLUDED_ALL_PROVIDERS` (`:318`); `pdf_encrypted` / `pdf_no_text` are intentionally the
   same literals as `/extract`'s codes for the same failures — carry the "Intentionally the same
   literal" comment shape of `contract.py:109-111`, and the docstring line says they are reasons
@@ -846,9 +1099,14 @@ whose text exceeds `max_extracted_characters(extraction.max_promptguard_chunks)`
 - [ ] Fetched `application/pdf` bodies are parsed by `extract_pdf_bytes_in_subprocess` →
       `extract_pdf_in_subprocess` inside `asyncio.to_thread`, with `app.state.extraction_settings`
       (asserted argument), inside the admission slot; `pipeline.pdf_subprocess.spool_dir()` resolves
-      per call under `tempfile.gettempdir()` and `_spool_upload` uses it; the lifespan creates the
-      `forage-spool-<uid>` directory 0700 and refuses boot on wrong ownership or permissions (tested
-      with a pre-created 0755 directory); the `except` chain is most-specific-first (a
+      per call under `tempfile.gettempdir()`, creates the `forage-spool-<uid>` directory with
+      `mkdir(mode=0o700, exist_ok=False)` on first use and, when it exists, verifies it with
+      `os.lstat` (symlink, non-directory, foreign owner, any group/other bit → refusal with a closed
+      token; no `chmod` anywhere in the function — `grep -c 'chmod' pipeline/pdf_subprocess.py`
+      counts only the `os.fchmod(fd, 0o600)` on the spool file); the lifespan's call refuses boot
+      with `RetrieveConfigurationError` on a pre-created 0755 directory (refused, not repaired) and
+      on a symlink; `_spool_upload` uses `dir=spool_dir()` and `tests/test_app.py:366-387` and
+      `:411` pass unedited; the `except` chain is most-specific-first (a
       `PDFClassifiableTextLimitError` yields the `content_too_large` row, never `extraction_failed`).
 - [ ] The spool file has mode `0600` while the worker runs and no `forage-retrieve-*` file remains
       under the spool directory after success, after each table row, after a simulated kill, after a
@@ -864,16 +1122,22 @@ whose text exceeds `max_extracted_characters(extraction.max_promptguard_chunks)`
       `tests/test_contract_schema.py:339`'s renamed pin and `RetrieveErrorCode`'s docstring are
       updated.
 - [ ] `ExtractionAdmissionMiddleware`, the worker's IPC vocabulary and `/extract`'s behaviour are
-      untouched (existing tests pass without edits); `SECURITY.md:50` still holds.
+      untouched (existing tests pass without edits, the two lifespan-free spool callers named
+      above included); `SECURITY.md:50` still holds; `Pipeline422ErrorResponse.error`'s description
+      names `extraction_failed` as `/retrieve`-only.
 - [ ] Window mechanics (R36): the `* ``1.3.0`` — …` docstring line is appended; `uv run python -m
       scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via
-      `_SCHEMA_MODELS`; the member and reasons appended to `_EXPECTED_ONE_THREE_ZERO_DIFF`; the four
-      anchor-quoting pages refreshed; `--check` green.
+      `_SCHEMA_MODELS`; `Pipeline422ErrorResponse.error[enum]=extraction_failed` appended to
+      `_EXPECTED_ONE_THREE_ZERO_DIFF` (one path, both routes' 422); the reason literals and the
+      description rewrite append nothing (R36 corrected); the four anchor-quoting pages refreshed;
+      `--check` green.
 - [ ] `grep -n 'pdf_spool_error' docs/configuration.md kit_tools/docs/MONITORING.md
       kit_tools/docs/API_GUIDE.md kit_tools/docs/TROUBLESHOOTING.md` returns at least one hit per
       file; `docs/configuration.md` carries the spool-directory requirement, the combined disk
       footprint, the orphan-on-SIGKILL sentence and the spawn-latency order of magnitude
-      (`grep -n 'forage-spool\|spawn' docs/configuration.md` hits); `CODE_ARCH.md` and
+      (`grep -n 'forage-spool\|spawn' docs/configuration.md` hits — path set: that file; zero hits
+      today), the parent-directory (sticky or not other-writable) requirement and the
+      confidentiality sentence (`grep -n 'sticky' docs/configuration.md` hits); `CODE_ARCH.md` and
       `SECURITY.md:198` carry the worker sentences.
 - [ ] `sanitizer_revision` rotation measured (revert `orchestrator.py` and `contract.py` each in
       turn, both-reverted control) and recorded at the five sites.
@@ -929,8 +1193,10 @@ the pipeline and re-populates the key.
       invalid JSON, wrong schema, wrong `retrieved_at` type).
 - [ ] Window mechanics (R36): the `* ``1.3.0`` — …` docstring line is appended; `uv run python -m
       scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via
-      `_SCHEMA_MODELS`; `corrupt_entries` appended to `_EXPECTED_ONE_THREE_ZERO_DIFF`; the four
-      anchor-quoting pages refreshed; `--check` green; `/metrics` serves the counter.
+      `_SCHEMA_MODELS`; nothing appended to `_EXPECTED_ONE_THREE_ZERO_DIFF` (`CacheMetricsResponse`
+      is not a `_SCHEMA_MODELS` member — R36 corrected; the gates are `--check` and the `/metrics`
+      order guards `tests/test_contract_metrics.py:135`, `:161`); the four anchor-quoting pages
+      refreshed; `--check` green; `/metrics` serves the counter.
 - [ ] `grep -n 'corrupt_entries\|cache_entry_corrupt' kit_tools/docs/MONITORING.md
       kit_tools/docs/TROUBLESHOOTING.md` returns at least one hit per file;
       `grep -n 'not authenticity' kit_tools/arch/SECURITY.md` hits the residual sentence.
@@ -1056,8 +1322,18 @@ fails the unit test that pins the update keys.
       carry no policy fields.
 - [ ] Window mechanics (R36): the `* ``1.3.0`` — …` docstring line is appended; `uv run python -m
       scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via
-      `_SCHEMA_MODELS`; the three fields appended to `_EXPECTED_ONE_THREE_ZERO_DIFF`; the four
+      `_SCHEMA_MODELS`; the three field paths — `RetrievedContent.effective_promptguard_fail_closed`,
+      `RetrievedContent.effective_promptguard_threshold`,
+      `SearchResponse.effective_promptguard_fail_closed` — appended to
+      `_EXPECTED_ONE_THREE_ZERO_DIFF` (added properties: the half of R36 that does append); the four
       anchor-quoting pages refreshed; `--check` green.
+- [ ] The consumer note spec 8 carries states that a caller sending `promptguard_fail_closed:
+      false` is, from this spec forward, exposed to an unscanned-but-marked response whenever the
+      classification permit is contended for longer than `promptguard_wait_seconds`, that
+      `promptguard_state` / `suspicious` / `promptguard_unavailable` / `unscanned_results` are the
+      per-response signals, and that `promptguard_fail_closed_floor: true` is the operator-side
+      control (`config.yaml`-only until spec 6's bind-mount procedure) — one sentence in the
+      existing deliverable, pinned by a grep on the note's file once spec 8 names it.
 - [ ] The field descriptions, `API_GUIDE.md` rows and `SECURITY.md` sentence state that the fields
       report the policy applied, not whether content was scanned, and name both exemptions
       (`grep -n 'trusted_tier\|VERIFIED' kit_tools/arch/SECURITY.md kit_tools/docs/API_GUIDE.md`
@@ -1096,11 +1372,19 @@ fails the unit test that pins the update keys.
   `promptguard_unavailable` (fail-closed) or served with `suspicious=True` and
   `promptguard_unavailable: true` (fail-open); the counter increments once (US-006).
 - A timed-out acquisition that is granted after cancellation releases the permit (US-006).
+- A `trusted_domains` `/retrieve` under a held permit is served at once with
+  `skip_reason="trusted_tier"`; nothing is acquired and no counter moves (US-006).
+- A fail-open wait-timeout body is served, marked `unavailable_allowed`, and never cached; the next
+  request for the URL classifies; an absent-classifier fail-open body is cached under its
+  `classifier_loaded=False` key as today (US-006).
+- On `/search`, once the deadline has passed a freed permit is not taken: the remaining results are
+  unscanned even if the permit is released mid-loop (US-006).
 - A queued `/retrieve` holds no body; a request beyond `admission_queue_depth` or
   `max_queued_fetch_bytes` (the byte bound binds first at the shipped defaults; the depth bound is
   tested under `max_queued_fetch_bytes: 10485760`) is refused `busy` / `admission_queue_full`; a
-  request queued longer than `admission_wait_seconds` is refused `busy` / `admission_wait_timeout`
-  and dequeued (US-002).
+  queued request cancelled before its grant is dequeued with the counters restored; a waiter
+  cancelled after its grant is the recorded pre-existing handoff residual, reachable only by task
+  cancellation (US-002).
 - A fetch error or an extraction exception releases the admission slot and the body; a request
   parked on the classification permit holds only its extracted text (US-002).
 - `/extract`'s admission refusal stays 429; `/retrieve`'s is 422 — the same literal, route-aware
@@ -1111,7 +1395,9 @@ fails the unit test that pins the update keys.
   over `max_pages` (arrives as `PDFExtractionError`), and a worker killed by `RLIMIT_CPU` /
   `RLIMIT_AS` / the wall clock each map to the table's `error` / `reason` (US-003).
 - A read-only or full spool directory yields `extraction_failed` / `pdf_spool_error` with no
-  orphan file; a spool directory that exists with the wrong mode or owner refuses boot (US-003).
+  orphan file; a spool directory that exists with the wrong mode or owner, or as a symlink, refuses
+  boot — and refuses the spool at use time if it changed after boot, because the check runs on
+  every call (US-003).
 - The spool file is gone after cancellation mid-parse (US-003).
 - A cache value that parses but carries a different `sanitizer_revision` is already a miss through
   the key; US-004 covers only values that fail to parse (US-004).
@@ -1149,6 +1435,13 @@ fails the unit test that pins the update keys.
 - Raising the default `classification_concurrency` (kept at 1; R16 — the envelope changes nothing at
   the defaults — and spec 6 widens the range).
 - Bounding the population of classification waiters (`--limit-concurrency`) — spec 6's envelope.
+- Widening `retrieve.fetch_concurrency` past 1, and fixing `ExtractionAdmissionController`'s
+  post-grant cancellation handoff (recorded residual) — spec 6's envelope work; both flagged for
+  the epic wrapper.
+- A per-result "unscanned" marker on `SearchResult` — declined on the record (Decisions Made); the
+  corrected `suspicious` description and the consumer rule are the signal.
+- A timer around the admission acquisition (`admission_wait_seconds`) — withdrawn in round 4; the
+  queue is bounded by construction.
 
 ## Assumptions
 
@@ -1161,9 +1454,12 @@ fails the unit test that pins the update keys.
 - The `1.3.0` golden is mutable until spec 8 US-002 freezes it (ruling 5); it exists because spec 1
   US-004 created it (`depends_on`).
 - The spool directory is a process-private `forage-spool-<uid>` subdirectory of
-  `tempfile.gettempdir()`, created 0700 at boot and resolved per call; disk cost per fetched PDF is
-  at most the 10 MB fetch cap; `TMPDIR` is an operator input documented as such.
-- The eight `retrieve:` / policy keys are `config.yaml`-only until spec 6's bind-mount and env
+  `tempfile.gettempdir()`, created 0700 on first use (the lifespan's call is the boot check) and
+  verified with `os.lstat` on every call; disk cost per fetched PDF is at most the 10 MB fetch cap;
+  `TMPDIR` is an operator input documented as such, including the parent-directory requirement.
+- No timer bounds the admission queue; its bound is the queue depth, the reserved bytes and the
+  slot hold, and the controller is used exactly as written.
+- The seven `retrieve:` / policy keys are `config.yaml`-only until spec 6's bind-mount and env
   procedure lands — an interim state the epic wrapper tracks (the shipped `extraction:` block has the
   same shape today).
 - No new dependency: `asyncio`, `tempfile`, `os.fchmod` are stdlib.
@@ -1179,12 +1475,18 @@ fails the unit test that pins the update keys.
 - **Wire changes in the window.** `content_too_large` reason `promptguard_budget` (US-001);
   `retrieve.classification_wait_timeouts`, `search.classification_wait_timeouts` (US-006);
   `retrieve.semaphore_saturation`, `retrieve.busy_rejections`, `busy` on `/retrieve` (422) with
-  reasons `admission_queue_full` / `admission_wait_timeout` (US-002); `extraction_failed` on `/retrieve` with four reasons (US-003);
-  `CacheMetrics.corrupt_entries` (US-004); `effective_promptguard_fail_closed` on both responses and
-  `effective_promptguard_threshold` on `RetrievedContent` (US-005). Each follows the R36 block; the
-  epic wrapper's window list is updated by the parent.
-- **Gate scopes.** Admission controller: cache read → (acquire, bounded by
-  `admission_wait_seconds`) → fetch → stage 1 → (release slot **and** body). Classification
+  reason `admission_queue_full` — and, through the shared `Pipeline422ErrorResponse`, on the
+  `/search` 422 enum (US-002); `extraction_failed` on `/retrieve` with four reasons, likewise on
+  the `/search` enum (US-003); `CacheMetrics.corrupt_entries` (US-004);
+  `effective_promptguard_fail_closed` on both responses and `effective_promptguard_threshold` on
+  `RetrievedContent` (US-005); description rewrites of `Pipeline422ErrorResponse.error` (US-002,
+  US-003) and `SearchResult.suspicious` (US-006). Each follows the R36 block and says which half
+  applies — diff-set entries: `Pipeline422ErrorResponse.error[enum]=busy`,
+  `…=extraction_failed`, and US-005's three field paths; everything else (counters, reasons,
+  descriptions) is gated by `--check`, the `/metrics` order guards or golden equality; the epic
+  wrapper's window list is updated by the parent (it still names two `busy` reasons).
+- **Gate scopes.** Admission controller: cache read → (acquire — the controller's bounded queue,
+  no timer) → fetch → stage 1 → (release slot **and** body). Classification
   semaphore: stage 3 only on all three routes, acquired inside `sanitize_and_structure` via
   `_bounded_permit` (`/extract` passes no deadline). Stages 2 and 4: `asyncio.to_thread`, bounded by
   neither gate. The three routes serialise behind `classification_concurrency`; `/extract`'s wait is
@@ -1203,7 +1505,12 @@ fails the unit test that pins the update keys.
   recorded facts: unauthenticated fetch traffic can block `/extract`'s untimed acquisition (the
   one-directional coupling, with no counter of its own — its signal is the prose); and the
   population of classification waiters is unbounded in count (bounded per waiter to the extracted
-  text and in time to `promptguard_wait_seconds`) until spec 6 sets `--limit-concurrency`.
+  text and in time to `promptguard_wait_seconds`) until spec 6 sets `--limit-concurrency`. Two
+  round-4 additions: a body left unscanned by a wait timeout is never written to the content
+  cache (otherwise a momentary saturation would become a durable, attacker-chosen classifier
+  bypass for `cache_ttl_hours`), and `ExtractionAdmissionController`'s post-grant cancellation
+  handoff is a recorded residual — no timer touches the acquisition, so it is reachable only by
+  task cancellation.
 - **Event-loop proof.** The responsiveness test follows `tests/test_app.py:958-993` (real
   `ASGITransport` client over the real lifespan, connected cache, `threading.Event` release); a
   mocked loop proves nothing.
@@ -1223,7 +1530,11 @@ fails the unit test that pins the update keys.
   `/retrieve` `sanitize_and_structure` call is `:368`; `tests/test_contract_errors.py`'s counts are
   `:234` (18) / `:241` (6) with the comment at `:244`; `extraction_limits.py`'s `_bounded_int` is
   `:79` and its 64-chunk bound `:146`; `pipeline_error_handler` is `retrieval_app.py:1411` with the
-  status choice at `:1424`, and the middleware's 429 is minted at `:1112`.
+  status choice at `:1424`, and the middleware's 429 is minted at `:1112`. Verified in round 4:
+  `ExtractionAdmissionController.acquire` is `:972` and `release` `:998` (both `async def`), the
+  handoff is `:1000-1007`, the constructor sites are `:1218` and `:1381` plus six test sites,
+  `_spool_upload` is `:1127-1152` with no `dir=`, `Pipeline422ErrorResponse.error` is `:723`, and
+  `SearchResult.suspicious` is `models.py:365-368`.
 - Related: `kit_tools/arch/SECURITY.md:50` (middlewares gate on `/extract` — unchanged), `:143`
   (chunk budget semantics — US-001), `:196-198` (admission table — US-006, US-002, US-003);
   `kit_tools/docs/MONITORING.md` (`/metrics`), `docs/configuration.md`.
@@ -1340,16 +1651,20 @@ the explicit version of that choice).
   resource-exhaustion vector of the same kind the 10 MiB refusal closes; pages above the knob's
   ceiling cannot be served safely under any configuration; keeping the old behaviour open keeps the
   vector open) — chosen over a MAJOR and over shipping the pre-check disabled by default.
-- `/retrieve`'s admission is the existing controller class (its `__init__` restructured to five
-  primitives, `from_settings` for `/extract`), acquired before the fetch under a bounded wait; a
-  refused admission is 422 `busy` (the existing literal) with reasons `admission_queue_full` /
-  `admission_wait_timeout`, because adding a 429 to `/retrieve` would be a new observable status
+- `/retrieve`'s admission is the existing controller class **used as it is** (round 4: constructor
+  and handoff unchanged, `from_retrieve_settings` adapts a `RetrieveSettings` into the view the
+  controller reads, the `metrics` annotation widened to the Protocol), acquired before the fetch
+  with no timer — the round-3 `asyncio.timeout` wrapper and `admission_wait_seconds` are withdrawn
+  because the handoff would leak a slot on a post-grant cancellation, and the bounded queue is the
+  backpressure; a refused admission is 422 `busy` (the existing literal) with the one reason
+  `admission_queue_full`, because adding a 429 to `/retrieve` would be a new observable status
   (MAJOR) while a new 422 code inside the window is MINOR — and because round 3 found
   `pipeline_error_handler` maps `busy` to 429 by code alone, the handler becomes route-aware with
   both halves tested (R42). The fetched body is released with the slot so a classification waiter
   holds only text; the waiter population is bounded in time and per-waiter size, not in count, and
   the docs say so. **Flagged for the epic wrapper**: ruling 23 and the window list name `busy` and
-  both reasons; the epic's success criterion "a 65-chunk page classifies at most 64 chunks" is
+  two reasons (now one, `admission_queue_full`, and no `admission_wait_seconds` key — seven keys);
+  the epic's success criterion "a 65-chunk page classifies at most 64 chunks" is
   stale (this spec gives `/retrieve` its own 256-chunk budget and refuses rather than clamps) and
   its contract list should assign `effective_promptguard_threshold` on `SearchResponse` to spec 3
   US-005; the interim "hardening knobs are `config.yaml`-only until spec 6" state is tracked there.
@@ -1403,7 +1718,29 @@ the explicit version of that choice).
   is whole-file and the record says so.
 - The `/search` deadline is a monotonic per-request deadline consulted per acquisition;
   `asyncio.timeout` lives only inside `_bounded_permit` (round 3; the round-2 sentence described a
-  loop-wrapping timeout that would unwind the loop).
+  loop-wrapping timeout that would unwind the loop); round 4 made the deadline check explicit
+  before each acquisition, because a free permit is taken synchronously and a zero timeout never
+  fires.
+- **Round 4.** `fetch_concurrency` is pinned 1–1 (the round-3 1–8 range overcommitted worker
+  address space against the one-worker memory reservation; the rationale sentence about body size
+  was wrong and is replaced). `retrieve.semaphore_saturation` keeps its name (overrules the rename
+  to `admission_saturation`: the controller writes the attribute by name, `/extract`'s counter of
+  the same name counts the same admission class, and the MONITORING row disambiguates both gates).
+  No per-result unscanned marker is added to `SearchResult` (overrules the reviewer's option (a):
+  the `suspicious` flag already marks every unscanned result, `unscanned_results` counts them, and
+  the description plus the consumer rule state it; a boolean that duplicates `suspicious` on the
+  scanned-and-flagged case would not separate the two either). `content_too_large_to_classify` is
+  not reused for a fetched PDF over the worker's ceiling: one refusal shape for "over the
+  classification budget" across the HTML and PDF branches of `/retrieve` beats matching
+  `/extract`'s code, and the `reason` names the budget. The GOVERNANCE example-6 lane is
+  reconciled by making the knob the stated window (through at least 1.4.0) rather than claiming
+  "no window" against step 2. The controller's handoff race is recorded, not fixed (R23: used as
+  it is; no timer makes it reachable). A trusted-tier request acquires no permit. A wait-timeout
+  fail-open body is never cached. `/metrics` counters are not in `_SCHEMA_MODELS`, so no counter
+  in this spec appends to the diff set (code fact; round 3 said they did). The ruling's phrase
+  "results that time out carry `suspicious` unset … as today" contradicts the code —
+  `orchestrator.py:1040-1044` sets `suspicious = True` on the fail-open pass-through — so the
+  code's behaviour is kept and the description is corrected to it.
 - The findings ledger (`kit_tools/AUDIT_FINDINGS.md`) is a gitignored run artifact; stories record
   the WA-D items they close in Implementation Notes.
 
@@ -1445,6 +1782,25 @@ the explicit version of that choice).
   200-only wording, the `retrieve only` negative scope, the parse-success-is-not-authenticity
   sentence. Findings overruled and why are in Decisions Made.
 
+### Session 2026-09-19 (validation round 4)
+- Rulings applied: R23 (corrected — controller constructor and handoff unchanged with the eight
+  construction sites named; `from_retrieve_settings` adapter; `AdmissionSlot` with `async def
+  release`; no `asyncio.timeout` around the admission acquisition and `admission_wait_seconds`
+  withdrawn; `build_retrieved_content` unchanged with `fetch_result` and `html_text` dropped before
+  the wait; lazy `mkdir(mode=0o700, exist_ok=False)` spool directory verified with `os.lstat` on
+  every call, no repair; cache write skipped on a fail-open wait timeout; `SearchResult.suspicious`
+  description corrected), R36 (corrected — enum members and fields append, counters, reasons and
+  descriptions do not; the `/metrics` models are not golden models), R43 (every grep names its
+  path set and was run), R41 (counts re-verified: 16 / 47 / 14 / 12 / 0, eight constructor sites).
+  Round-3 warnings applied: the trusted-tier permit skip, the explicit `/search` deadline check,
+  the `/search` 422 enum widening and `Pipeline422ErrorResponse.error` description, the
+  `fetch_concurrency` 1–1 pin, the honest stage-1 peak sentence, the gated GOVERNANCE `### (<letter>) `
+  section and example-6 reconciliation, the `TESTING_GUIDE.md` rows, the two-reason-shape
+  `API_GUIDE.md` sentence, the `cache.py:405-425` precedent, the provisional sizing pairing, the
+  per-test controller reset, the parent-directory and confidentiality sentences for `TMPDIR`, the
+  consumer-note sentence on fail-open exposure. Findings overruled or narrowed are in Decisions
+  Made (Round 4).
+
 ## Open Questions
 
 - [ ] Whether the new wait and saturation counters should gain a per-route or per-cause breakdown
@@ -1460,3 +1816,7 @@ the explicit version of that choice).
       story (non-blocking; a container restart on a tmpfs clears them).
 - [ ] Whether sustained classification-wait timeouts should ever surface on `/health` (non-blocking;
       decided "no" here with the reasoning recorded — revisit if operators cannot see the counters).
+- [ ] Whether `ExtractionAdmissionController.release()`'s handoff should be made idempotent
+      (decrement in `release()`, re-increment in the woken waiter) so a post-grant cancellation
+      cannot leak a slot (non-blocking; pre-existing, reachable only by task cancellation, recorded
+      in GOTCHAS and SECURITY; spec 6's envelope work is the natural owner).
