@@ -27,7 +27,8 @@ updated: 2026-09-19
 > vendors the 86M weights** (and only then adds the 86M to the allowlist) and **US-004 runs the
 > benchmark** on the reference container. Binding: owner decision 4; rulings 5, 6, R17, R18, R29,
 > R32, R33, R34, R36, R37, R39, R40, R41, R43. Context: Poppy's `WEB_ACCESS_FAMILY.md` § "PromptGuard research
-> (2026-08-30)". Validation rounds 1, 2, 3 and 4 (2026-09-19) applied — see Clarifications.
+> (2026-08-30)". Validation rounds 1–5 (2026-09-19) applied — see Clarifications (round 5 is the
+> final, un-reviewed close-out; its unapplied warnings are listed in § Known risks).
 >
 > **Assumed landed** (upstream seams this spec consumes by name): spec 3 US-003's `KNOWN_CONFIG_KEYS`
 > registry, spec 3 US-005's per-route threshold resolver, spec 6 US-002's sizing table in
@@ -132,9 +133,14 @@ shipped" unless US-005's record says so.
   same length to 1), and both shapes are pinned.
 - `uv run python -m scripts.bench_promptguard --help` exits 0 with no weights, no Docker and no
   network; its unit tests run under the socket guard with injected fakes; p50/p95 are nearest-rank
-  (`[1..20]` → `10`, `19`); a configuration failure exits 2 with a closed message and no JSON; a
-  **service** failure during measurement writes a JSON carrying `"outcome"`, the samples collected so
-  far and null percentiles, and exits non-zero — the row the epic was commissioned for is never lost.
+  (`[1..20]` → `10`, `19`); the harness **refuses to measure an unloaded classifier** — the health
+  wait must end at `status: healthy` with `promptguard_loaded: true` or the run is a configuration
+  failure (exit 2, no JSON, no rows); both benchmark documents are sized in **tokens** with the
+  model's own tokenizer, never by a characters-per-token constant; every row records
+  `promptguard_loaded`, `promptguard_model` and `sanitizer_revision` from `/health`; a configuration
+  failure exits 2 with a closed message and no JSON; a **service** failure during measurement writes
+  a JSON carrying `"outcome"`, the samples collected so far and null percentiles, and exits non-zero
+  — the row the epic was commissioned for is never lost.
 - Either the 86M manifest entry, the mirror tag and the allowlist entry are committed by the vendoring
   gate and the benchmark table is recorded here and in `docs/configuration.md`'s sizing table — or each
   gate is recorded as not run, naming its prerequisites (US-005, US-004), which is the sanctioned
@@ -170,6 +176,13 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
 `derive_sanitizer_revision({})` equals the pre-story value.
 
 **Implementation Hints:**
+- **Landing order inside the story — a green suite at each step** (salty, round 4; ruling R37 forbids
+  a split, so the midpoints are stated instead): (1) the per-model manifest format, `tests/fakes.py`,
+  the ~40 manifest-shaped assertion sites and the generator — suite green; (2) `(model_id, revision)`
+  threaded through acquisition and loading, `WeightAcquisition` included — suite green; (3) the
+  top-of-function order in `_acquire_and_load` and the `_load_verified` agreement check with their
+  dangerous-case tests — suite green; (4) docs and greps. Implementation Notes record which step was
+  reached, so a run that dies at hour two is resumable at a known midpoint rather than bisected.
 - **`DEFAULT_MODEL_ID`.** Rename `MODEL_ID` (`promptguard/classifier.py:23`) to `DEFAULT_MODEL_ID` and
   keep `MODEL_ID = DEFAULT_MODEL_ID` as a deprecated alias for one story so the importers
   (`model_fetcher.py:139`, `pipeline/sanitizer_revision.py:10`, `scripts/vendor_weights.py:107`,
@@ -213,13 +226,26 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
   `(model_id, revision)` pair and refuses with the new closed reason `weights_revision_unpinned` when
   `revision` is not that model's manifest entry revision — it never verifies one directory and hands
   another to `_load_verified`. **The loaded-identity check is an existence-plus-equality check in
-  `_load_verified`** (ruling R29 as corrected in round 4): `_load_verified(classifier, *, cache_root,
-  model_id, revision, verified_path)` (`:1474-1479` today takes `cache_root` and `revision` only)
-  computes the manifest-derived path `snapshot_path(cache_root, model_id, <that model's manifest
-  revision>)` (`:484`) and, **before** calling `load()`, asserts it `== verified_path` (the directory
-  `verify_weights` hashed) and `.is_dir()`; on either failure it logs the closed reason
-  `model_identity_mismatch` (no path in the message), returns `False`, and `load()` is never
-  called. `_walk_snapshot` (`:653`) is unchanged.
+  `_load_verified`, and `_load_verified` derives both paths itself** (ruling R29 as corrected in
+  round 5; codebase-fit, round 4 — the round-4 `verified_path` parameter could only be supplied by
+  the `_verify_cached` call site, `:1609`: the hub and mirror legs return a bare outcome string
+  through `_try_source` (`:1660`; `_fetch_from_mirror` `:1311`; the hub leg `:1700-1709`) and discard
+  their `VerificationResult`, so passing the observed directory would have meant changing three
+  return shapes the hint never budgeted): `_load_verified(classifier, *, cache_root, model_id,
+  revision, manifest_path)` (`:1474-1479` today takes `cache_root` and `revision` only; both call
+  sites, `:1609` and `:1636`, already hold every argument) computes the manifest-derived path
+  `snapshot_path(cache_root, model_id, _manifest_entry(manifest_path, model_id).revision)` (`:484`;
+  the memoised entry from the revision hint below) and the resolved path `snapshot_path(cache_root,
+  model_id, revision)` and, **before** calling `load()`, asserts the two are equal and that the
+  directory `.is_dir()`; on either failure it logs the closed reason `model_identity_mismatch` (no
+  path in the message), returns `False`, and `load()` is never called. No `_try_source` or mirror
+  signature changes; the `VerificationResult` stays where it is. **What the two halves buy, said
+  honestly** (salty, round 4): the equality half re-derives the top-of-function refusal at the load
+  site, so a future reorder of `_acquire_and_load` cannot load an unpinned revision; the existence
+  half is the live check for a snapshot that vanished or was never the requested model's. The
+  dangerous-case tests below therefore call `_load_verified` **directly**, once with a `model_id`
+  whose directory does not exist and once with a `revision` that is not the entry's, and assert
+  `model_identity_mismatch` with `load()` uncalled in both. `_walk_snapshot` (`:653`) is unchanged.
 - **The classifier side is an existence check only — and the residual is written down** (ruling R29
   as corrected in round 4; security, round 3). `load()` (`classifier.py:63-116`) wraps its body in one
   `except Exception` that logs the generic "PromptGuard model not available". The classifier does
@@ -275,7 +301,21 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
   `snapshot_path()` is computed and before any source is tried (the same placement as
   `manifest_model_unknown`; salty, round 3 — the round-3 "in the resolver / at the top" wording named
   two places, which contradicted "total") — `FORAGE_MODEL_REVISION=main` never reaches a path or a
-  download; (2) the manifest entry's revision for that model; (3) `DEFAULT_MODEL_REVISION`
+  download. **The new order at the top of `_acquire_and_load`, exactly** (salty, round 4 — today its
+  first statement is `_verify_cached(...)`, `:1594`, which computes `snapshot_path(cache_root,
+  MODEL_ID, revision)` at `:1525` before the manifest is read at `:1608`, where a comment justifies
+  that placement): (i) `_manifest_entry(manifest_path, model_id)` — a document-level failure or an
+  entry that blesses nothing → `weights_pin_unusable` (`:1617`'s message, now emitted **before**
+  `_verify_cached` rather than after it; `_load_manifest`'s closed reason is logged as today), a
+  missing entry → `manifest_model_unknown`; (ii) `resolve_revision(model_id) != entry.revision` →
+  `weights_revision_unpinned`; (iii) only then `_verify_cached(...)`, which takes `model_id` and can
+  no longer see a manifest failure the top did not — its `cached.manifest_failure` early return
+  **stays as written** (unreachable through the memoised entry, harmless, not worth a diff) and the
+  `read_manifest_pin` call at `:1608` is replaced by the entry from (i). The consequence is pinned
+  by a test: for a **warm cache plus an unreadable manifest** the reason the operator sees is
+  `weights_pin_unusable` (today `_verify_cached` logs the manifest reason first and
+  `cached.manifest_failure` returns silently) and `_verify_cached` is never called (recording
+  double); (2) the manifest entry's revision for that model; (3) `DEFAULT_MODEL_REVISION`
   (`:174`, stays the 22M constant) **for the default model only**, with one WARNING
   `manifest_pin_unavailable — reason=<manifest_missing|manifest_unreadable|manifest_unparseable|manifest_invalid|manifest_empty>`
   (the closed `_load_manifest` reasons, `:260-265`), so an unreadable manifest at runtime **never
@@ -313,8 +353,9 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
   table) are classified in Implementation Notes as mention-only or rewritten.
 - **The generator writes the map — and diffs it.** `scripts/vendor_weights.py` gains `--model-id`
   (default `DEFAULT_MODEL_ID` — the supply-chain tool does **not** read `FORAGE_MODEL_ID`; an explicit
-  flag always wins), `generate_manifest()` (`:446`) writes or replaces that model's entry and keeps the
-  others byte-stable; `read_manifest_document` (`:486`), `manifest_diff` (`:501`, run at `:981` in
+  flag always wins), `generate_manifest()` (`:446`) — which today neither reads nor merges an existing
+  document (codebase-fit, round 4) — is taught to read the committed document first, then write or
+  replace that model's entry and keep the others byte-stable; `read_manifest_document` (`:486`), `manifest_diff` (`:501`, run at `:981` in
   the manifest phase — the supply-chain review step whose output US-005 records) and `_files_by_path`
   (`:546`) are taught the keyed shape: the diff is **scoped to the `--model-id` entry** and reports
   another model's entry only as "untouched"; a diff of a one-model manifest against a two-model
@@ -344,13 +385,16 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
       `_load_verified` (asserted on a recording double).
 - [ ] `verify_weights(..., model_id=, revision=)` verifies the requested pair; a `FORAGE_MODEL_REVISION`
       that is not the pin yields `weights_revision_unpinned` (closed reason, no path in the log) from
-      the top of `_acquire_and_load` — the one refusal site — and `_load_verified` asserts the
-      manifest-derived `snapshot_path(...)` equals the verified path and exists before `load()` —
-      the two-directory test from the Independent Test passes and the unpinned directory's files are
-      never opened.
+      the top of `_acquire_and_load` — the one refusal site — and `_load_verified(...,
+      manifest_path=)` derives both paths itself and asserts the manifest-derived
+      `snapshot_path(...)` equals the resolved-revision one and exists before `load()` (no
+      `_try_source` / `_fetch_from_mirror` return-shape change — their `-> str` annotations are
+      untouched in `git diff`) — the two-directory test from the Independent Test passes and the
+      unpinned directory's files are never opened.
 - [ ] The loaded-identity check lives in `_load_verified` (existence plus equality): a warm snapshot
       of a different model under the requested id yields `model_identity_mismatch`, `load()` is never
-      called (recording double), and a test asserts that specific message; the classifier's own
+      called (recording double), and a test asserts that specific message; a direct `_load_verified`
+      call with a `revision` that is not the entry's yields the same (second test); the classifier's own
       pre-flight is the `cache_dir` existence check as an early-return block outside the blanket
       `except` (`model_cache_dir_missing`, tested); `kit_tools/arch/SECURITY.md`'s stage-3 paragraph
       carries the residual sentence "the classifier trusts the path the verifier handed it"
@@ -374,13 +418,19 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
 - [ ] `FORAGE_MODEL_REVISION` set to a non-40-hex value keeps `model_revision_invalid` + fall-back-to-pin
       (the two existing `TestRevisionPin` tests pass unchanged); set to a 40-hex value that is not the
       selected model's pin, the refusal `weights_revision_unpinned` fires before any `snapshot_path`
-      is computed and `_download_from_hub` is never called (recording doubles) — both tests named.
+      is computed and `_download_from_hub` is never called (recording doubles) — both tests named;
+      the top-of-function order (entry → `manifest_model_unknown` / `weights_pin_unusable` →
+      `weights_revision_unpinned` → `_verify_cached`) is pinned: a warm cache plus an unreadable
+      manifest yields `weights_pin_unusable` with `_verify_cached` uncalled (test).
 - [ ] `scripts/vendor_weights.py --model-id` writes the map form, preserves other entries, and
       `manifest_diff` scoped to that entry reports only the added model for a one-model → two-model
       diff (test); the seven diff tests at `tests/test_vendor_weights.py:559-616` pass against the
       keyed shape; a round-trip test parses the output with `_load_manifest`.
 - [ ] `ALLOWED_SUFFIXES == frozenset({".safetensors", ".json", ".txt", ".model"})` and `ALLOW_PATTERNS`
-      are asserted unchanged; `grep -n 'use_safetensors=True' promptguard/classifier.py` returns 1 hit.
+      are asserted unchanged; `grep -c 'use_safetensors=True' promptguard/classifier.py` is **2** (the
+      explanatory comment at `:90` and the call-site keyword at `:100` — executed 2026-09-19; the
+      round-4 "1 hit" was un-executed, R43) and `grep -n '^ *use_safetensors=True,'
+      promptguard/classifier.py` returns exactly the call site.
 - [ ] `grep -n '\bMODEL_ID\b' model_fetcher.py pipeline/sanitizer_revision.py scripts/vendor_weights.py
       promptguard/classifier.py` returns nothing (pre-story 20 hits, recorded) and `grep -rnw MODEL_ID
       tests --include='*.py'` returns nothing (pre-story 47) — alias removed, the three prose sites
@@ -458,8 +508,18 @@ id unset the hash input is byte-identical to explicitly setting the 22M id; at t
   round 3): `test_every_allowlisted_model_has_a_manifest_entry` iterates `ALLOWED_MODEL_IDS` and
   asserts `read_manifest_pin(<committed manifest>, model_id=...)` returns an entry for each — one
   member today; US-005's commit keeps it green by adding the entry and the id together.
-- **Assert `id2label` at load, don't assume index 1** — an explicit early-return block after
-  `from_pretrained`, outside the blanket `except` (US-001's pattern). `classifier.py:27-29` says "the
+- **Assert `id2label` at load, don't assume index 1** — and say how `load()` is restructured so the
+  check is an early return rather than a branch inside the blanket `except` (salty, round 4: today
+  the whole body — both `from_pretrained` calls, `model.eval()`, the assignment and the success
+  return — sits inside one `try`, `classifier.py:71-116`, and `model` exists only there, so US-001's
+  pre-flight pattern, which runs *before* the `try`, does not transfer): the imports and the two
+  `from_pretrained` calls stay in the `try`, which now binds `model` and `tokenizer` to names
+  declared before it and falls through instead of returning; the label check runs **after** the
+  `try` block on the bound `model` as an explicit early-return block
+  (`logger.warning("model_labels_unexpected"); return False`); `model.eval()`, the assignments and
+  the success `return True` move below the check. A `model.config` with no `id2label`, a `None`, or a
+  non-mapping value is a **third negative case** producing `model_labels_unexpected`, never the
+  generic "PromptGuard model not available" (tested beside the two below). `classifier.py:27-29` says "the
   older 86M had 3 classes" — that was Prompt Guard *1*. Read `model.config.id2label`: exactly one label
   `INJECTION` and one `BENIGN` (case-insensitive); set the instance attribute
   `_injection_label_index` from it — the module constant `_INJECTION_LABEL_INDEX` (`classifier.py:29`)
@@ -530,8 +590,9 @@ id unset the hash input is byte-identical to explicitly setting the 22M id; at t
       `tuple[str, bool]` as specified (tests for unset, blank, allowlisted, disallowed).
 - [ ] `load()` derives the injection index from `model.config.id2label` (exactly two labels: one
       `INJECTION` and one `BENIGN`, case-insensitive) and refuses `{LABEL_0, LABEL_1}` and a
-      three-label config — `loaded` stays `False`, WARNING `model_labels_unexpected`, the specific
-      message asserted (both negative tests).
+      three-label config and a missing / `None` / non-mapping `id2label` — `loaded` stays `False`,
+      WARNING `model_labels_unexpected`, the specific message asserted (three negative tests); the
+      check and the success return sit after the `try` block, not inside it.
 - [ ] `test_every_allowlisted_model_has_a_manifest_entry` exists and passes against the committed
       `weights_manifest.json` for every `ALLOWED_MODEL_IDS` member.
 - [ ] `/health.promptguard_model` reports the configured id unconditionally, read from `app.state` and
@@ -782,16 +843,22 @@ injected fakes (no Docker, no network, no weights) and `uv run python -m scripts
 --help` exits 0; the percentile test pins p50 = 10 and p95 = 19 for samples `[1..20]`; a fake
 `/extract` returning 404 (the gated route's status, `retrieval_app.py:1688`, documented at
 `:1624-1628` — never 403) makes `main` exit 2 with a stderr line naming the status and the benchmark
-config mount, writing no JSON; `bench/config.yaml` parses through `_load_config` and every key is a
-`KNOWN_CONFIG_KEYS` member.
+config mount, writing no JSON; a fake `/health` that never reports `healthy` with
+`promptguard_loaded: true` makes `main` exit 2 (`never_healthy`) writing no JSON; both documents
+sized against `tests/fixtures/tiny_model` are within their token bounds by the harness's arithmetic
+and by `PromptGuardClassifier._chunk_text`; `bench/config.yaml` parses through `_load_config` and
+every key is a `KNOWN_CONFIG_KEYS` member.
 
 **Implementation Hints:**
 - **Location and shape — reuse the existing driver** (codebase-fit, round 1): the repo already has
   two host-side drivers built for a running container with this exact architecture.
   `contract_smoke.py` provides `HttpResponse` (`:191`), `CommandResult` (`:205`), `http_get(url)`
   (`:223`), `wait_for_health(...)` (`:256` — polls `/health` until `status` matches, with a deadline:
-  US-004's "wait for `promptguard_loaded`" step), `run_command(argv)` (`:434`), `_json_object` (`:302`)
-  and a `main(argv)` + argparse shape (`:669`); `searxng_smoke.py:493` already shells `docker inspect
+  US-004's "wait for `promptguard_loaded`" step), `run_command(argv)` (`:434`) and a `main(argv)` +
+  argparse shape (`:669`) — **public names only**: `_json_object` (`:302`) is private and `scripts/`
+  sits under the strict pyright root where `reportPrivateUsage` is not relaxed (`pyproject.toml`;
+  only `tests/` has the carve-out), so the harness parses `/health` and `/metrics` bodies itself
+  (`json.loads` + `isinstance(..., dict)`, three lines; codebase-fit, round 4); `searxng_smoke.py:493` already shells `docker inspect
   --format '{{.State.Status}} {{.State.ExitCode}}'`. **Scope the reuse honestly** (salty and
   codebase-fit, round 2): `http_get` and `wait_for_health` are reused for the `/health` reads only
   (`http_get` is urllib, GET-only, with a module-level `REQUEST_TIMEOUT_SECONDS = 10.0` at `:171` and no
@@ -815,15 +882,34 @@ config mount, writing no JSON; `bench/config.yaml` parses through `_load_config`
   `wait_for_health(base_url, expect_status=STATUS_HEALTHY, timeout_seconds=<that>,
   poll_interval_seconds=5, fetch=<the injected GET>)` (signature `contract_smoke.py:256-266`; the
   default `expect_status` is `degraded`, `:154`, which would return on the first 200 before the model
-  loads) before the cold request, and a unit test with an injected `fetch` asserts the call's
-  `expect_status == STATUS_HEALTHY`; US-004's recipe relies on it. `tests/test_contract_smoke.py` is
+  loads) before the cold request — **and checks what came back** (ruling R29 as corrected in round 5;
+  salty, round 4: `wait_for_health` does not raise on timeout, it returns the last response seen,
+  `contract_smoke.py:292-298`; and a degraded service does not answer non-2xx on `/extract` — the
+  route hard-codes `promptguard_fail_closed=True`, `orchestrator.py:545`, stage 3 returns
+  `INJECTION_DETECTED` / `skip_reason=model_unavailable` in microseconds, `stage3_promptguard.py:99-107`,
+  and the handler answers 200 with the diagnostic label, so an unloaded classifier would yield a
+  clean-looking row that measured nothing but FastAPI): the harness parses the returned body and
+  requires `status == "healthy"` **and** `promptguard_loaded is True`; anything else is the
+  configuration failure `never_healthy` — exit 2, a stderr line naming the timeout, the last `status`
+  seen and `--container` when given, **no JSON, no rows**. A unit test with an injected `fetch` that
+  never reports healthy asserts exit 2 and no file; a second asserts a body with `status: healthy`
+  but `promptguard_loaded: false` (impossible today, cheap to pin) is refused the same way; a third
+  asserts the call's `expect_status == STATUS_HEALTHY`; US-004's recipe relies on it.
+  `promptguard_loaded`, `promptguard_model`, `sanitizer_revision` and `contract_version` are read from
+  that same `/health` body into the row. `tests/test_contract_smoke.py` is
   the hermetic test pattern ("pure evaluators plus an injectable fetcher"). The module goes in
   `scripts/` because it is owner tooling like `vendor_weights.py`; both `scripts/` (`.dockerignore:26`)
   and the root drivers (`Dockerfile:158-160`'s enumerated COPY list, guarded by
   `tests/test_dockerfile.py:559-603`) stay out of the image. `scripts/` is type-checked under the strict
   root (`pyproject.toml`): no private access, no suppression comments. A module-docstring
   `test_mapping:` block like `contract_smoke.py:112`.
-- **Arguments**: `--base-url` (default `http://127.0.0.1:8020`, must match `^https?://`), `--container
+- **Arguments**: `--tokenizer-dir <path>` (required for a measurement run — argparse `required=True`
+  keeps `--help` working; validated `Path(...).is_dir()` before any request; the selected model's
+  snapshot directory, of which only the tokenizer files are read), `--model-id` (default
+  `DEFAULT_MODEL_ID`, imported from `promptguard.classifier` as `scripts/vendor_weights.py` does;
+  checked against `/health.promptguard_model` — `model_mismatch`, exit 2, otherwise — so the host
+  tokenizer and the container's classifier are the same model by construction), `--base-url` (default
+  `http://127.0.0.1:8020`, must match `^https?://`), `--container
   <name>` (optional; validated against `^[A-Za-z0-9][A-Za-z0-9_.-]*$` before it reaches an argv),
   `--runs` (default 20; **no hard floor** — a value below 5 is accepted and runs, and `warm_p95_*` is
   then `null` because a nearest-rank p95 needs at least five samples), `--json <path>`, `--label`
@@ -846,21 +932,41 @@ config mount, writing no JSON; `bench/config.yaml` parses through `_load_config`
   `brave_settings_from_config` — `retrieval_app.py:1215,1242,1282` — and US-007's
   `promptguard_settings_from_config`), asserts every key is a `KNOWN_CONFIG_KEYS` member, asserts the
   key set equals `config.yaml`'s, and asserts the **only** key whose value differs is
-  `extract_route_enabled`. `bench/*.json` is gitignored (the outputs
-  live beside it). The mount replaces the file wholesale, so a partial file would silently benchmark
+  `extract_route_enabled`. `bench/*.json` and `bench/tokenizer-*/` are gitignored (the outputs and
+  the copied-out tokenizer snapshots live beside it; `.gitignore` has no `bench` line today). The mount replaces the file wholesale, so a partial file would silently benchmark
   a non-reference configuration — that is why it is a full copy. `bench/` joins `.dockerignore`
   (one line, `bench/`, beside `scripts/` at `:26`; security, round 3) so it is outside the build
   context as well as outside the enumerated COPY list (`tests/test_dockerfile.py:559-603`;
   `_dockerignore_patterns()` at `:626` reads the file).
-- **Inputs are deterministic and synthetic**: generated in code from a fixed seed — one plain-text
-  document of ≈512 tokens (≈2,000 characters of seeded lorem) and one sized **at or just under the
-  derived classification ceiling**, taken from the repo's single source
-  `pipeline.extraction_limits.max_extracted_characters(settings.max_promptguard_chunks)`
-  (`pipeline/extraction_limits.py:34`; 114,688 at the default 64 — `pdf_subprocess.py:71,81,208` read
-  the same function; never a literal or a re-derived formula) — a document over the ceiling is refused
-  with `content_too_large_to_classify`, `pipeline/orchestrator.py:551`. No fixture files, no
-  third-party text. The unit test asserts the generator is deterministic and the budget document is
-  within 1 % under the value that same call returns.
+- **Inputs are deterministic, synthetic — and sized in tokens with the model's own tokenizer**
+  (ruling R29 as corrected in round 5; salty and codebase-fit, round 4: `max_extracted_characters`
+  is `(MAX_SEQ_LEN - CHUNK_OVERLAP) * max_chunks * CHARACTERS_PER_PROMPTGUARD_TOKEN` with the constant
+  `4`, `pipeline/extraction_limits.py:22,34` — a heuristic — while the real window count is
+  `_chunk_text`'s arithmetic over the token ids, `promptguard/classifier.py:133-146`; US-007's own
+  measurement spans 4.56 chars/token for prose to 10.4 for repeated runs, so a document generated at
+  the character ceiling can pass the pre-gate at `orchestrator.py:532` and blow the chunk budget
+  inside `classify()`, which `:551` turns into a 422 `content_too_large_to_classify` — the one row
+  the epic was commissioned for, misread as a service failure). Two documents, generated in code
+  from a fixed seed with **no characters-per-token constant anywhere in the module** (`grep -c
+  CHARACTERS_PER_PROMPTGUARD_TOKEN scripts/bench_promptguard.py` is 0): the harness loads the
+  tokenizer from `--tokenizer-dir` (`transformers.AutoTokenizer.from_pretrained(<dir>,
+  local_files_only=True)`; `transformers` is a runtime dependency, `pyproject.toml`, so the repo venv
+  has it on the host) and counts tokens exactly as `_chunk_text` does (`encode(text,
+  add_special_tokens=False)`), reproducing its window arithmetic from the public `MAX_SEQ_LEN` /
+  `CHUNK_OVERLAP` constants. The **one-window document** is the longest seeded prefix whose token
+  count is ≤ `MAX_SEQ_LEN` (exactly one window, `classifier.py:133-134`); the **budget document** is
+  the longest seeded prefix admitted by **both** gates the service applies — `len(text) ≤
+  max_extracted_characters(max_chunks)` (the character pre-gate at `orchestrator.py:532`, read from
+  the same function `pdf_subprocess.py:71,81,208` use, never a literal) **and** window count ≤
+  `max_chunks` (the budget inside `classify()`) — so neither gate can refuse it; the JSON records
+  `budget_tokens`, `budget_windows` and `budget_chars` as measured, and the latency keys are named
+  `_1w` / `_budget`, not `_512` (a token count is a measurement, not a name). The unit tests use
+  `tests/fixtures/tiny_model` as `--tokenizer-dir` (the repo's only real tokenizer, already loaded
+  offline by `tests/test_stage3_promptguard.py:288`) and assert determinism, that the one-window
+  document is one window and the budget document is within both bounds by the harness's arithmetic
+  **and** by `PromptGuardClassifier._chunk_text` itself (private access is allowed under `tests/`),
+  and that one more seeded word breaches a bound. US-004's recipe copies each model's tokenizer out
+  of the shared volume. No fixture files, no third-party text.
 - **Measurements**: cold = wall-clock of the first request after container start; warm p50/p95 =
   nearest-rank percentiles (`sorted(samples)[math.ceil(p / 100 * n) - 1]`) over `--runs` further
   requests per input, `time.perf_counter`; **memory from the service's own cgroup reading first**
@@ -876,22 +982,33 @@ config mount, writing no JSON; `bench/config.yaml` parses through `_load_config`
   the table does not characterise behaviour at `classification_concurrency > 1` (second opinion,
   round 1; a `--concurrent N` mode is a follow-up, not this story).
 - **Failure behaviour is defined — two taxonomies** (story quality, round 1; salty, round 2).
-  *Configuration failures*, before any successful sample: a non-2xx from the very first `/extract`
-  request (a **404** means the bench config was not mounted — `retrieval_app.py:1688` raises 404, not
-  403, for the disabled route), a connection error at `--base-url`, a bad
-  argument — exit 2, a stderr line naming the status / the URL / the `bench/config.yaml` mount, **no
+  *Configuration failures*, before any successful sample: the health wait ending anywhere but
+  `healthy` + `promptguard_loaded: true` (`never_healthy`), `/health.promptguard_model` not equal to
+  `--model-id` (`model_mismatch`), a non-2xx from the very first `/extract` request (a **404** means
+  the bench config was not mounted — `retrieval_app.py:1688` raises 404, not 403, for the disabled
+  route; a **422** whose `reason` is `content_too_large_to_classify` on the first budget request
+  means the host tokenizer did not match the container's model and is named as such, never as a bare
+  status), a connection error at `--base-url`, a bad argument — exit 2, a stderr line naming the
+  status / the reason / the URL / the timeout and last status / the `bench/config.yaml` mount, **no
   JSON**. *Service failures during measurement*, after at least one successful sample: a non-2xx, a
   timed-out sample, the container gone — the harness **writes the JSON** with `"outcome":
-  "<non_2xx|timeout|container_gone>"`, the samples collected so far, `null` for every percentile it
-  could not compute, and exits non-zero; the row is a *result* ("86M at 1 vCPU timed out on the budget
+  "<non_2xx|timeout|container_gone>"` (plus `non_2xx_reason`: the pipeline 422 body's closed `reason`
+  when there is one, else `null`, so an oversized input can never be read as a service failure), the
+  samples collected so far, `null` for every percentile it could not compute, and exits non-zero; the row is a *result* ("86M at 1 vCPU timed out on the budget
   document" is the most informative row in the matrix), never a silent exclusion. `--container`
   omitted, or `docker stats` failing or unparseable, leaves `container_mem_mib` as `null`, logs one
   WARNING and completes the run. No path echoes a token or an environment value.
-- **Output**: one JSON object with fixed keys — `label`, `base_url`, `runs`, `concurrency`,
-  `outcome` (`"ok"` or the closed service-failure token), `cold_ms_512`, `warm_p50_ms_512`,
-  `warm_p95_ms_512`, `cold_ms_budget`, `warm_p50_ms_budget`, `warm_p95_ms_budget`, `samples_collected`,
-  `cgroup_mem_mib`, `oom_proximity_ratio`, `container_mem_mib`, `promptguard_model` and `contract_version` (read from `/health` so a row can
-  never be mislabelled).
+- **Output**: one JSON object with fixed keys — `label`, `base_url`, `model_id`, `runs`,
+  `concurrency`, `outcome` (`"ok"` or the closed service-failure token), `non_2xx_reason`,
+  `cold_ms_1w`, `warm_p50_ms_1w`, `warm_p95_ms_1w`, `cold_ms_budget`, `warm_p50_ms_budget`,
+  `warm_p95_ms_budget`, `budget_tokens`, `budget_windows`, `budget_chars`, `samples_collected`,
+  `cgroup_mem_mib`, `oom_proximity_ratio`, `container_mem_mib`, `promptguard_loaded`,
+  `promptguard_model`, `sanitizer_revision` and `contract_version` (the last four read from the
+  `/health` body the health wait returned). `promptguard_model` is **configuration, not evidence** —
+  US-006 reports the configured id unconditionally — so it cannot keep a row from being mislabelled
+  on its own (salty, round 4); the evidence that a row was measured against a loaded classifier is
+  `promptguard_loaded: true` (always `true` in a written row, since `false` is `never_healthy` and
+  writes nothing) together with `sanitizer_revision`, which moves with the model identity.
 - Docs: the "Benchmarking the classifier" subsection lives in **`docs/weights.md`** (owner tooling,
   next to the vendoring procedure), not the operator-facing `docs/configuration.md` — it states in-line
   that the benchmark config enables a release-gated route on a throwaway loopback-bound container and
@@ -906,23 +1023,36 @@ config mount, writing no JSON; `bench/config.yaml` parses through `_load_config`
       waits for `healthy` through `wait_for_health(..., expect_status=STATUS_HEALTHY,
       poll_interval_seconds=5)` under `--health-timeout-seconds` (unit test on the injected `fetch`),
       accepts the arguments above (`--runs 4` runs and reports p95 `null`), validates `--base-url` and
-      `--container` shapes, runs subprocesses as list argv with `shell=False`, reads
-      `promptguard_model` and `contract_version` from `/health` and `cgroup_mem_mib` /
-      `oom_proximity_ratio` from `/metrics` into the JSON, and writes the fixed-key JSON including
-      `"concurrency": 1` and `"outcome"`.
-- [ ] Both inputs are generated from a seed; the unit test asserts determinism and that the budget
-      document is within 1 % under `max_extracted_characters(settings.max_promptguard_chunks)`;
-      percentile maths is nearest-rank and pinned (`[1..20]` → 10 / 19; `--runs 4` → p95 `null`).
-- [ ] Failure paths are pinned by unit tests with injected fakes: first-request non-2xx (the 404
-      case included) → exit 2 naming the status and the config mount, no JSON; connection error → exit 2 naming the URL, no
-      JSON; a non-2xx or timeout **after** a successful sample → JSON written with `"outcome"`, the
+      `--container` shapes, runs subprocesses as list argv with `shell=False`, requires the health
+      wait's returned body to carry `status: healthy` **and** `promptguard_loaded: true` (else
+      `never_healthy`, exit 2, no JSON — two unit tests) and `promptguard_model == --model-id` (else
+      `model_mismatch`), reads `promptguard_loaded`, `promptguard_model`, `sanitizer_revision` and
+      `contract_version` from that body and `cgroup_mem_mib` / `oom_proximity_ratio` from `/metrics`
+      (parsed in the module — `grep -c '_json_object' scripts/bench_promptguard.py` is 0) into the
+      JSON, and writes the fixed-key JSON including `"concurrency": 1`, `"outcome"`,
+      `non_2xx_reason` and the three `budget_*` measurements.
+- [ ] Both inputs are generated from a seed and sized by tokenising with `--tokenizer-dir`
+      (`tests/fixtures/tiny_model` in the unit tests; `grep -c CHARACTERS_PER_PROMPTGUARD_TOKEN
+      scripts/bench_promptguard.py` is 0); the unit tests assert determinism, that the one-window
+      document is exactly one window, that the budget document satisfies **both** `len(text) ≤
+      max_extracted_characters(settings.max_promptguard_chunks)` and window count ≤
+      `max_promptguard_chunks` — by the harness's arithmetic and by
+      `PromptGuardClassifier._chunk_text` — and that one more word breaches a bound; percentile
+      maths is nearest-rank and pinned (`[1..20]` → 10 / 19; `--runs 4` → p95 `null`).
+- [ ] Failure paths are pinned by unit tests with injected fakes: health wait not ending at
+      `healthy` + `promptguard_loaded: true` → `never_healthy`, exit 2 naming the timeout and the
+      last status, no JSON; `promptguard_model ≠ --model-id` → `model_mismatch`, exit 2, no JSON;
+      first-request non-2xx (the 404 case and the `content_too_large_to_classify` 422 case
+      included, the latter named as a tokenizer mismatch) → exit 2 naming the status / reason and
+      the config mount, no JSON; connection error → exit 2 naming the URL, no JSON; a non-2xx or timeout **after** a successful sample → JSON written with `"outcome"`, the
       samples so far and null percentiles, non-zero exit; `--container` omitted / `docker stats`
       failure → `container_mem_mib: null` + one WARNING and a complete run; no token or env value in
       any message.
 - [ ] `bench/config.yaml` is committed with the first-line warning, `extract_route_enabled: true`, the
       contiguity keys, and a test that `yaml.safe_load`s it, runs the four `*_settings_from_config`
       validators over it, asserts only `KNOWN_CONFIG_KEYS` members, the same key set as `config.yaml`
-      and `extract_route_enabled` as the only differing value; `bench/*.json` is gitignored.
+      and `extract_route_enabled` as the only differing value; `bench/*.json` and
+      `bench/tokenizer-*/` are gitignored.
 - [ ] `Dockerfile` and `tests/test_dockerfile.py` are unchanged (`git diff --stat` on the two is
       empty); `.dockerignore` gains exactly the line `bench/` (`grep -c '^bench/$' .dockerignore` is 1;
       `git diff --stat .dockerignore` is one line); positively, `grep -c bench Dockerfile` is 0 (today
@@ -1017,8 +1147,9 @@ token, Docker and the reference envelope.
 
 **Independent Test:** *Gate run* → this file's Implementation Notes carry `### US-004 — benchmark,
 <date>` with one row per run (4 required: {22M, 86M} × {1, 4} CPUs; 2 optional at 2 CPUs; 86M rows
-read `not measured — access pending` if US-005 recorded a 403), each row's `promptguard_model` read
-from `/health`, the container-memory column and the OOM/exit-code line per run, and the wall-clock of
+read `not measured — access pending` if US-005 recorded a 403), each row's `promptguard_model` and
+`sanitizer_revision` read from `/health`, the after-warm-up and `memory.peak` memory columns and
+the OOM/exit-code line per run, and the wall-clock of
 the whole matrix; `docs/configuration.md`'s sizing table has the classifier column filled for 1 and 4
 vCPU (the 2 vCPU row reads `not measured` unless run); the recorded commands reference `--env-file`
 only. *Gate not run* → Implementation Notes carry `### US-004 — gate not run, <date>` naming the
@@ -1043,27 +1174,45 @@ the tree changes; the story stops and reports.
   `healthy` is a valid proxy for `promptguard_loaded: true` **only because the bench container sets no
   `VALKEY_URL`** (the in-memory backend's `ping_if_due()` is unconditionally true, `cache.py:598-600`),
   so the recipe must never gain one. The first 86M start downloads through the verified path; record
-  the cold-start time separately. On timeout, record the row with `promptguard_loaded: false`, run the
-  `docker inspect --format '{{.State.OOMKilled}} {{.State.ExitCode}}' bench-<model>-<cpus>` step
-  anyway, and enter the result as the row's outcome rather than aborting the matrix. A harness exit
-  with `"outcome"` other than `ok` (a service failure mid-measurement, US-003) is likewise entered as
-  the row's outcome with the samples it did collect — the matrix continues. Then `uv run python -m scripts.bench_promptguard
-  --container bench-<model>-<cpus> --label <model>-cpus<cpus> --json bench/<model>-<cpus>.json`, then
-  the inspect step, then `docker rm -f bench-<model>-<cpus>`.
+  the cold-start time separately. **Tokenizer copy-out, once per model** (US-003 sizes the documents
+  with the model's own tokenizer): after that model's first container reports `promptguard_loaded:
+  true` (`curl -s http://127.0.0.1:8020/health`; the shared volume is populated by then), `docker run
+  --rm -v forage-model-cache:/c -v "$PWD/bench:/out" alpine cp -rL
+  /c/hub/models--<org>--<model>/snapshots/<manifest revision> /out/tokenizer-<label>` (`-L`
+  dereferences the hub cache's blob symlinks; the weights come along — harmless, gitignored), then
+  `--tokenizer-dir bench/tokenizer-<label> --model-id <id>` on every harness run for that model. On
+  timeout the harness exits 2 with **no JSON** (`never_healthy`, US-003 — it never measures an
+  unloaded classifier): record the row by hand as `never healthy within 900 s`, run the `docker
+  inspect --format '{{.State.OOMKilled}} {{.State.ExitCode}}' bench-<model>-<cpus>` step anyway, and
+  enter the result as the row's outcome rather than aborting the matrix. A harness exit with
+  `"outcome"` other than `ok` (a service failure mid-measurement, US-003) is likewise entered as the
+  row's outcome with the samples it did collect — the matrix continues. Then `uv run python -m
+  scripts.bench_promptguard --tokenizer-dir bench/tokenizer-<label> --model-id <id> --container
+  bench-<model>-<cpus> --label <model>-cpus<cpus> --json bench/<model>-<cpus>.json`, then the inspect
+  step **and the peak reading** — `docker exec bench-<model>-<cpus> cat /sys/fs/cgroup/memory.peak`
+  (cgroup v2; `n/a` where the file is absent; owner gate only, no contract change — salty, round 4:
+  the after-warm-up figure is steady state, and the moment a 1 GiB cgroup kills the process is
+  `from_pretrained`, which only a peak reading or the OOM line can show) — then `docker rm -f
+  bench-<model>-<cpus>`.
 - **Wall-clock estimate**: 42 requests per row (2 inputs × (1 cold + 20 warm)) × 4 required rows; at
   the 1 vCPU 86M budget-document worst case this is minutes per row, not hours — record the actual
   matrix wall-clock so the next owner knows.
-- **The table** (columns fixed; copy the JSON keys): `label | promptguard_model (from /health) | cpus |
-  cold 512-tok (ms) | warm p50/p95 512-tok (ms) | cold budget (ms) | warm p50/p95 budget (ms) |
-  container memory after warm-up (MiB) | OOMKilled | exit code`. Four required rows. A separate line
+- **The table** (columns fixed; copy the JSON keys): `label | promptguard_model (from /health) |
+  sanitizer_revision | cpus | cold 1-window (ms) | warm p50/p95 1-window (ms) | cold budget (ms) |
+  warm p50/p95 budget (ms) | budget tokens/windows | memory after warm-up (MiB) | memory.peak (MiB) |
+  OOMKilled | exit code` (`promptguard_loaded` is `true` on every written row by construction — a
+  row exists only because the harness saw it). Four required rows. A separate line
   records the measured size the 86M set adds to the `forage-model-cache` volume (`docker run --rm -v
   forage-model-cache:/c alpine du -sm /c`). **Real-tokenizer window counts, per model** (salty,
   round 3; US-007 hint (c)): while each container is up, `docker exec bench-<model>-<cpus> python -c
   '…'` loads `PromptGuardClassifier` from `/app/model-cache` at the running revision and prints
-  `len(classify_windows(text, max_chunks=64)[0])` for three texts — the harness's 512-token
+  `len(classify_windows(text, max_chunks=64)[0])` for three texts — the harness's one-window
   document, its budget document, and a maximum-length prose `/search`-shaped text (title 512, url
-  2,048, snippet 2,000 characters) — one line per model under the table (`22M: 1 / n / m`, `86M: …`);
-  the two models tokenise differently, so the count is measured per model, never copied.
+  2,048, snippet 2,000 characters) — one line per model under the table (`22M: a / n / m`, `86M: …`);
+  the two models tokenise differently, so the count is measured per model, never copied; for the
+  two benchmark documents the harness's host-side `budget_windows` (and 1 for the one-window
+  document) is the expectation and the in-container count the confirmation — a disagreement is a
+  tokenizer copy-out mistake: stop and redo the copy-out.
 - **Optional FPR smoke** (cheap, the container is running): enable the contiguity rule via the
   committed benchmark config's commented line (`promptguard_contiguity_windows: 2`), post the harness's
   long benign document 20 times to each model and record how many verdicts were `injection_detected`
@@ -1078,15 +1227,18 @@ the tree changes; the story stops and reports.
   with its acquisition caveat: **86M is served from Hugging Face and the `forage-weights` mirror at its
   own revision tag; a deployment that selects it needs the same acquisition posture as the 22M**
   (`docs/configuration.md` and `docs/weights.md`, one sentence each).
-- **Do not flip the default** (owner decision 4). If 86M container memory exceeds 900 MiB at 1 GB or
-  warm p50 at 1 CPU exceeds 2× the 22M figure, say so and leave the open question open.
+- **Do not flip the default** (owner decision 4). If 86M `memory.peak` exceeds 900 MiB at 1 GB (the
+  peak column, not the steady-state one — the question is headroom at load time) or warm p50 at
+  1 CPU exceeds 2× the 22M figure, say so and leave the open question open.
 
 **Acceptance Criteria:**
 - [ ] If the gate has not run: Implementation Notes carry `### US-004 — gate not run, <date>` naming
       the missing prerequisites; nothing else in the tree changes.
-- [ ] Implementation Notes carry the populated table (four required rows, `promptguard_model` from
-      `/health` per row; `not measured — access pending` where US-005 recorded a 403), the OOM/exit-code
-      line per run, the volume-size line, the matrix wall-clock, and every command as run with
+- [ ] Implementation Notes carry the populated table (four required rows, `promptguard_model` and
+      `sanitizer_revision` from `/health` per row, the `memory.peak` column; `not measured — access
+      pending` where US-005 recorded a 403), the OOM/exit-code line per run, the volume-size line,
+      the matrix wall-clock, the tokenizer copy-out command per model (with `git status --porcelain
+      bench/` empty afterwards), and every command as run with
       `--env-file "$f"`, `-p 127.0.0.1:8020:8020` and `docker rm -f` — no token value, no `docker
       inspect` / `docker ps --no-trunc` / `docker compose config` output.
 - [ ] `docs/configuration.md` sizing table's classifier column is filled for 1 and 4 vCPU with both
@@ -1097,7 +1249,8 @@ the tree changes; the story stops and reports.
       `VALKEY_URL` (both recorded).
 - [ ] The optional FPR smoke, if run, is recorded with its counts and the config used.
 - [ ] The per-model window-count line (three texts per model, measured in the container with the
-      real tokenizer) is under the table.
+      real tokenizer) is under the table and agrees with the harness's host-side counts for the two
+      benchmark documents.
 - [ ] `grep -nE 'hf_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}' docs/configuration.md docs/weights.md
       bench/config.yaml` returns nothing (token shapes only over the story's artifacts; the spec
       file and `kit_tools/` excluded — ruling R29 as corrected in round 4, R43; executed 2026-09-19:
@@ -1148,8 +1301,13 @@ the tree changes; the story stops and reports.
 - `docker stats` unavailable — `container_mem_mib: null`, run completes, one WARNING (US-003).
 - The 86M repo carries a file outside `ALLOWED_SUFFIXES` — vendoring refuses; stop and record (US-005).
 - HF returns 403 for the 86M repo — recorded as `access pending`; the 22M rows still land (US-005, US-004).
-- 86M never reaches `promptguard_loaded: true` within 15 minutes — the row records the timeout and the
-  inspect result; the matrix continues (US-004).
+- 86M never reaches `promptguard_loaded: true` within 15 minutes — the harness exits 2 with no JSON
+  (`never_healthy`); the row records the timeout and the inspect result by hand; the matrix
+  continues (US-003, US-004).
+- The host tokenizer is not the container's model — `--model-id` against `/health.promptguard_model`
+  refuses (`model_mismatch`); a copy-out from the wrong snapshot shows as a window-count
+  disagreement at the gate, or as a first-request `content_too_large_to_classify` named as such
+  (US-003, US-004).
 - 86M OOM-killed at 1 GB — recorded as a row with `OOMKilled: true`, exit code 137; the default stays
   22M (US-004).
 
@@ -1314,6 +1472,13 @@ pattern (validation round 1, codebase-fit).
   verdict logged at WARNING; the benchmark's reuse scoped honestly (new multipart POST), its failure
   taxonomy split, its inputs sized from `max_extracted_characters()`, the `wait_for_health` call
   named; the gates-unrun end state named; TROUBLESHOOTING joins the fan-out.
+- Validation round 5 (2026-09-19, final, not re-reviewed): the harness refuses an unloaded
+  classifier (`never_healthy`) and records `promptguard_loaded` / `sanitizer_revision` per row; both
+  documents sized in tokens with the model's tokenizer (`--tokenizer-dir`, `--model-id`); the
+  `_load_verified` check derives both paths itself; the top-of-`_acquire_and_load` order spelled
+  out; `load()`'s restructuring for the `id2label` check; the owner-gate `memory.peak` reading; the
+  landing order inside US-001; `_json_object` dropped from the reuse list; the `use_safetensors`
+  count executed.
 
 ### Decisions Made
 
@@ -1369,6 +1534,16 @@ pattern (validation round 1, codebase-fit).
   round-3 form) — ruling R29 as corrected: the greps run over the stories' produced artifacts with
   token shapes only, so they can return nothing; the epic-level rule that no token-shaped literal
   appears in a spec is held by the epic wrapper, not by a self-matching criterion.
+- Corrected (round 5): the round-4 `verified_path` parameter on `_load_verified` (ruling R29 as
+  corrected in round 5) — both paths are derived inside `_load_verified` from `(cache_root,
+  model_id, revision, manifest_path)`; no acquisition-leg return shape changes.
+- Corrected (round 5): the benchmark documents are sized in tokens with the model's own tokenizer,
+  never by `CHARACTERS_PER_PROMPTGUARD_TOKEN`; the harness refuses to measure a container whose
+  `/health` is not `healthy` with `promptguard_loaded: true`, and `promptguard_model` is recorded as
+  configuration, not evidence.
+- Adopted (round 5): the owner gate reads `memory.peak` per run and the go/no-go memory rule is
+  stated against it; the harness itself still claims no peak figure (the round-4 overrule stands for
+  the harness).
 
 ## Clarifications
 
@@ -1421,6 +1596,24 @@ pattern (validation round 1, codebase-fit).
 - Q: Who checks that the loaded directory is the verified one? → A: `_load_verified`, before `load()`;
   the classifier checks only that `cache_dir` exists, and SECURITY.md says so.
 
+### Session 2026-09-19 (validation round 5, final)
+- Rulings applied: R29 (corrected — the harness asserts `promptguard_loaded: true` and `status:
+  healthy` before timing and records `promptguard_model` and `sanitizer_revision` per row, failing
+  non-zero with no rows on a degraded container; documents sized by tokenising with the model's
+  tokenizer, `tests/fixtures/tiny_model` in the hermetic tests, never a characters-per-token
+  constant; `_load_verified` derives both paths itself so no `_try_source` / mirror signature
+  changes), R43 (the `use_safetensors` count executed: 2). Round-4 warnings applied: the
+  top-of-`_acquire_and_load` order with the warm-cache-plus-unreadable-manifest pin; `load()`'s
+  restructuring for the `id2label` check with the missing/`None`/non-mapping third case; the
+  owner-gate `memory.peak` reading and the peak-based memory rule; the landing order inside US-001;
+  `_json_object` dropped from the reuse list; `generate_manifest` reads before it writes. This round
+  was not re-reviewed; the unapplied warnings are in § Known risks.
+- Q: What does the harness do when the container never becomes healthy? → A: Exits 2 with no JSON
+  (`never_healthy`); US-004 records the row by hand. It never measures an unloaded classifier.
+- Q: How are the benchmark documents sized? → A: In tokens, with the selected model's tokenizer
+  copied out of the shared volume (`--tokenizer-dir`); the budget document satisfies both the
+  character pre-gate and the chunk budget by construction.
+
 ### Session 2026-09-19 (validation round 2)
 - Rulings applied: R29 (corrected — per-model revision, verifier/loader agreement, `manifest_diff`
   keyed shape, `_EXPECTED_ONE_THREE_ZERO_DIFF`, `extraction` section, committed `bench/config.yaml`,
@@ -1440,3 +1633,38 @@ pattern (validation round 1, codebase-fit).
       dependency? Non-blocking; only asked if the numbers force it.
 - [ ] Whether a `--concurrent N` benchmark mode should land with the corpus epic (it needs the same
       container recipe) — non-blocking; the single-in-flight caveat holds the line meanwhile.
+
+## Known risks (validation close-out)
+
+Round 5 was a final fix pass without a review round. Warnings and notes from round 4 that were not
+applied, or were applied in a form the reviewer did not see, are recorded here so the implementer
+reads them as open rather than closed.
+
+- **salty (round 4) — the verifier/loader agreement is a re-derivation, not an observed hand-off.**
+  Applied as ruling R29 (round 5) directs: `_load_verified` derives both paths itself, so the
+  equality half restates the top-of-function refusal and the existence half is the live check; the
+  `VerificationResult.snapshot_dir` is still discarded on the hub and mirror legs. Deferred because
+  the alternative changes three acquisition-leg return shapes the spec never budgeted; the residual is
+  stated in US-001's hint and in SECURITY.md's "trusts the path" sentence.
+- **codebase-fit (round 4, info) — `resolve_model_id() -> tuple[str, bool]` is a third resolver
+  shape** beside the raising lifespan resolver (`pipeline/search_providers/__init__.py`) and the
+  total-with-fallback `resolve_revision`. Kept: the per-request `derive_sanitizer_revision` path must
+  never raise (round 4 decision); the implementer may fold the boolean into a `ModelConfigurationError`
+  raised only by the lifespan if the tuple reads badly, provided the per-request path stays total.
+- **codebase-fit (round 4, info) — MONITORING.md's log-lines table row for `classify() called but
+  model not loaded — returning safe fallback`** is not named in US-002's fan-out; US-002 re-implements
+  `classify()` on `classify_windows`, so the implementer keeps that WARNING's text byte-identical (or
+  updates the row). Not re-reviewed.
+- **codebase-fit (round 4, info) — line citations drift.** Every `:line` in this spec was measured on
+  2026-09-19 before specs 1–6 execute (e.g. the Goals cite of `tests/test_sanitizer_revision.py:95-118`);
+  anchor by symbol and quoted text, never by offset. A mismatch is not a spec defect.
+- **salty (round 4, info) — the orchestrator's omission log at `orchestrator.py:1032` is INFO** and
+  never renders in the container; the contiguity WARNING (`promptguard_contiguity_verdict`) is the
+  visible per-event signal. Left as is: the INFO line is pre-existing and the WARNING is the story's.
+- **Owner-gate environment assumptions (round 5).** The tokenizer copy-out relies on the hub cache
+  layout `hub/models--<org>--<model>/snapshots/<revision>` (`model_fetcher.snapshot_path`) and on
+  `alpine cp -rL` dereferencing blob symlinks; the peak reading relies on cgroup v2 `memory.peak`
+  (kernel ≥ 5.19). Both are owner-gate steps with an `n/a` / redo path, not criteria on the code.
+- **US-001 stays one story** (salty, round 4, overall): ≈600 lines across nine files under one
+  suite gate. The round-5 landing order gives it stated midpoints; it is still a single diff by
+  ruling R37.

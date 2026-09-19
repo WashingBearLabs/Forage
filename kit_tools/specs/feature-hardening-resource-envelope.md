@@ -42,7 +42,13 @@ updated: 2026-09-19
 > invariant to name every key that can be raised, re-keyed the runbook on spec 2's wait-timeout
 > counter, placed the memory check where all its operands exist, scoped every grep (retained goldens
 > and the seed cache excluded), listed the envelope keys in the bind-mount warning, documented the
-> probe's effect on the reconnect counters, and stated US-002's Docker requirement honestly.
+> probe's effect on the reconnect counters, and stated US-002's Docker requirement honestly. Validation
+> round 5 (R16 corrected, the final pass — applied without re-review) removed the last two module-local
+> bounded-int copies in favour of `pipeline/config_bounds`, registered both new readers with spec 3's
+> AST sweep, made the memory rule model-dependent (a named parent constant plus the selected
+> classifier's resident delta) and gave its Valkey branch the one-read term spec 4 promised, renamed the
+> thread reader's error for what it bounds, reconciled the `SECURITY.md:374` restatement with its own
+> grep, stated the reconnect WARNING rate per failure mode, and closed the pin question against spec 5.
 
 ## Overview
 
@@ -67,14 +73,18 @@ Compose v2.40.3 in validation round 1), i.e. no CPU limit, today's state — `me
 ${FORAGE_MEM_LIMIT:-1024m}` (today's value), a `promptguard_threads` key whose default `0` means "leave
 torch's and the tokenizer's defaults" and whose positive values pin both pools in a guarded step of
 their own, `classification_concurrency` widened to 1–8 under a **memory** rule whose terms are named
-honestly and counted once — the 512 MiB parent reservation **with no classification in flight**, one
+honestly and counted once — the 512 MiB parent reservation **with no classification in flight and the
+default (22M) classifier resident**, plus — once spec 7 makes the classifier selectable — the selected
+model's measured resident delta over the 22M, read from a per-model table the sizing section carries
+(`0` for the 22M; spec 7 fills the 86M row), one
 classifier working set per concurrent classification (a provisional 64 MiB until spec 7's benchmark
 measures it), the pypdf child's `RLIMIT_AS` per extraction slot (`extraction.child_address_space_bytes`
-as configured — 384 MiB shipped, 128–512 MiB allowed — never the literal), and, **only when the
-in-memory cache backend is selected** (`VALKEY_URL` unset, `retrieval_app.py:265-266`;
-`compose/full.yml:73` selects Valkey, whose memory is its own container's), the cache's
-`cache.max_bytes` — which evaluates to 992 MiB at the shipped defaults with the in-memory backend
-(`minimal.yml`) and 960 MiB under Valkey (`full.yml`), a stated 32 / 64 MiB margin under `mem_limit:
+as configured — 384 MiB shipped, 128–512 MiB allowed — never the literal), and a cache term that
+depends on the backend: **when the in-memory backend is selected** (`VALKEY_URL` unset,
+`retrieval_app.py:265-266`) the cache's `cache.max_bytes`; **under Valkey** (`compose/full.yml:73`,
+whose memory is its own container's) one in-flight read, spec 4's `cache.max_value_bytes` (4 MiB
+shipped) — which evaluates to 992 MiB at the shipped defaults with the in-memory backend
+(`minimal.yml`) and 964 MiB under Valkey (`full.yml`), a stated 32 / 60 MiB margin under `mem_limit:
 1024m` (round 2's wording double-counted the first classification and landed on exactly 1024 MiB by
 accident) — with an advisory boot WARNING when the cgroup's `memory.max` is *strictly below* the
 rule, the latency constants turned into `config.yaml` keys read through a module-owned
@@ -117,8 +127,9 @@ unloaded, and the docs say so.
   `search.sanitization_latency_max_ms` to at least the measured duration, visible on `/metrics` under
   contract 1.3.0, with both descriptions naming the window they measure.
 - A boot whose cgroup `memory.max` is strictly below the memory rule for the configured concurrency,
-  child address space and cache backend emits exactly one `envelope_memory_rule_unmet` WARNING naming
-  the numbers and the backend it counted, and proceeds; a boot
+  child address space, cache backend and selected classifier emits exactly one
+  `envelope_memory_rule_unmet` WARNING naming the numbers, the model and the backend it counted, and
+  proceeds; a boot
   whose limit equals or exceeds the rule — the shipped defaults against `mem_limit: 1024m` included —
   emits none.
 - Both compose fragments carry identical envelope keys, defaults and healthcheck, asserted by
@@ -158,22 +169,29 @@ with the count and the exception type in the message; with `configure_threads(0)
 happens and `TOKENIZERS_PARALLELISM` is unchanged from the sentinel the test seeded — asserted as
 "unchanged", never as "absent", which would depend on the host environment.
 `promptguard_threads_from_config({})` is `0`, `{"promptguard_threads": 17}` and `"abc"` raise
-`PromptGuardConfigurationError`. With `classification_concurrency: 2` the lifespan builds
+`PromptGuardThreadsConfigurationError`. With `classification_concurrency: 2` the lifespan builds
 `asyncio.Semaphore(2)` and two concurrent `POST /retrieve` calls (spec 2 US-006 made `/retrieve`
 acquire the semaphore) classify with overlap under a fake classifier that records timestamps, while
 `1` serialises them; `9` refuses boot with `ExtractionConfigurationError`. With
 `_cgroup_memory_snapshot` patched to report `memory.max` = 1 GiB and `classification_concurrency:
 4` on the in-memory backend, boot logs exactly one `envelope_memory_rule_unmet` WARNING naming
-`memory_max`, `required`, the four operands and `cache_backend=memory`, and `/health` answers 200
-(required = 512 + 256 + 384 + 32 = 1184 MiB); with the snapshot reporting exactly `1073741824` and
+`memory_max`, `required`, the operands, `model_id`, `parent_bytes` and `cache_backend=memory
+cache_term_bytes=33554432`, and `/health` answers 200 (required = 512 + 256 + 384 + 32 = 1184 MiB);
+with the snapshot reporting exactly `1073741824` and
 the **shipped defaults** (`classification_concurrency` 1, `extraction_concurrency` 1,
 `child_address_space_bytes` 384 MiB, in-memory `cache.max_bytes` 32 MiB) no WARNING is logged
 (required = 992 MiB; the 32 MiB margin is asserted, not implied); with the snapshot reporting exactly
 the rule's sum no WARNING is logged (strictly-below); with the snapshot reporting `None` no WARNING is
-logged; with `VALKEY_URL` set (the Valkey backend behind the fake storage the `test_lifespan_*` tests
-already use) and `classification_concurrency: 4` against 1 GiB the WARNING fires with
-`cache_backend=valkey cache_max_bytes=0` (required = 1152 MiB — the cache term is zero under Valkey);
-with the in-memory backend, `cache.max_bytes` at its 128 MiB ceiling (`cache.py:229`) and the other
+logged; with `VALKEY_URL` set — through `_started_with_valkey_url` (`tests/test_app.py:1270-1306`),
+the seam that reaches the Valkey branch; the `_running_app` / `test_lifespan_*` shape cannot — and
+`classification_concurrency: 4` against 1 GiB the WARNING fires with `cache_backend=valkey
+cache_term_bytes=4194304` (required = 1156 MiB — under Valkey the term is one in-flight read, spec 4's
+`cache.max_value_bytes`, 4 MiB shipped, never `cache.max_bytes`); with a second model id whose
+`CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` row is monkeypatched to 448 MiB selected, and the other
+defaults against 1 GiB, the WARNING fires with `model_id=<that id> parent_bytes=1006632960` (required =
+992 + 448 = 1440 MiB — the parent term reads the selected model's row; with the default id the delta
+is `0` and every figure above is unchanged); with the in-memory backend, `cache.max_bytes` at its
+128 MiB ceiling (`cache.py:229`) and the other
 defaults against 1 GiB the WARNING fires (required = 1088 MiB); with `extraction.
 child_address_space_bytes: 536870912` (512 MiB) and the other defaults against 1 GiB the WARNING fires
 (required = 1120 MiB — the rule reads configuration, not `MAX_CHILD_ADDRESS_SPACE_BYTES`). With no
@@ -183,11 +201,21 @@ unchanged.
 
 **Implementation Hints:**
 - `promptguard_threads` is owned by `promptguard/classifier.py` (not hashed; already the lazy torch
-  owner). Follow the three settings precedents (`cache.py:244-267`, `pipeline/extraction_limits.py:
-  79-106`, `pipeline/search_providers/brave.py:193-275`): a module-owned
-  `PromptGuardConfigurationError(ValueError)`, a module-local bounded-int copy (the re-statement is
-  the recorded precedent, `brave.py:231-233`), and a public `promptguard_threads_from_config(config)
-  -> int` (default `0`, range 0–16; `0` = touch nothing). The lifespan (`retrieval_app.py:1322-1324`,
+  owner). Follow the three settings precedents for the *shape* (`cache.py:244-267`,
+  `pipeline/extraction_limits.py:79-106`, `pipeline/search_providers/brave.py:193-275`) but **not**
+  for the bounds helper (R16 corrected in round 5 — no new bounded-int copies; round-4 codebase-fit
+  critical): a module-owned `PromptGuardThreadsConfigurationError(ValueError)` — named for what it
+  bounds, the `PromptGuard<What>Error` shape `PromptGuardBudgetExceededError`
+  (`promptguard/classifier.py:210`) already establishes, so the generic `PromptGuardConfigurationError`
+  stays free for spec 7's `promptguard_settings_from_config` triple in `pipeline/stage3_promptguard.py`
+  (spec 7 runs *after* this spec, so this story cannot import a class spec 7 declares, and two classes
+  of one name in two modules would leave `MONITORING.md`'s boot-failure row ambiguous — round-4
+  codebase-fit review; Decisions Made) — the bound read through `pipeline/config_bounds.bounded_int`
+  (spec 2 US-001; takes the exception class as a parameter), which is the first `promptguard` →
+  `pipeline` import and is cycle-free (`pipeline/__init__.py` is a docstring, `config_bounds` imports
+  nothing from `promptguard`, and `pipeline/stage3_promptguard.py` imports the classifier lazily), and
+  a public `promptguard_threads_from_config(config) -> int` (default `0`, range 0–16; `0` = touch
+  nothing). The lifespan (`retrieval_app.py:1322-1324`,
   where `PromptGuardClassifier()` is built and `WeightAcquisition` starts) calls the builder and
   passes the value **straight into** `classifier.configure_threads(n)` — no `app.state.
   promptguard_threads` attribute and no module-level default (nothing outside the lifespan would read
@@ -228,20 +256,41 @@ unchanged.
   `admission_queue_depth` (0–4)", never "the one key"; US-003's `only tighten` / `never raise` sweep
   carries the same three-key wording to the other copies (`TROUBLESHOOTING.md:524`, `DECISIONS.md:105`,
   `SECURITY.md:182`) and leaves the single-key-scoped line (`TROUBLESHOOTING.md:161`).
-- The memory rule, as R16 corrects it in round 3 — every term counted once: `FORAGE_MEM_LIMIT ≥
-  512 MiB (parent process with no classification in flight) + classification_concurrency ×
-  CLASSIFIER_WORKING_SET + extraction_concurrency × extraction.child_address_space_bytes +
-  (cache.max_bytes if the in-memory backend is selected, else 0)`. The third term reads the
+- The memory rule, as R16 corrects it in rounds 3–5 — every term counted once: `FORAGE_MEM_LIMIT ≥
+  PARENT_RESERVATION_BYTES + CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[selected model] +
+  classification_concurrency × CLASSIFIER_WORKING_SET + extraction_concurrency ×
+  extraction.child_address_space_bytes + (cache.max_bytes if the in-memory backend is selected, else
+  cache.max_value_bytes)`. **The parent term is model-dependent** (R16 corrected in round 5; round-4
+  salty review): `PARENT_RESERVATION_BYTES = 512 * MEBIBYTE` is a **named constant** in
+  `pipeline/extraction_limits.py` beside the coefficient — the parent process with the default (22M)
+  classifier resident and no classification in flight, the reservation `docs/configuration.md:485`
+  already states — and `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL: Mapping[str, int]`, keyed by model
+  id, holds each allowlisted model's measured resident working set minus the 22M's (`{<22M id>: 0}` at
+  this story — the only allowlisted id, so the shipped arithmetic is unchanged); the rule adds the
+  selected model's row, because a bigger model's weights are *shared* across concurrent
+  classifications and belong in the parent term, not in the per-classification coefficient — an RSS
+  delta between concurrency 1 and 2 (spec 7's marginal measurement) can never capture them, so without
+  this term an 86M selection on a 1 GiB host would be silent right up to the OOM kill. The selected id
+  is `promptguard.classifier.MODEL_ID` until spec 7 US-006 makes it selectable, and the handoff is
+  written on both sides: spec 7 US-004 fills the 86M row from its idle-RSS measurement with each model
+  loaded (86M minus 22M) and the sizing table gains the per-model column; spec 7 US-006 routes the
+  selected `FORAGE_MODEL_ID` into this rule (Open Questions). The WARNING prints `model_id=%s
+  parent_bytes=%d`. The third term reads the
   **configured** `ExtractionSettings.child_address_space_bytes` (384 MiB shipped, 128–512 MiB allowed
   — `pipeline/extraction_limits.py:25-26,132-137`), never the `MAX_CHILD_ADDRESS_SPACE_BYTES` literal:
   a deployment that raised the sandbox limit to 512 MiB would be under-counted by 128 MiB per slot by
   the constant, and a rule that stays silent exactly when it should warn is worse than none (round-3
   security review); the 384 MiB is the **child's address space** (`:16,45`, `config.yaml:39-41`,
-  `compose/minimal.yml:105-109`), never a classifier figure. The fourth term is **conditional on the
+  `compose/minimal.yml:105-109`), never a classifier figure. The cache term is **conditional on the
   backend** (round-3 salty review): `_select_cache_storage` (`retrieval_app.py:265-266`) picks
   `InMemoryStorage` only when `VALKEY_URL` is unset; under Valkey (`compose/full.yml:73` sets it) the
-  bound (`cache.py:219-229`) belongs to the Valkey container, the term is 0, and the WARNING names the
-  backend it counted. The parent
+  bound (`cache.py:219-229`) belongs to the Valkey container and the term is the one value Forage
+  holds in its own memory at a time — one in-flight read, bounded by spec 4 US-001's
+  `cache.max_value_bytes` (4 MiB shipped, 512 KiB–8 MiB; the read term spec 4 promised this rule —
+  R16 corrected in round 5) — and the WARNING names the backend it counted **and the term it used**
+  (`cache_backend=%s cache_term_bytes=%d`; the field is named for the term, not for
+  `cache.max_bytes`, which under Valkey is still `33554432` in `app.state.cache_settings` and would
+  mislead — round-4 salty review). The parent
   term excludes classification so the concurrency term starts at the *first* classification — round
   2's "including one in-process classification" double-counted it and made the reference row land on
   exactly 1024 MiB by accident. `CLASSIFIER_WORKING_SET` is a named coefficient: this story ships
@@ -251,27 +300,33 @@ unchanged.
   96 MiB`; 64 MiB is that residual with a 32 MiB margin kept; it has **no** measurement behind it
   (the name says provisional), and spec 7 US-004 replaces it with the `docker stats` RSS delta between
   concurrency 1 and 2 on the 22M and the 86M. At the shipped defaults the rule evaluates to
-  `512 + 64 + 384 + 32 = 992 MiB` against `mem_limit: 1024m` on `minimal.yml` (in-memory) and to
-  `960 MiB` on `full.yml` (Valkey) — a stated, non-zero margin, not the boundary. The advisory check is
+  `512 + 0 + 64 + 384 + 32 = 992 MiB` against `mem_limit: 1024m` on `minimal.yml` (in-memory) and to
+  `512 + 0 + 64 + 384 + 4 = 964 MiB` on `full.yml` (Valkey) — a stated, non-zero margin, not the
+  boundary. The advisory check is
   a **new** `_cgroup_memory_snapshot()` call site — `retrieval_app.py:1010-1028` is the function's
   definition and its only caller today is the `/metrics` handler at `:1515`; there is no lifespan call
   to insert after — placed in the lifespan immediately after the backend selection that follows
   `app.state.cache_settings = cache_settings_from_config(config)` (`:1282`; `_select_cache_storage`
   returns the `"memory"` / `"valkey"` tag at `:1284`), because that is the first point at which every
   operand is in hand: `settings.classification_concurrency`, `settings.extraction_concurrency` and
-  `settings.child_address_space_bytes` from `extraction_settings_from_config` at `:1213`,
-  `PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES`, and `app.state.cache_settings.max_bytes` with the backend
-  tag — an implementer who places it beside the semaphore build at `:1225-1228` has three terms and no
-  cache bound (round-3 codebase-fit review). The shape is `_warn_if_break_glass_advertisement_enabled()`
-  (`:147`, called from the lifespan at `:1235`): a named-marker WARNING helper called once, never a
-  refusal, with a row in `MONITORING.md`'s startup table. When `cgroup_memory_max_bytes` is not `None`
-  and it is **strictly below** the rule's sum, `logger.warning("envelope_memory_rule_unmet —
-  memory_max=%d required=%d classification_concurrency=%d extraction_concurrency=%d
-  child_address_space_bytes=%d cache_backend=%s cache_max_bytes=%d", ...)` once and proceed (never a
-  boot refusal: `None` on non-cgroup-v2 hosts and deliberate over-subscription stay supported;
-  equality is silent). Test it by patching `_cgroup_memory_snapshot` (the `test_lifespan_*` shape in
-  `tests/test_app.py:1199+`), including the shipped-defaults-against-1 GiB case, the exact-equality
-  case, the Valkey case, the 128 MiB-cache case and the 512 MiB-child case (Independent Test). What happens if spec 7 measures a coefficient above 96 MiB is decided now, not
+  `settings.child_address_space_bytes` from `extraction_settings_from_config` at `:1215`,
+  `PARENT_RESERVATION_BYTES` plus the selected model's delta row,
+  `PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES`, and `app.state.cache_settings.max_bytes` /
+  `.max_value_bytes` with the backend tag — an implementer who places it beside the semaphore build at
+  `:1225-1228` has three terms and no cache bound (round-3 codebase-fit review). The shape is
+  `_warn_if_break_glass_advertisement_enabled()` (`:142`, called from the lifespan at `:1234`): a
+  named-marker WARNING helper called once, never a refusal, with a row in `MONITORING.md`'s startup
+  table. When `cgroup_memory_max_bytes` is not `None` and it is **strictly below** the rule's sum,
+  `logger.warning("envelope_memory_rule_unmet — memory_max=%d required=%d
+  classification_concurrency=%d extraction_concurrency=%d child_address_space_bytes=%d model_id=%s
+  parent_bytes=%d cache_backend=%s cache_term_bytes=%d", ...)` once and proceed (never a boot refusal:
+  `None` on non-cgroup-v2 hosts and deliberate over-subscription stay supported; equality is silent).
+  Test it by patching `_cgroup_memory_snapshot` (the `test_lifespan_*` shape in
+  `tests/test_app.py:1199+` for the in-memory cases; `_started_with_valkey_url`, `:1270-1306`, for the
+  Valkey case — round-4 codebase-fit review), including the shipped-defaults-against-1 GiB case, the
+  exact-equality case, the Valkey case, the 128 MiB-cache case, the 512 MiB-child case and the
+  monkeypatched-delta model case (Independent Test). What happens if spec 7 measures a coefficient
+  above 96 MiB is decided now, not
   after the measurement: the shipped compose default `FORAGE_MEM_LIMIT=1024m` does **not** move; spec 7
   US-004 records the measured value, the sizing table's reference row states the measured minimum,
   and a 1 GiB deployment then boots with the advisory WARNING — the honest signal — rather than being
@@ -282,7 +337,7 @@ unchanged.
   "Startup lines you may see" table (`:237` is the `PromptGuard model not available` row, the last one
   today) gains rows for `envelope_memory_rule_unmet` and
   `promptguard_threads_apply_failed`, and the "Boot failure" row (`:349`) names
-  `PromptGuardConfigurationError`.
+  `PromptGuardThreadsConfigurationError`.
 - `docs/configuration.md:489` (`classification_concurrency` row) is rewritten by **this** story:
   range 1–8, the memory rule with its coefficient and the pointer to § Sizing the container (US-003
   creates it — a forward reference US-003's criterion closes), "above the rule the failure is an OOM
@@ -296,7 +351,13 @@ unchanged.
   the host's core count, not the quota". The shipped `config.yaml` gains `promptguard_threads: 0`
   with that comment (the `search_promptguard_*` keys of US-004 are shipped too — the three new keys
   are shipped, the one widened key is rewritten in place).
-- `KNOWN_CONFIG_KEYS` (spec 3, ruling 12) gains `promptguard_threads`; `kit_tools/docs/
+- `KNOWN_CONFIG_KEYS` (spec 3, ruling 12) gains `promptguard_threads`, **and `promptguard/classifier.py`
+  joins spec 3 US-003's AST code-parity reader list** — the hand-enumerated walk over `retrieval_app.py`,
+  `cache.py`, `pipeline/extraction_limits.py`, `brave.py`, `pipeline/orchestrator.py`,
+  `pipeline/sanitizer_revision.py`, spec 2's retrieve reader, `pipeline/config_bounds.py` and, after
+  spec 5 US-001, `searxng.py` — because registering the key and registering its reader are two halves of
+  the same registry, and the sweep's shape-(b) rule is written for exactly the `bounded_int(config,
+  "<key>", …)` call this reader makes (round-4 codebase-fit review); `kit_tools/docs/
   ENV_REFERENCE.md` `### Top-level keys` (`:81-94`) gains its row with the `Read site` and `Shipped`
   columns filled (the `search_brave_*` rows `:90-92` are the shape).
 - Tests: the builder's bounds and the load-path assertions in `tests/test_stage3_promptguard.py`
@@ -312,8 +373,9 @@ unchanged.
 
 **Acceptance Criteria:**
 - [ ] `promptguard_threads` (default 0, range 0–16) is read at boot through
-      `promptguard_threads_from_config`, refuses boot out of range or wrong-typed with
-      `PromptGuardConfigurationError`, ships in `config.yaml` as `promptguard_threads: 0`, and a positive
+      `promptguard_threads_from_config` via `pipeline/config_bounds.bounded_int` (`grep -n '_bounded_'
+      promptguard/classifier.py` returns nothing), refuses boot out of range or wrong-typed with
+      `PromptGuardThreadsConfigurationError`, ships in `config.yaml` as `promptguard_threads: 0`, and a positive
       value reaches `torch.set_num_threads` and sets `TOKENIZERS_PARALLELISM=false` before
       `AutoTokenizer.from_pretrained` via `configure_threads` on the lifespan's classifier object
       (patched torch and transformers, no weights); `0` calls nothing and leaves
@@ -330,17 +392,21 @@ unchanged.
 - [ ] Two concurrent `/retrieve` classifications overlap at concurrency 2 and serialise at 1 (fake
       classifier with timestamps; the `/retrieve` semaphore from spec 2 US-006).
 - [ ] `PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES` (64 MiB) exists, is named provisional in its comment
-      and in the docs with its derivation and its no-measurement caveat; the rule has the four terms
-      (parent, concurrency × working set, extraction slots × the **configured**
-      `child_address_space_bytes`, `cache.max_bytes` **only when the backend tag is `memory`**); the
-      check is a new `_cgroup_memory_snapshot()` call in the lifespan after the backend selection that
-      follows `cache_settings_from_config` (`retrieval_app.py:1282-1284`); boot logs exactly one
-      `envelope_memory_rule_unmet` WARNING — naming `memory_max`, `required`, the four operands and
-      `cache_backend` — when the cgroup limit is readable and strictly below the rule, none when it is
-      `None`, none at the shipped defaults against exactly `1073741824` (required 992 MiB — the margin
-      is asserted), none at exact equality; the Valkey case (required 1152 MiB at concurrency 4,
-      `cache_max_bytes=0`), the 128 MiB-cache case (1088 MiB) and the 512 MiB-child case (1120 MiB) each
-      warn against 1 GiB; `/health` is 200 either way; pinned with a patched `_cgroup_memory_snapshot`;
+      and in the docs with its derivation and its no-measurement caveat; `PARENT_RESERVATION_BYTES`
+      (512 MiB) is a named constant and `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` holds the 22M row
+      at `0`; the rule has the five terms (the parent constant plus the selected model's delta row,
+      concurrency × working set, extraction slots × the **configured** `child_address_space_bytes`,
+      and `cache.max_bytes` when the backend tag is `memory` or `cache.max_value_bytes` when it is
+      `valkey`); the check is a new `_cgroup_memory_snapshot()` call in the lifespan after the backend
+      selection that follows `cache_settings_from_config` (`retrieval_app.py:1282-1284`); boot logs
+      exactly one `envelope_memory_rule_unmet` WARNING — naming `memory_max`, `required`, the operands,
+      `model_id`, `parent_bytes`, `cache_backend` and `cache_term_bytes` — when the cgroup limit is
+      readable and strictly below the rule, none when it is `None`, none at the shipped defaults
+      against exactly `1073741824` (required 992 MiB — the margin is asserted), none at exact equality;
+      the Valkey case (required 1156 MiB at concurrency 4, `cache_term_bytes=4194304`, reached through
+      `_started_with_valkey_url`), the 128 MiB-cache case (1088 MiB), the 512 MiB-child case (1120 MiB)
+      and the monkeypatched-delta model case (1440 MiB, `parent_bytes` reflecting the row) each warn
+      against 1 GiB; `/health` is 200 either way; pinned with a patched `_cgroup_memory_snapshot`;
       `MONITORING.md`'s startup table has both new WARNING rows.
 - [ ] The `classification_concurrency` rows in `docs/configuration.md`'s `extraction:` table and
       `ENV_REFERENCE.md`'s `extraction:` table (the rows reading "Pinned … same reason" today —
@@ -351,6 +417,7 @@ unchanged.
       carve-out; the `extraction_concurrency` row (the one reading "Pinned at 1") is unchanged; the
       `promptguard_threads` rows exist in both files' top-level tables with the quota-agnostic wording;
       `promptguard_threads` is in `KNOWN_CONFIG_KEYS`.
+- [ ] `promptguard/classifier.py` is in spec 3 US-003's AST code-parity reader list.
 - [ ] `git diff --stat` shows no change under `pipeline/orchestrator.py`, `pipeline/contract.py`,
       `models.py` or `contract/`.
 - [ ] Tests written/updated for new functionality.
@@ -385,10 +452,19 @@ first `/search` and then reflects it, and spec 5 US-005's wire pins are byte-ide
 - Settings builder, module-owned (the precedent trio again; `tests/test_brave_provider.py` is the
   module-owned-settings test precedent): new non-hashed module `pipeline/search_targets.py` with a
   frozen `SearchTargets(promptguard_latency_target_ms: int = 1_000, first_token_target_ms: int =
-  5_000)`, `SearchTargetsConfigurationError`, a module-local bounded-int copy, and
-  `search_targets_from_config(config)` reading `search_promptguard_latency_target_ms` (range
-  100–60000) and `search_first_token_target_ms` (range 100–120000); both ship in `config.yaml` at
-  today's values. The lifespan calls it unconditionally, stores `app.state.search_targets`, and the
+  5_000)`, `SearchTargetsConfigurationError`, **no** module-local bounded-int copy — both ranges are
+  read through `pipeline/config_bounds.bounded_int` with `SearchTargetsConfigurationError` as the
+  exception class, the call shape spec 2's `pipeline/retrieve_limits.py` uses (R16 corrected in round
+  5; round-4 codebase-fit critical) — and `search_targets_from_config(config)` reading
+  `search_promptguard_latency_target_ms` (range 100–60000) and `search_first_token_target_ms` (range
+  100–120000); both ship in `config.yaml` at today's values. `pipeline/search_targets.py` joins spec 3
+  US-003's AST code-parity reader list beside its two `KNOWN_CONFIG_KEYS` entries; its tests — the two
+  bounds, the `5` boot refusal and the lifespan wiring — land in `tests/test_app.py` beside
+  `test_lifespan_refuses_an_out_of_range_cache_bound` (`:1208`), and `kit_tools/testing/
+  TESTING_GUIDE.md`'s `test_mapping` gains the row `"pipeline/search_targets.py": "tests/test_app.py"`
+  (every source module has a row; spec 2's `pipeline/retrieve_limits.py` → `tests/test_app.py` is the
+  precedent — round-4 codebase-fit review). The lifespan calls it unconditionally, stores
+  `app.state.search_targets`, and the
   module-level default block (`retrieval_app.py:1378-1402`) gets `SearchTargets()` with the block's
   usual comment (the `/search` handler reads it, so a lifespan-less transport needs it).
   `search_first_token_target_ms` is **log-only today**: it feeds the `extra=` dict at
@@ -411,10 +487,9 @@ first `/search` and then reflects it, and spec 5 US-005's wire pins are byte-ide
   counter `metrics.promptguard_latency_target_exceeded += 1` goes inside the existing `if
   promptguard_duration_ms > target:` at `:1082`. A `/search` that raises before `:960` (provider
   failure → 422) reaches neither site — pinned. The local is named `metrics` (`:863`, rebound from
-  `search_metrics`). Six sites per field: `SearchMetricsSink` Protocol
-  (`pipeline/orchestrator.py:747-756`, including its "two counters" docstring sentence — **five**
-  fields after this story: `fallback_fired`, `paid_calls`, spec 5's `provider_compressed_body`, and
-  these two; drop the count from the sentence if simpler), `_NullSearchMetrics.__init__` (`:759-771`,
+  `search_metrics`). Six sites per field, plus the two test-side seams: `SearchMetricsSink` Protocol
+  (`pipeline/orchestrator.py:747-756`, whose docstring **drops its field count** — it is stale today
+  and spec 2 US-006 and spec 5 US-003 each move it; round-4 salty review), `_NullSearchMetrics.__init__` (`:759-771`,
   both attributes), `SearchMetrics.__init__` (`retrieval_app.py:875-886`, a plain class), the
   `/metrics` handler dict (`:1517-1524`, appended after the last key), `SearchMetricsResponse`
   (`:488-533`, appended last; descriptions name the config key and the window, both state that the
@@ -424,13 +499,20 @@ first `/search` and then reflects it, and spec 5 US-005's wire pins are byte-ide
   `search.requests`** — restarting the container is the only way to clear it), and the literal field
   set in `tests/test_contract_schema.py:368`
   (`test_search_metrics_response_1_2_0_field_set_is_pinned_exactly`), which spec 5 US-003 already
-  extends and which gains these two names in the same commit or stays red. Missing the Protocol or
+  extends and which gains these two names in the same commit or stays red — plus
+  `tests/fakes.py::RecordingSearchMetrics` (spec 5 US-001, the one test-side double every
+  `SearchMetricsSink` member lands in) and `tests/test_app.py:482-490`'s exhaustive `body["search"]`
+  literal, both of which gain both keys in the same commit. Missing the Protocol or
   the null sink fails pyright strict; a model field without its class counterpart 500s `/metrics`
   (`extra="forbid"`, GOTCHAS).
 - Follow and update the repo's own runbook: `kit_tools/docs/MONITORING.md:433-439` ("Adding a
   counter to `/metrics`") — spec 5 US-003 already teaches it the Protocol / `_NullSearchMetrics` /
   handler-dict sites and the plain-class correction; this story verifies that edit landed (or makes
-  it) and follows it.
+  it) and follows it — and adds one sentence that a field may be a **high-water mark** rather than a
+  counter (updated with `max(...)` at the seam, per-process, never reset, read with its companion
+  count), under the heading widened to "Adding a counter or gauge to `/metrics`", because this story
+  adds the repo's first `/metrics` field that is neither a monotonic counter nor a dict (round-4
+  codebase-fit review).
 - Window mechanics (R36, verbatim): append the docstring lines (`* ``1.3.0`` — …` format), run
   `uv run python -m scripts.export_contract`, re-create `tests/golden/contract_1_3_0.json` via
   `_SCHEMA_MODELS`, append the fields to `_EXPECTED_ONE_THREE_ZERO_DIFF` in
@@ -480,7 +562,8 @@ first `/search` and then reflects it, and spec 5 US-005's wire pins are byte-ide
       whose loop exceeds the target, strictly greater, never otherwise) and
       `search.sanitization_latency_max_ms` (updated on every `/search` that reaches the site after
       the duration is computed — a served-empty `/search` included, a pre-loop 422 excluded, both
-      pinned); all six sites per field are edited, the literal pin in `tests/test_contract_schema.py`
+      pinned); all six sites per field and the two test-side seams (`RecordingSearchMetrics`, the
+      `tests/test_app.py:482-490` literal) are edited, the literal pin in `tests/test_contract_schema.py`
       included; `_NullSearchMetrics` carries both; the two order-guard tests pass with the keys
       appended; both descriptions name the window and the `num_results` scaling; the max's description
       states per-process, never-resets, read-with-the-count; `grep -rn 'promptguard_latency_max_ms'
@@ -493,13 +576,20 @@ first `/search` and then reflects it, and spec 5 US-005's wire pins are byte-ide
       `uv run python -m scripts.export_contract --check` green — with Implementation Notes recording
       that the golden is byte-identical and the diff list carries no `/metrics` entry, and why.
 - [ ] With no overrides, spec 5 US-005's wire pins (`tests/test_search_pipeline_pins.py`) pass
-      unchanged.
+      unchanged — correct as written because the pins compare a closed `_PINNED_COUNTERS` projection
+      that excludes these two fields (spec 5 US-005, R13 corrected in round 5); the test this story
+      moves is `tests/test_contract_schema.py::test_search_metrics_response_1_2_0_field_set_is_pinned_exactly`,
+      never the pins.
+- [ ] `pipeline/search_targets.py` is in spec 3 US-003's AST code-parity reader list; `grep -n
+      '_bounded_' pipeline/search_targets.py` returns nothing; `kit_tools/testing/TESTING_GUIDE.md`'s
+      `test_mapping` carries a row for `pipeline/search_targets.py` naming `tests/test_app.py`.
 - [ ] `docs/configuration.md` rows (the first-token row saying "log-only today"), `MONITORING.md` rows
       with the per-process semantics and the `num_results` comparability clause, the count-first
       runbook sentence and the `search.classification_wait_timeouts` sentence (the max is never read
       against `promptguard_wait_seconds`), `ENV_REFERENCE.md` rows and `KNOWN_CONFIG_KEYS` entries exist
       for both keys; `MONITORING.md:433-439`'s runbook names the Protocol, `_NullSearchMetrics`,
-      handler-dict and literal-pin sites; `grep -rn '1000 ms' kit_tools/docs/ docs/` returns nothing and
+      handler-dict and literal-pin sites and covers a high-water mark under its widened heading;
+      `grep -rn '1000 ms' kit_tools/docs/ docs/` returns nothing and
       `grep -rn 'promptguard_wait_seconds × 1000\|promptguard_wait_seconds x 1000' kit_tools/docs/
       kit_tools/arch/ docs/` returns nothing.
 - [ ] `sanitizer_revision` rotation measured (revert `pipeline/orchestrator.py` and
@@ -594,9 +684,14 @@ place of the two integers.
   `_RECONNECT_MAX_BACKOFF_S`, `cache.py:42` — the same 30 s as the interval) runs `_attempt_connect()`,
   which logs `Valkey connection failed for content cache (connect_failed|timeout)` at WARNING
   (`cache.py:419-422`) and bumps `reconnect_attempts` / `reconnect_failures`, so a zero-traffic
-  `full.yml` container with Valkey down emits that WARNING roughly every 30 s for as long as Valkey is
-  down and both counters climb at a fixed rate with no traffic. The fragment comment says so in one
-  clause ("with the cache down, expect one reconnect WARNING per probe"), and US-003's
+  `full.yml` container with Valkey down emits that WARNING at **at most one reconnect attempt per
+  probe**, at a rate that depends on how the attempt fails (round-4 salty review; R16 corrected in
+  round 5): `_next_retry_at` is set *after* the attempt returns (`cache.py:432-466`), so a **refused**
+  connection — the attempt returns in milliseconds — gives one WARNING per probe, while a
+  **timing-out** one — the 2 s deadline pushes the next retry past the next probe — gives roughly one
+  per two probes; both counters climb at that probe-driven rate with no traffic. The fragment comment
+  says so in one clause ("with the cache down, expect at most one reconnect WARNING per probe — one
+  per probe on connection refused, about one per two on a connect timeout"), and US-003's
   `MONITORING.md:174` / `:342` edits make the counters' non-zero baseline honest. The `python3 -c
   urllib` form is the fallback only if `curl` leaves the image.
 - The healthcheck falsifies two docstrings **rendered into the frozen contract document**:
@@ -635,7 +730,11 @@ place of the two integers.
   and are frozen (CLAUDE.md invariant 4 — retained, never edited); the only golden that moves is
   `contract_1_3_0.json`, which this story re-creates, and the acceptance grep excludes `tests/golden/`
   for exactly that reason. `tests/fixtures/contract/unregenerated_openapi.yaml:422,1416` are rewritten
-  by `scripts.export_contract` (`:101-102,269`), never by hand.
+  by `scripts.export_contract` (`:101-102,269`), never by hand. `kit_tools/docs/API_GUIDE.md:93` ("a
+  bare `curl -f` proves only that the process is up") is a true, generic sentence the acceptance grep
+  nevertheless hits; **this** story rewrites it to "the compose healthcheck's `curl -fsS -o /dev/null`
+  proves only that the process is up" — a prescribed replacement, not a string-match casualty (round-4
+  salty and codebase-fit reviews).
 - CI: a **second** step in the `lint` job, placed immediately after the existing render step
   (`.github/workflows/ci.yml:201-239`) and named for the envelope ("Validate the compose fragments
   with the resource envelope set"), running the same two `config -q` commands with its own `env:` —
@@ -724,9 +823,14 @@ no tracked file left claiming the fragments declare no healthcheck, no CPU quota
 DEPLOYMENT.md kit_tools/docs/MONITORING.md kit_tools/arch/INFRA_ARCH.md kit_tools/arch/SECURITY.md`
 lists six files (one per line); `grep -l FORAGE_CPUS README.md docs/configuration.md kit_tools/docs/
 ENV_REFERENCE.md kit_tools/arch/INFRA_ARCH.md` lists four; `grep -rn -iE '(no|without|neither)[^|]{0,40}healthcheck|No CPU quota|10 s x 5|bare .curl -f.' kit_tools/
-docs/ kit_tools/arch/ docs/ README.md` returns only lines about the image-level `HEALTHCHECK`
-instruction (which stays absent), each of which also says on the same line that the compose
-fragments declare one; `grep -rn 'only tighten' kit_tools/docs/ kit_tools/arch/ docs/ README.md` and `grep -n 'never raise'
+docs/ kit_tools/arch/ docs/ README.md | grep -v 'unless the operator sets one'` returns only lines
+about the image-level `HEALTHCHECK` instruction (which stays absent), each of which also says on the
+same line that the compose fragments declare one — the `grep -v` excludes, by its own content, the one
+true "no CPU quota" phrase the verbatim `SECURITY.md:374` restatement carries, so the restatement stays
+verbatim and the criterion stays checkable (round-4 salty review; R16 corrected in round 5);
+`INFRA_ARCH.md:348` ("Not provided — … a container `HEALTHCHECK`; CPU or pids limits"), which the
+pattern does not match, is on the hand list and is rewritten to say the fragments declare a compose
+healthcheck and a `cpus` knob; `grep -rn 'only tighten' kit_tools/docs/ kit_tools/arch/ docs/ README.md` and `grep -n 'never raise'
 kit_tools/arch/SECURITY.md` (R43: `kit_tools/specs/`, the untracked `kit_tools/.seed_cache/` — whose
 `tech-stack_summary.md:82` repeats the old claim and is a regenerated artefact left alone — and the
 result artefacts are excluded; five hits at planning time, executed: `ENV_REFERENCE.md:107`,
@@ -751,13 +855,18 @@ next.
   = `2 / 2048m / 2 / 1 / 67108864`, `4 / 4 GB` = `4 / 4096m / 2 / 2 / 134217728`; the last column
   reads "measured in spec 7 (`feature-hardening-promptguard-86m` US-004)" in every row and its header
   states the `num_results` the figure is measured at (the loop runs once per served result, so a
-  classify latency without its `num_results` is not comparable — round-3 salty review). Beneath it:
-  the **memory** rule verbatim from US-001 (four terms — the child term as the configured
-  `child_address_space_bytes`, the cache term **only under the in-memory backend**, with one sentence
-  that `full.yml`'s Valkey moves the cache's memory into its own container and the term to 0), with
-  `CLASSIFIER_WORKING_SET` named as provisional (64 MiB, its derivation and its no-measurement caveat)
-  until spec 7 measures it, the worked reference row (`512 + 64 + 384 + 32 = 992 MiB` under `1024m` on
-  `minimal.yml`, a 32 MiB margin; `960 MiB` on `full.yml`), the
+  classify latency without its `num_results` is not comparable — round-3 salty review); one sentence
+  under the table says the `4 / 4 GB` row's `cache.max_bytes` `134217728` sits **at**
+  `_MAX_CACHE_MAX_BYTES` (`cache.py:229`, 128 MiB) — the column does not keep doubling with the host and
+  the ceiling is not configurable (round-4 salty review; Out of Scope records the deferral). Beneath
+  it: the **memory** rule verbatim from US-001 (five terms — the named `PARENT_RESERVATION_BYTES` plus
+  the selected model's resident delta, `0` for the 22M, with a per-model column spec 7 fills; the child
+  term as the configured `child_address_space_bytes`; the cache term as `cache.max_bytes` under the
+  in-memory backend or `cache.max_value_bytes`, one in-flight read, under Valkey — with one sentence
+  that `full.yml`'s Valkey moves the cache's memory into its own container and leaves one read's
+  worth here), with `CLASSIFIER_WORKING_SET` named as provisional (64 MiB, its derivation and its
+  no-measurement caveat) until spec 7 measures it, the worked reference row (`512 + 0 + 64 + 384 + 32
+  = 992 MiB` under `1024m` on `minimal.yml`, a 32 MiB margin; `964 MiB` on `full.yml`), the
   sentence "boot warns `envelope_memory_rule_unmet` when the cgroup limit is readable and strictly
   below the rule; above it the failure is an OOM kill `/health` cannot report", and the decided
   consequence of a larger measurement (the shipped default does not move; the reference row's
@@ -807,7 +916,18 @@ next.
   in `KNOWN_CONFIG_KEYS` is in exactly one of `SECURITY_RELEVANT_CONFIG_KEYS` or an explicit
   `_NOT_SECURITY_RELEVANT_CONFIG_KEYS` (`user_agents` and `news_domains` deliberately differ from their
   code defaults, which is why a blanket all-keys test is unavailable), so a new `config.yaml` key goes
-  red until someone classifies it. It proves the shipped baseline only; the day a shipped value stops
+  red until someone classifies it. Both sets hold **dotted registry names** exactly as
+  `KNOWN_CONFIG_KEYS` spells them (spec 3 US-003: top-level keys bare, block leaves as
+  `extraction.<key>` / `cache.<key>` / `retrieve.<key>`, block names bare) and the failure message
+  prints them that way; the **membership rule is written beside the constant** — *security-relevant: a
+  key whose value decides whether or how content is scanned, served or sandboxed* (thresholds, floors
+  and ceilings, route enablement, blocklists, the four envelope keys, the untrusted-PDF child's
+  `RLIMIT_AS`); *not: a pure resource or throughput bound, a cosmetic list, or a bare block name* — so
+  `extraction.child_address_space_bytes` is classified **in** (the sandbox limit this spec rewrites
+  four files to call raisable), `extraction.admission_queue_depth` **out** (a queue depth), each
+  explicitly rather than by omission, and the bare block names `cache`, `extraction`, `retrieve` go in
+  the not-relevant set (round-4 salty review: an exhaustive partition with no stated criterion is a
+  coin flip for every future key). It proves the shipped baseline only; the day a shipped value stops
   equalling its code default the test says so.
 - The sweeps are greps (R39); the lists below are starting points — floors, not ceilings — and the
   criterion is the grep:
@@ -843,10 +963,11 @@ next.
     (now: the shipped probe is this repo's), and the two `reconnect_*` lines the probe now drives
     unconditionally (round-3 salty review) — `MONITORING.md:174`, whose "*if* you poll `/health`"
     conditional becomes "the compose healthcheck polls `/health` every 30 s, so on any deployment with
-    Valkey down these counters have a non-zero, steadily climbing baseline — the *rate* is diagnostic,
-    not the value", and `:342`, the "Cache flapping or down" row, which distinguishes
-    `reconnect_failures` climbing at one per probe interval (the down-Valkey heartbeat) from flapping
-    (`successes` climbing too).
+    Valkey down these counters have a non-zero, steadily climbing baseline — at most one attempt per
+    probe: one per probe on connection refused, about one per two probes on a connect timeout — the
+    *rate* is diagnostic, not the value", and `:342`, the "Cache flapping or down" row, which
+    distinguishes `reconnect_failures` climbing at the probe-driven rate (the down-Valkey heartbeat —
+    one per probe or one per two) from flapping (`successes` climbing too).
   - `only tighten` / `never raise` / `1000 ms` — `grep -rn 'only tighten' kit_tools/docs/ kit_tools/arch/
     docs/ README.md` and `grep -n 'never raise' kit_tools/arch/SECURITY.md` (`ENV_REFERENCE.md:107` is
     US-001's; `TROUBLESHOOTING.md:524` and `DECISIONS.md:105` gain the three-key wording —
@@ -872,9 +993,10 @@ next.
   `depends_on: service_healthy`, or a consumer's activation; the classifier's state is `/health`'s
   `promptguard_loaded` / `degraded_reasons` plus `/metrics` `search.unscanned_results`; the probe calls
   `/health`, which pings the cache when due, so `cache_connected` recovery is now detected within one
-  probe interval even with no traffic — and, with Valkey down, one reconnect WARNING and one
-  `reconnect_failures` increment per probe interval for as long as it stays down (the down-Valkey
-  heartbeat, `:174` / `:342`) — and the `cgroup_memory_max_bytes` verification note beside the
+  probe interval even with no traffic — and, with Valkey down, at most one reconnect WARNING and one
+  `reconnect_failures` increment per probe for as long as it stays down (one per probe when refused,
+  about one per two when timing out — the down-Valkey heartbeat, `:174` / `:342`) — and the
+  `cgroup_memory_max_bytes` verification note beside the
   US-004 runbook line, whose forward reference to § Sizing the container this story makes real.
   `kit_tools/docs/DEPLOYMENT.md`: the same liveness paragraph beside the compose instructions.
 - `kit_tools/arch/SECURITY.md`: the "Upload ceilings" sentence (`:180-182`, "hard ceilings that
@@ -906,10 +1028,12 @@ next.
 
 **Acceptance Criteria:**
 - [ ] `docs/configuration.md` has the top-level `## Sizing the container` section before
-      `## config.yaml`, with the three rows and the `num_results` in the classify column's header, the
-      four-term memory rule (the child term as the configured `child_address_space_bytes`, the cache
-      term in-memory only, the Valkey sentence) with its provisional 64 MiB coefficient, its derivation,
-      the worked 992 MiB (`minimal.yml`) / 960 MiB (`full.yml`) reference row and the boot-WARNING
+      `## config.yaml`, with the three rows, the `num_results` in the classify column's header and the
+      `4 / 4 GB` row's at-the-ceiling sentence, the five-term memory rule (the named parent constant
+      plus the selected model's resident delta with its per-model column, the child term as the
+      configured `child_address_space_bytes`, the cache term as in-memory `max_bytes` or Valkey
+      `max_value_bytes`, the Valkey sentence) with its provisional 64 MiB coefficient, its derivation,
+      the worked 992 MiB (`minimal.yml`) / 964 MiB (`full.yml`) reference row and the boot-WARNING
       sentence, the
       decided larger-measurement consequence, the under-sizing-is-a-security-decision sentence naming
       `promptguard_wait_seconds`, `unavailable_blocked` and `unavailable_allowed`, the CPU rule with its
@@ -920,9 +1044,11 @@ next.
       warning, and the classify-latency column deferring to spec 7 by name; the weights-acquisition
       paragraph distinguishes boot latency from classify latency.
 - [ ] The shipped-equals-code-default test exists and passes over `SECURITY_RELEVANT_CONFIG_KEYS`
-      (the three keys of today, spec 2's floor and ceiling, this spec's four envelope keys), and its
-      partition assertion places every `KNOWN_CONFIG_KEYS` entry in exactly one of the two explicit
-      sets.
+      (the three keys of today, spec 2's floor and ceiling, this spec's four envelope keys,
+      `extraction.child_address_space_bytes`), and its partition assertion places every
+      `KNOWN_CONFIG_KEYS` entry — as dotted registry names — in exactly one of the two explicit sets,
+      with `extraction.admission_queue_depth` and the bare block names in the not-relevant set and the
+      membership rule written beside the constant.
 - [ ] Every grep in the Independent Test — `Sizing the container` (six files), `FORAGE_CPUS` (four),
       the healthcheck/CPU-quota claims, `only tighten` / `never raise` (five tracked hits at planning
       time, each either three-key or single-key-scoped afterwards), `1000 ms`, `Pinned at 1`,
@@ -967,7 +1093,11 @@ next.
 - `cache.max_bytes` raised to its 128 MiB ceiling **with the in-memory backend** (`minimal.yml`,
   `VALKEY_URL` unset) on a 1 GiB cgroup at the default concurrency puts the rule at 1088 MiB — a
   WARNING, which is the point of the cache term; the same key under `full.yml`'s Valkey backend
-  changes nothing, because the term is 0 there and the bound is the Valkey container's (US-001).
+  changes nothing, because the term there is one in-flight read (`cache.max_value_bytes`) and the
+  bound is the Valkey container's (US-001).
+- Selecting a non-default classifier (spec 7 US-006) adds that model's measured resident delta to the
+  parent term, so an 86M selection on a 1 GiB host is a WARNING, never silent; with the 22M the delta
+  is `0` and nothing changes (US-001; the row and the routing are spec 7's handoff).
 - `extraction.child_address_space_bytes` raised to its 512 MiB ceiling on a 1 GiB cgroup at the
   shipped defaults puts the rule at 1120 MiB — a WARNING, because the rule reads the configured value,
   never the 384 MiB constant (US-001).
@@ -998,8 +1128,9 @@ next.
 - Plain `docker compose` reports an unhealthy container and never restarts it (US-002).
 - The probe pings the cache when due, so cache recovery is detected within one interval with no
   traffic; with the cache down the probe may take up to 2 s (`_RECONNECT_TIMEOUT_S`), inside its 5 s
-  timeout — and each such probe logs a reconnect WARNING and bumps `reconnect_attempts` /
-  `reconnect_failures`, so a down Valkey is a 30 s heartbeat in the log and a fixed-rate climb on two
+  timeout — and each probe that lands after the backoff logs a reconnect WARNING and bumps
+  `reconnect_attempts` / `reconnect_failures`, so a down Valkey is a probe-driven heartbeat in the log
+  — one per probe when refused, about one per two probes when timing out — and a steady climb on two
   counters with no traffic at all (US-002, US-003).
 - A short bind-mounted `config.yaml` resets `promptguard_threshold`, `extract_route_enabled`,
   `seed_blocklist`, spec 2's floor/ceiling keys **and the four envelope keys** to code defaults — which
@@ -1043,14 +1174,19 @@ next.
   named as unknown-whether-deliberate for a hardening spec of their own.
 - Wiring the classification semaphore's bounded wait — spec 2 US-006 owns `promptguard_wait_seconds`;
   this spec only documents how the envelope interacts with it.
+- Widening `_MAX_CACHE_MAX_BYTES` (128 MiB, `cache.py:229`) under the memory rule — the `4 / 4 GB`
+  sizing row sits at that ceiling; raising it is deliberately deferred, and the sizing section says the
+  ceiling is not configurable (round-4 salty review).
 
 ## Assumptions
 
 - Poppy is the only consumer; the `/metrics` fields are additive and defaulted; the two `/health`
   description corrections change no shape.
 - The 1.3.0 contract window is open when this spec executes (spec 1 US-004 opened it), spec 3
-  US-003's `KNOWN_CONFIG_KEYS` registry exists, spec 2 US-006 has wired the classification semaphore
-  into `/retrieve` and `/search`, and spec 5 US-005's wire pins and US-003's runbook edit exist.
+  US-003's `KNOWN_CONFIG_KEYS` registry and AST reader list exist, spec 2 US-001's
+  `pipeline/config_bounds.py` exists, spec 2 US-006 has wired the classification semaphore into
+  `/retrieve` and `/search`, spec 4 US-001's `cache.max_value_bytes` exists, and spec 5 US-001's
+  `RecordingSearchMetrics`, US-005's wire pins and US-003's runbook edit exist.
 - Docker Compose v2 (Compose Spec) is the supported runner; `${VAR:-default}` substitution and the
   service-level `cpus` key are Compose Spec features; `cpus: 0` renders as no key (verified on
   v2.40.3, validation round 1).
@@ -1062,9 +1198,11 @@ next.
   envelope's 96 MiB residual after the parent, one child and the shipped cache, with a 32 MiB margin
   kept) is the provisional coefficient until spec 7 US-004 measures it; the child term is the
   configured `child_address_space_bytes` (the pypdf child's address space, 384 MiB shipped) and its
-  range is not revisited here; the cache term counts only under the in-memory backend; the 512 MiB
-  parent term is the existing reservation (`docs/configuration.md:485`) and is likewise not
-  re-measured.
+  range is not revisited here; the cache term is `cache.max_bytes` under the in-memory backend and
+  one in-flight read (`cache.max_value_bytes`) under Valkey; the 512 MiB parent term is the existing
+  reservation (`docs/configuration.md:485`) with the 22M resident and is not re-measured here — a
+  non-default model's resident delta is a per-model row spec 7 measures and fills (`0` for the 22M), so
+  the rule is model-dependent by construction and never silent on a bigger model.
 - Pydantic renders a model's class docstring as its JSON-schema `description`, so the `HealthResponse`
   correction moves the 1.3.0 golden; the route docstring moves only `contract/openapi.yaml`.
 - `tests/test_ci_workflow.py`'s placeholder test binds to the first `docker compose` step in `lint`;
@@ -1093,10 +1231,12 @@ next.
   `HealthResponse` is in `_SCHEMA_MODELS` and its class docstring is the schema `description` —
   while neither adds an entry to the 1.3.0 diff list (`_added_paths` records added keys, not
   changed values); both record which.
-- The memory rule's four terms are additive and counted once: parent (no classification in flight),
+- The memory rule's five terms are additive and counted once: the named parent constant plus the
+  selected model's resident delta (`0` for the 22M; no classification in flight),
   `classification_concurrency × 64 MiB`, `extraction_concurrency × child_address_space_bytes` (as
-  configured), and `cache.max_bytes` only when the backend tag is `memory`; the shipped defaults
-  evaluate to 992 MiB (in-memory) or 960 MiB (Valkey), the comparison is strictly-below, and the
+  configured), and `cache.max_bytes` when the backend tag is `memory` or `cache.max_value_bytes` when
+  it is `valkey`; the shipped defaults evaluate to 992 MiB (in-memory) or 964 MiB (Valkey), the
+  comparison is strictly-below, and the
   shipped `FORAGE_MEM_LIMIT` default never moves on a measurement — the reference row's recommendation
   does. The check is a new lifespan call site after the backend selection (`retrieval_app.py:1282-1284`)
   in the shape of `_warn_if_break_glass_advertisement_enabled()`.
@@ -1115,6 +1255,11 @@ next.
   before spec 2 US-006 that is `/extract` only (`retrieval_app.py:1731` → `orchestrator.py:539`).
 - The memory-rule WARNING reads the cgroup, not `FORAGE_MEM_LIMIT`, so it needs no new plumbing and
   works under any orchestrator's limit.
+- `promptguard/classifier.py` importing `pipeline.config_bounds` is the first `promptguard` →
+  `pipeline` import: cycle-free (`pipeline/__init__.py` is a docstring, `config_bounds` is a leaf,
+  `pipeline/stage3_promptguard.py` imports the classifier lazily) and it imports a bounds helper, not
+  a pipeline stage; no test forbids the direction (`_FORBIDDEN_IMPORTS` guards
+  `pipeline/search_providers/` only).
 
 ## Security Considerations
 
@@ -1290,9 +1435,28 @@ only establishes what `0` means.
   completionist vision-alignment finding, recorded).
 - `search_first_token_target_ms` stays a key per ruling 16 but is documented as log-only; four
   reviewers proposed dropping it — recorded, overruled by the ruling, mitigated by the doc sentence.
-- Overruled: a shared public `bounded_int` helper — the module-local copy is the recorded precedent
-  (`brave.py:231-233`); the copies in `promptguard/classifier.py` and `pipeline/search_targets.py`
-  follow it.
+- Round 5 (R16 corrected): **reversed** — no new bounded-int copies. Spec 2 US-001 made
+  `pipeline/config_bounds.bounded_int` the shared helper and spec 5 US-001 already reads through it;
+  `promptguard/classifier.py`'s thread reader and `pipeline/search_targets.py` do the same and both
+  join spec 3 US-003's AST reader list (round-4 codebase-fit critical). The count of module-local
+  copies stays at two after spec 2 (`cache.py`, `brave.py`).
+- Round 5 (R16 corrected): the thread reader's error is `PromptGuardThreadsConfigurationError` —
+  named for what it bounds, the in-house `PromptGuard<What>Error` shape — because spec 7 (which runs
+  after this spec) declares `PromptGuardConfigurationError` for its settings triple and this story can
+  neither import a class that does not exist yet nor declare a second one of that name.
+- Round 5 (R16 corrected): the parent term is `PARENT_RESERVATION_BYTES` plus the selected model's
+  `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` row, so the rule is model-dependent and an 86M selection
+  is never silent; the Valkey branch counts one in-flight read (`cache.max_value_bytes`, spec 4) rather
+  than zero; the WARNING field is `cache_term_bytes`, named for the term.
+- Round 5: the `SECURITY.md:374` restatement stays verbatim and the healthcheck/CPU-quota grep excludes
+  its one true phrase by content (`grep -v 'unless the operator sets one'`); the reconnect WARNING
+  rate is stated per failure mode (one per probe refused, about one per two timing out); the partition
+  test holds dotted registry names with a written membership rule, `extraction.child_address_space_bytes`
+  in and `extraction.admission_queue_depth` out; the runbook heading covers a gauge; the `4 / 4 GB`
+  row is marked at the `cache.max_bytes` ceiling; `API_GUIDE.md:93` gets prescribed wording;
+  `pipeline/search_targets.py` gets a `test_mapping` row; spec 5 US-005's closed `_PINNED_COUNTERS`
+  projection is why "wire pins pass unchanged" holds and the literal field-set pin is the test that
+  moves.
 - Overruled: `os.sched_getaffinity` as the threads default — approximate under cgroup v1; deferred.
 - Overruled: an image-level `HEALTHCHECK` — out of scope, stated.
 - Overruled: the `compose/envelope.yml` fallback — the render question is closed; a third file would
@@ -1438,6 +1602,27 @@ only establishes what `0` means.
 - Q: Does US-002 need Docker? → A: The render does not (`docker compose config` is client-side); the
   `busybox` probe does, and its not-run outcome is written down.
 
+### Session 2026-09-19 (validation round 5, final)
+- Rulings applied (this pass was not re-reviewed; the round-4 salty and codebase-fit findings were
+  applied directly and the remainder recorded under Known risks): R16 (corrected — no new bounded-int
+  copies: `promptguard/classifier.py`'s thread reader and `pipeline/search_targets.py` on
+  `pipeline/config_bounds`, both added to spec 3's AST reader list, `pipeline/search_targets.py` with
+  a `test_mapping` row; the thread reader's error named `PromptGuardThreadsConfigurationError` because
+  spec 7's `PromptGuardConfigurationError` does not exist when this spec runs; the memory rule's parent
+  term as `PARENT_RESERVATION_BYTES` plus the selected model's measured resident delta read from a
+  per-model table the sizing section carries, so an 86M selection is not silent; the Valkey branch's
+  one-read term `cache.max_value_bytes` that spec 4 promised; the `SECURITY.md:374` grep reconciled by
+  excluding the verbatim line's phrase by content; the reconnect WARNING rate "one per probe on
+  connection refused, about one per two on a connect timeout"), R43 (the new greps scoped and
+  executed).
+- Q: Can this spec import spec 7's `PromptGuardConfigurationError`? → A: No — spec 7 runs after this
+  spec; the reader's error is named for what it bounds and the generic name stays spec 7's.
+- Q: Where do a bigger model's weights land in the rule? → A: In the parent term, as the selected
+  model's resident delta over the 22M — shared weights are not per-classification; spec 7 measures and
+  fills the row and routes the selected id in.
+- Q: Does spec 6 US-004 move spec 5 US-005's pins? → A: No — the pins project a closed counter set;
+  the literal field-set pin in `tests/test_contract_schema.py` is the test that moves.
+
 ## Open Questions
 
 - [ ] Should `FORAGE_CPUS` also drive `extraction.extraction_concurrency` (the PDF worker admission
@@ -1446,3 +1631,32 @@ only establishes what `0` means.
       and the 86M — non-blocking; the rule's structure does not change either way, and the
       consequence of a larger value is already decided (US-001: the shipped default stays, the
       reference row's recommendation rises, 1 GiB hosts warn).
+- [ ] The model-dependent parent term's handoff (non-blocking, but it must belong to somebody): spec 7
+      US-004 fills `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL`'s 86M row from its idle-RSS measurement
+      and the sizing table's per-model column, and spec 7 US-006 routes the selected `FORAGE_MODEL_ID`
+      into the rule — written here at close-out; spec 7's text must carry the same handoff (Known
+      risks).
+
+## Known risks (validation close-out)
+
+Round-4 warnings not applied in the final pass, recorded per the round-5 rulings (reviewer, finding,
+why deferred), plus the cross-spec handoffs this pass created:
+
+- **Salty engineer, US-003 — the negative healthcheck claim is guarded by a one-time grep, not a
+  test.** The reviewer asked for an assertion in `tests/test_compose_fragments.py` beside
+  `_DOCUMENTED_VOLUME_RE` that `MONITORING.md` / `SERVICE_MAP.md` / `INFRA_ARCH.md` carry no surviving
+  "no `healthcheck:` in `compose/*.yml`" sentence while the fragments declare one. Deferred: US-003 is
+  doc-only by design (no test criteria on doc-only stories) and US-002, which does edit that test
+  module, runs before the sweep, so the guard would be red at US-002. The one hit the grep misses
+  (`INFRA_ARCH.md:348`) is on US-003's hand list. Risk: the claim can rot after the epic; a follow-up
+  can add the guard once both stories have landed.
+- **Cross-spec handoff, US-001 → spec 7 US-004 / US-006 (the model-dependent parent term).** This spec
+  ships `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` with the 22M row only; spec 7 must fill the 86M row
+  from its measurement, add the sizing table's per-model column, and route the selected
+  `FORAGE_MODEL_ID` into the rule. Spec 7's text today says only that its marginal RSS delta replaces
+  the working-set coefficient (`feature-hardening-promptguard-86m.md:1205-1208`) and cites the sizing
+  table as "spec 6 US-002" (it is US-003's); both need the matching edit (flagged at close-out).
+- **Cross-spec observation, spec 7 (not this spec's to fix).** Spec 7's settings triple re-states the
+  bounded-read idiom locally in `pipeline/stage3_promptguard.py` (`:652-658`), which is the module-local
+  copy R16 (corrected in round 5) removes here; if spec 7 keeps it, the copy count grows to three
+  again. Recorded so the parent can relay it.

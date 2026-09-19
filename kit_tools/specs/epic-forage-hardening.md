@@ -186,15 +186,16 @@ knobs. Spec 1 opens the contract window (ruling 5) so every later wire addition 
     path, so spec 7 US-004 is a declared human gate, preceded by the vendoring gate US-005
     (ruling 29). Numbers recorded: a 2×2×2 matrix (22M/86M × `FORAGE_CPUS=1`/`4` × two inputs)
     plus RSS rows.
-19. **The validation 422 body loses `input`/`ctx`/`url`** via an app-level
-    `RequestValidationError` handler re-emitting `{loc, msg, type}`. The shipped contract
-    (`contract/openapi.yaml:1271-1278`, `v1.1.0`) documents that pydantic adds those keys, so the
-    trim removes documented behaviour: it is a **MINOR** inside the 1.3.0 window, announced with a
-    compatibility note ("consumers that read `detail[].input` must stop"), and GOVERNANCE ruling
-    (e) is written from that premise (corrected in round 2). Spec 8 US-001 owns its own
-    regenerate, golden and four-page anchor refresh; `msg` and `loc` carry a no-caller-bytes
-    invariant pinned by a marker fuzz over invalid values; the pipeline 422 `reason` stays what the
-    search epic's ruling (d) made it.
+19. **The validation 422 body closes its reflector in two steps** (corrected in rounds 2–5).
+    An app-level `RequestValidationError` handler re-emits `{loc, msg, type}`; following
+    GOVERNANCE "Example 6 in full" step 1, for one minor release the documented-by-description
+    extra keys `input`, `ctx` and `url` stay present with the fixed value `"[redacted]"`
+    (shape-compatible, reflector closed immediately), and the docstring line names the release
+    in which they are dropped as a second MINOR; GOVERNANCE ruling (e) records the two-step.
+    Spec 8 US-001 owns its own regenerate, golden and four-page anchor refresh; `msg`, `loc`
+    and `type` carry a no-caller-bytes invariant pinned by a per-field marker fuzz; the `loc`
+    allowlist is keyed by the matched route's path with a fail-closed default; the pipeline 422
+    `reason` stays what the search epic's ruling (d) made it.
 20. **Release plumbing repeats the `v1.1.0` runbook verbatim**: compose pins and `_FORAGE_RELEASE_TAG`
     move to `1.2.0` before the tag, both smoke modes run with `--anchor`, the credential-free pull
     follows `docker image rm` (audit -014), and the handoff table copies the shape of the archived
@@ -202,20 +203,22 @@ knobs. Spec 1 opens the contract window (ruling 5) so every later wire addition 
 
 ### Rulings from `/kit-tools:validate-epic` round 1 (2026-09-19; 48 reviews, 51 criticals resolved here)
 
-21. **The cache MAC binds the key, and both sides are bounded** (corrected in rounds 2–4).
+21. **The cache MAC binds the key, and both sides are bounded** (corrected in rounds 2–5).
     `HMAC-SHA256(key, "v1" || cache_key || payload)`, envelope `v1.<mac>.<payload>`, recomputed
     under the key being read; the secret is at least 32 bytes after strip. Read: one atomic
     `GETRANGE key 0 max` — an empty result is a miss, a `WRONGTYPE` reply is an integrity
     reject, a value longer than `cache.max_value_bytes` (default 4 MiB, floor 512 KiB; larger
-    than `max_bytes` is a WARNING, not a refusal) is deleted and counted `oversize`;
-    `decode_responses=False` is explicit so the byte bound stays a byte bound. Write: `put`
-    deletes the superseded entry and refuses to store a value it would reject, counting
-    `storage_oversize_skips` (a documentation-only semantics change recorded in GOVERNANCE).
-    Envelope parsing is bytes end-to-end; the five rejection shapes each have a literal in
-    `CACHE_INTEGRITY_REASONS`, nothing raises. Because `contract.py` rotates in this spec, every
-    pre-epic entry is orphaned at upgrade: the runbook says there is no first-enable burst, that
-    `unsigned`/`bad_mac`/`wrong_type` mean a foreign writer, and that `oversize` means a cap
-    mismatch across replicas. A configured key on the memory backend logs `cache_hmac_key_unused`.
+    than `max_bytes` is a WARNING) is deleted and counted `oversize`; because `from_url` applies
+    URL query options over explicit kwargs, a `VALKEY_URL` carrying `decode_responses`,
+    `protocol` or `encoding` options refuses boot (`valkey_url_option_forbidden`) so the byte
+    bound stays a byte bound. Write: `put` deletes the superseded entry and refuses to store a
+    value it would reject, counting `storage_oversize_skips` (documentation-only semantics
+    change recorded in GOVERNANCE). Envelope parsing is bytes end-to-end; the five rejection
+    shapes each have a literal in `CACHE_INTEGRITY_REASONS`, nothing raises. Because
+    `contract.py` rotates in this spec, every pre-epic entry is orphaned at upgrade: the runbook
+    says there is no first-enable burst, that `unsigned`/`bad_mac`/`wrong_type` mean a foreign
+    writer, and that `oversize` means a cap mismatch across replicas. A configured key on the
+    memory backend logs `cache_hmac_key_unused`.
 22. **The `/retrieve` chunk budget is a pre-checked refusal**, not a clamp: its own key
     `retrieve.max_promptguard_chunks` (default 256), a characters-only pre-check before
     classification (`len(raw_text) > max_extracted_characters(n)`; no byte limb — it cannot bind
@@ -228,19 +231,20 @@ knobs. Spec 1 opens the contract window (ruling 5) so every later wire addition 
     rounds 2 and 3).
 23. **Fetched PDFs go through the worker from a spooled file** under a second
     `ExtractionAdmissionController` built from a `retrieve.*` config block through the
-    controller's existing constructor shape (the six positional test constructions stay valid)
-    and handed to the pipeline as a pipeline-side Protocol with `async def acquire` / `async def
-    release` (`retrieval_app` imports `pipeline`, never the reverse); the acquisition is never
-    wrapped in `asyncio.timeout` (the controller's handoff would leak a slot; there is no
-    admission timer and `retrieve.fetch_concurrency` is pinned 1–1), its bounded queue and
-    queued-bytes limits are the backpressure, and a full queue refuses with the existing
-    `busy` code — 422 on `/retrieve` (reason `admission_queue_full`) while `/extract` keeps its
-    429 — through a route-aware handler declared per route (ruling 42). The spool directory is
-    created 0700 lazily with an `lstat` check and no repair. The worker's four reachable typed
-    errors map to one new `RetrieveErrorCode` member `extraction_failed` with closed reasons, so
-    `RetrieveErrorCode` grows by two. Fetched bodies are released before any wait on the
-    classification semaphore; a fail-open wait timeout never writes the cache; the over-budget
-    200→422 is a security-tightening MINOR with a compatibility note (GOVERNANCE row 6). HTML
+    controller's existing constructor shape and handed to the pipeline as a pipeline-side
+    Protocol (`admission: AdmissionSlot | None = None` in spec 2 US-001 so that story is green
+    alone; required from US-002); the acquisition is never wrapped in `asyncio.timeout`, the
+    controller's bounded queue and queued-bytes limits are the backpressure, and a full queue
+    refuses with the existing `busy` code — 422 on `/retrieve` (reason `admission_queue_full`)
+    while `/extract` keeps its 429 — through a route-aware handler declared per route (ruling
+    42). At most one fetched body is held, from fetch through stage 1 (`fetch_concurrency`
+    1–1), none while waiting on classification; a fail-open wait timeout never writes the
+    cache. The spool directory is created 0700 lazily with an `lstat` check and no repair. The
+    worker's four reachable typed errors map to one new `RetrieveErrorCode` member
+    `extraction_failed` with closed reasons, so `RetrieveErrorCode` grows by two. The chunk
+    budget ships at `0` (unbounded, today's behaviour) with a `retrieve_budget_unset` WARNING for
+    one minor release before the default flips to 256 — GOVERNANCE Example 6 step 1, the knob
+    is the compatibility mechanism and the window is stated in `docs/releases.md`. HTML
     extraction and `scan_structural` run under `asyncio.to_thread` on both routes.
 24. **`effective_*` fields are computed in the handler and cached faithfully.** Both are inputs to
     `cache_policy_fingerprint`, so a cache hit always reports the request's current effective
@@ -252,43 +256,47 @@ knobs. Spec 1 opens the contract window (ruling 5) so every later wire addition 
     code points, IPv6 zone ids) are `invalid_url`; `blocked_url` is reserved for policy —
     private/loopback/link-local literals, blocklisted hosts, `blocked_domains` / `seed_blocklist`
     matches (ruling 9 clarified).
-26. **One normalisation, wire ⊆ scan by construction** (order fixed in round 2, scoped in
-    round 3): NFC → `html.unescape` → Stage 1 prose extraction (paragraph breaks preserved) →
-    control-strip → newline-preserving whitespace collapse → truncate at the cap = the scan form;
-    the wire form is `" ".join(scan.split())`. The measured fixtures (660 padded paragraphs
-    blocked, 700 served; entity-encoded marker decoded; decoded escape never on the wire) are
-    executed before they are written (ruling 41). Wire identity holds for every existing fixture
-    except the ones the story names and rewrites. `SearchResult.engine` is an explicit documented
-    exemption from Stage 2/3.
-27. **Hosts are canonicalised before audit, IPv6 literals first** (corrected in rounds 3–4): a
+26. **One normalisation, wire ⊆ scan by construction** (order fixed in rounds 2–5): NFC → raw
+    control strip → Stage 1 prose extraction (the parser decodes one entity level, so benign
+    escaped markup survives as visible text) → `html.unescape` on the extracted text (the
+    second level, so double-encoded markers reach the scanner) → control strip again →
+    newline-preserving whitespace collapse → truncate at the cap = the scan form; the wire form
+    is `" ".join(scan.split())`. The measured fixtures (660 padded paragraphs blocked, 700
+    served; a double-encoded line-anchored marker decoded; a raw NUL stripped before parsing; a
+    benign `&lt;div&gt;` kept as text) are executed before they are written (ruling 41). Wire
+    identity holds for every existing fixture except the ones the story names and rewrites.
+    `SearchResult.engine` is an explicit documented exemption from Stage 2/3.
+27. **Hosts are canonicalised before audit, IPv6 literals first** (corrected in rounds 3–5): a
     colon-bearing hostname is an IPv6 literal and is classified by `ipaddress` before any IDNA
     step; colon-free hosts strip one trailing dot, IDNA via `idna.encode(..., uts46=True)`
     (failure → `invalid_url`/`idna`), then numeric hosts (decimal, octal, hex or short forms)
     must be a dotted quad `ipaddress` parses or are `invalid_url`/`numeric_host`; `urlsplit`
-    failures are `unparseable`. The canonicaliser returns a result that carries the closed
-    rejection token. IPv4-mapped, IPv4-compatible, 6to4 and Teredo embedded addresses are
-    unwrapped per their layouts and NAT64 only under `64:ff9b::/96`; `2001:db8::/32` stays
-    private (documentation range), so served IPv6 controls are global-unicast literals. The raw
-    URL is rejected `invalid_url`/`too_long` past `_MAX_SEARCH_URL_LENGTH` before any scan.
+    failures and a `parsed.port` that raises are `invalid_url` (`unparseable` / `invalid_port`).
+    The canonicaliser returns a result carrying the closed rejection token. IPv4-mapped,
+    IPv4-compatible, 6to4 and Teredo embedded addresses are unwrapped per their layouts and NAT64
+    only under `64:ff9b::/96`; `2001:db8::/32` stays private, so served IPv6 controls are
+    global-unicast literals. The raw URL is rejected `invalid_url`/`too_long` past
+    `_MAX_SEARCH_URL_LENGTH` before any scan.
 28. **Anchor sweeps never touch released records**: only the four anchor-quoting pages the
     governance test names; `docs/releases.md` entries and archived specs keep the anchor of the
     release they record.
 29. **The model id reaches every consumer, and 86M is vendored before it is benchmarked**
-    (corrected in rounds 2–4). One resolver feeds `model_fetcher` — through
-    `WeightAcquisition`, the object the lifespan actually constructs, which gains `model_id` —
-    `sanitizer_revision`, `vendor_weights` and the classifier's two `from_pretrained` calls
-    (`load(*, model_id=...)`); spec 7 US-001 owns the plumbing, US-006 the `FORAGE_MODEL_ID`
-    allowlist, refuse-boot, `id2label` name-and-cardinality assertion and `/health`
-    `promptguard_model`. `weights_manifest.json` is keyed by model id with one exact-set file
-    allowlist and one revision per model; `resolve_revision(model_id)` is the validated env
+    (corrected in rounds 2–5). One resolver feeds `model_fetcher` — through
+    `WeightAcquisition`, which gains `model_id` — `sanitizer_revision`, `vendor_weights` and the
+    classifier's two `from_pretrained` calls; spec 7 US-001 owns the plumbing, US-006 the
+    `FORAGE_MODEL_ID` allowlist, refuse-boot, `id2label` name-and-cardinality assertion and
+    `/health` `promptguard_model`. `weights_manifest.json` is keyed by model id with one exact-set
+    file allowlist and one revision per model; `resolve_revision(model_id)` is the validated env
     override (40-hex shape checked before any path or fetch) → manifest entry →
-    `DEFAULT_MODEL_REVISION` for the default model → `unpinned`; an unreadable manifest never
-    rotates the default model's hash; `_load_verified` asserts manifest-derived and resolved
-    snapshot paths are equal, and SECURITY.md records that the classifier trusts the path the
-    verifier handed it. Verification is never skipped; the allowlist ships with the 22M only, a
-    test proves every allowlisted id has a manifest entry, and spec 7 US-005 (owner gate) adds
-    the 86M when it vendors the weights, before US-004 runs; the benchmark drives `POST /extract`
-    under a committed `bench/config.yaml` and publishes single-in-flight numbers with that caveat.
+    `DEFAULT_MODEL_REVISION` for the default model → `unpinned`; `_load_verified` derives the
+    manifest-derived and resolved snapshot paths itself and asserts they are equal; SECURITY.md
+    records that the classifier trusts the path the verifier handed it. Verification is never
+    skipped; the allowlist ships with the 22M only, a test proves every allowlisted id has a
+    manifest entry, and spec 7 US-005 (owner gate) adds the 86M before US-004 runs. The benchmark
+    refuses to measure a container whose classifier is not loaded, records `promptguard_model`
+    and `sanitizer_revision` per row, sizes its documents by tokenising with the model's own
+    tokenizer, drives `POST /extract` under a committed `bench/config.yaml`, and publishes
+    single-in-flight numbers with that caveat.
 30. **The release spec closes the window mechanically** (corrected in rounds 2 and 3): each
     window story appends its field to `_EXPECTED_ONE_THREE_ZERO_DIFF` and spec 8 US-002 freezes
     the list, the golden and the docstring record (entries carry no publication-state clause);

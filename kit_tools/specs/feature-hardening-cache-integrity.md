@@ -52,7 +52,7 @@ version tag, the cache key and the payload (ruling 21), and a relocated envelope
 
 Second, how the read is bounded. The adversary who can `SET` can also swap a small value for a
 512 MiB one between two commands, so a `STRLEN`-then-`GET` probe is a race the attacker wins.
-The read is therefore one atomic `GETRANGE key 0 max` (ruling 21, corrected in rounds 2–4):
+The read is therefore one atomic `GETRANGE key 0 max` (ruling 21, corrected in rounds 2–5):
 one read never allocates more than the bound plus one byte, and a full-length return *is* the
 oversize verdict. `GETRANGE` differs from `GET` in one way that matters: on a missing key it
 returns an empty string, never nil — so an empty return is a **miss** (counted on
@@ -135,7 +135,10 @@ entry can never be served to the model as sanitized content — and so that neit
 cache miss nor Forage's own large pages ever trip the tampering signal.
 
 **Independent Test:** With a real `ContentCache` over `tests/fakes.py::FakeStorage` constructed with
-`hmac_key=b"x" * 32` and `max_value_bytes=4 * 2**20`: `put` stores a value beginning with `v1.`
+`hmac_key=b"x" * 32` and a **small** explicit `max_value_bytes=4096` (the constructor takes any
+`int`; the 512 KiB floor lives in `cache_settings_from_config`, so the drives never allocate
+megabytes to test an inequality — round 5; the 4 MiB default is asserted by the defaults test and
+the construction-site criterion): `put` stores a value beginning with `v1.`
 whose MAC equals `hmac.new(key, b"v1\0" + cache_key.encode() + b"\0" + payload, "sha256").hexdigest()`;
 `get` returns the content and `integrity_rejects` is still 0. Four planted values — bare JSON;
 `v1.<mac under another key>.<json>`; a valid envelope with one payload byte flipped; a valid
@@ -149,11 +152,16 @@ planted `b""` produces `get → None` with **no** delete and no increment (a mis
 `tests/test_cache.py::_connected_valkey_storage(_mock_valkey_client())`: (i) `getrange` returning
 `max_value_bytes + 1` bytes → `ValkeyStorage.get` issues exactly one `getrange` and no `get`, returns
 `None`, issues one `delete` on the client, and `integrity_rejects` advances by one with reason
-`oversize`; (ii) `getrange` returning `b""` → `None`, `storage_misses` + 1, `storage_hits`
-unchanged, no delete, no reject, no WARNING; (iii) `getrange` raising `redis.exceptions.ResponseError
-("WRONGTYPE …")` → `None`, one `delete`, `integrity_rejects` + 1 with reason `wrong_type`,
-`connected` still true, `operation_failures` unchanged; (iv) `aioredis.from_url` is called with
-`decode_responses=False`. A `put` over the bound for a key that already holds a small valid
+`oversize` — neither `storage_hits` nor `storage_misses` moves; (ii) `getrange` returning `b""` →
+`None`, `storage_misses` + 1, `storage_hits` unchanged, no delete, no reject, no WARNING; (iii)
+`getrange` raising `redis.exceptions.ResponseError("WRONGTYPE …")` → `None`, one `delete`,
+`integrity_rejects` + 1 with reason `wrong_type`, `connected` still true, `operation_failures`,
+`storage_hits` and `storage_misses` unchanged; (iv) `aioredis.from_url` is called with
+`decode_responses=False`, a lifespan start with `VALKEY_URL=redis://valkey:6379/4?decode_responses=1`
+(likewise `?encoding=latin1`, `?protocol=3`) raises `cache.CacheConfigurationError` whose message
+and `caplog.text` name the option and never the host or URL, and for a query-free URL the real
+client built without connecting reports `connection_pool.connection_kwargs["decode_responses"] is
+False`. A `put` over the bound for a key that already holds a small valid
 envelope deletes that entry before skipping (`storage.entries` no longer has the key,
 `storage.delete_calls` + 1, `storage_oversize_skips` + 1, `integrity_rejects` unchanged). With
 `hmac_key=None` the stored value is bare JSON as today and every existing `tests/test_cache.py` test passes apart from the named
@@ -211,13 +219,20 @@ Valkey doubles gaining `getrange` (the seam list below).
   writes an empty value; a non-empty return counts `storage_hits`. If the returned length is
   `max_value_bytes + 1` (Valkey's end index is inclusive), the value is oversize: issue `DEL`,
   `integrity_rejects += 1`, WARNING `cache_integrity_reject — reason=oversize key=ret:<digest>`,
-  return `None`. **Type rule:** a `redis.exceptions.ResponseError` whose message starts with
+  return `None` — and **neither `storage_hits` nor `storage_misses` moves** for `oversize` or
+  `wrong_type` (the read served nothing and it was not an absence; only `integrity_rejects` moves),
+  while the cache-layer `_unwrap` rejects never touch the storage counters (whatever the storage
+  counted stands) — round 5. **Type rule:** a `redis.exceptions.ResponseError` whose message starts with
   `WRONGTYPE` is caught **before** the blanket `except Exception` that calls `_mark_disconnected`
   (`cache.py:500-503`, `:475-486`) and handled as an integrity reject (`wrong_type`: `DEL`, count,
   WARNING, `None`) — the reply proves the connection is healthy; every other exception keeps
   today's disconnect path. Plumbing, in full: (a) `_ValkeyClient` (`cache.py:357-372`) gains `async
   def getrange(self, name: str, start: int, end: int) -> bytes: ...` and its docstring (`:358`, "The
-  five Valkey operations this cache actually issues") says six; (b) `ValkeyStorage.__init__`
+  five Valkey operations this cache actually issues") says six — keep `name` for consistency with
+  the protocol's other members, but redis-py's real parameter is `key`, the connection is a `cast`
+  and every double is an `AsyncMock`, so the call site **must be positional**
+  (`await client.getrange(key, 0, self._max_value_bytes)`); a keyword call would pass strict typing
+  and the whole suite and raise `TypeError` only against a real Valkey (round 5); (b) `ValkeyStorage.__init__`
   (`cache.py:385`) gains `max_value_bytes: int = DEFAULT_CACHE_MAX_VALUE_BYTES` (keyword-only,
   beside `metrics`); (c) both storage construction sites pass it — `retrieval_app._select_cache_storage`
   (`retrieval_app.py:240-266`, which today hands `CacheSettings` only to `InMemoryStorage`) passes
@@ -233,14 +248,42 @@ Valkey doubles gaining `getrange` (the seam list below).
   inside `_unwrap` — defence in depth for a backend that cannot pre-bound (`FakeStorage` is
   "deliberately unbounded", `tests/fakes.py:200`; `InMemoryStorage` is write-bounded by `max_bytes`,
   `:648`), tested on `FakeStorage`; the parity harness's memory side never produces an oversize
-  value — say so in the test; (f) `ValkeyStorage._attempt_connect` passes `decode_responses=False`
-  **explicitly** to `aioredis.from_url` (`cache.py:411`): redis-py's `parse_url` forwards unknown
-  query parameters to the connection constructor verbatim, so `VALKEY_URL=redis://valkey:6379/4?
-  decode_responses=1` would otherwise turn every reply into `str`, make `len(reply)` a character
-  count against a server-side byte index, and raise `UnicodeDecodeError` on a truncated multibyte
-  boundary into the disconnect path (round 4, security); `ValkeyStorage.get` additionally asserts
-  the seam is bytes — a non-`bytes` reply is encoded to UTF-8 before the length check (belt and
-  braces) — and a test asserts the `from_url` keyword.
+  value — say so in the test; (f) **the byte mode is refused into existence, not overridden** (R21
+  corrected, round 5). redis-py's `ConnectionPool.from_url` is `url_options = parse_url(url);
+  kwargs.update(url_options)` — "querystring arguments always win", its own docstring says, and it
+  was verified on the pinned redis 8.1.0: `from_url("redis://h:6379/4?decode_responses=1",
+  decode_responses=False)` yields `connection_kwargs["decode_responses"] == "1"`, decoding **on** —
+  so the round-4 explicit kwarg pins nothing against the URL, and the failure it was written to
+  prevent (`len(reply)` as a character count against a server-side byte index, a
+  `UnicodeDecodeError` on a truncated multibyte boundary raised inside redis-py's parser, caught
+  by the blanket `except Exception` and flapping the cache disconnected on every oversize read)
+  still stood. The pin is therefore a URL rule enforced by the module that owns the setting:
+  `ValkeyStorage.__init__` (`cache.py:385`) reads `urlsplit(valkey_url).query` through `parse_qs` —
+  **query keys only**, never the netloc, userinfo or values — and, when any of `decode_responses`,
+  `encoding`, `encoding_errors` or `protocol` is present, logs one WARNING
+  `valkey_url_option_forbidden — option=%s` (the key name only; the operator's only diagnostic for
+  a container that exits at start, so it goes to stderr before the raise, as US-002's key refusal
+  does) and raises `cache.CacheConfigurationError` naming `VALKEY_URL` and the option, never the
+  URL. It lives in `ValkeyStorage.__init__` rather than in `retrieval_app._configured_valkey_url()`
+  because the lifespan-less `/health` path calls the latter (`retrieval_app.py:228-238`) and must
+  never raise (US-002's criterion); `_select_cache_storage`'s docstring ("Nothing here inspects,
+  splits or logs it") stays true and gains one sentence saying the query-key check lives in
+  `cache.py` beside the guarded connect. `_attempt_connect` still passes `decode_responses=False`
+  explicitly (belt), `ValkeyStorage.get` still encodes a non-`bytes` reply to UTF-8 before the
+  length check (braces), and the tests assert the **effect**, not the call: a lifespan start with
+  `VALKEY_URL=redis://valkey:6379/4?decode_responses=1` raises `CacheConfigurationError`
+  (`pytest.raises`), `str(exc)` and `caplog.text` carry `decode_responses` and never the host or
+  URL (the `tests/test_cache.py:753 test_connect_failure_never_logs_url_or_secret` idiom); the same
+  for `?encoding=latin1` and `?protocol=3`; for a query-free URL a test constructs the real client
+  **without connecting** (`aioredis.from_url` is lazy — no socket is opened, so the hermeticity
+  guard is untouched) and asserts `client.connection_pool.connection_kwargs["decode_responses"] is
+  False`, pinning the library precedence the rule relies on; the `call_args.kwargs` assertion stays
+  as the belt's own check. `socket_timeout` / `socket_connect_timeout` in the query are
+  **deliberately operator-overridable** — tuning, not a correctness input, and the
+  `asyncio.timeout(_RECONNECT_TIMEOUT_S)` around the connect (`cache.py:408`) is untouched by them;
+  Technical Considerations records it. A `VALKEY_URL` carrying one of the four options boots
+  today, so the refusal is an upgrade note in `docs/configuration.md`'s `VALKEY_URL` row, written so
+  spec 8 can lift it.
 - `cache.max_value_bytes` is a new `config.yaml` key in the `cache:` block (the block comment
   currently frames the block as in-memory-only — reword it), read by `cache_settings_from_config`
   (`cache.py:267`) with `_bounded_int` (`:244`): default **4 MiB**, range 512 KiB – **8 MiB**;
@@ -257,7 +300,11 @@ Valkey doubles gaining `getrange` (the seam list below).
   table row states that relationship, the `max_bytes` relationship (a WARNING, not a refusal),
   **the container-memory one** (peak cache-read allocation is `max_value_bytes × in-flight
   /retrieve requests`, and cache reads sit under no concurrency bound; cross-reference
-  `feature-hardening-resource-envelope`'s sizing table, whose formula gains a cache-read term),
+  `feature-hardening-resource-envelope`'s sizing section — a **deliberate forward reference** spec 6
+  closes: its memory rule carries the `+ cache.max_value_bytes` (one in-flight read) term when the
+  Valkey backend is selected, recorded on spec 6's own page in round 5; the section does not exist
+  when this story runs (`epic_seq` 4 against 6), so the criterion gates the sentence written here,
+  never the target),
   **and the fleet one** (round 4): the bound is not a cache-key input (`derive_sanitizer_revision`
   hashes sources, the model identity and the threshold — `pipeline/sanitizer_revision.py:38-42` —
   never the cache block), so every replica over one shared Valkey must carry the same
@@ -307,7 +354,16 @@ Valkey doubles gaining `getrange` (the seam list below).
   the description that said only one could; a counter documented as always 0 on Valkey moving off
   0 is additive behaviour, not a redefinition of the name, so it is documentation-only within the
   1.3.0 window and carries no bump — the ruling names Example 4 as considered and says why it does
-  not apply. `tests/test_contract_metrics.py::
+  not apply. The ruling is its own `### (<next free letter>) ` section with a `**Source:**` line
+  (spec 1 US-003 takes `(e)` and `(f)` first; reconcile the letter at merge the way a rotation
+  ordinal is), appended to `tests/test_governance_docs.py::_RULING_MARKERS` (`:93`) — a ruling
+  outside the tuple is ungated — with the count words at `contract/GOVERNANCE.md:174` ("Five
+  rulings this epic already made"), `CLAUDE.md:89` ("records the five rulings") and
+  `tests/test_governance_docs.py:90` / `:355` incremented **as found**; and a new test in
+  `tests/test_governance_docs.py` asserts `GOVERNANCE.md`'s rulings sentence carries
+  `_NUMBER_WORDS[len(_RULING_MARKERS)]`, the file's existing mechanism for the hashed-source and
+  required-check counts (`:96-109`), so the count can never go stale again (round 5 — the
+  by-value sweep's path set excludes `contract/` and `tests/` by construction). `tests/test_contract_metrics.py::
   test_dataclass_counters_and_their_models_carry_the_same_fields` (`:305`) and
   `::test_metrics_schema_is_fully_rendered` enforce the field. One counter, six reasons: the
   counter cannot separate a key-enable/rotation burst on a running fleet (`unsigned`, `bad_mac` on
@@ -383,10 +439,12 @@ Valkey doubles gaining `getrange` (the seam list below).
       `storage_misses` + 1, `storage_hits` unchanged, no delete, no reject and no WARNING; a
       `ResponseError("WRONGTYPE …")` from `getrange` yields `None`, one client `delete`,
       `integrity_rejects` + 1 with reason `wrong_type`, `connected` still true and
-      `operation_failures` unchanged; both doubles' `getrange` stubs return `b""` for a miss.
+      `operation_failures` unchanged; neither `storage_hits` nor `storage_misses` moves for
+      `oversize` or `wrong_type`; both doubles' `getrange` stubs return `b""` for a miss.
 - [ ] `_ValkeyClient` declares six methods, and neither its own docstring nor either Valkey
       double's docstring describes the surface as "five" (the corrected grep returns 0); the five
-      inline `.get = AsyncMock` stubs in `tests/test_cache.py` are migrated to `getrange` as named.
+      inline `.get = AsyncMock` stubs in `tests/test_cache.py` are migrated to `getrange` as named;
+      the `getrange` call site is positional.
 - [ ] `put` never stores a value longer than `cache.max_value_bytes` **UTF-8 bytes**: the skip
       deletes any existing entry under that key first (a previously cached small value is gone after
       an oversize `put` for the same key), advances `storage_oversize_skips`, leaves
@@ -400,11 +458,20 @@ Valkey doubles gaining `getrange` (the seam list below).
       is registered in `KNOWN_CONFIG_KEYS`, is asserted by
       `test_the_shipped_config_yaml_pins_the_documented_defaults`, and its `docs/configuration.md`
       row states the `MAX_EXTRACTED_OUTPUT_BYTES`, `cache.max_bytes` (WARNING), container-memory
-      and same-across-replicas relationships, the lowering consequence, and the cross-reference to
-      spec 6's sizing table.
-- [ ] `ValkeyStorage._attempt_connect` calls `aioredis.from_url` with `decode_responses=False`
-      (asserted on `call_args.kwargs`), and `ValkeyStorage.get` measures and parses bytes even when
-      a double returns `str`.
+      and same-across-replicas relationships, the lowering consequence, and the forward
+      cross-reference to spec 6's sizing section (written here; spec 6 closes it — not gated on that
+      section existing yet).
+- [ ] `ValkeyStorage.__init__` refuses a `VALKEY_URL` whose query carries `decode_responses`,
+      `encoding`, `encoding_errors` or `protocol`: a lifespan start with `?decode_responses=1`
+      raises `cache.CacheConfigurationError` (`pytest.raises`) after one WARNING
+      `valkey_url_option_forbidden` naming the option, and neither `str(exc)` nor `caplog.text`
+      carries the host, the URL or a password; the same for `?encoding=latin1` and `?protocol=3`;
+      `?socket_timeout=90` boots; for a query-free URL a real client built without connecting has
+      `connection_pool.connection_kwargs["decode_responses"] is False`;
+      `ValkeyStorage._attempt_connect` still calls `aioredis.from_url` with `decode_responses=False`
+      (asserted on `call_args.kwargs`), `ValkeyStorage.get` measures and parses bytes even when a
+      double returns `str`, `_select_cache_storage`'s docstring names where the check lives, and
+      `docs/configuration.md`'s `VALKEY_URL` row carries the upgrade note.
 - [ ] Every rejection logs exactly one WARNING whose `getMessage()` contains
       `cache_integrity_reject`, one member of `CACHE_INTEGRITY_REASONS` and the `ret:` cache-key
       digest; the secret bytes, the raw value, the URL and the Valkey URL appear in no record
@@ -419,7 +486,9 @@ Valkey doubles gaining `getrange` (the seam list below).
       on Valkey" because that counter **stays** memory-only, and the exported `contract/openapi.yaml`
       folds descriptions across lines, so a single-line grep on it sees neither — R43) and the
       `storage_oversize_skips` Field description no longer contains `in-memory storage`; the
-      GOVERNANCE recorded ruling on the widened counter is written.
+      GOVERNANCE recorded ruling on the widened counter is written as its own `### (<letter>) `
+      section with a `**Source:**` line, `_RULING_MARKERS` carries its marker, the four count words
+      are incremented as found, and the new `_NUMBER_WORDS[len(_RULING_MARKERS)]` test passes.
 - [ ] 1.3.0 window (ruling 36): docstring line appended (covering `integrity_rejects` and the
       widened `storage_oversize_skips`), contract regenerated, `tests/golden/contract_1_3_0.json`
       re-created via `_SCHEMA_MODELS`, the field appended to `_EXPECTED_ONE_THREE_ZERO_DIFF` (the
@@ -493,8 +562,9 @@ sentinel appears zero times in `/health`, `/metrics`, `caplog.text` and `repr(ap
   `app.state.cache_signing_active: bool = key resolved AND backend is valkey` beside
   `app.state.cache_backend` (`:1294`); read it in `/health` through
   `_resolved_cache_signing_active(state) -> bool` with a `getattr(..., False)` default and a
-  module-scope `app.state` initialisation in the lifespan-less block (the `app.state`
-  initialisation block after the `/metrics` handler, `:~1396-1402`), on
+  module-scope `app.state` initialisation in the lifespan-less block (the module-scope `app.state`
+  initialisation block, `retrieval_app.py:1379-1402`, which sits **before** the route handlers —
+  `/health` at `:1444`, `/metrics` at `:1490`; round 5), on
   `_resolved_search_key_capabilities`'s pattern (`:313`). On the lifespan-less path
   `_resolved_cache_backend` re-reads `VALKEY_URL` (`:228-238`) while signing defaults to `False`,
   so a lifespan-less `/health` reports `cache_unauthenticated` whenever the backend resolves to
@@ -526,9 +596,17 @@ sentinel appears zero times in `/health`, `/metrics`, `caplog.text` and `repr(ap
   (`_WORKING_VALKEY_URL`, expects `"healthy"` / `[]`, `:1481-1489`) gets the sentinel key so it
   stays healthy, and its `valkey-down-degraded` param (`:1491-1498`) expects
   `["cache_unavailable", "cache_unauthenticated"]`; the `Case N of 5` docstring series in the same
-  file (`:1332`, `:1357`, `:1387`) is renumbered to six cases with the new keyless sibling as its
-  own case (anchored grep: `grep -c 'Case . of 5' tests/test_app.py` is 3 today — the naive `'of 5'`
-  is 4 because `tests/test_app.py:179` says "500ing" — R43); `kit_tools/arch/SECURITY.md:293` cites the second test by name and needs no change
+  file (`:1332`, `:1357`, `:1387` — the last reads `Cases 3-5 of 5`, plural, which the round-4
+  single-wildcard anchor never counted) is renumbered to six cases with the new keyless sibling as
+  its own case, and so are the two sites outside the series: the section header comment `# Five
+  starts, one per configuration the operator can produce:` (`:1228`) with its five-row enumeration
+  of exactly the configurations a sixth joins, and the docstring `All five starts keep the closed
+  log vocabulary` (`:1424`); the widened anchored grep `grep -nE 'Cases? [0-9-]+ of 5|[Ff]ive
+  starts' tests/test_app.py` returns 5 today (`:1228`, `:1332`, `:1357`, `:1387`, `:1424` — the
+  round-4 `Case . of 5` anchor returned 2, not 3, and the naive `'of 5'` also catches
+  `tests/test_app.py:179`'s "500ing") and 0 after; `tests/test_app.py:1510` / `:1540`'s `Cases 1-3
+  of 4` / `Case 4 of 4` belong to `test_health_names_the_backend_it_selected_for_this_start`'s own
+  series and stay (R43, corrected round 5); `kit_tools/arch/SECURITY.md:293` cites the second test by name and needs no change
   unless it is renamed. Starting count: `grep -n 'degraded_reasons"\]' tests/test_app.py` (14 hits
   today, which also catches the parametrised form that `== \[` misses).
 - Boot WARNING when Valkey is configured and no key: `cache_hmac_key_missing — %s is unset; cached
@@ -572,8 +650,10 @@ sentinel appears zero times in `/health`, `/metrics`, `caplog.text` and `repr(ap
       `test_a_broken_valkey_url_degrades_and_never_falls_back_to_memory` expects
       `["cache_unavailable", "cache_unauthenticated"]`;
       `test_health_names_the_backend_it_selected_for_this_start`'s two Valkey params are updated as
-      named; the `Case N of 5` docstring series is renumbered to six (`grep -c 'Case . of 5'
-      tests/test_app.py` returns 0; 3 today); `SECURITY.md:293`'s citation still resolves.
+      named; the `Case N of 5` series, the `Five starts` header enumeration and the `All five
+      starts` docstring are renumbered to six (`grep -nE 'Cases? [0-9-]+ of 5|[Ff]ive starts'
+      tests/test_app.py` returns nothing; 5 today) and the `of 4` series at `:1510` / `:1540` is
+      untouched; `SECURITY.md:293`'s citation still resolves.
 - [ ] `_CLEARED_ENV_VARS` contains `FORAGE_CACHE_HMAC_KEY` and the exact-set test in
       `tests/test_hermeticity.py` is updated in this story.
 - [ ] Sentinel: the key value appears zero times in `/health`, `/metrics`, every log record and
@@ -604,7 +684,7 @@ a reachable Valkey is `healthy` on its own.
 **Independent Test:** The `### Credential handling for FORAGE_CACHE_HMAC_KEY` subsection of
 `docs/configuration.md` contains the generation command, the CSPRNG-not-passphrase sentence, the
 UTF-8-never-decoded rule, the 32-byte floor, the `/health` behaviour without the key, the boot
-refusal, and the rotation consequence; the by-value sweep (ruling 39, criterion 5) returns nothing; the doc-scanning tests pass.
+refusal, and the rotation consequence; the by-value sweep (ruling 39, criterion 4) returns nothing; the two automated doc checks that do touch these pages (the anchor check over the four anchor-quoting pages, spec 3's config-key parity test) pass.
 
 **Implementation Hints:**
 - `docs/configuration.md`: a row in `### Runtime` (`| Variable | Default | Purpose |`) and the new
@@ -619,12 +699,25 @@ refusal, and the rotation consequence; the by-value sweep (ruling 39, criterion 
   into keyed → `healthy` and key-less → `degraded`, `cache_unauthenticated`), `:467-470` (the cache
   metrics rows gain `integrity_rejects`, and "Only the in-memory storage can move the last two"
   becomes "`storage_evictions` is memory-only; `storage_oversize_skips` counts Forage's own
-  write-side refusals on both backends" — US-001 widened it), `:539` ("two keys" / "two reasons"),
-  and the `cache.max_value_bytes` row (if US-001 has not already added it) with its four
-  relationships and the same-across-replicas / lowering sentence.
+  write-side refusals on both backends" — US-001 widened it), `:539` (the `degraded_reasons` row —
+  the "two reasons" half only; `docs/configuration.md` carries no "two keys" sentence, its `/health`
+  field table at `:536-545` has no `capabilities` row — round 5), the `### The `cache:` block`
+  intro at `:445-449` ("Bounds for `InMemoryStorage`, the bounded in-process content-cache
+  storage…" — the block now also bounds the Valkey read, so it stops framing itself as
+  in-memory-only; the same reword `config.yaml`'s block comment gets in US-001), and the
+  `cache.max_value_bytes` row (if US-001 has not already added it) with its four relationships and
+  the same-across-replicas / lowering sentence.
+- **The cache bounds are enumerated as a closed pair on six further pages** (round 5, codebase
+  fit), each of which gains `cache.max_value_bytes`: `kit_tools/docs/ENV_REFERENCE.md:102-103` (a
+  third row in the `config.yaml` key table — distinct from the `### Runtime service` table the
+  variable's row joins), `kit_tools/arch/SERVICE_MAP.md:133` (the cache's Configuration row, both
+  keys with their ranges) and `:269-270`, `kit_tools/docs/LOCAL_DEV.md:132` and `:267`, and
+  `README.md:119` ("Bounded by | `cache.max_entries` / `cache.max_bytes`"); the sweep's new
+  patterns cover them.
 - `kit_tools/docs/ENV_REFERENCE.md` `### Runtime service` table (seven columns, the
   `FORAGE_BRAVE_API_KEY` row at `:43` is the shape) gains the row with `Secret: **yes**` and read
-  site `retrieval_app._resolve_cache_hmac_key(), start`.
+  site `retrieval_app._resolve_cache_hmac_key(), start`; the `VALKEY_URL` row notes the four
+  refused query options.
 - `kit_tools/docs/MONITORING.md`: the `capabilities` row (`:63`), the `degraded_reasons` row (`:68`)
   and "The two reasons are the complete set" (`:70`), the body-shape block (`:81`), the runbook item
   (`:99`), the cache counter table (`:170-177`) with a row for `cache.integrity_rejects`, the
@@ -674,8 +767,13 @@ refusal, and the rotation consequence; the by-value sweep (ruling 39, criterion 
   32-byte floor, the strip rules, the recipe. This file has no log-marker table.
 - `kit_tools/docs/API_GUIDE.md:105` and `:109` (the "two keys" capability sentence).
 - `kit_tools/arch/SERVICE_MAP.md`: `:108` ("`DegradedReason` … is exactly `promptguard_unavailable`
-  and `cache_unavailable`"), the `/health` signal row (`:135`) and the Valkey-mode table
-  (`:147-149`); `kit_tools/arch/CODE_ARCH.md:198` (the exhaustive parenthetical).
+  and `cache_unavailable`"), the `/health` signal row (`:135`), the Valkey-mode table's `set and
+  reachable` row (`:146`, which splits keyed → `healthy` / key-less → `degraded`; `:147-149` are the
+  unreachable / unparseable / empty-string rows and do not change — round 5), and `:132` (the
+  client/protocol row — the prose twin of the two in-code "five operations" strings US-001 tracks:
+  the command surface becomes `ping`, `getrange`, `set(ex=)`, `delete`, `aclose`, and the quoted
+  `from_url(url, socket_connect_timeout=2.0, socket_timeout=2.0)` gains `decode_responses=False`
+  plus the refused query options); `kit_tools/arch/CODE_ARCH.md:198` (the exhaustive parenthetical).
 - `README.md:115` (the cache-mode matrix's "`/health` when the cache is fine" row splits keyed /
   key-less) and the configuration section's mention of the variable in the same sentence as
   `VALKEY_URL`; `kit_tools/docs/DEPLOYMENT.md:100` ("The history grep uses the same three patterns as" → four,
@@ -690,9 +788,11 @@ refusal, and the rotation consequence; the by-value sweep (ruling 39, criterion 
   the third; a new cache-poisoning entry (there is none today — `grep -i poison` is empty)
   stating: with an **uncompromised, CSPRNG-generated** key, integrity and authenticity of cached
   values are assured; **four** residuals remain — availability (an attacker can still delete or
-  overwrite, forcing misses and outbound fetches plus classifier inference; the concurrency and
-  latency bounds of spec 6 are the control that bounds it — spec 6 is later in the epic, so until
-  it lands the residual is stated as unbounded), confidentiality, replay (a captured
+  overwrite, forcing misses and outbound fetches plus classifier inference, **and log volume**: every
+  rejection logs one un-rate-limited WARNING, so a writer who can `SET` can drive one
+  attacker-chosen line per request for as long as they like; the concurrency and
+  latency bounds of spec 6 are the control that bounds both — spec 6 is later in the epic, so until
+  it lands the residual is stated as unbounded — round 5), confidentiality, replay (a captured
   valid envelope restored under the same key pins one Forage-authored snapshot; the signed
   `retrieved_at` plus the TTL check bound the window to `cache_ttl_hours`, which is a reason not to
   raise that value casually on a shared Valkey), and **key compromise** (a leaked or weak key lets
@@ -710,16 +810,27 @@ refusal, and the rotation consequence; the by-value sweep (ruling 39, criterion 
   sentence (`:80` area) gain the six integrity reasons; refresh the three `cache.py:NNN-NNN`
   citations in that section (`_closed_vocabulary_reason`, `_attempt_connect`, `_mark_disconnected`)
   after US-001 shifted them; the `cache` Logger Inventory row; the four boot markers.
-- `kit_tools/PRODUCT_VISION.md` Success Criteria: the "Fails loud, never silent" row ("a missing
-  paid key is a supported mode, never a degraded state") and the "Key-less floor" row ("no new
-  required secret, no degradation of the default path") are scoped to the paid *search* key and to
-  the default (memory-backed) path, so the vision and the shipped `/health` contract agree; `:173`
-  ("a key-less deployment is a first-class supported mode") is scoped the same way — key-less on
-  the memory-backed default path is first-class, key-less on Valkey is `degraded` with a named
-  reason (round 4; none of criterion 5's patterns would have caught that line).
-- The `kit_tools/PRODUCT_VISION.md` edit is an owner-level scoping of three lines (`:63`, `:65`,
-  `:173`); flag it for explicit owner sign-off in this story's Implementation Notes.
-- Doc-only story: no code; the doc-scanning suite is the gate; nothing rotates.
+- `kit_tools/PRODUCT_VISION.md` Success Criteria (round 5 — repointed at the clauses that actually
+  go stale): `:63` ("Key-less floor") needs **no edit** — it is already scoped to the paid search
+  key and to the default path, and this spec adds no required secret and does not degrade the
+  memory-backed default; `:65` ("Fails loud, never silent"): the clause that goes stale is the
+  parenthetical enumeration `(weights absent, cache unreachable)`, which becomes two-of-three the
+  moment `cache_unauthenticated` lands — it is extended (`cache unreachable or unsigned`), while
+  "a missing paid key is a supported mode" is already scoped to *paid* and stays; `:173` ("a
+  key-less deployment is a first-class supported mode") is scoped — key-less on the memory-backed
+  default path is first-class, key-less on Valkey is `degraded` with a named reason (none of the
+  sweep's patterns would have caught that line).
+- **The vision edit is an owner gate, not a note.** This story does **not** edit
+  `kit_tools/PRODUCT_VISION.md` itself: it writes the exact replacement text for `:65` and `:173`
+  into its Implementation Notes and stops; the owner applies the two lines (the pattern of
+  `feature-hardening-release` US-003 / US-005), so an autonomous lane never rewrites the Success
+  Criteria table and then records that it did (round 5). The by-value sweep's path set excludes
+  the file by construction.
+- Doc-only story: no code; the by-value sweep in criterion 4 is the gate — the only automated doc
+  checks that touch these pages are `tests/test_governance_docs.py`'s anchor check over the four
+  anchor-quoting pages and spec 3 US-003's `KNOWN_CONFIG_KEYS` parity test over
+  `docs/configuration.md`, so `uv run pytest` will **not** catch a missed page (round 5); nothing
+  rotates.
 
 **Acceptance Criteria:**
 - [ ] `docs/configuration.md` carries the runtime row and the credential subsection (generation
@@ -743,19 +854,31 @@ refusal, and the rotation consequence; the by-value sweep (ruling 39, criterion 
       cross-reference and the disclosure trade-off; `kit_tools/arch/patterns/LOGGING.md` names the
       six reasons, the four boot markers and refreshed `cache.py` citations;
       `kit_tools/arch/SERVICE_MAP.md`, `kit_tools/arch/CODE_ARCH.md`, `README.md`,
-      `kit_tools/docs/DEPLOYMENT.md`, `kit_tools/docs/CI_CD.md`, `kit_tools/docs/GOTCHAS.md` and
-      `kit_tools/PRODUCT_VISION.md` (three lines, `:173` included) carry the named edits.
+      `kit_tools/docs/DEPLOYMENT.md`, `kit_tools/docs/CI_CD.md`, `kit_tools/docs/GOTCHAS.md`,
+      `kit_tools/docs/ENV_REFERENCE.md:102-103`, `kit_tools/docs/LOCAL_DEV.md:132` / `:267`,
+      `README.md:119`, `kit_tools/arch/SERVICE_MAP.md:132` / `:133` / `:146` / `:269-270` and
+      `docs/configuration.md:445-449` carry the named edits; `kit_tools/PRODUCT_VISION.md` is **not**
+      edited by the story — the replacement text for `:65` and `:173` is in Implementation Notes
+      and the edit is held for the owner (owner gate); SECURITY.md's availability residual names log
+      volume.
 - [ ] By-value sweep (ruling 39), run as one command at the story's start (record the count) and at
       its end: `grep -rn -iE -e 'two keys' -e 'the two reasons' -e 'exactly two values' -e 'exactly
       one of .connect_failed' -e 'exactly three strings' -e 'three patterns' -e 'is exactly
       .promptguard_unavailable' -e 'Always 0 on Valkey' -e 'Only the in-memory storage can move' -e
       'in-memory storage refused' -e 'InMemoryStorage. only' -e 'Set and reachable' -e 'when the
-      cache is fine' docs kit_tools/docs kit_tools/arch README.md .github/workflows/ci.yml` returns
-      **nothing** at the end (17 hits at the start, measured in round 4, every one inside this
-      story's named edit list; the path set excludes `kit_tools/specs/`, `kit_tools/.seed_cache/`,
-      `kit_tools/AUDIT_FINDINGS.md` and the `.validate_epic_*.json` artifacts by construction —
-      R43; a hit that is genuinely outside the six vocabularies is listed in Implementation Notes
-      with the reason it stays);
+      cache is fine' -e 'Bounds for .InMemoryStorage' -e 'max_entries. / .cache.max_bytes' -e
+      'ping., .get., .set' docs kit_tools/docs kit_tools/arch README.md .github/workflows/ci.yml
+      contract/GOVERNANCE.md CLAUDE.md` returns **nothing** at the end (22 hits at the start,
+      measured in round 5 — the round-4 seventeen plus the five the three new patterns add:
+      `docs/configuration.md:447`, `kit_tools/docs/LOCAL_DEV.md:132`, `:267`, `README.md:119`,
+      `kit_tools/arch/SERVICE_MAP.md:132`, whose `ping., .get., .set` pattern stops matching once
+      `get` becomes `getrange`; the two added paths contribute zero hits today and exist so the
+      sweep covers the document the recorded ruling lands in — the rulings count word itself is
+      gated by US-001's `_NUMBER_WORDS` test, not by a grep; every hit is inside this story's named
+      edit list; the path set excludes `kit_tools/specs/`, `kit_tools/.seed_cache/`,
+      `kit_tools/AUDIT_FINDINGS.md`, `kit_tools/PRODUCT_VISION.md` and the `.validate_epic_*.json`
+      artifacts by construction — R43; a hit that is genuinely outside the vocabularies is listed in
+      Implementation Notes with the reason it stays);
       `grep -rn FORAGE_CACHE_HMAC_KEY README.md kit_tools/docs/DEPLOYMENT.md` each return at least
       one line.
 - [ ] Full test suite passes (`uv run pytest`).
@@ -855,8 +978,10 @@ legitimately names — `scripts/export_contract.py:263-270` writes it on every e
 - `cache.max_bytes` (in-memory total) below `cache.max_value_bytes` — a config that is legal today →
   boots with one `cache_bounds_inverted` WARNING; on the memory backend the storage's own
   `max_bytes` check is the effective per-entry bound. US-001.
-- `VALKEY_URL` carrying `?decode_responses=1` → ignored: `_attempt_connect` pins
-  `decode_responses=False` after the URL is parsed, so replies stay bytes. US-001.
+- `VALKEY_URL` carrying `?decode_responses=1`, `?encoding=…`, `?encoding_errors=…` or `?protocol=…`
+  → boot refused with `CacheConfigurationError` and one `valkey_url_option_forbidden` WARNING
+  naming the option, never the URL (redis-py lets the query string beat every kwarg, so the option
+  cannot be pinned — only refused); `?socket_timeout=…` is honoured as operator tuning. US-001.
 - `compose/full.yml`'s header recipe with an empty `FORAGE_CACHE_HMAC_KEY=` → absent, `degraded`;
   the shipped recipe generates the value. US-004.
 - Two replicas over one Valkey with different keys (a rolling rotation), or a mixed keyed/keyless
@@ -915,6 +1040,12 @@ legitimately names — `scripts/export_contract.py:263-270` writes it on every e
   carries the discriminator).
 - Comparing `source_url` to the requested URL after a verified parse (the key-bound MAC closes the
   relocation attack; a second check is belt-and-braces and is recorded as a non-blocking question).
+- Deleting the existing entry on `ContentCache.put`'s `_NO_CACHE_TIERS` early return
+  (`cache.py:847`): a page cached as `STANDARD` that later classifies `UNTRUSTED` or `BLOCKED`
+  keeps serving its correctly signed envelope until its TTL — pre-existing, outside the oversize
+  branch this spec fixes, and recorded as an open question (round 5).
+- Rate-limiting the `cache_integrity_reject` WARNING (the request rate bounds it and spec 6's
+  admission bounds that; a non-blocking open question — round 5).
 
 ## Assumptions
 
@@ -930,8 +1061,9 @@ legitimately names — `scripts/export_contract.py:263-270` writes it on every e
   bounded `GETRANGE` behind it and maps an empty return to a miss; `InMemoryStorage` is untouched;
   `_ValkeyClient` widens by one method as a deliberate act.
 - `VALKEY_URL` is a wider configuration surface than host/port/db/password because redis-py forwards
-  unknown query arguments to the connection constructor, which is why the byte mode is pinned in
-  code rather than assumed.
+  unknown query arguments to the connection constructor **and lets them beat explicit kwargs**
+  (`kwargs.update(url_options)` in `ConnectionPool.from_url` — verified on redis 8.1.0), which is
+  why the byte mode is a URL rule enforced at construction rather than a kwarg.
 - `CacheMetrics` is mirrored on `/metrics` under `extra="forbid"` with exact field parity enforced
   by test (verified: `retrieval_app.py:568`, `tests/test_contract_metrics.py:305`).
 - No healthcheck ships in this repo's `Dockerfile` or compose fragments today
@@ -974,8 +1106,9 @@ legitimately names — `scripts/export_contract.py:263-270` writes it on every e
   says so). **The read bound is per read**: peak cache-read allocation is `max_value_bytes ×
   in-flight /retrieve requests`, cache reads sit under no concurrency bound (the classification
   semaphore covers stage 3, which a hit short-circuits), and `cache.py:214-222` documents ~128 MiB
-  of headroom — so the sizing table in `feature-hardening-resource-envelope` gains a cache-read
-  term and the config row cross-references it. The bound is a per-deployment input, not a
+  of headroom — so spec 6's memory rule carries a `+ cache.max_value_bytes` cache-read term
+  (recorded on its own page in round 5) and the config row forward-references it. The bound is a
+  per-deployment input, not a
   cache-key input: keep it equal across replicas; lowering it is a self-inflicted `oversize` burst
   the runbook names (round 4).
 - **Constant-time comparison** via `hmac.compare_digest` on bytes; the reject log carries only the
@@ -985,6 +1118,16 @@ legitimately names — `scripts/export_contract.py:263-270` writes it on every e
   the HTTP status; a configured-but-unusable key on the memory backend is said once at boot. The
   posture is advertised on an unauthenticated `/health` deliberately (recorded in SECURITY.md).
 - **Key rotation is fleet-wide** and cold; the docs say so.
+- **`VALKEY_URL` query options (round 5).** `from_url` applies URL options over kwargs, so the
+  four reply-shaping options (`decode_responses`, `encoding`, `encoding_errors`, `protocol`) are
+  refused at `ValkeyStorage.__init__` with a closed marker rather than overridden; the check reads
+  query keys only and lives in `cache.py`, the URL's owner, so `_select_cache_storage`'s no-parse
+  rule and the lifespan-less `/health` path are untouched. `socket_timeout` and
+  `socket_connect_timeout` remain operator-overridable through the URL on purpose — they are
+  tuning, and the `asyncio.timeout` connect deadline is independent of them.
+- **The reject WARNING is not rate-limited** (round 5): one line per rejected read is the loud
+  posture; its volume is bounded by the request rate, which spec 6's admission bounds. SECURITY.md
+  names log volume in the availability residual; a rate limit is an open question.
 
 ## Related Documentation
 
@@ -1084,6 +1227,14 @@ in `retrieval_app.py` — rejected, the repo owns errors per setting module.
   path set and the two counted greps were corrected to measured values; `:643` joined the named
   tests; TROUBLESHOOTING `:121`, DEPLOYMENT `:100` and PRODUCT_VISION `:173` joined the fan-out;
   the compose recipe generates the key value.
+- Validation round 5 (final, not re-reviewed — R21 corrected): the `decode_responses` kwarg became
+  a URL refusal (`valkey_url_option_forbidden`); the `Case . of 5` baseline was corrected to 2 and
+  the widened grep to 5; the recorded ruling gained its marker, the count-word fan-out and the
+  `_NUMBER_WORDS` test; `SERVICE_MAP.md:132` and the six bounds-pair pages joined US-003's fan-out
+  with three sweep patterns; the spec 6 cross-reference became a declared forward reference; the
+  PRODUCT_VISION edit became an owner gate; the round-4 salty / codebase-fit warnings that were
+  one-to-three-line edits were applied and the rest recorded under "Known risks (validation
+  close-out)".
 
 ### Decisions Made
 
@@ -1166,6 +1317,28 @@ in `retrieval_app.py` — rejected, the repo owns errors per setting module.
   capability key are golden-only.
 - Round 4: the compose header recipe generates the key value; an empty assignment is the absent
   shape and would ship the quickstart `degraded`.
+- Round 5 (R21 corrected): the explicit `decode_responses=False` kwarg does **not** pin the byte
+  mode — `ConnectionPool.from_url` applies URL options over kwargs (verified on redis 8.1.0) — so
+  the four reply-shaping options are refused at `ValkeyStorage.__init__` with a closed marker and
+  `CacheConfigurationError`; the kwarg stays as belt. Placed in `cache.py`, not
+  `_configured_valkey_url()`, because the lifespan-less `/health` calls that function and must never
+  raise; the round-4 "ignored" edge case and the "`parse_url` forwards unknown parameters" rationale
+  were false as written and are gone. The criterion asserts the effect (a refusal, and the
+  constructed pool's setting), not the call alone.
+- Round 5: `oversize` and `wrong_type` move neither `storage_hits` nor `storage_misses` — a read that
+  served nothing was not a hit, and it was not an absence either; the hit/miss ratio stays legible
+  during the one event the feature exists to make legible.
+- Round 5: the recorded ruling on the widened counter is gated — its `### (<letter>) ` marker joins
+  `_RULING_MARKERS`, and a `_NUMBER_WORDS[len(_RULING_MARKERS)]` test pins the count word the
+  by-value sweep could never reach (`contract/` and `tests/` are outside its path set by design).
+- Round 5: the PRODUCT_VISION scoping is an owner gate — the story writes the replacement text and
+  stops; `:63` needs no edit, `:65`'s stale clause is the `(weights absent, cache unreachable)`
+  enumeration, not the paid-key sentence.
+- Round 5: the spec 6 sizing cross-reference is a declared forward reference; spec 6's page carries
+  the `+ cache.max_value_bytes` term (its round-5 directive), so the promise is recorded on both
+  sides.
+- Round 5: the FakeStorage drives use a small explicit bound; the 4 MiB default is asserted where
+  it is configured, not materialised per test.
 
 ## Clarifications
 
@@ -1231,6 +1404,28 @@ in `retrieval_app.py` — rejected, the repo owns errors per setting module.
 - Q: Does a `cache.max_bytes` under 4 MiB still boot? → A: Yes, with one `cache_bounds_inverted`
   WARNING; the memory backend's own `max_bytes` check is then the effective per-entry bound.
 
+### Session 2026-09-19 (validation round 5, final)
+- Rulings applied: 21 (corrected — `decode_responses` refused, not overridden: the four
+  reply-shaping `VALKEY_URL` query options refuse boot at `ValkeyStorage.__init__` with
+  `valkey_url_option_forbidden`, never echoing the URL; `Case . of 5` baseline 2 and the widened
+  five-site grep; the recorded ruling's marker, count-word fan-out and `_NUMBER_WORDS` test;
+  `kit_tools/arch/SERVICE_MAP.md:132` in US-003's fan-out; spec 6's memory rule carries the
+  cache-read term this spec promised), plus the round-4 salty-engineer and codebase-fit warnings
+  applied as one-to-three-line edits: the `oversize` / `wrong_type` counter rule; the six
+  bounds-pair pages and three sweep patterns; the forward-reference wording; the PRODUCT_VISION
+  repointing and owner gate; the positional `getrange` call; the "doc-scanning suite" sentence
+  replaced by the real gate; the three citation slips (`:1379-1402` before the handlers,
+  `SERVICE_MAP.md:146`, `configuration.md:539` two-reasons only); the log-volume residual; the
+  small test bound; the `_NO_CACHE_TIERS` hole recorded. This round was not re-reviewed.
+- Q: Why not pin `decode_responses=False` with the kwarg? → A: `from_url` applies the URL's query
+  options over every kwarg ("querystring arguments always win"), so the kwarg cannot win; the only
+  honest pin is to refuse a URL that carries the option. The check reads query keys only, in
+  `cache.py`, so no password can reach a log line and the lifespan-less `/health` never raises.
+- Q: Does an `oversize` or `wrong_type` read count as a hit or a miss? → A: Neither — only
+  `integrity_rejects` moves.
+- Q: Who edits `kit_tools/PRODUCT_VISION.md`? → A: The owner, from the replacement text US-003
+  writes into its Implementation Notes; the story itself does not touch the file.
+
 ## Open Questions
 
 - [ ] Whether `brave_key_present`'s shape rules and the new key check should become one
@@ -1246,3 +1441,40 @@ in `retrieval_app.py` — rejected, the repo owns errors per setting module.
 - [ ] Whether the envelope should carry a key id (`v1.<kid>.<mac>.<payload>`) so a compromised key
       can be revoked without a fleet-wide cold restart (non-blocking; the stop-all rotation is the
       documented response).
+- [ ] Whether `ContentCache.put`'s `_NO_CACHE_TIERS` early return should delete the existing entry
+      under that key, so a page that later classifies `UNTRUSTED` / `BLOCKED` stops serving its
+      stale signed envelope before the TTL (non-blocking; pre-existing, outside this spec's oversize
+      branch — round 5).
+- [ ] Whether the `cache_integrity_reject` WARNING should be rate-limited, given a writer who can
+      `SET` can drive one line per request (non-blocking; the request rate and spec 6's admission
+      bound it today — round 5).
+
+## Known risks (validation close-out)
+
+Round-4 warnings not applied in round 5 (the final, un-reviewed fix pass), each with the reviewer,
+the finding and why it is deferred rather than fixed:
+
+- **Salty engineer — the `VALKEY_URL` query refusal is a boot-behaviour change.** An operator whose
+  URL carries `?decode_responses=1` (or `encoding` / `encoding_errors` / `protocol`) boots today and
+  will not after US-001. Accepted: the option would silently break the byte bound and there is no
+  way to pin it; the refusal is loud, names the option, and ships as an upgrade note rather than a
+  compatibility window (no wire change, so GOVERNANCE is not engaged).
+- **Salty engineer — `socket_timeout` / `socket_connect_timeout` stay operator-overridable through
+  the URL.** The bounded 2 s deadline `ValkeyStorage` advertises for operations can be raised by a
+  query option. Accepted as tuning; the `asyncio.timeout` connect deadline is unaffected; recorded
+  in Technical Considerations rather than refused.
+- **Salty engineer — the spec 6 sizing cross-reference is a forward reference.** The
+  `docs/configuration.md` row points at a section two specs away; spec 6's page carries the
+  `+ cache.max_value_bytes` term by its own round-5 directive, applied concurrently. Risk: if spec
+  6's page did not land the term, the promise is one-sided — verify it at execution.
+- **Salty engineer — the PRODUCT_VISION scoping waits on the owner.** Until the owner applies the
+  two lines from US-003's Implementation Notes, the vision's degraded-state enumeration is
+  two-of-three. Accepted: an owner-level table is not rewritten by an autonomous lane.
+- **Salty engineer — the reject WARNING is un-rate-limited.** A writer who can `SET` can drive one
+  attacker-chosen log line per request. Deferred as an open question; the residual is now written
+  into SECURITY.md and bounded by spec 6's admission.
+- **Salty engineer — the `_NO_CACHE_TIERS` early return keeps serving a stale signed envelope.** A
+  page cached as `STANDARD` that later classifies `UNTRUSTED` / `BLOCKED` is served until its TTL
+  with the MAC verifying and the counter flat. Deferred: pre-existing behaviour outside the oversize
+  branch this spec fixes; recorded in Out of Scope and Open Questions so the round-4 rationale is
+  not read as having closed both.
