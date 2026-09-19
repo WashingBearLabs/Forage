@@ -31,7 +31,10 @@ updated: 2026-09-19
 > -043, -045, -011 (orchestrator cleanup). Validation round 1 split the old US-002 into US-002 and
 > US-004 and renumbered the cleanup to US-005; validation round 2 split the old US-001 into US-001
 > (the settings seam and the shared test doubles, behaviour-preserving) and US-003 (the streamed,
-> self-decoded, wall-clock-bounded read path). Every id from US-001 to US-005 is now in use.
+> self-decoded, wall-clock-bounded read path); validation round 3 corrected the decoder's end-of-stream
+> rule (no `flush()`), bounded the *raw* bytes read, made the shared doubles stream-backed, named the
+> decode observation seam, made `Accept-Encoding: identity` an admitted new header, and declined every
+> further split (R37 corrected). Every id from US-001 to US-005 is now in use.
 
 ## Overview
 
@@ -54,13 +57,23 @@ The load-bearing decision is **R13 as corrected in round 2**: both providers rea
 `aiter_raw()` and decode compressed bodies **themselves**, under a byte ceiling. `Content-Encoding`
 absent or `identity` → raw bytes are counted against the cap; `gzip` / `deflate` → a
 `zlib.decompressobj` is fed one raw chunk at a time with `decompress(chunk, max_length=remaining +
-1)` (looping on `unconsumed_tail`), so the peak decoded bytes held for one response never exceed the
-cap plus one byte, plus one raw read buffer; any other encoding — `br`, `zstd`, an unknown token, or
+1)`, looping on `unconsumed_tail` until it is empty, so the peak decoded bytes held for one response
+never exceed the cap plus one byte, plus one raw read buffer — and **`flush()` is never called**:
+`zlib.decompressobj.flush(length)` sizes an output buffer and returns every remaining byte regardless
+(round 2 measured 4,999,990 bytes back from `flush(10)` after a `max_length=10` decompress), so the
+end-of-stream rule is "`eof` set → done; `eof` unset or `unconsumed_tail` non-empty at end of stream →
+`malformed_body`". The **raw** bytes read are bounded too, at `4 × max_response_bytes`, because a
+deflate stream can consume unbounded input while producing nothing (round 2 measured 1,000,000 raw
+bytes → 0 decoded, `eof` unset); any other encoding — `br`, `zstd`, an unknown token, or
 a multi-encoding list — is `ProviderFailure("hard_error", "unsupported_encoding")`, because the pinned
 httpx 0.28.1 ships no brotli or zstandard decoder (`SUPPORTED_DECODERS` pops both, `_decoders.py:
 381-393`; neither package is in `uv.lock`) and silently falls back to identity, which today turns such a
 body into `bad_json` and, on a `[searxng, brave]` chain, into a billable call. `Accept-Encoding:
-identity` is still requested; a compressing proxy in front of an operator's `SEARXNG_URL` is never an
+identity` is **now requested — a new outbound header on both clients** (httpx sends `gzip, deflate` by
+default; `grep -rni accept-encoding pipeline/` returns nothing today), and because SearXNG's optional
+bot limiter treats a request without `gzip`/`deflate` in that header as a bot (`kit_tools/docs/
+GOTCHAS.md:370`, `docs/searxng.md:74`), the interaction is written beside the existing limiter caveat
+rather than discovered; a compressing proxy in front of an operator's `SEARXNG_URL` is never an
 outage — a gzip body is served, bounded and counted; only a body this build *cannot decode* is
 refused, and that refusal is a distinct token so the operator sees the proxy setting instead of a
 parse error. The new `/metrics` counter, `search.provider_compressed_body`, is incremented **at the
@@ -92,14 +105,19 @@ criteria.
 ## Goals
 
 - Peak decoded bytes held for one provider response never exceed `max_response_bytes + 1` plus one
-  raw read buffer, on both providers, for a plain body and for a gzip body whose decoded length is
-  ≥ 64× its raw length; a body of `max_response_bytes + 1` decoded bytes — plain or compressed —
-  returns `ProviderFailure("hard_error", "body_too_large")`; the test asserts the **largest decoded
-  chunk**, never a chunk count.
+  raw read buffer, **and the total raw bytes read never exceed `4 × max_response_bytes`**, on both
+  providers, for a plain body, for a gzip body whose decoded length is ≥ 64× its raw length, and for
+  a compressed stream that decodes to nothing; a body of `max_response_bytes + 1` decoded bytes —
+  plain or compressed, including one whose overflow arrives only in its final raw chunk — returns
+  `ProviderFailure("hard_error", "body_too_large")`; the test asserts the largest value returned by
+  **any** zlib call through the recording seam (`tests/fakes.py::RecordingDecompressor`), never a
+  chunk count.
 - A compressed body is never refused for being compressed: a gzip or deflate body under the bound is
   served; a `br`, `zstd` or unknown encoding is `ProviderFailure("hard_error", "unsupported_encoding")`;
-  every non-identity `Content-Encoding` increments `search.provider_compressed_body` by exactly 1
-  whatever the outcome.
+  a truncated or corrupt compressed stream is `ProviderFailure("hard_error", "malformed_body")`; both
+  providers send `Accept-Encoding: identity` (a new header); every non-identity `Content-Encoding`
+  increments `search.provider_compressed_body` by exactly 1 whatever the outcome — served, over-bound,
+  undecodable, malformed, a compressed non-2xx, a timeout after headers, or a transport error mid-body.
 - Every provider HTTP interaction completes or fails within its wall-clock budget: a fake peer that
   trickles bytes past a 0.5 s budget yields `ProviderFailure("timeout", "timeout")` after more than
   0.5 s has elapsed, on both providers (lower bound only).
@@ -154,6 +172,18 @@ assertion intact.
   construction keeps working); in this story the value is stored on `self.settings` and **not yet
   read** by `search()` — the module constants `_SEARXNG_TIMEOUT_SECONDS` / `_MAX_SEARXNG_RESPONSE_BYTES`
   still drive the read path until US-003 switches it (say so in a comment US-003 deletes).
+- `BraveSettings` (`brave.py:197-203` — today `timeout_seconds`, `chunk_max_chars`, `query_max_chars`
+  only) gains `max_response_bytes: int = 1_048_576` with **no** `config.yaml` key (test-only,
+  non-configurable, the same shape as SearXNG's field), and `_BRAVE_MAX_RESPONSE_BYTES` (`:150`)
+  becomes that field's default; `brave.py:331-346` keeps reading the module constant until US-003
+  switches it to `self.settings.max_response_bytes`. Without the field the Brave half of the
+  byte-bound test has no seam to shrink the cap and must build 1 MiB-scale fixtures (round-2 salty
+  and story-quality reviews).
+- Spec 3 US-003's AST code-parity sweep walks a hand-maintained reader list
+  (`feature-hardening-hostname-and-config.md`, the `_settings_from_config` readers) that names
+  `brave.py` but not `searxng.py`: add `pipeline/search_providers/searxng.py` to that list in this
+  story, so `searxng_settings_from_config`'s literal keys are swept like `brave_settings_from_config`'s
+  (spec 3 already anticipates the `search_searxng_*` keys in its comment).
 - Wiring, exactly as Brave is wired: the lifespan calls the builder unconditionally beside
   `brave_settings_from_config` (`retrieval_app.py:1242`), stores `app.state.searxng_settings`, and
   `build_provider_chain` (`pipeline/search_providers/__init__.py:83-89`) gains
@@ -170,16 +200,30 @@ assertion intact.
   (`:230`), `_make_stream_cm` (`:247`) and `_client_patch` (`:259`) into `tests/fakes.py` (the shared
   home: `FakeStorage`, `FakeContentCache`, `FakeSearchProvider`; the module imports neither `httpx` nor
   `unittest.mock` today — add both). They are **parameterised**, not copied: `make_response(*, url,
-  content_type="application/json", content=b"{}", headers=None, status_code=200)`,
-  `make_stream_cm(response)`, `client_patch(target, *, response=None, stream_error=None)` taking the
-  patch target as an argument (`_BRAVE_CLIENT` at `:255` becomes a call-site constant), and
-  `ChunkStream(chunks)` recording every chunk it yields and exposing `largest_chunk` and
-  `chunks_yielded` (US-003's byte-bound assertion reads `largest_chunk`). Rebase
-  `tests/test_brave_provider.py` on them, and rebase `tests/test_stage5_url_audit.py:43-86` — whose
-  `_make_response` defaults differ (`text/html; charset=utf-8`, `<html>OK</html>`,
-  `https://example.com`) and which carries two extra helpers, `_make_redirect` (`:60`) and
-  `_stream_side_effect` (`:77`) — by having its local helpers *call* the shared ones with its
-  defaults, so no third copy survives. The SearXNG transport doubles (`_searxng_client_patch`,
+  content_type="application/json", content=b"{}", headers=None, status_code=200)` builds a
+  **stream-backed** `httpx.Response(status_code=..., headers=..., stream=ChunkStream([content]))` —
+  never `content=`-backed: `aiter_raw()` on a `content=`-constructed Response raises
+  `httpx.StreamConsumed`, a `RuntimeError` outside httpx's `HTTPError` tree, which would fall through
+  both providers' httpx arms into the catch-all as `unexpected` (round-2 salty review; 26
+  `_make_response(` and 27 `_client_patch(` sites in `tests/test_brave_provider.py` depend on it). Two
+  consequences the helper's docstring states: a stream-backed Response synthesises no
+  `content-length`, so a test that relies on that header sets it explicitly; and `aiter_bytes()` still
+  works on the stream-backed shape, which is what keeps `tests/test_stage5_url_audit.py` green
+  (`pipeline/stage5_url_audit.py:212` reads `aiter_bytes()`). Also exported: `make_stream_cm(response)`,
+  `client_patch(target, *, response=None, stream_error=None)` taking the patch target as an argument
+  (`_BRAVE_CLIENT` at `:255` becomes a call-site constant), `ChunkStream(chunks)` recording every raw
+  chunk it yields and exposing `largest_chunk` and `chunks_yielded` (the **raw** side only), and
+  `RecordingDecompressor(wbits)` — a thin proxy over `zlib.decompressobj(wbits)` recording `len(out)`
+  for every `decompress(...)` return and exposing `largest_output` and `calls`, the seam US-003
+  patches over `pipeline.bounded_body.zlib.decompressobj` to prove the decoded-side bound (the
+  `patch(..., wraps=...)` spy idiom at `tests/test_brave_provider.py:740-746` is the precedent).
+  Rebase `tests/test_brave_provider.py` on them. Rebase `tests/test_stage5_url_audit.py:43-86` —
+  which defines `_make_response` (`:43`, 20 call sites), `_make_redirect` (`:60`), `_make_stream_cm`
+  (`:69`) and `_stream_side_effect` (`:77`) with different defaults (`text/html; charset=utf-8`,
+  `<html>OK</html>`, `https://example.com`) — by keeping its local `_make_response` and
+  `_make_stream_cm` as **single-line delegating wrappers** into `tests/fakes.py` carrying the stage-5
+  defaults (shape (a) of the round-2 story-quality review: the 20 call sites are untouched and no
+  third *implementation* survives); `_make_redirect` and `_stream_side_effect` call those wrappers. The SearXNG transport doubles (`_searxng_client_patch`,
   `_mock_searxng_response`, `tests/test_search_providers.py`'s `_client_patch` / `_SEARXNG_CLIENT` /
   `_response`, `tests/test_app.py:1828`) are **not** touched here: production still calls
   `client.get`, so they stay `get`-shaped until US-003 switches both sides together (R40).
@@ -204,20 +248,26 @@ assertion intact.
       lifespan reads the builder unconditionally and the production chain's `SearxngProvider.settings`
       reflects a configured value; there is no module-level `app.state.searxng_settings` default.
 - [ ] `tests/fakes.py` exports the parameterised `ChunkStream` (with `largest_chunk` and
-      `chunks_yielded`), `make_response`, `make_stream_cm` and `client_patch(target, ...)`;
-      `tests/test_brave_provider.py` and `tests/test_stage5_url_audit.py` import them and keep no
-      private copy of `_ChunkStream` / `_make_response` / `_make_stream_cm` / `_client_patch`
-      (`grep -n 'def _make_response\|class _ChunkStream' tests/` returns nothing); the stage-5 helpers
-      `_make_redirect` and `_stream_side_effect` call the shared ones; `grep -rn MockTransport tests/`
-      returns nothing.
-- [ ] Behaviour preserved: `git diff --stat` shows no change under `pipeline/search_providers/brave.py`,
-      `pipeline/orchestrator.py`, `pipeline/contract.py`, `models.py` or `contract/`, and the only
-      change to `searxng.py`'s `search()` is none (the settings object is stored, not yet read — the
-      comment says so); the `get`-shaped SearXNG doubles in `tests/test_orchestrator.py`,
+      `chunks_yielded`), the stream-backed `make_response` (a test asserts `aiter_raw()` and
+      `aiter_bytes()` both work on it and that no `content-length` is synthesised), `make_stream_cm`,
+      `client_patch(target, ...)` and `RecordingDecompressor` (with `largest_output` and `calls`);
+      `grep -n 'class _ChunkStream' tests/` returns nothing; `grep -n 'def _make_response\|def
+      _make_stream_cm' tests/` returns only `tests/test_stage5_url_audit.py`, whose two bodies are
+      single delegating calls into `tests/fakes.py` with the stage-5 defaults; `_make_redirect` and
+      `_stream_side_effect` call those wrappers; `tests/test_brave_provider.py` keeps no private copy
+      of any of the four; `grep -rn MockTransport tests/` returns nothing.
+- [ ] `BraveSettings.max_response_bytes` exists (default `1_048_576`, no config key), is the default
+      of `_BRAVE_MAX_RESPONSE_BYTES`, and is not yet read by `search()` (a comment US-003 deletes).
+- [ ] `pipeline/search_providers/searxng.py` is in spec 3 US-003's AST code-parity reader list.
+- [ ] Behaviour preserved: `git diff --stat` lists no change for `pipeline/search_providers/brave.py`
+      (beyond the one dataclass field and its default wiring), `pipeline/orchestrator.py`,
+      `pipeline/contract.py`, `models.py` or `contract/`; `git diff pipeline/search_providers/searxng.py`
+      shows no hunk inside `search()` (the settings object is stored, not yet read — the comment says
+      so); the `get`-shaped SearXNG doubles in `tests/test_orchestrator.py`,
       `tests/test_search_providers.py` and `tests/test_app.py` are unchanged.
 - [ ] Every pre-existing test in `tests/test_brave_provider.py` and `tests/test_stage5_url_audit.py`
-      keeps its subject and expected value; the only edits are helper-body replacements and import
-      lines.
+      keeps its subject and expected value; the only edits are helper-body replacements, explicit
+      `content-length` headers where a test relied on the synthesised one, and import lines.
 - [ ] Tests written/updated for new functionality.
 - [ ] Full test suite passes (`uv run pytest`).
 - [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
@@ -233,21 +283,32 @@ provider failure instead of a memory spike or a hung `/search`, and a compressin
 front of my SearXNG is a counter I can read and a token I can grep, not an outage or a parse error.
 
 **Independent Test:** Using `tests/fakes.py`'s `ChunkStream` / `make_response` / `make_stream_cm` /
-`client_patch` (US-001): each provider called directly returns
-`ProviderFailure("hard_error", "body_too_large")` for a plain stream of `max_response_bytes + 1` bytes
-with no `Content-Length` and for a gzip stream whose decoded length is `max_response_bytes + 1`, and
-in both cases `ChunkStream.largest_chunk` and the provider's largest `decompress()` output are each
-≤ `max_response_bytes + 1` (a gzip fixture of ≥ 64× expansion — `gzip.compress(b"A" * 200_000)` is
-230 bytes); a gzip stream whose decoded length is under the bound is served (SearXNG: results
-returned; Brave: chunks returned); a deflate stream likewise (both zlib-wrapped and raw deflate); a
-stream with `Content-Encoding: br`, `zstd`, `x-unknown` or `gzip, br` returns
-`ProviderFailure("hard_error", "unsupported_encoding")`; a stream that yields one byte every 0.2 s
+`client_patch` / `RecordingDecompressor` (US-001), with `max_response_bytes` shrunk through
+`SearxngSettings(...)` / `BraveSettings(...)` on both providers: each provider called directly returns
+`ProviderFailure("hard_error", "body_too_large")` for (a) a plain stream of `max_response_bytes + 1`
+bytes with no `Content-Length`, (b) a gzip stream whose decoded length is `max_response_bytes + 1`
+(≥ 64× expansion — `gzip.compress(b"A" * 200_000)` is 230 bytes), (c) a gzip stream whose decoded
+length crosses the bound **only in its final raw chunk**, and (d) a raw-deflate filler stream of
+`5 × max_response_bytes` raw bytes that decodes to nothing (`b"\x00\x00\x00\xff\xff" * n` — round 2
+measured 1,000,000 raw bytes → 0 decoded bytes, `eof` unset) — in every case
+`RecordingDecompressor.largest_output ≤ max_response_bytes + 1`, `ChunkStream.largest_chunk` is the
+raw chunk size the test supplied, and for (d) `sum(len(c) for c in ChunkStream.chunks_yielded) ≤ 4 ×
+max_response_bytes` with the outcome `body_too_large`, not `timeout`; a truncated gzip stream and a
+corrupt deflate stream return `ProviderFailure("hard_error", "malformed_body")` with `compressed`
+set; a gzip stream whose decoded length is under the bound is served (SearXNG: results returned;
+Brave: chunks returned); a deflate stream likewise (both zlib-wrapped and raw deflate); a stream with
+`Content-Encoding: br`, `zstd`, `x-unknown` or `gzip, br` returns `ProviderFailure("hard_error",
+"unsupported_encoding")` before any body byte is read; a stream that yields one byte every 0.2 s
 against `SearxngSettings(timeout_seconds=0.5)` / `BraveSettings(timeout_seconds=0.5)` returns
-`ProviderFailure("timeout", "timeout")` after more than 0.5 s (`time.perf_counter`, lower bound only).
-At the `run_search_pipeline` level with a recording `SearchMetricsSink`: a compressed-under-bound
-response, a compressed-over-bound response, a `br` response, and a compressed 200-with-zero-results-
-plus-`unresponsive_engines` response (the re-classification path, `orchestrator.py:895-919`) each
-increment `provider_compressed_body` by exactly 1; a plain response increments it by 0. The SearXNG
+`ProviderFailure("timeout", "timeout")` after more than 0.5 s (`time.perf_counter`, lower bound only);
+both clients are constructed with `Accept-Encoding: identity` (asserted on the `AsyncClient` call's
+`headers=`). At the `run_search_pipeline` level with a recording `SearchMetricsSink`: a
+compressed-under-bound response, a compressed-over-bound response, a `br` response, a compressed
+**429**, a compressed stream that **times out after its headers**, a compressed 200-with-zero-
+results-plus-`unresponsive_engines` response on a `[searxng, brave]` chain (the re-classification
+path, `orchestrator.py:895-919`) **and** the same shape on a configured `[searxng]`-only chain (the
+ruling-28 serve-and-break at `:906-916`) each increment `provider_compressed_body` by exactly 1; a
+plain response increments it by 0. The SearXNG
 transport doubles are migrated to the stream shape in this story's first commit together with the
 production switch, and every pre-existing SearXNG assertion keeps its subject and expected value
 except the two `_FAILURE_CASES` entries named below.
@@ -264,43 +325,66 @@ except the two `_FAILURE_CASES` entries named below.
   inherits httpx's default today). Read `self.settings.timeout_seconds` / `.max_response_bytes` and
   delete `_SEARXNG_TIMEOUT_SECONDS` / `_MAX_SEARXNG_RESPONSE_BYTES` and the US-001 placeholder comment;
   rewrite the comment at `:57-59` (it describes the buffer-then-check order this story removes).
-- One bounded-body helper, shared by both providers: a module in `pipeline/search_providers/`
-  (`_body.py`, not hashed) exposing `async def read_bounded_body(response, *, max_bytes) -> bytes`
-  that raises a module-owned `BodyTooLarge` / `UnsupportedEncoding`. It (1) fast-rejects on a
+- One bounded-body helper, shared by both providers: a new module **`pipeline/bounded_body.py`**
+  (a `pipeline/` module, not under `pipeline/search_providers/`, so a later fetch-path story can
+  import it without a provider package importing outward or stage 5 importing inward; the implementer
+  confirms it is absent from `_REVISION_SOURCES`, `pipeline/sanitizer_revision.py:12-21`, so it is not
+  hashed) exposing `async def read_bounded_body(response, *, max_bytes) -> bytes` that raises three
+  module-owned exceptions: `BodyTooLarge`, `UnsupportedEncoding` and `MalformedBody`. In order it
+  (1) dispatches on `Content-Encoding` (lower-cased, whitespace-stripped) **before any body byte is
+  read**: absent or `identity` → raw bytes are counted; `gzip` → `zlib.decompressobj(zlib.MAX_WBITS |
+  16)`; `deflate` → `zlib.decompressobj(zlib.MAX_WBITS)`, retrying the first chunk with
+  `-zlib.MAX_WBITS` on `zlib.error` (the raw-deflate fallback `httpx/_decoders.py:55-83` performs);
+  any other token, or a list with more than one token → `UnsupportedEncoding` (this dispatch runs
+  first so an undecodable body is refused whatever its `Content-Length` says); (2) fast-rejects on a
   `Content-Length` header longer than 20 characters or parsing above `max_bytes` (defence in depth —
   h11 already enforces `CONTENT_LENGTH_MAX_DIGITS = 20`, `h11/_headers.py:15,178`, and a real peer
   sending more digits surfaces as `httpx.RemoteProtocolError`, classified `connect_error` on SearXNG
   and `transport_error` on Brave; the `body_too_large` classification is the direct-construction
-  path's, and the criterion says so); (2) reads `response.aiter_raw()` (never `aiter_bytes()`, whose
-  decoder has no output cap — `httpx/_decoders.py:85-97`); (3) dispatches on
-  `Content-Encoding` (lower-cased, whitespace-stripped): absent or `identity` → count raw bytes;
-  `gzip` → `zlib.decompressobj(zlib.MAX_WBITS | 16)`; `deflate` → `zlib.decompressobj(zlib.MAX_WBITS)`,
-  retrying the first chunk with `-zlib.MAX_WBITS` on `zlib.error` (the raw-deflate fallback
-  `httpx/_decoders.py:55-83` performs); each raw chunk is fed as `decompressor.decompress(data,
-  max_length=remaining + 1)` in a loop over `unconsumed_tail` until it is empty, `remaining =
-  max_bytes - total`, and the moment `total > max_bytes` the helper raises `BodyTooLarge` and stops
-  reading — so no single `decompress()` call can return more than `remaining + 1` bytes and the peak
-  held is `max_bytes + 1` plus the raw chunk; any other token, or a list with more than one token, →
-  `UnsupportedEncoding` **before any body byte is read**; (4) `flush()` at end of stream is also
-  bounded by `max_length`. Both providers map `BodyTooLarge` → `self._failure("hard_error",
-  "body_too_large")` and `UnsupportedEncoding` → `self._failure("hard_error", "unsupported_encoding")`
-  — one **new detail token on each provider's closed detail set** (`_SEARXNG_FAILURE_DETAILS`
-  `:69-76`, `_BRAVE_FAILURE_DETAILS` `:155-165`; `detail` is log-only — the wire carries
-  `failure_class`, so this is not a contract change); a `zlib.error` mid-stream maps to the existing
-  `malformed_body` on both. `brave.py:329-346` migrates to the helper (its own counter and the `int(content_
-  length)` guard at `:331-335` go), and the comment at `brave.py:146-150` is rewritten: decoded bytes
-  are bounded by Forage's own decompressor; identity is requested; a compressed reply is served if
-  decodable, refused as `unsupported_encoding` if not. `tests/test_brave_provider.py:781-811`
-  (`test_compressed_body_whose_decoded_length_exceeds_cap_is_rejected`) is rewritten against the
-  helper: its fixture must now be a **real gzip body** (`gzip.compress`) fed through `aiter_raw`, and
-  it asserts the largest decoded output, not a chunk count.
+  path's, and the criterion says so); (3) reads `response.aiter_raw()` (never `aiter_bytes()`, whose
+  decoder has no output cap — `httpx/_decoders.py:85-97`), counting **raw** bytes against
+  `4 × max_bytes` on every path and raising `BodyTooLarge` when that raw budget is exceeded — a
+  compressed stream that decodes to nothing must end as `body_too_large`, never as a `timeout` after a
+  full budget of bandwidth and zlib CPU; (4) on the compressed path feeds each raw chunk as
+  `decompressor.decompress(data, max_length=remaining + 1)` in a loop over `unconsumed_tail` until it
+  is empty, `remaining = max_bytes - total`, and the moment `total > max_bytes` raises `BodyTooLarge`
+  and stops reading — so no single `decompress()` call can return more than `remaining + 1` bytes and
+  the peak held is `max_bytes + 1` plus the raw chunk (the `+ 1` is load-bearing: `zlib` treats
+  `max_length=0` as *unlimited*, so `max_length=remaining` would remove the bound at exactly `total ==
+  max_bytes` — say so in a comment); (5) **never calls `flush()`** — `zlib.decompressobj.flush(length)`
+  sizes an output buffer and returns every remaining byte (round 2: 4,999,990 bytes from `flush(10)`)
+  — the end-of-stream rule is: `decompressor.eof` set → done; `eof` unset, or `unconsumed_tail`
+  non-empty, when `aiter_raw()` ends → `MalformedBody`; a `zlib.error` at any point → `MalformedBody`.
+  Both providers map `BodyTooLarge` → `self._failure("hard_error", "body_too_large")`,
+  `UnsupportedEncoding` → `self._failure("hard_error", "unsupported_encoding")` — one **new detail
+  token on each provider's closed detail set** (`_SEARXNG_FAILURE_DETAILS` `:69-76`,
+  `_BRAVE_FAILURE_DETAILS` `:155-165`; `detail` is log-only — the wire carries `failure_class`, so this
+  is not a contract change) — and `MalformedBody` → the existing `malformed_body` on both. The helper
+  never logs and never includes the header value or `str(exc)` in an exception message (the
+  providers' closed vocabularies are the only thing that reaches a log). `brave.py:329-346` migrates to the helper (its own counter and the `int(content_
+  length)` guard at `:331-335` go; the bound is read from `self.settings.max_response_bytes`, US-001),
+  and the comment at `brave.py:146-150` is rewritten: decoded bytes are bounded by Forage's own
+  decompressor; identity is requested; a compressed reply is served if decodable, refused as
+  `unsupported_encoding` if not. `tests/test_brave_provider.py:781-811`
+  (`test_compressed_body_whose_decoded_length_exceeds_cap_is_rejected`) already builds its fixture
+  with `gzip.compress(raw)` (`:785`) and asserts `failure_class`/`detail` plus `loads_spy.assert_not_
+  called()`; it is extended, not rewritten: the fixture is fed through `aiter_raw`, and it gains the
+  `RecordingDecompressor.largest_output ≤ max_response_bytes + 1` assertion and the raw-bytes bound.
 - The compression signal and the counter (`search.provider_compressed_body`, additive, ruling 5):
   `ProviderSearchResult` **and** `ProviderFailure` (`base.py`, internal dataclasses, not wire models)
-  gain `compressed: bool = False`, set by the provider from the header at the point it is seen — so
-  a served, an over-bound and an undecodable compressed body all carry it. The orchestrator's loop
-  increments `metrics.provider_compressed_body` once per provider outcome whose `compressed` is set,
-  and the 200-with-zero-results-plus-`unresponsive_engines` re-classification (`orchestrator.py:
-  895-919`) copies the flag onto the `ProviderFailure` it builds. Five sites for the field:
+  gain `compressed: bool = False`. The provider stamps a local from `Content-Encoding` at the **one
+  header-read site**, before status mapping and before the `except TimeoutError` / `except
+  httpx.*` / `except Exception` arms, and every `ProviderSearchResult` or `ProviderFailure` built after
+  that point — served, over-bound, undecodable, malformed, a compressed non-2xx refused by status
+  mapping, a wall-clock timeout after the headers, a transport error mid-body — carries it (a failure
+  built *before* the headers arrived — connect error, timeout before headers — is never compressed).
+  The orchestrator increments `metrics.provider_compressed_body` **immediately after `call_outcome`
+  is produced** (`pipeline/orchestrator.py:882`, and on the orchestrator-side catch-all at `:888`),
+  **before** the re-classification block at `:894` — the loop has three exits (the ruling-28
+  lone-`searxng` serve-and-break at `:906-916`, the failure `continue` at `:933`, the ordinary
+  serve-and-break at `:935-938`) and only that placement covers all three; the
+  200-with-zero-results-plus-`unresponsive_engines` re-classification (`:895-919`) still copies the
+  flag onto the `ProviderFailure` it builds, for dataclass honesty, not for counting. Five sites for the field:
   `SearchMetricsSink` Protocol (`pipeline/orchestrator.py:747-756`, and its "two counters" docstring
   sentence — three after this story), `_NullSearchMetrics.__init__` (`:759-771`),
   `SearchMetrics.__init__` (`retrieval_app.py:875-886`, a plain class), the `/metrics` handler dict
@@ -310,7 +394,11 @@ except the two `_FAILURE_CASES` entries named below.
   zero count means no compression"). `extra="forbid"` on the metrics models means the model and the
   class move in the same commit (`GOTCHAS.md` "Adding a /metrics counter"); the order guards are
   `tests/test_contract_metrics.py:135` and `:161`; that module hosts the counter's tests; the
-  schema-fullness test at `:272-292` requires the description. Update `kit_tools/docs/MONITORING.md:
+  schema-fullness test at `:272-292` requires the description; and `SearchMetricsResponse`'s field set
+  is pinned **literally** a second time in `tests/test_contract_schema.py:368-395`
+  (`test_search_metrics_response_1_2_0_field_set_is_pinned_exactly`) — extend that literal set with
+  the new name and retitle the test or its docstring for a 1.3.0 field set (spec 6 US-004 hits the
+  same pin). Update `kit_tools/docs/MONITORING.md:
   433-439` ("Adding a counter to `/metrics`") so the procedure names the `SearchMetricsSink` Protocol
   and `_NullSearchMetrics` sites and says `SearchMetrics` is a plain class (spec 6 US-004 cites the
   same runbook).
@@ -324,17 +412,40 @@ except the two `_FAILURE_CASES` entries named below.
   operation). Nest `asyncio.timeout` inside the `AsyncClient` context so the client's `__aexit__`
   runs on expiry; the hermetic suite (pytest-socket, patched `AsyncClient`) cannot exercise httpx's
   real teardown under cancellation — Technical Considerations records that as accepted untested.
+  The defaults do not move (SearXNG 10.0 s, Brave 15.0 s) but their *meaning* tightens from
+  per-socket-operation to whole-interaction: a SearXNG that takes 3 s to connect and 8 s to stream
+  succeeds today and is `timeout` after this story, and SearXNG fans out to four engines and waits
+  for the slowest. No fan-out latency distribution has been measured; the defaults are kept with that
+  uncertainty stated, and both timeout rows in `docs/configuration.md` and `ENV_REFERENCE.md` tell
+  operators of slow instances to raise `search_searxng_timeout_seconds` (Edge Cases records the
+  tightening; on a `[searxng, brave]` chain a new free-path `timeout` buys a paid call, so the
+  sentence is not optional).
+- `Accept-Encoding: identity` is a **new header** on both clients (`headers={"Accept-Encoding":
+  "identity"}` on each `AsyncClient` construction; nothing sends it today — `grep -rni
+  accept-encoding pipeline/ tests/` is empty, and httpx's built default is `gzip, deflate`). It buys
+  nothing from a proxy that ignores it (Forage decodes anyway) and one thing from a peer that
+  honours it (no decode at all), and it collides with SearXNG's optional bot limiter: with
+  `server.limiter: true` the `http_accept_encoding` rule refuses requests whose header lacks
+  `gzip`/`deflate` with **429 on the first request** (`kit_tools/docs/GOTCHAS.md:370`,
+  `docs/searxng.md:74`). The baked image ships `limiter: false`; `docs/searxng.md`'s "Turning it on
+  anyway" section and the GOTCHAS entry gain one sentence each naming the header and that a
+  limiter-enabled instance answers Forage with 429 → `rate_limited` (the existing classification, and
+  on a `[searxng, brave]` chain a paid call) unless the limiter's pass list admits Forage. The
+  overruled alternative (round-2 salty review: drop the header entirely) is recorded in Decisions Made.
 - The SearXNG test-seam migration (R40) is this story's **first commit, together with the
   production switch**, because production and doubles must change sides at once: rewrite
   `tests/test_orchestrator.py:881-905` (`_mock_searxng_response`, `_searxng_client_patch` — 19 and
-  23 uses at planning time; `grep -c` is the authority) to return a stream double whose body is
-  `json.dumps(data).encode()` via `make_stream_cm`; migrate the direct
+  23 uses at planning time; `grep -c` is the authority) so `_mock_searxng_response` returns a **real
+  `httpx.Response`** built by the promoted `make_response(...)` with body `json.dumps(data).encode()`,
+  wrapped by `make_stream_cm` — today it returns a bare `MagicMock()` (`:887`), and a `MagicMock`
+  reaching `read_bounded_body` yields a truthy `Content-Encoding` and lands every SearXNG test on
+  `unsupported_encoding` (round-2 codebase-fit review); migrate the direct
   `pipeline.search_providers.searxng.httpx.AsyncClient` patches at `tests/test_orchestrator.py:2417`,
-  `:2439` and the `.get.call_count` assertion at `:2505`; in `tests/test_search_providers.py` rewrite
-  `_client_patch` (`:311-331`, its `get_error=` keyword becomes `stream_error=`; it either adopts the
-  promoted `client_patch(target=_SEARXNG_CLIENT, ...)` or keeps a thin local wrapper — say which, the
-  two names must not collide), `_SEARXNG_CLIENT` / `_response` (`:272-300`; the docstring "the body
-  bound is read off len() before json() runs" is rewritten), the `client.get.call_args` assertions
+  `:2439` and the `.get.call_count` assertion at `:2505`; in `tests/test_search_providers.py` delete
+  the local `_client_patch` (`:311-331`) and **adopt the promoted `client_patch(target=_SEARXNG_CLIENT,
+  ...)`** (decided: no thin wrapper, no name collision; its `get_error=` keyword becomes
+  `stream_error=`), rebuild `_response` (`:272-300`, today a `MagicMock()` at `:296`) on
+  `make_response` (the docstring "the body bound is read off len() before json() runs" is rewritten), the `client.get.call_args` assertions
   at `:378,:388` (now `client.stream.call_args`), and the `_FAILURE_CASES` matrix (`:509-593`,
   consumed at `:611`, `:630`, `:681`): the `json_error=ValueError("not json")` case becomes non-JSON
   body bytes (`b"not json"`), and the `json_error=RuntimeError("decoder exploded")` case is
@@ -342,7 +453,25 @@ except the two `_FAILURE_CASES` entries named below.
   `RuntimeError` from `json.loads` is not a real input shape — recorded in Decisions Made); migrate
   `tests/test_app.py:1828-1833` (`inner.get.side_effect` → a stream error). Every other pre-existing
   assertion keeps its subject and expected value; the permitted edits are helper bodies, mock-attribute
-  renames (`client.get.*` → `client.stream.*`) and the two named `_FAILURE_CASES` rows.
+  renames (`client.get.*` → `client.stream.*`) and the named `_FAILURE_CASES` rows. `raise_for_status()`
+  at `searxng.py:171` is inside the replaced range; the status mapping it fed (`:182-188`) survives
+  and runs on the streamed response's status before any body byte is read — the replaced lines are
+  the read, the `len()` check and the `json()` call, not the status semantics.
+- `_FAILURE_CASES` grow with the new peer-reachable paths so the closed-vocabulary and no-leak
+  sweeps cover them by construction (round-2 security review): SearXNG's matrix
+  (`tests/test_search_providers.py:509-593`, consumed by `test_every_detail_is_in_the_closed_
+  vocabulary` `:625-644` and `test_no_log_record_carries_exception_text_or_the_base_url` `:668-703`)
+  gains four rows — `unsupported_encoding` (an attacker-controlled `Content-Encoding: br`),
+  helper-raised `body_too_large`, `zlib.error` → `malformed_body`, and the builtin `TimeoutError` arm
+  — for **fifteen** rows after the one deletion and one rewrite; Brave's `_FAILURE_CASES` gains an
+  `unsupported_encoding` row, `test_the_twelve_cases_exercise_every_closed_token`
+  (`tests/test_brave_provider.py:1330-1332`, which asserts `{case.detail} == set(_BRAVE_FAILURE_
+  DETAILS)` **and** `len(_BRAVE_FAILURE_DETAILS) == 12`) becomes the thirteen-case test, and the three
+  prose sites that hard-code the count — `brave.py:152` ("Twelve fixed tokens"), `:290`
+  ("twelve-token vocabulary"), `:490` ("not one of the twelve fixed tokens") — are rewritten; `grep
+  -rn 'twelve' pipeline/ tests/` is the sweep. One explicit assertion joins the no-leak sweep on both
+  providers: no log record carries the raw `Content-Encoding` header value (the one new
+  attacker-authored string this story routes into a failure decision).
 - Timed tests: the suite's only real sleeps are 0.05 s (`tests/test_app.py:978,1007,1123`) and
   `tests/fakes.py::ManualClock` exists to avoid them; this story knowingly adds two ~0.6 s tests
   (one per provider) asserting `elapsed > budget` **and nothing else** (no upper bound — a contended
@@ -355,14 +484,26 @@ except the two `_FAILURE_CASES` entries named below.
   wall-clock), `:245` (Brave row), `:246` (chain traversal row — it becomes *true* here);
   `kit_tools/docs/API_GUIDE.md:58` ("10 s per provider call"); `kit_tools/docs/TROUBLESHOOTING.md:178`
   and `:464` ("10 s"); `grep -rn '10 s' kit_tools/arch/patterns/ERROR_HANDLING.md kit_tools/docs/
-  API_GUIDE.md kit_tools/docs/TROUBLESHOOTING.md docs/configuration.md` is the sweep (six hits at
-  planning time, `TROUBLESHOOTING.md:702` is Poppy's and stays). `kit_tools/docs/MONITORING.md` gains
-  the `search.provider_compressed_body` row with the header-seen semantics and the
-  `unsupported_encoding` token as the "this build cannot decode it" signal.
-  `kit_tools/arch/SECURITY.md`'s documented-non-vulnerabilities table (`:336`) gains one row: a slow
-  upstream can hold a `/search` for the sum of the configured per-provider budgets (20 s on today's
-  chain, up to 2 × 60 s at the ranges' maxima); there is no chain-wide deadline and no concurrency
-  ceiling on `/search`; network placement and the per-call budget are the controls.
+  API_GUIDE.md kit_tools/docs/TROUBLESHOOTING.md docs/configuration.md` is the sweep (seven hits at
+  planning time — `ERROR_HANDLING.md:244` and `:246` are two of them; the implementer re-runs the
+  grep at HEAD; `TROUBLESHOOTING.md:702` is Poppy's and stays); `docs/configuration.md`'s "10 s +
+  this value" sentence becomes "10 s + this value on a `searxng,brave` chain — 25 s at the shipped
+  defaults". A second sweep covers the closed `detail` vocabulary pages: `grep -rn 'malformed_body'
+  kit_tools/` finds every page that enumerates the token set (`kit_tools/docs/TROUBLESHOOTING.md:176`
+  — the Brave `detail` grep table — and `:178`, the exhaustive SearXNG list; `kit_tools/arch/patterns/
+  ERROR_HANDLING.md:164`), and each enumerated set gains `unsupported_encoding`. `kit_tools/docs/
+  MONITORING.md` gains the `search.provider_compressed_body` row with the header-seen semantics and
+  the `unsupported_encoding` token as the "this build cannot decode it" signal, and both timeout rows
+  in `docs/configuration.md` / `ENV_REFERENCE.md` carry the "raise it for a slow instance" sentence.
+  `kit_tools/arch/SECURITY.md`'s documented-non-vulnerabilities table (`:336`) gains one row, worded
+  exactly: a slow upstream can hold a `/search` for **at least** the sum of the configured
+  per-provider budgets — 10 s on the default `[searxng]` chain, 25 s on `searxng,brave` at the
+  shipped defaults (`config.yaml:20` Brave 15.0 s; there is no configuration that yields 20 s), up to
+  2 × 60 s at the ranges' maxima — plus parse, sanitization and classification time, which sit
+  outside the budget; there is no chain-wide deadline and no concurrency ceiling on the
+  provider-fetch phase (the one ceiling that exists is spec 2 US-006's classification semaphore, which
+  bounds stage 3, not the fetch); network placement and the per-call budget are the controls. `grep
+  -n '25 s' kit_tools/arch/SECURITY.md docs/configuration.md` is the criterion for the number.
 - Rotation (ruling 6, R32): this story moves **two hashed files** — `pipeline/orchestrator.py` (the
   Protocol, `_NullSearchMetrics`, the loop increment, the re-classification copy) and
   `pipeline/contract.py` (the docstring line). Measure by reverting each in turn with a both-reverted
@@ -378,14 +519,25 @@ except the two `_FAILURE_CASES` entries named below.
   byte-identical and the diff list needs no entry, and records both facts in Implementation Notes.
 
 **Acceptance Criteria:**
-- [ ] Both providers read through `read_bounded_body` over `aiter_raw()`; `grep -n 'aiter_bytes'
-      pipeline/search_providers/` returns nothing; a plain stream and a ≥ 64×-expansion gzip stream
-      of `max_response_bytes + 1` decoded bytes each return `ProviderFailure("hard_error",
-      "body_too_large")` with the largest decoded output ≤ `max_response_bytes + 1` and reading stopped
-      at that point (`ChunkStream.chunks_yielded` shows no further chunk), pinned on both providers.
+- [ ] Both providers read through `pipeline/bounded_body.py::read_bounded_body` over `aiter_raw()`,
+      each from its own `settings.max_response_bytes`; `grep -n 'aiter_bytes' pipeline/search_providers/
+      pipeline/bounded_body.py` returns nothing; `grep -n 'flush(' pipeline/bounded_body.py` returns
+      nothing; the four over-bound shapes of the Independent Test — plain, ≥ 64×-expansion gzip,
+      overflow-in-the-final-chunk gzip, and the zero-expansion raw-deflate filler — each return
+      `ProviderFailure("hard_error", "body_too_large")` with `RecordingDecompressor.largest_output ≤
+      max_response_bytes + 1` (the largest value returned by any zlib call), reading stopped at that
+      point (`ChunkStream.chunks_yielded` shows no further chunk), and, for the filler, total raw bytes
+      read ≤ `4 × max_response_bytes` and the outcome not `timeout`; pinned on both providers.
+- [ ] A truncated gzip stream and a corrupt deflate stream return `ProviderFailure("hard_error",
+      "malformed_body")` with `compressed` set, on both providers; `eof` unset at end of stream is
+      `malformed_body`, never a served partial body; pinned.
 - [ ] `gzip`, zlib-wrapped `deflate` and raw `deflate` bodies under the bound are served; `br`, `zstd`,
       an unknown token and `gzip, br` return `ProviderFailure("hard_error", "unsupported_encoding")`
-      before any body byte is read; both providers send `Accept-Encoding: identity`; pinned on both.
+      before any body byte is read, whatever `Content-Length` says; both `AsyncClient` constructions
+      pass `Accept-Encoding: identity` explicitly (asserted on the construction call — this is a new
+      header); `docs/searxng.md`'s limiter section and `kit_tools/docs/GOTCHAS.md`'s limiter entry
+      each name the header and its 429 → `rate_limited` consequence on a limiter-enabled instance;
+      pinned on both.
 - [ ] A `Content-Length` longer than 20 characters or above the bound is `body_too_large` on both
       providers on the direct-construction path, with the criterion text stating that a real peer
       surfaces as `connect_error` / `transport_error` through h11's own 20-digit bound; pinned.
@@ -393,14 +545,20 @@ except the two `_FAILURE_CASES` entries named below.
       than the budget has elapsed (lower bound only); the budget covers the HTTP interaction only (a
       slow parse after a fast body is never a timeout); the arm catches the builtin `TimeoutError`
       before the catch-all; the SearXNG client is constructed with `follow_redirects=False`; pinned.
-- [ ] `ProviderSearchResult.compressed` and `ProviderFailure.compressed` exist; at the
-      `run_search_pipeline` level with a recording sink, a served, an over-bound, an undecodable and a
-      re-classified compressed response each increment `provider_compressed_body` by 1 and a plain
-      response by 0; pinned.
+- [ ] `ProviderSearchResult.compressed` and `ProviderFailure.compressed` exist and are stamped from
+      the one header-read site before status mapping and before every exception arm; at the
+      `run_search_pipeline` level with a recording sink, a served, an over-bound, an undecodable, a
+      malformed, a compressed-429, a compressed-timeout-after-headers, a re-classified compressed
+      response on `[searxng, brave]` **and** a compressed 200-zero-results response on a configured
+      `[searxng]`-only chain each increment `provider_compressed_body` by exactly 1 and a plain
+      response by 0; the increment site is immediately after `call_outcome` is produced
+      (`orchestrator.py:882` / `:888`), before the re-classification block; pinned.
 - [ ] `search.provider_compressed_body` is on `/metrics` (`SearchMetricsSink`, `_NullSearchMetrics`,
       `SearchMetrics`, the handler dict, `SearchMetricsResponse` with the header-seen description); the
-      two order guards in `tests/test_contract_metrics.py` pass with the key appended; `MONITORING.md:
-      433-439`'s runbook names the Protocol and `_NullSearchMetrics` sites.
+      two order guards in `tests/test_contract_metrics.py` pass with the key appended;
+      `tests/test_contract_schema.py::test_search_metrics_response_1_2_0_field_set_is_pinned_exactly`
+      carries the new name in its literal set; `MONITORING.md:433-439`'s runbook names the Protocol
+      and `_NullSearchMetrics` sites.
 - [ ] Window mechanics (R36): docstring line appended in the `* ``1.3.0`` — …` format; `uv run
       python -m scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via
       `_SCHEMA_MODELS`; the field appended to `_EXPECTED_ONE_THREE_ZERO_DIFF` where applicable; the
@@ -409,15 +567,28 @@ except the two `_FAILURE_CASES` entries named below.
       no `/metrics` entry, and why.
 - [ ] `FAILURE_CLASSES` (`base.py:21,32`) is unchanged; `_SEARXNG_FAILURE_DETAILS` and
       `_BRAVE_FAILURE_DETAILS` each gain exactly `unsupported_encoding`; the only other edit to
-      `base.py` is the additive `compressed` field on the two dataclasses.
-- [ ] The SearXNG doubles are stream-shaped (`grep -c 'client.get' tests/test_orchestrator.py
-      tests/test_search_providers.py tests/test_app.py` returns 0 hits for the SearXNG seam);
-      `_FAILURE_CASES` has eleven rows (the `RuntimeError` row deleted, the `ValueError` row now
-      `b"not json"`); every other pre-existing SearXNG assertion keeps its subject and expected value.
+      `base.py` is the additive `compressed` field on the two dataclasses; `tests/test_brave_provider.py`'s
+      closed-token test asserts thirteen tokens with a new `unsupported_encoding` `_FAILURE_CASES` row,
+      and `grep -rn 'twelve' pipeline/ tests/` returns nothing.
+- [ ] The SearXNG doubles are stream-shaped and real: `grep -nE '(mock_client|client|inner|
+      return_value)\.get\.' tests/test_orchestrator.py tests/test_search_providers.py tests/test_app.py`
+      returns nothing (eight sites at planning time — `test_orchestrator.py:903,905,2122,2403,2505`,
+      `test_search_providers.py:325,327,378,388`, `test_app.py:1830`; `grep -c` is the authority);
+      `grep -n 'MagicMock()' ` over `_mock_searxng_response` and `tests/test_search_providers.py::
+      _response` returns nothing (both are built by `make_response`); the local `_client_patch` in
+      `tests/test_search_providers.py` is gone and the promoted `client_patch` is used; SearXNG's
+      `_FAILURE_CASES` has fifteen rows (the `RuntimeError` row deleted, the `ValueError` row now
+      `b"not json"`, four new rows for `unsupported_encoding`, helper `body_too_large`, `zlib.error` →
+      `malformed_body` and the builtin `TimeoutError` arm), and the no-leak sweep asserts no record
+      carries the raw `Content-Encoding` value on either provider; every other pre-existing SearXNG
+      assertion keeps its subject and expected value.
 - [ ] Docs: `grep -rn '10 s' kit_tools/arch/patterns/ERROR_HANDLING.md kit_tools/docs/API_GUIDE.md
       kit_tools/docs/TROUBLESHOOTING.md docs/configuration.md` returns only `TROUBLESHOOTING.md:702`
       (Poppy's healthcheck note); both timeout rows in `docs/configuration.md` contain "wall-clock
-      budget"; `MONITORING.md` documents the counter; `SECURITY.md` carries the slow-upstream row.
+      budget" and the raise-it-for-a-slow-instance sentence; every page `grep -rn 'malformed_body'
+      kit_tools/` returns enumerates `unsupported_encoding` beside it; `MONITORING.md` documents the
+      counter; `SECURITY.md` carries the slow-upstream row with `grep -n '25 s' kit_tools/arch/
+      SECURITY.md docs/configuration.md` hitting both files and no `20 s` figure anywhere in either.
 - [ ] `sanitizer_revision` rotation measured (revert `pipeline/orchestrator.py` and
       `pipeline/contract.py` each in turn, with a both-reverted control reproducing the pre-story
       hash) and recorded at the five sites ruling 6 names — `docs/bootstrap-notes.md`, `CLAUDE.md`,
@@ -517,6 +688,16 @@ passes unchanged.
   is built; the behaviour is **named** — in the Edge Cases, in a `tests/test_app.py` test, and in the
   1.3.0 docstring line beside the description change ("on an all-paid configured chain a later-paid-
   only selection is now the policy 422"), so the window record is not read as schema-additive-only.
+  **Governance (CLAUDE.md invariant 4):** `contract/GOVERNANCE.md:102` puts "a status code a client
+  observes changes" in the MAJOR row, so the story records a ruling in GOVERNANCE's "Recorded
+  rulings" (the next free letter) rather than riding a docstring line: the flip is classified an
+  **expedited security-tightening MINOR** (row 6, § "Example 6 in full") on the reachability argument
+  that today no production chain can reach it — `_KNOWN_PROVIDER_NAMES` holds exactly one paid name
+  and `parse_provider_names` collapses duplicates, so a multi-paid configured chain is
+  unconstructible (the same unreachability reasoning as the documented-but-unreachable `/extract`
+  413, `GOVERNANCE.md:213`) — with the compatibility note that the case becomes reachable the day
+  T3.1 registers a second paid backend, and that story inherits this ruling instead of an
+  undocumented MAJOR.
 - Observability of a prefix drop: **none** (no counter, no log — INFO never renders, GOTCHAS, and a
   WARNING per request is noise). The diagnosis path is written down instead: `SearchRequest.providers`'
   description (`models.py:302-315`) states the prefix rule and that `provider_used` never names a
@@ -555,6 +736,10 @@ passes unchanged.
       the docstring's numbered steps and the body's markers agree.
 - [ ] `SearchRequest.providers`' description states the prefix rule and the `provider_used` diagnosis
       sentence; `API_GUIDE.md` matches; the 1.3.0 docstring line names the all-paid-chain consequence.
+- [ ] `contract/GOVERNANCE.md`'s "Recorded rulings" carries the all-paid-chain ruling (expedited
+      security-tightening MINOR on the one-paid-name reachability argument, the `/extract` 413
+      precedent cited, the T3.1 note), and `tests/test_governance_docs.py`'s ruling-marker test counts
+      it.
 - [ ] Window mechanics (R36): docstring line appended in the `* ``1.3.0`` — …` format; `uv run
       python -m scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via
       `_SCHEMA_MODELS`; `_EXPECTED_ONE_THREE_ZERO_DIFF` reviewed (no field added — recorded); the four
@@ -594,9 +779,12 @@ record.
 
 **Implementation Hints:**
 - Extract the loop at `pipeline/orchestrator.py:874-946` into a module-level
-  `async def _query_provider_chain(...) -> _ServedChain` (a small frozen dataclass: serving provider,
-  raw results, `provider_errors`, `fallback_fired`) so `run_search_pipeline` reads as query →
-  sanitize → respond. **The sink mutations stay inside the helper**, at the same points relative to
+  `async def _query_provider_chain(...) -> _ServedChain` (a small frozen dataclass carrying
+  everything the post-loop code reads today: the serving provider, the raw results, the
+  `max_results` slice bound (`serving_max_results`, `:951`), `unresponsive_engines` (`:953-955` →
+  `SearchResponse.unresponsive_engines` `:1101`), `content_kind` (`:1056`), `provider_errors` and
+  `fallback_fired`) so `run_search_pipeline` reads as query → sanitize → respond; one of the three
+  committed fixture runs carries a non-empty `unresponsive_engines` so the pin covers that field. **The sink mutations stay inside the helper**, at the same points relative to
   the provider calls as today (`metrics.fallback_fired += 1` at `:875-877`, `metrics.paid_calls += 1`
   at `:879-880`, US-003's `provider_compressed_body` increment) — the helper takes the sink and
   mutates it; it does **not** return deltas for the caller to apply (a raise mid-chain must leave the
@@ -632,9 +820,10 @@ record.
   `hard_error`, a `detail` not matching `^[a-z0-9_]{1,32}$` to `unexpected`, **and** a
   `provider.name` not matching the same pattern to `unknown` before the entry is built (finding
   -045; the name half is hardening for a future operator-pluggable provider — say so in
-  `_query_provider_chain`'s docstring); a test registers a fake returning
-  `ProviderFailure("weird", "x y")` and asserts the entry `"<name>: hard_error"` and the log token
-  `unexpected`.
+  `_query_provider_chain`'s docstring, and `kit_tools/arch/patterns/ERROR_HANDLING.md:166-172`'s
+  "two closed vocabularies" sentence gains the `unknown` provider-name fallback); a test registers a
+  fake returning `ProviderFailure("weird", "x y")` and asserts the entry `"<name>: hard_error"` and
+  the log token `unexpected`.
 - Pins: the three wire captures and their counter dicts are built from
   `tests/fixtures/brave/llm_context_sample.json` and the synthetic SearXNG dicts the tests already use
   — never a live capture (Brave's ToS forbids persisting result payloads); the captured dumps have
@@ -642,15 +831,19 @@ record.
   `tests/test_brave_provider.py:101-107` (`test_no_auth_header_name_anywhere_in_fixtures`) walks the
   whole `tests/fixtures/` tree; `:109-118` (`test_no_token_shaped_literal_anywhere_in_brave_fixtures`,
   `_TOKEN_SHAPE_RE = [A-Za-z0-9_-]{24,}`) walks only `tests/fixtures/brave/` because the comment at
-  `:81-83` keeps it off `tests/fixtures/tiny_model/` — this story adds a `search/`-scoped sibling of
-  the token walk (or re-roots it at `_FIXTURES_DIR` with an explicit `tiny_model/` allowlist; say
-  which), so the captures are secret-shape-guarded. Add a `tests/fixtures/README.md` section for
-  `search/` (provenance: synthetic, scrubbed, `request_id` removed) and a
-  `kit_tools/testing/TESTING_GUIDE.md:153-156` row. The comparison lives in a new
+  `:81-83` keeps it off `tests/fixtures/tiny_model/` — this story **re-roots the token walk at `_FIXTURES_DIR` with an explicit
+  `tiny_model/` allowlist** (decided; one walk, not a per-directory sibling), so the captures are
+  secret-shape-guarded. Add a `tests/fixtures/README.md` section for `search/` (provenance: synthetic,
+  scrubbed, `request_id` removed), a `kit_tools/testing/TESTING_GUIDE.md:153-156` support-files row for
+  `tests/fixtures/search/` **and** a per-module row for `tests/test_search_pipeline_pins.py` (the
+  guide's module table carries every test file). The comparison lives in a new
   `tests/test_search_pipeline_pins.py`; the closed exclusion list is `{"request_id"}` — the
   implementer sweeps `SearchResponse` for any other non-deterministic field before the capture and
   records the sweep result in Implementation Notes. Captures are taken in the story's **first**
-  commit, before the refactor.
+  commit, before any refactor hunk: that commit holds the fixtures, `tests/test_search_pipeline_pins.py`
+  green against unchanged code, the re-rooted token walk and the two doc rows, and nothing under
+  `pipeline/` (the round-2 proposal to make this its own story is overruled by R37; the ordering
+  achieves the same fallback state).
 - `pipeline/orchestrator.py` is hashed: this is the one rotation the whole cleanup gets; the
   `provider_errors` and omission-log deltas are deliberately inside it. Record per ruling 6 (five
   sites).
@@ -663,6 +856,10 @@ record.
 - [ ] The sink is mutated inside `_query_provider_chain` at the same points as before: the three
       fixture runs produce identical counter dicts before and after; the exhaustion captures show the
       increments already landed when the `PipelineError` is raised.
+- [ ] `_ServedChain` carries the serving provider, raw results, `max_results`, `unresponsive_engines`,
+      `content_kind`, `provider_errors` and `fallback_fired`, and one committed fixture run has a
+      non-empty `unresponsive_engines` that survives the pin; `ERROR_HANDLING.md:166-172` names the
+      `unknown` provider-name fallback.
 - [ ] `grep -n 'searxng_url' pipeline/orchestrator.py` returns nothing; no `run_search_pipeline(`
       call in `tests/` passes `searxng_url=`; `build_provider_chain`'s `searxng_url=` keyword and its
       callers are unchanged.
@@ -698,7 +895,21 @@ record.
   `zstd`, an unknown token, or a list such as `gzip, br`: `unsupported_encoding` before any body byte
   is read, counted once (US-003).
 - A compressed body whose decoded length exceeds the bound is `body_too_large`, counted once, and no
-  `decompress()` call ever returned more than `remaining + 1` bytes (US-003).
+  zlib call ever returned more than `remaining + 1` bytes — including when the overflow arrives only
+  in the final raw chunk, because `flush()` is never called and the loop drains `unconsumed_tail`
+  (US-003).
+- A compressed stream that decodes to nothing (zero-expansion filler) is `body_too_large` on the raw
+  budget (`4 × max_response_bytes`), never a `timeout` after a full budget of bandwidth (US-003).
+- `Content-Encoding` dispatch runs before the `Content-Length` fast-reject: an undecodable encoding is
+  `unsupported_encoding` whatever `Content-Length` says, and a decodable one with an over-bound
+  `Content-Length` is `body_too_large` before any body byte (US-003).
+- A limiter-enabled SearXNG (`server.limiter: true`, opt-in; the image ships it off) refuses the new
+  `Accept-Encoding: identity` header with 429 on the first request → `rate_limited`, the existing
+  classification; documented beside the limiter caveat in `docs/searxng.md` and GOTCHAS (US-003).
+- The timeout defaults keep their values (10 s / 15 s) but tighten in meaning to the whole HTTP
+  interaction; a slow four-engine fan-out that succeeded under per-operation timeouts may now be
+  `timeout` (and buy a paid call on a two-provider chain); the config rows say to raise
+  `search_searxng_timeout_seconds` for a slow instance (US-003).
 - A gzip or deflate body that is truncated or corrupt raises `zlib.error` mid-stream:
   `read_bounded_body` maps it to `MalformedBody` (a sibling of `BodyTooLarge`) and both providers
   classify it `hard_error` / `malformed_body` — a token both detail sets already carry
@@ -706,7 +917,10 @@ record.
 - A 200-with-zero-results-plus-`unresponsive_engines` body that arrived compressed is re-classified
   into a `ProviderFailure` that still carries `compressed`, so the counter fires (US-003).
 - The wall-clock budget expiring after headers but before the first body byte maps to `timeout`, not
-  `body_too_large`; a slow `json.loads` after a fast body is never a timeout (US-003).
+  `body_too_large`, and carries `compressed` if the headers said so; a compressed non-2xx refused by
+  status mapping and a transport error mid-body carry it too; a failure before the headers arrive
+  (connect error, timeout before headers) never does; a slow `json.loads` after a fast body is never
+  a timeout (US-003).
 - A query shorter than the cap is sent untouched; a cap equal to the query length sends it whole;
   truncation counts characters, not bytes; the echoed `SearchResponse.query` is the caller's (US-002).
 - `providers` naming a paid provider that is configured *first* keeps it; naming only a later paid
@@ -741,6 +955,14 @@ record.
   documented and recorded as a non-vulnerability row.
 - Structural or PromptGuard behaviour on search text — spec 1; `SearchResult.engine` bounding — spec 1
   US-004.
+- **`pipeline/stage5_url_audit.py:210-219`**, the `/retrieve` fetch path's own running counter over
+  `aiter_bytes()` — the identical uncapped-decoder shape finding -020 describes, on a caller-chosen
+  URL rather than a fixed host (round-2 salty review). It is deliberately not fixed here: stage 5 is a
+  hashed file with its own rotation and belongs to a fetch-path story; `read_bounded_body` is placed
+  in `pipeline/bounded_body.py` precisely so that story can adopt it without an import-direction
+  change. No sibling spec owns it yet — the epic wrapper's owner files it as a backlog item at the
+  close of this planning round, and this spec's Implementation Notes must not claim `/retrieve` is
+  covered.
 
 ## Assumptions
 
@@ -751,7 +973,12 @@ record.
   decoder (`_decoders.py:381-393`; neither `brotli`, `brotlicffi` nor `zstandard` is in `uv.lock`) —
   which is why Forage decodes for itself and refuses what it cannot decode.
 - `aiter_raw()` yields at most one transport read (~64 KiB) per chunk; the raw chunk is the only
-  allocation above the cap.
+  allocation above the cap; the raw budget is `4 × max_response_bytes` (a genuinely compressed body
+  under the decoded cap is essentially never larger than the cap raw, so the raw budget costs nothing
+  in legitimate traffic).
+- `zlib.decompressobj.flush(length)` sizes a buffer and does not cap its return; the bounded reader
+  never calls it (measured in round 2).
+- `Accept-Encoding: identity` is a new header on both clients; httpx's default is `gzip, deflate`.
 - The 1.3.0 contract window is open when this spec executes (spec 1 US-004 opened it) and spec 3
   US-003's `KNOWN_CONFIG_KEYS` registry exists.
 - The three wire pins are representative enough; they are kept as regression fixtures for later
@@ -767,6 +994,15 @@ record.
 - Golden movement: US-003 moves `contract/openapi.yaml` and the anchor but **not** the golden or the
   1.3.0 diff list (`/metrics` models are outside `_SCHEMA_MODELS`); US-004 moves the golden
   (`SearchRequest`), adds no field.
+- `read_bounded_body` lives in `pipeline/bounded_body.py` — a `pipeline/` module outside
+  `pipeline/search_providers/` and outside `_REVISION_SOURCES` — so both providers import inward from
+  `pipeline` as today and a later stage-5 story can import it without a provider package importing
+  outward.
+- `BraveSettings.max_response_bytes` (US-001, no config key) exists so the Brave byte-bound tests can
+  shrink the cap the way the SearXNG ones do; `_BRAVE_MAX_RESPONSE_BYTES` is its default.
+- The wall-clock budgets keep their default values and tighten in meaning; the tightening is
+  documented, the defaults are kept with the stated uncertainty (no fan-out latency distribution has
+  been measured), and the config rows tell operators of slow instances what to raise.
 - Settings precedent: `brave.py:193-275` (`BraveConfigurationError`, frozen `BraveSettings`,
   module-local `_bounded_int`, `brave_settings_from_config`) — `cache.py:244-267` and
   `pipeline/extraction_limits.py:79-106` are the other two copies; the fourth copy in `searxng.py`
@@ -886,6 +1122,26 @@ separately (round-1 salty review).
   not survive as a third.
 - The fourth module-local bounded-value copy follows the recorded precedent (`brave.py:231-233`); a
   shared helper module is noted for a later cleanup, not this spec.
+- Round 3 (R13 corrected): the reader never calls `flush()`; `eof` unset or a non-empty
+  `unconsumed_tail` at end of stream is `malformed_body`; raw bytes are bounded at 4× the decoded cap;
+  the decode observation seam is `tests/fakes.py::RecordingDecompressor` patched over
+  `pipeline.bounded_body.zlib.decompressobj` (a test-side wrapper, not a production hook — the
+  `wraps=` spy idiom at `tests/test_brave_provider.py:740-746` is the precedent).
+- Round 3: `make_response` is stream-backed; the two SearXNG double factories return real
+  `httpx.Response` objects; `tests/test_search_providers.py`'s local `_client_patch` is deleted in
+  favour of the promoted `client_patch`; the stage-5 helpers survive as single-line delegating
+  wrappers (shape (a)); the token walk is re-rooted at `_FIXTURES_DIR` with a `tiny_model/`
+  allowlist; `BraveSettings` gains `max_response_bytes`; the helper module is `pipeline/bounded_body.py`.
+- Overruled (round-2 salty review): dropping `Accept-Encoding: identity` to avoid SearXNG's
+  `http_accept_encoding` limiter rule — R13 (corrected) keeps the header on both clients; the
+  limiter is off in the shipped image, the interaction is documented beside the existing limiter
+  caveat, and a limiter-enabled instance already refuses curl the same way.
+- Overruled (R37 corrected): the round-2 three-way split of US-003 (bodies / wall-clock budget /
+  counter) and the pin-corpus split of US-005 into a US-008 — already litigated; single concern each
+  at size L; the first-commit ordering inside US-005 gives the same fallback state.
+- The all-paid-chain 200→422 is recorded in GOVERNANCE as an expedited security-tightening MINOR on
+  the one-paid-name reachability argument (round-2 completionist and salty reviews), not ridden on a
+  docstring line.
 
 ## Clarifications
 
@@ -916,6 +1172,20 @@ separately (round-1 salty review).
   own arm before the catch-all; `httpx.TimeoutException` keeps its arm.
 - Q: What happens on an all-paid chain with a later-paid-only selection? → A: The existing policy
   422; named in the docstring line and pinned.
+
+### Session 2026-09-19 (validation round 3)
+- Rulings applied: R13 (corrected — no `flush()`, `unconsumed_tail` drained, `eof` rule, raw bytes
+  bounded at 4×, `Accept-Encoding: identity` as an admitted new header with the SearXNG-limiter
+  interaction documented, stream-backed `make_response`, real `httpx.Response` SearXNG doubles,
+  `_ServedChain` fields, counter on every outcome, GOVERNANCE classification for the all-paid 422),
+  R37 (corrected — no further splits), R39, R40, R41 (every fixture named carries its expected token
+  and, where it matters, its arithmetic), ruling 6 (five sites).
+- Q: How is "largest decoded output" observed? → A: `RecordingDecompressor` patched over the helper's
+  `zlib.decompressobj`; `ChunkStream.largest_chunk` is the raw side only.
+- Q: Does the flip on an all-paid chain need a GOVERNANCE ruling? → A: Yes — recorded as an expedited
+  security-tightening MINOR on the reachability argument, with the T3.1 note.
+- Q: Where does the bounded-body helper live? → A: `pipeline/bounded_body.py`, so stage 5 can adopt it
+  in a later story; stage 5's own counter is named in Out of Scope.
 
 ## Open Questions
 
