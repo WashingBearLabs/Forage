@@ -1248,22 +1248,22 @@ moves are a description and a bound, which `_added_paths` cannot see — R36 cor
   as the search epic's US-004 did, and record one rotation at the five sites.
 
 **Acceptance Criteria:**
-- [ ] `pipeline/contract.py` `CONTRACT_VERSION == "1.3.0"`; the docstring carries one `* ``1.3.0``
+- [x] `pipeline/contract.py` `CONTRACT_VERSION == "1.3.0"`; the docstring carries one `* ``1.3.0``
       — …` bullet (two-space continuation lines, no blank line) naming `blocked_url`, the `engine`
       bound (all four moves) and US-001's served-text derivation as additive changes;
       `tests/test_ci_workflow.py::
       test_the_current_contract_version_has_a_docstring_entry` passes.
-- [ ] `pipeline/contract.py` defines `OMIT_BLOCKED_URL = "blocked_url"` beside the existing `OMIT_*`
+- [x] `pipeline/contract.py` defines `OMIT_BLOCKED_URL = "blocked_url"` beside the existing `OMIT_*`
       constants and includes it in `OMISSION_REASONS`; `models.py`'s `omitted_by_reason` description
       names five keys with `blocked_url` added in 1.3.0; `tests/test_contract_errors.py::
       test_degraded_reasons_and_dict_vocabularies_are_documented` passes.
-- [ ] Window mechanics (R36): the `* ``1.3.0`` — …` docstring entry carries this story's lines;
+- [x] Window mechanics (R36): the `* ``1.3.0`` — …` docstring entry carries this story's lines;
       `uv run python -m scripts.export_contract` run and its three files committed together;
       `tests/golden/contract_1_3_0.json` created via `_SCHEMA_MODELS`; `_EXPECTED_ONE_THREE_ZERO_DIFF` is opened **empty** in
       `tests/test_contract_schema.py` with its explanatory comment and its sweep test exists and
       passes on the empty set (R36 corrected — this story appends nothing); the four
       `_ANCHOR_QUOTING_PAGES` refreshed; `uv run python -m scripts.export_contract --check` green.
-- [ ] `tests/golden/contract_1_3_0.json` pins `blocked_url` in the `omitted_by_reason` description
+- [x] `tests/golden/contract_1_3_0.json` pins `blocked_url` in the `omitted_by_reason` description
       and `maxLength: 64` on `SearchResult.engine`; `tests/golden/contract_1_2_0.json` and every older
       golden byte-identical to `main`; all six `_GOLDEN_PATH` readers except
       `test_contract_schema_matches_golden` are pinned to the literal `contract_1_2_0.json`; the
@@ -1271,17 +1271,17 @@ moves are a description and a bound, which `_added_paths` cannot see — R36 cor
       `_ONE_THREE_ZERO_DIFFED_SCHEMAS` lists all six `_SCHEMA_MODELS` entries;
       `test_contract_schema_matches_golden` is the test that pins the `omitted_by_reason`
       description, the `domain` description and `maxLength: 64` against the re-created golden.
-- [ ] `_MAX_SEARCH_ENGINE_LENGTH = 64` exists in the cap block; `SearchResult.engine` carries
+- [x] `_MAX_SEARCH_ENGINE_LENGTH = 64` exists in the cap block; `SearchResult.engine` carries
       `max_length=64`; a 300-character provider `engine` reaches the wire as 64 characters after
       normalisation; `"duck\x01duck  go\n"` reaches the wire as `duckduck go`; `""` and `"  "`
       reach the wire as `None` (today `""` ships as `""` — pinned as the changed value); a
       non-string is `None`; the docstring line and ruling (e) name the four moves.
-- [ ] The four `_ANCHOR_QUOTING_PAGES` quote the new anchor and `tests/test_governance_docs.py`
+- [x] The four `_ANCHOR_QUOTING_PAGES` quote the new anchor and `tests/test_governance_docs.py`
       passes with the new version string; `docs/releases.md`'s `v1.1.0` block still quotes
       `11435a17…` (`grep -c '11435a17' docs/releases.md` is at least 1 — scoped to that file; 1
       today, verified) and its "What has to be green first" section carries the open-window line
       (`grep -n '_EXPECTED_ONE_THREE_ZERO_DIFF' docs/releases.md` hits).
-- [ ] `kit_tools/arch/SECURITY.md:356`'s `engine` row is amended (provider-controlled, bounded and
+- [x] `kit_tools/arch/SECURITY.md:356`'s `engine` row is amended (provider-controlled, bounded and
       normalised in 1.3.0; still not scanned or classified, the residual stated as up to 64
       unscanned model-visible characters per result, 2 304 per response with
       `unresponsive_engines`) and names `unresponsive_engines` beside it, not deleted;
@@ -1291,11 +1291,11 @@ moves are a description and a bound, which `_added_paths` cannot see — R36 cor
       grep (path set above, run at story start with the count recorded) returns zero
       current-version `1.2.0` hits, every remaining hit classified as history in Implementation
       Notes.
-- [ ] `sanitizer_revision` rotation measured (revert `contract.py` and `orchestrator.py` each in
+- [x] `sanitizer_revision` rotation measured (revert `contract.py` and `orchestrator.py` each in
       turn, both-reverted control) and recorded at the five sites.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ## Edge Cases
 
