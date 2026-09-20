@@ -41,7 +41,12 @@ proven on the records that motivated the epic.
   every route its `surface` targets by one call — with no network, no weights and no `run_promptguard`
   mock (the classifier double sits below stage 3, not above it).
 - A cassette miss is a hard error that names the record id, route, rule config, model identity and
-  text hash — never a default score (ruling 10; landscape finding 14).
+  text hash — never a default score **in any gated run** (ruling 10; landscape finding 14). The one
+  exception is the explicitly test-only `fallback=` argument, which exists so a test can drive a
+  record with no cassette at all (`fallback=0.0` for the structural-only measurement); it is never
+  set in the CI gate, and a test asserts the gate's entry point passes `fallback=None`. *(Clarified
+  2026-09-19, validation round 1 — this goal read as an absolute that the spec's own escape hatch
+  contradicted.)*
 - The four outcomes are computed from the wire body alone; a record's payload text never appears in
   a test name, an assertion message, a log line or a report line (ruling 8; finding 16).
 - The seed set pins the two audit bypasses (-016, -032) as `blocked` on `/search` and covers every
@@ -90,8 +95,16 @@ offending value.
   (may be empty; where JSON-LD / OG / meta carriers go), `body_html`; `text` → `filename`, `text`),
   `marker` (attack only: a verbatim substring, ≥ 12 characters, no newline, that must not reach the
   wire — compared after NFC, case-fold and whitespace-run collapse on both sides), `pinned` (`null`
-  or a non-empty list drawn from `blocked` / `flagged` / `neutralised`: the outcomes acceptable on
-  **every** applicable route), `pinned_reason` (required iff `pinned`), `source` (`kind`:
+  or a non-empty list drawn from `blocked` / `flagged` / `neutralised` / `clean`: the outcomes
+  acceptable on **every** applicable route), `pinned_reason` (required iff `pinned`).
+  **`pinned` is how a benign record declares a non-`clean` expectation, too** — a `news` record the
+  triage step tagged with `params.variant` because its text trips a stage-2 regex carries
+  `pinned: ["flagged", "blocked"]` with `pinned_reason` naming the regex, and untagged benign records
+  carry no `pinned` and are asserted `clean` by a generic test. The semantics are unchanged in both
+  cases — "these are the acceptable outcomes; a change here is a regression to look at" — so no new
+  field is needed and `clean` joins the vocabulary. *(Added 2026-09-19, validation round 3: spec 3's
+  round-2 "every record's outcome equals the outcome its record declares" named no field to hold the
+  declaration.)* `source` (`kind`:
   `synthetic` | `owned` | `third_party`; `name`; `url`; `licence` (SPDX id or `n/a`); `revision`
   (commit SHA or dataset revision, required for `third_party`); `record_ref`; `framing`:
   `indirect` | `rehomed_direct` — finding 13), `lang` (BCP-47), `params` (object; allowed keys per
@@ -99,18 +112,39 @@ offending value.
   values), `notes`.
 - **Lint rules** (each a named function; the test parametrises over them): unique ids; prefix
   matches `kind`; category in the vocabulary for the kind; surface-specific payload keys exactly;
-  `marker` present iff attack, and a normalised substring of at least one payload text field;
+  `marker` present iff attack, and a substring of at least one payload text field **under the same
+  normalisation the leak check uses** (`pipeline.stage1_extraction.normalize_text` + `casefold`, and
+  compared against the post-pipeline form — see US-002's leak-check bullet; the lint imports that one
+  helper rather than defining its own). *(Corrected 2026-09-19, validation round 3: this rule said
+  only "normalised", and a reader would implement the obvious NFC+casefold+`\s+` version — which
+  strips no invisibles and would therefore **reject** the very `zwsp` record US-002's acceptance
+  criteria require, since its marker matches the payload only after the invisible-strip. One
+  normalisation, one helper, both ends.)*
   `pinned` ⇒ `pinned_reason`; every URL (in `payload.url` and any `href` / `src` / `content=`
   attribute value inside `head_html` / `body_html`) has a host under RFC 2606 (`example.com`,
   `example.net`, `example.org`, `*.example`, `*.test`, `*.invalid`, `*.localhost` excluded because
-  `url_validator` rejects it) or is a `data:` / `javascript:` scheme the `suspicious_url` category
-  needs — ruling 8, finding 16; **secret shapes**: no substring matching `hf_[A-Za-z0-9]{20,}`,
+  `url_validator` rejects it), **or** is one of the two declared non-host exceptions below — ruling 8,
+  finding 16.
+  **The two exceptions are keyed on the record declaring them, not on a category** (corrected
+  2026-09-19, validation round 1: both were written as carve-outs for the `suspicious_url`
+  *attack* category, which a benign record can never hold — so spec 3's `data:image/png` inline icon,
+  its `data:image/svg+xml` favicon, its `javascript:void(0)` accessibility note and both specs'
+  private-IP probes were unlintable by construction):
+  (a) a `data:` or `javascript:` scheme URL, permitted when the record sets `params.url_exception:
+  "scheme"`; (b) an RFC 1918 literal host (`10.*`, `172.16-31.*`, `192.168.*`), permitted when the
+  record sets `params.url_exception: "private_ip"` — these are the private-IP probes both the
+  `suspicious_url` attack category and the `over_defence_probe` benign genre need, and an RFC 1918
+  literal is not an RFC 2606 reserved name so the host rule alone would reject it. Both exceptions
+  are in the `params` allowlist for every category and genre, a test covers one record of each kind
+  using each exception, and a record that uses a `data:`/`javascript:`/private-IP URL **without**
+  declaring the exception still fails the lint; **secret shapes**: no substring matching `hf_[A-Za-z0-9]{20,}`,
   `ghp_[A-Za-z0-9]{20,}`, `github_pat_[A-Za-z0-9_]{20,}`, `sk-[A-Za-z0-9]{20,}`,
   `AKIA[0-9A-Z]{16}`, `xox[abprs]-[A-Za-z0-9-]{10,}`, `-----BEGIN [A-Z ]*PRIVATE KEY-----`, or the
   generic shape `(?i)(api[_-]?key|secret|token|password)\s*[:=]\s*['"]?[A-Za-z0-9_\-]{16,}` — and
   exfil bait uses the documented fake prefix `FAKEKEY-` with a body of at most 8 characters
-  (finding 12; the same rule set is what CI's full-history `gitleaks` would trip on, and
-  `.gitleaksignore` gains no entry); sizes: `search` fields within the orchestrator caps (title ≤ 512,
+  (finding 12; **this lint is the only automated gate on corpus secret shapes** — CI runs no
+  `gitleaks` job, see the corrected Refinement Note below — and `.gitleaksignore` gains no entry);
+  sizes: `search` fields within the orchestrator caps (title ≤ 512,
   url ≤ 2 048, content ≤ 2 000 characters — `pipeline/orchestrator.py:583-585` at HEAD; re-read
   after hardening spec 1), `page` HTML ≤ 200 000 bytes, `text` ≤ 114 688 characters (the classifiable
   ceiling, `docs/configuration.md:487`); `lang` parses as a BCP-47 tag (`[a-z]{2,3}(-[A-Za-z0-9]{2,8})*`);
@@ -120,9 +154,22 @@ offending value.
   2, 3); `params` keys are allowed for the category.
 - **Negative control** (finding 12): a test feeds each secret regex a real-shaped value and asserts
   the lint rejects it — the lint cannot be silently off.
+- **The `params` key allowlist covers all 25 vocabulary members — 16 attack categories and 9 benign
+  genres** (corrected 2026-09-19, validation round 1). An earlier draft scoped the allowlist per
+  *category* only, and no story extended it to the genres, so every benign record carrying
+  `params.variant` or `params.windows_min` would have failed the allowlist rule on day one. Related:
+  `params.variant` is **one** closed vocabulary shared by both kinds and its meaning is keyed on
+  `kind` — for `kind == "attack"` it names an obfuscation transform (`plain`, `case`, `entity`,
+  `zwsp`, `split_tags`, `url_*`, `title_field`, `second_paragraph`, spec 2 US-001); for
+  `kind == "benign"` it names the `STAGE2_REGEX_NAMES` member a record deliberately trips (spec 3
+  US-001). The lint validates `variant` against the vocabulary its `kind` selects; a test covers one
+  record of each kind and one cross-kind value that must be rejected.
 - **Count floors** (ruling 14) live in `scripts/corpus/vocab.py` as `MIN_RECORDS` constants; the
-  lint test asserting them is written now but **skips with a reason** until spec 3 lands (the
-  floors are asserted from spec 5 US-002 on; the skip is removed there).
+  lint test asserting them is written now but **skips with the reason `"asserted from spec 5
+  US-002"`**, and **spec 5 US-002 is the one story that removes the skip**. *(Corrected 2026-09-19,
+  validation round 1: this bullet said the skip lasts "until spec 3 lands" while the acceptance
+  criterion, the Edge Cases entry and spec 5 all say spec 5 US-002. Spec 5 is right — the corpus is
+  not complete until spec 3's benign genres are in, and the floors cover both kinds.)*
 - **Payload never printed.** Lint failures raise `CorpusLintError(record_id, rule)`; its `__str__`
   is `f"{record_id}: {rule}"` and a test asserts that a failing record's payload substring is absent
   from the message.
@@ -134,9 +181,30 @@ offending value.
       pins it), `load_corpus(root)`, `lint_corpus(records) -> list[CorpusLintError]`, and
       `CorpusLintError(record_id, rule)` whose message carries the id and rule only.
 - [ ] `scripts/corpus/vocab.py` holds the 16 attack categories, 9 benign genres, 3 surfaces, the
-      surface → payload-key map, the `params` key allowlist per category, the permitted
-      third-party licence ids, the RFC 2606 host rule, the secret-shape regexes, the size caps and
-      the `MIN_RECORDS` floors — each as a typed constant with a one-line comment naming its ruling.
+      surface → payload-key map, the `params` key allowlist **per category and per genre** (see the
+      note below), the permitted third-party licence ids, the RFC 2606 host rule, the secret-shape
+      regexes, the size caps and the `MIN_RECORDS` floors — each as a typed constant with a one-line
+      comment naming its ruling.
+- [ ] `scripts/corpus/vocab.py` also holds **`STAGE2_REGEX_NAMES`**: the closed, ordered tuple of
+      human names for the compiled patterns in `pipeline/stage2_structural.py` (24 at HEAD, by
+      `_PATTERNS`), plus `STAGE2_REGEX_PROBES` mapping each name to the literal fixture substring
+      that provokes it, and **`STAGE2_REGEX_NO_BENIGN`** — the three names exempt from spec 3's
+      ≥ 2-benign-records floor because they match Forage/Poppy-internal tokens that cannot occur in
+      real external text (`[poppy]`, `^POPPY:`, the `envelope_breakout` pattern). A test asserts
+      `len(STAGE2_REGEX_NAMES) == len(_PATTERNS)` so the tuple cannot silently fall behind the
+      scanner, and a second asserts `STAGE2_REGEX_NO_BENIGN` is exactly those three so a fourth
+      exemption cannot be added quietly. *(Added 2026-09-19, validation round 1: spec 3 US-004
+      invented this constant inside a P2 benign story, which made a shared vocabulary a side effect
+      of one genre's coverage test. `vocab.py` is spec 1's deliverable and the single source of every
+      closed vocabulary — it belongs here, and spec 2's `notes` convention and spec 3's coverage test
+      both read it.)*
+- [ ] Per-pattern identification is done by **probe literal**, not by the public `category` field: a
+      helper `stage2_hits(text) -> frozenset[str]` in `scripts/corpus/vocab.py` maps a
+      `scan_structural` result back to regex names by matching `FlaggedSpan.matched_text` against
+      `STAGE2_REGEX_PROBES`. `FlaggedSpan.category` carries only 7 coarse values
+      (`instruction_override`, `authority_impersonation`, `encoded_payload`, `prompt_boundary`,
+      `suspicious_url`, `exfil_beacon`, `envelope_breakout`), so it cannot distinguish `[SYSTEM]`
+      from `<system>` from `---INSTRUCTIONS---`; spec 3's coverage test uses this helper.
 - [ ] `tests/test_corpus_lint.py` parametrises every lint rule with a failing record and asserts the
       rule name in the error, the payload absent from the error text, and the seed corpus (US-003)
       lint-clean; the negative-control test covers every secret regex; the `MIN_RECORDS` test exists
@@ -169,8 +237,10 @@ stage-3 text, `drive(record, classifier, config="default")` returns `blocked` wi
 when it is 0.6, and — for a benign record — `clean` when it is 0.1; a `page` record whose `marker`
 survives to `body` with no flag returns `leaked`, and the same record with the marker only inside a
 stripped `<script type="application/ld+json">` returns `neutralised`; an unseeded text raises
-`UnrecordedTextError` whose message names the record id, route, config, model id and the sha256
-prefix and not the text; every request goes through `httpx.ASGITransport` and the socket guard stays
+`UnrecordedRecordError` whose message names the record id, route, config, model id and the sha256
+prefix and not the text (the classifier-level `UnrecordedTextError(sha256_hex, chars)` carries only
+what the classifier can know — the driver re-raises it with the record context, as Technical
+Considerations describes; corrected 2026-09-19, validation round 1); every request goes through `httpx.ASGITransport` and the socket guard stays
 green.
 
 **Implementation Hints:**
@@ -188,7 +258,26 @@ green.
   A miss raises `UnrecordedTextError(sha256_hex, chars)`; the driver re-raises it as
   `UnrecordedRecordError(record_id, route, config, model_id, sha_prefix)` — neither carries text.
 - **Booting the app** (ruling 15): `scripts/corpus/drivers.py::corpus_app(*, classifier, config:
-  RuleConfig)` is an async context manager that (a) monkeypatches `retrieval_app._load_config`
+  RuleConfig)` is an async context manager, and it is **the public home of a helper that already
+  exists privately**. `tests/test_app.py:796-812`'s `_running_app` is a fixture-free async context
+  manager that boots the lifespan and yields a client — the same shape, and the model to follow.
+  Write `corpus_app` here as the public helper, borrowing that structure; do **not** import
+  `_running_app` from `scripts/`.
+  **Do not migrate `tests/test_app.py` to it.** `corpus_app` unconditionally stubs
+  `model_fetcher.acquire_and_load` (that is its whole point — a drive must never fetch weights), and
+  `_running_app`'s ~24 call sites include tests that exercise the real acquisition path through the
+  real lifespan — `test_the_lifespan_calls_the_fetcher_off_the_event_loop` (`:1162-1185`),
+  `test_promptguard_loaded_flips_without_a_restart`,
+  `test_a_credential_less_boot_stays_degraded_and_says_so_once` — which a universal swap would
+  silently defeat. `_running_app` stays as it is. The repo already keeps
+  `_started_with_valkey_url` (`:1268-1295`) as a separate helper for the stub-and-install shape,
+  which is the precedent: these are two boot recipes, not one. *(Corrected 2026-09-19, validation
+  round 3 — round 2's wording mandated the migration.)* *(Corrected 2026-09-19,
+  validation round 2: round 1 said to reuse `_running_app` in place, but it is a leading-underscore
+  module-private symbol and `pyproject.toml:109-129` relaxes `reportPrivateUsage` only for the
+  `root = "tests"` execution environment — `scripts/corpus/drivers.py` sits in the default `root = "."`
+  environment, so importing it would fail this story's own "`uv run pyright` passes" criterion. The
+  dependency direction matters too: tests may import from `scripts/`, not the reverse.)* It (a) monkeypatches `retrieval_app._load_config`
   (`retrieval_app.py:330`) to return the real `config.yaml` dict plus `{"extract_route_enabled": True}`
   and, for `config == "contiguity"`, `{"promptguard_contiguity_windows": 2,
   "promptguard_contiguity_threshold": 0.5}` (hardening spec 7's enabling recipe; keys validated at
@@ -233,14 +322,70 @@ green.
   Outcome rules as `/retrieve` over `ExtractedContent` (`models.py:159-`).
 - **Route map**: `search` → `/search`; `page` → `/retrieve`; `text` → `/extract`. One record, one
   route. (An `also_text` convenience was considered and rejected: two surfaces are two records.)
+- **`flagged` is route-asymmetric by wire construction — outcomes are never compared across routes**
+  (added 2026-09-19, validation round 1). On `/search` the orchestrator sets `suspicious = True`
+  whenever `pg_result.score > 0.5` (`pipeline/orchestrator.py:1045-1047`), so a sub-threshold score
+  surfaces on the wire. On `/retrieve` and `/extract` there is no sub-threshold signal at all:
+  `run_promptguard` returns `Stage3Verdict.SAFE` with `flagged_chunks=[]` at or below 0.85,
+  `_derive_promptguard_state` returns `"scanned"`, `structural_flags` is empty and `trust_score`
+  takes no stage-3 penalty. The same payload replayed at 0.6 is therefore `flagged` on `/search` and
+  `leaked` on `/retrieve` — a difference in what the API exposes, not in what the defence caught.
+  Consequences, binding on specs 4 and 5: (a) floors stay **per category × route** (ruling 12) and
+  are read within a route only; (b) any cross-route comparison — including spec 5 US-004's
+  86M-vs-22M and contiguity-on/off decision tables — is computed on the **recorded window scores**,
+  never on the derived outcome. `signals["score"]` (the max) suffices for the 86M-vs-22M comparison
+  but **not** for contiguity, which is a predicate over the *sequence* of window scores (N
+  consecutive windows above a threshold) and cannot be evaluated from a scalar — so `signals` carries
+  `window_scores`, the full replayed list, and the contiguity table is computed from that.
+  *(Corrected 2026-09-19, validation round 2: round 1's rule bound the contiguity table to a scalar
+  no pooler can use.)* (c) spec 5's report states this asymmetry
+  in-line wherever a per-route column appears, so a reader does not mistake it for `/retrieve` being
+  the weaker route.
 - **Outcome model** (`scripts/corpus/outcomes.py`): `Outcome = Literal["blocked", "flagged",
   "neutralised", "leaked", "clean"]`; `RouteResult(record_id, route, config, model_id, outcome,
   signals)` where `signals` is a frozen mapping of `omit_reason`, `suspicious`, `structural_flags`,
   `injection_detected`, `promptguard_state`, `rule` (`PromptGuardResult.rule` is not on the wire —
   read `injection_spans` count only; the report's `rule` column comes from the replay classifier's
-  call log, spec 5), `score` (max of the replayed windows), `windows`, `status_code`. **Leak check**:
-  walk the JSON body, collect every string except values under a key named `injection_spans`
-  (ruling 9), normalise (NFC → casefold → collapse `\s+` to one space) and test `marker in text`.
+  call log, spec 5), `score` (max of the replayed windows), **`window_scores`** (the full replayed
+  list — the contiguity table needs the sequence, not the max), `windows`, `status_code`,
+  **`marker_on_wire`** (below).
+- **Leak check** (corrected 2026-09-19, validation round 1 — three separate defects, all in the
+  flattering direction):
+  - **It runs on every drive, not only in the `else` branch.** Walk the JSON body, collect every
+    string except values under a key named `injection_spans` (ruling 9), normalise (below) and test
+    `marker in text`; store the boolean as `signals["marker_on_wire"]` **before** the outcome is
+    decided. The four-way outcome is unchanged (floors keep their meaning), but a `blocked` result
+    that still put the marker on the wire is now visible. This matters because a blocked response is
+    not marker-free: `finalize_quarantine` (`pipeline/stage4_structuring.py:178-211`) replaces only
+    `body` and `injection_spans` — it passes `title=result.title` through verbatim — and
+    `build_retrieved_content` adds `source_url`, `final_url`, `domain` and `redirect_chain`
+    independently of the sanitization result. A `title_stuffing` record (and `hidden_markup`
+    generally) is therefore `blocked` *and* leaking, which the pre-correction model scored as an
+    unqualified success. Spec 5's report carries a **blocked-but-leaked** column sourced from this
+    signal, and the epic's "any bypass the corpus surfaces is filed" criterion covers it.
+  - **The normaliser must match what the pipeline already did to the text — so it calls the
+    pipeline's own function rather than re-deriving it.** `pipeline/stage1_extraction.py` exports a
+    **public** `normalize_text(text)` (the wrapper over `_normalize_text`): NFC, then delete every
+    member of `_INVISIBLE_CHARS`, then collapse whitespace. The leak check applies
+    `normalize_text()` and then `casefold()` to **both** the marker and the wire text, and does not
+    enumerate codepoints anywhere. *(Corrected 2026-09-19, validation round 2 — round 1's correction
+    listed five codepoints where `_INVISIBLE_CHARS` (`stage1_extraction.py:53-67`) holds **nine**:
+    U+200B, U+200C, U+200D, U+200E (LRM), U+200F (RLM), U+202E (RLO), U+FEFF, U+2060 (word joiner),
+    U+00AD. The four omitted include RLO and the word joiner, both standard injection obfuscations,
+    so a hand-maintained list was wrong within one round of being written and would drift again.
+    Calling the public function makes the match true by construction; a test asserts the corpus
+    normaliser and `normalize_text` strip the same set by feeding one string containing all nine.)*
+    Python's `\s` matches none of the invisibles, which is why `collapse \s+` alone was never
+    sufficient. Without the invisible-strip, every `zwsp` / `entity` /
+    `split_tags` variant whose marker overlaps the obfuscated token can never match: BeautifulSoup
+    decodes entities during parsing and `get_text` rejoins split tags, so the wire text is already
+    de-obfuscated while the authored marker is not. Those records would score `neutralised` while
+    the payload reached the consumer intact.
+  - **A marker must survive its own variant** — lint rule, spec 2 US-001 authors to it: for every
+    record, the normalised marker is a substring of the normalised *post-pipeline* form of its
+    payload, not merely of the raw payload. A per-variant test (`plain`, `case`, `entity`, `zwsp`,
+    `split_tags`, `url_*`, `title_field`, `second_paragraph`) drives one record and asserts the leak
+    check sees the marker when the payload genuinely arrives.
 - **Never print payload**: `RouteResult.__repr__` prints ids and signals only; a test drives a record
   whose marker is a unique sentinel and asserts the sentinel is absent from `repr(result)`, from the
   `UnrecordedRecordError` message and from pytest's captured output of a failing assertion written
@@ -266,6 +411,20 @@ green.
       prefix; a test asserts the payload is absent from its message.
 - [ ] The leak check ignores `injection_spans` and nothing else; a test with the marker present only
       in `injection_spans` yields `blocked`, not `leaked`.
+- [ ] The leak check runs on **every** drive and `signals["marker_on_wire"]` is set independently of
+      the outcome: a `page` record whose payload sits in the document title is driven through
+      `/retrieve`, and the test asserts `outcome == "blocked"` **and** `marker_on_wire is True`
+      (`finalize_quarantine` passes `title` through verbatim).
+- [ ] The leak-check normaliser is `pipeline.stage1_extraction.normalize_text` + `casefold`, applied
+      to both marker and wire text, with no codepoint list of its own; a test feeds a string holding
+      all nine `_INVISIBLE_CHARS` members and asserts the corpus normaliser and `normalize_text`
+      agree. A second test drives a `zwsp`-variant record whose marker spans the obfuscated token and
+      asserts the leak is seen (it is `leaked`, not `neutralised`).
+- [ ] A per-variant test asserts every obfuscation variant's marker survives its own transform —
+      the normalised marker is a substring of the normalised post-pipeline payload.
+- [ ] A test asserts the gate's entry point passes `fallback=None` — the promise Goal 2 makes about
+      the test-only `fallback` escape hatch, which round 1 stated without giving it a home. It lives
+      here because spec 1 owns `ReplayClassifier`; spec 5 US-002's gate is what it reads.
 - [ ] A test asserts that with `classifier=None` (the unavailable path) the driver still returns a
       `RouteResult` (`blocked` via `promptguard_unavailable` / `unavailable_blocked` under fail-closed)
       so the structural-only measurement is possible without a cassette.
@@ -412,6 +571,35 @@ lint-clean.
   (`validate_url` call), `:583-585` (search caps), `:665-668` (stage-3 join), `:964-1060` (search loop
   and omit reasons). Re-grep before writing hints into code comments.
 
+### Validation residue — closed at `needs-work` (2026-09-19, `/kit-tools:validate-epic`, 3 rounds)
+
+Thirty reviewers over three rounds took this epic from 19 criticals to 0 open; the items below are
+the warnings that remained when validation was deliberately closed rather than chased to zero — the
+same call, for the same reason, that `epic-forage-hardening` recorded on the same day: the precision
+reviewers surface a new layer every round, and **every code anchor in this spec predates eight
+unexecuted hardening specs** (ruling 5), so precision spent now is precision spent twice. Re-verify
+against the post-hardening tree at execution time; treat each item as a decision the implementer
+makes deliberately, not a defect to discover.
+
+- **US-002 is oversized** — five separable jobs (the `ReplayClassifier` stand-in, the `corpus_app`
+  boot harness, three route drivers, the outcome model, the leak check). Flagged every round by two
+  reviewers. Splitting was deferred rather than declined: if execution times out, split on those
+  seams, and note the drivers share nothing but the boot helper.
+- **`RouteResult.signals` is an eleven-key heterogeneous frozen mapping** (`str`, `bool`, `float`,
+  `list[float]`, `list[str]`, `int`). Under strict pyright a `TypedDict` types it properly; a bare
+  `Mapping[str, object]` will push `cast` calls into every consumer in spec 5.
+- **Normalising both sides can create false *positives*.** `normalize_text` + `casefold` is right for
+  finding a marker through an obfuscated carrier, but two texts that differ only in invisibles or
+  case now compare equal. The per-variant test is the guard; a marker chosen from distinctive prose
+  rather than a short common phrase is the other half.
+- **`window_scores` duplicates what the cassette already holds.** Spec 5 must read the signal, not
+  re-derive the list from the cassette, or the two can disagree silently.
+- **The payload-never-printed invariant (ruling 8) rests on targeted unit tests**, not a structural
+  lint. As the corpus grows across specs 2-5 nothing mechanically stops a new test from formatting a
+  payload into an assertion message.
+- All three stories are `P1` with no differentiation, and the lint's key-order rule does not say
+  whether it reaches nested objects.
+
 ## Related Documentation
 
 - Architecture: [CODE_ARCH.md](../arch/CODE_ARCH.md)
@@ -465,10 +653,23 @@ attacker domain; the socket guard protects pytest only.
 https://www.zscaler.com/blogs/security-research/indirect-prompt-injection-web-content-targets-ai-agents).
 
 **Decision:** Secret-shape lint with a fake exfil prefix and a negative control; no `.gitleaksignore`
-entry and no path allowlist, ever.
-**Rationale:** CI runs a full-history `gitleaks` scan; a committed false positive is permanent and a
-path allowlist over `tests/` switches the scanner off where keys get pasted.
-**Source:** `.github/workflows/ci.yml:474-560`; `.gitleaksignore`; landscape finding 12
+entry and no path allowlist, ever. **The corpus lint is the only automated gate** — nothing else in
+CI scans corpus files for secrets.
+**Rationale (corrected 2026-09-19, validation round 1):** an earlier draft of this note said "CI runs
+a full-history `gitleaks` scan" and cited `.github/workflows/ci.yml:474-560`. That is false. That line
+range is the `secret-grep` job: it runs `docker history --no-trunc` over the **built image's layer
+history** and greps three literals (`HF_TOKEN`, `hf_[A-Za-z0-9]{20,}`, `FORAGE_BRAVE_API_KEY`). It
+never reads a repository file, so it cannot see `tests/corpus/*.jsonl` at all. The real full-history
+`gitleaks` run was a **one-time, owner-run, local** action at the public-flip gate — `.gitleaksignore`'s
+header calls it "the full-history secret scan (US-008 gate b)", `docs/bootstrap-notes.md:548` records
+it, and `docs/bootstrap-scan.txt` is dated 2026-09-07. There is one workflow file, no `schedule:`
+trigger, and `gitleaks` appears in `ci.yml` only inside a comment. Owner decision (2026-09-19): correct
+the claim, do **not** add a gitleaks CI job in this epic — the lint's secret-shape rules stand alone,
+and a reviewer must not believe a safety net exists that does not. The `.gitleaksignore`/allowlist
+prohibition stands on its own merit: a committed false positive is permanent, and a path allowlist over
+`tests/` would switch the scanner off for the next operator who does run it locally.
+**Source:** `.github/workflows/ci.yml:474-560` (read 2026-09-19 — `secret-grep`, image layers only);
+`.gitleaksignore`; `docs/bootstrap-notes.md:548`; `docs/bootstrap-scan.txt`; landscape finding 12
 (https://devopsaitoolkit.com/blog/gitleaks-tuning-precision/ — `search_snippet`, lead only).
 
 **Decision:** Sixteen attack categories and nine benign genres, closed.

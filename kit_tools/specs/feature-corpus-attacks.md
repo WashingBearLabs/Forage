@@ -81,6 +81,19 @@ outcomes are recorded (not asserted) in the story's Implementation Notes as a co
   `second_paragraph` (`search` content with the trigger after `\n\n`), `url_query`, `url_path`,
   `title_field`. Not every variant applies to every category (e.g. `url_*` for `envelope_breakout`,
   `suspicious_url`, `url_borne_envelope`); the lint's `params` allowlist admits `variant` for all nine.
+- **The `marker` must survive its own variant** (added 2026-09-19, validation round 1 — this was a
+  leak-check false negative in the flattering direction). A record's `marker` is compared against the
+  wire text *after the pipeline has already de-obfuscated it*: `pipeline/stage1_extraction.py:92-110`
+  deletes U+200B / U+200C / U+200D / U+FEFF / U+00AD outright, BeautifulSoup decodes HTML entities
+  during parsing, and `get_text` rejoins `split_tags` markup. An authored marker that overlaps the
+  obfuscated token therefore never matches the wire text, and the record scores `neutralised` while
+  the payload arrived intact. Two rules, both enforced by spec 1's lint: (a) the normalised marker
+  must be a substring of the **post-pipeline** form of its payload, not merely of the raw payload;
+  (b) in practice, choose the marker from a stretch of payload the variant does not touch — the
+  obfuscation belongs on the trigger token, the marker on the sentence around it. Spec 1's
+  per-variant test is the backstop. The Edge Cases entry about an `entity` variant that stage 1
+  decodes one level is about a route-dependent *outcome* difference and is a separate matter from
+  this.
 - Surfaces: ≥ 3 `search`, ≥ 3 `page`, ≥ 2 `text` per category so each route sees each family.
 - **Pins**: only `plain` variants of the three BLOCK categories and of `line_anchored_role` /
   `url_borne_envelope` are `pinned: ["blocked"]` (`pinned_reason: "stage-2 regex, deterministic"` /
@@ -188,15 +201,33 @@ the filler text's provenance records a public-domain source with `LicenseRef-Pub
   would catch.
 - `boundary_straddle` (`params.placement`: `split_448`, `split_896`, `split_1344` — the payload's two
   halves straddle the named step boundary; `windows_min` ≥ 2): ≥ 10 records, `page` and `text`.
+- **Sweep bases must be stage-2-clean — stage 3 does not run when stage 2 blocks.**
+  `pipeline/orchestrator.py:181-188` skips `run_promptguard` entirely on a BLOCKED verdict
+  (`skip_reason="structural_block"`), and the `/search` loop at `:997-1014` `continue`s past the
+  classifier. A record carrying a BLOCK-category trigger therefore produces **no classifier call, no
+  cassette entry and no score at all** — it returns a constant `blocked` at every sweep level and
+  contributes nothing to the curve. Binding on the two sweep families below, whose entire purpose is
+  to find where the *classifier* stops catching: **every base payload used in a sweep is
+  stage-2-clean**, verified by a lint rule (`scan_structural(payload) == []` for any record whose
+  category is `density_thinned`, `repetition_camouflage`, `boundary_straddle` or `sustained_midband`)
+  with a test that fails on a stage-2-shaped base. Stage-2-shaped payloads keep their own pinned
+  records in the regex-floor categories, where a constant `blocked` is the point. *(Added 2026-09-19,
+  validation round 1 — as drafted, half of `density_thinned` and the stage-2-shaped half of
+  `repetition_camouflage` measured nothing, and ruling 11's offline pooler evaluation was dead on
+  those records for want of scores.)*
 - `density_thinned` (`params.density`: `1/1`, `1/2`, `1/4`, `1/8` payload sentences per window;
   `params.placement`: `head`, `tail`, `interleave`; finding 9): 4 × 3 = 12 combinations × 2 base
-  payloads (one `instruction_override`-shaped, one `natural_language`-shaped) → 24 records,
-  `windows_min` ≥ 4 for the `1/4` and `1/8` levels.
+  payloads (**both stage-2-clean** — one `natural_language`-shaped, one `authority_seo`-shaped;
+  the earlier `instruction_override`-shaped base is moved to the regex-floor categories) → 24
+  records, `windows_min` ≥ 4 for the `1/4` and `1/8` levels.
 - `repetition_camouflage` (`params.repeat`: `1`, `2`, `3`, `5`; finding 10): 4 base payloads × 4
   levels = 16 records, all inside one window (`windows_min: 1`), half camouflaged as cookie-banner /
-  footer boilerplate repeated across a `page`; the stage-2 `plain`-shaped base payloads are pinned
-  `["blocked"]` at every repeat level — the regex floor the report pairs with the classifier's
-  repetition drop.
+  footer boilerplate repeated across a `page`. **All four bases are stage-2-clean**, so every one of
+  the 16 records yields a classifier score and the Zenity repetition effect is observable across the
+  whole family. The regex floor the report pairs this with comes from **separate** pinned
+  `["blocked"]` records in the stage-2 categories, not from bases inside this sweep. *(Corrected
+  2026-09-19, validation round 1 — pinning stage-2-shaped bases `["blocked"]` at every level made
+  those records unmeasurable rather than informative.)*
 - `sustained_midband` (`windows_min` ≥ 3): ≥ 6 long `page` records of review / comment prose that
   reads as semi-instructional without any trigger string (the adversarial-trip shape hardening
   spec 7 US-007 hands over); no pins — it exists to be scored.
@@ -208,8 +239,14 @@ the filler text's provenance records a public-domain source with `LicenseRef-Pub
       allowlist (`placement`, `density`, `repeat`, `windows_min`).
 - [ ] Filler provenance recorded per record with a public-domain licence id and the ebook number;
       no filler excerpt exceeds 6 000 characters; lint-clean.
-- [ ] `repetition_camouflage` stage-2-shaped bases pinned `["blocked"]` at all four levels and
-      passing under `fallback=0.0`.
+- [ ] Every sweep record (`density_thinned`, `repetition_camouflage`, `boundary_straddle`,
+      `sustained_midband`) has a stage-2-clean base — a lint rule asserts `scan_structural` returns
+      no span for it, and a test feeds a stage-2-shaped base and asserts the lint rejects it.
+- [ ] Every sweep record yields a classifier score under replay (the cassette carries an entry for
+      each of its windows); a test asserts no sweep record produces `skip_reason ==
+      "structural_block"`.
+- [ ] The regex-floor pins the report pairs with the repetition curve live in the stage-2 categories
+      and are asserted there, not inside `repetition_camouflage`.
 - [ ] `tests/corpus/README.md` documents each family's parameters and the character-budget rule.
 - [ ] Tests written/updated for new functionality
 - [ ] Full test suite passes (`uv run pytest`)
@@ -232,8 +269,8 @@ checkable per record.
 fed a five-row in-memory fixture in the upstream's native shape, produces the same records on two
 runs with the same seed, respects `--limit`, rewrites every URL to a reserved host, sets
 `source.kind = third_party`, `source.licence = MIT`, `source.revision` to the pinned SHA / dataset
-revision, `source.framing` per the source's shape, and refuses a row whose text carries a secret
-shape; `uv run python -m scripts.corpus.ingest.agentdojo --help` exits 0 offline.
+revision, `source.framing` per the source's shape, refuses a row whose text carries a secret
+shape, and refuses an `--input` path resolving inside the repository root; `uv run python -m scripts.corpus.ingest.agentdojo --help` exits 0 offline.
 
 **Implementation Hints:**
 - Package `scripts/corpus/ingest/` with one module per source and a shared `render.py` (email body
@@ -259,6 +296,31 @@ shape; `uv run python -m scripts.corpus.ingest.agentdojo --help` exits 0 offline
   repo root is the Llama 3.2 Community License — finding 4): take only files under that directory;
   `--limit 30` of the indirect prompt-injection cases; `NOTICE` cites the directory LICENSE path,
   never the root.
+- **Category mapping is one rule for all three sources** (corrected 2026-09-19, validation round 1 —
+  it was stated only inside the AgentDojo paragraph, leaving LLMail-Inject and CyberSecEval with no
+  rule at all): every ingested row is scanned with `scan_structural` at ingest time; if it trips a
+  pattern it takes the matching structural category with `variant = plain`, otherwise it takes
+  `natural_language` (or `authority_seo` where the source's framing is SEO/authority-shaped). US-004
+  carries an acceptance criterion testing this assignment — the existing criteria cover determinism,
+  cap, URL rewriting, licence fields, secret refusal and no-payload-in-output, but nothing tested
+  category assignment, which is what US-005's assertion depends on.
+- **Where the raw downloads live** (added 2026-09-19, validation round 2 — security). `--input PATH`
+  points at a local download the implementer makes by hand, and for LLMail-Inject that is a shard of
+  a ~462 k-row set the epic explicitly decided never to vendor. Nothing currently stops it being
+  committed. So: the downloads go **outside the working tree** — the documented location is
+  `$FORAGE_CORPUS_INPUTS` (default `~/.cache/forage-corpus-inputs/`), never a path under the repo;
+  `.gitignore` gains `/corpus-inputs/` as a belt-and-braces entry for the obvious mistake; the
+  samplers refuse an `--input` path that resolves inside the repository root, with a test; and
+  `tests/corpus/README.md` says where inputs live and that they are never committed. Only the
+  sampled, re-rendered, capped records reach `tests/corpus/`.
+- **Credentials for the downloads** (added 2026-09-19, validation round 1 — story quality). The
+  LLMail-Inject shard and any gated source are fetched with a token **from the environment only**:
+  `huggingface_hub` reads `HF_TOKEN` itself, so no token is ever passed as an argument, and the
+  "record the exact download command in Implementation Notes" instruction above means the command
+  **without** its environment — a pasted `HF_TOKEN=hf_…` in a spec's notes is a committed secret.
+  Any error text the samplers surface follows `model_fetcher.py:937-950`'s `_fetch_reason()` pattern:
+  a closed vocabulary of reason codes, never the URL or the exception's raw message, which can carry
+  a signed URL. A test asserts a sampler failure message contains no `hf_`-shaped substring.
 - **Sourcing rule, written into `tests/corpus/README.md`**: resolve the licence at the directory of
   the files taken; pin by SHA / revision, not branch (PIGuard's rename "due to licensing issues" is
   the precedent, finding 13); direct (user-turn) rows are excluded or re-homed with
@@ -279,6 +341,20 @@ shape; `uv run python -m scripts.corpus.ingest.agentdojo --help` exits 0 offline
       shape above; `--help` exits 0 offline for each.
 - [ ] Hermetic sampler tests: determinism, cap, URL rewriting, licence / revision / framing fields,
       secret-shape refusal, no payload in output.
+- [ ] **Category assignment is tested**: a fixture row carrying a stage-2 trigger lands in the
+      matching structural category with `variant = plain`; a clean row lands in `natural_language`;
+      the same rule is exercised for all three samplers, not just AgentDojo.
+- [ ] **Raw downloads cannot be committed**: the samplers refuse an `--input` path that resolves
+      inside the repository root (test: a path under the repo is rejected by reason code, a path
+      outside is accepted); `.gitignore` carries `/corpus-inputs/`; `tests/corpus/README.md` states
+      where inputs live and that they are never committed. *(Added 2026-09-19, validation round 3 —
+      the rule existed only in Implementation Hints, so this story's checklist could pass green while
+      a ~462k-row set the epic swore off vendoring sat staged for commit.)*
+- [ ] **No credential can reach the corpus or a log**: tokens are read from the environment by
+      `huggingface_hub` only, never passed as an argument; a test asserts a simulated sampler failure
+      message carries no `hf_`-shaped substring and no URL, following `model_fetcher.py:937-950`'s
+      closed-vocabulary `_fetch_reason()` pattern; the recorded download commands in Implementation
+      Notes carry no environment assignment.
 - [ ] The host runs are done and recorded: Implementation Notes carry, per source, the download
       command, the pinned revision, seed, limit, rows read, records written, rows skipped by reason;
       if a source could not be fetched, `not ingested — <reason>` and the floors still hold on owned
@@ -328,7 +404,17 @@ with ≥ 5 in every category.
 **Acceptance Criteria:**
 - [ ] ≥ 24 owned `natural_language` and ≥ 16 owned `authority_seo` records; ≥ 6 languages; all
       three surfaces represented in each category.
-- [ ] Every record `leaked` under `fallback=0.0` (a generic test over the two categories).
+- [ ] Every **owned** (`source.kind == "owned"`) `natural_language` / `authority_seo` record is
+      `leaked` under `fallback=0.0` — the generic test filters on `source.kind`, and a second
+      assertion states why: US-004's ingested rows land in these same two categories, attacker-
+      authored corpora are dense with BLOCK-category phrasing (LLMail-Inject alone is ~462 k real
+      attempts), so a meaningful fraction of them legitimately come back `blocked`. Scoping the
+      assertion to owned records keeps the category's defining invariant testable instead of
+      inviting it to be narrowed under time pressure later. *(Corrected 2026-09-19, validation
+      round 1.)*
+- [ ] Ingested records are covered by their own assertion: every third-party row is either
+      `leaked` **or** carries the structural category the mapping rule assigned it — no ingested row
+      sits in `natural_language` / `authority_seo` while tripping stage 2.
 - [ ] Attack corpus totals after this story: ≥ 200 records, ≥ 5 per category, recorded in
       Implementation Notes as a category × surface table (counts only).
 - [ ] Lint-clean; `tests/corpus/README.md` lists the languages present.
@@ -387,6 +473,34 @@ with ≥ 5 in every category.
   `git diff` stays per-record.
 - Ingestion adds no runtime dependency; `pyarrow` (if needed) is `dev`-only.
 - `NOTICE` is read by nothing at runtime; the coverage test is the only consumer.
+
+### Validation residue — closed at `needs-work` (2026-09-19, `/kit-tools:validate-epic`, 3 rounds)
+
+Thirty reviewers over three rounds took this epic from 19 criticals to 0 open; the items below are
+the warnings that remained when validation was deliberately closed rather than chased to zero — the
+same call, for the same reason, that `epic-forage-hardening` recorded on the same day: the precision
+reviewers surface a new layer every round, and **every code anchor in this spec predates eight
+unexecuted hardening specs** (ruling 5), so precision spent now is precision spent twice. Re-verify
+against the post-hardening tree at execution time; treat each item as a decision the implementer
+makes deliberately, not a defect to discover.
+
+- **US-004 stands up three independent ingestion pipelines in one story** (AgentDojo, LLMail-Inject,
+  CyberSecEval) — each with its own download shape, licence location and row format. Flagged in all
+  three rounds. The per-source escape hatch (`not ingested — <reason>`, floors hold on owned records)
+  is what makes a partial completion survivable; use it rather than stretching the story.
+- **The LLMail-Inject shard format is still open** (Parquet vs JSONL) and it forks a real decision:
+  Parquet adds `pyarrow` to the `dev` extra and a re-lock, JSONL means converting on the host.
+  Marked non-blocking across two rounds; decide it before starting US-004, not during.
+- **The sha256 input-pin refusal is stated in Edge Cases but owned by no story's criteria** — the
+  same shape of gap that let the `marker_on_wire` producer go missing in spec 5.
+- **The `authority_seo` mapping branch is undefined.** "Where the source's framing is SEO-shaped" has
+  no rule and no test, so in practice every ingested row will land in `natural_language`.
+- **Category mapping classifies the upstream row at ingest time, not the rendered wire form** — the
+  same pre-render/post-render gap that was corrected in spec 3's triage step. If it matters that the
+  two agree, scan the rendered form here too.
+- **Ingested rows need markers that survive their carrier**, and no criterion covers marker authoring
+  for third-party text; Goal 3's "stratified where the source offers labels" is specified only for
+  LLMail-Inject.
 
 ## Related Documentation
 
@@ -465,6 +579,36 @@ which stage carries each class, and these two classes are the ones only stage 3 
 
 ## Known risks (planning)
 
+- **Anchor drift, and two categories that do not exist yet** (ruling 5; added 2026-09-19, validation
+  round 1 — sibling spec 1 carries the equivalent bullet and this spec was missing it). Every
+  `file:line` anchor in US-001, US-002 and US-003 was read against `main` `20ddb2a` and is accurate
+  *today*, but all of them predate `epic-forage-hardening`, which this spec `depends_on` transitively
+  and which rewrites some of the files they point into. Re-verify before relying on any of them.
+  **Which files actually move** (measured 2026-09-19, validation round 2, by reading all eight
+  hardening specs — round 1's version of this bullet named the wrong ones):
+  - `pipeline/orchestrator.py` — **the one to distrust.** All eight hardening specs touch it, and
+    hardening spec 1's entire search-text and URL work lands here (`_normalize_search_text`
+    `:591-598`, `_sanitize_search_text` `:601-608`, the new `_scan_forms_for_search_text`, the
+    `:969` / `:979` call sites). Every `orchestrator.py` anchor in this spec predates all of it.
+  - `promptguard/classifier.py:23-25`, `:133-148` — hardening spec 7's model selection and
+    contiguity gating.
+  - `pipeline/stage2_structural.py:62-248` and `pipeline/stage1_extraction.py` — **stable, and
+    deliberately so.** Hardening spec 1 carries an explicit acceptance criterion that both are
+    "untouched (`git diff --stat` shows no change to either)". The regex table this spec authors
+    against is the one that will still be there, so a stale warning must not send an implementer
+    hunting for changes the hardening epic promised not to make.
+  **More than drift:** `line_anchored_role` and `url_borne_envelope` are two of the nine categories
+  US-001's Independent Test requires, and **neither is detectable on `main` today**. They are
+  *corpus* category names (spec 1's `vocab.py`), not `stage2_structural.py` category names — do not
+  expect to find them by grepping that file, before or after hardening. What makes them work is a
+  hardening change to what the scanner *sees*, with the regex table unchanged:
+  `feature-hardening-search-sanitization.md` US-001 (audit 2026-09-16-016) makes the search-text
+  scan newline-preserving, so `^System:` / `^POPPY:`-shaped lines after `\n\n` reach the
+  line-anchored patterns that today sit under `authority_impersonation`; US-002 (audit -032) scans
+  the URL in wire form so the envelope shape is caught. Both land in `orchestrator.py`. Until those
+  two stories ship, records in these two categories will not come back `blocked` — which is why this
+  spec pins them and why the epic sequences after hardening. Check those two stories first; if their
+  wire codes changed, this spec's pins follow.
 - Character-per-token budgeting can under-provision multilingual filler; spec 4 US-002 re-authors.
 - A source repository can vanish or change licence after the pin; the pinned revision and the local
   input hash keep the corpus reproducible, and the NOTICE entry records what was taken and when.

@@ -131,9 +131,27 @@ corpus surfaces is recorded as an audit finding for a follow-up, never fixed her
     the recorder only through the environment (`read -rs` into a variable, or `--env-file` by path),
     never argv or a log line; the recorder refuses to record an unloaded classifier (a fail-closed
     run measures nothing).
-14. **Corpus size floors (asserted by lint).** Attacks ≥ 200 records over the 13 categories with
-    ≥ 5 per category; benign ≥ 250 records over 8 genres with ≥ 15 per genre; ≥ 6 languages;
+14. **Corpus size floors (asserted by lint).** Attacks ≥ 200 records over the **16** categories with
+    ≥ 5 per category; benign ≥ 250 records over **9** genres with ≥ 15 per genre; ≥ 6 languages;
     ≥ 20 records whose recorded window count is ≥ 3. Counts are floors, not targets.
+    *(Corrected 2026-09-19, validation round 1: this ruling said 13 categories / 8 genres while specs
+    1–3 all say 16 / 9. The specs are right — `scripts/corpus/vocab.py` is the single source of the two
+    vocabularies and the lint reads their lengths, so neither number is hand-maintained in a story.)*
+14b. **Disclosure posture: the corpus and its bypass catalog are published** (owner decision,
+    2026-09-19, validation round 1 — two security reviewers noted that no spec discussed the
+    trade-off). This epic commits, to a public Apache-2.0 repository: a parameter-tuned evasion
+    corpus whose `density_thinned` / `repetition_camouflage` / `sustained_midband` families exist to
+    locate where Prompt Guard 2 stops catching, and (spec 5 US-005) a permanent per-record record of
+    which categories and carriers reach the consumer under the live default configuration. The
+    decision is to publish both, in full, and to say why in `docs/corpus.md`: public injection
+    corpora are standard defensive practice and the ones this epic ingests (AgentDojo,
+    LLMail-Inject, CyberSecEval) are themselves public; Forage is already public, ships no
+    authentication by design, and its README says on the first screen that it is **not a trust
+    boundary** — the calling agent owns every trust decision, so a reader who learns which shapes get
+    through learns something Forage never promised to stop; and a gate whose failures are hidden is a
+    gate nobody can check, which is the failure mode this repo exists to avoid (invariant 5,
+    degradation is loud). `docs/corpus.md`'s "Reading the results" section carries this paragraph so
+    the reasoning travels with the numbers rather than living only here.
 15. **Drivers.** Every record goes through the app (`httpx.ASGITransport`) with the lifespan booted
     and `model_fetcher.acquire_and_load` patched to install the replay classifier; `/search` via
     `app.state.search_providers = [FakeSearchProvider(...)]`; `/retrieve` via patched

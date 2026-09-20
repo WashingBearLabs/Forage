@@ -83,14 +83,31 @@ of a `leaked` attack and no marker substring; `uv run python -m scripts.corpus.r
 - **Benign**: per genre × route × provenance (`external` = `third_party`, `synthetic` = `synthetic`
   / `owned`): `fpr` (= blocked + flagged / n), `blocked_rate`; headline `fpr_external` over every
   genre except `over_defence_probe` and `security_prose` (both reported on their own lines);
-  `fpr_multilingual` named.
+  `fpr_multilingual` named; and **`candidate_rejection_rate`** per genre — printed beside
+  `fpr_external` so a reader can see how much the sampler had to discard (for reasons unrelated to
+  stage 2) to assemble the corpus. **Formula:** `rejected / examined` per genre, where `examined` is
+  every candidate the sampler drew and `rejected` is the sum over reasons; both come from spec 3
+  US-001's emitted `{genre: {examined: n, rejections: {reason: count}}}`, and the per-reason
+  breakdown is printed under the rate so a high number from `duplicate` is not read as a high number
+  from `non_prose`. A rate is reported as `—` for a genre whose records are entirely synthetic
+  (nothing was drawn). *(Added 2026-09-19, validation
+  round 2: spec 3 discharged this honesty mechanism to "spec 5's report", which did not carry it.)*
 - **Classifier-only view**: from each replay classifier's call log (spec 4 US-001) — for benign
   texts, the share whose max window score > 0.85 (`stage3_fpr`) and whose windows would fire the
   contiguity recipe; for attacks, the share whose max score > 0.85 (`stage3_recall`) — independent of
   what stage 2 did first (stage 3 is skipped after a structural block, so the live tables cannot show
   it; the call log can only show texts that reached stage 3 — say so in the report header).
-- **Per-record map**: `records: {id: {route: {config: {model: outcome}}}}` — the part of the baseline
-  that makes a drift diff name records.
+- **Per-record map**: `records: {id: {route: {config: {model: [outcome, marker_on_wire]}}}}` — the
+  part of the baseline that makes a drift diff name records. The second element is spec 1's
+  `signals["marker_on_wire"]` boolean, carried verbatim. *(Added 2026-09-19, validation round 2: the
+  round-1 leak-check fix had spec 1 promise "spec 5's report carries a blocked-but-leaked column
+  sourced from this signal" and had US-005 file those records — but nothing here produced the signal,
+  so the leak class was observed once at drive time and never gated. Three reviewers found this from
+  both ends; a fourth caught that the round-2 edit itself never reached the file.)*
+- **Blocked-but-leaked counts**: alongside the four outcome counts, `blocked_but_leaked` per
+  (category × route × config × model) — the count of records whose outcome is `blocked` while
+  `marker_on_wire` is true. A half-worked defence is not a success: US-005 files each one, and the
+  per-record map above is what makes a new one turn the drift test red.
 - **Warnings section**: `cassette_versions_differ` (spec 4 US-004 soft guard), `unmeasured_models`.
 - **Never payload**: the Markdown lists ids; a test drives a record whose marker is a sentinel and
   asserts the sentinel is absent from both renderers' output.
@@ -123,7 +140,8 @@ sanitizer change cannot land without its effect being seen.
 `tests/corpus/baseline.json`; `uv run pytest tests/test_corpus_gate.py -q` is green; editing one
 outcome in the baseline turns the drift test red with a unified diff naming the record id and the
 regeneration command; lowering one floor in `tests/corpus/floors.json` below the measured value is
-green and raising it above is red naming category / route / model; copying a cassette to a temp
+green and raising it above is red naming category / route / model; flipping one record's
+`marker_on_wire` in the baseline turns the drift test red naming that record; copying a cassette to a temp
 dir with one entry removed and pointing the gate at it is red with `UnrecordedRecordError` naming
 the record id (finding 14); the `MIN_RECORDS` test from spec 1 is un-skipped and green.
 
@@ -141,6 +159,15 @@ the record id (finding 14); the `MIN_RECORDS` test from spec 1 is un-skipped and
   meeting F1 ≥ 0.95 and FPR ≤ 0.10 together). Structural categories' `plain`-variant behaviour is
   already pinned per record, so a category floor can sit below 1.0 without losing the regex
   promise. A PR that lowers a floor edits this file — visible in review.
+  **Scaffold it, do not type it** (added 2026-09-19, validation round 1). With 16 categories × 3
+  routes × up to 2 models × 2 configs on the attack side and 9 genres on the benign side, this is a
+  hundred-plus-cell structure, and hand-entering it invites a transposed cell that silently weakens a
+  floor nobody notices. `scripts/corpus/report.py` grows `--write-floors`, which emits the whole
+  file from the first baseline with the two rounding rules already applied; the human step is
+  *reviewing* the generated diff and deliberately tightening or loosening individual cells, which is
+  where the judgement actually is. A completeness test asserts every (category|genre) × route ×
+  model × config cell the corpus can produce has a floor — a missing cell is a gate that silently
+  passes, which is the same failure as a too-low one.
 - **Pins**: the generic pinned-outcome test from spec 1 now runs with the real cassettes and no
   fallback, on every config.
 - **Completeness**: for every cassette × config, zero `UnrecordedRecordError` — a separate test
@@ -189,10 +216,14 @@ carries the corpus checklist line.
   uv run python -m scripts.corpus.report --markdown; } >> "${GITHUB_STEP_SUMMARY}"` — the
   `searxng-smoke` step summary is the precedent (`:1495-1507`); an `if:` on GitHub's `!cancelled()` expression so a drift
   failure still publishes the table; keep the job's `timeout-minutes`; `actionlint` runs in `lint`.
-- `tests/test_ci_workflow.py`: extend the `test`-job assertions (`_run_text(jobs, "test")` idiom,
-  `:670-678`); keep `test_no_repository_secrets_referenced` and the permissions tests green (nothing
+- `tests/test_ci_workflow.py`: extend the `test`-job assertions — the class is **`TestTestJob`
+  (`:953-1040`)** and the idiom is `_run_text(jobs, "test")`. *(Corrected 2026-09-19, validation
+  round 1: the hint cited `:670-678`, which is inside `TestLintJob` (`:651`) and asserts
+  `uv run ruff check .` — following it would have grown the lint-job class.)* keep `test_no_repository_secrets_referenced` and the permissions tests green (nothing
   new needs write).
-- `.github/pull_request_template.md`: under the sanitization checklist, "- [ ] If this PR changes
+- `.github/pull_request_template.md`: as a new bullet under **`## Standing invariants`** — the
+  template's four sections are `What and why`, `Contract`, `Standing invariants` and `Gates`; there is
+  no "sanitization checklist" (corrected 2026-09-19, validation round 1) — "- [ ] If this PR changes
   what reaches stage 3 or how stage 2 / 3 decide: `uv run python -m scripts.corpus.report
   --write-baseline`, reviewed the baseline diff; re-recorded cassettes if CI reported a miss";
   `tests/test_governance_docs.py` asserts the line (its PR-template checks are the pattern).
@@ -265,8 +296,17 @@ on synthetic cassettes pin each pooler's arithmetic (e.g. `[0.6, 0.2, 0.6]` fire
 
 **Description:** As the owner, I want the epic to end with the documentation that lets anyone check
 the claim "injection defence is measured" — the corpus guide, README, SECURITY.md, vision and roadmap
-— every leaked attack filed as a finding, the Poppy handoff stated, and the zero-runtime-change
-promise asserted one last time.
+— every leaked attack filed as a finding, the Poppy handoff stated, the **disclosure posture stated
+in the open**, and the zero-runtime-change promise asserted one last time.
+
+**Disclosure (owner decision, 2026-09-19 — wrapper ruling 14b):** this story publishes a permanent,
+per-record catalog of exactly which injection categories and carriers reach the consumer under the
+live default config, alongside a tuned evasion corpus. That is deliberate and it is published in
+full. `docs/corpus.md`'s "Reading the results" section must carry the reasoning — public injection
+corpora are standard defensive practice and the ingested ones are themselves public; Forage is
+public, unauthenticated by design, and documented as **not a trust boundary**, so the catalog
+discloses no guarantee Forage ever made; and an unpublished gate is one nobody can check. A test
+asserts the section exists, the same way the other `docs/corpus.md` sections are asserted.
 
 **Independent Test:** `docs/corpus.md` exists with the sections listed below; `README.md` has a
 "Measured injection defence" paragraph linking it; `kit_tools/arch/SECURITY.md` no longer says
@@ -282,7 +322,12 @@ corpus gate; `kit_tools/PRODUCT_VISION.md` marks T2.3 shipped; MILESTONES / BACK
   The gate (what each red means, the two commands); Sources and licences (the accepted table with
   NOTICE pointers; the rejected table — BIPIA, WASP, HackAPrompt, PIGuard, Wikipedia, Stack
   Exchange, MDN, OWASP, Reddit, HN — with the reason); Decision inputs (US-004's table + reading
-  guide); Consumers (Poppy's `epic-web-injection-regression-suite` may vendor records one way; the
+  guide); **Reading the results** (what the headline numbers do and do not claim: the disclosure
+  reasoning from ruling 14b; the candidate rejection rate beside the FPR; the route-asymmetry note
+  from spec 1 — `flagged` is not comparable across routes, cross-route comparison uses recorded
+  scores; `blocked_but_leaked` as a half-worked defence rather than a success; stage 3 is skipped
+  after a structural block so the classifier-only view covers only texts that reached it);
+  Consumers (Poppy's `epic-web-injection-regression-suite` may vendor records one way; the
   format is versioned by `"format"` in cassettes and by the README's field list; Forage never reads
   Poppy). Numbers appear only in the Decision-inputs table and are dated with the baseline's commit.
 - `README.md`: one paragraph under the pipeline table: what the corpus is, where the numbers live
@@ -294,7 +339,14 @@ corpus gate; `kit_tools/PRODUCT_VISION.md` marks T2.3 shipped; MILESTONES / BACK
 - `kit_tools/AUDIT_FINDINGS.md`: one entry per (category, route) with `leaked` under `default` /
   22M — ids, counts, the stage that should have caught it, `info` / `warning` by whether the category
   is structural; **not fixed** (ruling 6). Also file any `hidden_markup` carrier that leaked (spec 2
-  US-002's list).
+  US-002's list). **And the other direction**: one entry per (genre, route) whose measured FPR is
+  non-zero under `default` / 22M — the over-defence half of the epic's completion criterion ("any
+  bypass **or over-defence** the corpus surfaces is filed"), which the leaked-only rule left with no
+  filing path at all. Same shape, same not-fixed rule; `info` unless the genre is a core one, where a
+  real false positive on ordinary web text is `warning`. **And the third**: every record whose
+  `signals["marker_on_wire"]` is true while its outcome is `blocked` (spec 1's blocked-but-leaked
+  column) — a half-worked defence is a finding, not a success. *(Added 2026-09-19, validation
+  round 1.)*
 - `kit_tools/PRODUCT_VISION.md` T2.3 shipped; `kit_tools/roadmap/MILESTONES.md` / `BACKLOG.md` the
   corpus item closed and a follow-up item "contiguity / 86M default rulings (inputs:
   `docs/corpus.md` Decision inputs)" opened; `kit_tools/SYNOPSIS.md` and `kit_tools/AGENT_README.md`
@@ -306,10 +358,13 @@ corpus gate; `kit_tools/PRODUCT_VISION.md` marks T2.3 shipped; MILESTONES / BACK
   change is US-003's step.
 
 **Acceptance Criteria:**
-- [ ] `docs/corpus.md` with all eight sections; README paragraph; SECURITY.md updated as specified;
+- [ ] `docs/corpus.md` with all **nine** sections (the ninth, "Reading the results", is what ruling
+      14b's disclosure decision and spec 1's route-asymmetry rule require a reader to have — round 1
+      added the obligation while the list and this criterion still said eight); README paragraph; SECURITY.md updated as specified;
       vision / roadmap / synopsis / agent-readme updated.
-- [ ] `AUDIT_FINDINGS.md` entries for every leaked (category, route) and every leaked carrier —
-      ids and numbers only, none fixed.
+- [ ] `AUDIT_FINDINGS.md` entries for every leaked (category, route), every leaked carrier, **every
+      non-zero-FPR (genre, route)** and **every blocked-but-leaked record** — ids and numbers only,
+      none fixed.
 - [ ] Ruling-6 assertions recorded in Implementation Notes with the commands and their output.
 - [ ] `tests/test_governance_docs.py`-style link check: every relative link in `docs/corpus.md`
       resolves.
@@ -355,6 +410,32 @@ corpus gate; `kit_tools/PRODUCT_VISION.md` marks T2.3 shipped; MILESTONES / BACK
   module-scope caching is safe.
 - The JSON baseline is a few hundred KB (per-record map); it is a test fixture, not shipped.
 - `docs/corpus.md` numbers are dated to the baseline commit so a reader can tell staleness.
+
+### Validation residue — closed at `needs-work` (2026-09-19, `/kit-tools:validate-epic`, 3 rounds)
+
+Thirty reviewers over three rounds took this epic from 19 criticals to 0 open; the items below are
+the warnings that remained when validation was deliberately closed rather than chased to zero — the
+same call, for the same reason, that `epic-forage-hardening` recorded on the same day: the precision
+reviewers surface a new layer every round, and **every code anchor in this spec predates eight
+unexecuted hardening specs** (ruling 5), so precision spent now is precision spent twice. Re-verify
+against the post-hardening tree at execution time; treat each item as a decision the implementer
+makes deliberately, not a defect to discover.
+
+- **`rule` has the same producer/consumer gap that `marker_on_wire` had.** Spec 1 puts `rule` in
+  `RouteResult.signals` while this spec's report wants a `rule` column sourced from the replay
+  classifier's call log. One of the two must be chosen explicitly, or the column will be empty the
+  same way the blocked-but-leaked column nearly was.
+- **The contiguity pooler is needed by US-001 and built in US-004.** US-001's classifier-only view
+  needs "whose windows would fire the contiguity recipe" — the run-of-k-above-threshold predicate
+  that `poolers.py` implements in a later story. Build the predicate first or scope US-001's view.
+- **The floor-breach failure message drops `config`** although floors are keyed by it, so a breach
+  under `contiguity` and one under `default` read identically.
+- **`--check` is declared in the CLI but never exercised** by an Independent Test or criterion, and
+  **`--write-floors`'s two rounding rules are not unit-pinned** — the rounding is what sets every
+  floor, so it deserves a test of its own rather than being verified by eye on the generated diff.
+- **`candidate_rejection_rate` has no test on this spec's side** — spec 3 writes
+  `tests/corpus/benign/sampler_stats.json`, and nothing here asserts the report reads it or that the
+  `—` path works when the file is absent.
 
 ## Related Documentation
 

@@ -3,9 +3,9 @@
   "models": {
     "implementer": "sonnet",
     "verifier": "opus",
-    "validator": "opus",
-    "reviewer": "opus",
-    "second_opinion": "sonnet",
+    "validator": "sonnet",
+    "reviewer": "sonnet",
+    "second_opinion": "opus",
     "escalation": { "to": "opus", "on_attempt": 2, "sizes": ["L", "XL"] }
   }
 }

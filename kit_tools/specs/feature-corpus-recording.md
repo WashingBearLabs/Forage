@@ -89,9 +89,21 @@ offline; a recorder run whose classifier fails to load exits 2 with `not_loaded`
   `PromptGuardBudgetExceededError` when `max_chunks is not None and len(scores) > max_chunks`) so
   the drive's outcome during recording equals the replay's. `classify` re-implements max-pool.
 - **Recorder CLI**: `uv run python -m scripts.corpus.record --model-id <id> [--out DIR]
-  [--configs default,contiguity]`: (1) `classifier = PromptGuardClassifier()`; acquire through the
-  same path the lifespan uses — `model_fetcher.acquire_and_load(...)` (`model_fetcher.py:1530`;
-  the lifespan's call site `retrieval_app.py:1315-1330` shows the arguments; `HF_HOME`, `HF_TOKEN`,
+  [--configs default,contiguity]`: (1) `classifier = PromptGuardClassifier()`; acquire by calling
+  `model_fetcher.acquire_and_load(...)` **directly** (`model_fetcher.py:1530`) — a deliberately
+  synchronous, one-shot, no-retry path, chosen *because* this is a host CLI rather than a long-lived
+  service. *(Corrected 2026-09-19, validation round 1: this read "the same path the lifespan uses",
+  which is false on the current tree and was already caught and corrected once in this epic family
+  the same day — `feature-hardening-promptguard-86m.md` states "**The lifespan seam is
+  `WeightAcquisition`, not `acquire_and_load`**" (ruling R29 as corrected in round 4). The lifespan
+  at `retrieval_app.py:1305-1335` constructs
+  `model_fetcher.WeightAcquisition(classifier, metrics=app.state.model_metrics)` and awaits
+  `acquisition.run()` — an async, jittered-backoff retry loop with a single-flight lock
+  (`model_fetcher.py:1742` class, `:1839` `run()`, `:1811` `attempt_once()`), and `attempt_once` is
+  the only caller of the module-level `acquire_and_load`, wrapped in `asyncio.to_thread`. If retry
+  fidelity is ever wanted here, that is a deliberate change: the CLI would need an event loop and a
+  definition of "give up" for a one-shot script.)* The environment contract is unchanged — `HF_HOME`,
+  `HF_TOKEN`, `HF_HOME`, `HF_TOKEN`,
   `FORAGE_WEIGHTS_MIRROR`, `FORAGE_MIRROR_TOKEN` are read by that function from the environment
   exactly as in the container — nothing token-shaped is parsed here; `FORAGE_MODEL_ID` selects the
   model after hardening spec 7 US-006, so `--model-id` is an alias that sets the same environment
@@ -108,6 +120,28 @@ offline; a recorder run whose classifier fails to load exits 2 with `not_loaded`
   same fixture end to end); random weights are fine — the test asserts *equivalence*, not values.
   Patch the recorder's acquisition seam with a function that performs that load so the CLI path is
   covered too.
+  **The fixture cannot classify a full-length chunk — drive it with a reduced window** (added
+  2026-09-19, validation round 1, verified empirically against the committed fixture). Its
+  `config.json` sets `max_position_embeddings: 64` while `promptguard/classifier.py` chunks at
+  `MAX_SEQ_LEN = 512` and tokenizes each chunk with `max_length=512`; a 512-token chunk raises
+  `RuntimeError("The size of tensor a (512) must match the size of tensor b (64) at non-singleton
+  dimension 1")`. Nothing classifies with this fixture today — `tests/test_model_fetcher.py` and
+  `tests/test_app.py` only *load* it — so the ceiling has never bitten, but every test in this story
+  classifies. So these tests monkeypatch **both** `promptguard.classifier.MAX_SEQ_LEN` **and**
+  `promptguard.classifier.CHUNK_OVERLAP` — to **32 and 8** — for the duration, which makes a
+  "two-window text" ~56 tokens rather than >512 and keeps every window inside the fixture's
+  position budget. *(Corrected 2026-09-19, validation round 2: round 1 patched `MAX_SEQ_LEN` alone,
+  which is unsound. `_chunk_text` computes `step = MAX_SEQ_LEN - CHUNK_OVERLAP`
+  (`promptguard/classifier.py:139`), so `MAX_SEQ_LEN = 32` against the unpatched `CHUNK_OVERLAP = 64`
+  gives `step = -32`, `range(start, len, -32)` is empty, `chunks == []`, and `classify()` /
+  `classify_windows()` return `(0.0, [])` — zero windows. The budget-error criterion would have been
+  unreachable and the equivalence tests would have passed vacuously. There is no admissible value of
+  `MAX_SEQ_LEN` alone: it must be ≤ 64 to fit the fixture, and any value ≤ 64 makes `step` ≤ 0
+  against the default overlap. Both constants move together, and `step > 0` is asserted in the test
+  helper that applies the patch.)* The reduced window is a property of the *fixture*, not of the format:
+  the cassette shape, the budget behaviour and the equivalence claim are all window-count-relative,
+  so nothing about the assertion weakens. A comment in the test says why, and the real-model
+  recordings (US-002, US-003) run at the real `MAX_SEQ_LEN`.
 - **Determinism**: float `repr` round-trips exactly; sorted keys; no timestamps inside `records`.
 - **NOTICE**: append to the "Third-party model weights — Llama Prompt Guard 2" section one paragraph
   stating that `tests/corpus/cassettes/` holds numeric outputs of the named model(s) at the named
@@ -119,13 +153,27 @@ offline; a recorder run whose classifier fails to load exits 2 with `not_loaded`
 - [ ] Cassette format as specified; `from_cassette` round-trips; the 2 MB cap lint exists.
 - [ ] `RecordingClassifier` records unbudgeted and applies the budget itself; a test with
       `max_chunks=1` on a two-window text asserts the recorded list has two scores and the drive
-      raised the budget error both live and in replay.
+      raised the budget error both live and in replay. The tiny-model tests monkeypatch
+      `MAX_SEQ_LEN` to 32 **and `CHUNK_OVERLAP` to 8** so every window fits the fixture's
+      `max_position_embeddings: 64` and `step` stays positive; the patch helper asserts
+      `MAX_SEQ_LEN - CHUNK_OVERLAP > 0`, and a test asserts the unpatched fixture raises on a
+      full-length chunk, so both constraints are pinned rather than rediscovered.
 - [ ] Live-vs-replay equivalence on the tiny model across all three routes and both configs;
       cassette contains no marker text; deleting an entry → `UnrecordedRecordError` with the id.
 - [ ] Recorder CLI: `--help` offline; `not_loaded` and `revision_mismatch` exits write nothing;
       output line format pinned; no token value can reach stdout / stderr (a test injects a fake
       token into the environment and asserts it is absent from captured output).
 - [ ] `NOTICE` paragraph present; coverage test green.
+- [ ] **The two tests the owner gates assert against are authored here, not at the gate** (added
+      2026-09-19, validation round 1). US-002's and US-003's Independent Tests require (a) a
+      full-corpus replay drive with `fallback=None` over every record × both configs reporting
+      **zero misses**, and (b) a test asserting every record with `params.windows_min` has a recorded
+      window count ≥ it, listing offenders by id. Neither existed in any story's criteria — US-001
+      covered the mini-corpus tiny-model tests plus the CLI, US-004 the revision/versions guards and
+      the one-cassette-per-model lint, and spec 5's gate criterion (d) is a later spec. Both are
+      written **here**, in `tests/test_corpus_record.py`, and both skip with the reason
+      `"no cassette recorded yet"` until US-002 commits one. An owner gate must be "run the documented
+      procedure, paste the numbers" — never "author two new tests first".
 - [ ] `kit_tools/testing/TESTING_GUIDE.md` rows for `tests/test_corpus_record.py` and
       `tests/corpus/cassettes/`.
 - [ ] Tests written/updated for new functionality
@@ -290,6 +338,31 @@ recorded — access pending` naming the hardening story that gates it.
   precedent, hardening spec 7 US-003).
 - The Llama licence attribution for cassettes is a `NOTICE` paragraph, not a per-file header.
 
+### Validation residue — closed at `needs-work` (2026-09-19, `/kit-tools:validate-epic`, 3 rounds)
+
+Thirty reviewers over three rounds took this epic from 19 criticals to 0 open; the items below are
+the warnings that remained when validation was deliberately closed rather than chased to zero — the
+same call, for the same reason, that `epic-forage-hardening` recorded on the same day: the precision
+reviewers surface a new layer every round, and **every code anchor in this spec predates eight
+unexecuted hardening specs** (ruling 5), so precision spent now is precision spent twice. Re-verify
+against the post-hardening tree at execution time; treat each item as a decision the implementer
+makes deliberately, not a defect to discover.
+
+- **The tiny fixture proves structure, not semantics.** `tests/fixtures/tiny_model`'s tokenizer is a
+  toy WordPiece vocabulary and its weights are random, so the live-vs-replay equivalence test shows
+  the record/replay loop is faithful — it says nothing about scores. That is the correct scope; do
+  not let it be read as model validation.
+- **The `MAX_SEQ_LEN` / `CHUNK_OVERLAP` patch must stay narrow, and the trap next to it is silent.**
+  Patching either constant alone gives a non-positive step and zero windows, which passes tests
+  vacuously rather than failing loudly. The helper asserts `step > 0`; keep that assertion and keep
+  the patch scoped to the tiny-model tests.
+- **The cassette filename embeds the revision (`<slug>@<revision>.json`) while US-004's lint refuses
+  two cassettes for one model id.** Those two rules collide the first time a revision rotates;
+  decide whether the lint is per (model id, revision) or whether old cassettes are deleted.
+- **Cassettes are unsigned**, which is sound only while `ReplayClassifier` stays confined to
+  tests and CI. Nothing enforces that boundary; if it ever loads outside a test, revisit.
+- All four stories are `P1`, and US-001 and US-004 each bundle several concerns under one title.
+
 ## Related Documentation
 
 - `docs/weights.md` (tokens, mirror, manifest); `docs/configuration.md` (`FORAGE_MODEL_ID`,
@@ -341,6 +414,18 @@ cheap now and expensive to retrofit (finding 15).
 
 ## Known risks (planning)
 
+- **Anchor drift** (ruling 5; added 2026-09-19, validation round 2 — sibling specs 1 and 2 carry the
+  equivalent bullet and this spec was missing it). Every `file:line` anchor in this spec was read
+  against `main` `20ddb2a` and is accurate today, but this spec depends transitively on
+  `epic-forage-hardening`. Re-verify before relying on any of them. The two that will move:
+  `model_fetcher.py` — `acquire_and_load` `:1530`, `read_manifest_pin` `:924`, `WeightAcquisition`
+  `:1742` / `:1811` / `:1839`, `RETRY_INITIAL_BACKOFF_S` `:841`, `_fetch_reason` `:937-950` — and
+  `promptguard/classifier.py` (`MAX_SEQ_LEN` / `CHUNK_OVERLAP` `:24-25`, `_chunk_text` `:133-148`),
+  both rewritten by `feature-hardening-promptguard-86m.md` for `FORAGE_MODEL_ID` selection and
+  contiguity gating — the story this spec's `--model-id` alias and both cassette recordings depend
+  on. `retrieval_app.py:1305-1335` (the lifespan's acquisition block) moves with them. Note the
+  hardening spec's own correction while re-reading: **the lifespan seam is `WeightAcquisition`, not
+  `acquire_and_load`** (its ruling R29 as corrected in round 4).
 - Meta's gated-repo approval is not instant; the owner gate may wait on it — the mirror read token is
   the alternative path.
 - The 86M tokenizer changes window counts; re-authoring may ripple into the 22M cassette.

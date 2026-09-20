@@ -3,7 +3,7 @@
 feature: corpus-benign
 status: active
 session_ready: true
-depends_on: [corpus-harness]
+depends_on: [corpus-harness, corpus-attacks]
 vision_ref: "T2.3 — Injection regression corpus (CI)"
 type: epic-child
 size: L
@@ -57,12 +57,56 @@ each source, so the headline false-positive rate is measured on the text the ser
 
 **Independent Test:** `uv run pytest tests/test_corpus_ingest.py -k benign tests/test_corpus_lint.py`
 passes hermetically; `load_corpus()` yields ≥ 15 records for each of `news`, `docs`, `code`, `forum`,
-`ecommerce`; `news`, `docs` and `code` are entirely `third_party` with a permitted licence id and a
-revision; `forum` / `ecommerce` records are `third_party` where a source was found and otherwise
-`synthetic`; driven with `fallback=0.0` every record is `clean` except the ones whose `params.variant`
-names a stage-2 regex (those are `flagged` or `blocked`, asserted).
+`ecommerce`; `news`, `docs` and `code` are `third_party` with a permitted licence id and a revision
+**where the source was reachable**, and `synthetic` otherwise with the reason recorded (the offline fallback
+below — the ratio is asserted, not the absolute); `forum` / `ecommerce` likewise; driven with
+`fallback=0.0` **every record's outcome is in its `pinned` list**, and untagged records (no `pinned`)
+are `clean` — a tagged record carries `pinned: ["flagged", "blocked"]` with `pinned_reason` naming
+the regex, which is spec 1's existing mechanism rather than a new field. The assertion is per-record and declared, not a blanket "all clean", because the
+sampler triages every candidate before it is written (below) and real external text legitimately
+trips regexes. *(Corrected 2026-09-19, validation round 2: the blanket assertion contradicted the
+offline fallback and made organic false positives unrepresentable.)*
 
 **Implementation Hints:**
+- **Candidate triage — the step that makes the `clean` assertion honest, and the honesty caveat that
+  goes with it** (added 2026-09-19, validation round 1; two reviewers, one of whom ran the scanner).
+  Real external text does not arrive clean: an ordinary deep documentation link such as
+  `href="https://docs.python.example/3/library/collections/abc/index/html"` trips `encoded_payload`
+  (the class `[A-Za-z0-9+/]{40,}` includes `/`, so any ≥ 40-character run of dotless path segments
+  matches), and a long docs page with a `## New task:` heading is `blocked` outright by
+  `instruction_override`. Wikinews political and legal copy contains "new directive", "new task
+  force", "ignore previous" and "disregard … instructions" often enough to matter. So the sampler
+  **renders each accepted candidate into its surface form first** — the full HTML document for
+  `page`, the title + URL + snippet join for `search`, the plain paragraphs for `text` — extracts it
+  exactly as stage 1 will (`extract_html` / `normalize_text`), and runs the real `scan_structural()`
+  on **that** text before writing the record. Scanning the raw candidate is a different test: stage 2
+  never sees raw text, and rendering both introduces hits (a URL that exists only in the rendered
+  `href`) and removes them (markup stage 1 strips). *(Corrected 2026-09-19, validation round 3.)*
+  It then takes **one** documented branch: **keep it in its organic genre** and tag `params.variant` with the
+  regex it hit. A real news article that trips `instruction_override` because a politician said
+  "ignore previous guidance" **is** a structural false positive, and it is counted as one in that
+  genre's FPR — that is the number this epic exists to measure. The triage step exists to make the
+  outcome *declared* rather than discovered at drive time, so the hermetic test states each record's
+  expected outcome explicitly instead of asserting a blanket "clean" that depends on which articles
+  the seed happened to draw (which would flake the moment `--seed` or the upstream corpus changed —
+  `CLAUDE.md`'s hermeticity policy does not tolerate that).
+  *(Owner decision, 2026-09-19, validation round 2. Round 1 had a second branch that moved any
+  tripping candidate into `over_defence_probe`. That was an over-correction: since tripping a regex
+  was exactly what removed a record from its genre, the five headline genres' structural FPR became
+  **zero by construction**, and spec 5 US-001's `fpr_external` — the epic's headline over-blocking
+  number — could only ever report 0. Rejecting-and-resampling instead was the other option and was
+  declined: it is the detector-flattering selection PIDS-Bench warns about, applied to the corpus
+  built to refute it.)*
+  **A candidate is rejected only for reasons unrelated to stage 2** (licence, length, non-prose,
+  duplicate). Rejections are counted per genre and per reason and reported (below); a stage-2 hit is
+  never a rejection reason, and a test asserts the sampler's reject path is never reached with
+  `reason == "stage2"`.
+- **Coverage records are separate from organic hits.** The ≥ 2-records-per-regex coverage floor is
+  satisfied **only** by deliberately-authored `over_defence_probe` records, which are excluded from
+  the headline FPR (the genre already exists for exactly that reason). Organic hits count toward
+  FPR, never toward coverage. Keeping coverage deliberate makes it stable across re-seeds: an
+  organic hit that satisfied a floor by luck would drop below it on the next `--seed` and turn the
+  gate red for a reason unrelated to any regression. *(Owner decision, 2026-09-19, round 2.)*
 - `scripts/corpus/ingest/benign.py`: one sampler with a `--source` switch and per-source adapters;
   same CLI idiom as spec 2 US-004 (`--input`, `--revision`, `--seed`, `--limit`, `--out
   tests/corpus/benign/`), same "local download, hash-pinned, ids and counts only" rules.
@@ -79,19 +123,56 @@ names a stage-2 regex (those are `flagged` or `blocked`, asserted).
   author synthetic records (`source.kind: synthetic`) and say so in Implementation Notes — the report
   splits FPR by provenance (spec 5 US-001; landscape finding 8), so synthetic never masquerades as
   external.
-- **Rendering**: `page` = a minimal article template (`<article><h1>title</h1><p>…</p></article>`;
-  the template lives in `scripts/corpus/ingest/render.py`, shared with spec 2); `search` = title +
+- **Rendering**: `page` = a **full HTML document**, not a bare fragment —
+  `<html><head><title>{title}</title>{head_html}</head><body>{body_html}</body></html>` (the record
+  schema already separates `head_html` from `body_html` for exactly this). The template lives in
+  `scripts/corpus/ingest/render.py`, **shared with spec 2**, so this shape is binding on the attack
+  corpus too. *(Corrected 2026-09-19, validation round 1: the template was
+  `<article><h1>title</h1><p>…</p></article>`, with no `<title>` element.
+  `pipeline/stage1_extraction.py:123-128` (`_extract_title()`) reads the title exclusively from a
+  `<title>` tag and never from `<h1>`, so every rendered `page` record would have extracted
+  `title: None` regardless of its declared title — defeating the genre's realism goal and any
+  declared-vs-extracted comparison. Every existing HTML fixture in the repo that expects a non-null
+  title wraps content in a full document, e.g. `tests/test_orchestrator.py:64-67`.)* A test renders
+  one record and asserts the extracted title equals the declared one; `search` = title +
   reserved URL + the first ≤ 300 characters as `content`; `text` = the plain paragraphs. Every
   external URL in the text is rewritten to a reserved host (ruling 8) — attribution URLs live in
   `source.url`, not in the payload.
-- **Regex-targeted benigns** (`params.variant` = the regex name, ≥ 2 per stage-2 regex across this
-  story and US-004): a `code` README with a 40-hex commit SHA in a link (`[A-Za-z0-9+/]{40,}`), a
+- **Deliberately-authored regex probes live in the `over_defence_probe` genre, never in the headline
+  genres** (corrected 2026-09-19, validation round 1; scope narrowed in round 2). The spec already
+  establishes the principle — NotInject probes get their own genre so they are "never pooled into the
+  headline FPR" (Goals, US-002) — and then broke it: ~48 records authored to *guarantee* a stage-2
+  match were scattered into `news` / `docs` / `code` / `forum` / `ecommerce`, the very genres whose
+  FPR is the headline number. With core-genre floors at ≥ 15, a genre could carry 5 deliberate
+  matches against 15 records — a 33 % "false-positive rate" that is an authoring artefact, which
+  spec 5 US-002 would then freeze into per-genre FPR *ceilings*, hiding a real over-blocking
+  regression underneath. These records keep their realistic provenance (`source.kind` is unchanged —
+  a real README with a commit SHA is still `third_party`); they are simply counted in their own
+  genre. **This applies to records authored to hit a regex, not to real text that happens to hit
+  one** — an organic hit stays in its genre and counts toward that genre's FPR (see the triage
+  bullet above). `params.variant` naming the regex is set in both cases; `kind`/genre is what
+  separates them.
+- **Regex probes** (genre `over_defence_probe`, `params.variant` = the regex name, ≥ 2 per
+  stage-2 regex across this story and US-004): a `code` README with a 40-hex commit SHA in a link (`[A-Za-z0-9+/]{40,}`), a
   networking tutorial with `href="http://192.168.1.1/"` (private-IP `href`), a docs page whose
   heading is "New task: …" (`new\s+(directive|instruction|task|objective)`), a changelog line
   "disregard the previous instructions in section 2" (`disregard.*instructions`), a `data:image/png`
   inline icon (`data:` scheme), a Markdown docs page with `![logo](https://cdn.example/${version}/logo.png)`
   (`exfil_beacon`). Their expected outcome under `fallback=0.0` is `flagged` / `blocked` — the story
   asserts it and Implementation Notes count them: this is the structural false-positive number.
+- **Offline fallback for the externally-required genres, and what `session_ready` means here**
+  (added 2026-09-19, validation round 1). US-001 requires `news`, `docs` and `code` to be *entirely*
+  `third_party`, and US-003 requires every `multilingual` / `long_form` record to be `third_party`,
+  but a synthetic fallback was granted only to `forum` / `ecommerce`. The repo is hermetic by design
+  (the autouse `pytest-socket` guard, `CLAUDE.md`), so these downloads are a manual host pre-step
+  outside the suite — an execution session without network access, or without reachable Wikinews /
+  CPython / the Rust book / Gutenberg / arXiv / Hugging Face, could not complete either story at all.
+  Adopt spec 2 US-004's escape hatch verbatim for **every** genre in this spec: if a source cannot be
+  fetched, Implementation Notes record `not ingested — <reason>`, the story proceeds with
+  `source.kind: synthetic` records for that genre, and the per-genre floors still hold. The report
+  splits FPR by provenance, so a synthetic-heavy genre is visible as such rather than silently
+  standing in for external text. `session_ready: true` is therefore accurate **only with this
+  fallback in place** — it is what makes the stories completable in one session.
 - Excerpt caps: ≤ 6 000 characters per record except `long_form` (US-003); `search` within the caps.
 - Ids `ben-0011` … continue the seed.
 
@@ -102,12 +183,34 @@ names a stage-2 regex (those are `flagged` or `blocked`, asserted).
 - [ ] ≥ 15 records per core genre; provenance as in the Independent Test; every external record has
       `source.url`, `licence`, `revision`; `NOTICE` gains one entry per source and the coverage test
       passes.
-- [ ] ≥ 2 benign records per stage-2 regex across US-001 + US-004, each with `params.variant`; their
-      `flagged` / `blocked` outcome under `fallback=0.0` asserted by a generic test over
-      `params.variant`.
+- [ ] ≥ 2 **`over_defence_probe`** records per stage-2 regex across US-001 + US-004 (except the three
+      in `STAGE2_REGEX_NO_BENIGN`), each with `params.variant`; their `flagged` / `blocked` outcome
+      under `fallback=0.0` asserted by a generic test over `params.variant`. A test asserts the
+      coverage floor is computed over `over_defence_probe` records only, so an organic hit in a
+      headline genre can never satisfy it.
+- [ ] **The sampler triages before writing**: a test asserts `scan_structural()` is called on every
+      candidate and that a tripping candidate is written with `params.variant` set and its genre
+      unchanged — never moved to `over_defence_probe`, never rejected. A second test asserts the
+      reject path is never reached with `reason == "stage2"`.
+- [ ] **The rejection count has a home, and a denominator**: the sampler emits
+      `{genre: {examined: n, rejections: {reason: count}}}` to a committed sidecar,
+      **`tests/corpus/benign/sampler_stats.json`** — `rejections` is not a record and cannot ride in
+      the `.jsonl`, so it needs its own file; `examined` is every candidate drawn, so spec 5 can
+      compute a *rate* rather than an uninterpretable raw count. `scripts/corpus/report.py` reads it
+      by path (absent file ⇒ the rate column prints `—`, never a crash) and the lint asserts every
+      genre holding `third_party` records has an entry. *(Transport specified 2026-09-19, validation
+      round 3 — round 2 named the payload at neither end.)* `scripts/corpus/report.py` (spec 5 US-001) carries it as *candidate
+      rejection rate* beside the headline FPR, and a test asserts the field survives into the
+      rendered report. *(Added 2026-09-19, validation round 2 — round 1 put the honesty mechanism in
+      one prose paragraph with no criterion, no test and no consumer; three reviewers found it
+      discharged to a spec that never mentioned it.)*
+- [ ] **The offline fallback is a criterion, not an aside**: for every genre, if a source cannot be
+      fetched, Implementation Notes carry `not ingested — <reason>` and the records are written
+      `source.kind: synthetic`; the per-genre floors still hold; a test asserts a genre's records are
+      either all-third_party-with-revision or carry a recorded synthetic reason — never a silent mix.
 - [ ] Rejected-sources table in `tests/corpus/README.md` gains the share-alike / no-grant entries.
 - [ ] Implementation Notes record per genre: source, revision, seed, limit, records written,
-      synthetic count (numbers and names only).
+      synthetic count, **rejection count by reason** (numbers and names only).
 - [ ] Tests written/updated for new functionality
 - [ ] Full test suite passes (`uv run pytest`)
 - [ ] `uv run ruff check .` passes
@@ -167,8 +270,14 @@ returns, and pages long enough to span several classifier windows, so the 22M-vs
 multilingual FPR to weigh and the contiguity rule has an accident rate to be judged by.
 
 **Independent Test:** `load_corpus()` yields ≥ 30 `multilingual` records over ≥ 6 non-English
-languages (≥ 4 each) and ≥ 20 `long_form` records with `params.windows_min ≥ 3`, all `third_party`
-public-domain or CC-BY / PSF sources; lint-clean; every record `clean` under `fallback=0.0`.
+languages (≥ 4 each) and ≥ 20 `long_form` records with `params.windows_min ≥ 3`, `third_party`
+public-domain or CC-BY / PSF sources **where reachable and `synthetic` with a recorded reason
+otherwise** (US-001's offline fallback applies to this story too); lint-clean; **every record's
+outcome is in its `pinned` list** under `fallback=0.0` — `clean` for untagged records (no `pinned`),
+and the declared list for any record the triage step tagged with `params.variant` (spec 1's existing
+`pinned` / `pinned_reason` mechanism; no new field). *(Corrected 2026-09-19,
+validation round 2: "all `third_party`" and a blanket `clean` were the two statements the round-1
+fallback and triage additions contradicted, and this story carried no criterion for either.)*
 
 **Implementation Hints:**
 - Multilingual sources: other-language Wikinews editions (CC-BY-2.5; de, fr, es, pt, it, ja, zh, ru
@@ -211,10 +320,38 @@ recorded per regex in Implementation Notes.
 **Implementation Hints:**
 - Author as `search` records (title / reserved URL with realistic query strings / snippet ≤ 2 000)
   derived from the external pages of US-001–003 where possible (`source` carried over) and synthetic
-  otherwise; the regex-name list lives in `scripts/corpus/vocab.py` as `STAGE2_REGEX_NAMES` (the
-  human names from spec 2 US-001's `notes` convention) — the coverage test is over that list, not
-  over the private `_PATTERNS` (strict pyright; `reportPrivateUsage` is relaxed only in `tests/`, and
-  the corpus code lives in `scripts/`).
+  otherwise. `STAGE2_REGEX_NAMES` and its companion `STAGE2_REGEX_PROBES` are **spec 1's deliverable**
+  in `scripts/corpus/vocab.py` (US-001 acceptance criteria) — this story *consumes* them and creates
+  nothing. *(Corrected 2026-09-19, validation round 1: this P2 story was the only place across all
+  five specs that mentioned the constant, so a shared closed vocabulary was being invented as a side
+  effect of one genre's coverage test.)* The coverage test runs over that list, not over the private
+  `_PATTERNS` (strict pyright; `reportPrivateUsage` is relaxed only in `tests/`, and the corpus code
+  lives in `scripts/`), and it identifies which pattern fired through spec 1's
+  `stage2_hits(text) -> frozenset[str]` helper, which maps `FlaggedSpan.matched_text` back to a regex
+  name. It cannot use `FlaggedSpan.category`: that field carries only 7 coarse values
+  (`instruction_override`, `authority_impersonation`, `encoded_payload`, `prompt_boundary`,
+  `suspicious_url`, `exfil_beacon`, `envelope_breakout`) and cannot distinguish `[SYSTEM]` from
+  `<system>` from `---INSTRUCTIONS---`.
+- **Three regexes cannot have an organic benign example, and are exempt by name.** `[poppy]`
+  (poppy-bracket), `^POPPY:` (poppy-colon) and the `envelope_breakout` pattern (`<` or an
+  entity-encoded `<` followed by `retrieved_content` / `retrieval_note` / `retrieval_warning` /
+  `retrieval_cache_note`) match Forage/Poppy-internal tokens with no plausible occurrence in real
+  external text — Wikinews, the CPython docs, the Rust book and Gutenberg will never contain them, and
+  hand-authoring text that quotes internal envelope-tag names reads as attack-shaped, not benign,
+  which undercuts what the corpus measures. They are listed in `vocab.py` as
+  `STAGE2_REGEX_NO_BENIGN` with this reason, the ≥ 2-per-regex floor skips them, and a test asserts
+  the exemption list is exactly those three so a fourth cannot be added quietly. For **every other name in
+  `STAGE2_REGEX_NAMES`**, US-004 authors realistic carriers (a docs page documenting a chat-template
+  format, a support-forum post quoting a log line, a tokenizer README) and names each in
+  `params.variant`. The set is **derived, never enumerated here**: the coverage test walks
+  `STAGE2_REGEX_NAMES`, subtracts `STAGE2_REGEX_NO_BENIGN`, and fails naming any member with fewer
+  than two `over_defence_probe` records — so a pattern added to `stage2_structural.py` later turns
+  the gate red instead of being silently uncovered. *(Added 2026-09-19, validation round 1 — nine of
+  the 24 patterns had no named example anywhere in the spec. Hand-enumerating the gap was itself
+  wrong twice: round 1's list of examples missed several patterns, and round 2's "six remaining"
+  list omitted ```` ```system ```` and `<|im_start|>`, which are separate compiled patterns from
+  ```` ```instructions ```` and `<|endoftext|>`. Deriving from the constant removes the class of
+  error.)*
 - Shapes: 40-hex SHAs and 44-character base64 ids in URLs and text (`encoded_payload` — keep them
   away from `key` / `token` / `secret` on the same line), `\x1b[0m` ANSI sequences in a terminal
   transcript (`\x` escapes), `rot13` in a puzzle forum, `data:image/svg+xml` favicons, `192.168.0.1`
@@ -226,7 +363,8 @@ recorded per regex in Implementation Notes.
   floors of their genre, not toward a `search` genre (there is none).
 
 **Acceptance Criteria:**
-- [ ] ≥ 40 `search` benign records; ≥ 24 regex-tagged; every `STAGE2_REGEX_NAMES` entry covered ≥ 2
+- [ ] ≥ 40 `search` benign records; ≥ 24 regex-tagged; every `STAGE2_REGEX_NAMES` entry **except the
+      three in `STAGE2_REGEX_NO_BENIGN`** covered ≥ 2
       across the whole benign corpus (test); lint-clean.
 - [ ] Implementation Notes: per-regex outcome counts under `fallback=0.0` and the final benign totals
       (≥ 250; ≥ 15 per genre; ≥ 30 `over_defence_probe`; ≥ 6 languages; ≥ 20 with `windows_min ≥ 3`).
@@ -273,9 +411,41 @@ recorded per regex in Implementation Notes.
 - The benign samplers share `render.py` and the CLI shape with spec 2's; one `NOTICE` section
   serves both.
 - Directory-size lint keeps the corpus clone-friendly; cassettes (spec 4) have their own cap.
-- The `STAGE2_REGEX_NAMES` list must be kept in step with `stage2_structural.py` by hand; a test
-  asserts its length equals the number of compiled patterns (read through the public
-  `scan_structural` behaviour on one probe per name, not through `_PATTERNS`).
+- `STAGE2_REGEX_NAMES` lives in spec 1's `scripts/corpus/vocab.py` and must be kept in step with
+  `stage2_structural.py` by hand; **spec 1's** test asserts its length equals the number of compiled
+  patterns, and per-pattern identification goes through spec 1's `stage2_hits()` helper (matching
+  `FlaggedSpan.matched_text` against `STAGE2_REGEX_PROBES`), never through `_PATTERNS` and never
+  through the 7-value `FlaggedSpan.category`.
+
+### Validation residue — closed at `needs-work` (2026-09-19, `/kit-tools:validate-epic`, 3 rounds)
+
+Thirty reviewers over three rounds took this epic from 19 criticals to 0 open; the items below are
+the warnings that remained when validation was deliberately closed rather than chased to zero — the
+same call, for the same reason, that `epic-forage-hardening` recorded on the same day: the precision
+reviewers surface a new layer every round, and **every code anchor in this spec predates eight
+unexecuted hardening specs** (ruling 5), so precision spent now is precision spent twice. Re-verify
+against the post-hardening tree at execution time; treat each item as a decision the implementer
+makes deliberately, not a defect to discover.
+
+- **The coverage arithmetic does not close.** 24 compiled patterns minus the three in
+  `STAGE2_REGEX_NO_BENIGN` is 21, at ≥ 2 probe records each = 42 — against a stated
+  `over_defence_probe` floor of ≥ 30. Reconcile the floor with the derived requirement before
+  authoring, and let the derived number win.
+- **`params.variant` is a single value, but a record can trip several regexes.** The triage step tags
+  "the regex it hit"; say which one when there are two, or make the field a list in spec 1's schema.
+- **`STAGE2_REGEX_NO_BENIGN` is frozen at exactly three with no amendment path.** A test asserting
+  the list is exactly those three turns a legitimate future discovery into a red gate with no
+  documented way to extend it.
+- **Per-genre × route FPR cells are small** — a genre floor of ≥ 15 records spread over three
+  surfaces leaves roughly five per cell, so a single record moves a cell's rate by ~20 points. Spec 5
+  US-002's `max_fpr` ceilings should be set per genre, not per genre × route, unless the floors rise.
+- **No auth, rate-limit or retry story for the ~8 external hosts** the samplers reach (Wikinews and
+  its non-English editions, python.org, the Rust book, Gutenberg, arXiv, Hugging Face). These are
+  host-run steps outside the socket guard; a 429 mid-sample is the likely first failure.
+- **PII**: the `forum` genre's preferred source is a real GitHub Discussions export carrying real
+  usernames, and no scrubbing rule is stated for text committed permanently to a public repo.
+  Decide handling before US-001 ingests, not after.
+- US-003 bundles multilingual sourcing and long-form sourcing under one story.
 
 ## Related Documentation
 
