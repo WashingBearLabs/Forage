@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Literal, get_args
 
-CONTRACT_VERSION = "1.2.0"
+CONTRACT_VERSION = "1.3.0"
 """The retrieval sidecar's wire-shape version, carried on ``/health``.
 
 Bump MAJOR when a field is removed/renamed or its semantics change; bump
@@ -62,10 +62,35 @@ MINOR when fields are only added.
   (``search-policy-and-health`` US-003) landed inside this same unpublished
   window and is not a separate PATCH: there is no vendored 1.2.0 copy yet to
   re-vendor, so the description edits are subsumed by this unreleased
-  MINOR. This version is **held**: ``tests/golden/contract_1_2_0.json`` is
-  regenerated in place across ``search-provider-abstraction`` specs 2-4 and
-  every ``search-fallback``/``search-policy-and-health`` story that moved
-  this shape, until the ``v1.1.0`` image publishes it.
+  MINOR. This version is now frozen at 1.2.0 bytes; ``tests/golden/contract_1_2_0.json``
+  stays exactly as it shipped.
+* ``1.3.0`` — opens ``hardening-search-sanitization``'s contract window: every
+  later story in this epic that moves the wire appends a continuation line
+  here instead of bumping again. Three additive changes land with the
+  version itself. ``SearchResponse.omitted_by_reason`` gains a fifth key,
+  ``blocked_url`` (``OMIT_BLOCKED_URL``) — declared before it has a raiser,
+  the same shape ``1.2.0``'s ``chunk`` used, so the later story that actually
+  raises it (US-003) is not a further contract change. ``SearchResult.engine``
+  moves from an unexamined ``isinstance`` pass-through to a bounded,
+  normalised field: it is run through the same normalisation as ``title``
+  and ``snippet`` (NFC, C0/C1 control deletion, whitespace-run collapse),
+  truncated to 64 characters (``_MAX_SEARCH_ENGINE_LENGTH``), and a
+  non-string or an empty-after-normalisation value now serves as ``None``
+  where an unexamined ``""`` shipped before — four emitted-value moves on a
+  field that was never structurally scanned or part of the PromptGuard input
+  and still is not (``contract/GOVERNANCE.md`` ruling (e)). And ``title`` /
+  ``snippet`` carry a served-text change that shipped ahead of this version,
+  in ``hardening-search-sanitization`` US-001: both are now truncated
+  *after* Stage 1 extraction instead of before, so an over-cap multi-line
+  field ships a different byte count (fewer for a padded field, more for a
+  markup-dense one) and payload-shaped escaped markup (``&lt;system&gt;``)
+  is blocked as ``structural_blocked`` rather than served stripped. All
+  three are additive or a narrowing of an already-unscanned,
+  already-unbounded field — a consumer comparing MAJOR keeps working
+  untouched, and nothing removed or changed the meaning of an existing
+  field. This version is **held**: ``tests/golden/contract_1_3_0.json`` is
+  re-created in place by every later story in this epic that moves the
+  wire, until spec 8 US-002 freezes it ahead of the release cut.
 
 This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy
@@ -110,6 +135,11 @@ OMIT_INJECTION_DETECTED = "injection_detected"
 # "PromptGuard did not run" — one on the /health surface, one per withheld
 # search result.
 OMIT_PROMPTGUARD_UNAVAILABLE = "promptguard_unavailable"
+# Contract 1.3.0. Policy, not malformation: a literal private, loopback,
+# link-local, documentation-range or embedded-private-transition host, or a
+# blocklisted name — distinct from OMIT_INVALID_URL, which is a URL that
+# could not be parsed or canonicalised at all.
+OMIT_BLOCKED_URL = "blocked_url"
 
 OMISSION_REASONS = frozenset(
     {
@@ -117,6 +147,7 @@ OMISSION_REASONS = frozenset(
         OMIT_STRUCTURAL_BLOCKED,
         OMIT_INJECTION_DETECTED,
         OMIT_PROMPTGUARD_UNAVAILABLE,
+        OMIT_BLOCKED_URL,
     }
 )
 

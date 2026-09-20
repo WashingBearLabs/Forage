@@ -9,7 +9,7 @@
 
 > **TEMPLATE_INTENT:** Document API endpoints, CLI commands, or library interface. The external contract.
 
-> Last updated: 2026-09-16
+> Last updated: 2026-09-20
 > Updated by: Claude (seed-project)
 
 ---
@@ -40,7 +40,7 @@ reasoning; `docs/configuration.md` "Deployment posture" is the operator statemen
 `POST /extract` takes `multipart/form-data`. Datetimes are ISO 8601 in UTC.
 
 **Versioning signal.** The response contract has a hand-bumped semver, `contract_version`,
-currently **1.2.0** (`pipeline/contract.py`). It appears on `/health`, on `/metrics`, and
+currently **1.3.0** (`pipeline/contract.py`). It appears on `/health`, on `/metrics`, and
 as `info.version` in `/openapi.json`. Consumers compare the MAJOR component and refuse to
 activate on a mismatch; a MINOR difference is additive and safe. `/health` also carries
 `sanitizer_revision`, a hash of pipeline *behaviour*; never compare it for compatibility
@@ -108,7 +108,7 @@ Fields to read (all present; `degraded_reasons` defaults to `[]`):
 | `cache_backend` | `"valkey"` or `"memory"` | Which storage was selected at start (added in 1.1.0). `memory` means `VALKEY_URL` was fully unset |
 | `capabilities` | dict of str to int | Presence map, two keys as of 1.2.0: `search_sanitization` present when the model is loaded (or break-glass advertising is armed), `brave_api_key` present when this start resolved a usable `FORAGE_BRAVE_API_KEY` — independently of the sanitization key and untouched by break-glass |
 | `search_providers` | list of str | The resolved provider chain's names, in traversal order, after key-gated skips (added in 1.2.0). Configuration echo, not a liveness probe |
-| `contract_version` | str | `1.2.0`; the compatibility signal |
+| `contract_version` | str | `1.3.0`; the compatibility signal |
 | `sanitizer_revision` | str | Hash of pipeline behaviour; a cache-key input, not a compatibility signal |
 
 `/health` never probes SearXNG: a missing search backend surfaces per request on
@@ -252,11 +252,11 @@ Response fields to read (`SearchResponse`):
 
 | Field | Type | Read it because |
 |---|---|---|
-| `results` | list of `{title, url, domain, snippet, engine, content_kind, date, suspicious}` | `suspicious: true` means the structural scan flagged it, the classifier scored above 0.5, or it was returned unscanned under fail-open. Title is at most 512 characters, URL 2048 (over-length URLs are omitted under `invalid_url`, never truncated), snippet 2000. `domain` (added in `1.2.0`) is the lower-cased hostname of `url` (`urlsplit(url).hostname`), never eTLD+1 — a provenance signal, not a trust decision; for an IPv6 literal `domain` is unbracketed (`2001:db8::1`) while `url` carries brackets (`[2001:db8::1]`), the one case where `domain` is not a substring of `url`. `engine` is whichever SearXNG sub-engine answered (e.g. `duckduckgo`, or SearXNG's own `brave` sub-engine) or, for a Brave-served result, `brave-api` — the two are deliberately never normalized into each other. `content_kind` (added in `1.2.0`) is `snippet` or `chunk` and nothing else. `date` (added in `1.2.0`) is a strict `YYYY-MM-DD` calendar date or `null` — anything a provider sends that is not one becomes `null`, so it never needs parsing defensively |
+| `results` | list of `{title, url, domain, snippet, engine, content_kind, date, suspicious}` | `suspicious: true` means the structural scan flagged it, the classifier scored above 0.5, or it was returned unscanned under fail-open. Title is at most 512 characters, URL 2048 (over-length URLs are omitted under `invalid_url`, never truncated), snippet 2000. `domain` (added in `1.2.0`) is the lower-cased hostname of `url` (`urlsplit(url).hostname`), never eTLD+1 — a provenance signal, not a trust decision; for an IPv6 literal `domain` is unbracketed (`2001:db8::1`) while `url` carries brackets (`[2001:db8::1]`), the one case where `domain` is not a substring of `url`. `engine` is whichever SearXNG sub-engine answered (e.g. `duckduckgo`, or SearXNG's own `brave` sub-engine) or, for a Brave-served result, `brave-api` — the two are deliberately never normalized into each other; bounded to 64 characters and NFC-normalised (added in `1.3.0`), or `null` for a non-string or an empty-after-normalisation value — still neither structurally scanned nor part of the PromptGuard input. `content_kind` (added in `1.2.0`) is `snippet` or `chunk` and nothing else. `date` (added in `1.2.0`) is a strict `YYYY-MM-DD` calendar date or `null` — anything a provider sends that is not one becomes `null`, so it never needs parsing defensively |
 | `provider_used` | str | Added in `1.2.0`. The serving provider's `name` — `searxng`, `brave`, or a future third token (open string, not an enum, so a new provider is additive) |
 | `fallback_fired` | bool | Added in `1.2.0`. `true` iff the provider chain advanced past the first provider before this response was served — the per-response face of the `search.fallback_fired` `/metrics` counter. It says nothing about which provider served: for a chain that tries a paid provider first, this is `true` when the free provider ends up serving |
 | `provider_errors` | list of str | Added in `1.2.0`. Chain-order `"<provider_name>: <failure_class>"` entries for every provider tried before the one that served (closed vocabulary, never exception text or a URL) — the only place provider-level failures appear; they never affect `omitted_results` / `omitted_by_reason` or `unresponsive_engines` |
-| `omitted_results`, `omitted_by_reason` | int, dict of str to int | How many candidates were withheld and why; keys are only ever `invalid_url`, `structural_blocked`, `injection_detected`, `promptguard_unavailable`, and only non-zero counts appear. `invalid_url` covers three families of URL rule, checked on the provider's raw value in this order, first rejection wins: **presence and length** (missing, empty, non-string, or longer than 2 048 characters after trimming — over-length is rejected, never truncated), **raw characters** (any control character, any whitespace, or any RFC 3986 excluded character — `<`, `>`, `"`, `{`, `}`, `\|`, `\\`, `^`, backtick — rejected rather than stripped), and **host code points** (any WHATWG forbidden domain code point surviving into the hostname, plus a non-`http(s)` scheme, userinfo, an unparseable or out-of-range port, and an IPv6 zone id). A URL that clears all three is scanned structurally in both its entity-decoded and its once-percent-decoded form; a block there counts under `structural_blocked`, never twice |
+| `omitted_results`, `omitted_by_reason` | int, dict of str to int | How many candidates were withheld and why; keys are only ever `invalid_url`, `structural_blocked`, `injection_detected`, `promptguard_unavailable`, and — added in `1.3.0` — `blocked_url`, and only non-zero counts appear. `invalid_url` covers three families of URL rule, checked on the provider's raw value in this order, first rejection wins: **presence and length** (missing, empty, non-string, or longer than 2 048 characters after trimming — over-length is rejected, never truncated), **raw characters** (any control character, any whitespace, or any RFC 3986 excluded character — `<`, `>`, `"`, `{`, `}`, `\|`, `\\`, `^`, backtick — rejected rather than stripped), and **host code points** (any WHATWG forbidden domain code point surviving into the hostname, plus a non-`http(s)` scheme, userinfo, an unparseable or out-of-range port, and an IPv6 zone id). A URL that clears all three is scanned structurally in both its entity-decoded and its once-percent-decoded form; a block there counts under `structural_blocked`, never twice. `blocked_url` is policy rather than malformation: a URL that parsed and canonicalised cleanly but names a literal private, loopback, link-local, documentation-range or blocklisted host |
 | `unscanned_results`, `promptguard_unavailable` | int, bool | Non-zero or `true` means results came back without the ML scan; treat the whole response as unscanned evidence |
 | `unresponsive_engines` | list of str | The serving provider's SearXNG engines that failed to respond; empty on a Brave-served response. With zero results this is the free-path failure signal that advances a multi-provider chain (`search-fallback` US-002); with results present it is a partial answer, not an error, and no fallback fires. Entries are unsanitized, provider-asserted text — no stage scans them — and must never be rendered into a model prompt |
 | `request_id`, `query` | str, str | Correlation and echo |
@@ -449,7 +449,9 @@ activate on a mismatch. New members of `degraded_reasons`, `omitted_by_reason` o
 `1.0.0` is the frozen original surface; `1.1.0` added `/health.cache_backend`; `1.2.0`
 added `SearchResult.content_kind` and `SearchResult.date`, the `search_unavailable`
 error code, and — additively, still `1.2.0` — `SearchResult.domain` and
-`SearchResponse.provider_used` / `fallback_fired` / `provider_errors`. Do not
+`SearchResponse.provider_used` / `fallback_fired` / `provider_errors`; `1.3.0` declared
+`blocked_url` in `omitted_by_reason` and bounded `SearchResult.engine` to 64 characters,
+NFC-normalised. Do not
 compare `sanitizer_revision`: it has deliberately diverged between Forage and Poppy's
 in-tree copy and says nothing about wire compatibility. The image tag (for example
 `v1.0.0`) is a third, independent version.
@@ -466,7 +468,7 @@ in-tree copy and says nothing about wire compatibility. The image tag (for examp
 CI verifies two of the three on every release: the `smoke` job reads the in-image copy
 back out of the candidate image, and the `publish` job downloads the Release assets back
 from the API; both are checked against the anchor committed at the tag (currently
-`11435a17aabe7c11faf71aee0fd066a3784d5e9de557c451153e7f47d0d5615f`).
+`40d693ce30a84a9a9977543e6667446a1152e74eb43a0f487dd31bd40f501800`).
 
 **Vendoring procedure** (`contract/GOVERNANCE.md` "Consumers"):
 

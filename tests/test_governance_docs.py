@@ -87,10 +87,17 @@ _SIX_EXAMPLES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("An urgent security tightening", ("MINOR",)),
 )
 
-# The five rulings this epic recorded, by the heading marker each section
+# The six rulings this epic recorded, by the heading marker each section
 # carries. (a2) is US-001's verification finding and is listed separately from
 # (a) precisely because it is a different ruling about a different thing.
-_RULING_MARKERS = ("### (a) ", "### (a2) ", "### (b) ", "### (c) ", "### (d) ")
+_RULING_MARKERS = (
+    "### (a) ",
+    "### (a2) ",
+    "### (b) ",
+    "### (c) ",
+    "### (d) ",
+    "### (e) ",
+)
 
 # Counts these documents state in words. Both are read back out of the code —
 # the hashed-source count from `_REVISION_SOURCES`, the required-check count

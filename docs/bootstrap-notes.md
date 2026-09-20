@@ -693,6 +693,42 @@ spec 6 pin.
 memory mode, one TTL of extra fetches in Valkey mode. **Do not assume Poppy↔Forage revision
 parity** — compare contracts, not revisions.
 
+### The seventeenth rotation: the contract 1.3.0 window (`hardening-search-sanitization` US-004, 2026-09-20)
+
+```
+before: 4248568667b234c52c9f5c760e0c3992b2e4288866b798d690c7f677f04ec17f
+after:  05dbbb5c99eb1055b364f68871b5c18e5cfbd2f12d150c1737eae47564282c0b
+```
+
+**Two `_REVISION_SOURCES` files moved: `pipeline/contract.py` and `pipeline/orchestrator.py`** —
+the ninth rotation's shape (`search-provider-abstraction` US-004, contract `1.2.0`). Measured
+from a **clean tree** — `git status --porcelain` listed only the files this story touches, no
+other hashed file — by reverting each in turn against a both-reverted control: `contract.py`
+alone gives `4000a520…c865f32`, `orchestrator.py` alone gives `d03b9fd7…d33c4b838b`, and the
+both-reverted control lands exactly on `42485686…ec17f` — the sixteenth rotation's shipped
+value. Neither file alone reproduces the rotation.
+
+**This rotation does not change sanitization behaviour.** `contract.py` moved for the version
+bump itself (`CONTRACT_VERSION` "1.2.0" → "1.3.0", the docstring's new `1.3.0` bullet, and
+`OMIT_BLOCKED_URL` joining `OMISSION_REASONS`) — none of it code Stage 2 or Stage 3 execute.
+`orchestrator.py` moved for `SearchResult.engine`'s new bound: `_MAX_SEARCH_ENGINE_LENGTH = 64`
+and routing `engine` through the same `_normalize_search_text` call `title`/`snippet`/
+`unresponsive_engines` already use, so an over-length, control-bearing or NFC-denormalized
+`engine` now serves differently (truncated to 64, controls deleted, whitespace collapsed, and
+an empty-after-normalisation value serving as `None` where an unexamined `""` shipped before).
+`engine` is still not routed through Stage 2's structural scan or the Stage 3 PromptGuard input
+— this rotation bounds and normalizes a field, it does not start scanning one, so it does not
+join the fifteenth and sixteenth rotations as a third rotation that changes sanitization
+behaviour.
+
+**Not replayed to Poppy**; the deployed copy stays on the value it already diverged to.
+
+**Blast radius.** The same mechanism as every rotation since the fifth:
+`cache_policy_fingerprint()` takes the revision as an input, so every extraction cached under
+`42485686…` becomes unreachable at the next start and ages out on its own TTL — free in memory
+mode, one TTL of extra fetches in Valkey mode. **Do not assume Poppy↔Forage revision parity** —
+compare contracts, not revisions.
+
 ## Deferred GitHub settings — for the spec 2 public flip
 
 The `WashingBearLabs` org is on the **GitHub Free** plan, and this repository

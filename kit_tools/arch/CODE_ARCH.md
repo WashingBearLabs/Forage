@@ -1,7 +1,7 @@
 <!-- Template Version: 2.0.0 -->
 # CODE_ARCH.md
 
-> Last updated: 2026-09-16
+> Last updated: 2026-09-20
 > Updated by: Claude (forage-contract US-004)
 
 ---
@@ -88,7 +88,11 @@ Design principles:
 
 | Module | Lines | Responsibility |
 |--------|------:|----------------|
-| `pipeline/orchestrator.py` | 1128 | Drives the five stages end to end. Since `search-provider-abstraction` US-002 it reaches search backends through the `SearchProvider` seam rather than calling SearXNG itself: it sets the candidate budget, re-applies its own slice, bounds `unresponsive_engines`, and maps a `ProviderFailure`'s closed `detail` onto `searxng_error` / `searxng_unavailable`. `_DEFAULT_SEARXNG_URL` and `_SEARXNG_ENGINES` survive here as **assigned aliases** of `pipeline/search_providers/searxng.py`'s public constants (three test modules import the private names from here); the definitions live in the provider. Since `hardening-search-sanitization` US-001 the per-result sanitization loop keeps **two forms** of `title` and `snippet`: `_scan_forms_for_search_text` returns `(wire_form, scan_form)`, where the scan form is what Stages 2 and 3 see and the wire form is its whitespace collapse (`wire_form == " ".join(scan_form.split())`, so nothing reaches the wire unscanned). The scan form keeps line breaks, which is what lets Stage 2's line-anchored patterns fire anywhere in the field. Order: NFC → a **first** control strip on the raw provider value (the parser maps a raw NUL to U+FFFD, outside the strip's class) → a parser-input bound of `_SEARCH_PARSER_INPUT_MULTIPLIER * max_length` (4×, measured — truncation now follows extraction, so without it the parser would see the whole provider body per field) → `extract_html` on the `<div>`-wrapped text (one entity level) → `html.unescape` (the second level) → a **second** control strip for what those decodes produced → `normalize_text` → truncate once at the field's cap. `_sanitize_search_text` survives for the URL call site only. The busiest file in the repo. |
+| `pipeline/orchestrator.py` | 1128 | Drives the five stages end to end. Since `search-provider-abstraction` US-002 it reaches search backends through the `SearchProvider` seam rather than calling SearXNG itself: it sets the candidate budget, re-applies its own slice, bounds `unresponsive_engines`, and maps a `ProviderFailure`'s closed `detail` onto `searxng_error` / `searxng_unavailable`. `_DEFAULT_SEARXNG_URL` and `_SEARXNG_ENGINES` survive here as **assigned aliases** of `pipeline/search_providers/searxng.py`'s public constants (three test modules import the private names from here); the definitions live in the provider. Since `hardening-search-sanitization` US-001 the per-result sanitization loop keeps **two forms** of `title` and `snippet`: `_scan_forms_for_search_text` returns `(wire_form, scan_form)`, where the scan form is what Stages 2 and 3 see and the wire form is its whitespace collapse (`wire_form == " ".join(scan_form.split())`, so nothing reaches the wire unscanned). The scan form keeps line breaks, which is what lets Stage 2's line-anchored patterns fire anywhere in the field. Order: NFC → a **first** control strip on the raw provider value (the parser maps a raw NUL to U+FFFD, outside the strip's class) → a parser-input bound of `_SEARCH_PARSER_INPUT_MULTIPLIER * max_length` (4×, measured — truncation now follows extraction, so without it the parser would see the whole provider body per field) → `extract_html` on the `<div>`-wrapped text (one entity level) → `html.unescape` (the second level) → a **second** control strip for what those decodes produced → `normalize_text` → truncate once at the field's cap. `_sanitize_search_text` survives for the URL call site only. Since `hardening-search-sanitization`
+US-004, `SearchResult.engine` is also routed through `_normalize_search_text`
+(`_MAX_SEARCH_ENGINE_LENGTH = 64`) rather than passed through unexamined; it is not routed
+through the structural scan or PromptGuard, unlike `title`, `url` and `snippet`. The busiest
+file in the repo. |
 | `retrieval_app.py` | 1824 | FastAPI app + the five endpoints, startup wiring, `/health` body assembly, the legacy-capability break-glass warning. Since `forage-contract` it also carries the documentation surface: the five per-shape error **mirrors** (US-001) and the six `/metrics` response models (US-005), all `extra="forbid"`, none of which any emission site routes through — the emission sites are unchanged and parity tests hold the models to them. The `FastAPI(...)` call serves `title="Forage"`, `version=CONTRACT_VERSION` and the no-auth/private-network posture, so `/openapi.json` cannot disagree with `/health` about which contract this process implements. |
 | `cache.py` | 860 | Valkey content cache. **Never logs the connection URL** — it may carry a password; enforced by a closed log vocabulary and a dedicated regression test. |
 | `models.py` | 470 | Pydantic models for every request and response shape. |
@@ -105,7 +109,7 @@ Design principles:
 | `model_fetcher.py` | 1872 | Weight acquisition end to end. The one gate every source passes — fail-closed manifest verification, exact-set + safetensors-only allowlist, symlink-resolving hashing over `snapshots/<revision>/`, one-generation quarantine, the `ModelMetrics` counters `/metrics` exports — plus `acquire_and_load()`, the boot pipeline the lifespan runs in a worker thread: verify the cache, then **Hugging Face, then the GHCR mirror**, then one ERROR naming both. The mirror leg shells out to the image's pinned `oras`, extracts with `filter="data"` into a bounded staging area, verifies *there*, and installs by rename. Owns the revision pin, the `$HF_HOME/hub` resolution both the download and the loader are handed, and the five environment variables the acquisition path reads. `WeightAcquisition` wraps that pipeline in the service's only background loop: single-flight, 30 s→10 min jittered backoff, cancellable, and a hub-offline pin scoped to the load so a warm start makes zero network attempts. |
 | `pipeline/stage1_pdf.py` | 156 | PDF branch of stage 1. |
 | `pipeline/stage3_promptguard.py` | 151 | ML injection scan; skipped for trusted domains. |
-| `pipeline/contract.py` | 327 | The versioned response contract (`contract_version`, currently **1.2.0**), the 18-code error vocabulary, and the `ContentKind` Literal. |
+| `pipeline/contract.py` | 358 | The versioned response contract (`contract_version`, currently **1.3.0**), the 18-code error vocabulary, and the `ContentKind` Literal. |
 | `contract_smoke.py` | 759 | CI's published-image smoke: polls a running container's `/health`, validates it against the same `HealthResponse` model the golden test pins, and reads every wire value from `pipeline/contract.py` at run time. Two modes via `--expect-status`: `degraded` (the default, CI's weights-free image) and `healthy` (a container started with weights — the three PromptGuard-coupled checks invert, every other check is identical); the wait polls until `/health` answers 200 with the expected `status`, not merely the first 200. With `--image` (US-004) it also `cat`s `/app/contract/openapi.yaml` out of the candidate image, hashes it against the `--anchor` file (default the committed anchor) and compares its `info.version` with the version the container serves. Ships in no image. |
 | `searxng_smoke.py` | 779 | CI's companion-image smoke: creates an egress-free Docker network, runs SearXNG beside a Valkey and probes it from a third container. Docker goes through an injected runner and every judgement is a pure function, so `tests/test_searxng_smoke.py` covers the failure branches without a daemon. Ships in no image. |
 | `scripts/vendor_weights.py` | 1112 | Operator-only, supervised: downloads the pinned revision, generates `weights_manifest.json` with the safetensors allowlist enforced **at generation time**, builds a deterministic symlink-dereferenced tarball, self-checks it through the real verifier, `oras push`es it tagged by revision sha, and confirms the GHCR package is private. Every constant comes from `model_fetcher`; no credential ever reaches an argv. Ships in no image; `docs/weights.md` is the procedure. |
@@ -162,7 +166,14 @@ rotation that changes sanitization behaviour** — when `orchestrator.py` gained
 tree), and a sixteenth — **the second** — when `_canonicalize_search_url` became the
 `_SEARCH_URL_RULES` registry (`b0ca8d9a…` → `42485686…`,
 `hardening-search-sanitization` US-002 — `orchestrator.py` alone, measured from a clean
-tree). Nothing downstream may assume
+tree), and a seventeenth with the contract bump to `1.3.0` (`42485686…` → `05dbbb5c…`,
+`hardening-search-sanitization` US-004 — `contract.py` + `orchestrator.py`, the epic's
+second two-file rotation, each file's contribution measured by reverting it in turn:
+`contract.py` gained `OMIT_BLOCKED_URL` and the version bump, `orchestrator.py` gained
+`_MAX_SEARCH_ENGINE_LENGTH = 64` and routed `SearchResult.engine` through
+`_normalize_search_text`. Bounds and normalizes a field rather than scanning one, so this
+does **not** join the fifteenth and sixteenth as a third behaviour-changing rotation).
+Nothing downstream may assume
 Poppy↔Forage revision parity.
 
 **Startup is non-blocking, and one background task is the reason.** The lifespan does its

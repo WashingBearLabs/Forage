@@ -9,7 +9,7 @@
 
 > **TEMPLATE_INTENT:** Document build pipelines, deployment triggers, and automation. How code gets to production.
 
-> Last updated: 2026-09-17
+> Last updated: 2026-09-20
 > Updated by: Claude (seed-project)
 
 ---
@@ -311,7 +311,7 @@ Steps, in order:
    `hf_[A-Za-z0-9]{20,}`, `FORAGE_BRAVE_API_KEY`), run over the published image config
    JSON for all platforms.
 8. **On `v*` tags only — Release.** `CONTRACT_VERSION` is grepped out of the *tagged tree's*
-   `pipeline/contract.py` (currently `1.2.0`; a non-semver read fails the step), and the
+   `pipeline/contract.py` (currently `1.3.0`; a non-semver read fails the step), and the
    same step copies that version's **per-version entry** — its bullet at column 0 in the
    `CONTRACT_VERSION` docstring plus the two-space-indented lines under it — into
    `${RUNNER_TEMP}/contract-entry.md` with a POSIX `awk` program; an empty file (a contract
@@ -441,7 +441,7 @@ of those bytes. The same file also verifies the checker can fail (a committed
 un-regenerated twin under `tests/fixtures/contract/`), that rendering is byte-stable across
 `PYTHONHASHSEED`s, and that `/extract` is in the document even though the route is off by default.
 
-The anchor (`11435a17aabe7c11faf71aee0fd066a3784d5e9de557c451153e7f47d0d5615f` at HEAD) is
+The anchor (`40d693ce30a84a9a9977543e6667446a1152e74eb43a0f487dd31bd40f501800` at HEAD) is
 the trust root every other copy is verified against: `smoke` hashes the in-image copy
 against it, `publish` hashes the Release assets against it, and consumers verify the copy
 they vendor against the anchor *at the same tag*, never against another copy. Whether a

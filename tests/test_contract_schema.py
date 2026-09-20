@@ -18,6 +18,11 @@ from retrieval_app import (
 
 _GOLDEN_DIR = Path(__file__).parent / "golden"
 _GOLDEN_PATH = _GOLDEN_DIR / f"contract_{CONTRACT_VERSION.replace('.', '_')}.json"
+# The 1.2.0 golden is frozen (an image has published it) — every reader below
+# except test_contract_schema_matches_golden pins against this literal path
+# rather than against _GOLDEN_PATH, so a later version bump does not silently
+# repoint them at a golden that does not carry the 1.2.0 coverage sweep.
+_GOLDEN_1_2_0_PATH = _GOLDEN_DIR / "contract_1_2_0.json"
 
 # The four response models the golden has always pinned, plus two surfaces a
 # response-only fixture cannot see: `SearchRequest`, so a request-model
@@ -193,7 +198,7 @@ def test_the_fourteen_1_2_0_additions_are_all_golden_pinned() -> None:
     counters live on `SearchMetricsResponse`, pinned against the handler by
     ``tests/test_contract_metrics.py`` rather than by this golden.
     """
-    golden = json.loads(_GOLDEN_PATH.read_text())
+    golden = json.loads(_GOLDEN_1_2_0_PATH.read_text())
     search_result_props = golden["SearchResponse"]["$defs"]["SearchResult"][
         "properties"
     ]
@@ -229,7 +234,7 @@ def test_the_1_1_0_to_1_2_0_diff_has_no_unlisted_additions() -> None:
     and ``MetricsResponse`` stays out of ``_SCHEMA_MODELS``.
     """
     previous = json.loads((_GOLDEN_DIR / "contract_1_1_0.json").read_text())
-    current = json.loads(_GOLDEN_PATH.read_text())
+    current = json.loads(_GOLDEN_1_2_0_PATH.read_text())
     assert set(_ONE_TWO_ZERO_DIFFED_SCHEMAS) == set(previous)
     assert set(current) == set(previous) | {"SearchRequest", "Pipeline422ErrorResponse"}
     assert "MetricsResponse" not in _SCHEMA_MODELS
@@ -318,7 +323,7 @@ def test_an_unlisted_addition_anywhere_in_a_diffed_schema_moves_the_diff(
     golden and requires the diff to grow by exactly that path — so a member
     added to an enum rendered under ``items`` or ``anyOf`` cannot slip past.
     """
-    mutated = json.loads(_GOLDEN_PATH.read_text())
+    mutated = json.loads(_GOLDEN_1_2_0_PATH.read_text())
     assert reported_as not in _diff_against_1_1_0(mutated)
     _inject(mutated, path, value)
     assert _diff_against_1_1_0(mutated) == _EXPECTED_ONE_TWO_ZERO_DIFF | {reported_as}
@@ -326,7 +331,7 @@ def test_an_unlisted_addition_anywhere_in_a_diffed_schema_moves_the_diff(
 
 def test_search_request_1_2_0_shape_is_pinned_exactly() -> None:
     """``SearchRequest`` has no 1.1.0 golden entry, so its shape is pinned directly."""
-    golden = json.loads(_GOLDEN_PATH.read_text())
+    golden = json.loads(_GOLDEN_1_2_0_PATH.read_text())
     assert set(golden["SearchRequest"]["properties"]) == {
         "query",
         "num_results",
@@ -343,7 +348,7 @@ def test_pipeline_422_error_code_is_pinned_to_nine_members() -> None:
     ``/retrieve``'s six codes plus ``/search``'s three, and this pins that
     the 1.2.0 addition was exactly one more member (``search_unavailable``).
     """
-    golden = json.loads(_GOLDEN_PATH.read_text())
+    golden = json.loads(_GOLDEN_1_2_0_PATH.read_text())
     enum = set(golden["Pipeline422ErrorResponse"]["properties"]["error"]["enum"])
     # A literal set, not `set(PIPELINE_422_ERROR_CODES)`: the golden is
     # regenerated from the code, so comparing code to code would let a renamed
@@ -382,3 +387,54 @@ def test_search_metrics_response_1_2_0_field_set_is_pinned_exactly() -> None:
         "paid_calls",
         "policy_unknown_provider",
     }
+
+
+# ---------------------------------------------------------------------------
+# 1.3.0 coverage sweep (hardening-search-sanitization US-004)
+#
+# The window opens here: unlike the 1.2.0 sweep above, this one covers all six
+# _SCHEMA_MODELS entries from the start — the 1.2.0 golden (unlike 1.1.0's)
+# already carries SearchRequest and Pipeline422ErrorResponse, so there is no
+# schema excluded for want of a counterpart. _diff_against_1_2_0 reuses the
+# same generic _added_paths engine; only the schema list and the golden it
+# diffs against are version-bound.
+# ---------------------------------------------------------------------------
+
+_ONE_THREE_ZERO_DIFFED_SCHEMAS = (
+    "HealthResponse",
+    "SearchRequest",
+    "SearchResponse",
+    "RetrievedContent",
+    "ExtractedContent",
+    "Pipeline422ErrorResponse",
+)
+
+# This story's two moves — SearchResult.engine's maxLength: 64 bound and the
+# rewritten omitted_by_reason description — are neither a new properties key
+# nor a new enum member, so _added_paths cannot see either one (verified by
+# running it over contract_1_2_0.json with both mutations applied: every run
+# returned set()). The window opens empty; it stays that way for a
+# description or bound move and grows only when a later story in this epic
+# adds a field or enum member, until spec 8 US-002 freezes it.
+_EXPECTED_ONE_THREE_ZERO_DIFF: frozenset[str] = frozenset()
+
+
+def _diff_against_1_2_0(current: dict[str, Any]) -> set[str]:
+    """Every addition in ``current`` over the frozen 1.2.0 golden, across schemas."""
+    previous = json.loads(_GOLDEN_1_2_0_PATH.read_text())
+    added: set[str] = set()
+    for name in _ONE_THREE_ZERO_DIFFED_SCHEMAS:
+        added |= _added_paths(previous[name], current[name], name)
+    return added
+
+
+def test_the_1_2_0_to_1_3_0_diff_has_no_unlisted_additions() -> None:
+    """Completeness sweep: the diff is exactly the (currently empty) expected set.
+
+    Mirrors the 1.2.0 sweep's own guard line: every schema the frozen 1.2.0
+    golden carries is diffed, and none is missing.
+    """
+    previous = json.loads(_GOLDEN_1_2_0_PATH.read_text())
+    current = json.loads(_GOLDEN_PATH.read_text())
+    assert set(_ONE_THREE_ZERO_DIFFED_SCHEMAS) == set(previous)
+    assert _diff_against_1_2_0(current) == _EXPECTED_ONE_THREE_ZERO_DIFF

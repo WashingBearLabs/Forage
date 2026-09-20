@@ -121,6 +121,15 @@ release gates into wishful thinking.
 A tag pushed onto a red tree still *runs* the gates. They fail, and `publish`
 never starts.
 
+**No `v*` tag while the contract 1.3.0 window is open.** `hardening-search-sanitization`
+US-004 opened contract `1.3.0` with `tests/test_contract_schema.py`'s
+`_EXPECTED_ONE_THREE_ZERO_DIFF` starting **empty** and mutable — every later story in the
+epic that moves the wire appends to it and re-creates `tests/golden/contract_1_3_0.json`.
+A tag cut while that set's opening comment still says the window is open would publish a
+contract whose golden is still being edited mid-epic. The check today is this sentence, not
+a CI gate; spec 8 US-002 rewrites that comment when it freezes the set, and a mechanical
+gate keyed on the same comment is that story's to add (flagged in the epic wrapper).
+
 ## Architectures
 
 | Platform | Built | Gated | Notes |

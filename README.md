@@ -59,7 +59,7 @@ the numbering follows the sanitization order the contract reports.
 | `POST /retrieve` | Fetches and sanitizes one caller-named URL through the full pipeline, cached by `sanitizer_revision`. Honours `promptguard_fail_closed` (shared with `/search`) and additionally `promptguard_threshold`, `trusted_domains`, `verified_domains`, `blocked_domains` and `cache_ttl_hours`. |
 | `POST /extract` | Extract from an uploaded document (gated behind `extract_route_enabled` in `config.yaml`). |
 
-The response contract is versioned (`contract_version`, currently **1.2.0**). Consumers
+The response contract is versioned (`contract_version`, currently **1.3.0**). Consumers
 should refuse to activate on a mismatch rather than guess.
 
 ## Quickstart
@@ -255,7 +255,7 @@ no client-header trust) — behind its own hermetic cross-container smoke.
 went public at the 2026-09-10 US-008 flip**; anonymous pulls verified at the gate.
 
 The optional in-memory cache shipped with contract `1.1.0` (the current contract is
-`1.2.0`), and the **frozen OpenAPI
+`1.3.0`), and the **frozen OpenAPI
 contract** is in the tree: [`contract/openapi.yaml`](contract/openapi.yaml), generated and
 checked against a committed `openapi.yaml.sha256` anchor, with the versioning rules — what
 counts as MAJOR, MINOR, PATCH or no bump, and how to vendor a verified copy — in

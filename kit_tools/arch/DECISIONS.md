@@ -8,7 +8,7 @@
 
 > **TEMPLATE_INTENT:** Record architectural decisions and their rationale. Explains the 'why' behind technical choices.
 
-> Last updated: 2026-09-16
+> Last updated: 2026-09-20
 > Updated by: Claude (seed-project)
 
 This file records significant architectural and technical decisions.
@@ -222,7 +222,9 @@ Not recorded; the source gives only the rule and the promise it serves.
 `pipeline/contract.py` carries a hand-bumped `CONTRACT_VERSION` (1.0.0 froze the Epic 1 surface;
 1.1.0 added the additive `/health.cache_backend`, a MINOR, on 2026-09-10; 1.2.0 added the additive
 `SearchResult.content_kind` and `SearchResult.date` plus the `search_unavailable` error code, a
-MINOR, on 2026-09-15), served as
+MINOR, on 2026-09-15; 1.3.0 opened `hardening-search-sanitization`'s contract window on
+2026-09-20, declaring `OMIT_BLOCKED_URL` and bounding `SearchResult.engine` to 64 characters,
+also a MINOR), served as
 `/health.contract_version` and `/openapi.json` `info.version`. Any change to a response shape
 means: classify, bump, add a new golden fixture under `tests/golden/` (older ones retained, never
 edited — ruling (c)), and note it for the consuming repo. `contract.py` lives under `pipeline/` on
@@ -233,8 +235,9 @@ purpose, so it is a hashed `sanitizer_revision` source.
 X.*.*, and is expected to refuse to activate on a major mismatch rather than guess."
 
 **Consequences:**
-Two independent semvers — image tag (`v1.1.0`) and contract (now `1.2.0`, first published by
-the `v1.1.0` image on 2026-09-18) move for different reasons;
+Two independent semvers — image tag (`v1.1.0`) and contract (now `1.3.0` in the tree,
+unpublished; `1.2.0` is the latest published, by the `v1.1.0` image on 2026-09-18) move for
+different reasons;
 `pyproject.toml`'s version is inert. A withdrawn image tag never withdraws a contract version.
 `.github/pull_request_template.md` carries the short-form checklist.
 
@@ -603,8 +606,9 @@ extractions — `cache_policy_fingerprint()` mixed in every caller knob but not 
 **Decision:**
 The hashed identity is `MODEL_ID@revision` (`feature-forage-model-bootstrap` US-001) and the
 revision is an input to `cache_policy_fingerprint()` (`feature-forage-cache-fallback` US-003), so
-a rotation flushes Forage's own cache. Rotations to date — fourteen of the fifteen
-changed no sanitization behaviour; the fifteenth is the first that did:
+a rotation flushes Forage's own cache. Rotations to date — fourteen of the seventeen
+changed no sanitization behaviour; the fifteenth and sixteenth did, and the seventeenth did not
+rejoin them:
 
 | Value | Moved by |
 |---|---|
@@ -624,7 +628,8 @@ changed no sanitization behaviour; the fifteenth is the first that did:
 | `dc3ff92a…` | `contract.py` gained the `POLICY_EXCLUDED_ALL_PROVIDERS` literal for the per-request policy 422 (`retrieval_app.py`, where the raise site lives, is not a hashed file) — `contract.py` is the only hashed file that moved, measured against all eight `_REVISION_SOURCES` files (`search-policy-and-health` US-010, 2026-09-16) |
 | `41ac98ca…` | `contract.py`'s `CONTRACT_VERSION` docstring gained the completed 1.2.0 change record — every field, counter and enum member specs 1-4 added, all additive, plus a note that the `/search`/`/retrieve` boundary text rides the same unpublished window (`retrieval_app.py` and `models.py`, where that boundary text lives, are not hashed files) — `contract.py` is the only hashed file that moved, measured by reverting it alone and reproducing `dc3ff92a…` (`search-policy-and-health` US-003, 2026-09-16) |
 | `b0ca8d9a…` | **the first rotation that changes sanitization behaviour.** `orchestrator.py` gained `_scan_forms_for_search_text`: `/search` now scans `title` and `snippet` in a newline-preserving form and ships their whitespace collapse, so Stage 2's line-anchored BLOCK patterns fire on any line rather than at character 0 only. Two entity decode levels before the scan, two control strips (one before the parser, one after the decodes), truncation once on the scan form, and a `_SEARCH_PARSER_INPUT_MULTIPLIER * max_length` parser-input bound. `orchestrator.py` is the only hashed file that moved, measured by reverting it alone and reproducing `41ac98ca…` from a clean tree (`hardening-search-sanitization` US-001, 2026-09-20) |
-| `42485686…` (current) | **the second rotation that changes sanitization behaviour.** `orchestrator.py`'s `_canonicalize_search_url` became `_SEARCH_URL_RULES`, an ordered registry of named pure rule functions run over the **raw** provider URL, first rejection wins, returning a frozen `SearchUrlOutcome` that carries the omission reason and a closed `SearchUrlRule` log token: presence/length (rejection, never truncation, at 2 048 characters), raw character class (controls, whitespace and RFC 3986 excluded characters rejected, never deleted), parse (`urlsplit` and the `parsed.port` read each in their own `try`), host code points (WHATWG forbidden set, IPv6 colons exempt, `%25` zone id its own token), then a structural scan of **both** `html.unescape(value)` and `unquote(html.unescape(value))`. `_sanitize_search_text` — which routed the URL through `extract_html`, and so ate tag-shaped text before the scan saw it — is deleted. `orchestrator.py` is the only hashed file that moved, measured by reverting it alone and reproducing `b0ca8d9a…` from a clean tree (`hardening-search-sanitization` US-002, 2026-09-20) |
+| `42485686…` | **the second rotation that changes sanitization behaviour.** `orchestrator.py`'s `_canonicalize_search_url` became `_SEARCH_URL_RULES`, an ordered registry of named pure rule functions run over the **raw** provider URL, first rejection wins, returning a frozen `SearchUrlOutcome` that carries the omission reason and a closed `SearchUrlRule` log token: presence/length (rejection, never truncation, at 2 048 characters), raw character class (controls, whitespace and RFC 3986 excluded characters rejected, never deleted), parse (`urlsplit` and the `parsed.port` read each in their own `try`), host code points (WHATWG forbidden set, IPv6 colons exempt, `%25` zone id its own token), then a structural scan of **both** `html.unescape(value)` and `unquote(html.unescape(value))`. `_sanitize_search_text` — which routed the URL through `extract_html`, and so ate tag-shaped text before the scan saw it — is deleted. `orchestrator.py` is the only hashed file that moved, measured by reverting it alone and reproducing `b0ca8d9a…` from a clean tree (`hardening-search-sanitization` US-002, 2026-09-20) |
+| `05dbbb5c…` (current) | contract `1.3.0`: `contract.py` gained `OMIT_BLOCKED_URL` and the version bump, `orchestrator.py` gained `_MAX_SEARCH_ENGINE_LENGTH = 64` and routed `SearchResult.engine` through the same `_normalize_search_text` call `title`/`snippet` already use — both hashed files, measured (both-reverted control reproduces `42485686…`). Bounds and normalizes a field; does not scan one, so **not** a third rotation that changes sanitization behaviour (`hardening-search-sanitization` US-004, 2026-09-20) |
 
 **Rationale:**
 `pipeline/sanitizer_revision.py`: "two containers running the same code can be scanning with

@@ -585,6 +585,11 @@ _MAX_UNRESPONSIVE_ENGINE_LENGTH = 64
 _MAX_SEARCH_TITLE_LENGTH = 512
 _MAX_SEARCH_URL_LENGTH = 2_048
 _MAX_SEARCH_SNIPPET_LENGTH = 2_000
+# `SearchResult.engine` is provider-controlled provenance metadata (which
+# configured engine answered), not page content — it is bounded and
+# normalized like `unresponsive_engines` but, deliberately, never
+# structurally scanned or part of the PromptGuard input (contract 1.3.0).
+_MAX_SEARCH_ENGINE_LENGTH = 64
 # A bound on what `extract_html` parses, not a contract cap. `title` and
 # `snippet` are now truncated *after* extraction, so without this the parser
 # would be handed the provider's whole body (up to 1 MiB) per field per result.
@@ -1186,7 +1191,9 @@ async def run_search_pipeline(
             raw.get("content", ""),
             max_length=_MAX_SEARCH_SNIPPET_LENGTH,
         )
-        engine = raw.get("engine")
+        engine = _normalize_search_text(
+            raw.get("engine"), max_length=_MAX_SEARCH_ENGINE_LENGTH
+        )
         # `content_kind` describes the whole batch the provider returned;
         # `date` is per-result and is filtered to a strict calendar date by
         # `SearchResult` itself, so anything else becomes None there.
@@ -1263,7 +1270,7 @@ async def run_search_pipeline(
                 url=url,
                 domain=domain,
                 snippet=snippet,
-                engine=engine if isinstance(engine, str) else None,
+                engine=engine or None,
                 content_kind=outcome.content_kind,
                 date=result_date,
                 suspicious=suspicious,

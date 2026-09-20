@@ -1690,6 +1690,96 @@ states that plainly and that no `/metrics` counter is planned.
 **Gates.** `uv run pytest` 2 187 passed (2 131 after US-001, +56 here), none skipped;
 `ruff check`, `ruff format --check` and `pyright` (strict) all clean.
 
+### US-004 — Open the contract 1.3.0 window (2026-09-20)
+
+**Shipped.** `pipeline/contract.py`: `CONTRACT_VERSION` "1.2.0" → "1.3.0", with the required
+docstring bullet (`* ``1.3.0`` — …`, two-space continuation lines, no blank line) naming
+`blocked_url`, all four `engine` moves and US-001's served-text derivation, as the spec's
+"entry also carries US-001's line" hint asks; `OMIT_BLOCKED_URL = "blocked_url"` added beside
+the existing `OMIT_*` constants and joined into `OMISSION_REASONS` (now five members).
+`models.py`: `SearchResponse.omitted_by_reason`'s description rewritten to name five keys and
+the `invalid_url`/`blocked_url` split; `SearchResult.engine` gained `max_length=64` and a
+description naming the normalisation — description-only moves in the document, per R36, since
+neither is a new `properties` key or `enum` member. `pipeline/orchestrator.py`: cap block
+gained `_MAX_SEARCH_ENGINE_LENGTH = 64`; the `engine` extraction site now reads `engine =
+_normalize_search_text(raw.get("engine"), max_length=_MAX_SEARCH_ENGINE_LENGTH)` and the
+construction site `engine=engine or None` (empty string, from a non-string or
+empty-after-normalisation input, becomes `None`).
+
+**Regeneration.** `uv run python -m scripts.export_contract` rewrote `contract/openapi.yaml`,
+`contract/openapi.yaml.sha256` (new anchor `40d693ce30a84a9a9977543e6667446a1152e74eb43a0f487dd31bd40f501800`)
+and `tests/fixtures/contract/unregenerated_openapi.yaml`, diffing exactly the three mutations
+this story makes and nothing else (`--check`'s diff was read before regenerating, to confirm).
+`tests/golden/contract_1_3_0.json` created via the same `_SCHEMA_MODELS` the schema test
+builds from; `contract_1_2_0.json` and older are untouched (`git diff --stat` on them is
+empty).
+
+**Golden sweep (R36 corrected, confirmed empirically).** All five `_GOLDEN_PATH` readers
+besides `test_contract_schema_matches_golden` were re-pointed at the new literal
+`_GOLDEN_1_2_0_PATH`. `_ONE_THREE_ZERO_DIFFED_SCHEMAS` lists all six `_SCHEMA_MODELS` entries
+(the 1.2.0 golden, unlike 1.1.0's, already carries `SearchRequest` and
+`Pipeline422ErrorResponse`); `_diff_against_1_2_0` reuses `_added_paths` verbatim, no second
+diff implementation. `_EXPECTED_ONE_THREE_ZERO_DIFF` opens as `frozenset()` — verified, not
+assumed: `test_the_1_2_0_to_1_3_0_diff_has_no_unlisted_additions` is green against the real
+golden built from the real `maxLength: 64` bound and the real rewritten description, which is
+a stronger proof than mutating a copy by hand.
+
+**GOVERNANCE ruling (e).** Classified the `engine` bound as MINOR (additive-behavioural, the
+same class as US-003's future `domain` move), explicitly **not** PATCH — the wire moves on
+more than the annotation (four emitted-value moves: truncation past 64, NFC, control and
+whitespace normalisation, empty → `None`) — and **not** ruling (b), which is scoped to enum
+members. `_RULING_MARKERS` gained `"### (e) "`; the "Five rulings" sentence became "Six
+rulings". The `## Two semvers` section and ruling (c)'s prose were also updated to describe
+the *current* mapping (1.3.0 in the tree, pending; 1.2.0 the latest published, by `v1.1.0` on
+2026-09-18) rather than leave 1.2.0's now-resolved "currently pending" language stale beside
+new prose about 1.3.0's own pending state — `docs/releases.md` already recorded `v1.1.0` as
+published (2026-09-18) when this story started, so that correction was made in passing while
+already editing the section for the fan-out, not treated as a separate change.
+
+**Fan-out (R39).** `grep -rn "1\.2\.0" README.md CLAUDE.md contract kit_tools/arch
+kit_tools/docs` returned 68 hits at story start (matches the spec's count exactly). Every hit
+was read and classified: current-version mentions (`README.md:62,258`, `CLAUDE.md:82`
+invariant 4, `contract/GOVERNANCE.md:29` current-version sentence, `CODE_ARCH.md:108` bold
+version + line count, `SERVICE_MAP.md:75,202`, `TROUBLESHOOTING.md:61`, `CI_CD.md:314`,
+`API_GUIDE.md:43,111`, `DEPLOYMENT.md:210`, `MONITORING.md:65,83`) moved to `1.3.0`; every
+other hit — a dated "Added in `1.2.0`" field marker, a rotation-table row, an
+image-tag-to-contract mapping fact (`v1.1.0` serves `1.2.0`), or an archived/history sentence
+— was left alone as an accurate record of when that thing happened, per R43. The two
+specifically named cells, `API_GUIDE.md`'s `engine` row (`:255`) and `omitted_by_reason` row
+(`:259`), were rewritten in place (keeping US-002's rule-family text on the latter, per the
+spec's instruction) rather than merely version-bumped, since both needed new content, not just
+a new number. `MONITORING.md:146`'s `omitted_by_reason` row gained `blocked_url`.
+`kit_tools/arch/SECURITY.md`'s `engine` row was rewritten to the spec's adversary-framed text
+verbatim (provider-controlled, bounded, NFC-normalised, unscanned, the 2 304-character
+aggregate with `unresponsive_engines`), replacing rather than appending to the old
+unbounded-pass-through row.
+
+**`sanitizer_revision` rotation (the seventeenth): `42485686…ec17f` → `05dbbb5c…82c0b`.**
+Measured by reverting `contract.py` and `orchestrator.py` each in turn against a
+both-reverted control from a clean tree (`git status --porcelain` listed only the files this
+story touches before each revert): `contract.py` alone → `4000a520…c865f32`; `orchestrator.py`
+alone → `d03b9fd7…d33c4b838b`; both reverted → `42485686…ec17f` (the sixteenth rotation's
+shipped value) exactly. Neither file alone reproduces the control, confirming the two-file
+shape (the epic's second, after the ninth rotation). Recorded at all five sites
+(`docs/bootstrap-notes.md`'s new numbered section, `CLAUDE.md`'s Coexistence paragraph,
+`kit_tools/arch/DECISIONS.md`'s rotation table and prose count, `kit_tools/docs/GOTCHAS.md`'s
+table and "Fourteen of the fifteen" sentence — now "Fifteen of the seventeen", naming the
+fifteenth and sixteenth as the only two behaviour-changing rotations and stating the
+seventeenth does not join them — and `kit_tools/arch/CODE_ARCH.md`'s rotation narrative).
+This rotation does **not** change sanitization behaviour: `engine` is now bounded and
+normalised, but still never reaches Stage 2's structural scan or the Stage 3 PromptGuard
+input, so it stays a two-behaviour-changing-rotation epic rather than three.
+
+**Tests.** `tests/test_orchestrator.py` gained `TestSearchResultEngineBound` (six cases:
+over-length truncated to exactly 64, control+whitespace normalised, four empty-after-
+normalisation shapes → `None`, non-string and `None` → `None`, a clean value passed through
+unchanged). `tests/test_contract_schema.py` gained the 1.3.0 sweep section.
+`tests/test_governance_docs.py`'s `_RULING_MARKERS` gained `"### (e) "`.
+
+**Gates.** `uv run pytest` 2 198 passed (2 187 after US-002, +11 here — 8 new engine-bound
+tests, 1 new schema-sweep test, 2 more via the ruling-marker parametrization), none skipped;
+`ruff check`, `ruff format --check` and `pyright` (strict, 0 errors) all clean.
+
 ## Refinement Notes
 
 ### Research Findings

@@ -31,6 +31,7 @@ from models import (
 )
 from pipeline import contract
 from pipeline.orchestrator import (
+    _MAX_SEARCH_ENGINE_LENGTH,
     _MAX_SEARCH_SNIPPET_LENGTH,
     _MAX_SEARCH_TITLE_LENGTH,
     _MAX_SEARCH_URL_LENGTH,
@@ -3393,6 +3394,53 @@ class TestFallbackTelemetry:
         )
 
         assert result.provider_used == "brave"
+
+
+class TestSearchResultEngineBound:
+    """``SearchResult.engine`` is bounded and normalised (contract 1.3.0)."""
+
+    async def _serve(self, engine: object) -> str | None:
+        provider = FakeSearchProvider(
+            name="fake",
+            outcome=ProviderSearchResult(
+                provider_name="fake",
+                results=[
+                    {
+                        "title": "R",
+                        "url": "https://example.com/1",
+                        "content": "c",
+                        "engine": engine,
+                    }
+                ],
+                unresponsive_engines=[],
+            ),
+        )
+        result = await run_search_pipeline(
+            _make_search_request(),
+            providers=[provider],
+            config=_SAMPLE_CONFIG,
+        )
+        assert len(result.results) == 1
+        return result.results[0].engine
+
+    async def test_an_over_length_engine_is_truncated_to_the_bound(self) -> None:
+        engine = await self._serve("e" * 300)
+        assert engine == "e" * _MAX_SEARCH_ENGINE_LENGTH
+        assert _MAX_SEARCH_ENGINE_LENGTH == 64
+
+    async def test_control_characters_and_whitespace_runs_are_normalized(self) -> None:
+        assert await self._serve("duck\x01duck  go\n") == "duckduck go"
+
+    @pytest.mark.parametrize("engine", ["", "  ", "\x01", "\n\n"])
+    async def test_empty_after_normalization_serves_as_none(self, engine: str) -> None:
+        assert await self._serve(engine) is None
+
+    async def test_a_non_string_engine_serves_as_none(self) -> None:
+        assert await self._serve(42) is None
+        assert await self._serve(None) is None
+
+    async def test_a_clean_engine_within_the_bound_is_unchanged(self) -> None:
+        assert await self._serve("duckduckgo") == "duckduckgo"
 
 
 # ---------------------------------------------------------------------------

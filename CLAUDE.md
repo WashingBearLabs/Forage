@@ -79,7 +79,7 @@ is now load-bearing for the two consumers above.
 ### 4. A change to a response shape is a contract change.
 
 The response contract is versioned (`pipeline/contract.py`, `contract_version` currently
-**1.2.0**), and consumers are expected to refuse activation on a major mismatch rather
+**1.3.0**), and consumers are expected to refuse activation on a major mismatch rather
 than guess. Changing any response shape means: bump the version, add a golden fixture
 under `tests/golden/` (older ones are retained, never edited), and note the change for the
 consuming repo.
@@ -251,7 +251,14 @@ presence/length (rejection at 2 048 characters, never truncation), raw character
 forbidden set, IPv6 colons exempt, `%25` zone id its own token), then a structural scan of
 **both** the entity-decoded and the once-percent-decoded forms; `_sanitize_search_text`,
 which routed the URL through `extract_html` and so ate tag-shaped text before the scan saw
-it, is deleted.
+it, is deleted), and a seventeenth to `05dbbb5c…` — **not** a rotation that changes
+sanitization behaviour — when `contract.py` and `orchestrator.py` moved together for the
+contract `1.3.0` bump (`hardening-search-sanitization` US-004 — two hashed files, measured:
+`contract.py` for `CONTRACT_VERSION` and `OMIT_BLOCKED_URL`, `orchestrator.py` for
+`SearchResult.engine`'s new `_MAX_SEARCH_ENGINE_LENGTH = 64` bound, routed through the same
+`_normalize_search_text` call `title`/`snippet` already use; `engine` is bounded and
+normalized, not structurally scanned, so this rotation does not join the fifteenth and
+sixteenth as a third behaviour-changing one).
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

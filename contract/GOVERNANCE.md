@@ -26,7 +26,7 @@ response, and does every name it already knows still mean what it meant?
 | Schema fixtures | `tests/golden/contract_X_Y_Z.json` | by hand, one per contract version |
 | What the running service serves | `/openapi.json` `info.version`, `/health`'s `contract_version` | from `CONTRACT_VERSION` at import |
 
-The current contract version is **1.2.0**. *(That sentence is checked against
+The current contract version is **1.3.0**. *(That sentence is checked against
 `pipeline/contract.py` by `tests/test_governance_docs.py`; a bump that leaves it stale is
 a red test, not a stale doc.)*
 
@@ -59,12 +59,14 @@ publishing a frozen, sha256-anchored contract for the first time, and a contract
 **US-004**, whose job it is to land the in-image `COPY` and the Release assets first; a
 `v1.0.0` tagged before them would ship a contract-less release that nothing can re-cut.)
 
-The mapping has moved once since, and is currently **pending**:
-`search-provider-abstraction` US-004 bumps `CONTRACT_VERSION` to `1.2.0` in the tree, and
-the image that serves it is `v1.1.0`, cut by that epic's release spec. Until then a
-process built from this tree reports `1.2.0` on `/health` while no published image
-advertises it — expected, not drift to chase, and it closes the way the first one did:
-the release spec lands the artifacts, then cuts the tag.
+The mapping has moved twice since. `search-provider-abstraction` US-004 bumped
+`CONTRACT_VERSION` to `1.2.0` in the tree; `v1.1.0`, cut by that epic's release spec,
+is the image that serves it — the mapping closed the way the first one did, the
+release spec landing the artifacts and then cutting the tag. It has moved again, and
+is currently **pending**: `hardening-search-sanitization` US-004 bumps
+`CONTRACT_VERSION` to `1.3.0` in the tree, opening this epic's contract window, and no
+published image serves it yet. A process built from this tree reports `1.3.0` on
+`/health` while no published image advertises it — expected, not drift to chase.
 
 A human line in a release note claiming "this image serves contract 1.1.0" would be the
 last unmechanized integrity claim in the release path, so it is not a human line. The
@@ -171,7 +173,7 @@ An urgent fix does not get to skip the rules; it gets a faster lane through them
 
 ## Recorded rulings
 
-Five rulings this epic already made, kept here so the next change re-reads them instead of
+Six rulings this epic already made, kept here so the next change re-reads them instead of
 re-litigating them. Each cites its source.
 
 ### (a) The documentation pass does not bump the contract
@@ -257,12 +259,14 @@ regenerates the *current* fixture (ruling (a)); a wire change adds a **new** fil
 
 **The current version's own fixture is regenerated in place until that version ships.**
 Retention is about *published* contracts: a version nobody can pull is not yet a thing a
-consumer could have been written against. So while `1.2.0` is in the tree but unpublished
-— across `search-provider-abstraction` specs 2-4, until the `v1.1.0` image publishes it —
-`contract_1_2_0.json` is rewritten by each story that moves the shape, exactly as a
-documentation-only change rewrites the current fixture under ruling (a). The moment an
-image serves a version, its fixture freezes like every other. This is not a seventh worked
-example and adds no row to the table below (`test_there_are_exactly_six`); it is a
+consumer could have been written against. `1.2.0` went through exactly this window across
+`search-provider-abstraction` specs 2-4, with `contract_1_2_0.json` rewritten by each
+story that moved the shape, exactly as a documentation-only change rewrites the current
+fixture under ruling (a) — and froze the moment `v1.1.0` published it. `1.3.0` is in that
+same unpublished window now, opened by `hardening-search-sanitization` US-004:
+`contract_1_3_0.json` is rewritten in place by every later story in that epic that moves
+the shape, until spec 8 US-002 freezes it ahead of the release cut. This is not a seventh
+worked example and adds no row to the table below (`test_there_are_exactly_six`); it is a
 qualification of *when* this ruling starts applying to a given file.
 
 **Source:** `kit_tools/specs/archive/feature-forage-contract.md`, US-003 *Implementation Hints*
@@ -291,6 +295,44 @@ zero-wire-byte epic.
 ruling (d) (round-2 security note); the emission path is `url_validator.py:174` →
 `pipeline/orchestrator.py`'s `private_ip` raise sites. Repeated for reporters in
 [`SECURITY.md`](../SECURITY.md).
+
+### (e) Bounding and normalising an unexamined pass-through field is additive-behavioural, not PATCH
+
+**Ruling:** routing `SearchResult.engine` through the same normalisation as `title` and
+`snippet` — NFC, C0/C1 control deletion, whitespace-run collapse — and truncating it to 64
+characters is a **MINOR**, not a PATCH, even though nothing about it adds a field or an
+enum member.
+
+**Why PATCH does not fit.** This document's PATCH row is scoped to "the published document
+moves but the wire does not" — a description fix, a tightened annotation, a schema render
+that changes with no served byte moving. `engine` fails that test on inspection: before this
+change it was a bare `isinstance(engine, str)` pass-through with no cap and no
+normalisation, so a provider-asserted value over 64 characters, or carrying a control
+character, a decomposed Unicode form, or a run of whitespace, now serves differently than it
+did — four distinct emitted-value moves (truncation past 64, NFC normalisation, control and
+whitespace normalisation, and an empty-after-normalisation value serving as `null` where an
+unexamined `""` served before). A `maxLength: 64` annotation is not the only thing that
+moved; real response bytes did too, on inputs well under the old (nonexistent) bound.
+
+**Why it is additive rather than breaking.** No existing consumer read anything out of
+`engine` that this change removes or renames, and every value the field can still take was
+already a legal value of the old, wider type (`str | None`). A consumer that stored the raw
+value verbatim sees a narrower one for a minority of inputs; a consumer that did nothing
+with it is unaffected. That is the MINOR row's "new response field" case, restated for a
+field whose *shape* is unchanged but whose *emitted values* have moved for the first time —
+the same class as ruling (b), but a behavioural narrowing on an existing field rather than a
+new vocabulary member, so it does not carry ruling (b)'s announcement obligation.
+
+**What does not change.** `engine` remains outside Stage 2's structural scan and outside the
+Stage 3 PromptGuard input — it is provider-controlled provenance metadata, not page content
+a result's website controls, and this rotation does not add scanning. The residual is
+recorded in [`kit_tools/arch/SECURITY.md`](../kit_tools/arch/SECURITY.md)'s
+documented-non-vulnerabilities row.
+
+**Source:** `kit_tools/specs/feature-hardening-search-sanitization.md`, US-004 *Implementation
+Hints* ("The `engine` bound"); the normalisation function is
+`pipeline/orchestrator.py::_normalize_search_text`, already applied to
+`unresponsive_engines` under `_MAX_UNRESPONSIVE_ENGINE_LENGTH`.
 
 ---
 

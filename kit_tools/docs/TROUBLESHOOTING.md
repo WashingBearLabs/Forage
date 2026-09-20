@@ -9,7 +9,7 @@
 
 > **TEMPLATE_INTENT:** Document debugging procedures and common fixes. How to diagnose problems.
 
-> Last updated: 2026-09-16
+> Last updated: 2026-09-20
 > Updated by: Claude (seed-project)
 
 ---
@@ -58,7 +58,7 @@ curl -s localhost:8020/health | jq
 | `cache_connected` | `true` | `false` only with `cache_backend: "valkey"`; memory mode is always `true` |
 | `cache_backend` | what you configured | `"memory"` in production means the env file was not mounted; `"valkey"` when you meant memory means `VALKEY_URL` is set (even to `""`) |
 | `capabilities` | `{"search_sanitization": 1}` | `{}` until weights load. The one field break-glass can make lie |
-| `contract_version` | `"1.2.0"` | Consumers compare MAJOR (see Consumer-Side Problems) |
+| `contract_version` | `"1.3.0"` | Consumers compare MAJOR (see Consumer-Side Problems) |
 | `sanitizer_revision` | 64-hex sha256 | `"unknown"` only when no lifespan ran (test transports) |
 
 **2. Read `/metrics`.** It is JSON, in-process, and resets on restart. The `model` section
@@ -579,7 +579,8 @@ body.
 `/openapi.json` `info.version`). Consumers compare **MAJOR** and are expected to refuse on
 a mismatch rather than guess; MINOR is additive (`1.1.0` added `cache_backend`; `1.2.0`
 added `SearchResult.content_kind` and `SearchResult.date`, plus the `search_unavailable`
-code). Poppy also
+code; `1.3.0` declared `blocked_url` and bounded `SearchResult.engine` to 64 characters).
+Poppy also
 rejects an `/extract` 422 lacking `sanitizer_revision`, and pins the ten `/extract` codes as
 `_SIDECAR_EXTRACT_FAILURE_CODES`.
 

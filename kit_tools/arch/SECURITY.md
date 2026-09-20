@@ -9,7 +9,7 @@
 
 > **TEMPLATE_INTENT:** Document authentication, authorization, and secrets management. Security architecture reference.
 
-> Last updated: 2026-09-16
+> Last updated: 2026-09-20
 > Updated by: Claude (seed-project)
 
 ---
@@ -359,18 +359,22 @@ These are recorded in the repo with a source and a reason; they are decisions, n
 | A validation 422 echoes the offending value verbatim under `detail[].input` on every POST route (FastAPI's default `RequestValidationError` handler); those bytes are caller text, not sanitized output. Dropping `input`/`ctx` is a 422 wire change and goes through `contract/GOVERNANCE.md` | "Request models" above; `contract/GOVERNANCE.md` |
 | arm64 image built but never executed by CI | `docs/releases.md` |
 | No image signing, provenance, or SBOM | `.github/workflows/ci.yml` publish job comment |
-| `SearchResult.engine` is an unbounded `isinstance(engine, str)` pass-through — no length cap, no normalisation, no structural scan — and from contract `1.2.0` its provenance widens from the operator's own SearXNG to any provider in the chain, including spec 2's third-party API | `pipeline/orchestrator.py` (the sanitization loop); `search-provider-abstraction` US-004 |
+| `engine` is provider-controlled, bounded to 64 characters and NFC-normalised in contract `1.3.0`, and neither structurally scanned nor part of the PromptGuard input — a hostile or compromised search backend can place up to 64 unscanned model-visible characters per result (`searxng.py:52` notes SearXNG can report engines outside the vetted list, so the field is not a closed vocabulary either). `SearchResponse.unresponsive_engines` is the second bounded-but-unscanned provider-controlled string (16 × 64 by `_MAX_UNRESPONSIVE_ENGINES` / `_MAX_UNRESPONSIVE_ENGINE_LENGTH`) — so `engine` is not the *only* such field, and the aggregate is at most 20 × 64 + 16 × 64 = 2 304 unscanned, model-visible, provider-controlled characters per `/search` response | `pipeline/orchestrator.py` (the sanitization loop, `_MAX_SEARCH_ENGINE_LENGTH` / `_MAX_UNRESPONSIVE_ENGINE_LENGTH`); `models.py:348,434-437`; `search-provider-abstraction` US-004; `hardening-search-sanitization` US-004 |
 
-The `engine` row is the one that *changed shape* rather than merely being restated.
-`engine` is provenance, not identity (`SearchProvider.name` is identity), and it has always
-been passed through unbounded — but until contract `1.2.0` the only thing that could
-populate it was the operator's own SearXNG deployment. It is now whatever a chained
-provider puts in the field, which from spec 2 includes a third-party API's response. The
-risk is carried forward deliberately rather than fixed here: bounding `engine` is a wire
-change and belongs with the provider that first widens it. The two fields `1.2.0` *adds*
-are closed by construction — `content_kind` is a `Literal` validated on the way out, and
-`date` is filtered to a strict `YYYY-MM-DD` calendar date or `None`, so neither can carry
-free text (GOVERNANCE ruling 19 is why they need no scan).
+The `engine` row moved once already and moved again here. `engine` is provenance, not
+identity (`SearchProvider.name` is identity). Until contract `1.2.0` the only thing that
+could populate it was the operator's own SearXNG deployment; from `1.2.0` it is whatever a
+chained provider puts in the field, including a third-party API's response, and until
+`1.3.0` it was passed through completely unbounded and unexamined — no length cap, no
+normalisation. `1.3.0` closes the unbounded half (`_MAX_SEARCH_ENGINE_LENGTH = 64`, the same
+`_normalize_search_text` call `title`/`snippet`/`unresponsive_engines` already use) but
+deliberately not the unscanned half: `engine` is search-backend-assigned provenance
+metadata — which configured engine answered — not page content a result's website
+controls, unlike `title`, `url` and `snippet`, and a future spec (T3.2) plans to let
+consumers weight source trust off it. The two fields `1.2.0` *adds* are closed by
+construction — `content_kind` is a `Literal` validated on the way out, and `date` is
+filtered to a strict `YYYY-MM-DD` calendar date or `None`, so neither can carry free text
+(GOVERNANCE ruling 19 is why they need no scan).
 
 ### Observed absences (for the owner to rule on)
 

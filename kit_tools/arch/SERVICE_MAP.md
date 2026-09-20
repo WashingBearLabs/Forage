@@ -9,7 +9,7 @@
 
 > **TEMPLATE_INTENT:** Document dependencies and integrations. Shows what talks to what and failure impacts.
 
-> Last updated: 2026-09-16
+> Last updated: 2026-09-20
 > Updated by: Claude (seed-project)
 
 ---
@@ -72,7 +72,7 @@ Forage is the only internal service. Its pipeline stages (`pipeline/stage1_*` th
 | **Runtime** | Python 3.12, FastAPI + uvicorn, one worker (`CMD` has no `--workers`); uv-managed lockfile; CPU-only torch/transformers loaded lazily by `promptguard/classifier.py`. |
 | **Port** | `8020` in-container (`EXPOSE 8020`, uvicorn `--host 0.0.0.0`); published as `127.0.0.1:8020` by both compose fragments. |
 | **Health Check** | `GET /health` — **always HTTP 200; the truth is in the body** (`status`, `degraded_reasons`, `promptguard_loaded`, `cache_connected`, `cache_backend`, `capabilities`, `search_providers`, `sanitizer_revision`, `contract_version`). No `HEALTHCHECK` in `Dockerfile` and no `healthcheck:` in `compose/*.yml`; the "10 s x 5 `curl -f`" check referenced in code comments is Poppy's compose. |
-| **Contract** | `contract_version` **1.2.0** (`pipeline/contract.py`), frozen as `contract/openapi.yaml` with a committed `openapi.yaml.sha256` anchor. Image tag (`v1.0.0`) and contract version are independent semvers — no published image serves `1.2.0` yet; `v1.1.0` will. |
+| **Contract** | `contract_version` **1.3.0** (`pipeline/contract.py`), frozen as `contract/openapi.yaml` with a committed `openapi.yaml.sha256` anchor. Image tag and contract version are independent semvers — `v1.1.0` serves `1.2.0`; no published image serves `1.3.0` yet. |
 | **Auth** | None on any route, including `/docs`, `/redoc`, `/openapi.json`. Network placement is the control (`docs/configuration.md`, `SECURITY.md`). |
 
 **Depends on:**
@@ -199,16 +199,16 @@ behaviour is described here from Forage's own docs and tests
 (`tests/test_contract_errors.py`, `docs/bootstrap-notes.md`); the Poppy repo was not read.
 
 **What Poppy must do:**
-- Compare `/health.contract_version` (**1.2.0**) on its **MAJOR** and refuse to activate on
+- Compare `/health.contract_version` (**1.3.0**) on its **MAJOR** and refuse to activate on
   a mismatch (`CLAUDE.md` invariant 4). **Never** compare `sanitizer_revision`: the two
-  repos' revisions diverged deliberately fourteen times (Forage `41ac98ca…`, Poppy still
+  repos' revisions diverged deliberately seventeen times (Forage `05dbbb5c…`, Poppy still
   `e6b2b56d…`; `docs/bootstrap-notes.md` is the running record, not this count).
 - Vendor the contract by the procedure in `contract/GOVERNANCE.md`: pick a tag (never
   `latest`); fetch `openapi.yaml` and `openapi.yaml.sha256` from the **same** tag (git
   tag, `gh release download v<ver> --pattern 'openapi.yaml*'`, or
   `docker run --rm --entrypoint cat <image> /app/contract/openapi.yaml`); run
   `sha256sum -c openapi.yaml.sha256`; commit both; record the tag. The anchor is
-  currently `11435a17aabe7c11faf71aee0fd066a3784d5e9de557c451153e7f47d0d5615f`.
+  currently `40d693ce30a84a9a9977543e6667446a1152e74eb43a0f487dd31bd40f501800`.
 - Its client caches `sanitizer_revision` from `/health`, pins the ten `/extract` error
   codes, rejects an `/extract` 422 lacking `sanitizer_revision`, gates web search on
   `capabilities.search_sanitization`, and buckets unknown `omitted_by_reason` /

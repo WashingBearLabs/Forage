@@ -1,7 +1,7 @@
 <!-- Template Version: 2.0.0 -->
 # GOTCHAS.md
 
-> Last updated: 2026-09-16
+> Last updated: 2026-09-20
 > Updated by: Claude (forage-contract US-004)
 
 ## Overview
@@ -407,7 +407,7 @@ recipe.
 
 **What happens:**
 `derive_sanitizer_revision()` hashes eight source files plus the model identity and the
-active threshold. Forage's revision has moved fifteen times, each time at a boundary and
+active threshold. Forage's revision has moved seventeen times, each time at a boundary and
 each time deliberately:
 
 | When | Value | What moved it |
@@ -429,15 +429,18 @@ each time deliberately:
 | `search-policy-and-health` US-003 | `41ac98ca…b4e318` | `contract.py`'s `CONTRACT_VERSION` docstring gained the completed 1.2.0 change record (every field, counter and enum member specs 1-4 added, all additive) plus a note that the `/search`/`/retrieve` boundary text rides the same unpublished window; `retrieval_app.py` and `models.py`, where that boundary text lives, are not `_REVISION_SOURCES` members |
 | `hardening-search-sanitization` US-001 | `b0ca8d9a…aed73` | **the first rotation that changes sanitization behaviour.** `orchestrator.py` gained `_scan_forms_for_search_text`, which returns `(wire_form, scan_form)` for `title` and `snippet`: the scan form keeps line breaks so Stage 2's `^System:` / `^POPPY:` / `^assistant:` patterns fire on any line, and the wire form is its whitespace collapse. Two entity decode levels before the scan, two control strips (one before the parser for raw bytes, one after the decodes), truncation once on the scan form, and a `_SEARCH_PARSER_INPUT_MULTIPLIER * max_length` parser-input bound. `orchestrator.py` is the only hashed file that moved, measured from a clean tree |
 | `hardening-search-sanitization` US-002 | `42485686…ec17f` | **the second rotation that changes sanitization behaviour.** `orchestrator.py`'s `_canonicalize_search_url` became `_SEARCH_URL_RULES`, an ordered registry of named pure rule functions run over the **raw** provider URL, first rejection wins, returning a frozen `SearchUrlOutcome` that carries the omission reason and a closed `SearchUrlRule` log token: presence/length (rejection, never truncation, at 2 048 characters), raw character class (controls, whitespace and RFC 3986 excluded characters rejected, never deleted), parse (`urlsplit` and the `parsed.port` read each in their own `try`), host code points (WHATWG forbidden set, IPv6 colons exempt, `%25` zone id its own token), then a structural scan of **both** `html.unescape(value)` and `unquote(html.unescape(value))`. `_sanitize_search_text` — which routed the URL through `extract_html`, and so ate tag-shaped text before the scan saw it — is deleted. `orchestrator.py` is the only hashed file that moved, measured from a clean tree |
+| `hardening-search-sanitization` US-004 | `05dbbb5c…82c0b` | contract `1.3.0` — **two** hashed files: `contract.py` (`OMIT_BLOCKED_URL`, the version bump) and `orchestrator.py` (`_MAX_SEARCH_ENGINE_LENGTH = 64`, routing `SearchResult.engine` through the same `_normalize_search_text` call `title`/`snippet` already use). Bounds and normalizes a field rather than scanning one, so **not** a third rotation that changes sanitization behaviour; both-reverted control reproduces `42485686…ec17f`, measured |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Fourteen of the fifteen rotations changed no sanitization behaviour; the fifteenth
-(`hardening-search-sanitization` US-001) is the first that did** — `/search` scans `title`
-and `snippet` newline-preserved now, so line-anchored Stage 2 patterns fire on any line
-rather than at character 0 only, and a rising `structural_blocked` after it is expected.
-Among the other fourteen, the fourth and fifth
+**Fifteen of the seventeen rotations changed no sanitization behaviour; the fifteenth and
+sixteenth (`hardening-search-sanitization` US-001 and US-002) are the only two that did, and
+the seventeenth (US-004, contract `1.3.0`) does not rejoin them** — US-001's is that `/search`
+scans `title` and `snippet` newline-preserved now, so line-anchored Stage 2 patterns fire on
+any line rather than at character 0 only, and a rising `structural_blocked` after it is
+expected; US-004 bounds and normalizes `SearchResult.engine` without routing it through that
+same scan. Among the other fourteen, the fourth and fifth
 are different *kinds* of rotation and worth reading as such. The first three moved because
 the hash is over bytes and someone reformatted or retyped a hashed file. The fourth moved
 because an **input changed**: weights are a runtime, per-deployment thing now

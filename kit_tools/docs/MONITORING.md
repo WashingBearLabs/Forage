@@ -9,7 +9,7 @@
 
 > **TEMPLATE_INTENT:** Document logs, metrics, alerts, and dashboards. How to observe the system.
 
-> Last updated: 2026-09-17
+> Last updated: 2026-09-20
 > Updated by: Claude (seed-project)
 
 ---
@@ -62,7 +62,7 @@ Forage listens on `0.0.0.0:8020` inside the container; the compose fragments pub
 | `cache_connected` | bool | `true`, `false` | Valkey mode: a live ping via `cache.ping_if_due()`, subject to reconnect backoff. Memory mode: always `true` (the backend is in-process). Not a statement that Valkey is present; read `cache_backend` for that. |
 | `capabilities` | dict | `{"search_sanitization": 1, "brave_api_key": 1}`, any subset, or `{}` | Presence map, two keys as of contract 1.2.0. `search_sanitization` is present when the classifier is loaded **or** when break-glass is armed (`FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION=1`, alias `POPPY_RETRIEVAL_LEGACY_CAPABILITY=1`, exact string `1`) — break-glass lies only for this key. `brave_api_key` is present when this start resolved a usable `FORAGE_BRAVE_API_KEY` (`brave_key_present()`), independently of whether `brave` is in `search_providers` and untouched by break-glass. |
 | `sanitizer_revision` | string | 64-hex sha256 | `derive_sanitizer_revision(config)`: hash of eight `pipeline/*.py` sources plus `MODEL_ID@revision` plus `promptguard_threshold`. The literal `unknown` appears only when no lifespan ran (test transports). |
-| `contract_version` | string | `1.2.0` | `pipeline.contract.CONTRACT_VERSION`; identical to `/metrics.contract_version` and `/openapi.json` `info.version`. |
+| `contract_version` | string | `1.3.0` | `pipeline.contract.CONTRACT_VERSION`; identical to `/metrics.contract_version` and `/openapi.json` `info.version`. |
 | `cache_backend` | string | `valkey`, `memory` | Decided once at start: `VALKEY_URL` fully unset gives `memory`; set to anything else, including the empty string, gives `valkey`. |
 | `search_providers` | list | `["searxng"]`, `["searxng", "brave"]`, ... | The resolved provider chain's names, in traversal order, after key-gated skips (contract 1.2.0, `search-policy-and-health` US-002). Configuration echo fixed for the life of the process — not a liveness probe, and not a statement that any provider is reachable right now. The check is to compare it against `FORAGE_SEARCH_PROVIDERS`: a configured `brave` that is missing here was skipped at boot for want of a usable key, and the startup signal for that is the WARNING `brave_skipped_missing_key`; `/health` itself cannot tell "configured but skipped" from "never configured" — by design, key presence is published, never a second differential channel (ruling 15). |
 | `degraded_reasons` | list | `promptguard_unavailable`, `cache_unavailable` | Closed vocabulary (`pipeline/contract.py` `DegradedReason`). Ordered `promptguard_unavailable` first. Empty iff `status` is `healthy`. |
@@ -80,7 +80,7 @@ Schema-style listing (field set and value domains as confirmed in `retrieval_app
   "cache_connected":    true | false,
   "capabilities":       {"search_sanitization": 1, "brave_api_key": 1} | {} | ...,
   "sanitizer_revision": "<64-hex sha256>",
-  "contract_version":   "1.2.0",
+  "contract_version":   "1.3.0",
   "cache_backend":      "valkey" | "memory",
   "search_providers":   ["searxng"] | ["searxng", "brave"] | ...,
   "degraded_reasons":   [] | ["promptguard_unavailable"] | ["cache_unavailable"] | ["promptguard_unavailable", "cache_unavailable"]
@@ -143,7 +143,7 @@ Backed by `retrieval_app.SearchMetrics`.
 |---------|------|-----------------|----------------------|
 | `requests` | counter | Every `/search` that reached the handler. | Load. |
 | `errors` | map | `record_error(exc.error)`; three keys. `searxng_error` (SearXNG answered non-2xx) and `searxng_unavailable` (connection refused, DNS, 10 s timeout, bad JSON) are raised only when the configured chain is a lone `searxng`; `search_unavailable` (contract `1.2.0`) covers every other chain, with reason `<provider_name>: <failure_class>` — or, raised by the handler before any provider is called, the fixed literal `policy_excluded_all_providers` when a request's `providers` / `allow_paid_fallback` leaves a paid-only chain empty (`search-policy-and-health` US-010). | The companion is down or throttling. `searxng_error` with reason "SearXNG returned HTTP error (http_429)" means the SearXNG limiter was turned on. `search_unavailable` names its provider in the 422 `reason`, not in the counter key — read the logs or the response to tell which one failed; a `policy_excluded_all_providers` reason is a consumer's policy, not a provider failure. |
-| `omitted_by_reason` | map | Results dropped before return, keyed by `contract.OMISSION_REASONS`: `invalid_url`, `structural_blocked`, `injection_detected`, `promptguard_unavailable`; anything else lands in `other`. | `promptguard_unavailable` rising: fail-closed omissions on a degraded container — the consumer sees thin or empty results. `structural_blocked` rising after `hardening-search-sanitization` US-001 is **expected** — see the caveat below. |
+| `omitted_by_reason` | map | Results dropped before return, keyed by `contract.OMISSION_REASONS`: `invalid_url`, `structural_blocked`, `injection_detected`, `promptguard_unavailable`, and — added in contract `1.3.0`, declared before it has a raiser — `blocked_url`; anything else lands in `other`. | `promptguard_unavailable` rising: fail-closed omissions on a degraded container — the consumer sees thin or empty results. `structural_blocked` rising after `hardening-search-sanitization` US-001 is **expected** — see the caveat below. |
 | `unscanned_results` | counter | `+= response.unscanned_results` — fail-open results returned without an ML scan. | Unsanitized results are reaching the consumer. |
 | `fallback_fired` | counter | Once per `/search` request whose provider chain advances past the first provider (`search-fallback` US-003; the per-process count of the per-response `fallback_fired` bool) — including a request that ends in a 422. | Free search is failing often enough that the chain is advancing; correlate with `search_provider_failed` WARNINGs and the `errors` map to see which provider is unreliable. |
 | `paid_calls` | counter | Once per call to a `paid=True` configured provider, incremented before the call so a call that times out is still counted — whether or not it served the response. | Spend. `paid_calls` rising **faster** than `fallback_fired` means a paid provider is first in the configured chain — `FORAGE_SEARCH_PROVIDERS` names it ahead of every free provider, or names no free provider — so it is called without the chain advancing. A per-request `providers` / `allow_paid_fallback` policy cannot cause this: it only removes paid providers, never adds or reorders one. Rising together at 1:1 means a standard free-first chain is falling back to the paid provider every time it advances. |
