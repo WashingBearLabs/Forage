@@ -8,8 +8,8 @@
 
 > **TEMPLATE_INTENT:** Record architectural decisions and their rationale. Explains the 'why' behind technical choices.
 
-> Last updated: 2026-09-16
-> Updated by: Claude (seed-project)
+> Last updated: 2026-09-19
+> Updated by: Claude (close-session — cassette-replay decision)
 
 This file records significant architectural and technical decisions.
 
@@ -834,3 +834,54 @@ contract in commit `5985437`, distribution in `f4c2b16` (both 2026-09-11);
      short title, followed by Status, Context, Options Considered (or "not recorded"), Decision,
      Rationale, Consequences and Source. Add new decisions here first; promote to CLAUDE.md only
      if they turn out to be load-bearing. -->
+
+
+### 2026-09-19: Injection defence is measured by replaying owner-recorded classifier scores; model weights never enter CI
+
+**Status:** Accepted (planned — `epic-forage-injection-corpus`, executes after `epic-forage-hardening`)
+
+**Context:**
+Injection coverage was example-based unit testing (`kit_tools/arch/SECURITY.md` "Observations").
+The 2026-08-30 family review scored "injection regression suite in CI" ✗. Measuring the real
+Prompt Guard classifier on every PR collides with three settled facts: the upstream repository is
+gated, the org's weights mirror is private by decision (`docs/weights.md` "Why the mirror is
+private"), and the workflow pins that it references no repository secret
+(`tests/test_ci_workflow.py::test_no_repository_secrets_referenced`).
+
+**Options Considered (all recorded):**
+
+1. **A CI job pulls the private mirror with `GITHUB_TOKEN` (`packages: read`)** — rejected: it
+   reverses the "weights never in CI" stance, costs ~270 MiB per run, and float drift across torch
+   versions can flip borderline scores into flaky gates.
+2. **Structural-only measurement (stages 1/2/4/5), classifier unmeasured** — rejected: leaves the
+   scorecard item half-open and the 86M / contiguity questions unanswerable.
+3. **Recorded-score cassettes** — chosen. An owner runs the real classifier once per model
+   revision on a host; per-window scores are committed keyed by the sha256 of the exact text stage 3
+   sends, plus model id and revision; CI replays them through the real stage-3 rules. A miss is a
+   hard error naming record, route, model and hash. No chunk text is stored.
+
+**Decision:**
+Cassettes under `tests/corpus/cassettes/`, one per model id, revision equal to the manifest pin.
+The gate is a generated, exact-match baseline plus floors set from the first measurement (never
+aspirational), riding the existing `test` job. Contiguity gating and the 86M default are **not**
+flipped by the corpus epic; it produces the decision table, and a flip is a later owner ruling
+because both rotate `sanitizer_revision`. Third-party samples enter only from licences read at the
+directory of the files taken (AgentDojo, LLMail-Inject, CyberSecEval — MIT); BIPIA (CC-BY-SA data)
+and WASP (CC-BY-NC) are excluded by name.
+
+**Rationale:**
+The model is pinned by revision and per-file hash, so its scores cannot change without a
+re-vendoring — the event that requires re-recording; what can change without one is the text stage
+3 receives, which a text-keyed cassette catches as a miss. Replay makes every number deterministic,
+which is what makes exact-match gating honest and tolerance bands unnecessary.
+
+**Consequences:**
+Owner gates for each recording (token via `read -rs`, never argv). Every corpus record is data:
+never quoted in docs or assertion output, `.jsonl` only, RFC 2606 hosts, secret-shape lint, no
+`.gitleaksignore` growth. The epic ships no runtime change (`_REVISION_SOURCES`, contract and
+`config.yaml` untouched — asserted per spec).
+
+**Source:** `kit_tools/specs/epic-forage-injection-corpus.md` (owner decisions 1–4, rulings 5–16,
+2026-09-19); landscape research folded into spec 2/3/5 Research Findings (PG2 model card; Prompt
+Overflow, arXiv 2605.23196; Zenity 2026-03-12; PIDS-Bench, arXiv 2609.15017; Zscaler ThreatLabz
+2026-07-02); `docs/weights.md`; `.github/workflows/ci.yml` `test` job.

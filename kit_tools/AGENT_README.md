@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.1 -->
 # AGENT_README.md
 
-> Last updated: 2026-09-17
-> Updated by: Claude (seed-project)
+> Last updated: 2026-09-19
+> Updated by: Claude (close-session — in-flight epics, decisions count)
 
 Navigation guide for AI assistants working in Forage. Forage is a ~5,100-line single
 service, so this documentation set is deliberately smaller than a monorepo's — every file
@@ -65,8 +65,10 @@ listed below exists, and nothing is listed that doesn't.
 
 - [ ] Read `SYNOPSIS.md` for current state
 - [ ] Read `../CLAUDE.md` for the invariants
-- [ ] Check `specs/` for anything in flight (the extraction epic closed at v1.0.0 on
-      2026-09-11; new specs land here via `/kit-tools:plan-epic`)
+- [ ] Check `specs/` for anything in flight: `epic-search-providers` shipped as `v1.1.0`
+      (2026-09-18, archived); `epic-forage-hardening` (eight specs, validated to needs-work
+      2026-09-19) is next to execute, then `epic-forage-injection-corpus` (five specs, planned
+      2026-09-19, `validate-epic` pending). New specs land here via `/kit-tools:plan-epic`.
 - [ ] Scan `docs/GOTCHAS.md`
 - [ ] Confirm the environment: `uv sync --extra dev && uv run pytest` (expect ALL green, zero
       failures — the current count lives in `testing/TESTING_GUIDE.md`; 2105 as of
@@ -189,7 +191,7 @@ kit_tools/
 │
 ├── arch/
 │   ├── CODE_ARCH.md         # Module map, patterns, deliberate non-structure
-│   ├── DECISIONS.md         # Decision log with sources (19 entries, reconstructed 2026-09-13)
+│   ├── DECISIONS.md         # Decision log with sources (20 entries; reconstructed 2026-09-13, appended since)
 │   ├── INFRA_ARCH.md        # Image, compose fragments, registry, volume, resource envelope
 │   ├── SECURITY.md          # Posture, SSRF, injection signalling, secrets, supply chain
 │   ├── SERVICE_MAP.md       # Dependencies, consumer, failure impact matrix, cache key scheme

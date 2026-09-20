@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # SYNOPSIS.md
 
-> Last updated: 2026-09-17
-> Updated by: Claude (forage-contract US-004)
+> Last updated: 2026-09-19
+> Updated by: Claude (close-session — hardening validated, corpus planned)
 
 ---
 
@@ -35,6 +35,7 @@ preserved). See `docs/bootstrap-notes.md` for the pin record.
 | CI | `.github/workflows/ci.yml` — ten jobs in two lanes: `lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke`, `publish` for the service image, and `searxng-build`/`-smoke`/`-publish` for the companion |
 | Published image | `ghcr.io/washingbearlabs/forage` — `latest`, `1.1` and `1.1.0` resolve to one digest (`sha256:e1b875cc…`, `search-release` US-002); `1.0`/`1.0.0` still resolve to the earlier cut. `docs/releases.md` § "Released versions" has both entries |
 | Deployment | Poppy's in-tree copy is still the deployed source of truth (coexistence rule) |
+| Planned next | `epic-forage-hardening` (eight specs, 42 stories, contract window 1.2.0 → 1.3.0, target `v1.2.0`; validated to `needs-work` 2026-09-19) executes next; `epic-forage-injection-corpus` (five specs, 21 stories, no runtime change; planned 2026-09-19, `validate-epic` pending) follows and measures it — wrappers in `specs/` |
 
 **Coexistence rule:** until Poppy pins a published Forage image, any fix to the extracted
 paths on either side must be replayed onto the other, and `docs/bootstrap-notes.md`'s pin
