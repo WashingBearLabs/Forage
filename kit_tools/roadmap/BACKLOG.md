@@ -41,13 +41,17 @@ Deliberately deferred at extraction — the flat layout keeps the Dockerfile,
 `sanitizer_revision`'s hashed source paths, and the whole suite working unchanged.
 Cosmetic only, and it touches `sanitizer_revision`, so it needs its own change.
 
-### Injection regression corpus in CI (T2.3)
+### Injection regression corpus in CI (T2.3) — planned
 **Priority:** Medium · **Effort:** Large
-`epic-forage-injection-corpus` is still the 2026-09-14 stub; it measures the classifier and
-parity changes `epic-forage-hardening` makes, so plan it (`/kit-tools:plan-epic`) once that epic's
-spec 7 numbers exist. Shipped and moved out of this list: the search-provider abstraction
-(`v1.1.0`, 2026-09-18) and `/retrieve` hardening + the 86M model (now the planned
-`epic-forage-hardening`, below).
+`epic-forage-injection-corpus` was planned on 2026-09-19 (`/kit-tools:plan-epic`; five specs, 21
+stories — `feature-corpus-{harness,attacks,benign,recording,gates}.md`): a licence-clean attack
+corpus and benign counter-corpus driven hermetically through `POST /search`, `/retrieve` and
+`/extract`, with the real classifier measured once per model revision on a host and replayed in CI
+from committed per-window score cassettes; the gate is a generated baseline (exact match) plus
+measured floors. Ships no runtime change. Sequenced **after** `epic-forage-hardening` (spec 1
+`depends_on: [hardening-release]`); next step `/kit-tools:validate-epic forage-injection-corpus`.
+Shipped and moved out of this list: the search-provider abstraction (`v1.1.0`, 2026-09-18) and
+`/retrieve` hardening + the 86M model (now the planned `epic-forage-hardening`, below).
 
 ### Structured request logging / tracing
 **Priority:** Low · **Effort:** Small
