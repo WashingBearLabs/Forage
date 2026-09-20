@@ -590,11 +590,11 @@ have become 500s under round 4's one-statement reading of it.)
   rewritten. Closing audit ids (-032, -033) in this story's Implementation Notes.
 
 **Acceptance Criteria:**
-- [ ] Each hostile URL in the Independent Test table is absent from `results`, counted under
+- [x] Each hostile URL in the Independent Test table is absent from `results`, counted under
       exactly the reason the table names, and logs exactly the token the table names; every
       control row is served with the stated `url`, `domain` and encoding; `len(fixtures) <= 20` is
       asserted per drive for `num_results=10` (20 and 5).
-- [ ] Rule (0): a `None`, empty or non-string URL and a URL longer than `_MAX_SEARCH_URL_LENGTH`
+- [x] Rule (0): a `None`, empty or non-string URL and a URL longer than `_MAX_SEARCH_URL_LENGTH`
       after trimming are `invalid_url` (`missing` / `too_long`), split across two levels because
       the pipeline cannot prove all four (round 5): at the pipeline level `scan_structural` and
       `unquote` are asserted uncalled (the per-field loop is skipped by the `continue`); in a
@@ -604,29 +604,29 @@ have become 500s under round 4's one-statement reading of it.)
       `unresponsive_engines` at `:954` before the result loop, so a pipeline-level patch would
       fail on the title's call, not the URL's; the exactly-2 048-character control is served; `"  https://example.com/x \n"` is served as
       `https://example.com/x` and `https://example.com/ x` is rejected.
-- [ ] Rule (1) runs on the trimmed raw value: `https://example.com/pa\x01th` and
+- [x] Rule (1) runs on the trimmed raw value: `https://example.com/pa\x01th` and
       `https://exam\x01ple.com/` are both rejected under `invalid_url`, `_normalize_search_text` is
       never called for them (patched and asserted), and no served `url` differs from the provider's
       trimmed string by a character `_normalize_search_text` deleted — fragment removal, scheme/host
       lower-casing and IPv6 re-bracketing are pinned as served controls.
-- [ ] A URL violating rule (1) and rule (4) is counted exactly once, under `invalid_url`.
-- [ ] `_canonicalize_search_url` iterates an explicit ordered list of named rule functions
+- [x] A URL violating rule (1) and rule (4) is counted exactly once, under `invalid_url`.
+- [x] `_canonicalize_search_url` iterates an explicit ordered list of named rule functions
       (first rejection wins) and returns a frozen `SearchUrlOutcome` carrying the omission reason and
       the log token; the omission branch at `:974-977` reads the reason from it; each rule has a
       direct unit test; `_sanitize_search_text` no longer exists (`grep -rl "_sanitize_search_text"
       pipeline/ tests/` prints nothing — path set `pipeline/` and `tests/`, `kit_tools/` excluded;
       today it prints three files: `pipeline/orchestrator.py`, `tests/test_orchestrator.py`,
       `tests/test_brave_provider.py`, verified).
-- [ ] The `url` entry of the per-field loop calls `scan_structural` on both scan texts; a test
+- [x] The `url` entry of the per-field loop calls `scan_structural` on both scan texts; a test
       patches `scan_structural` and asserts it receives the entity-decoded text and the once-decoded
       text for a URL whose decoded form differs, and that neither exceeds `_MAX_SEARCH_URL_LENGTH`
       characters; `extract_html` is not called for either.
-- [ ] No `SearchResult.domain` in any test response contains a WHATWG forbidden domain code point
+- [x] No `SearchResult.domain` in any test response contains a WHATWG forbidden domain code point
       other than the colons of an IPv6 literal (the criterion names the set: C0 controls, U+007F,
       space, `# % / : < > ? @ [ \ ] ^ |`); `tests/test_orchestrator.py:2825`'s domain test is
       rewritten to the `2606:4700::1111` fixture with the recorded expectation and passes; no other
       assertion in it changes.
-- [ ] Every rule (0)–(3) rejection logs exactly one content-free `search_url_rejected rule=<token>
+- [x] Every rule (0)–(3) rejection logs exactly one content-free `search_url_rejected rule=<token>
       provider=<name>` record with the token from `SearchUrlRule` — `{missing, too_long,
       raw_chars, unparseable, invalid_port, parse, userinfo, host_code_point, zone_id}` —
       `provider` from the closed provider-name vocabulary, and no other record for that result;
@@ -638,14 +638,14 @@ have become 500s under round 4's one-statement reading of it.)
       port (drive B); a sentinel
       substring of a rejected URL appears in no record emitted for it; the pre-existing Stage-2
       block log at `:999-1003` is unchanged.
-- [ ] The archived `feature-search-fallback.md` carries the dated correction line; `SECURITY.md:77`
+- [x] The archived `feature-search-fallback.md` carries the dated correction line; `SECURITY.md:77`
       and `API_GUIDE.md:255/:259` state the rules and the rejection-not-truncation bound;
       `MONITORING.md` states that the yield signal is the `rule=raw_chars` / `rule=too_long` log
       line aggregated by `provider` plus `rule`, not `/metrics`.
-- [ ] `sanitizer_revision` rotation measured (revert-and-reproduce) and recorded at the five sites.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] `sanitizer_revision` rotation measured (revert-and-reproduce) and recorded at the five sites.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-003: Search-time URL audit — literals first, canonicalised names, embedded-IPv4 unwrap, blocklisted names
 
