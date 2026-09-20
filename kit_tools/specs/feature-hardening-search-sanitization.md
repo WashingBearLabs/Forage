@@ -1780,6 +1780,118 @@ unchanged). `tests/test_contract_schema.py` gained the 1.3.0 sweep section.
 tests, 1 new schema-sweep test, 2 more via the ruling-marker parametrization), none skipped;
 `ruff check`, `ruff format --check` and `pyright` (strict, 0 errors) all clean.
 
+### US-003 — Search-time URL audit (2026-09-20)
+
+**Shipped.** `url_validator.py` gained the service's one host canonicaliser —
+`canonicalize_host` / `canonical_host`, the frozen `CanonicalHost` / `HostRejection`
+carriers and the `HostKind` / `HostRejectionReason` `Literal`s — plus the public
+`private_address_class` (which `_is_private_ip` now delegates to, keeping its `str`
+signature) and `is_blocklisted_hostname`. `_BLOCKED_SUFFIXES` is `{".local", ".localhost"}`;
+`_PRIVATE_NETWORKS_V6` is untouched at six entries. `pipeline/orchestrator.py` gained the
+`SearchHostClass` vocabulary, `_block_search_url`, and rules (3a)–(3c) of
+`_SEARCH_URL_RULES`, and reads `domain` from `CanonicalHost.host`.
+`pipeline/sanitizer_revision.py` gained `_ROOT_REVISION_SOURCES` and the `idna@<version>`
+input. `idna>=3.7` is a direct dependency.
+
+**Two closed vocabularies, not one widened.** `SEARCH_URL_RULES` had to stay exactly the
+`SearchUrlRule` `Literal` (a criterion pins its eleven tokens) while a blocked URL sets
+`rule` to a host class (a hint). Resolved by widening the *carrier*, not the vocabulary:
+`SearchUrlOutcome.rule` is `SearchUrlRule | SearchHostClass | None`. The two log
+vocabularies stay disjoint, which is what the `search_url_rejected` /
+`search_url_blocked` log-shape criteria need, and a test asserts the intersection is empty.
+
+**Criterion 4's parenthetical is not satisfiable alongside the hints' step order.** It asks
+that `idna.encode` be "asserted uncalled" for the five numeric hosts, but step (e) runs the
+numeric rule on the **encoded** host precisely so the NFKC-mapped loopbacks (`①②⑦.⓪.⓪.①`,
+`127。0。0。1`) are caught — so the encode necessarily runs for every colon-free host.
+Implemented on the hints' side, which is the security-relevant order. The test pins the
+equivalent property that *is* true, row by row: a numeric host is never a
+`CanonicalHost(kind="name")`, it is `HostRejection(reason="numeric_host")`. The "never
+called" assertion is made where it holds and is load-bearing — colon-bearing hosts, with
+`idna.encode` patched to raise. **Flagged for the epic wrapper**: criterion 4's
+parenthetical should be corrected rather than re-attempted.
+
+**`grep -cE 'idna\.(encode|decode)|encode\("idna"\)'` counts lines, not call sites.** The
+first draft summed to 4 because three comments spelled the call in prose; rewording them to
+"the UTS-46 encode" brings the sum to the criterion's 1 and reads better anyway.
+
+**`validate_url`'s hostname step is deliberately left uncanonicalised.** Routing it through
+`canonical_host` would also refuse `http://localhost./` at fetch time, a wider narrowing
+than GOVERNANCE ruling (f) argues for. The `.localhost` suffix ruling (f) *does* cover is
+caught by `_BLOCKED_SUFFIXES` alone, and the four embedded-address classes by
+`private_address_class` on the resolved address. Flagged in case a verifier wants the wider
+form.
+
+**The `"blocked_url"` producer grep lands on one file, not two.** The criterion expects
+`models.py` in the list, but US-004 spelled the reason there single-quoted inside a
+docstring (`'blocked_url'`), so it does not match the criterion's double-quoted needle. The
+test asserts the stronger true result — `pipeline/contract.py` is the only non-test file
+spelling the double-quoted literal — and separately asserts `models.py` carries the
+single-quoted documentation mention, so neither half is invisible.
+
+**The trailing-dot guard has to run on the *encoded* host, not the raw one (round-6
+finding).** The hints' step (b) strips one trailing dot and rejects a remaining dot or empty
+label *before* the UTS-46 encode — but UTS-46 maps three more code points to U+002E
+(U+3002 IDEOGRAPHIC, U+FF0E FULLWIDTH, U+FF61 HALFWIDTH IDEOGRAPHIC FULL STOP), so a
+provider could append one to any host in the table and have it served: the mapped dot
+became a real `.` at step (d), the empty final label broke the all-labels-numeric test, and
+`127.0.0.1。` classified as a **name** — skipping rule (3b) entirely — while `localhost。`
+matched neither blocklist entry. `canonicalize_host` now runs the same strip-and-guard a
+second time on `encoded`, which is the same argument that puts the numeric classification
+after the encode rather than before it: **every dot check has to be relative to the dot set
+UTS-46 emits, not the one ASCII carries.** `localhost。。` still rejects (the encode raises
+`Empty Label` before either guard is reached). Pinned both ways: a direct
+`canonicalize_host` case per dot code point, for one address literal and one blocklisted
+name each, and a pipeline drive (`_AUDIT_MAPPED_DOT_ROWS`) carrying the mapped-dot
+spellings of `127.0.0.1`, `192.168.1.70`, `169.254.169.254`, `127。0。0。1`, `localhost`,
+`printer.local` and `api.localhost`. The rows are their own drive rather than additions to
+drive A, whose eighteen-plus-two shape is pinned by a criterion.
+
+**`ruff`'s RUF001 flags a literal U+FF0E in source** as an ambiguous character — which is
+precisely what the test is about. Spelled as a source escape (`"\uff0e"`) rather than
+suppressed; the string is identical and the lint is honest.
+
+**Rotation (the eighteenth), measured last, from a clean tree, two independent ways** — the
+live `derive_sanitizer_revision` and a standalone digest reading reverted bytes with
+`git show HEAD:<path>`, both agreeing:
+
+| Measurement | Value |
+|---|---|
+| Before (US-004's shipped value) | `05dbbb5c…82c0b` |
+| **After** | **`840c78fa…ee4be`** |
+| `pipeline/orchestrator.py` reverted | `ae381e3c…3fbc1` |
+| `pipeline/contract.py` reverted | `ddb32c41…7ef8b` |
+| Both files reverted, both inputs present | `356cc0d1…d308c` |
+| `url_validator.py` removed as an input | `5282ab54…3c36d` |
+| `idna@<version>` removed as an input | `469935f0…96fac` |
+| **Control:** both files reverted *and* both inputs removed | `05dbbb5c…82c0b` |
+
+The control reproducing US-004's value exactly is what proves the four-part shape. Recorded
+at the five rotation sites plus `docs/bootstrap-notes.md`'s ledger table, whose `Current`
+row was still on US-002's value — US-004 added its section but not the row, so this story
+adds both.
+
+**R36.** A description-only rewrite moves exactly one line of the golden and **zero**
+entries of `_added_paths`, so nothing was appended to `_EXPECTED_ONE_THREE_ZERO_DIFF` and
+`test_contract_schema_matches_golden` is the gate. Verified against the real regenerated
+golden, not a hand-mutated copy.
+
+**Regenerating `contract/openapi.yaml` rotates the sha256 anchor**, and
+`grep -rl <old-anchor> --include='*.md' .` also matches this spec file — that hit is
+deliberately *not* rewritten, since the spec is orchestrator-owned outside these notes. The
+four anchor-quoting pages were refreshed.
+
+**Two doc-staleness items swept while already in these files.**
+`kit_tools/arch/SERVICE_MAP.md`'s Poppy-facing note still said the revisions "diverged
+deliberately seventeen times" and named the superseded `05dbbb5c…`; it is a *sixth* site
+recording the value, beyond the five the criterion lists, and is now on eighteen and the
+current digest. `kit_tools/docs/MONITORING.md`'s `omitted_by_reason` row still described
+`blocked_url` as "declared before it has a raiser" — this story is the raiser, so the
+clause is dropped.
+
+**Gates.** `uv run pytest` 2 342 passed (2 198 after US-004), none skipped; `ruff check`,
+`ruff format --check` and `pyright` (strict, 0 errors) all clean.
+
 ## Refinement Notes
 
 ### Research Findings

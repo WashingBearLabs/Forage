@@ -24,6 +24,14 @@ dependencies = [
     # transitive dependency of `transformers`, but a module that imports a
     # package must declare it — a transitive pin is someone else's to drop.
     "huggingface_hub>=1.30.0",
+    # Direct since `hardening-search-sanitization` US-003:
+    # `url_validator.canonicalize_host` calls `idna.encode(uts46=True)` to
+    # canonicalise every search-result and fetch host. It has always been
+    # present as a transitive dependency of `httpx`, but a module that imports
+    # a package must declare it. The floor is the control, not a preference:
+    # `idna < 3.7` carries CVE-2024-3651 (quadratic `encode` on crafted
+    # input), and the hosts reaching that call are provider-controlled.
+    "idna>=3.7",
     "torch>=2.2.0",
     "python-multipart==0.0.20",
 ]

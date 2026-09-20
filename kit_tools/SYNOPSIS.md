@@ -54,6 +54,7 @@ record updated.
 | ML | transformers + torch (CPU) running Llama Prompt Guard 2 22M |
 | Cache | Valkey/Redis via `redis` (optional-in-memory fallback lands in `feature-forage-cache-fallback`) |
 | Search | SearXNG (companion service; config in `searxng/config/`) |
+| Host canonicalisation | **`idna`** (`>=3.7`, direct since `hardening-search-sanitization` US-003; `url_validator.canonicalize_host` is the one UTS-46 call site, and `idna@<version>` is a `sanitizer_revision` input) |
 | Tests | pytest + pytest-asyncio (`asyncio_mode = auto`) + pytest-socket |
 | Lint / types | ruff (E,F,I,N,UP,B,SIM,RUF; line-length 88) + pyright **strict** |
 | Container | Dockerfile at repo root; entrypoint is a 17-line `exec "$@"` — **no vault client** |

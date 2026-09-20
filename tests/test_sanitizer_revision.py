@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import idna
 import pytest
 
 from model_fetcher import DEFAULT_MODEL_REVISION, MODEL_REVISION_ENV_VAR
@@ -19,6 +20,10 @@ from promptguard.classifier import MODEL_ID
         "stage2_structural.py",
         "stage3_promptguard.py",
         "stage4_structuring.py",
+        # Repo-root, in `_ROOT_REVISION_SOURCES` since
+        # `hardening-search-sanitization` US-003: it decides which search
+        # results are dropped and which fetches are refused.
+        "url_validator.py",
     ),
 )
 def test_sanitizer_revision_changes_for_security_pipeline_source(
@@ -101,16 +106,57 @@ def test_the_hashed_model_identity_is_model_id_at_revision(
     wrong implementations also satisfy: this fails if the identity is hashed
     as ``MODEL_ID`` alone, as the revision alone, or with the two run together
     without the separator that makes the pair unambiguous.
+
+    Extended by ``hardening-search-sanitization`` US-003 to both new inputs,
+    in exactly the order the code feeds them: the root sources after the
+    ``pipeline/`` ones, ``idna@<version>`` after the model identity. Extended
+    rather than weakened to "the value differs" — an order this test could not
+    see is an order a cache key could not rely on.
     """
     monkeypatch.delenv(MODEL_REVISION_ENV_VAR, raising=False)
     expected = hashlib.sha256()
     pipeline_dir = Path(sanitizer_revision.__file__).parent
     for source_name in sanitizer_revision._REVISION_SOURCES:
         expected.update((pipeline_dir / source_name).read_bytes())
+    for root_source_name in sanitizer_revision._ROOT_REVISION_SOURCES:
+        expected.update((pipeline_dir.parent / root_source_name).read_bytes())
     expected.update(f"{MODEL_ID}@{DEFAULT_MODEL_REVISION}".encode())
+    expected.update(f"idna@{idna.__version__}".encode())
     expected.update(b"0.85")
 
     assert (
         sanitizer_revision.derive_sanitizer_revision({"promptguard_threshold": 0.85})
         == expected.hexdigest()
     )
+
+
+def test_the_root_sources_resolve_against_the_repo_root() -> None:
+    """A repo-root entry is a path-resolution change, not a tuple entry.
+
+    `_REVISION_SOURCES` names are resolved under `pipeline/`; a name added
+    there would be looked for at `pipeline/url_validator.py`, which does not
+    exist. The separate tuple is what makes the resolution explicit.
+    """
+    assert sanitizer_revision._ROOT_REVISION_SOURCES == ("url_validator.py",)
+    pipeline_dir = Path(sanitizer_revision.__file__).parent
+    for name in sanitizer_revision._ROOT_REVISION_SOURCES:
+        assert (pipeline_dir.parent / name).is_file()
+        assert not (pipeline_dir / name).exists()
+        assert name not in sanitizer_revision._REVISION_SOURCES
+
+
+def test_sanitizer_revision_changes_for_the_idna_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """UTS-46 tables decide which hosts are dropped, so the version is an input.
+
+    A lock bump that moves the tables is a sanitization change with no source
+    byte to show for it — the same argument that put `MODEL_ID@revision` in
+    the hash, applied to the table the canonicaliser reads.
+    """
+    config = {"promptguard_threshold": 0.85}
+    original_revision = sanitizer_revision.derive_sanitizer_revision(config)
+
+    monkeypatch.setattr(sanitizer_revision.idna, "__version__", "0.0-test")
+
+    assert sanitizer_revision.derive_sanitizer_revision(config) != original_revision

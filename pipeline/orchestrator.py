@@ -87,7 +87,15 @@ from pipeline.stage4_structuring import (
 )
 from pipeline.stage5_url_audit import ContentTooLargeError, fetch_url
 from promptguard.classifier import PromptGuardBudgetExceededError
-from url_validator import BlockedDomainError, PrivateIPError, validate_url
+from url_validator import (
+    BlockedDomainError,
+    CanonicalHost,
+    PrivateIPError,
+    canonicalize_host,
+    is_blocklisted_hostname,
+    private_address_class,
+    validate_url,
+)
 
 if TYPE_CHECKING:
     from promptguard.classifier import PromptGuardClassifier
@@ -662,6 +670,8 @@ SearchUrlRule = Literal[
     "userinfo",
     "host_code_point",
     "zone_id",
+    "numeric_host",
+    "idna",
 ]
 """Closed vocabulary for why `_canonicalize_search_url` rejected a result URL.
 
@@ -674,15 +684,37 @@ constant carried beside it.
 
 SEARCH_URL_RULES = frozenset(get_args(SearchUrlRule))
 
+SearchHostClass = Literal[
+    "private_literal",
+    "embedded_private",
+    "blocklisted_name",
+]
+"""Closed vocabulary for why the search-time audit *blocked* a result URL.
+
+Deliberately disjoint from `SearchUrlRule`: a rejected URL is malformed and
+logs `search_url_rejected`, a blocked one is well-formed and points somewhere
+policy refuses, and logs `search_url_blocked host_class=<token>`. The two
+vocabularies never share a token, so an operator aggregating on one is never
+reading the other's records. Like `SearchUrlRule` it is content-free -- it
+names the class, never the host.
+"""
+
+SEARCH_HOST_CLASSES = frozenset(get_args(SearchHostClass))
+
 
 @dataclass(frozen=True, slots=True)
 class SearchUrlOutcome:
     """The verdict on one result URL -- internal, never the wire shape.
 
     Exactly two shapes. A cleared URL carries `canonical_url`, `domain` and the
-    two `scan_texts`, with `omission_reason` and `rule` both `None`; a rejected
-    one carries the reason pair and leaves the other three empty. `domain` is
-    never derived from a rejected URL.
+    two `scan_texts`, with `omission_reason` and `rule` both `None`; a
+    rejected or blocked one carries the reason pair and leaves the other three
+    empty. `domain` is never derived from a URL that did not clear every rule.
+
+    `rule` carries either vocabulary: a `SearchUrlRule` beside
+    `contract.OMIT_INVALID_URL`, a `SearchHostClass` beside
+    `contract.OMIT_BLOCKED_URL`. Widening the carrier rather than the
+    `SearchUrlRule` `Literal` is what keeps the two log vocabularies disjoint.
 
     `scan_texts` is `(entity-decoded, once-percent-decoded)` -- the two forms
     Stage 2 scans. Neither is routed through `extract_html`: the extractor eats
@@ -694,7 +726,7 @@ class SearchUrlOutcome:
     scan_texts: tuple[str, str]
     domain: str | None
     omission_reason: str | None
-    rule: SearchUrlRule | None
+    rule: SearchUrlRule | SearchHostClass | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -705,6 +737,7 @@ class _UrlState:
     value: str = ""
     parsed: SplitResult | None = None
     port: int | None = None
+    canonical: CanonicalHost | None = None
 
 
 def _reject_search_url(rule: SearchUrlRule) -> SearchUrlOutcome:
@@ -715,6 +748,23 @@ def _reject_search_url(rule: SearchUrlRule) -> SearchUrlOutcome:
         domain=None,
         omission_reason=contract.OMIT_INVALID_URL,
         rule=rule,
+    )
+
+
+def _block_search_url(host_class: SearchHostClass) -> SearchUrlOutcome:
+    """Build the blocked outcome for *host_class*.
+
+    Separate from `_reject_search_url` because the wire reason differs:
+    `blocked_url` is policy on a well-formed URL, `invalid_url` is
+    malformation. Counting them together would hide "a provider is returning
+    internal addresses" inside "a provider is returning junk".
+    """
+    return SearchUrlOutcome(
+        canonical_url=None,
+        scan_texts=("", ""),
+        domain=None,
+        omission_reason=contract.OMIT_BLOCKED_URL,
+        rule=host_class,
     )
 
 
@@ -801,6 +851,47 @@ def _url_rule_host_code_points(state: _UrlState) -> _UrlState | SearchUrlOutcome
     return state
 
 
+def _url_rule_canonicalize_host(state: _UrlState) -> _UrlState | SearchUrlOutcome:
+    """Rule (3a): canonicalise the host, literals first. No DNS, ever.
+
+    `canonicalize_host` is the one canonicaliser and the one UTS-46 call site
+    in this service. `validate_url` is deliberately *not* reachable from here:
+    it resolves DNS, and Forage does not look up a URL nobody asked to fetch.
+    """
+    parsed = state.parsed
+    if parsed is None or not parsed.hostname:
+        return _reject_search_url("parse")
+    canonical = canonicalize_host(parsed.hostname)
+    if not isinstance(canonical, CanonicalHost):
+        # The token is read off the rejection, never recomputed -- the caller
+        # may not re-run the encode to learn why it failed.
+        return _reject_search_url(canonical.reason)
+    return replace(state, canonical=canonical)
+
+
+def _url_rule_address_class(state: _UrlState) -> _UrlState | SearchUrlOutcome:
+    """Rule (3b): an address literal that is private, or embeds one, is blocked."""
+    canonical = state.canonical
+    if canonical is None or canonical.address is None:
+        return state
+    host_class = private_address_class(canonical.address)
+    if host_class is not None:
+        # Decided by the helper, never recomputed here: the token says *how*
+        # the address was reached, which a second `in`-check could not.
+        return _block_search_url(host_class)
+    return state
+
+
+def _url_rule_blocklisted_name(state: _UrlState) -> _UrlState | SearchUrlOutcome:
+    """Rule (3c): a name on the built-in private-name list is blocked."""
+    canonical = state.canonical
+    if canonical is None or canonical.kind != "name":
+        return state
+    if is_blocklisted_hostname(canonical.host):
+        return _block_search_url("blocklisted_name")
+    return state
+
+
 # Ordered registry, first rejection wins: the order is data and each rule is a
 # pure function, unit-testable on its own. The shape follows
 # `pipeline/stage2_structural.py`'s `_PATTERNS` -- name-first pairs iterated in
@@ -812,6 +903,9 @@ _SEARCH_URL_RULES: tuple[
     ("raw_character_class", _url_rule_raw_character_class),
     ("parse", _url_rule_parse),
     ("host_code_points", _url_rule_host_code_points),
+    ("canonicalize_host", _url_rule_canonicalize_host),
+    ("address_class", _url_rule_address_class),
+    ("blocklisted_name", _url_rule_blocklisted_name),
 )
 
 
@@ -820,11 +914,10 @@ def _canonicalize_search_url(value: object) -> SearchUrlOutcome:
 
     Iterates `_SEARCH_URL_RULES` over the **raw** provider value, first
     rejection wins, and canonicalizes only a value every rule cleared.
-    `domain` is bound from `parsed.hostname` before the IPv6 re-bracketing
-    below, so an IPv6 literal reaches the wire unbracketed
-    (``2606:4700::1111``) even though `canonical_url` carries the bracketed
-    form (``[2606:4700::1111]``) -- the one case where `domain` is not a
-    substring of `canonical_url`.
+    `domain` is `CanonicalHost.host`, which for an IPv6 literal is the raw
+    unbracketed literal (``2606:4700::1111``) even though `canonical_url`
+    carries the bracketed form (``[2606:4700::1111]``) -- the one case where
+    `domain` is not a substring of `canonical_url`.
     """
     state = _UrlState(raw=value)
     for _rule_name, rule in _SEARCH_URL_RULES:
@@ -834,10 +927,14 @@ def _canonicalize_search_url(value: object) -> SearchUrlOutcome:
         state = outcome
 
     parsed = state.parsed
-    if parsed is None or not parsed.hostname:
+    if parsed is None or not parsed.hostname or state.canonical is None:
         return _reject_search_url("parse")
-    domain = parsed.hostname.lower()
-    host = f"[{domain}]" if ":" in domain else domain
+    # `domain` is the canonicalised ASCII host; `canonical_url` keeps the
+    # provider's spelling of it. The two diverge for an IDN host -- `domain`
+    # is punycode, `url` is not -- because Goal 2 freezes the served URL.
+    domain = state.canonical.host
+    raw_host = parsed.hostname.lower()
+    host = f"[{raw_host}]" if ":" in raw_host else raw_host
     netloc = host if state.port is None else f"{host}:{state.port}"
     canonical = urlunsplit(
         (
@@ -1175,16 +1272,25 @@ async def run_search_pipeline(
         domain = url_outcome.domain
         omission_reason = url_outcome.omission_reason
         if omission_reason is not None or url is None or domain is None:
-            # Content-free: the rule token and the provider name, never the
-            # URL or its host (invariant 6). An operator watching
-            # `invalid_url` climb needs to know which rule fired on which
-            # provider, not the bytes. `contract.OMIT_INVALID_URL` is the
-            # floor -- a cleared outcome always carries both halves.
-            logger.info(
-                "search_url_rejected rule=%s provider=%s",
-                url_outcome.rule,
-                serving_provider.name,
-            )
+            # Content-free: the token and the provider name, never the URL or
+            # its host (invariant 6). An operator watching `invalid_url` or
+            # `blocked_url` climb needs to know which rule or host class fired
+            # on which provider, not the bytes -- and the two records carry
+            # disjoint vocabularies, so aggregating on one never picks up the
+            # other. `contract.OMIT_INVALID_URL` is the floor -- a cleared
+            # outcome always carries both halves.
+            if omission_reason == contract.OMIT_BLOCKED_URL:
+                logger.info(
+                    "search_url_blocked host_class=%s provider=%s",
+                    url_outcome.rule,
+                    serving_provider.name,
+                )
+            else:
+                logger.info(
+                    "search_url_rejected rule=%s provider=%s",
+                    url_outcome.rule,
+                    serving_provider.name,
+                )
             omitted_by_reason[omission_reason or contract.OMIT_INVALID_URL] += 1
             continue
         snippet, snippet_scan_text = _scan_forms_for_search_text(

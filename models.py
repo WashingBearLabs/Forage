@@ -335,12 +335,16 @@ class SearchResult(BaseModel):
         ...,
         min_length=1,
         description=(
-            "Lower-cased hostname of `url` (`urlsplit(url).hostname`), with no "
-            "userinfo or port — a provenance signal, not a trust decision. This "
-            "is the hostname, not the registrable domain (eTLD+1); derive that "
-            "yourself if you need it. For an IPv6 literal this is the "
-            "unbracketed form ('2001:db8::1') while `url` carries the bracketed "
-            "form ('[2001:db8::1]') — the one case where `domain` is not a "
+            "The canonicalised ASCII host of `url`, with no userinfo or port "
+            "— a provenance signal, not a trust decision. A name is "
+            "UTS-46-encoded, so an internationalised host appears here in "
+            "punycode ('xn--strae-oqa.de') while `url` keeps the provider's "
+            "spelling ('http://straße.de/'); an address literal is the raw "
+            "lower-cased literal as it was written. This is the host, not the "
+            "registrable domain (eTLD+1); derive that yourself if you need it. "
+            "For an IPv6 literal this is the unbracketed form "
+            "('2606:4700::1111') while `url` carries the bracketed form "
+            "('[2606:4700::1111]') — the one case where `domain` is not a "
             "substring of `url`. Added in contract 1.2.0."
         ),
     )

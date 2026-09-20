@@ -258,7 +258,18 @@ contract `1.3.0` bump (`hardening-search-sanitization` US-004 — two hashed fil
 `SearchResult.engine`'s new `_MAX_SEARCH_ENGINE_LENGTH = 64` bound, routed through the same
 `_normalize_search_text` call `title`/`snippet` already use; `engine` is bounded and
 normalized, not structurally scanned, so this rotation does not join the fifteenth and
-sixteenth as a third behaviour-changing one).
+sixteenth as a third behaviour-changing one), and an eighteenth to `840c78fa…` —
+**the third rotation that changes sanitization behaviour, and the first that adds *inputs*
+rather than only moving source bytes** — with the search-time URL audit
+(`hardening-search-sanitization` US-003): `orchestrator.py` gained rules (3a)–(3c) of
+`_SEARCH_URL_RULES` (canonicalise the host, classify the address, check the name blocklist)
+and now reads `domain` from `CanonicalHost.host`, `contract.py` gained the `1.3.0`
+continuation line, **and two inputs joined the hash** — repo-root `url_validator.py` as
+`_ROOT_REVISION_SOURCES` (hashed after the eight `pipeline/` sources, resolved against
+`pipeline_dir.parent`; invariant 3's "by relative path" stays true) and `idna@<version>`
+(UTS-46 tables decide which hosts are dropped, so a lock bump is a sanitization change with
+no source byte to show for it). All four measured alone from a clean tree, with a control
+that reverts both files *and* removes both inputs landing exactly on `05dbbb5c…`.
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

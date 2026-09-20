@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import inspect
 import io
 import logging
 import re
+import textwrap
 import unicodedata
 from collections import Counter
 from contextlib import AbstractContextManager
 from dataclasses import FrozenInstanceError
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import urlsplit
 
@@ -38,8 +41,11 @@ from pipeline.orchestrator import (
     _SEARCH_PARSER_INPUT_MULTIPLIER,
     DOCUMENT_FAILURE_CODES,
     DOCUMENT_FAILURE_REASONS,
+    SEARCH_HOST_CLASSES,
     PipelineError,
+    SearchHostClass,
     SearchUrlOutcome,
+    _block_search_url,
     _canonicalize_search_url,
     _scan_forms_for_search_text,
     _search_result_promptguard_input,
@@ -3997,12 +4003,18 @@ class TestSearchUrlRules:
             "raw_character_class",
             "parse",
             "host_code_points",
+            # US-003's audit, inserted between (3) and (4) exactly as US-002
+            # reserved the slot: canonicalise, then classify the address, then
+            # check the name blocklist.
+            "canonicalize_host",
+            "address_class",
+            "blocklisted_name",
         ]
         for _name, rule in _SEARCH_URL_RULES:
             assert callable(rule)
 
     def test_every_rule_token_is_a_member_of_the_closed_literal(self) -> None:
-        """`SEARCH_URL_RULES` is `get_args(SearchUrlRule)`, nine tokens."""
+        """`SEARCH_URL_RULES` is `get_args(SearchUrlRule)`, eleven tokens."""
         from pipeline.orchestrator import SEARCH_URL_RULES
 
         assert (
@@ -4017,6 +4029,12 @@ class TestSearchUrlRules:
                     "userinfo",
                     "host_code_point",
                     "zone_id",
+                    # US-003's two canonicalisation failures. The audit's
+                    # *block* tokens are deliberately not here: they live in
+                    # `SearchHostClass`, so the two log vocabularies stay
+                    # disjoint.
+                    "numeric_host",
+                    "idna",
                 }
             )
             == SEARCH_URL_RULES
@@ -4460,3 +4478,448 @@ class TestSearchUrlRulesThroughThePipeline:
         assert not any(sentinel in message for message in records)
         for message in _rejection_records(caplog):
             assert message.split("rule=")[1].split(" ")[0] in SEARCH_URL_RULES
+
+
+# ---------------------------------------------------------------------------
+# US-003: the search-time URL audit
+# ---------------------------------------------------------------------------
+
+
+# The Independent Test table. Each row is `(raw_url, reason, host_class)` for a
+# blocked row, `(raw_url, None, None)` for a served control.
+_AUDIT_DRIVE_A_ROWS: list[tuple[str, str | None, str | None]] = [
+    ("http://192.168.1.70:8200/", contract.OMIT_BLOCKED_URL, "private_literal"),
+    ("http://10.0.0.1/", contract.OMIT_BLOCKED_URL, "private_literal"),
+    ("http://127.0.0.1/", contract.OMIT_BLOCKED_URL, "private_literal"),
+    ("http://169.254.169.254/latest/", contract.OMIT_BLOCKED_URL, "private_literal"),
+    # Named before the `::/96` unwrap, which would report it as an embedding.
+    ("http://[::1]/", contract.OMIT_BLOCKED_URL, "private_literal"),
+    # The documentation range is already in `_PRIVATE_NETWORKS_V6`.
+    ("http://[2001:db8::1]/", contract.OMIT_BLOCKED_URL, "private_literal"),
+    ("http://[::ffff:10.0.0.1]/", contract.OMIT_BLOCKED_URL, "embedded_private"),
+    ("http://[::127.0.0.1]/", contract.OMIT_BLOCKED_URL, "embedded_private"),
+    ("http://[2002:7f00:1::]/", contract.OMIT_BLOCKED_URL, "embedded_private"),
+    ("http://[64:ff9b::a00:1]/", contract.OMIT_BLOCKED_URL, "embedded_private"),
+    (
+        "http://[2001:0:0:0::80ff:fffe]/",
+        contract.OMIT_BLOCKED_URL,
+        "embedded_private",
+    ),
+    ("http://localhost/", contract.OMIT_BLOCKED_URL, "blocklisted_name"),
+    ("http://localhost./", contract.OMIT_BLOCKED_URL, "blocklisted_name"),
+    ("http://api.localhost/", contract.OMIT_BLOCKED_URL, "blocklisted_name"),
+    ("http://printer.local/", contract.OMIT_BLOCKED_URL, "blocklisted_name"),
+    ("http://printer.local./", contract.OMIT_BLOCKED_URL, "blocklisted_name"),
+    # Not numeric until UTS-46 maps them, which is why the numeric rule runs
+    # on the encoded host.
+    ("http://①②⑦.⓪.⓪.①/", contract.OMIT_BLOCKED_URL, "private_literal"),
+    ("http://127。0。0。1/", contract.OMIT_BLOCKED_URL, "private_literal"),
+    ("https://example.com/", None, None),
+    ("http://[2606:4700::1111]/", None, None),
+]
+
+_AUDIT_DRIVE_B_ROWS: list[tuple[str, str | None, str | None]] = [
+    ("http://[2002:808:808::]/", None, None),
+    ("http://[64:ff9b::808:808]/", None, None),
+    ("http://[2001:0:0:0::f7f7:f7f7]/", None, None),
+    ("http://[::8.8.8.8]/", None, None),
+    ("http://[2a00:1450:4001:80e::200e]/", None, None),
+    ("http://[2606:4700:0:0:0:0:0:1111]/", None, None),
+]
+
+# `title -> (url, domain)` for every served control across both drives.
+_AUDIT_SERVED_CONTROLS: dict[str, tuple[str, str]] = {
+    "a18": ("https://example.com/", "example.com"),
+    "a19": ("http://[2606:4700::1111]/", "2606:4700::1111"),
+    "b0": ("http://[2002:808:808::]/", "2002:808:808::"),
+    "b1": ("http://[64:ff9b::808:808]/", "64:ff9b::808:808"),
+    "b2": ("http://[2001:0:0:0::f7f7:f7f7]/", "2001:0:0:0::f7f7:f7f7"),
+    "b3": ("http://[::8.8.8.8]/", "::8.8.8.8"),
+    "b4": ("http://[2a00:1450:4001:80e::200e]/", "2a00:1450:4001:80e::200e"),
+    # The raw lower-cased literal, never `str(address)` — which would
+    # re-serialise this to `2606:4700::1111` and move `domain`.
+    "b5": (
+        "http://[2606:4700:0:0:0:0:0:1111]/",
+        "2606:4700:0:0:0:0:0:1111",
+    ),
+}
+
+# A trailing dot that is only a dot *after* the UTS-46 encode: U+3002, U+FF0E
+# and U+FF61 all map to U+002E. These rows are their own drive rather than
+# additions to drive A, whose eighteen-plus-two shape is pinned by a
+# criterion. Before the post-encode strip every one of them was served — the
+# empty final label broke the all-labels-numeric test, so the address rows
+# classified as *names* and skipped the address audit, and the name rows
+# matched neither blocklist entry.
+_AUDIT_MAPPED_DOT_ROWS: list[tuple[str, str | None, str | None]] = [
+    ("http://127.0.0.1。/", contract.OMIT_BLOCKED_URL, "private_literal"),
+    ("http://192.168.1.70\uff0e/", contract.OMIT_BLOCKED_URL, "private_literal"),
+    ("http://169.254.169.254。/latest/", contract.OMIT_BLOCKED_URL, "private_literal"),
+    ("http://127。0。0。1。/", contract.OMIT_BLOCKED_URL, "private_literal"),
+    ("http://localhost｡/", contract.OMIT_BLOCKED_URL, "blocklisted_name"),
+    ("http://printer.local。/", contract.OMIT_BLOCKED_URL, "blocklisted_name"),
+    ("http://api.localhost。/", contract.OMIT_BLOCKED_URL, "blocklisted_name"),
+    # Two of them leave the empty label behind, which the encode refuses.
+    ("http://localhost。。/", contract.OMIT_INVALID_URL, None),
+]
+
+# Rejections the canonicaliser adds to `invalid_url`, outside the two drives.
+_AUDIT_REJECTION_ROWS: list[tuple[str, str]] = [
+    ("http://2130706433/", "numeric_host"),
+    ("http://0177.0.0.1/", "numeric_host"),
+    ("http://0x7f000001/", "numeric_host"),
+    ("http://0x7f.0.0.1/", "numeric_host"),
+    ("http://127.1/", "numeric_host"),
+    ("http://foo_bar.example.com/", "idna"),
+    (f"http://{'a' * 70}.com/", "idna"),
+    # Rejected by the empty-label guard before the encode: one strip leaves
+    # `localhost.`, which would otherwise be served.
+    ("http://localhost../", "idna"),
+    ("http://printer.local../", "idna"),
+]
+
+
+def _blocked_records(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """Every ``search_url_blocked`` line the orchestrator emitted, formatted."""
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("search_url_blocked")
+    ]
+
+
+class TestSearchUrlAuditThroughThePipeline:
+    """US-003: the Independent Test table, driven through `run_search_pipeline`."""
+
+    async def _drive(
+        self,
+        rows: list[tuple[str, str | None, str | None]],
+        *,
+        prefix: str,
+        caplog: pytest.LogCaptureFixture,
+    ) -> SearchResponse:
+        # `fetch_limit = min(num_results * 2, 20)`, so a drive that exceeded
+        # twenty fixtures would be silently sliced and the counts below would
+        # be measuring the slice rather than the table.
+        assert len(rows) <= 20
+        provider = _url_row_provider(rows, prefix=prefix)
+        with caplog.at_level(logging.INFO, logger="pipeline.orchestrator"):
+            return await run_search_pipeline(
+                _make_search_request(num_results=10),
+                providers=[provider],
+                config=_SAMPLE_CONFIG,
+            )
+
+    async def test_drive_a_blocks_the_eighteen_hostile_rows(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Eighteen omitted under `blocked_url`, two controls served."""
+        result = await self._drive(_AUDIT_DRIVE_A_ROWS, prefix="a", caplog=caplog)
+
+        served = {item.title for item in result.results}
+        expected_tokens: list[str] = []
+        for index, (_raw, reason, token) in enumerate(_AUDIT_DRIVE_A_ROWS):
+            title = f"a{index}"
+            if reason is None:
+                assert title in served, title
+                item = next(r for r in result.results if r.title == title)
+                assert (item.url, item.domain) == _AUDIT_SERVED_CONTROLS[title]
+            else:
+                assert title not in served, title
+                assert token is not None
+                expected_tokens.append(token)
+
+        assert len(expected_tokens) == 18
+        assert result.omitted_by_reason == {contract.OMIT_BLOCKED_URL: 18}
+        assert result.omitted_results == 18
+        assert _blocked_records(caplog) == [
+            f"search_url_blocked host_class={token} provider=searxng"
+            for token in expected_tokens
+        ]
+        # The blocked vocabulary never leaks into the rejected one.
+        assert _rejection_records(caplog) == []
+
+    async def test_drive_b_serves_every_public_embedding(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The prefix guards, proven by the public half of every pair."""
+        result = await self._drive(_AUDIT_DRIVE_B_ROWS, prefix="b", caplog=caplog)
+
+        assert result.omitted_by_reason == {}
+        assert len(result.results) == 6
+        for item in result.results:
+            assert (item.url, item.domain) == _AUDIT_SERVED_CONTROLS[item.title]
+        assert _blocked_records(caplog) == []
+        assert _rejection_records(caplog) == []
+
+    @pytest.mark.parametrize("rows", [_AUDIT_DRIVE_A_ROWS, _AUDIT_DRIVE_B_ROWS])
+    async def test_neither_drive_falls_back_or_resolves_dns(
+        self, rows: list[tuple[str, str | None, str | None]]
+    ) -> None:
+        """Sufficiency is judged on raw results, so nothing paid is reached.
+
+        No `enable_socket` marker: the autouse `pytest-socket` guard is live
+        for this test, so a DNS lookup anywhere under the audit would raise
+        `SocketBlockedError` rather than pass quietly.
+        """
+        free = _url_row_provider(rows, prefix="x")
+        paid = FakeSearchProvider(name="brave", paid=True)
+
+        result = await run_search_pipeline(
+            _make_search_request(num_results=10),
+            providers=[free, paid],
+            config=_SAMPLE_CONFIG,
+        )
+
+        assert result.fallback_fired is False
+        assert result.provider_used == "searxng"
+        assert paid.calls == []
+
+    async def test_a_page_of_audited_out_results_serves_an_empty_200(self) -> None:
+        """Ruling 17: an audited-out page is a served empty 200, not a paid call."""
+        hostile = [row for row in _AUDIT_DRIVE_A_ROWS if row[1] is not None]
+        free = _url_row_provider(hostile, prefix="h")
+        paid = FakeSearchProvider(name="brave", paid=True)
+
+        result = await run_search_pipeline(
+            _make_search_request(num_results=10),
+            providers=[free, paid],
+            config=_SAMPLE_CONFIG,
+        )
+
+        assert result.results == []
+        assert result.omitted_by_reason == {contract.OMIT_BLOCKED_URL: 18}
+        assert result.fallback_fired is False
+        assert paid.calls == []
+
+    async def test_the_canonicalisation_rejections_land_under_invalid_url(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Five numeric hosts and four the UTS-46 encode refuses."""
+        rows: list[tuple[str, str | None, str | None]] = [
+            (raw, contract.OMIT_INVALID_URL, None)
+            for raw, _token in _AUDIT_REJECTION_ROWS
+        ]
+        result = await self._drive(rows, prefix="j", caplog=caplog)
+
+        assert result.results == []
+        assert result.omitted_by_reason == {
+            contract.OMIT_INVALID_URL: len(_AUDIT_REJECTION_ROWS)
+        }
+        assert _rejection_records(caplog) == [
+            f"search_url_rejected rule={token} provider=searxng"
+            for _raw, token in _AUDIT_REJECTION_ROWS
+        ]
+        assert _blocked_records(caplog) == []
+        from pipeline.orchestrator import SEARCH_URL_RULES
+
+        for message in _rejection_records(caplog):
+            assert message.split("rule=")[1].split(" ")[0] in SEARCH_URL_RULES
+
+    async def test_a_dot_uts46_maps_to_cannot_dodge_the_audit(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The round-5 bypass: a mapped trailing dot appended to any host.
+
+        Every row here was served before the strip ran on the encoded host.
+        """
+        result = await self._drive(_AUDIT_MAPPED_DOT_ROWS, prefix="m", caplog=caplog)
+
+        assert result.results == []
+        assert result.omitted_by_reason == {
+            contract.OMIT_BLOCKED_URL: 7,
+            contract.OMIT_INVALID_URL: 1,
+        }
+        assert _blocked_records(caplog) == [
+            f"search_url_blocked host_class={token} provider=searxng"
+            for _raw, _reason, token in _AUDIT_MAPPED_DOT_ROWS
+            if token is not None
+        ]
+        assert _rejection_records(caplog) == [
+            "search_url_rejected rule=idna provider=searxng"
+        ]
+
+    async def test_an_idn_host_serves_punycode_in_domain_and_unicode_in_url(
+        self,
+    ) -> None:
+        """Goal 2 freezes the served `url`; `domain` is the canonical form."""
+        provider = _url_row_provider([("http://straße.de/x", None, None)], prefix="i")
+        result = await run_search_pipeline(
+            _make_search_request(num_results=1),
+            providers=[provider],
+            config=_SAMPLE_CONFIG,
+        )
+
+        assert len(result.results) == 1
+        assert result.results[0].url == "http://straße.de/x"
+        assert result.results[0].domain == "xn--strae-oqa.de"
+
+    async def test_the_two_spellings_of_one_idn_host_agree_on_domain(self) -> None:
+        provider = _url_row_provider(
+            [
+                ("http://exämple.com/", None, None),
+                ("http://xn--exmple-cua.com/", None, None),
+            ],
+            prefix="p",
+        )
+        result = await run_search_pipeline(
+            _make_search_request(num_results=2),
+            providers=[provider],
+            config=_SAMPLE_CONFIG,
+        )
+
+        assert [item.domain for item in result.results] == [
+            "xn--exmple-cua.com",
+            "xn--exmple-cua.com",
+        ]
+
+    async def test_no_audit_record_carries_the_url_or_its_host(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Invariant 6: the token and the provider name, nothing else."""
+        sentinel = "zzsentinelzz"
+        rows: list[tuple[str, str | None, str | None]] = [
+            (f"http://{sentinel}.localhost/path", contract.OMIT_BLOCKED_URL, None),
+            (f"http://{sentinel}_bad.example.com/", contract.OMIT_INVALID_URL, None),
+        ]
+        result = await self._drive(rows, prefix="s", caplog=caplog)
+
+        assert result.results == []
+        assert result.omitted_by_reason == {
+            contract.OMIT_BLOCKED_URL: 1,
+            contract.OMIT_INVALID_URL: 1,
+        }
+        messages = [record.getMessage() for record in caplog.records]
+        assert not any(sentinel in message for message in messages)
+        assert _blocked_records(caplog) == [
+            "search_url_blocked host_class=blocklisted_name provider=searxng"
+        ]
+        assert _rejection_records(caplog) == [
+            "search_url_rejected rule=idna provider=searxng"
+        ]
+
+    async def test_a_blocked_url_never_reaches_the_structural_scan(self) -> None:
+        """First reason wins: the snippet of a blocked result is never scanned."""
+        hostile = [row for row in _AUDIT_DRIVE_A_ROWS if row[1] is not None]
+        provider = _url_row_provider(hostile, prefix="h")
+        with patch("pipeline.orchestrator.scan_structural") as scanner:
+            result = await run_search_pipeline(
+                _make_search_request(num_results=10),
+                providers=[provider],
+                config=_SAMPLE_CONFIG,
+            )
+
+        assert result.results == []
+        scanner.assert_not_called()
+
+
+class TestSearchUrlAuditWiring:
+    """The properties the drives cannot show from the outside."""
+
+    def test_the_audit_resolves_no_dns(self) -> None:
+        """`validate_url` is not reachable from the search path.
+
+        Ruling 7 forbids DNS at search time. The hermetic socket guard turns a
+        slip into a red test, but only for a code path a test happens to
+        drive; this reads the source of both functions instead.
+        """
+        from pipeline.orchestrator import _SEARCH_URL_RULES
+
+        # Names as the parser sees them, not as `in` sees them: the
+        # canonicalisation rule's own docstring says the words "validate_url"
+        # out loud, and a substring check would read that as a call.
+        referenced: set[str] = set()
+        for function in (
+            run_search_pipeline,
+            _canonicalize_search_url,
+            *(rule for _name, rule in _SEARCH_URL_RULES),
+        ):
+            tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Name):
+                    referenced.add(node.id)
+                elif isinstance(node, ast.Attribute):
+                    referenced.add(node.attr)
+
+        assert "validate_url" not in referenced
+        assert "getaddrinfo" not in referenced
+
+    @pytest.mark.parametrize(
+        ("host_class", "expected"),
+        [
+            ("private_literal", contract.OMIT_BLOCKED_URL),
+            ("embedded_private", contract.OMIT_BLOCKED_URL),
+            ("blocklisted_name", contract.OMIT_BLOCKED_URL),
+        ],
+    )
+    def test_a_blocked_outcome_carries_the_constant_and_the_class(
+        self, host_class: SearchHostClass, expected: str
+    ) -> None:
+        outcome = _block_search_url(host_class)
+        assert outcome.omission_reason == expected
+        assert outcome.rule == host_class
+        assert outcome.canonical_url is None
+        assert outcome.domain is None
+        assert outcome.scan_texts == ("", "")
+
+    def test_the_two_log_vocabularies_are_disjoint(self) -> None:
+        """A token in both sets would make one aggregation read the other."""
+        from pipeline.orchestrator import SEARCH_URL_RULES
+
+        assert frozenset() == SEARCH_URL_RULES & SEARCH_HOST_CLASSES
+        assert (
+            frozenset({"private_literal", "embedded_private", "blocklisted_name"})
+            == SEARCH_HOST_CLASSES
+        )
+
+    def test_the_rejection_token_is_a_subset_of_the_rule_literal(self) -> None:
+        """`HostRejection.reason` assigns into `SearchUrlRule` without a cast."""
+        from pipeline.orchestrator import SEARCH_URL_RULES
+        from url_validator import HostRejectionReason
+
+        assert set(get_args(HostRejectionReason)) <= SEARCH_URL_RULES
+
+    def test_the_omission_count_is_produced_from_the_contract_constant(self) -> None:
+        """No source file outside the contract and the tests spells the literal.
+
+        The path set is the criterion's: a producer that hardcoded the string
+        would be a wire value with no single definition behind it.
+        """
+        repo_root = Path(__file__).resolve().parent.parent
+        paths = [
+            repo_root / "models.py",
+            repo_root / "url_validator.py",
+            repo_root / "retrieval_app.py",
+            *sorted((repo_root / "pipeline").rglob("*.py")),
+            *sorted((repo_root / "tests").rglob("*.py")),
+        ]
+        needle = '"blocked' + '_url"'
+        hits = {
+            path.relative_to(repo_root).as_posix()
+            for path in paths
+            if needle in path.read_text()
+        }
+        outside_tests = {path for path in hits if not path.startswith("tests/")}
+        # `pipeline/contract.py` alone: `OMIT_BLOCKED_URL`'s definition is the
+        # only double-quoted spelling in the source tree. `models.py` names
+        # the reason too, in the `omitted_by_reason` description US-004 wrote,
+        # but single-quoted inside a docstring — prose about the vocabulary,
+        # never a producer of the count.
+        assert outside_tests == {"pipeline/contract.py"}
+        models_source = (repo_root / "models.py").read_text()
+        assert needle not in models_source
+        assert "'blocked" + "_url'" in models_source
+
+    def test_the_uts46_encode_has_exactly_one_call_site(self) -> None:
+        """One canonicaliser, one IDNA call site across the two files."""
+        repo_root = Path(__file__).resolve().parent.parent
+        pattern = re.compile(r'idna\.(encode|decode)|encode\("idna"\)')
+        counted = {
+            name: sum(
+                1
+                for line in (repo_root / name).read_text().splitlines()
+                if pattern.search(line)
+            )
+            for name in ("url_validator.py", "pipeline/orchestrator.py")
+        }
+        assert sum(counted.values()) == 1, counted

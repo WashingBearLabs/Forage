@@ -102,7 +102,7 @@ file in the repo. |
 | `pipeline/pdf_subprocess.py` | 219 | PDF parsing isolated in a subprocess (pypdf is not trusted with hostile input in-process). |
 | `pipeline/stage2_structural.py` | 304 | Deterministic regex injection scan. |
 | `pipeline/smart_extraction.py` | 207 | Summary mode that preserves high-signal content (stats, quotes, references). |
-| `url_validator.py` | 188 | Private-IP rejection and DNS-rebinding protection. |
+| `url_validator.py` | 336 | Private-IP rejection and DNS-rebinding protection, plus the service's one host canonicaliser. `canonicalize_host` / `canonical_host` (literals first: an IPv6 literal is recognised by its colons and never reaches the encode; every other host loses exactly one trailing dot, is lower-cased, is UTS-46-encoded via **`idna`** — a direct dependency, floor `>=3.7` for CVE-2024-3651 — and only then classified as numeric or named) and `private_address_class`, which reports *how* an address was reached (`private_literal` / `embedded_private`) and unwraps IPv4-mapped, 6to4, Teredo, prefix-guarded NAT64 and prefix-guarded IPv4-compatible embeddings. In `_ROOT_REVISION_SOURCES` since `hardening-search-sanitization` US-003. |
 | `pipeline/extraction_limits.py` | 181 | Resource limits from `config.yaml`'s `extraction:` block. |
 | `pipeline/stage1_upload.py` | 172 | Upload path for `/extract` (gated by `extract_route_enabled`). |
 | `promptguard/classifier.py` | 211 | Loads and runs Llama Prompt Guard 2 (`use_safetensors=True` — the loader can never fall back to a pickle); absent weights → degraded, never silent. |
@@ -114,7 +114,7 @@ file in the repo. |
 | `searxng_smoke.py` | 779 | CI's companion-image smoke: creates an egress-free Docker network, runs SearXNG beside a Valkey and probes it from a third container. Docker goes through an injected runner and every judgement is a pure function, so `tests/test_searxng_smoke.py` covers the failure branches without a daemon. Ships in no image. |
 | `scripts/vendor_weights.py` | 1112 | Operator-only, supervised: downloads the pinned revision, generates `weights_manifest.json` with the safetensors allowlist enforced **at generation time**, builds a deterministic symlink-dereferenced tarball, self-checks it through the real verifier, `oras push`es it tagged by revision sha, and confirms the GHCR package is private. Every constant comes from `model_fetcher`; no credential ever reaches an argv. Ships in no image; `docs/weights.md` is the procedure. |
 | `scripts/export_contract.py` | 327 | Operator-only: renders `app.openapi()` into `contract/openapi.yaml` in a canonical form pinned here (JSON round-trip, no anchors, sorted keys, `width=88`), writes the sha256 anchor, and writes the drift check's own committed failure case. Byte-stable across processes and hash seeds — `tests/test_contract_export.py` calls `drift_report()` directly, so the gate runs on every `uv run pytest` rather than in a lane someone has to remember. |
-| `pipeline/sanitizer_revision.py` | 42 | Hashes eight source files into a `sanitizer_revision` string. See the gotcha below. |
+| `pipeline/sanitizer_revision.py` | 62 | Hashes nine source files — the eight `pipeline/` sources (`_REVISION_SOURCES`) plus repo-root `url_validator.py` (`_ROOT_REVISION_SOURCES`, resolved against `pipeline_dir.parent`) — the model identity, `idna@<version>` and the threshold into a `sanitizer_revision` string. See the gotcha below. |
 | `pipeline/search_providers/searxng.py` | 262 | `SearxngProvider` — the key-less free floor behind the protocol, and the home of `DEFAULT_SEARXNG_URL`, `SEARXNG_ENGINES`, `HTTP_STATUS_DETAIL_PREFIX` and the closed `_SEARXNG_FAILURE_DETAILS` vocabulary. A behavior-preserving extraction of the `httpx` block that used to sit inline in `run_search_pipeline`, with two recorded deviations: `trust_env=False` on the client and a `reason` text that no longer carries `str(exc)` or userinfo. Not in `_REVISION_SOURCES`, for the same reason as `base.py`. |
 | `pipeline/search_providers/base.py` | 146 | The `SearchProvider` protocol (`name`, `paid`, `origin`, `search()`) plus the internal `ProviderSearchResult` / `ProviderFailure` types and the closed `FailureClass` vocabulary every backend implements. First nested package under `pipeline/` (its `__init__.py` is the registry, below, not a bare marker); not in `_REVISION_SOURCES` — provider code changes what is fetched, not how it is sanitized. |
 | `pipeline/search_providers/brave.py` | 504 | `BraveApiProvider` (`feature-brave-provider`) — the paid Brave LLM-Context backend, `paid = True`, returning content chunks (`content_kind="chunk"`, `engine="brave-api"`, deliberately distinct from SearXNG's own `brave` sub-engine) parsed against one owner-captured pinned sample (`tests/fixtures/brave/llm_context_sample.json`). A hardened per-call `httpx.AsyncClient` (`trust_env=False`, `follow_redirects=False`, TLS verified) against a fixed constant endpoint, a response body bounded before any `json.loads`, and `config.yaml`-tunable timeout/chunk/query caps read unconditionally in the lifespan. Also home of `brave_key_present()` — strip, non-empty; the one key-presence helper the registry and `/health` share (ruling 28) — and of the closed `_BRAVE_FAILURE_DETAILS` vocabulary every failure's `detail` token is drawn from (`http_401`/`http_403` → `auth`, `http_429` → `rate_limited`, everything else → `hard_error`). Not in `_REVISION_SOURCES`, for the same reason as the other two provider modules. |
@@ -126,10 +126,13 @@ file in the repo. |
 ## Patterns That Matter
 
 **The sanitizer revision is a content hash of source files *and of the model pin*.**
-`sanitizer_revision.py` resolves `_REVISION_SOURCES` relative to its own file and hashes
-them, then the model identity (`MODEL_ID@revision`) and the active threshold; the value
-ships in every `/health` body and response envelope so a consumer can tell which
-sanitizer version produced a result. Editing any of those eight files changes it — that
+`sanitizer_revision.py` resolves `_REVISION_SOURCES` relative to its own file and
+`_ROOT_REVISION_SOURCES` against its parent, and hashes the nine files in that order, then
+the model identity (`MODEL_ID@revision`), then `idna@<version>`, then the active threshold;
+the value ships in every `/health` body and response envelope so a consumer can tell which
+sanitizer version produced a result. Editing any of those nine files — or bumping `idna`,
+whose UTS-46 tables decide which hosts the search audit drops and `validate_url` refuses —
+changes it. That
 is the intent, but it means Forage's revision has **deliberately diverged** from Poppy's
 since the vault-free config work (`e6b2b56d…` → `2b8d7e9a…`), moved again when the
 `ruff format` CI gate reformatted `stage2_structural.py` (`2b8d7e9a…` → `cd00a8b4…`) — a
@@ -172,7 +175,13 @@ second two-file rotation, each file's contribution measured by reverting it in t
 `contract.py` gained `OMIT_BLOCKED_URL` and the version bump, `orchestrator.py` gained
 `_MAX_SEARCH_ENGINE_LENGTH = 64` and routed `SearchResult.engine` through
 `_normalize_search_text`. Bounds and normalizes a field rather than scanning one, so this
-does **not** join the fifteenth and sixteenth as a third behaviour-changing rotation).
+does **not** join the fifteenth and sixteenth as a third behaviour-changing rotation), and
+an eighteenth — **the third behaviour-changing rotation, and the first that adds *inputs***
+— with the search-time URL audit (`05dbbb5c…` → `840c78fa…`,
+`hardening-search-sanitization` US-003 — `orchestrator.py` + `contract.py`, each measured by
+reverting it in turn, **plus** two new inputs each measured absent/present: repo-root
+`url_validator.py` as `_ROOT_REVISION_SOURCES` and `idna@<version>`, with a control that
+reverts both files and removes both inputs landing exactly on `05dbbb5c…`).
 Nothing downstream may assume
 Poppy↔Forage revision parity.
 

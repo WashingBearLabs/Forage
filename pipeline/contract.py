@@ -88,7 +88,17 @@ MINOR when fields are only added.
   three are additive or a narrowing of an already-unscanned,
   already-unbounded field — a consumer comparing MAJOR keeps working
   untouched, and nothing removed or changed the meaning of an existing
-  field. This version is **held**: ``tests/golden/contract_1_3_0.json`` is
+  field. Continuing in ``hardening-search-sanitization`` US-003:
+  ``SearchResult.domain`` is now the canonicalised ASCII host, so it is the
+  UTS-46-encoded (punycode) form for an internationalised name where the raw
+  Unicode host shipped before; ``url`` is unchanged and still carries the
+  provider's spelling. The same story narrows what ``/retrieve`` and
+  ``/extract`` accept: an IPv6 literal that *embeds* a private IPv4 (6to4,
+  Teredo, NAT64 and IPv4-compatible forms) and any name under the
+  ``.localhost`` suffix are refused ``private_ip`` where they were fetched
+  before — an expedited MINOR with no compatibility window, argued in
+  ``contract/GOVERNANCE.md`` ruling (f). This version is **held**:
+  ``tests/golden/contract_1_3_0.json`` is
   re-created in place by every later story in this epic that moves the
   wire, until spec 8 US-002 freezes it ahead of the release cut.
 

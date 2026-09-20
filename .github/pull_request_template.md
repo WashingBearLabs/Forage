@@ -37,8 +37,9 @@ The ones that bite PR authors here, in the order they bite. (This list and `CLAU
 - [ ] **No `ARG` in the `Dockerfile`.** The build takes no arguments at all — a build arg is
       not a secret, `docker history` reads it back out of any registry the image reaches.
       Pass secrets at runtime. `tests/test_dockerfile.py` and CI's `secret-grep` both refuse.
-- [ ] **`sanitizer_revision` rotation is deliberate or it is a bug.** Editing any of the eight
-      hashed `pipeline/` files (`contract.py`, the stage modules, `orchestrator.py`) rotates
+- [ ] **`sanitizer_revision` rotation is deliberate or it is a bug.** Editing any of the nine
+      hashed files — the eight `pipeline/` sources (`contract.py`, the stage modules,
+      `orchestrator.py`) plus `url_validator.py` — or bumping the `idna` version rotates
       the revision and flushes every cached sanitization keyed on it. Take that at a boundary,
       on purpose, with the before/after recorded in `docs/bootstrap-notes.md` — never as a
       drive-by inside a behavioural change, where it is indistinguishable from a real

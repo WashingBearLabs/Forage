@@ -74,7 +74,9 @@ those eight — so Forage's revision moved:
 | After the per-request policy literal (`search-policy-and-health` US-010) | `dc3ff92a…eded9` |
 | After the completed 1.2.0 change record (`search-policy-and-health` US-003) | `41ac98ca…b4e318` |
 | After the newline-preserving search scan (`hardening-search-sanitization` US-001) | `b0ca8d9a…aed73` |
-| **Current (`hardening-search-sanitization` US-002, bounded and directly scanned result URLs)** | **`42485686…ec17f`** |
+| After bounded, directly scanned result URLs (`hardening-search-sanitization` US-002) | `42485686…ec17f` |
+| After the contract 1.3.0 window (`hardening-search-sanitization` US-004) | `05dbbb5c…82c0b` |
+| **Current (`hardening-search-sanitization` US-003, the search-time URL audit and two new hashed inputs)** | **`840c78fa…ee4be`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -728,6 +730,71 @@ behaviour.
 `42485686…` becomes unreachable at the next start and ages out on its own TTL — free in memory
 mode, one TTL of extra fetches in Valkey mode. **Do not assume Poppy↔Forage revision parity** —
 compare contracts, not revisions.
+
+### The eighteenth rotation: the search-time URL audit, and two new inputs (`hardening-search-sanitization` US-003, 2026-09-20)
+
+```
+before: 05dbbb5c99eb1055b364f68871b5c18e5cfbd2f12d150c1737eae47564282c0b
+after:  840c78fa4a4e3004219c313f2653c28c78f2722f6946b3d3e915e646f5eee4be
+```
+
+**The first rotation of this epic that adds *inputs* rather than only moving source bytes.**
+Four things changed the value, and each was measured on its own from a **clean tree**
+(`git status --porcelain` listed only this story's files, no other hashed file), with the
+others held as they ship:
+
+| Measurement | Value |
+|---|---|
+| After (everything present) | `840c78fa…ee4be` |
+| `pipeline/orchestrator.py` reverted | `ae381e3c…3fbc1` |
+| `pipeline/contract.py` reverted | `ddb32c41…7ef8b` |
+| Both files reverted, both new inputs present | `356cc0d1…d308c` |
+| `url_validator.py` removed as an input | `5282ab54…3c36d` |
+| `idna@<version>` removed as an input | `469935f0…96fac` |
+| **Control:** both files reverted *and* both inputs removed | `05dbbb5c…82c0b` |
+
+The control is the measurement that matters: reverting the two hashed files **and** removing
+both new inputs reproduces the seventeenth rotation's shipped value exactly, which is what
+proves the four-part shape rather than asserting it. No single row reproduces the rotation.
+The whole table was re-derived two independent ways — the live `derive_sanitizer_revision`
+and a standalone digest that reads reverted bytes with `git show HEAD:<path>` — and taken
+**after** the final byte of every hashed file had landed.
+
+**The two source files.** `pipeline/orchestrator.py` gained rules (3a)–(3c) of
+`_SEARCH_URL_RULES` — canonicalise the host, classify the address, check the name blocklist —
+the `SearchHostClass` vocabulary and `_block_search_url`, and now reads `domain` from
+`CanonicalHost.host` rather than `parsed.hostname.lower()`. `pipeline/contract.py` gained the
+`1.3.0` docstring's continuation line for the `domain` move and the fetch-time narrowing.
+
+**The two new inputs.** Repo-root `url_validator.py` joins the hash as
+`_ROOT_REVISION_SOURCES`, hashed after the eight `pipeline/` sources and resolved against
+`pipeline_dir.parent` rather than `pipeline_dir` — a path-resolution change, not a tuple
+entry, because `derive_sanitizer_revision` resolves every `_REVISION_SOURCES` name under
+`pipeline/`. CLAUDE.md invariant 3's "hashes files by relative path" stays true and the
+Dockerfile already `COPY`s the file. The reason is that the canonicaliser, the numeric
+classifier and the embedded-address unwraps — the code that decides which results are
+dropped — would otherwise live in the one sanitization file the revision cannot see. And
+`idna@<version>` is hashed beside the model identity: UTS-46 mapping tables change between
+`idna` releases and decide which spelling of a host is compared, so a lock bump is a
+sanitization change with no source byte to show for it. It is the same argument the fourth
+rotation made for `MODEL_ID@revision`, and it applies more strongly to the code consuming
+the table than to the table itself.
+
+**This rotation *does* change sanitization behaviour** — the third of the epic, after the
+fifteenth and sixteenth. `/search` now omits a result whose host is a literal private or
+loopback address, an IPv6 literal embedding a private IPv4, or a blocklisted name, counting
+it under `blocked_url`; five non-canonical numeric hosts and the hosts UTS-46 refuses are
+counted under `invalid_url`; and `domain` is the canonicalised ASCII host, so an IDN result
+serves punycode where the raw Unicode host shipped before. Fetch-time `validate_url` narrows
+in the same precise way (`contract/GOVERNANCE.md` ruling (f)).
+
+**Not replayed to Poppy**; the deployed copy stays on the value it already diverged to.
+
+**Blast radius.** The same mechanism as every rotation since the fifth:
+`cache_policy_fingerprint()` takes the revision as an input, so every extraction cached under
+`05dbbb5c…` becomes unreachable at the next start and ages out on its own TTL — free in
+memory mode, one TTL of extra fetches in Valkey mode. **Do not assume Poppy↔Forage revision
+parity** — compare contracts, not revisions.
 
 ## Deferred GitHub settings — for the spec 2 public flip
 

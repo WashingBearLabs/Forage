@@ -173,7 +173,7 @@ An urgent fix does not get to skip the rules; it gets a faster lane through them
 
 ## Recorded rulings
 
-Six rulings this epic already made, kept here so the next change re-reads them instead of
+Seven rulings this epic already made, kept here so the next change re-reads them instead of
 re-litigating them. Each cites its source.
 
 ### (a) The documentation pass does not bump the contract
@@ -431,3 +431,37 @@ statement. `sanitizer_revision` has deliberately diverged between Forage and Pop
 in-tree copy and says nothing about wire compatibility. The **image tag** is not a
 compatibility statement either — image `v1.0.0` serves contract `1.1.0`, and the two move
 for different reasons ("Two semvers", above).
+
+### (f) The search audit's fetch-time narrowing is an expedited MINOR
+
+**Source:** `hardening-search-sanitization` US-003.
+
+**Ruling:** `/retrieve` and `/extract` stop accepting two classes of URL they accepted
+before — an IPv6 literal that *embeds* a private IPv4 (6to4 `2002:7f00:1::`, Teredo
+`2001:0:0:0::80ff:fffe`, NAT64 `64:ff9b::a00:1`, IPv4-compatible `::127.0.0.1`), and any
+name under the `.localhost` suffix (`api.localhost`). Each is now refused 422 `private_ip`
+where it was fetched. This ships as an **expedited MINOR** inside the open `1.3.0` window,
+with **no compatibility window**.
+
+**Why it is not the MAJOR the table says.** The table's "an accepted request value stops
+being accepted" row exists to protect a consumer whose working request suddenly breaks. The
+values being withdrawn here are exactly the SSRF vectors the row's own security carve-out
+(worked example 6) names: an IPv6 literal that embeds a private IPv4 *is* the private IPv4
+request, spelled so the guard did not recognise it, and `api.localhost` is `localhost` with
+a label prepended — RFC 6761 §6.3 reserves the whole domain for loopback. No legitimate
+consumer fetch names one of these; a consumer that does is the request the guard was always
+meant to refuse. Worked example 6 routes precisely this to an expedited MINOR.
+
+**Why no compatibility window.** A compatibility window means continuing to serve the
+vulnerable behaviour for a named period. For a documentation change that is cheap; for an
+SSRF bypass it is the vulnerability, on purpose, for longer. The narrowing is announced
+instead: the `1.3.0` docstring entry in `pipeline/contract.py` names both tightenings, and
+`kit_tools/docs/TROUBLESHOOTING.md`'s `private_ip` row enumerates the newly refused classes
+so an operator reading a 422 finds the reason rather than guessing.
+
+**Scope.** One ruling, two tightenings — the embedded-address classes and the `.localhost`
+suffix — because they are the same argument applied to an address and to a name. The
+prefix guards are part of the ruling: the NAT64 and IPv4-compatible unwraps only fire
+inside `64:ff9b::/96` and `::/96`, because an unguarded low-32 mask would refuse ordinary
+public IPv6 (a real Google AAAA, `2a00:1450:4001:80e::200e`, masks to `0.0.32.14`) and
+*that* would be a MAJOR-shaped break on legitimate traffic.

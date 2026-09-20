@@ -43,7 +43,10 @@ import pytest
 import yaml
 
 from pipeline.contract import CONTRACT_VERSION
-from pipeline.sanitizer_revision import _REVISION_SOURCES
+from pipeline.sanitizer_revision import (
+    _REVISION_SOURCES,
+    _ROOT_REVISION_SOURCES,
+)
 from scripts.export_contract import ANCHOR_PATH, CONTRACT_PATH, REGEN_COMMAND
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -97,10 +100,11 @@ _RULING_MARKERS = (
     "### (c) ",
     "### (d) ",
     "### (e) ",
+    "### (f) ",
 )
 
 # Counts these documents state in words. Both are read back out of the code —
-# the hashed-source count from `_REVISION_SOURCES`, the required-check count
+# the hashed-source count from both hashed tuples, the required-check count
 # from the jobs `publish` hangs off — so a number that goes stale is a red test
 # rather than a confidently wrong instruction.
 _NUMBER_WORDS = {
@@ -590,13 +594,17 @@ class TestPullRequestTemplate:
     def test_the_hashed_source_count_matches_the_code(self, pr_template: str) -> None:
         # The template tells an author how many files rotate the revision. That
         # number lives in pipeline/sanitizer_revision.py and has moved before.
-        expected = _NUMBER_WORDS[len(_REVISION_SOURCES)]
+        # Both hashed tuples, not just the `pipeline/` one: an oracle derived
+        # from `_REVISION_SOURCES` alone stays green on a stale "eight" the
+        # moment a root source joins the hash.
+        expected = _NUMBER_WORDS[len(_REVISION_SOURCES) + len(_ROOT_REVISION_SOURCES)]
         # Flowed, because the template wraps at 92 columns and a phrase that
         # happens to straddle a line break is still the phrase.
         flowed = " ".join(pr_template.split())
         assert f"{expected} hashed" in flowed, (
             f"The PR template must say '{expected} hashed' — "
-            f"_REVISION_SOURCES currently holds {len(_REVISION_SOURCES)} files, "
+            f"the hashed tuples currently hold "
+            f"{len(_REVISION_SOURCES) + len(_ROOT_REVISION_SOURCES)} files, "
             "and an author counting on a stale number takes a rotation they "
             "did not mean to take."
         )

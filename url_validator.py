@@ -10,8 +10,14 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+import re
 import socket
+from dataclasses import dataclass
+from ipaddress import IPv4Address, IPv6Address
+from typing import Literal
 from urllib.parse import urlparse
+
+import idna
 
 logger = logging.getLogger(__name__)
 
@@ -62,12 +68,206 @@ _PRIVATE_NETWORKS_V6 = [
 ]
 
 _BLOCKED_HOSTNAMES = {"localhost"}
-_BLOCKED_SUFFIXES = {".local"}
+# RFC 6761 §6.3 reserves the whole ``.localhost`` domain for loopback, so
+# ``api.localhost`` is ``localhost`` with a label prepended — it matched
+# neither entry before `hardening-search-sanitization` US-003.
+_BLOCKED_SUFFIXES = {".local", ".localhost"}
+
+# The two transition prefixes whose low 32 bits are an IPv4 address. Both
+# unwraps are guarded by membership: an unguarded ``int(addr) & 0xFFFFFFFF``
+# would refuse ordinary public IPv6 whose low 32 bits happen to land in a
+# private range (``2a00:1450:4001:80e::200e`` masks to ``0.0.32.14``, inside
+# ``0.0.0.0/8`` — a real Google AAAA), and ``64:ff9b::/96`` maps the *whole*
+# public IPv4 space, so a blanket list entry would make `validate_url` refuse
+# every fetch from an IPv6-only DNS64/NAT64 deployment.
+_NAT64_PREFIX = ipaddress.IPv6Network("64:ff9b::/96")
+_V4_COMPATIBLE_PREFIX = ipaddress.IPv6Network("::/96")
+
+# A label that is a decimal or ``0x``-hex digit run. A host whose *every*
+# label matches is a numeric host: it is an address spelling, not a name, and
+# the only spelling this service accepts is a canonical dotted quad.
+_NUMERIC_LABEL_RE = re.compile(r"^(?:0[xX][0-9A-Fa-f]*|[0-9]+)$")
+
+
+# ---------------------------------------------------------------------------
+# Host canonicalisation
+# ---------------------------------------------------------------------------
+
+HostKind = Literal["ipv6", "ipv4", "name"]
+"""What `canonicalize_host` decided a host *is*. It classifies; callers decide."""
+
+HostRejectionReason = Literal["unparseable", "numeric_host", "idna"]
+"""Closed, content-free log vocabulary for a host that cannot be canonicalised."""
+
+
+@dataclass(frozen=True, slots=True)
+class CanonicalHost:
+    """A host that canonicalised, with the form every comparison uses.
+
+    ``host`` is the ASCII form: the UTS-46 encoding for a name, and for an
+    address literal the **raw lower-cased literal exactly as it was written**.
+    That distinction is load-bearing rather than incidental --
+    ``str(ip_address("2001:0:0:0::f7f7:f7f7"))`` is ``2001::f7f7:f7f7`` and
+    ``str(ip_address("::8.8.8.8"))`` is ``::808:808``, so re-serialising the
+    address object would silently move ``SearchResult.domain`` for every
+    uncompressed spelling a provider happens to return. ``address`` is the
+    parsed value the classification compares; ``host`` is the value served.
+    """
+
+    host: str
+    kind: HostKind
+    address: IPv4Address | IPv6Address | None
+
+
+@dataclass(frozen=True, slots=True)
+class HostRejection:
+    """A host that cannot be canonicalised, and the closed token saying why.
+
+    The token is a **value** rather than something the caller re-derives: the
+    UTS-46 encode is run exactly once per host (a caller that re-ran it to
+    learn the reason would be a second call site of a versioned table), and a
+    bare ``None`` could not tell an IDNA failure from a numeric host.
+    """
+
+    reason: HostRejectionReason
+
+
+def canonicalize_host(host: str) -> CanonicalHost | HostRejection:
+    """Canonicalise *host*, literals first. Never raises, never resolves DNS.
+
+    The order is the security property. An IPv6 literal is recognised
+    *structurally*, by its colons, and never reaches the UTS-46 encode --
+    the UTS-46 encode raises ``InvalidCodepoint`` on U+003A for every IPv6
+    literal, and ``urlsplit`` only ever yields a colon-bearing hostname from a
+    real bracketed literal, so the branch is not reachable by an NFKC-mapped
+    spelling. Every other host is stripped of exactly one trailing dot,
+    lower-cased and UTS-46-encoded, stripped of exactly one trailing dot
+    *again* -- the second time against the dot set UTS-46 emits -- and *only
+    then* classified as numeric or named: ``①②⑦.⓪.⓪.①``,
+    ``127。0。0。1`` and ``localhost。`` are not numeric, and do not match a
+    blocklist entry, until UTS-46 has mapped them; both fail-opens a
+    classify-before-encode order leaves behind.
+    """
+    if ":" in host:
+        try:
+            return CanonicalHost(
+                host=host.lower(), kind="ipv6", address=ipaddress.IPv6Address(host)
+            )
+        except ValueError:
+            return HostRejection(reason="unparseable")
+
+    # Exactly one trailing dot: `urlsplit("http://localhost../").hostname` is
+    # `localhost..`, and the UTS-46 encode accepts a single root dot
+    # unchanged -- so an unguarded strip would serve
+    # `localhost.`, which matches neither the exact entry nor a suffix. Any
+    # dot left after the strip, and any empty interior label, is the same
+    # failure the UTS-46 encode reports for an empty label.
+    if host.endswith("."):
+        host = host[:-1]
+    if ".." in host or host.endswith("."):
+        return HostRejection(reason="idna")
+
+    host = host.lower()
+    try:
+        encoded = idna.encode(host, uts46=True).decode("ascii")
+    except idna.IDNAError:
+        # Covers `InvalidCodepoint` (an underscore label), "Label too long"
+        # and empty labels alike.
+        return HostRejection(reason="idna")
+
+    # The same strip again, now against the dot set UTS-46 can *produce*
+    # rather than the one ASCII carries. U+3002, U+FF0E and U+FF61 are not
+    # `.` going in but are coming out (the UTS-46 encode turns `localhost。`
+    # into `localhost.`), so a guard that ran only before the encode let a
+    # provider append one to any host in the audit: the empty final label
+    # broke the all-labels-numeric test below, `127.0.0.1。` classified as a
+    # *name*, and `localhost。` matched neither blocklist entry. Same argument
+    # as running the numeric classification after the encode rather than
+    # before it -- the check has to be relative to what UTS-46 emits.
+    if encoded.endswith("."):
+        encoded = encoded[:-1]
+    if ".." in encoded or encoded.endswith("."):
+        return HostRejection(reason="idna")
+
+    labels = encoded.split(".")
+    if all(_NUMERIC_LABEL_RE.match(label) for label in labels):
+        # Every label is a digit run, so this is an address spelling. Only a
+        # canonical dotted quad is accepted: decimal `2130706433`, octal
+        # `0177.0.0.1`, short `127.1`, hex `0x7f000001` and mixed `0x7f.0.0.1`
+        # all fail this parse and are rejected rather than passed to the name
+        # path, where a resolver would answer 127.0.0.1 for each of them.
+        try:
+            address = ipaddress.IPv4Address(encoded)
+        except ValueError:
+            return HostRejection(reason="numeric_host")
+        return CanonicalHost(host=encoded, kind="ipv4", address=address)
+
+    return CanonicalHost(host=encoded, kind="name", address=None)
+
+
+def canonical_host(host: str) -> str | None:
+    """Return the canonical ASCII form of *host*, or ``None`` if it has none."""
+    result = canonicalize_host(host)
+    if isinstance(result, CanonicalHost):
+        return result.host
+    return None
 
 
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
+
+
+def private_address_class(
+    addr: IPv4Address | IPv6Address,
+) -> Literal["private_literal", "embedded_private"] | None:
+    """Classify *addr*, reporting **how** it was reached, or ``None`` if public.
+
+    A ``bool`` cannot say whether an address was private in its own right or
+    because it embeds a private IPv4, and that distinction is the log token
+    an operator aggregates on. The order matters twice: ``::1`` is named
+    before the ``::/96`` unwrap because it also lies inside that prefix and is
+    a loopback literal, not an embedding; and every unwrap returns *at once*,
+    because falling through to the IPv6 list would let ``::ffff:0:0/96``
+    re-block a public IPv4-mapped address.
+
+    The two masked unwraps are prefix-guarded. ISATAP
+    (``<prefix>::5efe:a.b.c.d``) is deliberately not unwrapped: its prefix is
+    deployment-specific and not enumerable.
+    """
+    if isinstance(addr, IPv4Address):
+        if any(addr in net for net in _PRIVATE_NETWORKS_V4):
+            return "private_literal"
+        return None
+
+    if addr in (ipaddress.IPv6Address("::"), ipaddress.IPv6Address("::1")):
+        return "private_literal"
+
+    embedded: IPv4Address | None = addr.ipv4_mapped
+    if embedded is None:
+        embedded = addr.sixtofour
+    if embedded is None and addr.teredo is not None:
+        # `teredo` is `(server, client)` and the client field is the
+        # ones-complement of the low 32 bits, so a literal that *looks* like
+        # it embeds 127.0.0.1 embeds 128.255.255.254. Only the client is an
+        # address the host can be talked into reaching.
+        embedded = addr.teredo[1]
+    if embedded is None and addr in _NAT64_PREFIX:
+        embedded = IPv4Address(int(addr) & 0xFFFFFFFF)
+    if embedded is None and addr in _V4_COMPATIBLE_PREFIX:
+        # RFC 4291 deprecated `::a.b.c.d`, but `ip_address("::127.0.0.1")`
+        # has `ipv4_mapped is None`, `is_private False`, and lies in none of
+        # the six `_PRIVATE_NETWORKS_V6` entries -- so it reached the fetch
+        # boundary untouched.
+        embedded = IPv4Address(int(addr) & 0xFFFFFFFF)
+    if embedded is not None:
+        if any(embedded in net for net in _PRIVATE_NETWORKS_V4):
+            return "embedded_private"
+        return None
+
+    if any(addr in net for net in _PRIVATE_NETWORKS_V6):
+        return "private_literal"
+    return None
 
 
 def _is_private_ip(ip_str: str) -> bool:
@@ -76,20 +276,7 @@ def _is_private_ip(ip_str: str) -> bool:
         addr = ipaddress.ip_address(ip_str)
     except ValueError:
         return True  # Unparseable → treat as unsafe
-
-    # Explicit zero-address check
-    if ip_str in ("0.0.0.0", "::"):
-        return True
-
-    # Check IPv4-mapped IPv6 addresses (e.g. ::ffff:192.168.1.1)
-    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
-        return any(addr.ipv4_mapped in net for net in _PRIVATE_NETWORKS_V4)
-
-    if isinstance(addr, ipaddress.IPv4Address):
-        return any(addr in net for net in _PRIVATE_NETWORKS_V4)
-
-    # IPv6
-    return any(addr in net for net in _PRIVATE_NETWORKS_V6)
+    return private_address_class(addr) is not None
 
 
 def _check_hostname_blocklist(hostname: str) -> None:
@@ -100,6 +287,19 @@ def _check_hostname_blocklist(hostname: str) -> None:
     for suffix in _BLOCKED_SUFFIXES:
         if lower.endswith(suffix):
             raise PrivateIPError(f"Hostname '{hostname}' is blocked ({suffix} domain)")
+
+
+def is_blocklisted_hostname(host: str) -> bool:
+    """Whether *host* is on the built-in private-name list.
+
+    The public, non-raising form of `_check_hostname_blocklist`, so callers
+    outside this module never import an underscored name.
+    """
+    try:
+        _check_hostname_blocklist(host)
+    except PrivateIPError:
+        return True
+    return False
 
 
 async def validate_url(

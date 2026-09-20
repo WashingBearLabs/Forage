@@ -694,6 +694,51 @@ async def test_metrics_search_records_omitted_and_unscanned_from_response(
     assert search_metrics["unscanned_results"] == 2
 
 
+async def test_metrics_search_records_the_url_audit_blocks(
+    client: httpx.AsyncClient,
+) -> None:
+    """US-003: drive A's eighteen blocks reach `/metrics` through the handler.
+
+    The real pipeline, not a stubbed `SearchResponse`: `blocked_url` has to
+    survive `contract.OMISSION_REASONS` membership or it buckets to `other`,
+    and that membership is the half a response-level assertion cannot see.
+    """
+    from tests.test_orchestrator import _AUDIT_DRIVE_A_ROWS
+
+    hostile = [raw for raw, reason, _token in _AUDIT_DRIVE_A_ROWS if reason is not None]
+    assert len(hostile) == 18
+    fake = FakeSearchProvider(
+        name="searxng",
+        outcome=ProviderSearchResult(
+            provider_name="searxng",
+            results=[
+                {"title": f"h{index}", "url": raw, "content": "a snippet"}
+                for index, raw in enumerate(hostile)
+            ],
+            unresponsive_engines=[],
+        ),
+    )
+
+    with _borrowed_search_providers([fake]):
+        resp = await client.post(
+            "/search",
+            json={
+                "query": "audit",
+                "num_results": 10,
+                "promptguard_fail_closed": False,
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["results"] == []
+    assert resp.json()["omitted_by_reason"] == {contract.OMIT_BLOCKED_URL: 18}
+
+    metrics_resp = await client.get("/metrics")
+    search_metrics = metrics_resp.json()["search"]
+    assert search_metrics["omitted_by_reason"] == {contract.OMIT_BLOCKED_URL: 18}
+    assert contract.METRICS_OTHER_BUCKET not in search_metrics["omitted_by_reason"]
+
+
 async def test_metrics_search_omitted_by_reason_unknown_key_buckets_to_other(
     client: httpx.AsyncClient,
 ) -> None:

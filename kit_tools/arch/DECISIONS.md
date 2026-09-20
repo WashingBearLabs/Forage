@@ -62,9 +62,11 @@ the first URL could not.
 
 **Decision:**
 `pipeline/stage5_url_audit.py` opens `httpx.AsyncClient(follow_redirects=False)` and follows at
-most 5 redirects by hand. Each hop runs `url_validator.validate_url` (http/https only; `localhost`
-and `.local` refused; private, reserved and IPv4-mapped ranges refused for *every* resolved
-address; unparseable addresses treated as private; request blocklist merged with `seed_blocklist`),
+most 5 redirects by hand. Each hop runs `url_validator.validate_url` (http/https only; `localhost`,
+`.local` and `.localhost` refused; private and reserved ranges refused for *every* resolved
+address, as are the five unwrapped embedded-IPv4 classes — IPv4-mapped, 6to4, Teredo's client
+field, NAT64 inside `64:ff9b::/96` and IPv4-compatible inside `::/96`, the two masked unwraps
+prefix-guarded so public IPv6 stays fetchable; unparseable addresses treated as private; request blocklist merged with `seed_blocklist`),
 then pins the connection to the validated IP by rewriting the netloc and sending the original
 `Host` plus `sni_hostname`, so TLS verification stays on. Bodies stream under a 10 MiB cap with a
 Content-Length fast reject; timeout 30 s; `domain_changed_on_redirect` costs 0.1 trust score.
@@ -606,9 +608,9 @@ extractions — `cache_policy_fingerprint()` mixed in every caller knob but not 
 **Decision:**
 The hashed identity is `MODEL_ID@revision` (`feature-forage-model-bootstrap` US-001) and the
 revision is an input to `cache_policy_fingerprint()` (`feature-forage-cache-fallback` US-003), so
-a rotation flushes Forage's own cache. Rotations to date — fourteen of the seventeen
-changed no sanitization behaviour; the fifteenth and sixteenth did, and the seventeenth did not
-rejoin them:
+a rotation flushes Forage's own cache. Rotations to date — fifteen of the eighteen
+changed no sanitization behaviour; the fifteenth, sixteenth and eighteenth did, and the
+seventeenth did not join them:
 
 | Value | Moved by |
 |---|---|
@@ -629,7 +631,8 @@ rejoin them:
 | `41ac98ca…` | `contract.py`'s `CONTRACT_VERSION` docstring gained the completed 1.2.0 change record — every field, counter and enum member specs 1-4 added, all additive, plus a note that the `/search`/`/retrieve` boundary text rides the same unpublished window (`retrieval_app.py` and `models.py`, where that boundary text lives, are not hashed files) — `contract.py` is the only hashed file that moved, measured by reverting it alone and reproducing `dc3ff92a…` (`search-policy-and-health` US-003, 2026-09-16) |
 | `b0ca8d9a…` | **the first rotation that changes sanitization behaviour.** `orchestrator.py` gained `_scan_forms_for_search_text`: `/search` now scans `title` and `snippet` in a newline-preserving form and ships their whitespace collapse, so Stage 2's line-anchored BLOCK patterns fire on any line rather than at character 0 only. Two entity decode levels before the scan, two control strips (one before the parser, one after the decodes), truncation once on the scan form, and a `_SEARCH_PARSER_INPUT_MULTIPLIER * max_length` parser-input bound. `orchestrator.py` is the only hashed file that moved, measured by reverting it alone and reproducing `41ac98ca…` from a clean tree (`hardening-search-sanitization` US-001, 2026-09-20) |
 | `42485686…` | **the second rotation that changes sanitization behaviour.** `orchestrator.py`'s `_canonicalize_search_url` became `_SEARCH_URL_RULES`, an ordered registry of named pure rule functions run over the **raw** provider URL, first rejection wins, returning a frozen `SearchUrlOutcome` that carries the omission reason and a closed `SearchUrlRule` log token: presence/length (rejection, never truncation, at 2 048 characters), raw character class (controls, whitespace and RFC 3986 excluded characters rejected, never deleted), parse (`urlsplit` and the `parsed.port` read each in their own `try`), host code points (WHATWG forbidden set, IPv6 colons exempt, `%25` zone id its own token), then a structural scan of **both** `html.unescape(value)` and `unquote(html.unescape(value))`. `_sanitize_search_text` — which routed the URL through `extract_html`, and so ate tag-shaped text before the scan saw it — is deleted. `orchestrator.py` is the only hashed file that moved, measured by reverting it alone and reproducing `b0ca8d9a…` from a clean tree (`hardening-search-sanitization` US-002, 2026-09-20) |
-| `05dbbb5c…` (current) | contract `1.3.0`: `contract.py` gained `OMIT_BLOCKED_URL` and the version bump, `orchestrator.py` gained `_MAX_SEARCH_ENGINE_LENGTH = 64` and routed `SearchResult.engine` through the same `_normalize_search_text` call `title`/`snippet` already use — both hashed files, measured (both-reverted control reproduces `42485686…`). Bounds and normalizes a field; does not scan one, so **not** a third rotation that changes sanitization behaviour (`hardening-search-sanitization` US-004, 2026-09-20) |
+| `05dbbb5c…` | contract `1.3.0`: `contract.py` gained `OMIT_BLOCKED_URL` and the version bump, `orchestrator.py` gained `_MAX_SEARCH_ENGINE_LENGTH = 64` and routed `SearchResult.engine` through the same `_normalize_search_text` call `title`/`snippet` already use — both hashed files, measured (both-reverted control reproduces `42485686…`). Bounds and normalizes a field; does not scan one, so **not** a third rotation that changes sanitization behaviour (`hardening-search-sanitization` US-004, 2026-09-20) |
+| `840c78fa…` (current) | the **search-time URL audit**: `orchestrator.py` gained rules (3a)–(3c) of `_SEARCH_URL_RULES`, the `SearchHostClass` vocabulary and `domain` from `CanonicalHost.host`; `contract.py` gained the `1.3.0` continuation line; **and two inputs joined the hash** — repo-root `url_validator.py` as `_ROOT_REVISION_SOURCES` (resolved against `pipeline_dir.parent`) and `idna@<version>` (UTS-46 tables are a sanitization input). All four measured alone; the control reverting both files *and* removing both inputs reproduces `05dbbb5c…`. **Changes sanitization behaviour** (`hardening-search-sanitization` US-003, 2026-09-20) |
 
 **Rationale:**
 `pipeline/sanitizer_revision.py`: "two containers running the same code can be scanning with
