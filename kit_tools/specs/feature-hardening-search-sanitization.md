@@ -979,12 +979,12 @@ today already — the list entry) and the name `api.localhost`.
   different matter).
 
 **Acceptance Criteria:**
-- [ ] The eighteen hostile rows of the table are omitted under `blocked_url` with the `host_class`
+- [x] The eighteen hostile rows of the table are omitted under `blocked_url` with the `host_class`
       token in their row; the eight controls are served; drive A reports `omitted_by_reason ==
       {"blocked_url": 18}` in the response and, through the `/search` handler, in `/metrics`
       `omitted_by_reason`, drive B reports `{}`; `len(fixtures) <= 20` is asserted per drive for
       `num_results=10` (18 + 2 and 6).
-- [ ] Canonicalisation order is pinned by a test of `canonicalize_host` itself: a colon-bearing host
+- [x] Canonicalisation order is pinned by a test of `canonicalize_host` itself: a colon-bearing host
       is parsed with `ipaddress` and `idna.encode` is **never called** for it (patched and asserted);
       the helper returns a `CanonicalHost(kind="ipv6")` for `2606:4700::1111`, `2001:db8::1`,
       `2002:808:808::`, `64:ff9b::808:808`, `2001:0:0:0::f7f7:f7f7` and `::8.8.8.8` (the helper
@@ -1003,10 +1003,10 @@ today already — the list entry) and the name `api.localhost`.
       tested); `grep -cE "idna\.(encode|decode)|encode\(\"idna\"\)" url_validator.py
       pipeline/orchestrator.py` sums to 1 (path set: exactly those two files; today both report 0,
       verified).
-- [ ] `idna>=3.7` is a direct dependency in `pyproject.toml` with the inline comment and in the lock;
+- [x] `idna>=3.7` is a direct dependency in `pyproject.toml` with the inline comment and in the lock;
       `derive_sanitizer_revision` hashes `idna@<version>`; `SYNOPSIS.md`'s Tech Stack table and
       `CODE_ARCH.md`'s `url_validator.py` row name the dependency.
-- [ ] The five non-canonical numeric hosts (`2130706433`, `0177.0.0.1`, `0x7f000001`, `0x7f.0.0.1`,
+- [x] The five non-canonical numeric hosts (`2130706433`, `0177.0.0.1`, `0x7f000001`, `0x7f.0.0.1`,
       `127.1`) are `invalid_url` / `numeric_host` and none reaches the name path (`idna.encode` is
       asserted uncalled for them); the underscore-label and over-long-label hosts are `invalid_url`
       / `idna`; each logs exactly one content-free `search_url_rejected rule=<token>
@@ -1015,10 +1015,10 @@ today already — the list entry) and the name `api.localhost`.
       numeric_host, idna}` (and `SEARCH_URL_RULES` with it); the token is read from
       `HostRejection.reason`, never recomputed at the call site, and pyright strict accepts the
       assignment because `HostRejection.reason`'s `Literal` is a subset.
-- [ ] No DNS lookup occurs during `/search`: the audit tests run under the default socket guard with
+- [x] No DNS lookup occurs during `/search`: the audit tests run under the default socket guard with
       no `enable_socket` marker, and `validate_url` is not referenced from `run_search_pipeline` or
       `_canonicalize_search_url`.
-- [ ] `_PRIVATE_NETWORKS_V6` is unchanged (six entries); `private_address_class` unwraps
+- [x] `_PRIVATE_NETWORKS_V6` is unchanged (six entries); `private_address_class` unwraps
       IPv4-mapped, 6to4 (`sixtofour`), Teredo (`teredo[1]`, the client field), NAT64 (low 32 bits
       **only inside `64:ff9b::/96`**) and IPv4-compatible (low 32 bits **only inside `::/96`**, with
       `::` and `::1` reported as `private_literal`, never as an embedding) addresses and returns
@@ -1031,17 +1031,17 @@ today already — the list entry) and the name `api.localhost`.
       the already-committed `2607:f8b0:4004:800::200e` (`:115`) are served and allowed to fetch;
       `_BLOCKED_SUFFIXES == {".local", ".localhost"}` and `api.localhost` is refused by
       `validate_url` as well as audited out.
-- [ ] Every producer of the omission count references `contract.OMIT_BLOCKED_URL`:
+- [x] Every producer of the omission count references `contract.OMIT_BLOCKED_URL`:
       `grep -rl --include='*.py' '"blocked_url"' pipeline/ tests/ models.py url_validator.py
       retrieval_app.py` lists only `pipeline/contract.py`, `models.py` (the `omitted_by_reason`
       description, where US-004 spells the vocabulary out) and files under `tests/` (path set as
       written; `kit_tools/` excluded; today the list is empty, verified).
-- [ ] A chain `[searxng, brave]` whose free provider returns only audited-out results serves an empty
+- [x] A chain `[searxng, brave]` whose free provider returns only audited-out results serves an empty
       200 with `fallback_fired is False` and zero paid calls.
-- [ ] Every audit omission logs one content-free `search_url_blocked host_class=<token>
+- [x] Every audit omission logs one content-free `search_url_blocked host_class=<token>
       provider=<name>` record; a sentinel substring of the URL appears in no record emitted for a
       rejected or blocked result.
-- [ ] Window mechanics (R36) for the `domain` line: the `* ``1.3.0`` — …` docstring entry gains this
+- [x] Window mechanics (R36) for the `domain` line: the `* ``1.3.0`` — …` docstring entry gains this
       story's line; `uv run python -m scripts.export_contract` run; `tests/golden/contract_1_3_0.json`
       re-created via `_SCHEMA_MODELS`; **nothing** appended to `_EXPECTED_ONE_THREE_ZERO_DIFF` (a
       description move is invisible to `_added_paths` — R36 corrected) and the sweep stays green on
@@ -1057,7 +1057,7 @@ today already — the list entry) and the name `api.localhost`.
       section with a `**Source:**` line, the letter appended to `_RULING_MARKERS`
       (`tests/test_governance_docs.py:93`) and the count sentence (`contract/GOVERNANCE.md:174`)
       updated, as an expedited MINOR with no compatibility window and the reason stated.
-- [ ] `SECURITY.md:77` states the audit, the order, the no-oracle property, the fetch-time boundary
+- [x] `SECURITY.md:77` states the audit, the order, the no-oracle property, the fetch-time boundary
       and the IDNA2008 yield cut; `SECURITY.md:83` keeps "Six IPv6 networks" and names the four
       embeddings, their guards and the `.localhost` suffix; `MONITORING.md` carries the three
       sentences; `SERVICE_MAP.md:333` and `API_GUIDE.md:259` are updated; `grep -rn 'IPv4-mapped'
@@ -1069,16 +1069,16 @@ today already — the list entry) and the name `api.localhost`.
       `idna@<version>`, and `tests/test_governance_docs.py:583`'s oracle is
       `len(_REVISION_SOURCES) + len(_ROOT_REVISION_SOURCES)` (the template cannot drift back to
       "eight" silently).
-- [ ] `sanitizer_revision` rotation measured (from a clean tree; revert `orchestrator.py` and
+- [x] `sanitizer_revision` rotation measured (from a clean tree; revert `orchestrator.py` and
       `contract.py` each in turn, both-reverted control; the `idna@<version>` input and the
       `url_validator.py` entry each measured absent/present as their own ledger lines) and
       recorded at the five sites; `_ROOT_REVISION_SOURCES == ("url_validator.py",)` resolves
       against `pipeline_dir.parent`; `tests/test_sanitizer_revision.py:95-116`'s independent
       recomputation is extended to both new inputs in the code's order and still asserts exact
       equality.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-004: Open the contract 1.3.0 window — `blocked_url`, bounded `engine`, golden
 
