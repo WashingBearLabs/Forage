@@ -17,10 +17,11 @@ import time
 import unicodedata
 import uuid
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
-from urllib.parse import unquote, urlparse, urlsplit, urlunsplit
+from typing import TYPE_CHECKING, Any, Literal, Protocol, get_args
+from urllib.parse import SplitResult, unquote, urlparse, urlsplit, urlunsplit
 
 import httpx
 
@@ -607,16 +608,6 @@ def _normalize_search_text(value: object, *, max_length: int) -> str:
     return normalized[:max_length]
 
 
-def _sanitize_search_text(value: object, *, max_length: int) -> tuple[str, str]:
-    """Apply Stage 1 extraction to one bounded search text field."""
-    normalized = _normalize_search_text(value, max_length=max_length)
-    extraction = extract_html(f"<div>{normalized}</div>")
-    return (
-        _normalize_search_text(extraction.raw_text, max_length=max_length),
-        _normalize_search_text(extraction.raw_text, max_length=max_length),
-    )
-
-
 def _scan_forms_for_search_text(value: object, *, max_length: int) -> tuple[str, str]:
     """Return ``(wire_form, scan_form)`` for one model-visible search text field.
 
@@ -656,44 +647,193 @@ def _scan_forms_for_search_text(value: object, *, max_length: int) -> tuple[str,
     return (" ".join(scan_form.split()), scan_form)
 
 
-def _canonicalize_search_url(value: object) -> tuple[str, str, str] | None:
-    """Normalize a result URL and allow only canonical HTTP(S) URLs.
+SearchUrlRule = Literal[
+    "missing",
+    "too_long",
+    "raw_chars",
+    "unparseable",
+    "invalid_port",
+    "parse",
+    "userinfo",
+    "host_code_point",
+    "zone_id",
+]
+"""Closed vocabulary for why `_canonicalize_search_url` rejected a result URL.
 
-    Returns ``(canonical_url, scanned_text, domain)``. ``domain`` is bound
-    from ``parsed.hostname`` before the IPv6 re-bracketing below, so an IPv6
-    literal reaches the wire unbracketed (``2001:db8::1``) even though
-    ``canonical_url`` carries the bracketed form (``[2001:db8::1]``) — the one
-    case where ``domain`` is not a substring of ``canonical_url``.
+The token is content-free: it names the rule that fired, never the URL or its
+host (invariant 6). `run_search_pipeline` logs it as `search_url_rejected
+rule=<token> provider=<name>` and `kit_tools/docs/MONITORING.md` aggregates on
+that pair. It stays internal -- the wire reason is the `contract.OMIT_*`
+constant carried beside it.
+"""
+
+SEARCH_URL_RULES = frozenset(get_args(SearchUrlRule))
+
+
+@dataclass(frozen=True, slots=True)
+class SearchUrlOutcome:
+    """The verdict on one result URL -- internal, never the wire shape.
+
+    Exactly two shapes. A cleared URL carries `canonical_url`, `domain` and the
+    two `scan_texts`, with `omission_reason` and `rule` both `None`; a rejected
+    one carries the reason pair and leaves the other three empty. `domain` is
+    never derived from a rejected URL.
+
+    `scan_texts` is `(entity-decoded, once-percent-decoded)` -- the two forms
+    Stage 2 scans. Neither is routed through `extract_html`: the extractor eats
+    tag-shaped text, which is how an envelope tag could ride a path onto the
+    wire unscanned.
     """
-    normalized = _normalize_search_text(value, max_length=_MAX_SEARCH_URL_LENGTH)
-    if not normalized or any(character.isspace() for character in normalized):
-        return None
 
-    # Stage 1 processes this field before its Stage 2 structural scan, even
-    # though the model-visible form is the canonical URL rather than prose.
-    _visible, scanned = _sanitize_search_text(
-        unquote(normalized),
-        max_length=_MAX_SEARCH_URL_LENGTH,
+    canonical_url: str | None
+    scan_texts: tuple[str, str]
+    domain: str | None
+    omission_reason: str | None
+    rule: SearchUrlRule | None
+
+
+@dataclass(frozen=True, slots=True)
+class _UrlState:
+    """The value threaded through `_SEARCH_URL_RULES`, one rule at a time."""
+
+    raw: object
+    value: str = ""
+    parsed: SplitResult | None = None
+    port: int | None = None
+
+
+def _reject_search_url(rule: SearchUrlRule) -> SearchUrlOutcome:
+    """Build the rejection outcome for *rule*."""
+    return SearchUrlOutcome(
+        canonical_url=None,
+        scan_texts=("", ""),
+        domain=None,
+        omission_reason=contract.OMIT_INVALID_URL,
+        rule=rule,
     )
+
+
+# Everything a URL may not carry in the raw provider value: C0 controls, space
+# and tab/LF/CR (`\x00-\x20`), DEL and C1 (`\x7f-\x9f`), any other Unicode
+# whitespace, and RFC 3986's excluded set. Rejection, never deletion --
+# `_normalize_search_text` used to delete these, which is how
+# `http://example.com/\x01foo` was served pointing at a different resource.
+_RAW_URL_REJECT_RE = re.compile(r'[\x00-\x20\x7f-\x9f\s<>"{}|\\^`]')
+
+# WHATWG's forbidden domain code points. `urlsplit` consumes `/ ? # @ [ ]`
+# structurally and `:` for `host:port`, so what actually survives into
+# `parsed.hostname` is `% \ < > ^ |`, space and control characters.
+_FORBIDDEN_DOMAIN_CODE_POINTS = frozenset(
+    [chr(code_point) for code_point in range(0x20)] + list("\x7f #%/:<>?@[\\]^|")
+)
+
+
+def _url_rule_presence_and_length(state: _UrlState) -> _UrlState | SearchUrlOutcome:
+    """Rule (0): a non-empty string of at most `_MAX_SEARCH_URL_LENGTH` characters."""
+    if not isinstance(state.raw, str):
+        return _reject_search_url("missing")
+    value = state.raw.strip()
+    if not value:
+        return _reject_search_url("missing")
+    if len(value) > _MAX_SEARCH_URL_LENGTH:
+        # Rejection, never truncation: a shortened URL points at a different
+        # resource, and nothing downstream -- `html.unescape`, `unquote`,
+        # `urlsplit`, `scan_structural` -- may be handed more than the bound.
+        # `scan_structural` has no input cap of its own and `_line_number_of`
+        # is O(n) per match, so an unbounded URL is a CPU lever.
+        return _reject_search_url("too_long")
+    return replace(state, value=value)
+
+
+def _url_rule_raw_character_class(state: _UrlState) -> _UrlState | SearchUrlOutcome:
+    """Rule (1): reject controls, whitespace and RFC 3986's excluded characters."""
+    if _RAW_URL_REJECT_RE.search(state.value):
+        return _reject_search_url("raw_chars")
+    return state
+
+
+def _url_rule_parse(state: _UrlState) -> _UrlState | SearchUrlOutcome:
+    """Rule (2): parse, read the port, and require a bare HTTP(S) origin."""
     try:
-        parsed = urlsplit(normalized)
+        parsed = urlsplit(state.value)
+    except ValueError:
+        # A bracketed IPv6 literal is validated eagerly, so `[fe80::zz]` raises
+        # here rather than yielding a host nothing downstream can read.
+        return _reject_search_url("unparseable")
+    try:
         port = parsed.port
     except ValueError:
-        return None
+        # `urlsplit("http://example.com:99999/")` parses fine with
+        # `hostname == "example.com"`; it is the port read that raises. Both
+        # reads live in this rule, and `port` travels on in `_UrlState`, so the
+        # canonicalisation tail never touches `parsed.port` itself -- an
+        # unhandled `ValueError` there would be a 500 on an unauthenticated
+        # route from a provider-supplied URL.
+        return _reject_search_url("invalid_port")
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        return _reject_search_url("parse")
+    if parsed.username is not None or parsed.password is not None:
+        return _reject_search_url("userinfo")
+    return replace(state, parsed=parsed, port=port)
 
-    if (
-        parsed.scheme.lower() not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-    ):
-        return None
 
-    domain = parsed.hostname.lower()
-    host = domain
+def _url_rule_host_code_points(state: _UrlState) -> _UrlState | SearchUrlOutcome:
+    """Rule (3): no forbidden domain code point, and no IPv6 zone id."""
+    parsed = state.parsed
+    if parsed is None or not parsed.hostname:
+        return _reject_search_url("parse")
+    host = parsed.hostname
     if ":" in host:
-        host = f"[{host}]"
-    netloc = host if port is None else f"{host}:{port}"
+        # An IPv6 literal -- `urlsplit` has already stripped the brackets. Its
+        # colons are exempt; a `%25` zone id is not.
+        if "%" in host:
+            return _reject_search_url("zone_id")
+        forbidden = _FORBIDDEN_DOMAIN_CODE_POINTS - {":"}
+    else:
+        forbidden = _FORBIDDEN_DOMAIN_CODE_POINTS
+    if any(character in forbidden for character in host):
+        return _reject_search_url("host_code_point")
+    return state
+
+
+# Ordered registry, first rejection wins: the order is data and each rule is a
+# pure function, unit-testable on its own. The shape follows
+# `pipeline/stage2_structural.py`'s `_PATTERNS` -- name-first pairs iterated in
+# order.
+_SEARCH_URL_RULES: tuple[
+    tuple[str, Callable[[_UrlState], _UrlState | SearchUrlOutcome]], ...
+] = (
+    ("presence_and_length", _url_rule_presence_and_length),
+    ("raw_character_class", _url_rule_raw_character_class),
+    ("parse", _url_rule_parse),
+    ("host_code_points", _url_rule_host_code_points),
+)
+
+
+def _canonicalize_search_url(value: object) -> SearchUrlOutcome:
+    """Bound, screen and canonicalize one provider-supplied result URL.
+
+    Iterates `_SEARCH_URL_RULES` over the **raw** provider value, first
+    rejection wins, and canonicalizes only a value every rule cleared.
+    `domain` is bound from `parsed.hostname` before the IPv6 re-bracketing
+    below, so an IPv6 literal reaches the wire unbracketed
+    (``2606:4700::1111``) even though `canonical_url` carries the bracketed
+    form (``[2606:4700::1111]``) -- the one case where `domain` is not a
+    substring of `canonical_url`.
+    """
+    state = _UrlState(raw=value)
+    for _rule_name, rule in _SEARCH_URL_RULES:
+        outcome = rule(state)
+        if isinstance(outcome, SearchUrlOutcome):
+            return outcome
+        state = outcome
+
+    parsed = state.parsed
+    if parsed is None or not parsed.hostname:
+        return _reject_search_url("parse")
+    domain = parsed.hostname.lower()
+    host = f"[{domain}]" if ":" in domain else domain
+    netloc = host if state.port is None else f"{host}:{state.port}"
     canonical = urlunsplit(
         (
             parsed.scheme.lower(),
@@ -703,10 +843,17 @@ def _canonicalize_search_url(value: object) -> tuple[str, str, str] | None:
             "",
         )
     )
-    return (
-        _normalize_search_text(canonical, max_length=_MAX_SEARCH_URL_LENGTH),
-        scanned,
-        domain,
+    # Rule (4)'s two texts, built from the trimmed raw value rather than the
+    # canonical form. Exactly one `unquote` pass: `%253C...` stays encoded on
+    # the wire and is out of scope. Both are at most `_MAX_SEARCH_URL_LENGTH`
+    # characters -- rule (0) bounded the value and neither decode lengthens it.
+    unescaped = html.unescape(state.value)
+    return SearchUrlOutcome(
+        canonical_url=canonical,
+        scan_texts=(unescaped, unquote(unescaped)),
+        domain=domain,
+        omission_reason=None,
+        rule=None,
     )
 
 
@@ -1018,12 +1165,23 @@ async def run_search_pipeline(
             raw.get("title", ""),
             max_length=_MAX_SEARCH_TITLE_LENGTH,
         )
-        canonical_url = _canonicalize_search_url(raw.get("url", ""))
-        if canonical_url is None:
-            logger.info("Omitting search result with invalid URL")
-            omitted_by_reason[contract.OMIT_INVALID_URL] += 1
+        url_outcome = _canonicalize_search_url(raw.get("url", ""))
+        url = url_outcome.canonical_url
+        domain = url_outcome.domain
+        omission_reason = url_outcome.omission_reason
+        if omission_reason is not None or url is None or domain is None:
+            # Content-free: the rule token and the provider name, never the
+            # URL or its host (invariant 6). An operator watching
+            # `invalid_url` climb needs to know which rule fired on which
+            # provider, not the bytes. `contract.OMIT_INVALID_URL` is the
+            # floor -- a cleared outcome always carries both halves.
+            logger.info(
+                "search_url_rejected rule=%s provider=%s",
+                url_outcome.rule,
+                serving_provider.name,
+            )
+            omitted_by_reason[omission_reason or contract.OMIT_INVALID_URL] += 1
             continue
-        url, url_scan_text, domain = canonical_url
         snippet, snippet_scan_text = _scan_forms_for_search_text(
             raw.get("content", ""),
             max_length=_MAX_SEARCH_SNIPPET_LENGTH,
@@ -1039,7 +1197,12 @@ async def run_search_pipeline(
         blocked = False
         for field_name, field_text in (
             ("title", title_scan_text),
-            ("url", url_scan_text),
+            # Both of rule (4)'s texts: the entity-decoded form and the
+            # once-percent-decoded one. The loop's existing break/flag
+            # behaviour is the BLOCKED > SUSPICIOUS > clean ladder, so the
+            # worse verdict wins without a second comparator.
+            ("url", url_outcome.scan_texts[0]),
+            ("url", url_outcome.scan_texts[1]),
             ("snippet", snippet_scan_text),
         ):
             scan = scan_structural(field_text)

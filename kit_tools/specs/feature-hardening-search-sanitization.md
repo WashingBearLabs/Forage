@@ -1614,6 +1614,82 @@ CLAUDE.md README.md`) returns no unamended hit. Recorded at all five sites.
 **Gates.** `uv run pytest` 2 131 passed (2 105 at merge-base, +26 here), none skipped; `ruff check`, `ruff format --check` and `pyright`
 (strict) all clean.
 
+### US-002 — URL bounded, scanned directly in raw and decoded form (2026-09-20)
+
+**Audit findings closed: -032 and -033.** Both lived in the same two lines of
+`_canonicalize_search_url`: `_normalize_search_text(value, max_length=_MAX_SEARCH_URL_LENGTH)`
+followed by `_sanitize_search_text(unquote(normalized), …)`. The first *deleted* control
+characters, collapsed whitespace and truncated to 2 048, so `http://example.com/\x01foo` was
+served as `http://example.com/foo` and an over-length URL was served shortened — in both cases a
+URL pointing at a different resource than the provider returned (-033). The second routed the URL
+through `extract_html`, which eats tag-shaped text, so the scanner never saw an envelope tag on a
+path or query and it reached the wire and `domain` unscanned (-032). The whitespace check at the
+old `:621` was unreachable for the same reason: the normalization it guarded against had already
+run.
+
+**Shape.** `_SEARCH_URL_RULES` is a module-level ordered `tuple` of `(name, callable)` pairs —
+the shape of `pipeline/stage2_structural.py`'s `_PATTERNS`, the only other ordered named registry
+in the tree — iterated first-rejection-wins over the **raw** provider value. Each rule is a pure
+function `(_UrlState) -> _UrlState | SearchUrlOutcome`, so the order is data and every rule has a
+direct unit test. The registry holds rules (0)–(3); the canonicalisation tail that builds the
+success outcome runs after the loop, which is what lets pyright strict see the function as total
+without an `assert` (there are none in `pipeline/`). US-003 appends its audit steps between (3)
+and the tail.
+
+**The return shape is the reason channel.** `SearchUrlOutcome` is
+`@dataclass(frozen=True, slots=True)` carrying `canonical_url`, `scan_texts`, `domain`,
+`omission_reason` (a `contract.OMIT_*` constant) and `rule` — a closed
+`SearchUrlRule = Literal[…]` with `SEARCH_URL_RULES = frozenset(get_args(SearchUrlRule))` beside
+it, exactly `FailureClass` / `FAILURE_CLASSES`'s shape. The omission branch in
+`run_search_pipeline` reads `omission_reason`; `contract.OMIT_INVALID_URL` remains as a floor on
+that branch so a future rule that forgets to set a reason omits the result rather than serving
+it.
+
+**Every table row was measured, not assumed.** All twenty-four rows of the Independent Test
+table plus the two direct-unit cases reproduce exactly as written, including the four port
+fixtures (`:99999` raises `Port out of range 0-65535`; `:abc`, `:-1`, `:0x50` raise `Port could
+not be cast to integer value` — all four from the `parsed.port` read, not from `urlsplit`) and
+`[fe80::zz]` (raised by `urlsplit` itself). Round 5's insistence on keeping the port read inside
+rule (2)'s `try` is load-bearing: with the one-statement reading, all four port fixtures become
+an unhandled `ValueError` out of `run_search_pipeline` — a 500 on an unauthenticated route from
+a provider-supplied URL.
+
+**Two things the criteria named that the pipeline cannot show, and where they are shown
+instead.** (a) `_normalize_search_text` and `html.unescape` being uncalled for a rule-(0)
+rejection is asserted in a **direct** test of `_canonicalize_search_url`, because at the pipeline
+level US-001's title path calls `html.unescape` and `unresponsive_engines` normalization calls
+`_normalize_search_text` before the URL is reached. At the pipeline level the assertion is
+`scan_structural` and `unquote` uncalled, which the `continue` does guarantee. (b) `extract_html`
+cannot simply be asserted uncalled at the pipeline level either — `_scan_forms_for_search_text`
+calls it for `title` and `snippet` — so the URL-side test records every string the extractor
+received and asserts none contains the URL's host.
+
+**Two small collateral edits.** `tests/test_orchestrator.py`'s parity assertion
+`scanned == [title_scan, _PARITY_URL, expected_scan]` becomes four entries, because the `url`
+field is now two scan texts (identical for that plain URL). The pre-story-order comment at
+`:1278` named the deleted helper, which would have failed this story's
+`grep -rl` criterion, so it now names it descriptively; the grep test itself assembles the needle
+from two halves so it does not find itself.
+
+**`sanitizer_revision` rotation (the sixteenth).** Reverting `pipeline/orchestrator.py` alone to
+its pre-story bytes and re-deriving reproduces `b0ca8d9a…aed73` exactly; with the story applied
+the value is `4248568667b234c52c9f5c760e0c3992b2e4288866b798d690c7f677f04ec17f`. `git status
+--porcelain` listed only `pipeline/orchestrator.py` and `tests/test_orchestrator.py` at
+measurement time, no other hashed file. This is the **second** rotation that changes sanitization
+behaviour; the two sites carrying the "none changing sanitization behaviour" claim were already
+amended by US-001, so this story appends to them rather than amending again. Recorded at all five
+sites.
+
+**Yield, accepted unconditionally.** Rule (1) now rejects unencoded `|`, `{`, `}`, `^` and
+backtick — which some engines return unencoded in query strings — and rule (0) rejects
+over-length URLs that were served shortened. Both land in the same `invalid_url` bucket as every
+other URL rejection, so the only observation is the `search_url_rejected rule=raw_chars` /
+`rule=too_long` log line aggregated by `provider` plus `rule`; `kit_tools/docs/MONITORING.md`
+states that plainly and that no `/metrics` counter is planned.
+
+**Gates.** `uv run pytest` 2 187 passed (2 131 after US-001, +56 here), none skipped;
+`ruff check`, `ruff format --check` and `pyright` (strict) all clean.
+
 ## Refinement Notes
 
 ### Research Findings

@@ -837,6 +837,8 @@ The tests import `_MAX_SEARCH_SNIPPET_LENGTH`, `_MAX_SEARCH_TITLE_LENGTH`,
 `_sanitize_search_text` and `_search_result_promptguard_input` from `pipeline.orchestrator`,
 plus `scan_structural`. This is allowed by the `reportPrivateUsage` carve-out for `tests/`.
 
+**Correction, 2026-09-20 (`hardening-search-sanitization` US-002; appended, nothing above is rewritten).** "Bypasses found: none" was superseded by audit finding **-032**: the parity claim held — the loop really does treat every provider's rows alike — but the path it proved parity *over* was itself a bypass. `_canonicalize_search_url` normalized the URL through `_normalize_search_text` (deleting control characters, collapsing whitespace, truncating to 2 048) and then scanned it through `_sanitize_search_text`, i.e. through `extract_html`, which ate tag-shaped text before Stage 2 saw it. US-002 closes -032 and -033: the rules now run on the raw provider value, over-length and illegal-character URLs are rejected rather than mutated, and both the entity-decoded and the once-percent-decoded forms are scanned directly. `_sanitize_search_text` is deleted, so the import line recorded just above no longer describes the tree.
+
 ## Refinement Notes
 
 US-002 is the load-bearing security/cost story, and the validation pass showed why it had to be

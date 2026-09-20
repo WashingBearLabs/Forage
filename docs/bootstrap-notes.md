@@ -73,7 +73,8 @@ those eight — so Forage's revision moved:
 | After failure-class discrimination (`search-fallback` US-002) | `f0b93318…70d62` |
 | After the per-request policy literal (`search-policy-and-health` US-010) | `dc3ff92a…eded9` |
 | After the completed 1.2.0 change record (`search-policy-and-health` US-003) | `41ac98ca…b4e318` |
-| **Current (`hardening-search-sanitization` US-001, newline-preserving search scan)** | **`b0ca8d9a…aed73`** |
+| After the newline-preserving search scan (`hardening-search-sanitization` US-001) | `b0ca8d9a…aed73` |
+| **Current (`hardening-search-sanitization` US-002, bounded and directly scanned result URLs)** | **`42485686…ec17f`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -606,6 +607,91 @@ the spec 6 pin.
 `41ac98ca…` becomes unreachable at the next start and ages out on its own TTL — free in memory
 mode, one TTL of extra fetches in Valkey mode. **Do not assume Poppy↔Forage revision parity** —
 compare contracts, not revisions.
+
+### The sixteenth rotation: bounded, directly scanned result URLs (`hardening-search-sanitization` US-002, 2026-09-20)
+
+```
+before: b0ca8d9a57320e4348bf620375641bd783324b8ac86c1cb934f22f5279daed73
+after:  4248568667b234c52c9f5c760e0c3992b2e4288866b798d690c7f677f04ec17f
+```
+
+**Exactly one `_REVISION_SOURCES` file moved: `pipeline/orchestrator.py`.** Measured from a
+**clean tree** — `git status --porcelain` listed only `pipeline/orchestrator.py` and
+`tests/test_orchestrator.py`, no other hashed file — by restoring `orchestrator.py` alone to
+its pre-story bytes and re-deriving: that reproduces `b0ca8d9a…aed73` exactly. The other
+seven `_REVISION_SOURCES` files are untouched.
+
+**This is the second rotation that changes sanitization behaviour**, and it changes the URL
+side where US-001 changed the text side. `_canonicalize_search_url` used to begin with
+`_normalize_search_text(value, max_length=_MAX_SEARCH_URL_LENGTH)` — which *deleted* control
+characters, collapsed whitespace and **truncated to 2 048** — and then routed the result
+through `_sanitize_search_text`, i.e. through `extract_html`. Three consequences, all now
+closed:
+
+- `http://example.com/\x01foo` was served as `http://example.com/foo`: a URL pointing at a
+  different resource than the provider returned.
+- An over-length URL was served *shortened*, likewise pointing elsewhere, and a ~1 MiB
+  bracket-padded URL reached `scan_structural`, which has no input cap of its own and whose
+  `_line_number_of` is O(n) per match (17.8 s in one measured scan, twice per URL, twenty
+  results, on an unauthenticated route).
+- The extractor ate tag-shaped text, so an envelope tag on a path or query could reach the
+  wire and `domain` unscanned (audit findings **-032**, **-033**).
+
+`_canonicalize_search_url` is now an ordered registry, `_SEARCH_URL_RULES` — the shape of
+`pipeline/stage2_structural.py`'s `_PATTERNS`, name-first pairs iterated in order — of pure
+rule functions run over the **raw** provider value, first rejection wins, each unit-testable
+alone:
+
+0. **Presence and length** (`missing` / `too_long`). A non-`str`, `None`, empty or
+   whitespace-only value is `missing`; surrounding whitespace is *trimmed* (a trailing
+   newline in an engine's JSON field costs nothing), and a trimmed value longer than 2 048
+   characters is `too_long`. **Rejection, never truncation** — nothing downstream
+   (`html.unescape`, `unquote`, `urlsplit`, `scan_structural`) is handed more than the bound.
+1. **Raw character class** (`raw_chars`). Any C0/C1 control, tab/LF/CR, any other Unicode
+   whitespace, or any RFC 3986 excluded character (`<`, `>`, `"`, `{`, `}`, `|`, `\`, `^`,
+   backtick). **Rejection, never deletion**; `_normalize_search_text` is not called at all
+   for a URL this rule rejects.
+2. **Parse** (`unparseable` / `invalid_port` / `parse` / `userinfo`). `urlsplit` and the
+   `parsed.port` read each sit in their own `try`: a bracketed IPv6 literal is validated
+   eagerly so `[fe80::zz]` raises at `urlsplit`, while `http://example.com:99999/` parses
+   fine with `hostname == "example.com"` and it is `.port` that raises. `port` travels on in
+   `_UrlState`, so the canonicalisation tail never touches `parsed.port` itself — an
+   unhandled `ValueError` there would have been a 500 on an unauthenticated route from a
+   provider-supplied URL.
+3. **Host code points** (`host_code_point` / `zone_id`). No WHATWG forbidden domain code
+   point in `parsed.hostname`; an IPv6 literal's colons are exempt, a `%25` zone id is its
+   own token. `domain` is computed only after this rule passes, so it is never derived from a
+   rejected URL.
+4. **Structural scan, two texts.** Stage 2 scans both `html.unescape(value)` and
+   `unquote(html.unescape(value))` — exactly one percent-decode pass, so `%253C…` stays
+   encoded and is out of scope — through the per-field loop's existing
+   `BLOCKED > SUSPICIOUS > clean` ladder. Neither text goes through `extract_html`.
+   `_sanitize_search_text` is deleted.
+
+The return shape carries the reason: a frozen `SearchUrlOutcome` with `canonical_url`,
+`scan_texts`, `domain`, `omission_reason` (a `contract.OMIT_*` constant) and `rule` — a
+closed `SearchUrlRule` `Literal` with `SEARCH_URL_RULES = frozenset(get_args(...))` beside
+it, the shape of `FailureClass` / `FAILURE_CLASSES`. Rules (0)–(3) count under `invalid_url`
+and rule (4) under `structural_blocked`, each rejection counted exactly once under the first
+rule that fired. Every (0)–(3) rejection emits one content-free record,
+`search_url_rejected rule=<token> provider=<name>` at INFO — never the URL or its host
+(invariant 6).
+
+**Yield.** Two classes of URL served before this story are now rejected: one carrying an
+unencoded RFC 3986 excluded character (`|`, `{`, `}`, `^`, backtick — some engines return
+these unencoded in query strings), and one over 2 048 characters (served shortened before).
+Both are deliberate: an unencoded excluded character is not a URL, and a truncated URL points
+somewhere else. Neither is separable from any other URL rejection by a counter — the signal
+is the rejection log aggregated by `provider` plus `rule` (`kit_tools/docs/MONITORING.md`).
+
+**Not replayed to Poppy**; the deployed copy stays exposed to audit -032 / -033 until the
+spec 6 pin.
+
+**Blast radius.** The same mechanism as every rotation since the fifth:
+`cache_policy_fingerprint()` takes the revision as an input, so every extraction cached under
+`b0ca8d9a…` becomes unreachable at the next start and ages out on its own TTL — free in
+memory mode, one TTL of extra fetches in Valkey mode. **Do not assume Poppy↔Forage revision
+parity** — compare contracts, not revisions.
 
 ## Deferred GitHub settings — for the spec 2 public flip
 

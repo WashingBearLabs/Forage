@@ -159,6 +159,9 @@ change record (`dc3ff92a…` → `41ac98ca…`, `search-policy-and-health` US-00
 rotation that changes sanitization behaviour** — when `orchestrator.py` gained
 `_scan_forms_for_search_text` (`41ac98ca…` → `b0ca8d9a…`,
 `hardening-search-sanitization` US-001 — `orchestrator.py` alone, measured from a clean
+tree), and a sixteenth — **the second** — when `_canonicalize_search_url` became the
+`_SEARCH_URL_RULES` registry (`b0ca8d9a…` → `42485686…`,
+`hardening-search-sanitization` US-002 — `orchestrator.py` alone, measured from a clean
 tree). Nothing downstream may assume
 Poppy↔Forage revision parity.
 

@@ -238,7 +238,20 @@ US-001 — `orchestrator.py` alone, measured from a clean tree by reverting it a
 `41ac98ca…`; `/search` now scans `title` and `snippet` in a newline-preserving form and ships
 their whitespace collapse, so Stage 2's line-anchored patterns fire on any line rather than at
 character 0 only, with two entity decode levels before the scan, two control strips around
-them, truncation once on the scan form and a 4× parser-input bound).
+them, truncation once on the scan form and a 4× parser-input bound), and a sixteenth to
+`42485686…` — **the second rotation that changes sanitization behaviour** — when
+`_canonicalize_search_url` became `_SEARCH_URL_RULES`
+(`hardening-search-sanitization` US-002 — `orchestrator.py` alone, measured from a clean tree
+by reverting it and reproducing `b0ca8d9a…`): an ordered registry of named pure rule
+functions run over the **raw** provider URL, first rejection wins, returning a frozen
+`SearchUrlOutcome` that carries the omission reason and a closed `SearchUrlRule` log token —
+presence/length (rejection at 2 048 characters, never truncation), raw character class
+(controls, whitespace and RFC 3986 excluded characters rejected, never deleted), parse
+(`urlsplit` and the `parsed.port` read each in their own `try`), host code points (WHATWG
+forbidden set, IPv6 colons exempt, `%25` zone id its own token), then a structural scan of
+**both** the entity-decoded and the once-percent-decoded forms; `_sanitize_search_text`,
+which routed the URL through `extract_html` and so ate tag-shaped text before the scan saw
+it, is deleted.
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.
