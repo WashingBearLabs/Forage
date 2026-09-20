@@ -603,7 +603,8 @@ extractions — `cache_policy_fingerprint()` mixed in every caller knob but not 
 **Decision:**
 The hashed identity is `MODEL_ID@revision` (`feature-forage-model-bootstrap` US-001) and the
 revision is an input to `cache_policy_fingerprint()` (`feature-forage-cache-fallback` US-003), so
-a rotation flushes Forage's own cache. Rotations to date, none changing sanitization behaviour:
+a rotation flushes Forage's own cache. Rotations to date — fourteen of the fifteen
+changed no sanitization behaviour; the fifteenth is the first that did:
 
 | Value | Moved by |
 |---|---|
@@ -621,7 +622,8 @@ a rotation flushes Forage's own cache. Rotations to date, none changing sanitiza
 | `5249def6…` | `run_search_pipeline` gained fallback telemetry and per-result provenance in `orchestrator.py`: derives `SearchResult.domain`, populates `provider_used`/`fallback_fired`/`provider_errors`, and increments `paid_calls`/`fallback_fired` through a new `SearchMetricsSink` Protocol; `models.py` gained the matching wire fields but is not a `_REVISION_SOURCES` member, so `orchestrator.py` is the only hashed file that moved — measured, not sanitization behaviour (`search-fallback` US-003, 2026-09-16) |
 | `f0b93318…` | `run_search_pipeline` classifies a `ProviderSearchResult` with zero raw results and a non-empty `unresponsive_engines` list as a failure (SearXNG's real production shape, which answers 200 and never raises), advancing the chain exactly as a `ProviderFailure` does; sufficiency stays judged on raw results before sanitization; a configured `[searxng]`-only chain is carved out and still serves that shape as before — `orchestrator.py` is the only hashed file that moved (`search-fallback` US-002, 2026-09-16) |
 | `dc3ff92a…` | `contract.py` gained the `POLICY_EXCLUDED_ALL_PROVIDERS` literal for the per-request policy 422 (`retrieval_app.py`, where the raise site lives, is not a hashed file) — `contract.py` is the only hashed file that moved, measured against all eight `_REVISION_SOURCES` files (`search-policy-and-health` US-010, 2026-09-16) |
-| `41ac98ca…` (current) | `contract.py`'s `CONTRACT_VERSION` docstring gained the completed 1.2.0 change record — every field, counter and enum member specs 1-4 added, all additive, plus a note that the `/search`/`/retrieve` boundary text rides the same unpublished window (`retrieval_app.py` and `models.py`, where that boundary text lives, are not hashed files) — `contract.py` is the only hashed file that moved, measured by reverting it alone and reproducing `dc3ff92a…` (`search-policy-and-health` US-003, 2026-09-16) |
+| `41ac98ca…` | `contract.py`'s `CONTRACT_VERSION` docstring gained the completed 1.2.0 change record — every field, counter and enum member specs 1-4 added, all additive, plus a note that the `/search`/`/retrieve` boundary text rides the same unpublished window (`retrieval_app.py` and `models.py`, where that boundary text lives, are not hashed files) — `contract.py` is the only hashed file that moved, measured by reverting it alone and reproducing `dc3ff92a…` (`search-policy-and-health` US-003, 2026-09-16) |
+| `b0ca8d9a…` (current) | **the first rotation that changes sanitization behaviour.** `orchestrator.py` gained `_scan_forms_for_search_text`: `/search` now scans `title` and `snippet` in a newline-preserving form and ships their whitespace collapse, so Stage 2's line-anchored BLOCK patterns fire on any line rather than at character 0 only. Two entity decode levels before the scan, two control strips (one before the parser, one after the decodes), truncation once on the scan form, and a `_SEARCH_PARSER_INPUT_MULTIPLIER * max_length` parser-input bound. `orchestrator.py` is the only hashed file that moved, measured by reverting it alone and reproducing `41ac98ca…` from a clean tree (`hardening-search-sanitization` US-001, 2026-09-20) |
 
 **Rationale:**
 `pipeline/sanitizer_revision.py`: "two containers running the same code can be scanning with

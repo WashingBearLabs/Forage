@@ -10,6 +10,7 @@ Stage 3 halts the pipeline and returns a quarantine
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import re
 import time
@@ -59,7 +60,7 @@ from pipeline.search_providers.searxng import (
     SEARXNG_PROVIDER_NAME,
     SearxngProvider,
 )
-from pipeline.stage1_extraction import ExtractionResult, extract_html
+from pipeline.stage1_extraction import ExtractionResult, extract_html, normalize_text
 from pipeline.stage1_pdf import (
     PDFEncryptedError,
     PDFExtractionError,
@@ -583,6 +584,14 @@ _MAX_UNRESPONSIVE_ENGINE_LENGTH = 64
 _MAX_SEARCH_TITLE_LENGTH = 512
 _MAX_SEARCH_URL_LENGTH = 2_048
 _MAX_SEARCH_SNIPPET_LENGTH = 2_000
+# A bound on what `extract_html` parses, not a contract cap. `title` and
+# `snippet` are now truncated *after* extraction, so without this the parser
+# would be handed the provider's whole body (up to 1 MiB) per field per result.
+# The multiplier is measured, not picked: the parser's cost is superlinear on
+# unclosed-tag input, so 4x is a ~2 s lever on an unauthenticated, undeadlined
+# route where 8x is a ~6 s one. Any change re-derives from the three-shape
+# table in `kit_tools/specs/feature-hardening-search-sanitization.md`.
+_SEARCH_PARSER_INPUT_MULTIPLIER = 4
 _LOCAL_PROMPTGUARD_TARGET_MS = 1_000
 _TOOL_AUGMENTED_FIRST_TOKEN_TARGET_MS = 5_000
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
@@ -606,6 +615,45 @@ def _sanitize_search_text(value: object, *, max_length: int) -> tuple[str, str]:
         _normalize_search_text(extraction.raw_text, max_length=max_length),
         _normalize_search_text(extraction.raw_text, max_length=max_length),
     )
+
+
+def _scan_forms_for_search_text(value: object, *, max_length: int) -> tuple[str, str]:
+    """Return ``(wire_form, scan_form)`` for one model-visible search text field.
+
+    The scan form keeps line breaks so Stage 2's line-anchored BLOCK patterns
+    (``^System:``, ``^POPPY:``, ``^assistant:`` under ``MULTILINE``) fire on any
+    line of a title or snippet, exactly as they do on a fetched page. The wire
+    form is the single-line text ``/search`` has always served.
+
+    Guarantees:
+
+    * ``wire_form == " ".join(scan_form.split())`` -- the wire form is derived
+      from the scanned string, never built alongside it.
+    * Every non-whitespace character of the wire form appears, in order, in the
+      scan form, so nothing reaches the wire unscanned.
+    * Truncation happens once, on the scan form, before the wire form is
+      derived, so blank-line padding cannot push a payload past the scan and
+      leave it on the wire.
+
+    There are two control-character strips because there are two sources. The
+    first runs on the raw provider value: the HTML parser maps a raw NUL to
+    U+FFFD, which is outside ``_CONTROL_CHARS_RE``'s class, so a raw control
+    stripped only afterwards would ship as a replacement character. The second
+    runs after both decode levels -- the parser's one entity level plus
+    ``html.unescape`` -- because those decodes mint C0/C1 characters of their
+    own, and ``stage1_extraction._normalize_text`` removes only nine zero-width
+    and bidi code points, not the C0/C1 range.
+    """
+    if not isinstance(value, str):
+        return ("", "")
+    text = unicodedata.normalize("NFC", value)
+    text = _CONTROL_CHARS_RE.sub("", text)
+    text = text[: _SEARCH_PARSER_INPUT_MULTIPLIER * max_length]
+    extraction = extract_html(f"<div>{text}</div>")
+    scan_form = html.unescape(extraction.raw_text)
+    scan_form = _CONTROL_CHARS_RE.sub("", scan_form)
+    scan_form = normalize_text(scan_form)[:max_length]
+    return (" ".join(scan_form.split()), scan_form)
 
 
 def _canonicalize_search_url(value: object) -> tuple[str, str, str] | None:
@@ -966,7 +1014,7 @@ async def run_search_pipeline(
         if len(sanitized_results) >= request.num_results:
             break
 
-        title, title_scan_text = _sanitize_search_text(
+        title, title_scan_text = _scan_forms_for_search_text(
             raw.get("title", ""),
             max_length=_MAX_SEARCH_TITLE_LENGTH,
         )
@@ -976,7 +1024,7 @@ async def run_search_pipeline(
             omitted_by_reason[contract.OMIT_INVALID_URL] += 1
             continue
         url, url_scan_text, domain = canonical_url
-        snippet, snippet_scan_text = _sanitize_search_text(
+        snippet, snippet_scan_text = _scan_forms_for_search_text(
             raw.get("content", ""),
             max_length=_MAX_SEARCH_SNIPPET_LENGTH,
         )

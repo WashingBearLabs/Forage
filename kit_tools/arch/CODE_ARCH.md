@@ -88,7 +88,7 @@ Design principles:
 
 | Module | Lines | Responsibility |
 |--------|------:|----------------|
-| `pipeline/orchestrator.py` | 1128 | Drives the five stages end to end. Since `search-provider-abstraction` US-002 it reaches search backends through the `SearchProvider` seam rather than calling SearXNG itself: it sets the candidate budget, re-applies its own slice, bounds `unresponsive_engines`, and maps a `ProviderFailure`'s closed `detail` onto `searxng_error` / `searxng_unavailable`. `_DEFAULT_SEARXNG_URL` and `_SEARXNG_ENGINES` survive here as **assigned aliases** of `pipeline/search_providers/searxng.py`'s public constants (three test modules import the private names from here); the definitions live in the provider. The busiest file in the repo. |
+| `pipeline/orchestrator.py` | 1128 | Drives the five stages end to end. Since `search-provider-abstraction` US-002 it reaches search backends through the `SearchProvider` seam rather than calling SearXNG itself: it sets the candidate budget, re-applies its own slice, bounds `unresponsive_engines`, and maps a `ProviderFailure`'s closed `detail` onto `searxng_error` / `searxng_unavailable`. `_DEFAULT_SEARXNG_URL` and `_SEARXNG_ENGINES` survive here as **assigned aliases** of `pipeline/search_providers/searxng.py`'s public constants (three test modules import the private names from here); the definitions live in the provider. Since `hardening-search-sanitization` US-001 the per-result sanitization loop keeps **two forms** of `title` and `snippet`: `_scan_forms_for_search_text` returns `(wire_form, scan_form)`, where the scan form is what Stages 2 and 3 see and the wire form is its whitespace collapse (`wire_form == " ".join(scan_form.split())`, so nothing reaches the wire unscanned). The scan form keeps line breaks, which is what lets Stage 2's line-anchored patterns fire anywhere in the field. Order: NFC → a **first** control strip on the raw provider value (the parser maps a raw NUL to U+FFFD, outside the strip's class) → a parser-input bound of `_SEARCH_PARSER_INPUT_MULTIPLIER * max_length` (4×, measured — truncation now follows extraction, so without it the parser would see the whole provider body per field) → `extract_html` on the `<div>`-wrapped text (one entity level) → `html.unescape` (the second level) → a **second** control strip for what those decodes produced → `normalize_text` → truncate once at the field's cap. `_sanitize_search_text` survives for the URL call site only. The busiest file in the repo. |
 | `retrieval_app.py` | 1824 | FastAPI app + the five endpoints, startup wiring, `/health` body assembly, the legacy-capability break-glass warning. Since `forage-contract` it also carries the documentation surface: the five per-shape error **mirrors** (US-001) and the six `/metrics` response models (US-005), all `extra="forbid"`, none of which any emission site routes through — the emission sites are unchanged and parity tests hold the models to them. The `FastAPI(...)` call serves `title="Forage"`, `version=CONTRACT_VERSION` and the no-auth/private-network posture, so `/openapi.json` cannot disagree with `/health` about which contract this process implements. |
 | `cache.py` | 860 | Valkey content cache. **Never logs the connection URL** — it may carry a password; enforced by a closed log vocabulary and a dedicated regression test. |
 | `models.py` | 470 | Pydantic models for every request and response shape. |
@@ -155,7 +155,11 @@ policy literal (`f0b93318…` → `dc3ff92a…`, `search-policy-and-health` US-0
 fourteenth when `contract.py`'s `CONTRACT_VERSION` docstring gained the completed 1.2.0
 change record (`dc3ff92a…` → `41ac98ca…`, `search-policy-and-health` US-003 —
 `contract.py` alone; `retrieval_app.py` and `models.py`, where the new
-`/search`/`/retrieve` boundary text lives, are not hashed). Nothing downstream may assume
+`/search`/`/retrieve` boundary text lives, are not hashed), and a fifteenth — **the first
+rotation that changes sanitization behaviour** — when `orchestrator.py` gained
+`_scan_forms_for_search_text` (`41ac98ca…` → `b0ca8d9a…`,
+`hardening-search-sanitization` US-001 — `orchestrator.py` alone, measured from a clean
+tree). Nothing downstream may assume
 Poppy↔Forage revision parity.
 
 **Startup is non-blocking, and one background task is the reason.** The lifespan does its

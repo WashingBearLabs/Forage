@@ -407,7 +407,7 @@ recipe.
 
 **What happens:**
 `derive_sanitizer_revision()` hashes eight source files plus the model identity and the
-active threshold. Forage's revision has moved fourteen times, each time at a boundary and
+active threshold. Forage's revision has moved fifteen times, each time at a boundary and
 each time deliberately:
 
 | When | Value | What moved it |
@@ -427,11 +427,16 @@ each time deliberately:
 | `search-fallback` US-002 | `f0b93318…70d62` | `run_search_pipeline` classifies a zero-result, non-empty-`unresponsive_engines` `ProviderSearchResult` as a failure in `orchestrator.py` — SearXNG's real production failure shape; a lone-`searxng` chain is carved out and unaffected |
 | `search-policy-and-health` US-010 | `dc3ff92a…eded9` | `contract.py` gained `POLICY_EXCLUDED_ALL_PROVIDERS`, the fixed-literal `reason` the `/search` handler raises when the new `apply_request_policy` narrows a request's effective chain to empty; `retrieval_app.py`, where the raise site lives, is not a `_REVISION_SOURCES` member |
 | `search-policy-and-health` US-003 | `41ac98ca…b4e318` | `contract.py`'s `CONTRACT_VERSION` docstring gained the completed 1.2.0 change record (every field, counter and enum member specs 1-4 added, all additive) plus a note that the `/search`/`/retrieve` boundary text rides the same unpublished window; `retrieval_app.py` and `models.py`, where that boundary text lives, are not `_REVISION_SOURCES` members |
+| `hardening-search-sanitization` US-001 | `b0ca8d9a…aed73` | **the first rotation that changes sanitization behaviour.** `orchestrator.py` gained `_scan_forms_for_search_text`, which returns `(wire_form, scan_form)` for `title` and `snippet`: the scan form keeps line breaks so Stage 2's `^System:` / `^POPPY:` / `^assistant:` patterns fire on any line, and the wire form is its whitespace collapse. Two entity decode levels before the scan, two control strips (one before the parser for raw bytes, one after the decodes), truncation once on the scan form, and a `_SEARCH_PARSER_INPUT_MULTIPLIER * max_length` parser-input bound. `orchestrator.py` is the only hashed file that moved, measured from a clean tree |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**None of the fourteen rotations changed sanitization behaviour** — but the fourth and fifth
+**Fourteen of the fifteen rotations changed no sanitization behaviour; the fifteenth
+(`hardening-search-sanitization` US-001) is the first that did** — `/search` scans `title`
+and `snippet` newline-preserved now, so line-anchored Stage 2 patterns fire on any line
+rather than at character 0 only, and a rising `structural_blocked` after it is expected.
+Among the other fourteen, the fourth and fifth
 are different *kinds* of rotation and worth reading as such. The first three moved because
 the hash is over bytes and someone reformatted or retyped a hashed file. The fourth moved
 because an **input changed**: weights are a runtime, per-deployment thing now

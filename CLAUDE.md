@@ -231,7 +231,14 @@ counter and enum member the epic's specs 1-4 added, all additive, plus a note th
 `/search`/`/retrieve` boundary text landed inside this same unpublished window
 (`search-policy-and-health` US-003 — `contract.py` alone, measured by reverting it to its
 pre-story bytes and reproducing `dc3ff92a…` exactly; `retrieval_app.py` and `models.py`,
-where the boundary text itself lives, are not `_REVISION_SOURCES` members).
+where the boundary text itself lives, are not `_REVISION_SOURCES` members), and a fifteenth
+to `b0ca8d9a…` — **the first rotation that changes sanitization behaviour** — when
+`orchestrator.py` gained `_scan_forms_for_search_text` (`hardening-search-sanitization`
+US-001 — `orchestrator.py` alone, measured from a clean tree by reverting it and reproducing
+`41ac98ca…`; `/search` now scans `title` and `snippet` in a newline-preserving form and ships
+their whitespace collapse, so Stage 2's line-anchored patterns fire on any line rather than at
+character 0 only, with two entity decode levels before the scan, two control strips around
+them, truncation once on the scan form and a 4× parser-input bound).
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

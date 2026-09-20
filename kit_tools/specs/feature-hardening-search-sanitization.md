@@ -1539,6 +1539,81 @@ moves are a description and a bound, which `_added_paths` cannot see — R36 cor
 
 ## Implementation Notes
 
+### US-001 — Newline-preserving structural scan for search text (2026-09-20)
+
+**Closing audit id:** 2026-09-16-016 (newline collapse before the `/search` structural scan).
+
+**Shipped.** `pipeline/orchestrator.py` gained `_scan_forms_for_search_text(value, *,
+max_length) -> tuple[str, str]` and `_SEARCH_PARSER_INPUT_MULTIPLIER = 4` in the cap block; the
+`title` and `snippet` call sites in `run_search_pipeline` use it. `_sanitize_search_text` is
+unchanged and keeps its one remaining production caller, `_canonicalize_search_url` (US-002's).
+`pipeline/stage1_extraction.py` and `pipeline/stage2_structural.py` are untouched.
+
+**Parser-input multiplier, re-measured on the implementing machine** (`extract_html` on a
+`<div>`-wrapped field, best of five runs; a one-off script, never a CI assertion):
+
+| Shape | 2 000 chars (1×) | 8 000 (4×) | 16 000 (8×) |
+|---|---|---|---|
+| balanced deep nesting | 8.7 ms | 36.0 ms | 77.2 ms |
+| unclosed tags (`<div><p><span>` repeated) | 4.5 ms | 30.7 ms | 95.8 ms |
+| half tags, half text | 2.7 ms | 8.7 ms | 17.2 ms |
+
+The superlinearity the spec's Assumptions table records reproduces (unclosed tags: 21× cost for
+8× input), so **4 is kept**. Absolute numbers differ from the round-4 table — this machine is
+slower on the balanced shape and faster on the unclosed one — but the shape of the curve, which
+is what the decision rests on, is the same. Any later change to the constant re-derives from
+this table.
+
+**Measured fixture facts.**
+
+- 660 repetitions of `"x\n\n"` leave the marker inside the 2 000-character scan form (664 is the
+  last count that does); 700 put it past the cut, and `"System:"` is then absent from both forms.
+- The over-cap chunk fixture in
+  `test_chunk_longer_than_the_bound_is_returned_and_scanned_as_one_string` now serves **1 968**
+  characters (the collapse of the 2 000-character scan form), and the recorded scan string is the
+  scan form, not the served snippet. Confirmed both values by running it.
+- A markup-dense field yields more extracted text than before: `"<b>word</b>" * 200` yields 999
+  characters now against the pre-story order's 909 (fixture (i)).
+- Benign escaped markup is byte-identical to the pre-story order: `Use &lt;div&gt; for layout` →
+  `Use <div> for layout`, `&lt;script&gt;alert(1)&lt;/script&gt; example` →
+  `<script>alert(1)</script> example`. Pinned against `_legacy_scan_form`, not against a literal
+  alone.
+
+**What `_legacy_scan_form` actually proved, and where the spec's expectation was off.** The
+parametrised `test_legacy_scan_form_shows_what_each_fixture_proves` records the legacy verdict,
+legacy payload presence, new verdict and new payload presence per fixture, because measuring them
+showed the (c)–(g) set is *not* uniformly "legacy clean → new blocked":
+
+- **Real bypass closures** (legacy CLEAN and still carrying the payload, new BLOCKED): the
+  two-paragraph marker, the 660-padded marker, and `&amp;lt;system&amp;gt;` (the second decode
+  level — the legacy form keeps it as the literal text `&lt;system&gt;`, which scans clean).
+- **Already caught before, pinned as regression guards:** `&#83;ystem:` and
+  `</div>System:…<div>` — under the legacy order the whitespace collapse put the marker at
+  character 0, where `^System:` fired anyway; and `&lt;/retrieved_content&gt;&lt;system&gt;`,
+  which the parser's single decode level already exposed. They still belong in the suite (the
+  acceptance criteria require them to be omitted) but they do not, on their own, demonstrate the
+  bypass this story closes, and the test says so rather than implying otherwise.
+- **Control-character fixtures:** both the single- and double-encoded triples were already
+  control-free on the legacy order too; the rows pin that the new order did not lose that, via
+  the second strip and `html.unescape`'s empty-string mapping of an invalid numeric reference
+  respectively.
+
+Every row additionally asserts the invariant that carries the security property: a payload is
+never both present on the wire form and scanned clean.
+
+**`sanitizer_revision` rotation (the fifteenth).** `git status --porcelain` was **empty** before
+the measurement. Reverting `pipeline/orchestrator.py` alone to its pre-story bytes and
+re-deriving reproduces `41ac98ca…b4e318` exactly; with the story applied the value is
+`b0ca8d9a57320e4348bf620375641bd783324b8ac86c1cb934f22f5279daed73`. This is the **first rotation
+in the repo's history that changes sanitization behaviour**, so both sites carrying the "none
+changing sanitization behaviour" claim (`kit_tools/arch/DECISIONS.md`,
+`kit_tools/docs/GOTCHAS.md`) were amended, not just appended to; the two-site grep
+(`grep -rn 'chang.* sanitization behaviour' --include='*.md' kit_tools/arch kit_tools/docs docs
+CLAUDE.md README.md`) returns no unamended hit. Recorded at all five sites.
+
+**Gates.** `uv run pytest` 2 131 passed (2 105 at merge-base, +26 here), none skipped; `ruff check`, `ruff format --check` and `pyright`
+(strict) all clean.
+
 ## Refinement Notes
 
 ### Research Findings
