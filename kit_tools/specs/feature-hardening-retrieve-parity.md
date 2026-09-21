@@ -714,17 +714,17 @@ at zero. A cache hit is served without acquiring.
   each reverted in turn with a both-reverted control.
 
 **Acceptance Criteria:**
-- [ ] Every acquisition on all three routes goes through `_bounded_permit`: `grep -n
+- [x] Every acquisition on all three routes goes through `_bounded_permit`: `grep -n
       'semaphore.acquire()' pipeline/orchestrator.py` returns exactly one match and it is inside
       `_bounded_permit` (a test monkeypatches `_bounded_permit` and shows every acquisition on
       `/retrieve`, `/search` and the `/extract` file route passes through it); `grep -c 'async with
       classification_semaphore' pipeline/orchestrator.py` is 0 (the outer `/extract` acquisition at
       `:539` is gone); the permit count is unchanged after an over-budget refusal, a backstop raise,
       a timed-out wait, a cancelled wait and a late grant (the N+1 tests above).
-- [ ] The `/extract` file route acquires exactly once, inside `sanitize_and_structure`, with no
+- [x] The `/extract` file route acquires exactly once, inside `sanitize_and_structure`, with no
       deadline; a test drives the file route under a size-1 semaphore and completes; `/extract`
       output is unchanged (existing tests pass without edits).
-- [ ] A timed-out wait logs exactly one WARNING containing `classification_wait_timeout
+- [x] A timed-out wait logs exactly one WARNING containing `classification_wait_timeout
       route=<retrieve|search>` and nothing caller-derived (sentinel assertion); the existing
       "PromptGuard unavailable" line is **not** emitted for a timeout; the timeout path calls
       `stage3_promptguard.unavailable_result`, which is pinned against
@@ -734,23 +734,23 @@ at zero. A cache hit is served without acquiring.
       pipeline/orchestrator.py` is 0 — path set: that file); `/search`'s acquisition guard is
       `classifier is not None and classifier.loaded`; `TROUBLESHOOTING.md`'s `unavailable_*` row
       distinguishes classifier-absent from permit-contention by that line.
-- [ ] Two concurrent classifications (`/retrieve`+`/retrieve`, `/retrieve`+`/search`,
+- [x] Two concurrent classifications (`/retrieve`+`/retrieve`, `/retrieve`+`/search`,
       `/extract`+`/retrieve`) serialise through the shared semaphore; a cache hit is served without
       acquiring; with `classifier is None` the semaphore is never acquired and the counters stay
       zero; a `trusted_domains` `/retrieve` under a held permit is served at once with
       `skip_reason="trusted_tier"` and no counter moves (tested).
-- [ ] A fail-open `/retrieve` whose classification wait timed out is served, marked
+- [x] A fail-open `/retrieve` whose classification wait timed out is served, marked
       `unavailable_allowed`, and **not** written to the content cache (`cache.put` asserted
       uncalled); a following request for the same URL with the permit free reaches `run_promptguard`
       and is classified; the absent-classifier fail-open body is still cached under its
       `classifier_loaded=False` key as today; the reasoning is recorded beside `cache.py:128-133`
       and in `SECURITY.md`.
-- [ ] `SearchResult.suspicious`'s description states that the flag is also set for results
+- [x] `SearchResult.suspicious`'s description states that the flag is also set for results
       PromptGuard did not scan (absent classifier or expired wait) and the consumer rule on
       `promptguard_unavailable: true`; `API_GUIDE.md` carries the rule; the re-created golden pins
       the description (`test_contract_schema_matches_golden`); nothing is appended to
       `_EXPECTED_ONE_THREE_ZERO_DIFF` for it.
-- [ ] A `/retrieve` waiter exceeding `promptguard_wait_seconds` reports `unavailable_blocked`
+- [x] A `/retrieve` waiter exceeding `promptguard_wait_seconds` reports `unavailable_blocked`
       (effective fail-closed) or `unavailable_allowed` (effective fail-open), never a 500, and
       `retrieve.classification_wait_timeouts` increments once; `/search` spends one wait budget per
       request, and after it expires every remaining result follows the classifier-unavailable branch
@@ -759,7 +759,7 @@ at zero. A cache hit is served without acquiring.
       with `search.classification_wait_timeouts` incremented once per request; the Independent
       Test's 3-of-10 case asserts `len(results)`, `omitted_by_reason["promptguard_unavailable"]` and
       the fail-open `suspicious` / `promptguard_unavailable` / `unscanned_results` shape.
-- [ ] `run_search_pipeline`'s two new parameters are defaulted, so no pre-existing call site is
+- [x] `run_search_pipeline`'s two new parameters are defaulted, so no pre-existing call site is
       edited: the story's diff touches none of the 47 / 14 / 12 existing `run_search_pipeline(`
       sites in `tests/test_orchestrator.py`, `tests/test_search_providers.py` and
       `tests/test_brave_provider.py` (asserted by reviewing the diff; sites this story's own tests
@@ -768,7 +768,7 @@ at zero. A cache hit is served without acquiring.
       `_bounded_permit`); the handler passes both; `SearchMetricsSink`, `_NullSearchMetrics`,
       `SearchMetrics` and `SearchMetricsResponse` carry `classification_wait_timeouts`; both
       counters appear on `/metrics`.
-- [ ] Window mechanics (R36): the `* ``1.3.0`` — …` docstring line is appended; `uv run python -m
+- [x] Window mechanics (R36): the `* ``1.3.0`` — …` docstring line is appended; `uv run python -m
       scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via
       `_SCHEMA_MODELS`; **nothing** appended to `_EXPECTED_ONE_THREE_ZERO_DIFF` (the `/metrics`
       models are not in `_SCHEMA_MODELS` — R36 corrected; the counters' gates are `--check`, the
@@ -776,7 +776,7 @@ at zero. A cache hit is served without acquiring.
       `tests/test_contract_schema.py:368`'s field-set pin, whose literal set gains
       `classification_wait_timeouts`); the four anchor-quoting pages refreshed; `uv run python -m
       scripts.export_contract --check` green.
-- [ ] `grep -n 'classification_wait_timeouts' docs/configuration.md kit_tools/arch/SECURITY.md
+- [x] `grep -n 'classification_wait_timeouts' docs/configuration.md kit_tools/arch/SECURITY.md
       kit_tools/docs/MONITORING.md kit_tools/docs/TROUBLESHOOTING.md` returns at least one hit per
       file; `SECURITY.md` carries the Security Considerations sentence about a saturated semaphore
       and fail-open requests, the interim-posture sentence, and the one-directional `/extract`
@@ -785,12 +785,12 @@ at zero. A cache hit is served without acquiring.
       `retrieve.max_promptguard_chunks` sizing rule and the provisional pairing; every grep in this
       story names its file list explicitly (no recursive sweep; nothing under `kit_tools/specs/`,
       `tests/golden/` or `kit_tools/.seed_cache/`).
-- [ ] `sanitizer_revision` rotation measured from a clean tree (revert `orchestrator.py`,
+- [x] `sanitizer_revision` rotation measured from a clean tree (revert `orchestrator.py`,
       `stage3_promptguard.py` and `contract.py` each in turn, all-reverted control) and recorded at
       the five sites.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-002: Stages 1, 2 and 4 off the event loop, with fetch and stage 1 under a bounded `/retrieve` admission controller
 
