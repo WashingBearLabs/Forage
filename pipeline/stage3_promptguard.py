@@ -39,6 +39,50 @@ class PromptGuardResult:
     skip_reason: SkipReason | None = None
 
 
+def unavailable_result(
+    tier_value: str,
+    *,
+    fail_closed: bool,
+) -> PromptGuardResult:
+    """Return the classifier-unavailable Stage 3 result for *tier_value*.
+
+    Pure — it logs nothing. Two callers produce this result and each owns its
+    own WARNING: :func:`run_promptguard` below, when the classifier is absent
+    or still warming, and ``pipeline/orchestrator.py``'s classification-wait
+    timeout, whose operator signal is ``classification_wait_timeout`` because
+    the classifier there is *loaded and busy*, not missing.
+
+    Every value it returns — the verdict, the literal flagged chunk, the
+    penalty and the ``model_unavailable`` skip reason — reaches the wire
+    through stage 4 (``promptguard_state`` ``unavailable_blocked`` /
+    ``unavailable_allowed``), so restating them at the timeout site would be a
+    second copy free to drift from this one.
+    """
+    if fail_closed and tier_value in (
+        TrustTier.STANDARD.value,
+        TrustTier.UNTRUSTED.value,
+    ):
+        return PromptGuardResult(
+            verdict=Stage3Verdict.INJECTION_DETECTED,
+            score=0.0,
+            flagged_chunks=[
+                "[PromptGuard unavailable — content blocked as precaution]"
+            ],
+            penalty=INJECTION_PENALTY,
+            skipped=True,
+            skip_reason="model_unavailable",
+        )
+    # Fail-open or VERIFIED tier: degrade gracefully with a penalty.
+    return PromptGuardResult(
+        verdict=Stage3Verdict.SAFE,
+        score=0.0,
+        flagged_chunks=[],
+        penalty=-0.1,
+        skipped=True,
+        skip_reason="model_unavailable",
+    )
+
+
 async def run_promptguard(
     text: str,
     classifier: PromptGuardClassifier | None,
@@ -96,34 +140,17 @@ async def run_promptguard(
                 "PromptGuard unavailable — fail-closed for %s tier",
                 tier_value,
             )
-            return PromptGuardResult(
-                verdict=Stage3Verdict.INJECTION_DETECTED,
-                score=0.0,
-                flagged_chunks=[
-                    "[PromptGuard unavailable — content blocked as precaution]"
-                ],
-                penalty=INJECTION_PENALTY,
-                skipped=True,
-                skip_reason="model_unavailable",
+        else:
+            logger.warning(
+                "PromptGuard unavailable — %s for %s tier",
+                (
+                    "lenient fallback"
+                    if tier_value == TrustTier.VERIFIED.value
+                    else "fail-open"
+                ),
+                tier_value,
             )
-        # Fail-open or VERIFIED tier: degrade gracefully with a penalty.
-        logger.warning(
-            "PromptGuard unavailable — %s for %s tier",
-            (
-                "lenient fallback"
-                if tier_value == TrustTier.VERIFIED.value
-                else "fail-open"
-            ),
-            tier_value,
-        )
-        return PromptGuardResult(
-            verdict=Stage3Verdict.SAFE,
-            score=0.0,
-            flagged_chunks=[],
-            penalty=-0.1,
-            skipped=True,
-            skip_reason="model_unavailable",
-        )
+        return unavailable_result(tier_value, fail_closed=fail_closed)
 
     # Run synchronous PyTorch inference in a thread to avoid blocking
     # the event loop.

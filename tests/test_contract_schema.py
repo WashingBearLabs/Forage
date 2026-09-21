@@ -386,6 +386,9 @@ def test_search_metrics_response_1_2_0_field_set_is_pinned_exactly() -> None:
         "fallback_fired",
         "paid_calls",
         "policy_unknown_provider",
+        # 1.3.0, hardening-retrieve-parity US-006. The `_1_2_0_` in this
+        # test's name is left as history, the way the sibling pins are.
+        "classification_wait_timeouts",
     }
 
 

@@ -9,6 +9,8 @@ import io
 import logging
 import re
 import textwrap
+import threading
+import time
 import unicodedata
 from collections import Counter
 from contextlib import AbstractContextManager
@@ -75,9 +77,13 @@ from pipeline.stage1_upload import (
     extract_upload_text,
 )
 from pipeline.stage2_structural import StructuralScanResult, scan_structural
-from pipeline.stage3_promptguard import PromptGuardResult
+from pipeline.stage3_promptguard import (
+    PromptGuardResult,
+    run_promptguard,
+    unavailable_result,
+)
 from pipeline.stage5_url_audit import FetchResult
-from promptguard.classifier import PromptGuardBudgetExceededError
+from promptguard.classifier import PromptGuardBudgetExceededError, PromptGuardClassifier
 from tests.fakes import FakeSearchProvider, FakeStorage
 
 # ---------------------------------------------------------------------------
@@ -3382,6 +3388,7 @@ class TestFallbackTelemetry:
             def __init__(self) -> None:
                 self.fallback_fired = 0
                 self.paid_calls = 0
+                self.classification_wait_timeouts = 0
 
         metrics = _RecordingMetrics()
         searxng = FakeSearchProvider(
@@ -3420,6 +3427,7 @@ class TestFallbackTelemetry:
             def __init__(self) -> None:
                 self.fallback_fired = 0
                 self.paid_calls = 0
+                self.classification_wait_timeouts = 0
 
         metrics = _RecordingMetrics()
         searxng = FakeSearchProvider(
@@ -3457,6 +3465,7 @@ class TestFallbackTelemetry:
             def __init__(self) -> None:
                 self.fallback_fired = 0
                 self.paid_calls = 0
+                self.classification_wait_timeouts = 0
 
         metrics = _RecordingMetrics()
         provider = FakeSearchProvider(
@@ -5161,3 +5170,933 @@ def test_the_app_retrieve_metrics_satisfies_the_sink_protocol() -> None:
     assert sink.semaphore_saturation == 0
     assert sink.busy_rejections == 0
     assert sink.classification_wait_timeouts == 0
+
+
+# ---------------------------------------------------------------------------
+# The classification semaphore on /retrieve and /search
+# (hardening-retrieve-parity US-006)
+# ---------------------------------------------------------------------------
+
+
+def _blocking_classifier(gate: threading.Event, *, score: float = 0.1) -> MagicMock:
+    """A loaded classifier whose ``classify`` parks until *gate* is set.
+
+    ``run_promptguard`` runs ``classify`` through ``asyncio.to_thread``, so a
+    plain ``threading.Event`` is what actually holds the permit while the
+    event loop stays free for the second request.
+    """
+    classifier = MagicMock(spec=PromptGuardClassifier)
+    classifier.loaded = True
+
+    def _classify(text: str, max_chunks: int | None = None) -> tuple[float, list[str]]:
+        gate.wait(timeout=5.0)
+        return (score, [])
+
+    classifier.classify = MagicMock(side_effect=_classify)
+    return classifier
+
+
+def _loaded_classifier(*, score: float = 0.1) -> MagicMock:
+    """A loaded classifier that returns at once."""
+    classifier = MagicMock(spec=PromptGuardClassifier)
+    classifier.loaded = True
+    classifier.classify = MagicMock(return_value=(score, []))
+    return classifier
+
+
+def _retrieve_patches(page: bytes = b"<html><body><p>Hello.</p></body></html>"):
+    """Patch URL validation and the fetch so only stage 2-4 run for real."""
+    return (
+        patch(
+            "pipeline.orchestrator.validate_url",
+            new_callable=AsyncMock,
+            return_value=("93.184.216.34", "example.com"),
+        ),
+        patch(
+            "pipeline.orchestrator.fetch_url",
+            new_callable=AsyncMock,
+            return_value=_make_fetch_result(response_body=page),
+        ),
+    )
+
+
+async def _retrieve_under(
+    *,
+    classifier: Any,
+    semaphore: asyncio.Semaphore,
+    metrics: Any,
+    settings: RetrieveSettings,
+    request: RetrieveRequest | None = None,
+    cache: Any = None,
+) -> RetrievedContent:
+    """Drive ``run_retrieve_pipeline`` with a real stage 3 under *semaphore*."""
+    validate_patch, fetch_patch = _retrieve_patches()
+    with validate_patch, fetch_patch:
+        return await run_retrieve_pipeline(
+            request if request is not None else _make_retrieve_request(),
+            cache=cache,
+            classifier=classifier,
+            config=_SAMPLE_CONFIG,
+            sanitizer_revision=_SAMPLE_REVISION,
+            **_retrieve_kwargs(
+                settings=settings,
+                retrieve_metrics=metrics,
+                classification_semaphore=semaphore,
+            ),
+        )
+
+
+_WAIT_TIMEOUT_TOKEN = "classification_wait_timeout"
+
+
+# -- The helper itself ------------------------------------------------------
+
+
+async def test_bounded_permit_holds_and_releases_exactly_one_permit() -> None:
+    """The happy path: held inside the block, back in the pool after it."""
+    semaphore = asyncio.Semaphore(1)
+
+    async with orchestrator._bounded_permit(semaphore, None) as acquired:
+        assert acquired is True
+        assert semaphore.locked()
+
+    assert not semaphore.locked()
+
+
+async def test_bounded_permit_yields_false_without_stranding_the_permit() -> None:
+    """A timed-out wait never releases a permit it did not hold.
+
+    The regression this pins is the late grant: ``asyncio.timeout`` cancels the
+    pending ``acquire()``, and a release on that path would hand back a permit
+    this coroutine never took — growing a size-1 pool by one on every timeout.
+    """
+    semaphore = asyncio.Semaphore(1)
+    await semaphore.acquire()
+
+    async with orchestrator._bounded_permit(semaphore, 0.01) as acquired:
+        assert acquired is False
+
+    # Still exactly one permit outstanding: the holder's.
+    assert semaphore.locked()
+    semaphore.release()
+    assert not semaphore.locked()
+
+
+async def test_bounded_permit_survives_a_grant_that_lands_after_cancellation() -> None:
+    """Timeout, then the holder releases: the pool is back to one, not two."""
+    semaphore = asyncio.Semaphore(1)
+    await semaphore.acquire()
+
+    async def _late_release() -> None:
+        await asyncio.sleep(0.05)
+        semaphore.release()
+
+    releaser = asyncio.create_task(_late_release())
+    async with orchestrator._bounded_permit(semaphore, 0.01) as acquired:
+        assert acquired is False
+    await releaser
+
+    # One permit, not two: acquire twice must block the second time.
+    await semaphore.acquire()
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.05):
+            await semaphore.acquire()
+    semaphore.release()
+
+
+async def test_bounded_permit_releases_when_the_body_raises() -> None:
+    """An exception out of the guarded work still returns the permit."""
+    semaphore = asyncio.Semaphore(1)
+
+    with pytest.raises(RuntimeError):
+        async with orchestrator._bounded_permit(semaphore, None) as acquired:
+            assert acquired is True
+            raise RuntimeError("stage 3 blew up")
+
+    assert not semaphore.locked()
+
+
+def test_every_acquisition_in_the_orchestrator_goes_through_bounded_permit() -> None:
+    """One ``acquire()``, one ``asyncio.timeout``, no outer ``async with``."""
+    source = Path(orchestrator.__file__).read_text()
+
+    assert source.count("semaphore.acquire()") == 1
+    assert source.count("async with classification_semaphore") == 0
+    assert source.count("asyncio.timeout(") == 1
+
+    tree = ast.parse(source)
+    helper = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_bounded_permit"
+    )
+    helper_source = ast.get_source_segment(source, helper) or ""
+    assert "semaphore.acquire()" in helper_source
+    assert "asyncio.timeout(" in helper_source
+
+
+def test_the_orchestrator_never_restates_the_unavailable_result() -> None:
+    """``model_unavailable`` has exactly one producer, and it is in stage 3.
+
+    The story's criterion words this as ``grep -c 'model_unavailable'`` being
+    ``0``, which was never true — the ``/search`` loop has *read* the skip
+    reason off the result since long before this story, and still does. What
+    the criterion is actually after is that the orchestrator never
+    **constructs** one: every value in that result reaches the wire through
+    stage 4, so a second constructor here would be free to drift from
+    ``stage3_promptguard.unavailable_result``. Checked structurally rather
+    than by substring, because the two surviving matches are comparisons.
+    """
+    source = Path(orchestrator.__file__).read_text()
+    tree = ast.parse(source)
+
+    constructors = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "PromptGuardResult"
+    ]
+    for call in constructors:
+        for keyword in call.keywords:
+            if keyword.arg != "skip_reason":
+                continue
+            assert isinstance(keyword.value, ast.Constant)
+            assert keyword.value.value != "model_unavailable"
+
+    # And the two that remain are reads of a result stage 3 produced.
+    matches = [line for line in source.splitlines() if "model_unavailable" in line]
+    assert len(matches) == 3
+    assert all(
+        "skip_reason ==" in line or line.lstrip().startswith("#") for line in matches
+    )
+
+
+# -- The extracted stage-3 seam --------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("tier", "fail_closed"),
+    [
+        pytest.param(TrustTier.STANDARD, True, id="fail-closed-standard"),
+        pytest.param(TrustTier.UNTRUSTED, True, id="fail-closed-untrusted"),
+        pytest.param(TrustTier.VERIFIED, True, id="verified-is-lenient"),
+        pytest.param(TrustTier.STANDARD, False, id="fail-open-standard"),
+        pytest.param(TrustTier.UNTRUSTED, False, id="fail-open-untrusted"),
+        pytest.param(TrustTier.VERIFIED, False, id="fail-open-verified"),
+    ],
+)
+async def test_unavailable_result_is_pinned_against_run_promptguard(
+    tier: TrustTier, fail_closed: bool
+) -> None:
+    """The timeout path and the absent-classifier path cannot drift.
+
+    Every value in this result reaches the wire through stage 4, so the
+    assertion is on the whole dataclass rather than on the verdict alone.
+    """
+    through_run = await run_promptguard(
+        "some text",
+        None,
+        trust_tier=tier,
+        fail_closed=fail_closed,
+    )
+
+    assert unavailable_result(tier.value, fail_closed=fail_closed) == through_run
+
+
+# -- /retrieve --------------------------------------------------------------
+
+
+async def test_two_retrieve_classifications_serialise_through_the_permit() -> None:
+    """The second request's ``classify`` cannot start while the first holds it."""
+    gate = threading.Event()
+    classifier = _blocking_classifier(gate)
+    semaphore = asyncio.Semaphore(1)
+    settings = RetrieveSettings()
+
+    first = asyncio.create_task(
+        _retrieve_under(
+            classifier=classifier,
+            semaphore=semaphore,
+            metrics=_NullRetrieveMetrics(),
+            settings=settings,
+        )
+    )
+    # Let the first request reach `classify` and park there.
+    for _ in range(50):
+        await asyncio.sleep(0)
+        if classifier.classify.call_count == 1:
+            break
+
+    second = asyncio.create_task(
+        _retrieve_under(
+            classifier=classifier,
+            semaphore=semaphore,
+            metrics=_NullRetrieveMetrics(),
+            settings=settings,
+        )
+    )
+    for _ in range(50):
+        await asyncio.sleep(0)
+
+    assert classifier.classify.call_count == 1
+
+    gate.set()
+    await first
+    await second
+    assert classifier.classify.call_count == 2
+    assert not semaphore.locked()
+
+
+@pytest.mark.parametrize(
+    ("fail_closed", "expected_state"),
+    [
+        pytest.param(True, "unavailable_blocked", id="fail-closed"),
+        pytest.param(False, "unavailable_allowed", id="fail-open"),
+    ],
+)
+async def test_retrieve_wait_timeout_follows_the_requests_policy(
+    fail_closed: bool,
+    expected_state: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A timed-out wait is a policy event: never a 500, counted, logged once."""
+    semaphore = asyncio.Semaphore(1)
+    await semaphore.acquire()
+    metrics = _NullRetrieveMetrics()
+    settings = RetrieveSettings(promptguard_wait_seconds=0.1)
+    cache_mock = MagicMock()
+    cache_mock.get = AsyncMock(return_value=None)
+    cache_mock.put = AsyncMock(return_value=True)
+
+    with caplog.at_level(logging.WARNING, logger="pipeline.orchestrator"):
+        content = await _retrieve_under(
+            classifier=_loaded_classifier(),
+            semaphore=semaphore,
+            metrics=metrics,
+            settings=settings,
+            request=_make_retrieve_request(promptguard_fail_closed=fail_closed),
+            cache=cache_mock,
+        )
+
+    assert content.promptguard_state == expected_state
+    assert metrics.classification_wait_timeouts == 1
+
+    timeouts = [
+        record
+        for record in caplog.records
+        if _WAIT_TIMEOUT_TOKEN in record.getMessage()
+    ]
+    assert len(timeouts) == 1
+    assert timeouts[0].getMessage() == "classification_wait_timeout route=retrieve"
+    # The model-loader line would send an operator to the wrong place.
+    assert not any(
+        "PromptGuard unavailable" in record.getMessage() for record in caplog.records
+    )
+    # A wait-timeout body never enters the content cache, under either policy.
+    cache_mock.put.assert_not_called()
+    # The permit was never taken, so the holder's is still the only one out.
+    assert semaphore.locked()
+
+
+async def test_a_following_retrieve_with_the_permit_free_is_classified() -> None:
+    """The timeout is per request; nothing about it is sticky."""
+    semaphore = asyncio.Semaphore(1)
+    await semaphore.acquire()
+    classifier = _loaded_classifier()
+    metrics = _NullRetrieveMetrics()
+    settings = RetrieveSettings(promptguard_wait_seconds=0.05)
+
+    timed_out = await _retrieve_under(
+        classifier=classifier,
+        semaphore=semaphore,
+        metrics=metrics,
+        settings=settings,
+        request=_make_retrieve_request(promptguard_fail_closed=False),
+    )
+    assert timed_out.promptguard_state == "unavailable_allowed"
+    assert classifier.classify.call_count == 0
+
+    semaphore.release()
+    served = await _retrieve_under(
+        classifier=classifier,
+        semaphore=semaphore,
+        metrics=metrics,
+        settings=settings,
+        request=_make_retrieve_request(promptguard_fail_closed=False),
+    )
+    assert served.promptguard_state == "scanned"
+    assert classifier.classify.call_count == 1
+    assert metrics.classification_wait_timeouts == 1
+
+
+async def test_the_absent_classifier_fail_open_body_is_still_cached() -> None:
+    """Only the loaded-and-busy combination is withheld from the cache."""
+    semaphore = asyncio.Semaphore(1)
+    metrics = _NullRetrieveMetrics()
+    cache_mock = MagicMock()
+    cache_mock.get = AsyncMock(return_value=None)
+    cache_mock.put = AsyncMock(return_value=True)
+
+    content = await _retrieve_under(
+        classifier=None,
+        semaphore=semaphore,
+        metrics=metrics,
+        settings=RetrieveSettings(),
+        request=_make_retrieve_request(promptguard_fail_closed=False),
+        cache=cache_mock,
+    )
+
+    assert content.promptguard_state == "unavailable_allowed"
+    cache_mock.put.assert_called_once()
+    assert metrics.classification_wait_timeouts == 0
+
+
+async def test_retrieve_with_no_classifier_never_touches_the_semaphore() -> None:
+    """``classifier is None`` is the unchanged path: no permit, no counter."""
+    semaphore = asyncio.Semaphore(1)
+    await semaphore.acquire()
+    metrics = _NullRetrieveMetrics()
+
+    content = await _retrieve_under(
+        classifier=None,
+        semaphore=semaphore,
+        metrics=metrics,
+        settings=RetrieveSettings(promptguard_wait_seconds=0.05),
+        request=_make_retrieve_request(promptguard_fail_closed=False),
+    )
+
+    assert content.promptguard_state == "unavailable_allowed"
+    assert metrics.classification_wait_timeouts == 0
+    assert semaphore.locked()
+
+
+async def test_a_trusted_domain_retrieve_is_served_under_a_held_permit() -> None:
+    """A TRUSTED page does no inference, so it must not queue for the permit."""
+    semaphore = asyncio.Semaphore(1)
+    await semaphore.acquire()
+    metrics = _NullRetrieveMetrics()
+
+    content = await _retrieve_under(
+        classifier=_loaded_classifier(),
+        semaphore=semaphore,
+        metrics=metrics,
+        settings=RetrieveSettings(promptguard_wait_seconds=0.05),
+        request=_make_retrieve_request(trusted_domains=["example.com"]),
+    )
+
+    assert content.promptguard_state == "skipped_trusted"
+    assert metrics.classification_wait_timeouts == 0
+    assert semaphore.locked()
+
+
+async def test_a_cache_hit_is_served_without_acquiring_the_permit() -> None:
+    """The cache read is absolute — outside every gate."""
+    semaphore = asyncio.Semaphore(1)
+    await semaphore.acquire()
+    metrics = _NullRetrieveMetrics()
+    cached = RetrievedContent(
+        request_id="cached-id",
+        source_url="https://example.com/page",
+        final_url="https://example.com/page",
+        title="Cached",
+        body="Cached body",
+        word_count=2,
+        content_type="html",
+        trust_score=0.7,
+        trust_tier=TrustTier.STANDARD,
+        stage2_verdict=Stage2Verdict.CLEAN,
+        stage3_verdict=Stage3Verdict.SAFE,
+        domain="example.com",
+    )
+    cache_mock = MagicMock()
+    cache_mock.get = AsyncMock(return_value=cached)
+    cache_mock.put = AsyncMock(return_value=True)
+
+    content = await _retrieve_under(
+        classifier=_loaded_classifier(),
+        semaphore=semaphore,
+        metrics=metrics,
+        settings=RetrieveSettings(promptguard_wait_seconds=0.05),
+        cache=cache_mock,
+    )
+
+    assert content.title == "Cached"
+    assert metrics.classification_wait_timeouts == 0
+    assert semaphore.locked()
+
+
+async def test_the_permit_count_survives_five_rounds_of_each_failure() -> None:
+    """N+1 = 5 timed-out waits, then the next request still classifies."""
+    semaphore = asyncio.Semaphore(1)
+    metrics = _NullRetrieveMetrics()
+    settings = RetrieveSettings(promptguard_wait_seconds=0.02)
+    classifier = _loaded_classifier()
+
+    for _ in range(5):
+        await semaphore.acquire()
+        timed_out = await _retrieve_under(
+            classifier=classifier,
+            semaphore=semaphore,
+            metrics=metrics,
+            settings=settings,
+            request=_make_retrieve_request(promptguard_fail_closed=False),
+        )
+        assert timed_out.promptguard_state == "unavailable_allowed"
+        semaphore.release()
+
+    assert metrics.classification_wait_timeouts == 5
+    assert not semaphore.locked()
+
+    served = await _retrieve_under(
+        classifier=classifier,
+        semaphore=semaphore,
+        metrics=metrics,
+        settings=settings,
+    )
+    assert served.promptguard_state == "scanned"
+    assert not semaphore.locked()
+
+
+async def test_an_over_budget_refusal_leaves_the_permit_count_unchanged() -> None:
+    """The pre-check refuses before stage 3, five times, without leaking."""
+    semaphore = asyncio.Semaphore(1)
+    metrics = _NullRetrieveMetrics()
+    settings = RetrieveSettings(max_promptguard_chunks=1)
+    page = ("<html><body><p>" + "word " * 200_000 + "</p></body></html>").encode()
+
+    for _ in range(5):
+        validate_patch, fetch_patch = _retrieve_patches(page)
+        with validate_patch, fetch_patch, pytest.raises(PipelineError) as excinfo:
+            await run_retrieve_pipeline(
+                _make_retrieve_request(),
+                cache=None,
+                classifier=_loaded_classifier(),
+                config=_SAMPLE_CONFIG,
+                sanitizer_revision=_SAMPLE_REVISION,
+                **_retrieve_kwargs(
+                    settings=settings,
+                    retrieve_metrics=metrics,
+                    classification_semaphore=semaphore,
+                ),
+            )
+        assert excinfo.value.error == "content_too_large"
+        assert not semaphore.locked()
+
+    assert metrics.classification_wait_timeouts == 0
+
+
+# -- sanitize_and_structure, called directly -------------------------------
+
+
+async def test_sanitize_and_structure_without_a_semaphore_classifies() -> None:
+    """The defaulted parameters keep every existing caller unchanged."""
+    result = await orchestrator.sanitize_and_structure(
+        extraction=_make_extraction(),
+        trust_tier=TrustTier.STANDARD,
+        classifier=_loaded_classifier(),
+        promptguard_threshold=0.85,
+        promptguard_fail_closed=True,
+        extract_mode="full",
+        content_type="html",
+    )
+
+    assert result.promptguard_state == "scanned"
+
+
+async def test_sanitize_and_structure_with_a_held_permit_times_out() -> None:
+    """Given a semaphore and a deadline, it takes the unavailable outcome."""
+    semaphore = asyncio.Semaphore(1)
+    await semaphore.acquire()
+
+    result = await orchestrator.sanitize_and_structure(
+        extraction=_make_extraction(),
+        trust_tier=TrustTier.STANDARD,
+        classifier=_loaded_classifier(),
+        promptguard_threshold=0.85,
+        promptguard_fail_closed=True,
+        extract_mode="full",
+        content_type="html",
+        classification_semaphore=semaphore,
+        classification_wait_seconds=0.02,
+    )
+
+    assert result.promptguard_state == "unavailable_blocked"
+    assert semaphore.locked()
+
+
+async def test_sanitize_and_structure_with_a_free_permit_classifies() -> None:
+    """The permit is taken and given back around one classification."""
+    semaphore = asyncio.Semaphore(1)
+    classifier = _loaded_classifier()
+
+    result = await orchestrator.sanitize_and_structure(
+        extraction=_make_extraction(),
+        trust_tier=TrustTier.STANDARD,
+        classifier=classifier,
+        promptguard_threshold=0.85,
+        promptguard_fail_closed=True,
+        extract_mode="full",
+        content_type="html",
+        classification_semaphore=semaphore,
+        classification_wait_seconds=None,
+    )
+
+    assert result.promptguard_state == "scanned"
+    assert classifier.classify.call_count == 1
+    assert not semaphore.locked()
+
+
+# -- /search ----------------------------------------------------------------
+
+
+def _ten_result_response() -> MagicMock:
+    """Ten clean, distinct provider results."""
+    return _mock_searxng_response(
+        [
+            {
+                "title": f"Result {index}",
+                "url": f"https://example.com/{index}",
+                "content": f"Harmless snippet {index}.",
+            }
+            for index in range(10)
+        ]
+    )
+
+
+async def _search_under(
+    *,
+    classifier: Any,
+    semaphore: asyncio.Semaphore | None,
+    wait_seconds: float | None,
+    metrics: Any = None,
+    fail_closed: bool = False,
+    response: MagicMock | None = None,
+) -> SearchResponse:
+    """Drive ``run_search_pipeline`` over ten results under *semaphore*."""
+    with _searxng_client_patch(response or _ten_result_response()):
+        return await run_search_pipeline(
+            _make_search_request(num_results=10, promptguard_fail_closed=fail_closed),
+            searxng_url="http://test-searxng:8080",
+            config=_SAMPLE_CONFIG,
+            classifier=classifier,
+            search_metrics=metrics,
+            classification_semaphore=semaphore,
+            classification_wait_seconds=wait_seconds,
+        )
+
+
+class _SearchCounters:
+    """A ``SearchMetricsSink`` a test can read back."""
+
+    def __init__(self) -> None:
+        self.fallback_fired = 0
+        self.paid_calls = 0
+        self.classification_wait_timeouts = 0
+
+
+async def test_search_with_a_free_permit_classifies_every_result() -> None:
+    """The default path with a semaphore supplied: nothing changes but the gate."""
+    classifier = _loaded_classifier()
+    semaphore = asyncio.Semaphore(1)
+    metrics = _SearchCounters()
+
+    response = await _search_under(
+        classifier=classifier,
+        semaphore=semaphore,
+        wait_seconds=30.0,
+        metrics=metrics,
+    )
+
+    assert len(response.results) == 10
+    assert classifier.classify.call_count == 10
+    assert response.promptguard_unavailable is False
+    assert metrics.classification_wait_timeouts == 0
+    assert not semaphore.locked()
+
+
+async def test_search_spends_one_wait_budget_per_request_fail_open(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Budget expiry marks every remaining result, counted and logged once."""
+    classifier = _loaded_classifier()
+    semaphore = asyncio.Semaphore(1)
+    await semaphore.acquire()
+    metrics = _SearchCounters()
+
+    with caplog.at_level(logging.WARNING, logger="pipeline.orchestrator"):
+        response = await _search_under(
+            classifier=classifier,
+            semaphore=semaphore,
+            wait_seconds=0.05,
+            metrics=metrics,
+            fail_closed=False,
+        )
+
+    assert len(response.results) == 10
+    assert response.unscanned_results == 10
+    assert response.promptguard_unavailable is True
+    assert all(result.suspicious for result in response.results)
+    assert classifier.classify.call_count == 0
+    assert metrics.classification_wait_timeouts == 1
+
+    timeouts = [
+        record
+        for record in caplog.records
+        if _WAIT_TIMEOUT_TOKEN in record.getMessage()
+    ]
+    assert len(timeouts) == 1
+    assert timeouts[0].getMessage() == "classification_wait_timeout route=search"
+    assert semaphore.locked()
+
+
+async def test_search_wait_timeout_fail_closed_omits_every_remaining_result() -> None:
+    """The existing fail-closed branch, reached by contention instead of absence."""
+    semaphore = asyncio.Semaphore(1)
+    await semaphore.acquire()
+    metrics = _SearchCounters()
+
+    response = await _search_under(
+        classifier=_loaded_classifier(),
+        semaphore=semaphore,
+        wait_seconds=0.05,
+        metrics=metrics,
+        fail_closed=True,
+    )
+
+    assert response.results == []
+    assert response.omitted_by_reason == {contract.OMIT_PROMPTGUARD_UNAVAILABLE: 10}
+    assert response.promptguard_unavailable is True
+    assert metrics.classification_wait_timeouts == 1
+
+
+async def test_search_budget_expiry_is_unconditional_for_the_rest_of_the_loop() -> None:
+    """A permit released mid-loop after the deadline must not be taken.
+
+    The round-3 finding this pins: ``Semaphore.acquire()`` returns without
+    yielding when a permit is free, so an ``asyncio.timeout`` around the
+    acquisition can never fire once the permit comes back. Only the explicit
+    ``loop.time() >= deadline`` test makes "every remaining result is
+    unscanned" true.
+    """
+    classifier = _loaded_classifier()
+    semaphore = asyncio.Semaphore(1)
+    await semaphore.acquire()
+    metrics = _SearchCounters()
+
+    loop = asyncio.get_running_loop()
+    loop.call_later(0.15, semaphore.release)
+
+    response = await _search_under(
+        classifier=classifier,
+        semaphore=semaphore,
+        wait_seconds=0.05,
+        metrics=metrics,
+        fail_closed=False,
+    )
+
+    assert classifier.classify.call_count == 0
+    assert response.unscanned_results == 10
+    assert metrics.classification_wait_timeouts == 1
+
+
+async def test_search_classifies_the_first_results_then_marks_the_rest() -> None:
+    """Partial classification: the state this story makes reachable."""
+    semaphore = asyncio.Semaphore(1)
+    metrics = _SearchCounters()
+    classifier = MagicMock(spec=PromptGuardClassifier)
+    classifier.loaded = True
+    calls = {"n": 0}
+
+    def _classify(text: str, max_chunks: int | None = None) -> tuple[float, list[str]]:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            # Burn the whole budget inside the second classification.
+            time.sleep(0.12)
+        return (0.1, [])
+
+    classifier.classify = MagicMock(side_effect=_classify)
+
+    response = await _search_under(
+        classifier=classifier,
+        semaphore=semaphore,
+        wait_seconds=0.1,
+        metrics=metrics,
+        fail_closed=False,
+    )
+
+    assert classifier.classify.call_count == 2
+    assert len(response.results) == 10
+    assert response.unscanned_results == 8
+    assert response.promptguard_unavailable is True
+    assert sum(1 for result in response.results if result.suspicious) == 8
+    assert metrics.classification_wait_timeouts == 1
+
+
+async def test_search_with_no_classifier_never_touches_the_semaphore() -> None:
+    """``classifier is None`` is the unchanged path on `/search` too."""
+    semaphore = asyncio.Semaphore(1)
+    await semaphore.acquire()
+    metrics = _SearchCounters()
+
+    response = await _search_under(
+        classifier=None,
+        semaphore=semaphore,
+        wait_seconds=0.05,
+        metrics=metrics,
+        fail_closed=False,
+    )
+
+    assert response.unscanned_results == 10
+    assert metrics.classification_wait_timeouts == 0
+    assert semaphore.locked()
+
+
+async def test_search_with_a_warming_classifier_never_acquires() -> None:
+    """The guard is ``is not None and loaded``: a warming model does not queue."""
+    semaphore = asyncio.Semaphore(1)
+    await semaphore.acquire()
+    metrics = _SearchCounters()
+    warming = MagicMock(spec=PromptGuardClassifier)
+    warming.loaded = False
+
+    response = await _search_under(
+        classifier=warming,
+        semaphore=semaphore,
+        wait_seconds=0.05,
+        metrics=metrics,
+        fail_closed=False,
+    )
+
+    assert response.unscanned_results == 10
+    assert metrics.classification_wait_timeouts == 0
+    assert semaphore.locked()
+
+
+async def test_a_retrieve_and_a_search_classification_serialise() -> None:
+    """The two fetch routes share one permit, so they cannot both infer."""
+    gate = threading.Event()
+    classifier = _blocking_classifier(gate)
+    semaphore = asyncio.Semaphore(1)
+
+    retrieving = asyncio.create_task(
+        _retrieve_under(
+            classifier=classifier,
+            semaphore=semaphore,
+            metrics=_NullRetrieveMetrics(),
+            settings=RetrieveSettings(),
+        )
+    )
+    for _ in range(50):
+        await asyncio.sleep(0)
+        if classifier.classify.call_count == 1:
+            break
+
+    searching = asyncio.create_task(
+        _search_under(
+            classifier=classifier,
+            semaphore=semaphore,
+            wait_seconds=None,
+            metrics=_SearchCounters(),
+        )
+    )
+    for _ in range(50):
+        await asyncio.sleep(0)
+
+    assert classifier.classify.call_count == 1
+
+    gate.set()
+    await retrieving
+    search_response = await searching
+    assert len(search_response.results) == 10
+    assert not semaphore.locked()
+
+
+async def test_the_search_parameters_are_defaulted() -> None:
+    """No pre-existing ``run_search_pipeline(`` call site needed editing."""
+    signature = inspect.signature(run_search_pipeline)
+
+    for name in ("classification_semaphore", "classification_wait_seconds"):
+        parameter = signature.parameters[name]
+        assert parameter.default is None
+        assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+
+
+# -- /extract file route ----------------------------------------------------
+
+
+async def test_the_extract_file_route_acquires_exactly_once(
+    tmp_path: Path,
+) -> None:
+    """A size-1 semaphore would deadlock a double acquisition; it completes."""
+    spooled = tmp_path / "upload.txt"
+    spooled.write_text("Hello from an uploaded document.", encoding="utf-8")
+    semaphore = asyncio.Semaphore(1)
+    classifier = _loaded_classifier()
+
+    result = await orchestrator.run_extract_pipeline_from_file(
+        spooled,
+        filename="upload.txt",
+        mime_hint="text/plain",
+        extract_mode="full",
+        request_id="req-1",
+        classifier=classifier,
+        promptguard_threshold=0.85,
+        sanitizer_revision=_SAMPLE_REVISION,
+        settings=ExtractionSettings(),
+        classification_semaphore=semaphore,
+    )
+
+    assert result.body
+    assert classifier.classify.call_count == 1
+    assert not semaphore.locked()
+
+
+async def test_the_extract_file_route_waits_for_a_retrieve_holding_the_permit(
+    tmp_path: Path,
+) -> None:
+    """`/extract` shares the gate, untimed and uncounted, and still completes."""
+    spooled = tmp_path / "upload.txt"
+    spooled.write_text("Hello from an uploaded document.", encoding="utf-8")
+    gate = threading.Event()
+    classifier = _blocking_classifier(gate)
+    semaphore = asyncio.Semaphore(1)
+
+    retrieving = asyncio.create_task(
+        _retrieve_under(
+            classifier=classifier,
+            semaphore=semaphore,
+            metrics=_NullRetrieveMetrics(),
+            settings=RetrieveSettings(),
+        )
+    )
+    for _ in range(50):
+        await asyncio.sleep(0)
+        if classifier.classify.call_count == 1:
+            break
+
+    extracting = asyncio.create_task(
+        orchestrator.run_extract_pipeline_from_file(
+            spooled,
+            filename="upload.txt",
+            mime_hint="text/plain",
+            extract_mode="full",
+            request_id="req-1",
+            classifier=classifier,
+            promptguard_threshold=0.85,
+            sanitizer_revision=_SAMPLE_REVISION,
+            settings=ExtractionSettings(),
+            classification_semaphore=semaphore,
+        )
+    )
+    for _ in range(50):
+        await asyncio.sleep(0)
+
+    assert classifier.classify.call_count == 1
+
+    gate.set()
+    await retrieving
+    result = await extracting
+    assert result.body
+    assert classifier.classify.call_count == 2
+    assert not semaphore.locked()

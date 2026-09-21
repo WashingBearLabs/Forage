@@ -565,6 +565,27 @@ matches", which is exactly the nine-day silent failure the honest-health contrac
 prevent; `retrieve.promptguard_state.unavailable_blocked` rising is the signal to alarm
 on. Never resolve it by turning fail-closed off.
 
+**Not the only cause, since `hardening-retrieve-parity` US-006.** The two `unavailable_*`
+states now have a second, entirely different cause: the classifier is loaded and *busy*,
+and the request's wait for the single classification permit expired. Tell them apart in
+two places rather than guessing:
+
+| | Model absent | Permit contention |
+|---|---|---|
+| `/health` `promptguard_loaded` | `false` | `true` |
+| `/metrics` `retrieve.classification_wait_timeouts` / `search.classification_wait_timeouts` | stays `0` | rises, once per request |
+| Log line | `PromptGuard unavailable — fail-closed for <tier> tier` | `classification_wait_timeout route=<retrieve\|search>` |
+
+The two log lines are deliberately disjoint: the timeout never emits the "PromptGuard
+unavailable" text, because that text would send you to the model loader for a problem the
+model loader cannot fix. For contention the fix is the sizing rule in
+`docs/configuration.md` — lower `retrieve.max_promptguard_chunks` to bound the worst-case
+permit hold, or raise `promptguard_wait_seconds` — and note that a `/search` request spends
+one budget for the whole request, so a single `classification_wait_timeouts` increment can
+account for many unscanned results. `/extract` shares the same permit but waits without a
+deadline and increments nothing, so a hanging `/extract` under `/retrieve` load shows up
+only as latency.
+
 ---
 
 ## Consumer-Side Problems

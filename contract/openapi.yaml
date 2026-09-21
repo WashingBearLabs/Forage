@@ -689,6 +689,13 @@ components:
           description: Requests that had to fetch.
           title: Cache Misses
           type: integer
+        classification_wait_timeouts:
+          description: '`/retrieve` requests that waited `promptguard_wait_seconds` for the
+            classification permit and gave up, taking the classifier-unavailable outcome under
+            the request''s own `promptguard_fail_closed`. Rising with `promptguard_loaded:
+            true` on `/health` means permit contention, not a missing model.'
+          title: Classification Wait Timeouts
+          type: integer
         errors:
           additionalProperties:
             type: integer
@@ -713,6 +720,7 @@ components:
       - cache_misses
       - blocked_by_reason
       - promptguard_state
+      - classification_wait_timeouts
       title: RetrieveMetricsResponse
       type: object
     RetrieveRequest:
@@ -941,6 +949,13 @@ components:
       additionalProperties: false
       description: The ``search`` section of ``GET /metrics``.
       properties:
+        classification_wait_timeouts:
+          description: '`/search` requests whose per-request PromptGuard wait budget expired
+            — at most one per request, however many results were left unscanned afterwards.
+            The classifier was loaded and busy, not absent: compare against `/health` `promptguard_loaded`
+            and the `retrieve` counter of the same name.'
+          title: Classification Wait Timeouts
+          type: integer
         errors:
           additionalProperties:
             type: integer
@@ -992,6 +1007,7 @@ components:
       - fallback_fired
       - paid_calls
       - policy_unknown_provider
+      - classification_wait_timeouts
       title: SearchMetricsResponse
       type: object
     SearchRequest:
@@ -1208,7 +1224,15 @@ components:
           type: string
         suspicious:
           default: false
-          description: Whether Stage 2 or Stage 3 flagged this result as suspicious
+          description: 'Whether Stage 2 or Stage 3 flagged this result as suspicious — and
+            also set for every result PromptGuard did not scan at all, either because the
+            classifier was absent or because the request''s classification wait expired while
+            it was busy. `promptguard_unavailable` says whether any result in this response
+            was unscanned and `unscanned_results` says how many, so the consumer rule is:
+            on `promptguard_unavailable: true`, treat every `suspicious` result as unscanned
+            rather than as scanned-and-flagged. Since contract 1.3.0 a single response may
+            mix the two — the wait budget is per request, so earlier results can be scanned
+            and later ones not.'
           title: Suspicious
           type: boolean
         title:

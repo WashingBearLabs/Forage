@@ -105,7 +105,19 @@ MINOR when fields are only added.
   worked example 6 step 1: the key defaults to ``0`` (today's behaviour) for
   one minor release, the boot WARNING ``retrieve_budget_unset`` names the
   coming default 256, and ``0`` remains a legal opt-out after the flip
-  (``contract/GOVERNANCE.md`` ruling (g)). This version is **held**:
+  (``contract/GOVERNANCE.md`` ruling (g)). Continuing in
+  ``hardening-retrieve-parity`` US-006: ``/metrics`` gains
+  ``retrieve.classification_wait_timeouts`` and
+  ``search.classification_wait_timeouts`` — both additive counters, pinned
+  against the handler by ``tests/test_contract_metrics.py`` rather than by
+  the golden fixture — and ``SearchResult.suspicious``'s *description* is
+  corrected, not its type or its default: the flag was already set for
+  results PromptGuard never scanned, and the text now says so along with
+  the consumer rule on ``promptguard_unavailable: true``. What is new
+  behind that unchanged shape is that a single ``/search`` response may now
+  mix scanned and unscanned results, because the classification wait is one
+  budget per request rather than a state of the process. No field was
+  removed and none changed meaning. This version is **held**:
   ``tests/golden/contract_1_3_0.json`` is
   re-created in place by every later story in this epic that moves the
   wire, until spec 8 US-002 freezes it ahead of the release cut.

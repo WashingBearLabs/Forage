@@ -2124,3 +2124,49 @@ and why it is carried rather than fixed here.
   `NamedTemporaryFile` with no `dir=` could not; the `/extract` spool failure propagates as today
   (out of scope) and the directory is verified at boot, so the exposure is a use-time change
   after boot on a hostile `TMPDIR`, documented as the sticky-parent requirement.
+
+### US-006 implementation notes (2026-09-20)
+
+- **`_bounded_permit` has exactly one `acquire()`, because `asyncio.timeout(None)` is the
+  no-deadline form.** The hints describe an `if seconds is None: await semaphore.acquire()`
+  branch beside the timed one, which makes `grep -n 'semaphore.acquire()'` return **two**
+  matches and fails the first acceptance criterion as written. `asyncio.timeout` accepts
+  `None` and means "no deadline", so the untimed `/extract` acquisition is the same single
+  statement. The criterion's number is achievable exactly this way.
+- **The criterion's `grep -c 'model_unavailable' pipeline/orchestrator.py` is 0 was never
+  true.** The `/search` loop has *read* `pg_result.skip_reason == "model_unavailable"` at
+  two sites since long before this epic (verified against the merge-base blob: count 2).
+  The property the criterion is actually after is that the orchestrator never
+  **constructs** the result, so the test asserts that structurally — an AST walk over every
+  `PromptGuardResult(...)` call in the file — and then asserts the surviving matches are
+  comparisons or comments.
+- **The `/retrieve` wait-timeout counter is derived, not threaded back.**
+  `sanitize_and_structure` has no metrics sink and the hints give it only two new
+  parameters, so `run_retrieve_pipeline` derives the event from the result:
+  `classifier_loaded and content.promptguard_state in {"unavailable_blocked",
+  "unavailable_allowed"}`. That is sound because `run_promptguard` returns
+  `model_unavailable` **only** when the classifier is absent or unloaded, so a loaded
+  classifier plus an `unavailable_*` state is the wait timeout and nothing else. It also
+  means the counter and the new cache condition read the same fact rather than two.
+- **The `route=retrieve` token in `sanitize_and_structure` is a literal, with a comment.**
+  Only `/retrieve` passes a deadline into that function; `/extract` passes
+  `classification_wait_seconds=None`, which cannot time out, and `/search` never calls it.
+  A third `route=` parameter would exist solely to be passed one value.
+- **`/search` reads `promptguard_wait_seconds` off `app.state.retrieve_settings`.** It is a
+  top-level config key that US-001's reader happens to land in `RetrieveSettings`; the
+  handler coupling is noted here rather than duplicating the reader.
+- **Two pre-existing test doubles needed the new counter**, both structural
+  `SearchMetricsSink` implementations that pyright checks at the call site:
+  `_RecordingMetrics` in `tests/test_orchestrator.py` and the inline `search` section
+  assertion in `tests/test_app.py::test_metrics_covers_search_retrieve_and_cache_sections`.
+  Neither is a `run_search_pipeline(` call-site edit.
+- **Rotation measured last, from a clean tree, reading reverted bytes from `HEAD` blobs:**
+  `e55b5f06…4d3c0` → `d0433876…fc88e`. `orchestrator.py` alone `64257b22…73c79`,
+  `stage3_promptguard.py` alone `201ac2c8…fd451`, `contract.py` alone `5ee16308…bcbdb`,
+  all-three-reverted control reproduces `e55b5f06…4d3c0` exactly. Recorded at all five
+  sites plus `SERVICE_MAP.md`'s divergence count (now twenty-one).
+- **`export_contract` moved the frozen surface**, because the `SearchResult.suspicious`
+  description reaches `contract/openapi.yaml`; the four anchor-quoting pages
+  (`API_GUIDE.md`, `CI_CD.md`, `DEPLOYMENT.md`, `SERVICE_MAP.md`) were refreshed to the new
+  sha256 and `tests/test_governance_docs.py` is green. Nothing was appended to
+  `_EXPECTED_ONE_THREE_ZERO_DIFF`; the golden's only change is that one description.

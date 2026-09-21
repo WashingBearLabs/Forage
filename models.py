@@ -380,7 +380,19 @@ class SearchResult(BaseModel):
     )
     suspicious: bool = Field(
         default=False,
-        description="Whether Stage 2 or Stage 3 flagged this result as suspicious",
+        description=(
+            "Whether Stage 2 or Stage 3 flagged this result as suspicious — "
+            "and also set for every result PromptGuard did not scan at all, "
+            "either because the classifier was absent or because the "
+            "request's classification wait expired while it was busy. "
+            "`promptguard_unavailable` says whether any result in this "
+            "response was unscanned and `unscanned_results` says how many, "
+            "so the consumer rule is: on `promptguard_unavailable: true`, "
+            "treat every `suspicious` result as unscanned rather than as "
+            "scanned-and-flagged. Since contract 1.3.0 a single response may "
+            "mix the two — the wait budget is per request, so earlier results "
+            "can be scanned and later ones not."
+        ),
     )
 
     @field_validator("date", mode="before")

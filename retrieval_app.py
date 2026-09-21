@@ -538,6 +538,15 @@ class SearchMetricsResponse(BaseModel):
             "bad name from a missing key."
         )
     )
+    classification_wait_timeouts: int = Field(
+        description=(
+            "`/search` requests whose per-request PromptGuard wait budget "
+            "expired — at most one per request, however many results were "
+            "left unscanned afterwards. The classifier was loaded and busy, "
+            "not absent: compare against `/health` `promptguard_loaded` and "
+            "the `retrieve` counter of the same name."
+        )
+    )
 
 
 class RetrieveMetricsResponse(BaseModel):
@@ -566,6 +575,15 @@ class RetrieveMetricsResponse(BaseModel):
         description=(
             "Retrievals by classifier state (scanned / skipped / unavailable), "
             "bucketed the same way."
+        )
+    )
+    classification_wait_timeouts: int = Field(
+        description=(
+            "`/retrieve` requests that waited `promptguard_wait_seconds` for "
+            "the classification permit and gave up, taking the "
+            "classifier-unavailable outcome under the request's own "
+            "`promptguard_fail_closed`. Rising with `promptguard_loaded: true` "
+            "on `/health` means permit contention, not a missing model."
         )
     )
 
@@ -888,6 +906,9 @@ class SearchMetrics:
         self.fallback_fired = 0
         self.paid_calls = 0
         self.policy_unknown_provider = 0
+        # `pipeline.orchestrator.SearchMetricsSink`'s third counter, moved at
+        # most once per request by the per-request classification wait budget.
+        self.classification_wait_timeouts = 0
 
     def record_error(self, error: str) -> None:
         """Record one content-free search error, keyed by ``PipelineError.error``."""
@@ -1552,6 +1573,9 @@ async def metrics(request: Request) -> dict[str, Any]:
             "fallback_fired": search_metrics.fallback_fired,
             "paid_calls": search_metrics.paid_calls,
             "policy_unknown_provider": search_metrics.policy_unknown_provider,
+            "classification_wait_timeouts": (
+                search_metrics.classification_wait_timeouts
+            ),
         },
         "retrieve": {
             "requests": retrieve_metrics.requests,
@@ -1560,6 +1584,9 @@ async def metrics(request: Request) -> dict[str, Any]:
             "cache_misses": retrieve_metrics.cache_misses,
             "blocked_by_reason": retrieve_metrics.blocked_by_reason,
             "promptguard_state": retrieve_metrics.promptguard_state,
+            "classification_wait_timeouts": (
+                retrieve_metrics.classification_wait_timeouts
+            ),
         },
         # A different layer from `retrieve.cache_hits`/`cache_misses` above,
         # not a duplicate of it — :class:`CacheMetricsResponse` says why, and
@@ -1853,6 +1880,10 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
             config=request.app.state.config,
             classifier=request.app.state.classifier,
             search_metrics=search_metrics,
+            classification_semaphore=request.app.state.classification_semaphore,
+            classification_wait_seconds=(
+                request.app.state.retrieve_settings.promptguard_wait_seconds
+            ),
         )
     except PipelineError as exc:
         search_metrics.record_error(exc.error)

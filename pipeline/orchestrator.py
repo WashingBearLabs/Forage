@@ -17,7 +17,8 @@ import time
 import unicodedata
 import uuid
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, get_args
@@ -79,7 +80,11 @@ from pipeline.stage1_upload import (
     extract_upload_text_file,
 )
 from pipeline.stage2_structural import scan_structural
-from pipeline.stage3_promptguard import PromptGuardResult, run_promptguard
+from pipeline.stage3_promptguard import (
+    PromptGuardResult,
+    run_promptguard,
+    unavailable_result,
+)
 from pipeline.stage4_structuring import (
     SanitizationResult,
     build_extracted_content,
@@ -168,6 +173,47 @@ def document_failure(error: str, request_id: str) -> PipelineError:
     )
 
 
+@asynccontextmanager
+async def _bounded_permit(
+    semaphore: asyncio.Semaphore,
+    seconds: float | None,
+) -> AsyncGenerator[bool]:
+    """Hold one classification permit, waiting at most *seconds* for it.
+
+    Yields ``True`` while the permit is held and ``False`` when the wait
+    expired, so a caller branches on an outcome instead of catching an
+    exception. ``None`` seconds waits without a deadline — the ``/extract``
+    file route's untimed acquisition.
+
+    The release is in ``finally`` and runs **only when the permit was
+    acquired**: ``asyncio.timeout`` cancels the pending ``acquire()``, and a
+    grant that lands after that cancellation is handed back by
+    ``Semaphore.acquire``'s own cancellation handling. Releasing on the
+    timeout path as well would hand out a permit this coroutine never held and
+    grow the pool by one on every timeout.
+
+    The shape is ``cache.py``'s ``_attempt_connect`` (``:405-425``), not a new
+    one: one fixed deadline around exactly one awaited call, with a
+    closed-token WARNING at the caller.
+    """
+    acquired = False
+    try:
+        try:
+            # ``asyncio.timeout`` takes ``None`` as its no-deadline form, so
+            # the untimed `/extract` acquisition is this same one statement
+            # rather than a second bare ``acquire()`` for a reviewer to check.
+            async with asyncio.timeout(seconds):
+                await semaphore.acquire()
+        except TimeoutError:
+            yield False
+            return
+        acquired = True
+        yield True
+    finally:
+        if acquired:
+            semaphore.release()
+
+
 async def sanitize_and_structure(
     *,
     extraction: ExtractionResult,
@@ -180,8 +226,23 @@ async def sanitize_and_structure(
     sanitizer_revision: str = "",
     domain_changed_on_redirect: bool = False,
     max_promptguard_chunks: int | None = None,
+    classification_semaphore: asyncio.Semaphore | None = None,
+    classification_wait_seconds: float | None = None,
 ) -> SanitizationResult:
-    """Run the shared Stage 2-4 gauntlet for any extracted content source."""
+    """Run the shared Stage 2-4 gauntlet for any extracted content source.
+
+    *classification_semaphore* bounds stage 3 — and stage 3 only — across every
+    route that classifies: the two fetch routes and the ``/extract`` file
+    route, which moved its acquisition in here rather than wrapping stages 2
+    and 4 with it. ``None`` acquires nothing, which is what the unguarded
+    callers (``run_extract_pipeline``, direct callers) keep doing.
+
+    *classification_wait_seconds* bounds the wait for that permit. ``None``
+    waits without a deadline — the ``/extract`` file route, whose acquisition
+    stays untimed and uncounted — and a float is ``/retrieve``'s
+    ``promptguard_wait_seconds``, after which the request takes the
+    classifier-unavailable outcome under its own policy instead of queueing.
+    """
     structural = scan_structural(extraction.raw_text)
     promptguard = PromptGuardResult(
         verdict=Stage3Verdict.SAFE,
@@ -189,8 +250,9 @@ async def sanitize_and_structure(
         skipped=True,
         skip_reason="structural_block",
     )
-    if structural.verdict != Stage2Verdict.BLOCKED:
-        promptguard = await run_promptguard(
+
+    async def classify() -> PromptGuardResult:
+        return await run_promptguard(
             extraction.raw_text,
             classifier,
             threshold=promptguard_threshold,
@@ -198,6 +260,42 @@ async def sanitize_and_structure(
             fail_closed=promptguard_fail_closed,
             max_chunks=max_promptguard_chunks,
         )
+
+    if structural.verdict != Stage2Verdict.BLOCKED:
+        # The permit is taken only under the condition `run_promptguard`
+        # itself classifies on: a loaded classifier *and* a non-TRUSTED tier.
+        # `stage3_promptguard.py` returns `skip_reason="trusted_tier"` before
+        # the absent-classifier branch and before any inference, so a
+        # `trusted_domains` page must never queue behind a 256-chunk one for
+        # work it will not do. With either condition false nothing is
+        # acquired and no counter moves.
+        if (
+            classification_semaphore is not None
+            and classifier is not None
+            and classifier.loaded
+            and trust_tier != TrustTier.TRUSTED
+        ):
+            async with _bounded_permit(
+                classification_semaphore, classification_wait_seconds
+            ) as acquired:
+                if acquired:
+                    promptguard = await classify()
+                else:
+                    # Its own closed token, carrying nothing caller-derived.
+                    # The classifier here is loaded and *busy*; the
+                    # "PromptGuard unavailable" lines would send an operator
+                    # to the model loader instead of to contention.
+                    #
+                    # `route=retrieve` is a literal because only `/retrieve`
+                    # passes a deadline into this function: the `/extract`
+                    # file route passes `classification_wait_seconds=None`,
+                    # which cannot time out, and `/search` never calls here.
+                    logger.warning("classification_wait_timeout route=retrieve")
+                    promptguard = unavailable_result(
+                        trust_tier.value, fail_closed=promptguard_fail_closed
+                    )
+        else:
+            promptguard = await classify()
 
     return structure_sanitization_result(
         extraction=extraction,
@@ -277,6 +375,7 @@ async def run_retrieve_pipeline(
         timeout, invalid URL, etc.).
     """
     request_id = uuid.uuid4().hex
+    classifier_loaded = classifier is not None and classifier.loaded
 
     # Merge blocklists: request-level + config seed_blocklist
     blocked_domains = list(request.blocked_domains)
@@ -290,7 +389,7 @@ async def run_retrieve_pipeline(
         blocked_domains=blocked_domains,
         promptguard_threshold=request.promptguard_threshold,
         promptguard_fail_closed=request.promptguard_fail_closed,
-        classifier_loaded=classifier is not None and classifier.loaded,
+        classifier_loaded=classifier_loaded,
         sanitizer_revision=sanitizer_revision,
     )
     news_domains: list[str] = config.get("news_domains", [])
@@ -433,6 +532,8 @@ async def run_retrieve_pipeline(
                 if settings.max_promptguard_chunks > 0
                 else None
             ),
+            classification_semaphore=classification_semaphore,
+            classification_wait_seconds=settings.promptguard_wait_seconds,
         )
     except PromptGuardBudgetExceededError as exc:
         raise PipelineError(
@@ -455,11 +556,40 @@ async def run_retrieve_pipeline(
         domain_changed_on_redirect=fetch_result.domain_changed_on_redirect,
     )
 
+    # A loaded classifier cannot produce an `unavailable_*` state through
+    # `run_promptguard` — `stage3_promptguard.py` returns `model_unavailable`
+    # only when the classifier is absent or still warming — so the
+    # combination is exactly and only the classification-wait timeout above,
+    # under either policy (`unavailable_blocked` fail-closed,
+    # `unavailable_allowed` fail-open). Derived rather than threaded back so
+    # the counter and the cache condition below read the same fact.
+    wait_timed_out = classifier_loaded and content.promptguard_state in {
+        "unavailable_blocked",
+        "unavailable_allowed",
+    }
+    if wait_timed_out:
+        retrieve_metrics.classification_wait_timeouts += 1
+
     # -- Step 8: Cache safe result --
+    #
+    # A wait-timeout body never enters the content cache. `cache.py`'s
+    # `cache_policy_fingerprint` note explains why `classifier_loaded` is a
+    # key input: before this story an unscanned body could only exist while
+    # the flag was `False`, and the model loading orphaned it. A fail-open
+    # wait timeout is the first unscanned body with `classifier_loaded=True`,
+    # so without the condition below a saturation event lasting
+    # `promptguard_wait_seconds` would let an in-network caller pin an
+    # attacker-chosen unscanned body for `cache_ttl_hours` and replay it to
+    # every later request — including ones a free permit would have
+    # classified. The absent-classifier fail-open body still caches under its
+    # `classifier_loaded=False` key exactly as before.
     if (
         cache is not None
         and request.cache_ttl_hours > 0
         and not content.injection_detected
+        and not (
+            content.promptguard_state == "unavailable_allowed" and classifier_loaded
+        )
         and content.trust_tier
         not in {
             TrustTier.UNTRUSTED,
@@ -601,18 +731,24 @@ async def run_extract_pipeline_from_file(
         raise document_failure("content_too_large_to_classify", request_id)
 
     try:
-        async with classification_semaphore:
-            sanitization = await sanitize_and_structure(
-                extraction=extraction,
-                trust_tier=TrustTier.UNTRUSTED,
-                classifier=classifier,
-                promptguard_threshold=promptguard_threshold,
-                promptguard_fail_closed=True,
-                extract_mode=extract_mode,
-                content_type=content_type,
-                sanitizer_revision=sanitizer_revision,
-                max_promptguard_chunks=settings.max_promptguard_chunks,
-            )
+        # Stage 3 only, and exactly once: the permit used to wrap stages 2, 3
+        # and 4 out here, which would only lengthen as those stages move off
+        # the event loop. Untimed and uncounted — `/extract` is the
+        # authenticated route and keeps waiting — and never both an outer and
+        # an inner acquisition, which on a size-1 semaphore is a deadlock.
+        sanitization = await sanitize_and_structure(
+            extraction=extraction,
+            trust_tier=TrustTier.UNTRUSTED,
+            classifier=classifier,
+            promptguard_threshold=promptguard_threshold,
+            promptguard_fail_closed=True,
+            extract_mode=extract_mode,
+            content_type=content_type,
+            sanitizer_revision=sanitizer_revision,
+            max_promptguard_chunks=settings.max_promptguard_chunks,
+            classification_semaphore=classification_semaphore,
+            classification_wait_seconds=None,
+        )
     except PromptGuardBudgetExceededError as exc:
         raise document_failure("content_too_large_to_classify", request_id) from exc
 
@@ -1172,6 +1308,7 @@ class SearchMetricsSink(Protocol):
 
     fallback_fired: int
     paid_calls: int
+    classification_wait_timeouts: int
 
 
 class _NullSearchMetrics:
@@ -1187,6 +1324,7 @@ class _NullSearchMetrics:
     def __init__(self) -> None:
         self.fallback_fired = 0
         self.paid_calls = 0
+        self.classification_wait_timeouts = 0
 
 
 async def run_search_pipeline(
@@ -1199,6 +1337,8 @@ async def run_search_pipeline(
     config: dict[str, Any],
     classifier: Any = None,
     promptguard_threshold: float = 0.85,
+    classification_semaphore: asyncio.Semaphore | None = None,
+    classification_wait_seconds: float | None = None,
 ) -> SearchResponse:
     """Run a web search through a search provider chain with sanitized results.
 
@@ -1253,7 +1393,17 @@ async def run_search_pipeline(
     which traversal advances past the first provider — both move even when
     the chain is ultimately exhausted and the call ends in a raised
     :class:`PipelineError`. ``None`` (the default) is a private null object,
-    so every increment site is unconditional.
+    so every increment site is unconditional. ``classification_wait_timeouts``
+    moves at most once per request, below.
+
+    *classification_semaphore* is the same permit the two other classifying
+    routes take, held around one result's Stage 3 call and released between
+    results. *classification_wait_seconds* is a **per-request** budget, not a
+    per-result one: one deadline is computed before the result loop, and once
+    it passes, that result and every remaining one take the
+    classifier-unavailable branch under the effective ``promptguard_fail_closed``
+    without touching the semaphore. Both default to ``None`` — no permit, no
+    deadline, today's behaviour — so no existing call site changes.
 
     This function never reads the environment.
     """
@@ -1380,6 +1530,36 @@ async def run_search_pipeline(
     unscanned_results = 0
     promptguard_unavailable = False
     omitted_by_reason: Counter[str] = Counter()
+
+    # One deadline per request, tested explicitly before every acquisition.
+    # The explicit test is what makes "every remaining result is unscanned"
+    # true: `Semaphore.acquire()` returns without yielding when a permit is
+    # free, so a zero-length `asyncio.timeout` around it never fires, and a
+    # permit released mid-loop after the deadline would otherwise be taken
+    # and the result classified.
+    loop = asyncio.get_running_loop()
+    classification_deadline: float | None = (
+        loop.time() + classification_wait_seconds
+        if classification_semaphore is not None
+        and classification_wait_seconds is not None
+        else None
+    )
+    wait_expired = False
+
+    def wait_timed_out() -> PromptGuardResult:
+        """Take the classifier-unavailable outcome, counted once per request."""
+        nonlocal wait_expired
+        if not wait_expired:
+            wait_expired = True
+            # The classifier is loaded and busy, not absent: its own closed
+            # token, nothing caller-derived.
+            logger.warning("classification_wait_timeout route=search")
+            metrics.classification_wait_timeouts += 1
+        return unavailable_result(
+            TrustTier.STANDARD.value,
+            fail_closed=request.promptguard_fail_closed,
+        )
+
     for raw in raw_results:
         if len(sanitized_results) >= request.num_results:
             break
@@ -1468,13 +1648,48 @@ async def run_search_pipeline(
 
         # Stage 3 always runs, including when the classifier is unavailable.
         # run_promptguard then honors request.promptguard_fail_closed.
-        pg_result = await run_promptguard(
-            _search_result_promptguard_input(title, url, snippet),
-            classifier,
-            threshold=promptguard_threshold,
-            trust_tier="standard",
-            fail_closed=request.promptguard_fail_closed,
-        )
+        #
+        # The acquisition guard is the condition `run_promptguard` itself
+        # classifies on — a classifier that is present *and* loaded. A warming
+        # model is not None and not loaded, which is exactly when the other
+        # two routes are contending for the same permit.
+        pg_result: PromptGuardResult
+        if (
+            classification_semaphore is None
+            or classifier is None
+            or not classifier.loaded
+        ):
+            pg_result = await run_promptguard(
+                _search_result_promptguard_input(title, url, snippet),
+                classifier,
+                threshold=promptguard_threshold,
+                trust_tier="standard",
+                fail_closed=request.promptguard_fail_closed,
+            )
+        elif wait_expired or (
+            classification_deadline is not None
+            and loop.time() >= classification_deadline
+        ):
+            pg_result = wait_timed_out()
+        else:
+            async with _bounded_permit(
+                classification_semaphore,
+                (
+                    None
+                    if classification_deadline is None
+                    else classification_deadline - loop.time()
+                ),
+            ) as acquired:
+                if acquired:
+                    pg_result = await run_promptguard(
+                        _search_result_promptguard_input(title, url, snippet),
+                        classifier,
+                        threshold=promptguard_threshold,
+                        trust_tier="standard",
+                        fail_closed=request.promptguard_fail_closed,
+                    )
+                else:
+                    pg_result = wait_timed_out()
         if pg_result.verdict == Stage3Verdict.INJECTION_DETECTED:
             if pg_result.skip_reason == "model_unavailable":
                 logger.info(

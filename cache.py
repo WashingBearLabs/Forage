@@ -134,6 +134,21 @@ def cache_policy_fingerprint(
     otherwise the stale unscanned entry would replay as if it had been
     scanned.
 
+    That argument holds only while an unscanned body implies
+    ``classifier_loaded=False``, which stopped being true in
+    ``hardening-retrieve-parity`` US-006: a ``/retrieve`` whose classification
+    *wait* expires is fail-open-unscanned with the model loaded, so its entry
+    would key as scanned and no later load would orphan it. A saturation event
+    lasting ``promptguard_wait_seconds`` would then let an in-network caller
+    pin an attacker-chosen unscanned body for a whole ``cache_ttl_hours`` and
+    replay it to every later request, including ones a free permit would have
+    classified. The fix is upstream of this key, at
+    ``pipeline/orchestrator.py``'s step 8, which refuses to store a body that
+    is ``unavailable_allowed`` while the classifier is loaded — the
+    combination only a wait timeout produces. The absent-classifier fail-open
+    body is unaffected and still caches under its ``classifier_loaded=False``
+    key exactly as described above.
+
     ``sanitizer_revision`` is included for the same reason one step out
     (``feature-forage-cache-fallback`` US-003). It is
     ``derive_sanitizer_revision()``'s hash of the sanitization sources, the

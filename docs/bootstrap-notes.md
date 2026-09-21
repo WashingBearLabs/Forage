@@ -77,7 +77,8 @@ those eight — so Forage's revision moved:
 | After bounded, directly scanned result URLs (`hardening-search-sanitization` US-002) | `42485686…ec17f` |
 | After the contract 1.3.0 window (`hardening-search-sanitization` US-004) | `05dbbb5c…82c0b` |
 | After scanning both search-text forms (`hardening-search-sanitization` validation fix) | `6f0fa2de…66671` |
-| **Current (`hardening-retrieve-parity` US-001, the `/retrieve` pipeline signature and chunk budget)** | **`e55b5f06…4d3c0`** |
+| After the `/retrieve` pipeline signature and chunk budget (`hardening-retrieve-parity` US-001) | `e55b5f06…4d3c0` |
+| **Current (`hardening-retrieve-parity` US-006, the classification semaphore on `/retrieve` and `/search`)** | **`d0433876…fc88e`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -1009,5 +1010,77 @@ after that.
 **Blast radius.** The same mechanism as every rotation since the fifth:
 `cache_policy_fingerprint()` takes the revision as an input, so every extraction cached under
 `6f0fa2de…` becomes unreachable at the next start and ages out on its own TTL — free in
+memory mode, one TTL of extra fetches in Valkey mode. **Do not assume Poppy↔Forage revision
+parity** — compare contracts, not revisions.
+
+### The twenty-first rotation: the classification semaphore on `/retrieve` and `/search` (`hardening-retrieve-parity` US-006, 2026-09-20)
+
+```
+before: e55b5f061d4d547d757148d04cf4f5873ab3d0419bd546ced20e6813e9c4d3c0
+after:  d04338762ef42c04e43852538f4f9994ed21db9d82c4a4e41478098b4d3fc88e
+```
+
+**Three hashed files moved, each measured alone, with an all-reverted control.**
+
+| Measurement | Value |
+|---|---|
+| After (this story) | `d0433876…fc88e` |
+| `pipeline/orchestrator.py` reverted alone | `64257b22…73c79` |
+| `pipeline/stage3_promptguard.py` reverted alone | `201ac2c8…fd451` |
+| `pipeline/contract.py` reverted alone | `5ee16308…bcbdb` |
+| **Control:** all three reverted | `e55b5f06…4d3c0` |
+
+The control reproduces the twentieth rotation's shipped value to the character, which is
+what proves these are the only three hashed files this story touched. Measured last, after
+the final byte of every hashed file had landed, from a clean tree, reading the reverted
+bytes out of the `HEAD` blobs rather than editing the working tree.
+
+**What moved in each.**
+
+`pipeline/orchestrator.py` — the `_bounded_permit` async context manager (the single place
+`asyncio.timeout` and `semaphore.acquire()` appear in the file); `sanitize_and_structure`'s
+two new defaulted parameters `classification_semaphore` and `classification_wait_seconds`
+and the acquisition around its `run_promptguard` call, guarded by the condition
+`run_promptguard` itself classifies on (classifier loaded **and** tier not `TRUSTED`);
+`run_search_pipeline`'s two matching defaulted parameters, its one-deadline-per-request
+budget and the per-result acquisition; the `/extract` file route's acquisition moving
+inward from the outer `async with classification_semaphore` that used to wrap stages 2, 3
+and 4; `SearchMetricsSink` / `_NullSearchMetrics` gaining `classification_wait_timeouts`;
+and step 8's new cache condition.
+
+`pipeline/stage3_promptguard.py` — the `unavailable_result(tier_value, *, fail_closed)`
+seam, extracted so the wait-timeout path and the absent-classifier path produce the same
+`PromptGuardResult` rather than two copies free to drift. `run_promptguard` keeps both of
+its `logger.warning` lines and now calls the helper; the helper itself is pure, and a test
+pins it against `run_promptguard(classifier=None)` for every tier/flag combination.
+
+`pipeline/contract.py` — the `1.3.0` docstring continuation line for the two `/metrics`
+counters and the corrected `SearchResult.suspicious` description.
+
+**What did not move it.** `models.py` (where the `suspicious` description text lives),
+`retrieval_app.py` (the two `*MetricsResponse` models, the `SearchMetrics` counter, the
+`/metrics` dict and both handlers' new arguments), `cache.py` (the widened
+`cache_policy_fingerprint` note) and every doc page are not `_REVISION_SOURCES` members.
+
+**Not a behaviour-changing rotation — but it is the first to add a *refusal to cache*.**
+Nothing about how any text is sanitized changed: the same Stage 2 patterns run on the same
+forms, and the same Stage 3 classifier sees the same input. What changed is *when* stage 3
+runs (serialised behind one permit across all three routes) and what happens when the wait
+for that permit expires (the route's existing classifier-unavailable outcome under its own
+`promptguard_fail_closed`, logged with the closed token `classification_wait_timeout
+route=<retrieve|search>` and counted on `/metrics`). One consequence is a genuine change in
+what is *stored* rather than what is served: a `/retrieve` body that is
+`unavailable_allowed` while the classifier is loaded — the combination only a wait timeout
+produces — is no longer written to the content cache, because
+`cache_policy_fingerprint`'s `classifier_loaded` input assumes an unscanned body implies
+`classifier_loaded=False`, and a wait timeout is the first thing to break that assumption.
+The absent-classifier fail-open body still caches under its `classifier_loaded=False` key
+exactly as before.
+
+**Not replayed to Poppy**; the deployed copy stays on the value it already diverged to.
+
+**Blast radius.** The same mechanism as every rotation since the fifth:
+`cache_policy_fingerprint()` takes the revision as an input, so every extraction cached under
+`e55b5f06…` becomes unreachable at the next start and ages out on its own TTL — free in
 memory mode, one TTL of extra fetches in Valkey mode. **Do not assume Poppy↔Forage revision
 parity** — compare contracts, not revisions.

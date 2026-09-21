@@ -289,6 +289,20 @@ behaviour-changing rotations because the shipped default is
 classifier, byte-for-byte the previous behaviour; the new module
 `pipeline/retrieve_limits.py` and the migrated `pipeline/config_bounds.py` are **not**
 `_REVISION_SOURCES` members, so they do not move this hash on their own.
+and a twenty-first to `d0433876…` — also **not** a behaviour-changing rotation, and the
+first of this epic with **three** hashed files — when the classification semaphore reached
+`/retrieve` and `/search` (`hardening-retrieve-parity` US-006): `orchestrator.py` for the
+`_bounded_permit` context manager (the only place `asyncio.timeout` and
+`semaphore.acquire()` appear, release in `finally` only when acquired), the two defaulted
+`classification_semaphore` / `classification_wait_seconds` parameters on both
+`sanitize_and_structure` and `run_search_pipeline`, `/search`'s one-deadline-per-request
+budget, the `/extract` file route's acquisition moving inward from the outer `async with`
+that wrapped stages 2-4, and step 8's refusal to cache an `unavailable_allowed` body while
+the classifier is loaded; `stage3_promptguard.py` for the pure `unavailable_result` seam
+that keeps the wait-timeout path and the absent-classifier path from drifting;
+`contract.py` for the `1.3.0` continuation line. Each reverted in turn with an all-reverted
+control landing exactly on `e55b5f06…`. What moved is *when* stage 3 runs and what happens
+when the permit wait expires, not how any text is sanitized.
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

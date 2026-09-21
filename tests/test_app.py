@@ -494,6 +494,7 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "fallback_fired": 0,
         "paid_calls": 0,
         "policy_unknown_provider": 0,
+        "classification_wait_timeouts": 0,
     }
     assert body["retrieve"] == {
         "requests": 0,
@@ -502,6 +503,7 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "cache_misses": 0,
         "blocked_by_reason": {},
         "promptguard_state": {},
+        "classification_wait_timeouts": 0,
     }
     assert set(body["cache"]) == {
         "reconnect_attempts",

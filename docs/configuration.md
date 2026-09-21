@@ -486,7 +486,7 @@ exist to make the service *more* conservative, not less.
 | `wall_clock_seconds` | `90` | 1 – 90 | Total wall-clock budget for one extraction, worker included. |
 | `max_promptguard_chunks` | `64` | 1 – 64 | PromptGuard chunk budget for one document. Derives the classifiable character ceiling: `(512 − 64) × chunks × 4` = 114,688 characters at the default. |
 | `extraction_concurrency` | `1` | 1 – 1 | Concurrent extractions. Pinned at 1 — the memory reservation above assumes exactly one worker. |
-| `classification_concurrency` | `1` | 1 – 1 | Concurrent PromptGuard classifications. Pinned at 1 for the same reason. |
+| `classification_concurrency` | `1` | 1 – 1 | Concurrent PromptGuard classifications. Pinned at 1 for the same reason. Since `hardening-retrieve-parity` US-006 it sizes **all three** classifying routes, not just `/extract`: `/retrieve` and `/search` take the same permit around their own stage 3. See the sizing rule below. |
 | `admission_queue_depth` | `1` | 0 – 4 | Requests allowed to wait for the extraction slot. `0` means reject immediately with `busy` (HTTP 429) whenever the slot is taken. |
 | `max_queued_upload_bytes` | `52428800` (50 MiB) | 0 – 50 MiB | Total bytes of queued uploads held in flight. `0` disables queuing of upload bodies. |
 
@@ -530,7 +530,47 @@ bind-mount story: no environment override.
 |-----|---------|---------------|-------|---------|
 | `promptguard_fail_closed_floor` | `false` | `true` / `false` | `/retrieve` | Floor under a request's own `promptguard_fail_closed`. `false` imposes no floor — today's behaviour. |
 | `promptguard_threshold_ceiling` | `1.0` | 0.0 – 1.0 | `/retrieve` | Ceiling over a request's own `promptguard_threshold`. `1.0` imposes no ceiling — today's behaviour. |
-| `promptguard_wait_seconds` | `30.0` | 0.05 – 300.0 | **both fetch routes** (`/retrieve` and `/extract`) | How long a request waits for a classification slot before giving up. A float, so sub-second values are expressible. |
+| `promptguard_wait_seconds` | `30.0` | 0.05 – 300.0 | **both fetch routes** (`/retrieve` and `/search`) | How long a request waits for a classification slot before giving up. A float, so sub-second values are expressible. On `/search` it is one budget for the whole request, not per result. `/extract` takes the same permit but waits without a deadline. |
+
+#### Sizing `promptguard_wait_seconds` against `retrieve.max_promptguard_chunks`
+
+`extraction.classification_concurrency` is one permit, and since
+`hardening-retrieve-parity` US-006 all three classifying routes take it: `/retrieve` and
+`/search` around their own stage 3, `/extract` around its own. So the wait one request
+faces is the time the *other* routes hold the permit, and the rule is a single sentence:
+
+> `promptguard_wait_seconds` must exceed the worst-case single permit hold, which is
+> `retrieve.max_promptguard_chunks` × the per-window classify latency on the operator's
+> CPU.
+
+A wait timeout under ordinary mixed traffic therefore means the permit holder exceeded the
+wait — not that the model is missing. The fix is to raise `promptguard_wait_seconds` or to
+lower `retrieve.max_promptguard_chunks`, and lowering the budget is the better of the two:
+it bounds the hold rather than waiting longer for an unbounded one.
+
+Until the resource-envelope spec measures the per-window number on the reference envelope,
+a **provisional** pairing: at an assumed 100 ms per window on a 2-vCPU container, the
+coming default of 256 chunks is a ~25.6 s hold, which the shipped `30.0` clears with
+little margin. An operator who cannot meet that on their hardware lowers
+`retrieve.max_promptguard_chunks` — to 128 for a ~12.8 s hold, to 64 for ~6.4 s — rather
+than raising the wait, because a longer wait parks more requests behind the same permit
+without making any of them finish sooner.
+
+One honest qualification: **while `retrieve.max_promptguard_chunks` is `0` the rule does
+not hold**, because there is no chunk budget to multiply — the worst-case hold is bounded
+only by the 10 MB fetch cap, which is far more windows than any wait in range covers. An
+operator who wants the sizing rule to apply sets the key explicitly; the
+`retrieve_budget_unset` boot WARNING says so. The shipped default pair (`0` and `30.0`) is
+recorded under Known risks for exactly that reason: on a CPU-bound classifier it makes
+wait timeouts likely under even modest concurrency.
+
+**Known risk — the shipped default pair.** `retrieve.max_promptguard_chunks: 0` with
+`promptguard_wait_seconds: 30.0` leaves the permit hold unbounded by anything but the fetch
+cap, so a single large fetched page can time out every other request's wait. The signal is
+`retrieve.classification_wait_timeouts` and `search.classification_wait_timeouts` on
+`/metrics` rising while `/health` still reports `promptguard_loaded: true` — contention,
+not a missing model. Watch both counters after enabling `/retrieve` at volume, and set
+`retrieve.max_promptguard_chunks` to bound the hold.
 
 ---
 
