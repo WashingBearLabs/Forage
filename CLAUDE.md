@@ -277,6 +277,18 @@ alone, measured, and the revert reproduces `840c78fa…` exactly). Two of the tw
 Stage 2 patterns carry no `re.DOTALL`, so a payload split across a newline scanned clean on
 the form that was scanned and blocked on the form that was served — a bypass this epic
 introduced in US-001 and its own spec-level validation caught.
+and a twentieth to `e55b5f06…` — **not** a behaviour-changing rotation — when
+`run_retrieve_pipeline` gained its five new keyword-only dependencies and the pre-checked
+chunk budget (`hardening-retrieve-parity` US-001): `orchestrator.py` for the signature, the
+`AdmissionSlot`/`AdmissionMetrics`/`RetrieveMetricsSink` Protocols, the character pre-check
+and the `PromptGuardBudgetExceededError` backstop; `contract.py` for `PROMPTGUARD_BUDGET`
+and the `1.3.0` continuation line. Two hashed files, each measured by reverting it in turn,
+with a both-reverted control landing exactly on `6f0fa2de…`. It does not join the four
+behaviour-changing rotations because the shipped default is
+`retrieve.max_promptguard_chunks: 0` — no pre-check, no `max_chunks` handed to the
+classifier, byte-for-byte the previous behaviour; the new module
+`pipeline/retrieve_limits.py` and the migrated `pipeline/config_bounds.py` are **not**
+`_REVISION_SOURCES` members, so they do not move this hash on their own.
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

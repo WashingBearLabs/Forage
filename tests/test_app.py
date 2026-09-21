@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import yaml
 from fastapi import FastAPI
 from starlette.types import Message, Receive, Scope, Send
 
@@ -52,6 +53,11 @@ from pipeline.extraction_limits import (
     extraction_settings_from_config,
 )
 from pipeline.orchestrator import PipelineError
+from pipeline.retrieve_limits import (
+    RetrieveConfigurationError,
+    RetrieveSettings,
+    retrieve_settings_from_config,
+)
 from pipeline.search_providers import SearchProviderConfigurationError
 from pipeline.search_providers.base import (
     ProviderFailure,
@@ -60,6 +66,7 @@ from pipeline.search_providers.base import (
 )
 from pipeline.search_providers.brave import BRAVE_API_KEY_ENV_VAR
 from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL
+from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES
 from promptguard.classifier import (
     CHUNK_OVERLAP,
     MAX_SEQ_LEN,
@@ -1264,6 +1271,152 @@ async def test_lifespan_refuses_an_out_of_range_cache_bound(
     with pytest.raises(CacheConfigurationError):
         async with lifespan(probe_app):
             pass
+
+
+# ---------------------------------------------------------------------------
+# `retrieve:` limits (`hardening-retrieve-parity` US-001)
+# ---------------------------------------------------------------------------
+
+
+class TestRetrieveSettingsReader:
+    """`retrieve_settings_from_config` — defaults, bounds, and the derivation."""
+
+    def test_an_empty_config_is_todays_behaviour(self) -> None:
+        settings = retrieve_settings_from_config({})
+        assert settings.max_promptguard_chunks == 0
+        assert settings.max_extracted_characters is None
+        assert settings.fetch_concurrency == 1
+        assert settings.admission_queue_depth == 4
+        assert settings.max_queued_fetch_bytes == 31457280
+        assert settings.promptguard_fail_closed_floor is False
+        assert settings.promptguard_threshold_ceiling == 1.0
+        assert settings.promptguard_wait_seconds == 30.0
+
+    def test_the_byte_bound_binds_before_the_depth_bound_at_the_defaults(self) -> None:
+        """Both bounds are exercisable — the default is not depth x 10 MB."""
+        settings = retrieve_settings_from_config({})
+        assert (
+            settings.max_queued_fetch_bytes
+            < settings.admission_queue_depth * DEFAULT_MAX_CONTENT_BYTES
+        )
+
+    def test_a_set_budget_derives_the_character_ceiling(self) -> None:
+        settings = retrieve_settings_from_config(
+            {"retrieve": {"max_promptguard_chunks": 256}}
+        )
+        assert settings.max_promptguard_chunks == 256
+        assert settings.max_extracted_characters == 458752
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("max_promptguard_chunks", -1),
+            ("max_promptguard_chunks", 1025),
+            ("fetch_concurrency", 0),
+            ("fetch_concurrency", 2),
+            ("admission_queue_depth", -1),
+            ("admission_queue_depth", 17),
+            ("max_queued_fetch_bytes", 1024),
+            ("max_queued_fetch_bytes", 167772161),
+            ("max_promptguard_chunks", True),
+            ("fetch_concurrency", "1"),
+        ],
+    )
+    def test_an_out_of_range_or_mistyped_block_key_refuses(
+        self, key: str, value: object
+    ) -> None:
+        with pytest.raises(RetrieveConfigurationError):
+            retrieve_settings_from_config({"retrieve": {key: value}})
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("promptguard_fail_closed_floor", "yes"),
+            ("promptguard_threshold_ceiling", 1.5),
+            ("promptguard_threshold_ceiling", -0.1),
+            ("promptguard_threshold_ceiling", True),
+            ("promptguard_wait_seconds", 0.01),
+            ("promptguard_wait_seconds", 300.1),
+            ("promptguard_wait_seconds", "30"),
+        ],
+    )
+    def test_an_out_of_range_or_mistyped_top_level_key_refuses(
+        self, key: str, value: object
+    ) -> None:
+        with pytest.raises(RetrieveConfigurationError):
+            retrieve_settings_from_config({key: value})
+
+    def test_a_non_mapping_block_refuses(self) -> None:
+        with pytest.raises(RetrieveConfigurationError):
+            retrieve_settings_from_config({"retrieve": []})
+
+    def test_the_wait_is_a_float_so_sub_second_values_are_in_range(self) -> None:
+        settings = retrieve_settings_from_config({"promptguard_wait_seconds": 0.25})
+        assert settings.promptguard_wait_seconds == 0.25
+
+    def test_the_shipped_config_is_readable_and_at_its_defaults(self) -> None:
+        """The shipped file stays the complete, boot-valid example."""
+        config = yaml.safe_load(
+            (Path(__file__).resolve().parent.parent / "config.yaml").read_text()
+        )
+        assert retrieve_settings_from_config(config) == RetrieveSettings()
+
+
+async def test_lifespan_refuses_an_out_of_range_retrieve_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `retrieve:` bound outside its range fails the boot rather than widening."""
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {"retrieve": {"fetch_concurrency": 4}},
+    )
+
+    probe_app = FastAPI()
+    with pytest.raises(RetrieveConfigurationError):
+        async with lifespan(probe_app):
+            pass
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        ({}, True),
+        ({"retrieve": {"max_promptguard_chunks": 0}}, True),
+        ({"retrieve": {"max_promptguard_chunks": 256}}, False),
+    ],
+)
+async def test_lifespan_warns_exactly_once_while_the_budget_is_unset(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    config: dict[str, object],
+    expected: bool,
+) -> None:
+    """One closed-token WARNING naming the coming default, nothing more."""
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+
+    probe_app = FastAPI()
+    with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+        async with lifespan(probe_app):
+            pass
+
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if "retrieve_budget_unset" in record.getMessage()
+    ]
+    assert warnings == (
+        ["retrieve_budget_unset coming_default=256"] if expected else []
+    )
+
+
+async def test_the_module_level_fallback_publishes_settings_and_logs_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The lifespan-free path exists for tests, so it emits no boot warning."""
+    assert isinstance(retrieval_app.app.state.retrieve_settings, RetrieveSettings)
+    assert retrieval_app.app.state.retrieve_settings.max_promptguard_chunks == 0
+    assert "retrieve_budget_unset" not in caplog.text
 
 
 # ---------------------------------------------------------------------------

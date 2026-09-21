@@ -71,6 +71,11 @@ from pipeline.orchestrator import (
     run_retrieve_pipeline,
     run_search_pipeline,
 )
+from pipeline.retrieve_limits import (
+    COMING_MAX_PROMPTGUARD_CHUNKS,
+    RetrieveSettings,
+    retrieve_settings_from_config,
+)
 from pipeline.sanitizer_revision import derive_sanitizer_revision
 from pipeline.search_providers import (
     DEFAULT_PROVIDER_NAME,
@@ -910,6 +915,15 @@ class RetrieveMetrics:
         self.cache_misses = 0
         self.blocked_by_reason: dict[str, int] = {}
         self.promptguard_state: dict[str, int] = {}
+        # The three counters `pipeline.orchestrator.RetrieveMetricsSink`
+        # declares. Incremented by the stories that wire the behaviour they
+        # describe (US-002, US-006) and mirrored onto
+        # `RetrieveMetricsResponse` by those same stories; declared here so
+        # this class satisfies the Protocol structurally from the seam's
+        # first commit.
+        self.semaphore_saturation = 0
+        self.busy_rejections = 0
+        self.classification_wait_timeouts = 0
 
     def record_error(self, error: str) -> None:
         """Record one content-free retrieve error, keyed by ``PipelineError.error``."""
@@ -1214,6 +1228,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.config = config
     settings = extraction_settings_from_config(config)
     app.state.extraction_settings = settings
+    retrieve_settings = retrieve_settings_from_config(config)
+    app.state.retrieve_settings = retrieve_settings
+    if retrieve_settings.max_promptguard_chunks == 0:
+        # Exactly one WARNING, closed token plus the integer — no URL, no
+        # config dump. `0` is the shipped default for one minor release
+        # (`contract/GOVERNANCE.md` ruling (g)); this names the value the next
+        # MINOR flips to, so an operator reading boot logs finds the window
+        # rather than discovering it in a Release body.
+        logger.warning(
+            "retrieve_budget_unset coming_default=%d", COMING_MAX_PROMPTGUARD_CHUNKS
+        )
     app.state.extraction_metrics = ExtractionMetrics()
     app.state.extraction_admission = ExtractionAdmissionController(
         settings,
@@ -1377,6 +1402,11 @@ app = FastAPI(
 )
 _initial_extraction_settings = extraction_settings_from_config({})
 app.state.extraction_settings = _initial_extraction_settings
+# The file route's module-level fallback shape, for a transport that never
+# fires lifespan events. Deliberately silent: the `retrieve_budget_unset`
+# WARNING belongs to the lifespan, so a lifespan-free test does not emit a
+# boot warning nobody configured.
+app.state.retrieve_settings = retrieve_settings_from_config({})
 app.state.extraction_metrics = ExtractionMetrics()
 app.state.extraction_admission = ExtractionAdmissionController(
     _initial_extraction_settings,
@@ -1591,12 +1621,20 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
     retrieve_metrics: RetrieveMetrics = request.app.state.retrieve_metrics
     retrieve_metrics.requests += 1
     try:
+        retrieve_settings: RetrieveSettings = request.app.state.retrieve_settings
         content = await run_retrieve_pipeline(
             body,
             cache=request.app.state.cache,
             classifier=request.app.state.classifier,
             config=request.app.state.config,
             sanitizer_revision=_resolved_sanitizer_revision(request.app.state),
+            settings=retrieve_settings,
+            retrieve_metrics=retrieve_metrics,
+            classification_semaphore=request.app.state.classification_semaphore,
+            extraction_settings=request.app.state.extraction_settings,
+            # US-002 swaps this for `request.app.state.retrieve_admission`;
+            # nothing publishes that attribute yet.
+            admission=None,
         )
     except PipelineError as exc:
         retrieve_metrics.record_error(exc.error)

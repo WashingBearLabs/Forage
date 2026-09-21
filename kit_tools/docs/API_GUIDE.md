@@ -197,7 +197,10 @@ Response fields a consumer must read (`RetrievedContent`; full shape in the cont
 Refusals are 422 with `{"error", "reason", "request_id"}`: `invalid_url`, `private_ip`,
 `blocked_domain`, `fetch_timeout`, `fetch_error`, `content_too_large`. `reason` echoes the
 requested URL, and `private_ip` echoes the resolved address (`contract/GOVERNANCE.md`
-ruling (d)). Quarantined results are never cached; neither are `untrusted` or `blocked`
+ruling (d)). `content_too_large` is the one code with **two reason shapes**: the fetch-cap
+prose that echoes the URL, or the fixed literal `promptguard_budget` when the fetched
+page's extracted text exceeds `retrieve.max_promptguard_chunks`. Branch on the literal, not
+on the prose. Quarantined results are never cached; neither are `untrusted` or `blocked`
 tiers.
 
 ### POST /search

@@ -32,7 +32,8 @@ from models import (
     Stage3Verdict,
     TrustTier,
 )
-from pipeline import contract
+from pipeline import contract, orchestrator
+from pipeline.extraction_limits import ExtractionSettings
 from pipeline.orchestrator import (
     _MAX_SEARCH_ENGINE_LENGTH,
     _MAX_SEARCH_SNIPPET_LENGTH,
@@ -42,11 +43,14 @@ from pipeline.orchestrator import (
     DOCUMENT_FAILURE_CODES,
     DOCUMENT_FAILURE_REASONS,
     SEARCH_HOST_CLASSES,
+    AdmissionSlot,
     PipelineError,
+    RetrieveMetricsSink,
     SearchHostClass,
     SearchUrlOutcome,
     _block_search_url,
     _canonicalize_search_url,
+    _NullRetrieveMetrics,
     _scan_forms_for_search_text,
     _search_result_promptguard_input,
     document_failure,
@@ -54,6 +58,7 @@ from pipeline.orchestrator import (
     run_retrieve_pipeline,
     run_search_pipeline,
 )
+from pipeline.retrieve_limits import RetrieveSettings
 from pipeline.search_providers.base import (
     FAILURE_CLASSES,
     FailureClass,
@@ -72,6 +77,7 @@ from pipeline.stage1_upload import (
 from pipeline.stage2_structural import StructuralScanResult, scan_structural
 from pipeline.stage3_promptguard import PromptGuardResult
 from pipeline.stage5_url_audit import FetchResult
+from promptguard.classifier import PromptGuardBudgetExceededError
 from tests.fakes import FakeSearchProvider, FakeStorage
 
 # ---------------------------------------------------------------------------
@@ -96,6 +102,24 @@ _SAMPLE_CONFIG: dict[str, Any] = {
 # value is opaque to everything below, so a fixed sample is enough except in
 # the tests that deliberately rotate it.
 _SAMPLE_REVISION = "a" * 64
+
+
+def _retrieve_kwargs(**overrides: Any) -> dict[str, Any]:
+    """Build the five dependencies ``run_retrieve_pipeline`` requires.
+
+    One helper so the call sites pass the whole set through a single line and
+    a later story that changes the set edits one place rather than seventeen.
+    ``admission=None`` is the default until US-002 publishes a controller.
+    """
+    kwargs: dict[str, Any] = {
+        "settings": RetrieveSettings(),
+        "retrieve_metrics": _NullRetrieveMetrics(),
+        "classification_semaphore": asyncio.Semaphore(1),
+        "extraction_settings": ExtractionSettings(),
+        "admission": None,
+    }
+    kwargs.update(overrides)
+    return kwargs
 
 
 def _make_text_pdf(text: str) -> bytes:
@@ -299,6 +323,7 @@ async def test_retrieve_full_pipeline_happy_path(
         classifier=None,
         config=_SAMPLE_CONFIG,
         sanitizer_revision=_SAMPLE_REVISION,
+        **_retrieve_kwargs(),
     )
 
     assert result.source_url == "https://example.com/page"
@@ -356,6 +381,7 @@ async def test_retrieve_cache_hit_skips_pipeline(
         classifier=None,
         config=_SAMPLE_CONFIG,
         sanitizer_revision=_SAMPLE_REVISION,
+        **_retrieve_kwargs(),
     )
 
     assert result.cache_hit is True
@@ -420,6 +446,7 @@ async def test_retrieve_summary_cache_does_not_serve_full_request(
         classifier=None,
         config=_SAMPLE_CONFIG,
         sanitizer_revision=_SAMPLE_REVISION,
+        **_retrieve_kwargs(),
     )
     full_result = await run_retrieve_pipeline(
         _make_retrieve_request(extract_mode="full"),
@@ -427,6 +454,7 @@ async def test_retrieve_summary_cache_does_not_serve_full_request(
         classifier=None,
         config=_SAMPLE_CONFIG,
         sanitizer_revision=_SAMPLE_REVISION,
+        **_retrieve_kwargs(),
     )
 
     assert fetch.await_count == 2
@@ -482,6 +510,7 @@ async def test_retrieve_ttl_zero_deletes_without_cache_read_or_write(
         classifier=None,
         config=_SAMPLE_CONFIG,
         sanitizer_revision=_SAMPLE_REVISION,
+        **_retrieve_kwargs(),
     )
 
     cache_mock.delete.assert_awaited_once()
@@ -545,6 +574,7 @@ async def test_retrieve_stage2_blocked_returns_quarantine(
         classifier=None,
         config=_SAMPLE_CONFIG,
         sanitizer_revision=_SAMPLE_REVISION,
+        **_retrieve_kwargs(),
     )
 
     assert result.injection_detected is True
@@ -612,6 +642,7 @@ async def test_retrieve_stage3_injection_returns_quarantine(
         classifier=None,
         config=_SAMPLE_CONFIG,
         sanitizer_revision=_SAMPLE_REVISION,
+        **_retrieve_kwargs(),
     )
 
     assert result.injection_detected is True
@@ -650,6 +681,7 @@ async def test_retrieve_classifier_absent_fail_closed_reports_unavailable_blocke
         classifier=None,
         config=_SAMPLE_CONFIG,
         sanitizer_revision=_SAMPLE_REVISION,
+        **_retrieve_kwargs(),
     )
 
     assert result.injection_spans == ["promptguard_unavailable"]
@@ -685,6 +717,7 @@ async def test_retrieve_classifier_absent_fail_open_reports_unavailable_allowed(
         classifier=None,
         config=_SAMPLE_CONFIG,
         sanitizer_revision=_SAMPLE_REVISION,
+        **_retrieve_kwargs(),
     )
 
     assert result.promptguard_state == "unavailable_allowed"
@@ -722,6 +755,7 @@ async def test_retrieve_trusted_tier_loaded_classifier_reports_skipped_trusted(
         classifier=classifier,
         config=_SAMPLE_CONFIG,
         sanitizer_revision=_SAMPLE_REVISION,
+        **_retrieve_kwargs(),
     )
 
     assert result.promptguard_state == "skipped_trusted"
@@ -765,6 +799,7 @@ async def test_retrieve_cache_misses_when_classifier_loads_after_fail_open_cache
         classifier=None,
         config=_SAMPLE_CONFIG,
         sanitizer_revision=_SAMPLE_REVISION,
+        **_retrieve_kwargs(),
     )
     assert model_absent_result.promptguard_state == "unavailable_allowed"
     assert fetch.await_count == 1
@@ -779,6 +814,7 @@ async def test_retrieve_cache_misses_when_classifier_loads_after_fail_open_cache
         classifier=loaded_classifier,
         config=_SAMPLE_CONFIG,
         sanitizer_revision=_SAMPLE_REVISION,
+        **_retrieve_kwargs(),
     )
 
     assert fetch.await_count == 2
@@ -808,6 +844,7 @@ async def test_retrieve_private_ip_raises_pipeline_error(
             classifier=None,
             config=_SAMPLE_CONFIG,
             sanitizer_revision=_SAMPLE_REVISION,
+            **_retrieve_kwargs(),
         )
 
     assert exc_info.value.error == "private_ip"
@@ -834,6 +871,7 @@ async def test_retrieve_blocked_domain_raises_pipeline_error(
             classifier=None,
             config=_SAMPLE_CONFIG,
             sanitizer_revision=_SAMPLE_REVISION,
+            **_retrieve_kwargs(),
         )
 
     assert exc_info.value.error == "blocked_domain"
@@ -864,6 +902,7 @@ async def test_retrieve_timeout_raises_pipeline_error(
             classifier=None,
             config=_SAMPLE_CONFIG,
             sanitizer_revision=_SAMPLE_REVISION,
+            **_retrieve_kwargs(),
         )
 
     assert exc_info.value.error == "fetch_timeout"
@@ -885,6 +924,7 @@ async def test_retrieve_invalid_url_raises_pipeline_error(
             classifier=None,
             config=_SAMPLE_CONFIG,
             sanitizer_revision=_SAMPLE_REVISION,
+            **_retrieve_kwargs(),
         )
 
     assert exc_info.value.error == "invalid_url"
@@ -1370,6 +1410,7 @@ async def _run_retrieve_with_body(body: str) -> RetrievedContent:
             classifier=None,
             config=_SAMPLE_CONFIG,
             sanitizer_revision=_SAMPLE_REVISION,
+            **_retrieve_kwargs(),
         )
 
 
@@ -1932,6 +1973,7 @@ def test_config_loading() -> None:
 def client() -> httpx.AsyncClient:
     """Create an async test client for the retrieval app."""
     from pipeline.extraction_limits import extraction_settings_from_config
+    from pipeline.retrieve_limits import retrieve_settings_from_config
     from promptguard.classifier import PromptGuardClassifier
     from retrieval_app import (
         ExtractionAdmissionController,
@@ -1960,6 +2002,7 @@ def client() -> httpx.AsyncClient:
     )
     app.state.search_metrics = SearchMetrics()
     app.state.retrieve_metrics = RetrieveMetrics()
+    app.state.retrieve_settings = retrieve_settings_from_config(_SAMPLE_CONFIG)
     app.state.classification_semaphore = asyncio.Semaphore(
         settings.classification_concurrency
     )
@@ -4983,3 +5026,138 @@ class TestSearchUrlAuditWiring:
             for name in ("url_validator.py", "pipeline/orchestrator.py")
         }
         assert sum(counted.values()) == 1, counted
+
+
+# ---------------------------------------------------------------------------
+# /retrieve classification budget (`hardening-retrieve-parity` US-001)
+# ---------------------------------------------------------------------------
+
+
+def _budget_settings(chunks: int) -> RetrieveSettings:
+    return RetrieveSettings(max_promptguard_chunks=chunks)
+
+
+async def _retrieve_with_text(
+    raw_text: str, settings: RetrieveSettings
+) -> RetrievedContent:
+    """Run the pipeline over a page whose extracted text is exactly *raw_text*."""
+    with (
+        patch(
+            "pipeline.orchestrator.validate_url",
+            new_callable=AsyncMock,
+            return_value=("93.184.216.34", "example.com"),
+        ),
+        patch(
+            "pipeline.orchestrator.fetch_url",
+            new_callable=AsyncMock,
+            return_value=_make_fetch_result(),
+        ),
+        patch(
+            "pipeline.orchestrator.extract_html",
+            MagicMock(return_value=_make_extraction(raw_text=raw_text)),
+        ),
+    ):
+        return await run_retrieve_pipeline(
+            _make_retrieve_request(promptguard_fail_closed=False),
+            cache=None,
+            classifier=None,
+            config=_SAMPLE_CONFIG,
+            sanitizer_revision=_SAMPLE_REVISION,
+            **_retrieve_kwargs(settings=settings),
+        )
+
+
+async def test_a_fetched_page_one_character_over_the_budget_is_refused() -> None:
+    """The pre-check refuses rather than classifying a hostile page in full."""
+    settings = _budget_settings(256)
+    ceiling = settings.max_extracted_characters
+    assert ceiling == 458752
+
+    with pytest.raises(PipelineError) as excinfo:
+        await _retrieve_with_text("a" * (ceiling + 1), settings)
+
+    assert excinfo.value.error == "content_too_large"
+    assert excinfo.value.reason == contract.PROMPTGUARD_BUDGET
+    assert excinfo.value.reason == "promptguard_budget"
+
+
+async def test_a_fetched_page_exactly_at_the_budget_is_served() -> None:
+    """The bound is `>`, not `>=` — the boundary page still goes through."""
+    settings = _budget_settings(256)
+    ceiling = settings.max_extracted_characters
+    assert ceiling is not None
+
+    content = await _retrieve_with_text("a" * ceiling, settings)
+    assert content.injection_detected is False
+
+
+async def test_the_default_zero_budget_runs_no_pre_check_at_all() -> None:
+    """`0` is today's behaviour: no ceiling, and no `max_chunks` handed over."""
+    settings = RetrieveSettings()
+    assert settings.max_extracted_characters is None
+
+    seen: list[int | None] = []
+    real_run_promptguard = orchestrator.run_promptguard
+
+    async def _recording(*args: Any, **kwargs: Any) -> Any:
+        seen.append(kwargs.get("max_chunks"))
+        return await real_run_promptguard(*args, **kwargs)
+
+    with patch.object(orchestrator, "run_promptguard", _recording):
+        content = await _retrieve_with_text("a" * 600_000, settings)
+
+    assert content.injection_detected is False
+    assert seen == [None]
+
+
+async def test_a_set_budget_is_handed_to_the_classifier_as_the_backstop() -> None:
+    """The pre-check is primary; `max_chunks` still reaches `run_promptguard`."""
+    seen: list[int | None] = []
+    real_run_promptguard = orchestrator.run_promptguard
+
+    async def _recording(*args: Any, **kwargs: Any) -> Any:
+        seen.append(kwargs.get("max_chunks"))
+        return await real_run_promptguard(*args, **kwargs)
+
+    with patch.object(orchestrator, "run_promptguard", _recording):
+        await _retrieve_with_text("short text", _budget_settings(256))
+
+    assert seen == [256]
+
+
+async def test_the_classifier_budget_error_maps_to_the_same_refusal() -> None:
+    """The backstop: a classifier-side refusal wears the same code and reason."""
+    with (
+        patch.object(
+            orchestrator,
+            "run_promptguard",
+            AsyncMock(side_effect=PromptGuardBudgetExceededError("over budget")),
+        ),
+        pytest.raises(PipelineError) as excinfo,
+    ):
+        await _retrieve_with_text("short text", _budget_settings(256))
+
+    assert excinfo.value.error == "content_too_large"
+    assert excinfo.value.reason == contract.PROMPTGUARD_BUDGET
+
+
+def test_the_admission_protocol_is_satisfied_by_the_app_controller() -> None:
+    """`ExtractionAdmissionController` satisfies `AdmissionSlot` without edits."""
+    from retrieval_app import ExtractionAdmissionController, ExtractionMetrics
+
+    controller = ExtractionAdmissionController(
+        ExtractionSettings(),
+        ExtractionMetrics(),
+    )
+    slot: AdmissionSlot = controller
+    assert slot is controller
+
+
+def test_the_app_retrieve_metrics_satisfies_the_sink_protocol() -> None:
+    """`RetrieveMetrics` carries the three counters the sink declares."""
+    from retrieval_app import RetrieveMetrics
+
+    sink: RetrieveMetricsSink = RetrieveMetrics()
+    assert sink.semaphore_saturation == 0
+    assert sink.busy_rejections == 0
+    assert sink.classification_wait_timeouts == 0

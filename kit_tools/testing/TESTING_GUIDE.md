@@ -260,6 +260,8 @@ test_mapping:
   "pipeline/stage5_url_audit.py": "tests/test_stage5_url_audit.py"
   "pipeline/smart_extraction.py": "tests/test_smart_extraction.py"
   "pipeline/extraction_limits.py": "tests/test_stage1_extraction.py"
+  "pipeline/config_bounds.py": "tests/test_stage1_extraction.py"
+  "pipeline/retrieve_limits.py": "tests/test_app.py"
   "pipeline/search_providers/__init__.py": "tests/test_search_providers.py"
   "pipeline/search_providers/base.py": "tests/test_search_providers.py"
   "pipeline/search_providers/searxng.py": "tests/test_search_providers.py"

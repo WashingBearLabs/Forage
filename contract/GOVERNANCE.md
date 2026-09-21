@@ -173,7 +173,7 @@ An urgent fix does not get to skip the rules; it gets a faster lane through them
 
 ## Recorded rulings
 
-Seven rulings this epic already made, kept here so the next change re-reads them instead of
+Eight rulings this epic already made, kept here so the next change re-reads them instead of
 re-litigating them. Each cites its source.
 
 ### (a) The documentation pass does not bump the contract
@@ -465,3 +465,49 @@ prefix guards are part of the ruling: the NAT64 and IPv4-compatible unwraps only
 inside `64:ff9b::/96` and `::/96`, because an unguarded low-32 mask would refuse ordinary
 public IPv6 (a real Google AAAA, `2a00:1450:4001:80e::200e`, masks to `0.0.32.14`) and
 *that* would be a MAJOR-shaped break on legitimate traffic.
+
+### (g) A security tightening that arrives as a new refusal condition on an accepting route
+
+**Source:** `hardening-retrieve-parity` US-001.
+
+**Ruling:** `/retrieve`'s `content_too_large` gains a second `reason`, the fixed literal
+`promptguard_budget` (`pipeline/contract.py`). With `retrieve.max_promptguard_chunks` set,
+a fetched page whose extracted text exceeds the derived character ceiling is refused rather
+than chunked and classified in full. This is **worked example 6 step 1** — a security
+tightening shipped compatibly — inside the open `1.3.0` window, and it is the epic's ruling
+for this whole *class* of change: a new refusal condition added to a route that previously
+accepted the request.
+
+**The four steps, by number** (`contract/GOVERNANCE.md:150-167`):
+
+1. *Shipped compatibly, off by default with the knob.* `retrieve.max_promptguard_chunks`
+   ships at `0`, which means no pre-check and no `max_chunks` handed to the classifier —
+   byte-for-byte today's behaviour. A consumer upgrading on this MINOR sees no new refusal
+   at all. The new reason exists in the vocabulary before anything raises it, the shape
+   `1.2.0`'s `chunk` and `1.3.0`'s `blocked_url` both used.
+2. *The window is one minor release, and it is named.* The release that ships contract
+   `1.3.0` keeps the default at `0`; the next MINOR flips it to `256`. That window is
+   stated in `docs/releases.md` and belongs in the Release body, and boot logs one WARNING
+   `retrieve_budget_unset coming_default=256` so an operator finds it without reading
+   either.
+3. *The MAJOR is never reached.* Step 3 cuts a MAJOR when the old behaviour is removed.
+   It is not removed: `0` stays a legal, documented opt-out after the flip, so an operator
+   who needs the old behaviour keeps it by configuration rather than by pinning a version.
+4. *Not the step-4 case.* Step 4 is for a vulnerability that cannot be fixed compatibly.
+   This one can — the knob is the proof — so it does not get step 4's immediate MAJOR.
+   Ruling (f) is the contrasting case in this same epic: an SSRF bypass, where continuing
+   to serve the vulnerable behaviour for a named window *is* the vulnerability, so it
+   shipped as an expedited MINOR with no window at all.
+
+**What this ruling does not cover.** The two later refusals this spec adds are a different
+lane, and the consumer note lists all three with their lanes so nobody merges them:
+
+- `busy` (US-002) is a **capacity** refusal, not a security tightening — a new 422 code,
+  MINOR under ruling (b) and carrying that ruling's announcement obligation. The operator's
+  knobs are `retrieve.admission_queue_depth` and `retrieve.max_queued_fetch_bytes`;
+  `retrieve.fetch_concurrency` is pinned at 1 and is **not** a knob.
+- `extraction_failed` (US-003) turns an uncoded 500 into a coded 422, also under ruling (b).
+  Nothing that used to be accepted stops being accepted; a failure that used to be shapeless
+  gains a shape.
+
+Neither is a worked-example-6 tightening, and neither needs step 2's window.

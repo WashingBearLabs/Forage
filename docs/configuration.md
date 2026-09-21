@@ -490,6 +490,48 @@ exist to make the service *more* conservative, not less.
 | `admission_queue_depth` | `1` | 0 – 4 | Requests allowed to wait for the extraction slot. `0` means reject immediately with `busy` (HTTP 429) whenever the slot is taken. |
 | `max_queued_upload_bytes` | `52428800` (50 MiB) | 0 – 50 MiB | Total bytes of queued uploads held in flight. `0` disables queuing of upload bodies. |
 
+### `retrieve:` — fetch-route limits
+
+The `/retrieve` counterpart to `extraction:`, read by
+`pipeline/retrieve_limits.py` at boot: an out-of-range value refuses startup rather than
+surfacing as a strange refusal on the first request.
+
+Unlike `extraction:`, which is bounded *at* its defaults on every key but two because its
+memory reservation assumes exactly one worker, three of these four keys are **raisable**.
+They bound queued and classified text, which the 10 MB fetch cap already bounds per body.
+`fetch_concurrency` is the exception and is pinned at `1` for the same worker reason
+`extraction.extraction_concurrency` is: a fetched PDF spawns the same bounded child under
+the same `child_address_space_bytes` rlimit, so N fetch slots would put N × 384 MiB of
+worker address space in a 1 GiB container. The constraint is worker address space, not
+fetched-body size — which means an HTML-only deployment, whose fetch path spawns no worker
+at all, is throttled to single flight by a bound sized for PDFs. That is accepted; sizing
+the envelope belongs to the resource-envelope spec.
+
+At most one fetched body is held, from fetch through stage 1; none while waiting on
+classification.
+
+There is **no environment-variable override for any key below**. `config.yaml` is copied
+into the image, so changing one in a deployed container means bind-mounting a replacement
+file — the procedure the resource-envelope spec documents.
+
+| Key | Default | Allowed range | Purpose |
+|-----|---------|---------------|---------|
+| `max_promptguard_chunks` | `0` | 0 – 1024 | PromptGuard chunk budget for one **fetched page**. `0` means **no pre-check** and no `max_chunks` handed to the classifier — today's behaviour — and boot logs one WARNING `retrieve_budget_unset coming_default=256`. Non-zero derives the classifiable character ceiling `(512 − 64) × chunks × 4` (458,752 at the coming default of 256); a page over it is refused 422 `content_too_large` with reason `promptguard_budget`. Ships at `0` for one minor release; the next MINOR flips the default to `256`, and `0` stays a legal opt-out (`contract/GOVERNANCE.md` ruling (g)). |
+| `fetch_concurrency` | `1` | 1 – 1 | Concurrent `/retrieve` fetches. Pinned at 1 — see above. |
+| `admission_queue_depth` | `4` | 0 – 16 | Requests allowed to wait for the fetch slot. `0` means reject immediately whenever the slot is taken. |
+| `max_queued_fetch_bytes` | `31457280` (30 MiB) | 10 MiB – 160 MiB | Total bytes of queued fetched bodies held in flight — three bodies at the 10 MB fetch cap. Deliberately **not** `admission_queue_depth × 10 MB`, so at the shipped defaults the byte bound binds before the depth bound and both are exercisable. |
+
+### Top-level PromptGuard policy keys
+
+Read by the same function, because it owns the boot-validated fetch-route policy. Same
+bind-mount story: no environment override.
+
+| Key | Default | Allowed range | Route | Purpose |
+|-----|---------|---------------|-------|---------|
+| `promptguard_fail_closed_floor` | `false` | `true` / `false` | `/retrieve` | Floor under a request's own `promptguard_fail_closed`. `false` imposes no floor — today's behaviour. |
+| `promptguard_threshold_ceiling` | `1.0` | 0.0 – 1.0 | `/retrieve` | Ceiling over a request's own `promptguard_threshold`. `1.0` imposes no ceiling — today's behaviour. |
+| `promptguard_wait_seconds` | `30.0` | 0.05 – 300.0 | **both fetch routes** (`/retrieve` and `/extract`) | How long a request waits for a classification slot before giving up. A float, so sub-second values are expressible. |
+
 ---
 
 ## SearXNG configuration

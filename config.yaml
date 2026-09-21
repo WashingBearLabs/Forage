@@ -36,8 +36,16 @@ extraction:
   max_input_bytes: 52428800
   max_pages: 500
   child_cpu_seconds: 20
-  # The 1 GiB container reserves >=512 MiB for parent FastAPI + PromptGuard;
-  # the spawned pypdf worker may consume at most this independent 384 MiB.
+  # Worker address space is bounded per worker, and the ceiling is the SUM:
+  # (extraction.extraction_concurrency + retrieve.fetch_concurrency) x
+  # child_address_space_bytes, plus the parent's >=512 MiB FastAPI +
+  # PromptGuard reservation. At the shipped defaults that is
+  # 2 x 384 MiB + 512 MiB = 1 280 MiB, against the 1 GiB container this same
+  # file describes above. What prevents two workers running at once today is
+  # `extract_route_enabled: false` — nobody can upload while a fetched PDF
+  # parses. Sizing that envelope (and deciding whether boot should refuse a
+  # sum that exceeds it) belongs to the resource-envelope spec, not to this
+  # comment.
   child_address_space_bytes: 402653184
   wall_clock_seconds: 90
   # Derived character ceiling = (512 - 64) * 64 * 4 = 114688.
@@ -46,3 +54,32 @@ extraction:
   classification_concurrency: 1
   admission_queue_depth: 1
   max_queued_upload_bytes: 52428800
+retrieve:
+  # Classification budget for a FETCHED page, separate from `extraction`'s
+  # ceiling for uploads and fetched PDFs. `0` means no pre-check and no
+  # `max_chunks` handed to the classifier — today's behaviour — and boot logs
+  # one WARNING `retrieve_budget_unset coming_default=256`. It ships as `0`
+  # for one minor release; the next MINOR flips the default to 256, and `0`
+  # stays a legal opt-out after that (contract/GOVERNANCE.md ruling (g)).
+  # Derived character ceiling at 256 = (512 - 64) * 256 * 4 = 458752.
+  max_promptguard_chunks: 0
+  # Pinned at exactly 1, for the reason `extraction.extraction_concurrency` is:
+  # a fetched PDF spawns the same bounded worker under the same
+  # `child_address_space_bytes` rlimit, so N fetch slots would put
+  # N x 384 MiB of worker address space in a 1 GiB container.
+  fetch_concurrency: 1
+  # Requests allowed to wait for the single fetch slot, and the total queued
+  # body bytes they may represent. The byte bound is deliberately NOT
+  # depth x 10 MB, so at these defaults it binds first and both bounds are
+  # exercisable.
+  admission_queue_depth: 4
+  max_queued_fetch_bytes: 31457280
+# Per-request PromptGuard policy floors for the fetch routes. A request may
+# not relax below `promptguard_fail_closed_floor` nor above
+# `promptguard_threshold_ceiling`; the shipped values (false / 1.0) impose no
+# floor at all, which is today's behaviour.
+promptguard_fail_closed_floor: false
+promptguard_threshold_ceiling: 1.0
+# How long either fetch route waits for a classification slot before giving
+# up. A float so sub-second values are expressible.
+promptguard_wait_seconds: 30.0

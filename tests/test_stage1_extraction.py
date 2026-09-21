@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
+
+from pipeline import config_bounds
+from pipeline.extraction_limits import (
+    ExtractionConfigurationError,
+    extraction_settings_from_config,
+)
 from pipeline.stage1_extraction import (
     ExtractionResult,
     _collapse_invisible,
@@ -410,3 +417,102 @@ class TestEdgeCases:
     def test_frozen_dataclass(self) -> None:
         result = extract_html(MINIMAL_HTML)
         assert_frozen(result, "title", "new title")
+
+
+# ---------------------------------------------------------------------------
+# Shared bounded-config helpers (`hardening-retrieve-parity` US-001)
+# ---------------------------------------------------------------------------
+#
+# `pipeline/extraction_limits.py` was migrated onto `pipeline/config_bounds.py`
+# in the same story, so its boot-refusal behaviour is pinned here against the
+# shared helpers rather than against a private copy that no longer exists.
+# `cache.py` keeps its own copy for the reason recorded beside it.
+
+
+class _BoundsError(ValueError):
+    """A caller-supplied exception class, the way each settings reader has one."""
+
+
+class TestBoundedInt:
+    def test_a_missing_key_takes_the_default(self) -> None:
+        assert (
+            config_bounds.bounded_int(
+                {}, "k", 7, minimum=0, maximum=10, error=_BoundsError
+            )
+            == 7
+        )
+
+    def test_a_bool_is_rejected_even_though_bool_subclasses_int(self) -> None:
+        with pytest.raises(_BoundsError, match="must be an integer"):
+            config_bounds.bounded_int(
+                {"k": True}, "k", 7, minimum=0, maximum=10, error=_BoundsError
+            )
+
+    @pytest.mark.parametrize("value", ["7", 7.0, None, []])
+    def test_a_non_integer_is_rejected(self, value: object) -> None:
+        with pytest.raises(_BoundsError, match="must be an integer"):
+            config_bounds.bounded_int(
+                {"k": value}, "k", 7, minimum=0, maximum=10, error=_BoundsError
+            )
+
+    @pytest.mark.parametrize("value", [-1, 11])
+    def test_an_out_of_range_value_is_rejected(self, value: int) -> None:
+        with pytest.raises(_BoundsError, match="must be between 0 and 10"):
+            config_bounds.bounded_int(
+                {"k": value}, "k", 7, minimum=0, maximum=10, error=_BoundsError
+            )
+
+    @pytest.mark.parametrize("value", [0, 10])
+    def test_the_range_is_inclusive_at_both_ends(self, value: int) -> None:
+        assert (
+            config_bounds.bounded_int(
+                {"k": value}, "k", 7, minimum=0, maximum=10, error=_BoundsError
+            )
+            == value
+        )
+
+
+class TestBoundedFloat:
+    def test_an_int_is_widened(self) -> None:
+        value = config_bounds.bounded_float(
+            {"k": 3}, "k", 1.0, minimum=0.0, maximum=10.0, error=_BoundsError
+        )
+        assert value == 3.0
+        assert isinstance(value, float)
+
+    def test_a_bool_is_rejected(self) -> None:
+        with pytest.raises(_BoundsError, match="must be a number"):
+            config_bounds.bounded_float(
+                {"k": True}, "k", 1.0, minimum=0.0, maximum=10.0, error=_BoundsError
+            )
+
+    @pytest.mark.parametrize("value", ["3.0", None, []])
+    def test_a_non_number_is_rejected(self, value: object) -> None:
+        with pytest.raises(_BoundsError, match="must be a number"):
+            config_bounds.bounded_float(
+                {"k": value}, "k", 1.0, minimum=0.0, maximum=10.0, error=_BoundsError
+            )
+
+    @pytest.mark.parametrize("value", [-0.1, 10.1])
+    def test_an_out_of_range_value_is_rejected(self, value: float) -> None:
+        with pytest.raises(_BoundsError, match="must be between"):
+            config_bounds.bounded_float(
+                {"k": value}, "k", 1.0, minimum=0.0, maximum=10.0, error=_BoundsError
+            )
+
+
+class TestBoundedBool:
+    def test_a_truthy_string_is_rejected(self) -> None:
+        with pytest.raises(_BoundsError, match="must be a boolean"):
+            config_bounds.bounded_bool({"k": "yes"}, "k", False, error=_BoundsError)
+
+    def test_a_missing_key_takes_the_default(self) -> None:
+        assert config_bounds.bounded_bool({}, "k", True, error=_BoundsError) is True
+
+
+def test_the_migration_kept_extraction_limits_refusing_the_same_values() -> None:
+    """The reader still raises its own error class, not the helper's caller's."""
+    with pytest.raises(ExtractionConfigurationError, match="must be an integer"):
+        extraction_settings_from_config({"extraction": {"max_pages": True}})
+    with pytest.raises(ExtractionConfigurationError, match="must be between 1 and 500"):
+        extraction_settings_from_config({"extraction": {"max_pages": 501}})

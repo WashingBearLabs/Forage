@@ -97,7 +97,15 @@ MINOR when fields are only added.
   Teredo, NAT64 and IPv4-compatible forms) and any name under the
   ``.localhost`` suffix are refused ``private_ip`` where they were fetched
   before — an expedited MINOR with no compatibility window, argued in
-  ``contract/GOVERNANCE.md`` ruling (f). This version is **held**:
+  ``contract/GOVERNANCE.md`` ruling (f). Continuing in
+  ``hardening-retrieve-parity`` US-001: ``/retrieve`` 422 ``content_too_large``
+  gains the reason ``promptguard_budget``: with
+  ``retrieve.max_promptguard_chunks`` set, a fetched page over it is refused
+  rather than classified in full — a security tightening shipped by GOVERNANCE
+  worked example 6 step 1: the key defaults to ``0`` (today's behaviour) for
+  one minor release, the boot WARNING ``retrieve_budget_unset`` names the
+  coming default 256, and ``0`` remains a legal opt-out after the flip
+  (``contract/GOVERNANCE.md`` ruling (g)). This version is **held**:
   ``tests/golden/contract_1_3_0.json`` is
   re-created in place by every later story in this epic that moves the
   wire, until spec 8 US-002 freezes it ahead of the release cut.
@@ -366,3 +374,18 @@ exhausted chain, or this fixed literal, raised by ``retrieval_app.py`` before
 ``run_search_pipeline`` is ever called, when a request's own ``providers`` /
 ``allow_paid_fallback`` policy excludes every provider the deployment
 configured. Never a mix of the two."""
+
+# ---------------------------------------------------------------------------
+# /retrieve classification budget
+# ---------------------------------------------------------------------------
+
+PROMPTGUARD_BUDGET = "promptguard_budget"
+"""The ``/retrieve`` ``content_too_large`` ``reason`` for a page over budget.
+
+``content_too_large`` on ``/retrieve`` carries exactly two reason shapes: the
+fetch-cap prose ``stage5_url_audit`` raises when a body exceeds the 10 MB
+transfer limit, or this fixed literal, raised by ``orchestrator.py`` when the
+extracted text of a fetched page exceeds the character ceiling derived from
+``retrieve.max_promptguard_chunks``. Token-shaped rather than sentence-shaped
+(``POLICY_EXCLUDED_ALL_PROVIDERS`` is the precedent) because it is a closed
+value a consumer may branch on, not prose for a human."""

@@ -130,6 +130,14 @@ contract whose golden is still being edited mid-epic. The check today is this se
 a CI gate; spec 8 US-002 rewrites that comment when it freezes the set, and a mechanical
 gate keyed on the same comment is that story's to add (flagged in the epic wrapper).
 
+**The `retrieve.max_promptguard_chunks` compatibility window.** The release that ships
+contract `1.3.0` keeps that key's default at **`0`** — no pre-check on `/retrieve`, exactly
+the behaviour that shipped before the key existed — and boot logs one WARNING,
+`retrieve_budget_unset coming_default=256`. The **next MINOR** flips the default to `256`;
+`0` remains a legal, documented opt-out after the flip, so no MAJOR is ever cut for it.
+That is worked example 6 step 1 with the window named, and it belongs in this release's
+Release body as well as here (`contract/GOVERNANCE.md` ruling (g)).
+
 ## Architectures
 
 | Platform | Built | Gated | Notes |

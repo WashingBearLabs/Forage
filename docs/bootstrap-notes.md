@@ -76,7 +76,8 @@ those eight — so Forage's revision moved:
 | After the newline-preserving search scan (`hardening-search-sanitization` US-001) | `b0ca8d9a…aed73` |
 | After bounded, directly scanned result URLs (`hardening-search-sanitization` US-002) | `42485686…ec17f` |
 | After the contract 1.3.0 window (`hardening-search-sanitization` US-004) | `05dbbb5c…82c0b` |
-| **Current (`hardening-search-sanitization` validation fix, scan both search-text forms)** | **`6f0fa2de…66671`** |
+| After scanning both search-text forms (`hardening-search-sanitization` validation fix) | `6f0fa2de…66671` |
+| **Current (`hardening-retrieve-parity` US-001, the `/retrieve` pipeline signature and chunk budget)** | **`e55b5f06…4d3c0`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -956,3 +957,57 @@ Two boundaries the discharge does not cross:
 - **Poppy's in-tree copy is unchanged.** `services/retrieval/Dockerfile` in the monorepo
   still carries `ARG HF_TOKEN`, and the two copies coexist until spec 6 pins Poppy to a
   published image. The old rule still applies there, verbatim.
+
+### The twentieth rotation: the `/retrieve` pipeline signature and chunk budget (`hardening-retrieve-parity` US-001, 2026-09-20)
+
+```
+before: 6f0fa2de75f048ec639c9c34ee8d7bd684d82508f6f0796915615cbc24066671
+after:  e55b5f061d4d547d757148d04cf4f5873ab3d0419bd546ced20e6813e9c4d3c0
+```
+
+**Two hashed files moved, each measured alone, with a both-reverted control.**
+
+| Measurement | Value |
+|---|---|
+| After (this story) | `e55b5f06…4d3c0` |
+| `pipeline/orchestrator.py` reverted alone | `965e22dd…c0ff4` |
+| `pipeline/contract.py` reverted alone | `0a95a190…4da0b` |
+| **Control:** both reverted | `6f0fa2de…66671` |
+
+The both-reverted control reproduces the nineteenth rotation's shipped value to the
+character, which is what proves these are the only two hashed files this story touched.
+Measured last, after the final byte of every hashed file had landed.
+
+**What moved in each.** `pipeline/orchestrator.py`: `run_retrieve_pipeline`'s five new
+keyword-only parameters (`settings: RetrieveSettings`, `retrieve_metrics:
+RetrieveMetricsSink`, `classification_semaphore: asyncio.Semaphore` and
+`extraction_settings: ExtractionSettings`, all required; `admission: AdmissionSlot | None =
+None`, defaulted for exactly one story because nothing publishes
+`app.state.retrieve_admission` until US-002); the `AdmissionSlot`, `AdmissionMetrics` and
+`RetrieveMetricsSink` Protocols plus `_NullRetrieveMetrics`, declared beside
+`SearchMetricsSink` on the consumer side because `pipeline/` never imports `retrieval_app`;
+the character pre-check that refuses an over-budget fetched page `content_too_large` with
+reason `promptguard_budget`; and the `PromptGuardBudgetExceededError` catch around
+`sanitize_and_structure` as the backstop. `pipeline/contract.py`: the `PROMPTGUARD_BUDGET`
+literal and the `1.3.0` docstring continuation line.
+
+**What did not move it.** `pipeline/retrieve_limits.py` (new) and `pipeline/config_bounds.py`
+(new, with `pipeline/extraction_limits.py` migrated onto it) are **not**
+`_REVISION_SOURCES` members, so neither moves this hash on its own — deliberately: they hold
+configuration bounds, not sanitization behaviour. `retrieval_app.py`, `config.yaml` and the
+docs are not hashed either.
+
+**Not a behaviour-changing rotation.** The shipped default is
+`retrieve.max_promptguard_chunks: 0`, which means no pre-check and no `max_chunks` handed to
+the classifier — byte-for-byte the behaviour that shipped before this story. The hash moved
+because the hash is over bytes. The tightening reaches operators when the next MINOR flips
+the default to 256 (`contract/GOVERNANCE.md` ruling (g)), and `0` stays a legal opt-out
+after that.
+
+**Not replayed to Poppy**; the deployed copy stays on the value it already diverged to.
+
+**Blast radius.** The same mechanism as every rotation since the fifth:
+`cache_policy_fingerprint()` takes the revision as an input, so every extraction cached under
+`6f0fa2de…` becomes unreachable at the next start and ages out on its own TTL — free in
+memory mode, one TTL of extra fetches in Valkey mode. **Do not assume Poppy↔Forage revision
+parity** — compare contracts, not revisions.

@@ -146,6 +146,8 @@ Forage never decides whether content is safe; it produces signals and, for the c
 | `exfil_beacon` | `suspicious` | a markdown image whose URL carries double-brace, `${`, or `%7B` templating |
 | `envelope_breakout` | `suspicious` | any `<`, `&lt;`, `&#60;`, or `&#x3c;` spelling of the `retrieved_content`, `retrieval_note`, `retrieval_warning`, or `retrieval_cache_note` tags |
 
+`/retrieve` pre-checks a fetched page's extracted text against the character ceiling derived from `retrieve.max_promptguard_chunks` **before** Stage 3 runs, and refuses an over-budget page 422 `content_too_large` with the fixed reason `promptguard_budget`, so one hostile page cannot burn unbounded classification CPU. The classifier's own `PromptGuardBudgetExceededError` is caught around the same call and mapped to the same refusal as a backstop. At the shipped default of `0` there is no pre-check (`contract/GOVERNANCE.md` ruling (g)).
+
 A blocking hit yields verdict `blocked` and quarantine. Each suspicious hit costs `-0.15` trust, capped at `-0.45` (`penalty = max(-0.45, -0.15 * suspicious_count)`); blocking always overrides suspicious. `tests/test_stage2_structural.py` (78 tests) has a class per category plus `TestMixedContent::test_blocking_overrides_suspicious` and `::test_penalty_cap`.
 
 ### Stage 3: Llama Prompt Guard 2

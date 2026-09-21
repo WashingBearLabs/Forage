@@ -49,6 +49,7 @@ from pipeline.pdf_subprocess import (
     PDFClassifiableTextLimitError,
     extract_pdf_in_subprocess,
 )
+from pipeline.retrieve_limits import RetrieveSettings
 from pipeline.search_providers.base import (
     ProviderFailure,
     ProviderSearchResult,
@@ -222,6 +223,11 @@ async def run_retrieve_pipeline(
     classifier: PromptGuardClassifier | None,
     config: dict[str, Any],
     sanitizer_revision: str,
+    settings: RetrieveSettings,
+    retrieve_metrics: RetrieveMetricsSink,
+    classification_semaphore: asyncio.Semaphore,
+    extraction_settings: ExtractionSettings,
+    admission: AdmissionSlot | None = None,
 ) -> RetrievedContent:
     """Run the full 5-stage retrieval pipeline.
 
@@ -241,6 +247,24 @@ async def run_retrieve_pipeline(
         passed in the way ``run_extract_pipeline`` already takes it. It keys
         the cache: content sanitized under an older pipeline must not be
         replayed by a newer one.
+    settings:
+        Boot-validated ``retrieve:`` limits. Required, not defaulted — a
+        defaulted limits parameter would be the second, unbounded limits path
+        this spec exists to prevent, exactly as
+        ``run_extract_pipeline_from_file`` takes its ``ExtractionSettings``.
+    retrieve_metrics:
+        The ``/metrics`` retrieve counters this pipeline increments directly.
+    classification_semaphore:
+        Bounds concurrent PromptGuard work across both fetch routes.
+    extraction_settings:
+        The ``extraction:`` limits a fetched PDF's bounded worker runs under.
+    admission:
+        The slot held for the fetch-and-classify work, or ``None`` to acquire
+        nothing — today's behaviour. Defaulted for exactly one story: nothing
+        publishes ``app.state.retrieve_admission`` yet, so a required
+        parameter here would make every ``/retrieve`` request die on
+        ``AttributeError``. US-002 builds the controller and removes this
+        default.
 
     Returns
     -------
@@ -364,6 +388,22 @@ async def run_retrieve_pipeline(
         html_text = fetch_result.response_body.decode("utf-8", errors="replace")
         extraction = extract_html(html_text, request.url)
 
+    # -- Step 4a: Refuse an over-budget page before classifying it --
+    # The primary control: a page whose extracted text exceeds the character
+    # ceiling derived from `retrieve.max_promptguard_chunks` is refused rather
+    # than chunked and classified in full, so one hostile page cannot burn
+    # unbounded CPU. Characters only -- `/extract`'s second, byte limb is not
+    # copied here: at the coming default of 256 chunks the character limb
+    # (458 752) admits at most 1 835 008 UTF-8 bytes, under the 2 MiB output
+    # ceiling, so a byte limb could not bind below 293 chunks.
+    budget_characters = settings.max_extracted_characters
+    if budget_characters is not None and len(extraction.raw_text) > budget_characters:
+        raise PipelineError(
+            error="content_too_large",
+            reason=contract.PROMPTGUARD_BUDGET,
+            request_id=request_id,
+        )
+
     # Determine domain from final URL
     parsed_final = urlparse(fetch_result.final_url)
     domain = parsed_final.hostname or ""
@@ -375,16 +415,31 @@ async def run_retrieve_pipeline(
             blocked_domains,
         )
     )
-    sanitization = await sanitize_and_structure(
-        extraction=extraction,
-        trust_tier=trust_tier,
-        classifier=classifier,
-        promptguard_threshold=request.promptguard_threshold,
-        promptguard_fail_closed=request.promptguard_fail_closed,
-        extract_mode=request.extract_mode,
-        content_type=content_type,
-        domain_changed_on_redirect=fetch_result.domain_changed_on_redirect,
-    )
+    # The catch is the backstop, not the control: the pre-check above already
+    # refused an over-budget page, and this maps the classifier's own refusal
+    # to the same 422 should the two ever disagree.
+    try:
+        sanitization = await sanitize_and_structure(
+            extraction=extraction,
+            trust_tier=trust_tier,
+            classifier=classifier,
+            promptguard_threshold=request.promptguard_threshold,
+            promptguard_fail_closed=request.promptguard_fail_closed,
+            extract_mode=request.extract_mode,
+            content_type=content_type,
+            domain_changed_on_redirect=fetch_result.domain_changed_on_redirect,
+            max_promptguard_chunks=(
+                settings.max_promptguard_chunks
+                if settings.max_promptguard_chunks > 0
+                else None
+            ),
+        )
+    except PromptGuardBudgetExceededError as exc:
+        raise PipelineError(
+            error="content_too_large",
+            reason=contract.PROMPTGUARD_BUDGET,
+            request_id=request_id,
+        ) from exc
     if sanitization.injection_detected:
         logger.warning(
             "Content quarantined for %s — returning content-free response",
@@ -1045,6 +1100,66 @@ def _search_unavailable_error(
         reason="; ".join(provider_errors),
         request_id=request_id,
     )
+
+
+class AdmissionSlot(Protocol):
+    """One admission slot ``run_retrieve_pipeline`` holds for the work it does.
+
+    ``retrieval_app.ExtractionAdmissionController`` satisfies this
+    structurally — declared here, on the consumer side, because ``pipeline/``
+    never imports ``retrieval_app`` (the rule :class:`SearchMetricsSink`
+    records and ``cache.py`` records from the other end).
+
+    ``acquire`` returns ``False`` when the queue is full rather than raising,
+    so the caller decides what refusal the wire carries.
+    """
+
+    async def acquire(self) -> bool: ...
+
+    async def release(self) -> None: ...
+
+
+class AdmissionMetrics(Protocol):
+    """The two admission counters an :class:`AdmissionSlot` increments.
+
+    One Protocol for the pair, not two, because the controller increments both
+    or neither: a saturated semaphore and a refused request are the two halves
+    of the same story.
+    """
+
+    semaphore_saturation: int
+    busy_rejections: int
+
+
+class RetrieveMetricsSink(AdmissionMetrics, Protocol):
+    """The ``/metrics`` retrieve counters ``run_retrieve_pipeline`` increments.
+
+    ``retrieval_app.RetrieveMetrics`` satisfies this structurally, the same
+    seam shape as :class:`SearchMetricsSink`.
+    """
+
+    classification_wait_timeouts: int
+
+
+class _NullRetrieveMetrics:
+    """A real counter nobody reads, for callers with no sink to hand over.
+
+    The ``_NullSearchMetrics`` idiom: process-local scratch space satisfying
+    :class:`RetrieveMetricsSink` structurally, so an increment site never
+    needs an ``is not None`` branch.
+    """
+
+    def __init__(self) -> None:
+        self.semaphore_saturation = 0
+        self.busy_rejections = 0
+        self.classification_wait_timeouts = 0
+
+
+# Structural conformance, checked by the type checker rather than asserted in
+# prose: a counter added to `RetrieveMetricsSink` without a matching field on
+# the null sink is an error here, at the seam, instead of an `AttributeError`
+# in whichever later story first increments it.
+_NULL_RETRIEVE_METRICS: RetrieveMetricsSink = _NullRetrieveMetrics()
 
 
 class SearchMetricsSink(Protocol):

@@ -185,7 +185,12 @@ reverts both files and removes both inputs landing exactly on `05dbbb5c…`), an
 — **the fourth behaviour-changing rotation** — when the `/search` scan loop began scanning
 **both** forms of each text field (`840c78fa…` → `6f0fa2de…`, the
 `hardening-search-sanitization` validation fix; `orchestrator.py` alone, with the revert
-reproducing `840c78fa…` exactly).
+reproducing `840c78fa…` exactly). A twentieth rotation — **not** behaviour-changing —
+came with `run_retrieve_pipeline`'s five new keyword-only dependencies and the pre-checked
+chunk budget (`6f0fa2de…` → `e55b5f06…`, `hardening-retrieve-parity` US-001 —
+`orchestrator.py` + `contract.py`, each reverted in turn, both-reverted control landing on
+`6f0fa2de…`; the shipped default `retrieve.max_promptguard_chunks: 0` runs no pre-check, and
+the new `pipeline/retrieve_limits.py` and `pipeline/config_bounds.py` are not hashed).
 Nothing downstream may assume
 Poppy↔Forage revision parity.
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, cast
 
+from pipeline.config_bounds import bounded_int
 from promptguard.classifier import CHUNK_OVERLAP, MAX_SEQ_LEN
 
 MEBIBYTE = 1024 * 1024
@@ -76,25 +77,6 @@ class ExtractionSettings:
         return min(MAX_EXTRACTED_OUTPUT_BYTES, self.max_extracted_characters * 4)
 
 
-def _bounded_int(
-    config: dict[str, Any],
-    key: str,
-    default: int,
-    *,
-    minimum: int,
-    maximum: int,
-) -> int:
-    """Read one bounded integer setting without accepting bool values."""
-    value = config.get(key, default)
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ExtractionConfigurationError(f"{key} must be an integer")
-    if not minimum <= value <= maximum:
-        raise ExtractionConfigurationError(
-            f"{key} must be between {minimum} and {maximum}"
-        )
-    return value
-
-
 def extraction_settings_from_config(config: dict[str, Any]) -> ExtractionSettings:
     """Build bounded extraction settings from the sidecar configuration."""
     route_enabled = config.get("extract_route_enabled", False)
@@ -108,74 +90,84 @@ def extraction_settings_from_config(config: dict[str, Any]) -> ExtractionSetting
 
     return ExtractionSettings(
         route_enabled=route_enabled,
-        max_input_bytes=_bounded_int(
+        max_input_bytes=bounded_int(
             extraction_config,
             "max_input_bytes",
             MAX_INPUT_BYTES,
             minimum=_MIN_INPUT_BYTES,
             maximum=MAX_INPUT_BYTES,
+            error=ExtractionConfigurationError,
         ),
-        max_pages=_bounded_int(
+        max_pages=bounded_int(
             extraction_config,
             "max_pages",
             MAX_PDF_PAGES,
             minimum=1,
             maximum=MAX_PDF_PAGES,
+            error=ExtractionConfigurationError,
         ),
-        child_cpu_seconds=_bounded_int(
+        child_cpu_seconds=bounded_int(
             extraction_config,
             "child_cpu_seconds",
             MAX_CHILD_CPU_SECONDS,
             minimum=1,
             maximum=MAX_CHILD_CPU_SECONDS,
+            error=ExtractionConfigurationError,
         ),
-        child_address_space_bytes=_bounded_int(
+        child_address_space_bytes=bounded_int(
             extraction_config,
             "child_address_space_bytes",
             MAX_CHILD_ADDRESS_SPACE_BYTES,
             minimum=_MIN_CHILD_ADDRESS_SPACE_BYTES,
             maximum=_MAX_CHILD_ADDRESS_SPACE_BYTES,
+            error=ExtractionConfigurationError,
         ),
-        wall_clock_seconds=_bounded_int(
+        wall_clock_seconds=bounded_int(
             extraction_config,
             "wall_clock_seconds",
             MAX_EXTRACTION_WALL_SECONDS,
             minimum=1,
             maximum=MAX_EXTRACTION_WALL_SECONDS,
+            error=ExtractionConfigurationError,
         ),
-        max_promptguard_chunks=_bounded_int(
+        max_promptguard_chunks=bounded_int(
             extraction_config,
             "max_promptguard_chunks",
             MAX_PROMPTGUARD_CHUNKS,
             minimum=1,
             maximum=MAX_PROMPTGUARD_CHUNKS,
+            error=ExtractionConfigurationError,
         ),
-        extraction_concurrency=_bounded_int(
+        extraction_concurrency=bounded_int(
             extraction_config,
             "extraction_concurrency",
             EXTRACTION_CONCURRENCY,
             minimum=1,
             maximum=EXTRACTION_CONCURRENCY,
+            error=ExtractionConfigurationError,
         ),
-        classification_concurrency=_bounded_int(
+        classification_concurrency=bounded_int(
             extraction_config,
             "classification_concurrency",
             CLASSIFICATION_CONCURRENCY,
             minimum=1,
             maximum=CLASSIFICATION_CONCURRENCY,
+            error=ExtractionConfigurationError,
         ),
-        admission_queue_depth=_bounded_int(
+        admission_queue_depth=bounded_int(
             extraction_config,
             "admission_queue_depth",
             ADMISSION_QUEUE_DEPTH,
             minimum=0,
             maximum=_MAX_ADMISSION_QUEUE_DEPTH,
+            error=ExtractionConfigurationError,
         ),
-        max_queued_upload_bytes=_bounded_int(
+        max_queued_upload_bytes=bounded_int(
             extraction_config,
             "max_queued_upload_bytes",
             MAX_QUEUED_UPLOAD_BYTES,
             minimum=0,
             maximum=MAX_QUEUED_UPLOAD_BYTES,
+            error=ExtractionConfigurationError,
         ),
     )

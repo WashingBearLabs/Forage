@@ -1720,6 +1720,44 @@ fails the unit test that pins the update keys.
 
 ## Implementation Notes
 
+### US-001 (2026-09-20)
+
+- **Stale line numbers in the hints.** `SearchMetricsSink` is at `pipeline/orchestrator.py:1050`,
+  not `:747-757` (that range is now `_reject_search_url` / `_block_search_url`). The new Protocols
+  and `_NullRetrieveMetrics` were placed beside the real `SearchMetricsSink`. `_bounded_int` in
+  `pipeline/extraction_limits.py` is at `:79-96` as stated.
+- **Seventeen call sites, not sixteen.** `grep -c 'run_retrieve_pipeline(' tests/test_orchestrator.py`
+  returns 17 at story start (the sixteen the hints count plus the one inside the
+  `test_search_hands_the_scanner_a_newline_preserving_form` neighbourhood helper at `:1367`). All
+  seventeen go through the one `_retrieve_kwargs()` helper.
+- **A third `_bounded_int` copy exists** — `pipeline/search_providers/brave.py:224`. The hints name
+  only `extraction_limits.py` and `cache.py`, so only `extraction_limits.py` was migrated; the
+  brave copy is untouched (out of scope, and it is the search provider's own settings reader).
+  `config_bounds` also gained `bounded_bool`, which the hints do not name: the `retrieve:` reader
+  needs one for `promptguard_fail_closed_floor` and restating it inline would have been a fourth
+  copy of the same idea.
+- **`_NullRetrieveMetrics` is unused by the pipeline in this story** (nothing increments the three
+  counters until US-002/US-006), and pyright strict's `reportUnusedClass` flags a private class
+  nobody touches. Resolved with a module-level annotated binding,
+  `_NULL_RETRIEVE_METRICS: RetrieveMetricsSink = _NullRetrieveMetrics()`, which is also the
+  structural-conformance check: a counter added to the Protocol without a matching field on the
+  null sink is a type error at the seam rather than an `AttributeError` in a later story.
+- **`AdmissionSlot` is satisfied by `ExtractionAdmissionController` without edits**, as the hints
+  predicted: `acquire` and `release` are both `async def`, pinned by
+  `test_the_admission_protocol_is_satisfied_by_the_app_controller`.
+- **The boot WARNING lives in the lifespan, not the reader.** `retrieve_settings_from_config` stays
+  pure so the module-level fallback (`app.state.retrieve_settings = retrieve_settings_from_config({})`)
+  emits nothing, which is what the hints require of it.
+- **The contract export did not move.** `PROMPTGUARD_BUDGET` is a `reason` *value*, not a schema
+  field, so `uv run python -m scripts.export_contract` leaves `contract/openapi.yaml`, its sha256
+  anchor and `tests/golden/contract_1_3_0.json` byte-identical. Only the `CONTRACT_VERSION`
+  docstring moved.
+- **Rotation measured last, after the final hashed byte landed.** `6f0fa2de…66671` →
+  `e55b5f06…4d3c0`; `orchestrator.py` alone reverted gives `965e22dd…c0ff4`, `contract.py` alone
+  gives `0a95a190…4da0b`, and the both-reverted control reproduces `6f0fa2de…66671` exactly.
+  Recorded at all six sites (CLAUDE.md, GOTCHAS.md, CODE_ARCH.md, DECISIONS.md,
+  `docs/bootstrap-notes.md` ledger row + section, SERVICE_MAP.md's divergence count, now twenty).
+
 ## Refinement Notes
 
 ### Research Findings
