@@ -1010,13 +1010,13 @@ existing fixture corpus are byte-identical.
 - Rotates `sanitizer_revision` (`orchestrator.py`, `contract.py`), ruling 6 / R32.
 
 **Acceptance Criteria:**
-- [ ] `extract_html`, `scan_structural` and `structure_sanitization_result` are invoked via
+- [x] `extract_html`, `scan_structural` and `structure_sanitization_result` are invoked via
       `asyncio.to_thread` on both routes; no synchronous call to them remains in
       `run_retrieve_pipeline` or `sanitize_and_structure`; a test asserts each runs on a
       non-event-loop thread.
-- [ ] Five sequential `/health` requests each complete in under 1 s while a fetched-page
+- [x] Five sequential `/health` requests each complete in under 1 s while a fetched-page
       `extract_html` is blocked (the `:958` shape, connected cache).
-- [ ] `ExtractionAdmissionController`'s constructor keeps its `(settings, metrics)` arity and order
+- [x] `ExtractionAdmissionController`'s constructor keeps its `(settings, metrics)` arity and order
       (the `metrics` annotation is the `AdmissionMetrics` Protocol), `from_retrieve_settings` builds
       `/retrieve`'s instance, and the eight construction sites are untouched (`grep -n
       'ExtractionAdmissionController(' retrieval_app.py tests/*.py` lists the same eight lines as
@@ -1045,7 +1045,7 @@ existing fixture corpus are byte-identical.
       the `retrieve:` reader already bounded, not a validated `extraction:` configuration;
       `admission` is a required `AdmissionSlot` after this story (no `| None` on it in
       `pipeline/orchestrator.py`) and the handler passes `app.state.retrieve_admission`.
-- [ ] The fetched body is released with the slot: `build_retrieved_content`'s signature and
+- [x] The fetched body is released with the slot: `build_retrieved_content`'s signature and
       `pipeline/stage4_structuring.py` are unchanged (`git diff --stat` shows no change to it — this
       story touches no hashed file other than `orchestrator.py` and `contract.py`); the three
       scalars are read into locals and `fetch_result` and `html_text` are deleted before the
@@ -1053,11 +1053,11 @@ existing fixture corpus are byte-identical.
       request waits on a held classification permit; the `retrieve:` table states the stage-1 peak
       honestly (body + decoded copy + extraction result per slot) and the waiter term, and names
       `--limit-concurrency` as spec 6's knob.
-- [ ] `pipeline_error_handler` is route-aware: `/retrieve`'s admission refusal is 422 with a
+- [x] `pipeline_error_handler` is route-aware: `/retrieve`'s admission refusal is 422 with a
       `Pipeline422ErrorResponse` body and no `sanitizer_revision`; `/extract`'s middleware refusal is
       429 with a byte-identical `RateLimit429Response`; `tests/test_contract_errors.py:567` asserts
       both at runtime; the three old-premise docstrings/comments are rewritten.
-- [ ] `busy` is a member of `RetrieveErrorCode`; `RETRIEVE_ADMISSION_QUEUE_FULL` is a constant in
+- [x] `busy` is a member of `RetrieveErrorCode`; `RETRIEVE_ADMISSION_QUEUE_FULL` is a constant in
       `pipeline/contract.py`; `Pipeline422ErrorResponse.error`'s description names `busy` as
       `/retrieve`-only at 422;
       `tests/test_contract_errors.py:241` and `:244-247` (and its comment),
@@ -1065,25 +1065,25 @@ existing fixture corpus are byte-identical.
       deduplicated `ERROR_CODES` total stays eighteen (`:234`); `retrieve.busy_rejections`'
       description does not say 429; the refusal is recorded under ruling (b) with its two operator
       knobs, `fetch_concurrency` named as pinned rather than as a knob.
-- [ ] `/extract` responses on the existing fixture corpus are byte-identical before and after
+- [x] `/extract` responses on the existing fixture corpus are byte-identical before and after
       (existing tests unchanged).
-- [ ] Window mechanics (R36): the `* ``1.3.0`` — …` docstring line is appended; `uv run python -m
+- [x] Window mechanics (R36): the `* ``1.3.0`` — …` docstring line is appended; `uv run python -m
       scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via
       `_SCHEMA_MODELS`; `Pipeline422ErrorResponse.error[enum]=busy` appended to
       `_EXPECTED_ONE_THREE_ZERO_DIFF` — one path, covering the `/search` 422 as well through the
       shared model — while the two counters (`/metrics` models are not in `_SCHEMA_MODELS`), the
       reason literal and the description rewrite append nothing (R36 corrected); the four
       anchor-quoting pages refreshed; `--check` green.
-- [ ] `grep -n 'busy_rejections\|admission_queue_full' docs/configuration.md
+- [x] `grep -n 'busy_rejections\|admission_queue_full' docs/configuration.md
       kit_tools/arch/SECURITY.md kit_tools/docs/MONITORING.md kit_tools/docs/API_GUIDE.md
       kit_tools/docs/TROUBLESHOOTING.md` returns at least one hit per file (path set: those five
       files; zero hits today); the `SECURITY.md:198` row for `/retrieve` no longer reads "none | not
       applicable"; the queue-latency number is in the `retrieve:` table; the `MONITORING.md`
       `semaphore_saturation` row names the admission gate.
-- [ ] `sanitizer_revision` rotation measured (revert-and-reproduce) and recorded at the five sites.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] `sanitizer_revision` rotation measured (revert-and-reproduce) and recorded at the five sites.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-003: Fetched PDFs parsed in the rlimited worker, with a typed `/retrieve` failure vocabulary
 
