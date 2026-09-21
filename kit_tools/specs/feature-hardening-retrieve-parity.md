@@ -446,7 +446,7 @@ byte-limb case — see Decisions Made.)
   the control baseline is the previous story's post-state (measure in execution order).
 
 **Acceptance Criteria:**
-- [ ] `pipeline/retrieve_limits.py` defines `RetrieveSettings` (with a derived
+- [x] `pipeline/retrieve_limits.py` defines `RetrieveSettings` (with a derived
       `max_extracted_characters` property), `RetrieveConfigurationError` and
       `retrieve_settings_from_config` with the seven keys, defaults and ranges above
       (`max_promptguard_chunks` default 0, range 0–1024, `0` = no pre-check and a `None` derived
@@ -464,7 +464,7 @@ byte-limb case — see Decisions Made.)
       coming-default comment, the three keys at their defaults, and its worker-memory comment
       states the combined worker ceiling, its 1 280 MiB sum at the defaults, and that
       `extract_route_enabled: false` is what keeps two workers from coexisting.
-- [ ] `run_retrieve_pipeline` takes the five new keyword-only parameters — four required,
+- [x] `run_retrieve_pipeline` takes the five new keyword-only parameters — four required,
       `admission: AdmissionSlot | None = None` typed against the pipeline-side `AdmissionSlot`
       Protocol and defaulted in this story only (US-002 removes the default; with `None` nothing
       is acquired, tested); `AdmissionMetrics`, `RetrieveMetricsSink` and `_NullRetrieveMetrics`
@@ -477,7 +477,7 @@ byte-limb case — see Decisions Made.)
       verified; `grep -l` finds no other test file; re-counted at story start) and every site this
       story adds pass the kwargs through one shared helper — no site passes them inline; a test
       asserts the kwargs reach the pipeline.
-- [ ] Under `retrieve.max_promptguard_chunks: 256`, a fetched page one character over
+- [x] Under `retrieve.max_promptguard_chunks: 256`, a fetched page one character over
       `max_extracted_characters(256)` is refused with 422 `content_too_large` /
       `promptguard_budget` before `classify` is called (a spy-that-raises on a
       `MagicMock(spec=PromptGuardClassifier)` with `loaded = True`); a page exactly at the limit
@@ -486,7 +486,7 @@ byte-limb case — see Decisions Made.)
       absent or `0` the over-budget page is classified in full and served byte-identically to
       today (the default is today's behaviour); the `/extract` file route's call and tests are
       unchanged.
-- [ ] `PROMPTGUARD_BUDGET` is a constant in `pipeline/contract.py` beside
+- [x] `PROMPTGUARD_BUDGET` is a constant in `pipeline/contract.py` beside
       `POLICY_EXCLUDED_ALL_PROVIDERS`; the governance ruling (example 6 by step: shipped off by
       default with the knob, a one-minor-release window named in `docs/releases.md` and the
       Release body, `0` legal after the flip so no MAJOR; `busy` and `extraction_failed` placed
@@ -497,28 +497,28 @@ byte-limb case — see Decisions Made.)
       `test_mapping` carries rows for `pipeline/retrieve_limits.py` and `pipeline/config_bounds.py`
       naming the test modules above; `API_GUIDE.md:197-199` states the two reason shapes under
       `content_too_large`.
-- [ ] Window mechanics (R36): the `* ``1.3.0`` — …` docstring line is appended; `uv run python -m
+- [x] Window mechanics (R36): the `* ``1.3.0`` — …` docstring line is appended; `uv run python -m
       scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via
       `_SCHEMA_MODELS`; **nothing** appended to `_EXPECTED_ONE_THREE_ZERO_DIFF` (a reason string is
       free text on `Pipeline422ErrorResponse.reason`, not a property or enum member — R36
       corrected; the docstring line and `--check` are the gate); the four anchor-quoting pages
       refreshed; `uv run python -m scripts.export_contract --check` green.
-- [ ] `grep -n 'promptguard_budget' docs/configuration.md kit_tools/arch/SECURITY.md
+- [x] `grep -n 'promptguard_budget' docs/configuration.md kit_tools/arch/SECURITY.md
       kit_tools/docs/API_GUIDE.md kit_tools/docs/TROUBLESHOOTING.md` returns at least one hit per
       file (R39); `grep -n 'retrieve_budget_unset' docs/releases.md docs/configuration.md` hits
       both (path set: those two files; zero hits today) and the `docs/releases.md` line names the
       release that flips the default; `docs/configuration.md`'s `retrieve:` table preamble names
       the bind-mount procedure and spec 6.
-- [ ] `sanitizer_revision` rotation measured (revert `orchestrator.py` and `contract.py` each in
+- [x] `sanitizer_revision` rotation measured (revert `orchestrator.py` and `contract.py` each in
       turn, both-reverted control — the `orchestrator.py` measurement is whole-file and attributes
       the signature, the pre-check and the sink to one rotation; accepted, and stated in the
       record; every measurement in this spec starts from a clean tree — `git status --porcelain`
       empty before the revert, stated in the record — round 5) and recorded at the five sites:
       `docs/bootstrap-notes.md`, `CLAUDE.md`, `kit_tools/arch/DECISIONS.md`,
       `kit_tools/docs/GOTCHAS.md` (divergence table), `kit_tools/arch/CODE_ARCH.md`.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-006: The classification semaphore on `/retrieve` and `/search` — bounded wait, permit discipline, wait counters
 
