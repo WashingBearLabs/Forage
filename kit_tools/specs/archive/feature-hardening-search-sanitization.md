@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: hardening-search-sanitization
-status: active
+status: completed
 session_ready: true
 depends_on: []
 vision_ref: "T2.2 — Forage hardening"
@@ -12,7 +12,8 @@ epic_seq: 1
 epic_final: false
 execution_order: [US-001, US-002, US-004, US-003]
 created: 2026-09-19
-updated: 2026-09-19
+updated: 2026-09-21
+completed: 2026-09-21
 ---
 
 # Feature Spec: Search-Result Sanitization Gaps (Text, URL, Provenance)
