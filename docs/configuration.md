@@ -507,8 +507,44 @@ fetched-body size — which means an HTML-only deployment, whose fetch path spaw
 at all, is throttled to single flight by a bound sized for PDFs. That is accepted; sizing
 the envelope belongs to the resource-envelope spec.
 
-At most one fetched body is held, from fetch through stage 1; none while waiting on
-classification.
+**Admission.** Since `hardening-retrieve-parity` US-002 the fetch and stage 1 run under a
+second admission controller — the same class `/extract` uses, with its own counters. A
+request takes a slot after the cache read (a cache hit never waits) and before the fetch, and
+gives it back once stage 1 is done. When no slot is free it queues, holding **nothing** — it
+has not fetched — behind a queue bounded in depth (`admission_queue_depth`) and in reserved
+bytes (`max_queued_fetch_bytes`, one 10 MB fetch-cap reservation per queued request). Beyond
+either bound it is refused at once: **422 `busy`, reason `admission_queue_full`**, counted
+under `retrieve.busy_rejections` (every request that found no free slot, queued or refused,
+counts under `retrieve.semaphore_saturation`). There is no timer on the queue wait; it is
+bounded by construction. At the shipped defaults that means single flight, at most four
+queued by depth and three by bytes — the byte bound binds first — so the fifth concurrent
+`/retrieve` (one fetching, three queued) is refused.
+
+**Worst-case queue latency** is a derived number, not a knob:
+`admission_queue_depth / fetch_concurrency × max(fetch timeout 30 s, PDF worker wall clock)`
+— at the defaults, 4 × 30 s = **120 s** before a queued request reaches the fetch, plus the
+stage-1 time of the requests ahead of it.
+
+**Memory, honestly.** At most `fetch_concurrency` bodies are alive during fetch and stage 1;
+a queued request holds nothing; the queue is bounded in depth and reserved bytes; a request
+waiting on the classification permit holds only its extracted text, because the body and its
+decoded copy are released with the slot. The stage-1 peak is
+`fetch_concurrency × (10 MB body + its decoded str + the ExtractionResult's raw_text and
+main_content)` — the body and its decoded copy are alive together while HTML extraction
+runs, so an in-flight page costs three to five times the 10 MB body term, and the 10 MB cap
+bounds the body term only. What is **not** bounded is the population of classification
+waiters: `uvicorn` runs with no `--limit-concurrency` and both middlewares gate on `/extract`
+alone, so admission bounds the *rate* through stage 1, not the number of requests past it.
+Each such waiter costs at most `max_extracted_characters(256)` ≈ 459 KB of text for at most
+`promptguard_wait_seconds`, so the waiter term is
+`arrival rate × promptguard_wait_seconds × ≤ 0.5 MB`. `--limit-concurrency` is the envelope
+knob that bounds it, and the resource-envelope spec owns it.
+
+**Disk.** The HTML path writes nothing to disk: the fetched body lives in memory, inside the
+slot, and nowhere else. Stage 1 runs on the default thread pool (`asyncio.to_thread`, shared
+with stage 3's inference), which is uncancellable — the slot is what keeps hostile pages from
+starving the classifier of threads. No wall clock is put on HTML extraction; the 30 s fetch
+timeout and the 10 MB cap bound its input.
 
 There is **no environment-variable override for any key below**. `config.yaml` is copied
 into the image, so changing one in a deployed container means bind-mounting a replacement
@@ -517,9 +553,9 @@ file — the procedure the resource-envelope spec documents.
 | Key | Default | Allowed range | Purpose |
 |-----|---------|---------------|---------|
 | `max_promptguard_chunks` | `0` | 0 – 1024 | PromptGuard chunk budget for one **fetched page**. `0` means **no pre-check** and no `max_chunks` handed to the classifier — today's behaviour — and boot logs one WARNING `retrieve_budget_unset coming_default=256`. Non-zero derives the classifiable character ceiling `(512 − 64) × chunks × 4` (458,752 at the coming default of 256); a page over it is refused 422 `content_too_large` with reason `promptguard_budget`. Ships at `0` for one minor release; the next MINOR flips the default to `256`, and `0` stays a legal opt-out (`contract/GOVERNANCE.md` ruling (g)). |
-| `fetch_concurrency` | `1` | 1 – 1 | Concurrent `/retrieve` fetches. Pinned at 1 — see above. |
-| `admission_queue_depth` | `4` | 0 – 16 | Requests allowed to wait for the fetch slot. `0` means reject immediately whenever the slot is taken. |
-| `max_queued_fetch_bytes` | `31457280` (30 MiB) | 10 MiB – 160 MiB | Total bytes of queued fetched bodies held in flight — three bodies at the 10 MB fetch cap. Deliberately **not** `admission_queue_depth × 10 MB`, so at the shipped defaults the byte bound binds before the depth bound and both are exercisable. |
+| `fetch_concurrency` | `1` | 1 – 1 | Admission slots: concurrent `/retrieve` fetch-and-stage-1 work. Pinned at 1 — see above; not an operator knob until the resource-envelope spec. |
+| `admission_queue_depth` | `4` | 0 – 16 | Requests allowed to wait for the fetch slot, holding no body while they wait. Beyond it a request is refused 422 `busy` / `admission_queue_full` (`retrieve.busy_rejections`). `0` means refuse immediately whenever the slot is taken. Worst-case queue latency is `admission_queue_depth / fetch_concurrency × 30 s` — 120 s at the defaults. |
+| `max_queued_fetch_bytes` | `31457280` (30 MiB) | 10 MiB – 160 MiB | Bytes reserved for queued requests, one 10 MB fetch-cap reservation each — three at the default. A request whose reservation would exceed it is refused 422 `busy` / `admission_queue_full` (`retrieve.busy_rejections`). Deliberately **not** `admission_queue_depth × 10 MB`, so at the shipped defaults the byte bound binds before the depth bound and both are exercisable. |
 
 ### Top-level PromptGuard policy keys
 

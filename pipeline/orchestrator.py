@@ -186,7 +186,7 @@ async def _bounded_permit(
     file route's untimed acquisition.
 
     The release is in ``finally`` and runs **only when the permit was
-    acquired**: ``asyncio.timeout`` cancels the pending ``acquire()``, and a
+    acquired**: the deadline cancels the pending ``acquire()``, and a
     grant that lands after that cancellation is handed back by
     ``Semaphore.acquire``'s own cancellation handling. Releasing on the
     timeout path as well would hand out a permit this coroutine never held and
@@ -199,7 +199,7 @@ async def _bounded_permit(
     acquired = False
     try:
         try:
-            # ``asyncio.timeout`` takes ``None`` as its no-deadline form, so
+            # The deadline context takes ``None`` as its no-deadline form, so
             # the untimed `/extract` acquisition is this same one statement
             # rather than a second bare ``acquire()`` for a reviewer to check.
             async with asyncio.timeout(seconds):
@@ -242,8 +242,13 @@ async def sanitize_and_structure(
     stays untimed and uncounted — and a float is ``/retrieve``'s
     ``promptguard_wait_seconds``, after which the request takes the
     classifier-unavailable outcome under its own policy instead of queueing.
+
+    Stages 2 and 4 run on the default executor through ``asyncio.to_thread``,
+    the way stage 3's inference already does, so a pathological page cannot
+    stall ``/health`` on either route that comes through here. The functions
+    are pure, so the output is byte-identical to the synchronous calls.
     """
-    structural = scan_structural(extraction.raw_text)
+    structural = await asyncio.to_thread(scan_structural, extraction.raw_text)
     promptguard = PromptGuardResult(
         verdict=Stage3Verdict.SAFE,
         score=0.0,
@@ -297,7 +302,8 @@ async def sanitize_and_structure(
         else:
             promptguard = await classify()
 
-    return structure_sanitization_result(
+    return await asyncio.to_thread(
+        structure_sanitization_result,
         extraction=extraction,
         structural=structural,
         promptguard=promptguard,
@@ -325,7 +331,7 @@ async def run_retrieve_pipeline(
     retrieve_metrics: RetrieveMetricsSink,
     classification_semaphore: asyncio.Semaphore,
     extraction_settings: ExtractionSettings,
-    admission: AdmissionSlot | None = None,
+    admission: AdmissionSlot,
 ) -> RetrievedContent:
     """Run the full 5-stage retrieval pipeline.
 
@@ -357,12 +363,12 @@ async def run_retrieve_pipeline(
     extraction_settings:
         The ``extraction:`` limits a fetched PDF's bounded worker runs under.
     admission:
-        The slot held for the fetch-and-classify work, or ``None`` to acquire
-        nothing — today's behaviour. Defaulted for exactly one story: nothing
-        publishes ``app.state.retrieve_admission`` yet, so a required
-        parameter here would make every ``/retrieve`` request die on
-        ``AttributeError``. US-002 builds the controller and removes this
-        default.
+        The ``/retrieve`` admission slot, ``app.state.retrieve_admission``.
+        Acquired after the cache read (a hit never waits) and before the fetch
+        (a queued request holds no body), with no timer around the
+        acquisition, and released in ``finally`` once stage 1 is done — so
+        the fetched body goes with the slot, before the classification wait.
+        A full queue is refused 422 ``busy`` / ``admission_queue_full``.
 
     Returns
     -------
@@ -436,56 +442,78 @@ async def run_retrieve_pipeline(
                 logger.info("Cache hit for %s", request.url)
                 return cached.model_copy(update={"request_id": request_id})
 
-    # -- Step 3: Fetch content --
-    user_agents: list[str] = config.get("user_agents", [])
-    try:
-        fetch_result = await fetch_url(
-            request.url,
-            blocked_domains=blocked_domains,
-            user_agents=user_agents if user_agents else None,
+    # -- Step 3: Take an admission slot, fetch, and run Stage 1 --
+    # After the cache read, so a hit never waits, and before the fetch, so a
+    # queued request holds no body. No timer around `acquire()`: the
+    # controller's handoff is not cancellation-safe after a grant (recorded in
+    # GOTCHAS.md), and its bounded queue depth and reserved bytes are the
+    # backpressure — a full queue refuses at once rather than waiting.
+    if not await admission.acquire():
+        raise PipelineError(
+            error="busy",
+            reason=contract.RETRIEVE_ADMISSION_QUEUE_FULL,
+            request_id=request_id,
         )
-    except PrivateIPError as exc:
-        raise PipelineError(
-            error="private_ip",
-            reason=str(exc),
-            request_id=request_id,
-        ) from exc
-    except BlockedDomainError as exc:
-        raise PipelineError(
-            error="blocked_domain",
-            reason=str(exc),
-            request_id=request_id,
-        ) from exc
-    except httpx.TimeoutException as exc:
-        raise PipelineError(
-            error="fetch_timeout",
-            reason=f"Request timed out fetching {request.url}",
-            request_id=request_id,
-        ) from exc
-    except ContentTooLargeError as exc:
-        raise PipelineError(
-            error="content_too_large",
-            reason=str(exc),
-            request_id=request_id,
-        ) from exc
-    except Exception as exc:
-        raise PipelineError(
-            error="fetch_error",
-            reason=f"Failed to fetch {request.url}: {exc}",
-            request_id=request_id,
-        ) from exc
+    try:
+        user_agents: list[str] = config.get("user_agents", [])
+        try:
+            fetch_result = await fetch_url(
+                request.url,
+                blocked_domains=blocked_domains,
+                user_agents=user_agents if user_agents else None,
+            )
+        except PrivateIPError as exc:
+            raise PipelineError(
+                error="private_ip",
+                reason=str(exc),
+                request_id=request_id,
+            ) from exc
+        except BlockedDomainError as exc:
+            raise PipelineError(
+                error="blocked_domain",
+                reason=str(exc),
+                request_id=request_id,
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise PipelineError(
+                error="fetch_timeout",
+                reason=f"Request timed out fetching {request.url}",
+                request_id=request_id,
+            ) from exc
+        except ContentTooLargeError as exc:
+            raise PipelineError(
+                error="content_too_large",
+                reason=str(exc),
+                request_id=request_id,
+            ) from exc
+        except Exception as exc:
+            raise PipelineError(
+                error="fetch_error",
+                reason=f"Failed to fetch {request.url}: {exc}",
+                request_id=request_id,
+            ) from exc
 
-    # -- Step 4: Detect content type and run Stage 1 extraction --
-    content_type = detect_content_type(
-        fetch_result.content_type,
-        fetch_result.response_body,
-    )
+        # -- Step 4: Detect content type and run Stage 1 extraction --
+        content_type = detect_content_type(
+            fetch_result.content_type,
+            fetch_result.response_body,
+        )
 
-    if content_type == "pdf":
-        extraction = extract_pdf(fetch_result.response_body)
-    else:
-        html_text = fetch_result.response_body.decode("utf-8", errors="replace")
-        extraction = extract_html(html_text, request.url)
+        if content_type == "pdf":
+            extraction = extract_pdf(fetch_result.response_body)
+        else:
+            html_text = fetch_result.response_body.decode("utf-8", errors="replace")
+            extraction = await asyncio.to_thread(extract_html, html_text, request.url)
+            del html_text
+        # The three post-stage-1 scalars leave the fetch result here, so the
+        # body and its decoded copy go with the slot: a request parked on the
+        # classification permit holds only its extracted text.
+        final_url = fetch_result.final_url
+        redirect_chain = fetch_result.redirect_chain
+        domain_changed_on_redirect = fetch_result.domain_changed_on_redirect
+        del fetch_result
+    finally:
+        await admission.release()
 
     # -- Step 4a: Refuse an over-budget page before classifying it --
     # The primary control: a page whose extracted text exceeds the character
@@ -504,7 +532,7 @@ async def run_retrieve_pipeline(
         )
 
     # Determine domain from final URL
-    parsed_final = urlparse(fetch_result.final_url)
+    parsed_final = urlparse(final_url)
     domain = parsed_final.hostname or ""
     trust_tier = TrustTier(
         _resolve_request_trust_tier(
@@ -526,7 +554,7 @@ async def run_retrieve_pipeline(
             promptguard_fail_closed=request.promptguard_fail_closed,
             extract_mode=request.extract_mode,
             content_type=content_type,
-            domain_changed_on_redirect=fetch_result.domain_changed_on_redirect,
+            domain_changed_on_redirect=domain_changed_on_redirect,
             max_promptguard_chunks=(
                 settings.max_promptguard_chunks
                 if settings.max_promptguard_chunks > 0
@@ -549,11 +577,11 @@ async def run_retrieve_pipeline(
     content = build_retrieved_content(
         request_id=request_id,
         source_url=request.url,
-        final_url=fetch_result.final_url,
+        final_url=final_url,
         domain=domain,
         sanitization=sanitization,
-        redirect_chain=fetch_result.redirect_chain,
-        domain_changed_on_redirect=fetch_result.domain_changed_on_redirect,
+        redirect_chain=redirect_chain,
+        domain_changed_on_redirect=domain_changed_on_redirect,
     )
 
     # A loaded classifier cannot produce an `unavailable_*` state through
@@ -1534,7 +1562,7 @@ async def run_search_pipeline(
     # One deadline per request, tested explicitly before every acquisition.
     # The explicit test is what makes "every remaining result is unscanned"
     # true: `Semaphore.acquire()` returns without yielding when a permit is
-    # free, so a zero-length `asyncio.timeout` around it never fires, and a
+    # free, so a zero-length deadline around it never fires, and a
     # permit released mid-loop after the deadline would otherwise be taken
     # and the result classified.
     loop = asyncio.get_running_loop()

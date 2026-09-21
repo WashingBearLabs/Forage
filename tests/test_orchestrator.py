@@ -115,14 +115,22 @@ def _retrieve_kwargs(**overrides: Any) -> dict[str, Any]:
 
     One helper so the call sites pass the whole set through a single line and
     a later story that changes the set edits one place rather than seventeen.
-    ``admission=None`` is the default until US-002 publishes a controller.
+    ``admission`` is a fresh ``/retrieve`` controller per call, built the way
+    the ``client`` fixture and the lifespan build theirs, so no direct call
+    shares held slots with another.
     """
+    from retrieval_app import ExtractionAdmissionController
+
+    settings = RetrieveSettings()
+    retrieve_metrics = _NullRetrieveMetrics()
     kwargs: dict[str, Any] = {
-        "settings": RetrieveSettings(),
-        "retrieve_metrics": _NullRetrieveMetrics(),
+        "settings": settings,
+        "retrieve_metrics": retrieve_metrics,
         "classification_semaphore": asyncio.Semaphore(1),
         "extraction_settings": ExtractionSettings(),
-        "admission": None,
+        "admission": ExtractionAdmissionController.from_retrieve_settings(
+            settings, retrieve_metrics
+        ),
     }
     kwargs.update(overrides)
     return kwargs
@@ -2009,6 +2017,9 @@ def client() -> httpx.AsyncClient:
     app.state.search_metrics = SearchMetrics()
     app.state.retrieve_metrics = RetrieveMetrics()
     app.state.retrieve_settings = retrieve_settings_from_config(_SAMPLE_CONFIG)
+    app.state.retrieve_admission = ExtractionAdmissionController.from_retrieve_settings(
+        app.state.retrieve_settings, app.state.retrieve_metrics
+    )
     app.state.classification_semaphore = asyncio.Semaphore(
         settings.classification_concurrency
     )

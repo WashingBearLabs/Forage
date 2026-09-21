@@ -15,7 +15,7 @@ import time
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args
 
@@ -64,6 +64,7 @@ from pipeline.extraction_limits import (
 )
 from pipeline.orchestrator import (
     DOCUMENT_FAILURE_REASONS,
+    AdmissionMetrics,
     PipelineError,
     UnsupportedFormatError,
     document_failure,
@@ -91,6 +92,7 @@ from pipeline.search_providers.brave import (
 )
 from pipeline.search_providers.policy import apply_request_policy
 from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL, SearxngProvider
+from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES
 from promptguard.classifier import PromptGuardClassifier
 
 logger = logging.getLogger(__name__)
@@ -586,6 +588,22 @@ class RetrieveMetricsResponse(BaseModel):
             "on `/health` means permit contention, not a missing model."
         )
     )
+    semaphore_saturation: int = Field(
+        description=(
+            "`/retrieve` requests that found every fetch slot of the admission "
+            "gate busy (`retrieve.fetch_concurrency`) — not the classification "
+            "permit, which is `classification_wait_timeouts`. Counts queueing "
+            "as well as refusal, so it is always >= busy_rejections."
+        )
+    )
+    busy_rejections: int = Field(
+        description=(
+            "`/retrieve` requests refused 422 `busy` (reason "
+            "`admission_queue_full`) because the admission queue was at "
+            "`retrieve.admission_queue_depth` or its byte reservation would "
+            "have exceeded `retrieve.max_queued_fetch_bytes`."
+        )
+    )
 
 
 class CacheMetricsResponse(BaseModel):
@@ -747,7 +765,9 @@ class Pipeline422ErrorResponse(BaseModel):
         description=(
             "Stable machine-readable refusal code. The fetch and URL-validation "
             "codes arrive on /retrieve, the searxng_* codes and "
-            "search_unavailable on /search."
+            "search_unavailable on /search. busy arrives on /retrieve only, "
+            "at 422, as the admission refusal (reason admission_queue_full); "
+            "the same literal is /extract's 429."
         )
     )
     reason: str = Field(
@@ -937,11 +957,10 @@ class RetrieveMetrics:
         self.blocked_by_reason: dict[str, int] = {}
         self.promptguard_state: dict[str, int] = {}
         # The three counters `pipeline.orchestrator.RetrieveMetricsSink`
-        # declares. Incremented by the stories that wire the behaviour they
-        # describe (US-002, US-006) and mirrored onto
-        # `RetrieveMetricsResponse` by those same stories; declared here so
-        # this class satisfies the Protocol structurally from the seam's
-        # first commit.
+        # declares. The first two are the `/retrieve` admission controller's
+        # (`app.state.retrieve_admission` increments them by attribute, the
+        # way `/extract`'s controller increments `ExtractionMetrics`); the
+        # third is the classification-permit wait timeout.
         self.semaphore_saturation = 0
         self.busy_rejections = 0
         self.classification_wait_timeouts = 0
@@ -977,7 +996,7 @@ class ExtractionAdmissionController:
     def __init__(
         self,
         settings: ExtractionSettings,
-        metrics: ExtractionMetrics,
+        metrics: AdmissionMetrics,
     ) -> None:
         self._limit = settings.extraction_concurrency
         self._queue_depth = settings.admission_queue_depth
@@ -988,6 +1007,41 @@ class ExtractionAdmissionController:
         self._queued_bytes = 0
         self._waiters: list[asyncio.Future[None]] = []
         self._lock = asyncio.Lock()
+
+    @classmethod
+    def from_retrieve_settings(
+        cls,
+        settings: RetrieveSettings,
+        metrics: AdmissionMetrics,
+    ) -> ExtractionAdmissionController:
+        """Build ``/retrieve``'s admission controller from ``retrieve:`` limits.
+
+        The controller reads exactly four fields off an ``ExtractionSettings``,
+        so this builds an ``ExtractionSettings``-shaped view carrying
+        ``/retrieve``'s values in them: ``fetch_concurrency`` as the slot
+        count, ``admission_queue_depth`` as the queue depth,
+        ``max_queued_fetch_bytes`` as the queued-byte bound and the 10 MB fetch
+        cap (``DEFAULT_MAX_CONTENT_BYTES``) as each queued request's
+        reservation.
+
+        The view is a **field carrier, not a validated ``extraction:``
+        configuration**. ``ExtractionSettings`` has no ``__post_init__`` — its
+        bounds live in ``extraction_settings_from_config``'s reader, which
+        ``dataclasses.replace`` bypasses — so the view may legitimately hold an
+        ``admission_queue_depth`` up to 16 and a queued-byte bound up to
+        160 MB, above the ``extraction:`` maxima. ``retrieve_settings_from_config``
+        is the gate that already bounded those values; nothing here re-checks
+        them against the ``extraction:`` ranges, and nothing else reads the
+        view.
+        """
+        view = replace(
+            extraction_settings_from_config({}),
+            extraction_concurrency=settings.fetch_concurrency,
+            admission_queue_depth=settings.admission_queue_depth,
+            max_queued_upload_bytes=settings.max_queued_fetch_bytes,
+            max_input_bytes=DEFAULT_MAX_CONTENT_BYTES,
+        )
+        return cls(view, metrics)
 
     @property
     def active(self) -> int:
@@ -1267,6 +1321,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     app.state.search_metrics = SearchMetrics()
     app.state.retrieve_metrics = RetrieveMetrics()
+    app.state.retrieve_admission = ExtractionAdmissionController.from_retrieve_settings(
+        retrieve_settings,
+        app.state.retrieve_metrics,
+    )
     app.state.model_metrics = ModelMetrics()
     app.state.classification_semaphore = asyncio.Semaphore(
         settings.classification_concurrency
@@ -1435,6 +1493,13 @@ app.state.extraction_admission = ExtractionAdmissionController(
 )
 app.state.search_metrics = SearchMetrics()
 app.state.retrieve_metrics = RetrieveMetrics()
+# One process-wide instance for every lifespan-free transport, exactly like
+# `extraction_admission` above: a test that saturates it must build its own or
+# reset this attribute, or it leaks held slots into the next test.
+app.state.retrieve_admission = ExtractionAdmissionController.from_retrieve_settings(
+    app.state.retrieve_settings,
+    app.state.retrieve_metrics,
+)
 app.state.model_metrics = ModelMetrics()
 # Declared here as well as in the lifespan so the attributes exist for a
 # transport that never fires lifespan events (`httpx.ASGITransport`, which the
@@ -1463,7 +1528,13 @@ async def pipeline_error_handler(
     request: Request,
     exc: PipelineError,
 ) -> JSONResponse:
-    """Return structured JSON for pipeline errors."""
+    """Return structured JSON for pipeline errors.
+
+    The status is chosen by route and code together, never by code alone:
+    ``busy`` is 429 on ``/extract`` and 422 everywhere else, because
+    ``/retrieve``'s admission refusal carries the same literal and a new
+    status on a route would be a MAJOR contract change.
+    """
     content = exc.to_dict()
     if request.url.path == "/extract":
         content["sanitizer_revision"] = getattr(
@@ -1472,7 +1543,9 @@ async def pipeline_error_handler(
             derive_sanitizer_revision(request.app.state.config),
         )
     return JSONResponse(
-        status_code=429 if exc.error == "busy" else 422,
+        status_code=(
+            429 if exc.error == "busy" and request.url.path == "/extract" else 422
+        ),
         content=content,
     )
 
@@ -1587,6 +1660,8 @@ async def metrics(request: Request) -> dict[str, Any]:
             "classification_wait_timeouts": (
                 retrieve_metrics.classification_wait_timeouts
             ),
+            "semaphore_saturation": retrieve_metrics.semaphore_saturation,
+            "busy_rejections": retrieve_metrics.busy_rejections,
         },
         # A different layer from `retrieve.cache_hits`/`cache_misses` above,
         # not a duplicate of it — :class:`CacheMetricsResponse` says why, and
@@ -1659,9 +1734,7 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
             retrieve_metrics=retrieve_metrics,
             classification_semaphore=request.app.state.classification_semaphore,
             extraction_settings=request.app.state.extraction_settings,
-            # US-002 swaps this for `request.app.state.retrieve_admission`;
-            # nothing publishes that attribute yet.
-            admission=None,
+            admission=request.app.state.retrieve_admission,
         )
     except PipelineError as exc:
         retrieve_metrics.record_error(exc.error)

@@ -125,6 +125,17 @@ file in the repo. |
 
 ## Patterns That Matter
 
+**Stages 1, 2 and 4 run off the event loop, on both routes.** Since
+`hardening-retrieve-parity` US-002, `extract_html` (a fetched page's HTML), `scan_structural`
+and `structure_sanitization_result` are called through `asyncio.to_thread`, as stage 3's
+inference already was — the latter two inside `sanitize_and_structure`, so `/retrieve` and
+`/extract` share them, with byte-identical output. A pathological page therefore cannot stall
+`/health`. `/retrieve`'s fetch and stage 1 run under a second `ExtractionAdmissionController`
+(`app.state.retrieve_admission`, built by `from_retrieve_settings`), acquired after the cache
+read and released in `finally` after stage 1, and the fetched body is deleted with the slot
+so a request waiting on the classification permit holds only its extracted text. `/search`'s
+per-result `scan_structural` over bounded fields stays on the loop.
+
 **The sanitizer revision is a content hash of source files *and of the model pin*.**
 `sanitizer_revision.py` resolves `_REVISION_SOURCES` relative to its own file and
 `_ROOT_REVISION_SOURCES` against its parent, and hashes the nine files in that order, then
@@ -196,8 +207,11 @@ A twenty-first — also **not** behaviour-changing — came with the classificat
 the first rotation of this epic with **three** hashed files: `orchestrator.py` for
 `_bounded_permit` and the two routes' acquisitions, `stage3_promptguard.py` for the pure
 `unavailable_result` seam, `contract.py` for the `1.3.0` continuation line; each reverted in
-turn, all-reverted control landing on `e55b5f06…`). Nothing downstream may assume
-Poppy↔Forage revision parity.
+turn, all-reverted control landing on `e55b5f06…`). A twenty-second — also **not**
+behaviour-changing — came with stages 1, 2 and 4 moving off the event loop and the `/retrieve`
+admission gate (`d0433876…` → `f654be77…`, `hardening-retrieve-parity` US-002 —
+`orchestrator.py` + `contract.py`, each reverted in turn, both-reverted control landing on
+`d0433876…`). Nothing downstream may assume Poppy↔Forage revision parity.
 
 **Startup is non-blocking, and one background task is the reason.** The lifespan does its
 synchronous wiring, starts weight acquisition as

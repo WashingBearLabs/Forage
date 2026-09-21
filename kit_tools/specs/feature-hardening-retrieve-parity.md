@@ -1758,6 +1758,27 @@ fails the unit test that pins the update keys.
   Recorded at all six sites (CLAUDE.md, GOTCHAS.md, CODE_ARCH.md, DECISIONS.md,
   `docs/bootstrap-notes.md` ledger row + section, SERVICE_MAP.md's divergence count, now twenty).
 
+### US-002
+
+- **`grep -c 'asyncio.timeout' pipeline/orchestrator.py` was 4 at story start, not 1** — three
+  comments/docstrings named it beside the one `_bounded_permit` code site. The three were reworded
+  ("the deadline", "the deadline context") so the count is exactly 1 as the criterion states.
+- **Construction-site grep lists nine lines, not eight.** `tests/test_orchestrator.py:5157` was
+  added by an earlier story in this epic; the property the criterion is after — the sites at story
+  start are untouched — holds: no `ExtractionAdmissionController(` line was added or edited. Every
+  new controller in this story is built through `from_retrieve_settings`.
+- **`test_pipeline_422_error_code_is_pinned_to_ten_members` now reads the held 1.3.0 golden**,
+  not the frozen 1.2.0 one: the 1.2.0 fixture can never carry `busy`, and editing it is forbidden.
+- **The body-release test needs a plain function as `fetch_url`, not an `AsyncMock`:** a mock's
+  `return_value` keeps the `FetchResult` — and so the body — alive for the life of the mock.
+- **The discipline tests pin the safe cancel-while-queued ordering** (the cancelled waiter's
+  `except BaseException` runs before the holder releases); the racing interleaving is the recorded
+  residual (GOTCHAS.md, SECURITY.md, spec 6 Open Questions) and is not a tested property.
+- **Rotation** `d0433876…fc88e` → `f654be77…c92fb`; `orchestrator.py` alone reverted gives
+  `16b9631f…d8932`, `contract.py` alone `646b4f27…3fd81`, both-reverted control reproduces
+  `d0433876…fc88e` exactly. Recorded at CLAUDE.md, GOTCHAS.md, CODE_ARCH.md, DECISIONS.md,
+  `docs/bootstrap-notes.md` (ledger row + section) and SERVICE_MAP.md's count (now twenty-two).
+
 ## Refinement Notes
 
 ### Research Findings

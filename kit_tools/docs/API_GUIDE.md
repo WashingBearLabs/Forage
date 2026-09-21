@@ -195,7 +195,9 @@ Response fields a consumer must read (`RetrievedContent`; full shape in the cont
 | `request_id` | str | Server-minted per call (fresh even on a cache hit); quote it in bug reports |
 
 Refusals are 422 with `{"error", "reason", "request_id"}`: `invalid_url`, `private_ip`,
-`blocked_domain`, `fetch_timeout`, `fetch_error`, `content_too_large`. `reason` echoes the
+`blocked_domain`, `fetch_timeout`, `fetch_error`, `content_too_large`, and `busy` (reason
+`admission_queue_full`: the `/retrieve` admission queue is full — retry later; the same
+literal is `/extract`'s 429, but here it is always 422). `reason` echoes the
 requested URL, and `private_ip` echoes the resolved address (`contract/GOVERNANCE.md`
 ruling (d)). `content_too_large` is the one code with **two reason shapes**: the fetch-cap
 prose that echoes the URL, or the fixed literal `promptguard_budget` when the fetched
@@ -417,6 +419,7 @@ emission site through the real routes and asserts parity).
 |---|---|---|---|
 | `blocked_domain` | 422 | `/retrieve` | Host is in `blocked_domains` or the configured `seed_blocklist` |
 | `busy` | 429 | `/extract` | Admission queue full |
+| `busy` | 422 | `/retrieve` | Reason `admission_queue_full`: the fetch admission queue is at `retrieve.admission_queue_depth` or `retrieve.max_queued_fetch_bytes`. Added in `1.3.0` (`hardening-retrieve-parity` US-002) |
 | `content_too_large` | 422 (and the unreachable 413) | `/retrieve`, `/extract` | Response body over 10 MiB (`/retrieve`); upload over 50 MiB (`/extract`) |
 | `content_too_large_to_classify` | 422 | `/extract` | Extracted text exceeds the Prompt Guard chunk budget |
 | `extraction_failed` | 422 | `/extract` | Parser failure |
@@ -471,7 +474,7 @@ in-tree copy and says nothing about wire compatibility. The image tag (for examp
 CI verifies two of the three on every release: the `smoke` job reads the in-image copy
 back out of the candidate image, and the `publish` job downloads the Release assets back
 from the API; both are checked against the anchor committed at the tag (currently
-`2e451afcc1f75b8521ffc61e3e78835ec49b25650adba096b65140a9be57e394`).
+`ebca0919519a147d20970773b2db6059a13a566b5b5faf3fbc2065bdea5bf225`).
 
 **Vendoring procedure** (`contract/GOVERNANCE.md` "Consumers"):
 

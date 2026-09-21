@@ -601,8 +601,11 @@ components:
         error:
           description: Stable machine-readable refusal code. The fetch and URL-validation
             codes arrive on /retrieve, the searxng_* codes and search_unavailable on /search.
+            busy arrives on /retrieve only, at 422, as the admission refusal (reason admission_queue_full);
+            the same literal is /extract's 429.
           enum:
           - blocked_domain
+          - busy
           - content_too_large
           - fetch_error
           - fetch_timeout
@@ -679,6 +682,12 @@ components:
             outside the closed vocabulary.
           title: Blocked By Reason
           type: object
+        busy_rejections:
+          description: '`/retrieve` requests refused 422 `busy` (reason `admission_queue_full`)
+            because the admission queue was at `retrieve.admission_queue_depth` or its byte
+            reservation would have exceeded `retrieve.max_queued_fetch_bytes`.'
+          title: Busy Rejections
+          type: integer
         cache_hits:
           description: Requests served from the content cache. A *request* outcome — see the
             cache section for the storage-operation counters underneath.
@@ -712,6 +721,13 @@ components:
           description: Retrieve requests that reached the handler.
           title: Requests
           type: integer
+        semaphore_saturation:
+          description: '`/retrieve` requests that found every fetch slot of the admission
+            gate busy (`retrieve.fetch_concurrency`) — not the classification permit, which
+            is `classification_wait_timeouts`. Counts queueing as well as refusal, so it is
+            always >= busy_rejections.'
+          title: Semaphore Saturation
+          type: integer
       required:
       - requests
       - errors
@@ -720,6 +736,8 @@ components:
       - blocked_by_reason
       - promptguard_state
       - classification_wait_timeouts
+      - semaphore_saturation
+      - busy_rejections
       title: RetrieveMetricsResponse
       type: object
     RetrieveRequest:

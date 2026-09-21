@@ -42,6 +42,7 @@ from pipeline.contract import (
 )
 from pipeline.extraction_limits import extraction_settings_from_config
 from pipeline.orchestrator import DOCUMENT_FAILURE_CODES, PipelineError
+from pipeline.retrieve_limits import retrieve_settings_from_config
 from promptguard.classifier import PromptGuardClassifier
 from retrieval_app import (
     Admission413Response,
@@ -115,6 +116,9 @@ def _configure_app(config: dict[str, Any]) -> None:
     )
     app.state.search_metrics = SearchMetrics()
     app.state.retrieve_metrics = RetrieveMetrics()
+    app.state.retrieve_admission = ExtractionAdmissionController.from_retrieve_settings(
+        retrieve_settings_from_config(config), app.state.retrieve_metrics
+    )
     app.state.classification_semaphore = asyncio.Semaphore(
         settings.classification_concurrency
     )
@@ -238,12 +242,13 @@ def test_error_vocabulary_is_the_documented_eighteen() -> None:
         | contract.SEARCH_ERROR_CODES
     )
     assert len(contract.EXTRACT_ERROR_CODES) == 10
-    assert len(contract.RETRIEVE_ERROR_CODES) == 6
+    assert len(contract.RETRIEVE_ERROR_CODES) == 7
     assert len(contract.SEARCH_ERROR_CODES) == 3
-    # `content_too_large` is the one code two surfaces share, and it is why
-    # 10 + 6 + 3 documents eighteen codes rather than nineteen.
+    # `content_too_large` and `busy` are the two codes two surfaces share, and
+    # they are why 10 + 7 + 3 documents eighteen codes rather than twenty.
     assert {
-        "content_too_large"
+        "busy",
+        "content_too_large",
     } == contract.EXTRACT_ERROR_CODES & contract.RETRIEVE_ERROR_CODES
 
 
@@ -269,8 +274,9 @@ def test_extract_surface_matches_the_orchestrator_taxonomy() -> None:
         "invalid_mime_hint",
         "invalid_request_id",
     } == contract.EXTRACT_ERROR_CODES - DOCUMENT_FAILURE_CODES
-    # `busy` is the one /extract code the 422 handler never emits: it answers
-    # 429 instead.
+    # `busy` is the one /extract code the 422 handler never emits on /extract:
+    # there it answers 429. The same literal is a /retrieve code, answered 422
+    # there — the handler picks the status by route and code together.
     assert {"busy"} == contract.EXTRACT_ERROR_CODES - contract.EXTRACT_422_ERROR_CODES
 
 
@@ -568,6 +574,68 @@ def test_declared_error_statuses_match_the_emission_map() -> None:
         "/search": ["200", "422"],
         "/extract": ["200", "400", "404", "413", "422", "429", "503"],
     }
+
+
+async def test_busy_status_is_chosen_by_route_at_runtime() -> None:
+    """The declaration above, observed: ``busy`` is 422 on /retrieve, 429 on /extract.
+
+    ``pipeline_error_handler`` picks 429 for ``busy`` on ``/extract`` only
+    (``hardening-retrieve-parity`` US-002). ``/retrieve``'s admission refusal
+    carries the same literal and must stay inside its declared ``["200",
+    "422"]`` — a 429 there would be a new status on the route, a MAJOR change.
+    Both refusals are driven for real: each route's controller is saturated
+    with a zero-depth queue, so neither is a patched pipeline.
+    """
+    _configure_app(
+        {
+            "extract_route_enabled": True,
+            "extraction": {"admission_queue_depth": 0},
+            "retrieve": {"admission_queue_depth": 0},
+        }
+    )
+    extract_controller: ExtractionAdmissionController = app.state.extraction_admission
+    retrieve_controller: ExtractionAdmissionController = app.state.retrieve_admission
+    assert await extract_controller.acquire() is True
+    assert await retrieve_controller.acquire() is True
+    fetch = AsyncMock()
+    try:
+        with (
+            patch(
+                "pipeline.orchestrator.validate_url",
+                new=AsyncMock(return_value=("93.184.216.34", "example.com")),
+            ),
+            patch("pipeline.orchestrator.fetch_url", new=fetch),
+        ):
+            async with _client() as client:
+                retrieve = await client.post(
+                    "/retrieve", json={"url": "https://example.com/"}
+                )
+                extract = await client.post(
+                    "/extract",
+                    files={"file": ("document.txt", b"safe", "text/plain")},
+                    data={"filename": "document.txt"},
+                )
+    finally:
+        await extract_controller.release()
+        await retrieve_controller.release()
+
+    assert retrieve.status_code == 422
+    assert retrieve.json()["error"] == "busy"
+    assert retrieve.json()["reason"] == contract.RETRIEVE_ADMISSION_QUEUE_FULL
+    assert set(retrieve.json()) == {"error", "reason", "request_id"}
+    assert_mirrors(Pipeline422ErrorResponse, retrieve)
+    fetch.assert_not_awaited()
+
+    assert extract.status_code == 429
+    assert extract.json()["error"] == "busy"
+    assert_mirrors(RateLimit429Response, extract)
+
+    for controller in (extract_controller, retrieve_controller):
+        assert (controller.active, controller.queued, controller.queued_bytes) == (
+            0,
+            0,
+            0,
+        )
 
 
 def test_each_declaration_points_at_its_mirror_model() -> None:

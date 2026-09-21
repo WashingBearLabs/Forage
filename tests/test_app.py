@@ -66,7 +66,8 @@ from pipeline.search_providers.base import (
 )
 from pipeline.search_providers.brave import BRAVE_API_KEY_ENV_VAR
 from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL
-from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES
+from pipeline.stage1_extraction import ExtractionResult, extract_html
+from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES, FetchResult
 from promptguard.classifier import (
     CHUNK_OVERLAP,
     MAX_SEQ_LEN,
@@ -109,6 +110,9 @@ def client() -> httpx.AsyncClient:
     )
     app.state.search_metrics = SearchMetrics()
     app.state.retrieve_metrics = RetrieveMetrics()
+    app.state.retrieve_admission = ExtractionAdmissionController.from_retrieve_settings(
+        RetrieveSettings(), app.state.retrieve_metrics
+    )
     app.state.model_metrics = ModelMetrics()
     app.state.classification_semaphore = asyncio.Semaphore(
         settings.classification_concurrency
@@ -504,6 +508,8 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "blocked_by_reason": {},
         "promptguard_state": {},
         "classification_wait_timeouts": 0,
+        "semaphore_saturation": 0,
+        "busy_rejections": 0,
     }
     assert set(body["cache"]) == {
         "reconnect_attempts",
@@ -1046,6 +1052,73 @@ async def test_health_answers_while_the_fetch_is_in_flight(
             assert model_metrics.fetch_in_progress is True
     finally:
         release.set()
+
+
+async def test_health_answers_while_a_fetched_page_is_being_extracted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`/health` stays responsive while stage 1 parses a fetched page.
+
+    The shape of the test above, with the same connected cache for the same
+    reason — no reconnect floor to hide behind — and a different thing held:
+    a `/retrieve` whose `extract_html` is parked in its worker thread, standing
+    in for a pathological page. With stage 1 on the event loop every `/health`
+    would wait for it (`hardening-retrieve-parity` US-002).
+    """
+    acquisition = threading.Event()
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _blocking_acquisition(acquisition)
+    )
+    entered = threading.Event()
+    release = threading.Event()
+
+    def _blocking_extract_html(
+        html_content: str, source_url: str | None = None
+    ) -> ExtractionResult:
+        entered.set()
+        release.wait(timeout=10)
+        return extract_html(html_content, source_url)
+
+    fetch = AsyncMock(
+        return_value=FetchResult(
+            final_url="https://example.com/",
+            response_body=b"<html><body><p>A calm page.</p></body></html>",
+            content_type="text/html",
+            status_code=200,
+        )
+    )
+    try:
+        with (
+            patch(
+                "pipeline.orchestrator.validate_url",
+                new=AsyncMock(return_value=("93.184.216.34", "example.com")),
+            ),
+            patch("pipeline.orchestrator.fetch_url", new=fetch),
+            patch("pipeline.orchestrator.extract_html", new=_blocking_extract_html),
+        ):
+            async with _running_app(cache_connected=True) as client:
+                retrieve = asyncio.create_task(
+                    client.post("/retrieve", json={"url": "https://example.com/"})
+                )
+                deadline = time.monotonic() + 10
+                while not entered.is_set():
+                    assert time.monotonic() < deadline, "extraction never started"
+                    await asyncio.sleep(0.01)
+
+                latencies: list[float] = []
+                for _ in range(5):
+                    started_at = time.monotonic()
+                    response = await client.get("/health")
+                    latencies.append(time.monotonic() - started_at)
+                    assert response.status_code == 200
+
+                assert max(latencies) < 1.0
+                assert retrieve.done() is False
+                release.set()
+                assert (await retrieve).status_code == 200
+    finally:
+        release.set()
+        acquisition.set()
 
 
 async def test_metrics_reports_fetch_in_progress_while_downloading(

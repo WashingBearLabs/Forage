@@ -150,13 +150,15 @@ retention is configured anywhere in the repo; the Docker daemon defaults apply.
 
 The complete wire vocabulary is the eighteen codes in `pipeline/contract.py`
 (`ErrorCode`), verified against the source at seeding time. `content_too_large` is one
-code emitted from three sites, which is why ten `/extract` codes plus six `/retrieve`
-codes plus three `/search` codes deduplicate to eighteen.
+code emitted from three sites, and `busy` is shared by `/extract` (429) and `/retrieve`
+(422), which is why ten `/extract` codes plus seven `/retrieve` codes plus three `/search`
+codes deduplicate to eighteen.
 
 | Code | HTTP | Route | What it means | First thing to check |
 |---|---|---|---|---|
 | `blocked_domain` | 422 | `/retrieve` | Host matched the request's `blocked_domains` or `seed_blocklist` in `config.yaml` (exact, case-insensitive) | The two lists. This is an intended refusal |
 | `busy` | 429 | `/extract` | Admission queue full: `admission_queue_depth` (shipped 1) or `max_queued_upload_bytes` exceeded. Body carries `sanitizer_revision` | `/metrics.extraction.busy_rejections`, `active`, `queued`. Extraction concurrency is pinned to 1; retry client-side |
+| `busy` | 422 | `/retrieve` | Reason `admission_queue_full`: the `/retrieve` admission queue is full — `retrieve.admission_queue_depth` (shipped 4) or `retrieve.max_queued_fetch_bytes` (shipped 30 MiB, three queued requests) exceeded while the single fetch slot was held. No `sanitizer_revision` in the body | `/metrics` `retrieve.busy_rejections` and `retrieve.semaphore_saturation`; what `/retrieve` is being pointed at and how often. Raise the two queue knobs, not `fetch_concurrency` (pinned at 1) |
 | `content_too_large` | 422 (`/retrieve`, `/extract`); 413 documented on `/extract` but **unreachable** | `/retrieve`: `Content-Length` or streamed body over 10 MiB, **or** — reason `promptguard_budget`, the fixed literal rather than prose — extracted text over the ceiling derived from `retrieve.max_promptguard_chunks` (no pre-check at the shipped default `0`; 458,752 characters once the coming default 256 lands, `contract/GOVERNANCE.md` ruling (g)). `/extract`: upload over `max_input_bytes` (50 MiB); the streaming refusal actually arrives as **400** `{"detail": "There was an error parsing the body"}`, the post-spool re-check as 422 | The target or upload size. The 400 is expected: `contract/GOVERNANCE.md` ruling (a2); fixing it is a MAJOR |
 | `content_too_large_to_classify` | 422 | `/extract` | Extracted text exceeds `max_promptguard_chunks` (64 chunks, 114,688 classifiable characters) | Document length; the shipped value is the maximum, `config.yaml` can only tighten it |
 | `extraction_failed` | 422 | `/extract` | The pypdf child failed or hit a bound: 20 s CPU, 384 MiB address space, 90 s wall clock, 500 pages | `/metrics.extraction.verdicts.extraction_failed`; page count; container memory headroom |

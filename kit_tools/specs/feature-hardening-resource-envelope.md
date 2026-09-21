@@ -1636,6 +1636,15 @@ only establishes what `0` means.
       and the sizing table's per-model column, and spec 7 US-006 routes the selected `FORAGE_MODEL_ID`
       into the rule — written here at close-out; spec 7's text must carry the same handoff (Known
       risks).
+- [ ] **The admission controller's handoff leaks a slot on a racing cancellation** (recorded by
+      `hardening-retrieve-parity` US-002; flagged for the epic wrapper). `release()` hands the slot
+      to a popped waiter without decrementing `_active`; a waiter cancelled while queued or after
+      its grant, racing a release, leaves `active == limit` with nobody holding a slot — at
+      `retrieve.fetch_concurrency: 1` that wedges `/retrieve` for the life of the process. Reachable
+      today only by task cancellation (server shutdown); no timer wraps `acquire()`. Fix direction:
+      make the handoff idempotent (`release()` always decrements, the woken waiter re-increments
+      under the lock). The envelope work that sizes the slot and adds `--limit-concurrency` is the
+      natural owner. Full description: `kit_tools/docs/GOTCHAS.md`.
 
 ## Known risks (validation close-out)
 

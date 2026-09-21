@@ -436,6 +436,7 @@ each time deliberately:
 | `hardening-search-sanitization` validation fix | `6f0fa2de…66671` | **the fourth rotation that changes sanitization behaviour.** The `/search` scan loop now scans **both** forms of each text field, not only the newline-preserving one. Two of the twenty-four Stage 2 patterns carry no `re.DOTALL`, so a payload split across a newline scanned clean on the scanned form and blocked on the served one — a bypass US-001 introduced and spec-level validation caught. `orchestrator.py` alone; the revert reproduces `840c78fa…ee4be`. |
 | `hardening-retrieve-parity` US-001 | `e55b5f06…4d3c0` | **not** a behaviour-changing rotation. `run_retrieve_pipeline` gained five keyword-only dependencies (`settings`, `retrieve_metrics`, `classification_semaphore`, `extraction_settings` required; `admission` defaulted for US-002 only) plus the character pre-check that refuses an over-budget fetched page `content_too_large` / `promptguard_budget`; `contract.py` gained `PROMPTGUARD_BUDGET` and the `1.3.0` continuation line. Two hashed files, each reverted in turn; the both-reverted control reproduces `6f0fa2de…66671`. The shipped default `retrieve.max_promptguard_chunks: 0` means no pre-check at all, so no served byte moves. |
 | `hardening-retrieve-parity` US-006 | `d0433876…fc88e` | **not** a behaviour-changing rotation. `orchestrator.py` gained `_bounded_permit` (the one place `asyncio.timeout` and `semaphore.acquire()` appear), the two defaulted classification parameters on `sanitize_and_structure` and `run_search_pipeline`, the `/extract` file route's acquisition moving inward to the stage-3 seam, and step 8's refusal to cache a wait-timeout body; `stage3_promptguard.py` gained the pure `unavailable_result` seam; `contract.py` gained the `1.3.0` continuation line. **Three** hashed files, each reverted in turn; the all-reverted control reproduces `e55b5f06…4d3c0`. No sanitization behaviour moved — what moved is when stage 3 runs and what happens when the permit wait expires. |
+| `hardening-retrieve-parity` US-002 | `f654be77…c92fb` | **not** a behaviour-changing rotation. Two hashed files, each reverted alone (`orchestrator.py` → `16b9631f…`, `contract.py` → `646b4f27…`), both-reverted control landing exactly on `d0433876…`. `orchestrator.py`: `extract_html`, `scan_structural` and `structure_sanitization_result` moved onto `asyncio.to_thread`, `admission` became a required `AdmissionSlot` acquired after the cache read and released in `finally` after stage 1, and `fetch_result` / `html_text` are deleted before the classification wait; `contract.py`: `busy` in `RetrieveErrorCode`, `RETRIEVE_ADMISSION_QUEUE_FULL`, the `1.3.0` continuation line. `stage4_structuring.py` untouched. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
@@ -496,6 +497,19 @@ it made unavoidable: a multi-valued attribute (bs4's `AttributeValueList`) used 
 **Why it matters:**
 Any cross-repo work that assumes Poppy↔Forage revision parity will be wrong. The
 consuming-side spec must compare contracts, not revisions.
+
+---
+
+### The admission controller's handoff leaks a slot on a racing cancellation
+
+The controller's `release()` does a **handoff**: it pops the first waiter, sets its result and returns *without* decrementing `_active`, the woken waiter inheriting the slot; `acquire()`'s `except BaseException` restores accounting only for a waiter still in `_waiters`. So a waiter cancelled after its grant loses the slot — and the window is wider than that: `Task.cancel()` marks the awaited future done at once, so a waiter cancelled while still **queued** has `waiter.done()` before its own `except` runs, and if the holder's `release()` takes the lock in that window it pops the cancelled future, decrements `_queued_bytes`, skips `set_result` and returns without decrementing `_active`; the woken task then finds itself gone from `_waiters` and restores nothing. Net: `active == limit` with nobody holding a slot, and at `fetch_concurrency: 1` one occurrence wedges `/retrieve` for the life of the process — reachable by a plain queued cancellation racing a normal release, not only by a post-grant cancellation. It is latent on `/extract` (the route ships disabled) and reachable on `/retrieve` only by task cancellation — server shutdown; Starlette does not cancel a handler task when an HTTP client disconnects — and never by a timer, because no timer wraps `acquire()` (`hardening-retrieve-parity` US-002 declined one for exactly this reason). **Accepted residual, pre-existing, not fixed here.** Fix direction: make the handoff idempotent — `release()` always decrements, and the woken waiter re-increments under the lock. Open question for the resource-envelope spec.
+
+**Why it matters:** never wrap `ExtractionAdmissionController.acquire()` in a timer
+(`asyncio.timeout`, `wait_for`) until the handoff is fixed — a timeout firing in the grant
+window is the reliable way to reach the leak. The `/retrieve` tests pin the *safe*
+interleaving (the cancelled waiter runs its `except` before the holder releases) and say so;
+the racing one is not deterministic and is not a tested property. `retrieve.semaphore_saturation`
+climbing while `retrieve.requests` flatlines after a shutdown-less cancellation is the shape.
 
 ---
 

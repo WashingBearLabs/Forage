@@ -341,22 +341,25 @@ def test_search_request_1_2_0_shape_is_pinned_exactly() -> None:
     }
 
 
-def test_pipeline_422_error_code_is_pinned_to_nine_members() -> None:
+def test_pipeline_422_error_code_is_pinned_to_ten_members() -> None:
     """The document-wide eighteen (``ERROR_CODES``) is a different gate.
 
     Never widen ``Pipeline422ErrorCode`` to match that number — it is
-    ``/retrieve``'s six codes plus ``/search``'s three, and this pins that
-    the 1.2.0 addition was exactly one more member (``search_unavailable``).
+    ``/retrieve``'s seven codes plus ``/search``'s three. The 1.2.0 addition
+    was exactly one more member (``search_unavailable``); the 1.3.0 one is
+    ``busy`` (``hardening-retrieve-parity`` US-002), read here off the held
+    1.3.0 golden because the frozen 1.2.0 one never carried it.
     """
-    golden = json.loads(_GOLDEN_1_2_0_PATH.read_text())
+    golden = json.loads(_GOLDEN_PATH.read_text())
     enum = set(golden["Pipeline422ErrorResponse"]["properties"]["error"]["enum"])
     # A literal set, not `set(PIPELINE_422_ERROR_CODES)`: the golden is
     # regenerated from the code, so comparing code to code would let a renamed
     # member — a MAJOR change — pass. The sibling `SearchRequest` and
     # `SearchMetricsResponse` pins are literal for the same reason.
     assert enum == {
-        # `/retrieve`'s six
+        # `/retrieve`'s seven
         "blocked_domain",
+        "busy",
         "content_too_large",
         "fetch_error",
         "fetch_timeout",
@@ -419,7 +422,13 @@ _ONE_THREE_ZERO_DIFFED_SCHEMAS = (
 # returned set()). The window opens empty; it stays that way for a
 # description or bound move and grows only when a later story in this epic
 # adds a field or enum member, until spec 8 US-002 freezes it.
-_EXPECTED_ONE_THREE_ZERO_DIFF: frozenset[str] = frozenset()
+_EXPECTED_ONE_THREE_ZERO_DIFF: frozenset[str] = frozenset(
+    {
+        # hardening-retrieve-parity US-002: `/retrieve`'s admission refusal.
+        # One path covers `/search`'s 422 as well, through the shared model.
+        "Pipeline422ErrorResponse.error[enum]=busy",
+    }
+)
 
 
 def _diff_against_1_2_0(current: dict[str, Any]) -> set[str]:

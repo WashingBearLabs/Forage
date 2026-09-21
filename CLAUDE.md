@@ -303,6 +303,16 @@ that keeps the wait-timeout path and the absent-classifier path from drifting;
 `contract.py` for the `1.3.0` continuation line. Each reverted in turn with an all-reverted
 control landing exactly on `e55b5f06…`. What moved is *when* stage 3 runs and what happens
 when the permit wait expires, not how any text is sanitized.
+and a twenty-second to `f654be77…` — **not** a behaviour-changing rotation — when stages 1,
+2 and 4 moved off the event loop and `/retrieve` gained its admission gate
+(`hardening-retrieve-parity` US-002): `orchestrator.py` for `asyncio.to_thread` around
+`extract_html`, `scan_structural` and `structure_sanitization_result`, the now-required
+`admission: AdmissionSlot` acquired after the cache read and released in `finally` after
+stage 1, the 422 `busy` refusal, and the deletion of `fetch_result` / `html_text` before the
+classification wait; `contract.py` for `busy` in `RetrieveErrorCode`,
+`RETRIEVE_ADMISSION_QUEUE_FULL` and the `1.3.0` continuation line. Each reverted in turn with
+a both-reverted control landing exactly on `d0433876…`; `stage4_structuring.py` untouched.
+The threaded functions are pure, so every route's output is byte-identical.
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

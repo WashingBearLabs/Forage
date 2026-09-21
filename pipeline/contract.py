@@ -117,7 +117,21 @@ MINOR when fields are only added.
   behind that unchanged shape is that a single ``/search`` response may now
   mix scanned and unscanned results, because the classification wait is one
   budget per request rather than a state of the process. No field was
-  removed and none changed meaning. This version is **held**:
+  removed and none changed meaning. Continuing in
+  ``hardening-retrieve-parity`` US-002: ``/retrieve`` gains the 422 code
+  ``busy`` with the reason ``admission_queue_full``
+  (``RETRIEVE_ADMISSION_QUEUE_FULL``) — a capacity refusal from the new
+  ``/retrieve`` admission controller when its queue is full in depth or in
+  reserved bytes, recorded under ``contract/GOVERNANCE.md`` ruling (b) as a
+  new 422 code with ``retrieve.admission_queue_depth`` and
+  ``retrieve.max_queued_fetch_bytes`` as the operator's two knobs
+  (``retrieve.fetch_concurrency`` is pinned at one, not a knob). The status
+  is 422, not ``/extract``'s 429: the handler picks 429 for ``busy`` on
+  ``/extract`` only, so no route gains a status. Because ``/retrieve`` and
+  ``/search`` share ``Pipeline422ErrorResponse``, the ``/search`` 422
+  ``error`` enum widens by the same member, though ``busy`` never arrives
+  there. ``/metrics`` gains ``retrieve.semaphore_saturation`` and
+  ``retrieve.busy_rejections``, both additive counters. This version is **held**:
   ``tests/golden/contract_1_3_0.json`` is
   re-created in place by every later story in this epic that moves the
   wire, until spec 8 US-002 freezes it ahead of the release cut.
@@ -270,8 +284,10 @@ Extract422ErrorCode = Literal[
 Seven come from ``orchestrator.DOCUMENT_FAILURE_CODES`` via
 ``document_failure()``; ``invalid_filename``/``invalid_mime_hint``/
 ``invalid_request_id`` are raised in ``retrieval_app._sanitize_upload_metadata``
-before the pipeline is entered. ``busy`` is deliberately **not** here: the
-handler answers it 429, not 422 (``retrieval_app.pipeline_error_handler``).
+before the pipeline is entered. ``busy`` is deliberately **not** here: on
+``/extract`` it answers 429, not 422 — ``retrieval_app.pipeline_error_handler``
+picks 429 for ``busy`` on the ``/extract`` path only, and every other route's
+``busy`` (``/retrieve``'s admission refusal) answers 422.
 """
 
 EXTRACT_422_ERROR_CODES = frozenset(get_args(Extract422ErrorCode))
@@ -284,7 +300,13 @@ read trips ``_spool_upload``'s cap — one code, two statuses, two body shapes.
 """
 
 RateLimit429ErrorCode = Literal["busy"]
-"""The single code ``ExtractionAdmissionMiddleware`` emits, at 429."""
+"""The single code ``/extract`` emits at 429, from ``ExtractionAdmissionMiddleware``.
+
+The same literal is also a ``/retrieve`` 422 code (``RetrieveErrorCode``):
+429 is ``/extract``'s status for it and nobody else's, because
+``retrieval_app.pipeline_error_handler`` chooses the status by route and code
+together, never by code alone.
+"""
 
 ExtractErrorCode = Literal[
     Extract422ErrorCode,
@@ -303,6 +325,10 @@ EXTRACT_ERROR_CODES = frozenset(get_args(ExtractErrorCode))
 
 RetrieveErrorCode = Literal[
     "blocked_domain",
+    # Intentionally the same literal as /extract's 429 `busy`: one word for
+    # "refused for capacity" across the surface. It answers 422 here, because
+    # the handler picks 429 for `busy` on /extract only.
+    "busy",
     "content_too_large",
     "fetch_error",
     "fetch_timeout",
@@ -315,6 +341,10 @@ Five are the URL-validation and fetch refusals raised in
 ``orchestrator.run_retrieve_pipeline``; ``content_too_large`` is the sixth and
 is shared with ``/extract`` — the retrieve path raises it from
 ``stage5_url_audit``'s response cap, not from the ``/extract`` middleware.
+``busy`` (contract ``1.3.0``) is the seventh and is also shared with
+``/extract``: the ``/retrieve`` admission controller's capacity refusal, reason
+``RETRIEVE_ADMISSION_QUEUE_FULL``, answered 422 on this route where
+``/extract``'s middleware answers the same literal 429.
 """
 
 RETRIEVE_ERROR_CODES = frozenset(get_args(RetrieveErrorCode))
@@ -347,7 +377,8 @@ Pipeline422ErrorCode = Literal[
 ``/retrieve`` and ``/search`` share one emission site — the ``PipelineError``
 handler, on a path that is not ``/extract`` — and therefore one mirroring
 model. The union is the price of that single shape: a ``searxng_*`` code
-cannot in fact arrive on ``/retrieve``, nor a fetch refusal on ``/search``.
+cannot in fact arrive on ``/retrieve``, nor a fetch refusal or ``busy`` on
+``/search``.
 Read ``RETRIEVE_ERROR_CODES`` / ``SEARCH_ERROR_CODES`` for the per-route
 answer.
 """
@@ -361,7 +392,8 @@ ErrorCode = Literal[
 """Every error code the service can put on the wire — eighteen, deduplicated.
 
 Ten ``/extract`` codes, plus the five ``/retrieve``-only refusals
-(``content_too_large`` is shared), plus the three ``/search`` codes.
+(``content_too_large`` and ``busy`` are shared), plus the three ``/search``
+codes.
 """
 
 ERROR_CODES = frozenset(get_args(ErrorCode))
@@ -401,3 +433,12 @@ extracted text of a fetched page exceeds the character ceiling derived from
 ``retrieve.max_promptguard_chunks``. Token-shaped rather than sentence-shaped
 (``POLICY_EXCLUDED_ALL_PROVIDERS`` is the precedent) because it is a closed
 value a consumer may branch on, not prose for a human."""
+
+RETRIEVE_ADMISSION_QUEUE_FULL = "admission_queue_full"
+"""The ``/retrieve`` 422 ``busy`` ``reason``: the admission queue is full.
+
+Raised by ``orchestrator.run_retrieve_pipeline`` when the ``/retrieve``
+admission controller refuses a request because its queue is at
+``retrieve.admission_queue_depth`` or its reserved bytes would exceed
+``retrieve.max_queued_fetch_bytes``. The only reason ``busy`` carries on
+``/retrieve``; a closed token for the same reason as ``PROMPTGUARD_BUDGET``."""

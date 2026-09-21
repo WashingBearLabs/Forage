@@ -78,7 +78,8 @@ those eight — so Forage's revision moved:
 | After the contract 1.3.0 window (`hardening-search-sanitization` US-004) | `05dbbb5c…82c0b` |
 | After scanning both search-text forms (`hardening-search-sanitization` validation fix) | `6f0fa2de…66671` |
 | After the `/retrieve` pipeline signature and chunk budget (`hardening-retrieve-parity` US-001) | `e55b5f06…4d3c0` |
-| **Current (`hardening-retrieve-parity` US-006, the classification semaphore on `/retrieve` and `/search`)** | **`d0433876…fc88e`** |
+| After the classification semaphore on `/retrieve` and `/search` (`hardening-retrieve-parity` US-006) | `d0433876…fc88e` |
+| **Current (`hardening-retrieve-parity` US-002, stages 1, 2 and 4 off the loop and the `/retrieve` admission gate)** | **`f654be77…c92fb`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -1084,3 +1085,52 @@ exactly as before.
 `e55b5f06…` becomes unreachable at the next start and ages out on its own TTL — free in
 memory mode, one TTL of extra fetches in Valkey mode. **Do not assume Poppy↔Forage revision
 parity** — compare contracts, not revisions.
+
+### The twenty-second rotation: stages 1, 2 and 4 off the loop, and the `/retrieve` admission gate (`hardening-retrieve-parity` US-002, 2026-09-20)
+
+```
+before: d04338762ef42c04e43852538f4f9994ed21db9d82c4a4e41478098b4d3fc88e
+after:  f654be77527e60315a9d08a8ab1a8efad3b0a4efc6372be94048c743496c92fb
+```
+
+**Two hashed files moved, each measured alone, with a both-reverted control.**
+
+| Measurement | Value |
+|---|---|
+| After (this story) | `f654be77…c92fb` |
+| `pipeline/orchestrator.py` reverted alone | `16b9631f…d8932` |
+| `pipeline/contract.py` reverted alone | `646b4f27…3fd81` |
+| **Control:** both reverted | `d0433876…fc88e` |
+
+The control reproduces the twenty-first rotation's value to the character, so these are the
+only two hashed files this story touched — `pipeline/stage4_structuring.py` in particular is
+unchanged (`build_retrieved_content` already took the three post-stage-1 scalars). Measured
+after the final byte of both files had landed, reading the reverted bytes out of the `HEAD`
+blobs rather than editing the working tree.
+
+**What moved in each.** `pipeline/orchestrator.py`: `extract_html` (fetched HTML),
+`scan_structural` and `structure_sanitization_result` now run through `asyncio.to_thread`
+(the latter two inside `sanitize_and_structure`, so `/extract` gets them too);
+`run_retrieve_pipeline`'s `admission` is a required `AdmissionSlot`, acquired after the cache
+read and before the fetch with no timer around it, held through stage 1 and released in
+`finally`; a refused acquisition raises 422 `busy` / `admission_queue_full`; the three
+post-stage-1 scalars are read into locals and `fetch_result` and `html_text` are deleted
+before the release; three comments reworded so the file names `asyncio.timeout` only at the
+`_bounded_permit` site. `pipeline/contract.py`: `busy` joins `RetrieveErrorCode`, the
+`RETRIEVE_ADMISSION_QUEUE_FULL` literal, the three rewritten old-premise docstrings and the
+`1.3.0` continuation line.
+
+**What did not move it.** `retrieval_app.py` (the controller's `from_retrieve_settings`,
+the route-aware `pipeline_error_handler`, the two new `/metrics` counters), the tests and the
+docs are not `_REVISION_SOURCES` members.
+
+**Not a behaviour-changing rotation.** The threaded functions are pure, so every route's
+output is byte-identical to the synchronous calls; what changed is *where* stages 1, 2 and 4
+run and whether a `/retrieve` is admitted under load, not how any text is sanitized.
+
+**Not replayed to Poppy**; the deployed copy stays on the value it already diverged to.
+
+**Blast radius.** The same mechanism as every rotation since the fifth:
+`cache_policy_fingerprint()` takes the revision as an input, so every extraction cached under
+`d0433876…` becomes unreachable at the next start and ages out on its own TTL. **Do not
+assume Poppy↔Forage revision parity** — compare contracts, not revisions.
