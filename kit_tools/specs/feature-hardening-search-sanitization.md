@@ -1412,8 +1412,17 @@ moves are a description and a bound, which `_added_paths` cannot see — R36 cor
 - The `/search` handler's per-reason `/metrics` map needs no model change for a new token
   (`omitted_by_reason: dict[str, int]`, `retrieval_app.py:500`); the **response** model's documented
   vocabulary (`models.py:445-457`) does change and is US-004's edit.
-- Stage 2's line-anchored patterns are the only patterns whose behaviour changes with newlines; any
-  other pattern's verdict is identical on both forms (assert on the existing fixture corpus).
+- ~~Stage 2's line-anchored patterns are the only patterns whose behaviour changes with newlines; any
+  other pattern's verdict is identical on both forms (assert on the existing fixture corpus).~~
+  **FALSE — corrected 2026-09-20 by this spec's own validation run.** A sweep of all twenty-four
+  registered patterns found two more that are newline-sensitive, both in the *fail-open* direction
+  because they are compiled without `re.DOTALL`: `disregard.*instructions` (BLOCK) and
+  `!\[.*?\]\(https?://[^)]*(?:\{\{|\$\{|%7[Bb])` (SUSPICIOUS). Each matches across a space but not
+  across a newline, so a payload split on a line break scanned **clean** on the newline-preserving
+  scan form while its collapsed wire form — the text actually served — scanned **blocked**.
+  US-001 shipped that bypass on this assumption. The remedy is to scan **both** forms and take the
+  worse verdict, which is what the scan loop now does; see the nineteenth rotation in
+  `docs/bootstrap-notes.md`.
 - The `1.3.0` golden is mutable until spec 8 US-002 freezes it (ruling 5). That a `v*` release is
   not cut inside the window is a named risk with an owner and a tag-time check (Technical
   Considerations), not an assumption.

@@ -639,6 +639,12 @@ def _scan_forms_for_search_text(value: object, *, max_length: int) -> tuple[str,
       derived, so blank-line padding cannot push a payload past the scan and
       leave it on the wire.
 
+    Both returned forms are scanned by the caller, and neither alone is
+    sufficient. The scan form is what makes the line-anchored BLOCK patterns
+    fire per line; the wire form is what makes the patterns compiled without
+    ``re.DOTALL`` fire across what was a line break. Scanning only one of them
+    is a bypass in whichever direction that pattern class runs.
+
     There are two control-character strips because there are two sources. The
     first runs on the raw provider value: the HTML parser maps a raw NUL to
     U+FFFD, which is outside ``_CONTROL_CHARS_RE``'s class, so a raw control
@@ -1309,14 +1315,26 @@ async def run_search_pipeline(
         # Stage 2: scan every model-visible field before exposing the result.
         blocked = False
         for field_name, field_text in (
+            # Both forms of each text field, for the same reason rule (4)
+            # scans two URL texts: the loop's break/flag behaviour is the
+            # BLOCKED > SUSPICIOUS > clean ladder, so the worse verdict wins
+            # without a second comparator.
+            #
+            # The scan form keeps line breaks so the line-anchored patterns
+            # fire per line; the wire form is its whitespace collapse. Neither
+            # is a superset of the other for Stage 2's purposes: a pattern
+            # compiled without `re.DOTALL` -- `disregard.*instructions`
+            # (stage2_structural.py, BLOCK) and the `!\[.*?\]\(` exfil beacon
+            # (SUSPICIOUS) are the two such patterns among the 24 registered --
+            # matches across a space but not across a newline. Scanning only
+            # the newline-preserving form therefore served a payload that its
+            # own collapsed wire form would have blocked. Scan both.
             ("title", title_scan_text),
-            # Both of rule (4)'s texts: the entity-decoded form and the
-            # once-percent-decoded one. The loop's existing break/flag
-            # behaviour is the BLOCKED > SUSPICIOUS > clean ladder, so the
-            # worse verdict wins without a second comparator.
+            ("title", title),
             ("url", url_outcome.scan_texts[0]),
             ("url", url_outcome.scan_texts[1]),
             ("snippet", snippet_scan_text),
+            ("snippet", snippet),
         ):
             scan = scan_structural(field_text)
             if scan.verdict == Stage2Verdict.BLOCKED:

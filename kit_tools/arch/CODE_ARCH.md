@@ -181,7 +181,11 @@ an eighteenth — **the third behaviour-changing rotation, and the first that ad
 `hardening-search-sanitization` US-003 — `orchestrator.py` + `contract.py`, each measured by
 reverting it in turn, **plus** two new inputs each measured absent/present: repo-root
 `url_validator.py` as `_ROOT_REVISION_SOURCES` and `idna@<version>`, with a control that
-reverts both files and removes both inputs landing exactly on `05dbbb5c…`).
+reverts both files and removes both inputs landing exactly on `05dbbb5c…`), and a nineteenth
+— **the fourth behaviour-changing rotation** — when the `/search` scan loop began scanning
+**both** forms of each text field (`840c78fa…` → `6f0fa2de…`, the
+`hardening-search-sanitization` validation fix; `orchestrator.py` alone, with the revert
+reproducing `840c78fa…` exactly).
 Nothing downstream may assume
 Poppy↔Forage revision parity.
 

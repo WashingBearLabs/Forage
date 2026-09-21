@@ -270,6 +270,13 @@ continuation line, **and two inputs joined the hash** — repo-root `url_validat
 (UTS-46 tables decide which hosts are dropped, so a lock bump is a sanitization change with
 no source byte to show for it). All four measured alone from a clean tree, with a control
 that reverts both files *and* removes both inputs landing exactly on `05dbbb5c…`.
+and a nineteenth to `6f0fa2de…` — **the fourth behaviour-changing rotation** — when the
+`/search` scan loop began scanning **both** forms of each text field rather than only the
+newline-preserving one (`hardening-search-sanitization` validation fix; `orchestrator.py`
+alone, measured, and the revert reproduces `840c78fa…` exactly). Two of the twenty-four
+Stage 2 patterns carry no `re.DOTALL`, so a payload split across a newline scanned clean on
+the form that was scanned and blocked on the form that was served — a bypass this epic
+introduced in US-001 and its own spec-level validation caught.
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.
