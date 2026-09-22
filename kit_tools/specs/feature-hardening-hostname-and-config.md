@@ -649,19 +649,19 @@ lands.
   `tests/test_orchestrator.py` trust-tier test at the name above.
 
 **Acceptance Criteria:**
-- [ ] The `/retrieve` handler contains exactly one `body.model_copy(update=...)` call, carrying the
+- [x] The `/retrieve` handler contains exactly one `body.model_copy(update=...)` call, carrying the
       three normalised lists together with the resolved threshold / fail-closed values (assert on
       the handler function's source, not a whole-file `grep -c`); the pipeline never normalises;
       `grep -c "normalize_domain_entries(" url_validator.py` returns 1 (the definition) and `grep -n
       "normalize_domain_entries(" pipeline/orchestrator.py cache.py` returns nothing (US-001's
       interim per-comparison pass is gone; the lifespan and handler calls live in `retrieval_app.py`).
-- [ ] 70 `trusted_domains` entries including `"com"` → 69 valid normalised entries applied (no entry
+- [x] 70 `trusted_domains` entries including `"com"` → 69 valid normalised entries applied (no entry
       count), `retrieve.policy_invalid_domain_entry` advanced by one, no 422; an allowlist over
       `policy_domain_entries_max_bytes` → entries up to the budget boundary applied, the remainder
       counted, no 422; the same for `verified_domains`; `grep -n "budget_bytes=" retrieval_app.py`
       shows the two allowlist calls and `grep -rn "limit=64\|limit=4096" retrieval_app.py pipeline
       url_validator.py` returns nothing.
-- [ ] 500 valid junk `blocked_domains` plus a config `seed_blocklist` domain → the seed domain is
+- [x] 500 valid junk `blocked_domains` plus a config `seed_blocklist` domain → the seed domain is
       refused and all 500 caller entries are enforced; a `blocked_domains` list over the budget →
       422 `content_too_large` with reason `policy_domain_list_too_large`, raised before any entry is
       canonicalised (a patched `canonicalize_host` records zero calls) and recorded on `/metrics`
@@ -670,30 +670,30 @@ lands.
       `pipeline/orchestrator.py` lists the operator entries first; `policy_domain_entries_max_bytes`
       is read at boot with `bounded_int`, a malformed value warns (`config_invalid_value`) and falls
       back to 65536, and the shipped `config.yaml` carries the key.
-- [ ] `retrieve.policy_suffix_trusted_skip` advances by one for a wildcard-caused trusted skip, by
+- [x] `retrieve.policy_suffix_trusted_skip` advances by one for a wildcard-caused trusted skip, by
       one for a wildcard-caused `verified` resolution, and by zero for an exact-entry match of
       either tier; `promptguard_state` is `skipped_trusted` for both trusted cases;
       `_resolve_request_trust_tier`'s signature and `str` return are unchanged and `matched_entry`
       is called only on the trusted/verified branches (a `standard` resolution never calls it).
-- [ ] All four counters exist on the counter classes, the response models and the handler dicts;
+- [x] All four counters exist on the counter classes, the response models and the handler dicts;
       `test_an_unmodeled_counter_fails_loudly` and `test_served_metrics_are_the_handlers_dict_serialized`
       pass; `GET /metrics` serves the `search.*` pair at `0`.
-- [ ] MONITORING has the four rows with the per-entry unit and the two causes;
+- [x] MONITORING has the four rows with the per-entry unit and the two causes;
       `docs/configuration.md` has the `policy_domain_entries_max_bytes` row; TROUBLESHOOTING has the
       `### policy_invalid_domain_entry` section with the two causes, the per-route difference and
       the 422 sentence.
-- [ ] 1.3.0 window (R36): docstring line appended; `uv run python -m scripts.export_contract` run;
+- [x] 1.3.0 window (R36): docstring line appended; `uv run python -m scripts.export_contract` run;
       `tests/golden/contract_1_3_0.json` re-created via `_SCHEMA_MODELS`; **nothing** appended to
       `_EXPECTED_ONE_THREE_ZERO_DIFF` (the `*MetricsResponse` models are outside `_SCHEMA_MODELS`;
       the new reason is announced in the docstring line and not appended — R8 corrected, round 5);
       the search field-set pin (`tests/test_contract_schema.py:368`) is extended by the two names
       and a `RetrieveMetricsResponse` twin pinned to the post-story set exists; the four
       anchor-quoting pages refreshed; `--check` green; `contract_1_2_0.json` unchanged.
-- [ ] The `sanitizer_revision` rotation (`pipeline/orchestrator.py`, `pipeline/contract.py`) is
+- [x] The `sanitizer_revision` rotation (`pipeline/orchestrator.py`, `pipeline/contract.py`) is
       measured and recorded at the five sites.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-002: `/search` honours `blocked_domains` and the operator's `seed_blocklist`
 
