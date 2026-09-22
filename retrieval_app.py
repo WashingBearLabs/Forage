@@ -13,11 +13,11 @@ import re
 import tempfile
 import time
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Annotated, Any, Literal, TypedDict, get_args
+from typing import Annotated, Any, Literal, TypedDict, cast, get_args
 
 import yaml
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -338,6 +338,65 @@ def _resolved_search_key_capabilities(state: State) -> tuple[str, ...]:
         state, "search_key_capabilities", None
     )
     return capabilities if capabilities is not None else ()
+
+
+# Later hardening specs append cache.max_value_bytes, search_searxng_*,
+# resource-envelope and contiguity keys here alongside their readers and docs.
+KNOWN_CONFIG_KEYS: frozenset[str] = frozenset(
+    {
+        "user_agents",
+        "news_domains",
+        "seed_blocklist",
+        "promptguard_threshold",
+        "promptguard_fail_closed_floor",
+        "promptguard_threshold_ceiling",
+        "promptguard_wait_seconds",
+        "policy_domain_entries_max_bytes",
+        "search_brave_timeout_seconds",
+        "search_brave_chunk_max_chars",
+        "search_brave_query_max_chars",
+        "extract_route_enabled",
+        "cache",
+        "cache.max_entries",
+        "cache.max_bytes",
+        "extraction",
+        "extraction.max_input_bytes",
+        "extraction.max_pages",
+        "extraction.child_cpu_seconds",
+        "extraction.child_address_space_bytes",
+        "extraction.wall_clock_seconds",
+        "extraction.max_promptguard_chunks",
+        "extraction.extraction_concurrency",
+        "extraction.classification_concurrency",
+        "extraction.admission_queue_depth",
+        "extraction.max_queued_upload_bytes",
+        "retrieve",
+        "retrieve.max_promptguard_chunks",
+        "retrieve.fetch_concurrency",
+        "retrieve.admission_queue_depth",
+        "retrieve.max_queued_fetch_bytes",
+    }
+)
+
+
+def _warn_unknown_config_keys(config: object) -> list[str]:
+    """Warn on names only; leave malformed values to the settings readers."""
+    if not isinstance(config, dict):
+        return []
+    top_level = {key for key in KNOWN_CONFIG_KEYS if "." not in key}
+    blocks = {key.split(".", 1)[0] for key in KNOWN_CONFIG_KEYS if "." in key}
+    unknown: list[str] = []
+    for key, value in cast(dict[object, object], config).items():
+        if key not in top_level:
+            unknown.append(str(key))
+        elif key in blocks and isinstance(value, Mapping):
+            for leaf in cast(Mapping[object, object], value):
+                dotted = f"{key}.{leaf}"
+                if dotted not in KNOWN_CONFIG_KEYS:
+                    unknown.append(dotted)
+    for dotted in unknown:
+        logger.warning("config_unknown_key — key=%s", dotted)
+    return unknown
 
 
 def _load_config() -> dict[str, Any]:
@@ -1357,6 +1416,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Startup/shutdown lifecycle."""
     # Load config
     config = _load_config()
+    _warn_unknown_config_keys(config)
     published_config = config.copy()
     for key, denylist in (("seed_blocklist", True), ("news_domains", False)):
         entries: list[str] = config.get(key, [])

@@ -1693,6 +1693,49 @@ and the same for `kit_tools/arch/SERVICE_MAP.md` each return at least `1`; the f
   gate is explicitly deferred to end-of-epic validation per retry instructions,
   not claimed as passed. No story definition or acceptance checkbox changed.
 
+### US-003 — config key registry and parity guards (2026-09-22, Copilot)
+
+- Added 31 registered names beside `_load_config`, with block discovery derived from
+  dotted leaves rather than a second block vocabulary. The lifespan warns immediately
+  after loading. Unknown blocks are reported once; registered non-mapping values are
+  untouched, so existing typed startup refusals still fire. Only key names are logged.
+- Real-lifespan regressions cover the shipped config and all three planted typos,
+  exactly one WARNING per key, no sentinel value at any log level, and unchanged
+  health/revision. Unit tests cover malformed documents, non-dict Mapping blocks,
+  no recursive descent into values, and an added future registry block. Cache,
+  extraction and retrieve invalid-value refusals remain independently asserted.
+- Docs parity borrows `_section` / `_cells` by function-scoped import, following
+  `test_contract_smoke`'s single-source precedent. It discovers backtick-bearing
+  block headings and checks only each key table's first column. Added the missing
+  retrieve and three top-level policy rows to the main table, standardized the
+  retrieve heading (retaining its old anchor), and documented the warning/value
+  split in the reference, environment guide and three logging/runbook surfaces.
+- The eight-module AST sweep follows `.get`, subscripts, trailing `.config`
+  attribute chains, function-local aliases and casts, and bounded helpers' second
+  arguments (including `bounded_bool` and the threshold reader's literal dict).
+  It measures 11 direct literal reads, requires each bounded reader and each block
+  to contribute, and fails on opaque mapping aliases rather than silently skipping
+  them. Temporary-module regressions plant unknown keys in each supported shape.
+- Reconciled the spec's pre-dependency anchors with actual code: `config_bounds.py`
+  has **no literal keys**; its three variable-key helpers are resolved from imported
+  callers' literal arguments. Each helper must retain its named variable read and
+  have literal callers; those resolved keys satisfy that helper-only module's
+  coverage gate. The named skip list now has seven sites: cache's helper, Brave's
+  two, config_bounds' three (including the migrated extraction helper), and the
+  lifespan's domain-list loop. None count toward the literal-site floor.
+- No sanitizer rotation: before and after are
+  `e00049c4ea9d02893c2f3c4f567a6a75f5a4fdfdb145bbf6d6fc701ec7c7ed5c`,
+  under default and shipped config, matching the latest bootstrap record. All nine
+  hashed sources, the derivation module, response models and contract artifacts
+  are byte-identical to the pre-story commit; no export or golden change is needed.
+- Validation: 1,053 tests pass in one process across app, metrics/docs, governance,
+  cache, Brave, provider registry, PromptGuard policy, contract smoke/errors/export.
+  Repository Ruff lint/format, strict Pyright (zero errors), contract export check
+  and diff whitespace pass. Six existing non-failing warnings remain (one Torch
+  deprecation and five unavailable-cache socket-guard warnings), unsuppressed.
+  Full pytest remains explicitly deferred to end-of-epic validation by the
+  implementer instruction; this is not a claim that its acceptance gate was run.
+
 ## Refinement Notes
 
 ### Research Findings

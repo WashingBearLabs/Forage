@@ -24,16 +24,18 @@ Three claims are checked here, each the way it is stated:
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import json
 import re
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 import httpx
 import pytest
+import yaml
 from fastapi import FastAPI
 from fastapi.exceptions import ResponseValidationError
 from pydantic import BaseModel
@@ -57,6 +59,36 @@ from retrieval_app import (
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CONFIGURATION_DOC = _REPO_ROOT / "docs" / "configuration.md"
+
+_CONFIG_READER_MODULES = (
+    "retrieval_app.py",
+    "cache.py",
+    "pipeline/extraction_limits.py",
+    "pipeline/search_providers/brave.py",
+    "pipeline/orchestrator.py",
+    "pipeline/sanitizer_revision.py",
+    "pipeline/retrieve_limits.py",
+    "pipeline/config_bounds.py",
+)
+_BOUNDED_HELPERS = {
+    "_bounded_int",
+    "_bounded_float",
+    "bounded_int",
+    "bounded_float",
+    "bounded_bool",
+}
+# The old extraction-local helper migrated to config_bounds; its float/bool
+# siblings and lifespan's domain-list loop are now variable-key reads as well.
+# These sites never count toward the literal-read floor.
+_VARIABLE_KEY_READS = {
+    ("cache.py", "_bounded_int", "key"),
+    ("pipeline/search_providers/brave.py", "_bounded_int", "key"),
+    ("pipeline/search_providers/brave.py", "_bounded_float", "key"),
+    ("pipeline/config_bounds.py", "bounded_int", "key"),
+    ("pipeline/config_bounds.py", "bounded_float", "key"),
+    ("pipeline/config_bounds.py", "bounded_bool", "key"),
+    ("retrieval_app.py", "lifespan", "key"),
+}
 
 _SECTION_MODELS = {
     "extraction": ExtractionMetricsResponse,
@@ -419,3 +451,341 @@ def test_posture_doc_states_the_docs_endpoints_are_unauthenticated() -> None:
         )
         assert row is not None, f"{path} has no row in the posture table"
         assert "| none |" in row
+
+
+def test_config_registry_equals_documented_keys() -> None:
+    """Borrow the single-source helpers, as test_contract_smoke does for schemas.
+
+    The function-scoped import follows its _SCHEMA_MODELS precedent rather than
+    moving helpers out of an existing contract guard just for this consumer.
+    Only a key table's first column defines names; prose and request tables do not.
+    """
+    from tests.test_governance_docs import _cells, _section
+
+    section = _section(_CONFIGURATION_DOC.read_text(), "## `config.yaml`")
+    headings = [("### Top-level keys", "")]
+    fenced = False
+    for line in section.splitlines():
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+        if not fenced and (match := re.fullmatch(r"### The `(\w+):` block", line)):
+            headings.append((line, f"{match.group(1)}."))
+    assert len(headings) > 1
+    documented: set[str] = set()
+    for heading, prefix in headings:
+        body = _section(section, heading)
+        tables = re.findall(
+            r"^\| Key \|[^\n]*\n((?:\|[^\n]*(?:\n|$))+)", body, flags=re.MULTILINE
+        )
+        assert len(tables) == 1, f"Expected one key table under {heading}"
+        keys = [
+            _cells(row)[0].strip("`")
+            for row in tables[0].splitlines()
+            if _cells(row)[0].startswith("`")
+        ]
+        assert keys, f"Empty key table under {heading}"
+        assert len(keys) == len(set(keys)), f"Duplicate keys under {heading}"
+        documented.update(f"{prefix}{key}" for key in keys)
+    assert isinstance(retrieval_app.KNOWN_CONFIG_KEYS, frozenset)
+    assert documented == retrieval_app.KNOWN_CONFIG_KEYS
+    blocks = {key.partition(".")[0] for key in documented if "." in key}
+    assert blocks <= documented
+
+
+def test_config_registry_covers_the_shipped_yaml() -> None:
+    """Read the shipped file, on TestCacheSettings' documented-defaults precedent."""
+    shipped: dict[str, Any] = yaml.safe_load((_REPO_ROOT / "config.yaml").read_text())
+    assert shipped
+    keys = set(shipped)
+    for block, value in shipped.items():
+        if isinstance(value, dict):
+            leaves = cast(dict[str, Any], value)
+            assert leaves, f"Shipped block {block} is empty"
+            keys.update(f"{block}.{leaf}" for leaf in leaves)
+    assert keys <= retrieval_app.KNOWN_CONFIG_KEYS
+
+
+def _literal_key(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _config_read(node: ast.AST) -> tuple[ast.expr, ast.expr] | None:
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "get"
+        and node.args
+    ):
+        return node.func.value, node.args[0]
+    if isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load):
+        return node.value, node.slice
+    return None
+
+
+class _ConfigKeySweep(ast.NodeVisitor):
+    """Follow function-local mapping aliases, including the readers' cast seam."""
+
+    def __init__(self) -> None:
+        self.keys: set[str] = set()
+        self.literal_reads = 0
+        self.bounded_readers: set[str] = set()
+        self.variable_reads: list[tuple[str, str]] = []
+        self.shared_calls: dict[str, set[str]] = {}
+        self._shared_imports: dict[str, str] = {}
+        self._aliases: dict[str, str] = {}
+        self._function = "<module>"
+
+    def _prefix(self, node: ast.expr) -> str | None:
+        if isinstance(node, ast.Name):
+            return "" if node.id == "config" else self._aliases.get(node.id)
+        if isinstance(node, ast.Attribute) and node.attr == "config":
+            return ""
+        if isinstance(node, ast.Call):
+            if (
+                isinstance(node.func, ast.Name)
+                and node.func.id == "cast"
+                and len(node.args) == 2
+            ):
+                return self._prefix(node.args[1])
+            if isinstance(node.func, ast.Attribute) and node.func.attr == "copy":
+                return self._prefix(node.func.value)
+        if read := _config_read(node):
+            receiver, key_node = read
+            prefix, key = self._prefix(receiver), _literal_key(key_node)
+            if prefix is not None and key is not None:
+                return f"{prefix}{key}."
+        return None
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        if node.module == "pipeline.config_bounds":
+            for alias in node.names:
+                self._shared_imports[alias.asname or alias.name] = alias.name
+
+    def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        previous = self._function, self._aliases
+        self._function, self._aliases = node.name, {}
+        self.generic_visit(node)
+        self._function, self._aliases = previous
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self.visit_FunctionDef(node)
+
+    def _bind(self, target: ast.expr, value: ast.expr | None) -> None:
+        if isinstance(target, ast.Name):
+            prefix = self._prefix(value) if value is not None else None
+            if prefix is None:
+                self._aliases.pop(target.id, None)
+            else:
+                self._aliases[target.id] = prefix
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        for target in node.targets:
+            self._bind(target, node.value)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self._bind(node.target, node.value)
+        self.generic_visit(node)
+
+    def _record_read(self, node: ast.AST) -> None:
+        if read := _config_read(node):
+            receiver, key_node = read
+            prefix = self._prefix(receiver)
+            if prefix is not None:
+                key = _literal_key(key_node)
+                if key is None:
+                    self.variable_reads.append((self._function, ast.unparse(key_node)))
+                else:
+                    self.keys.add(f"{prefix}{key}")
+                    self.literal_reads += 1
+
+    def visit_Call(self, node: ast.Call) -> None:
+        self._record_read(node)
+        if isinstance(node.func, ast.Name):
+            helper = self._shared_imports.get(node.func.id, node.func.id)
+            if helper in _BOUNDED_HELPERS:
+                assert len(node.args) >= 2, ast.unparse(node)
+                prefix = (
+                    ""
+                    if isinstance(node.args[0], ast.Dict)
+                    else self._prefix(node.args[0])
+                )
+                key = _literal_key(node.args[1])
+                assert prefix is not None and key is not None, ast.unparse(node)
+                dotted = f"{prefix}{key}"
+                self.keys.add(dotted)
+                self.bounded_readers.add(self._function)
+                if node.func.id in self._shared_imports:
+                    self.shared_calls.setdefault(helper, set()).add(dotted)
+        self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript) -> None:
+        self._record_read(node)
+        self.generic_visit(node)
+
+
+def _swept_config_keys(path: Path) -> _ConfigKeySweep:
+    sweep = _ConfigKeySweep()
+    sweep.visit(ast.parse(path.read_text()))
+    return sweep
+
+
+def test_config_registry_covers_every_reader() -> None:
+    """Adding a config reader means adding its module to _CONFIG_READER_MODULES.
+
+    config_bounds is helper-only: its variable-key reads are resolved from
+    callers' literal second arguments, not counted as direct literal sites.
+    Check each helper's read and callers so that module cannot silently go dark.
+    """
+    sweeps = {
+        name: _swept_config_keys(_REPO_ROOT / name) for name in _CONFIG_READER_MODULES
+    }
+    variable_reads = [
+        (name, function, key)
+        for name, sweep in sweeps.items()
+        for function, key in sweep.variable_reads
+    ]
+    assert set(variable_reads) == _VARIABLE_KEY_READS
+    assert len(variable_reads) == len(_VARIABLE_KEY_READS)
+    assert sum(sweep.literal_reads for sweep in sweeps.values()) >= 8
+    for module, reader in (
+        ("cache.py", "cache_settings_from_config"),
+        ("pipeline/extraction_limits.py", "extraction_settings_from_config"),
+        ("pipeline/retrieve_limits.py", "retrieve_settings_from_config"),
+        ("pipeline/search_providers/brave.py", "brave_settings_from_config"),
+        ("retrieval_app.py", "lifespan"),
+        ("retrieval_app.py", "promptguard_threshold_from_config"),
+    ):
+        assert reader in sweeps[module].bounded_readers, (module, reader)
+    shared = sweeps["pipeline/config_bounds.py"]
+    resolved: set[str] = set()
+    for helper in ("bounded_int", "bounded_float", "bounded_bool"):
+        assert (helper, "key") in shared.variable_reads
+        call_keys = set[str]().union(
+            *(sweep.shared_calls.get(helper, set[str]()) for sweep in sweeps.values())
+        )
+        assert call_keys, f"No literal callers of config_bounds.{helper}"
+        resolved.update(call_keys)
+    all_keys: set[str] = set()
+    for name, sweep in sweeps.items():
+        keys = sweep.keys | (
+            resolved if name == "pipeline/config_bounds.py" else set[str]()
+        )
+        assert keys, f"No literal config keys resolved in {name}"
+        assert keys <= retrieval_app.KNOWN_CONFIG_KEYS, (
+            name,
+            keys - retrieval_app.KNOWN_CONFIG_KEYS,
+        )
+        all_keys.update(keys)
+    blocks = {
+        key.partition(".")[0] for key in retrieval_app.KNOWN_CONFIG_KEYS if "." in key
+    }
+    for block in blocks:
+        assert any(key.startswith(f"{block}.") for key in all_keys), block
+
+
+@pytest.mark.parametrize(
+    ("source", "expected", "direct", "bounded"),
+    [
+        ('config.get("planted_key")', {"planted_key"}, 1, False),
+        ('request.app.state.config.get("planted_key", 0)', {"planted_key"}, 1, False),
+        ('app.state.config["planted_key"]', {"planted_key"}, 1, False),
+        (
+            'raw = config.get("cache", {})\n'
+            "local = cast(dict[str, object], raw)\n"
+            "alias = local\n"
+            '_bounded_int(alias, "planted_key", 1)\n'
+            'alias.get("other_key")\n'
+            'alias["third_key"]',
+            {"cache", "cache.planted_key", "cache.other_key", "cache.third_key"},
+            3,
+            True,
+        ),
+        ('bounded_float(config, "planted_key", 1.0)', {"planted_key"}, 0, True),
+        ('bounded_bool(config, "planted_key", False)', {"planted_key"}, 0, True),
+    ],
+)
+def test_config_sweep_reports_planted_unregistered_keys(
+    tmp_path: Path, source: str, expected: set[str], direct: int, bounded: bool
+) -> None:
+    module = tmp_path / "planted_reader.py"
+    module.write_text("def reader(config):\n    " + source.replace("\n", "\n    "))
+    sweep = _swept_config_keys(module)
+    assert sweep.keys == expected
+    assert sweep.keys - retrieval_app.KNOWN_CONFIG_KEYS == expected - {"cache"}
+    assert sweep.literal_reads == direct
+    assert sweep.bounded_readers == ({"reader"} if bounded else set())
+
+
+def test_config_sweep_keeps_mapping_aliases_function_local(tmp_path: Path) -> None:
+    module = tmp_path / "scoped_readers.py"
+    module.write_text(
+        "def cache_reader(config):\n"
+        '    local = config.get("cache", {})\n'
+        '    local.get("max_entries")\n'
+        "def retrieve_reader(config):\n"
+        '    local = config.get("retrieve", {})\n'
+        '    local["max_promptguard_chunks"]\n'
+        "def unrelated(local):\n"
+        '    local.get("not_config")\n'
+    )
+    assert _swept_config_keys(module).keys == {
+        "cache",
+        "cache.max_entries",
+        "retrieve",
+        "retrieve.max_promptguard_chunks",
+    }
+
+
+def test_config_sweep_resolves_shared_helper_imports(tmp_path: Path) -> None:
+    module = tmp_path / "shared_reader.py"
+    module.write_text(
+        "from pipeline.config_bounds import bounded_float as read_float\n"
+        "def reader(config):\n"
+        '    read_float({"planted_key": 0.5}, "planted_key", 0.85)\n'
+    )
+    sweep = _swept_config_keys(module)
+    assert sweep.keys == {"planted_key"}
+    assert sweep.shared_calls == {"bounded_float": {"planted_key"}}
+    assert sweep.literal_reads == 0
+    assert sweep.bounded_readers == {"reader"}
+
+
+def test_config_sweep_refuses_an_unresolved_block_helper(tmp_path: Path) -> None:
+    module = tmp_path / "opaque_reader.py"
+    module.write_text(
+        "def reader(config):\n"
+        "    local = opaque_helper(config)\n"
+        '    bounded_int(local, "planted_key", 1)\n'
+    )
+    with pytest.raises(AssertionError, match="planted_key"):
+        _swept_config_keys(module)
+
+
+def test_unknown_config_key_warning_is_documented() -> None:
+    from tests.test_governance_docs import _cells, _section
+
+    section = _section(_CONFIGURATION_DOC.read_text(), "## `config.yaml`")
+    for phrase in (
+        "Unknown keys are ignored",
+        "WARNING",
+        "config_unknown_key",
+        "ExtractionConfigurationError",
+        "CacheConfigurationError",
+        "promptguard_threshold",
+        "policy_domain_entries_max_bytes",
+        "seed_blocklist",
+        "news_domains",
+        "config_invalid_value",
+    ):
+        assert phrase in section
+    monitoring = (_REPO_ROOT / "kit_tools/docs/MONITORING.md").read_text()
+    startup = _section(monitoring, "### Startup lines you may see")
+    rows = [_cells(line) for line in startup.splitlines() if line.startswith("|")]
+    assert any(row[0] == "WARNING" and "config_unknown_key" in row[1] for row in rows)
+    logging = (_REPO_ROOT / "kit_tools/arch/patterns/LOGGING.md").read_text()
+    assert "config_unknown_key" in _section(logging, "## Logger Inventory")
+    troubleshooting = (_REPO_ROOT / "kit_tools/docs/TROUBLESHOOTING.md").read_text()
+    assert "restart" in _section(troubleshooting, "### config_unknown_key")

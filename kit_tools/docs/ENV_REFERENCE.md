@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document environment variables and secrets. What config exists and where to find it.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-005)
+> Updated by: Copilot (hardening-hostname-and-config US-003)
 
 ## Overview
 
@@ -77,6 +77,13 @@ No test-only variables exist. `tests/conftest.py` autouse-clears `HF_TOKEN`, `HF
 ## `config.yaml` Keys
 
 Loaded by `retrieval_app._load_config()` in the lifespan; a missing file logs a WARNING (`config.yaml not found at ...`) and every key falls to its code default. Override in a container with `-v "$PWD/config.yaml:/app/config.yaml:ro"`. The shipped file is not always the code default, so both columns are shown.
+
+Unknown keys are ignored with one boot WARNING `config_unknown_key — key=<dotted.name>`,
+never the value. The `KNOWN_CONFIG_KEYS` registry checks top-level names and one level
+inside registered blocks; an unknown block is named once, without walking its children.
+Invalid known bounds still refuse boot through their typed readers. The separate
+`config_invalid_value` exceptions are the fetch-route threshold, domain-list byte budget,
+and invalid operator domain entries; see the canonical reference for their fallbacks.
 
 ### Top-level keys
 

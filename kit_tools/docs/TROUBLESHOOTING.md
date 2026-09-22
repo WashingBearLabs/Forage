@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document debugging procedures and common fixes. How to diagnose problems.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-001)
+> Updated by: Copilot (hardening-hostname-and-config US-003)
 
 ---
 
@@ -246,6 +246,24 @@ logs `config.yaml not found at /app/config.yaml` and runs on code defaults.
 
 **Fix:** correct the mounted file and restart. This is the only dependency whose failure is
 a refused boot rather than a degraded service.
+
+---
+
+### config_unknown_key
+
+**Symptom:** boot logs `config_unknown_key — key=<dotted.name>` at WARNING.
+The service starts normally, but the misspelled setting has no effect.
+
+**Cause:** the key is not registered. Known `cache:`, `extraction:` and `retrieve:`
+blocks are checked one level deep; an unknown block is named once without
+walking its children. No value appears in this warning.
+
+**Fix:** compare the key and indentation against `docs/configuration.md`, correct
+the mounted file and restart. Unknown keys are ignored, not translated to similar
+names. This warning does not replace value validation: invalid known bounds still
+refuse boot with their reader's typed error. `config_invalid_value` instead names
+the warn-and-fall-back cases: the fetch-route threshold, domain-list byte budget,
+or invalid operator domain entries.
 
 ---
 

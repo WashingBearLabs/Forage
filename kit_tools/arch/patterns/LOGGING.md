@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document logging patterns, levels, and conventions.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-005)
+> Updated by: Copilot (hardening-hostname-and-config US-003)
 
 ## Overview
 
@@ -41,7 +41,7 @@ Every module obtains its logger with `logger = logging.getLogger(__name__)` at m
 
 | Logger | Defined at | Levels used | What it emits |
 |--------|------------|-------------|---------------|
-| `retrieval_app` | `retrieval_app.py` | INFO, WARNING | Startup lines; `config.yaml not found at %s`; `config_invalid_value — key=%s dropped=%d entries=%s` (operator domain-list drops); `config_invalid_value — key=promptguard_threshold. /extract reads the raw value through its own guard` (WARNING, never the invalid value); `promptguard_threshold_resolved — value=%s` (once per boot, INFO, validated numeric default only); `break_glass_advertisement_active — %s=1 is forcing /health ...`; `document extraction completed` (INFO, content-free `extra=` dict) |
+| `retrieval_app` | `retrieval_app.py` | INFO, WARNING | Startup lines; `config.yaml not found at %s`; `config_unknown_key — key=%s` (WARNING, one per unknown dotted key, never its value, tokens in the message not `extra=`); `config_invalid_value — key=%s dropped=%d entries=%s` (operator domain-list drops); `config_invalid_value — key=promptguard_threshold. /extract reads the raw value through its own guard` (WARNING, never the invalid value); `promptguard_threshold_resolved — value=%s` (once per boot, INFO, validated numeric default only); `break_glass_advertisement_active — %s=1 is forcing /health ...`; `document extraction completed` (INFO, content-free `extra=` dict) |
 | `cache` | `cache.py:38` | WARNING | Closed-vocabulary connection, operation and corrupt-entry lines (see below) |
 | `model_fetcher` | `model_fetcher.py:141` | INFO, WARNING, ERROR, exception | All `weights_*` markers and `model_revision_invalid` |
 | `promptguard.classifier` | `promptguard/classifier.py:21` | DEBUG, INFO, WARNING | Model loaded; `PromptGuard model not available — ML injection detection disabled` (WARNING with `exc_info=True`, so a traceback follows); `classify() called but model not loaded — returning safe fallback` |

@@ -15,6 +15,7 @@ import time
 from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import ExitStack, asynccontextmanager, contextmanager
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1659,6 +1660,134 @@ async def test_lifespan_publishes_the_validated_cache_settings(
 
         assert settings.max_entries == DEFAULT_CACHE_MAX_ENTRIES
         assert settings.max_bytes == DEFAULT_CACHE_MAX_BYTES
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        [],
+        ["cache"],
+        "scalar",
+        1,
+        None,
+        {"cache": "yes"},
+        {"extraction": []},
+        {"retrieve": None},
+    ],
+)
+def test_unknown_key_warning_leaves_malformed_values_to_readers(
+    config: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    assert retrieval_app._warn_unknown_config_keys(config) == []
+    assert not caplog.records
+
+
+def test_unknown_blocks_are_not_walked_and_values_are_never_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    config = {
+        "unknown_block": {"nested": "SENTINEL-VALUE"},
+        "cache": MappingProxyType({"max_entires": {"nested": "SENTINEL-VALUE"}}),
+        "extraction": {"max_pages": {"not_a_config_key": "SENTINEL-VALUE"}},
+    }
+    assert retrieval_app._warn_unknown_config_keys(config) == [
+        "unknown_block",
+        "cache.max_entires",
+    ]
+    assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
+        (logging.WARNING, "config_unknown_key — key=unknown_block"),
+        (logging.WARNING, "config_unknown_key — key=cache.max_entires"),
+    ]
+    assert "SENTINEL-VALUE" not in caplog.text
+
+
+def test_unknown_key_warning_discovers_new_registered_blocks(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(
+        retrieval_app,
+        "KNOWN_CONFIG_KEYS",
+        retrieval_app.KNOWN_CONFIG_KEYS | {"future", "future.limit"},
+    )
+    assert retrieval_app._warn_unknown_config_keys(
+        {"future": {"limit": 1, "typo": "SENTINEL-VALUE"}}
+    ) == ["future.typo"]
+    assert [record.getMessage() for record in caplog.records] == [
+        "config_unknown_key — key=future.typo"
+    ]
+
+
+@pytest.mark.parametrize("with_typos", [False, True])
+async def test_lifespan_warns_for_unknown_keys_without_changing_health(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    with_typos: bool,
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(app, "state", type(app.state)())
+    async with _running_app() as running:
+        baseline = (await running.get("/health")).json()
+    caplog.clear()
+    config = retrieval_app._load_config()
+    expected: list[str] = []
+    if with_typos:
+        config["promtguard_threshold"] = "SENTINEL-VALUE"
+        config["extraction"]["max_pagse"] = "SENTINEL-VALUE"
+        config["retrieve"]["max_promptguard_chnuks"] = "SENTINEL-VALUE"
+        expected = [
+            "extraction.max_pagse",
+            "retrieve.max_promptguard_chnuks",
+            "promtguard_threshold",
+        ]
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    with caplog.at_level(logging.DEBUG):
+        async with _running_app() as running:
+            response = await running.get("/health")
+            assert response.status_code == 200
+            health = response.json()
+            for field in (
+                "status",
+                "degraded_reasons",
+                "promptguard_loaded",
+                "cache_connected",
+                "sanitizer_revision",
+            ):
+                assert health[field] == baseline[field]
+    warnings = [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if "config_unknown_key" in record.getMessage()
+    ]
+    assert warnings == [
+        (logging.WARNING, f"config_unknown_key — key={key}") for key in expected
+    ]
+    assert "SENTINEL-VALUE" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("config", "error"),
+    [
+        ({"cache": "yes"}, CacheConfigurationError),
+        ({"cache": {"max_entries": False}}, CacheConfigurationError),
+        ({"extraction": []}, ExtractionConfigurationError),
+        ({"extraction": {"max_pages": False}}, ExtractionConfigurationError),
+        ({"retrieve": "yes"}, RetrieveConfigurationError),
+        ({"retrieve": {"fetch_concurrency": False}}, RetrieveConfigurationError),
+    ],
+)
+async def test_known_bad_config_values_still_refuse_boot(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    config: dict[str, Any],
+    error: type[ValueError],
+) -> None:
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    with pytest.raises(error):
+        async with lifespan(FastAPI()):
+            pytest.fail("invalid configuration started")
+    assert not any(
+        "config_unknown_key" in record.getMessage() for record in caplog.records
+    )
 
 
 @pytest.mark.parametrize(

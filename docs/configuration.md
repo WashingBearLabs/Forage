@@ -482,6 +482,18 @@ If the file is missing, Forage logs a warning and every key below falls back to 
 default. The repository ships a working `config.yaml`; the "shipped" column records what
 that file sets, which is not always the code default.
 
+Unknown keys are ignored, with one boot WARNING per key:
+`config_unknown_key — key=<dotted.name>`. The message names only the key, never
+its value. An unknown top-level block gets one warning, not one per child;
+known blocks are checked one level deep. Correct the spelling and restart.
+This is not value validation: an invalid known safety setting still refuses boot
+through its reader's typed error (`ExtractionConfigurationError`,
+`CacheConfigurationError`, or the corresponding retrieve/Brave error).
+The warn-and-fall-back exceptions are `promptguard_threshold` (fetch routes use
+0.85; `/extract` retains its raw-value guard), `policy_domain_entries_max_bytes`
+(65536), and invalid entries in `seed_blocklist` / `news_domains` (dropped at boot).
+Those emit `config_invalid_value`, not `config_unknown_key`.
+
 ### Top-level keys
 
 | Key | Type | Code default | Shipped | Purpose |
@@ -497,6 +509,10 @@ that file sets, which is not always the code default.
 | `search_brave_query_max_chars` | integer | `400` | `400` | Cap on the outbound query text sent to Brave. Out of range (50 to 400) or wrong-typed refuses boot. |
 | `cache` | mapping | `{}` (all defaults) | both keys at their defaults | Bounds for the bounded in-memory content-cache storage — see below. |
 | `extraction` | mapping | `{}` (all defaults) | all keys set to their maxima | Resource limits for untrusted document extraction — see below. |
+| `retrieve` | mapping | `{}` (all defaults) | all four keys at their defaults | Fetch-route admission and classification limits — see the `retrieve:` block below. |
+| `promptguard_fail_closed_floor` | boolean | `false` | `false` | Operator fail-closed floor on both fetch routes; see "Top-level PromptGuard policy keys" below. |
+| `promptguard_threshold_ceiling` | float | `1.0` | `1.0` | Operator threshold ceiling on both fetch routes; see "Top-level PromptGuard policy keys" below. |
+| `promptguard_wait_seconds` | float | `30.0` | `30.0` | Classification-permit wait budget on both fetch routes; see "Top-level PromptGuard policy keys" below. |
 
 Domain matching is directional: denylist `evil.com` blocks `evil.com` and
 `www.evil.com`, never `notevil.com` or `evil.com.attacker.net`. Allowlist
@@ -534,7 +550,8 @@ placement and enforce body-size limits at the caller-facing proxy as appropriate
 Bounds for `InMemoryStorage`, the bounded in-process content-cache storage that sits
 under the cache's policy layer — the backend an unset `VALKEY_URL` selects (see "Cache
 backend selection" above). They are validated at startup regardless of which storage
-is active, so a typo fails the boot loudly rather than silently widening a memory bound.
+is active, so an invalid known value refuses boot rather than silently widening a
+memory bound. A misspelled key instead warns and is ignored.
 
 The budget is the container's real headroom: `mem_limit: 1024m` already reserves 512 MiB
 for the parent FastAPI + torch + PromptGuard process and 384 MiB for the spawned
@@ -559,7 +576,7 @@ the in-memory storage can move the last two.
 
 Every value is validated at startup. A non-integer, a boolean, or an out-of-range value
 raises `ExtractionConfigurationError` and the service refuses to start — these are
-safety limits, so a typo fails loudly rather than silently widening a bound.
+safety limits. A misspelled key instead warns and is ignored.
 
 Note the pattern: for most keys the shipped value **is** the maximum, so these knobs
 exist to make the service *more* conservative, not less.
@@ -577,7 +594,9 @@ exist to make the service *more* conservative, not less.
 | `admission_queue_depth` | `1` | 0 – 4 | Requests allowed to wait for the extraction slot. `0` means reject immediately with `busy` (HTTP 429) whenever the slot is taken. |
 | `max_queued_upload_bytes` | `52428800` (50 MiB) | 0 – 50 MiB | Total bytes of queued uploads held in flight. `0` disables queuing of upload bodies. |
 
-### `retrieve:` — fetch-route limits
+<a id="retrieve--fetch-route-limits"></a>
+
+### The `retrieve:` block
 
 The `/retrieve` counterpart to `extraction:`, read by
 `pipeline/retrieve_limits.py` at boot: an out-of-range value refuses startup rather than
