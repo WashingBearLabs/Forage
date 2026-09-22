@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document build pipelines, deployment triggers, and automation. How code gets to production.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-005)
+> Updated by: Copilot (hardening-hostname-and-config US-004)
 
 ---
 
@@ -441,7 +441,7 @@ of those bytes. The same file also verifies the checker can fail (a committed
 un-regenerated twin under `tests/fixtures/contract/`), that rendering is byte-stable across
 `PYTHONHASHSEED`s, and that `/extract` is in the document even though the route is off by default.
 
-The anchor (`83242c6917cacb809b92f24b3b1b94fc1c149bfc0835e1c09a9c39ed86bbd81b` at HEAD) is
+The anchor (`014e873a2e7fae9b87b781e5e7b8bd5446d1e2259ad7ddcf52089d4840480194` at HEAD) is
 the trust root every other copy is verified against: `smoke` hashes the in-image copy
 against it, `publish` hashes the Release assets against it, and consumers verify the copy
 they vendor against the anchor *at the same tag*, never against another copy. Whether a

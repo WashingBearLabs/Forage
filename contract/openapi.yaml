@@ -779,19 +779,19 @@ components:
 
         chunks, per result `content_kind` — from the configured provider chain,
 
-        every result sanitized, never cached. `promptguard_fail_closed`,
+        every result sanitized, never cached. Only `/retrieve` honours
 
-        `promptguard_threshold` and `blocked_domains` are honoured on both routes;
+        `cache_ttl_hours`, `extract_mode`, `trusted_domains` and `verified_domains`;
 
-        this route additionally honours `trusted_domains`, `verified_domains`,
+        only `/search` honours `allow_paid_fallback`, `num_results` and `providers`
 
-        and `cache_ttl_hours`, while `/search` additionally
+        and scans every result at trust tier `standard`.
 
-        honours `providers` and `allow_paid_fallback` (contract 1.2.0) and scans
+        Shared by both routes: `blocked_domains`, `promptguard_threshold` and
 
-        every result at trust tier `standard`. On both routes, an omitted or null
+        `promptguard_fail_closed`. On both routes, an omitted or null threshold
 
-        threshold uses the validated `config.yaml` default (shipped as 0.85), then
+        uses the validated `config.yaml` default (shipped as 0.85), then
 
         `promptguard_threshold_ceiling` bounds the requested or default value.'
       properties:
@@ -1120,25 +1120,21 @@ components:
 
         `/retrieve` fetches and sanitizes one caller-named URL through the full
 
-        pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed`,
+        pipeline, cached by `sanitizer_revision`. Only `/search` honours
 
-        `promptguard_threshold` and `blocked_domains` are honoured on both routes;
+        `allow_paid_fallback`, `num_results` and `providers` and scans every result
 
-        this route additionally honours
+        at trust tier `standard`; only `/retrieve` honours `cache_ttl_hours`,
 
-        `providers`
+        `extract_mode`, `trusted_domains` and `verified_domains`.
 
-        and `allow_paid_fallback` (contract 1.2.0) and scans every result at
+        Shared by both routes: `blocked_domains`, `promptguard_threshold` and
 
-        trust tier `standard`, while `/retrieve` additionally honours
+        `promptguard_fail_closed`. On both routes, an omitted or null threshold
 
-        `trusted_domains`, `verified_domains` and `cache_ttl_hours`. On both routes,
+        uses the validated `config.yaml` default (shipped as 0.85), then
 
-        an omitted or null threshold uses the validated `config.yaml` default
-
-        (shipped as 0.85), then `promptguard_threshold_ceiling` bounds the requested
-
-        or default value.'
+        `promptguard_threshold_ceiling` bounds the requested or default value.'
       properties:
         allow_paid_fallback:
           default: true
@@ -1646,21 +1642,19 @@ paths:
         every result sanitized, never cached.
 
 
-        `promptguard_fail_closed`, `promptguard_threshold` and `blocked_domains` are
+        Only `/retrieve` honours `cache_ttl_hours`, `extract_mode`, `trusted_domains`
 
-        honoured on both routes; `/retrieve` additionally honours `trusted_domains`,
+        and `verified_domains`; only `/search` honours `allow_paid_fallback`,
 
-        `verified_domains` and `cache_ttl_hours`, while
+        `num_results` and `providers` and scans every result at trust tier `standard`.
 
-        `/search` additionally honours `providers` and `allow_paid_fallback`
+        Shared by both routes: `blocked_domains`, `promptguard_threshold` and
 
-        (contract 1.2.0) and scans every result at trust tier `standard`. On both
+        `promptguard_fail_closed`. On both routes, an omitted or null threshold
 
-        routes, an omitted or null threshold uses the validated `config.yaml`
+        uses the validated `config.yaml` default (shipped as 0.85), then
 
-        default (shipped as 0.85), then `promptguard_threshold_ceiling` bounds the
-
-        requested or default value.'
+        `promptguard_threshold_ceiling` bounds the requested or default value.'
       operationId: retrieve_retrieve_post
       requestBody:
         content:
@@ -1702,19 +1696,17 @@ paths:
         pipeline, cached by `sanitizer_revision`.
 
 
-        `promptguard_fail_closed`, `promptguard_threshold` and `blocked_domains` are
+        Only `/search` honours `allow_paid_fallback`, `num_results` and `providers`
 
-        honoured on both routes;
+        and scans every result at trust tier `standard`; only `/retrieve` honours
 
-        `/search` additionally honours `providers` and `allow_paid_fallback` (contract
+        `cache_ttl_hours`, `extract_mode`, `trusted_domains` and `verified_domains`.
 
-        1.2.0) and scans every result at trust tier `standard`, while `/retrieve`
+        Shared by both routes: `blocked_domains`, `promptguard_threshold` and
 
-        additionally honours `trusted_domains`, `verified_domains` and
+        `promptguard_fail_closed`. On both routes, an omitted or null threshold
 
-        `cache_ttl_hours`. On both routes, an omitted or null threshold uses the
-
-        validated `config.yaml` default (shipped as 0.85), then
+        uses the validated `config.yaml` default (shipped as 0.85), then
 
         `promptguard_threshold_ceiling` bounds the requested or default value.'
       operationId: search_search_post

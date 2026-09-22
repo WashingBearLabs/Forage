@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document API endpoints, CLI commands, or library interface. The external contract.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-005)
+> Updated by: Copilot (hardening-hostname-and-config US-004)
 
 ---
 
@@ -236,16 +236,20 @@ passes every result's title, URL and snippet through the same structural and Pro
 scans. Results that fail are omitted and counted, not
 returned. Never cached.
 
+<!-- boundary-text:start -->
+
 `/search` finds and returns provider-extracted content for a query across sources —
 snippets or chunks, per result `content_kind` — from the configured provider chain, every
 result sanitized, never cached; `/retrieve` fetches and sanitizes one caller-named URL
-through the full pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed`,
-`promptguard_threshold` and `blocked_domains` are honoured on both routes;
-this route additionally honours `providers` and `allow_paid_fallback` (contract 1.2.0)
-and scans every result at trust tier `standard`, while `/retrieve` additionally honours
-`trusted_domains`, `verified_domains` and `cache_ttl_hours`. On both routes, null or
-omitted threshold means the validated `config.yaml` default (shipped as `0.85`),
-then `promptguard_threshold_ceiling` bounds the requested or default value.
+through the full pipeline, cached by `sanitizer_revision`. Only `/search` honours
+`allow_paid_fallback`, `num_results` and `providers` and scans every result at trust tier
+`standard`; only `/retrieve` honours `cache_ttl_hours`, `extract_mode`, `trusted_domains`
+and `verified_domains`. Shared by both routes: `blocked_domains`,
+`promptguard_threshold` and `promptguard_fail_closed`. On both routes, null or omitted
+threshold means the validated `config.yaml` default (shipped as `0.85`), then
+`promptguard_threshold_ceiling` bounds the requested or default value.
+
+<!-- boundary-text:end -->
 
 Request fields (`SearchRequest`):
 
@@ -505,7 +509,7 @@ in-tree copy and says nothing about wire compatibility. The image tag (for examp
 CI verifies two of the three on every release: the `smoke` job reads the in-image copy
 back out of the candidate image, and the `publish` job downloads the Release assets back
 from the API; both are checked against the anchor committed at the tag (currently
-`83242c6917cacb809b92f24b3b1b94fc1c149bfc0835e1c09a9c39ed86bbd81b`).
+`014e873a2e7fae9b87b781e5e7b8bd5446d1e2259ad7ddcf52089d4840480194`).
 
 **Vendoring procedure** (`contract/GOVERNANCE.md` "Consumers"):
 

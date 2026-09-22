@@ -1736,6 +1736,44 @@ and the same for `kit_tools/arch/SERVICE_MAP.md` each return at least `1`; the f
   Full pytest remains explicitly deferred to end-of-epic validation by the
   implementer instruction; this is not a claim that its acceptance gate was run.
 
+### US-004 - boundary-text knob parity (2026-09-22)
+
+- Derived the route-specific and shared sets from `SearchRequest.model_fields`
+  and `RetrieveRequest.model_fields`, excluding only `url` and `query`: seven
+  route-specific knobs and three shared knobs. All seven authored copies now
+  include `extract_mode` and `num_results`, use the real `cache_ttl_hours` name,
+  and place every shared knob in one `Shared by both routes:` sentence.
+- The export guard reads all four descriptions from `CONTRACT_PATH` and the
+  three Markdown copies through exactly one ordered fence pair each. README
+  fences surround the entire uninterrupted HTTP table; only rows with the
+  exact `/search` and `/retrieve` first cells contribute names.
+- Mutation regressions remove every knob from each copy, move or duplicate
+  shared knobs outside their sentence, remove or duplicate that lead-in,
+  remove/duplicate/reverse fences, move README fences into the table, and
+  plant missing names in the three unrelated endpoint rows. Every case is
+  rejected by the same guard used for the committed copies.
+- Regenerated OpenAPI, its anchor and the drift twin, re-created the held
+  1.3.0 golden through `_SCHEMA_MODELS`, and refreshed all four anchor-quoting
+  pages. New anchor:
+  `014e873a2e7fae9b87b781e5e7b8bd5446d1e2259ad7ddcf52089d4840480194`.
+  A structural comparison to the pre-story tree finds exactly four OpenAPI
+  description changes and only `SearchRequest.description` in the golden.
+  All older goldens are byte-identical. Ruling 5 keeps this description-only
+  change in the open 1.3.0 window; no `CONTRACT_VERSION` entry was appended.
+- Production ASTs are identical after stripping docstrings. All nine hashed
+  sources and the derivation module are unchanged; before and after, default
+  and shipped config reproduce
+  `e00049c4ea9d02893c2f3c4f567a6a75f5a4fdfdb145bbf6d6fc701ec7c7ed5c`,
+  matching the latest `docs/bootstrap-notes.md` rotation record.
+- Validation: 657 related tests pass in one process across export/schema,
+  governance, models, app, errors, metrics and sanitizer revision. Safe fixers
+  ran only on the three changed Python files; repository Ruff lint/format,
+  strict Pyright (zero errors), exporter `--check` and whitespace checks pass.
+  Three existing non-failing warnings remain unsuppressed (one Torch
+  deprecation and two unavailable-cache socket-guard warnings). The full
+  pytest gate remains deferred as explicitly required by the implementer
+  instructions, not claimed as passed.
+
 ## Refinement Notes
 
 ### Research Findings

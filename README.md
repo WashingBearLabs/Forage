@@ -51,13 +51,17 @@ the numbering follows the sanitization order the contract reports.
 
 ### HTTP surface
 
+<!-- boundary-text:start -->
+
 | Endpoint | Purpose |
 |----------|---------|
 | `GET /health` | Always 200. Body carries `status` (`healthy`/`degraded`), `degraded_reasons`, `promptguard_loaded`, `cache_connected`, `cache_backend`, `search_providers`, `sanitizer_revision`, `contract_version`. **Check the body, not the status code.** |
 | `GET /metrics` | Extraction, search, retrieve, and cache counters. |
-| `POST /search` | Finds and returns provider-extracted content for a query across sources — snippets or chunks, per result `content_kind` — from the configured provider chain, every result sanitized, never cached. Honours `promptguard_fail_closed`, `promptguard_threshold` and `blocked_domains` (shared with `/retrieve`) and additionally `providers` and `allow_paid_fallback`; every result is scanned at trust tier `standard`. An omitted or null threshold uses the validated `config.yaml` default (shipped as 0.85); `promptguard_threshold_ceiling` bounds either choice on both routes. |
-| `POST /retrieve` | Fetches and sanitizes one caller-named URL through the full pipeline, cached by `sanitizer_revision`. Honours `promptguard_fail_closed`, `promptguard_threshold` and `blocked_domains` (shared with `/search`) and additionally `trusted_domains`, `verified_domains` and `cache_ttl_hours`. |
+| `POST /search` | Finds and returns provider-extracted content for a query across sources — snippets or chunks, per result `content_kind` — from the configured provider chain, every result sanitized, never cached. Only `/search` honours `allow_paid_fallback`, `num_results` and `providers`; every result is scanned at trust tier `standard`. Shared by both routes: `blocked_domains`, `promptguard_threshold` and `promptguard_fail_closed`. An omitted or null threshold uses the validated `config.yaml` default (shipped as 0.85); `promptguard_threshold_ceiling` bounds either choice on both routes. |
+| `POST /retrieve` | Fetches and sanitizes one caller-named URL through the full pipeline, cached by `sanitizer_revision`. Only `/retrieve` honours `cache_ttl_hours`, `extract_mode`, `trusted_domains` and `verified_domains`; the shared knobs are listed above. |
 | `POST /extract` | Extract from an uploaded document (gated behind `extract_route_enabled` in `config.yaml`). |
+
+<!-- boundary-text:end -->
 
 The response contract is versioned (`contract_version`, currently **1.3.0**). Consumers
 should refuse to activate on a mismatch rather than guess.
