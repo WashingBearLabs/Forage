@@ -100,7 +100,9 @@ from url_validator import (
     CanonicalHost,
     PrivateIPError,
     canonicalize_host,
+    hostname_matches,
     is_blocklisted_hostname,
+    normalize_domain_entries,
     private_address_class,
     validate_url,
 )
@@ -1876,11 +1878,22 @@ def _resolve_request_trust_tier(
     blocked_domains: list[str],
 ) -> str:
     """Resolve the trust tier string for a domain from request lists."""
-    lower = domain.lower()
-    if lower in {d.lower() for d in blocked_domains}:
-        return "blocked"
-    if lower in {d.lower() for d in trusted_domains}:
-        return "trusted"
-    if lower in {d.lower() for d in verified_domains}:
-        return "verified"
+    host = canonicalize_host(domain)
+    if not isinstance(host, CanonicalHost):
+        return "standard"
+    for tier, domains, denylist in (
+        ("blocked", blocked_domains, True),
+        ("trusted", trusted_domains, False),
+        ("verified", verified_domains, False),
+    ):
+        entries, _ = normalize_domain_entries(
+            domains, denylist=denylist, budget_bytes=None
+        )
+        if any(
+            hostname_matches(
+                host.host, entry, allow_suffix=denylist or entry.startswith(".")
+            )
+            for entry in entries
+        ):
+            return tier
     return "standard"

@@ -30,6 +30,7 @@ from cache import (
     InMemoryStorage,
     TrustTier,
     ValkeyStorage,
+    _effective_ttl_hours,
     cache_key,
     cache_policy_fingerprint,
     cache_settings_from_config,
@@ -37,6 +38,45 @@ from cache import (
 )
 from models import RetrievedContent, Stage2Verdict, Stage3Verdict
 from tests.fakes import FakeStorage, ManualClock, assert_frozen
+
+
+@pytest.mark.parametrize(
+    ("domain", "entries", "expected"),
+    [
+        ("www.bbc.co.uk", ["bbc.co.uk"], 24),
+        ("www.bbc.co.uk", [".bbc.co.uk"], 1),
+        ("bbc.co.uk", ["bbc.co.uk"], 1),
+        ("WWW.BBC.CO.UK.", [" .BBC.co.uk. "], 1),
+        ("xn--strae-oqa.de", ["straße.de"], 1),
+        ("xn--", [".xn--"], 24),
+        ("com", ["com"], 24),
+        ("1.2.3.4", ["1.2.3.4"], 1),
+        ("11.2.3.4", ["1.2.3.4"], 24),
+        ("2606:4700::1111", ["2606:4700::1111"], 1),
+    ],
+)
+def test_news_ttl_uses_canonical_opt_in_suffixes(
+    domain: str, entries: list[str], expected: int
+) -> None:
+    assert _effective_ttl_hours(24, domain=domain, news_domains=entries) == expected
+    assert _effective_ttl_hours(0, domain=domain, news_domains=entries) == 0
+
+
+def test_policy_fingerprint_preserves_the_wildcard_marker() -> None:
+    def fingerprint(entry: str) -> str:
+        return cache_policy_fingerprint(
+            trusted_domains=[entry],
+            verified_domains=[],
+            blocked_domains=[],
+            promptguard_threshold=0.85,
+            promptguard_fail_closed=True,
+            classifier_loaded=True,
+            sanitizer_revision="revision",
+        )
+
+    assert fingerprint("Example.COM ") == fingerprint("example.com")
+    assert fingerprint(".example.com") != fingerprint("example.com")
+
 
 # ---------------------------------------------------------------------------
 # Fixtures

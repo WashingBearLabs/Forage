@@ -24,6 +24,7 @@ from starlette.types import Message, Receive, Scope, Send
 
 import model_fetcher
 import retrieval_app
+import url_validator
 from cache import (
     DEFAULT_CACHE_MAX_BYTES,
     DEFAULT_CACHE_MAX_ENTRIES,
@@ -33,6 +34,7 @@ from cache import (
     ContentCache,
     InMemoryStorage,
     ValkeyStorage,
+    _effective_ttl_hours,
 )
 from model_fetcher import DEFAULT_MODEL_REVISION, ModelMetrics
 from models import (
@@ -1409,6 +1411,129 @@ async def test_lifespan_publishes_the_validated_cache_settings(
 
         assert settings.max_entries == DEFAULT_CACHE_MAX_ENTRIES
         assert settings.max_bytes == DEFAULT_CACHE_MAX_BYTES
+
+
+async def test_lifespan_normalizes_domain_lists_and_names_drops(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _park_the_retry(monkeypatch)
+    raw: dict[str, Any] = {
+        "seed_blocklist": [" Evil.COM. ", "bad..entry", "intranet"],
+        "news_domains": ["BBC.co.uk", ".Example.ORG", "com"],
+    }
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: raw)
+    with (
+        patch("pipeline.orchestrator.validate_url", new=url_validator.validate_url),
+        patch(
+            "url_validator.socket.getaddrinfo",
+            return_value=[(2, 1, 6, "", ("93.184.216.34", 0))],
+        ),
+        patch(
+            "pipeline.orchestrator.fetch_url",
+            new=AsyncMock(
+                return_value=FetchResult(
+                    final_url="https://wiki.intranet/",
+                    response_body=b"<html><body><p>A calm page.</p></body></html>",
+                    content_type="text/html",
+                    status_code=200,
+                )
+            ),
+        ),
+    ):
+        async with _running_app() as client:
+            assert app.state.config["seed_blocklist"] == ["evil.com", "intranet"]
+            assert app.state.config["news_domains"] == ["bbc.co.uk", ".example.org"]
+            assert raw["seed_blocklist"] == [" Evil.COM. ", "bad..entry", "intranet"]
+            assert raw["news_domains"] == ["BBC.co.uk", ".Example.ORG", "com"]
+            assert (
+                _effective_ttl_hours(
+                    24,
+                    domain="bbc.co.uk",
+                    news_domains=app.state.config["news_domains"],
+                )
+                == 1
+            )
+            for host in ("www.evil.com", "intranet"):
+                response = await client.post(
+                    "/retrieve", json={"url": f"https://{host}/"}
+                )
+                assert response.status_code == 422
+                assert response.json()["error"] == "blocked_domain"
+            response = await client.post(
+                "/retrieve",
+                json={
+                    "url": "https://wiki.intranet/",
+                    "promptguard_fail_closed": False,
+                },
+            )
+            assert response.status_code == 200
+            response = await client.post(
+                "/retrieve",
+                json={"url": "https://evil.local/", "blocked_domains": ["evil.local"]},
+            )
+            assert response.status_code == 422
+            assert response.json()["error"] == "private_ip"
+    warnings = [
+        record
+        for record in caplog.records
+        if "config_invalid_value" in record.getMessage()
+    ]
+    assert len(warnings) == 2
+    for record, key, entry in zip(
+        warnings, ("seed_blocklist", "news_domains"), ("bad..entry", "com"), strict=True
+    ):
+        assert record.levelno == logging.WARNING
+        assert f"key={key} dropped=1 entries={entry}" in record.getMessage()
+
+
+@pytest.mark.parametrize("shipped", [True, False])
+async def test_lifespan_valid_domain_lists_are_unbudgeted_and_quiet(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, shipped: bool
+) -> None:
+    _park_the_retry(monkeypatch)
+    entries = [f"news{index}.example" for index in range(70)]
+    if not shipped:
+        monkeypatch.setattr(
+            retrieval_app, "_load_config", lambda: {"news_domains": entries}
+        )
+    async with _running_app():
+        if shipped:
+            assert app.state.config["news_domains"] == [
+                ".reuters.com",
+                ".apnews.com",
+                ".bbc.co.uk",
+                ".nytimes.com",
+                ".theguardian.com",
+                ".cnn.com",
+            ]
+            assert (
+                _effective_ttl_hours(
+                    24,
+                    domain="www.bbc.co.uk",
+                    news_domains=app.state.config["news_domains"],
+                )
+                == 1
+            )
+        else:
+            assert app.state.config["news_domains"] == entries
+    assert not any(
+        "config_invalid_value" in record.getMessage() for record in caplog.records
+    )
+
+
+async def test_domain_config_warning_does_not_echo_misplaced_credentials(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {"news_domains": ["https://user:secret@example.com/"]},
+    )
+    async with _running_app():
+        assert app.state.config["news_domains"] == []
+    assert "key=news_domains dropped=1 entries=[redacted]" in caplog.text
+    assert "secret" not in caplog.text
 
 
 async def test_lifespan_refuses_an_out_of_range_cache_bound(

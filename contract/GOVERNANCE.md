@@ -173,7 +173,7 @@ An urgent fix does not get to skip the rules; it gets a faster lane through them
 
 ## Recorded rulings
 
-Eight rulings this epic already made, kept here so the next change re-reads them instead of
+Nine rulings this epic already made, kept here so the next change re-reads them instead of
 re-litigating them. Each cites its source.
 
 ### (a) The documentation pass does not bump the contract
@@ -511,3 +511,35 @@ lane, and the consumer note lists all three with their lanes so nobody merges th
   gains a shape.
 
 Neither is a worked-example-6 tightening, and neither needs step 2's window.
+
+### (h) Directional domain matching tightens denylists and adds opt-in allowlist suffixes
+
+**Source:** `kit_tools/specs/feature-hardening-hostname-and-config.md`, US-001,
+the epic's R8 and ruling 42.
+
+**Ruling:** in the 1.3.0 window, existing multi-label denylist entries cover their
+subdomains as well as their apex. This is a pure tightening: single-label denylist
+entries remain accepted and exact-only, with **no single-label loosening**.
+Bare allowlist entries retain their existing meaning; the leading-dot suffix form
+is additive. IP literals remain equality-only.
+
+**Example 6 ("expedited security changes") applies explicitly.** Step 1's compatible
+alternative — opt-in leading dots on denylists too — was considered and declined:
+it leaves `www.evil.com` unblocked for every existing `evil.com` entry, which is the
+bug. For this tightening, the upgrade note in `docs/configuration.md` and the
+Release-body line carried by spec 8 stand in for step 2's compatibility window;
+this is an explicit expedited MINOR exception, not a claim that an opt-in window
+was shipped. Operators must review apex entries before upgrading: a multi-tenant
+denylist apex removes every tenant. The old suffix gap is not retained.
+
+The same ruling classifies the `blocked_domain` → `private_ip` precedence swap:
+canonical private-name rejection now runs before caller-list comparison, so
+`https://evil.local/` with `blocked_domains: ["evil.local"]` returns the latter.
+It is a value swap between two existing 422 codes, not a status or shape change,
+and rides this announced tightening in the 1.3.0 window.
+
+Ruling 42's `policy_domain_list_too_large` is a **new closed reason** on each
+route's existing 422 code (`content_too_large` on `/retrieve`, `search_unavailable` on
+`/search`), not a new status or response shape. Its raisers and byte cap belong
+to US-007 and US-002 respectively; they do not ship in US-001. A denylist over
+budget will be refused whole rather than silently truncated.

@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document logs, metrics, alerts, and dashboards. How to observe the system.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-retrieve-parity US-004)
+> Updated by: Copilot (hardening-hostname-and-config US-001)
 
 ---
 
@@ -251,6 +251,7 @@ All are `logging.getLogger(__name__)`: `retrieval_app`, `cache`, `model_fetcher`
 | Level | Line | When |
 |-------|------|------|
 | WARNING | `config.yaml not found at <path>` | `/app/config.yaml` missing; all code defaults apply. |
+| WARNING | `config_invalid_value — key=<list> dropped=<n> entries=<entries>` (domain-list form names dropped entries) | Invalid `seed_blocklist` or `news_domains` entries dropped at boot; one WARNING per list with drops, none for valid lists. Misplaced credential/URL-shaped entries are redacted. Request counters are not incremented. |
 | WARNING | `break_glass_advertisement_active — <var>=1 is forcing /health to advertise search_sanitization regardless of classifier state; ...` | Break-glass armed. `capabilities` will lie; `status` and `promptguard_loaded` stay honest. |
 | WARNING | `Content cache not available at startup` | `VALKEY_URL` set and the 2 s connect+ping deadline failed. |
 | WARNING | `PromptGuard model not available — ML injection detection disabled` (with traceback, `exc_info=True`) | The verified weight set failed to load (torch/transformers); followed by ERROR `weights_load_failed`. |

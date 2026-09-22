@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document dependencies and integrations. Shows what talks to what and failure impacts.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-retrieve-parity US-005)
+> Updated by: Copilot (hardening-hostname-and-config US-001)
 
 ---
 
@@ -172,7 +172,7 @@ Operator-side vendoring of a new revision to the mirror is `scripts/vendor_weigh
 |-----------|-------|
 | **Purpose** | Fetch the caller's URL for `POST /retrieve`. Forage is SSRF-capable by nature, so every hop is validated. |
 | **Client / protocol** | `httpx.AsyncClient(timeout=30.0, follow_redirects=False, verify=ssl.create_default_context())` in `pipeline/stage5_url_audit.py`; streaming GET; one client per `fetch_url` call. Redirects are followed by a manual loop, each hop re-validated and recorded in `redirect_chain`; a netloc change sets `domain_changed_on_redirect` (-0.1 trust). DNS pinning: `url_validator.validate_url` resolves off-loop, rejects if **any** address is private, then the request is sent to the resolved IP with `Host: <hostname>` and `sni_hostname` so TLS verification stays on. One user agent per top-level fetch, chosen from `config.yaml user_agents` (five shipped) or the built-in list. |
-| **Configuration** | No env vars. `config.yaml`: `user_agents`, `seed_blocklist` (shipped `[]`; merged with each request's `blocked_domains`, exact-host case-insensitive, also applied to `/search` result URLs), `news_domains` (cache TTL only). The fetch tunables are code constants, not config keys. |
+| **Configuration** | No env vars. `config.yaml`: `user_agents`, `seed_blocklist` (shipped `[]`; merged with `/retrieve`'s `blocked_domains`, canonical apex plus dot-boundary subdomains; search policy plumbing is US-002), `news_domains` (cache TTL only, suffixes opt in with a leading dot). The fetch tunables are code constants, not config keys. |
 | **Timeouts / retries** | `DEFAULT_TIMEOUT` 30 s per request, `DEFAULT_MAX_REDIRECTS` 5, `DEFAULT_MAX_CONTENT_BYTES` 10 MiB (Content-Length fast reject, then a streamed cap). **No retries.** |
 | **SSRF defence** | Schemes `http`/`https` only; hostname `localhost` and suffixes `.local` / `.localhost` rejected before DNS; private and reserved IPv4 and IPv6 ranges (link-local, CGN, multicast, documentation ranges, `0.0.0.0` and `::`); five classes of **embedded IPv4** unwrapped and checked against the IPv4 list — IPv4-mapped, 6to4, Teredo (the client field), NAT64 (**only inside `64:ff9b::/96`**) and IPv4-compatible (**only inside `::/96`**), the prefix guards being what keeps a public embedding and ordinary public IPv6 fetchable; unparseable addresses treated as unsafe. Full range list in `url_validator.py`. |
 | **Health signal** | **None** — per request only. `/metrics.retrieve.errors` keyed by code; `/metrics.retrieve.requests`. |
@@ -208,7 +208,7 @@ behaviour is described here from Forage's own docs and tests
   tag, `gh release download v<ver> --pattern 'openapi.yaml*'`, or
   `docker run --rm --entrypoint cat <image> /app/contract/openapi.yaml`); run
   `sha256sum -c openapi.yaml.sha256`; commit both; record the tag. The anchor is
-  currently `62c1efe2d07184730900f0af4279321e8626de5e80a31c19c94f765124b25a22`.
+  currently `b176ced35f6cacd32adbca96c5ca78daaaa2a50c99fc7a349be036018f24ccff`.
 - Its client caches `sanitizer_revision` from `/health`, pins the ten `/extract` error
   codes, rejects an `/extract` 422 lacking `sanitizer_revision`, gates web search on
   `capabilities.search_sanitization`, and buckets unknown `omitted_by_reason` /
@@ -259,10 +259,16 @@ for the in-memory bounds; no live-reference mutation). A hit is returned as
 `model_copy(cache_hit=True, cached_at=retrieved_at)` with a fresh `request_id`.
 
 **TTL rules:** Valkey `EX = effective_ttl_hours * 3600`, where effective TTL is the
-caller's `cache_ttl_hours` (default 24, max 8760) capped to 1 h for exact-host matches in
-`config.yaml news_domains`. Read-time revalidation deletes an entry older than the
+caller's `cache_ttl_hours` (default 24, max 8760) capped to 1 h for canonical matches in
+`config.yaml news_domains`: bare entries match only themselves; leading-dot entries
+cover apex and subdomains. The shipped six entries opt in. Read-time revalidation deletes an entry older than the
 caller's current TTL or one with a tz-naive `retrieved_at`. `cache_ttl_hours=0` deletes
 the variant and skips both read and write ("zero-TTL purge").
+
+The shared rule is directional: denylist `evil.com` covers `www.evil.com`, never
+`notevil.com`; allowlist `example.com` matches only itself, `.example.com` adds every
+subdomain. IP literals and single-label denylist entries are equality-only;
+single-label allowlists are invalid.
 
 **Refusals:** never stores `untrusted` or `blocked` tiers (`_NO_CACHE_TIERS`) or any
 `injection_detected` result; the memory backend skips single entries larger than

@@ -157,6 +157,12 @@ MINOR when fields are only added.
   ``/retrieve``'s threshold only, without overriding the caller's trusted-tier
   skip or VERIFIED fail-open exemption. Every 200 response is stamped after
   the pipeline, including cache hits; 422 bodies are unchanged.
+* ``1.3.0`` — ``hardening-hostname-and-config`` US-001 documents the three
+  ``RetrieveRequest`` domain lists: multi-label denylists cover subdomains;
+  allowlists opt in with a leading dot, with trusted classification-skip and
+  verified degrade-open cautions. Canonical private-name rejection now precedes
+  the caller denylist, swapping ``blocked_domain`` to ``private_ip`` for a host
+  that matches both (GOVERNANCE ruling (h)); response shapes are unchanged.
   This version is **held**:
   ``tests/golden/contract_1_3_0.json`` is
   re-created in place by every later story in this epic that moves the

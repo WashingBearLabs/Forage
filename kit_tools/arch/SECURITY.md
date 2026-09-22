@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document authentication, authorization, and secrets management. Security architecture reference.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-retrieve-parity US-005)
+> Updated by: Copilot (hardening-hostname-and-config US-001)
 
 ---
 
@@ -93,7 +93,17 @@ Since `hardening-search-sanitization` US-001 a result's `title` and `snippet` ar
 - **Reserved-range rejection** (`_is_private_ip`). Fifteen IPv4 networks: `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10` (carrier-grade NAT), `127.0.0.0/8`, `169.254.0.0/16` (link-local, which covers the `169.254.169.254` cloud-metadata endpoint), `172.16.0.0/12`, `192.0.0.0/24`, `192.0.2.0/24`, `192.168.0.0/16`, `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24`, `224.0.0.0/4`, `240.0.0.0/4`, `255.255.255.255/32`. Six IPv6 networks: `::1/128`, `fe80::/10`, `fc00::/7`, `::ffff:0:0/96`, `2001:db8::/32`, `ff00::/8`. **Five classes of embedded IPv4 are unwrapped** and checked against the IPv4 list instead — IPv4-mapped (`::ffff:a.b.c.d`), 6to4 (`2002::/16`), Teredo (the *client* field, which is the ones-complement of the low 32 bits, so a literal that looks like it embeds `127.0.0.1` embeds `128.255.255.254`), NAT64 (low 32 bits, **only inside `64:ff9b::/96`**) and IPv4-compatible (low 32 bits, **only inside `::/96`**) — the first match deciding, and returning at once so a public embedding is never re-blocked by `::ffff:0:0/96`. The transition ranges are unwrapped **with their prefix guards and never blanket-listed**: `64:ff9b::/96` maps the whole public IPv4 space, so a list entry would make an IPv6-only DNS64/NAT64 deployment refuse every fetch, and an unguarded low-32 mask would refuse ordinary public IPv6 whose low 32 bits land in a private range (`2a00:1450:4001:80e::200e` masks to `0.0.32.14`). ISATAP is deliberately not unwrapped — its prefix is deployment-specific and not enumerable. `0.0.0.0` and `::` are rejected explicitly, and `::1` is named before the `::/96` unwrap so a loopback literal is reported as a literal rather than as an embedding. The four embedded-private classes and the `.localhost` suffix are **newly refused** as of `hardening-search-sanitization` US-003 (`contract/GOVERNANCE.md` ruling (f)).
 - **Unparseable is private.** An address that `ipaddress` cannot parse is treated as private, so the check fails closed.
 - **Every resolved address is checked.** `socket.getaddrinfo` runs off the event loop; if *any* returned address is private the whole URL is rejected. DNS failure or an empty result is `invalid_url`.
-- **Exact-host blocklist.** The request's `blocked_domains` are merged with `config.yaml` `seed_blocklist` (currently `[]`) and matched case-insensitively as exact hosts; a hit raises `BlockedDomainError`, surfaced as `blocked_domain` (422), before any HTTP request is made.
+- **Dot-boundary blocklist.** The request's `blocked_domains` are merged with `config.yaml` `seed_blocklist` (currently `[]`). Canonical multi-label entries cover the apex and every subdomain: `evil.com` blocks `www.evil.com`, never `notevil.com`. IP literals and single-label entries match only themselves. A hit raises `BlockedDomainError`, surfaced as `blocked_domain` (422), before any HTTP request. Private names are refused first as `private_ip`, even if also denylisted.
+
+Allowlists deliberately differ: `example.com` matches only itself; `.example.com`
+includes the apex and every subdomain. A wildcard `trusted_domains` entry skips injection
+classification for all covered hosts; a wildcard `verified_domains` entry makes them
+degrade open on unavailable classification, even under `promptguard_fail_closed_floor`
+or a load-triggered wait timeout. Neither should name a multi-tenant or registry-level
+apex (`.co.uk`, `.github.io`, `.s3.amazonaws.com`). US-007 adds
+`policy_suffix_trusted_skip` to count wildcard-caused resolutions to either tier.
+Single-label allowlists are invalid. The normaliser and host side share exactly one
+UTS-46 implementation; malformed hosts are refused regardless of configured lists.
 
 ### `fetch_url`
 
@@ -114,7 +124,7 @@ A `/retrieve` refusal `reason` echoes `URL '<url>' resolves to private IP <ip>` 
 | Reserved IPv4/IPv6 ranges, unparseable-is-private, `::` | `tests/test_url_validator.py::TestIsPrivateIP` (`test_private_ipv4`, `test_private_ipv6`, `test_unparseable_ip_is_private`, `test_zero_ipv6`) |
 | Any private address among several rejects the URL | `TestRFC1918Rejection::test_mixed_ips_rejected_if_any_private` |
 | `localhost` and `.local` regardless of case or nesting | `TestHostnameRejection::test_localhost_uppercase_rejected`, `::test_nested_local_domain_rejected` |
-| Exact-host blocklist | `TestBlockedDomains` |
+| Dot-boundary blocklist and exact-only single-label entries | `TestBlockedDomains`, `test_domain_matching` |
 | Scheme allowlist, DNS failure | `TestEdgeCases::test_unsupported_scheme_raises_valueerror`, `::test_dns_failure_raises_valueerror` |
 | Private IP reached mid-fetch or via redirect | `tests/test_stage5_url_audit.py::TestRFC1918DuringFetch`, `TestRedirectTracking::test_redirect_to_private_ip_rejected` |
 | Redirect budget and relative `Location` | `TestRedirectTracking::test_too_many_redirects`, `::test_relative_redirect_resolved` |

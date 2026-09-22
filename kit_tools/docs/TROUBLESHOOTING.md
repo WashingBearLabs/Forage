@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document debugging procedures and common fixes. How to diagnose problems.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-retrieve-parity US-004)
+> Updated by: Copilot (hardening-hostname-and-config US-001)
 
 ---
 
@@ -157,7 +157,7 @@ eighteen.
 
 | Code | HTTP | Route | What it means | First thing to check |
 |---|---|---|---|---|
-| `blocked_domain` | 422 | `/retrieve` | Host matched the request's `blocked_domains` or `seed_blocklist` in `config.yaml` (exact, case-insensitive) | The two lists. This is an intended refusal |
+| `blocked_domain` | 422 | `/retrieve` | Canonical host matched the request's `blocked_domains` or `seed_blocklist`; multi-label entries include every subdomain | The two lists. This is an intended refusal; private names take precedence as `private_ip` |
 | `busy` | 429 | `/extract` | Admission queue full: `admission_queue_depth` (shipped 1) or `max_queued_upload_bytes` exceeded. Body carries `sanitizer_revision` | `/metrics.extraction.busy_rejections`, `active`, `queued`. Extraction concurrency is pinned to 1; retry client-side |
 | `busy` | 422 | `/retrieve` | Reason `admission_queue_full`: the `/retrieve` admission queue is full — `retrieve.admission_queue_depth` (shipped 4) or `retrieve.max_queued_fetch_bytes` (shipped 30 MiB, three queued requests) exceeded while the single fetch slot was held. No `sanitizer_revision` in the body | `/metrics` `retrieve.busy_rejections` and `retrieve.semaphore_saturation`; what `/retrieve` is being pointed at and how often. Raise the two queue knobs, not `fetch_concurrency` (pinned at 1) |
 | `content_too_large` | 422 (`/retrieve`, `/extract`); 413 documented on `/extract` but **unreachable** | `/retrieve`: `Content-Length` or streamed body over 10 MiB, **or** — reason `promptguard_budget`, the fixed literal rather than prose — extracted text over the ceiling derived from `retrieve.max_promptguard_chunks` (no pre-check at the shipped default `0`; 458,752 characters once the coming default 256 lands, `contract/GOVERNANCE.md` ruling (g)). `/extract`: upload over `max_input_bytes` (50 MiB); the streaming refusal actually arrives as **400** `{"detail": "There was an error parsing the body"}`, the post-spool re-check as 422 | The target or upload size. The 400 is expected: `contract/GOVERNANCE.md` ruling (a2); fixing it is a MAJOR |
@@ -437,7 +437,11 @@ a behavioural change instead of at a boundary; record it in `docs/bootstrap-note
 **Cause:** `url_validator.validate_url` runs before any byte is fetched and again on
 **every redirect hop**. `invalid_url` is scheme, hostname, or DNS; `private_ip` is
 `localhost`, `.local`, or any resolved address in a private range; `blocked_domain` is an
-exact host match against the request's `blocked_domains` merged with `seed_blocklist`.
+apex or dot-boundary subdomain match against the request's `blocked_domains` merged
+with `seed_blocklist`. Denylist `evil.com` covers `www.evil.com`, never `notevil.com`;
+allowlist `example.com` matches only itself and `.example.com` adds all subdomains.
+IP literals and single-label denylist entries match only themselves, while single-label
+allowlists are invalid. Canonical private names are rejected before caller lists.
 
 **Fix:** these are the service working as designed. If a public site trips `private_ip`,
 resolve it from inside the container (`docker exec <container> curl -sI <url>`): a split

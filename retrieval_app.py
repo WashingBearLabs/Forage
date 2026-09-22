@@ -96,6 +96,7 @@ from pipeline.search_providers.policy import apply_request_policy
 from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL, SearxngProvider
 from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES
 from promptguard.classifier import PromptGuardClassifier
+from url_validator import normalize_domain_entries
 
 logger = logging.getLogger(__name__)
 
@@ -1317,7 +1318,30 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Startup/shutdown lifecycle."""
     # Load config
     config = _load_config()
-    app.state.config = config
+    published_config = config.copy()
+    for key, denylist in (("seed_blocklist", True), ("news_domains", False)):
+        entries: list[str] = config.get(key, [])
+        normalized: list[str] = []
+        dropped: list[str] = []
+        for entry in entries:
+            values, count = normalize_domain_entries(
+                [entry], denylist=denylist, budget_bytes=None
+            )
+            normalized.extend(values)
+            if count:
+                # A misplaced URL/credential is not safe to echo as a domain.
+                dropped.append(
+                    "[redacted]" if any(char in entry for char in ":/@") else entry
+                )
+        published_config[key] = normalized
+        if dropped:
+            logger.warning(
+                "config_invalid_value — key=%s dropped=%d entries=%s",
+                key,
+                len(dropped),
+                ",".join(dropped),
+            )
+    app.state.config = published_config
     settings = extraction_settings_from_config(config)
     app.state.extraction_settings = settings
     retrieve_settings = retrieve_settings_from_config(config)

@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document environment variables and secrets. What config exists and where to find it.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-retrieve-parity US-005)
+> Updated by: Copilot (hardening-hostname-and-config US-001)
 
 ## Overview
 
@@ -83,7 +83,7 @@ Loaded by `retrieval_app._load_config()` in the lifespan; a missing file logs a 
 | Key | Code default | Shipped | Type / range | Controls | Read site |
 |---|---|---|---|---|---|
 | `user_agents` | empty list | 5 desktop browser UAs | list of strings | Outbound User-Agent pool for stage-5 fetches; empty falls to `DEFAULT_USER_AGENTS` in `pipeline/stage5_url_audit.py` | `pipeline/orchestrator.py` line 294, per `/retrieve` |
-| `news_domains` | empty list | reuters.com, apnews.com, bbc.co.uk, nytimes.com, theguardian.com, cnn.com | list of strings | Cache TTL for exact-host matches capped at 1 h regardless of the caller's `cache_ttl_hours` | `pipeline/orchestrator.py` line 249, then `cache.py` line 171, per `/retrieve` |
+| `news_domains` | empty list | .reuters.com, .apnews.com, .bbc.co.uk, .nytimes.com, .theguardian.com, .cnn.com | list of strings | Cache TTL capped at 1 h; bare entries match only themselves, leading-dot entries cover apex and subdomains. Upgrade: operator bare entries stay exact; shipped entries now opt in with a dot | `pipeline/orchestrator.py`, then `cache.py`, per `/retrieve`; normalised at boot |
 | `seed_blocklist` | empty list | empty list | list of strings | Merged into every request's `blocked_domains` before URL validation: the one deployment-wide trust setting. The trust-tier lists themselves (`trusted_domains`, `verified_domains`, `blocked_domains`) are per-request body fields, not config | `pipeline/orchestrator.py` line 236, per `/retrieve` |
 | `promptguard_threshold` | `0.85` | `0.85` | float, 0.0 to 1.0 | Stage-3 injection cutoff for `/extract`; also hashed into `sanitizer_revision`, so changing it rotates that value and invalidates the content cache by design | `retrieval_app.py` line 1474 (`/extract`, per request; a non-numeric or out-of-range value is rejected per request); `pipeline/sanitizer_revision.py` line 41 (start) |
 | `extract_route_enabled` | `false` | `false` | boolean (a non-boolean refuses boot) | Release gate: while `false`, `POST /extract` returns **404** from `ExtractionAdmissionMiddleware`. No authentication exists behind it | `pipeline/extraction_limits.py` line 100, start |
@@ -92,6 +92,12 @@ Loaded by `retrieval_app._load_config()` in the lifespan; a missing file logs a 
 | `search_brave_timeout_seconds` | `15.0` | `15.0` | float, 1.0 to 60.0 (wrong-typed or out-of-range refuses boot) | Per-request timeout for the Brave LLM-Context HTTP call — `/search`'s worst-case latency on a Brave-only chain until spec 3's fallback exists | `pipeline/search_providers/brave.py`'s `brave_settings_from_config()`, start |
 | `search_brave_chunk_max_chars` | `2000` | `2000` | integer, 200 to 2000 (wrong-typed or out-of-range refuses boot) | Cap on each Brave result's extracted-chunk text before it reaches sanitization | `pipeline/search_providers/brave.py`'s `brave_settings_from_config()`, start |
 | `search_brave_query_max_chars` | `400` | `400` | integer, 50 to 400 (wrong-typed or out-of-range refuses boot) | Cap on the outbound query text sent to Brave | `pipeline/search_providers/brave.py`'s `brave_settings_from_config()`, start |
+
+Domain lists use canonical UTS-46 names: denylist `evil.com` covers `www.evil.com`,
+never `notevil.com`; allowlist `example.com` matches only itself and `.example.com`
+adds every subdomain. IP literals and single-label denylist entries match only themselves;
+single-label allowlists are invalid. Config lists are normalised at boot without a budget,
+with one `config_invalid_value` WARNING per list naming invalid entries.
 
 Observation, not a decision: `/retrieve` scans at the request body's own `promptguard_threshold` field (default 0.85) and `/search` passes no threshold at all, so `/search` always scans at the hard default 0.85 even after an operator changes this key. Only `/extract` honours the config value (`kit_tools/arch/SECURITY.md`, "Observation: `/search` scans at the hard default").
 

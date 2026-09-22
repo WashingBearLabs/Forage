@@ -486,8 +486,8 @@ that file sets, which is not always the code default.
 | Key | Type | Code default | Shipped | Purpose |
 |-----|------|--------------|---------|---------|
 | `user_agents` | list of strings | `[]` | 5 desktop browser UAs | Pool rotated across outbound fetches. Empty means the fetcher's own built-in default is used. |
-| `news_domains` | list of strings | `[]` | 6 wire/major outlets | Domains whose cached entries expire after **at most 1 hour**, regardless of the caller's requested TTL (news goes stale fast). Matched case-insensitively on the exact host. |
-| `seed_blocklist` | list of strings | `[]` | `[]` | Domains merged into every request's `blocked_domains` before URL validation — a permanent, deployment-wide deny list. |
+| `news_domains` | list of strings | `[]` | 6 leading-dot wire/major outlets | Domains whose cached entries expire after **at most 1 hour**. Bare entries match only the apex; a leading dot covers the apex and every subdomain. **Upgrade note:** your bare entries stay exact; add the dot for subdomains. The six shipped entries now have it (`.bbc.co.uk` covers `www.bbc.co.uk`). |
+| `seed_blocklist` | list of strings | `[]` | `[]` | Deployment-wide denylist merged with `/retrieve`'s `blocked_domains`. **Upgrade note:** existing multi-label entries now cover subdomains; review apex entries before upgrading, because a multi-tenant apex removes every tenant. Single-label entries keep matching exactly as before. This list is policy, not a secret: observable through `/retrieve`'s refusal message and, once search policy plumbing lands (US-002), `/search`'s `blocked_url` counts. |
 | `promptguard_threshold` | float | `0.85` | `0.85` | Injection score at or above which stage 3 marks content as injected. Also feeds the `sanitizer_revision` hash, so changing it changes that value by design. |
 | `extract_route_enabled` | boolean | `false` | `false` | Release gate for `POST /extract`. While `false` the route returns **404** — it is invisible, not merely refused. Requires a restart to take effect. Remember there is no authentication in front of it. |
 | `search_brave_timeout_seconds` | float | `15.0` | `15.0` | Per-request timeout for the Brave LLM-Context HTTP call. This is `/search`'s worst-case latency on a Brave-only chain until spec 3's fallback exists. Out of range (1.0 to 60.0) or wrong-typed refuses boot. A caller's `/search` timeout must exceed the sum of the configured chain's per-provider timeouts — 10 s + this value for `searxng,brave` — so lower this value rather than raising the caller's. |
@@ -495,6 +495,20 @@ that file sets, which is not always the code default.
 | `search_brave_query_max_chars` | integer | `400` | `400` | Cap on the outbound query text sent to Brave. Out of range (50 to 400) or wrong-typed refuses boot. |
 | `cache` | mapping | `{}` (all defaults) | both keys at their defaults | Bounds for the bounded in-memory content-cache storage — see below. |
 | `extraction` | mapping | `{}` (all defaults) | all keys set to their maxima | Resource limits for untrusted document extraction — see below. |
+
+Domain matching is directional: denylist `evil.com` blocks `evil.com` and
+`www.evil.com`, never `notevil.com` or `evil.com.attacker.net`. Allowlist
+`example.com` matches only itself; `.example.com` includes every subdomain.
+IP literals match only themselves; single-label denylists are exact-only and
+single-label allowlists are rejected. All entries use the same UTS-46 host
+canonicaliser (case and one trailing dot normalised). Config lists are unbudgeted,
+normalised at boot, and invalid entries produce one `config_invalid_value` WARNING
+per list naming the dropped entries; misplaced credential/URL-shaped entries are redacted.
+
+| Per-request allowlist | Consequence and caution |
+|---|---|
+| `trusted_domains` | A leading-dot entry skips injection classification for every host under the suffix. Never name a multi-tenant or registry-level apex (`.co.uk`, `.github.io`, `.s3.amazonaws.com`). `policy_suffix_trusted_skip` will count wildcard-caused resolutions in US-007. |
+| `verified_domains` | A leading-dot entry makes every host under the suffix degrade open when the classifier is unavailable, including under `promptguard_fail_closed_floor` and a load-triggered classification wait timeout. Never name a multi-tenant or registry-level apex (`.co.uk`, `.github.io`, `.s3.amazonaws.com`). The same `policy_suffix_trusted_skip` counter arrives in US-007. |
 
 ### The `cache:` block
 

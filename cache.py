@@ -34,6 +34,12 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 import redis.asyncio as aioredis
 
 from models import RetrievedContent, TrustTier
+from url_validator import (
+    CanonicalHost,
+    canonicalize_host,
+    hostname_matches,
+    normalize_domain_entries,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -186,9 +192,16 @@ def _effective_ttl_hours(
     news_domains: list[str] | None,
 ) -> int:
     """Return the caller TTL, shortened for configured news domains."""
+    host = canonicalize_host(domain)
+    entries, _ = normalize_domain_entries(
+        news_domains or [], denylist=False, budget_bytes=None
+    )
     if ttl_hours <= 0:
         return 0
-    if news_domains and domain.lower() in {item.lower() for item in news_domains}:
+    if isinstance(host, CanonicalHost) and any(
+        hostname_matches(host.host, entry, allow_suffix=entry.startswith("."))
+        for entry in entries
+    ):
         return min(1, ttl_hours)
     return ttl_hours
 

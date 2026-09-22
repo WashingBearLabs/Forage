@@ -2,7 +2,7 @@
 # CODE_ARCH.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-retrieve-parity US-005)
+> Updated by: Copilot (hardening-hostname-and-config US-001)
 
 ---
 
@@ -245,7 +245,28 @@ defaults — announces the effective-policy fields (`664ee603…` → `d98f7dbe�
 `hardening-retrieve-parity` US-005): `contract.py` alone, whose read-only whole-file
 revert reproduces `664ee603…` under both default and shipped configuration.
 `retrieval_app.py`'s policy helper and `models.py`'s fields are not hashed.
+A twenty-sixth (`d98f7dbe…` → `5a470872…`) came from the preceding retrieve-parity
+validation commit `fe211e3`: `orchestrator.py` and `stage3_promptguard.py` changed
+cancellation ownership, the absolute fetch deadline and timeout accounting, not the
+text sanitization algorithm. Read-only substitution of its parent reproduces the
+before value. The twenty-seventh (`5a470872…` → `328d386c…`) is the **fifth
+sanitization-behaviour change**: hostname policy now has unconditional multi-label
+denylist suffixes and leading-dot opt-in allowlist suffixes, which can skip PromptGuard
+on trusted subdomains. `orchestrator.py`, `contract.py` and `url_validator.py` all
+move; the latter was already in `_ROOT_REVISION_SOURCES`. Each reversal is measured
+in `docs/bootstrap-notes.md`, with the all-reverted control reproducing `5a470872…`
+under default and shipped config.
 Nothing downstream may assume Poppy↔Forage revision parity.
+
+**Domain lists cross boundaries as canonical strings.** `url_validator.py` owns the
+normaliser, byte measure and matcher; there is still one IDNA implementation in
+`canonicalize_host`. A leading dot remains in allowlist strings (and fingerprints)
+but is removed from denylist strings. IP literals are equality-only, single-label
+denylists are exact-only, and single-label allowlists are invalid. Private-name
+rejection remains its own unconditional check before caller lists.
+The lifespan publishes a normalised config copy and warns once per invalid list;
+the raw loaded config still feeds revision derivation. Until US-007 owns caller
+normalisation, each comparison normalises its inputs once per call without a budget.
 
 **Operator policy is resolved in the handler, once.** `_apply_promptguard_policy`
 replaces the typed request with `model_copy` after asserting update keys against

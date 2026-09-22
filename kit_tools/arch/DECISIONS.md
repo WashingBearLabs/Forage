@@ -9,7 +9,7 @@
 > **TEMPLATE_INTENT:** Record architectural decisions and their rationale. Explains the 'why' behind technical choices.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-retrieve-parity US-005)
+> Updated by: Copilot (hardening-hostname-and-config US-001)
 
 This file records significant architectural and technical decisions.
 
@@ -608,9 +608,10 @@ extractions — `cache_policy_fingerprint()` mixed in every caller knob but not 
 **Decision:**
 The hashed identity is `MODEL_ID@revision` (`feature-forage-model-bootstrap` US-001) and the
 revision is an input to `cache_policy_fingerprint()` (`feature-forage-cache-fallback` US-003), so
-a rotation flushes Forage's own cache. Rotations to date — fifteen of the eighteen
-changed no sanitization behaviour; the fifteenth, sixteenth and eighteenth did, and the
-seventeenth did not join them:
+a rotation flushes Forage's own cache. Of twenty-seven rotations, twenty-two
+changed no sanitization algorithm; the fifteenth, sixteenth, eighteenth,
+nineteenth and twenty-seventh change sanitization behaviour. The last adds opt-in
+suffix privilege: `.example.com` skips PromptGuard for every trusted subdomain.
 
 | Value | Moved by |
 |---|---|
@@ -639,7 +640,9 @@ seventeenth did not join them:
 | `f654be77…c92fb` | **not** a rotation that changes sanitization behaviour. `orchestrator.py` moved `extract_html`, `scan_structural` and `structure_sanitization_result` onto `asyncio.to_thread` (pure functions, byte-identical output on every route), made `run_retrieve_pipeline`'s `admission` a required `AdmissionSlot` held from after the cache read through stage 1, and deletes the fetched body before the classification wait; `contract.py` gained `busy` in `RetrieveErrorCode`, `RETRIEVE_ADMISSION_QUEUE_FULL` and the `1.3.0` continuation line. Each reverted alone, both-reverted control landing exactly on `d0433876…` (`hardening-retrieve-parity` US-002). |
 | `464b6ad5…fead2` | **not** a rotation that changes how text is sanitized, though it moves a served outcome at the shipped defaults. `orchestrator.py` routes a fetched PDF through `asyncio.to_thread(extract_pdf_bytes_in_subprocess, …)` inside the `/retrieve` admission slot — the spawned, rlimited worker `/extract` uses, under `extraction.max_promptguard_chunks` — retaining ownership through worker reaping and spool cleanup even under repeated task cancellation. Its outcomes map most-specific first to 422 `content_too_large` / `promptguard_budget` or `extraction_failed` with reasons `pdf_encrypted`, `pdf_no_text`, `pdf_extraction_error`, `pdf_spool_error`; `contract.py` gained `extraction_failed` in `RetrieveErrorCode`, the four `RETRIEVE_PDF_*` literals and the `1.3.0` continuation line. Each reverted alone, both-reverted control landing exactly on `f654be77…`. Supersedes the unaccepted `6fd320da…` candidate, which released admission while cancelled PDF work remained live. Served text for a PDF within bounds is byte-identical; a PDF over 114,688 characters or the worker's rlimits is now refused where it was served or answered 500 (`hardening-retrieve-parity` US-003, 2026-09-22) |
 | `664ee603…c04b` | **not** a sanitization-behaviour change. `contract.py` alone gained the 1.3.0 continuation line announcing `cache.corrupt_entries`; reverting its bytes reproduces `464b6ad5…fead2` exactly. The guarded parse in `cache.py` and metrics mirror/emission in `retrieval_app.py` are not hashed. Invalid cached JSON/schema becomes a counted, logged miss with deletion attempted rather than a 500, without authenticating parseable values (`hardening-retrieve-parity` US-004, 2026-09-22). |
-| `d98f7dbe…69359` (current) | **not** a sanitization-behaviour change at shipped defaults. `contract.py` alone gained the 1.3.0 continuation line for the three effective-policy fields; its read-only whole-file revert reproduces `664ee603…c04b` under default and shipped config. `retrieval_app.py` resolves bounds by replacing the request before cache/pipeline reads, then stamps every 200; `models.py` defaults the fields for old entries. Neither file is hashed. The floor and ceiling ship off, `/search` keeps 0.85, `/extract` is unchanged, and trusted-tier / VERIFIED exemptions remain (`hardening-retrieve-parity` US-005, 2026-09-22). |
+| `d98f7dbe…69359` | **not** a sanitization-behaviour change at shipped defaults. `contract.py` alone gained the 1.3.0 continuation line for the three effective-policy fields; its read-only whole-file revert reproduces `664ee603…c04b` under default and shipped config. `retrieval_app.py` resolves bounds by replacing the request before cache/pipeline reads, then stamps every 200; `models.py` defaults the fields for old entries. Neither file is hashed. The floor and ceiling ship off, `/search` keeps 0.85, `/extract` is unchanged, and trusted-tier / VERIFIED exemptions remain (`hardening-retrieve-parity` US-005, 2026-09-22). |
+| `5a470872…bf623` | Twenty-sixth, reconciled from the clean US-001 base: `fe211e3` changed `orchestrator.py` and `stage3_promptguard.py` for cancellation ownership, the absolute fetch deadline and timeout accounting, not the sanitization algorithm. The read-only pre-validation control reproduces `d98f7dbe…`. |
+| `328d386c…93286` (current) | Twenty-seventh, **fifth sanitization-behaviour change**: multi-label denylists include subdomains, allowlists opt in with a leading dot, and canonical private names precede caller denylists. Three hashed files (`orchestrator.py`, `contract.py`, and already-hashed root `url_validator.py`), individually reverted and all-reverted to reproduce `5a470872…` under default and shipped config (`hardening-hostname-and-config` US-001). |
 
 **Rationale:**
 `pipeline/sanitizer_revision.py`: "two containers running the same code can be scanning with

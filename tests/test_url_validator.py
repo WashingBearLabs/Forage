@@ -22,7 +22,11 @@ from url_validator import (
     _is_private_ip,
     canonical_host,
     canonicalize_host,
+    domain_list_bytes,
+    hostname_matches,
     is_blocklisted_hostname,
+    matched_entry,
+    normalize_domain_entries,
     private_address_class,
     validate_url,
 )
@@ -30,6 +34,200 @@ from url_validator import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("host", "entry", "denylist", "expected"),
+    [
+        ("evil.com", "evil.com", True, True),
+        ("www.evil.com", "evil.com", True, True),
+        ("a.b.evil.com", ".evil.com", True, True),
+        ("notevil.com", "evil.com", True, False),
+        ("evil.com.attacker.net", "evil.com", True, False),
+        ("WWW.Evil.COM.", " Evil.COM. ", True, True),
+        ("münchen.de", "xn--mnchen-3ya.de", True, True),
+        ("xn--mnchen-3ya.de", "münchen.de", True, True),
+        ("straße.de", "xn--strae-oqa.de", True, True),
+        ("xn--strae-oqa.de", "straße.de", True, True),
+        ("example.com", "example.com", False, True),
+        ("www.example.com", "example.com", False, False),
+        ("example.com", ".example.com", False, True),
+        ("a.b.example.com", ".example.com", False, True),
+        ("notexample.com", ".example.com", False, False),
+        ("example.com.attacker.net", ".example.com", False, False),
+        ("intranet", "intranet", True, True),
+        ("wiki.intranet", "intranet", True, False),
+        ("com", "com", True, True),
+        ("example.com", "com", True, False),
+        ("1.2.3.4", "1.2.3.4", False, True),
+        ("1.2.3.4", "11.2.3.4", True, False),
+        ("11.2.3.4", "1.2.3.4", True, False),
+        ("www.1.2.3.4", "1.2.3.4", True, False),
+        ("2606:4700::1111", "2606:4700::1111", False, True),
+        ("2606:4700::1111", "4700::1111", True, False),
+    ],
+)
+def test_domain_matching(host: str, entry: str, denylist: bool, expected: bool) -> None:
+    canonical = canonicalize_host(host)
+    assert isinstance(canonical, CanonicalHost)
+    entries, dropped = normalize_domain_entries(
+        [entry], denylist=denylist, budget_bytes=None
+    )
+    assert dropped == 0
+    assert len(entries) == 1
+    assert (
+        hostname_matches(
+            canonical.host,
+            entries[0],
+            allow_suffix=denylist or entries[0].startswith("."),
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize("denylist", [True, False])
+@pytest.mark.parametrize(
+    "entry",
+    [
+        ".com",
+        "",
+        "bad..entry",
+        "xn--",
+        "bad_label.example",
+        ".".join(["a" * 63] * 3 + ["a" * 62]),
+        ".1.2.3.4",
+        ".2.3.4",
+        ".2606:4700::1111",
+    ],
+)
+def test_invalid_domain_entries_are_counted(entry: str, denylist: bool) -> None:
+    assert normalize_domain_entries([entry], denylist=denylist, budget_bytes=None) == (
+        [],
+        1,
+    )
+
+
+@pytest.mark.parametrize(
+    "entry", ["com", ".com", "local", ".local", "localhost", "intranet", "münchen"]
+)
+def test_single_label_allowlist_entries_never_grant_privilege(entry: str) -> None:
+    assert normalize_domain_entries([entry], denylist=False, budget_bytes=None) == (
+        [],
+        1,
+    )
+
+
+def test_domain_budget_is_raw_utf8_with_separators_and_prefix_only() -> None:
+    entries = [" Straße.DE ", "bad..entry", ".example.org", "a.de"]
+    assert domain_list_bytes(entries) == len("\n".join(entries).encode("utf-8"))
+    assert domain_list_bytes([]) == 0
+    first_two = domain_list_bytes(entries[:2])
+    assert normalize_domain_entries(
+        entries, denylist=False, budget_bytes=first_two
+    ) == (["xn--strae-oqa.de"], 3)
+    assert normalize_domain_entries(
+        entries, denylist=False, budget_bytes=first_two - 1
+    ) == (["xn--strae-oqa.de"], 3)
+    assert normalize_domain_entries(
+        ["a.de", "b.de"], denylist=False, budget_bytes=8
+    ) == (["a.de"], 1)
+    assert normalize_domain_entries(
+        ["a.de", "b.de"], denylist=False, budget_bytes=9
+    ) == (["a.de", "b.de"], 0)
+    assert normalize_domain_entries(entries, denylist=True, budget_bytes=0) == (
+        ["xn--strae-oqa.de", "example.org", "a.de"],
+        1,
+    )
+
+
+def test_domain_budget_stops_before_canonicalizing_the_overflow_tail() -> None:
+    with patch("url_validator.canonicalize_host", wraps=canonicalize_host) as canonical:
+        assert normalize_domain_entries(
+            ["a.de", "b.de", "c.de"], denylist=False, budget_bytes=4
+        ) == (["a.de"], 2)
+        canonical.assert_called_once_with("a.de")
+
+
+def test_maximum_length_domain_and_wildcard_remain_canonical_strings() -> None:
+    name = ".".join(["a" * 63] * 3 + ["a" * 61])
+    assert len(name) == 253
+    assert normalize_domain_entries(
+        [name, "." + name], denylist=False, budget_bytes=None
+    ) == ([name, "." + name], 0)
+
+
+def test_matched_entry_returns_the_first_matching_canonical_spelling() -> None:
+    assert (
+        matched_entry("www.example.com", ["example.com", ".example.com"])
+        == ".example.com"
+    )
+    assert (
+        matched_entry("example.com", ["example.com", ".example.com"]) == "example.com"
+    )
+    assert matched_entry("notexample.com", [".example.com"]) is None
+
+
+@pytest.mark.parametrize("blocked", [None, [], ["other.example"]])
+async def test_uncanonicalizable_fetch_host_is_refused_before_dns(
+    blocked: list[str] | None,
+) -> None:
+    with patch("url_validator.socket.getaddrinfo") as dns:
+        with pytest.raises(ValueError, match="Invalid hostname"):
+            await validate_url("https://xn--/", blocked_domains=blocked)
+        dns.assert_not_called()
+
+
+@pytest.mark.parametrize("blocked", [None, ["evil.local"]])
+@pytest.mark.parametrize(
+    "host",
+    [
+        "localhost",
+        "localhost.",
+        "anything.localhost",
+        "printer.local",
+        "deep.sub.myhost.local",
+        "evil.local",
+    ],
+)
+async def test_private_names_precede_denylists_without_dns(
+    host: str, blocked: list[str] | None
+) -> None:
+    with patch("url_validator.socket.getaddrinfo") as dns:
+        with pytest.raises(PrivateIPError):
+            await validate_url(f"https://{host}/", blocked_domains=blocked)
+        dns.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("host", "entry"),
+    [
+        ("www.evil.com", "evil.com"),
+        ("www.evil.com", "Evil.COM"),
+        ("straße.de", "straße.de"),
+        ("straße.de", "xn--strae-oqa.de"),
+        ("intranet", "intranet"),
+    ],
+)
+async def test_normalized_denylists_block_before_dns(host: str, entry: str) -> None:
+    with patch("url_validator.socket.getaddrinfo") as dns:
+        with pytest.raises(
+            BlockedDomainError,
+            match=f"Domain '{canonical_host(host)}' is on the blocklist",
+        ):
+            await validate_url(f"https://{host}/x", blocked_domains=[entry])
+        dns.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("host", "entries"),
+    [("www.evil.com", ["notevil.com"]), ("wiki.intranet", ["intranet"]), ("local", [])],
+)
+async def test_denylists_do_not_overmatch(host: str, entries: list[str]) -> None:
+    with _mock_getaddrinfo(_fake_addrinfo("93.184.216.34")):
+        assert await validate_url(f"https://{host}/", blocked_domains=entries) == (
+            "93.184.216.34",
+            host,
+        )
 
 
 # ``socket.getaddrinfo`` returns 5-tuples; the fakes below build the one shape

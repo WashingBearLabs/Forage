@@ -1437,6 +1437,51 @@ and the same for `kit_tools/arch/SERVICE_MAP.md` each return at least `1`; the f
 
 ## Implementation Notes
 
+### US-001 implementation (2026-09-22)
+
+- Pre-flight passed before edits: canonical host/rejection return shape, both config
+  bound helpers, `OMIT_BLOCKED_URL`, the held 1.3.0 golden, the complete 1.2.0-schema
+  diff sweep, and the operator-policy resolver all exist. Read the actual spec-1
+  US-003 notes: the rejection reasons are `unparseable`, `numeric_host`, `idna`;
+  `.localhost` was already added there.
+- Added the canonical-string domain normaliser and directional matcher, plus byte
+  measure and matching-entry helper. No signature change at any of the three
+  comparison sites or the fingerprint. The interim per-comparison entry pass remains
+  unbudgeted until US-007; no request counters or cap raisers were added here.
+  Config entries are each normalised once at boot into a published copy, retaining the
+  untouched raw config for revision derivation. One warning names each list's drops;
+  misplaced URL/credential-shaped entries are redacted to preserve invariant 6.
+- The spec's unhashed-helper assumption is superseded: `url_validator.py` already
+  belongs to `_ROOT_REVISION_SOURCES`. Removing it or documenting it as unhashed would
+  regress spec 1. GOTCHAS records the resolved question and whole-file invalidation
+  cost instead. Three source files rotate the revision. Read-only single-file
+  reversals and the all-reverted control reproduce the clean base under both default
+  and shipped config; all five rotation records are updated.
+- Reconciled the preceding, previously unrecorded validation rotation from `fe211e3`
+  separately: `d98f7dbe…` → `5a470872…` (twenty-sixth). This story is twenty-seventh,
+  `5a470872…` → `328d386c…`, the fifth sanitization-behaviour change.
+- The three request descriptions and GOVERNANCE ruling (h) land in the 1.3.0 window.
+  Exported OpenAPI anchor: `b176ced35f6cacd32adbca96c5ca78daaaa2a50c99fc7a349be036018f24ccff`.
+  Re-created the held golden through `_SCHEMA_MODELS`, byte-identical; older goldens
+  and `_EXPECTED_ONE_THREE_ZERO_DIFF` stay unchanged. All four anchor quotations updated.
+- No pre-existing matcher test was removed, weakened or given a different call shape.
+  `test_config_loading` now expects `.reuters.com`, the intentionally changed shipped
+  spelling. Formatting touched existing lines in the modified orchestrator test file;
+  its pre-existing untyped tokenizer lambda became a typed equivalent for pyright.
+  The lifespan regression explicitly installs the real validator at its import seam:
+  a prior concurrent-mock test leaks a validator mock when the modules run together,
+  while this regression passes independently without that patch.
+- Full-suite execution remains deferred by the story-implementer instruction.
+  Repository-wide formatting currently reports pre-existing drift in untouched
+  `tests/test_retrieve_admission.py` from `fe211e3`; do not confuse that gate with a
+  failure of the hostname tests. This file is outside the permitted changed-file
+  formatter scope and was left untouched.
+- Final focused gate: 1,142 tests across the twelve related modules passed; five
+  expected unavailable-cache socket-guard warnings and one upstream Torch deprecation.
+  Repository lint and strict pyright pass, as do changed-file formatting and
+  `export_contract --check`. A separate AST/read-only check pins unchanged public
+  signatures, one IDNA call site, the direct dependency, and all retained goldens.
+
 ## Refinement Notes
 
 ### Research Findings

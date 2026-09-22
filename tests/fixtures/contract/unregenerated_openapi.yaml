@@ -781,7 +781,12 @@ components:
         `epic-forage-hardening`.'
       properties:
         blocked_domains:
-          description: Domains to block outright
+          description: 'Domains to block outright: blocked_domains always covers subdomains
+            for multi-label names, with or without a leading dot; an IP literal matches only
+            itself. Single-label entries match exactly. Upgrade note: existing multi-label
+            entries now cover subdomains; review apex entries before upgrading, because a
+            multi-tenant apex removes every tenant. Single-label entries keep matching exactly
+            as before.'
           items:
             type: string
           title: Blocked Domains
@@ -817,7 +822,12 @@ components:
           title: Promptguard Threshold
           type: number
         trusted_domains:
-          description: Domains to treat as trusted
+          description: 'Domains to treat as trusted: bare entries match exactly; a leading
+            dot covers the apex and every subdomain; an IP literal matches only itself. A
+            leading-dot trusted_domains entry skips injection classification for every host
+            under that suffix. Never name a multi-tenant or registry-level apex (.co.uk, .github.io,
+            .s3.amazonaws.com). policy_suffix_trusted_skip counts wildcard-caused resolution
+            to either trusted or verified (counter added by US-007).'
           items:
             type: string
           title: Trusted Domains
@@ -828,7 +838,14 @@ components:
           title: Url
           type: string
         verified_domains:
-          description: Domains to treat as verified
+          description: 'Domains to treat as verified: bare entries match exactly; a leading
+            dot covers the apex and every subdomain; an IP literal matches only itself. A
+            leading-dot verified_domains entry makes every host under that suffix degrade
+            open when the classifier is unavailable, including under promptguard_fail_closed_floor
+            and a load-triggered classification wait timeout. Never name a multi-tenant or
+            registry-level apex (.co.uk, .github.io, .s3.amazonaws.com). policy_suffix_trusted_skip
+            counts wildcard-caused resolution to either trusted or verified (counter added
+            by US-007).'
           items:
             type: string
           title: Verified Domains

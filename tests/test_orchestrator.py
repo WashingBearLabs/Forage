@@ -94,6 +94,40 @@ from pipeline.stage5_url_audit import FetchResult
 from promptguard.classifier import PromptGuardBudgetExceededError, PromptGuardClassifier
 from tests.fakes import FakeSearchProvider, FakeStorage
 
+
+@pytest.mark.parametrize(
+    ("domain", "trusted", "verified", "blocked", "expected"),
+    [
+        ("www.example.com", ["example.com"], [], [], "standard"),
+        ("www.example.com", [".example.com"], [], [], "trusted"),
+        ("www.example.com", [".example.com"], [], ["example.com"], "blocked"),
+        ("www.example.com", [".example.com"], [".example.com"], [], "trusted"),
+        ("www.example.com", [], [".example.com"], [], "verified"),
+        ("www.example.com", [], ["example.com"], [], "standard"),
+        ("a.com", ["com"], [], [], "standard"),
+        ("com", ["com"], ["com"], [], "standard"),
+        ("WWW.Example.COM.", [" .EXAMPLE.com. "], [], [], "trusted"),
+        ("xn--strae-oqa.de", [], [], ["straße.de"], "blocked"),
+        ("straße.de", ["xn--strae-oqa.de"], [], [], "trusted"),
+        ("xn--", [".xn--"], [], [], "standard"),
+        ("1.2.3.4", ["1.2.3.4"], [], [], "trusted"),
+        ("11.2.3.4", ["1.2.3.4"], [], [], "standard"),
+        ("2606:4700::1111", [], ["2606:4700::1111"], [], "verified"),
+    ],
+)
+def test_request_trust_tier_uses_canonical_directional_matching(
+    domain: str,
+    trusted: list[str],
+    verified: list[str],
+    blocked: list[str],
+    expected: str,
+) -> None:
+    assert (
+        orchestrator._resolve_request_trust_tier(domain, trusted, verified, blocked)
+        == expected
+    )
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -1982,7 +2016,7 @@ def test_config_loading() -> None:
     assert "seed_blocklist" in config
     assert config["promptguard_threshold"] == 0.85
     assert len(config["user_agents"]) == 5
-    assert "reuters.com" in config["news_domains"]
+    assert ".reuters.com" in config["news_domains"]
     assert config["seed_blocklist"] == []
 
 
@@ -5468,14 +5502,19 @@ async def test_the_classifier_budget_error_maps_to_the_same_refusal() -> None:
     ids=["under-budget", "boundary", "absent", "explicit-zero"],
 )
 async def test_retrieve_classifies_every_window_with_compatible_response(
-    config: dict[str, Any], text: str,
+    config: dict[str, Any],
+    text: str,
 ) -> None:
     """Real chunking/inference loop, fake tensor/model IO, no downloaded weights."""
     classifier = PromptGuardClassifier()
     classifier._loaded = True
     tokenizer = MagicMock()
     tokenizer.encode.return_value = list(range((len(text) + 3) // 4))
-    tokenizer.decode.side_effect = lambda ids, **_kw: f"window-{ids[0]}-{ids[-1]}"
+
+    def decode_window(ids: list[int], **_kw: Any) -> str:
+        return f"window-{ids[0]}-{ids[-1]}"
+
+    tokenizer.decode.side_effect = decode_window
     tokenizer.return_value = {"input_ids": "fake-tensor"}
     classifier._tokenizer = tokenizer
     model = MagicMock()
@@ -5494,9 +5533,9 @@ async def test_retrieve_classifies_every_window_with_compatible_response(
     # Previous unbounded call: same real gauntlet, just no max_chunks.
     baseline = await _retrieve_with_text(text, RetrieveSettings(), _loaded_classifier())
     assert content.promptguard_state == "scanned"
-    assert content.model_dump(exclude={"request_id", "retrieved_at"}) == baseline.model_dump(
+    assert content.model_dump(
         exclude={"request_id", "retrieved_at"}
-    )
+    ) == baseline.model_dump(exclude={"request_id", "retrieved_at"})
 
 
 def test_the_admission_protocol_is_satisfied_by_the_app_controller() -> None:
@@ -5807,7 +5846,10 @@ async def _until_waiting(semaphore: asyncio.Semaphore) -> None:
 @pytest.mark.parametrize("cancel_count", [1, 3])
 @pytest.mark.parametrize("worker_fails", [False, True])
 async def test_active_classification_cancellation_retains_ownership(
-    holder_route: str, cancel_count: int, worker_fails: bool, tmp_path: Path,
+    holder_route: str,
+    cancel_count: int,
+    worker_fails: bool,
+    tmp_path: Path,
 ) -> None:
     """Actual repeated Task.cancel cannot let a competing route classify early."""
     loop = asyncio.get_running_loop()
@@ -5821,7 +5863,9 @@ async def test_active_classification_cancellation_retains_ownership(
     calls = 0
     lock = threading.Lock()
 
-    def classify(text: str, *, max_chunks: int | None = None) -> tuple[float, list[str]]:
+    def classify(
+        text: str, *, max_chunks: int | None = None
+    ) -> tuple[float, list[str]]:
         nonlocal active, peak, calls
         with lock:
             calls += 1
@@ -5847,8 +5891,10 @@ async def test_active_classification_cancellation_retains_ownership(
 
     async def retrieve() -> RetrievedContent:
         return await _retrieve_under(
-            classifier=classifier, semaphore=semaphore,
-            metrics=_NullRetrieveMetrics(), settings=RetrieveSettings(),
+            classifier=classifier,
+            semaphore=semaphore,
+            metrics=_NullRetrieveMetrics(),
+            settings=RetrieveSettings(),
         )
 
     async def holder() -> object:
@@ -5856,13 +5902,21 @@ async def test_active_classification_cancellation_retains_ownership(
             return await retrieve()
         if holder_route == "search":
             return await _search_under(
-                classifier=classifier, semaphore=semaphore, wait_seconds=30,
+                classifier=classifier,
+                semaphore=semaphore,
+                wait_seconds=30,
             )
         return await orchestrator.run_extract_pipeline_from_file(
-            path, filename="notes.txt", mime_hint="text/plain", extract_mode="full",
-            request_id="cancelled-extract", classifier=classifier,
-            promptguard_threshold=0.85, sanitizer_revision=_SAMPLE_REVISION,
-            settings=ExtractionSettings(), classification_semaphore=semaphore,
+            path,
+            filename="notes.txt",
+            mime_hint="text/plain",
+            extract_mode="full",
+            request_id="cancelled-extract",
+            classifier=classifier,
+            promptguard_threshold=0.85,
+            sanitizer_revision=_SAMPLE_REVISION,
+            settings=ExtractionSettings(),
+            classification_semaphore=semaphore,
         )
 
     first = asyncio.create_task(holder())
@@ -5890,14 +5944,17 @@ async def test_active_classification_cancellation_retains_ownership(
         assert not semaphore._waiters
     finally:
         finish.set()
-        await asyncio.gather(first, *([second] if second is not None else []),
-                             return_exceptions=True)
+        await asyncio.gather(
+            first, *([second] if second is not None else []), return_exceptions=True
+        )
 
 
 @pytest.mark.parametrize("initially_loaded", [False, True])
 @pytest.mark.parametrize("fail_closed", [False, True])
 async def test_model_warmup_during_fetch_counts_timeout_and_never_caches(
-    initially_loaded: bool, fail_closed: bool, caplog: pytest.LogCaptureFixture,
+    initially_loaded: bool,
+    fail_closed: bool,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     classifier = _loaded_classifier()
     classifier.loaded = initially_loaded
@@ -5915,17 +5972,23 @@ async def test_model_warmup_during_fetch_counts_timeout_and_never_caches(
     with (
         validate_patch,
         patch.object(orchestrator, "fetch_url", fetch),
-        patch.object(orchestrator, "cache_policy_fingerprint",
-                     wraps=orchestrator.cache_policy_fingerprint) as fingerprint,
+        patch.object(
+            orchestrator,
+            "cache_policy_fingerprint",
+            wraps=orchestrator.cache_policy_fingerprint,
+        ) as fingerprint,
         caplog.at_level(logging.WARNING),
     ):
         content = await run_retrieve_pipeline(
             _make_retrieve_request(promptguard_fail_closed=fail_closed),
-            cache=cache, classifier=classifier, config=_SAMPLE_CONFIG,
+            cache=cache,
+            classifier=classifier,
+            config=_SAMPLE_CONFIG,
             sanitizer_revision=_SAMPLE_REVISION,
             **_retrieve_kwargs(
                 settings=RetrieveSettings(promptguard_wait_seconds=0.05),
-                retrieve_metrics=metrics, classification_semaphore=semaphore,
+                retrieve_metrics=metrics,
+                classification_semaphore=semaphore,
             ),
         )
     assert fingerprint.call_args.kwargs["classifier_loaded"] is initially_loaded
@@ -6190,11 +6253,15 @@ async def test_five_cancelled_classification_waits_preserve_exact_permit(
     async def run() -> object:
         if route == "search":
             return await _search_under(
-                classifier=classifier, semaphore=semaphore, wait_seconds=30,
+                classifier=classifier,
+                semaphore=semaphore,
+                wait_seconds=30,
                 metrics=search_metrics,
             )
         return await _retrieve_under(
-            classifier=classifier, semaphore=semaphore, metrics=metrics,
+            classifier=classifier,
+            semaphore=semaphore,
+            metrics=metrics,
             settings=RetrieveSettings(),
         )
 
@@ -6225,7 +6292,9 @@ async def test_five_classifier_budget_backstops_preserve_exact_permit() -> None:
         classifier.classify.side_effect = PromptGuardBudgetExceededError("budget")
         with pytest.raises(PipelineError) as raised:
             await _retrieve_under(
-                classifier=classifier, semaphore=semaphore, metrics=metrics,
+                classifier=classifier,
+                semaphore=semaphore,
+                metrics=metrics,
                 settings=RetrieveSettings(max_promptguard_chunks=256),
             )
         assert raised.value.error == "content_too_large"
@@ -6235,7 +6304,9 @@ async def test_five_classifier_budget_backstops_preserve_exact_permit() -> None:
         assert not semaphore._waiters
     classifier.classify.side_effect = None
     content = await _retrieve_under(
-        classifier=classifier, semaphore=semaphore, metrics=metrics,
+        classifier=classifier,
+        semaphore=semaphore,
+        metrics=metrics,
         settings=RetrieveSettings(max_promptguard_chunks=256),
     )
     assert content.promptguard_state == "scanned"
@@ -6445,7 +6516,9 @@ async def test_search_budget_expiry_is_unconditional_for_the_rest_of_the_loop() 
     order: list[str] = []
     real_unavailable = orchestrator.unavailable_result
 
-    def release_after_expiry(tier_value: str, *, fail_closed: bool) -> PromptGuardResult:
+    def release_after_expiry(
+        tier_value: str, *, fail_closed: bool
+    ) -> PromptGuardResult:
         assert metrics.classification_wait_timeouts == 1
         if not order:
             assert semaphore._value == 0
@@ -6459,8 +6532,11 @@ async def test_search_budget_expiry_is_unconditional_for_the_rest_of_the_loop() 
 
     with patch.object(orchestrator, "unavailable_result", release_after_expiry):
         response = await _search_under(
-            classifier=classifier, semaphore=semaphore, wait_seconds=0.05,
-            metrics=metrics, fail_closed=False,
+            classifier=classifier,
+            semaphore=semaphore,
+            wait_seconds=0.05,
+            metrics=metrics,
+            fail_closed=False,
         )
 
     assert order == ["expired", "released", *(["later-result"] * 9)]

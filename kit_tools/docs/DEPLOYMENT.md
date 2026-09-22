@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document deployment procedures and rollback processes. How to ship safely.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-retrieve-parity US-005)
+> Updated by: Copilot (hardening-hostname-and-config US-001)
 
 ---
 
@@ -112,7 +112,7 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
 
    `gh release download v$TAG --pattern 'openapi.yaml*'` is the alternative route to the
    same two files. The anchor at `HEAD` is
-   `62c1efe2d07184730900f0af4279321e8626de5e80a31c19c94f765124b25a22`.
+   `b176ced35f6cacd32adbca96c5ca78daaaa2a50c99fc7a349be036018f24ccff`.
 4. **Check contract compatibility.** The image tag and `contract_version` are independent
    semvers — image `1.1.0` serves contract `1.2.0` (`1.0.0` served `1.1.0`). Compare the consumer's expected MAJOR
    against `info.version` in the `openapi.yaml` you just extracted; a MAJOR mismatch means

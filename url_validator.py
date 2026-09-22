@@ -12,6 +12,7 @@ import ipaddress
 import logging
 import re
 import socket
+from collections.abc import Sequence
 from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv6Address
 from typing import Literal
@@ -302,6 +303,87 @@ def is_blocklisted_hostname(host: str) -> bool:
     return False
 
 
+@dataclass(frozen=True, slots=True)
+class DomainEntry:
+    """Internal normalisation state; policy boundaries carry strings."""
+
+    name: str
+    wildcard: bool
+
+
+def domain_list_bytes(entries: Sequence[str]) -> int:
+    """Raw UTF-8 size, including the newline separators between entries."""
+    return sum(len(entry.encode("utf-8")) for entry in entries) + max(
+        0, len(entries) - 1
+    )
+
+
+def normalize_domain_entries(
+    entries: Sequence[str], *, denylist: bool, budget_bytes: int | None
+) -> tuple[list[str], int]:
+    """Canonicalise policy entries, never truncating a denylist for a budget."""
+    normalized: list[str] = []
+    dropped = 0
+    consumed = 0
+    for index, raw in enumerate(entries):
+        if not denylist and budget_bytes is not None:
+            consumed += len(raw.encode("utf-8")) + (1 if index else 0)
+            if consumed > budget_bytes:
+                dropped += len(entries) - index
+                break
+        stripped = raw.strip()
+        wildcard = stripped.startswith(".")
+        canonical = canonicalize_host(stripped[1:] if wildcard else stripped)
+        if isinstance(canonical, HostRejection):
+            dropped += 1
+            continue
+        if canonical.kind == "name":
+            labels = canonical.host.split(".")
+            if (
+                not all(labels)
+                or len(canonical.host) > 253
+                or (len(labels) < 2 and (not denylist or wildcard))
+            ):
+                dropped += 1
+                continue
+        elif wildcard:
+            dropped += 1
+            continue
+        entry = DomainEntry(canonical.host, wildcard and not denylist)
+        normalized.append(("." if entry.wildcard else "") + entry.name)
+    return normalized, dropped
+
+
+# Matching semantics are a cache-key input: every change must carry a rotation.
+def hostname_matches(host: str, entry: str, *, allow_suffix: bool) -> bool:
+    """Compare canonical strings, with dot-boundary suffixes only for names."""
+    name = entry.removeprefix(".")
+    if host == name:
+        return True
+    if (
+        not allow_suffix
+        or "." not in name
+        or ":" in host
+        or ":" in name
+        or host.replace(".", "").isdigit()
+        or name.replace(".", "").isdigit()
+    ):
+        return False
+    return host.endswith("." + name)
+
+
+def matched_entry(host: str, entries: Sequence[str]) -> str | None:
+    """Return the first canonical allowlist entry matching a canonical host."""
+    return next(
+        (
+            entry
+            for entry in entries
+            if hostname_matches(host, entry, allow_suffix=entry.startswith("."))
+        ),
+        None,
+    )
+
+
 async def validate_url(
     url: str,
     blocked_domains: list[str] | None = None,
@@ -313,7 +395,7 @@ async def validate_url(
     url:
         The URL to validate.
     blocked_domains:
-        Optional list of blocked domain names (case-insensitive).
+        Optional denylist; multi-label names also block their subdomains.
 
     Returns
     -------
@@ -339,15 +421,17 @@ async def validate_url(
         msg = f"Cannot extract hostname from URL: {url}"
         raise ValueError(msg)
 
-    # 1. Domain blocklist
-    if blocked_domains:
-        lower_host = hostname.lower()
-        lower_blocked = {d.lower() for d in blocked_domains}
-        if lower_host in lower_blocked:
-            raise BlockedDomainError(f"Domain '{hostname}' is on the blocklist")
-
-    # 2. Hostname-level rejection (localhost, .local)
+    canonical = canonicalize_host(hostname)
+    if isinstance(canonical, HostRejection):
+        raise ValueError(f"Invalid hostname ({canonical.reason})")
+    hostname = canonical.host
     _check_hostname_blocklist(hostname)
+
+    entries, _ = normalize_domain_entries(
+        blocked_domains or [], denylist=True, budget_bytes=None
+    )
+    if any(hostname_matches(hostname, entry, allow_suffix=True) for entry in entries):
+        raise BlockedDomainError(f"Domain '{hostname}' is on the blocklist")
 
     # 3. DNS resolution (offloaded to thread to avoid blocking the event loop)
     loop = asyncio.get_running_loop()

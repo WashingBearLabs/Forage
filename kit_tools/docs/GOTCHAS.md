@@ -2,7 +2,7 @@
 # GOTCHAS.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-retrieve-parity US-005)
+> Updated by: Copilot (hardening-hostname-and-config US-001)
 
 ## Overview
 
@@ -15,6 +15,19 @@ live in, and losing them in the move was an identified risk.
 ---
 
 ## Active Gotchas
+
+### Hostname matching is a hashed cache-key input, not an unhashed helper
+
+`url_validator.py` is a cache-key input in substance **and in the actual hash**:
+search-sanitization US-003 added `_ROOT_REVISION_SOURCES = ("url_validator.py",)`.
+The hostname spec's earlier warning that `_REVISION_SOURCES` alone does not hash it
+is historically true but incomplete; both tuples feed the revision now. A
+matcher-only change rotates automatically, so old-policy cached content is not
+served until its TTL. Do not remove the root tuple to avoid a rotation.
+The old open question is resolved: the cost of hashing this whole file is that
+even comment-only edits invalidate all cached sanitizations, accepted to prevent
+stale privilege decisions. US-001 therefore measures three changed hashed files,
+not the two the older spec assumed.
 
 ### YAML integers can overflow a float before validation
 
@@ -417,8 +430,9 @@ recipe.
 `derive_sanitizer_revision()` hashes nine source files — the eight under `pipeline/` plus
 repo-root `url_validator.py` — plus the model identity, the `idna` version
 (`idna@<version>`: UTS-46 tables decide which hosts are dropped) and the active
-threshold. Forage's revision has moved twenty-five times, each time at a boundary and
-each time deliberately:
+threshold. Forage's revision has moved twenty-seven times. The twenty-sixth was
+reconciled from the preceding validation commit during US-001's pre-flight; the rest
+were recorded at their implementation boundaries:
 
 | When | Value | What moved it |
 |---|---|---|
@@ -448,14 +462,18 @@ each time deliberately:
 | `hardening-retrieve-parity` US-003 | `464b6ad5…fead2` | **not** a rotation that changes how text is sanitized, but it moves a served outcome at the shipped defaults. Two hashed files, each reverted alone (`orchestrator.py` → `a018345e…`, `contract.py` → `80b39055…`), both-reverted control landing exactly on `f654be77…`. `orchestrator.py`: fetched PDFs go through `asyncio.to_thread(extract_pdf_bytes_in_subprocess, …)` inside the admission slot, retaining ownership through cleanup under repeated task cancellation, mapped most-specific first to `content_too_large` / `promptguard_budget` or `extraction_failed` with four reasons; `contract.py`: `extraction_failed` in `RetrieveErrorCode`, the `RETRIEVE_PDF_*` literals, the `1.3.0` continuation line. Supersedes the unaccepted `6fd320da…` candidate's cancellation bug. `pdf_subprocess.py` (`spool_dir()`, the bytes entry point) is not hashed. A PDF within bounds serves identical text; one over 114,688 characters or the worker's rlimits is now refused 422 rather than served or answered 500. |
 | `hardening-retrieve-parity` US-004 | `664ee603…c04b` | **not** a sanitization-behaviour change. Only `contract.py`'s 1.3.0 continuation line for `cache.corrupt_entries` moves the hash; its read-only whole-file revert reproduces `464b6ad5…fead2` exactly. `cache.py`'s guarded parse and `retrieval_app.py`'s metrics mirror/emission are not hashed. Invalid cached JSON/schema is counted, logged without payload bytes, deleted and treated as a miss rather than a 500; parse success is still not authenticity. |
 | `hardening-retrieve-parity` US-005 | `d98f7dbe…69359` | **not** a sanitization-behaviour change at shipped defaults. Only `contract.py`'s 1.3.0 continuation line for the three effective-policy fields moves the hash; its read-only whole-file revert reproduces `664ee603…c04b` exactly under default and shipped config. Request replacement and post-pipeline stamping in `retrieval_app.py`, and the fields in `models.py`, are not hashed. Opt-in bounds reach the fingerprint through the replaced request, never a parallel pipeline kwarg; trusted-tier skip and VERIFIED fail-open remain exempt. |
+| `hardening-retrieve-parity` validation (`fe211e3`) | `5a470872…bf623` | Twenty-sixth: `orchestrator.py` and `stage3_promptguard.py` gained cancellation ownership, absolute fetch deadline and timeout accounting; not a sanitization-algorithm change. Read-only pre-validation control reproduces `d98f7dbe…`. |
+| `hardening-hostname-and-config` US-001 | `328d386c…93286` | Twenty-seventh, **fifth sanitization-behaviour change**: directional matching and canonical private-name precedence. `orchestrator.py`, `contract.py`, and already-hashed root `url_validator.py` each move the revision; all-reverted control reproduces `5a470872…` under default and shipped config. Leading-dot trust skips classification for subdomains; multi-label denylists block them. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Twenty-one of the twenty-five rotations changed no sanitization algorithm; the
+**Twenty-two of the twenty-seven rotations changed no sanitization algorithm; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
-US-001, US-002, US-003 and its validation fix) are the four that did, and the seventeenth
-(US-004, contract `1.3.0`) does not join them** — US-001's
+US-001, US-002, US-003 and its validation fix) and the twenty-seventh
+(`hardening-hostname-and-config` US-001) are the five that did, and the seventeenth
+(US-004, contract `1.3.0`) does not join them** — hostname policy can now skip
+classification on an opted-in trusted suffix; search-sanitization US-001's
 is that `/search` scans `title` and `snippet` newline-preserved now, so line-anchored Stage 2
 patterns fire on any line rather than at character 0 only, and a rising `structural_blocked`
 after it is expected; US-003's is that `/search` now drops results whose host is a private,

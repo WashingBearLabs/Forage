@@ -86,7 +86,7 @@ consuming repo.
 
 **The bump policy is written down: [`contract/GOVERNANCE.md`](contract/GOVERNANCE.md).**
 Read it before touching `pipeline/contract.py` or the response models in `models.py`. It
-classifies any change, answers the six standing examples, and records the five rulings
+classifies any change, answers the six standing examples, and records the nine rulings
 this epic already made — including the one that is not obvious from the code: the
 `/extract` 413 is documented but unreachable (FastAPI turns it into a 400), documenting it
 carried no bump, and *correcting* it is a MAJOR. `.github/pull_request_template.md` is the
@@ -345,6 +345,19 @@ request replacement and post-pipeline response stamping (`retrieval_app.py`) and
 the defaulted response fields (`models.py`) are not hashed. The operator can now
 bound fail-closed on both fetch routes and the threshold on `/retrieve` only;
 the defaults impose no bound and caller trust-tier exemptions remain intact.
+and a twenty-sixth to `5a470872…` — the preceding retrieve-parity validation
+commit `fe211e3` changed `orchestrator.py` and `stage3_promptguard.py` for
+cancellation ownership, the absolute fetch deadline and timeout accounting;
+the read-only pre-validation control reproduces `d98f7dbe…`. This is not a
+change to the text sanitization algorithm. And a twenty-seventh to `328d386c…` —
+**the fifth sanitization-behaviour-changing rotation** — for directional hostname
+policy (`hardening-hostname-and-config` US-001): `orchestrator.py` uses the shared
+matcher, `contract.py` announces the list descriptions and private-name precedence,
+and **`url_validator.py` is already hashed** through `_ROOT_REVISION_SOURCES`, so
+its normaliser/matcher moves the hash too. All three reversals were measured;
+the all-reverted control reproduces `5a470872…` under default and shipped config.
+Leading-dot trust can skip PromptGuard across a suffix; multi-label denylists now
+block subdomains. Matching-only changes therefore rotate automatically, not silently.
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

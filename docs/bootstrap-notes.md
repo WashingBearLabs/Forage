@@ -1273,3 +1273,58 @@ VERIFIED fail-open. The effective fields are policy, not proof of scanning. Cach
 entries keyed under `664ee603…` become unreachable at the next start and age out
 under their own TTL; effective bounds themselves feed `cache_policy_fingerprint`.
 **Not replayed to Poppy**; compare contracts, not revisions.
+
+### The twenty-sixth rotation: retrieve-parity validation fixes (reconciled 2026-09-22)
+
+```
+before: d98f7dbe09458a38e986916771baf1cf9f47223acf87e0478ddd8911a1169359
+after:  5a47087225f0a25b917468b742547cdc0a3b5fc915d132c81aa22c98c76bf623
+```
+
+The clean hostname-story base (`53b4be1`) already contains `fe211e3`'s
+`orchestrator.py` and `stage3_promptguard.py` changes: cancellation-safe ownership
+of threaded work, an absolute fetch deadline, and timeout accounting. Its revision
+was not yet in these records. Read-only substitution of all nine source inputs
+from `fe211e3^` reproduces `d98f7dbe…`; only those two differ from the clean base.
+Default and shipped configuration agree. This changes resource ownership, not
+the text sanitization algorithm, and is recorded separately from US-001 below.
+
+### The twenty-seventh rotation: directional hostname policy (`hardening-hostname-and-config` US-001, 2026-09-22)
+
+```
+before: 5a47087225f0a25b917468b742547cdc0a3b5fc915d132c81aa22c98c76bf623
+after:  328d386c1974d5ec3a70f854b9ea21f0714dead0a1ddc3b0e642dd64d0893286
+```
+
+**Three hashed files move, not the spec's assumed two.** `url_validator.py` is
+already in `_ROOT_REVISION_SOURCES` from search-sanitization US-003. It now owns
+`normalize_domain_entries`, `hostname_matches`, `matched_entry` and
+`domain_list_bytes`; fetch hosts canonicalise unconditionally and private names
+precede the denylist. `orchestrator.py` applies the shared predicate with blocked →
+trusted → verified precedence. `contract.py` announces the list descriptions and
+precedence swap in the 1.3.0 window. No new hash input was added.
+
+Measured with `derive_sanitizer_revision`, substituting `git show HEAD:<path>`
+bytes through `Path.read_bytes` without overwriting the worktree:
+
+| Read-only reversal against clean `53b4be1` | Revision |
+|---|---|
+| `pipeline/contract.py` alone | `457fe6f58252f9d65d5a9ddce75bf783d8bb4f909312034a61d000b8311e5377` |
+| `pipeline/orchestrator.py` alone | `3694487279a210ced293f004ac669c4e73814b295cf9275de44783988187ca94` |
+| `url_validator.py` alone | `81f3513be84700ff36e699afe92c7be0fc9df9161f90cd2731d05ed51c434f27` |
+| All three | `5a47087225f0a25b917468b742547cdc0a3b5fc915d132c81aa22c98c76bf623` |
+
+Default and shipped configuration reproduce every value. The other six hashed
+sources are byte-identical to the base. `cache.py`'s news TTL matcher,
+`retrieval_app.py`'s published canonical config copy, `models.py`'s descriptions,
+and the six leading-dot shipped news entries are not hashed sources.
+The raw loaded config remains untouched for the revision's threshold input.
+
+This is the **fifth sanitization-behaviour-changing rotation**: `.example.com`
+can skip PromptGuard for every trusted subdomain, while denylists now block those
+subdomains automatically. Existing cache entries become unreachable under the
+new revision and expire under their own TTL. The 1.3.0 golden was regenerated
+through `_SCHEMA_MODELS` and remained byte-identical (requests are not in it);
+the regenerated OpenAPI anchor is
+`b176ced35f6cacd32adbca96c5ca78daaaa2a50c99fc7a349be036018f24ccff`.
+**Not replayed to Poppy**; compare contracts, not revisions.

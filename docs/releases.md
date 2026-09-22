@@ -288,6 +288,19 @@ extracted locally from the tagged tree (`git show "$TAG":pipeline/contract.py`
 through the same `awk` program) so the Release carries it verbatim — or
 deleting the Release and re-running the job.
 
+### Domain-list upgrade note for the pending hardening release
+
+**Spec 8 Release-body handoff, the 1.3.0 window:** existing multi-label
+`blocked_domains` and `seed_blocklist` entries now cover subdomains; review apex
+entries before upgrading, because a multi-tenant apex removes every tenant.
+Single-label entries keep matching exactly as before. Bare allowlist entries
+stay exact; add a leading dot to opt into the apex and all subdomains. The six
+shipped `news_domains` entries now opt in, so `www.bbc.co.uk` gets the one-hour TTL.
+Canonical private-name rejection precedes caller denylists (`blocked_domain` →
+`private_ip` when both match). GOVERNANCE ruling (h) records the explicit
+Example 6 exception; this paragraph is the upgrade announcement, not a claim
+that an opt-in compatibility window was implemented.
+
 ### The Release carries the contract itself
 
 Since `feature-forage-contract` US-004 every `v*` Release has two assets:

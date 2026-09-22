@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document API endpoints, CLI commands, or library interface. The external contract.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-retrieve-parity US-005)
+> Updated by: Copilot (hardening-hostname-and-config US-001)
 
 ---
 
@@ -155,9 +155,9 @@ Request fields (`RetrieveRequest` in `models.py`):
 | `url` | str | required | non-empty | `http` or `https` only; hosts resolving to private or reserved addresses, `localhost` and `.local` names are refused |
 | `extract_mode` | `"summary"` or `"full"` | `"summary"` | | Summary keeps the leading and trailing paragraphs, statistics, quotes, list items and table rows, and sets `truncation_notice` |
 | `cache_ttl_hours` | int | 24 | 0..8760 | Maximum acceptable age of a cached copy; `0` disables the cache for this call and purges the entry |
-| `trusted_domains` | list of str | `[]` | | Exact-host match. Trusted content skips Prompt Guard entirely (`skipped_trusted`) |
-| `verified_domains` | list of str | `[]` | | Higher base score; fail-open if the model is absent |
-| `blocked_domains` | list of str | `[]` | | Merged with `config.yaml` `seed_blocklist`; refused with `blocked_domain` |
+| `trusted_domains` | list of str | `[]` | | Bare entries match only themselves; a leading dot covers the apex and every subdomain, skipping injection classification for all of them (`skipped_trusted`). Never use a multi-tenant or registry-level apex (`.co.uk`, `.github.io`, `.s3.amazonaws.com`). US-007's `policy_suffix_trusted_skip` counts wildcard-caused resolutions to either tier. |
+| `verified_domains` | list of str | `[]` | | Bare entries match only themselves; a leading dot covers the apex and every subdomain. All covered hosts degrade open when the classifier is unavailable, even under `promptguard_fail_closed_floor` or a load-triggered wait timeout. Never use a multi-tenant or registry-level apex (`.co.uk`, `.github.io`, `.s3.amazonaws.com`). Same planned `policy_suffix_trusted_skip` counter. |
+| `blocked_domains` | list of str | `[]` | | Merged with `config.yaml` `seed_blocklist`; refused with `blocked_domain` (private names take precedence as `private_ip`). **Upgrade note:** existing multi-label entries now cover subdomains; review apex entries before upgrading, because a multi-tenant apex removes every tenant. Single-label entries keep matching exactly as before. |
 | `promptguard_threshold` | float | 0.85 | 0.0..1.0 | Classifier scores above this value quarantine content; bounded by the operator's `promptguard_threshold_ceiling` via `min(request, ceiling)` |
 | `promptguard_fail_closed` | bool | `true` | | When the classifier is absent or the permit wait expires: `true` quarantines standard and untrusted content, `false` allows it with a trust penalty; bounded by the operator's `promptguard_fail_closed_floor` via `request or floor`. Neither overrides the trusted_tier skip or VERIFIED fail-open exemption |
 
@@ -166,6 +166,11 @@ curl -s -X POST http://127.0.0.1:8020/retrieve \
   -H 'Content-Type: application/json' \
   -d '{"url": "https://example.com/article", "extract_mode": "summary"}'
 ```
+
+Matching uses canonical UTS-46 names: denylist `evil.com` covers `www.evil.com`
+but never `notevil.com`; allowlist `example.com` matches only itself whereas
+`.example.com` covers the apex and every subdomain. IP literals are equality-only.
+Single-label entries are accepted only on denylists, with exact-only matching.
 
 With a trust policy:
 
@@ -489,7 +494,7 @@ in-tree copy and says nothing about wire compatibility. The image tag (for examp
 CI verifies two of the three on every release: the `smoke` job reads the in-image copy
 back out of the candidate image, and the `publish` job downloads the Release assets back
 from the API; both are checked against the anchor committed at the tag (currently
-`62c1efe2d07184730900f0af4279321e8626de5e80a31c19c94f765124b25a22`).
+`b176ced35f6cacd32adbca96c5ca78daaaa2a50c99fc7a349be036018f24ccff`).
 
 **Vendoring procedure** (`contract/GOVERNANCE.md` "Consumers"):
 

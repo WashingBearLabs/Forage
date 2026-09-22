@@ -90,7 +90,7 @@ _SIX_EXAMPLES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("An urgent security tightening", ("MINOR",)),
 )
 
-# The eight rulings this epic recorded, by the heading marker each section
+# The nine rulings this epic recorded, by the heading marker each section
 # carries. (a2) is US-001's verification finding and is listed separately from
 # (a) precisely because it is a different ruling about a different thing.
 _RULING_MARKERS = (
@@ -102,6 +102,7 @@ _RULING_MARKERS = (
     "### (e) ",
     "### (f) ",
     "### (g) ",
+    "### (h) ",
 )
 
 # Counts these documents state in words. Both are read back out of the code —
@@ -364,7 +365,33 @@ class TestTheSixWorkedExamples:
 
 
 class TestTheRecordedRulings:
-    """The five rulings, each with a source a reader can go and check."""
+    """The nine rulings, each with a source a reader can go and check."""
+
+    def test_ruling_count_matches_the_governance_and_invariant_text(
+        self, governance: str
+    ) -> None:
+        count = _NUMBER_WORDS[len(_RULING_MARKERS)]
+        assert f"{count.capitalize()} rulings this epic" in governance
+        assert f"records the {count} rulings" in (_REPO_ROOT / "CLAUDE.md").read_text()
+
+    def test_directional_matching_ruling_records_the_security_exception(
+        self, governance: str
+    ) -> None:
+        body = _section(governance, "### (h)")
+        for text in (
+            "Example 6",
+            "Step 1",
+            "considered and declined",
+            "step 2",
+            "compatibility window",
+            "docs/configuration.md",
+            "Release-body",
+            "no single-label loosening",
+            "blocked_domain",
+            "private_ip",
+            "policy_domain_list_too_large",
+        ):
+            assert text in body
 
     @pytest.mark.parametrize("marker", _RULING_MARKERS)
     def test_the_ruling_has_a_section(self, governance: str, marker: str) -> None:

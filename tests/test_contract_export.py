@@ -64,6 +64,32 @@ _SERVED_PATHS = {"/health", "/metrics", "/retrieve", "/search", "/extract"}
 _MISSING = object()
 
 
+@pytest.mark.parametrize("tier", ["trusted", "verified"])
+def test_exported_domain_policy_cautions(tier: str) -> None:
+    document = yaml.safe_load(CONTRACT_PATH.read_text())
+    properties = document["components"]["schemas"]["RetrieveRequest"]["properties"]
+    description = properties[f"{tier}_domains"]["description"]
+    for text in (
+        "bare entries match exactly",
+        "a leading dot",
+        "apex and every subdomain",
+        "IP literal matches only itself",
+        "multi-tenant",
+        "registry-level",
+        ".co.uk",
+        ".github.io",
+        ".s3.amazonaws.com",
+        "policy_suffix_trusted_skip",
+    ):
+        assert text in description
+    if tier == "trusted":
+        assert "skips injection classification" in description
+    else:
+        assert "degrade open when the classifier is unavailable" in description
+        assert "promptguard_fail_closed_floor" in description
+        assert "wait timeout" in description
+
+
 @pytest.fixture
 def restore_app_config() -> Iterator[None]:
     """Let a test set ``app.state.config`` without leaking it to the next one."""

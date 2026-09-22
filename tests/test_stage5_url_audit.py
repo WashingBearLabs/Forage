@@ -173,6 +173,32 @@ class TestRFC1918DuringFetch:
 class TestBlocklistDuringFetch:
     """Blocked domains must be rejected without HTTP requests."""
 
+    @pytest.mark.parametrize(
+        ("target", "error"),
+        [
+            ("https://www.blocked.example/", BlockedDomainError),
+            ("https://xn--/", ValueError),
+        ],
+    )
+    async def test_redirect_hop_refused_before_dns_or_http(
+        self, target: str, error: type[Exception]
+    ) -> None:
+        with (
+            patch(
+                "url_validator.socket.getaddrinfo", return_value=_fake_addrinfo()
+            ) as dns,
+            patch(
+                "httpx.AsyncClient.stream",
+                return_value=_make_stream_cm(_make_redirect(target)),
+            ) as stream,
+        ):
+            with pytest.raises(error):
+                await fetch_url(
+                    "https://safe.example/", blocked_domains=["blocked.example"]
+                )
+            assert dns.call_count == 1
+            assert stream.call_count == 1
+
     @pytest.mark.asyncio
     async def test_blocked_domain_rejected(self) -> None:
         with pytest.raises(BlockedDomainError):
