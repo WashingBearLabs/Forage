@@ -437,6 +437,7 @@ each time deliberately:
 | `hardening-retrieve-parity` US-001 | `e55b5f06…4d3c0` | **not** a behaviour-changing rotation. `run_retrieve_pipeline` gained five keyword-only dependencies (`settings`, `retrieve_metrics`, `classification_semaphore`, `extraction_settings` required; `admission` defaulted for US-002 only) plus the character pre-check that refuses an over-budget fetched page `content_too_large` / `promptguard_budget`; `contract.py` gained `PROMPTGUARD_BUDGET` and the `1.3.0` continuation line. Two hashed files, each reverted in turn; the both-reverted control reproduces `6f0fa2de…66671`. The shipped default `retrieve.max_promptguard_chunks: 0` means no pre-check at all, so no served byte moves. |
 | `hardening-retrieve-parity` US-006 | `d0433876…fc88e` | **not** a behaviour-changing rotation. `orchestrator.py` gained `_bounded_permit` (the one place `asyncio.timeout` and `semaphore.acquire()` appear), the two defaulted classification parameters on `sanitize_and_structure` and `run_search_pipeline`, the `/extract` file route's acquisition moving inward to the stage-3 seam, and step 8's refusal to cache a wait-timeout body; `stage3_promptguard.py` gained the pure `unavailable_result` seam; `contract.py` gained the `1.3.0` continuation line. **Three** hashed files, each reverted in turn; the all-reverted control reproduces `e55b5f06…4d3c0`. No sanitization behaviour moved — what moved is when stage 3 runs and what happens when the permit wait expires. |
 | `hardening-retrieve-parity` US-002 | `f654be77…c92fb` | **not** a behaviour-changing rotation. Two hashed files, each reverted alone (`orchestrator.py` → `16b9631f…`, `contract.py` → `646b4f27…`), both-reverted control landing exactly on `d0433876…`. `orchestrator.py`: `extract_html`, `scan_structural` and `structure_sanitization_result` moved onto `asyncio.to_thread`, `admission` became a required `AdmissionSlot` acquired after the cache read and released in `finally` after stage 1, and `fetch_result` / `html_text` are deleted before the classification wait; `contract.py`: `busy` in `RetrieveErrorCode`, `RETRIEVE_ADMISSION_QUEUE_FULL`, the `1.3.0` continuation line. `stage4_structuring.py` untouched. |
+| `hardening-retrieve-parity` US-003 | `464b6ad5…fead2` | **not** a rotation that changes how text is sanitized, but it moves a served outcome at the shipped defaults. Two hashed files, each reverted alone (`orchestrator.py` → `a018345e…`, `contract.py` → `80b39055…`), both-reverted control landing exactly on `f654be77…`. `orchestrator.py`: fetched PDFs go through `asyncio.to_thread(extract_pdf_bytes_in_subprocess, …)` inside the admission slot, retaining ownership through cleanup under repeated task cancellation, mapped most-specific first to `content_too_large` / `promptguard_budget` or `extraction_failed` with four reasons; `contract.py`: `extraction_failed` in `RetrieveErrorCode`, the `RETRIEVE_PDF_*` literals, the `1.3.0` continuation line. Supersedes the unaccepted `6fd320da…` candidate's cancellation bug. `pdf_subprocess.py` (`spool_dir()`, the bytes entry point) is not hashed. A PDF within bounds serves identical text; one over 114,688 characters or the worker's rlimits is now refused 422 rather than served or answered 500. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
@@ -499,6 +500,23 @@ Any cross-repo work that assumes Poppy↔Forage revision parity will be wrong. T
 consuming-side spec must compare contracts, not revisions.
 
 ---
+
+### Cancelling a PDF await does not stop its worker thread
+
+`asyncio.to_thread` cancellation cancels the await, not the running thread. A
+`finally: await admission.release()` around that await alone therefore frees capacity
+while a PDF worker and its content-bearing spool remain live. A stub that raises
+`CancelledError` synchronously cannot test this: it unwinds the thread normally.
+
+`hardening-retrieve-parity` US-003 keeps the fetched-PDF task and waits without forwarding
+cancellation to it (`asyncio.wait`), deferring even repeated cancellation until the
+existing bounded worker is reaped and the spool unlinked. The worker's outcome is retrieved
+(and a spool fault still logs `retrieve_spool_error`), then pending cancellation propagates.
+No classification or cache write follows a cancelled parse. The regression blocks the
+path worker with a threading event, calls the actual pipeline task's `cancel()`, refuses
+replacement admission, and checks cleanup before cancellation completes. This is separate
+from the pre-existing queued-waiter handoff residual below; neither the controller nor
+`/extract`'s cancellation behavior changes here.
 
 ### The admission controller's handoff leaks a slot on a racing cancellation
 

@@ -79,7 +79,8 @@ those eight — so Forage's revision moved:
 | After scanning both search-text forms (`hardening-search-sanitization` validation fix) | `6f0fa2de…66671` |
 | After the `/retrieve` pipeline signature and chunk budget (`hardening-retrieve-parity` US-001) | `e55b5f06…4d3c0` |
 | After the classification semaphore on `/retrieve` and `/search` (`hardening-retrieve-parity` US-006) | `d0433876…fc88e` |
-| **Current (`hardening-retrieve-parity` US-002, stages 1, 2 and 4 off the loop and the `/retrieve` admission gate)** | **`f654be77…c92fb`** |
+| After stages 1, 2 and 4 off the loop and the `/retrieve` admission gate (`hardening-retrieve-parity` US-002) | `f654be77…c92fb` |
+| **Current (`hardening-retrieve-parity` US-003, fetched PDFs in the rlimited worker)** | **`464b6ad5…fead2`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -1133,4 +1134,72 @@ run and whether a `/retrieve` is admitted under load, not how any text is saniti
 **Blast radius.** The same mechanism as every rotation since the fifth:
 `cache_policy_fingerprint()` takes the revision as an input, so every extraction cached under
 `d0433876…` becomes unreachable at the next start and ages out on its own TTL. **Do not
+assume Poppy↔Forage revision parity** — compare contracts, not revisions.
+
+### The twenty-third rotation: fetched PDFs in the rlimited worker (`hardening-retrieve-parity` US-003, 2026-09-22)
+
+```
+before: f654be77527e60315a9d08a8ab1a8efad3b0a4efc6372be94048c743496c92fb
+after:  464b6ad55a7b7b51661ed264835ed94cc48c16202fd5583f88e995531d4fead2
+```
+
+**Two hashed files moved, each measured alone, with a both-reverted control.**
+
+| Measurement | Value |
+|---|---|
+| After (this story) | `464b6ad55a7b7b51661ed264835ed94cc48c16202fd5583f88e995531d4fead2` |
+| `pipeline/orchestrator.py` reverted alone | `a018345e868fc0b3e27e85c4055ce0569c495b13290ced6ae88de335bda16c73` |
+| `pipeline/contract.py` reverted alone | `80b39055722237bd5c1a29b9c044707581db91aff7c6dce7dcae0ef92a71f039` |
+| **Control:** both reverted | `f654be77527e60315a9d08a8ab1a8efad3b0a4efc6372be94048c743496c92fb` |
+
+The corrected attempt started from clean `96cc9fc` (its hashed inputs match the candidate's
+parent `4dbb83a`). Measured with `derive_sanitizer_revision` on the actual sources and
+read-only `Path.read_bytes` substitutions of `git show 96cc9fc:<path>` for each revert:
+no working-tree file was overwritten and no temporary commit or checkout was needed.
+The both-reverted control reproduces the twenty-second rotation exactly, and comparing all
+nine hashed files against the base confirms that only these two moved. Every measurement
+is identical under `config.yaml` and `{}` (the shipped threshold is the default).
+
+The recovered candidate `371d254` measured `6fd320da…f24a7`, but was never accepted:
+actual `Task.cancel()` detached its PDF thread and spool from the released admission slot.
+This record replaces that candidate measurement with the corrected implementation, not
+an additional shipped rotation. Its old contract-only revert (`79ea65b3…6c0a9`) is
+superseded too; reverting the orchestrator still yields the same `a018345e…c6c73`.
+
+**What moved in each.** `pipeline/orchestrator.py`: the fetched-PDF branch of
+`run_retrieve_pipeline` calls `asyncio.to_thread(extract_pdf_bytes_in_subprocess,
+fetch_result.response_body, extraction_settings)` inside the admission slot instead of the
+in-process `extract_pdf`. It retains the task and uses cancellation-safe waiting until
+the bounded worker has finished, been reaped, and unlinked its spool; even repeated
+cancellation cannot release admission early. It then retrieves the task's outcome,
+logging any spool fault, before re-raising a pending cancellation. The outcomes map
+most-specific first —
+`PDFClassifiableTextLimitError` → `content_too_large` / `promptguard_budget`;
+`PDFEncryptedError`, `PDFNoTextError`, `PDFExtractionError`, `OSError` → `extraction_failed`
+with reasons `pdf_encrypted`, `pdf_no_text`, `pdf_extraction_error`, `pdf_spool_error` — the
+spool row logging one WARNING `retrieve_spool_error`. `pipeline/contract.py`:
+`extraction_failed` joins `RetrieveErrorCode`, the four `RETRIEVE_PDF_*` reason literals
+(two intentionally the same literals as `/extract`'s codes), the rewritten
+`RetrieveErrorCode` / `Pipeline422ErrorCode` / `ErrorCode` docstrings and the `1.3.0`
+continuation line.
+
+**What did not move it.** `pipeline/pdf_subprocess.py` (`spool_dir()`,
+`SpoolDirectoryError`, `extract_pdf_bytes_in_subprocess`), `retrieval_app.py` (the lifespan's
+spool-directory check, `_spool_upload`'s `dir=spool_dir()`, the 422 description), the tests
+and the docs are not `_REVISION_SOURCES` members.
+
+**Not a rotation that changes how text is sanitized — but it moves a served outcome at the
+shipped defaults.** The worker makes the same `pypdf` calls, joins pages with the same
+separator and runs the same `normalize_text` as `stage1_pdf.extract_pdf`, so a fetched PDF
+within bounds serves byte-identical text. What moved is which PDFs are served: one whose
+text exceeds `max_extracted_characters(extraction.max_promptguard_chunks)` (114,688
+characters at the default), or over 500 pages, or that trips the worker's CPU, address-space
+or wall-clock rlimit, is now refused with a coded 422 where it was served or answered 500.
+Unlike US-001's pre-check, this is active at the shipped defaults.
+
+**Not replayed to Poppy**; the deployed copy stays on the value it already diverged to.
+
+**Blast radius.** The same mechanism as every rotation since the fifth:
+`cache_policy_fingerprint()` takes the revision as an input, so every extraction cached under
+`f654be77…` becomes unreachable at the next start and ages out on its own TTL. **Do not
 assume Poppy↔Forage revision parity** — compare contracts, not revisions.

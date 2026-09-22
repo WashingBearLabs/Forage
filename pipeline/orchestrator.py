@@ -48,6 +48,7 @@ from pipeline.extraction_limits import (
 )
 from pipeline.pdf_subprocess import (
     PDFClassifiableTextLimitError,
+    extract_pdf_bytes_in_subprocess,
     extract_pdf_in_subprocess,
 )
 from pipeline.retrieve_limits import RetrieveSettings
@@ -361,7 +362,9 @@ async def run_retrieve_pipeline(
     classification_semaphore:
         Bounds concurrent PromptGuard work across both fetch routes.
     extraction_settings:
-        The ``extraction:`` limits a fetched PDF's bounded worker runs under.
+        The ``extraction:`` limits a fetched PDF's bounded worker runs under —
+        ``app.state.extraction_settings``, whose character ceiling (not
+        ``settings``') is the one a fetched PDF is refused against.
     admission:
         The ``/retrieve`` admission slot, ``app.state.retrieve_admission``.
         Acquired after the cache read (a hit never waits) and before the fetch
@@ -500,7 +503,72 @@ async def run_retrieve_pipeline(
         )
 
         if content_type == "pdf":
-            extraction = extract_pdf(fetch_result.response_body)
+            # `/extract`'s spawned, rlimited worker, from a 0600 file in the
+            # process-private spool directory — so a fetched PDF runs under
+            # `extraction.max_promptguard_chunks`, the ceiling the worker's
+            # rlimits were sized for, not `retrieve.max_promptguard_chunks`.
+            # Most-specific first: every PDF failure is a `PDFExtractionError`
+            # subclass, and the classifiable-text refusal is not a parse
+            # failure.
+            pdf_worker = asyncio.create_task(
+                asyncio.to_thread(
+                    extract_pdf_bytes_in_subprocess,
+                    fetch_result.response_body,
+                    extraction_settings,
+                )
+            )
+            cancellation: asyncio.CancelledError | None = None
+            try:
+                # Cancelling a to_thread await cannot stop its thread. Keep the
+                # slot until the bounded worker is reaped and its spool unlinked,
+                # even on repeated cancellation. wait() leaves the task intact;
+                # result() below retrieves its outcome, including host faults.
+                while not pdf_worker.done():
+                    try:
+                        await asyncio.wait({pdf_worker})
+                    except asyncio.CancelledError as exc:
+                        if cancellation is None:
+                            cancellation = exc
+                extraction = pdf_worker.result()
+            except PDFClassifiableTextLimitError as exc:
+                raise PipelineError(
+                    error="content_too_large",
+                    reason=contract.PROMPTGUARD_BUDGET,
+                    request_id=request_id,
+                ) from exc
+            except PDFEncryptedError as exc:
+                raise PipelineError(
+                    error="extraction_failed",
+                    reason=contract.RETRIEVE_PDF_ENCRYPTED,
+                    request_id=request_id,
+                ) from exc
+            except PDFNoTextError as exc:
+                raise PipelineError(
+                    error="extraction_failed",
+                    reason=contract.RETRIEVE_PDF_NO_TEXT,
+                    request_id=request_id,
+                ) from exc
+            except PDFExtractionError as exc:
+                raise PipelineError(
+                    error="extraction_failed",
+                    reason=contract.RETRIEVE_PDF_EXTRACTION_ERROR,
+                    request_id=request_id,
+                ) from exc
+            except OSError as exc:
+                # The one host fault in the table (ENOSPC, EACCES, a read-only
+                # or vanished temp dir, a refused spool directory). `/metrics`
+                # keys errors by code alone, so this closed token — nothing
+                # path- or content-derived — is what lets an alert tell it
+                # apart from an encrypted-PDF caller.
+                logger.warning("retrieve_spool_error")
+                raise PipelineError(
+                    error="extraction_failed",
+                    reason=contract.RETRIEVE_PDF_SPOOL_ERROR,
+                    request_id=request_id,
+                ) from exc
+            finally:
+                if cancellation is not None:
+                    raise cancellation
         else:
             html_text = fetch_result.response_body.decode("utf-8", errors="replace")
             extraction = await asyncio.to_thread(extract_html, html_text, request.url)

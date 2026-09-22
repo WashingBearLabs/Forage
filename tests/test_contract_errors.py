@@ -242,14 +242,32 @@ def test_error_vocabulary_is_the_documented_eighteen() -> None:
         | contract.SEARCH_ERROR_CODES
     )
     assert len(contract.EXTRACT_ERROR_CODES) == 10
-    assert len(contract.RETRIEVE_ERROR_CODES) == 7
+    assert len(contract.RETRIEVE_ERROR_CODES) == 8
     assert len(contract.SEARCH_ERROR_CODES) == 3
-    # `content_too_large` and `busy` are the two codes two surfaces share, and
-    # they are why 10 + 7 + 3 documents eighteen codes rather than twenty.
+    # `content_too_large`, `extraction_failed` and `busy` are the three codes
+    # two surfaces share, and they are why 10 + 8 + 3 documents eighteen codes
+    # rather than twenty-one.
     assert {
         "busy",
         "content_too_large",
+        "extraction_failed",
     } == contract.EXTRACT_ERROR_CODES & contract.RETRIEVE_ERROR_CODES
+
+
+def test_retrieve_pdf_failure_reasons_are_not_retrieve_error_codes() -> None:
+    assert contract.RETRIEVE_PDF_ENCRYPTED == "pdf_encrypted"
+    assert contract.RETRIEVE_PDF_NO_TEXT == "pdf_no_text"
+    assert contract.RETRIEVE_PDF_EXTRACTION_ERROR == "pdf_extraction_error"
+    assert contract.RETRIEVE_PDF_SPOOL_ERROR == "pdf_spool_error"
+    assert {
+        "pdf_encrypted",
+        "pdf_no_text",
+        "pdf_extraction_error",
+        "pdf_spool_error",
+    } == contract.RETRIEVE_PDF_FAILURE_REASONS
+    assert contract.RETRIEVE_PDF_FAILURE_REASONS.isdisjoint(
+        contract.RETRIEVE_ERROR_CODES
+    )
 
 
 def test_every_raise_site_in_the_repo_is_in_the_vocabulary() -> None:

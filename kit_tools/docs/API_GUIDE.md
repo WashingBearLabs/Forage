@@ -197,12 +197,19 @@ Response fields a consumer must read (`RetrievedContent`; full shape in the cont
 Refusals are 422 with `{"error", "reason", "request_id"}`: `invalid_url`, `private_ip`,
 `blocked_domain`, `fetch_timeout`, `fetch_error`, `content_too_large`, and `busy` (reason
 `admission_queue_full`: the `/retrieve` admission queue is full — retry later; the same
-literal is `/extract`'s 429, but here it is always 422). `reason` echoes the
+literal is `/extract`'s 429, but here it is always 422), and `extraction_failed` (a fetched
+PDF the worker could not parse or spool, with one of four fixed reasons: `pdf_encrypted`,
+`pdf_no_text`, `pdf_extraction_error`, or `pdf_spool_error` for a host-side spool failure
+— reasons, not codes, even where the literal matches an `/extract` code; `1.3.0`,
+`hardening-retrieve-parity` US-003). `reason` echoes the
 requested URL, and `private_ip` echoes the resolved address (`contract/GOVERNANCE.md`
 ruling (d)). `content_too_large` is the one code with **two reason shapes**: the fetch-cap
 prose that echoes the URL, or the fixed literal `promptguard_budget` when the fetched
-page's extracted text exceeds `retrieve.max_promptguard_chunks`. Branch on the literal, not
-on the prose. Quarantined results are never cached; neither are `untrusted` or `blocked`
+page's extracted text exceeds its ceiling. Fetched PDFs run under
+`extraction.max_promptguard_chunks`; fetched HTML under `retrieve.max_promptguard_chunks`.
+Branch on the literal, not on the prose. A fetched PDF is parsed in the same spawned,
+rlimited worker `/extract` uses, so its first fetch pays a process-spawn cost (hundreds of
+milliseconds); repeat fetches are cache hits. Quarantined results are never cached; neither are `untrusted` or `blocked`
 tiers.
 
 ### POST /search
@@ -423,6 +430,7 @@ emission site through the real routes and asserts parity).
 | `content_too_large` | 422 (and the unreachable 413) | `/retrieve`, `/extract` | Response body over 10 MiB (`/retrieve`); upload over 50 MiB (`/extract`) |
 | `content_too_large_to_classify` | 422 | `/extract` | Extracted text exceeds the Prompt Guard chunk budget |
 | `extraction_failed` | 422 | `/extract` | Parser failure |
+| `extraction_failed` | 422 | `/retrieve` | A fetched PDF failed in the worker or its spool. Reason `pdf_encrypted`, `pdf_no_text`, `pdf_extraction_error` (corrupt parse, page limit, or an rlimit / wall-clock kill) or `pdf_spool_error` (host fault: the spool file could not be written). A fetched PDF over `extraction.max_promptguard_chunks` is `content_too_large` / `promptguard_budget` instead — fetched PDFs run under `extraction.max_promptguard_chunks`; fetched HTML under `retrieve.max_promptguard_chunks`. Added in `1.3.0` (`hardening-retrieve-parity` US-003) |
 | `fetch_error` | 422 | `/retrieve` | Any other fetch failure, including more than 5 redirects |
 | `fetch_timeout` | 422 | `/retrieve` | 30 s fetch timeout |
 | `invalid_filename` | 422 | `/extract` | Over 255 characters or no basename |
@@ -474,7 +482,7 @@ in-tree copy and says nothing about wire compatibility. The image tag (for examp
 CI verifies two of the three on every release: the `smoke` job reads the in-image copy
 back out of the candidate image, and the `publish` job downloads the Release assets back
 from the API; both are checked against the anchor committed at the tag (currently
-`ebca0919519a147d20970773b2db6059a13a566b5b5faf3fbc2065bdea5bf225`).
+`cad199ba552e09f48ca02a450d87479db05042c8d2d2b9b6b1faedda75d04967`).
 
 **Vendoring procedure** (`contract/GOVERNANCE.md` "Consumers"):
 

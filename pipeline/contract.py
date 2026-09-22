@@ -131,7 +131,18 @@ MINOR when fields are only added.
   ``/search`` share ``Pipeline422ErrorResponse``, the ``/search`` 422
   ``error`` enum widens by the same member, though ``busy`` never arrives
   there. ``/metrics`` gains ``retrieve.semaphore_saturation`` and
-  ``retrieve.busy_rejections``, both additive counters. This version is **held**:
+  ``retrieve.busy_rejections``, both additive counters. Continuing in
+  ``hardening-retrieve-parity`` US-003: ``/retrieve`` 422 gains
+  ``extraction_failed`` (fetched-PDF worker and spool failures) with reasons
+  ``pdf_encrypted`` | ``pdf_no_text`` | ``pdf_extraction_error`` |
+  ``pdf_spool_error`` — reasons named after ``/extract``'s codes for the same
+  failures, not ``RetrieveErrorCode`` members; a fetched PDF over
+  ``extraction.max_promptguard_chunks`` is ``content_too_large`` /
+  ``promptguard_budget``. MINOR under ``contract/GOVERNANCE.md`` ruling (b): a
+  new 422 code for failures that answered 500 before, now parsed in
+  ``/extract``'s rlimited worker. As with ``busy``, the ``/search`` 422
+  ``error`` enum widens by the same member through the shared model, though
+  ``extraction_failed`` never arrives there. This version is **held**:
   ``tests/golden/contract_1_3_0.json`` is
   re-created in place by every later story in this epic that moves the
   wire, until spec 8 US-002 freezes it ahead of the release cut.
@@ -330,6 +341,10 @@ RetrieveErrorCode = Literal[
     # the handler picks 429 for `busy` on /extract only.
     "busy",
     "content_too_large",
+    # Intentionally the same literal as /extract's 422 `extraction_failed`:
+    # both routes now parse PDFs in the same rlimited worker, and a failed
+    # parse is one failure whichever route fetched the bytes.
+    "extraction_failed",
     "fetch_error",
     "fetch_timeout",
     "invalid_url",
@@ -340,11 +355,18 @@ RetrieveErrorCode = Literal[
 Five are the URL-validation and fetch refusals raised in
 ``orchestrator.run_retrieve_pipeline``; ``content_too_large`` is the sixth and
 is shared with ``/extract`` — the retrieve path raises it from
-``stage5_url_audit``'s response cap, not from the ``/extract`` middleware.
-``busy`` (contract ``1.3.0``) is the seventh and is also shared with
-``/extract``: the ``/retrieve`` admission controller's capacity refusal, reason
-``RETRIEVE_ADMISSION_QUEUE_FULL``, answered 422 on this route where
-``/extract``'s middleware answers the same literal 429.
+``stage5_url_audit``'s response cap and, with the reason
+``PROMPTGUARD_BUDGET``, from the classification budget, not from the
+``/extract`` middleware. ``busy`` (contract ``1.3.0``) is the seventh and is
+also shared with ``/extract``: the ``/retrieve`` admission controller's
+capacity refusal, reason ``RETRIEVE_ADMISSION_QUEUE_FULL``, answered 422 on
+this route where ``/extract``'s middleware answers the same literal 429.
+``extraction_failed`` (contract ``1.3.0``) is the eighth and is shared with
+``/extract`` too: a fetched PDF the worker could not parse, or could not be
+spooled for it. Its reasons — ``RETRIEVE_PDF_ENCRYPTED``,
+``RETRIEVE_PDF_NO_TEXT``, ``RETRIEVE_PDF_EXTRACTION_ERROR``,
+``RETRIEVE_PDF_SPOOL_ERROR`` — are reasons under ``extraction_failed``, not
+members of this alias, even where the literal matches an ``/extract`` code.
 """
 
 RETRIEVE_ERROR_CODES = frozenset(get_args(RetrieveErrorCode))
@@ -377,8 +399,8 @@ Pipeline422ErrorCode = Literal[
 ``/retrieve`` and ``/search`` share one emission site — the ``PipelineError``
 handler, on a path that is not ``/extract`` — and therefore one mirroring
 model. The union is the price of that single shape: a ``searxng_*`` code
-cannot in fact arrive on ``/retrieve``, nor a fetch refusal or ``busy`` on
-``/search``.
+cannot in fact arrive on ``/retrieve``, nor a fetch refusal, ``busy`` or
+``extraction_failed`` on ``/search``.
 Read ``RETRIEVE_ERROR_CODES`` / ``SEARCH_ERROR_CODES`` for the per-route
 answer.
 """
@@ -392,8 +414,8 @@ ErrorCode = Literal[
 """Every error code the service can put on the wire — eighteen, deduplicated.
 
 Ten ``/extract`` codes, plus the five ``/retrieve``-only refusals
-(``content_too_large`` and ``busy`` are shared), plus the three ``/search``
-codes.
+(``content_too_large``, ``busy`` and ``extraction_failed`` are shared), plus
+the three ``/search`` codes.
 """
 
 ERROR_CODES = frozenset(get_args(ErrorCode))
@@ -442,3 +464,38 @@ admission controller refuses a request because its queue is at
 ``retrieve.admission_queue_depth`` or its reserved bytes would exceed
 ``retrieve.max_queued_fetch_bytes``. The only reason ``busy`` carries on
 ``/retrieve``; a closed token for the same reason as ``PROMPTGUARD_BUDGET``."""
+
+# ---------------------------------------------------------------------------
+# /retrieve fetched-PDF failure reasons (the `extraction_failed` reasons)
+# ---------------------------------------------------------------------------
+#
+# Raised by `orchestrator.run_retrieve_pipeline` around the fetched-PDF worker
+# call, most-specific first. They are `reason` values under the 422
+# `extraction_failed`, not members of `RetrieveErrorCode`. A fetched PDF whose
+# text is over `extraction.max_promptguard_chunks` is not among them: that is
+# `content_too_large` / `PROMPTGUARD_BUDGET`, the same refusal as an
+# over-budget page.
+
+# Intentionally the same literal as /extract's `pdf_encrypted` code: the same
+# failure, named the same way, as a reason here rather than a code.
+RETRIEVE_PDF_ENCRYPTED = "pdf_encrypted"
+# Intentionally the same literal as /extract's `pdf_no_text` code, for the
+# same reason: no text layer, OCR not supported.
+RETRIEVE_PDF_NO_TEXT = "pdf_no_text"
+# The worker's `failed` status: a corrupt parse, the page limit, or a child
+# killed by `RLIMIT_CPU`, `RLIMIT_AS` or the wall clock — the IPC vocabulary
+# deliberately does not tell them apart.
+RETRIEVE_PDF_EXTRACTION_ERROR = "pdf_extraction_error"
+# The one host fault: the spool directory or file could not be created or
+# written (ENOSPC, EACCES, a read-only or vanished temp dir, a refused spool
+# directory). Logged once as the closed WARNING token `retrieve_spool_error`.
+RETRIEVE_PDF_SPOOL_ERROR = "pdf_spool_error"
+
+RETRIEVE_PDF_FAILURE_REASONS = frozenset(
+    {
+        RETRIEVE_PDF_ENCRYPTED,
+        RETRIEVE_PDF_NO_TEXT,
+        RETRIEVE_PDF_EXTRACTION_ERROR,
+        RETRIEVE_PDF_SPOOL_ERROR,
+    }
+)

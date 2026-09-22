@@ -602,11 +602,14 @@ components:
           description: Stable machine-readable refusal code. The fetch and URL-validation
             codes arrive on /retrieve, the searxng_* codes and search_unavailable on /search.
             busy arrives on /retrieve only, at 422, as the admission refusal (reason admission_queue_full);
-            the same literal is /extract's 429.
+            the same literal is /extract's 429. extraction_failed arrives on /retrieve only,
+            as a fetched PDF the worker could not parse or spool (reason pdf_encrypted, pdf_no_text,
+            pdf_extraction_error or pdf_spool_error).
           enum:
           - blocked_domain
           - busy
           - content_too_large
+          - extraction_failed
           - fetch_error
           - fetch_timeout
           - invalid_url

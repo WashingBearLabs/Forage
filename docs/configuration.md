@@ -107,6 +107,7 @@ instance is private-network-only and Forage is its only client.
 | `HF_TOKEN` | unset | Hugging Face access token for the **gated** `meta-llama/Llama-Prompt-Guard-2-22M` repository. Optional — see "Weights acquisition" below. **Carries a credential**; supply it the same way as `VALKEY_URL`. |
 | `FORAGE_MODEL_REVISION` | the committed pin (a 40-character commit sha) | Which upstream revision of the weights to fetch, verify and load. Only a full commit sha is accepted — a branch name is refused with an error and the committed pin is used instead. |
 | `FORAGE_WEIGHTS_MIRROR` | `ghcr.io/washingbearlabs/forage-weights` | The OCI **repository** holding the vendored weights, used when Hugging Face cannot supply them. A repository, never a tag: the tag is always `FORAGE_MODEL_REVISION`, so redirecting the mirror cannot also redirect which revision it serves. Validated to a lower-case `<registry>/<owner>/<name>`, optionally prefixed `https://` — anything else (an `http://` scheme, embedded credentials, a tag or digest) is refused with an error and the mirror is treated as unconfigured. |
+| `TMPDIR` | the platform default (`/tmp` in the image) | Parent of the process-private spool directory `forage-spool-<uid>` that `/extract` uploads and `/retrieve`'s fetched PDFs are written to for the PDF worker. **Must be sticky or not writable by other users**; tmpfs recommended. See "The spool directory" below. |
 | `FORAGE_MIRROR_TOKEN` | unset | Registry credential for `FORAGE_WEIGHTS_MIRROR`. Optional — without it the mirror is skipped exactly as a missing `HF_TOKEN` skips Hugging Face. **Carries a credential**; supply it the same way as `VALKEY_URL`. A **read-only** token, scoped as narrowly as your registry allows — see `docs/weights.md` § "The mirror read token". |
 
 `SEARXNG_URL`'s default is a deliberately neutral service name — it assumes a compose
@@ -118,6 +119,59 @@ the `search_providers` field on `/health`: the resolved chain's names, a configu
 echo rather than a liveness probe. A missing PromptGuard (`promptguard_unavailable`) or a
 configured-but-unreachable Valkey (`cache_unavailable`, see the table below) is what
 degrades the service.
+
+### The spool directory (`TMPDIR`)
+
+The PDF worker is a spawned child that re-opens its input **by path**, so both PDF routes
+write the document to a spool file first: `/extract` its upload (`poppy-extract-*`) and,
+since `hardening-retrieve-parity` US-003, `/retrieve` every fetched PDF
+(`forage-retrieve-*`). Both land in one directory,
+`<TMPDIR>/forage-spool-<uid>`, which Forage creates for you on first use with mode `0700`
+— never wider at any instant, because it is created with that mode rather than chmod-ed
+after. The boot checks it once and each spool checks it again: if the path already
+exists as a symlink, as a non-directory, owned by another user, or with any group or other
+permission bit, the boot is **refused** (`RetrieveConfigurationError` with a closed token
+such as `spool_dir_mode`) and a `/retrieve` fetched PDF is refused 422 `extraction_failed`
+/ `pdf_spool_error`. Forage never repairs such a directory: one already present with the
+wrong owner or mode is evidence that something else put it there. Remove it and restart.
+
+**The parent requirement.** `TMPDIR` itself must be **sticky** (like `/tmp`, mode `1777`)
+**or not writable by other users**. The per-call check re-establishes owner and mode before
+every spool, but inside a world-writable, non-sticky parent another local user could
+delete and re-create the directory between two requests; the sticky bit, or a parent
+nobody else can write, is what stops that.
+
+**Why it matters — confidentiality, not only integrity.** A spool file holds fetched
+third-party content, possibly from an internal or authenticated URL the agent was asked to
+read. It is `0600` inside a `0700` directory and unlinked on every normal exit path —
+success, every worker failure, a failed spool write and a cancelled request. A **tmpfs**
+`TMPDIR` keeps that content off durable storage altogether. On a non-tmpfs `TMPDIR`, a
+process killed with SIGKILL (an OOM kill, `docker kill`) mid-parse leaves its
+`forage-retrieve-*` or `poppy-extract-*` file behind, and those orphans are
+**content-bearing**: they survive until the next manual clear of the spool directory. No
+sweep runs at boot (an open question in the resource-envelope spec).
+
+**Cancellation ownership.** Cancelling a `/retrieve` task cannot stop its Python
+worker thread. The request therefore keeps its admission slot and waits for the existing
+bounded PDF worker to finish (or hit its wall-clock limit and be killed/reaped), then
+unlinks the spool before propagating cancellation. Repeated cancellation does not detach
+that work or admit a replacement early. Shutdown must allow this cleanup time; SIGKILL
+still bypasses it. This does not change `/extract`'s cancellation behavior.
+
+**Disk footprint.** The combined worst case is the two routes' reservations added
+together: `/extract`'s existing `extraction_concurrency × max_input_bytes` +
+`admission_queue_depth × max_input_bytes` (50 MiB + 50 MiB ≈ 100 MiB at the defaults)
+plus `/retrieve`'s `fetch_concurrency × 10 MiB` active + `max_queued_fetch_bytes` queued
+(10 MiB + 30 MiB = 40 MiB) — about **140 MiB** at the defaults. It is an upper bound: a
+queued request has not spooled yet. On a tmpfs `TMPDIR` that figure is **memory**, and it
+sits beside the container's memory ceiling rather than inside the worker's 384 MiB rlimit
+— size the tmpfs and the container limit together.
+
+**Latency.** The worker spawns a fresh interpreter per call
+(`multiprocessing.get_context("spawn")`), which costs on the order of **hundreds of
+milliseconds** on a cold spawn. A fetched PDF now pays that on its first fetch; repeat
+fetches of the same URL are served by the content cache and spawn nothing. Set the
+consumer's `/retrieve` request timeout accordingly.
 
 ### Cache backend selection
 
@@ -484,7 +538,7 @@ exist to make the service *more* conservative, not less.
 | `child_cpu_seconds` | `20` | 1 – 20 | CPU-time rlimit on the spawned pypdf worker process. |
 | `child_address_space_bytes` | `402653184` (384 MiB) | 128 MiB – 512 MiB | Address-space rlimit on that worker. The 1 GiB container reserves ≥512 MiB for the parent FastAPI + torch + PromptGuard process, so parser working memory cannot eat the parent's reservation. |
 | `wall_clock_seconds` | `90` | 1 – 90 | Total wall-clock budget for one extraction, worker included. |
-| `max_promptguard_chunks` | `64` | 1 – 64 | PromptGuard chunk budget for one document. Derives the classifiable character ceiling: `(512 − 64) × chunks × 4` = 114,688 characters at the default. |
+| `max_promptguard_chunks` | `64` | 1 – 64 | PromptGuard chunk budget for one document. Derives the classifiable character ceiling: `(512 − 64) × chunks × 4` = 114,688 characters at the default. Fetched PDFs run under `extraction.max_promptguard_chunks`; fetched HTML under `retrieve.max_promptguard_chunks` — a fetched PDF over this ceiling is refused 422 `content_too_large` / `promptguard_budget` (`hardening-retrieve-parity` US-003). |
 | `extraction_concurrency` | `1` | 1 – 1 | Concurrent extractions. Pinned at 1 — the memory reservation above assumes exactly one worker. |
 | `classification_concurrency` | `1` | 1 – 1 | Concurrent PromptGuard classifications. Pinned at 1 for the same reason. Since `hardening-retrieve-parity` US-006 it sizes **all three** classifying routes, not just `/extract`: `/retrieve` and `/search` take the same permit around their own stage 3. See the sizing rule below. |
 | `admission_queue_depth` | `1` | 0 – 4 | Requests allowed to wait for the extraction slot. `0` means reject immediately with `busy` (HTTP 429) whenever the slot is taken. |
@@ -541,7 +595,14 @@ Each such waiter costs at most `max_extracted_characters(256)` ≈ 459 KB of tex
 knob that bounds it, and the resource-envelope spec owns it.
 
 **Disk.** The HTML path writes nothing to disk: the fetched body lives in memory, inside the
-slot, and nowhere else. Stage 1 runs on the default thread pool (`asyncio.to_thread`, shared
+slot, and nowhere else. The PDF path (`hardening-retrieve-parity` US-003) spools the fetched
+body to a `0600` `forage-retrieve-*` file in the process-private spool directory and parses
+it in `/extract`'s spawned, rlimited worker, under `extraction.max_promptguard_chunks`
+rather than this block's budget; the file is unlinked as soon as the worker returns, on
+every outcome. See "The spool directory (`TMPDIR`)" above for the requirement, the footprint and
+the spawn latency. Every fetched-PDF failure is a 422 — `extraction_failed` with reason
+`pdf_encrypted`, `pdf_no_text`, `pdf_extraction_error` or `pdf_spool_error`, or
+`content_too_large` / `promptguard_budget` over the ceiling — never a 500. Stage 1 runs on the default thread pool (`asyncio.to_thread`, shared
 with stage 3's inference), which is uncancellable — the slot is what keeps hostile pages from
 starving the classifier of threads. No wall clock is put on HTML extraction; the 30 s fetch
 timeout and the 10 MB cap bound its input.

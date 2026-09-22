@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import errno
 import inspect
 import io
 import logging
+import os
 import re
+import stat
+import tempfile
 import textwrap
 import threading
 import time
 import unicodedata
 from collections import Counter
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, ExitStack
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import Any, get_args
@@ -34,8 +38,11 @@ from models import (
     Stage3Verdict,
     TrustTier,
 )
-from pipeline import contract, orchestrator
-from pipeline.extraction_limits import ExtractionSettings
+from pipeline import contract, orchestrator, pdf_subprocess
+from pipeline.extraction_limits import (
+    ExtractionSettings,
+    extraction_settings_from_config,
+)
 from pipeline.orchestrator import (
     _MAX_SEARCH_ENGINE_LENGTH,
     _MAX_SEARCH_SNIPPET_LENGTH,
@@ -60,6 +67,7 @@ from pipeline.orchestrator import (
     run_retrieve_pipeline,
     run_search_pipeline,
 )
+from pipeline.pdf_subprocess import PDFClassifiableTextLimitError
 from pipeline.retrieve_limits import RetrieveSettings
 from pipeline.search_providers.base import (
     FAILURE_CLASSES,
@@ -70,7 +78,7 @@ from pipeline.search_providers.base import (
 from pipeline.search_providers.brave import BraveApiProvider
 from pipeline.search_providers.searxng import SearxngProvider
 from pipeline.stage1_extraction import ExtractionResult, extract_html
-from pipeline.stage1_pdf import PDFExtractionError
+from pipeline.stage1_pdf import PDFEncryptedError, PDFExtractionError, PDFNoTextError
 from pipeline.stage1_upload import (
     UnsupportedUploadFormatError,
     detect_upload_content_type,
@@ -2261,6 +2269,303 @@ async def test_post_retrieve_error_response(
     assert data["error"] == "private_ip"
     assert "reason" in data
     assert "request_id" in data
+
+
+# ---------------------------------------------------------------------------
+# Fetched PDFs through the rlimited worker (hardening-retrieve-parity US-003)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def spool_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point ``tempfile.gettempdir`` — the seam ``spool_dir()`` resolves — here."""
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    return tmp_path
+
+
+def _spool_leftovers(root: Path) -> list[Path]:
+    directory = root / f"forage-spool-{os.geteuid()}"
+    if not directory.exists():
+        return []
+    return sorted(directory.glob("forage-retrieve-*"))
+
+
+def _fetched(body: bytes, content_type: str) -> ExitStack:
+    """Patch URL validation and the fetch so ``/retrieve`` receives *body*."""
+    stack = ExitStack()
+    stack.enter_context(
+        patch(
+            "pipeline.orchestrator.validate_url",
+            new_callable=AsyncMock,
+            return_value=("93.184.216.34", "example.com"),
+        )
+    )
+    stack.enter_context(
+        patch(
+            "pipeline.orchestrator.fetch_url",
+            new_callable=AsyncMock,
+            return_value=_make_fetch_result(
+                final_url="https://example.com/report.pdf",
+                response_body=body,
+                content_type=content_type,
+            ),
+        )
+    )
+    return stack
+
+
+def _spool_warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+        and "retrieve_spool_error" in record.getMessage()
+    ]
+
+
+async def test_post_retrieve_fetched_pdf_runs_in_the_worker_inside_the_slot(
+    client: httpx.AsyncClient, spool_root: Path
+) -> None:
+    """The bytes entry point spools 0600 under ``spool_dir()`` and hands the
+    worker ``app.state.extraction_settings``, off the loop, holding the slot."""
+    from retrieval_app import app
+
+    seen: dict[str, Any] = {}
+
+    def recording_worker(path: Path, settings: ExtractionSettings) -> ExtractionResult:
+        seen.update(
+            path=path,
+            mode=stat.S_IMODE(os.lstat(path).st_mode),
+            settings=settings,
+            spool_dir=pdf_subprocess.spool_dir(),
+            off_loop=threading.current_thread() is not threading.main_thread(),
+            active=app.state.retrieve_admission.active,
+        )
+        return _make_extraction(raw_text="Fetched report text.", title=None)
+
+    with (
+        _fetched(b"%PDF-1.7 fetched report", "application/pdf"),
+        patch.object(pdf_subprocess, "extract_pdf_in_subprocess", recording_worker),
+    ):
+        resp = await client.post(
+            "/retrieve", json={"url": "https://example.com/report.pdf"}
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["content_type"] == "pdf"
+    assert seen["settings"] is app.state.extraction_settings
+    assert seen["path"].parent == seen["spool_dir"]
+    assert seen["spool_dir"] == spool_root / f"forage-spool-{os.geteuid()}"
+    assert seen["path"].name.startswith("forage-retrieve-")
+    assert seen["mode"] == 0o600
+    assert seen["off_loop"] is True
+    assert seen["active"] == 1
+    assert app.state.retrieve_admission.active == 0
+    assert _spool_leftovers(spool_root) == []
+
+
+@pytest.mark.parametrize(
+    ("outcome", "error", "reason"),
+    [
+        pytest.param(
+            PDFEncryptedError("PDF is encrypted"),
+            "extraction_failed",
+            contract.RETRIEVE_PDF_ENCRYPTED,
+            id="encrypted",
+        ),
+        pytest.param(
+            PDFNoTextError("PDF contains no extractable text"),
+            "extraction_failed",
+            contract.RETRIEVE_PDF_NO_TEXT,
+            id="no_text",
+        ),
+        pytest.param(
+            PDFClassifiableTextLimitError("over budget"),
+            "content_too_large",
+            contract.PROMPTGUARD_BUDGET,
+            id="classifiable_limit",
+        ),
+        # The child's `failed` status — a page limit, a corrupt parse, or an
+        # rlimit / wall-clock kill, simulated: a real `RLIMIT_CPU` kill is not
+        # reproducible in the hermetic suite.
+        pytest.param(
+            PDFExtractionError("PDF extraction worker failed"),
+            "extraction_failed",
+            contract.RETRIEVE_PDF_EXTRACTION_ERROR,
+            id="killed",
+        ),
+    ],
+)
+async def test_post_retrieve_fetched_pdf_worker_failure_is_a_coded_422(
+    client: httpx.AsyncClient,
+    spool_root: Path,
+    caplog: pytest.LogCaptureFixture,
+    outcome: Exception,
+    error: str,
+    reason: str,
+) -> None:
+    """Each worker row of the table: its code and reason, never a 500."""
+    from retrieval_app import app
+
+    spooled: list[Path] = []
+
+    def failing_worker(path: Path, _settings: ExtractionSettings) -> ExtractionResult:
+        spooled.append(path)
+        raise outcome
+
+    caplog.set_level(logging.WARNING)
+    with (
+        _fetched(b"%PDF-1.7 fetched report", "application/pdf"),
+        patch.object(pdf_subprocess, "extract_pdf_in_subprocess", failing_worker),
+    ):
+        resp = await client.post(
+            "/retrieve", json={"url": "https://example.com/report.pdf"}
+        )
+
+    assert resp.status_code == 422
+    assert resp.json()["error"] == error
+    assert resp.json()["reason"] == reason
+    assert "sanitizer_revision" not in resp.json()
+    assert app.state.retrieve_metrics.errors == {error: 1}
+    assert app.state.retrieve_admission.active == 0
+    assert len(spooled) == 1
+    assert _spool_leftovers(spool_root) == []
+    assert _spool_warnings(caplog) == []
+
+
+@pytest.mark.parametrize("failure", ["create", "write", "spool_dir"])
+async def test_post_retrieve_fetched_pdf_spool_failure_is_a_coded_422(
+    client: httpx.AsyncClient,
+    spool_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure: str,
+) -> None:
+    """The host-fault row: ``pdf_spool_error`` and exactly one closed WARNING."""
+    if failure == "create":
+
+        def no_space(*_args: object, **_kwargs: object) -> object:
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr(tempfile, "NamedTemporaryFile", no_space)
+    elif failure == "write":
+        create = tempfile.NamedTemporaryFile
+
+        def failing_spool(**kwargs: Any):
+            temporary = create(mode="w+b", **kwargs)
+
+            def failed_write(data: bytes) -> int:
+                temporary.file.write(data[:5])
+                temporary.file.flush()
+                raise OSError(errno.ENOSPC, "private-path-and-content-sentinel")
+
+            monkeypatch.setattr(temporary, "write", failed_write)
+            return temporary
+
+        monkeypatch.setattr(tempfile, "NamedTemporaryFile", failing_spool)
+    else:
+        # Refused at use time — re-created by someone else after boot.
+        directory = spool_root / f"forage-spool-{os.geteuid()}"
+        directory.mkdir()
+        directory.chmod(0o755)
+
+    def unexpected_worker(
+        _path: Path, _settings: ExtractionSettings
+    ) -> ExtractionResult:
+        raise AssertionError("the worker must not run without a spool file")
+
+    caplog.set_level(logging.WARNING)
+    with (
+        _fetched(b"%PDF-1.7 fetched report", "application/pdf"),
+        patch.object(pdf_subprocess, "extract_pdf_in_subprocess", unexpected_worker),
+    ):
+        resp = await client.post(
+            "/retrieve", json={"url": "https://example.com/report.pdf"}
+        )
+
+    assert resp.status_code == 422
+    assert resp.json()["error"] == "extraction_failed"
+    assert resp.json()["reason"] == contract.RETRIEVE_PDF_SPOOL_ERROR
+    warnings = _spool_warnings(caplog)
+    assert len(warnings) == 1
+    assert warnings[0].getMessage() == "retrieve_spool_error"
+    assert _spool_leftovers(spool_root) == []
+
+
+async def test_post_retrieve_fetched_pdf_is_served_with_the_extract_route_off(
+    client: httpx.AsyncClient, spool_root: Path
+) -> None:
+    """``ExtractionAdmissionMiddleware`` gates ``/extract`` only; the real
+    worker serves a fetched PDF while that route answers 404."""
+    from retrieval_app import (
+        ExtractionAdmissionController,
+        ExtractionMetrics,
+        app,
+    )
+
+    settings = extraction_settings_from_config({})
+    assert settings.route_enabled is False
+    app.state.config = {
+        key: value
+        for key, value in _SAMPLE_CONFIG.items()
+        if key != "extract_route_enabled"
+    }
+    app.state.extraction_settings = settings
+    app.state.extraction_metrics = ExtractionMetrics()
+    app.state.extraction_admission = ExtractionAdmissionController(
+        settings, app.state.extraction_metrics
+    )
+
+    with _fetched(_make_text_pdf("Quarterly report text."), "application/pdf"):
+        resp = await client.post(
+            "/retrieve", json={"url": "https://example.com/report.pdf"}
+        )
+    extract = await client.post(
+        "/extract",
+        files={"file": ("document.txt", b"safe", "text/plain")},
+        data={"filename": "document.txt"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["content_type"] == "pdf"
+    assert "Quarterly report text." in resp.json()["body"]
+    assert extract.status_code == 404
+    assert _spool_leftovers(spool_root) == []
+
+
+async def test_post_retrieve_fetched_pdf_runs_under_the_extraction_ceiling(
+    client: httpx.AsyncClient, spool_root: Path
+) -> None:
+    """Fetched PDFs run under ``extraction.max_promptguard_chunks``; fetched
+    HTML under ``retrieve.max_promptguard_chunks`` — the same text, both ways.
+    """
+    from retrieval_app import app
+
+    extraction = ExtractionSettings(route_enabled=True, max_promptguard_chunks=1)
+    retrieve = RetrieveSettings(max_promptguard_chunks=2)
+    text = " ".join(["quarterly"] * 250)
+    assert extraction.max_extracted_characters < len(text)
+    retrieve_ceiling = retrieve.max_extracted_characters
+    assert retrieve_ceiling is not None and len(text) < retrieve_ceiling
+    app.state.extraction_settings = extraction
+    app.state.retrieve_settings = retrieve
+
+    with _fetched(_make_text_pdf(text), "application/pdf"):
+        as_pdf = await client.post(
+            "/retrieve", json={"url": "https://example.com/report.pdf"}
+        )
+    html = f"<html><body><article><p>{text}</p></article></body></html>"
+    with _fetched(html.encode(), "text/html"):
+        as_html = await client.post(
+            "/retrieve", json={"url": "https://example.com/report.html"}
+        )
+
+    assert as_pdf.status_code == 422
+    assert as_pdf.json()["error"] == "content_too_large"
+    assert as_pdf.json()["reason"] == contract.PROMPTGUARD_BUDGET
+    assert as_html.status_code == 200
+    assert as_html.json()["content_type"] == "html"
+    assert _spool_leftovers(spool_root) == []
 
 
 async def test_post_search_endpoint_success(client: httpx.AsyncClient) -> None:

@@ -99,7 +99,7 @@ file in the repo. |
 | `pipeline/stage4_structuring.py` | 308 | Assembles the response object and the composite trust score. |
 | `pipeline/stage1_extraction.py` | 337 | HTML extraction → `raw_text` (for scanning) + `main_content` (for the agent). |
 | `pipeline/stage5_url_audit.py` | 237 | Outbound fetch with manual redirect following and redirect-chain auditing. |
-| `pipeline/pdf_subprocess.py` | 219 | PDF parsing isolated in a subprocess (pypdf is not trusted with hostile input in-process). |
+| `pipeline/pdf_subprocess.py` | 297 | PDF parsing isolated in a subprocess (pypdf is not trusted with hostile input in-process), for both routes; also `spool_dir()`, the process-private `0700` spool directory, and `extract_pdf_bytes_in_subprocess`, `/retrieve`'s bytes entry point. |
 | `pipeline/stage2_structural.py` | 304 | Deterministic regex injection scan. |
 | `pipeline/smart_extraction.py` | 207 | Summary mode that preserves high-signal content (stats, quotes, references). |
 | `url_validator.py` | 336 | Private-IP rejection and DNS-rebinding protection, plus the service's one host canonicaliser. `canonicalize_host` / `canonical_host` (literals first: an IPv6 literal is recognised by its colons and never reaches the encode; every other host loses exactly one trailing dot, is lower-cased, is UTS-46-encoded via **`idna`** — a direct dependency, floor `>=3.7` for CVE-2024-3651 — and only then classified as numeric or named) and `private_address_class`, which reports *how* an address was reached (`private_literal` / `embedded_private`) and unwraps IPv4-mapped, 6to4, Teredo, prefix-guarded NAT64 and prefix-guarded IPv4-compatible embeddings. In `_ROOT_REVISION_SOURCES` since `hardening-search-sanitization` US-003. |
@@ -135,6 +135,25 @@ inference already was — the latter two inside `sanitize_and_structure`, so `/r
 read and released in `finally` after stage 1, and the fetched body is deleted with the slot
 so a request waiting on the classification permit holds only its extracted text. `/search`'s
 per-result `scan_structural` over bounded fields stays on the loop.
+
+**Both routes parse PDFs in the worker.** Since `hardening-retrieve-parity` US-003 a fetched
+PDF on `/retrieve` goes through `extract_pdf_bytes_in_subprocess`, which spools the body to a
+`0600` `forage-retrieve-*` file in `spool_dir()` (`<TMPDIR>/forage-spool-<uid>`, `0700`,
+created on first use and verified with `lstat` on every call, never repaired) and calls the
+same `extract_pdf_in_subprocess` `/extract`'s uploads use — spawned, under `/extract`'s
+rlimits and `extraction.max_promptguard_chunks` — inside `asyncio.to_thread` and the
+admission slot, unlinking in `finally`. The in-process `stage1_pdf.extract_pdf` is now
+reached only by `run_extract_pipeline`, the bytes-in `/extract` path. The mapping around the
+call is most-specific first — `PDFClassifiableTextLimitError` (→ `content_too_large` /
+`promptguard_budget`), `PDFEncryptedError`, `PDFNoTextError`, `PDFExtractionError`, `OSError`
+(→ `extraction_failed` with the four `contract.RETRIEVE_PDF_*` reasons) — because every PDF
+failure subclasses `PDFExtractionError`. `_spool_upload` writes into the same directory, and
+the lifespan checks it once so a planted directory refuses boot.
+The fetched-PDF task remains owned until the bounded worker is reaped and the spool is
+unlinked, even if the request is cancelled repeatedly. `asyncio.wait` does not cancel the
+worker task; the pipeline retrieves its outcome and propagates pending cancellation only
+after cleanup, before leaving the admission slot. Merely cancelling a `to_thread` await
+would detach the still-running thread and release admission early.
 
 **The sanitizer revision is a content hash of source files *and of the model pin*.**
 `sanitizer_revision.py` resolves `_REVISION_SOURCES` relative to its own file and
@@ -211,7 +230,12 @@ turn, all-reverted control landing on `e55b5f06…`). A twenty-second — also *
 behaviour-changing — came with stages 1, 2 and 4 moving off the event loop and the `/retrieve`
 admission gate (`d0433876…` → `f654be77…`, `hardening-retrieve-parity` US-002 —
 `orchestrator.py` + `contract.py`, each reverted in turn, both-reverted control landing on
-`d0433876…`). Nothing downstream may assume Poppy↔Forage revision parity.
+`d0433876…`). A twenty-third — also **not** a change to how text is sanitized, though it
+refuses fetched PDFs over the worker's bounds at the shipped defaults — came with fetched
+PDFs moving into the rlimited worker (`f654be77…` → `464b6ad5…`, `hardening-retrieve-parity`
+US-003 — `orchestrator.py` + `contract.py`, each reverted in turn, both-reverted control
+landing on `f654be77…`; includes the cancellation-ownership correction to the unaccepted
+`6fd320da…` candidate). Nothing downstream may assume Poppy↔Forage revision parity.
 
 **Startup is non-blocking, and one background task is the reason.** The lifespan does its
 synchronous wiring, starts weight acquisition as

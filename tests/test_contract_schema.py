@@ -341,14 +341,15 @@ def test_search_request_1_2_0_shape_is_pinned_exactly() -> None:
     }
 
 
-def test_pipeline_422_error_code_is_pinned_to_ten_members() -> None:
+def test_pipeline_422_error_code_is_pinned_to_eleven_members() -> None:
     """The document-wide eighteen (``ERROR_CODES``) is a different gate.
 
     Never widen ``Pipeline422ErrorCode`` to match that number — it is
-    ``/retrieve``'s seven codes plus ``/search``'s three. The 1.2.0 addition
-    was exactly one more member (``search_unavailable``); the 1.3.0 one is
-    ``busy`` (``hardening-retrieve-parity`` US-002), read here off the held
-    1.3.0 golden because the frozen 1.2.0 one never carried it.
+    ``/retrieve``'s eight codes plus ``/search``'s three. The 1.2.0 addition
+    was exactly one more member (``search_unavailable``); the 1.3.0 ones are
+    ``busy`` (``hardening-retrieve-parity`` US-002) and ``extraction_failed``
+    (US-003), read here off the held 1.3.0 golden because the frozen 1.2.0 one
+    never carried either.
     """
     golden = json.loads(_GOLDEN_PATH.read_text())
     enum = set(golden["Pipeline422ErrorResponse"]["properties"]["error"]["enum"])
@@ -357,10 +358,11 @@ def test_pipeline_422_error_code_is_pinned_to_ten_members() -> None:
     # member — a MAJOR change — pass. The sibling `SearchRequest` and
     # `SearchMetricsResponse` pins are literal for the same reason.
     assert enum == {
-        # `/retrieve`'s seven
+        # `/retrieve`'s eight
         "blocked_domain",
         "busy",
         "content_too_large",
+        "extraction_failed",
         "fetch_error",
         "fetch_timeout",
         "invalid_url",
@@ -427,6 +429,10 @@ _EXPECTED_ONE_THREE_ZERO_DIFF: frozenset[str] = frozenset(
         # hardening-retrieve-parity US-002: `/retrieve`'s admission refusal.
         # One path covers `/search`'s 422 as well, through the shared model.
         "Pipeline422ErrorResponse.error[enum]=busy",
+        # hardening-retrieve-parity US-003: a fetched PDF the worker could not
+        # parse or spool. Its four reasons are free text on `reason` and the
+        # description rewrite is not a properties key, so neither appends.
+        "Pipeline422ErrorResponse.error[enum]=extraction_failed",
     }
 )
 

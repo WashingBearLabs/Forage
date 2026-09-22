@@ -150,9 +150,10 @@ retention is configured anywhere in the repo; the Docker daemon defaults apply.
 
 The complete wire vocabulary is the eighteen codes in `pipeline/contract.py`
 (`ErrorCode`), verified against the source at seeding time. `content_too_large` is one
-code emitted from three sites, and `busy` is shared by `/extract` (429) and `/retrieve`
-(422), which is why ten `/extract` codes plus seven `/retrieve` codes plus three `/search`
-codes deduplicate to eighteen.
+code emitted from three sites, `busy` is shared by `/extract` (429) and `/retrieve`
+(422), and `extraction_failed` by `/extract` and `/retrieve` (both 422), which is why ten
+`/extract` codes plus eight `/retrieve` codes plus three `/search` codes deduplicate to
+eighteen.
 
 | Code | HTTP | Route | What it means | First thing to check |
 |---|---|---|---|---|
@@ -162,6 +163,7 @@ codes deduplicate to eighteen.
 | `content_too_large` | 422 (`/retrieve`, `/extract`); 413 documented on `/extract` but **unreachable** | `/retrieve`: `Content-Length` or streamed body over 10 MiB, **or** — reason `promptguard_budget`, the fixed literal rather than prose — extracted text over the ceiling derived from `retrieve.max_promptguard_chunks` (no pre-check at the shipped default `0`; 458,752 characters once the coming default 256 lands, `contract/GOVERNANCE.md` ruling (g)). `/extract`: upload over `max_input_bytes` (50 MiB); the streaming refusal actually arrives as **400** `{"detail": "There was an error parsing the body"}`, the post-spool re-check as 422 | The target or upload size. The 400 is expected: `contract/GOVERNANCE.md` ruling (a2); fixing it is a MAJOR |
 | `content_too_large_to_classify` | 422 | `/extract` | Extracted text exceeds `max_promptguard_chunks` (64 chunks, 114,688 classifiable characters) | Document length; the shipped value is the maximum, `config.yaml` can only tighten it |
 | `extraction_failed` | 422 | `/extract` | The pypdf child failed or hit a bound: 20 s CPU, 384 MiB address space, 90 s wall clock, 500 pages | `/metrics.extraction.verdicts.extraction_failed`; page count; container memory headroom |
+| `extraction_failed` | 422 | `/retrieve` | A fetched PDF, parsed in the same worker under the same bounds (`hardening-retrieve-parity` US-003). Reason `pdf_encrypted` or `pdf_no_text` (the document), `pdf_extraction_error` (corrupt parse, page limit, or the child killed by an rlimit or the wall clock), or `pdf_spool_error` — a **host** fault: the spool file under `<TMPDIR>/forage-spool-<uid>` could not be created or written, or that directory was refused. Fetched PDFs run under `extraction.max_promptguard_chunks`; fetched HTML under `retrieve.max_promptguard_chunks` — over it is `content_too_large` / `promptguard_budget`, not this code | For `pdf_spool_error`: the `retrieve_spool_error` WARNING, free space and permissions on `TMPDIR`, and whether the spool directory is a symlink, foreign-owned or not `0700` (remove it and restart; Forage never repairs it). Otherwise `/metrics` `retrieve.errors.extraction_failed` and the document itself |
 | `fetch_error` | 422 | `/retrieve` | Anything the other codes do not name: transport or TLS failure, and **more than 5 redirects** (`TooManyRedirectsError` has no dedicated code). Reason is `Failed to fetch <url>: <exc>` | Read the reason: `Exceeded 5 redirects` versus a TLS/transport message. Reach the target from the container's network with `curl` |
 | `fetch_timeout` | 422 | `/retrieve` | httpx timeout on a hop; 30 s per request (`DEFAULT_TIMEOUT` in `pipeline/stage5_url_audit.py`), no retry | Target latency from the container's network; retry is the client's job |
 | `invalid_filename` | 422 | `/extract` | `filename` longer than 255 characters, or no basename left after path separators are stripped (empty, `.`, `..`) (`_sanitize_upload_metadata`) | The client's form field |

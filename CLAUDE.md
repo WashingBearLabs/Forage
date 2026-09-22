@@ -313,6 +313,22 @@ classification wait; `contract.py` for `busy` in `RetrieveErrorCode`,
 `RETRIEVE_ADMISSION_QUEUE_FULL` and the `1.3.0` continuation line. Each reverted in turn with
 a both-reverted control landing exactly on `d0433876…`; `stage4_structuring.py` untouched.
 The threaded functions are pure, so every route's output is byte-identical.
+and a twenty-third to `464b6ad5…` — **not** a rotation that changes how any text is
+sanitized, but the first of this epic to move a served outcome at the shipped defaults —
+when fetched PDFs moved into the rlimited worker (`hardening-retrieve-parity` US-003):
+`orchestrator.py` for the `asyncio.to_thread(extract_pdf_bytes_in_subprocess, …)` call
+inside the admission slot, cancellation-safe waiting until worker reaping and spool cleanup,
+and its most-specific-first mapping to 422s (plus the `retrieve_spool_error` WARNING);
+`contract.py` for `extraction_failed` in
+`RetrieveErrorCode`, the four `RETRIEVE_PDF_*` reason literals and the `1.3.0`
+continuation line. Each reverted in turn with a both-reverted control landing exactly on
+`f654be77…`; `pipeline/pdf_subprocess.py`, where `spool_dir()` and the bytes entry point
+live, is not a `_REVISION_SOURCES` member. A fetched PDF within bounds serves the same text
+as before; one over 114,688 characters or the worker's rlimits is now refused, and every
+PDF failure is a coded 422 where it was a 500.
+The recovered candidate's `6fd320da…` was never accepted: cancelling its `to_thread`
+await released admission while the worker and spool survived. The corrected task retains
+ownership even under repeated cancellation and propagates cancellation only after cleanup.
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

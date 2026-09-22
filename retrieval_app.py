@@ -72,8 +72,10 @@ from pipeline.orchestrator import (
     run_retrieve_pipeline,
     run_search_pipeline,
 )
+from pipeline.pdf_subprocess import SpoolDirectoryError, spool_dir
 from pipeline.retrieve_limits import (
     COMING_MAX_PROMPTGUARD_CHUNKS,
+    RetrieveConfigurationError,
     RetrieveSettings,
     retrieve_settings_from_config,
 )
@@ -767,7 +769,10 @@ class Pipeline422ErrorResponse(BaseModel):
             "codes arrive on /retrieve, the searxng_* codes and "
             "search_unavailable on /search. busy arrives on /retrieve only, "
             "at 422, as the admission refusal (reason admission_queue_full); "
-            "the same literal is /extract's 429."
+            "the same literal is /extract's 429. extraction_failed arrives on "
+            "/retrieve only, as a fetched PDF the worker could not parse or "
+            "spool (reason pdf_encrypted, pdf_no_text, pdf_extraction_error "
+            "or pdf_spool_error)."
         )
     )
     reason: str = Field(
@@ -1219,13 +1224,18 @@ async def _spool_upload(
     max_bytes: int,
     chunk_size: int = _UPLOAD_READ_CHUNK_SIZE,
 ) -> _SpoolResult:
-    """Spool a bounded upload to a 0600 sidecar-owned file for the parser child."""
+    """Spool a bounded upload to a 0600 sidecar-owned file for the parser child.
+
+    Into :func:`spool_dir`, the process-private 0700 directory ``/retrieve``'s
+    fetched PDFs share; created on first use, so a lifespan-free caller works.
+    """
     path: Path | None = None
     received_bytes = 0
     try:
         with tempfile.NamedTemporaryFile(
             prefix="poppy-extract-",
             suffix=".upload",
+            dir=spool_dir(),
             delete=False,
         ) as temporary:
             path = Path(temporary.name)
@@ -1305,6 +1315,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.extraction_settings = settings
     retrieve_settings = retrieve_settings_from_config(config)
     app.state.retrieve_settings = retrieve_settings
+    # The spool directory is checked once here so a planted symlink, a foreign
+    # owner or a group/other bit refuses the boot, under the same closed
+    # vocabulary as every other `retrieve:` refusal — the token, never the
+    # path. Each spool re-runs the same check, because a directory verified now
+    # can be removed and re-created by another local user later.
+    try:
+        spool_dir()
+    except SpoolDirectoryError as exc:
+        raise RetrieveConfigurationError(str(exc)) from exc
     if retrieve_settings.max_promptguard_chunks == 0:
         # Exactly one WARNING, closed token plus the integer — no URL, no
         # config dump. `0` is the shipped default for one minor release

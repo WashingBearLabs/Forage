@@ -1735,6 +1735,35 @@ fails the unit test that pins the update keys.
   for all roles. Previous attempt history and ignored execution artifacts are
   backed up; the new retry round does not erase that history.
 
+### US-003 corrected implementation (2026-09-22)
+
+- Reused the preserved `371d254` diff on the attempt branch, not the backup or handoff
+  branches. The new asynchronous regression failed on that candidate: after
+  `Task.cancel()` the request was already done while its worker and spool remained live.
+- `/retrieve` now owns the `asyncio.to_thread` task until it completes, using
+  `asyncio.wait` without forwarding cancellation. Repeated cancellation is deferred until
+  the existing bounded worker is reaped and its spool unlinked; its outcome is retrieved
+  (a spool fault still logs the closed WARNING), then cancellation propagates before
+  classification. No change to worker IPC, rlimits, admission middleware/controller,
+  or `/extract` cancellation behavior.
+- The regression exercises actual task cancellation once and three times, worker success
+  and worker/spool failure, rejection of a replacement request while cleanup is pending,
+  and restored counters with no spool after cancellation completes. Additional cases
+  exercise real spawned-child failure mapping and a partial write followed by ENOSPC.
+- Contract artifacts and the held `1.3.0` golden regenerated from `_SCHEMA_MODELS`.
+  Only the shared 422 enum gains `extraction_failed`; four PDF tokens are reasons, not
+  new retrieve codes. Older goldens are untouched.
+- Corrected revision: `f654be77…c92fb` -> `464b6ad5…fead2`; orchestrator reverted
+  `a018345e…c6c73`, contract reverted `80b39055…1f039`, both reverted
+  `f654be77…c92fb`. The five records replace the unaccepted candidate values;
+  `docs/bootstrap-notes.md` records the read-only git-blob measurement.
+- Full-suite execution is deferred to the orchestrator/end-of-epic gate as instructed;
+  698 mapped and directly related documentation tests pass. Repository-wide Ruff lint,
+  format check, strict Pyright and `export_contract --check` are clean; AST comparisons
+  confirm the worker/IPC, middleware/controller, `/extract` pipelines and two named
+  legacy callers are unchanged. The pre-existing queued-admission
+  handoff race remains the recorded spec-6 residual, not part of this correction.
+
 ### US-001 (2026-09-20)
 
 - **Stale line numbers in the hints.** `SearchMetricsSink` is at `pipeline/orchestrator.py:1050`,

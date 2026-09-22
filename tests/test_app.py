@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import stat
 import tempfile
 import threading
 import time
@@ -1451,6 +1453,45 @@ async def test_lifespan_refuses_an_out_of_range_retrieve_bound(
     with pytest.raises(RetrieveConfigurationError):
         async with lifespan(probe_app):
             pass
+
+
+@pytest.mark.parametrize(
+    ("plant", "token"),
+    [("mode_0755", "spool_dir_mode"), ("symlink", "spool_dir_symlink")],
+)
+async def test_lifespan_refuses_an_unsafe_spool_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    plant: str,
+    token: str,
+) -> None:
+    """A planted spool directory refuses the boot — refused, never repaired.
+
+    The refusal is a ``RetrieveConfigurationError`` carrying the closed token,
+    so boot refusals keep one vocabulary and no path reaches the message.
+    """
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: dict[str, Any]())
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    spool = tmp_path / f"forage-spool-{os.geteuid()}"
+    if plant == "mode_0755":
+        spool.mkdir()
+        spool.chmod(0o755)
+    else:
+        target = tmp_path / "planted"
+        target.mkdir(mode=0o700)
+        spool.symlink_to(target)
+
+    probe_app = FastAPI()
+    with pytest.raises(RetrieveConfigurationError) as exc_info:
+        async with lifespan(probe_app):
+            pass
+
+    assert str(exc_info.value) == token
+    assert str(tmp_path) not in str(exc_info.value)
+    if plant == "mode_0755":
+        assert stat.S_IMODE(os.lstat(spool).st_mode) == 0o755
+    else:
+        assert spool.is_symlink()
 
 
 @pytest.mark.parametrize(

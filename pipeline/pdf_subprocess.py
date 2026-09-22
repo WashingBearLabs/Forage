@@ -1,11 +1,14 @@
-"""Killable, spawn-isolated PDF parsing for untrusted uploads."""
+"""Killable, spawn-isolated PDF parsing for untrusted uploads and fetched PDFs."""
 
 from __future__ import annotations
 
 import json
 import multiprocessing
+import os
 import signal
+import stat
 import sys
+import tempfile
 import time
 from contextlib import suppress
 from multiprocessing.connection import Connection
@@ -27,6 +30,51 @@ class PDFClassifiableTextLimitError(PDFExtractionError):
 
 class PDFPageLimitError(PDFExtractionError):
     """Raised when a PDF exceeds the fixed page-count extraction bound."""
+
+
+class SpoolDirectoryError(OSError):
+    """Raised when the spool directory exists but is not safe to spool into.
+
+    The message is one closed token — ``spool_dir_symlink``,
+    ``spool_dir_not_directory``, ``spool_dir_foreign_owner`` or
+    ``spool_dir_mode`` — and never the path, so the lifespan can re-raise it
+    as a boot refusal and ``/retrieve`` can map it to ``pdf_spool_error``
+    without either carrying anything host-derived.
+    """
+
+
+def spool_dir() -> Path:
+    """Return the process-private spool directory, creating it on first use.
+
+    ``<tempfile.gettempdir()>/forage-spool-<euid>``, resolved on every call
+    rather than at import, so a ``TMPDIR`` set after import still applies.
+    Both routes spool here: ``/extract``'s uploads and ``/retrieve``'s fetched
+    PDFs. The worker child re-opens a spool file by path, so the file must sit
+    in a directory nobody else can enter — that is what closes the re-open
+    window without depending on the sticky bit of the parent.
+
+    Created with ``mkdir(mode=0o700)`` and ``exist_ok=False``: umask can only
+    clear bits, so the directory is never wider than 0700 at any instant. An
+    existing path is verified with ``os.lstat`` (never ``stat``, which would
+    follow a planted symlink) on **every** call and refused, never repaired —
+    a directory already present with the wrong owner or mode is evidence, not
+    a state to fix, and a check that re-runs per call catches one removed and
+    re-created by another local user after boot.
+    """
+    path = Path(tempfile.gettempdir()) / f"forage-spool-{os.geteuid()}"
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError:
+        st = os.lstat(path)
+        if stat.S_ISLNK(st.st_mode):
+            raise SpoolDirectoryError("spool_dir_symlink") from None
+        if not stat.S_ISDIR(st.st_mode):
+            raise SpoolDirectoryError("spool_dir_not_directory") from None
+        if st.st_uid != os.geteuid():
+            raise SpoolDirectoryError("spool_dir_foreign_owner") from None
+        if st.st_mode & 0o077:
+            raise SpoolDirectoryError("spool_dir_mode") from None
+    return path
 
 
 def _apply_child_limits(settings: ExtractionSettings) -> None:
@@ -217,3 +265,35 @@ def extract_pdf_in_subprocess(
         main_content=raw_text,
         word_count=word_count,
     )
+
+
+def extract_pdf_bytes_in_subprocess(
+    data: bytes,
+    settings: ExtractionSettings,
+) -> ExtractionResult:
+    """Spool fetched PDF bytes and parse them in the same bounded worker.
+
+    ``/retrieve`` already holds the body in memory, so the spool buys reuse of
+    ``extract_pdf_in_subprocess``'s entry point and rlimit wiring, not memory
+    isolation. The file is created in :func:`spool_dir`, made 0600 before a
+    byte is written, and unlinked in ``finally`` on success or any raised
+    failure. Cancelling an async caller does not interrupt this synchronous
+    function: the caller must retain ownership of its thread until it returns,
+    including cleanup, before propagating cancellation or releasing admission.
+    An ``OSError`` from the directory check, the create or the write propagates
+    unchanged for the caller to map; an already-created file is still unlinked.
+    """
+    path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix="forage-retrieve-",
+            dir=spool_dir(),
+            delete=False,
+        ) as spool:
+            path = Path(spool.name)
+            os.fchmod(spool.fileno(), 0o600)
+            spool.write(data)
+        return extract_pdf_in_subprocess(path, settings)
+    finally:
+        if path is not None:
+            path.unlink(missing_ok=True)

@@ -201,14 +201,14 @@ behaviour is described here from Forage's own docs and tests
 **What Poppy must do:**
 - Compare `/health.contract_version` (**1.3.0**) on its **MAJOR** and refuse to activate on
   a mismatch (`CLAUDE.md` invariant 4). **Never** compare `sanitizer_revision`: the two
-  repos' revisions diverged deliberately twenty-two times (Forage `f654be77…`, Poppy still
+  repos' revisions diverged deliberately twenty-three times (Forage `464b6ad5…`, Poppy still
   `e6b2b56d…`; `docs/bootstrap-notes.md` is the running record, not this count).
 - Vendor the contract by the procedure in `contract/GOVERNANCE.md`: pick a tag (never
   `latest`); fetch `openapi.yaml` and `openapi.yaml.sha256` from the **same** tag (git
   tag, `gh release download v<ver> --pattern 'openapi.yaml*'`, or
   `docker run --rm --entrypoint cat <image> /app/contract/openapi.yaml`); run
   `sha256sum -c openapi.yaml.sha256`; commit both; record the tag. The anchor is
-  currently `ebca0919519a147d20970773b2db6059a13a566b5b5faf3fbc2065bdea5bf225`.
+  currently `cad199ba552e09f48ca02a450d87479db05042c8d2d2b9b6b1faedda75d04967`.
 - Its client caches `sanitizer_revision` from `/health`, pins the ten `/extract` error
   codes, rejects an `/extract` 422 lacking `sanitizer_revision`, gates web search on
   `capabilities.search_sanitization`, and buckets unknown `omitted_by_reason` /
