@@ -398,7 +398,7 @@ the `["xn--strae-oqa.de"]` spelling both raise `BlockedDomainError` after this s
   `config_unknown_key`).
 
 **Acceptance Criteria:**
-- [ ] Pre-flight (this is the first story in `execution_order`): before any other work, a check
+- [x] Pre-flight (this is the first story in `execution_order`): before any other work, a check
       asserts each assumed seam exists with the assumed shape — `canonicalize_host` importable from
       `url_validator` and returning `CanonicalHost | HostRejection`; `pipeline.config_bounds.
       bounded_float` and `bounded_int` importable; `contract.OMIT_BLOCKED_URL in OMISSION_REASONS`;
@@ -409,7 +409,7 @@ the `["xn--strae-oqa.de"]` spelling both raise `BlockedDomainError` after this s
       the window stories depend on the diff machinery, not the file); the operator-policy resolver
       locatable in `retrieval_app.py` by `promptguard_threshold_ceiling`. A failing pre-flight stops the spec
       (recorded in Implementation Notes) instead of surfacing in US-005.
-- [ ] `hostname_matches`, `normalize_domain_entries`, `matched_entry`, `domain_list_bytes` and
+- [x] `hostname_matches`, `normalize_domain_entries`, `matched_entry`, `domain_list_bytes` and
       `DomainEntry` exist in `url_validator.py`;
       the three list sites call `hostname_matches` on canonical strings (`grep -c hostname_matches`
       ≥ 1 in `url_validator.py`, `pipeline/orchestrator.py` and `cache.py`); the three inline
@@ -418,10 +418,10 @@ the `["xn--strae-oqa.de"]` spelling both raise `BlockedDomainError` after this s
       nothing); no function signature among `validate_url`, `_resolve_request_trust_tier`,
       `_effective_ttl_hours` and `cache_policy_fingerprint` changes; `uv run pyright` passes with no
       type-ignore comment.
-- [ ] Exactly one IDNA implementation: `grep -cE "idna\.(encode|decode)|encode\(\"idna\"\)"
+- [x] Exactly one IDNA implementation: `grep -cE "idna\.(encode|decode)|encode\(\"idna\"\)"
       url_validator.py pipeline/orchestrator.py` sums to 1, inside spec 1's `canonicalize_host`;
       `idna` is listed in `pyproject.toml` `dependencies` (spec 1's work, verified here).
-- [ ] Parametrised matcher test covers at least: equal; `www.` prefix; deeper subdomain;
+- [x] Parametrised matcher test covers at least: equal; `www.` prefix; deeper subdomain;
       `notevil.com`; `evil.com.attacker.net`; trailing dot on host and entry; `münchen.de` vs
       `xn--mnchen-3ya.de` and `straße.de` vs `xn--strae-oqa.de` in both directions; bare vs
       leading-dot allowlist entry; an IPv4 and an IPv6 literal host matching an identical entry and
@@ -431,7 +431,7 @@ the `["xn--strae-oqa.de"]` spelling both raise `BlockedDomainError` after this s
       exact-only (`intranet` matches `intranet` and never `wiki.intranet`) and `.com`, `""`,
       `bad..entry` are still dropped. A separate test asserts `normalize_domain_entries(...,
       denylist=False)` rejects every single-label entry (the private-name guard is closed by test).
-- [ ] `validate_url("https://www.evil.com/x", blocked_domains=["evil.com"])` raises
+- [x] `validate_url("https://www.evil.com/x", blocked_domains=["evil.com"])` raises
       `BlockedDomainError`; `blocked_domains=["notevil.com"]` does not;
       `validate_url("https://straße.de/", blocked_domains=["straße.de"])` and with
       `["xn--strae-oqa.de"]` both raise `BlockedDomainError` after this story alone (the seam never
@@ -440,7 +440,7 @@ the `["xn--strae-oqa.de"]` spelling both raise `BlockedDomainError` after this s
       (`tests/test_stage5_url_audit.py::TestBlocklistDuringFetch`); an un-canonicalisable host is
       refused by `validate_url` with `blocked_domains=None`, with `[]` and with a non-empty list,
       and a redirect hop onto one is refused, never fetched.
-- [ ] `https://localhost/`, `https://localhost./`, `https://anything.localhost/`,
+- [x] `https://localhost/`, `https://localhost./`, `https://anything.localhost/`,
       `https://printer.local/` and `https://deep.sub.myhost.local/` raise `PrivateIPError` at the
       hostname stage before DNS, with and without a blocklist; `https://local/` is unchanged
       (allowed at the hostname stage); `TestHostnameRejection` passes unchanged; `_BLOCKED_SUFFIXES`
@@ -448,15 +448,15 @@ the `["xn--strae-oqa.de"]` spelling both raise `BlockedDomainError` after this s
       both denylisted and private-named (`blocked_domains=["evil.local"]`, `https://evil.local/`)
       raises `PrivateIPError`, so `/retrieve` maps it to `private_ip` (the precedence the
       GOVERNANCE ruling records).
-- [ ] `_resolve_request_trust_tier("www.example.com", ["example.com"], [], [])` returns `"standard"`;
+- [x] `_resolve_request_trust_tier("www.example.com", ["example.com"], [], [])` returns `"standard"`;
       with `[".example.com"]` it returns `"trusted"`; with `blocked_domains=["example.com"]` as well
       it returns `"blocked"`; `_resolve_request_trust_tier("a.com", ["com"], [], [])` returns
       `"standard"` — `com` is dropped by the allowlist normalisation the site runs in this story (the
       handler's after US-007), and a single-label entry is exact-only in any case; counting it under
       `policy_invalid_domain_entry` is US-007's.
-- [ ] `_effective_ttl_hours(24, domain="www.bbc.co.uk", news_domains=["bbc.co.uk"])` returns `24`
+- [x] `_effective_ttl_hours(24, domain="www.bbc.co.uk", news_domains=["bbc.co.uk"])` returns `24`
       and with `[".bbc.co.uk"]` returns `1`; `["bbc.co.uk"]` with `domain="bbc.co.uk"` returns `1`.
-- [ ] Lifespan normalisation: `seed_blocklist: [" Evil.COM. ", "bad..entry", "intranet"]` and
+- [x] Lifespan normalisation: `seed_blocklist: [" Evil.COM. ", "bad..entry", "intranet"]` and
       `news_domains: ["BBC.co.uk", ".Example.ORG", "com"]` publish `["evil.com", "intranet"]` and
       `["bbc.co.uk", ".example.org"]`; `www.evil.com` and `intranet` are refused on `/retrieve`,
       `wiki.intranet` is not, and `bbc.co.uk` gets the one-hour TTL; exactly one
@@ -465,16 +465,16 @@ the `["xn--strae-oqa.de"]` spelling both raise `BlockedDomainError` after this s
       `config.yaml` logs no such WARNING and its six `news_domains` entries carry the leading dot,
       so `_effective_ttl_hours(24, domain="www.bbc.co.uk",
       news_domains=app.state.config["news_domains"])` returns `1`.
-- [ ] `trusted_domains=["example.com"]` and `trusted_domains=[".example.com"]` produce different
+- [x] `trusted_domains=["example.com"]` and `trusted_domains=[".example.com"]` produce different
       `cache_policy_fingerprint` values for the same URL (the marker reaches the fingerprint as a
       string), and two spellings of one entry (`"Example.COM "` / `"example.com"`) produce the same
       value.
-- [ ] No test in `tests/test_url_validator.py`, `tests/test_stage5_url_audit.py`,
+- [x] No test in `tests/test_url_validator.py`, `tests/test_stage5_url_audit.py`,
       `tests/test_orchestrator.py` and `tests/test_cache.py` is deleted, weakened or has its call
       shape changed (`tests/test_cache.py:506`'s `domain="CNN.com"` included — the helper
       canonicalises its host); any test that asserted exact-only **denylist** behaviour is updated in place
       and named in the Implementation Notes with the reason.
-- [ ] `grep -rn -iE "exact-host|exact host|exact, case-insensitive" docs kit_tools/docs
+- [x] `grep -rn -iE "exact-host|exact host|exact, case-insensitive" docs kit_tools/docs
       kit_tools/arch README.md` returns nothing (nine line sites at the start); the six files
       state the two-direction rule (`grep -c notevil.com` ≥ 1 in `docs/configuration.md`,
       `kit_tools/docs/API_GUIDE.md` and `kit_tools/arch/SECURITY.md`); the multi-tenant caution is on
@@ -483,7 +483,7 @@ the `["xn--strae-oqa.de"]` spelling both raise `BlockedDomainError` after this s
       unchanged) and the observability sentence; the `news_domains` row carries its note; MONITORING
       has the `config_invalid_value` row and LOGGING.md lists the marker; `kit_tools/docs/GOTCHAS.md`
       states that `url_validator.py` is an unhashed cache-key input.
-- [ ] 1.3.0 window (R36): the docstring line for the three list descriptions is appended in the
+- [x] 1.3.0 window (R36): the docstring line for the three list descriptions is appended in the
       `* ``1.3.0`` — …` format; `uv run python -m scripts.export_contract` run;
       `tests/golden/contract_1_3_0.json` re-created via `_SCHEMA_MODELS` (a no-op — `RetrieveRequest`
       is outside `_SCHEMA_MODELS`, so the golden does not move); nothing appended to
@@ -500,13 +500,13 @@ the `["xn--strae-oqa.de"]` spelling both raise `BlockedDomainError` after this s
       `private_ip` precedence swap and the new `policy_domain_list_too_large` reason, is a
       `### (<letter>) ` section with a `**Source:**` line, and `_RULING_MARKERS` plus the four count
       words are updated as found.
-- [ ] The `sanitizer_revision` rotation (`pipeline/orchestrator.py`, `pipeline/contract.py`) is
+- [x] The `sanitizer_revision` rotation (`pipeline/orchestrator.py`, `pipeline/contract.py`) is
       measured by revert-and-reproduce and recorded at the five sites (`docs/bootstrap-notes.md`,
       `CLAUDE.md`, `kit_tools/arch/DECISIONS.md` table and preamble as found,
       `kit_tools/docs/GOTCHAS.md` counter and table, `kit_tools/arch/CODE_ARCH.md`).
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-007: Request domain lists normalised once per request, with the `policy_invalid_domain_entry` and `policy_suffix_trusted_skip` counters
 
