@@ -946,24 +946,24 @@ table carries a `promptguard_threshold` row and its response table an
   `RetrieveRequest` with a threshold.
 
 **Acceptance Criteria:**
-- [ ] `promptguard_threshold` is `float | None` defaulting to `None` on both request models (new on
+- [x] `promptguard_threshold` is `float | None` defaulting to `None` on both request models (new on
       `SearchRequest`); `tests/test_models.py`'s default assertion is updated.
-- [ ] `/search` passes the resolved threshold into `run_search_pipeline`; with config `0.5` and a
+- [x] `/search` passes the resolved threshold into `run_search_pipeline`; with config `0.5` and a
       `0.6`-scoring classifier, omitting the field blocks on `/search` and `/retrieve`, an explicit
       `0.85` serves; `/extract`'s tests pass unchanged.
-- [ ] Ceiling order: config `0.85` + ceiling `0.5` + omitted field → classification at `0.5`,
+- [x] Ceiling order: config `0.85` + ceiling `0.5` + omitted field → classification at `0.5`,
       `effective_promptguard_threshold == 0.5` on both responses, `0.5` in the `/retrieve` fingerprint.
-- [ ] `grep -n "request.promptguard_threshold" pipeline/orchestrator.py` returns nothing; `uv run
+- [x] `grep -n "request.promptguard_threshold" pipeline/orchestrator.py` returns nothing; `uv run
       pyright` passes with no type-ignore comment added.
-- [ ] A config `promptguard_threshold` of `"abc"`, `-0.1`, `1.7` or `true` boots, logs exactly one
+- [x] A config `promptguard_threshold` of `"abc"`, `-0.1`, `1.7` or `true` boots, logs exactly one
       `config_invalid_value` WARNING naming the key and never the value, and resolves to `0.85`
       (`grep -n "bounded_float" retrieval_app.py` shows the reader is the shared one; for this key
       the WARNING's `getMessage()` also names `/extract`'s own read); a quoted
       `"0.85"` resolves to `0.85` with no WARNING; an absent key resolves to `0.85`; the resolved
       default is logged once at INFO as `promptguard_threshold_resolved`, which MONITORING's
       "Dropped (INFO)" line and LOGGING.md's inventory name.
-- [ ] The cache-key assertions (null vs explicit default vs ceiling) pass.
-- [ ] 1.3.0 window (R36): docstring line appended; `uv run python -m scripts.export_contract` run;
+- [x] The cache-key assertions (null vs explicit default vs ceiling) pass.
+- [x] 1.3.0 window (R36): docstring line appended; `uv run python -m scripts.export_contract` run;
       `tests/golden/contract_1_3_0.json` re-created via `_SCHEMA_MODELS`; the new field and the
       `SearchResponse` field appended to `_EXPECTED_ONE_THREE_ZERO_DIFF`; the four anchor-quoting
       pages refreshed; `--check` green; a test that collapses runs of whitespace in each of the five
@@ -974,18 +974,18 @@ table carries a `promptguard_threshold` row and its response table an
       as its own `### (<letter>) ` section with a `**Source:**` line, `_RULING_MARKERS` and the
       count words updated as found (US-001's mechanism); `derive_sanitizer_revision`'s docstring
       says "configured".
-- [ ] `kit_tools/docs/API_GUIDE.md`'s `/search` request table has the `promptguard_threshold` row
+- [x] `kit_tools/docs/API_GUIDE.md`'s `/search` request table has the `promptguard_threshold` row
       and its response table the `effective_promptguard_threshold` row.
-- [ ] `docs/configuration.md`'s `promptguard_threshold` row carries the two-direction upgrade note,
+- [x] `docs/configuration.md`'s `promptguard_threshold` row carries the two-direction upgrade note,
       names `promptguard_threshold_ceiling` as the bound and states the three-route reading.
-- [ ] A test pins the `/extract` divergence as known-and-unchanged: `promptguard_threshold: true`
+- [x] A test pins the `/extract` divergence as known-and-unchanged: `promptguard_threshold: true`
       boots with one `config_invalid_value` WARNING, resolves to `0.85` on `/retrieve` and
       `/search`, and still reaches `/extract`'s `float()` coercion at `1.0`;
       `kit_tools/docs/GOTCHAS.md` states it.
-- [ ] The `sanitizer_revision` rotation is measured and recorded on the five-site protocol.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] The `sanitizer_revision` rotation is measured and recorded on the five-site protocol.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-003: `config.yaml` key registry — warn on unknown keys, docs and code parity by test
 
