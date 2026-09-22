@@ -175,6 +175,10 @@ MINOR when fields are only added.
   scanning, without triggering fallback. Invalid caller entries are counted;
   an oversized denylist is refused whole as ``search_unavailable`` with reason
   ``policy_domain_list_too_large``, a non-retryable request-policy refusal.
+* ``1.3.0`` — ``hardening-hostname-and-config`` US-005 adds
+  ``promptguard_threshold`` to ``SearchRequest``; ``null`` means the server's
+  configured threshold on both fetch routes; the operator ceiling also applies
+  on ``/search``, which gains ``SearchResponse.effective_promptguard_threshold``.
   This version is **held**:
   ``tests/golden/contract_1_3_0.json`` is
   re-created in place by every later story in this epic that moves the
@@ -184,7 +188,7 @@ This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy
 at ``poppy/core/retrieval/client.py``): ``sanitizer_revision`` is a
 mechanically-derived hash of pipeline *behavior* (source, model identity,
-active threshold), while ``contract_version`` is a hand-bumped *wire-shape*
+configured threshold), while ``contract_version`` is a hand-bumped *wire-shape*
 contract. Neither replaces the other.
 """
 

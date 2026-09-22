@@ -725,6 +725,7 @@ async def test_retrieve_task_cancellation_keeps_admission_until_pdf_cleanup(
             classifier=None,
             config={},
             sanitizer_revision="a" * 64,
+            promptguard_threshold=0.85,
             settings=settings,
             retrieve_metrics=metrics,
             classification_semaphore=asyncio.Semaphore(1),

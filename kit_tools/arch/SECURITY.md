@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document authentication, authorization, and secrets management. Security architecture reference.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-002)
+> Updated by: Copilot (hardening-hostname-and-config US-005)
 
 ---
 
@@ -172,7 +172,7 @@ A blocking hit yields verdict `blocked` and quarantine. Each suspicious hit cost
 
 ### Stage 3: Llama Prompt Guard 2
 
-`promptguard/classifier.py` loads `meta-llama/Llama-Prompt-Guard-2-22M` (a DeBERTa-v3 sequence classifier) on CPU with `use_safetensors=True`. Text is chunked at `MAX_SEQ_LEN = 512` tokens with `CHUNK_OVERLAP = 64`, up to `MAX_PROMPTGUARD_CHUNKS = 64`; over budget raises `PromptGuardBudgetExceededError` rather than silently classifying a prefix. `pipeline/stage3_promptguard.py` applies `DEFAULT_THRESHOLD = 0.85` (`config.yaml` `promptguard_threshold`; overridable per `/retrieve` request within 0.0 to 1.0): a score above threshold is `injection_detected` with `INJECTION_PENALTY = -0.5`.
+`promptguard/classifier.py` loads `meta-llama/Llama-Prompt-Guard-2-22M` (a DeBERTa-v3 sequence classifier) on CPU with `use_safetensors=True`. Text is chunked at `MAX_SEQ_LEN = 512` tokens with `CHUNK_OVERLAP = 64`, up to `MAX_PROMPTGUARD_CHUNKS = 64`; over budget raises `PromptGuardBudgetExceededError` rather than silently classifying a prefix. `pipeline/stage3_promptguard.py` applies the handler-resolved threshold (`config.yaml` `promptguard_threshold`, shipped as 0.85; overridable per `/retrieve` or `/search` request within 0.0 to 1.0, then operator-capped): a score above threshold is `injection_detected` with `INJECTION_PENALTY = -0.5`.
 
 Two policy branches matter for security:
 
@@ -184,8 +184,8 @@ the request is the consumer's; the floor bounds `promptguard_fail_closed` and th
 ceiling bounds `promptguard_threshold`; neither overrides caller-supplied trust tiers,
 which decide whether the flag is consulted at all — the `trusted_tier` skip and the
 VERIFIED fail-open exemption. The floor covers `/retrieve` and `/search`, default
-`false`; the threshold ceiling is **retrieve only**, default `1.0`. `/search` keeps
-fixed `0.85` until `SearchRequest.promptguard_threshold` lands (spec 3 US-005).
+`false`; the threshold ceiling covers both fetch routes, default `1.0`.
+Null/omitted thresholds resolve to the validated config default before capping.
 `/extract` remains permanently fail-closed with its own threshold; neither bound
 reaches it and it carries neither field. Wrong-typed floors and invalid ceilings
 refuse boot. Config delivery is [config.yaml-only](../../docs/configuration.md#top-level-promptguard-policy-keys),
@@ -193,7 +193,7 @@ with the full bind-mount procedure owned by spec 6.
 
 Handlers replace the request once, before both the cache fingerprint and pipeline
 read it, then stamp `effective_promptguard_fail_closed` (both routes) and
-`effective_promptguard_threshold` (`/retrieve` only) on every 200, including cache
+`effective_promptguard_threshold` (both routes) on every 200, including cache
 hits; 422 bodies carry neither. The fields report **policy applied, not whether
 content was scanned**. The flag decides behaviour only when classification is
 unavailable to the request (absent or permit wait timed out). `promptguard_state`
@@ -208,9 +208,15 @@ When stage 2 says `blocked` or stage 3 says `injection_detected`, `finalize_quar
 
 `pipeline/stage4_structuring.py` composes `trust_score` from a per-tier base in `_BASE_SCORES` (`trusted` 0.95, `verified` 0.85, `standard` 0.70, `untrusted` 0.40, `blocked` 0.0) plus the stage-2 penalty, the stage-3 penalty, and `-0.1` for a redirect that changed domain, clamped to 0 to 1. The tier is resolved per request by `orchestrator._resolve_request_trust_tier` in the order `blocked_domains`, then `trusted_domains`, then `verified_domains`, else `standard`; `config.yaml` `news_domains` affects cache TTL only. The wire fields a consumer should read are `injection_detected`, `injection_spans`, `structural_flags`, `stage2_verdict`, `stage3_verdict`, `promptguard_state` (one of `scanned`, `skipped_trusted`, `structural_blocked`, `unavailable_blocked`, `unavailable_allowed`), `trust_score`, `trust_tier`, `redirect_chain`, and `domain_changed_on_redirect`; `/search` adds `omitted_by_reason`, `unscanned_results`, and `promptguard_unavailable`. The vocabulary is fixed in `pipeline/contract.py`.
 
-### Observation: `/search` scans at the hard default
+### Shared fetch threshold, separate raw upload guard
 
-The `/search` handler makes one stage-3 pass over the title, URL, and snippet of each result at `standard` tier and does not pass `config.yaml`'s `promptguard_threshold`, so it always scans at the hard default 0.85 even when the operator has changed the threshold that `/retrieve` and `/extract` honour. The architecture exploration recorded this as an observation; nothing in the repo documents it as intentional, and no decision has been made.
+`/search` scans title, URL and snippet at `standard` tier using the same threshold
+resolver as `/retrieve` (hardening-hostname-and-config US-005). The validated default
+is boot state, never re-read per request; the resolved float reaches classification
+and the retrieve cache fingerprint explicitly. `/extract` retains its raw `float()`
+conversion and range guard. A YAML boolean `true` therefore disables blocking on
+`/extract` only, while both fetch routes warn and use 0.85; this known divergence
+is pinned by a regression test, not silently repaired.
 
 ### Tests
 
@@ -458,7 +464,7 @@ The exploration found no source that either accepts or rejects these. They are l
 - **TLS to companions.** Whether the Valkey and SearXNG links must be TLS-protected on the private network is not stated; `VALKEY_URL` examples are plain `redis://`.
 - **Dependency vulnerability scanning.** None found (see "Supply Chain Integrity").
 - **Fuzzing.** None found (see "Security Testing").
-- **`/search` threshold.** Scans at the hard default 0.85 regardless of `config.yaml` (see "Prompt-Injection Signalling").
+- **`/extract` threshold.** Its raw guard accepts YAML `true` as 1.0, unlike the fetch routes' validated default (see "Prompt-Injection Signalling").
 
 ---
 

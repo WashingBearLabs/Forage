@@ -86,7 +86,8 @@ those eight — so Forage's revision moved:
 | After retrieve-parity validation (`fe211e3`) | `5a470872…bf623` |
 | After directional hostname policy (`hardening-hostname-and-config` US-001) | `328d386c…93286` |
 | After request domain budgets and counters (`hardening-hostname-and-config` US-007) | `c8a907cf…546b8` |
-| **Current (`hardening-hostname-and-config` US-002, search domain policy)** | **`de1cea65…6be91`** |
+| After search domain policy (`hardening-hostname-and-config` US-002) | `de1cea65…6be91` |
+| **Current (`hardening-hostname-and-config` US-005, shared threshold)** | **`e00049c4…7ed5c`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -1423,3 +1424,47 @@ set, retained every older golden, and regenerated OpenAPI with anchor
 `9c27428a293dfc033439074084776564ff22a26ec3220ac92602fc49d38593b9`.
 `docs/releases.md` carries the consumer upgrade handoff.
 **Not replayed to Poppy**; compare contracts, not revisions.
+
+### The thirtieth rotation: shared threshold (`hardening-hostname-and-config` US-005, 2026-09-22)
+
+```
+before: de1cea659b62b74f7dcd39cfdec8f3dee2272dcac38f2a35e829caacbe46be91
+after:  e00049c4ea9d02893c2f3c4f567a6a75f5a4fdfdb145bbf6d6fc701ec7c7ed5c
+```
+
+**Two hashed files move.** `orchestrator.py` replaces both nullable request-field
+reads with a required, handler-resolved float keyword, shared by classification
+and `cache_policy_fingerprint`. `contract.py` announces the optional search
+threshold, null/default semantics, search ceiling and effective response field,
+and corrects "active" to "configured" in its hash description.
+
+Measured through live `derive_sanitizer_revision` with read-only `Path.read_bytes`
+substitution of `git show 6cc45cfd43a21f176f6c0e0025fcdd58beb4a27c:<path>`.
+The worktree was clean when the pre-story value was captured; reversals never
+overwrite it:
+
+| Reversal against clean `6cc45cf` | Revision |
+|---|---|
+| `pipeline/contract.py` alone | `b07a473e8d4cb411e6a38b1cbc07498c9fc95067a01056984f155f824d674a14` |
+| `pipeline/orchestrator.py` alone | `c48aa79d3afe41424b19a3b8570a4c198248e189fe03c1dd63c6b7024a9797b6` |
+| Both | `de1cea659b62b74f7dcd39cfdec8f3dee2272dcac38f2a35e829caacbe46be91` |
+
+Each value is identical under default and shipped config. The other seven
+hashed sources are byte-identical to the base; no hash inputs changed.
+`sanitizer_revision.py`'s docstring correction is not itself hashed. The raw
+configured value remains a hash input unchanged; the resolved active value
+enters the content cache key through `cache_policy_fingerprint`.
+
+This is the **eighth policy-driven sanitization-behaviour change**, for tuned
+deployments rather than shipped defaults: omitted/null fetch thresholds now
+use the validated config default before the operator ceiling, and `/search`
+accepts a caller threshold. Higher configured values can loosen blocking,
+lower values tighten it, and the ceiling caps either choice. Shipped 0.85
+behavior, text-scanning algorithms and `/extract`'s raw guard are unchanged.
+Old cache entries become unreachable under the new revision and expire normally.
+
+Contract stays in the held 1.3.0 window; its regenerated OpenAPI anchor is
+`83242c6917cacb809b92f24b3b1b94fc1c149bfc0835e1c09a9c39ed86bbd81b`.
+The current golden was re-created through `_SCHEMA_MODELS`; older goldens are
+unchanged. GOVERNANCE ruling (i) classifies the change; `docs/releases.md`
+carries the two-direction consumer upgrade note. **Not replayed to Poppy**.

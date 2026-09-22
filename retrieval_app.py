@@ -17,7 +17,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Annotated, Any, Literal, get_args
+from typing import Annotated, Any, Literal, TypedDict, get_args
 
 import yaml
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -45,7 +45,7 @@ from models import (
     SearchResponse,
 )
 from pipeline import contract
-from pipeline.config_bounds import bounded_int
+from pipeline.config_bounds import bounded_float, bounded_int
 from pipeline.contract import (
     CONTRACT_VERSION,
     DEGRADED_CACHE_UNAVAILABLE,
@@ -1381,6 +1381,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 ",".join(dropped),
             )
     app.state.config = published_config
+    app.state.promptguard_threshold_default = promptguard_threshold_from_config(config)
+    logger.info(
+        "promptguard_threshold_resolved — value=%s",
+        app.state.promptguard_threshold_default,
+    )
     try:
         policy_domain_entries_max_bytes = bounded_int(
             config,
@@ -1588,6 +1593,7 @@ app.state.extraction_settings = _initial_extraction_settings
 # WARNING belongs to the lifespan, so a lifespan-free test does not emit a
 # boot warning nobody configured.
 app.state.retrieve_settings = retrieve_settings_from_config({})
+app.state.promptguard_threshold_default = 0.85
 app.state.policy_domain_entries_max_bytes = _DEFAULT_POLICY_DOMAIN_ENTRIES_MAX_BYTES
 app.state.extraction_metrics = ExtractionMetrics()
 app.state.extraction_admission = ExtractionAdmissionController(
@@ -1800,20 +1806,47 @@ async def metrics(request: Request) -> dict[str, Any]:
     }
 
 
+def promptguard_threshold_from_config(config: dict[str, Any]) -> float:
+    """Validate the fetch routes' default without changing the raw config."""
+    value = config.get("promptguard_threshold", 0.85)
+    try:
+        if isinstance(value, str):
+            value = float(value)
+        return bounded_float(
+            {"promptguard_threshold": value},
+            "promptguard_threshold",
+            0.85,
+            minimum=0.0,
+            maximum=1.0,
+            error=ValueError,
+        )
+    except ValueError:
+        logger.warning(
+            "config_invalid_value — key=promptguard_threshold. "
+            "/extract reads the raw value through its own guard"
+        )
+        return 0.85
+
+
+class _PromptGuardPolicyUpdates(TypedDict):
+    promptguard_fail_closed: bool
+    promptguard_threshold: float
+
+
 def _promptguard_policy_updates(
-    body: RetrieveRequest | SearchRequest, settings: RetrieveSettings
-) -> dict[str, bool | float]:
-    # Resolve caller-controlled, operator-boundable fields here, never as parallel
-    # pipeline parameters: the request also supplies the cache fingerprint.
-    updates: dict[str, bool | float] = {
+    body: RetrieveRequest | SearchRequest,
+    settings: RetrieveSettings,
+    threshold_default: float,
+) -> _PromptGuardPolicyUpdates:
+    threshold = body.promptguard_threshold
+    if threshold is None:
+        threshold = threshold_default
+    updates: _PromptGuardPolicyUpdates = {
         "promptguard_fail_closed": (
             body.promptguard_fail_closed or settings.promptguard_fail_closed_floor
         ),
+        "promptguard_threshold": min(threshold, settings.promptguard_threshold_ceiling),
     }
-    if isinstance(body, RetrieveRequest):
-        updates["promptguard_threshold"] = min(
-            body.promptguard_threshold, settings.promptguard_threshold_ceiling
-        )
     assert updates.keys() <= type(body).model_fields.keys()
     return updates
 
@@ -1837,14 +1870,14 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
     chunks, per result `content_kind` — from the configured provider chain,
     every result sanitized, never cached.
 
-    `promptguard_fail_closed` and `blocked_domains` are honoured on both routes;
-    `/retrieve` additionally honours `promptguard_threshold`, `trusted_domains`,
+    `promptguard_fail_closed`, `promptguard_threshold` and `blocked_domains` are
+    honoured on both routes; `/retrieve` additionally honours `trusted_domains`,
     `verified_domains` and `cache_ttl_hours`, while
     `/search` additionally honours `providers` and `allow_paid_fallback`
-    (contract 1.2.0) and scans every result at the fixed 0.85 default at
-    trust tier `standard` (`config.yaml`'s `promptguard_threshold` is not
-    applied there). This documents today's divergence; changing it belongs
-    to `epic-forage-hardening`.
+    (contract 1.2.0) and scans every result at trust tier `standard`. On both
+    routes, an omitted or null threshold uses the validated `config.yaml`
+    default (shipped as 0.85), then `promptguard_threshold_ceiling` bounds the
+    requested or default value.
     """
     retrieve_metrics: RetrieveMetrics = request.app.state.retrieve_metrics
     retrieve_metrics.requests += 1
@@ -1870,9 +1903,12 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
         retrieve_metrics.policy_invalid_domain_entry += (
             trusted_dropped + verified_dropped + blocked_dropped
         )
+        policy = _promptguard_policy_updates(
+            body, retrieve_settings, request.app.state.promptguard_threshold_default
+        )
         body = body.model_copy(
             update={
-                **_promptguard_policy_updates(body, retrieve_settings),
+                **policy,
                 "trusted_domains": trusted_domains,
                 "verified_domains": verified_domains,
                 "blocked_domains": blocked_domains,
@@ -1884,6 +1920,7 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
             classifier=request.app.state.classifier,
             config=request.app.state.config,
             sanitizer_revision=_resolved_sanitizer_revision(request.app.state),
+            promptguard_threshold=policy["promptguard_threshold"],
             settings=retrieve_settings,
             retrieve_metrics=retrieve_metrics,
             classification_semaphore=request.app.state.classification_semaphore,
@@ -1896,8 +1933,8 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
     retrieve_metrics.record_content(content)
     return content.model_copy(
         update={
-            "effective_promptguard_fail_closed": body.promptguard_fail_closed,
-            "effective_promptguard_threshold": body.promptguard_threshold,
+            "effective_promptguard_fail_closed": policy["promptguard_fail_closed"],
+            "effective_promptguard_threshold": policy["promptguard_threshold"],
         }
     )
 
@@ -2080,20 +2117,23 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
     `/retrieve` fetches and sanitizes one caller-named URL through the full
     pipeline, cached by `sanitizer_revision`.
 
-    `promptguard_fail_closed` and `blocked_domains` are honoured on both routes;
+    `promptguard_fail_closed`, `promptguard_threshold` and `blocked_domains` are
+    honoured on both routes;
     `/search` additionally honours `providers` and `allow_paid_fallback` (contract
-    1.2.0) and scans every result at the fixed 0.85 default at trust tier
-    `standard` (`config.yaml`'s `promptguard_threshold` is not applied
-    here), while `/retrieve` additionally honours `promptguard_threshold`,
-    `trusted_domains`, `verified_domains` and
-    `cache_ttl_hours`. This documents today's divergence; changing it
-    belongs to `epic-forage-hardening`.
+    1.2.0) and scans every result at trust tier `standard`, while `/retrieve`
+    additionally honours `trusted_domains`, `verified_domains` and
+    `cache_ttl_hours`. On both routes, an omitted or null threshold uses the
+    validated `config.yaml` default (shipped as 0.85), then
+    `promptguard_threshold_ceiling` bounds the requested or default value.
     """
     search_metrics: SearchMetrics = request.app.state.search_metrics
     search_metrics.requests += 1
-    body = body.model_copy(
-        update=_promptguard_policy_updates(body, request.app.state.retrieve_settings)
+    policy = _promptguard_policy_updates(
+        body,
+        request.app.state.retrieve_settings,
+        request.app.state.promptguard_threshold_default,
     )
+    body = body.model_copy(update=policy)
     configured_chain = _resolved_search_providers(request.app.state)
     effective_chain, ignored_count = apply_request_policy(configured_chain, body)
     search_metrics.policy_unknown_provider += ignored_count
@@ -2126,6 +2166,7 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
             blocked_domains=blocked_domains,
             config=request.app.state.config,
             classifier=request.app.state.classifier,
+            promptguard_threshold=policy["promptguard_threshold"],
             search_metrics=search_metrics,
             classification_semaphore=request.app.state.classification_semaphore,
             classification_wait_seconds=(
@@ -2137,5 +2178,8 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
         raise
     search_metrics.record_response(response)
     return response.model_copy(
-        update={"effective_promptguard_fail_closed": body.promptguard_fail_closed}
+        update={
+            "effective_promptguard_fail_closed": policy["promptguard_fail_closed"],
+            "effective_promptguard_threshold": policy["promptguard_threshold"],
+        }
     )

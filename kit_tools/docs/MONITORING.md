@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document logs, metrics, alerts, and dashboards. How to observe the system.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-002)
+> Updated by: Copilot (hardening-hostname-and-config US-005)
 
 ---
 
@@ -260,7 +260,7 @@ All are `logging.getLogger(__name__)`: `retrieval_app`, `cache`, `model_fetcher`
 | WARNING | `Content cache not available at startup` | `VALKEY_URL` set and the 2 s connect+ping deadline failed. |
 | WARNING | `PromptGuard model not available — ML injection detection disabled` (with traceback, `exc_info=True`) | The verified weight set failed to load (torch/transformers); followed by ERROR `weights_load_failed`. |
 
-Dropped (INFO): `Sidecar config loaded (<n> keys); contract_version=<v>`, `Content cache connected (valkey|memory)`, `PromptGuard 2 model loaded successfully`. A boot that fails outright (bad `extraction:` or `cache:` value in `config.yaml`) exits the container with a traceback in `docker logs`.
+Dropped (INFO): `Sidecar config loaded (<n> keys); contract_version=<v>`, `Content cache connected (valkey|memory)`, `PromptGuard 2 model loaded successfully`, `promptguard_threshold_resolved — value=<validated-default>` (once per boot, before the operator ceiling). Invalid threshold defaults instead emit one WARNING `config_invalid_value — key=promptguard_threshold. /extract reads the raw value through its own guard`, never the value; only the fetch routes fall back to 0.85. A boot that fails outright (bad `extraction:` or `cache:` value in `config.yaml`) exits the container with a traceback in `docker logs`.
 
 ### Closed vocabularies
 

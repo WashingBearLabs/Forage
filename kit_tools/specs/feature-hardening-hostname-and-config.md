@@ -1600,6 +1600,99 @@ and the same for `kit_tools/arch/SERVICE_MAP.md` each return at least `1`; the f
   that acceptance gate remains for the orchestrator. No unrelated test repair,
   story-definition edit or acceptance-checkbox change was made.
 
+### US-005 — shared configured PromptGuard threshold (2026-09-22, Copilot)
+
+- Both request models now use nullable, bounded `promptguard_threshold`, with
+  null/omitted selecting the boot-validated default before the operator ceiling.
+  `_promptguard_policy_updates` returns a TypedDict so the handler owns narrowing
+  and passes an explicit float to both pipelines without a cast or suppression.
+  The request is still replaced once. Retrieve classification and its cache
+  fingerprint consume that one keyword, never the nullable request field;
+  both successful responses are stamped after the pipeline.
+- `promptguard_threshold_from_config` reuses `bounded_float`, preserving quoted
+  numeric strings but rejecting bool, invalid types, out-of-range/non-finite
+  values and oversized integers. A bad default warns once, key only, explicitly
+  naming `/extract`'s raw guard, and uses 0.85 without refusing boot. The validated
+  default is published separately and logged once at INFO; the raw config is
+  unchanged. `/extract`'s AST is unchanged, including
+  its existing error mapping and YAML `true` becoming 1.0; an actual boot and
+  three-route regression pins that divergence.
+- Regressions cover score 0.6 at default 0.5 versus explicit 0.85, default-before-
+  ceiling at 0.85/0.5, explicit zero, all nullable model bounds, single-source
+  keyword isolation, and equal cache keys for null/explicit default/capped
+  equivalent requests. No socket guard was relaxed.
+- Held contract 1.3.0: continuation line, regenerated OpenAPI and failure fixture,
+  current golden re-created through `_SCHEMA_MODELS`, exactly two additions in
+  the expected diff, every older golden retained unchanged. Anchor
+  `83242c6917cacb809b92f24b3b1b94fc1c149bfc0835e1c09a9c39ed86bbd81b`
+  matches all four quotations. GOVERNANCE ruling (i) records the MINOR
+  classification; the marker tuple and count words now say ten. The
+  whitespace-normalizing regression checks all five authored files and all
+  four generated descriptions, and pins both API-guide table rows.
+- Operator, security, architecture, logging and monitoring docs now describe
+  both fetch routes' policy. Configuration and release handoff state the upgrade
+  in both directions: values above 0.85 loosen fetch blocking unless capped,
+  values below tighten it; the old upload-only config knob is gone and the
+  content cache re-keys. Raw versus active hash/fingerprint inputs are explicit.
+- Thirtieth rotation, **eighth policy-driven sanitization change for tuned
+  deployments**: `de1cea65…` → `e00049c4…`. Only `orchestrator.py` and
+  `contract.py` move among hashed sources. Each read-only reversal was measured
+  under default and shipped config; both-reverted reproduces the clean
+  `6cc45cf` baseline exactly. All five records updated; shipped 0.85 behavior,
+  text-scanning algorithms and the raw configured hash input are unchanged.
+- Validation: **1,151 related tests passed plus 15 admission tests in a separate
+  process**. Repository Ruff lint/format, strict Pyright, export `--check`,
+  historical-golden preservation, unchanged `/extract` AST, final revision and
+  `git diff --check` pass. The previously inherited admission formatting drift
+  was mechanically cleared because the required pipeline keyword now changes
+  that file; no unrelated formatter run was applied.
+- **Readiness remains partial / needs-work.** Combined test order exposes an
+  inherited leak: `test_two_retrieve_classifications_serialise_through_the_permit`
+  overlaps `_retrieve_under`'s global fetch mocks across coroutines, leaving
+  `orchestrator.fetch_url` mocked after teardown; the two subsequent admission
+  streaming-deadline cases time out. A temporary untouched `6cc45cf` source
+  snapshot reproduced exactly those failures (345 passed, 2 failed).
+  Separate-process success is not a gate waiver; this unrelated test defect
+  was not repaired here. Full-suite execution remains the orchestrator's gate
+  because implementer instructions prohibit it. Six existing non-failing
+  warnings (five unavailable-cache socket warnings and one Torch deprecation)
+  remain visible. No story definition or acceptance checkbox changed.
+
+### US-005 retry 2 — concurrent test isolation (2026-09-22, Copilot)
+
+- Reapplied preserved `ec8d698` onto its exact clean `6cc45cf` base without
+  changing production threshold behavior. The previous attempt's notes above
+  remain historical; this retry resolves its combined-test readiness blocker.
+- `_retrieve_under` no longer owns any process-global patches. Every caller
+  uses one test-scoped `_mock_retrieve_io` fixture, installed before concurrent
+  tasks start and restored after their cleanup; teardown asserts both original
+  function identities. No real fetcher is replaced in the admission deadline
+  tests to hide the leak.
+- The three retrieve/retrieve, retrieve/search and retrieve/extract
+  serialization tests wait for an explicit worker-entered event and a bounded
+  semaphore-waiter condition instead of fixed `sleep(0)` iteration counts.
+  Their assertions still prove the competing classifier cannot start early.
+  Gates are released and tasks cancelled/drained in `finally`; cancellation,
+  admission-deadline startup and body-lifetime tests also drain their tasks on
+  assertion failure. Single scheduler yields between deliberate repeated
+  `Task.cancel()` calls remain intentional, not worker-start synchronization.
+- Validation: the required orchestrator/admission pair passes **347 tests**;
+  the final single-process selection passes **1,196 tests across sixteen
+  related modules**, including that pair, threshold policy, boot, cache,
+  model, contract, search policy and PromptGuard regressions. Repository Ruff
+  lint/format, strict Pyright, export `--check` and `git diff --check` pass.
+  Six pre-existing non-failing warnings remain visible (five unavailable-cache
+  socket warnings and one upstream Torch deprecation); no guard was relaxed.
+- Re-ran the exporter and regenerated the held golden through `_SCHEMA_MODELS`;
+  output is byte-identical to the preserved implementation. All older goldens,
+  `/extract`'s AST, four anchor quotations, both single-file read-only revision
+  reversals and the combined control pass again under default and shipped
+  config. The thirtieth rotation stays `de1cea65…` → `e00049c4…`; the retry's
+  test/documentation-only repair adds no rotation.
+- Story implementation is ready for verification. The full-suite acceptance
+  gate is explicitly deferred to end-of-epic validation per retry instructions,
+  not claimed as passed. No story definition or acceptance checkbox changed.
+
 ## Refinement Notes
 
 ### Research Findings

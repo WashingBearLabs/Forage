@@ -2,7 +2,7 @@
 # TESTING_GUIDE.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-retrieve-parity US-005)
+> Updated by: Copilot (hardening-hostname-and-config US-005)
 
 ## Quick Start
 
@@ -111,6 +111,18 @@ status-aware `wait_for_health` and `--anchor` tests); the `test_search_providers
 `test_brave_provider.py` rows below were re-measured on 2026-09-19 (`pytest --collect-only`),
 the rest not since 2026-09-10).
 
+**US-005 retry validation (2026-09-22).** The explicit orchestrator-then-admission
+pair passes **347 tests**; the combined threshold/story selection across sixteen
+modules passes **1,196 tests in one process**. The inherited global-patch leak
+is repaired: `_mock_retrieve_io` owns URL/fetch mocks once per test, outside all
+concurrent `_retrieve_under` calls and their cleanup. Classification tests wait
+for an entered event and a queued semaphore waiter, not a fixed number of
+`sleep(0)` turns. Gates open and outstanding tasks are cancelled/drained in
+`finally`, including deadline-test startup failures. Fixture teardown checks
+both patched functions' original identities. Ruff lint/format, strict Pyright
+and contract drift checks pass. The full suite remains an end-of-epic gate;
+the story implementer did not run it.
+
 | Module | Tests | Covers |
 |--------|------:|--------|
 | `tests/test_model_fetcher.py` | 212 | `model_fetcher.py`: fail-closed manifest verification, exact-set + safetensors-only allowlist, symlink-resolving hashing, one-generation quarantine, the loadable safetensors fixture, the acquisition pipeline (revision pin, `$HF_HOME/hub` resolution, the mocked HF fetch, the `oras` mirror leg, token redaction), and US-005's warm start + retry loop — the counted-attempt proof that a warm load reaches no network, the normative 30 s→10 min jittered schedule, quarantine→re-fetch→loaded recovery on the real loader, single-flight, and clean cancellation |
@@ -125,8 +137,8 @@ the rest not since 2026-09-10).
 | `tests/test_stage1_extraction.py` | 66 | HTML extraction, `raw_text` vs `main_content`, shared config bounds including non-finite numbers and oversized integers (measured at US-005 retry) |
 | `tests/test_stage4_structuring.py` | 39 | Response assembly + composite trust score |
 | `tests/test_models.py` | 31 | Pydantic request/response models |
-| `tests/test_app.py` | 169 | FastAPI endpoints, `/health`, capability break-glass, `/metrics`, provider policy, and lifespan wiring; includes closed-message boot refusal for invalid operator policy types/ranges and oversized YAML integers, and publication of validated non-default bounds (measured at US-005 retry) |
-| `tests/test_promptguard_policy.py` | 81 | Handler-side policy resolution, field-name guard, absent/contended classifier floors on both fetch routes, trusted/VERIFIED exemptions, threshold scope, effective cache fingerprints, stamped hits (including old entries), unchanged `/extract` and policy-free 422s |
+| `tests/test_app.py` | 236 | FastAPI endpoints, `/health`, capability break-glass, `/metrics`, provider policy, and lifespan wiring; closed-message policy bound refusals, threshold-default warning/fallback for invalid values (including booleans, non-finite and oversized numbers), numeric strings, once-only INFO default publication, and the unchanged `/extract` boolean divergence (recounted at hostname/config US-005) |
+| `tests/test_promptguard_policy.py` | 131 | Handler-side policy resolution, field-name guard, nullable bounded thresholds on both routes, default-before-ceiling classification and zero preservation, null/explicit/capped cache-key equivalence, resolved-keyword isolation, absent/contended classifier floors, trusted/VERIFIED exemptions, stamped hits (including old entries), unchanged `/extract` and policy-free 422s (recounted at hostname/config US-005) |
 | `tests/test_stage3_promptguard.py` | 30 | ML scan; transformers/torch mocked |
 | `tests/test_ci_workflow.py` | 279 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane, image build + secret-grep gate, smoke job + artifact handoff, both publish lanes (tag policies evaluated, not matched), the cross-fire guards between them, and — since US-003 — the image↔contract mapping: the version is read from the tagged tree, the Release body is written from it, the published body is read back and asserted, and no version literal may appear in the job's shell. US-004 adds the Release assets (attached by the create call, downloaded back and verified against the committed anchor), the reproducible-export guards: one identical SOURCE_DATE_EPOCH script in all four building jobs, `rewrite-timestamp=true` on every exporter, and the longhand `type=docker` / `type=image,push=true` forms that can carry it, and (`search-release` US-004) the `CONTRACT_VERSION` docstring-entry extractor: the POSIX awk program sliced out of the publish job's read step is run through `subprocess` against the real `pipeline/contract.py` and against a hostile synthetic module (a backtick span, `$(id)`, a mid-line `*`, an indented bullet look-alike, an `EOF` line, a `version=forged` line and a mid-line `"""`), plus the static assertions that the read step uses no `python3`/`uv`/`scripts/`, the create step appends the entry from a notes file via `--notes-file`, and the read-back checks it with a fixed-string `grep -qF` |
 | `tests/test_compose_fragments.py` | 62 | Compose fragments, parse-only shape guards (audit: row was missing), and (`search-release` US-004) the `forage:1.1.0` pin and the `FORAGE_SEARCH_PROVIDERS` / `FORAGE_BRAVE_API_KEY` bare-name passthrough on the `forage` service in both fragments |
@@ -245,7 +257,7 @@ test_mapping:
   "models.py": ["tests/test_models.py", "tests/test_promptguard_policy.py", "tests/test_contract_errors.py", "tests/test_contract_export.py"]
   "cache.py": "tests/test_cache.py"
   "url_validator.py": "tests/test_url_validator.py"
-  "pipeline/orchestrator.py": "tests/test_orchestrator.py"
+  "pipeline/orchestrator.py": ["tests/test_orchestrator.py", "tests/test_promptguard_policy.py", "tests/test_retrieve_admission.py"]
   "pipeline/contract.py": ["tests/test_contract_schema.py", "tests/test_contract_errors.py", "tests/test_contract_export.py"]
   "pipeline/sanitizer_revision.py": ["tests/test_sanitizer_revision.py", "tests/test_governance_docs.py"]
   "model_fetcher.py": ["tests/test_model_fetcher.py", "tests/test_app.py"]

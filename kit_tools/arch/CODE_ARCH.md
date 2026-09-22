@@ -2,7 +2,7 @@
 # CODE_ARCH.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-002)
+> Updated by: Copilot (hardening-hostname-and-config US-005)
 
 ---
 
@@ -158,7 +158,7 @@ would detach the still-running thread and release admission early.
 **The sanitizer revision is a content hash of source files *and of the model pin*.**
 `sanitizer_revision.py` resolves `_REVISION_SOURCES` relative to its own file and
 `_ROOT_REVISION_SOURCES` against its parent, and hashes the nine files in that order, then
-the model identity (`MODEL_ID@revision`), then `idna@<version>`, then the active threshold;
+the model identity (`MODEL_ID@revision`), then `idna@<version>`, then the configured threshold;
 the value ships in every `/health` body and response envelope so a consumer can tell which
 sanitizer version produced a result. Editing any of those nine files — or bumping `idna`,
 whose UTS-46 tables decide which hosts the search audit drops and `validate_url` refuses —
@@ -277,6 +277,17 @@ Only `orchestrator.py` and `contract.py` move in the hash. Both read-only
 individual reversals were measured, and the both-reverted control reproduces
 `c8a907cf…` under default and shipped config. The five-field baseline with no new
 request field and an empty seed list is unchanged, as is text sanitization.
+The thirtieth (`de1cea65…` → `e00049c4…`) is the **eighth policy-driven
+sanitization-behaviour change**, bounded to tuned deployments and caller
+overrides (`hardening-hostname-and-config` US-005). Both fetch routes resolve
+null/omitted threshold to boot-validated config, then cap it. `orchestrator.py`
+replaces its two request-field reads with one required resolved-float keyword;
+`contract.py` announces the search request/response additions and defaults.
+Only those two hashed files move; individual read-only reversals were measured,
+and both-reverted reproduces `de1cea65…` under default and shipped config.
+Shipped 0.85 behavior, text-scanning algorithms and `/extract`'s raw guard are
+unchanged. The configured raw value still feeds the revision; the active float
+feeds `cache_policy_fingerprint`. Full measurements: `docs/bootstrap-notes.md`.
 Nothing downstream may assume Poppy↔Forage revision parity.
 
 **Domain lists cross boundaries as canonical strings.** `url_validator.py` owns the
@@ -292,12 +303,15 @@ normalisation belongs to the handler, never to the comparison sites.
 **Operator policy is resolved in the handler, once.** `_promptguard_policy_updates`
 returns the fields for one `model_copy` after asserting update keys against
 `model_fields`: both routes apply `request.promptguard_fail_closed or floor`,
-and `/retrieve` alone applies `min(request.promptguard_threshold, ceiling)`.
-The pipeline and `cache_policy_fingerprint` therefore read the same effective values;
-no parallel pipeline argument can bypass the cache key. Each handler stamps its
+and both select the boot-validated default for null/omitted thresholds **before**
+applying `min(value, ceiling)`. The typed resolver gives each pipeline an explicit
+float; the retrieve pipeline uses that same keyword for classification and
+`cache_policy_fingerprint`, never reading the nullable request field.
+Each handler stamps its
 response after the pipeline, including hits with missing or stale stored policy
 fields. The fields report policy, not scanning; trusted-tier skip and VERIFIED
-fail-open remain exemptions, `/search` keeps fixed `0.85`, and `/extract` is untouched.
+fail-open remain exemptions, `/search` stays STANDARD, and `/extract` keeps its raw
+`float()` and range guard (including YAML `true` becoming 1.0 there only).
 
 US-007 adds canonical domain lists to that same `/retrieve` request replacement.
 The handler checks the raw denylist byte size before any entry canonicalisation;

@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from cache import ContentCache, cache_policy_fingerprint
 from models import (
@@ -20,6 +21,7 @@ from models import (
     SearchResponse,
     TrustTier,
 )
+from pipeline import orchestrator
 from pipeline.extraction_limits import extraction_settings_from_config
 from pipeline.orchestrator import PipelineError
 from pipeline.retrieve_limits import RetrieveSettings
@@ -56,6 +58,7 @@ async def client(
     admission = ExtractionAdmissionController.from_retrieve_settings(settings, metrics)
     state: dict[str, object] = {
         "config": config,
+        "promptguard_threshold_default": 0.95,
         "retrieve_settings": settings,
         "policy_domain_entries_max_bytes": 65536,
         "extraction_settings": extraction_settings,
@@ -121,9 +124,9 @@ def _classifier(score: float) -> MagicMock:
 @pytest.mark.parametrize("floor", [False, True])
 @pytest.mark.parametrize("flag", [False, True])
 @pytest.mark.parametrize("ceiling", [0.0, 0.5, 1.0])
-@pytest.mark.parametrize("threshold", [0.0, 0.25, 0.85, 1.0])
+@pytest.mark.parametrize("threshold", [None, 0.0, 0.25, 0.85, 1.0])
 def test_policy_copies_only_declared_fields_without_mutating_the_caller(
-    floor: bool, flag: bool, ceiling: float, threshold: float
+    floor: bool, flag: bool, ceiling: float, threshold: float | None
 ) -> None:
     settings = RetrieveSettings(
         promptguard_fail_closed_floor=floor,
@@ -132,14 +135,19 @@ def test_policy_copies_only_declared_fields_without_mutating_the_caller(
     retrieve = RetrieveRequest(
         url=_URL, promptguard_fail_closed=flag, promptguard_threshold=threshold
     )
-    search = SearchRequest(query="gardening", promptguard_fail_closed=flag)
+    search = SearchRequest(
+        query="gardening", promptguard_fail_closed=flag, promptguard_threshold=threshold
+    )
     for body in (retrieve, search):
         original = body.model_dump()
-        updates = _promptguard_policy_updates(body, settings)
+        updates = _promptguard_policy_updates(body, settings, 0.85)
         effective = body.model_copy(update=updates)
-        expected: dict[str, bool | float] = {"promptguard_fail_closed": flag or floor}
-        if isinstance(body, RetrieveRequest):
-            expected["promptguard_threshold"] = min(threshold, ceiling)
+        expected: dict[str, bool | float] = {
+            "promptguard_fail_closed": flag or floor,
+            "promptguard_threshold": min(
+                0.85 if threshold is None else threshold, ceiling
+            ),
+        }
         assert updates == expected
         assert expected.keys() <= type(body).model_fields.keys()
         assert effective.model_dump() == original | expected
@@ -157,7 +165,7 @@ def test_unknown_policy_update_keys_fail_before_model_copy(
     del fields["promptguard_fail_closed"]
     monkeypatch.setattr(type(body), "model_fields", fields)
     with pytest.raises(AssertionError):
-        _promptguard_policy_updates(body, RetrieveSettings())
+        _promptguard_policy_updates(body, RetrieveSettings(), 0.85)
 
 
 @pytest.mark.parametrize("tier", [TrustTier.STANDARD, TrustTier.UNTRUSTED])
@@ -208,7 +216,7 @@ async def test_search_floor_omits_unavailable_results(
     assert body["omitted_by_reason"] == {"promptguard_unavailable": 1}
     assert body["promptguard_unavailable"] is True
     assert body["effective_promptguard_fail_closed"] is True
-    assert "effective_promptguard_threshold" not in body
+    assert body["effective_promptguard_threshold"] == 0.5
     assert app.state.search_metrics.classification_wait_timeouts == (
         1 if unavailable == "wait-timeout" else 0
     )
@@ -221,6 +229,7 @@ async def test_default_operator_settings_preserve_the_callers_policy(
     client: httpx.AsyncClient, route: str, flag: bool
 ) -> None:
     app.state.retrieve_settings = RetrieveSettings()
+    app.state.promptguard_threshold_default = 0.85
     request: dict[str, object] = {"promptguard_fail_closed": flag}
     request.update({"url": _URL} if route == "/retrieve" else {"query": "gardening"})
     response = await client.post(route, json=request)
@@ -275,7 +284,7 @@ async def test_trust_exemptions_are_not_overridden_by_the_floor(
     )
 
 
-async def test_ceiling_changes_retrieve_classification_but_not_search_or_extract(
+async def test_ceiling_changes_both_fetch_routes_but_not_extract(
     client: httpx.AsyncClient,
 ) -> None:
     classifier = _classifier(0.7)
@@ -290,9 +299,9 @@ async def test_ceiling_changes_retrieve_classification_but_not_search_or_extract
 
     search = await client.post("/search", json={"query": "gardening"})
     assert search.status_code == 200
-    assert len(search.json()["results"]) == 1
+    assert search.json()["omitted_by_reason"] == {"injection_detected": 1}
     assert search.json()["effective_promptguard_fail_closed"] is True
-    assert "effective_promptguard_threshold" not in search.json()
+    assert search.json()["effective_promptguard_threshold"] == 0.5
 
     extract = await client.post(
         "/extract",
@@ -446,7 +455,10 @@ def test_effective_field_defaults_and_scanning_scope_are_pinned() -> None:
             RetrievedContent,
             {"effective_promptguard_fail_closed", "effective_promptguard_threshold"},
         ),
-        (SearchResponse, {"effective_promptguard_fail_closed"}),
+        (
+            SearchResponse,
+            {"effective_promptguard_fail_closed", "effective_promptguard_threshold"},
+        ),
         (ExtractedContent, set[str]()),
     ):
         assert {
@@ -459,3 +471,136 @@ def test_effective_field_defaults_and_scanning_scope_are_pinned() -> None:
             assert "not whether" in description
             assert "trusted_tier" in description
             assert "VERIFIED" in description
+
+
+@pytest.mark.parametrize("model", [RetrieveRequest, SearchRequest])
+@pytest.mark.parametrize("threshold", [None, 0.0, 0.5, 1.0])
+def test_nullable_request_threshold_accepts_bounds(
+    model: type[RetrieveRequest] | type[SearchRequest], threshold: float | None
+) -> None:
+    body = {"url": _URL} if model is RetrieveRequest else {"query": "gardening"}
+    request = model.model_validate(body | {"promptguard_threshold": threshold})
+    assert request.promptguard_threshold == threshold
+    assert model.model_validate(body).promptguard_threshold is None
+
+
+@pytest.mark.parametrize("model", [RetrieveRequest, SearchRequest])
+@pytest.mark.parametrize("threshold", [-0.1, 1.7, "abc", float("nan"), float("inf")])
+def test_request_threshold_rejects_invalid_values(
+    model: type[RetrieveRequest] | type[SearchRequest], threshold: object
+) -> None:
+    body = {"url": _URL} if model is RetrieveRequest else {"query": "gardening"}
+    with pytest.raises(ValidationError):
+        model.model_validate(body | {"promptguard_threshold": threshold})
+
+
+@pytest.mark.parametrize("route", ["/retrieve", "/search"])
+@pytest.mark.parametrize(
+    "requested",
+    [
+        {},
+        {"promptguard_threshold": None},
+        {"promptguard_threshold": 0.85},
+        {"promptguard_threshold": 0.0},
+    ],
+)
+@pytest.mark.parametrize(("default", "ceiling"), [(0.5, 1.0), (0.85, 0.5)])
+async def test_both_routes_classify_at_resolved_default_then_ceiling(
+    client: httpx.AsyncClient,
+    route: str,
+    requested: dict[str, float | None],
+    default: float,
+    ceiling: float,
+) -> None:
+    app.state.promptguard_threshold_default = default
+    # This intentionally disagrees: handlers must use the boot-validated state.
+    app.state.config["promptguard_threshold"] = 1.0
+    app.state.retrieve_settings = RetrieveSettings(
+        promptguard_threshold_ceiling=ceiling
+    )
+    app.state.classifier = _classifier(0.6)
+    value = requested.get("promptguard_threshold")
+    expected = min(default if value is None else value, ceiling)
+    body = {"url": _URL} if route == "/retrieve" else {"query": "gardening"}
+    with (
+        patch(
+            "pipeline.orchestrator.run_promptguard", wraps=orchestrator.run_promptguard
+        ) as scan,
+        patch(
+            "pipeline.orchestrator.cache_policy_fingerprint",
+            wraps=cache_policy_fingerprint,
+        ) as fingerprint,
+    ):
+        response = await client.post(route, json=body | requested)
+    assert response.status_code == 200
+    result = response.json()
+    assert result["effective_promptguard_threshold"] == expected
+    assert scan.call_count == 1
+    assert scan.call_args.kwargs["threshold"] == expected
+    if route == "/retrieve":
+        assert result["injection_detected"] is (expected < 0.6)
+        fingerprint.assert_called_once()
+        assert fingerprint.call_args.kwargs["promptguard_threshold"] == expected
+    else:
+        assert len(result["results"]) == (0 if expected < 0.6 else 1)
+        assert result["omitted_by_reason"] == (
+            {"injection_detected": 1} if expected < 0.6 else {}
+        )
+
+
+async def test_null_explicit_default_and_ceiling_use_expected_cache_keys(
+    client: httpx.AsyncClient,
+) -> None:
+    storage = FakeStorage()
+    app.state.cache = ContentCache(storage=storage)
+    app.state.classifier = _classifier(0.1)
+    app.state.promptguard_threshold_default = 0.5
+    app.state.retrieve_settings = RetrieveSettings()
+    fingerprints: list[str] = []
+    with patch(
+        "pipeline.orchestrator.cache_policy_fingerprint", wraps=cache_policy_fingerprint
+    ) as fingerprint:
+        for ceiling in (1.0, 0.25):
+            app.state.retrieve_settings = RetrieveSettings(
+                promptguard_threshold_ceiling=ceiling
+            )
+            effective = min(0.5, ceiling)
+            for index, requested in enumerate((None, 0.5, effective)):
+                response = await client.post(
+                    "/retrieve", json={"url": _URL, "promptguard_threshold": requested}
+                )
+                assert response.status_code == 200
+                assert response.json()["cache_hit"] is (index != 0)
+                assert response.json()["effective_promptguard_threshold"] == effective
+                kwargs = fingerprint.call_args.kwargs
+                assert kwargs["promptguard_threshold"] == effective
+                fingerprints.append(cache_policy_fingerprint(**kwargs))
+    assert len(storage.entries) == 2
+    assert len(set(fingerprints[:3])) == len(set(fingerprints[3:])) == 1
+    assert fingerprints[0] != fingerprints[3]
+    assert storage.set_calls == 2
+
+
+@pytest.mark.parametrize("request_threshold", [None, 0.0, 1.0])
+async def test_retrieve_pipeline_uses_only_the_resolved_threshold_keyword(
+    client: httpx.AsyncClient, request_threshold: float | None
+) -> None:
+    with patch(
+        "pipeline.orchestrator.cache_policy_fingerprint",
+        wraps=cache_policy_fingerprint,
+    ) as fingerprint:
+        content = await orchestrator.run_retrieve_pipeline(
+            RetrieveRequest(url=_URL, promptguard_threshold=request_threshold),
+            promptguard_threshold=0.5,
+            classifier=_classifier(0.6),
+            cache=None,
+            config=app.state.config,
+            sanitizer_revision=app.state.sanitizer_revision,
+            settings=app.state.retrieve_settings,
+            retrieve_metrics=app.state.retrieve_metrics,
+            classification_semaphore=app.state.classification_semaphore,
+            extraction_settings=app.state.extraction_settings,
+            admission=app.state.retrieve_admission,
+        )
+    assert content.injection_detected is True
+    assert fingerprint.call_args.kwargs["promptguard_threshold"] == 0.5

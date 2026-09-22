@@ -446,6 +446,8 @@ _ONE_THREE_ZERO_DIFFED_SCHEMAS = (
 _EXPECTED_ONE_THREE_ZERO_DIFF: frozenset[str] = frozenset(
     {
         "SearchRequest.blocked_domains",
+        "SearchRequest.promptguard_threshold",
+        "SearchResponse.effective_promptguard_threshold",
         "RetrievedContent.effective_promptguard_fail_closed",
         "RetrievedContent.effective_promptguard_threshold",
         "SearchResponse.effective_promptguard_fail_closed",

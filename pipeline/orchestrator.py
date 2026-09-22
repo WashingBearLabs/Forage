@@ -334,6 +334,7 @@ async def run_retrieve_pipeline(
     classifier: PromptGuardClassifier | None,
     config: dict[str, Any],
     sanitizer_revision: str,
+    promptguard_threshold: float,
     settings: RetrieveSettings,
     retrieve_metrics: RetrieveMetricsSink,
     classification_semaphore: asyncio.Semaphore,
@@ -363,6 +364,9 @@ async def run_retrieve_pipeline(
         defaulted limits parameter would be the second, unbounded limits path
         this spec exists to prevent, exactly as
         ``run_extract_pipeline_from_file`` takes its ``ExtractionSettings``.
+    promptguard_threshold:
+        Handler-resolved threshold, shared by classification and the cache
+        fingerprint. The nullable request field is never read here.
     retrieve_metrics:
         The ``/metrics`` retrieve counters this pipeline increments directly.
     classification_semaphore:
@@ -399,7 +403,7 @@ async def run_retrieve_pipeline(
         trusted_domains=request.trusted_domains,
         verified_domains=request.verified_domains,
         blocked_domains=blocked_domains,
-        promptguard_threshold=request.promptguard_threshold,
+        promptguard_threshold=promptguard_threshold,
         promptguard_fail_closed=request.promptguard_fail_closed,
         classifier_loaded=classifier_loaded,
         sanitizer_revision=sanitizer_revision,
@@ -633,7 +637,7 @@ async def run_retrieve_pipeline(
             extraction=extraction,
             trust_tier=trust_tier,
             classifier=classifier,
-            promptguard_threshold=request.promptguard_threshold,
+            promptguard_threshold=promptguard_threshold,
             promptguard_fail_closed=request.promptguard_fail_closed,
             extract_mode=request.extract_mode,
             content_type=content_type,

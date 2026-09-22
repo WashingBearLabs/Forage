@@ -110,6 +110,7 @@ def client() -> httpx.AsyncClient:
     app.state.cache = FakeContentCache()
     app.state.config = {"extract_route_enabled": True}
     app.state.retrieve_settings = retrieve_settings_from_config(app.state.config)
+    app.state.promptguard_threshold_default = 0.85
     app.state.policy_domain_entries_max_bytes = 65536
     settings = extraction_settings_from_config(app.state.config)
     app.state.extraction_settings = settings
@@ -709,7 +710,10 @@ def test_retrieve_copies_once_and_comparison_sites_never_normalize() -> None:
     assert {
         key.value for key in update.value.keys if isinstance(key, ast.Constant)
     } == {"trusted_domains", "verified_domains", "blocked_domains"}
-    assert "_promptguard_policy_updates(body, retrieve_settings)" in source
+    assert (
+        "_promptguard_policy_updates( body, retrieve_settings, "
+        "request.app.state.promptguard_threshold_default )" in " ".join(source.split())
+    )
     root = Path(__file__).resolve().parent.parent
     for filename in ("pipeline/orchestrator.py", "cache.py"):
         assert "normalize_domain_entries(" not in (root / filename).read_text()
@@ -1704,6 +1708,157 @@ async def test_lifespan_domain_budget_warns_and_falls_back_without_echoing_value
 
 def test_shipped_domain_budget_is_64_kib() -> None:
     assert retrieval_app._load_config()["policy_domain_entries_max_bytes"] == 65536
+
+
+@pytest.mark.parametrize(
+    ("config", "expected", "warn"),
+    [
+        (dict[str, Any](), 0.85, False),
+        *[
+            ({"promptguard_threshold": value}, 0.85, True)
+            for value in (
+                "abc",
+                -0.1,
+                1.7,
+                True,
+                False,
+                None,
+                list[str](),
+                dict[str, object](),
+                float("nan"),
+                float("inf"),
+                -float("inf"),
+                10**400,
+                -(10**400),
+            )
+        ],
+        *[
+            ({"promptguard_threshold": value}, float(value), False)
+            for value in ("0.85", "0.5", 0, 1, 0.5)
+        ],
+    ],
+)
+async def test_lifespan_validates_threshold_once_without_mutating_raw_config(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    config: dict[str, Any],
+    expected: float,
+    warn: bool,
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    monkeypatch.setattr(app, "state", type(app.state)())
+    with caplog.at_level(logging.INFO, logger="retrieval_app"):
+        async with _running_app():
+            assert app.state.promptguard_threshold_default == expected
+            if "promptguard_threshold" in config:
+                assert (
+                    app.state.config["promptguard_threshold"]
+                    is config["promptguard_threshold"]
+                )
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+        and "config_invalid_value" in record.getMessage()
+    ]
+    assert warnings == (
+        [
+            "config_invalid_value — key=promptguard_threshold. "
+            "/extract reads the raw value through its own guard"
+        ]
+        if warn
+        else []
+    )
+    resolved = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.INFO
+        and "promptguard_threshold_resolved" in record.getMessage()
+    ]
+    assert resolved == [f"promptguard_threshold_resolved — value={expected}"]
+
+
+async def test_boolean_threshold_keeps_extracts_raw_coercion_only(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _park_the_retry(monkeypatch)
+    raw = {"promptguard_threshold": True, "extract_route_enabled": True}
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: raw)
+    monkeypatch.setattr(app, "state", type(app.state)())
+    async with _running_app() as session:
+        assert app.state.promptguard_threshold_default == 0.85
+        classifier = MagicMock(spec=PromptGuardClassifier)
+        classifier.loaded = True
+        classifier.classify.return_value = (0.9, [])
+        app.state.classifier = classifier
+        app.state.search_providers = [
+            FakeSearchProvider(
+                name="searxng",
+                outcome=ProviderSearchResult(
+                    provider_name="searxng",
+                    results=[
+                        {
+                            "url": "https://example.com/",
+                            "title": "Gardening",
+                            "snippet": "A calm article.",
+                        }
+                    ],
+                    unresponsive_engines=[],
+                ),
+            )
+        ]
+        with (
+            patch(
+                "pipeline.orchestrator.validate_url",
+                return_value=("93.184.216.34", "example.com"),
+            ),
+            patch(
+                "pipeline.orchestrator.fetch_url",
+                return_value=FetchResult(
+                    final_url="https://example.com/",
+                    content_type="text/html",
+                    response_body=b"<p>A calm article.</p>",
+                    status_code=200,
+                ),
+            ),
+            patch(
+                "pipeline.orchestrator.run_promptguard",
+                wraps=orchestrator.run_promptguard,
+            ) as scan,
+        ):
+            retrieve = await session.post(
+                "/retrieve", json={"url": "https://example.com/"}
+            )
+            search = await session.post("/search", json={"query": "gardening"})
+            extract = await session.post(
+                "/extract",
+                files={"file": ("article.txt", b"A calm article.", "text/plain")},
+                data={"filename": "article.txt"},
+            )
+        assert [response.status_code for response in (retrieve, search, extract)] == [
+            200,
+            200,
+            200,
+        ]
+        assert retrieve.json()["injection_detected"] is True
+        assert search.json()["omitted_by_reason"] == {"injection_detected": 1}
+        for response in (retrieve, search):
+            assert response.json()["effective_promptguard_threshold"] == 0.85
+        assert extract.json()["injection_detected"] is False
+        assert [call.kwargs["threshold"] for call in scan.call_args_list] == [
+            0.85,
+            0.85,
+            1.0,
+        ]
+    assert [
+        record.getMessage()
+        for record in caplog.records
+        if "config_invalid_value" in record.getMessage()
+    ] == [
+        "config_invalid_value — key=promptguard_threshold. "
+        "/extract reads the raw value through its own guard"
+    ]
 
 
 async def test_lifespan_normalizes_domain_lists_and_names_drops(

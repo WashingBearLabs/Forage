@@ -86,7 +86,7 @@ consuming repo.
 
 **The bump policy is written down: [`contract/GOVERNANCE.md`](contract/GOVERNANCE.md).**
 Read it before touching `pipeline/contract.py` or the response models in `models.py`. It
-classifies any change, answers the six standing examples, and records the nine rulings
+classifies any change, answers the six standing examples, and records the ten rulings
 this epic already made — including the one that is not obvious from the code: the
 `/extract` 413 is documented but unreachable (FastAPI turns it into a 400), documenting it
 carried no bump, and *correcting* it is a MAJOR. `.github/pull_request_template.md` is the
@@ -380,6 +380,18 @@ under default and shipped configuration. This is the **seventh policy-driven
 sanitization-behaviour change**: search now enforces both domain lists, before
 content scanning and without paid fallback. The empty-seed/no-new-field baseline
 is unchanged; the text sanitization algorithm is unchanged.
+And a thirtieth to `e00049c4…` for shared threshold resolution
+(`hardening-hostname-and-config` US-005): `orchestrator.py` takes the required
+resolved `promptguard_threshold` keyword for both its cache fingerprint and
+classification, never reading the now-nullable request field; `contract.py`
+announces the search request/response additions and config-default/ceiling policy.
+Only those two hashed files move. Individual read-only reversals were measured;
+both-reverted reproduces `de1cea65…` under default and shipped config.
+This is the **eighth policy-driven sanitization-behaviour change** for tuned
+deployments: both fetch routes default from the configured key before the
+operator ceiling. Shipped 0.85 behavior and text-scanning algorithms stay the
+same. `/extract`'s raw-value guard and the raw configured hash input stay intact;
+the active float reaches the cache through `cache_policy_fingerprint`.
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

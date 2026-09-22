@@ -33,7 +33,10 @@ _ROOT_REVISION_SOURCES = ("url_validator.py",)
 
 
 def derive_sanitizer_revision(config: dict[str, Any]) -> str:
-    """Return an opaque hash of source, model identity, and active threshold.
+    """Return an opaque hash of source, model identity, and configured threshold.
+
+    The configured value is hashed unchanged; the active, handler-resolved
+    threshold reaches the content cache key through ``cache_policy_fingerprint``.
 
     Model identity is ``MODEL_ID@revision``, not ``MODEL_ID`` alone
     (``feature-forage-model-bootstrap`` US-001). Weights arrive at runtime now,

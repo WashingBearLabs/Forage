@@ -111,6 +111,7 @@ class _Admission:
             classifier=overrides.pop("classifier", None),
             config={},
             sanitizer_revision="revision-under-test",
+            promptguard_threshold=0.85,
             settings=self.settings,
             retrieve_metrics=self.metrics,
             classification_semaphore=self.semaphore,
@@ -356,8 +357,10 @@ async def test_every_path_hands_the_slot_back(
 @pytest.mark.parametrize("cancel_count", [1, 3])
 @pytest.mark.parametrize("worker_fails", [False, True])
 async def test_html_cancellation_retains_slot_until_extractor_exits(
-    depth_one: _Admission, monkeypatch: pytest.MonkeyPatch,
-    cancel_count: int, worker_fails: bool,
+    depth_one: _Admission,
+    monkeypatch: pytest.MonkeyPatch,
+    cancel_count: int,
+    worker_fails: bool,
 ) -> None:
     loop = asyncio.get_running_loop()
     entered = asyncio.Event()
@@ -423,13 +426,19 @@ async def test_html_cancellation_retains_slot_until_extractor_exits(
         _assert_idle(controller)
     finally:
         finish.set()
-        await asyncio.gather(first, *([second] if second is not None else []),
-                             return_exceptions=True)
+        first.cancel()
+        if second is not None:
+            second.cancel()
+        await asyncio.gather(
+            first, *([second] if second is not None else []), return_exceptions=True
+        )
 
 
 @pytest.mark.parametrize("redirects", [False, True])
 async def test_total_fetch_deadline_stops_periodic_stream_and_unblocks_queue(
-    depth_one: _Admission, monkeypatch: pytest.MonkeyPatch, redirects: bool,
+    depth_one: _Admission,
+    monkeypatch: pytest.MonkeyPatch,
+    redirects: bool,
 ) -> None:
     """Real fetcher, fake transport: chunks cannot renew the absolute deadline."""
     started = asyncio.Event()
@@ -472,26 +481,35 @@ async def test_total_fetch_deadline_stops_periodic_stream_and_unblocks_queue(
         return real_client(transport=httpx.MockTransport(handler), **kwargs)
 
     monkeypatch.setattr("pipeline.stage5_url_audit.httpx.AsyncClient", mock_client)
-    monkeypatch.setattr("pipeline.stage5_url_audit.validate_url",
-                        _async_return(("93.184.216.34", "example.com")))
+    monkeypatch.setattr(
+        "pipeline.stage5_url_audit.validate_url",
+        _async_return(("93.184.216.34", "example.com")),
+    )
     monkeypatch.setattr(orchestrator, "DEFAULT_TIMEOUT", deadline)
-    start = loop.time()
-    first = asyncio.create_task(depth_one.run())
-    await asyncio.wait_for(started.wait(), 5)
 
     # The queued request's deadline begins only after admission.
     async def unrelated() -> object:
         return await run_retrieve_pipeline(
             RetrieveRequest(url="https://example.com/unrelated"),
-            cache=None, classifier=None, config={}, sanitizer_revision="test",
-            settings=depth_one.settings, retrieve_metrics=depth_one.metrics,
+            cache=None,
+            classifier=None,
+            config={},
+            sanitizer_revision="test",
+            promptguard_threshold=0.85,
+            settings=depth_one.settings,
+            retrieve_metrics=depth_one.metrics,
             classification_semaphore=depth_one.semaphore,
             extraction_settings=extraction_settings_from_config({}),
             admission=depth_one.controller,
         )
 
-    second = asyncio.create_task(unrelated())
+    start = loop.time()
+    first = asyncio.create_task(depth_one.run())
+    tasks = [first]
     try:
+        await asyncio.wait_for(started.wait(), 5)
+        second = asyncio.create_task(unrelated())
+        tasks.append(second)
         await _until(lambda: depth_one.controller.queued == 1)
         assert "/unrelated" not in requests
         with pytest.raises(PipelineError) as expired:
@@ -502,12 +520,14 @@ async def test_total_fetch_deadline_stops_periodic_stream_and_unblocks_queue(
         assert len(chunks) >= 2
         assert loop.time() - start < 0.6
         await asyncio.wait_for(second, 2)
-        assert requests == (["/", "/redirected", "/unrelated"] if redirects
-                            else ["/", "/unrelated"])
+        assert requests == (
+            ["/", "/redirected", "/unrelated"] if redirects else ["/", "/unrelated"]
+        )
         _assert_idle(depth_one.controller)
     finally:
-        first.cancel()
-        await asyncio.gather(first, second, return_exceptions=True)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 # ---------------------------------------------------------------------------
@@ -586,15 +606,19 @@ async def test_the_body_is_dead_while_the_request_waits_on_the_permit(
     monkeypatch.setattr("pipeline.orchestrator.fetch_url", _fetch)
     semaphore = defaults.semaphore
     await semaphore.acquire()
+    request = asyncio.create_task(defaults.run(classifier=defaults.classifier))
     try:
-        request = asyncio.create_task(defaults.run(classifier=defaults.classifier))
-        await _until(lambda: bool(semaphore._waiters))
-        assert defaults.controller.active == 0
-        gc.collect()
-        assert len(refs) == 1
-        assert refs[0]() is None
-        assert request.done() is False
+        try:
+            await _until(lambda: bool(semaphore._waiters))
+            assert defaults.controller.active == 0
+            gc.collect()
+            assert len(refs) == 1
+            assert refs[0]() is None
+            assert request.done() is False
+        finally:
+            semaphore.release()
+        content = await asyncio.wait_for(request, 5)
+        assert content.promptguard_state == "scanned"
     finally:
-        semaphore.release()
-    content = await request
-    assert content.promptguard_state == "scanned"
+        request.cancel()
+        await asyncio.gather(request, return_exceptions=True)

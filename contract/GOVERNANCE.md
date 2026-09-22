@@ -173,7 +173,7 @@ An urgent fix does not get to skip the rules; it gets a faster lane through them
 
 ## Recorded rulings
 
-Nine rulings this epic already made, kept here so the next change re-reads them instead of
+Ten rulings this epic already made, kept here so the next change re-reads them instead of
 re-litigating them. Each cites its source.
 
 ### (a) The documentation pass does not bump the contract
@@ -547,3 +547,25 @@ additive metrics fields. `/search`'s raiser remains US-002's. A denylist over
 budget is refused whole rather than silently truncated; allowlists retain the
 in-budget prefix and count the dropped remainder. The byte cap bounds encode
 work after JSON parsing, not request-body admission.
+
+### (i) Shared configurable thresholds are MINOR, with an operator upgrade note
+
+**Source:** `kit_tools/specs/feature-hardening-hostname-and-config.md`, US-005,
+epic rulings R10 and R36.
+
+**Ruling:** `SearchRequest.promptguard_threshold` and
+`SearchResponse.effective_promptguard_threshold` are additive and ride the held
+1.3.0 MINOR. Both request models accept null, meaning the validated configured
+default, with the operator ceiling applied **after** default selection on both
+fetch routes. `/retrieve`'s default changes from literal 0.85 to the configured
+default, shipped as 0.85. This is MINOR because a 1.2.0 client on shipped config
+sees identical behavior; the visible default change is bounded to operators who
+tuned that key.
+
+The upgrade note must travel to the consumer/release in both directions: a key
+above 0.85 now loosens fetch-route blocking unless the ceiling bounds it; below
+0.85 tightens it. The old upload-only config knob is gone and the content cache
+re-keys. Caller overrides remain bounded. `/extract`'s raw-value coercion and
+guard are unchanged, including YAML `true` becoming 1.0; the boot warning names
+that exception rather than implying service-wide rejection. Its closure remains
+an open question, not an unannounced change in this MINOR.

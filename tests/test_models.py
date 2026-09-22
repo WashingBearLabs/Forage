@@ -191,7 +191,7 @@ class TestRetrieveRequest:
         assert req.trusted_domains == []
         assert req.verified_domains == []
         assert req.blocked_domains == []
-        assert req.promptguard_threshold == 0.85
+        assert req.promptguard_threshold is None
         assert req.cache_ttl_hours == 24
 
     def test_custom_domains(self) -> None:
@@ -263,6 +263,7 @@ class TestSearchRequest:
     def test_defaults(self) -> None:
         req = SearchRequest(query="python pydantic")
         assert req.num_results == 5
+        assert req.promptguard_threshold is None
         assert req.promptguard_fail_closed is True
         assert req.providers == []
         assert req.allow_paid_fallback is True

@@ -250,15 +250,14 @@ class RetrieveRequest(BaseModel):
     pipeline, cached by `sanitizer_revision`; `/search` finds and returns
     provider-extracted content for a query across sources — snippets or
     chunks, per result `content_kind` — from the configured provider chain,
-    every result sanitized, never cached. `promptguard_fail_closed` and
-    `blocked_domains` are honoured on both routes; this route additionally honours
-    `promptguard_threshold`, `trusted_domains`, `verified_domains`,
+    every result sanitized, never cached. `promptguard_fail_closed`,
+    `promptguard_threshold` and `blocked_domains` are honoured on both routes;
+    this route additionally honours `trusted_domains`, `verified_domains`,
     and `cache_ttl_hours`, while `/search` additionally
     honours `providers` and `allow_paid_fallback` (contract 1.2.0) and scans
-    every result at the fixed 0.85 default at trust tier `standard`
-    (`config.yaml`'s `promptguard_threshold` is not applied there). This
-    documents today's divergence; changing it belongs to
-    `epic-forage-hardening`.
+    every result at trust tier `standard`. On both routes, an omitted or null
+    threshold uses the validated `config.yaml` default (shipped as 0.85), then
+    `promptguard_threshold_ceiling` bounds the requested or default value.
     """
 
     url: str = Field(..., min_length=1, description="URL to retrieve")
@@ -309,12 +308,14 @@ class RetrieveRequest(BaseModel):
             "Single-label entries keep matching exactly as before."
         ),
     )
-    promptguard_threshold: float = Field(
-        default=0.85,
+    promptguard_threshold: float | None = Field(
+        default=None,
         ge=0.0,
         le=1.0,
         description=(
-            "PromptGuard confidence threshold, bounded by the operator's ceiling"
+            "PromptGuard confidence threshold; null or omitted uses the server's "
+            "validated config.yaml default (shipped as 0.85). The requested or "
+            "default value is bounded by promptguard_threshold_ceiling."
         ),
     )
     promptguard_fail_closed: bool = Field(
@@ -336,21 +337,31 @@ class SearchRequest(BaseModel):
     across sources — snippets or chunks, per result `content_kind` — from
     the configured provider chain, every result sanitized, never cached;
     `/retrieve` fetches and sanitizes one caller-named URL through the full
-    pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` and
-    `blocked_domains` are honoured on both routes; this route additionally honours
+    pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed`,
+    `promptguard_threshold` and `blocked_domains` are honoured on both routes;
+    this route additionally honours
     `providers`
     and `allow_paid_fallback` (contract 1.2.0) and scans every result at
-    the fixed 0.85 default at trust tier `standard` (`config.yaml`'s
-    `promptguard_threshold` is not applied here), while `/retrieve`
-    additionally honours `promptguard_threshold`, `trusted_domains`,
-    `verified_domains` and `cache_ttl_hours`. This
-    documents today's divergence; changing it belongs to
-    `epic-forage-hardening`.
+    trust tier `standard`, while `/retrieve` additionally honours
+    `trusted_domains`, `verified_domains` and `cache_ttl_hours`. On both routes,
+    an omitted or null threshold uses the validated `config.yaml` default
+    (shipped as 0.85), then `promptguard_threshold_ceiling` bounds the requested
+    or default value.
     """
 
     query: str = Field(..., min_length=1, description="Search query")
     num_results: int = Field(
         default=5, ge=1, le=20, description="Number of results to return"
+    )
+    promptguard_threshold: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "PromptGuard confidence threshold; null or omitted uses the server's "
+            "validated config.yaml default (shipped as 0.85). The requested or "
+            "default value is bounded by promptguard_threshold_ceiling."
+        ),
     )
     promptguard_fail_closed: bool = Field(
         default=True,
@@ -499,6 +510,18 @@ class SearchResult(BaseModel):
 class SearchResponse(BaseModel):
     """Response wrapper for search results."""
 
+    effective_promptguard_threshold: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Policy applied to this request's PromptGuard threshold after resolving "
+            "the configured default and operator ceiling, not whether results were "
+            "scanned; read omissions, suspicious, promptguard_unavailable and "
+            "unscanned_results for that. This route uses STANDARD tier; /retrieve "
+            "retains its trusted_tier skip and VERIFIED unavailable exemption."
+        ),
+    )
     results: list[SearchResult] = Field(
         default_factory=lambda: [], description="Search results"
     )

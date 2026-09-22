@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document logging patterns, levels, and conventions.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-001)
+> Updated by: Copilot (hardening-hostname-and-config US-005)
 
 ## Overview
 
@@ -41,7 +41,7 @@ Every module obtains its logger with `logger = logging.getLogger(__name__)` at m
 
 | Logger | Defined at | Levels used | What it emits |
 |--------|------------|-------------|---------------|
-| `retrieval_app` | `retrieval_app.py` | INFO, WARNING | Startup lines; `config.yaml not found at %s`; `config_invalid_value — key=%s dropped=%d entries=%s` (operator domain-list drops); `break_glass_advertisement_active — %s=1 is forcing /health ...`; `document extraction completed` (INFO, content-free `extra=` dict) |
+| `retrieval_app` | `retrieval_app.py` | INFO, WARNING | Startup lines; `config.yaml not found at %s`; `config_invalid_value — key=%s dropped=%d entries=%s` (operator domain-list drops); `config_invalid_value — key=promptguard_threshold. /extract reads the raw value through its own guard` (WARNING, never the invalid value); `promptguard_threshold_resolved — value=%s` (once per boot, INFO, validated numeric default only); `break_glass_advertisement_active — %s=1 is forcing /health ...`; `document extraction completed` (INFO, content-free `extra=` dict) |
 | `cache` | `cache.py:38` | WARNING | Closed-vocabulary connection, operation and corrupt-entry lines (see below) |
 | `model_fetcher` | `model_fetcher.py:141` | INFO, WARNING, ERROR, exception | All `weights_*` markers and `model_revision_invalid` |
 | `promptguard.classifier` | `promptguard/classifier.py:21` | DEBUG, INFO, WARNING | Model loaded; `PromptGuard model not available — ML injection detection disabled` (WARNING with `exc_info=True`, so a traceback follows); `classify() called but model not loaded — returning safe fallback` |
@@ -58,7 +58,7 @@ Every module obtains its logger with `logger = logging.getLogger(__name__)` at m
 
 - **Dependency-state transitions**, at WARNING or ERROR so they are visible: the cache connect failure with its closed reason; the cache not being available at startup; every weights-acquisition outcome through a `weights_*` marker; a verified weight set that will not load (`weights_load_failed`, preceded by the classifier's WARNING with traceback).
 - **A decision that changed what the caller received** because a dependency was absent: the `stage3_promptguard` fail-closed / fail-open lines and the orchestrator quarantine line. The response body carries the machine-readable version (`promptguard_state`, `degraded_reasons`, `omitted_by_reason`); the log line is the operator's cue to look at `/health`.
-- **Operator-facing misconfiguration** at boot: break-glass armed (naming the variable that armed it), `config.yaml` missing, `config_invalid_value` for domain lists (one WARNING per list, key, dropped count and operator entries in the message, not `extra=`; credential/URL-shaped mistakes redacted), `FORAGE_MODEL_REVISION` not a 40-hex sha (`model_revision_invalid`, value not echoed), `FORAGE_WEIGHTS_MIRROR` malformed (`weights_mirror_invalid`, reference redacted).
+- **Operator-facing misconfiguration** at boot: break-glass armed (naming the variable that armed it), `config.yaml` missing, `config_invalid_value` for domain lists (one WARNING per list, key, dropped count and operator entries in the message, not `extra=`; credential/URL-shaped mistakes redacted), or for `promptguard_threshold` (one WARNING, key only, never the value, explicitly noting `/extract`'s separate raw guard; fetch routes fall back to 0.85), `FORAGE_MODEL_REVISION` not a 40-hex sha (`model_revision_invalid`, value not echoed), `FORAGE_WEIGHTS_MIRROR` malformed (`weights_mirror_invalid`, reference redacted).
 
 ### Never log
 

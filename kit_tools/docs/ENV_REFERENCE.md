@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document environment variables and secrets. What config exists and where to find it.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-002)
+> Updated by: Copilot (hardening-hostname-and-config US-005)
 
 ## Overview
 
@@ -85,11 +85,11 @@ Loaded by `retrieval_app._load_config()` in the lifespan; a missing file logs a 
 | `user_agents` | empty list | 5 desktop browser UAs | list of strings | Outbound User-Agent pool for stage-5 fetches; empty falls to `DEFAULT_USER_AGENTS` in `pipeline/stage5_url_audit.py` | `pipeline/orchestrator.py` line 294, per `/retrieve` |
 | `news_domains` | empty list | .reuters.com, .apnews.com, .bbc.co.uk, .nytimes.com, .theguardian.com, .cnn.com | list of strings | Cache TTL capped at 1 h; bare entries match only themselves, leading-dot entries cover apex and subdomains. Upgrade: operator bare entries stay exact; shipped entries now opt in with a dot | `pipeline/orchestrator.py`, then `cache.py`, per `/retrieve`; normalised at boot |
 | `seed_blocklist` | empty list | empty list | list of strings | Merged operator-first with every request's `blocked_domains` on both `/retrieve` and `/search`; callers cannot evict entries. Fetch matches are refused; search matches are omitted as `blocked_url` before content scanning. The trust-tier lists themselves (`trusted_domains`, `verified_domains`) remain per-request `/retrieve` fields | `pipeline/orchestrator.py`, `run_retrieve_pipeline` and `run_search_pipeline` |
-| `promptguard_threshold` | `0.85` | `0.85` | float, 0.0 to 1.0 | Stage-3 injection cutoff for `/extract`; also hashed into `sanitizer_revision`, so changing it rotates that value and invalidates the content cache by design | `retrieval_app.py` line 1474 (`/extract`, per request; a non-numeric or out-of-range value is rejected per request); `pipeline/sanitizer_revision.py` line 41 (start) |
+| `promptguard_threshold` | `0.85` | `0.85` | float, 0.0 to 1.0; numeric strings accepted | Default on `/retrieve` and `/search` for null/omitted request values, then operator-capped; invalid (including bool) warns and falls back to 0.85. `/extract` keeps its raw `float()` and range guard, so YAML true still becomes 1.0 there only. Changing the raw value rotates `sanitizer_revision`; the resolved value also keys the content cache | `retrieval_app.promptguard_threshold_from_config` (boot), `_promptguard_policy_updates` (fetch handlers), `/extract` (per request); `pipeline/sanitizer_revision.py` (boot hash) |
 | `policy_domain_entries_max_bytes` | `65536` | `65536` | integer, 4096 to 1048576; invalid warns and falls back | Raw UTF-8 byte budget per caller domain list, including separators. `/retrieve` truncates allowlists and counts drops; an over-budget denylist is refused whole, 422 `content_too_large` / `policy_domain_list_too_large`. Bounds encode work, not JSON body admission | `retrieval_app.py` lifespan via `bounded_int`, published as `app.state.policy_domain_entries_max_bytes`; consumed by the handler |
 | `extract_route_enabled` | `false` | `false` | boolean (a non-boolean refuses boot) | Release gate: while `false`, `POST /extract` returns **404** from `ExtractionAdmissionMiddleware`. No authentication exists behind it | `pipeline/extraction_limits.py` line 100, start |
 | `promptguard_fail_closed_floor` | `false` | `false` | boolean; wrong type refuses boot | `/retrieve` and `/search` apply `request.promptguard_fail_closed or floor` and report the result on every 200; trusted-tier skip and VERIFIED fail-open remain exempt | `pipeline/retrieve_limits.py` `retrieve_settings_from_config()`, start; `retrieval_app.py` `_promptguard_policy_updates()`, per request |
-| `promptguard_threshold_ceiling` | `1.0` | `1.0` | finite number, 0.0 to 1.0; invalid refuses boot | `/retrieve` only applies `min(request.promptguard_threshold, ceiling)` and reports it on every 200; `/search` stays at 0.85 and `/extract` is unchanged | Same reader and handler helper as the floor; config.yaml-only, see [delivery and scope](../../docs/configuration.md#top-level-promptguard-policy-keys) |
+| `promptguard_threshold_ceiling` | `1.0` | `1.0` | finite number, 0.0 to 1.0; invalid refuses boot | Both fetch routes apply `min(resolved threshold, ceiling)` after selecting the explicit request value or configured default, and report it on every 200; `/extract` is unchanged | Same reader and handler helper as the floor; config.yaml-only, see [delivery and scope](../../docs/configuration.md#top-level-promptguard-policy-keys) |
 | `search_brave_timeout_seconds` | `15.0` | `15.0` | float, 1.0 to 60.0 (wrong-typed or out-of-range refuses boot) | Per-request timeout for the Brave LLM-Context HTTP call — `/search`'s worst-case latency on a Brave-only chain until spec 3's fallback exists | `pipeline/search_providers/brave.py`'s `brave_settings_from_config()`, start |
 | `search_brave_chunk_max_chars` | `2000` | `2000` | integer, 200 to 2000 (wrong-typed or out-of-range refuses boot) | Cap on each Brave result's extracted-chunk text before it reaches sanitization | `pipeline/search_providers/brave.py`'s `brave_settings_from_config()`, start |
 | `search_brave_query_max_chars` | `400` | `400` | integer, 50 to 400 (wrong-typed or out-of-range refuses boot) | Cap on the outbound query text sent to Brave | `pipeline/search_providers/brave.py`'s `brave_settings_from_config()`, start |
@@ -100,7 +100,9 @@ adds every subdomain. IP literals and single-label denylist entries match only t
 single-label allowlists are invalid. Config lists are normalised at boot without a budget,
 with one `config_invalid_value` WARNING per list naming invalid entries.
 
-Observation, not a decision: `/retrieve` scans at the request body's own `promptguard_threshold` field (default 0.85) and `/search` passes no threshold at all, so `/search` always scans at the hard default 0.85 even after an operator changes this key. Only `/extract` honours the config value (`kit_tools/arch/SECURITY.md`, "Observation: `/search` scans at the hard default").
+Upgrade note: a configured threshold above 0.85 now loosens both fetch routes unless
+the ceiling bounds it; below 0.85 tightens both. See the canonical configuration row
+for the raw `/extract` boolean divergence and the cache re-key.
 
 ### `cache:` block
 
@@ -171,7 +173,7 @@ Rules: `.env` and `compose/.env` are gitignored and must stay uncommitted (GitHu
 - **`FORAGE_MODEL_REVISION` refuses branch names.** A movable `main` would turn the next upstream commit into "corruption"; only a 40-hex sha is accepted, and a bad value falls back to the pin with an ERROR that never echoes it.
 - **`FORAGE_WEIGHTS_MIRROR` points at a private mirror.** Without `FORAGE_MIRROR_TOKEN` the leg is skipped; with a token that cannot read it, `pull_failed`. Third parties: leave both unset and use `HF_TOKEN`.
 - **`config.yaml` validation refuses boot; a missing file does not.** A bad `cache.*` or `extraction.*` value fails the start with a `ValueError` subclass; an absent file logs one WARNING and runs on code defaults, which differ from the shipped file for `user_agents` and `news_domains`.
-- **`/search` ignores `promptguard_threshold`.** See the observation under the top-level keys.
+- **`/extract` reads the raw threshold.** A YAML boolean `true` becomes 1.0 there only; the fetch routes reject it at boot with a warning and use 0.85.
 - **INFO logs are invisible.** Nothing calls `logging.basicConfig()`, so the weights success narrative never reaches `docker logs`; watch `/metrics` (`model.fetch_in_progress`, `model.retries_scheduled`) instead.
 - **`SEARXNG_LIMITER=true` breaks `/search`.** The limiter 429s Forage's own client on the first request. `SEARXNG_VALKEY_URL` is not the content cache's Valkey; do not wire it to `full.yml`'s `valkey` service.
 - **`docker inspect` prints the whole environment.** An env file keeps a password out of shell history and `ps`, not out of the Docker socket; restrict socket access accordingly.

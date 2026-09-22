@@ -2,7 +2,7 @@
 # GOTCHAS.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-002)
+> Updated by: Copilot (hardening-hostname-and-config US-005)
 
 ## Overview
 
@@ -15,6 +15,36 @@ live in, and losing them in the move was an identified risk.
 ---
 
 ## Active Gotchas
+
+### Concurrent requests cannot own overlapping global mock contexts
+
+`unittest.mock.patch` changes a module attribute process-wide, not per task.
+Two overlapping `_retrieve_under` contexts exited out of order and restored
+each other's mocks, leaving `orchestrator.fetch_url` mocked for the following
+admission tests. The US-005 retry moves both fetch and validation patches into
+one test-scoped fixture and drains every concurrent request before teardown.
+Keep that ownership outside the coroutines. Use bounded entered-event/waiter
+synchronization for threaded classification; fixed `sleep(0)` iteration counts
+do not establish that a worker has started. Always release gates and drain
+tasks on assertion failure, before restoring their mocked dependencies.
+
+### A YAML boolean threshold disables blocking on `/extract` only
+
+`promptguard_threshold: true` is invalid for the shared `/retrieve` and `/search`
+default: boot logs one `config_invalid_value` WARNING naming the key, falls back
+to 0.85 and publishes that validated default separately from the raw config.
+The WARNING explicitly says `/extract reads the raw value through its own guard`.
+That route retains `float(raw_value)` plus a range check; `float(True) == 1.0`
+passes, so no classifier score can exceed it. The operator ceiling does not
+reach `/extract`. This known divergence is pinned by
+`test_boolean_threshold_keeps_extracts_raw_coercion_only`; closing it remains an
+open question under ruling R10, not part of US-005. Use a numeric threshold.
+
+Both fetch routes now default from the configured key, then cap against the
+operator ceiling. Operators who previously raised it just for uploads now loosen
+fetch blocking too unless capped; lowering it tightens both. The raw configured
+value remains a revision input; the active threshold also enters the cache
+fingerprint. Null and an explicit equal default therefore share a cache key.
 
 ### Hostname matching is a hashed cache-key input, not an unhashed helper
 
@@ -477,14 +507,15 @@ were recorded at their implementation boundaries:
 | `hardening-hostname-and-config` US-001 | `328d386c…93286` | Twenty-seventh, **fifth sanitization-behaviour change**: directional matching and canonical private-name precedence. `orchestrator.py`, `contract.py`, and already-hashed root `url_validator.py` each move the revision; all-reverted control reproduces `5a470872…` under default and shipped config. Leading-dot trust skips classification for subdomains; multi-label denylists block them. |
 | `hardening-hostname-and-config` US-007 | `c8a907cf…546b8` | Twenty-eighth, **sixth policy-driven sanitization-behaviour change**: over-budget allowlist tails can no longer grant trust, and denylists are refused whole; in-budget matching/text scanning remain unchanged. `orchestrator.py` removes the entry pass, merges operator-first and counts wildcard resolutions; `contract.py` announces counters/reason; already-hashed `url_validator.py` removes its pass and safely sizes surrogate escapes before rejecting them. All three individual reversals were measured; all-reverted reproduces `328d386c…` under default and shipped config. |
 | `hardening-hostname-and-config` US-002 | `de1cea65…6be91` | Twenty-ninth, **seventh policy-driven sanitization-behaviour change**: `/search` merges the operator seed list first, then canonical `blocked_domains=` entries, and omits matches after URL auditing but before content scans. The existing blocked outcome emits `blocked_url` and `host_class=policy_blocklist`; raw sufficiency prevents paid fallback. Only `orchestrator.py` and `contract.py` move; both individual read-only reversals were measured and both-reverted reproduces `c8a907cf…` under default and shipped config. The empty-seed/no-new-field baseline is unchanged. |
+| `hardening-hostname-and-config` US-005 | `e00049c4…7ed5c` | Thirtieth, **eighth policy-driven sanitization-behaviour change**, for tuned deployments: both fetch routes default from validated config before the ceiling, with a new caller threshold on search. `orchestrator.py` passes a required resolved float to classification and cache fingerprint; `contract.py` announces the additions/defaults. Only these two hashed files move; individual read-only reversals measured, both-reverted reproduces `de1cea65…` under default and shipped config. Shipped 0.85 behavior, text-scanning algorithms, raw configured hash input and `/extract`'s raw guard remain unchanged. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Twenty-two of the twenty-nine rotations changed no sanitization policy or algorithm; the
+**Twenty-two of the thirty rotations changed no sanitization policy or algorithm; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
 US-001, US-002, US-003 and its validation fix) and the twenty-seventh
-through twenty-ninth (`hardening-hostname-and-config` US-001, US-007 and US-002) are the seven
+through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005) are the eight
 that did, and the seventeenth
 (US-004, contract `1.3.0`) does not join them** — hostname policy can now skip
 classification on an opted-in trusted suffix; search-sanitization US-001's
@@ -495,6 +526,8 @@ embedded-private or blocklisted one and serves `domain` as the canonicalised ASC
 the validation fix scans both the newline-preserving and collapsed wire forms.
 Hostname/config US-002 closes search's bypass of operator and caller domain
 policy without changing raw-result sufficiency or the text-scanning algorithm.
+US-005 shares configured threshold policy across both fetch routes, before the
+operator ceiling; its behavior change is for tuned deployments, not shipped 0.85.
 US-004 bounds and normalizes `SearchResult.engine` without routing it through that same scan.
 Among the other twenty-two, the fourth and fifth
 are different *kinds* of rotation and worth reading as such. The first three moved because

@@ -17,6 +17,7 @@ import threading
 import time
 import unicodedata
 from collections import Counter
+from collections.abc import Iterator
 from contextlib import AbstractContextManager, ExitStack
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -248,7 +249,7 @@ _SAMPLE_REVISION = "a" * 64
 
 
 def _retrieve_kwargs(**overrides: Any) -> dict[str, Any]:
-    """Build the five dependencies ``run_retrieve_pipeline`` requires.
+    """Build the dependencies ``run_retrieve_pipeline`` requires.
 
     One helper so the call sites pass the whole set through a single line and
     a later story that changes the set edits one place rather than seventeen.
@@ -261,6 +262,7 @@ def _retrieve_kwargs(**overrides: Any) -> dict[str, Any]:
     settings = RetrieveSettings()
     retrieve_metrics = _NullRetrieveMetrics()
     kwargs: dict[str, Any] = {
+        "promptguard_threshold": 0.85,
         "settings": settings,
         "retrieve_metrics": retrieve_metrics,
         "classification_semaphore": asyncio.Semaphore(1),
@@ -5668,7 +5670,9 @@ def test_the_app_retrieve_metrics_satisfies_the_sink_protocol() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _blocking_classifier(gate: threading.Event, *, score: float = 0.1) -> MagicMock:
+def _blocking_classifier(
+    gate: threading.Event, entered: asyncio.Event, *, score: float = 0.1
+) -> MagicMock:
     """A loaded classifier whose ``classify`` parks until *gate* is set.
 
     ``run_promptguard`` runs ``classify`` through ``asyncio.to_thread``, so a
@@ -5677,9 +5681,11 @@ def _blocking_classifier(gate: threading.Event, *, score: float = 0.1) -> MagicM
     """
     classifier = MagicMock(spec=PromptGuardClassifier)
     classifier.loaded = True
+    loop = asyncio.get_running_loop()
 
     def _classify(text: str, max_chunks: int | None = None) -> tuple[float, list[str]]:
-        gate.wait(timeout=5.0)
+        loop.call_soon_threadsafe(entered.set)
+        assert gate.wait(timeout=10.0), "test did not release inference"
         return (score, [])
 
     classifier.classify = MagicMock(side_effect=_classify)
@@ -5710,6 +5716,18 @@ def _retrieve_patches(page: bytes = b"<html><body><p>Hello.</p></body></html>"):
     )
 
 
+@pytest.fixture(name="_mock_retrieve_io")
+def mock_retrieve_io() -> Iterator[None]:
+    """One patch lifetime covers every concurrent request and its cleanup."""
+    original_validate = orchestrator.validate_url
+    original_fetch = orchestrator.fetch_url
+    validate_patch, fetch_patch = _retrieve_patches()
+    with validate_patch, fetch_patch:
+        yield
+    assert orchestrator.validate_url is original_validate
+    assert orchestrator.fetch_url is original_fetch
+
+
 async def _retrieve_under(
     *,
     classifier: Any,
@@ -5719,21 +5737,19 @@ async def _retrieve_under(
     request: RetrieveRequest | None = None,
     cache: Any = None,
 ) -> RetrievedContent:
-    """Drive ``run_retrieve_pipeline`` with a real stage 3 under *semaphore*."""
-    validate_patch, fetch_patch = _retrieve_patches()
-    with validate_patch, fetch_patch:
-        return await run_retrieve_pipeline(
-            request if request is not None else _make_retrieve_request(),
-            cache=cache,
-            classifier=classifier,
-            config=_SAMPLE_CONFIG,
-            sanitizer_revision=_SAMPLE_REVISION,
-            **_retrieve_kwargs(
-                settings=settings,
-                retrieve_metrics=metrics,
-                classification_semaphore=semaphore,
-            ),
-        )
+    """Drive stage 3 under *semaphore*; the caller owns `_mock_retrieve_io`."""
+    return await run_retrieve_pipeline(
+        request if request is not None else _make_retrieve_request(),
+        cache=cache,
+        classifier=classifier,
+        config=_SAMPLE_CONFIG,
+        sanitizer_revision=_SAMPLE_REVISION,
+        **_retrieve_kwargs(
+            settings=settings,
+            retrieve_metrics=metrics,
+            classification_semaphore=semaphore,
+        ),
+    )
 
 
 _WAIT_TIMEOUT_TOKEN = "classification_wait_timeout"
@@ -5897,10 +5913,12 @@ async def test_unavailable_result_is_pinned_against_run_promptguard(
 # -- /retrieve --------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("_mock_retrieve_io")
 async def test_two_retrieve_classifications_serialise_through_the_permit() -> None:
     """The second request's ``classify`` cannot start while the first holds it."""
     gate = threading.Event()
-    classifier = _blocking_classifier(gate)
+    entered = asyncio.Event()
+    classifier = _blocking_classifier(gate, entered)
     semaphore = asyncio.Semaphore(1)
     settings = RetrieveSettings()
 
@@ -5912,30 +5930,30 @@ async def test_two_retrieve_classifications_serialise_through_the_permit() -> No
             settings=settings,
         )
     )
-    # Let the first request reach `classify` and park there.
-    for _ in range(50):
-        await asyncio.sleep(0)
-        if classifier.classify.call_count == 1:
-            break
-
-    second = asyncio.create_task(
-        _retrieve_under(
-            classifier=classifier,
-            semaphore=semaphore,
-            metrics=_NullRetrieveMetrics(),
-            settings=settings,
+    tasks = [first]
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        second = asyncio.create_task(
+            _retrieve_under(
+                classifier=classifier,
+                semaphore=semaphore,
+                metrics=_NullRetrieveMetrics(),
+                settings=settings,
+            )
         )
-    )
-    for _ in range(50):
-        await asyncio.sleep(0)
-
-    assert classifier.classify.call_count == 1
-
-    gate.set()
-    await first
-    await second
-    assert classifier.classify.call_count == 2
-    assert not semaphore.locked()
+        tasks.append(second)
+        await _until_waiting(semaphore)
+        assert classifier.classify.call_count == 1
+        assert not second.done()
+        gate.set()
+        await asyncio.wait_for(asyncio.gather(*tasks), 5)
+        assert classifier.classify.call_count == 2
+        assert not semaphore.locked()
+    finally:
+        gate.set()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def _until_waiting(semaphore: asyncio.Semaphore) -> None:
@@ -5947,6 +5965,7 @@ async def _until_waiting(semaphore: asyncio.Semaphore) -> None:
 @pytest.mark.parametrize("holder_route", ["retrieve", "search", "extract"])
 @pytest.mark.parametrize("cancel_count", [1, 3])
 @pytest.mark.parametrize("worker_fails", [False, True])
+@pytest.mark.usefixtures("_mock_retrieve_io")
 async def test_active_classification_cancellation_retains_ownership(
     holder_route: str,
     cancel_count: int,
@@ -6046,6 +6065,9 @@ async def test_active_classification_cancellation_retains_ownership(
         assert not semaphore._waiters
     finally:
         finish.set()
+        first.cancel()
+        if second is not None:
+            second.cancel()
         await asyncio.gather(
             first, *([second] if second is not None else []), return_exceptions=True
         )
@@ -6112,6 +6134,7 @@ async def test_model_warmup_during_fetch_counts_timeout_and_never_caches(
         pytest.param(False, "unavailable_allowed", id="fail-open"),
     ],
 )
+@pytest.mark.usefixtures("_mock_retrieve_io")
 async def test_retrieve_wait_timeout_follows_the_requests_policy(
     fail_closed: bool,
     expected_state: str,
@@ -6156,6 +6179,7 @@ async def test_retrieve_wait_timeout_follows_the_requests_policy(
     assert semaphore.locked()
 
 
+@pytest.mark.usefixtures("_mock_retrieve_io")
 async def test_a_following_retrieve_with_the_permit_free_is_classified() -> None:
     """The timeout is per request; nothing about it is sticky."""
     semaphore = asyncio.Semaphore(1)
@@ -6187,6 +6211,7 @@ async def test_a_following_retrieve_with_the_permit_free_is_classified() -> None
     assert metrics.classification_wait_timeouts == 1
 
 
+@pytest.mark.usefixtures("_mock_retrieve_io")
 async def test_the_absent_classifier_fail_open_body_is_still_cached() -> None:
     """Only the loaded-and-busy combination is withheld from the cache."""
     semaphore = asyncio.Semaphore(1)
@@ -6209,6 +6234,7 @@ async def test_the_absent_classifier_fail_open_body_is_still_cached() -> None:
     assert metrics.classification_wait_timeouts == 0
 
 
+@pytest.mark.usefixtures("_mock_retrieve_io")
 async def test_retrieve_with_no_classifier_never_touches_the_semaphore() -> None:
     """``classifier is None`` is the unchanged path: no permit, no counter."""
     semaphore = asyncio.Semaphore(1)
@@ -6228,6 +6254,7 @@ async def test_retrieve_with_no_classifier_never_touches_the_semaphore() -> None
     assert semaphore.locked()
 
 
+@pytest.mark.usefixtures("_mock_retrieve_io")
 async def test_a_trusted_domain_retrieve_is_served_under_a_held_permit() -> None:
     """A TRUSTED page does no inference, so it must not queue for the permit."""
     semaphore = asyncio.Semaphore(1)
@@ -6247,6 +6274,7 @@ async def test_a_trusted_domain_retrieve_is_served_under_a_held_permit() -> None
     assert semaphore.locked()
 
 
+@pytest.mark.usefixtures("_mock_retrieve_io")
 async def test_a_cache_hit_is_served_without_acquiring_the_permit() -> None:
     """The cache read is absolute — outside every gate."""
     semaphore = asyncio.Semaphore(1)
@@ -6283,6 +6311,7 @@ async def test_a_cache_hit_is_served_without_acquiring_the_permit() -> None:
     assert semaphore.locked()
 
 
+@pytest.mark.usefixtures("_mock_retrieve_io")
 async def test_the_permit_count_survives_five_rounds_of_each_failure() -> None:
     """N+1 = 5 timed-out waits, then the next request still classifies."""
     semaphore = asyncio.Semaphore(1)
@@ -6344,6 +6373,7 @@ async def test_an_over_budget_refusal_leaves_the_permit_count_unchanged() -> Non
 
 
 @pytest.mark.parametrize("route", ["retrieve", "search"])
+@pytest.mark.usefixtures("_mock_retrieve_io")
 async def test_five_cancelled_classification_waits_preserve_exact_permit(
     route: str,
 ) -> None:
@@ -6370,14 +6400,18 @@ async def test_five_cancelled_classification_waits_preserve_exact_permit(
     for _ in range(5):
         await semaphore.acquire()
         waiter = asyncio.create_task(run())
-        await _until_waiting(semaphore)
-        waiter.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await waiter
-        assert semaphore._value == 0
-        assert not semaphore._waiters
-        classifier.classify.assert_not_called()
-        semaphore.release()
+        try:
+            await _until_waiting(semaphore)
+            waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiter
+            assert semaphore._value == 0
+            assert not semaphore._waiters
+            classifier.classify.assert_not_called()
+        finally:
+            waiter.cancel()
+            await asyncio.gather(waiter, return_exceptions=True)
+            semaphore.release()
         assert semaphore._value == 1
     await run()
     assert classifier.classify.call_count == (10 if route == "search" else 1)
@@ -6386,6 +6420,7 @@ async def test_five_cancelled_classification_waits_preserve_exact_permit(
     assert search_metrics.classification_wait_timeouts == 0
 
 
+@pytest.mark.usefixtures("_mock_retrieve_io")
 async def test_five_classifier_budget_backstops_preserve_exact_permit() -> None:
     semaphore = asyncio.Semaphore(1)
     classifier = _loaded_classifier()
@@ -6729,10 +6764,12 @@ async def test_search_with_a_warming_classifier_never_acquires() -> None:
     assert semaphore.locked()
 
 
+@pytest.mark.usefixtures("_mock_retrieve_io")
 async def test_a_retrieve_and_a_search_classification_serialise() -> None:
     """The two fetch routes share one permit, so they cannot both infer."""
     gate = threading.Event()
-    classifier = _blocking_classifier(gate)
+    entered = asyncio.Event()
+    classifier = _blocking_classifier(gate, entered)
     semaphore = asyncio.Semaphore(1)
 
     retrieving = asyncio.create_task(
@@ -6743,29 +6780,32 @@ async def test_a_retrieve_and_a_search_classification_serialise() -> None:
             settings=RetrieveSettings(),
         )
     )
-    for _ in range(50):
-        await asyncio.sleep(0)
-        if classifier.classify.call_count == 1:
-            break
-
-    searching = asyncio.create_task(
-        _search_under(
-            classifier=classifier,
-            semaphore=semaphore,
-            wait_seconds=None,
-            metrics=_SearchCounters(),
+    searching: asyncio.Task[SearchResponse] | None = None
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        searching = asyncio.create_task(
+            _search_under(
+                classifier=classifier,
+                semaphore=semaphore,
+                wait_seconds=None,
+                metrics=_SearchCounters(),
+            )
         )
-    )
-    for _ in range(50):
-        await asyncio.sleep(0)
-
-    assert classifier.classify.call_count == 1
-
-    gate.set()
-    await retrieving
-    search_response = await searching
-    assert len(search_response.results) == 10
-    assert not semaphore.locked()
+        await _until_waiting(semaphore)
+        assert classifier.classify.call_count == 1
+        assert not searching.done()
+        gate.set()
+        await asyncio.wait_for(asyncio.gather(retrieving, searching), 5)
+        assert len(searching.result().results) == 10
+        assert not semaphore.locked()
+    finally:
+        gate.set()
+        retrieving.cancel()
+        if searching is not None:
+            searching.cancel()
+            await asyncio.gather(retrieving, searching, return_exceptions=True)
+        else:
+            await asyncio.gather(retrieving, return_exceptions=True)
 
 
 async def test_the_search_parameters_are_defaulted() -> None:
@@ -6808,6 +6848,7 @@ async def test_the_extract_file_route_acquires_exactly_once(
     assert not semaphore.locked()
 
 
+@pytest.mark.usefixtures("_mock_retrieve_io")
 async def test_the_extract_file_route_waits_for_a_retrieve_holding_the_permit(
     tmp_path: Path,
 ) -> None:
@@ -6815,7 +6856,8 @@ async def test_the_extract_file_route_waits_for_a_retrieve_holding_the_permit(
     spooled = tmp_path / "upload.txt"
     spooled.write_text("Hello from an uploaded document.", encoding="utf-8")
     gate = threading.Event()
-    classifier = _blocking_classifier(gate)
+    entered = asyncio.Event()
+    classifier = _blocking_classifier(gate, entered)
     semaphore = asyncio.Semaphore(1)
 
     retrieving = asyncio.create_task(
@@ -6826,33 +6868,36 @@ async def test_the_extract_file_route_waits_for_a_retrieve_holding_the_permit(
             settings=RetrieveSettings(),
         )
     )
-    for _ in range(50):
-        await asyncio.sleep(0)
-        if classifier.classify.call_count == 1:
-            break
-
-    extracting = asyncio.create_task(
-        orchestrator.run_extract_pipeline_from_file(
-            spooled,
-            filename="upload.txt",
-            mime_hint="text/plain",
-            extract_mode="full",
-            request_id="req-1",
-            classifier=classifier,
-            promptguard_threshold=0.85,
-            sanitizer_revision=_SAMPLE_REVISION,
-            settings=ExtractionSettings(),
-            classification_semaphore=semaphore,
+    extracting: asyncio.Task[ExtractedContent] | None = None
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        extracting = asyncio.create_task(
+            orchestrator.run_extract_pipeline_from_file(
+                spooled,
+                filename="upload.txt",
+                mime_hint="text/plain",
+                extract_mode="full",
+                request_id="req-1",
+                classifier=classifier,
+                promptguard_threshold=0.85,
+                sanitizer_revision=_SAMPLE_REVISION,
+                settings=ExtractionSettings(),
+                classification_semaphore=semaphore,
+            )
         )
-    )
-    for _ in range(50):
-        await asyncio.sleep(0)
-
-    assert classifier.classify.call_count == 1
-
-    gate.set()
-    await retrieving
-    result = await extracting
-    assert result.body
-    assert classifier.classify.call_count == 2
-    assert not semaphore.locked()
+        await _until_waiting(semaphore)
+        assert classifier.classify.call_count == 1
+        assert not extracting.done()
+        gate.set()
+        await asyncio.wait_for(asyncio.gather(retrieving, extracting), 5)
+        assert extracting.result().body
+        assert classifier.classify.call_count == 2
+        assert not semaphore.locked()
+    finally:
+        gate.set()
+        retrieving.cancel()
+        if extracting is not None:
+            extracting.cancel()
+            await asyncio.gather(retrieving, extracting, return_exceptions=True)
+        else:
+            await asyncio.gather(retrieving, return_exceptions=True)

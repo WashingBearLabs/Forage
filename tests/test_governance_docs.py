@@ -90,7 +90,7 @@ _SIX_EXAMPLES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("An urgent security tightening", ("MINOR",)),
 )
 
-# The nine rulings this epic recorded, by the heading marker each section
+# The ten rulings this epic recorded, by the heading marker each section
 # carries. (a2) is US-001's verification finding and is listed separately from
 # (a) precisely because it is a different ruling about a different thing.
 _RULING_MARKERS = (
@@ -103,6 +103,7 @@ _RULING_MARKERS = (
     "### (f) ",
     "### (g) ",
     "### (h) ",
+    "### (i) ",
 )
 
 # Counts these documents state in words. Both are read back out of the code —
@@ -121,6 +122,39 @@ _NUMBER_WORDS = {
 
 _MARKDOWN_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 _TABLE_ROW_RE = re.compile(r"^\|\s*(\d)\s*\|")
+
+
+def test_threshold_boundary_descriptions_have_no_stale_route_exceptions() -> None:
+    stale = re.compile(
+        r"not applied (here|there|on this route)|no per-request threshold", re.I
+    )
+    for name in (
+        "models.py",
+        "retrieval_app.py",
+        "kit_tools/docs/API_GUIDE.md",
+        "docs/configuration.md",
+        "README.md",
+    ):
+        assert not stale.search(" ".join((_REPO_ROOT / name).read_text().split())), name
+    document = yaml.safe_load(CONTRACT_PATH.read_text())
+    descriptions = [
+        document["paths"][route]["post"]["description"]
+        for route in ("/retrieve", "/search")
+    ] + [
+        document["components"]["schemas"][model]["description"]
+        for model in ("RetrieveRequest", "SearchRequest")
+    ]
+    for description in descriptions:
+        assert not stale.search(" ".join(description.split()))
+        assert "promptguard_threshold_ceiling" in description
+    guide = (_REPO_ROOT / "kit_tools/docs/API_GUIDE.md").read_text()
+    search = guide.split("Request fields (`SearchRequest`):", 1)[1]
+    request_table, response_section = search.split(
+        "Response fields to read (`SearchResponse`):", 1
+    )
+    assert "| `promptguard_threshold` | float \\| null | `null`" in request_table
+    assert "promptguard_threshold_ceiling" in request_table
+    assert "| `effective_promptguard_threshold` |" in response_section
 
 
 @pytest.fixture(scope="module")

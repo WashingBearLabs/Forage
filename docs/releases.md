@@ -326,6 +326,17 @@ Like `policy_excluded_all_providers`, that reason is a permanent client error,
 not retryable unchanged. The baseline for callers sending neither new field,
 with the shipped empty seed list, remains unchanged.
 
+US-005 adds optional `/search` `promptguard_threshold` and reports
+`effective_promptguard_threshold` on every search 200. Both fetch routes now
+interpret null/omitted threshold as the validated `config.yaml` default, then
+cap it with `promptguard_threshold_ceiling`. Shipped 0.85 behavior is unchanged.
+**Upgrade in both directions:** a key raised above 0.85 to quiet upload false
+positives now **loosens** `/retrieve` and `/search` blocking unless capped; below
+0.85 **tightens** them. The old upload-only config knob is gone and the content
+cache re-keys. Invalid defaults warn and fall back to 0.85 on the fetch routes,
+but `/extract` retains its raw guard, including YAML `true` becoming 1.0.
+Consumers should use the effective field as policy, not proof of scanning.
+
 ### The Release carries the contract itself
 
 Since `feature-forage-contract` US-004 every `v*` Release has two assets:

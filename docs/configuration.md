@@ -29,13 +29,14 @@ design:
 `/search` finds and returns provider-extracted content for a query across sources —
 snippets or chunks, per result `content_kind` — from the configured provider chain, every
 result sanitized, never cached; `/retrieve` fetches and sanitizes one caller-named URL
-through the full pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` and `blocked_domains` are
-honoured on both routes; `/retrieve` additionally honours `promptguard_threshold`,
+through the full pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed`,
+`promptguard_threshold` and `blocked_domains` are honoured on both routes;
+`/retrieve` additionally honours
 `trusted_domains`, `verified_domains` and `cache_ttl_hours`, while
 `/search` additionally honours `providers` and `allow_paid_fallback` (contract 1.2.0) and
-scans every result at the fixed 0.85 default at trust tier `standard` (`config.yaml`'s
-`promptguard_threshold` is not applied on this route). This documents today's divergence;
-changing it belongs to `epic-forage-hardening`.
+scans every result at trust tier `standard`. On both routes an omitted or null threshold
+uses the validated `config.yaml` default (shipped as 0.85), then
+`promptguard_threshold_ceiling` bounds the requested or default value.
 
 **And so are the three documentation endpoints FastAPI serves alongside them** — easy to
 forget, because nothing in this repo declares them:
@@ -488,7 +489,7 @@ that file sets, which is not always the code default.
 | `user_agents` | list of strings | `[]` | 5 desktop browser UAs | Pool rotated across outbound fetches. Empty means the fetcher's own built-in default is used. |
 | `news_domains` | list of strings | `[]` | 6 leading-dot wire/major outlets | Domains whose cached entries expire after **at most 1 hour**. Bare entries match only the apex; a leading dot covers the apex and every subdomain. **Upgrade note:** your bare entries stay exact; add the dot for subdomains. The six shipped entries now have it (`.bbc.co.uk` covers `www.bbc.co.uk`). |
 | `seed_blocklist` | list of strings | `[]` | `[]` | Deployment-wide denylist merged into both routes, `/retrieve` and `/search`, before caller `blocked_domains`; caller entries cannot evict it. **Upgrade note:** existing multi-label entries now cover subdomains; review apex entries before upgrading, because a multi-tenant apex removes every tenant. Single-label entries keep matching exactly as before. This list is policy, not a secret: observable through `/retrieve`'s refusal message and `/search`'s `blocked_url` counts. |
-| `promptguard_threshold` | float | `0.85` | `0.85` | Injection score at or above which stage 3 marks content as injected. Also feeds the `sanitizer_revision` hash, so changing it changes that value by design. |
+| `promptguard_threshold` | float | `0.85` | `0.85` | Injection score above which stage 3 marks content as injected. `/retrieve` and `/search` use this boot-validated default when the request omits the field or sends `null`, then apply `min(value, promptguard_threshold_ceiling)`; an explicit request value is capped too. Numeric strings remain accepted. Invalid values (including YAML booleans, non-finite or out-of-range numbers) warn once with `config_invalid_value` and fall back to `0.85`, never refusing boot for this validation; `promptguard_threshold_resolved` logs the validated default once at INFO. `/extract` instead retains its own per-request `float(raw_value)` conversion and range guard, outside the resolver and ceiling: invalid numeric strings/ranges still give its existing unsupported-format refusal, but YAML `true` becomes `1.0`, disabling blocking on `/extract` only while the fetch routes warn and default to `0.85`. The WARNING explicitly says `/extract reads the raw value through its own guard`; closing that divergence is an open question. The raw configured value still feeds `sanitizer_revision`; the resolved active threshold feeds `cache_policy_fingerprint`. **Upgrade note (1.3.0):** raising this key above `0.85` to quiet `/extract` false positives now **loosens** injection blocking on `/retrieve` and `/search` unless `promptguard_threshold_ceiling` bounds it; a value below `0.85` **tightens** both. The old per-route config knob is gone (caller overrides remain), and the content cache re-keys. |
 | `policy_domain_entries_max_bytes` | integer | `65536` (64 KiB) | `65536` | Raw UTF-8 bytes per caller domain list, including newline separators; range **4096–1048576** (4 KiB–1 MiB). Each `/retrieve` list and `/search`'s denylist has its own budget. An over-budget denylist is refused whole with 422 `content_too_large` on `/retrieve` or `search_unavailable` on `/search`, reason `policy_domain_list_too_large`; allowlists retain the in-budget prefix and count all remaining entries as drops. Invalid configuration logs `config_invalid_value — key=policy_domain_entries_max_bytes` and falls back to 65536, never refuses boot. Read once at startup; restart after changing it. |
 | `extract_route_enabled` | boolean | `false` | `false` | Release gate for `POST /extract`. While `false` the route returns **404** — it is invisible, not merely refused. Requires a restart to take effect. Remember there is no authentication in front of it. |
 | `search_brave_timeout_seconds` | float | `15.0` | `15.0` | Per-request timeout for the Brave LLM-Context HTTP call. This is `/search`'s worst-case latency on a Brave-only chain until spec 3's fallback exists. Out of range (1.0 to 60.0) or wrong-typed refuses boot. A caller's `/search` timeout must exceed the sum of the configured chain's per-provider timeouts — 10 s + this value for `searxng,brave` — so lower this value rather than raising the caller's. |
@@ -667,12 +668,11 @@ it has not landed yet.
 | Key | Default | Allowed range | Route | Purpose |
 |-----|---------|---------------|-------|---------|
 | `promptguard_fail_closed_floor` | `false` | `true` / `false` | `/retrieve` and `/search` | Effective flag is `request.promptguard_fail_closed or floor`: `true` blocks STANDARD/UNTRUSTED content when the classifier is absent or the classification wait expires, even if the caller requests fail-open. `false` imposes no floor. Every 200 reports `effective_promptguard_fail_closed`; trust-tier exemptions remain. Set through the deployed-container bind mount described above. |
-| `promptguard_threshold_ceiling` | `1.0` | 0.0 – 1.0 | **retrieve only** (`/retrieve`) | Effective threshold is `min(request.promptguard_threshold, ceiling)`; a lower ceiling blocks at a lower classifier score. `1.0` imposes no ceiling. Every `/retrieve` 200 reports `effective_promptguard_threshold`, including cache hits. Set through the deployed-container bind mount described above. |
+| `promptguard_threshold_ceiling` | `1.0` | 0.0 – 1.0 | `/retrieve` and `/search` | Effective threshold is `min(requested value or validated config default, ceiling)` where only null/omitted selects the default (zero remains zero). The default is resolved **before** capping. A lower ceiling blocks at a lower classifier score; `1.0` imposes no ceiling. Every 200 reports `effective_promptguard_threshold`, including retrieve cache hits. Set through the deployed-container bind mount described above. |
 | `promptguard_wait_seconds` | `30.0` | 0.05 – 300.0 | **both fetch routes** (`/retrieve` and `/search`) | How long a request waits for a classification slot before giving up. A float, so sub-second values are expressible. On `/search` it is one budget for the whole request, not per result. `/extract` takes the same permit but waits without a deadline. |
 
-The threshold ceiling is **retrieve only**: `/search` still classifies at fixed `0.85`
-until `SearchRequest.promptguard_threshold` lands in spec 3 US-005, and does not report
-an effective threshold. `/extract` stays permanently fail-closed with its own threshold;
+The threshold ceiling applies to both fetch routes, including their configured default.
+`/extract` stays permanently fail-closed with its own raw-value threshold guard;
 neither bound reaches it and it carries neither effective field. These fields report
 **policy, not proof of scanning**. Neither bound overrides caller-supplied trust tiers:
 `trusted_domains` skips classification (`trusted_tier`), and `verified_domains` (VERIFIED)
