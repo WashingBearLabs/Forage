@@ -1346,26 +1346,26 @@ the pipeline and re-populates the key.
   makes the poisoning path quieter (a miss instead of a 500), which is why spec 4 follows it.
 
 **Acceptance Criteria:**
-- [ ] `ContentCache.get` returns `None` for a value that fails `RetrievedContent` validation or JSON
+- [x] `ContentCache.get` returns `None` for a value that fails `RetrievedContent` validation or JSON
       parsing, deletes the key and increments `corrupt_entries`; the next request repopulates it.
-- [ ] The WARNING carries the closed token `cache_entry_corrupt` and the key digest only; a
+- [x] The WARNING carries the closed token `cache_entry_corrupt` and the key digest only; a
       sentinel string in the corrupt value appears in no log record.
-- [ ] No `/retrieve` request returns 500 for any cache content (a test drives three malformed shapes:
+- [x] No `/retrieve` request returns 500 for any cache content (a test drives three malformed shapes:
       invalid JSON, wrong schema, wrong `retrieved_at` type).
-- [ ] Window mechanics (R36): the `* ``1.3.0`` — …` docstring line is appended; `uv run python -m
+- [x] Window mechanics (R36): the `* ``1.3.0`` — …` docstring line is appended; `uv run python -m
       scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via
       `_SCHEMA_MODELS`; nothing appended to `_EXPECTED_ONE_THREE_ZERO_DIFF` (`CacheMetricsResponse`
       is not a `_SCHEMA_MODELS` member — R36 corrected; the gates are `--check` and the `/metrics`
       order guards `tests/test_contract_metrics.py:135`, `:161`); the four anchor-quoting pages
       refreshed; `--check` green; `/metrics` serves the counter.
-- [ ] `grep -n 'corrupt_entries\|cache_entry_corrupt' kit_tools/docs/MONITORING.md
+- [x] `grep -n 'corrupt_entries\|cache_entry_corrupt' kit_tools/docs/MONITORING.md
       kit_tools/docs/TROUBLESHOOTING.md` returns at least one hit per file;
       `grep -n 'not authenticity' kit_tools/arch/SECURITY.md` hits the residual sentence.
-- [ ] `sanitizer_revision` rotation (`contract.py` docstring line) measured and recorded at the five
+- [x] `sanitizer_revision` rotation (`contract.py` docstring line) measured and recorded at the five
       sites.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-005: Operator policy floors — fail-closed floor on both fetch routes, threshold ceiling on `/retrieve`, reported on every response
 
