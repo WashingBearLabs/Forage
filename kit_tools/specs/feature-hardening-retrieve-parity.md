@@ -1465,51 +1465,51 @@ fails the unit test that pins the update keys.
   `kit_tools/docs/API_GUIDE.md` field rows, `kit_tools/arch/SECURITY.md` sentence above.
 
 **Acceptance Criteria:**
-- [ ] `promptguard_fail_closed_floor` and `promptguard_threshold_ceiling` are read at boot with the
+- [x] `promptguard_fail_closed_floor` and `promptguard_threshold_ceiling` are read at boot with the
       defaults above; a non-boolean floor or an out-of-range ceiling refuses boot with a
       closed-vocabulary `RetrieveConfigurationError` message.
-- [ ] With the floor `true`, `/retrieve` and `/search` behave fail-closed regardless of the request
+- [x] With the floor `true`, `/retrieve` and `/search` behave fail-closed regardless of the request
       flag for STANDARD- and UNTRUSTED-tier content; with the ceiling below a `/retrieve` request's
       threshold, classification uses the ceiling; with the defaults, behaviour and every existing test
       are unchanged; the VERIFIED and trusted-tier exemptions behave exactly as today (tested).
-- [ ] The value reaching `cache_policy_fingerprint` is the effective value (a test asserts a
+- [x] The value reaching `cache_policy_fingerprint` is the effective value (a test asserts a
       fail-open entry is not served to a floored request and that the fingerprint inputs equal the
       effective values); the `model_copy` update keys are pinned against `model_fields`.
-- [ ] `RetrievedContent` carries both `effective_*` fields and `SearchResponse` carries
+- [x] `RetrievedContent` carries both `effective_*` fields and `SearchResponse` carries
       `effective_promptguard_fail_closed`, stamped by the handler on every 200 response, cache hit
       or miss (a test serves a hit under a floored request and asserts the floored values; a
       hand-seeded `FakeStorage` entry without the fields — the only way such an entry can exist,
       since every story here rotates the cache key — is served with the stamped values); 422 bodies
       carry no policy fields.
-- [ ] Window mechanics (R36): the `* ``1.3.0`` — …` docstring line is appended; `uv run python -m
+- [x] Window mechanics (R36): the `* ``1.3.0`` — …` docstring line is appended; `uv run python -m
       scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via
       `_SCHEMA_MODELS`; the three field paths — `RetrievedContent.effective_promptguard_fail_closed`,
       `RetrievedContent.effective_promptguard_threshold`,
       `SearchResponse.effective_promptguard_fail_closed` — appended to
       `_EXPECTED_ONE_THREE_ZERO_DIFF` (added properties: the half of R36 that does append); the four
       anchor-quoting pages refreshed; `--check` green.
-- [ ] The consumer note spec 8 carries states that a caller sending `promptguard_fail_closed:
+- [x] The consumer note spec 8 carries states that a caller sending `promptguard_fail_closed:
       false` is, from this spec forward, exposed to an unscanned-but-marked response whenever the
       classification permit is contended for longer than `promptguard_wait_seconds`, that
       `promptguard_state` / `suspicious` / `promptguard_unavailable` / `unscanned_results` are the
       per-response signals, and that `promptguard_fail_closed_floor: true` is the operator-side
       control (`config.yaml`-only until spec 6's bind-mount procedure) — one sentence in the
       existing deliverable, pinned by a grep on the note's file once spec 8 names it.
-- [ ] The field descriptions, `API_GUIDE.md` rows and `SECURITY.md` sentence state that the fields
+- [x] The field descriptions, `API_GUIDE.md` rows and `SECURITY.md` sentence state that the fields
       report the policy applied, not whether content was scanned, and name both exemptions
       (`grep -n 'trusted_tier\|VERIFIED' kit_tools/arch/SECURITY.md kit_tools/docs/API_GUIDE.md`
       hits the new sentences).
-- [ ] `docs/configuration.md`'s two rows carry their Purpose text and the deployed-container
+- [x] `docs/configuration.md`'s two rows carry their Purpose text and the deployed-container
       cross-reference, and both `docs/configuration.md` and `kit_tools/arch/SECURITY.md` state the
       negative scope: `promptguard_threshold_ceiling` bounds `/retrieve` only — `/search` classifies
       at a fixed 0.85 until `SearchRequest.promptguard_threshold` lands (spec 3 US-005) — and the
       floor does not reach `/extract` (permanently fail-closed) or the trusted-tier / VERIFIED
       exemptions (`grep -n 'retrieve only' docs/configuration.md kit_tools/arch/SECURITY.md` hits).
-- [ ] `sanitizer_revision` rotation (`contract.py` docstring line) measured and recorded at the five
+- [x] `sanitizer_revision` rotation (`contract.py` docstring line) measured and recorded at the five
       sites.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ## Edge Cases
 
