@@ -142,7 +142,12 @@ MINOR when fields are only added.
   new 422 code for failures that answered 500 before, now parsed in
   ``/extract``'s rlimited worker. As with ``busy``, the ``/search`` 422
   ``error`` enum widens by the same member through the shared model, though
-  ``extraction_failed`` never arrives there. This version is **held**:
+  ``extraction_failed`` never arrives there. Continuing in
+  ``hardening-retrieve-parity`` US-004: ``/metrics`` gains
+  ``cache.corrupt_entries``, an additive counter of stored values that fail
+  ``RetrievedContent`` JSON or schema validation and become cache misses
+  instead of 500s. Pinned by ``tests/test_contract_metrics.py`` rather than
+  the golden fixture; parse success is not authenticity. This version is **held**:
   ``tests/golden/contract_1_3_0.json`` is
   re-created in place by every later story in this epic that moves the
   wire, until spec 8 US-002 freezes it ahead of the release cut.

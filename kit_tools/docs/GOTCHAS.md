@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # GOTCHAS.md
 
-> Last updated: 2026-09-20
-> Updated by: Claude (forage-contract US-004)
+> Last updated: 2026-09-22
+> Updated by: Copilot (hardening-retrieve-parity US-004)
 
 ## Overview
 
@@ -438,6 +438,7 @@ each time deliberately:
 | `hardening-retrieve-parity` US-006 | `d0433876…fc88e` | **not** a behaviour-changing rotation. `orchestrator.py` gained `_bounded_permit` (the one place `asyncio.timeout` and `semaphore.acquire()` appear), the two defaulted classification parameters on `sanitize_and_structure` and `run_search_pipeline`, the `/extract` file route's acquisition moving inward to the stage-3 seam, and step 8's refusal to cache a wait-timeout body; `stage3_promptguard.py` gained the pure `unavailable_result` seam; `contract.py` gained the `1.3.0` continuation line. **Three** hashed files, each reverted in turn; the all-reverted control reproduces `e55b5f06…4d3c0`. No sanitization behaviour moved — what moved is when stage 3 runs and what happens when the permit wait expires. |
 | `hardening-retrieve-parity` US-002 | `f654be77…c92fb` | **not** a behaviour-changing rotation. Two hashed files, each reverted alone (`orchestrator.py` → `16b9631f…`, `contract.py` → `646b4f27…`), both-reverted control landing exactly on `d0433876…`. `orchestrator.py`: `extract_html`, `scan_structural` and `structure_sanitization_result` moved onto `asyncio.to_thread`, `admission` became a required `AdmissionSlot` acquired after the cache read and released in `finally` after stage 1, and `fetch_result` / `html_text` are deleted before the classification wait; `contract.py`: `busy` in `RetrieveErrorCode`, `RETRIEVE_ADMISSION_QUEUE_FULL`, the `1.3.0` continuation line. `stage4_structuring.py` untouched. |
 | `hardening-retrieve-parity` US-003 | `464b6ad5…fead2` | **not** a rotation that changes how text is sanitized, but it moves a served outcome at the shipped defaults. Two hashed files, each reverted alone (`orchestrator.py` → `a018345e…`, `contract.py` → `80b39055…`), both-reverted control landing exactly on `f654be77…`. `orchestrator.py`: fetched PDFs go through `asyncio.to_thread(extract_pdf_bytes_in_subprocess, …)` inside the admission slot, retaining ownership through cleanup under repeated task cancellation, mapped most-specific first to `content_too_large` / `promptguard_budget` or `extraction_failed` with four reasons; `contract.py`: `extraction_failed` in `RetrieveErrorCode`, the `RETRIEVE_PDF_*` literals, the `1.3.0` continuation line. Supersedes the unaccepted `6fd320da…` candidate's cancellation bug. `pdf_subprocess.py` (`spool_dir()`, the bytes entry point) is not hashed. A PDF within bounds serves identical text; one over 114,688 characters or the worker's rlimits is now refused 422 rather than served or answered 500. |
+| `hardening-retrieve-parity` US-004 | `664ee603…c04b` | **not** a sanitization-behaviour change. Only `contract.py`'s 1.3.0 continuation line for `cache.corrupt_entries` moves the hash; its read-only whole-file revert reproduces `464b6ad5…fead2` exactly. `cache.py`'s guarded parse and `retrieval_app.py`'s metrics mirror/emission are not hashed. Invalid cached JSON/schema is counted, logged without payload bytes, deleted and treated as a miss rather than a 500; parse success is still not authenticity. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.

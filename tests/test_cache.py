@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -449,6 +450,154 @@ class TestContentCacheGetPut:
         assert result.body == "round trip test"
         assert result.cache_hit is True
         assert result.cached_at is not None
+
+
+# ---------------------------------------------------------------------------
+# Corrupt entries
+# ---------------------------------------------------------------------------
+
+
+class TestCorruptCacheEntries:
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            b"not-json-CORRUPT-VALUE-SENTINEL",
+            b'{"not": "CORRUPT-VALUE-SENTINEL"}',
+            json.dumps(
+                _make_content().model_dump(mode="json")
+                | {"retrieved_at": {"secret": "CORRUPT-VALUE-SENTINEL"}}
+            ).encode(),
+            b"",
+            b"\xffCORRUPT-VALUE-SENTINEL",
+            b"null",
+            b"[]",
+            json.dumps(
+                _make_content().model_dump(mode="json")
+                | {"content_type": "CORRUPT-VALUE-SENTINEL"}
+            ).encode(),
+        ],
+        ids=[
+            "invalid-json",
+            "wrong-schema",
+            "wrong-retrieved-at",
+            "empty",
+            "invalid-utf8",
+            "null",
+            "array",
+            "field-validator",
+        ],
+    )
+    async def test_corruption_is_deleted_counted_and_logged_without_payload(
+        self, raw: bytes, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        url = "https://user:URL-CREDENTIAL-SENTINEL@example.com/article"
+        key = cache_key(url, extract_mode="full", policy_fingerprint="policy")
+        metrics = CacheMetrics()
+        storage = FakeStorage(metrics=metrics)
+        storage.entries[key] = (raw, time.monotonic() + 3600)
+        cache = ContentCache(storage=storage, metrics=metrics)
+
+        with caplog.at_level(logging.WARNING, logger="cache"):
+            assert (
+                await cache.get(url, extract_mode="full", policy_fingerprint="policy")
+                is None
+            )
+            assert key not in storage.entries
+            assert storage.delete_calls == 1
+            assert metrics.corrupt_entries == 1
+            assert metrics.storage_hits == 1
+            assert metrics.operation_failures == 0
+            assert (
+                await cache.get(url, extract_mode="full", policy_fingerprint="policy")
+                is None
+            )
+
+        assert storage.delete_calls == 1
+        assert metrics.corrupt_entries == 1
+        assert caplog.record_tuples == [
+            (
+                "cache",
+                logging.WARNING,
+                f"Content cache entry rejected (cache_entry_corrupt) key={key}",
+            )
+        ]
+        assert all(record.exc_info is None for record in caplog.records)
+        assert "CORRUPT-VALUE-SENTINEL" not in caplog.text
+        assert "URL-CREDENTIAL-SENTINEL" not in caplog.text
+        assert url not in caplog.text
+
+        assert await cache.put(
+            url, _make_content(), extract_mode="full", policy_fingerprint="policy"
+        )
+        result = await cache.get(url, extract_mode="full", policy_fingerprint="policy")
+        assert result is not None
+        assert result.cache_hit
+        assert metrics.corrupt_entries == 1
+
+    async def test_failed_valkey_delete_still_returns_a_counted_miss(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        client = _mock_valkey_client()
+        client.get.return_value = b'{"not": "CORRUPT-VALUE-SENTINEL"}'
+        client.delete.side_effect = ConnectionError("DELETE-CREDENTIAL-SENTINEL")
+        metrics = CacheMetrics()
+        storage = ValkeyStorage(metrics=metrics)
+        storage._client = client
+        cache = ContentCache(storage=storage, metrics=metrics)
+
+        with caplog.at_level(logging.WARNING, logger="cache"):
+            assert await cache.get("https://example.com") is None
+
+        client.delete.assert_awaited_once_with(cache_key("https://example.com"))
+        assert metrics.corrupt_entries == 1
+        assert metrics.operation_failures == 1
+        assert not cache.connected
+        assert "cache_entry_corrupt" in caplog.text
+        assert "operation_failed" in caplog.text
+        assert "SENTINEL" not in caplog.text
+
+    @pytest.mark.parametrize("state", ["valid", "stale", "tz-naive", "absent"])
+    async def test_non_corrupt_values_do_not_increment_or_warn(
+        self, state: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        metrics = CacheMetrics()
+        storage = FakeStorage(metrics=metrics)
+        cache = ContentCache(storage=storage, metrics=metrics)
+        url = "https://example.com"
+        content = _make_content()
+        if state == "stale":
+            content.retrieved_at = datetime.now(UTC) - timedelta(hours=25)
+        elif state == "tz-naive":
+            content.retrieved_at = datetime.now(UTC).replace(tzinfo=None)
+        if state != "absent":
+            await storage.set(
+                cache_key(url), content.model_dump_json(), ttl_seconds=3600
+            )
+
+        with caplog.at_level(logging.WARNING, logger="cache"):
+            result = await cache.get(url)
+
+        assert (result is not None) == (state == "valid")
+        assert storage.delete_calls == (1 if state in {"stale", "tz-naive"} else 0)
+        assert metrics.corrupt_entries == 0
+        assert caplog.records == []
+
+    async def test_unexpected_parser_errors_are_not_silenced(self) -> None:
+        metrics = CacheMetrics()
+        storage = FakeStorage()
+        cache = ContentCache(storage=storage, metrics=metrics)
+        url = "https://example.com"
+        await cache.put(url, _make_content())
+        with (
+            patch.object(
+                RetrievedContent, "model_validate_json", side_effect=RuntimeError("bug")
+            ),
+            pytest.raises(RuntimeError, match="bug"),
+        ):
+            await cache.get(url)
+
+        assert storage.delete_calls == 0
+        assert metrics.corrupt_entries == 0
 
 
 # ---------------------------------------------------------------------------

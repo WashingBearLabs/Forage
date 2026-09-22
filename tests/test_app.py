@@ -522,7 +522,83 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "storage_misses",
         "storage_evictions",
         "storage_oversize_skips",
+        "corrupt_entries",
     }
+
+
+@pytest.mark.parametrize(
+    "shape", ["invalid-json", "wrong-schema", "wrong-retrieved-at"]
+)
+async def test_retrieve_repopulates_a_corrupt_cache_entry(
+    client: httpx.AsyncClient,
+    shape: str,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metrics = CacheMetrics()
+    storage = FakeStorage(metrics=metrics)
+    app.state.cache = ContentCache(storage=storage, metrics=metrics)
+    monkeypatch.setattr(app.state, "cache_metrics", metrics)
+    url = "https://example.com/article"
+    request = {"url": url, "trusted_domains": ["example.com"]}
+    fetched = FetchResult(
+        final_url=url,
+        content_type="text/html",
+        response_body=b"<html><body><p>A safe article.</p></body></html>",
+        status_code=200,
+    )
+    with (
+        patch(
+            "pipeline.orchestrator.validate_url",
+            return_value=("93.184.216.34", "example.com"),
+        ),
+        patch("pipeline.orchestrator.fetch_url", return_value=fetched) as fetch,
+        caplog.at_level(logging.WARNING, logger="cache"),
+    ):
+        warm = await client.post("/retrieve", json=request)
+        assert warm.status_code == 200
+        assert not warm.json()["cache_hit"]
+        (key,) = storage.entries
+        if shape == "invalid-json":
+            raw = "not-json-CORRUPT-VALUE-SENTINEL"
+        elif shape == "wrong-schema":
+            raw = '{"not": "CORRUPT-VALUE-SENTINEL"}'
+        else:
+            raw = json.dumps(
+                warm.json() | {"retrieved_at": {"secret": "CORRUPT-VALUE-SENTINEL"}}
+            )
+        await storage.set(key, raw, ttl_seconds=3600)
+
+        response = await client.post("/retrieve", json=request)
+        assert response.status_code == 200
+        assert response.json()["cache_hit"] is False
+        assert response.json()["body"] == warm.json()["body"]
+        assert storage.delete_calls == 1
+        assert metrics.corrupt_entries == 1
+        assert (
+            RetrievedContent.model_validate_json(storage.entries[key][0]).body
+            == (warm.json()["body"])
+        )
+
+        hit = await client.post("/retrieve", json=request)
+        assert hit.status_code == 200
+        assert hit.json()["cache_hit"] is True
+        assert hit.json()["body"] == warm.json()["body"]
+        assert fetch.call_count == 2
+        assert metrics.corrupt_entries == 1
+
+    warnings = [record for record in caplog.records if record.name == "cache"]
+    assert len(warnings) == 1
+    assert warnings[0].levelno == logging.WARNING
+    assert warnings[0].getMessage() == (
+        f"Content cache entry rejected (cache_entry_corrupt) key={key}"
+    )
+    assert "CORRUPT-VALUE-SENTINEL" not in caplog.text
+    response_metrics = await client.get("/metrics")
+    assert response_metrics.status_code == 200
+    assert response_metrics.json()["cache"]["corrupt_entries"] == 1
+    assert response_metrics.json()["retrieve"]["cache_misses"] == 2
+    assert response_metrics.json()["retrieve"]["cache_hits"] == 1
 
 
 async def test_metrics_exposes_the_model_acquisition_counters(

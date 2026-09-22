@@ -646,6 +646,13 @@ class CacheMetricsResponse(BaseModel):
             "bound. Always 0 on Valkey."
         )
     )
+    corrupt_entries: int = Field(
+        description=(
+            "Stored values that failed RetrievedContent JSON or schema validation "
+            "and were treated as misses, with deletion attempted. Counts parse "
+            "failures, not tampering; parse success does not prove authenticity."
+        )
+    )
 
 
 class ModelMetricsResponse(BaseModel):
@@ -1694,6 +1701,7 @@ async def metrics(request: Request) -> dict[str, Any]:
             "storage_misses": cache_metrics.storage_misses,
             "storage_evictions": cache_metrics.storage_evictions,
             "storage_oversize_skips": cache_metrics.storage_oversize_skips,
+            "corrupt_entries": cache_metrics.corrupt_entries,
         },
         # Weight acquisition (feature-forage-model-bootstrap); the states these
         # five counters separate are documented on

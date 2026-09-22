@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # CODE_ARCH.md
 
-> Last updated: 2026-09-20
-> Updated by: Claude (forage-contract US-004)
+> Last updated: 2026-09-22
+> Updated by: Copilot (hardening-retrieve-parity US-004)
 
 ---
 
@@ -235,7 +235,19 @@ refuses fetched PDFs over the worker's bounds at the shipped defaults — came w
 PDFs moving into the rlimited worker (`f654be77…` → `464b6ad5…`, `hardening-retrieve-parity`
 US-003 — `orchestrator.py` + `contract.py`, each reverted in turn, both-reverted control
 landing on `f654be77…`; includes the cancellation-ownership correction to the unaccepted
-`6fd320da…` candidate). Nothing downstream may assume Poppy↔Forage revision parity.
+`6fd320da…` candidate). A twenty-fourth — **not** sanitization-behaviour-changing —
+came with corrupt cache entries becoming misses (`464b6ad5…` → `664ee603…`,
+`hardening-retrieve-parity` US-004): only `contract.py`'s 1.3.0 continuation line
+moved a hashed input, and its read-only revert reproduces `464b6ad5…` exactly.
+The parse guard in `cache.py` and metrics mirror/emission in `retrieval_app.py`
+are not hashed. Nothing downstream may assume Poppy↔Forage revision parity.
+
+**Cache parse failure is a miss, not an authenticity check.** `ContentCache._parse_entry`
+catches `ValueError` from `RetrievedContent.model_validate_json`, increments
+`corrupt_entries`, logs one WARNING with `cache_entry_corrupt` and the key digest,
+and attempts deletion before returning `None`. Storage owns operation failures as
+before; even a failed deletion leaves this request on the miss path. Values that
+parse still pass through the existing freshness checks and are not authenticated.
 
 **Startup is non-blocking, and one background task is the reason.** The lifespan does its
 synchronous wiring, starts weight acquisition as

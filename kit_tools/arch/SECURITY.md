@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document authentication, authorization, and secrets management. Security architecture reference.
 
-> Last updated: 2026-09-20
-> Updated by: Claude (seed-project)
+> Last updated: 2026-09-22
+> Updated by: Copilot (hardening-retrieve-parity US-004)
 
 ---
 
@@ -324,6 +324,15 @@ This is a security property because of the incident it answers: an earlier versi
 ---
 
 ## Security-Relevant Logging and Metrics
+
+**Cache parsing is not authenticity.** `ContentCache` deletes values that fail
+`RetrievedContent` JSON or schema validation, counts them in `cache.corrupt_entries`,
+and treats them as misses. The WARNING carries only `cache_entry_corrupt` and the
+`ret:<sha256>` key digest, never the stored value or exception text. **Parse success is
+not authenticity**: a value that validates is served as written (subject to freshness
+checks) until spec 4's HMAC lands. `corrupt_entries` counts values that fail to parse,
+not values that were tampered with. This story makes the poisoning path quieter (a miss
+instead of a 500), which is why the HMAC integrity story follows it.
 
 Forage has no audit log in the authentication sense; there is no identity to record. What it does log is constrained: the root logger runs at WARNING, so `logger.info` output is invisible in the container (`kit_tools/docs/GOTCHAS.md`), and the failure paths that could touch a credential use the closed vocabularies above. For observing security behaviour prefer `GET /metrics`, which exposes `retrieve.blocked_by_reason`, `retrieve.promptguard_state`, `retrieve.classification_wait_timeouts`, `search.omitted_by_reason`, `search.unscanned_results`, `search.classification_wait_timeouts`, `extraction.busy_rejections`, `extraction.verdicts`, and `model.fetch_failures`, `model.verify_failures`, and `model.quarantines` as typed counters (`kit_tools/arch/CODE_ARCH.md`; `kit_tools/docs/MONITORING.md`). Logging conventions are in `kit_tools/arch/patterns/LOGGING.md`; which error reasons are content-free is in `kit_tools/arch/patterns/ERROR_HANDLING.md`.
 

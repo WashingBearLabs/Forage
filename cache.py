@@ -213,6 +213,9 @@ class CacheMetrics:
     inside its bounds — expired ones first, then least-recently-used. An entry
     that simply aged out and was noticed on the next read is a
     ``storage_misses``, not an eviction: nothing was under pressure.
+
+    ``corrupt_entries`` counts policy-layer parse failures, not tampering. Such
+    a read is a storage hit but a retrieval miss, even if deletion then fails.
     """
 
     reconnect_attempts: int = 0
@@ -223,6 +226,7 @@ class CacheMetrics:
     storage_misses: int = 0
     storage_evictions: int = 0
     storage_oversize_skips: int = 0
+    corrupt_entries: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -781,7 +785,8 @@ class ContentCache:
         """Fetch valid cached content for *url*, or ``None`` on miss.
 
         Entries older than the current caller policy are deleted even if their
-        original storage expiration was longer.
+        original storage expiration was longer. Unparseable entries are counted,
+        logged without their contents, and deleted before returning a miss.
         """
         key = cache_key(
             url,
@@ -796,7 +801,9 @@ class ContentCache:
         if raw is None:
             return None
 
-        content = RetrievedContent.model_validate_json(raw)
+        content = await self._parse_entry(key, raw)
+        if content is None:
+            return None
         retrieved_at = content.retrieved_at
         if retrieved_at.tzinfo is None:
             await self._storage.delete(key)
@@ -817,6 +824,18 @@ class ContentCache:
                 "cached_at": retrieved_at,
             },
         )
+
+    async def _parse_entry(self, key: str, raw: bytes) -> RetrievedContent | None:
+        """Parse stored content, treating invalid JSON or schema as a miss."""
+        try:
+            return RetrievedContent.model_validate_json(raw)
+        except ValueError:
+            self._metrics.corrupt_entries += 1
+            logger.warning(
+                "Content cache entry rejected (%s) key=%s", "cache_entry_corrupt", key
+            )
+            await self._storage.delete(key)
+            return None
 
     async def delete(
         self,

@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document debugging procedures and common fixes. How to diagnose problems.
 
-> Last updated: 2026-09-20
-> Updated by: Claude (seed-project)
+> Last updated: 2026-09-22
+> Updated by: Copilot (hardening-retrieve-parity US-004)
 
 ---
 
@@ -90,8 +90,8 @@ docker logs <container> 2>&1 | grep -E 'weights_unavailable|weights_fetch_failed
 # Verifier refusals, quarantines, unusable pin, load failure, crash
 docker logs <container> 2>&1 | grep -E 'weights_verification_failed|weights_quarantined|weights_pin_unusable|weights_load_failed|weights_acquisition_crashed'
 
-# Cache: the closed three-word vocabulary (the URL and password never appear)
-docker logs <container> 2>&1 | grep -E 'Valkey connection failed for content cache|Content cache operation failed|Content cache not available at startup'
+# Cache: closed failure tokens (the URL, value and password never appear)
+docker logs <container> 2>&1 | grep -E 'Valkey connection failed for content cache|Content cache operation failed|Content cache not available at startup|cache_entry_corrupt'
 
 # Per-request noise on a degraded container, and quarantines
 docker logs <container> 2>&1 | grep -E 'PromptGuard unavailable|Content quarantined'
@@ -343,6 +343,25 @@ are inferred from the `OSError` mapping in the Hub leg and the catch-all in
 
 **Fix:** export a writable `HF_HOME` before starting uvicorn. A bare-host run is itself
 undocumented (every doc runs the container); prefer `docker build -t forage . && docker run`.
+
+---
+
+### `cache_entry_corrupt`: invalid cached content was dropped
+
+**Symptom:** WARNING `Content cache entry rejected (cache_entry_corrupt) key=ret:<sha256>`
+and a rising `/metrics.cache.corrupt_entries`. `/retrieve` treats invalid JSON, schema
+mismatches and invalid timestamps as misses, deletes the key, and fetches again instead
+of answering 500. Only the fixed token and one-way key digest are logged.
+
+**Cause:** schema drift or an external writer storing invalid values. Repeated
+`cache_entry_corrupt` WARNINGs for one key digest after successful deletion mean an
+external writer is repopulating it. If `operation_failures` also rises, check the
+closed operation-failure WARNING first: deletion itself may be failing.
+
+**Fix:** identify and stop the external writer or correct its schema; restrict access
+to the cache. A following successful fetch repopulates the key. This counter measures
+parse failures, not tampering: parse success is not authenticity. Spec 4's HMAC
+`integrity_rejects` will be the stronger signal; it is not available yet.
 
 ---
 

@@ -85,6 +85,12 @@ components:
 
         eviction and has no byte bound of ours.'
       properties:
+        corrupt_entries:
+          description: Stored values that failed RetrievedContent JSON or schema validation
+            and were treated as misses, with deletion attempted. Counts parse failures, not
+            tampering; parse success does not prove authenticity.
+          title: Corrupt Entries
+          type: integer
         operation_failures:
           description: Cache operations that failed against the backend.
           title: Operation Failures
@@ -128,6 +134,7 @@ components:
       - storage_misses
       - storage_evictions
       - storage_oversize_skips
+      - corrupt_entries
       title: CacheMetricsResponse
       type: object
     DetailResponse:

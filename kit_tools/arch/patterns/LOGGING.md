@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document logging patterns, levels, and conventions.
 
-> Last updated: 2026-09-13
-> Updated by: Claude (seed-project)
+> Last updated: 2026-09-22
+> Updated by: Copilot (hardening-retrieve-parity US-004)
 
 ## Overview
 
@@ -42,7 +42,7 @@ Every module obtains its logger with `logger = logging.getLogger(__name__)` at m
 | Logger | Defined at | Levels used | What it emits |
 |--------|------------|-------------|---------------|
 | `retrieval_app` | `retrieval_app.py:76` | INFO, WARNING | Startup lines; `config.yaml not found at %s`; `break_glass_advertisement_active — %s=1 is forcing /health ...`; `document extraction completed` (INFO, content-free `extra=` dict) |
-| `cache` | `cache.py:38` | WARNING | The two closed-vocabulary lines (see below) |
+| `cache` | `cache.py:38` | WARNING | Closed-vocabulary connection, operation and corrupt-entry lines (see below) |
 | `model_fetcher` | `model_fetcher.py:141` | INFO, WARNING, ERROR, exception | All `weights_*` markers and `model_revision_invalid` |
 | `promptguard.classifier` | `promptguard/classifier.py:21` | DEBUG, INFO, WARNING | Model loaded; `PromptGuard model not available — ML injection detection disabled` (WARNING with `exc_info=True`, so a traceback follows); `classify() called but model not loaded — returning safe fallback` |
 | `pipeline.orchestrator` | `pipeline/orchestrator.py:80` | INFO, WARNING | `Cache hit for %s`; search-result omission lines; `search_promptguard_complete`; quarantine WARNING; `search_promptguard_local_latency_target_exceeded` (WARNING, `extra=` only); `search_provider_failed provider=%s failure_class=%s detail=%s` (WARNING, one per failed provider during chain traversal — the closed tokens ride in the message as `key=value`, and the line pairs with the provider's own WARNING: cause at the provider, effect on the chain) |
@@ -77,12 +77,20 @@ Tests are the enforcement mechanism for both vocabularies: each fixed string bel
 
 ### `cache.py`
 
-`_closed_vocabulary_reason(exc, *, default)` (`cache.py:297-305`) returns `timeout` when `exc` is a `TimeoutError` and otherwise the caller's `default`. Exactly three strings can ever appear: `connect_failed`, `operation_failed`, `timeout`.
+`_closed_vocabulary_reason(exc, *, default)` returns `timeout` when `exc` is a
+`TimeoutError` and otherwise the caller's `default`: `connect_failed`,
+`operation_failed`, `timeout`. It is an exception mapper, not a token registry.
+The cache parse guard logs the fixed literal `cache_entry_corrupt` directly.
 
 | Level | Line | Reason values | Site |
 |-------|------|---------------|------|
 | WARNING | `Valkey connection failed for content cache (%s)` | `connect_failed`, `timeout` | `_attempt_connect`, `cache.py:419-422` |
 | WARNING | `Content cache operation failed (%s)` | `operation_failed`, `timeout` | `_mark_disconnected`, `cache.py:482-485` |
+| WARNING | `Content cache entry rejected (%s) key=%s` | `cache_entry_corrupt` and the one-way `ret:<sha256>` key digest only | `ContentCache._parse_entry` |
+
+The corrupt-entry line never carries the raw value, URL, exception text or traceback.
+`tests/test_cache.py::TestCorruptCacheEntries` asserts the exact record and absence of
+sentinels in both the value and URL, including when deletion also fails.
 
 Startup logs only the backend literal (`Content cache connected (valkey|memory)`) or the fixed canary `Content cache not available at startup`. Pinned by `tests/test_cache.py::TestReconnect::test_connect_failure_never_logs_url_or_secret` (drives both `ContentCache.connect()` and the real lifespan with a credentialed URL) and `tests/test_app.py::test_no_selection_path_logs_the_valkey_url` (five start modes).
 

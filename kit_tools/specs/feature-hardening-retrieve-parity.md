@@ -1720,6 +1720,27 @@ fails the unit test that pins the update keys.
 
 ## Implementation Notes
 
+### US-004 implementation (2026-09-22)
+
+- `ContentCache._parse_entry` is the one guarded parse seam: catches only `ValueError`,
+  counts `corrupt_entries`, logs `cache_entry_corrupt` plus the one-way key digest, and
+  attempts deletion before returning a miss. Storage retains ownership of operation
+  failures; even a Valkey delete failure returns a miss and reports its own closed token.
+- Added the counter in all three places, in matching order: `CacheMetrics`,
+  `CacheMetricsResponse`, and the handler's explicit cache dict. The existing byte/order
+  guards cover it; `/retrieve` recovery tests also assert the nonzero `/metrics` value.
+- Re-created the held golden using `_SCHEMA_MODELS`: byte-identical, because metrics
+  models are not members. No addition to `_EXPECTED_ONE_THREE_ZERO_DIFF`, no older
+  golden changes. Regenerated OpenAPI and its anchor, updating all four quoting pages.
+- Measured revision `464b6ad5…fead2` -> `664ee603…c04b`; the only changed hashed input
+  is the contract docstring. Its read-only whole-file revert to clean base `9200a76`
+  reproduces the before value under both `{}` and shipped config, recorded at all five
+  sites. No sanitization algorithm changed; parse success is still not authenticity.
+- The implementation instructions prohibit a full-suite run here, so that acceptance
+  gate remains for the orchestrator. All 668 related tests pass; repository-wide Ruff
+  lint/format, strict Pyright and contract export checks pass. Story definitions and
+  acceptance checkboxes are unchanged.
+
 ### US-003 handoff checkpoint (2026-09-22)
 
 - Claude's recovered attempt `371d254` is preserved on

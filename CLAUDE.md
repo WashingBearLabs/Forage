@@ -329,6 +329,13 @@ PDF failure is a coded 422 where it was a 500.
 The recovered candidate's `6fd320da…` was never accepted: cancelling its `to_thread`
 await released admission while the worker and spool survived. The corrected task retains
 ownership even under repeated cancellation and propagates cancellation only after cleanup.
+and a twenty-fourth to `664ee603…` — **not** a rotation that changes sanitization
+behaviour — when `contract.py` gained the `1.3.0` continuation line for
+`cache.corrupt_entries` (`hardening-retrieve-parity` US-004). It is the only hashed
+file that moved; reverting its bytes alone reproduces `464b6ad5…` exactly.
+`cache.py`'s guarded parse and `retrieval_app.py`'s metrics mirror/emission are not
+hashed. Invalid cached JSON or schema now becomes a counted, logged miss with deletion
+attempted rather than a 500; parse success still does not establish authenticity.
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

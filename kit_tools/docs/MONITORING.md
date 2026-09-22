@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document logs, metrics, alerts, and dashboards. How to observe the system.
 
-> Last updated: 2026-09-20
-> Updated by: Claude (seed-project)
+> Last updated: 2026-09-22
+> Updated by: Copilot (hardening-retrieve-parity US-004)
 
 ---
 
@@ -181,7 +181,8 @@ Backed by `retrieval_app.RetrieveMetrics`.
 
 ### `cache`
 
-Backed by `cache.CacheMetrics` — the storage-operation layer, not request outcomes.
+Backed by `cache.CacheMetrics` — storage operations and policy-layer parse failures,
+not request outcomes.
 
 | Counter | Kind | Increments when | A rising value means |
 |---------|------|-----------------|----------------------|
@@ -189,6 +190,11 @@ Backed by `cache.CacheMetrics` — the storage-operation layer, not request outc
 | `operation_failures` | counter | `ValkeyStorage._mark_disconnected` after a `get` / `set` / `delete` raised. | Valkey dropping mid-run; `/retrieve` continues uncached. |
 | `storage_hits` / `storage_misses` | counters | Key lookups, both backends. | — |
 | `storage_evictions` / `storage_oversize_skips` | counters | `InMemoryStorage` only; always 0 on Valkey. | Memory-mode cache bounds being hit. |
+| `corrupt_entries` | counter | `ContentCache` cannot parse stored bytes as `RetrievedContent`; the value is treated as a miss and deletion is attempted. Both backends. | Schema drift or invalid values from another writer. Not an authenticity or tampering counter: parseable values are still served. Correlate the WARNING `cache_entry_corrupt` by its `ret:<sha256>` key digest. |
+
+A corrupt value is a `storage_hits` increment but a `retrieve.cache_misses` outcome.
+If deletion fails, the ordinary `operation_failures` counter and closed WARNING also
+move; the request still proceeds as a miss.
 
 ### `model`
 
@@ -253,12 +259,13 @@ Dropped (INFO): `Sidecar config loaded (<n> keys); contract_version=<v>`, `Conte
 
 ### Closed vocabularies
 
-**`cache.py`** — `_closed_vocabulary_reason()` yields exactly one of `connect_failed`, `operation_failed`, `timeout` (the last when the exception is a `TimeoutError`). Only two lines exist:
+**`cache.py`** — `_closed_vocabulary_reason()` yields exactly one of `connect_failed`, `operation_failed`, `timeout` (the last when the exception is a `TimeoutError`). The parse guard logs `cache_entry_corrupt` directly, not through that exception mapper:
 
 | Level | Line | Reason values |
 |-------|------|---------------|
 | WARNING | `Valkey connection failed for content cache (<reason>)` | `connect_failed`, `timeout` — from `_attempt_connect`. |
 | WARNING | `Content cache operation failed (<reason>)` | `operation_failed`, `timeout` — from `_mark_disconnected`. |
+| WARNING | `Content cache entry rejected (cache_entry_corrupt) key=ret:<sha256>` | Fixed token and one-way key digest only, never the value, URL or exception text. |
 
 **`pipeline/orchestrator.py`** — the classification-wait timeout has its own closed token, deliberately distinct from stage 3's "PromptGuard unavailable" lines, because the classifier in this case is *loaded and busy* rather than missing and those lines would send an operator to the model loader.
 
@@ -308,7 +315,7 @@ These are WARNING, so they are visible, and they arrive once per `/retrieve` or 
 
 ### What is never logged
 
-`VALKEY_URL`, its password or host, `HF_TOKEN`, `FORAGE_MIRROR_TOKEN`, `str(exc)` on cache failures, oras stdout/stderr, and `huggingface_hub` exception text. Mirror references pass through `redact_reference()` before logging. No document text and no query text is logged; the only content-derived value in a visible line is the requested URL in the quarantine WARNING (result URLs appear only at INFO). Convention (`kit_tools/docs/CONVENTIONS.md`, "Logging"): never log a credential-bearing value; closed reason vocabularies over prose; machine-readable codes in anything a consumer parses. See `kit_tools/arch/patterns/LOGGING.md` for the full conventions and `kit_tools/arch/SECURITY.md` for the security-relevant logging section.
+`VALKEY_URL`, its password or host, `HF_TOKEN`, `FORAGE_MIRROR_TOKEN`, `str(exc)` on cache failures, oras stdout/stderr, and `huggingface_hub` exception text. Mirror references pass through `redact_reference()` before logging. No document text and no query text is logged; visible request-derived values include the requested URL in the quarantine WARNING and the one-way key digest in the `cache_entry_corrupt` WARNING (result URLs appear only at INFO). Convention (`kit_tools/docs/CONVENTIONS.md`, "Logging"): never log a credential-bearing value; closed reason vocabularies over prose; machine-readable codes in anything a consumer parses. See `kit_tools/arch/patterns/LOGGING.md` for the full conventions and `kit_tools/arch/SECURITY.md` for the security-relevant logging section.
 
 ### Leakage assertions
 
@@ -332,7 +339,7 @@ docker logs <container> 2>&1 | grep -E 'weights_unavailable|weights_fetch_failed
 docker logs <container> 2>&1 | grep -E 'weights_verification_failed|weights_quarantined|weights_pin_unusable'
 
 # Cache trouble (closed vocabulary; the URL never appears)
-docker logs <container> 2>&1 | grep -E 'Valkey connection failed|Content cache (operation failed|not available)'
+docker logs <container> 2>&1 | grep -E 'Valkey connection failed|Content cache (operation failed|not available)|cache_entry_corrupt'
 
 # Quarantines and fail-closed decisions
 docker logs <container> 2>&1 | grep -E 'Content quarantined|PromptGuard unavailable'

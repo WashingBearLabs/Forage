@@ -80,7 +80,8 @@ those eight — so Forage's revision moved:
 | After the `/retrieve` pipeline signature and chunk budget (`hardening-retrieve-parity` US-001) | `e55b5f06…4d3c0` |
 | After the classification semaphore on `/retrieve` and `/search` (`hardening-retrieve-parity` US-006) | `d0433876…fc88e` |
 | After stages 1, 2 and 4 off the loop and the `/retrieve` admission gate (`hardening-retrieve-parity` US-002) | `f654be77…c92fb` |
-| **Current (`hardening-retrieve-parity` US-003, fetched PDFs in the rlimited worker)** | **`464b6ad5…fead2`** |
+| After fetched PDFs moved into the rlimited worker (`hardening-retrieve-parity` US-003) | `464b6ad5…fead2` |
+| **Current (`hardening-retrieve-parity` US-004, corrupt cache entries become misses)** | **`664ee603…c04b`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -1203,3 +1204,34 @@ Unlike US-001's pre-check, this is active at the shipped defaults.
 `cache_policy_fingerprint()` takes the revision as an input, so every extraction cached under
 `f654be77…` becomes unreachable at the next start and ages out on its own TTL. **Do not
 assume Poppy↔Forage revision parity** — compare contracts, not revisions.
+
+### The twenty-fourth rotation: corrupt cache entries become misses (`hardening-retrieve-parity` US-004, 2026-09-22)
+
+```
+before: 464b6ad55a7b7b51661ed264835ed94cc48c16202fd5583f88e995531d4fead2
+after:  664ee603ca85466ada37bb3f3a5a78a7970d295dfa105a9045bde5298cc8c04b
+```
+
+**One hashed file moved: `pipeline/contract.py`'s 1.3.0 continuation line.**
+The attempt started at clean `9200a76` (`git status --porcelain` empty), where
+`derive_sanitizer_revision({})` measured the before value above. Comparing all nine
+hashed inputs with that commit confirms only `contract.py` changed. A read-only
+`Path.read_bytes` substitution of `git show 9200a76:pipeline/contract.py` reproduces
+`464b6ad55a7b7b51661ed264835ed94cc48c16202fd5583f88e995531d4fead2` exactly; removing
+the substitution reproduces the after value. Both measurements match under `{}` and
+the shipped `config.yaml`. No working-tree source was overwritten.
+
+**What moved it:** the docstring announces the additive `cache.corrupt_entries`
+counter in the held 1.3.0 window. **What did not:** `cache.py`'s single guarded parse,
+closed WARNING and deletion attempt, and `retrieval_app.py`'s counter mirror/emission
+are not revision sources. The regenerated OpenAPI anchor is
+`a588c1028f5fe61d306183a8f01de93deea141c6bdfbd36e5a0e504268938481`;
+regenerating the held golden through `_SCHEMA_MODELS` leaves it byte-identical,
+because that set contains no metrics models. No golden-diff path is added.
+
+This rotation does **not** change how text is sanitized. Invalid cached JSON or
+schema now produces a miss instead of a 500, while parseable values still pass
+through without authenticity checking until spec 4's HMAC. Freshness policy is
+unchanged. Every entry keyed under `464b6ad5…` becomes unreachable at the next start
+and ages out under its own TTL because the revision feeds `cache_policy_fingerprint`.
+**Not replayed to Poppy**; compare contracts, not revisions.
