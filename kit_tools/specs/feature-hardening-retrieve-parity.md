@@ -1255,7 +1255,7 @@ whose text exceeds `max_extracted_characters(extraction.max_promptguard_chunks)`
 - Rotates `sanitizer_revision` (`orchestrator.py`, `contract.py`), ruling 6 / R32.
 
 **Acceptance Criteria:**
-- [ ] Fetched `application/pdf` bodies are parsed by `extract_pdf_bytes_in_subprocess` →
+- [x] Fetched `application/pdf` bodies are parsed by `extract_pdf_bytes_in_subprocess` →
       `extract_pdf_in_subprocess` inside `asyncio.to_thread`, with `app.state.extraction_settings`
       (asserted argument), inside the admission slot; `pipeline.pdf_subprocess.spool_dir()` resolves
       per call under `tempfile.gettempdir()`, creates the `forage-spool-<uid>` directory with
@@ -1267,32 +1267,32 @@ whose text exceeds `max_extracted_characters(extraction.max_promptguard_chunks)`
       on a symlink; `_spool_upload` uses `dir=spool_dir()` and `tests/test_app.py:366-387` and
       `:411` pass unedited; the `except` chain is most-specific-first (a
       `PDFClassifiableTextLimitError` yields the `content_too_large` row, never `extraction_failed`).
-- [ ] The spool file has mode `0600` while the worker runs and no `forage-retrieve-*` file remains
+- [x] The spool file has mode `0600` while the worker runs and no `forage-retrieve-*` file remains
       under the spool directory after success, after each table row, after a simulated kill, after a
       spool `OSError` and after cancellation (a test scans the directory after each).
-- [ ] Each row of the five-row table yields the stated `error` and `reason` as a 422, never a 500;
+- [x] Each row of the five-row table yields the stated `error` and `reason` as a 422, never a 500;
       the spool row logs exactly one WARNING containing `retrieve_spool_error` (sentinel assertion)
       and no other row does; a fetched-PDF `/retrieve` with `extract_route_enabled` at its default
       is 200; a fetched PDF
       over `max_extracted_characters(extraction.max_promptguard_chunks)` is refused
       `content_too_large` / `promptguard_budget` while the same text as HTML is served under
       `retrieve.max_promptguard_chunks`.
-- [ ] `RetrieveErrorCode` gains exactly `extraction_failed` (beside US-002's `busy`); the four reason
+- [x] `RetrieveErrorCode` gains exactly `extraction_failed` (beside US-002's `busy`); the four reason
       literals are constants in `pipeline/contract.py` with the same-literal comment;
       `tests/test_contract_errors.py:241` (→ 8), `:245-247` and its comment, `:233` (stays 18),
       `tests/test_contract_schema.py:339`'s renamed pin and `RetrieveErrorCode`'s docstring are
       updated.
-- [ ] `ExtractionAdmissionMiddleware`, the worker's IPC vocabulary and `/extract`'s behaviour are
+- [x] `ExtractionAdmissionMiddleware`, the worker's IPC vocabulary and `/extract`'s behaviour are
       untouched (existing tests pass without edits, the two lifespan-free spool callers named
       above included); `SECURITY.md:50` still holds; `Pipeline422ErrorResponse.error`'s description
       names `extraction_failed` as `/retrieve`-only.
-- [ ] Window mechanics (R36): the `* ``1.3.0`` — …` docstring line is appended; `uv run python -m
+- [x] Window mechanics (R36): the `* ``1.3.0`` — …` docstring line is appended; `uv run python -m
       scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via
       `_SCHEMA_MODELS`; `Pipeline422ErrorResponse.error[enum]=extraction_failed` appended to
       `_EXPECTED_ONE_THREE_ZERO_DIFF` (one path, both routes' 422); the reason literals and the
       description rewrite append nothing (R36 corrected); the four anchor-quoting pages refreshed;
       `--check` green.
-- [ ] `grep -n 'pdf_spool_error' docs/configuration.md kit_tools/docs/MONITORING.md
+- [x] `grep -n 'pdf_spool_error' docs/configuration.md kit_tools/docs/MONITORING.md
       kit_tools/docs/API_GUIDE.md kit_tools/docs/TROUBLESHOOTING.md` returns at least one hit per
       file and `grep -n 'retrieve_spool_error' kit_tools/docs/MONITORING.md` hits the alert row; `docs/configuration.md` carries the spool-directory requirement, the combined disk
       footprint, the orphan-on-SIGKILL sentence and the spawn-latency order of magnitude
@@ -1300,11 +1300,11 @@ whose text exceeds `max_extracted_characters(extraction.max_promptguard_chunks)`
       today), the parent-directory (sticky or not other-writable) requirement and the
       confidentiality sentence (`grep -n 'sticky' docs/configuration.md` hits); `CODE_ARCH.md` and
       `SECURITY.md:198` carry the worker sentences.
-- [ ] `sanitizer_revision` rotation measured (revert `orchestrator.py` and `contract.py` each in
+- [x] `sanitizer_revision` rotation measured (revert `orchestrator.py` and `contract.py` each in
       turn, both-reverted control) and recorded at the five sites.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-004: A corrupt cache entry is a miss, not a 500
 
