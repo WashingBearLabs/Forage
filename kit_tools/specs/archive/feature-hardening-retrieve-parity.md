@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: hardening-retrieve-parity
-status: active
+status: completed
 session_ready: true
 depends_on: [hardening-search-sanitization]
 vision_ref: "T2.2 — Forage hardening"
@@ -12,7 +12,8 @@ epic_seq: 2
 epic_final: false
 execution_order: [US-001, US-006, US-002, US-003, US-004, US-005]
 created: 2026-09-19
-updated: 2026-09-19
+updated: 2026-09-22
+completed: 2026-09-22
 ---
 
 # Feature Spec: `/retrieve` Parity With `/extract`
