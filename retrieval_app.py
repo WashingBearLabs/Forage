@@ -1719,6 +1719,24 @@ async def metrics(request: Request) -> dict[str, Any]:
     }
 
 
+def _apply_promptguard_policy[T: RetrieveRequest | SearchRequest](
+    body: T, settings: RetrieveSettings
+) -> T:
+    # Resolve caller-controlled, operator-boundable fields here, never as parallel
+    # pipeline parameters: the request also supplies the cache fingerprint.
+    updates: dict[str, bool | float] = {
+        "promptguard_fail_closed": (
+            body.promptguard_fail_closed or settings.promptguard_fail_closed_floor
+        ),
+    }
+    if isinstance(body, RetrieveRequest):
+        updates["promptguard_threshold"] = min(
+            body.promptguard_threshold, settings.promptguard_threshold_ceiling
+        )
+    assert updates.keys() <= type(body).model_fields.keys()
+    return body.model_copy(update=updates)
+
+
 @app.post(
     "/retrieve",
     response_model=RetrievedContent,
@@ -1751,6 +1769,7 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
     retrieve_metrics.requests += 1
     try:
         retrieve_settings: RetrieveSettings = request.app.state.retrieve_settings
+        body = _apply_promptguard_policy(body, retrieve_settings)
         content = await run_retrieve_pipeline(
             body,
             cache=request.app.state.cache,
@@ -1767,7 +1786,12 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
         retrieve_metrics.record_error(exc.error)
         raise
     retrieve_metrics.record_content(content)
-    return content
+    return content.model_copy(
+        update={
+            "effective_promptguard_fail_closed": body.promptguard_fail_closed,
+            "effective_promptguard_threshold": body.promptguard_threshold,
+        }
+    )
 
 
 @app.post(
@@ -1959,6 +1983,7 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
     """
     search_metrics: SearchMetrics = request.app.state.search_metrics
     search_metrics.requests += 1
+    body = _apply_promptguard_policy(body, request.app.state.retrieve_settings)
     configured_chain = _resolved_search_providers(request.app.state)
     effective_chain, ignored_count = apply_request_policy(configured_chain, body)
     search_metrics.policy_unknown_provider += ignored_count
@@ -1989,4 +2014,6 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
         search_metrics.record_error(exc.error)
         raise
     search_metrics.record_response(response)
-    return response
+    return response.model_copy(
+        update={"effective_promptguard_fail_closed": body.promptguard_fail_closed}
+    )

@@ -114,6 +114,31 @@ class RetrievedContent(BaseModel):
             "structural_blocked, unavailable_blocked, or unavailable_allowed"
         ),
     )
+    effective_promptguard_fail_closed: bool = Field(
+        default=True,
+        description=(
+            "Policy applied to this request's promptguard_fail_closed flag, "
+            "bounded by the operator's floor. Decides behaviour only when the "
+            "classifier is unavailable (absent or classification wait timed out), "
+            "not whether content was scanned; read promptguard_state for that. "
+            "Neither effective policy field overrides caller-supplied trust tiers: "
+            "a trusted_domains match skips classification (trusted_tier), and a "
+            "verified_domains match (VERIFIED) degrades open when unavailable."
+        ),
+    )
+    effective_promptguard_threshold: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Block threshold applied to this request, bounded by the operator's "
+            "ceiling. Reports policy, not whether content was scanned; read "
+            "promptguard_state for that. Neither effective policy field overrides "
+            "caller-supplied trust tiers: a trusted_domains match skips "
+            "classification (trusted_tier), and a verified_domains match "
+            "(VERIFIED) degrades open when the classifier is unavailable."
+        ),
+    )
 
     # -- Provenance --
     domain: str = Field(..., min_length=1, description="Domain of final_url")
@@ -259,13 +284,18 @@ class RetrieveRequest(BaseModel):
         default=0.85,
         ge=0.0,
         le=1.0,
-        description="PromptGuard confidence threshold",
+        description=(
+            "PromptGuard confidence threshold, bounded by the operator's ceiling"
+        ),
     )
     promptguard_fail_closed: bool = Field(
         default=True,
         description=(
             "When True, block content if PromptGuard is unavailable "
-            "(fail-closed). When False, allow with a trust penalty (fail-open)."
+            "(fail-closed). When False, allow with a trust penalty (fail-open). "
+            "Bounded by the operator's floor; trusted_domains skips classification "
+            "(trusted_tier), and verified_domains (VERIFIED) degrades open when "
+            "unavailable regardless of this flag."
         ),
     )
 
@@ -296,7 +326,8 @@ class SearchRequest(BaseModel):
         default=True,
         description=(
             "When True, drop search results if PromptGuard is unavailable "
-            "(fail-closed). When False, allow with a suspicion marker (fail-open)."
+            "(fail-closed). When False, allow with a suspicion marker (fail-open). "
+            "Bounded by the operator's floor."
         ),
     )
     providers: list[str] = Field(
@@ -498,5 +529,19 @@ class SearchResponse(BaseModel):
             "PromptGuard was needed but did not run on at least one examined "
             "result (withheld or returned) — a stage-2 structural block never "
             "needed a scan and does not count"
+        ),
+    )
+    effective_promptguard_fail_closed: bool = Field(
+        default=True,
+        description=(
+            "Policy applied to this request's promptguard_fail_closed flag, "
+            "bounded by the operator's floor. Decides behaviour only when the "
+            "classifier is unavailable (absent or classification wait timed out), "
+            "not whether results were scanned; read omissions, suspicious, "
+            "promptguard_unavailable and unscanned_results for that. This route "
+            "uses STANDARD tier; the floor does not override caller-supplied "
+            "trust tiers on /retrieve: trusted_domains skips classification "
+            "(trusted_tier), and verified_domains (VERIFIED) degrades open "
+            "when unavailable."
         ),
     )

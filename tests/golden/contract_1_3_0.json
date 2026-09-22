@@ -396,6 +396,20 @@
         "title": "Domain Changed On Redirect",
         "type": "boolean"
       },
+      "effective_promptguard_fail_closed": {
+        "default": true,
+        "description": "Policy applied to this request's promptguard_fail_closed flag, bounded by the operator's floor. Decides behaviour only when the classifier is unavailable (absent or classification wait timed out), not whether content was scanned; read promptguard_state for that. Neither effective policy field overrides caller-supplied trust tiers: a trusted_domains match skips classification (trusted_tier), and a verified_domains match (VERIFIED) degrades open when unavailable.",
+        "title": "Effective Promptguard Fail Closed",
+        "type": "boolean"
+      },
+      "effective_promptguard_threshold": {
+        "default": 0.85,
+        "description": "Block threshold applied to this request, bounded by the operator's ceiling. Reports policy, not whether content was scanned; read promptguard_state for that. Neither effective policy field overrides caller-supplied trust tiers: a trusted_domains match skips classification (trusted_tier), and a verified_domains match (VERIFIED) degrades open when the classifier is unavailable.",
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "title": "Effective Promptguard Threshold",
+        "type": "number"
+      },
       "final_url": {
         "description": "URL after redirects resolved",
         "minLength": 1,
@@ -550,7 +564,7 @@
       },
       "promptguard_fail_closed": {
         "default": true,
-        "description": "When True, drop search results if PromptGuard is unavailable (fail-closed). When False, allow with a suspicion marker (fail-open).",
+        "description": "When True, drop search results if PromptGuard is unavailable (fail-closed). When False, allow with a suspicion marker (fail-open). Bounded by the operator's floor.",
         "title": "Promptguard Fail Closed",
         "type": "boolean"
       },
@@ -657,6 +671,12 @@
     },
     "description": "Response wrapper for search results.",
     "properties": {
+      "effective_promptguard_fail_closed": {
+        "default": true,
+        "description": "Policy applied to this request's promptguard_fail_closed flag, bounded by the operator's floor. Decides behaviour only when the classifier is unavailable (absent or classification wait timed out), not whether results were scanned; read omissions, suspicious, promptguard_unavailable and unscanned_results for that. This route uses STANDARD tier; the floor does not override caller-supplied trust tiers on /retrieve: trusted_domains skips classification (trusted_tier), and verified_domains (VERIFIED) degrades open when unavailable.",
+        "title": "Effective Promptguard Fail Closed",
+        "type": "boolean"
+      },
       "fallback_fired": {
         "default": false,
         "description": "True iff the provider chain advanced past the first provider before this response was served \u2014 the per-response face of the `search.fallback_fired` /metrics counter. It records chain advancement, not which provider ultimately served: for a chain that tries a provider before a free one, this is True when the free provider ends up serving.",

@@ -77,7 +77,9 @@ retrieve:
 # Per-request PromptGuard policy floors for the fetch routes. A request may
 # not relax below `promptguard_fail_closed_floor` nor above
 # `promptguard_threshold_ceiling`; the shipped values (false / 1.0) impose no
-# floor at all, which is today's behaviour.
+# floor at all, which is today's behaviour. The ceiling is /retrieve-only;
+# /search still classifies at 0.85. Neither overrides caller-supplied trust
+# tiers (trusted-tier skip / VERIFIED fail-open), nor /extract's fixed policy.
 promptguard_fail_closed_floor: false
 promptguard_threshold_ceiling: 1.0
 # How long either fetch route waits for a classification slot before giving

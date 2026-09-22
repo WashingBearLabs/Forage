@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document API endpoints, CLI commands, or library interface. The external contract.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-retrieve-parity US-004)
+> Updated by: Copilot (hardening-retrieve-parity US-005)
 
 ---
 
@@ -158,8 +158,8 @@ Request fields (`RetrieveRequest` in `models.py`):
 | `trusted_domains` | list of str | `[]` | | Exact-host match. Trusted content skips Prompt Guard entirely (`skipped_trusted`) |
 | `verified_domains` | list of str | `[]` | | Higher base score; fail-open if the model is absent |
 | `blocked_domains` | list of str | `[]` | | Merged with `config.yaml` `seed_blocklist`; refused with `blocked_domain` |
-| `promptguard_threshold` | float | 0.85 | 0.0..1.0 | Classifier score at or above which content is quarantined |
-| `promptguard_fail_closed` | bool | `true` | | When the model is absent: `true` quarantines standard and untrusted content, `false` allows it with a trust penalty |
+| `promptguard_threshold` | float | 0.85 | 0.0..1.0 | Classifier scores above this value quarantine content; bounded by the operator's `promptguard_threshold_ceiling` via `min(request, ceiling)` |
+| `promptguard_fail_closed` | bool | `true` | | When the classifier is absent or the permit wait expires: `true` quarantines standard and untrusted content, `false` allows it with a trust penalty; bounded by the operator's `promptguard_fail_closed_floor` via `request or floor`. Neither overrides the trusted_tier skip or VERIFIED fail-open exemption |
 
 ```bash
 curl -s -X POST http://127.0.0.1:8020/retrieve \
@@ -184,6 +184,8 @@ Response fields a consumer must read (`RetrievedContent`; full shape in the cont
 | `injection_detected` | bool | `true` means `body` is the quarantine placeholder, not the page |
 | `injection_spans` | list of str | On quarantine, one diagnostic label: `structural_injection_detected`, `promptguard_injection_detected` or `promptguard_unavailable`. Never hostile text |
 | `promptguard_state` | `scanned`, `skipped_trusted`, `structural_blocked`, `unavailable_blocked`, `unavailable_allowed` | Whether the ML scan actually ran on this content |
+| `effective_promptguard_fail_closed` | bool (default `true`) | Applied flag after the operator floor, on every 200 including cache hits; decides behaviour only when the classifier is absent or its wait times out. Reports policy, **not whether content was scanned** (`promptguard_state` does). Neither effective field overrides caller trust lists: `trusted_domains` skips classification (`trusted_tier`); `verified_domains` (VERIFIED) degrades open when unavailable |
+| `effective_promptguard_threshold` | float (default `0.85`) | Applied block threshold after the operator ceiling, on every 200 including cache hits. Policy, **not proof of scanning**: `trusted_domains` still skips (`trusted_tier`) and `verified_domains` (VERIFIED) still degrades open when unavailable. Read `promptguard_state` for the outcome |
 | `trust_score` | float 0.0..1.0 | Composite evidence score; see "Reading a response safely" |
 | `trust_tier` | `trusted`, `verified`, `standard`, `untrusted`, `blocked` | Tier resolved from your domain lists against the domain of `final_url` |
 | `stage2_verdict`, `stage3_verdict` | `clean`, `suspicious`, `blocked`; `safe`, `injection_detected` | The two scan verdicts separately |
@@ -211,6 +213,10 @@ Branch on the literal, not on the prose. A fetched PDF is parsed in the same spa
 rlimited worker `/extract` uses, so its first fetch pays a process-spawn cost (hundreds of
 milliseconds); repeat fetches are cache hits. Quarantined results are never cached; neither are `untrusted` or `blocked`
 tiers.
+
+The effective fields are stamped after the pipeline using the same resolved values that
+key the cache, not trusted from a stored entry. Refusal 422 bodies carry neither field.
+`/extract` is permanently fail-closed and carries neither field.
 
 ### POST /search
 
@@ -242,7 +248,7 @@ Request fields (`SearchRequest`):
 |---|---|---|---|---|
 | `query` | str | required | non-empty | |
 | `num_results` | int | 5 | 1..20 | Forage asks SearXNG for up to `min(2 * num_results, 20)` candidates and scans at most 20 |
-| `promptguard_fail_closed` | bool | `true` | | When the model is absent: `true` withholds results (`omitted_by_reason.promptguard_unavailable`), `false` returns them marked `suspicious` and counts them in `unscanned_results` |
+| `promptguard_fail_closed` | bool | `true` | | When the classifier is absent or the permit wait expires: `true` withholds results (`omitted_by_reason.promptguard_unavailable`), `false` returns them marked `suspicious` and counts them in `unscanned_results`; bounded by the operator's `promptguard_fail_closed_floor` via `request or floor` |
 | `providers` | list of str | `[]` | at most 8 honoured, rest ignored | Restrict-only filter of the configured chain, in configured order: can exclude paid providers only, never add, reorder, or key one — free providers always run, and a non-empty list removes every paid provider it does not name. Matched after `strip()` and lower-casing; entries beyond the first eight, and entries matching no configured provider, are ignored and counted on `/metrics` `search.policy_unknown_provider` rather than rejected. Empty (the default) runs the configured chain unrestricted |
 | `allow_paid_fallback` | bool | `true` | | When `false`, excludes every paid provider from this request's effective chain regardless of `providers` — free providers always run. Applied after `providers`' own filtering, one-way: can only narrow the configured chain, never widen, reorder, or key it |
 
@@ -266,6 +272,7 @@ Response fields to read (`SearchResponse`):
 |---|---|---|
 | `results` | list of `{title, url, domain, snippet, engine, content_kind, date, suspicious}` | `suspicious: true` means the structural scan flagged it, the classifier scored above 0.5, or **PromptGuard never scanned it at all** — either the classifier was absent, or (since `1.3.0`) the request's classification wait expired while the classifier was busy. The consumer rule is therefore: **on `promptguard_unavailable: true`, treat every `suspicious` result in the response as unscanned rather than as scanned-and-flagged**, with `unscanned_results` saying how many. Since `1.3.0` a single response may *mix* the two — the classification wait is one budget per request, so earlier results can be scanned and later ones not — so the flag alone no longer tells you which. Title is at most 512 characters, URL 2048 (over-length URLs are omitted under `invalid_url`, never truncated), snippet 2000. `domain` (added in `1.2.0`) is the **canonicalised ASCII host** of `url`, never eTLD+1 — a provenance signal, not a trust decision. A name is UTS-46-encoded, so an internationalised host appears in punycode (`xn--strae-oqa.de`) while `url` keeps the provider's spelling (`http://straße.de/`); an address literal is the raw lower-cased literal as written, so for an IPv6 literal `domain` is unbracketed (`2606:4700::1111`) while `url` carries brackets (`[2606:4700::1111]`), the one case where `domain` is not a substring of `url`. `engine` is whichever SearXNG sub-engine answered (e.g. `duckduckgo`, or SearXNG's own `brave` sub-engine) or, for a Brave-served result, `brave-api` — the two are deliberately never normalized into each other; bounded to 64 characters and NFC-normalised (added in `1.3.0`), or `null` for a non-string or an empty-after-normalisation value — still neither structurally scanned nor part of the PromptGuard input. `content_kind` (added in `1.2.0`) is `snippet` or `chunk` and nothing else. `date` (added in `1.2.0`) is a strict `YYYY-MM-DD` calendar date or `null` — anything a provider sends that is not one becomes `null`, so it never needs parsing defensively |
 | `provider_used` | str | Added in `1.2.0`. The serving provider's `name` — `searxng`, `brave`, or a future third token (open string, not an enum, so a new provider is additive) |
+| `effective_promptguard_fail_closed` | bool (default `true`) | Applied unavailable-classifier policy after the floor on every 200, **not whether results were scanned**; read omissions / `suspicious` / `promptguard_unavailable` / `unscanned_results`. Search uses STANDARD tier; on `/retrieve` the floor does not override `trusted_domains`' classification skip (`trusted_tier`) or `verified_domains`' VERIFIED fail-open exemption. No effective threshold is reported on `/search`: it still scans at `0.85` |
 | `fallback_fired` | bool | Added in `1.2.0`. `true` iff the provider chain advanced past the first provider before this response was served — the per-response face of the `search.fallback_fired` `/metrics` counter. It says nothing about which provider served: for a chain that tries a paid provider first, this is `true` when the free provider ends up serving |
 | `provider_errors` | list of str | Added in `1.2.0`. Chain-order `"<provider_name>: <failure_class>"` entries for every provider tried before the one that served (closed vocabulary, never exception text or a URL) — the only place provider-level failures appear; they never affect `omitted_results` / `omitted_by_reason` or `unresponsive_engines` |
 | `omitted_results`, `omitted_by_reason` | int, dict of str to int | How many candidates were withheld and why; keys are only ever `invalid_url`, `structural_blocked`, `injection_detected`, `promptguard_unavailable`, and — added in `1.3.0` — `blocked_url`, and only non-zero counts appear. `invalid_url` covers three families of URL rule, checked on the provider's raw value in this order, first rejection wins: **presence and length** (missing, empty, non-string, or longer than 2 048 characters after trimming — over-length is rejected, never truncated), **raw characters** (any control character, any whitespace, or any RFC 3986 excluded character — `<`, `>`, `"`, `{`, `}`, `\|`, `\\`, `^`, backtick — rejected rather than stripped), and **host code points** (any WHATWG forbidden domain code point surviving into the hostname, plus a non-`http(s)` scheme, userinfo, an unparseable or out-of-range port, and an IPv6 zone id). A URL that clears all three is scanned structurally in both its entity-decoded and its once-percent-decoded form; a block there counts under `structural_blocked`, never twice. `blocked_url` is policy rather than malformation: a URL that parsed and canonicalised cleanly but names a literal private, loopback, link-local, documentation-range or blocklisted host — including an IPv6 literal that *embeds* a private IPv4 (IPv4-mapped, 6to4, Teredo, prefix-guarded NAT64 and IPv4-compatible forms) and any name under `.local` or `.localhost`. The audit is purely lexical: no DNS is resolved for a URL nobody asked to fetch. Two further `invalid_url` tokens come from the same canonicalisation: a host whose every label is a digit run but which is not a canonical dotted quad (`2130706433`, `0177.0.0.1`, `0x7f000001`, `127.1`) is `numeric_host`, and a host the UTS-46 encode refuses (an underscore label, an over-long label, an empty label) is `idna` |
@@ -482,7 +489,7 @@ in-tree copy and says nothing about wire compatibility. The image tag (for examp
 CI verifies two of the three on every release: the `smoke` job reads the in-image copy
 back out of the candidate image, and the `publish` job downloads the Release assets back
 from the API; both are checked against the anchor committed at the tag (currently
-`a588c1028f5fe61d306183a8f01de93deea141c6bdfbd36e5a0e504268938481`).
+`62c1efe2d07184730900f0af4279321e8626de5e80a31c19c94f765124b25a22`).
 
 **Vendoring procedure** (`contract/GOVERNANCE.md` "Consumers"):
 

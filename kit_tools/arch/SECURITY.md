@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document authentication, authorization, and secrets management. Security architecture reference.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-retrieve-parity US-004)
+> Updated by: Copilot (hardening-retrieve-parity US-005)
 
 ---
 
@@ -159,6 +159,27 @@ Two policy branches matter for security:
 - **Trusted-tier skip.** `trust_tier == "trusted"` skips inference entirely (`promptguard_state: skipped_trusted`). Marking a domain trusted means opting it out of the ML scan.
 - **Model absent, fail closed.** With `promptguard_fail_closed=True` (the default), `standard` and `untrusted` content is blocked (`unavailable_blocked`, penalty `-0.5`); with `fail_closed=False`, or for the `verified` tier, it is allowed with `-0.1` (`unavailable_allowed`). `/extract` ignores request policy and always runs as `TrustTier.UNTRUSTED` with `promptguard_fail_closed=True`.
 
+**Operator policy (hardening-retrieve-parity US-005).** The floor is the operator's,
+the request is the consumer's; the floor bounds `promptguard_fail_closed` and the
+ceiling bounds `promptguard_threshold`; neither overrides caller-supplied trust tiers,
+which decide whether the flag is consulted at all — the `trusted_tier` skip and the
+VERIFIED fail-open exemption. The floor covers `/retrieve` and `/search`, default
+`false`; the threshold ceiling is **retrieve only**, default `1.0`. `/search` keeps
+fixed `0.85` until `SearchRequest.promptguard_threshold` lands (spec 3 US-005).
+`/extract` remains permanently fail-closed with its own threshold; neither bound
+reaches it and it carries neither field. Wrong-typed floors and invalid ceilings
+refuse boot. Config delivery is [config.yaml-only](../../docs/configuration.md#top-level-promptguard-policy-keys),
+with the full bind-mount procedure owned by spec 6.
+
+Handlers replace the request once, before both the cache fingerprint and pipeline
+read it, then stamp `effective_promptguard_fail_closed` (both routes) and
+`effective_promptguard_threshold` (`/retrieve` only) on every 200, including cache
+hits; 422 bodies carry neither. The fields report **policy applied, not whether
+content was scanned**. The flag decides behaviour only when classification is
+unavailable to the request (absent or permit wait timed out). `promptguard_state`
+(`/retrieve`) and omissions / `suspicious` / `promptguard_unavailable` /
+`unscanned_results` (`/search`) describe what actually happened.
+
 ### Quarantine
 
 When stage 2 says `blocked` or stage 3 says `injection_detected`, `finalize_quarantine` in `pipeline/stage4_structuring.py` replaces `body` with the fixed string "Content quarantined due to potential prompt injection." and `injection_spans` with a single stable diagnostic (`structural_injection_detected`, `promptguard_injection_detected`, or `promptguard_unavailable`). Hostile text never rides the response, and quarantined results are never cached. `tests/test_orchestrator.py::test_post_extract_structural_block_is_content_free` and `::test_post_extract_promptguard_block_is_content_free` pin this.
@@ -220,7 +241,7 @@ candidate, not the distinct pre-existing queued-waiter handoff residual below.
 
 **Security Considerations — a saturated semaphore is a route around the classifier.** When the permit is held and the wait expires, a `/retrieve` or `/search` request that set `promptguard_fail_closed: false` is served **unscanned**: the body is marked (`promptguard_state: unavailable_allowed` on `/retrieve`; `suspicious: true` with `promptguard_unavailable: true` and a non-zero `unscanned_results` on `/search`), but no ML classification ran. That outcome is load-triggerable on an unauthenticated service — an in-network caller who can saturate the single classification permit can steer another caller's fail-open request past Stage 3 — and it is counted, not silent: `retrieve.classification_wait_timeouts` and `search.classification_wait_timeouts` on `/metrics`, plus one WARNING per event carrying the closed token `classification_wait_timeout route=<retrieve|search>` and nothing caller-derived.
 
-Three things bound the exposure. **The interim posture:** the request default is `promptguard_fail_closed: true`, so the load-triggerable fail-open outcome reaches only callers that explicitly opt into fail-open; the operator floor (`promptguard_fail_closed_floor`) is what closes it for everyone, and it ships `false` today. **The cache is not poisonable through it:** a fail-open wait-timeout body is never written to the content cache. `cache_policy_fingerprint`'s `classifier_loaded` input assumes an unscanned body implies `classifier_loaded=False`, which a wait timeout breaks, so `run_retrieve_pipeline` refuses to store a body that is `unavailable_allowed` while the classifier is loaded — otherwise a saturation event lasting `promptguard_wait_seconds` would pin an attacker-chosen unscanned body for a whole `cache_ttl_hours` and replay it to every later request. The absent-classifier fail-open body still caches under its `classifier_loaded=False` key exactly as before. **Nothing is acquired that would not classify anyway:** with the classifier absent or still warming, or with the domain in `trusted_domains`, no route touches the permit and no counter moves.
+Three things bound the exposure. **The policy posture:** the request default is `promptguard_fail_closed: true`, so STANDARD/UNTRUSTED fail-open outcomes require an explicit opt-out and an operator floor of `false` (the shipped default). Setting `promptguard_fail_closed_floor: true` closes that flag-controlled route, but not the caller's `trusted_tier` skip or VERIFIED fail-open exemption. **The cache is not poisonable through it:** a fail-open wait-timeout body is never written to the content cache. `cache_policy_fingerprint`'s `classifier_loaded` input assumes an unscanned body implies `classifier_loaded=False`, which a wait timeout breaks, so `run_retrieve_pipeline` refuses to store a body that is `unavailable_allowed` while the classifier is loaded — otherwise a saturation event lasting `promptguard_wait_seconds` would pin an attacker-chosen unscanned body for a whole `cache_ttl_hours` and replay it to every later request. The absent-classifier fail-open body still caches under its `classifier_loaded=False` key exactly as before. **Nothing is acquired that would not classify anyway:** with the classifier absent or still warming, or with the domain in `trusted_domains`, no route touches the permit and no counter moves.
 
 **The coupling runs one way, and `/extract` has no counter of its own.** `/extract`'s own admission controller bounds its fetch and extraction work, but no longer bounds its *classification* wait once fetch traffic holds the permit: `/extract` waits with **no wait timeout** and increments nothing when it does. So unauthenticated `/retrieve` and `/search` traffic can block an authenticated `/extract` classification for an unbounded time, and the only visible symptom is latency. This is accepted and recorded. `extract.route_enabled` ships `false`, so the exposure is latent until an operator turns the route on; widening `classification_concurrency` belongs to the resource-envelope spec.
 

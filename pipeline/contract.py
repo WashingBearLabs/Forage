@@ -147,7 +147,17 @@ MINOR when fields are only added.
   ``cache.corrupt_entries``, an additive counter of stored values that fail
   ``RetrievedContent`` JSON or schema validation and become cache misses
   instead of 500s. Pinned by ``tests/test_contract_metrics.py`` rather than
-  the golden fixture; parse success is not authenticity. This version is **held**:
+  the golden fixture; parse success is not authenticity. Continuing in
+  ``hardening-retrieve-parity`` US-005: ``RetrievedContent`` gains
+  ``effective_promptguard_fail_closed`` and ``effective_promptguard_threshold``;
+  ``SearchResponse`` gains ``effective_promptguard_fail_closed``; ``/extract``
+  is permanently fail-closed and carries neither. These defaulted fields report
+  the policy applied, not whether content was scanned: the operator's opt-in
+  floor bounds the fail-closed flag on both fetch routes and the ceiling bounds
+  ``/retrieve``'s threshold only, without overriding the caller's trusted-tier
+  skip or VERIFIED fail-open exemption. Every 200 response is stamped after
+  the pipeline, including cache hits; 422 bodies are unchanged.
+  This version is **held**:
   ``tests/golden/contract_1_3_0.json`` is
   re-created in place by every later story in this epic that moves the
   wire, until spec 8 US-002 freezes it ahead of the release cut.

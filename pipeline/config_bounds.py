@@ -58,10 +58,10 @@ def bounded_float(
     value = config.get(key, default)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise error(f"{key} must be a number")
-    numeric = float(value)
-    if not minimum <= numeric <= maximum:
+    # Compare before widening: YAML integers can exceed float's finite range.
+    if not minimum <= value <= maximum:
         raise error(f"{key} must be between {minimum} and {maximum}")
-    return numeric
+    return float(value)
 
 
 def bounded_bool(

@@ -493,12 +493,24 @@ class TestBoundedFloat:
                 {"k": value}, "k", 1.0, minimum=0.0, maximum=10.0, error=_BoundsError
             )
 
-    @pytest.mark.parametrize("value", [-0.1, 10.1])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            -0.1,
+            10.1,
+            float("nan"),
+            float("inf"),
+            -float("inf"),
+            pytest.param(10**400, id="large-positive-integer"),
+            pytest.param(-(10**400), id="large-negative-integer"),
+        ],
+    )
     def test_an_out_of_range_value_is_rejected(self, value: float) -> None:
-        with pytest.raises(_BoundsError, match="must be between"):
+        with pytest.raises(_BoundsError) as exc:
             config_bounds.bounded_float(
                 {"k": value}, "k", 1.0, minimum=0.0, maximum=10.0, error=_BoundsError
             )
+        assert str(exc.value) == "k must be between 0.0 and 10.0"
 
 
 class TestBoundedBool:

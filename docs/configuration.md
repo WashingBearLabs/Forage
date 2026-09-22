@@ -620,14 +620,35 @@ file — the procedure the resource-envelope spec documents.
 
 ### Top-level PromptGuard policy keys
 
-Read by the same function, because it owns the boot-validated fetch-route policy. Same
-bind-mount story: no environment override.
+Read at boot by `retrieve_settings_from_config`, which owns the fetch-route policy.
+A non-boolean floor or a non-numeric, non-finite or out-of-range ceiling refuses boot
+with a closed-vocabulary `RetrieveConfigurationError`; values are never echoed.
+Numeric bounds are checked before conversion to float, so even arbitrarily large
+YAML integers receive the same range refusal; integer endpoints `0` and `1` are valid.
+These are **config.yaml-only**, with no environment override. For a deployed container,
+bind-mount a complete replacement over `/app/config.yaml` read-only and restart; start
+from the shipped file, because replacement **never merges** and omitted security keys
+reset to code defaults. The full Compose delivery procedure is tracked by
+[resource-envelope spec 6 US-003](../kit_tools/specs/feature-hardening-resource-envelope.md#us-003-operator-documentation--the-sizing-section-and-the-by-value-sweeps);
+it has not landed yet.
 
 | Key | Default | Allowed range | Route | Purpose |
 |-----|---------|---------------|-------|---------|
-| `promptguard_fail_closed_floor` | `false` | `true` / `false` | `/retrieve` | Floor under a request's own `promptguard_fail_closed`. `false` imposes no floor — today's behaviour. |
-| `promptguard_threshold_ceiling` | `1.0` | 0.0 – 1.0 | `/retrieve` | Ceiling over a request's own `promptguard_threshold`. `1.0` imposes no ceiling — today's behaviour. |
+| `promptguard_fail_closed_floor` | `false` | `true` / `false` | `/retrieve` and `/search` | Effective flag is `request.promptguard_fail_closed or floor`: `true` blocks STANDARD/UNTRUSTED content when the classifier is absent or the classification wait expires, even if the caller requests fail-open. `false` imposes no floor. Every 200 reports `effective_promptguard_fail_closed`; trust-tier exemptions remain. Set through the deployed-container bind mount described above. |
+| `promptguard_threshold_ceiling` | `1.0` | 0.0 – 1.0 | **retrieve only** (`/retrieve`) | Effective threshold is `min(request.promptguard_threshold, ceiling)`; a lower ceiling blocks at a lower classifier score. `1.0` imposes no ceiling. Every `/retrieve` 200 reports `effective_promptguard_threshold`, including cache hits. Set through the deployed-container bind mount described above. |
 | `promptguard_wait_seconds` | `30.0` | 0.05 – 300.0 | **both fetch routes** (`/retrieve` and `/search`) | How long a request waits for a classification slot before giving up. A float, so sub-second values are expressible. On `/search` it is one budget for the whole request, not per result. `/extract` takes the same permit but waits without a deadline. |
+
+The threshold ceiling is **retrieve only**: `/search` still classifies at fixed `0.85`
+until `SearchRequest.promptguard_threshold` lands in spec 3 US-005, and does not report
+an effective threshold. `/extract` stays permanently fail-closed with its own threshold;
+neither bound reaches it and it carries neither effective field. These fields report
+**policy, not proof of scanning**. Neither bound overrides caller-supplied trust tiers:
+`trusted_domains` skips classification (`trusted_tier`), and `verified_domains` (VERIFIED)
+degrades open when the classifier is unavailable, even under a true floor. Read
+`promptguard_state` on `/retrieve` and omissions / `suspicious` /
+`promptguard_unavailable` / `unscanned_results` on `/search`. Refusal 422 bodies carry
+no policy fields. The handler resolves policy before caching and stamps after the
+pipeline, so fingerprint inputs and reported values agree on hits and misses.
 
 #### Sizing `promptguard_wait_seconds` against `retrieve.max_promptguard_chunks`
 

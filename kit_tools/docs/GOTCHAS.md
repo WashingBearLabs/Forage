@@ -2,7 +2,7 @@
 # GOTCHAS.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-retrieve-parity US-004)
+> Updated by: Copilot (hardening-retrieve-parity US-005)
 
 ## Overview
 
@@ -15,6 +15,14 @@ live in, and losing them in the move was an identified risk.
 ---
 
 ## Active Gotchas
+
+### YAML integers can overflow a float before validation
+
+`pipeline/config_bounds.bounded_float` must compare the original numeric value with
+its bounds **before** widening it to float. YAML accepts 401-digit decimal integers;
+converting first raises `OverflowError` instead of the caller's closed-vocabulary
+configuration error. US-005's retry pins both signs through the settings reader and
+lifespan, including the exact message and absence of the supplied value in logs.
 
 ### PromptGuard model absent → the service reports **degraded**, and you must treat it as unscanned
 
@@ -409,7 +417,7 @@ recipe.
 `derive_sanitizer_revision()` hashes nine source files — the eight under `pipeline/` plus
 repo-root `url_validator.py` — plus the model identity, the `idna` version
 (`idna@<version>`: UTS-46 tables decide which hosts are dropped) and the active
-threshold. Forage's revision has moved eighteen times, each time at a boundary and
+threshold. Forage's revision has moved twenty-five times, each time at a boundary and
 each time deliberately:
 
 | When | Value | What moved it |
@@ -439,19 +447,22 @@ each time deliberately:
 | `hardening-retrieve-parity` US-002 | `f654be77…c92fb` | **not** a behaviour-changing rotation. Two hashed files, each reverted alone (`orchestrator.py` → `16b9631f…`, `contract.py` → `646b4f27…`), both-reverted control landing exactly on `d0433876…`. `orchestrator.py`: `extract_html`, `scan_structural` and `structure_sanitization_result` moved onto `asyncio.to_thread`, `admission` became a required `AdmissionSlot` acquired after the cache read and released in `finally` after stage 1, and `fetch_result` / `html_text` are deleted before the classification wait; `contract.py`: `busy` in `RetrieveErrorCode`, `RETRIEVE_ADMISSION_QUEUE_FULL`, the `1.3.0` continuation line. `stage4_structuring.py` untouched. |
 | `hardening-retrieve-parity` US-003 | `464b6ad5…fead2` | **not** a rotation that changes how text is sanitized, but it moves a served outcome at the shipped defaults. Two hashed files, each reverted alone (`orchestrator.py` → `a018345e…`, `contract.py` → `80b39055…`), both-reverted control landing exactly on `f654be77…`. `orchestrator.py`: fetched PDFs go through `asyncio.to_thread(extract_pdf_bytes_in_subprocess, …)` inside the admission slot, retaining ownership through cleanup under repeated task cancellation, mapped most-specific first to `content_too_large` / `promptguard_budget` or `extraction_failed` with four reasons; `contract.py`: `extraction_failed` in `RetrieveErrorCode`, the `RETRIEVE_PDF_*` literals, the `1.3.0` continuation line. Supersedes the unaccepted `6fd320da…` candidate's cancellation bug. `pdf_subprocess.py` (`spool_dir()`, the bytes entry point) is not hashed. A PDF within bounds serves identical text; one over 114,688 characters or the worker's rlimits is now refused 422 rather than served or answered 500. |
 | `hardening-retrieve-parity` US-004 | `664ee603…c04b` | **not** a sanitization-behaviour change. Only `contract.py`'s 1.3.0 continuation line for `cache.corrupt_entries` moves the hash; its read-only whole-file revert reproduces `464b6ad5…fead2` exactly. `cache.py`'s guarded parse and `retrieval_app.py`'s metrics mirror/emission are not hashed. Invalid cached JSON/schema is counted, logged without payload bytes, deleted and treated as a miss rather than a 500; parse success is still not authenticity. |
+| `hardening-retrieve-parity` US-005 | `d98f7dbe…69359` | **not** a sanitization-behaviour change at shipped defaults. Only `contract.py`'s 1.3.0 continuation line for the three effective-policy fields moves the hash; its read-only whole-file revert reproduces `664ee603…c04b` exactly under default and shipped config. Request replacement and post-pipeline stamping in `retrieval_app.py`, and the fields in `models.py`, are not hashed. Opt-in bounds reach the fingerprint through the replaced request, never a parallel pipeline kwarg; trusted-tier skip and VERIFIED fail-open remain exempt. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Fifteen of the eighteen rotations changed no sanitization behaviour; the fifteenth,
-sixteenth and eighteenth (`hardening-search-sanitization` US-001, US-002 and US-003) are the
-three that did, and the seventeenth (US-004, contract `1.3.0`) does not join them** — US-001's
+**Twenty-one of the twenty-five rotations changed no sanitization algorithm; the
+fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
+US-001, US-002, US-003 and its validation fix) are the four that did, and the seventeenth
+(US-004, contract `1.3.0`) does not join them** — US-001's
 is that `/search` scans `title` and `snippet` newline-preserved now, so line-anchored Stage 2
 patterns fire on any line rather than at character 0 only, and a rising `structural_blocked`
 after it is expected; US-003's is that `/search` now drops results whose host is a private,
 embedded-private or blocklisted one and serves `domain` as the canonicalised ASCII host;
+the validation fix scans both the newline-preserving and collapsed wire forms.
 US-004 bounds and normalizes `SearchResult.engine` without routing it through that same scan.
-Among the other fifteen, the fourth and fifth
+Among the other twenty-one, the fourth and fifth
 are different *kinds* of rotation and worth reading as such. The first three moved because
 the hash is over bytes and someone reformatted or retyped a hashed file. The fourth moved
 because an **input changed**: weights are a runtime, per-deployment thing now

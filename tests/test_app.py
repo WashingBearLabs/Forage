@@ -103,6 +103,7 @@ def client() -> httpx.AsyncClient:
     app.state.classifier = PromptGuardClassifier()
     app.state.cache = FakeContentCache()
     app.state.config = {"extract_route_enabled": True}
+    app.state.retrieve_settings = retrieve_settings_from_config(app.state.config)
     settings = extraction_settings_from_config(app.state.config)
     app.state.extraction_settings = settings
     app.state.extraction_metrics = ExtractionMetrics()
@@ -1499,6 +1500,22 @@ class TestRetrieveSettingsReader:
         with pytest.raises(RetrieveConfigurationError):
             retrieve_settings_from_config({key: value})
 
+    @pytest.mark.parametrize("sign", ["", "-"], ids=["positive", "negative"])
+    def test_a_large_yaml_integer_ceiling_refuses_without_echoing_it(
+        self, sign: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        literal = f"{sign}1{'0' * 400}"
+        config = yaml.safe_load(f"promptguard_threshold_ceiling: {literal}\n")
+        assert isinstance(config["promptguard_threshold_ceiling"], int)
+        with pytest.raises(RetrieveConfigurationError) as exc:
+            retrieve_settings_from_config(config)
+        assert type(exc.value) is RetrieveConfigurationError
+        assert str(exc.value) == (
+            "promptguard_threshold_ceiling must be between 0.0 and 1.0"
+        )
+        assert literal not in str(exc.value)
+        assert literal not in caplog.text
+
     def test_a_non_mapping_block_refuses(self) -> None:
         with pytest.raises(RetrieveConfigurationError):
             retrieve_settings_from_config({"retrieve": []})
@@ -1529,6 +1546,85 @@ async def test_lifespan_refuses_an_out_of_range_retrieve_bound(
     with pytest.raises(RetrieveConfigurationError):
         async with lifespan(probe_app):
             pass
+
+
+@pytest.mark.parametrize("value", ["credential-sentinel", 0, 1, None, [], {}])
+async def test_lifespan_refuses_a_non_boolean_policy_floor_without_echoing_it(
+    monkeypatch: pytest.MonkeyPatch, value: object
+) -> None:
+    monkeypatch.setattr(
+        retrieval_app, "_load_config", lambda: {"promptguard_fail_closed_floor": value}
+    )
+    with pytest.raises(RetrieveConfigurationError) as exc:
+        async with lifespan(FastAPI()):
+            pytest.fail("invalid policy started")
+    assert str(exc.value) == "promptguard_fail_closed_floor must be a boolean"
+
+
+@pytest.mark.parametrize(
+    ("value", "reason"),
+    [
+        ("credential-sentinel", "must be a number"),
+        (True, "must be a number"),
+        (None, "must be a number"),
+        ([], "must be a number"),
+        (-0.01, "must be between 0.0 and 1.0"),
+        (1.01, "must be between 0.0 and 1.0"),
+        (float("nan"), "must be between 0.0 and 1.0"),
+        (float("inf"), "must be between 0.0 and 1.0"),
+        (-float("inf"), "must be between 0.0 and 1.0"),
+    ],
+)
+async def test_lifespan_refuses_an_invalid_policy_ceiling_without_echoing_it(
+    monkeypatch: pytest.MonkeyPatch, value: object, reason: str
+) -> None:
+    monkeypatch.setattr(
+        retrieval_app, "_load_config", lambda: {"promptguard_threshold_ceiling": value}
+    )
+    with pytest.raises(RetrieveConfigurationError) as exc:
+        async with lifespan(FastAPI()):
+            pytest.fail("invalid policy started")
+    assert str(exc.value) == f"promptguard_threshold_ceiling {reason}"
+
+
+@pytest.mark.parametrize("sign", ["", "-"], ids=["positive", "negative"])
+async def test_lifespan_refuses_a_large_yaml_integer_ceiling_without_echoing_it(
+    monkeypatch: pytest.MonkeyPatch, sign: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    literal = f"{sign}1{'0' * 400}"
+    config = yaml.safe_load(f"promptguard_threshold_ceiling: {literal}\n")
+    assert isinstance(config["promptguard_threshold_ceiling"], int)
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    with pytest.raises(RetrieveConfigurationError) as exc:
+        async with lifespan(FastAPI()):
+            pytest.fail("invalid policy started")
+    assert type(exc.value) is RetrieveConfigurationError
+    assert str(exc.value) == (
+        "promptguard_threshold_ceiling must be between 0.0 and 1.0"
+    )
+    assert literal not in str(exc.value)
+    assert literal not in caplog.text
+
+
+@pytest.mark.parametrize("ceiling", [0, 0.5, 1])
+async def test_lifespan_publishes_nondefault_policy_bounds(
+    monkeypatch: pytest.MonkeyPatch, ceiling: float
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(app.state, "retrieve_settings", app.state.retrieve_settings)
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {
+            "promptguard_fail_closed_floor": True,
+            "promptguard_threshold_ceiling": ceiling,
+        },
+    )
+    async with _running_app():
+        settings: RetrieveSettings = app.state.retrieve_settings
+        assert settings.promptguard_fail_closed_floor is True
+        assert settings.promptguard_threshold_ceiling == ceiling
+        assert isinstance(settings.promptguard_threshold_ceiling, float)
 
 
 @pytest.mark.parametrize(

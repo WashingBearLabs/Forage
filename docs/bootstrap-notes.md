@@ -81,7 +81,8 @@ those eight — so Forage's revision moved:
 | After the classification semaphore on `/retrieve` and `/search` (`hardening-retrieve-parity` US-006) | `d0433876…fc88e` |
 | After stages 1, 2 and 4 off the loop and the `/retrieve` admission gate (`hardening-retrieve-parity` US-002) | `f654be77…c92fb` |
 | After fetched PDFs moved into the rlimited worker (`hardening-retrieve-parity` US-003) | `464b6ad5…fead2` |
-| **Current (`hardening-retrieve-parity` US-004, corrupt cache entries become misses)** | **`664ee603…c04b`** |
+| After corrupt cache entries become misses (`hardening-retrieve-parity` US-004) | `664ee603…c04b` |
+| **Current (`hardening-retrieve-parity` US-005, operator policy bounds and response fields)** | **`d98f7dbe…69359`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -1234,4 +1235,41 @@ schema now produces a miss instead of a 500, while parseable values still pass
 through without authenticity checking until spec 4's HMAC. Freshness policy is
 unchanged. Every entry keyed under `464b6ad5…` becomes unreachable at the next start
 and ages out under its own TTL because the revision feeds `cache_policy_fingerprint`.
+**Not replayed to Poppy**; compare contracts, not revisions.
+
+### The twenty-fifth rotation: operator policy bounds and response fields (`hardening-retrieve-parity` US-005, 2026-09-22)
+
+```
+before: 664ee603ca85466ada37bb3f3a5a78a7970d295dfa105a9045bde5298cc8c04b
+after:  d98f7dbe09458a38e986916771baf1cf9f47223acf87e0478ddd8911a1169359
+```
+
+**One hashed file moved: `pipeline/contract.py`'s 1.3.0 continuation line.**
+The attempt started at clean `0e71157` (`git status --short` empty).
+`derive_sanitizer_revision({})` and the shipped `config.yaml` both measured the
+before value. Comparing every one of the nine source inputs against that commit
+finds only `contract.py` changed. A read-only `Path.read_bytes` substitution of
+`git show 0e71157:pipeline/contract.py` reproduces the before value exactly in both
+configurations; removing it reproduces the after value. No source was overwritten.
+
+The US-005 retry reproduced the same control after fixing oversized YAML integer
+validation in `pipeline/config_bounds.py`. That helper is not a hashed input; checking
+the range before widening to float changes neither this revision nor the contract anchor.
+
+The docstring announces `RetrievedContent.effective_promptguard_fail_closed`,
+`RetrievedContent.effective_promptguard_threshold` and
+`SearchResponse.effective_promptguard_fail_closed`. The helper in `retrieval_app.py`
+replaces the request before cache/pipeline reads and stamps after the pipeline;
+it and the defaulted fields in `models.py` are not hashed. The golden's additions
+are exactly those three paths; older goldens, the `/extract`, health and 422 schemas,
+and the `/extract` handler, admission and lifespan ASTs are unchanged.
+The regenerated OpenAPI anchor is
+`62c1efe2d07184730900f0af4279321e8626de5e80a31c19c94f765124b25a22`.
+
+This rotation changes no sanitization algorithm and the shipped bounds (`false`,
+`1.0`) preserve existing policy. Opting in bounds the fail-closed flag on both fetch
+routes and the threshold on `/retrieve` only, preserving trusted-tier skip and
+VERIFIED fail-open. The effective fields are policy, not proof of scanning. Cache
+entries keyed under `664ee603…` become unreachable at the next start and age out
+under their own TTL; effective bounds themselves feed `cache_policy_fingerprint`.
 **Not replayed to Poppy**; compare contracts, not revisions.

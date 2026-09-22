@@ -1172,6 +1172,17 @@ Implementation Notes carry `### US-005 — gate not run, <date>` naming the miss
 
 ## Implementation Notes
 
+### Spec 2 US-005 consumer-note handoff (2026-09-22)
+
+The existing release deliverable `docs/releases.md` now carries the pending-hardening
+consumer note: callers sending `promptguard_fail_closed: false` may receive
+unscanned-but-marked content after contention exceeds `promptguard_wait_seconds`;
+`promptguard_state` / `suspicious` / `promptguard_unavailable` / `unscanned_results`
+are the signals, and `promptguard_fail_closed_floor: true` is the operator control
+(config.yaml-only until spec 6's bind-mount procedure). It preserves the trusted-tier
+skip and VERIFIED exemption. Carry that sentence into US-004's release draft; no release
+or owner gate was run here.
+
 <!-- Populated during execution. US-001/US-002 record their rotations and the rehearsal extraction;
 US-004 records both classified sweeps; US-003 records the cut, the four-way sha256 table and the
 config-grep facts; US-005 records the three smoke runs, the credential-free pull, the leak check and

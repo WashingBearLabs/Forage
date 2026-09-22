@@ -138,6 +138,15 @@ the behaviour that shipped before the key existed — and boot logs one WARNING,
 That is worked example 6 step 1 with the window named, and it belongs in this release's
 Release body as well as here (`contract/GOVERNANCE.md` ruling (g)).
 
+**Consumer note for the pending hardening release (spec 8 handoff).** From
+`hardening-retrieve-parity`, a caller sending `promptguard_fail_closed: false` is
+exposed to an unscanned-but-marked response whenever the classification permit is
+contended for longer than `promptguard_wait_seconds`, signalled by `promptguard_state`
+on `/retrieve` and `suspicious` / `promptguard_unavailable` / `unscanned_results` on
+`/search`; `promptguard_fail_closed_floor: true` is the operator-side control
+(`config.yaml`-only until spec 6's bind-mount procedure), bounding the flag but not
+the caller's trusted-tier skip or VERIFIED fail-open exemption.
+
 ## Architectures
 
 | Platform | Built | Gated | Notes |

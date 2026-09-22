@@ -426,6 +426,9 @@ _ONE_THREE_ZERO_DIFFED_SCHEMAS = (
 # adds a field or enum member, until spec 8 US-002 freezes it.
 _EXPECTED_ONE_THREE_ZERO_DIFF: frozenset[str] = frozenset(
     {
+        "RetrievedContent.effective_promptguard_fail_closed",
+        "RetrievedContent.effective_promptguard_threshold",
+        "SearchResponse.effective_promptguard_fail_closed",
         # hardening-retrieve-parity US-002: `/retrieve`'s admission refusal.
         # One path covers `/search`'s 422 as well, through the shared model.
         "Pipeline422ErrorResponse.error[enum]=busy",

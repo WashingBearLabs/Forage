@@ -2,7 +2,7 @@
 # CODE_ARCH.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-retrieve-parity US-004)
+> Updated by: Copilot (hardening-retrieve-parity US-005)
 
 ---
 
@@ -240,7 +240,22 @@ came with corrupt cache entries becoming misses (`464b6ad5…` → `664ee603…`
 `hardening-retrieve-parity` US-004): only `contract.py`'s 1.3.0 continuation line
 moved a hashed input, and its read-only revert reproduces `464b6ad5…` exactly.
 The parse guard in `cache.py` and metrics mirror/emission in `retrieval_app.py`
-are not hashed. Nothing downstream may assume Poppy↔Forage revision parity.
+are not hashed. A twenty-fifth — **not** sanitization-behaviour-changing at shipped
+defaults — announces the effective-policy fields (`664ee603…` → `d98f7dbe…`,
+`hardening-retrieve-parity` US-005): `contract.py` alone, whose read-only whole-file
+revert reproduces `664ee603…` under both default and shipped configuration.
+`retrieval_app.py`'s policy helper and `models.py`'s fields are not hashed.
+Nothing downstream may assume Poppy↔Forage revision parity.
+
+**Operator policy is resolved in the handler, once.** `_apply_promptguard_policy`
+replaces the typed request with `model_copy` after asserting update keys against
+`model_fields`: both routes apply `request.promptguard_fail_closed or floor`,
+and `/retrieve` alone applies `min(request.promptguard_threshold, ceiling)`.
+The pipeline and `cache_policy_fingerprint` therefore read the same effective values;
+no parallel pipeline argument can bypass the cache key. Each handler stamps its
+response after the pipeline, including hits with missing or stale stored policy
+fields. The fields report policy, not scanning; trusted-tier skip and VERIFIED
+fail-open remain exemptions, `/search` keeps fixed `0.85`, and `/extract` is untouched.
 
 **Cache parse failure is a miss, not an authenticity check.** `ContentCache._parse_entry`
 catches `ValueError` from `RetrievedContent.model_validate_json`, increments

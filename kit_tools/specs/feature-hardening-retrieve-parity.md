@@ -1720,6 +1720,62 @@ fails the unit test that pins the update keys.
 
 ## Implementation Notes
 
+### US-005 implementation (2026-09-22)
+
+- Reused US-001's validated `RetrieveSettings` reader without changing its boot
+  semantics. Added exact closed-message boot cases for mistyped floors and
+  mistyped/out-of-range/non-finite ceilings, plus accepted endpoints `0` and `1`.
+- `_apply_promptguard_policy` in `retrieval_app.py` resolves both routes' flag and
+  only `/retrieve`'s threshold by copying the request, asserting update keys against
+  its model fields. The request itself feeds classification and cache fingerprinting;
+  no parallel pipeline policy parameters were added. Responses are stamped after the
+  pipeline, so stored defaults or absent/stale policy fields never determine the report.
+- 81 new policy cases cover immutable request resolution, both floor inputs, standard
+  and untrusted absent/wait-timeout outcomes, real trust-list exemptions, a score-0.7
+  ceiling test, cache separation for each bound, stamped hits and hand-seeded old
+  entries, unchanged `/search` threshold and `/extract` policy, and unchanged 422 shape.
+  The app fixture now resets retrieve settings so a prior lifespan cannot leak its
+  policy into another handler test.
+- Re-created the held golden via `_SCHEMA_MODELS`; exactly the three expected
+  effective-field paths are new, and older goldens are untouched. Regenerated OpenAPI
+  and all four anchor quotations (`62c1efe2…b25a22`); export drift check passes.
+  `/extract`, health and 422 schemas and the `/extract`/admission/lifespan ASTs
+  compare identically to clean base `0e71157`.
+- Revision `664ee603…c04b` -> `d98f7dbe…69359`: only the contract continuation
+  moves a hashed source. Read-only whole-file revert reproduces the base exactly
+  under `{}` and shipped configuration; all five rotation records updated.
+- Operator/API/security text names both trust-tier exemptions and the retrieve-only
+  ceiling. `docs/releases.md` is the existing spec-8 consumer-note deliverable:
+  the required timeout, signal and floor tokens are grep-verified there, with a
+  carry-forward note in spec 8's Implementation Notes. Spec 6's bind-mount procedure
+  is cross-referenced as pending rather than claimed as shipped.
+- 1,055 related tests passed (1,002 runtime/contract tests plus 53 governance tests);
+  repository-wide Ruff lint/format and strict Pyright pass. Full-suite execution
+  remains the orchestrator/end-of-epic gate because the implementer instructions
+  explicitly prohibit it. No story definition or acceptance checkbox was changed.
+
+### US-005 retry: oversized numeric configuration (2026-09-22)
+
+- Restored the reviewed `bcbc928` implementation on clean `0e71157`, then corrected
+  the verifier's sole failing case: `bounded_float` now compares the original number
+  to its bounds before conversion. No broad catch, fallback, or value-bearing error
+  was added; valid integer endpoints still widen to floats and bool/NaN/infinity
+  remain refused.
+- Four new real-YAML regressions (positive and negative 401-digit integers through
+  the settings reader and lifespan) reproduced `OverflowError` before the fix and
+  now require the exact `RetrieveConfigurationError` class and closed range message,
+  with no value echoed in the error or logs. The shared helper gains five cases for
+  non-finite floats and oversized integers.
+- Re-measured the same `664ee603…c04b` -> `d98f7dbe…69359` rotation and read-only
+  revert control under both default and shipped configuration. `config_bounds.py`
+  is not hashed; only `contract.py` still moves a source input. Re-generated contract
+  and golden artifacts match the prior attempt exactly, including the anchor.
+- The related policy/app/config/cache/orchestrator/contract run passed all 972 cases;
+  another 94 mapped contract-smoke cases passed, with all 53 documentation guards
+  re-run after the notes update (1,066 distinct cases total). Repository-wide Ruff
+  lint/format, strict Pyright and contract drift checks pass.
+  The full-suite gate remains deferred to the orchestrator as explicitly instructed.
+
 ### US-004 implementation (2026-09-22)
 
 - `ContentCache._parse_entry` is the one guarded parse seam: catches only `ValueError`,

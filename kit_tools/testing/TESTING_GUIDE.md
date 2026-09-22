@@ -1,8 +1,8 @@
 <!-- Template Version: 2.1.0 -->
 # TESTING_GUIDE.md
 
-> Last updated: 2026-09-17
-> Updated by: Claude (forage-contract US-004)
+> Last updated: 2026-09-22
+> Updated by: Copilot (hardening-retrieve-parity US-005)
 
 ## Quick Start
 
@@ -122,10 +122,11 @@ the rest not since 2026-09-10).
 | `tests/test_url_validator.py` | 59 | SSRF defense: RFC1918, DNS rebinding, schemes |
 | `tests/test_cache.py` | 116 | Valkey cache incl. the never-log-the-URL invariant |
 | `tests/test_smart_extraction.py` | 45 | Summary mode / high-signal preservation |
-| `tests/test_stage1_extraction.py` | 41 | HTML extraction, `raw_text` vs `main_content` |
+| `tests/test_stage1_extraction.py` | 66 | HTML extraction, `raw_text` vs `main_content`, shared config bounds including non-finite numbers and oversized integers (measured at US-005 retry) |
 | `tests/test_stage4_structuring.py` | 39 | Response assembly + composite trust score |
 | `tests/test_models.py` | 31 | Pydantic request/response models |
-| `tests/test_app.py` | 60 | FastAPI endpoints, `/health` body, capability break-glass, the `/metrics` `model` counters, and the lifespan harness: startup yields immediately, `/health` latency during a fetch, the `promptguard_loaded` flip, and the retry task's cancellation at shutdown |
+| `tests/test_app.py` | 169 | FastAPI endpoints, `/health`, capability break-glass, `/metrics`, provider policy, and lifespan wiring; includes closed-message boot refusal for invalid operator policy types/ranges and oversized YAML integers, and publication of validated non-default bounds (measured at US-005 retry) |
+| `tests/test_promptguard_policy.py` | 81 | Handler-side policy resolution, field-name guard, absent/contended classifier floors on both fetch routes, trusted/VERIFIED exemptions, threshold scope, effective cache fingerprints, stamped hits (including old entries), unchanged `/extract` and policy-free 422s |
 | `tests/test_stage3_promptguard.py` | 30 | ML scan; transformers/torch mocked |
 | `tests/test_ci_workflow.py` | 279 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane, image build + secret-grep gate, smoke job + artifact handoff, both publish lanes (tag policies evaluated, not matched), the cross-fire guards between them, and — since US-003 — the image↔contract mapping: the version is read from the tagged tree, the Release body is written from it, the published body is read back and asserted, and no version literal may appear in the job's shell. US-004 adds the Release assets (attached by the create call, downloaded back and verified against the committed anchor), the reproducible-export guards: one identical SOURCE_DATE_EPOCH script in all four building jobs, `rewrite-timestamp=true` on every exporter, and the longhand `type=docker` / `type=image,push=true` forms that can carry it, and (`search-release` US-004) the `CONTRACT_VERSION` docstring-entry extractor: the POSIX awk program sliced out of the publish job's read step is run through `subprocess` against the real `pipeline/contract.py` and against a hostile synthetic module (a backtick span, `$(id)`, a mid-line `*`, an indented bullet look-alike, an `EOF` line, a `version=forged` line and a mid-line `"""`), plus the static assertions that the read step uses no `python3`/`uv`/`scripts/`, the create step appends the entry from a notes file via `--notes-file`, and the read-back checks it with a fixed-string `grep -qF` |
 | `tests/test_compose_fragments.py` | 62 | Compose fragments, parse-only shape guards (audit: row was missing), and (`search-release` US-004) the `forage:1.1.0` pin and the `FORAGE_SEARCH_PROVIDERS` / `FORAGE_BRAVE_API_KEY` bare-name passthrough on the `forage` service in both fragments |
@@ -143,7 +144,7 @@ the rest not since 2026-09-10).
 | `tests/test_contract_metrics.py` | 20 | The typed `/metrics` body and the served app metadata: parity between the handler's dict and the bytes the typed route sends (compared *outside* the model, so a reorder at any depth is caught), the flat cgroup keys in both wire and schema, the `extra="forbid"` failure mode and the permissive-model counterfactual it avoids, the dataclass-counter ↔ model field ties, `info.version == CONTRACT_VERSION`, and the mechanical check that every path FastAPI serves — `/docs`, `/redoc` and `/openapi.json` included — is acknowledged in `docs/configuration.md`'s posture section |
 | `tests/test_contract_export.py` | 18 | The frozen `contract/openapi.yaml`: that the committed bytes are what the app generates, that the committed `.sha256` anchor is the sha256 of those bytes in `sha256sum -c` form, that the render is byte-stable across processes and `PYTHONHASHSEED` values (measured in subprocesses, not asserted), that the canonical form round-trips and carries no YAML anchors, and that `/extract` is documented while `extract_route_enabled` is `false`. The drift check's own failure case is committed as `tests/fixtures/contract/unregenerated_openapi.yaml` and fed to the same checker |
 | `tests/test_governance_docs.py` | 43 | The three governance documents US-003 adds — `contract/GOVERNANCE.md`, `SECURITY.md`, `.github/pull_request_template.md` — held to the code they describe: the stated contract version against `CONTRACT_VERSION`, the regeneration command against `scripts.export_contract.REGEN_COMMAND`, the hashed-source count against `_REVISION_SOURCES`, the PR template's required-checks sentence against the jobs `publish` hangs off, the six worked examples parsed out of the table and checked for exactly one classification each (two are deliberately two-valued), the five recorded rulings present with a citation that resolves, and every relative link in all three files |
-| `tests/test_contract_schema.py` | 1 | Golden contract fixture vs `pipeline/contract.py` |
+| `tests/test_contract_schema.py` | 14 | Golden schema, frozen 1.2.0 coverage and held 1.3.0 exact-additions sweep, including the three effective-policy fields |
 
 Support files:
 
@@ -240,8 +241,8 @@ Used by the KitTools orchestrator to pick the right tests for a changed file.
 
 ```yaml
 test_mapping:
-  "retrieval_app.py": ["tests/test_app.py", "tests/test_contract_smoke.py", "tests/test_contract_errors.py", "tests/test_contract_metrics.py", "tests/test_contract_export.py"]
-  "models.py": ["tests/test_models.py", "tests/test_contract_errors.py", "tests/test_contract_export.py"]
+  "retrieval_app.py": ["tests/test_app.py", "tests/test_promptguard_policy.py", "tests/test_contract_smoke.py", "tests/test_contract_errors.py", "tests/test_contract_metrics.py", "tests/test_contract_export.py"]
+  "models.py": ["tests/test_models.py", "tests/test_promptguard_policy.py", "tests/test_contract_errors.py", "tests/test_contract_export.py"]
   "cache.py": "tests/test_cache.py"
   "url_validator.py": "tests/test_url_validator.py"
   "pipeline/orchestrator.py": "tests/test_orchestrator.py"
@@ -260,8 +261,8 @@ test_mapping:
   "pipeline/stage5_url_audit.py": "tests/test_stage5_url_audit.py"
   "pipeline/smart_extraction.py": "tests/test_smart_extraction.py"
   "pipeline/extraction_limits.py": "tests/test_stage1_extraction.py"
-  "pipeline/config_bounds.py": "tests/test_stage1_extraction.py"
-  "pipeline/retrieve_limits.py": "tests/test_app.py"
+  "pipeline/config_bounds.py": ["tests/test_stage1_extraction.py", "tests/test_app.py"]
+  "pipeline/retrieve_limits.py": ["tests/test_app.py", "tests/test_promptguard_policy.py"]
   "pipeline/search_providers/__init__.py": "tests/test_search_providers.py"
   "pipeline/search_providers/base.py": "tests/test_search_providers.py"
   "pipeline/search_providers/searxng.py": "tests/test_search_providers.py"

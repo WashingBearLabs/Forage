@@ -336,6 +336,15 @@ file that moved; reverting its bytes alone reproduces `464b6ad5…` exactly.
 `cache.py`'s guarded parse and `retrieval_app.py`'s metrics mirror/emission are not
 hashed. Invalid cached JSON or schema now becomes a counted, logged miss with deletion
 attempted rather than a 500; parse success still does not establish authenticity.
+and a twenty-fifth to `d98f7dbe…` — **not** a rotation that changes sanitization
+behaviour at shipped defaults — when `contract.py` gained the `1.3.0` continuation
+line for the three effective-policy fields (`hardening-retrieve-parity` US-005).
+It is the only hashed file that moved; a read-only whole-file revert reproduces
+`664ee603…` exactly under both default and shipped configuration. The handler's
+request replacement and post-pipeline response stamping (`retrieval_app.py`) and
+the defaulted response fields (`models.py`) are not hashed. The operator can now
+bound fail-closed on both fetch routes and the threshold on `/retrieve` only;
+the defaults impose no bound and caller trust-tier exemptions remain intact.
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.
