@@ -190,6 +190,24 @@ async def test_every_section_the_handler_emits_has_a_model(
         assert set(payload[section]) == set(model.model_fields)
 
 
+async def test_domain_policy_counters_match_classes_models_and_wire(
+    client: httpx.AsyncClient,
+) -> None:
+    payload = (await client.get("/metrics")).json()
+    for section in ("retrieve", "search"):
+        counters: retrieval_app.RetrieveMetrics | retrieval_app.SearchMetrics = getattr(
+            app.state, f"{section}_metrics"
+        )
+        assert set(vars(counters)) == set(_SECTION_MODELS[section].model_fields)
+        for name in ("policy_invalid_domain_entry", "policy_suffix_trusted_skip"):
+            assert payload[section][name] == 0
+            setattr(counters, name, 7)
+    payload = (await client.get("/metrics")).json()
+    for section in ("retrieve", "search"):
+        for name in ("policy_invalid_domain_entry", "policy_suffix_trusted_skip"):
+            assert payload[section][name] == 7
+
+
 async def test_cgroup_keys_stay_flat_in_the_extraction_section(
     client: httpx.AsyncClient,
 ) -> None:

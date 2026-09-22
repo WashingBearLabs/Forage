@@ -13,6 +13,9 @@ news_domains:
   - .cnn.com
 seed_blocklist: []
 promptguard_threshold: 0.85
+# Raw UTF-8 bytes per caller domain list, including newline separators.
+# Allowlists truncate; an over-budget denylist is refused whole.
+policy_domain_entries_max_bytes: 65536
 # Brave LLM-Context search provider tunables (feature-brave-provider US-010).
 # Read unconditionally at startup by brave_settings_from_config, whether or
 # not "brave" is in FORAGE_SEARCH_PROVIDERS, so an out-of-range value refuses

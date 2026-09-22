@@ -45,10 +45,12 @@ from models import (
     SearchResponse,
 )
 from pipeline import contract
+from pipeline.config_bounds import bounded_int
 from pipeline.contract import (
     CONTRACT_VERSION,
     DEGRADED_CACHE_UNAVAILABLE,
     DEGRADED_PROMPTGUARD_UNAVAILABLE,
+    POLICY_DOMAIN_LIST_TOO_LARGE,
     POLICY_EXCLUDED_ALL_PROVIDERS,
     Admission413ErrorCode,
     DegradedReason,
@@ -96,9 +98,11 @@ from pipeline.search_providers.policy import apply_request_policy
 from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL, SearxngProvider
 from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES
 from promptguard.classifier import PromptGuardClassifier
-from url_validator import normalize_domain_entries
+from url_validator import domain_list_bytes, normalize_domain_entries
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_POLICY_DOMAIN_ENTRIES_MAX_BYTES = 65536
 
 # Runtime configuration is 12-factor: every setting arrives as an environment
 # variable at container start (see ``docs/configuration.md``). There is no
@@ -543,6 +547,19 @@ class SearchMetricsResponse(BaseModel):
             "bad name from a missing key."
         )
     )
+    policy_invalid_domain_entry: int = Field(
+        description=(
+            "Dropped invalid denylist entries, one increment per entry, never "
+            "the offending value. Reserved until /search domain policy lands; "
+            "an over-budget denylist is refused, never truncated or counted."
+        )
+    )
+    policy_suffix_trusted_skip: int = Field(
+        description=(
+            "Reserved for parity with /retrieve; always zero because /search "
+            "has no trusted or verified tiers."
+        )
+    )
     classification_wait_timeouts: int = Field(
         description=(
             "`/search` requests whose per-request PromptGuard wait budget "
@@ -580,6 +597,24 @@ class RetrieveMetricsResponse(BaseModel):
         description=(
             "Retrievals by classifier state (scanned / skipped / unavailable), "
             "bucketed the same way."
+        )
+    )
+    policy_invalid_domain_entry: int = Field(
+        description=(
+            "Dropped request domain entries, one increment per entry: invalid "
+            "entries in any list or the over-budget remainder of an allowlist. "
+            "The two allowlist drop causes both narrow privilege; an over-budget "
+            "denylist is refused, never truncated or counted. Offending entries "
+            "are not stored."
+        )
+    )
+    policy_suffix_trusted_skip: int = Field(
+        description=(
+            "Uncached retrievals resolving to trusted or verified through a "
+            "leading-dot entry. Covers both the trusted classifier skip and "
+            "the verified exemption when classification is unavailable, even "
+            "if classification is available on this request. Exact matches "
+            "through bare entries do not increment it."
         )
     )
     classification_wait_timeouts: int = Field(
@@ -939,6 +974,8 @@ class SearchMetrics:
         self.fallback_fired = 0
         self.paid_calls = 0
         self.policy_unknown_provider = 0
+        self.policy_invalid_domain_entry = 0
+        self.policy_suffix_trusted_skip = 0
         # `pipeline.orchestrator.SearchMetricsSink`'s third counter, moved at
         # most once per request by the per-request classification wait budget.
         self.classification_wait_timeouts = 0
@@ -969,7 +1006,9 @@ class RetrieveMetrics:
         self.cache_misses = 0
         self.blocked_by_reason: dict[str, int] = {}
         self.promptguard_state: dict[str, int] = {}
-        # The three counters `pipeline.orchestrator.RetrieveMetricsSink`
+        self.policy_invalid_domain_entry = 0
+        self.policy_suffix_trusted_skip = 0
+        # The capacity counters `pipeline.orchestrator.RetrieveMetricsSink`
         # declares. The first two are the `/retrieve` admission controller's
         # (`app.state.retrieve_admission` increments them by attribute, the
         # way `/extract`'s controller increments `ExtractionMetrics`); the
@@ -1342,6 +1381,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 ",".join(dropped),
             )
     app.state.config = published_config
+    try:
+        policy_domain_entries_max_bytes = bounded_int(
+            config,
+            "policy_domain_entries_max_bytes",
+            _DEFAULT_POLICY_DOMAIN_ENTRIES_MAX_BYTES,
+            minimum=4096,
+            maximum=1048576,
+            error=ValueError,
+        )
+    except ValueError:
+        logger.warning("config_invalid_value — key=policy_domain_entries_max_bytes")
+        policy_domain_entries_max_bytes = _DEFAULT_POLICY_DOMAIN_ENTRIES_MAX_BYTES
+    app.state.policy_domain_entries_max_bytes = policy_domain_entries_max_bytes
     settings = extraction_settings_from_config(config)
     app.state.extraction_settings = settings
     retrieve_settings = retrieve_settings_from_config(config)
@@ -1536,6 +1588,7 @@ app.state.extraction_settings = _initial_extraction_settings
 # WARNING belongs to the lifespan, so a lifespan-free test does not emit a
 # boot warning nobody configured.
 app.state.retrieve_settings = retrieve_settings_from_config({})
+app.state.policy_domain_entries_max_bytes = _DEFAULT_POLICY_DOMAIN_ENTRIES_MAX_BYTES
 app.state.extraction_metrics = ExtractionMetrics()
 app.state.extraction_admission = ExtractionAdmissionController(
     _initial_extraction_settings,
@@ -1696,6 +1749,8 @@ async def metrics(request: Request) -> dict[str, Any]:
             "fallback_fired": search_metrics.fallback_fired,
             "paid_calls": search_metrics.paid_calls,
             "policy_unknown_provider": search_metrics.policy_unknown_provider,
+            "policy_invalid_domain_entry": search_metrics.policy_invalid_domain_entry,
+            "policy_suffix_trusted_skip": search_metrics.policy_suffix_trusted_skip,
             "classification_wait_timeouts": (
                 search_metrics.classification_wait_timeouts
             ),
@@ -1707,6 +1762,8 @@ async def metrics(request: Request) -> dict[str, Any]:
             "cache_misses": retrieve_metrics.cache_misses,
             "blocked_by_reason": retrieve_metrics.blocked_by_reason,
             "promptguard_state": retrieve_metrics.promptguard_state,
+            "policy_invalid_domain_entry": retrieve_metrics.policy_invalid_domain_entry,
+            "policy_suffix_trusted_skip": retrieve_metrics.policy_suffix_trusted_skip,
             "classification_wait_timeouts": (
                 retrieve_metrics.classification_wait_timeouts
             ),
@@ -1743,9 +1800,9 @@ async def metrics(request: Request) -> dict[str, Any]:
     }
 
 
-def _apply_promptguard_policy[T: RetrieveRequest | SearchRequest](
-    body: T, settings: RetrieveSettings
-) -> T:
+def _promptguard_policy_updates(
+    body: RetrieveRequest | SearchRequest, settings: RetrieveSettings
+) -> dict[str, bool | float]:
     # Resolve caller-controlled, operator-boundable fields here, never as parallel
     # pipeline parameters: the request also supplies the cache fingerprint.
     updates: dict[str, bool | float] = {
@@ -1758,7 +1815,7 @@ def _apply_promptguard_policy[T: RetrieveRequest | SearchRequest](
             body.promptguard_threshold, settings.promptguard_threshold_ceiling
         )
     assert updates.keys() <= type(body).model_fields.keys()
-    return body.model_copy(update=updates)
+    return updates
 
 
 @app.post(
@@ -1793,7 +1850,34 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
     retrieve_metrics.requests += 1
     try:
         retrieve_settings: RetrieveSettings = request.app.state.retrieve_settings
-        body = _apply_promptguard_policy(body, retrieve_settings)
+        budget: int = request.app.state.policy_domain_entries_max_bytes
+        # Refuse the entire denylist before canonicalising any caller entry.
+        if domain_list_bytes(body.blocked_domains) > budget:
+            raise PipelineError(
+                error="content_too_large",
+                reason=POLICY_DOMAIN_LIST_TOO_LARGE,
+                request_id=uuid.uuid4().hex,
+            )
+        trusted_domains, trusted_dropped = normalize_domain_entries(
+            body.trusted_domains, denylist=False, budget_bytes=budget
+        )
+        verified_domains, verified_dropped = normalize_domain_entries(
+            body.verified_domains, denylist=False, budget_bytes=budget
+        )
+        blocked_domains, blocked_dropped = normalize_domain_entries(
+            body.blocked_domains, denylist=True, budget_bytes=None
+        )
+        retrieve_metrics.policy_invalid_domain_entry += (
+            trusted_dropped + verified_dropped + blocked_dropped
+        )
+        body = body.model_copy(
+            update={
+                **_promptguard_policy_updates(body, retrieve_settings),
+                "trusted_domains": trusted_domains,
+                "verified_domains": verified_domains,
+                "blocked_domains": blocked_domains,
+            }
+        )
         content = await run_retrieve_pipeline(
             body,
             cache=request.app.state.cache,
@@ -2007,7 +2091,9 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
     """
     search_metrics: SearchMetrics = request.app.state.search_metrics
     search_metrics.requests += 1
-    body = _apply_promptguard_policy(body, request.app.state.retrieve_settings)
+    body = body.model_copy(
+        update=_promptguard_policy_updates(body, request.app.state.retrieve_settings)
+    )
     configured_chain = _resolved_search_providers(request.app.state)
     effective_chain, ignored_count = apply_request_policy(configured_chain, body)
     search_metrics.policy_unknown_provider += ignored_count

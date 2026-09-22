@@ -301,6 +301,20 @@ Canonical private-name rejection precedes caller denylists (`blocked_domain` →
 Example 6 exception; this paragraph is the upgrade announcement, not a claim
 that an opt-in compatibility window was implemented.
 
+US-007 adds a **64 KiB raw UTF-8 budget per caller domain list**, configurable
+with `policy_domain_entries_max_bytes` (4 KiB–1 MiB). `/retrieve` refuses an
+oversized `blocked_domains` list whole with 422 `content_too_large` and reason
+`policy_domain_list_too_large`; retrying unchanged cannot help. Allowlists keep
+their in-budget prefix, counting invalid entries and over-budget remainders on
+`retrieve.policy_invalid_domain_entry`. The operator's denylist cannot be evicted.
+`retrieve.policy_suffix_trusted_skip` measures wildcard trusted **and verified**
+resolutions; both corresponding `search.*` counters are also declared, with
+search drop increments deferred to US-002 and suffix skips permanently zero.
+Consumer-size evidence available in this checkout: **none** (no production
+request capture); the default is the specified configurable bound, not a claim
+about measured production headroom. This bounds encode work, not request-body
+admission.
+
 ### The Release carries the contract itself
 
 Since `feature-forage-contract` US-004 every `v*` Release has two assets:

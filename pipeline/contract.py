@@ -163,6 +163,12 @@ MINOR when fields are only added.
   verified degrade-open cautions. Canonical private-name rejection now precedes
   the caller denylist, swapping ``blocked_domain`` to ``private_ip`` for a host
   that matches both (GOVERNANCE ruling (h)); response shapes are unchanged.
+* ``1.3.0`` — ``hardening-hostname-and-config`` US-007 adds ``/metrics``
+  ``retrieve.policy_invalid_domain_entry``, ``retrieve.policy_suffix_trusted_skip``,
+  ``search.policy_invalid_domain_entry`` and ``search.policy_suffix_trusted_skip``;
+  ``/retrieve``'s ``content_too_large`` gains reason ``policy_domain_list_too_large``
+  for an over-budget caller denylist. Allowlists instead drop their over-budget
+  remainder; the counters report drops and wildcard trusted/verified resolutions.
   This version is **held**:
   ``tests/golden/contract_1_3_0.json`` is
   re-created in place by every later story in this epic that moves the
@@ -378,7 +384,9 @@ Five are the URL-validation and fetch refusals raised in
 is shared with ``/extract`` — the retrieve path raises it from
 ``stage5_url_audit``'s response cap and, with the reason
 ``PROMPTGUARD_BUDGET``, from the classification budget, not from the
-``/extract`` middleware. ``busy`` (contract ``1.3.0``) is the seventh and is
+``/extract`` middleware. Its handler raise site refuses an over-budget caller
+denylist with ``POLICY_DOMAIN_LIST_TOO_LARGE`` before pipeline entry.
+``busy`` (contract ``1.3.0``) is the seventh and is
 also shared with ``/extract``: the ``/retrieve`` admission controller's
 capacity refusal, reason ``RETRIEVE_ADMISSION_QUEUE_FULL``, answered 422 on
 this route where ``/extract``'s middleware answers the same literal 429.
@@ -397,7 +405,7 @@ SearchErrorCode = Literal[
     "searxng_unavailable",
     "search_unavailable",
 ]
-"""``POST /search`` upstream failure codes (all 422).
+"""``POST /search`` upstream failure and request-policy refusal codes (all 422).
 
 The two ``searxng_*`` codes are the legacy pair, and they are now
 *chain-shaped* rather than provider-shaped: ``orchestrator`` raises them only
@@ -406,7 +414,9 @@ the default deployment and the only one that existed before the
 ``SearchProvider`` seam. ``search_unavailable`` (contract ``1.2.0``) is the
 general code for every other chain — its ``reason`` is the closed
 ``"<provider_name>: <failure_class>"`` composition, never a URL and never
-exception text.
+exception text. Policy refusals instead use ``POLICY_EXCLUDED_ALL_PROVIDERS``
+or ``POLICY_DOMAIN_LIST_TOO_LARGE``; these are not retryable without changing
+the request.
 """
 
 SEARCH_ERROR_CODES = frozenset(get_args(SearchErrorCode))
@@ -455,12 +465,22 @@ POLICY_EXCLUDED_ALL_PROVIDERS = "policy_excluded_all_providers"
 """The ``search_unavailable`` ``reason`` when per-request policy narrows the
 effective provider chain to nothing (``search-policy-and-health`` US-010).
 
-``search_unavailable``'s reason takes exactly two shapes: the chain-order
+``search_unavailable``'s reason takes exactly three shapes: the chain-order
 ``"<provider>: <failure_class>"`` list ``orchestrator.py`` composes on an
 exhausted chain, or this fixed literal, raised by ``retrieval_app.py`` before
 ``run_search_pipeline`` is ever called, when a request's own ``providers`` /
 ``allow_paid_fallback`` policy excludes every provider the deployment
-configured. Never a mix of the two."""
+configured; or ``POLICY_DOMAIN_LIST_TOO_LARGE`` (declared here ahead of the
+``/search`` domain-policy raiser). Never a mix of these shapes."""
+
+POLICY_DOMAIN_LIST_TOO_LARGE = "policy_domain_list_too_large"
+"""An over-budget caller denylist, refused whole rather than partially enforced.
+
+The route-specific 422 codes are ``content_too_large`` on ``/retrieve`` and
+``search_unavailable`` on ``/search`` (declared ahead of its raiser). The request's
+own raw list bytes exceed ``policy_domain_entries_max_bytes``; retrying without
+changing the list or the configured budget cannot succeed.
+"""
 
 # ---------------------------------------------------------------------------
 # /retrieve classification budget
@@ -469,11 +489,12 @@ configured. Never a mix of the two."""
 PROMPTGUARD_BUDGET = "promptguard_budget"
 """The ``/retrieve`` ``content_too_large`` ``reason`` for a page over budget.
 
-``content_too_large`` on ``/retrieve`` carries exactly two reason shapes: the
+``content_too_large`` on ``/retrieve`` carries exactly three reason shapes: the
 fetch-cap prose ``stage5_url_audit`` raises when a body exceeds the 10 MB
 transfer limit, or this fixed literal, raised by ``orchestrator.py`` when the
 extracted text of a fetched page exceeds the character ceiling derived from
-``retrieve.max_promptguard_chunks``. Token-shaped rather than sentence-shaped
+``retrieve.max_promptguard_chunks``; or ``POLICY_DOMAIN_LIST_TOO_LARGE`` for an
+over-budget caller denylist. Token-shaped rather than sentence-shaped
 (``POLICY_EXCLUDED_ALL_PROVIDERS`` is the precedent) because it is a closed
 value a consumer may branch on, not prose for a human."""
 

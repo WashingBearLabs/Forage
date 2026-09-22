@@ -40,6 +40,37 @@ Canonical repo-root references used throughout: `docs/configuration.md`, `docs/w
 
 ## Quick Diagnostics: the first five minutes
 
+### policy_invalid_domain_entry
+
+`retrieve.policy_invalid_domain_entry` rises once **per dropped entry**, not per
+request. Two causes share it deliberately: malformed domain entries, and entries
+past an allowlist's raw byte-budget boundary. Both kinds of allowlist drops only
+narrow privilege, so one counter is enough; the denylist is never truncated.
+Invalid entries include single-label allowlist names (`com`, `.com`), empty
+labels, overlong names and names that cannot be UTS-46 encoded. Whitespace, case
+and one trailing dot are normalised rather than treated as invalid.
+
+For `/retrieve`, check all three lists and the raw UTF-8 size of each, including
+the newline separators, against `policy_domain_entries_max_bytes` (default 65536).
+`trusted_domains` and `verified_domains` keep only the prefix within that separate
+per-list budget. `/search` counts **invalid denylist entries only**, once US-002
+lands its domain policy; its counter is present but remains zero until then.
+An over-budget denylist is a **422 with reason `policy_domain_list_too_large` on
+either route**, never a count or partial enforcement: `/retrieve` uses
+`content_too_large`, and `/search` declares `search_unavailable` for its coming
+raiser. Retrying the same list without changing the budget cannot fix it.
+
+The offending entry is neither stored nor logged: it is caller-controlled content
+and could be a misplaced credential or URL. Inspect the consumer's configuration
+at its source; do not turn on payload logging. Check spelling, list assembly,
+unnecessary padding and the order of allowlist entries; there is no entry-count
+cap. The byte limit bounds canonicalisation work **after JSON parsing**, not
+request-body size. `retrieve.policy_suffix_trusted_skip` separately counts
+wildcard-caused trusted **and verified** resolutions; review those suffixes if it
+rises unexpectedly.
+
+### Immediate checks
+
 Forage is one FastAPI container with four dependencies (SearXNG, Valkey, the Hugging Face
 Hub or the private weights mirror, and the open web). Every failure surfaces in one of
 three places, and the order below is the order to read them.

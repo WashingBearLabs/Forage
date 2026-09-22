@@ -100,10 +100,20 @@ includes the apex and every subdomain. A wildcard `trusted_domains` entry skips 
 classification for all covered hosts; a wildcard `verified_domains` entry makes them
 degrade open on unavailable classification, even under `promptguard_fail_closed_floor`
 or a load-triggered wait timeout. Neither should name a multi-tenant or registry-level
-apex (`.co.uk`, `.github.io`, `.s3.amazonaws.com`). US-007 adds
-`policy_suffix_trusted_skip` to count wildcard-caused resolutions to either tier.
+apex (`.co.uk`, `.github.io`, `.s3.amazonaws.com`). US-007's
+`retrieve.policy_suffix_trusted_skip` counts wildcard-caused uncached resolutions
+to either tier, even when verified content is classified.
 Single-label allowlists are invalid. The normaliser and host side share exactly one
 UTS-46 implementation; malformed hosts are refused regardless of configured lists.
+
+`/retrieve` normalises caller lists once in the handler under
+`policy_domain_entries_max_bytes` (65536 raw UTF-8 bytes per list, including
+separators). An over-budget denylist is refused before any entry canonicalisation;
+allowlists keep only the in-budget prefix and count the remainder as drops.
+Operator entries are unbudgeted, canonical at boot, and merged first. The three
+comparison sites now require canonical entries and still canonicalise their host.
+**The budget bounds encode work, not request-body admission:** FastAPI parses the
+whole JSON first; `/retrieve` and `/search` body sizes remain unbounded here.
 
 ### `fetch_url`
 

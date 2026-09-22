@@ -256,6 +256,16 @@ on trusted subdomains. `orchestrator.py`, `contract.py` and `url_validator.py` a
 move; the latter was already in `_ROOT_REVISION_SOURCES`. Each reversal is measured
 in `docs/bootstrap-notes.md`, with the all-reverted control reproducing `5a470872…`
 under default and shipped config.
+The twenty-eighth (`328d386c…` → `c8a907cf…`) is the **sixth policy-driven
+sanitization-behaviour change** (`hardening-hostname-and-config` US-007):
+over-budget allowlist tails lose their trust grants and oversized denylists are
+refused whole; in-budget matching and text scanning stay unchanged.
+`orchestrator.py` removes its interim pass, merges operator entries first and
+counts wildcard trusted/verified resolutions; `contract.py` announces four
+counters and the reason. Already-hashed root `url_validator.py` removes its pass
+and safely sizes surrogate escapes before rejecting them as invalid entries.
+Every individual reversal was measured; all-reverted reproduces `328d386c…`
+under default and shipped config, with full hashes in `docs/bootstrap-notes.md`.
 Nothing downstream may assume Poppy↔Forage revision parity.
 
 **Domain lists cross boundaries as canonical strings.** `url_validator.py` owns the
@@ -265,11 +275,11 @@ but is removed from denylist strings. IP literals are equality-only, single-labe
 denylists are exact-only, and single-label allowlists are invalid. Private-name
 rejection remains its own unconditional check before caller lists.
 The lifespan publishes a normalised config copy and warns once per invalid list;
-the raw loaded config still feeds revision derivation. Until US-007 owns caller
-normalisation, each comparison normalises its inputs once per call without a budget.
+the raw loaded config still feeds revision derivation. Since US-007, caller
+normalisation belongs to the handler, never to the comparison sites.
 
-**Operator policy is resolved in the handler, once.** `_apply_promptguard_policy`
-replaces the typed request with `model_copy` after asserting update keys against
+**Operator policy is resolved in the handler, once.** `_promptguard_policy_updates`
+returns the fields for one `model_copy` after asserting update keys against
 `model_fields`: both routes apply `request.promptguard_fail_closed or floor`,
 and `/retrieve` alone applies `min(request.promptguard_threshold, ceiling)`.
 The pipeline and `cache_policy_fingerprint` therefore read the same effective values;
@@ -277,6 +287,14 @@ no parallel pipeline argument can bypass the cache key. Each handler stamps its
 response after the pipeline, including hits with missing or stale stored policy
 fields. The fields report policy, not scanning; trusted-tier skip and VERIFIED
 fail-open remain exemptions, `/search` keeps fixed `0.85`, and `/extract` is untouched.
+
+US-007 adds canonical domain lists to that same `/retrieve` request replacement.
+The handler checks the raw denylist byte size before any entry canonicalisation;
+the two allowlists independently retain their in-budget prefix. Config lists are
+still canonicalised only at boot. The three comparison sites receive canonical
+strings, retain host canonicalisation, and do no entry normalisation. Denylist
+merge order is operator first. The budget is an encode-work bound after JSON
+parsing, not an HTTP body limit.
 
 **Cache parse failure is a miss, not an authenticity check.** `ContentCache._parse_entry`
 catches `ValueError` from `RetrievedContent.model_validate_json`, increments

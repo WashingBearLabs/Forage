@@ -1482,6 +1482,64 @@ and the same for `kit_tools/arch/SERVICE_MAP.md` each return at least `1`; the f
   `export_contract --check`. A separate AST/read-only check pins unchanged public
   signatures, one IDNA call site, the direct dependency, and all retained goldens.
 
+### US-007 implementation (2026-09-22)
+
+- `/retrieve` makes exactly one request `model_copy`, carrying all three canonical
+  lists plus resolved fail-closed/threshold fields. The policy helper now returns
+  updates rather than copying; `/search` still makes one copy with unchanged
+  policy semantics. No pipeline parameter or public comparison signature changed.
+- The boot `bounded_int` read publishes a per-list byte cap (default 65536,
+  inclusive bounds 4096–1048576); invalid values warn with only the key and fall
+  back. `promptguard_threshold_from_config` and `KNOWN_CONFIG_KEYS` do not exist
+  at this execution point; their later stories own those additions. Allowlists
+  keep the in-budget prefix; an oversized denylist raises the handler's coded
+  422 before any caller entry is canonicalised. Operator entries merge first.
+  The three interim entry passes are gone; host canonicalisation remains.
+- Consumer-size evidence: **none**. This standalone checkout contains no
+  production consumer request capture from which to measure the largest list.
+  The 64 KiB default is confirmed as the specified configurable bound, not as
+  measured production headroom; the release handoff records that limitation.
+  This limits canonicalisation work after JSON parsing, not body admission.
+- Added all four counter class/model/handler fields, extended the exact search
+  field-set pin and added its retrieve twin. Wildcard accounting calls
+  `matched_entry` only for trusted/verified resolutions, including verified
+  with unavailable classification; exact-entry matches and standard resolutions
+  do not increment. Cached responses do not re-resolve tiers. Search counters
+  remain zero pending US-002 (suffix skips permanently reserved).
+- Closed a budget-boundary edge discovered during implementation: FastAPI's
+  JSON-to-Python path admits lone surrogate escapes that
+  `RetrieveRequest.model_validate_json` rejects. Strict UTF-8 sizing raised
+  `UnicodeEncodeError`; sizing now charges three bytes per surrogate using
+  `surrogatepass`, without replacing or accepting it as a domain. The normaliser
+  rejects and counts it. Real ASGI regressions cover both allowlists and the
+  denylist; valid UTF-8 budgets are unchanged.
+- Regenerated OpenAPI and its drift fixture; anchor
+  `416f86c93f74489b28083086bac7f9424ab700220fd46f275ca6333da428f97b`.
+  Re-created held 1.3.0 golden through `_SCHEMA_MODELS`, byte-identical; all
+  older goldens and `_EXPECTED_ONE_THREE_ZERO_DIFF` are unchanged. Four
+  anchor quotations, monitoring rows, troubleshooting, config and release
+  handoff documentation are current.
+- Twenty-eighth rotation: `328d386c…` → `c8a907cf…`. Three hashed sources move,
+  not the spec's two: `url_validator.py` was already hashed. Individual
+  read-only reversals and all-reverted control measured under default and
+  shipped config; all five sites recorded. In-budget matching and scanning
+  are unchanged, but an over-budget allowlist cannot grant trust through its
+  tail (sixth policy-driven sanitization change).
+- Validation: **1,196 tests passed** across twelve directly related modules;
+  **15 admission tests passed separately**. Repository lint, strict pyright,
+  changed-file formatting, contract drift and `git diff --check` pass.
+  No story definitions or acceptance checkboxes changed.
+- Readiness remains **partial / needs-work**: full-suite execution is explicitly
+  deferred by the implementer instructions. Repository formatting still fails
+  solely in untouched `tests/test_retrieve_admission.py`. Running that module
+  after `tests/test_orchestrator.py` also exposes two inherited failures:
+  `test_active_classification_cancellation_retains_ownership` overlaps the
+  `_retrieve_under` patch contexts and leaves `orchestrator.fetch_url` as an
+  `AsyncMock`, so the admission stream's `started` event never fires. Both
+  functions' ASTs are identical to clean `03bc764`; running the 12-case
+  cancellation test alone confirms the leaked mock. No unrelated test or
+  production change was made to conceal either gate failure.
+
 ## Refinement Notes
 
 ### Research Findings

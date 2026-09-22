@@ -167,6 +167,20 @@ def test_matched_entry_returns_the_first_matching_canonical_spelling() -> None:
     assert matched_entry("notexample.com", [".example.com"]) is None
 
 
+def test_domain_byte_budget_counts_surrogates_without_accepting_them() -> None:
+    entries = ["\ud800", "example.com"]
+    assert domain_list_bytes(entries) == 15
+    assert normalize_domain_entries(entries, denylist=False, budget_bytes=15) == (
+        ["example.com"],
+        1,
+    )
+    assert normalize_domain_entries(entries, denylist=False, budget_bytes=14) == ([], 2)
+    assert normalize_domain_entries(entries, denylist=True, budget_bytes=None) == (
+        ["example.com"],
+        1,
+    )
+
+
 @pytest.mark.parametrize("blocked", [None, [], ["other.example"]])
 async def test_uncanonicalizable_fetch_host_is_refused_before_dns(
     blocked: list[str] | None,
@@ -214,7 +228,11 @@ async def test_normalized_denylists_block_before_dns(host: str, entry: str) -> N
             BlockedDomainError,
             match=f"Domain '{canonical_host(host)}' is on the blocklist",
         ):
-            await validate_url(f"https://{host}/x", blocked_domains=[entry])
+            entries, dropped = normalize_domain_entries(
+                [entry], denylist=True, budget_bytes=None
+            )
+            assert dropped == 0
+            await validate_url(f"https://{host}/x", blocked_domains=entries)
         dns.assert_not_called()
 
 

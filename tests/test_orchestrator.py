@@ -93,6 +93,7 @@ from pipeline.stage3_promptguard import (
 from pipeline.stage5_url_audit import FetchResult
 from promptguard.classifier import PromptGuardBudgetExceededError, PromptGuardClassifier
 from tests.fakes import FakeSearchProvider, FakeStorage
+from url_validator import matched_entry, normalize_domain_entries, validate_url
 
 
 @pytest.mark.parametrize(
@@ -122,10 +123,104 @@ def test_request_trust_tier_uses_canonical_directional_matching(
     blocked: list[str],
     expected: str,
 ) -> None:
+    trusted, _ = normalize_domain_entries(trusted, denylist=False, budget_bytes=None)
+    verified, _ = normalize_domain_entries(verified, denylist=False, budget_bytes=None)
+    blocked, _ = normalize_domain_entries(blocked, denylist=True, budget_bytes=None)
     assert (
         orchestrator._resolve_request_trust_tier(domain, trusted, verified, blocked)
         == expected
     )
+
+
+@pytest.mark.parametrize(
+    ("tier", "entries", "domain", "expected"),
+    [
+        ("trusted", [".example.com"], "www.example.com", 1),
+        ("trusted", ["www.example.com"], "www.example.com", 0),
+        ("trusted", ["www.example.com", ".example.com"], "www.example.com", 0),
+        ("trusted", [".example.com", "www.example.com"], "www.example.com", 1),
+        ("trusted", [".example.com"], "example.com", 1),
+        ("trusted", [".xn--strae-oqa.de"], "www.straße.de", 1),
+        ("verified", [".example.com"], "www.example.com", 1),
+        ("verified", ["www.example.com"], "www.example.com", 0),
+        ("standard", [".other.example"], "www.example.com", 0),
+    ],
+)
+@pytest.mark.parametrize("loaded", [True, False])
+async def test_retrieve_counts_only_wildcard_trusted_or_verified_resolutions(
+    tier: str, entries: list[str], domain: str, expected: int, loaded: bool
+) -> None:
+    classifier = MagicMock(spec=PromptGuardClassifier)
+    classifier.loaded = loaded
+    classifier.classify.return_value = (0.0, [])
+    metrics = _NullRetrieveMetrics()
+    request = RetrieveRequest(
+        url=f"https://{domain}/",
+        trusted_domains=entries if tier != "verified" else [],
+        verified_domains=entries if tier == "verified" else [],
+    )
+    with (
+        patch(
+            "pipeline.orchestrator.validate_url", return_value=("93.184.216.34", domain)
+        ),
+        patch(
+            "pipeline.orchestrator.fetch_url",
+            return_value=FetchResult(
+                final_url=request.url,
+                response_body=_SAMPLE_HTML,
+                content_type="text/html",
+                status_code=200,
+            ),
+        ),
+        patch("pipeline.orchestrator.matched_entry", wraps=matched_entry) as match,
+    ):
+        result = await run_retrieve_pipeline(
+            request,
+            cache=None,
+            classifier=classifier,
+            config=_SAMPLE_CONFIG,
+            sanitizer_revision=_SAMPLE_REVISION,
+            **_retrieve_kwargs(retrieve_metrics=metrics),
+        )
+    assert result.trust_tier == tier
+    assert metrics.policy_suffix_trusted_skip == expected
+    if tier == "trusted":
+        assert result.promptguard_state == "skipped_trusted"
+        classifier.classify.assert_not_called()
+    elif tier == "verified" and not loaded:
+        assert result.promptguard_state == "unavailable_allowed"
+    if tier == "standard":
+        match.assert_not_called()
+    else:
+        match.assert_called_once()
+
+
+async def test_retrieve_enforces_operator_first_and_all_500_caller_entries() -> None:
+    entries = [f"junk{index}.example" for index in range(500)]
+    seed = ["operator.example"]
+    config = _SAMPLE_CONFIG | {"seed_blocklist": seed}
+    with (
+        patch("pipeline.orchestrator.validate_url", wraps=validate_url) as validate,
+        patch("pipeline.orchestrator.fetch_url") as fetch,
+        patch("url_validator.socket.getaddrinfo") as dns,
+    ):
+        for host in [*seed, *entries]:
+            with pytest.raises(PipelineError) as caught:
+                await run_retrieve_pipeline(
+                    RetrieveRequest(
+                        url=f"https://www.{host}/", blocked_domains=entries
+                    ),
+                    cache=None,
+                    classifier=None,
+                    config=config,
+                    sanitizer_revision=_SAMPLE_REVISION,
+                    **_retrieve_kwargs(),
+                )
+            assert caught.value.error == "blocked_domain"
+            assert validate.call_args.args[1] == [*seed, *entries]
+        fetch.assert_not_called()
+        dns.assert_not_called()
+    assert config["seed_blocklist"] == seed
 
 
 # ---------------------------------------------------------------------------

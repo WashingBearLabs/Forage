@@ -82,7 +82,10 @@ those eight — so Forage's revision moved:
 | After stages 1, 2 and 4 off the loop and the `/retrieve` admission gate (`hardening-retrieve-parity` US-002) | `f654be77…c92fb` |
 | After fetched PDFs moved into the rlimited worker (`hardening-retrieve-parity` US-003) | `464b6ad5…fead2` |
 | After corrupt cache entries become misses (`hardening-retrieve-parity` US-004) | `664ee603…c04b` |
-| **Current (`hardening-retrieve-parity` US-005, operator policy bounds and response fields)** | **`d98f7dbe…69359`** |
+| After operator policy bounds and response fields (`hardening-retrieve-parity` US-005) | `d98f7dbe…69359` |
+| After retrieve-parity validation (`fe211e3`) | `5a470872…bf623` |
+| After directional hostname policy (`hardening-hostname-and-config` US-001) | `328d386c…93286` |
+| **Current (`hardening-hostname-and-config` US-007, request domain budgets and counters)** | **`c8a907cf…546b8`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -1327,4 +1330,49 @@ new revision and expire under their own TTL. The 1.3.0 golden was regenerated
 through `_SCHEMA_MODELS` and remained byte-identical (requests are not in it);
 the regenerated OpenAPI anchor is
 `b176ced35f6cacd32adbca96c5ca78daaaa2a50c99fc7a349be036018f24ccff`.
+**Not replayed to Poppy**; compare contracts, not revisions.
+
+### The twenty-eighth rotation: request domain budgets and counters (`hardening-hostname-and-config` US-007, 2026-09-22)
+
+```
+before: 328d386c1974d5ec3a70f854b9ea21f0714dead0a1ddc3b0e642dd64d0893286
+after:  c8a907cf3d4eef215127457c449be4c95195ead863bfc4bf2894e5a75fd546b8
+```
+
+**Three hashed files again, not two.** `orchestrator.py` removes per-comparison
+entry normalisation, merges the operator denylist first, and records leading-dot
+trusted/verified resolutions. `contract.py` announces the four policy counters
+and `policy_domain_list_too_large`. Already-hashed root `url_validator.py` removes
+its interim entry pass; its byte helper also charges three bytes per lone
+surrogate escape so malformed JSON string values are dropped by canonicalisation
+and counted, not turned into `UnicodeEncodeError` 500s. Valid Unicode sizing is
+unchanged. No hash inputs were added or removed.
+
+Measured through `derive_sanitizer_revision` with read-only `Path.read_bytes`
+substitution of `git show 03bc764:<path>`, never overwriting the worktree:
+
+| Reversal against clean `03bc764` | Revision |
+|---|---|
+| `pipeline/contract.py` alone | `76b7f28815a679199b3088dc2cdf73193d1ef9eff8d48fb4641cdf6af2569744` |
+| `pipeline/orchestrator.py` alone | `0195f1764fc1dc05b5af6c6e039283ee502c4b9c44c0e9bca9c7f94f038ff444` |
+| `url_validator.py` alone | `12c03491e8b076831ff78b43122e56afa32ed5350fc68f263e8b2a4b3f2bbb8a` |
+| All three | `328d386c1974d5ec3a70f854b9ea21f0714dead0a1ddc3b0e642dd64d0893286` |
+
+Default and shipped config reproduce every value; the other six hashed sources
+are byte-identical to the base. `retrieval_app.py`'s handler, `cache.py`'s removal
+of its entry pass and the new config key are not hashed sources.
+
+This is the **sixth policy-driven sanitization-behaviour-changing rotation**:
+in-budget matching and text scanning are unchanged, but an over-budget allowlist
+can no longer skip classification through an entry in its dropped tail. An
+over-budget denylist is refused whole; operator entries are never evicted.
+The budget limits canonicalisation work after JSON parsing, not body admission.
+Old cache entries become unreachable under the new revision and expire normally.
+
+Re-created the held 1.3.0 golden through `_SCHEMA_MODELS`, byte-identical: metrics
+and the reason literal are outside that fixture and add nothing to the diff set.
+The generated OpenAPI anchor is
+`416f86c93f74489b28083086bac7f9424ab700220fd46f275ca6333da428f97b`.
+Consumer production list-size evidence: **none** available in this checkout;
+64 KiB is the specified configurable default, not measured production headroom.
 **Not replayed to Poppy**; compare contracts, not revisions.

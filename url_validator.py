@@ -312,10 +312,14 @@ class DomainEntry:
 
 
 def domain_list_bytes(entries: Sequence[str]) -> int:
-    """Raw UTF-8 size, including the newline separators between entries."""
-    return sum(len(entry.encode("utf-8")) for entry in entries) + max(
-        0, len(entries) - 1
-    )
+    """Raw UTF-8 size, including the newline separators between entries.
+
+    JSON may contain lone surrogate escapes. Charge three bytes per surrogate
+    for sizing only; host canonicalisation still rejects those invalid entries.
+    """
+    return sum(
+        len(entry.encode("utf-8", errors="surrogatepass")) for entry in entries
+    ) + max(0, len(entries) - 1)
 
 
 def normalize_domain_entries(
@@ -327,7 +331,7 @@ def normalize_domain_entries(
     consumed = 0
     for index, raw in enumerate(entries):
         if not denylist and budget_bytes is not None:
-            consumed += len(raw.encode("utf-8")) + (1 if index else 0)
+            consumed += domain_list_bytes([raw]) + (1 if index else 0)
             if consumed > budget_bytes:
                 dropped += len(entries) - index
                 break
@@ -395,7 +399,7 @@ async def validate_url(
     url:
         The URL to validate.
     blocked_domains:
-        Optional denylist; multi-label names also block their subdomains.
+        Optional canonical denylist; multi-label names also block their subdomains.
 
     Returns
     -------
@@ -427,10 +431,10 @@ async def validate_url(
     hostname = canonical.host
     _check_hostname_blocklist(hostname)
 
-    entries, _ = normalize_domain_entries(
-        blocked_domains or [], denylist=True, budget_bytes=None
-    )
-    if any(hostname_matches(hostname, entry, allow_suffix=True) for entry in entries):
+    if any(
+        hostname_matches(hostname, entry, allow_suffix=True)
+        for entry in blocked_domains or []
+    ):
         raise BlockedDomainError(f"Domain '{hostname}' is on the blocklist")
 
     # 3. DNS resolution (offloaded to thread to avoid blocking the event loop)

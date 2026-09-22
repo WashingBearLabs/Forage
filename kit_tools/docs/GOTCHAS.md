@@ -29,6 +29,17 @@ even comment-only edits invalidate all cached sanitizations, accepted to prevent
 stale privilege decisions. US-001 therefore measures three changed hashed files,
 not the two the older spec assumed.
 
+### JSON surrogate escapes reach the handler as Python strings
+
+FastAPI parses JSON before validating the Python object; unlike
+`RetrieveRequest.model_validate_json`, this admits lone surrogate escapes in a
+`list[str]`. A strict UTF-8 encode in the byte-budget helper therefore raised a
+500 instead of dropping an invalid entry. `domain_list_bytes` uses `surrogatepass`
+**only for sizing**, charging three bytes per surrogate; canonicalisation still
+rejects the entry and the handler counts it. The regression sends escaped JSON
+through the actual ASGI route. Do not "fix" it with lossy replacement before the
+matcher or by logging the bad entry.
+
 ### YAML integers can overflow a float before validation
 
 `pipeline/config_bounds.bounded_float` must compare the original numeric value with
@@ -430,7 +441,7 @@ recipe.
 `derive_sanitizer_revision()` hashes nine source files — the eight under `pipeline/` plus
 repo-root `url_validator.py` — plus the model identity, the `idna` version
 (`idna@<version>`: UTS-46 tables decide which hosts are dropped) and the active
-threshold. Forage's revision has moved twenty-seven times. The twenty-sixth was
+threshold. Forage's revision has moved twenty-eight times. The twenty-sixth was
 reconciled from the preceding validation commit during US-001's pre-flight; the rest
 were recorded at their implementation boundaries:
 
@@ -464,14 +475,16 @@ were recorded at their implementation boundaries:
 | `hardening-retrieve-parity` US-005 | `d98f7dbe…69359` | **not** a sanitization-behaviour change at shipped defaults. Only `contract.py`'s 1.3.0 continuation line for the three effective-policy fields moves the hash; its read-only whole-file revert reproduces `664ee603…c04b` exactly under default and shipped config. Request replacement and post-pipeline stamping in `retrieval_app.py`, and the fields in `models.py`, are not hashed. Opt-in bounds reach the fingerprint through the replaced request, never a parallel pipeline kwarg; trusted-tier skip and VERIFIED fail-open remain exempt. |
 | `hardening-retrieve-parity` validation (`fe211e3`) | `5a470872…bf623` | Twenty-sixth: `orchestrator.py` and `stage3_promptguard.py` gained cancellation ownership, absolute fetch deadline and timeout accounting; not a sanitization-algorithm change. Read-only pre-validation control reproduces `d98f7dbe…`. |
 | `hardening-hostname-and-config` US-001 | `328d386c…93286` | Twenty-seventh, **fifth sanitization-behaviour change**: directional matching and canonical private-name precedence. `orchestrator.py`, `contract.py`, and already-hashed root `url_validator.py` each move the revision; all-reverted control reproduces `5a470872…` under default and shipped config. Leading-dot trust skips classification for subdomains; multi-label denylists block them. |
+| `hardening-hostname-and-config` US-007 | `c8a907cf…546b8` | Twenty-eighth, **sixth policy-driven sanitization-behaviour change**: over-budget allowlist tails can no longer grant trust, and denylists are refused whole; in-budget matching/text scanning remain unchanged. `orchestrator.py` removes the entry pass, merges operator-first and counts wildcard resolutions; `contract.py` announces counters/reason; already-hashed `url_validator.py` removes its pass and safely sizes surrogate escapes before rejecting them. All three individual reversals were measured; all-reverted reproduces `328d386c…` under default and shipped config. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Twenty-two of the twenty-seven rotations changed no sanitization algorithm; the
+**Twenty-two of the twenty-eight rotations changed no sanitization policy or algorithm; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
 US-001, US-002, US-003 and its validation fix) and the twenty-seventh
-(`hardening-hostname-and-config` US-001) are the five that did, and the seventeenth
+and twenty-eighth (`hardening-hostname-and-config` US-001 and US-007) are the six
+that did, and the seventeenth
 (US-004, contract `1.3.0`) does not join them** — hostname policy can now skip
 classification on an opted-in trusted suffix; search-sanitization US-001's
 is that `/search` scans `title` and `snippet` newline-preserved now, so line-anchored Stage 2
@@ -480,7 +493,7 @@ after it is expected; US-003's is that `/search` now drops results whose host is
 embedded-private or blocklisted one and serves `domain` as the canonicalised ASCII host;
 the validation fix scans both the newline-preserving and collapsed wire forms.
 US-004 bounds and normalizes `SearchResult.engine` without routing it through that same scan.
-Among the other twenty-one, the fourth and fifth
+Among the other twenty-two, the fourth and fifth
 are different *kinds* of rotation and worth reading as such. The first three moved because
 the hash is over bytes and someone reformatted or retyped a hashed file. The fourth moved
 because an **input changed**: weights are a runtime, per-deployment thing now

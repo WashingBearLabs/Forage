@@ -358,6 +358,17 @@ its normaliser/matcher moves the hash too. All three reversals were measured;
 the all-reverted control reproduces `5a470872…` under default and shipped config.
 Leading-dot trust can skip PromptGuard across a suffix; multi-label denylists now
 block subdomains. Matching-only changes therefore rotate automatically, not silently.
+And a twenty-eighth to `c8a907cf…` for request-domain normalization and metrics
+(`hardening-hostname-and-config` US-007): `orchestrator.py` removes the interim
+entry pass, merges operator entries first and counts wildcard trusted/verified
+resolutions; `contract.py` announces four counters and the byte-cap refusal;
+already-hashed `url_validator.py` removes its entry pass and sizes malformed
+surrogate escapes without crashing (they still fail canonicalisation).
+All three read-only reversals were measured; the all-reverted control reproduces
+`328d386c…` under default and shipped config. This is the **sixth policy-driven
+sanitization-behaviour change**: an over-budget allowlist can no longer grant
+trust through its dropped tail, while an oversized denylist is refused whole.
+In-budget matching and the text-scanning algorithm are unchanged.
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

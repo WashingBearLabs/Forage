@@ -38,7 +38,6 @@ from url_validator import (
     CanonicalHost,
     canonicalize_host,
     hostname_matches,
-    normalize_domain_entries,
 )
 
 logger = logging.getLogger(__name__)
@@ -193,14 +192,11 @@ def _effective_ttl_hours(
 ) -> int:
     """Return the caller TTL, shortened for configured news domains."""
     host = canonicalize_host(domain)
-    entries, _ = normalize_domain_entries(
-        news_domains or [], denylist=False, budget_bytes=None
-    )
     if ttl_hours <= 0:
         return 0
     if isinstance(host, CanonicalHost) and any(
         hostname_matches(host.host, entry, allow_suffix=entry.startswith("."))
-        for entry in entries
+        for entry in news_domains or []
     ):
         return min(1, ttl_hours)
     return ttl_hours

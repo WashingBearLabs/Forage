@@ -720,6 +720,20 @@ components:
           description: Refusals keyed by the /retrieve error code.
           title: Errors
           type: object
+        policy_invalid_domain_entry:
+          description: 'Dropped request domain entries, one increment per entry: invalid entries
+            in any list or the over-budget remainder of an allowlist. The two allowlist drop
+            causes both narrow privilege; an over-budget denylist is refused, never truncated
+            or counted. Offending entries are not stored.'
+          title: Policy Invalid Domain Entry
+          type: integer
+        policy_suffix_trusted_skip:
+          description: Uncached retrievals resolving to trusted or verified through a leading-dot
+            entry. Covers both the trusted classifier skip and the verified exemption when
+            classification is unavailable, even if classification is available on this request.
+            Exact matches through bare entries do not increment it.
+          title: Policy Suffix Trusted Skip
+          type: integer
         promptguard_state:
           additionalProperties:
             type: integer
@@ -745,6 +759,8 @@ components:
       - cache_misses
       - blocked_by_reason
       - promptguard_state
+      - policy_invalid_domain_entry
+      - policy_suffix_trusted_skip
       - classification_wait_timeouts
       - semaphore_saturation
       - busy_rejections
@@ -1052,6 +1068,17 @@ components:
             serve the response. Zero on a chain with no paid provider configured.
           title: Paid Calls
           type: integer
+        policy_invalid_domain_entry:
+          description: Dropped invalid denylist entries, one increment per entry, never the
+            offending value. Reserved until /search domain policy lands; an over-budget denylist
+            is refused, never truncated or counted.
+          title: Policy Invalid Domain Entry
+          type: integer
+        policy_suffix_trusted_skip:
+          description: Reserved for parity with /retrieve; always zero because /search has
+            no trusted or verified tiers.
+          title: Policy Suffix Trusted Skip
+          type: integer
         policy_unknown_provider:
           description: Per-request `providers` entries ignored — beyond the first eight, or
             matching no configured provider — never the offending name itself. Compare against
@@ -1074,6 +1101,8 @@ components:
       - fallback_fired
       - paid_calls
       - policy_unknown_provider
+      - policy_invalid_domain_entry
+      - policy_suffix_trusted_skip
       - classification_wait_timeouts
       title: SearchMetricsResponse
       type: object

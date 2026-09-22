@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -39,6 +41,7 @@ from cache import (
 from model_fetcher import DEFAULT_MODEL_REVISION, ModelMetrics
 from models import (
     RetrievedContent,
+    RetrieveRequest,
     SearchResponse,
     Stage2Verdict,
     Stage3Verdict,
@@ -106,6 +109,7 @@ def client() -> httpx.AsyncClient:
     app.state.cache = FakeContentCache()
     app.state.config = {"extract_route_enabled": True}
     app.state.retrieve_settings = retrieve_settings_from_config(app.state.config)
+    app.state.policy_domain_entries_max_bytes = 65536
     settings = extraction_settings_from_config(app.state.config)
     app.state.extraction_settings = settings
     app.state.extraction_metrics = ExtractionMetrics()
@@ -503,6 +507,8 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "fallback_fired": 0,
         "paid_calls": 0,
         "policy_unknown_provider": 0,
+        "policy_invalid_domain_entry": 0,
+        "policy_suffix_trusted_skip": 0,
         "classification_wait_timeouts": 0,
     }
     assert body["retrieve"] == {
@@ -512,6 +518,8 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "cache_misses": 0,
         "blocked_by_reason": {},
         "promptguard_state": {},
+        "policy_invalid_domain_entry": 0,
+        "policy_suffix_trusted_skip": 0,
         "classification_wait_timeouts": 0,
         "semaphore_saturation": 0,
         "busy_rejections": 0,
@@ -663,9 +671,14 @@ async def test_metrics_retrieve_records_cache_hit_and_promptguard_state(
     )
     with patch(
         "retrieval_app.run_retrieve_pipeline", new=AsyncMock(return_value=content)
-    ):
+    ) as pipeline:
         resp = await client.post("/retrieve", json={"url": "https://example.com/a"})
     assert resp.status_code == 200
+    effective = pipeline.call_args.args[0]
+    assert isinstance(effective, RetrieveRequest)
+    assert effective.trusted_domains == []
+    assert effective.verified_domains == []
+    assert effective.blocked_domains == []
 
     metrics_resp = await client.get("/metrics")
     retrieve_metrics = metrics_resp.json()["retrieve"]
@@ -674,6 +687,236 @@ async def test_metrics_retrieve_records_cache_hit_and_promptguard_state(
     assert retrieve_metrics["cache_misses"] == 0
     assert retrieve_metrics["promptguard_state"] == {"scanned": 1}
     assert retrieve_metrics["blocked_by_reason"] == {}
+
+
+def test_retrieve_copies_once_and_comparison_sites_never_normalize() -> None:
+    source = inspect.getsource(retrieval_app.retrieve)
+    tree = ast.parse(source)
+    copies = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "body"
+        and node.func.attr == "model_copy"
+    ]
+    assert len(copies) == 1
+    update = copies[0].keywords[0]
+    assert update.arg == "update"
+    assert isinstance(update.value, ast.Dict)
+    assert {
+        key.value for key in update.value.keys if isinstance(key, ast.Constant)
+    } == {"trusted_domains", "verified_domains", "blocked_domains"}
+    assert "_promptguard_policy_updates(body, retrieve_settings)" in source
+    root = Path(__file__).resolve().parent.parent
+    for filename in ("pipeline/orchestrator.py", "cache.py"):
+        assert "normalize_domain_entries(" not in (root / filename).read_text()
+    assert (root / "url_validator.py").read_text().count(
+        "normalize_domain_entries("
+    ) == 1
+
+
+@pytest.mark.parametrize("field", ["trusted_domains", "verified_domains"])
+@pytest.mark.parametrize("over_budget", [False, True])
+@pytest.mark.parametrize("invalid_entry", ["com", "\ud800"])
+async def test_retrieve_normalizes_each_list_once_in_the_single_policy_copy(
+    client: httpx.AsyncClient,
+    field: str,
+    over_budget: bool,
+    invalid_entry: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    budget = 4096
+    monkeypatch.setattr(app.state, "policy_domain_entries_max_bytes", budget)
+    monkeypatch.setattr(
+        app.state,
+        "retrieve_settings",
+        RetrieveSettings(
+            promptguard_fail_closed_floor=True, promptguard_threshold_ceiling=0.5
+        ),
+    )
+    if over_budget:
+        prefix = " .Example.COM. "
+        tail = "straße.de"
+        padding = " " * (budget - len((prefix + "\n" + tail).encode("utf-8")))
+        raw_entries = [prefix, padding + tail, "overbudget.example", "bad..entry"]
+        assert url_validator.domain_list_bytes(raw_entries[:2]) == budget
+        expected = [".example.com", "xn--strae-oqa.de"]
+        dropped = 2
+    else:
+        raw_entries = [invalid_entry, " .Example.COM. "] + [
+            f"Site{index}.EXAMPLE." for index in range(68)
+        ]
+        expected = [".example.com"] + [f"site{index}.example" for index in range(68)]
+        assert len(raw_entries) == 70
+        assert len(expected) == 69
+        dropped = 1
+    other_field = (
+        "verified_domains" if field == "trusted_domains" else "trusted_domains"
+    )
+    payload = {
+        "url": "https://example.com/",
+        "promptguard_threshold": 0.9,
+        "promptguard_fail_closed": False,
+        field: raw_entries,
+        other_field: [" " * (budget - len(".Other.EXAMPLE")) + ".Other.EXAMPLE"],
+        "blocked_domains": [" Evil.COM. ", "straße.de"]
+        + (["\ud800"] if over_budget else []),
+    }
+    content = RetrievedContent(
+        request_id="domain-policy",
+        source_url="https://example.com/",
+        final_url="https://example.com/",
+        body="A calm page.",
+        word_count=3,
+        content_type="html",
+        trust_score=0.7,
+        trust_tier=TrustTier.STANDARD,
+        stage2_verdict=Stage2Verdict.CLEAN,
+        stage3_verdict=Stage3Verdict.SAFE,
+        domain="example.com",
+    )
+    with (
+        patch("retrieval_app.run_retrieve_pipeline", return_value=content) as pipeline,
+        patch(
+            "retrieval_app.normalize_domain_entries",
+            wraps=url_validator.normalize_domain_entries,
+        ) as normalize,
+        patch.object(
+            RetrieveRequest,
+            "model_copy",
+            autospec=True,
+            side_effect=RetrieveRequest.model_copy,
+        ) as copy,
+    ):
+        response = await client.post(
+            "/retrieve",
+            content=json.dumps(payload),
+            headers={"content-type": "application/json"},
+        )
+    assert response.status_code == 200
+    effective = pipeline.call_args.args[0]
+    assert isinstance(effective, RetrieveRequest)
+    assert getattr(effective, field) == expected
+    assert getattr(effective, other_field) == [".other.example"]
+    assert effective.blocked_domains == ["evil.com", "xn--strae-oqa.de"]
+    assert effective.promptguard_threshold == 0.5
+    assert effective.promptguard_fail_closed is True
+    assert normalize.call_count == 3
+    assert [call.kwargs for call in normalize.call_args_list] == [
+        {"denylist": False, "budget_bytes": budget},
+        {"denylist": False, "budget_bytes": budget},
+        {"denylist": True, "budget_bytes": None},
+    ]
+    copy.assert_called_once()
+    assert getattr(copy.call_args.args[0], field) == raw_entries
+    assert set(copy.call_args.kwargs["update"]) == {
+        "trusted_domains",
+        "verified_domains",
+        "blocked_domains",
+        "promptguard_threshold",
+        "promptguard_fail_closed",
+    }
+    counters = (await client.get("/metrics")).json()
+    assert counters["retrieve"]["policy_invalid_domain_entry"] == dropped + (
+        1 if over_budget else 0
+    )
+    assert counters["search"]["policy_invalid_domain_entry"] == 0
+    assert counters["search"]["policy_suffix_trusted_skip"] == 0
+    assert "\ud800" not in caplog.text
+    assert "overbudget.example" not in caplog.text
+
+
+@pytest.mark.parametrize("budget", [4096, 65536, 1048576])
+async def test_retrieve_refuses_over_budget_denylist_before_any_canonicalization(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, budget: int
+) -> None:
+    monkeypatch.setattr(app.state, "policy_domain_entries_max_bytes", budget)
+    # Raw bytes, not the stripped spelling or entry count, determine refusal.
+    entries = [" " * budget + "evil.com"]
+    with (
+        patch("retrieval_app.run_retrieve_pipeline") as pipeline,
+        patch("url_validator.canonicalize_host") as canonicalize,
+        patch("retrieval_app.normalize_domain_entries") as normalize,
+    ):
+        response = await client.post(
+            "/retrieve",
+            json={
+                "url": "https://example.com/",
+                "blocked_domains": entries,
+                "trusted_domains": [".example.com"],
+                "verified_domains": [".other.example"],
+            },
+        )
+    assert response.status_code == 422
+    assert response.json() == {
+        "error": "content_too_large",
+        "reason": contract.POLICY_DOMAIN_LIST_TOO_LARGE,
+        "request_id": response.json()["request_id"],
+    }
+    assert len(response.json()["request_id"]) == 32
+    pipeline.assert_not_called()
+    canonicalize.assert_not_called()
+    normalize.assert_not_called()
+    counters = (await client.get("/metrics")).json()["retrieve"]
+    assert counters["errors"] == {"content_too_large": 1}
+    assert counters["requests"] == 1
+    assert counters["policy_invalid_domain_entry"] == 0
+
+
+async def test_retrieve_enforces_a_denylist_at_the_exact_raw_byte_budget(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app.state, "policy_domain_entries_max_bytes", 4096)
+    entries = [" " * (4096 - len("EVIL.com")) + "EVIL.com"]
+    with (
+        patch("pipeline.orchestrator.validate_url", new=url_validator.validate_url),
+        patch("url_validator.socket.getaddrinfo") as dns,
+    ):
+        response = await client.post(
+            "/retrieve",
+            json={"url": "https://www.evil.com/", "blocked_domains": entries},
+        )
+    assert response.status_code == 422
+    assert response.json()["error"] == "blocked_domain"
+    dns.assert_not_called()
+    assert app.state.retrieve_metrics.policy_invalid_domain_entry == 0
+
+
+@pytest.mark.parametrize("field", ["trusted_domains", "verified_domains"])
+@pytest.mark.parametrize("entry", [".example.com", "www.example.com"])
+async def test_retrieve_wildcard_resolution_reaches_served_metrics(
+    client: httpx.AsyncClient, field: str, entry: str
+) -> None:
+    classifier = MagicMock(spec=PromptGuardClassifier)
+    classifier.loaded = field == "trusted_domains"
+    app.state.classifier = classifier
+    url = "https://www.example.com/"
+    with (
+        patch(
+            "pipeline.orchestrator.validate_url",
+            return_value=("93.184.216.34", "www.example.com"),
+        ),
+        patch(
+            "pipeline.orchestrator.fetch_url",
+            return_value=FetchResult(
+                final_url=url,
+                response_body=b"<html><body><p>A calm article.</p></body></html>",
+                content_type="text/html",
+                status_code=200,
+            ),
+        ),
+    ):
+        response = await client.post("/retrieve", json={"url": url, field: [entry]})
+    assert response.status_code == 200
+    state = "skipped_trusted" if field == "trusted_domains" else "unavailable_allowed"
+    assert response.json()["promptguard_state"] == state
+    counters = (await client.get("/metrics")).json()["retrieve"]
+    assert counters["policy_suffix_trusted_skip"] == int(entry.startswith("."))
+    assert counters["promptguard_state"] == {state: 1}
+    classifier.classify.assert_not_called()
 
 
 async def test_metrics_retrieve_records_blocked_by_reason_from_diagnostic(
@@ -1411,6 +1654,55 @@ async def test_lifespan_publishes_the_validated_cache_settings(
 
         assert settings.max_entries == DEFAULT_CACHE_MAX_ENTRIES
         assert settings.max_bytes == DEFAULT_CACHE_MAX_BYTES
+
+
+@pytest.mark.parametrize(
+    ("config", "expected", "warn"),
+    [
+        ({}, 65536, False),
+        ({"policy_domain_entries_max_bytes": 4096}, 4096, False),
+        ({"policy_domain_entries_max_bytes": 1048576}, 1048576, False),
+        *[
+            ({"policy_domain_entries_max_bytes": value}, 65536, True)
+            for value in (
+                4095,
+                1048577,
+                True,
+                False,
+                None,
+                "secret-value",
+                65536.0,
+                list[str](),
+            )
+        ],
+    ],
+)
+async def test_lifespan_domain_budget_warns_and_falls_back_without_echoing_value(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    config: dict[str, Any],
+    expected: int,
+    warn: bool,
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    # The global app's state is shared across tests; isolate this boot.
+    monkeypatch.setattr(app, "state", type(app.state)())
+    async with _running_app():
+        assert app.state.policy_domain_entries_max_bytes == expected
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if "config_invalid_value" in record.getMessage()
+    ]
+    assert warnings == (
+        ["config_invalid_value — key=policy_domain_entries_max_bytes"] if warn else []
+    )
+    assert "secret-value" not in caplog.text
+
+
+def test_shipped_domain_budget_is_64_kib() -> None:
+    assert retrieval_app._load_config()["policy_domain_entries_max_bytes"] == 65536
 
 
 async def test_lifespan_normalizes_domain_lists_and_names_drops(

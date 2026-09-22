@@ -38,6 +38,7 @@ from cache import (
 )
 from models import RetrievedContent, Stage2Verdict, Stage3Verdict
 from tests.fakes import FakeStorage, ManualClock, assert_frozen
+from url_validator import normalize_domain_entries
 
 
 @pytest.mark.parametrize(
@@ -58,6 +59,7 @@ from tests.fakes import FakeStorage, ManualClock, assert_frozen
 def test_news_ttl_uses_canonical_opt_in_suffixes(
     domain: str, entries: list[str], expected: int
 ) -> None:
+    entries, _ = normalize_domain_entries(entries, denylist=False, budget_bytes=None)
     assert _effective_ttl_hours(24, domain=domain, news_domains=entries) == expected
     assert _effective_ttl_hours(0, domain=domain, news_domains=entries) == 0
 

@@ -102,7 +102,7 @@ from url_validator import (
     canonicalize_host,
     hostname_matches,
     is_blocklisted_hostname,
-    normalize_domain_entries,
+    matched_entry,
     private_address_class,
     validate_url,
 )
@@ -392,12 +392,9 @@ async def run_retrieve_pipeline(
     request_id = uuid.uuid4().hex
     classifier_loaded = classifier is not None and classifier.loaded
 
-    # Merge blocklists: request-level + config seed_blocklist
-    blocked_domains = list(request.blocked_domains)
+    # Operator entries precede the independently budgeted caller list.
     seed_blocklist: list[str] = config.get("seed_blocklist", [])
-    for domain in seed_blocklist:
-        if domain not in blocked_domains:
-            blocked_domains.append(domain)
+    blocked_domains = list(dict.fromkeys([*seed_blocklist, *request.blocked_domains]))
     cache_policy = cache_policy_fingerprint(
         trusted_domains=request.trusted_domains,
         verified_domains=request.verified_domains,
@@ -607,6 +604,17 @@ async def run_retrieve_pipeline(
             blocked_domains,
         )
     )
+    if trust_tier in (TrustTier.TRUSTED, TrustTier.VERIFIED):
+        host = canonicalize_host(domain)
+        if isinstance(host, CanonicalHost):
+            entry = matched_entry(
+                host.host,
+                request.trusted_domains
+                if trust_tier == TrustTier.TRUSTED
+                else request.verified_domains,
+            )
+            if entry is not None and entry.startswith("."):
+                retrieve_metrics.policy_suffix_trusted_skip += 1
     # The catch is the backstop, not the control: the pre-check above already
     # refused an over-budget page, and this maps the classifier's own refusal
     # to the same 422 should the two ever disagree.
@@ -1363,6 +1371,7 @@ class RetrieveMetricsSink(AdmissionMetrics, Protocol):
     """
 
     classification_wait_timeouts: int
+    policy_suffix_trusted_skip: int
 
 
 class _NullRetrieveMetrics:
@@ -1377,6 +1386,7 @@ class _NullRetrieveMetrics:
         self.semaphore_saturation = 0
         self.busy_rejections = 0
         self.classification_wait_timeouts = 0
+        self.policy_suffix_trusted_skip = 0
 
 
 # Structural conformance, checked by the type checker rather than asserted in
@@ -1877,7 +1887,7 @@ def _resolve_request_trust_tier(
     verified_domains: list[str],
     blocked_domains: list[str],
 ) -> str:
-    """Resolve the trust tier string for a domain from request lists."""
+    """Resolve the trust tier string for a domain from canonical request lists."""
     host = canonicalize_host(domain)
     if not isinstance(host, CanonicalHost):
         return "standard"
@@ -1886,14 +1896,11 @@ def _resolve_request_trust_tier(
         ("trusted", trusted_domains, False),
         ("verified", verified_domains, False),
     ):
-        entries, _ = normalize_domain_entries(
-            domains, denylist=denylist, budget_bytes=None
-        )
         if any(
             hostname_matches(
                 host.host, entry, allow_suffix=denylist or entry.startswith(".")
             )
-            for entry in entries
+            for entry in domains
         ):
             return tier
     return "standard"

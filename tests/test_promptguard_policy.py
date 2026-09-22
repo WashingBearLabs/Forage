@@ -31,7 +31,7 @@ from retrieval_app import (
     ExtractionMetrics,
     RetrieveMetrics,
     SearchMetrics,
-    _apply_promptguard_policy,
+    _promptguard_policy_updates,
     app,
 )
 from tests.fakes import FakeSearchProvider, FakeStorage
@@ -57,6 +57,7 @@ async def client(
     state: dict[str, object] = {
         "config": config,
         "retrieve_settings": settings,
+        "policy_domain_entries_max_bytes": 65536,
         "extraction_settings": extraction_settings,
         "retrieve_metrics": metrics,
         "extraction_metrics": extraction_metrics,
@@ -134,12 +135,12 @@ def test_policy_copies_only_declared_fields_without_mutating_the_caller(
     search = SearchRequest(query="gardening", promptguard_fail_closed=flag)
     for body in (retrieve, search):
         original = body.model_dump()
-        with patch.object(type(body), "model_copy", wraps=body.model_copy) as copy:
-            effective = _apply_promptguard_policy(body, settings)
+        updates = _promptguard_policy_updates(body, settings)
+        effective = body.model_copy(update=updates)
         expected: dict[str, bool | float] = {"promptguard_fail_closed": flag or floor}
         if isinstance(body, RetrieveRequest):
             expected["promptguard_threshold"] = min(threshold, ceiling)
-        assert copy.call_args.kwargs["update"] == expected
+        assert updates == expected
         assert expected.keys() <= type(body).model_fields.keys()
         assert effective.model_dump() == original | expected
         assert body.model_dump() == original
@@ -156,7 +157,7 @@ def test_unknown_policy_update_keys_fail_before_model_copy(
     del fields["promptguard_fail_closed"]
     monkeypatch.setattr(type(body), "model_fields", fields)
     with pytest.raises(AssertionError):
-        _apply_promptguard_policy(body, RetrieveSettings())
+        _promptguard_policy_updates(body, RetrieveSettings())
 
 
 @pytest.mark.parametrize("tier", [TrustTier.STANDARD, TrustTier.UNTRUSTED])

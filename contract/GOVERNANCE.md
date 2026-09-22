@@ -541,5 +541,9 @@ and rides this announced tightening in the 1.3.0 window.
 Ruling 42's `policy_domain_list_too_large` is a **new closed reason** on each
 route's existing 422 code (`content_too_large` on `/retrieve`, `search_unavailable` on
 `/search`), not a new status or response shape. Its raisers and byte cap belong
-to US-007 and US-002 respectively; they do not ship in US-001. A denylist over
-budget will be refused whole rather than silently truncated.
+to US-007 and US-002 respectively; they do not ship in US-001. US-007 now ships
+the `/retrieve` raiser, the configurable 65536-byte per-list default and four
+additive metrics fields. `/search`'s raiser remains US-002's. A denylist over
+budget is refused whole rather than silently truncated; allowlists retain the
+in-budget prefix and count the dropped remainder. The byte cap bounds encode
+work after JSON parsing, not request-body admission.
