@@ -1720,6 +1720,21 @@ fails the unit test that pins the update keys.
 
 ## Implementation Notes
 
+### US-003 handoff checkpoint (2026-09-22)
+
+- Claude's recovered attempt `371d254` is preserved on
+  `backup/forage-hardening-pdf-us003-20260922`, but is **not accepted**. Independent
+  Copilot verification reproduced actual task cancellation leaving the PDF worker
+  and spool file alive after the request released its admission permit. Raising
+  `CancelledError` inside a synchronous worker stub did not test that lifecycle.
+- Resume US-003 with the candidate as reusable work, fix cancellation ownership,
+  and add a real `Task.cancel()` regression before verification. No criterion is
+  waived and the seven previously completed stories remain completed.
+- The controlled handoff retains guarded mode (three retries), the existing
+  worktree, PR completion and owner gates. GPT-6 Astra replaces Claude model aliases
+  for all roles. Previous attempt history and ignored execution artifacts are
+  backed up; the new retry round does not erase that history.
+
 ### US-001 (2026-09-20)
 
 - **Stale line numbers in the hints.** `SearchMetricsSink` is at `pipeline/orchestrator.py:1050`,
