@@ -1094,37 +1094,37 @@ every string-literal key the readers pass to `config.get(...)` / `config[...]` i
   `derive_sanitizer_revision({})` is unchanged after the story).
 
 **Acceptance Criteria:**
-- [ ] `KNOWN_CONFIG_KEYS` is a frozenset of dotted key names (plus the bare block names, `retrieve`
+- [x] `KNOWN_CONFIG_KEYS` is a frozenset of dotted key names (plus the bare block names, `retrieve`
       included, and `policy_domain_entries_max_bytes`) in `retrieval_app.py`; a test asserts it is a
       superset of every key in the shipped `config.yaml`.
-- [ ] The docs-parity test discovers every `config.yaml` table by heading (backticks verbatim),
+- [x] The docs-parity test discovers every `config.yaml` table by heading (backticks verbatim),
       asserts each slice is non-empty, and asserts `KNOWN_CONFIG_KEYS` equals the union of their
       first-column keys with the prefixing rule (a key without a row, or a row without a key, is
       red).
-- [ ] The AST sweep over the reader modules reads the key from the bounded helpers' second argument,
+- [x] The AST sweep over the reader modules reads the key from the bounded helpers' second argument,
       prefixes leaves read through a block-local mapping with the block name, matches the
       attribute-chain receiver shape, asserts every literal config key read is in the registry,
       asserts it found ≥ eight literal-key read sites (the named list, with the four variable-key
       sites in a named skip list), ≥ one shape-(b) site per bounded reader, ≥ one dotted leaf per
       registered block and ≥ one literal key in every listed module, and reports a planted
       unregistered key.
-- [ ] Booting with an unknown top-level key, an unknown `extraction.` key and an unknown `retrieve.`
+- [x] Booting with an unknown top-level key, an unknown `extraction.` key and an unknown `retrieve.`
       key logs exactly one WARNING per key whose `getMessage()` contains `config_unknown_key` and the
       dotted key and never the value; the service starts; `/health` status is unchanged.
-- [ ] `_warn_unknown_config_keys` called directly with a list, a scalar, and a mapping whose
+- [x] `_warn_unknown_config_keys` called directly with a list, a scalar, and a mapping whose
       `cache:` value is not a mapping returns `[]`, logs no `config_unknown_key` record and raises
       nothing (a unit test on the function — never a boot: the readers' typed refusals for a
       non-mapping block are unchanged, and a test asserts `cache: "yes"` still refuses boot with
       `CacheConfigurationError`).
-- [ ] Booting with the shipped `config.yaml` logs no `config_unknown_key` record.
-- [ ] `docs/configuration.md`'s `## `config.yaml`` section states the warn-and-ignore rule and the
+- [x] Booting with the shipped `config.yaml` logs no `config_unknown_key` record.
+- [x] `docs/configuration.md`'s `## `config.yaml`` section states the warn-and-ignore rule and the
       bad-value split; MONITORING's startup-lines table has the `WARNING` / `config_unknown_key`
       row; LOGGING's inventory lists it; TROUBLESHOOTING has the `### config_unknown_key` section.
-- [ ] `docs/bootstrap-notes.md`'s latest `sanitizer_revision` record still matches
+- [x] `docs/bootstrap-notes.md`'s latest `sanitizer_revision` record still matches
       `derive_sanitizer_revision({})`.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-004: Boundary-text knob-parity guard across all seven copies
 
