@@ -309,11 +309,22 @@ their in-budget prefix, counting invalid entries and over-budget remainders on
 `retrieve.policy_invalid_domain_entry`. The operator's denylist cannot be evicted.
 `retrieve.policy_suffix_trusted_skip` measures wildcard trusted **and verified**
 resolutions; both corresponding `search.*` counters are also declared, with
-search drop increments deferred to US-002 and suffix skips permanently zero.
+search drop increments enabled by US-002 and suffix skips permanently zero.
 Consumer-size evidence available in this checkout: **none** (no production
 request capture); the default is the specified configurable bound, not a claim
 about measured production headroom. This bounds encode work, not request-body
 admission.
+
+US-002 adds optional `/search` `blocked_domains`, merged after the operator's
+`seed_blocklist` using the same directional hostname semantics as `/retrieve`.
+Matching results are omitted whole as `blocked_url` before content scanning,
+without firing paid fallback even when no result survives. This closes the
+previous search bypass of an operator's existing seed policy. Invalid caller
+entries increment `search.policy_invalid_domain_entry`; an over-budget list is
+refused whole as 422 `search_unavailable` / `policy_domain_list_too_large`.
+Like `policy_excluded_all_providers`, that reason is a permanent client error,
+not retryable unchanged. The baseline for callers sending neither new field,
+with the shipped empty seed list, remains unchanged.
 
 ### The Release carries the contract itself
 

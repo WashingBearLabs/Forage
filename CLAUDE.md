@@ -369,6 +369,17 @@ All three read-only reversals were measured; the all-reverted control reproduces
 sanitization-behaviour change**: an over-budget allowlist can no longer grant
 trust through its dropped tail, while an oversized denylist is refused whole.
 In-budget matching and the text-scanning algorithm are unchanged.
+And a twenty-ninth to `de1cea65…` for search domain policy
+(`hardening-hostname-and-config` US-002): `orchestrator.py` merges canonical
+operator entries before the explicit `blocked_domains=` parameter and omits
+matches through the existing blocked outcome, logging `host_class=policy_blocklist`;
+`contract.py` announces the optional field and both non-retryable policy reasons.
+These are the only two hashed sources that move; both individual read-only
+reversals were measured and the both-reverted control reproduces `c8a907cf…`
+under default and shipped configuration. This is the **seventh policy-driven
+sanitization-behaviour change**: search now enforces both domain lists, before
+content scanning and without paid fallback. The empty-seed/no-new-field baseline
+is unchanged; the text sanitization algorithm is unchanged.
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.

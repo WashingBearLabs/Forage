@@ -9,7 +9,7 @@
 > **TEMPLATE_INTENT:** Record architectural decisions and their rationale. Explains the 'why' behind technical choices.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-001)
+> Updated by: Copilot (hardening-hostname-and-config US-002)
 
 This file records significant architectural and technical decisions.
 
@@ -608,10 +608,11 @@ extractions — `cache_policy_fingerprint()` mixed in every caller knob but not 
 **Decision:**
 The hashed identity is `MODEL_ID@revision` (`feature-forage-model-bootstrap` US-001) and the
 revision is an input to `cache_policy_fingerprint()` (`feature-forage-cache-fallback` US-003), so
-a rotation flushes Forage's own cache. Of twenty-seven rotations, twenty-two
-changed no sanitization algorithm; the fifteenth, sixteenth, eighteenth,
-nineteenth and twenty-seventh change sanitization behaviour. The last adds opt-in
-suffix privilege: `.example.com` skips PromptGuard for every trusted subdomain.
+a rotation flushes Forage's own cache. Of twenty-nine rotations, twenty-two
+changed no sanitization policy or algorithm; the fifteenth, sixteenth, eighteenth,
+nineteenth and twenty-seventh through twenty-ninth change sanitization behaviour.
+The last three add opt-in suffix privilege, bound caller domain-list work, and
+enforce both caller and operator domain policy on `/search`.
 
 | Value | Moved by |
 |---|---|
@@ -643,7 +644,8 @@ suffix privilege: `.example.com` skips PromptGuard for every trusted subdomain.
 | `d98f7dbe…69359` | **not** a sanitization-behaviour change at shipped defaults. `contract.py` alone gained the 1.3.0 continuation line for the three effective-policy fields; its read-only whole-file revert reproduces `664ee603…c04b` under default and shipped config. `retrieval_app.py` resolves bounds by replacing the request before cache/pipeline reads, then stamps every 200; `models.py` defaults the fields for old entries. Neither file is hashed. The floor and ceiling ship off, `/search` keeps 0.85, `/extract` is unchanged, and trusted-tier / VERIFIED exemptions remain (`hardening-retrieve-parity` US-005, 2026-09-22). |
 | `5a470872…bf623` | Twenty-sixth, reconciled from the clean US-001 base: `fe211e3` changed `orchestrator.py` and `stage3_promptguard.py` for cancellation ownership, the absolute fetch deadline and timeout accounting, not the sanitization algorithm. The read-only pre-validation control reproduces `d98f7dbe…`. |
 | `328d386c…93286` | Twenty-seventh, **fifth sanitization-behaviour change**: multi-label denylists include subdomains, allowlists opt in with a leading dot, and canonical private names precede caller denylists. Three hashed files (`orchestrator.py`, `contract.py`, and already-hashed root `url_validator.py`), individually reverted and all-reverted to reproduce `5a470872…` under default and shipped config (`hardening-hostname-and-config` US-001). |
-| `c8a907cf…546b8` (current) | Twenty-eighth, **sixth policy-driven sanitization-behaviour change**: caller lists normalise once under independent byte budgets; over-budget allowlists lose their tail's trust grants and denylists are refused whole. In-budget matching and text scanning are unchanged. `orchestrator.py` removes its entry pass, merges operator-first and counts wildcard trusted/verified resolutions; `contract.py` announces four counters and the reason; already-hashed `url_validator.py` removes its entry pass and sizes invalid surrogate escapes safely before rejecting them. Each read-only reversal was measured; all-reverted reproduces `328d386c…` under default and shipped config (`hardening-hostname-and-config` US-007; full values in `docs/bootstrap-notes.md`). |
+| `c8a907cf…546b8` | Twenty-eighth, **sixth policy-driven sanitization-behaviour change**: caller lists normalise once under independent byte budgets; over-budget allowlists lose their tail's trust grants and denylists are refused whole. In-budget matching and text scanning are unchanged. `orchestrator.py` removes its entry pass, merges operator-first and counts wildcard trusted/verified resolutions; `contract.py` announces four counters and the reason; already-hashed `url_validator.py` removes its entry pass and sizes invalid surrogate escapes safely before rejecting them. Each read-only reversal was measured; all-reverted reproduces `328d386c…` under default and shipped config (`hardening-hostname-and-config` US-007; full values in `docs/bootstrap-notes.md`). |
+| `de1cea65…6be91` (current) | Twenty-ninth, **seventh policy-driven sanitization-behaviour change**: `/search` honours caller `blocked_domains` and operator `seed_blocklist`, operator-first, after URL audit and before content scanning. Shared blocked outcomes emit `blocked_url` and `host_class=policy_blocklist`; omissions never trigger paid fallback. Two hashed files, `orchestrator.py` and `contract.py`, individually reverted read-only; both-reverted reproduces `c8a907cf…` under default and shipped config. Empty-seed/no-new-field baseline and text scanning are unchanged (`hardening-hostname-and-config` US-002; full values in `docs/bootstrap-notes.md`). |
 
 **Rationale:**
 `pipeline/sanitizer_revision.py`: "two containers running the same code can be scanning with

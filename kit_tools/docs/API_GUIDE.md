@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document API endpoints, CLI commands, or library interface. The external contract.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-001)
+> Updated by: Copilot (hardening-hostname-and-config US-002)
 
 ---
 
@@ -239,12 +239,12 @@ returned. Never cached.
 `/search` finds and returns provider-extracted content for a query across sources —
 snippets or chunks, per result `content_kind` — from the configured provider chain, every
 result sanitized, never cached; `/retrieve` fetches and sanitizes one caller-named URL
-through the full pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` is
+through the full pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` and `blocked_domains` are
 honoured on both routes; this route additionally honours `providers` and
 `allow_paid_fallback` (contract 1.2.0) and scans every result at the fixed 0.85 default at
 trust tier `standard` (`config.yaml`'s `promptguard_threshold` is not applied here), while
 `/retrieve` additionally honours `promptguard_threshold`, `trusted_domains`,
-`verified_domains`, `blocked_domains` and `cache_ttl_hours`. This documents today's
+`verified_domains` and `cache_ttl_hours`. This documents today's
 divergence; changing it belongs to `epic-forage-hardening`.
 
 Request fields (`SearchRequest`):
@@ -255,6 +255,7 @@ Request fields (`SearchRequest`):
 | `num_results` | int | 5 | 1..20 | Forage asks SearXNG for up to `min(2 * num_results, 20)` candidates and scans at most 20 |
 | `promptguard_fail_closed` | bool | `true` | | When the classifier is absent or the permit wait expires: `true` withholds results (`omitted_by_reason.promptguard_unavailable`), `false` returns them marked `suspicious` and counts them in `unscanned_results`; bounded by the operator's `promptguard_fail_closed_floor` via `request or floor` |
 | `providers` | list of str | `[]` | at most 8 honoured, rest ignored | Restrict-only filter of the configured chain, in configured order: can exclude paid providers only, never add, reorder, or key one — free providers always run, and a non-empty list removes every paid provider it does not name. Matched after `strip()` and lower-casing; entries beyond the first eight, and entries matching no configured provider, are ignored and counted on `/metrics` `search.policy_unknown_provider` rather than rejected. Empty (the default) runs the configured chain unrestricted |
+| `blocked_domains` | list of str | `[]` | raw UTF-8 list bytes, not entry count | Merged after the operator's `seed_blocklist`, which cannot be overridden. Multi-label names omit apex and dot-boundary subdomains; single-label names and IP literals match exactly. Entries are stripped and UTS-46-canonicalised once; malformed entries are ignored and counted on `search.policy_invalid_domain_entry`, never echoed. A list exceeding `policy_domain_entries_max_bytes` (including newline separators) is refused whole before encoding, 422 `search_unavailable` / `policy_domain_list_too_large`. Matches are omitted as `blocked_url` after the URL audit and before content scanning, without triggering paid fallback. Added in `1.3.0` |
 | `allow_paid_fallback` | bool | `true` | | When `false`, excludes every paid provider from this request's effective chain regardless of `providers` — free providers always run. Applied after `providers`' own filtering, one-way: can only narrow the configured chain, never widen, reorder, or key it |
 
 A consumer sources the names it may put in `providers` from `/health`'s `search_providers`
@@ -285,6 +286,11 @@ Response fields to read (`SearchResponse`):
 | `unresponsive_engines` | list of str | The serving provider's SearXNG engines that failed to respond; empty on a Brave-served response. With zero results this is the free-path failure signal that advances a multi-provider chain (`search-fallback` US-002); with results present it is a partial answer, not an error, and no fallback fires. Entries are unsanitized, provider-asserted text — no stage scans them — and must never be rendered into a model prompt |
 | `request_id`, `query` | str, str | Correlation and echo |
 
+`blocked_url` also counts matches against caller `blocked_domains` and operator
+`seed_blocklist`, after the lexical URL audit and before content scanning. Even
+if every raw result is omitted, this does not trigger paid fallback: provider
+sufficiency is decided before sanitization and policy omissions.
+
 Failures are 422 with `{"error", "reason", "request_id"}`. Which code you get depends on
 the **configured chain**, not on which backend failed. A chain of exactly one provider
 named `searxng` — the default — keeps the legacy pair: `searxng_error` (SearXNG answered
@@ -300,7 +306,11 @@ The second `search_unavailable` form is a policy refusal, not a provider failure
 request's `providers` / `allow_paid_fallback` leaves its effective chain empty — possible
 only on a configured chain with no free provider — the handler refuses before any provider
 is called, with the fixed literal `reason` `policy_excluded_all_providers`
-(`search-policy-and-health` US-010).
+(`search-policy-and-health` US-010). The third form is an oversized caller
+`blocked_domains` list: `reason=policy_domain_list_too_large`, refused whole before
+encoding or any provider call (`hardening-hostname-and-config` US-002).
+Both policy reasons are permanent client errors, **not retryable** without
+changing the request or the configured policy/budget, even on a lone SearXNG chain.
 
 ### POST /extract
 
@@ -452,7 +462,7 @@ emission site through the real routes and asserts parity).
 | `pdf_encrypted` | 422 | `/extract` | Encrypted PDF |
 | `pdf_no_text` | 422 | `/extract` | No extractable text; OCR is not supported |
 | `private_ip` | 422 | `/retrieve` | Resolves to a private or reserved address, `localhost` or a `.local` name |
-| `search_unavailable` | 422 | `/search` | Two reason forms: `<provider_name>: <failure_class>` when the configured provider chain failed and is not a lone `searxng`, or the fixed literal `policy_excluded_all_providers` when `providers` / `allow_paid_fallback` narrowed the effective chain to empty before any provider was called. Added in `1.2.0`; the policy form added in `search-policy-and-health` US-010 |
+| `search_unavailable` | 422 | `/search` | Three reason forms: `<provider_name>: <failure_class>` when the configured provider chain failed and is not a lone `searxng`; `policy_excluded_all_providers` when `providers` / `allow_paid_fallback` narrowed the chain to empty; or `policy_domain_list_too_large` when caller `blocked_domains` exceeded the byte budget. Both policy refusals occur before any provider call and are permanent client errors, **not retryable** without changing the request or configured policy/budget; distinguish them by `reason`, not the code alone. Code added in `1.2.0`, domain-policy refusal in `1.3.0` |
 | `searxng_error` | 422 | `/search` | SearXNG returned a non-2xx status (a lone `searxng` chain only) |
 | `searxng_unavailable` | 422 | `/search` | SearXNG unreachable, timed out, or returned bad JSON (a lone `searxng` chain only) |
 | `unsupported_format` | 422 | `/extract` | Neither a PDF nor valid UTF-8 text |
@@ -494,7 +504,7 @@ in-tree copy and says nothing about wire compatibility. The image tag (for examp
 CI verifies two of the three on every release: the `smoke` job reads the in-image copy
 back out of the candidate image, and the `publish` job downloads the Release assets back
 from the API; both are checked against the anchor committed at the tag (currently
-`416f86c93f74489b28083086bac7f9424ab700220fd46f275ca6333da428f97b`).
+`9c27428a293dfc033439074084776564ff22a26ec3220ac92602fc49d38593b9`).
 
 **Vendoring procedure** (`contract/GOVERNANCE.md` "Consumers"):
 

@@ -250,10 +250,10 @@ class RetrieveRequest(BaseModel):
     pipeline, cached by `sanitizer_revision`; `/search` finds and returns
     provider-extracted content for a query across sources — snippets or
     chunks, per result `content_kind` — from the configured provider chain,
-    every result sanitized, never cached. `promptguard_fail_closed` is
-    honoured on both routes; this route additionally honours
+    every result sanitized, never cached. `promptguard_fail_closed` and
+    `blocked_domains` are honoured on both routes; this route additionally honours
     `promptguard_threshold`, `trusted_domains`, `verified_domains`,
-    `blocked_domains` and `cache_ttl_hours`, while `/search` additionally
+    and `cache_ttl_hours`, while `/search` additionally
     honours `providers` and `allow_paid_fallback` (contract 1.2.0) and scans
     every result at the fixed 0.85 default at trust tier `standard`
     (`config.yaml`'s `promptguard_threshold` is not applied there). This
@@ -336,13 +336,14 @@ class SearchRequest(BaseModel):
     across sources — snippets or chunks, per result `content_kind` — from
     the configured provider chain, every result sanitized, never cached;
     `/retrieve` fetches and sanitizes one caller-named URL through the full
-    pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` is
-    honoured on both routes; this route additionally honours `providers`
+    pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` and
+    `blocked_domains` are honoured on both routes; this route additionally honours
+    `providers`
     and `allow_paid_fallback` (contract 1.2.0) and scans every result at
     the fixed 0.85 default at trust tier `standard` (`config.yaml`'s
     `promptguard_threshold` is not applied here), while `/retrieve`
     additionally honours `promptguard_threshold`, `trusted_domains`,
-    `verified_domains`, `blocked_domains` and `cache_ttl_hours`. This
+    `verified_domains` and `cache_ttl_hours`. This
     documents today's divergence; changing it belongs to
     `epic-forage-hardening`.
     """
@@ -371,6 +372,22 @@ class SearchRequest(BaseModel):
             "ignored and counted on /metrics `search.policy_unknown_provider` "
             "rather than rejected. Empty (the default) means the configured "
             "chain runs unrestricted. Honoured from contract 1.2.0."
+        ),
+    )
+    blocked_domains: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Domains to omit from search results as blocked_url, merged after the "
+            "operator's seed_blocklist, which cannot be overridden. Multi-label "
+            "names cover the apex and every dot-boundary subdomain, with or without "
+            "a leading dot; single-label names and IP literals match exactly. "
+            "Entries are stripped and UTS-46-canonicalised once; invalid entries "
+            "are ignored and counted on search.policy_invalid_domain_entry, never "
+            "echoed. No entry-count cap. A raw list over "
+            "policy_domain_entries_max_bytes "
+            "(UTF-8 bytes including newline separators) is refused whole with 422 "
+            "search_unavailable / policy_domain_list_too_large before normalisation. "
+            "Honoured from contract 1.3.0."
         ),
     )
     allow_paid_fallback: bool = Field(

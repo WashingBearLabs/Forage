@@ -1540,6 +1540,66 @@ and the same for `kit_tools/arch/SERVICE_MAP.md` each return at least `1`; the f
   cancellation test alone confirms the leaked mock. No unrelated test or
   production change was made to conceal either gate failure.
 
+### US-002 implementation (2026-09-22)
+
+- Captured `tests/fixtures/search/baseline_pre_blocked_domains.json` from clean
+  `a80b2819f5626b44c161c47fddd72c6982f9149d` before touching the handler.
+  The three prescribed hosts, fake content, loaded classifier score 0.1 and
+  threshold 0.85 are documented in the fixture README, including the rule
+  against regenerating after this story without a GOVERNANCE classification.
+  The real route still matches all five pinned fields without either new field.
+- Added unconstrained `SearchRequest.blocked_domains`, raw-byte refusal before
+  caller encoding, once-only normalization and per-entry invalid counters.
+  The canonical list reaches the pipeline solely through `blocked_domains=`;
+  the raw request field is never read there. Canonical operator entries merge
+  first with no cap or eviction. Existing host canonicalisation is reused, not
+  repeated per entry or after the URL audit.
+- Matching results use `_block_search_url("policy_blocklist")`, preserving the
+  common `SearchUrlOutcome` reason/log path and `contract.OMIT_BLOCKED_URL`.
+  Private-host audit reasons retain precedence, Stage 2/3 never receive blocked
+  content, and even an all-omitted raw success does not call the paid fallback.
+  The INFO record is exactly the existing two-token template, without host/URL.
+- Regressions cover 70 caller entries including a malformed entry and exact-only
+  `com`, 500 entries unable to evict a boot-normalized seed, all-results-blocked
+  non-fallback, UTS-46/leading-dot matching, one canonicalisation per entry and
+  per host, the explicit parameter as the only channel, exact 4096-byte admission
+  and 4097-byte refusal, UTF-8 sizing, and JSON lone-surrogate escapes. Refusal
+  invokes neither normalization nor provider and increments the shared error
+  metric once; malformed in-budget entries are counted without echo.
+- The 1.3.0 window stays held: appended the contract continuation, regenerated
+  OpenAPI and its drift fixture, re-created the golden through `_SCHEMA_MODELS`,
+  and appended only `SearchRequest.blocked_domains` to the additions set.
+  Older goldens are unchanged. Anchor:
+  `9c27428a293dfc033439074084776564ff22a26ec3220ac92602fc49d38593b9`;
+  all four quotations refreshed and `export_contract --check` passes.
+- All seven boundary copies across the five named files now identify
+  `blocked_domains` as shared. API_GUIDE already enumerated `blocked_url` from
+  spec 1 US-004, so no missing-token handoff was needed. US-007 had already
+  documented three policy reason shapes; this story replaces its future-tense
+  raiser notes and explicitly names both literal reasons as permanent,
+  non-retryable client errors. MONITORING separates expected `policy_blocklist`
+  from suspicious-host audit omissions. SERVICE_MAP's configuration row had
+  been narrowed to "search policy plumbing is US-002" by US-001; updated it to
+  the now-true "also applied to `/search` result URLs" claim rather than leaving
+  the stale future-tense wording. Configuration, security, environment and
+  release handoff docs now describe both routes.
+- Twenty-ninth rotation, **seventh policy-driven sanitization change**:
+  `c8a907cf…` → `de1cea65…`. Only `orchestrator.py` and `contract.py` move
+  among the nine hashed sources; each individual read-only reversal and the
+  both-reverted control were measured under default and shipped configuration.
+  All five rotation sites record it. Text scanning and the empty-seed baseline
+  are unchanged; search can no longer bypass the operator's existing seed list.
+- Validation: **1,032 related tests passed** across twelve modules; repository
+  Ruff lint, strict Pyright, changed-file formatting, generated-contract drift,
+  older-golden preservation and `git diff --check` pass. The socket guard stayed
+  enabled; two existing unavailable-cache warnings and one upstream Torch
+  deprecation warning remain non-failing.
+- Readiness remains **partial / needs-work**, not a gate waiver: repository-wide
+  formatting still fails solely in untouched `tests/test_retrieve_admission.py`.
+  The full suite was not run because implementer instructions prohibit it;
+  that acceptance gate remains for the orchestrator. No unrelated test repair,
+  story-definition edit or acceptance-checkbox change was made.
+
 ## Refinement Notes
 
 ### Research Findings

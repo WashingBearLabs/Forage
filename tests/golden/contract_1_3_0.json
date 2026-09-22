@@ -546,13 +546,21 @@
     "type": "object"
   },
   "SearchRequest": {
-    "description": "Inbound request to run a web search.\n\n`/search` finds and returns provider-extracted content for a query\nacross sources \u2014 snippets or chunks, per result `content_kind` \u2014 from\nthe configured provider chain, every result sanitized, never cached;\n`/retrieve` fetches and sanitizes one caller-named URL through the full\npipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` is\nhonoured on both routes; this route additionally honours `providers`\nand `allow_paid_fallback` (contract 1.2.0) and scans every result at\nthe fixed 0.85 default at trust tier `standard` (`config.yaml`'s\n`promptguard_threshold` is not applied here), while `/retrieve`\nadditionally honours `promptguard_threshold`, `trusted_domains`,\n`verified_domains`, `blocked_domains` and `cache_ttl_hours`. This\ndocuments today's divergence; changing it belongs to\n`epic-forage-hardening`.",
+    "description": "Inbound request to run a web search.\n\n`/search` finds and returns provider-extracted content for a query\nacross sources \u2014 snippets or chunks, per result `content_kind` \u2014 from\nthe configured provider chain, every result sanitized, never cached;\n`/retrieve` fetches and sanitizes one caller-named URL through the full\npipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` and\n`blocked_domains` are honoured on both routes; this route additionally honours\n`providers`\nand `allow_paid_fallback` (contract 1.2.0) and scans every result at\nthe fixed 0.85 default at trust tier `standard` (`config.yaml`'s\n`promptguard_threshold` is not applied here), while `/retrieve`\nadditionally honours `promptguard_threshold`, `trusted_domains`,\n`verified_domains` and `cache_ttl_hours`. This\ndocuments today's divergence; changing it belongs to\n`epic-forage-hardening`.",
     "properties": {
       "allow_paid_fallback": {
         "default": true,
         "description": "When False, excludes every paid provider from this request's effective chain regardless of `providers` \u2014 free providers always run. Applied after `providers`' own normalise-then-ignore-and-count filtering (ruling 29). One-way: can only narrow the configured chain, never widen, reorder, or key it. Honoured from contract 1.2.0.",
         "title": "Allow Paid Fallback",
         "type": "boolean"
+      },
+      "blocked_domains": {
+        "description": "Domains to omit from search results as blocked_url, merged after the operator's seed_blocklist, which cannot be overridden. Multi-label names cover the apex and every dot-boundary subdomain, with or without a leading dot; single-label names and IP literals match exactly. Entries are stripped and UTS-46-canonicalised once; invalid entries are ignored and counted on search.policy_invalid_domain_entry, never echoed. No entry-count cap. A raw list over policy_domain_entries_max_bytes (UTF-8 bytes including newline separators) is refused whole with 422 search_unavailable / policy_domain_list_too_large before normalisation. Honoured from contract 1.3.0.",
+        "items": {
+          "type": "string"
+        },
+        "title": "Blocked Domains",
+        "type": "array"
       },
       "num_results": {
         "default": 5,

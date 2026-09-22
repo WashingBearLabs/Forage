@@ -1,0 +1,38 @@
+{
+  "fallback_fired": false,
+  "omitted_by_reason": {},
+  "provider_errors": [],
+  "provider_used": "searxng",
+  "results": [
+    {
+      "content_kind": "snippet",
+      "date": null,
+      "domain": "a.example",
+      "engine": "google",
+      "snippet": "Calm search excerpt 1.",
+      "suspicious": false,
+      "title": "Result 1",
+      "url": "https://a.example/article"
+    },
+    {
+      "content_kind": "snippet",
+      "date": null,
+      "domain": "www.blocked.example",
+      "engine": "google",
+      "snippet": "Calm search excerpt 2.",
+      "suspicious": false,
+      "title": "Result 2",
+      "url": "https://www.blocked.example/article"
+    },
+    {
+      "content_kind": "snippet",
+      "date": null,
+      "domain": "blocked.example",
+      "engine": "google",
+      "snippet": "Calm search excerpt 3.",
+      "suspicious": false,
+      "title": "Result 3",
+      "url": "https://blocked.example/article"
+    }
+  ]
+}

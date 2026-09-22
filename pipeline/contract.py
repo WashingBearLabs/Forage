@@ -169,6 +169,12 @@ MINOR when fields are only added.
   ``/retrieve``'s ``content_too_large`` gains reason ``policy_domain_list_too_large``
   for an over-budget caller denylist. Allowlists instead drop their over-budget
   remainder; the counters report drops and wildcard trusted/verified resolutions.
+* ``1.3.0`` — ``hardening-hostname-and-config`` US-002 adds optional
+  ``SearchRequest.blocked_domains``, merged after the operator's ``seed_blocklist``:
+  either list omits matching search results as ``blocked_url`` before content
+  scanning, without triggering fallback. Invalid caller entries are counted;
+  an oversized denylist is refused whole as ``search_unavailable`` with reason
+  ``policy_domain_list_too_large``, a non-retryable request-policy refusal.
   This version is **held**:
   ``tests/golden/contract_1_3_0.json`` is
   re-created in place by every later story in this epic that moves the
@@ -414,9 +420,11 @@ the default deployment and the only one that existed before the
 ``SearchProvider`` seam. ``search_unavailable`` (contract ``1.2.0``) is the
 general code for every other chain — its ``reason`` is the closed
 ``"<provider_name>: <failure_class>"`` composition, never a URL and never
-exception text. Policy refusals instead use ``POLICY_EXCLUDED_ALL_PROVIDERS``
-or ``POLICY_DOMAIN_LIST_TOO_LARGE``; these are not retryable without changing
-the request.
+exception text. ``search_unavailable`` also carries the two per-request policy
+refusals, distinguished by ``reason``: ``policy_excluded_all_providers``
+(``POLICY_EXCLUDED_ALL_PROVIDERS``) and ``policy_domain_list_too_large``
+(``POLICY_DOMAIN_LIST_TOO_LARGE``). These are permanent client errors, not
+retryable without changing the request or the configured policy/budget.
 """
 
 SEARCH_ERROR_CODES = frozenset(get_args(SearchErrorCode))
@@ -470,14 +478,14 @@ effective provider chain to nothing (``search-policy-and-health`` US-010).
 exhausted chain, or this fixed literal, raised by ``retrieval_app.py`` before
 ``run_search_pipeline`` is ever called, when a request's own ``providers`` /
 ``allow_paid_fallback`` policy excludes every provider the deployment
-configured; or ``POLICY_DOMAIN_LIST_TOO_LARGE`` (declared here ahead of the
-``/search`` domain-policy raiser). Never a mix of these shapes."""
+configured; or ``POLICY_DOMAIN_LIST_TOO_LARGE``, raised by the same handler
+before normalising an over-budget caller denylist. Never a mix of these shapes."""
 
 POLICY_DOMAIN_LIST_TOO_LARGE = "policy_domain_list_too_large"
 """An over-budget caller denylist, refused whole rather than partially enforced.
 
 The route-specific 422 codes are ``content_too_large`` on ``/retrieve`` and
-``search_unavailable`` on ``/search`` (declared ahead of its raiser). The request's
+``search_unavailable`` on ``/search``. The request's
 own raw list bytes exceed ``policy_domain_entries_max_bytes``; retrying without
 changing the list or the configured budget cannot succeed.
 """

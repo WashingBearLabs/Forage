@@ -3,6 +3,31 @@
 Committed fixtures for the test suite. Nothing here is shipped in the image —
 `.dockerignore` excludes `tests/` outright.
 
+## `search/baseline_pre_blocked_domains.json`
+
+Captured on 2026-09-22 from commit
+`a80b2819f5626b44c161c47fddd72c6982f9149d`, **before** implementing
+`hardening-hostname-and-config` US-002 or touching its handler. The real
+`run_search_pipeline` ran with the socket guard enabled, empty config, a
+`FakeSearchProvider` named `searxng` followed by an uncalled paid `brave`,
+and a loaded classifier double returning `(0.1, [])` at threshold **0.85**.
+The request was `{"query": "domain policy baseline", "num_results": 3}`,
+sending neither `blocked_domains` nor `promptguard_threshold`.
+
+The three fake results, in order, use hosts `a.example`,
+`www.blocked.example`, and `blocked.example`; each URL is
+`https://<host>/article`. Their titles are `Result 1` through `Result 3`,
+their `content` values are `Calm search excerpt 1.` through
+`Calm search excerpt 3.`, and each engine is `google`.
+
+Only `results`, `omitted_by_reason`, `fallback_fired`, `provider_used`, and
+`provider_errors` are pinned, not whole-response equality: later stories in
+the 1.3.0 window add envelope fields. This fixture is deliberately **not
+regenerable after this story**. If it goes red later for a request sending
+neither new field, the change to these five fields is a behaviour change
+that the later story must classify under `contract/GOVERNANCE.md` before
+editing this fixture.
+
 ## `contract/unregenerated_openapi.yaml`
 
 The contract drift check's own failure case, committed rather than staged by hand.

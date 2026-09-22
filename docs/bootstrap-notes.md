@@ -85,7 +85,8 @@ those eight — so Forage's revision moved:
 | After operator policy bounds and response fields (`hardening-retrieve-parity` US-005) | `d98f7dbe…69359` |
 | After retrieve-parity validation (`fe211e3`) | `5a470872…bf623` |
 | After directional hostname policy (`hardening-hostname-and-config` US-001) | `328d386c…93286` |
-| **Current (`hardening-hostname-and-config` US-007, request domain budgets and counters)** | **`c8a907cf…546b8`** |
+| After request domain budgets and counters (`hardening-hostname-and-config` US-007) | `c8a907cf…546b8` |
+| **Current (`hardening-hostname-and-config` US-002, search domain policy)** | **`de1cea65…6be91`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -1375,4 +1376,50 @@ The generated OpenAPI anchor is
 `416f86c93f74489b28083086bac7f9424ab700220fd46f275ca6333da428f97b`.
 Consumer production list-size evidence: **none** available in this checkout;
 64 KiB is the specified configurable default, not measured production headroom.
+**Not replayed to Poppy**; compare contracts, not revisions.
+
+### The twenty-ninth rotation: search domain policy (`hardening-hostname-and-config` US-002, 2026-09-22)
+
+```
+before: c8a907cf3d4eef215127457c449be4c95195ead863bfc4bf2894e5a75fd546b8
+after:  de1cea659b62b74f7dcd39cfdec8f3dee2272dcac38f2a35e829caacbe46be91
+```
+
+**Two hashed files move.** `orchestrator.py` merges the canonical operator
+`seed_blocklist` before the explicit `blocked_domains=` parameter and checks
+the existing canonical result domain with `hostname_matches`. A match becomes
+the existing `SearchUrlOutcome` blocked shape, so the shared omission/logging
+path emits `blocked_url` and content-free `host_class=policy_blocklist`.
+The check follows the lexical URL audit and precedes Stage 2/3 content scanning;
+provider sufficiency is still decided on raw results and omissions cannot fire
+paid fallback. `contract.py` announces the optional request field and documents
+both permanent, non-retryable policy refusals under `search_unavailable`.
+
+Measured through `derive_sanitizer_revision` with read-only `Path.read_bytes`
+substitution of `git show a80b2819f5626b44c161c47fddd72c6982f9149d:<path>`,
+never overwriting the worktree:
+
+| Reversal against clean `a80b281` | Revision |
+|---|---|
+| `pipeline/contract.py` alone | `0b23cb5e56ac02fd298990c9b1eaa6f61ea783d709f0aecd932327e706555c96` |
+| `pipeline/orchestrator.py` alone | `dd96a33561ab29ee27d99b3ec5477d5bb5a8745b48d31a65cad14461021e30a5` |
+| Both | `c8a907cf3d4eef215127457c449be4c95195ead863bfc4bf2894e5a75fd546b8` |
+
+Every value is identical under default and shipped configuration. The other
+seven hashed sources, including `url_validator.py`, are byte-identical to the
+base; no hash inputs changed. The handler's once-only normalisation, byte-budget
+refusal and drop metric (`retrieval_app.py`) and the new field (`models.py`) are
+not hashed themselves.
+
+This is the **seventh policy-driven sanitization-behaviour change**: `/search`
+now enforces the operator's existing seed policy as well as a caller denylist.
+The shipped seed list is empty, so the five-field pre-story baseline remains
+identical for callers sending neither new field. Text sanitization is unchanged.
+Old cache entries become unreachable under the new revision and expire normally.
+
+The additive optional field rides the held 1.3.0 window. Re-created its golden
+through `_SCHEMA_MODELS`, appended `SearchRequest.blocked_domains` to the diff
+set, retained every older golden, and regenerated OpenAPI with anchor
+`9c27428a293dfc033439074084776564ff22a26ec3220ac92602fc49d38593b9`.
+`docs/releases.md` carries the consumer upgrade handoff.
 **Not replayed to Poppy**; compare contracts, not revisions.

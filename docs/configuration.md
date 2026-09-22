@@ -29,9 +29,9 @@ design:
 `/search` finds and returns provider-extracted content for a query across sources —
 snippets or chunks, per result `content_kind` — from the configured provider chain, every
 result sanitized, never cached; `/retrieve` fetches and sanitizes one caller-named URL
-through the full pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` is
+through the full pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` and `blocked_domains` are
 honoured on both routes; `/retrieve` additionally honours `promptguard_threshold`,
-`trusted_domains`, `verified_domains`, `blocked_domains` and `cache_ttl_hours`, while
+`trusted_domains`, `verified_domains` and `cache_ttl_hours`, while
 `/search` additionally honours `providers` and `allow_paid_fallback` (contract 1.2.0) and
 scans every result at the fixed 0.85 default at trust tier `standard` (`config.yaml`'s
 `promptguard_threshold` is not applied on this route). This documents today's divergence;
@@ -487,9 +487,9 @@ that file sets, which is not always the code default.
 |-----|------|--------------|---------|---------|
 | `user_agents` | list of strings | `[]` | 5 desktop browser UAs | Pool rotated across outbound fetches. Empty means the fetcher's own built-in default is used. |
 | `news_domains` | list of strings | `[]` | 6 leading-dot wire/major outlets | Domains whose cached entries expire after **at most 1 hour**. Bare entries match only the apex; a leading dot covers the apex and every subdomain. **Upgrade note:** your bare entries stay exact; add the dot for subdomains. The six shipped entries now have it (`.bbc.co.uk` covers `www.bbc.co.uk`). |
-| `seed_blocklist` | list of strings | `[]` | `[]` | Deployment-wide denylist merged with `/retrieve`'s `blocked_domains`. **Upgrade note:** existing multi-label entries now cover subdomains; review apex entries before upgrading, because a multi-tenant apex removes every tenant. Single-label entries keep matching exactly as before. This list is policy, not a secret: observable through `/retrieve`'s refusal message and, once search policy plumbing lands (US-002), `/search`'s `blocked_url` counts. |
+| `seed_blocklist` | list of strings | `[]` | `[]` | Deployment-wide denylist merged into both routes, `/retrieve` and `/search`, before caller `blocked_domains`; caller entries cannot evict it. **Upgrade note:** existing multi-label entries now cover subdomains; review apex entries before upgrading, because a multi-tenant apex removes every tenant. Single-label entries keep matching exactly as before. This list is policy, not a secret: observable through `/retrieve`'s refusal message and `/search`'s `blocked_url` counts. |
 | `promptguard_threshold` | float | `0.85` | `0.85` | Injection score at or above which stage 3 marks content as injected. Also feeds the `sanitizer_revision` hash, so changing it changes that value by design. |
-| `policy_domain_entries_max_bytes` | integer | `65536` (64 KiB) | `65536` | Raw UTF-8 bytes per caller domain list, including newline separators; range **4096–1048576** (4 KiB–1 MiB). Each `/retrieve` list has its own budget. An over-budget denylist is refused whole with 422 `content_too_large`, reason `policy_domain_list_too_large`; allowlists retain the in-budget prefix and count all remaining entries as drops. Invalid configuration logs `config_invalid_value — key=policy_domain_entries_max_bytes` and falls back to 65536, never refuses boot. Read once at startup; restart after changing it. `/search` will share the denylist rule when US-002 lands, under 422 `search_unavailable`. |
+| `policy_domain_entries_max_bytes` | integer | `65536` (64 KiB) | `65536` | Raw UTF-8 bytes per caller domain list, including newline separators; range **4096–1048576** (4 KiB–1 MiB). Each `/retrieve` list and `/search`'s denylist has its own budget. An over-budget denylist is refused whole with 422 `content_too_large` on `/retrieve` or `search_unavailable` on `/search`, reason `policy_domain_list_too_large`; allowlists retain the in-budget prefix and count all remaining entries as drops. Invalid configuration logs `config_invalid_value — key=policy_domain_entries_max_bytes` and falls back to 65536, never refuses boot. Read once at startup; restart after changing it. |
 | `extract_route_enabled` | boolean | `false` | `false` | Release gate for `POST /extract`. While `false` the route returns **404** — it is invisible, not merely refused. Requires a restart to take effect. Remember there is no authentication in front of it. |
 | `search_brave_timeout_seconds` | float | `15.0` | `15.0` | Per-request timeout for the Brave LLM-Context HTTP call. This is `/search`'s worst-case latency on a Brave-only chain until spec 3's fallback exists. Out of range (1.0 to 60.0) or wrong-typed refuses boot. A caller's `/search` timeout must exceed the sum of the configured chain's per-provider timeouts — 10 s + this value for `searxng,brave` — so lower this value rather than raising the caller's. |
 | `search_brave_chunk_max_chars` | integer | `2000` | `2000` | Cap on each Brave result's extracted-chunk text before it reaches sanitization. Out of range (200 to 2000) or wrong-typed refuses boot. |
@@ -506,7 +506,7 @@ canonicaliser (case and one trailing dot normalised). Config lists are unbudgete
 normalised at boot, and invalid entries produce one `config_invalid_value` WARNING
 per list naming the dropped entries; misplaced credential/URL-shaped entries are redacted.
 
-Request lists are normalised once in the `/retrieve` handler before pipeline entry.
+Request lists are normalised once in the `/retrieve` and `/search` handlers before pipeline entry.
 `blocked_domains` is measured before **any** caller entry is canonicalised, then
 normalised in full if in budget. `trusted_domains` and `verified_domains` consume
 raw bytes in order before normalising each retained entry; the first entry that
@@ -514,7 +514,9 @@ exceeds the budget and every following entry are dropped. There is no entry-coun
 cap. The operator's canonical `seed_blocklist` is merged first and has no caller
 budget, so caller entries can never evict it. Invalid entries and over-budget
 allowlist drops increment `retrieve.policy_invalid_domain_entry` once per entry,
-without logging or storing the offending value.
+without logging or storing the offending value. `/search` counts invalid denylist
+entries on `search.policy_invalid_domain_entry`; an oversized denylist on either
+route is refused before normalisation, not partially enforced or counted as drops.
 
 **This is an encode-work bound, not request-body admission.** FastAPI has already
 parsed the entire JSON body into `list[str]` before the handler runs; neither

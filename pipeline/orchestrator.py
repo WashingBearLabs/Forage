@@ -981,6 +981,7 @@ SearchHostClass = Literal[
     "private_literal",
     "embedded_private",
     "blocklisted_name",
+    "policy_blocklist",
 ]
 """Closed vocabulary for why the search-time audit *blocked* a result URL.
 
@@ -1431,6 +1432,7 @@ async def run_search_pipeline(
     searxng_url: str = _DEFAULT_SEARXNG_URL,
     providers: Sequence[SearchProvider] | None = None,
     configured_chain: Sequence[SearchProvider] | None = None,
+    blocked_domains: Sequence[str] = (),
     search_metrics: SearchMetricsSink | None = None,
     config: dict[str, Any],
     classifier: Any = None,
@@ -1485,6 +1487,13 @@ async def run_search_pipeline(
     *providers* when not supplied; spec 4 passes the configured chain
     explicitly once per-request policy can narrow *providers*.
 
+    *blocked_domains* carries canonical request entries from the handler,
+    merged after the operator's canonical ``seed_blocklist``. Only this
+    parameter supplies caller domain policy; multi-label names match by
+    dot-boundary suffix, single-label names and IP literals by equality.
+    Policy omissions follow the URL audit and precede content scanning;
+    they never trigger fallback, which is decided on raw provider results.
+
     *search_metrics* is incremented directly during traversal: ``paid_calls``
     once per call to a ``paid=True`` provider (before the call, so a call that
     times out is still counted), and ``fallback_fired`` once per request in
@@ -1512,6 +1521,7 @@ async def run_search_pipeline(
         )
 
     request_id = uuid.uuid4().hex
+    effective_blocklist = [*config.get("seed_blocklist", []), *blocked_domains]
 
     # -- Call the search provider chain, free-first --
     # Request extra results to compensate for any BLOCKED omissions. The
@@ -1667,6 +1677,11 @@ async def run_search_pipeline(
             max_length=_MAX_SEARCH_TITLE_LENGTH,
         )
         url_outcome = _canonicalize_search_url(raw.get("url", ""))
+        if url_outcome.domain is not None and any(
+            hostname_matches(url_outcome.domain, entry, allow_suffix=True)
+            for entry in effective_blocklist
+        ):
+            url_outcome = _block_search_url("policy_blocklist")
         url = url_outcome.canonical_url
         domain = url_outcome.domain
         omission_reason = url_outcome.omission_reason

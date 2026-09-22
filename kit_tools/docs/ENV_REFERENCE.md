@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document environment variables and secrets. What config exists and where to find it.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-001)
+> Updated by: Copilot (hardening-hostname-and-config US-002)
 
 ## Overview
 
@@ -84,7 +84,7 @@ Loaded by `retrieval_app._load_config()` in the lifespan; a missing file logs a 
 |---|---|---|---|---|---|
 | `user_agents` | empty list | 5 desktop browser UAs | list of strings | Outbound User-Agent pool for stage-5 fetches; empty falls to `DEFAULT_USER_AGENTS` in `pipeline/stage5_url_audit.py` | `pipeline/orchestrator.py` line 294, per `/retrieve` |
 | `news_domains` | empty list | .reuters.com, .apnews.com, .bbc.co.uk, .nytimes.com, .theguardian.com, .cnn.com | list of strings | Cache TTL capped at 1 h; bare entries match only themselves, leading-dot entries cover apex and subdomains. Upgrade: operator bare entries stay exact; shipped entries now opt in with a dot | `pipeline/orchestrator.py`, then `cache.py`, per `/retrieve`; normalised at boot |
-| `seed_blocklist` | empty list | empty list | list of strings | Merged into every request's `blocked_domains` before URL validation: the one deployment-wide trust setting. The trust-tier lists themselves (`trusted_domains`, `verified_domains`, `blocked_domains`) are per-request body fields, not config | `pipeline/orchestrator.py` line 236, per `/retrieve` |
+| `seed_blocklist` | empty list | empty list | list of strings | Merged operator-first with every request's `blocked_domains` on both `/retrieve` and `/search`; callers cannot evict entries. Fetch matches are refused; search matches are omitted as `blocked_url` before content scanning. The trust-tier lists themselves (`trusted_domains`, `verified_domains`) remain per-request `/retrieve` fields | `pipeline/orchestrator.py`, `run_retrieve_pipeline` and `run_search_pipeline` |
 | `promptguard_threshold` | `0.85` | `0.85` | float, 0.0 to 1.0 | Stage-3 injection cutoff for `/extract`; also hashed into `sanitizer_revision`, so changing it rotates that value and invalidates the content cache by design | `retrieval_app.py` line 1474 (`/extract`, per request; a non-numeric or out-of-range value is rejected per request); `pipeline/sanitizer_revision.py` line 41 (start) |
 | `policy_domain_entries_max_bytes` | `65536` | `65536` | integer, 4096 to 1048576; invalid warns and falls back | Raw UTF-8 byte budget per caller domain list, including separators. `/retrieve` truncates allowlists and counts drops; an over-budget denylist is refused whole, 422 `content_too_large` / `policy_domain_list_too_large`. Bounds encode work, not JSON body admission | `retrieval_app.py` lifespan via `bounded_int`, published as `app.state.policy_domain_entries_max_bytes`; consumed by the handler |
 | `extract_route_enabled` | `false` | `false` | boolean (a non-boolean refuses boot) | Release gate: while `false`, `POST /extract` returns **404** from `ExtractionAdmissionMiddleware`. No authentication exists behind it | `pipeline/extraction_limits.py` line 100, start |

@@ -550,7 +550,7 @@ class SearchMetricsResponse(BaseModel):
     policy_invalid_domain_entry: int = Field(
         description=(
             "Dropped invalid denylist entries, one increment per entry, never "
-            "the offending value. Reserved until /search domain policy lands; "
+            "the offending value. Request entries are normalised once; "
             "an over-budget denylist is refused, never truncated or counted."
         )
     )
@@ -1837,9 +1837,9 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
     chunks, per result `content_kind` — from the configured provider chain,
     every result sanitized, never cached.
 
-    `promptguard_fail_closed` is honoured on both routes; `/retrieve`
-    additionally honours `promptguard_threshold`, `trusted_domains`,
-    `verified_domains`, `blocked_domains` and `cache_ttl_hours`, while
+    `promptguard_fail_closed` and `blocked_domains` are honoured on both routes;
+    `/retrieve` additionally honours `promptguard_threshold`, `trusted_domains`,
+    `verified_domains` and `cache_ttl_hours`, while
     `/search` additionally honours `providers` and `allow_paid_fallback`
     (contract 1.2.0) and scans every result at the fixed 0.85 default at
     trust tier `standard` (`config.yaml`'s `promptguard_threshold` is not
@@ -2080,12 +2080,12 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
     `/retrieve` fetches and sanitizes one caller-named URL through the full
     pipeline, cached by `sanitizer_revision`.
 
-    `promptguard_fail_closed` is honoured on both routes; `/search`
-    additionally honours `providers` and `allow_paid_fallback` (contract
+    `promptguard_fail_closed` and `blocked_domains` are honoured on both routes;
+    `/search` additionally honours `providers` and `allow_paid_fallback` (contract
     1.2.0) and scans every result at the fixed 0.85 default at trust tier
     `standard` (`config.yaml`'s `promptguard_threshold` is not applied
     here), while `/retrieve` additionally honours `promptguard_threshold`,
-    `trusted_domains`, `verified_domains`, `blocked_domains` and
+    `trusted_domains`, `verified_domains` and
     `cache_ttl_hours`. This documents today's divergence; changing it
     belongs to `epic-forage-hardening`.
     """
@@ -2098,6 +2098,17 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
     effective_chain, ignored_count = apply_request_policy(configured_chain, body)
     search_metrics.policy_unknown_provider += ignored_count
     try:
+        budget: int = request.app.state.policy_domain_entries_max_bytes
+        if domain_list_bytes(body.blocked_domains) > budget:
+            raise PipelineError(
+                error="search_unavailable",
+                reason=POLICY_DOMAIN_LIST_TOO_LARGE,
+                request_id=uuid.uuid4().hex,
+            )
+        blocked_domains, blocked_dropped = normalize_domain_entries(
+            body.blocked_domains, denylist=True, budget_bytes=None
+        )
+        search_metrics.policy_invalid_domain_entry += blocked_dropped
         # The policy 422 is raised inside the same `try` as the pipeline's
         # own, so one `except` records every `search_unavailable` from the
         # exception's typed `error` — there is no second, string-literal
@@ -2112,6 +2123,7 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
             body,
             providers=effective_chain,
             configured_chain=configured_chain,
+            blocked_domains=blocked_domains,
             config=request.app.state.config,
             classifier=request.app.state.classifier,
             search_metrics=search_metrics,

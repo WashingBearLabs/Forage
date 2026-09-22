@@ -2,7 +2,7 @@
 # CODE_ARCH.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-001)
+> Updated by: Copilot (hardening-hostname-and-config US-002)
 
 ---
 
@@ -266,6 +266,17 @@ counters and the reason. Already-hashed root `url_validator.py` removes its pass
 and safely sizes surrogate escapes before rejecting them as invalid entries.
 Every individual reversal was measured; all-reverted reproduces `328d386c…`
 under default and shipped config, with full hashes in `docs/bootstrap-notes.md`.
+The twenty-ninth (`c8a907cf…` → `de1cea65…`) is the **seventh policy-driven
+sanitization-behaviour change** (`hardening-hostname-and-config` US-002):
+`/search` merges canonical operator `seed_blocklist` entries before the explicit
+`blocked_domains=` parameter, then tests the already-canonical result domain
+after the lexical URL audit and before content scanning. Matches use the shared
+blocked outcome/logging channel with `host_class=policy_blocklist`; raw-result
+sufficiency means even a wholly omitted set never fires paid fallback.
+Only `orchestrator.py` and `contract.py` move in the hash. Both read-only
+individual reversals were measured, and the both-reverted control reproduces
+`c8a907cf…` under default and shipped config. The five-field baseline with no new
+request field and an empty seed list is unchanged, as is text sanitization.
 Nothing downstream may assume Poppy↔Forage revision parity.
 
 **Domain lists cross boundaries as canonical strings.** `url_validator.py` owns the

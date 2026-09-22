@@ -5425,7 +5425,14 @@ class TestSearchUrlAuditWiring:
 
         assert frozenset() == SEARCH_URL_RULES & SEARCH_HOST_CLASSES
         assert (
-            frozenset({"private_literal", "embedded_private", "blocklisted_name"})
+            frozenset(
+                {
+                    "private_literal",
+                    "embedded_private",
+                    "blocklisted_name",
+                    "policy_blocklist",
+                }
+            )
             == SEARCH_HOST_CLASSES
         )
 

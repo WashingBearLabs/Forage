@@ -42,12 +42,13 @@ from model_fetcher import DEFAULT_MODEL_REVISION, ModelMetrics
 from models import (
     RetrievedContent,
     RetrieveRequest,
+    SearchRequest,
     SearchResponse,
     Stage2Verdict,
     Stage3Verdict,
     TrustTier,
 )
-from pipeline import contract
+from pipeline import contract, orchestrator
 from pipeline.contract import (
     CONTRACT_VERSION,
     DEGRADED_CACHE_UNAVAILABLE,
@@ -2889,6 +2890,411 @@ def _searxng_result(**overrides: Any) -> ProviderSearchResult:
     }
     defaults.update(overrides)
     return ProviderSearchResult(**defaults)
+
+
+def _domain_policy_results(
+    hosts: tuple[str, ...] = (
+        "a.example",
+        "www.blocked.example",
+        "blocked.example",
+    ),
+) -> ProviderSearchResult:
+    return _searxng_result(
+        results=[
+            {
+                "title": f"Result {i}",
+                "url": f"https://{host}/article",
+                "content": f"Calm search excerpt {i}.",
+                "engine": "google",
+            }
+            for i, host in enumerate(hosts, start=1)
+        ]
+    )
+
+
+def test_search_blocked_domains_has_no_validation_constraints() -> None:
+    first = SearchRequest(query="q")
+    second = SearchRequest(query="q")
+    assert first.blocked_domains == []
+    first.blocked_domains.append("anything")
+    assert second.blocked_domains == []
+    assert SearchRequest.model_fields["blocked_domains"].metadata == []
+    schema = SearchRequest.model_json_schema()["properties"]["blocked_domains"]
+    assert schema["items"] == {"type": "string"}
+    assert not {"maxItems", "minItems", "pattern"} & schema.keys()
+    assert "request.blocked_domains" not in inspect.getsource(
+        orchestrator.run_search_pipeline
+    )
+    source = inspect.getsource(contract)
+    doc = source.split("SearchErrorCode = Literal[", 1)[1].split(
+        "SEARCH_ERROR_CODES =", 1
+    )[0]
+    assert all(
+        text in doc
+        for text in (
+            "policy_excluded_all_providers",
+            "policy_domain_list_too_large",
+            "permanent client errors",
+            "retryable",
+        )
+    )
+
+
+async def test_search_without_domain_policy_matches_pre_story_baseline(
+    client: httpx.AsyncClient,
+) -> None:
+    classifier = MagicMock(spec=PromptGuardClassifier)
+    classifier.loaded = True
+    classifier.classify.return_value = (0.1, [])
+    app.state.classifier = classifier
+    free = FakeSearchProvider(name="searxng", outcome=_domain_policy_results())
+    paid = FakeSearchProvider(name="brave", paid=True)
+    with (
+        _borrowed_search_providers([free, paid]),
+        patch(
+            "pipeline.orchestrator.run_promptguard", wraps=orchestrator.run_promptguard
+        ) as pg,
+    ):
+        response = await client.post(
+            "/search", json={"query": "domain policy baseline", "num_results": 3}
+        )
+    assert response.status_code == 200
+    baseline = json.loads(
+        (
+            Path(__file__).parent / "fixtures/search/baseline_pre_blocked_domains.json"
+        ).read_text()
+    )
+    assert set(baseline) == {
+        "results",
+        "omitted_by_reason",
+        "fallback_fired",
+        "provider_used",
+        "provider_errors",
+    }
+    assert {key: response.json()[key] for key in baseline} == baseline
+    assert paid.calls == []
+    assert classifier.classify.call_count == 3
+    assert all(call.kwargs["threshold"] == 0.85 for call in pg.call_args_list)
+
+
+@pytest.mark.parametrize("all_blocked", [False, True])
+async def test_search_domain_policy_omits_before_scans_without_paid_fallback(
+    client: httpx.AsyncClient,
+    caplog: pytest.LogCaptureFixture,
+    all_blocked: bool,
+) -> None:
+    free = FakeSearchProvider(name="searxng", outcome=_domain_policy_results())
+    paid = FakeSearchProvider(name="brave", paid=True)
+    entries = ["blocked.example"] + (["a.example"] if all_blocked else [])
+    with (
+        _borrowed_search_providers([free, paid]),
+        caplog.at_level(logging.INFO, logger="pipeline.orchestrator"),
+        patch(
+            "pipeline.orchestrator.scan_structural", wraps=orchestrator.scan_structural
+        ) as scan,
+        patch(
+            "pipeline.orchestrator.run_promptguard", wraps=orchestrator.run_promptguard
+        ) as pg,
+    ):
+        response = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "num_results": 3,
+                "blocked_domains": entries,
+                "promptguard_fail_closed": False,
+            },
+        )
+    assert response.status_code == 200
+    data = response.json()
+    count = 3 if all_blocked else 2
+    assert [result["domain"] for result in data["results"]] == (
+        [] if all_blocked else ["a.example"]
+    )
+    assert data["omitted_by_reason"] == {contract.OMIT_BLOCKED_URL: count}
+    assert data["fallback_fired"] is False
+    assert data["provider_errors"] == []
+    assert paid.calls == []
+    assert pg.await_count == (0 if all_blocked else 1)
+    assert scan.call_count == (0 if all_blocked else 6)
+    for call in [*scan.call_args_list, *pg.call_args_list]:
+        assert "blocked.example" not in call.args[0]
+        assert "Result 2" not in call.args[0]
+        assert "excerpt 2" not in call.args[0]
+    records = [
+        r for r in caplog.records if r.getMessage().startswith("search_url_blocked")
+    ]
+    assert len(records) == count
+    for record in records:
+        assert record.levelno == logging.INFO
+        assert record.getMessage().startswith(
+            "search_url_blocked host_class=policy_blocklist provider=searxng"
+        )
+        assert "example" not in record.getMessage()
+        assert "https://" not in record.getMessage()
+    counters = (await client.get("/metrics")).json()["search"]
+    assert counters["omitted_by_reason"] == {contract.OMIT_BLOCKED_URL: count}
+    assert counters["paid_calls"] == counters["fallback_fired"] == 0
+
+
+async def test_search_domain_policy_accepts_70_entries_and_single_label_exact_only(
+    client: httpx.AsyncClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    entries = [" BLOCKED.example. ", "com", "bad..entry"] + [
+        f"other{i}.example" for i in range(67)
+    ]
+    free = FakeSearchProvider(
+        name="searxng",
+        outcome=_domain_policy_results(
+            (
+                "www.blocked.example",
+                "blocked.example",
+                "com",
+                "a.com",
+                "notblocked.example",
+            )
+        ),
+    )
+    with _borrowed_search_providers([free]), caplog.at_level(logging.INFO):
+        response = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "num_results": 5,
+                "blocked_domains": entries,
+                "promptguard_fail_closed": False,
+            },
+        )
+    assert response.status_code == 200
+    assert [result["domain"] for result in response.json()["results"]] == [
+        "a.com",
+        "notblocked.example",
+    ]
+    assert response.json()["omitted_by_reason"] == {contract.OMIT_BLOCKED_URL: 3}
+    counters = (await client.get("/metrics")).json()["search"]
+    assert counters["policy_invalid_domain_entry"] == 1
+    assert counters["policy_suffix_trusted_skip"] == 0
+    assert "bad..entry" not in caplog.text
+    assert "bad..entry" not in response.text
+
+
+async def test_search_domain_policy_seed_normalized_at_boot_and_cannot_be_evicted(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {"seed_blocklist": [" Blocked.Example. "]},
+    )
+    free = FakeSearchProvider(name="searxng", outcome=_domain_policy_results())
+    paid = FakeSearchProvider(name="brave", paid=True)
+    async with _running_app() as live:
+        assert app.state.config["seed_blocklist"] == ["blocked.example"]
+        with (
+            _borrowed_search_providers([free, paid]),
+            caplog.at_level(logging.INFO, logger="pipeline.orchestrator"),
+            patch(
+                "pipeline.orchestrator.hostname_matches",
+                wraps=url_validator.hostname_matches,
+            ) as match,
+        ):
+            for entries in (None, [f"caller{i}.example" for i in range(500)]):
+                body: dict[str, Any] = {
+                    "query": "q",
+                    "num_results": 3,
+                    "promptguard_fail_closed": False,
+                }
+                if entries is not None:
+                    body["blocked_domains"] = entries
+                response = await live.post("/search", json=body)
+                assert response.status_code == 200
+                assert [r["domain"] for r in response.json()["results"]] == [
+                    "a.example"
+                ]
+                assert response.json()["omitted_by_reason"] == {
+                    contract.OMIT_BLOCKED_URL: 2
+                }
+                assert response.json()["fallback_fired"] is False
+        assert all(
+            call.args[1] == "blocked.example"
+            for call in match.call_args_list
+            if call.args[0] in {"www.blocked.example", "blocked.example"}
+        )
+        assert app.state.config["seed_blocklist"] == ["blocked.example"]
+        assert app.state.search_metrics.policy_invalid_domain_entry == 0
+    assert paid.calls == []
+    assert (
+        sum(
+            record.getMessage().startswith(
+                "search_url_blocked host_class=policy_blocklist provider="
+            )
+            for record in caplog.records
+        )
+        == 4
+    )
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        ["blocked.example", "x" * 4096],
+        ["blocked.example", "é" * 2048],
+        ["blocked.example", "\ud800" * 1366],
+        ["blocked.example".ljust(4093), "\ud800"],
+    ],
+)
+async def test_search_domain_policy_over_budget_refuses_before_encoding(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    entries: list[str],
+) -> None:
+    monkeypatch.setattr(app.state, "policy_domain_entries_max_bytes", 4096)
+    monkeypatch.setitem(app.state.config, "seed_blocklist", ["blocked.example"])
+    free = FakeSearchProvider(name="searxng", outcome=_domain_policy_results())
+    with (
+        _borrowed_search_providers([free]),
+        patch(
+            "retrieval_app.normalize_domain_entries",
+            side_effect=AssertionError("must not normalize"),
+        ) as normalize,
+        patch(
+            "url_validator.canonicalize_host",
+            side_effect=AssertionError("must not encode"),
+        ),
+        caplog.at_level(logging.INFO),
+    ):
+        response = await client.post(
+            "/search",
+            content=json.dumps({"query": "q", "blocked_domains": entries}),
+            headers={"content-type": "application/json"},
+        )
+    assert response.status_code == 422
+    data = response.json()
+    assert set(data) == {"error", "reason", "request_id"}
+    assert data["error"] == "search_unavailable"
+    assert data["reason"] == contract.POLICY_DOMAIN_LIST_TOO_LARGE
+    assert data["request_id"]
+    assert free.calls == []
+    normalize.assert_not_called()
+    counters = (await client.get("/metrics")).json()["search"]
+    assert counters["requests"] == 1
+    assert counters["errors"] == {"search_unavailable": 1}
+    assert counters["policy_invalid_domain_entry"] == 0
+    assert counters["omitted_by_reason"] == {}
+    assert "blocked.example" not in response.text + caplog.text
+    assert entries[1] not in response.text + caplog.text
+
+
+async def test_search_domain_policy_exact_byte_budget_and_malformed_surrogate(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entries = ["blocked.example".ljust(4092), "\ud800"]
+    budget = url_validator.domain_list_bytes(entries)
+    assert budget == 4096
+    monkeypatch.setattr(app.state, "policy_domain_entries_max_bytes", budget)
+    free = FakeSearchProvider(name="searxng", outcome=_domain_policy_results())
+    with _borrowed_search_providers([free]):
+        response = await client.post(
+            "/search",
+            content=json.dumps(
+                {
+                    "query": "q",
+                    "num_results": 3,
+                    "blocked_domains": entries,
+                    "promptguard_fail_closed": False,
+                }
+            ),
+            headers={"content-type": "application/json"},
+        )
+    assert response.status_code == 200
+    assert response.json()["omitted_by_reason"] == {contract.OMIT_BLOCKED_URL: 2}
+    assert app.state.search_metrics.policy_invalid_domain_entry == 1
+
+
+async def test_search_domain_policy_encodes_entries_once_and_hosts_once(
+    client: httpx.AsyncClient,
+) -> None:
+    entries = [" STRAẞE.de. ", ".blocked.example"]
+    hosts = ("straße.de", "xn--strae-oqa.de", "www.blocked.example", "a.example")
+    free = FakeSearchProvider(name="searxng", outcome=_domain_policy_results(hosts))
+    with (
+        _borrowed_search_providers([free]),
+        patch(
+            "retrieval_app.normalize_domain_entries",
+            wraps=url_validator.normalize_domain_entries,
+        ) as normalize,
+        patch(
+            "url_validator.canonicalize_host", wraps=url_validator.canonicalize_host
+        ) as entry_host,
+        patch(
+            "pipeline.orchestrator.canonicalize_host",
+            wraps=orchestrator.canonicalize_host,
+        ) as result_host,
+        patch(
+            "retrieval_app.run_search_pipeline", wraps=orchestrator.run_search_pipeline
+        ) as pipeline,
+    ):
+        response = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "num_results": 4,
+                "blocked_domains": entries,
+                "promptguard_fail_closed": False,
+            },
+        )
+    assert response.status_code == 200
+    assert [r["domain"] for r in response.json()["results"]] == ["a.example"]
+    assert response.json()["omitted_by_reason"] == {contract.OMIT_BLOCKED_URL: 3}
+    normalize.assert_called_once_with(entries, denylist=True, budget_bytes=None)
+    assert entry_host.call_count == len(entries)
+    assert result_host.call_count == len(hosts)
+    assert pipeline.call_args.kwargs["blocked_domains"] == [
+        "xn--strae-oqa.de",
+        "blocked.example",
+    ]
+
+
+async def test_search_domain_policy_pipeline_parameter_is_the_only_channel() -> None:
+    request = SearchRequest(
+        query="q",
+        num_results=3,
+        blocked_domains=["a.example"],
+        promptguard_fail_closed=False,
+    )
+    response = await orchestrator.run_search_pipeline(
+        request,
+        config={},
+        blocked_domains=["blocked.example"],
+        providers=[
+            FakeSearchProvider(name="searxng", outcome=_domain_policy_results())
+        ],
+    )
+    assert [result.domain for result in response.results] == ["a.example"]
+    assert response.omitted_by_reason == {contract.OMIT_BLOCKED_URL: 2}
+
+
+async def test_search_domain_policy_runs_after_private_host_audit(
+    client: httpx.AsyncClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    free = FakeSearchProvider(
+        name="searxng", outcome=_domain_policy_results(("localhost",))
+    )
+    with _borrowed_search_providers([free]), caplog.at_level(logging.INFO):
+        response = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "blocked_domains": ["localhost"],
+            },
+        )
+    assert response.status_code == 200
+    assert response.json()["omitted_by_reason"] == {contract.OMIT_BLOCKED_URL: 1}
+    assert "search_url_blocked host_class=blocklisted_name provider=" in caplog.text
+    assert "policy_blocklist" not in caplog.text
 
 
 async def test_omitted_policy_params_traverse_the_configured_chain(
