@@ -793,7 +793,7 @@ equal the committed pre-story baseline's.
   the five-site protocol named in US-001.
 
 **Acceptance Criteria:**
-- [ ] `SearchRequest.blocked_domains` exists, defaults to `[]`, carries no pydantic validation; a
+- [x] `SearchRequest.blocked_domains` exists, defaults to `[]`, carries no pydantic validation; a
       test sends 70 entries including `" BLOCKED.example. "`, `"com"` and `"bad..entry"` and asserts
       the match fires, `com` is applied exact-only (a result on `com` itself is omitted, one on
       `a.com` is not), `search.policy_invalid_domain_entry` advances by one (for `bad..entry`), and
@@ -803,28 +803,28 @@ equal the committed pre-story baseline's.
       never partially enforced; `run_search_pipeline`'s source contains no `request.blocked_domains`
       read (the `blocked_domains=` parameter is the only channel); `SearchErrorCode`'s docstring
       names the two policy refusals as non-retryable.
-- [ ] A result whose `domain` matches a request entry or a `seed_blocklist` entry is omitted with
+- [x] A result whose `domain` matches a request entry or a `seed_blocklist` entry is omitted with
       `blocked_url`, counted in `omitted_by_reason`, after URL canonicalisation and before stage 2/3;
       `fallback_fired` is `False` and the paid fake's `calls == []`; each omission logs one INFO
       record whose `getMessage()` starts with `search_url_blocked host_class=policy_blocklist
       provider=` and carries no URL and no host (substring check, never exact equality).
-- [ ] The committed baseline's five fields equal the response's for a request sending no
+- [x] The committed baseline's five fields equal the response's for a request sending no
       `blocked_domains` and no `promptguard_threshold`; `tests/fixtures/README.md` has the section.
-- [ ] 1.3.0 window (R36): docstring line appended; `uv run python -m scripts.export_contract` run;
+- [x] 1.3.0 window (R36): docstring line appended; `uv run python -m scripts.export_contract` run;
       `tests/golden/contract_1_3_0.json` re-created via `_SCHEMA_MODELS`; `blocked_domains` appended
       to `_EXPECTED_ONE_THREE_ZERO_DIFF`; the four anchor-quoting pages refreshed; `--check` green;
       `contract_1_2_0.json` unchanged; none of the seven boundary-text copies in `models.py`,
       `retrieval_app.py`, `kit_tools/docs/API_GUIDE.md`, `docs/configuration.md` and `README.md` calls
       `blocked_domains` a `/retrieve`-only knob (each of the five files is checked by name).
-- [ ] `kit_tools/docs/API_GUIDE.md` has the `/search` request row (`grep -c blocked_domains
+- [x] `kit_tools/docs/API_GUIDE.md` has the `/search` request row (`grep -c blocked_domains
       kit_tools/docs/API_GUIDE.md` ≥ 2) and its `omitted_by_reason` enumeration includes
       `blocked_url`; MONITORING's `omitted_by_reason` row names the three causes and the token and
       says `policy_blocklist` is expected policy; `docs/configuration.md`'s `seed_blocklist` row
       says both routes.
-- [ ] The `sanitizer_revision` rotation is measured and recorded on the five-site protocol.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] The `sanitizer_revision` rotation is measured and recorded on the five-site protocol.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-005: `promptguard_threshold` added to `/search`, defaulted from `config.yaml` on both routes, capped by the operator ceiling
 
