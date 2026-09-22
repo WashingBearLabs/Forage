@@ -1182,25 +1182,25 @@ set in one copy makes it fail twice.
 - `models.py`, `retrieval_app.py` and the tests are not hashed; this story rotates nothing.
 
 **Acceptance Criteria:**
-- [ ] The new test derives both sets from `model_fields` minus the named identity fields and asserts
+- [x] The new test derives both sets from `model_fields` minus the named identity fields and asserts
       every name in the four OpenAPI strings and the three fenced Markdown regions, plus each shared
       name inside the shared-knobs sentence; deleting one route-specific name and one shared name
       from any copy (and regenerating where applicable) makes it fail.
-- [ ] Each of the three Markdown files has exactly one `boundary-text:start` / `:end` fence pair
+- [x] Each of the three Markdown files has exactly one `boundary-text:start` / `:end` fence pair
       (`grep -c "boundary-text:start"` returns 1 for each); the test is red on zero or two.
-- [ ] All seven copies name every route-specific knob and mark the shared ones: every `_SHARED`
+- [x] All seven copies name every route-specific knob and mark the shared ones: every `_SHARED`
       name appears inside the one sentence each copy opens with the fixed lead-in `Shared by both
       routes:` (a knob described anywhere else in the copy is red by construction — the negative
       "is not applied" assertion was dropped in round 5 because an absent English phrasing is a
       heuristic that rots); the existing `test_search_and_retrieve_descriptions_name_the_boundary`
       still passes.
-- [ ] `contract/openapi.yaml` regenerated; `tests/golden/contract_1_3_0.json` re-created;
+- [x] `contract/openapi.yaml` regenerated; `tests/golden/contract_1_3_0.json` re-created;
       `uv run python -m scripts.export_contract --check` green; the four anchor-quoting pages refreshed.
-- [ ] `docs/bootstrap-notes.md`'s latest `sanitizer_revision` record still matches
+- [x] `docs/bootstrap-notes.md`'s latest `sanitizer_revision` record still matches
       `derive_sanitizer_revision({})`.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-006: Name the engine-list sync mechanism (ruling 11)
 
