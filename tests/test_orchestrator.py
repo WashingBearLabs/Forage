@@ -68,7 +68,7 @@ from pipeline.orchestrator import (
     run_search_pipeline,
 )
 from pipeline.pdf_subprocess import PDFClassifiableTextLimitError
-from pipeline.retrieve_limits import RetrieveSettings
+from pipeline.retrieve_limits import RetrieveSettings, retrieve_settings_from_config
 from pipeline.search_providers.base import (
     FAILURE_CLASSES,
     FailureClass,
@@ -5363,7 +5363,7 @@ def _budget_settings(chunks: int) -> RetrieveSettings:
 
 
 async def _retrieve_with_text(
-    raw_text: str, settings: RetrieveSettings
+    raw_text: str, settings: RetrieveSettings, classifier: PromptGuardClassifier
 ) -> RetrievedContent:
     """Run the pipeline over a page whose extracted text is exactly *raw_text*."""
     with (
@@ -5385,7 +5385,7 @@ async def _retrieve_with_text(
         return await run_retrieve_pipeline(
             _make_retrieve_request(promptguard_fail_closed=False),
             cache=None,
-            classifier=None,
+            classifier=classifier,
             config=_SAMPLE_CONFIG,
             sanitizer_revision=_SAMPLE_REVISION,
             **_retrieve_kwargs(settings=settings),
@@ -5397,10 +5397,13 @@ async def test_a_fetched_page_one_character_over_the_budget_is_refused() -> None
     settings = _budget_settings(256)
     ceiling = settings.max_extracted_characters
     assert ceiling == 458752
+    classifier = _loaded_classifier()
+    classifier.classify.side_effect = AssertionError("pre-check must precede inference")
 
     with pytest.raises(PipelineError) as excinfo:
-        await _retrieve_with_text("a" * (ceiling + 1), settings)
+        await _retrieve_with_text("a" * (ceiling + 1), settings, classifier)
 
+    classifier.classify.assert_not_called()
     assert excinfo.value.error == "content_too_large"
     assert excinfo.value.reason == contract.PROMPTGUARD_BUDGET
     assert excinfo.value.reason == "promptguard_budget"
@@ -5412,58 +5415,88 @@ async def test_a_fetched_page_exactly_at_the_budget_is_served() -> None:
     ceiling = settings.max_extracted_characters
     assert ceiling is not None
 
-    content = await _retrieve_with_text("a" * ceiling, settings)
+    classifier = _loaded_classifier()
+    content = await _retrieve_with_text("a" * ceiling, settings, classifier)
+    classifier.classify.assert_called_once_with("a" * ceiling, max_chunks=256)
+    assert content.promptguard_state == "scanned"
     assert content.injection_detected is False
 
 
-async def test_the_default_zero_budget_runs_no_pre_check_at_all() -> None:
+@pytest.mark.parametrize("config", [{}, {"retrieve": {"max_promptguard_chunks": 0}}])
+async def test_the_default_zero_budget_runs_no_pre_check_at_all(
+    config: dict[str, Any],
+) -> None:
     """`0` is today's behaviour: no ceiling, and no `max_chunks` handed over."""
-    settings = RetrieveSettings()
+    settings = retrieve_settings_from_config(config)
     assert settings.max_extracted_characters is None
 
-    seen: list[int | None] = []
-    real_run_promptguard = orchestrator.run_promptguard
-
-    async def _recording(*args: Any, **kwargs: Any) -> Any:
-        seen.append(kwargs.get("max_chunks"))
-        return await real_run_promptguard(*args, **kwargs)
-
-    with patch.object(orchestrator, "run_promptguard", _recording):
-        content = await _retrieve_with_text("a" * 600_000, settings)
-
+    classifier = _loaded_classifier()
+    text = "a" * 600_000
+    content = await _retrieve_with_text(text, settings, classifier)
+    classifier.classify.assert_called_once_with(text, max_chunks=None)
+    assert content.promptguard_state == "scanned"
     assert content.injection_detected is False
-    assert seen == [None]
 
 
 async def test_a_set_budget_is_handed_to_the_classifier_as_the_backstop() -> None:
-    """The pre-check is primary; `max_chunks` still reaches `run_promptguard`."""
-    seen: list[int | None] = []
-    real_run_promptguard = orchestrator.run_promptguard
-
-    async def _recording(*args: Any, **kwargs: Any) -> Any:
-        seen.append(kwargs.get("max_chunks"))
-        return await real_run_promptguard(*args, **kwargs)
-
-    with patch.object(orchestrator, "run_promptguard", _recording):
-        await _retrieve_with_text("short text", _budget_settings(256))
-
-    assert seen == [256]
+    """The pre-check is primary; `max_chunks` reaches the loaded classifier."""
+    classifier = _loaded_classifier()
+    await _retrieve_with_text("short text", _budget_settings(256), classifier)
+    classifier.classify.assert_called_once_with("short text", max_chunks=256)
 
 
 async def test_the_classifier_budget_error_maps_to_the_same_refusal() -> None:
     """The backstop: a classifier-side refusal wears the same code and reason."""
-    with (
-        patch.object(
-            orchestrator,
-            "run_promptguard",
-            AsyncMock(side_effect=PromptGuardBudgetExceededError("over budget")),
-        ),
-        pytest.raises(PipelineError) as excinfo,
-    ):
-        await _retrieve_with_text("short text", _budget_settings(256))
+    classifier = _loaded_classifier()
+    classifier.classify.side_effect = PromptGuardBudgetExceededError("over budget")
+    with pytest.raises(PipelineError) as excinfo:
+        await _retrieve_with_text("short text", _budget_settings(256), classifier)
 
+    classifier.classify.assert_called_once_with("short text", max_chunks=256)
     assert excinfo.value.error == "content_too_large"
     assert excinfo.value.reason == contract.PROMPTGUARD_BUDGET
+
+
+@pytest.mark.parametrize(
+    ("config", "text"),
+    [
+        ({"retrieve": {"max_promptguard_chunks": 256}}, "word " * 1000),
+        ({"retrieve": {"max_promptguard_chunks": 256}}, "a" * 458752),
+        ({}, "a" * 600000),
+        ({"retrieve": {"max_promptguard_chunks": 0}}, "a" * 600000),
+    ],
+    ids=["under-budget", "boundary", "absent", "explicit-zero"],
+)
+async def test_retrieve_classifies_every_window_with_compatible_response(
+    config: dict[str, Any], text: str,
+) -> None:
+    """Real chunking/inference loop, fake tensor/model IO, no downloaded weights."""
+    classifier = PromptGuardClassifier()
+    classifier._loaded = True
+    tokenizer = MagicMock()
+    tokenizer.encode.return_value = list(range((len(text) + 3) // 4))
+    tokenizer.decode.side_effect = lambda ids, **_kw: f"window-{ids[0]}-{ids[-1]}"
+    tokenizer.return_value = {"input_ids": "fake-tensor"}
+    classifier._tokenizer = tokenizer
+    model = MagicMock()
+    classifier._model = model
+    torch = MagicMock()
+    torch.softmax.return_value.__getitem__.return_value.item.return_value = 0.1
+    windows = classifier._chunk_text(text)
+    assert len(windows) > 1
+    settings = retrieve_settings_from_config(config)
+    if settings.max_promptguard_chunks == 0:
+        assert len(windows) > 256
+    with patch.dict("sys.modules", {"torch": torch}):
+        content = await _retrieve_with_text(text, settings, classifier)
+    assert model.call_count == len(windows)
+    assert [call.args[0] for call in tokenizer.call_args_list] == windows
+    # Previous unbounded call: same real gauntlet, just no max_chunks.
+    baseline = await _retrieve_with_text(text, RetrieveSettings(), _loaded_classifier())
+    assert content.promptguard_state == "scanned"
+    assert content.model_dump(exclude={"request_id", "retrieved_at"}) == baseline.model_dump(
+        exclude={"request_id", "retrieved_at"}
+    )
 
 
 def test_the_admission_protocol_is_satisfied_by_the_app_controller() -> None:
@@ -5682,7 +5715,7 @@ def test_the_orchestrator_never_restates_the_unavailable_result() -> None:
 
     # And the two that remain are reads of a result stage 3 produced.
     matches = [line for line in source.splitlines() if "model_unavailable" in line]
-    assert len(matches) == 3
+    assert len(matches) == 2
     assert all(
         "skip_reason ==" in line or line.lstrip().startswith("#") for line in matches
     )
@@ -5762,6 +5795,149 @@ async def test_two_retrieve_classifications_serialise_through_the_permit() -> No
     await second
     assert classifier.classify.call_count == 2
     assert not semaphore.locked()
+
+
+async def _until_waiting(semaphore: asyncio.Semaphore) -> None:
+    async with asyncio.timeout(5):
+        while not semaphore._waiters:
+            await asyncio.sleep(0.001)
+
+
+@pytest.mark.parametrize("holder_route", ["retrieve", "search", "extract"])
+@pytest.mark.parametrize("cancel_count", [1, 3])
+@pytest.mark.parametrize("worker_fails", [False, True])
+async def test_active_classification_cancellation_retains_ownership(
+    holder_route: str, cancel_count: int, worker_fails: bool, tmp_path: Path,
+) -> None:
+    """Actual repeated Task.cancel cannot let a competing route classify early."""
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    finish = threading.Event()
+    exited = threading.Event()
+    semaphore = asyncio.Semaphore(1)
+    classifier = _loaded_classifier()
+    active = 0
+    peak = 0
+    calls = 0
+    lock = threading.Lock()
+
+    def classify(text: str, *, max_chunks: int | None = None) -> tuple[float, list[str]]:
+        nonlocal active, peak, calls
+        with lock:
+            calls += 1
+            first = calls == 1
+            active += 1
+            peak = max(peak, active)
+        try:
+            if first:
+                loop.call_soon_threadsafe(entered.set)
+                assert finish.wait(5), "test did not release inference"
+                if worker_fails:
+                    raise RuntimeError("inference-failure-sentinel")
+            return (0.1, [])
+        finally:
+            with lock:
+                active -= 1
+            if first:
+                exited.set()
+
+    classifier.classify.side_effect = classify
+    path = tmp_path / "notes.txt"
+    path.write_text("A calm page about gardening.")
+
+    async def retrieve() -> RetrievedContent:
+        return await _retrieve_under(
+            classifier=classifier, semaphore=semaphore,
+            metrics=_NullRetrieveMetrics(), settings=RetrieveSettings(),
+        )
+
+    async def holder() -> object:
+        if holder_route == "retrieve":
+            return await retrieve()
+        if holder_route == "search":
+            return await _search_under(
+                classifier=classifier, semaphore=semaphore, wait_seconds=30,
+            )
+        return await orchestrator.run_extract_pipeline_from_file(
+            path, filename="notes.txt", mime_hint="text/plain", extract_mode="full",
+            request_id="cancelled-extract", classifier=classifier,
+            promptguard_threshold=0.85, sanitizer_revision=_SAMPLE_REVISION,
+            settings=ExtractionSettings(), classification_semaphore=semaphore,
+        )
+
+    first = asyncio.create_task(holder())
+    second: asyncio.Task[RetrievedContent] | None = None
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        for _ in range(cancel_count):
+            first.cancel()
+            await asyncio.sleep(0)
+            assert not first.done()
+            assert not exited.is_set()
+            assert semaphore._value == 0
+        second = asyncio.create_task(retrieve())
+        await _until_waiting(semaphore)
+        assert calls == 1
+        assert not second.done()
+        finish.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        assert exited.is_set()
+        assert (await second).promptguard_state == "scanned"
+        assert peak == 1
+        assert active == 0
+        assert semaphore._value == 1
+        assert not semaphore._waiters
+    finally:
+        finish.set()
+        await asyncio.gather(first, *([second] if second is not None else []),
+                             return_exceptions=True)
+
+
+@pytest.mark.parametrize("initially_loaded", [False, True])
+@pytest.mark.parametrize("fail_closed", [False, True])
+async def test_model_warmup_during_fetch_counts_timeout_and_never_caches(
+    initially_loaded: bool, fail_closed: bool, caplog: pytest.LogCaptureFixture,
+) -> None:
+    classifier = _loaded_classifier()
+    classifier.loaded = initially_loaded
+    semaphore = asyncio.Semaphore(0)
+    metrics = _NullRetrieveMetrics()
+    cache = MagicMock()
+    cache.get = AsyncMock(return_value=None)
+    cache.put = AsyncMock()
+
+    async def fetch(*_args: Any, **_kwargs: Any) -> FetchResult:
+        classifier.loaded = True
+        return _make_fetch_result()
+
+    validate_patch, _ = _retrieve_patches()
+    with (
+        validate_patch,
+        patch.object(orchestrator, "fetch_url", fetch),
+        patch.object(orchestrator, "cache_policy_fingerprint",
+                     wraps=orchestrator.cache_policy_fingerprint) as fingerprint,
+        caplog.at_level(logging.WARNING),
+    ):
+        content = await run_retrieve_pipeline(
+            _make_retrieve_request(promptguard_fail_closed=fail_closed),
+            cache=cache, classifier=classifier, config=_SAMPLE_CONFIG,
+            sanitizer_revision=_SAMPLE_REVISION,
+            **_retrieve_kwargs(
+                settings=RetrieveSettings(promptguard_wait_seconds=0.05),
+                retrieve_metrics=metrics, classification_semaphore=semaphore,
+            ),
+        )
+    assert fingerprint.call_args.kwargs["classifier_loaded"] is initially_loaded
+    assert content.promptguard_state == (
+        "unavailable_blocked" if fail_closed else "unavailable_allowed"
+    )
+    assert metrics.classification_wait_timeouts == 1
+    assert sum(_WAIT_TIMEOUT_TOKEN in r.getMessage() for r in caplog.records) == 1
+    classifier.classify.assert_not_called()
+    cache.put.assert_not_called()
+    assert semaphore._value == 0
+    assert not semaphore._waiters
 
 
 @pytest.mark.parametrize(
@@ -6002,6 +6178,72 @@ async def test_an_over_budget_refusal_leaves_the_permit_count_unchanged() -> Non
     assert metrics.classification_wait_timeouts == 0
 
 
+@pytest.mark.parametrize("route", ["retrieve", "search"])
+async def test_five_cancelled_classification_waits_preserve_exact_permit(
+    route: str,
+) -> None:
+    semaphore = asyncio.Semaphore(1)
+    classifier = _loaded_classifier()
+    metrics = _NullRetrieveMetrics()
+    search_metrics = _SearchCounters()
+
+    async def run() -> object:
+        if route == "search":
+            return await _search_under(
+                classifier=classifier, semaphore=semaphore, wait_seconds=30,
+                metrics=search_metrics,
+            )
+        return await _retrieve_under(
+            classifier=classifier, semaphore=semaphore, metrics=metrics,
+            settings=RetrieveSettings(),
+        )
+
+    for _ in range(5):
+        await semaphore.acquire()
+        waiter = asyncio.create_task(run())
+        await _until_waiting(semaphore)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        assert semaphore._value == 0
+        assert not semaphore._waiters
+        classifier.classify.assert_not_called()
+        semaphore.release()
+        assert semaphore._value == 1
+    await run()
+    assert classifier.classify.call_count == (10 if route == "search" else 1)
+    assert semaphore._value == 1
+    assert metrics.classification_wait_timeouts == 0
+    assert search_metrics.classification_wait_timeouts == 0
+
+
+async def test_five_classifier_budget_backstops_preserve_exact_permit() -> None:
+    semaphore = asyncio.Semaphore(1)
+    classifier = _loaded_classifier()
+    metrics = _NullRetrieveMetrics()
+    for round_number in range(5):
+        classifier.classify.side_effect = PromptGuardBudgetExceededError("budget")
+        with pytest.raises(PipelineError) as raised:
+            await _retrieve_under(
+                classifier=classifier, semaphore=semaphore, metrics=metrics,
+                settings=RetrieveSettings(max_promptguard_chunks=256),
+            )
+        assert raised.value.error == "content_too_large"
+        assert raised.value.reason == contract.PROMPTGUARD_BUDGET
+        assert classifier.classify.call_count == round_number + 1
+        assert semaphore._value == 1
+        assert not semaphore._waiters
+    classifier.classify.side_effect = None
+    content = await _retrieve_under(
+        classifier=classifier, semaphore=semaphore, metrics=metrics,
+        settings=RetrieveSettings(max_promptguard_chunks=256),
+    )
+    assert content.promptguard_state == "scanned"
+    assert classifier.classify.call_count == 6
+    assert semaphore._value == 1
+    assert metrics.classification_wait_timeouts == 0
+
+
 # -- sanitize_and_structure, called directly -------------------------------
 
 
@@ -6200,23 +6442,38 @@ async def test_search_budget_expiry_is_unconditional_for_the_rest_of_the_loop() 
     await semaphore.acquire()
     metrics = _SearchCounters()
 
-    loop = asyncio.get_running_loop()
-    loop.call_later(0.15, semaphore.release)
+    order: list[str] = []
+    real_unavailable = orchestrator.unavailable_result
 
-    response = await _search_under(
-        classifier=classifier,
-        semaphore=semaphore,
-        wait_seconds=0.05,
-        metrics=metrics,
-        fail_closed=False,
-    )
+    def release_after_expiry(tier_value: str, *, fail_closed: bool) -> PromptGuardResult:
+        assert metrics.classification_wait_timeouts == 1
+        if not order:
+            assert semaphore._value == 0
+            order.append("expired")
+            semaphore.release()
+            order.append("released")
+        else:
+            assert semaphore._value == 1
+            order.append("later-result")
+        return real_unavailable(tier_value, fail_closed=fail_closed)
 
+    with patch.object(orchestrator, "unavailable_result", release_after_expiry):
+        response = await _search_under(
+            classifier=classifier, semaphore=semaphore, wait_seconds=0.05,
+            metrics=metrics, fail_closed=False,
+        )
+
+    assert order == ["expired", "released", *(["later-result"] * 9)]
+    assert semaphore._value == 1
     assert classifier.classify.call_count == 0
     assert response.unscanned_results == 10
     assert metrics.classification_wait_timeouts == 1
 
 
-async def test_search_classifies_the_first_results_then_marks_the_rest() -> None:
+@pytest.mark.parametrize("fail_closed", [False, True])
+async def test_search_classifies_the_first_results_then_marks_the_rest(
+    fail_closed: bool,
+) -> None:
     """Partial classification: the state this story makes reachable."""
     semaphore = asyncio.Semaphore(1)
     metrics = _SearchCounters()
@@ -6238,14 +6495,19 @@ async def test_search_classifies_the_first_results_then_marks_the_rest() -> None
         semaphore=semaphore,
         wait_seconds=0.1,
         metrics=metrics,
-        fail_closed=False,
+        fail_closed=fail_closed,
     )
 
     assert classifier.classify.call_count == 2
-    assert len(response.results) == 10
-    assert response.unscanned_results == 8
+    assert len(response.results) == (2 if fail_closed else 10)
+    assert response.unscanned_results == (0 if fail_closed else 8)
+    assert response.omitted_by_reason == (
+        {contract.OMIT_PROMPTGUARD_UNAVAILABLE: 8} if fail_closed else {}
+    )
     assert response.promptguard_unavailable is True
-    assert sum(1 for result in response.results if result.suspicious) == 8
+    assert sum(1 for result in response.results if result.suspicious) == (
+        0 if fail_closed else 8
+    )
     assert metrics.classification_wait_timeouts == 1
 
 

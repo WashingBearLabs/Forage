@@ -83,6 +83,7 @@ from pipeline.stage1_upload import (
 from pipeline.stage2_structural import scan_structural
 from pipeline.stage3_promptguard import (
     PromptGuardResult,
+    completed_thread,
     run_promptguard,
     unavailable_result,
 )
@@ -92,7 +93,7 @@ from pipeline.stage4_structuring import (
     build_retrieved_content,
     structure_sanitization_result,
 )
-from pipeline.stage5_url_audit import ContentTooLargeError, fetch_url
+from pipeline.stage5_url_audit import DEFAULT_TIMEOUT, ContentTooLargeError, fetch_url
 from promptguard.classifier import PromptGuardBudgetExceededError
 from url_validator import (
     BlockedDomainError,
@@ -229,6 +230,7 @@ async def sanitize_and_structure(
     max_promptguard_chunks: int | None = None,
     classification_semaphore: asyncio.Semaphore | None = None,
     classification_wait_seconds: float | None = None,
+    on_classification_wait_timeout: Callable[[], None] | None = None,
 ) -> SanitizationResult:
     """Run the shared Stage 2-4 gauntlet for any extracted content source.
 
@@ -297,6 +299,8 @@ async def sanitize_and_structure(
                     # file route passes `classification_wait_seconds=None`,
                     # which cannot time out, and `/search` never calls here.
                     logger.warning("classification_wait_timeout route=retrieve")
+                    if on_classification_wait_timeout is not None:
+                        on_classification_wait_timeout()
                     promptguard = unavailable_result(
                         trust_tier.value, fail_closed=promptguard_fail_closed
                     )
@@ -460,10 +464,15 @@ async def run_retrieve_pipeline(
     try:
         user_agents: list[str] = config.get("user_agents", [])
         try:
-            fetch_result = await fetch_url(
-                request.url,
-                blocked_domains=blocked_domains,
-                user_agents=user_agents if user_agents else None,
+            # Absolute deadline across redirects and streaming, not just httpx's
+            # per-operation inactivity timeout. Admission and stage 1 are outside.
+            fetch_result = await asyncio.wait_for(
+                fetch_url(
+                    request.url,
+                    blocked_domains=blocked_domains,
+                    user_agents=user_agents if user_agents else None,
+                ),
+                timeout=DEFAULT_TIMEOUT,
             )
         except PrivateIPError as exc:
             raise PipelineError(
@@ -477,7 +486,7 @@ async def run_retrieve_pipeline(
                 reason=str(exc),
                 request_id=request_id,
             ) from exc
-        except httpx.TimeoutException as exc:
+        except (httpx.TimeoutException, TimeoutError) as exc:
             raise PipelineError(
                 error="fetch_timeout",
                 reason=f"Request timed out fetching {request.url}",
@@ -510,68 +519,54 @@ async def run_retrieve_pipeline(
             # Most-specific first: every PDF failure is a `PDFExtractionError`
             # subclass, and the classifiable-text refusal is not a parse
             # failure.
-            pdf_worker = asyncio.create_task(
+            async with completed_thread(
                 asyncio.to_thread(
                     extract_pdf_bytes_in_subprocess,
                     fetch_result.response_body,
                     extraction_settings,
                 )
-            )
-            cancellation: asyncio.CancelledError | None = None
-            try:
-                # Cancelling a to_thread await cannot stop its thread. Keep the
-                # slot until the bounded worker is reaped and its spool unlinked,
-                # even on repeated cancellation. wait() leaves the task intact;
-                # result() below retrieves its outcome, including host faults.
-                while not pdf_worker.done():
-                    try:
-                        await asyncio.wait({pdf_worker})
-                    except asyncio.CancelledError as exc:
-                        if cancellation is None:
-                            cancellation = exc
-                extraction = pdf_worker.result()
-            except PDFClassifiableTextLimitError as exc:
-                raise PipelineError(
-                    error="content_too_large",
-                    reason=contract.PROMPTGUARD_BUDGET,
-                    request_id=request_id,
-                ) from exc
-            except PDFEncryptedError as exc:
-                raise PipelineError(
-                    error="extraction_failed",
-                    reason=contract.RETRIEVE_PDF_ENCRYPTED,
-                    request_id=request_id,
-                ) from exc
-            except PDFNoTextError as exc:
-                raise PipelineError(
-                    error="extraction_failed",
-                    reason=contract.RETRIEVE_PDF_NO_TEXT,
-                    request_id=request_id,
-                ) from exc
-            except PDFExtractionError as exc:
-                raise PipelineError(
-                    error="extraction_failed",
-                    reason=contract.RETRIEVE_PDF_EXTRACTION_ERROR,
-                    request_id=request_id,
-                ) from exc
-            except OSError as exc:
-                # The one host fault in the table (ENOSPC, EACCES, a read-only
-                # or vanished temp dir, a refused spool directory). `/metrics`
-                # keys errors by code alone, so this closed token — nothing
-                # path- or content-derived — is what lets an alert tell it
-                # apart from an encrypted-PDF caller.
-                logger.warning("retrieve_spool_error")
-                raise PipelineError(
-                    error="extraction_failed",
-                    reason=contract.RETRIEVE_PDF_SPOOL_ERROR,
-                    request_id=request_id,
-                ) from exc
-            finally:
-                if cancellation is not None:
-                    raise cancellation
+            ) as pdf_worker:
+                try:
+                    extraction = pdf_worker.result()
+                except PDFClassifiableTextLimitError as exc:
+                    raise PipelineError(
+                        error="content_too_large",
+                        reason=contract.PROMPTGUARD_BUDGET,
+                        request_id=request_id,
+                    ) from exc
+                except PDFEncryptedError as exc:
+                    raise PipelineError(
+                        error="extraction_failed",
+                        reason=contract.RETRIEVE_PDF_ENCRYPTED,
+                        request_id=request_id,
+                    ) from exc
+                except PDFNoTextError as exc:
+                    raise PipelineError(
+                        error="extraction_failed",
+                        reason=contract.RETRIEVE_PDF_NO_TEXT,
+                        request_id=request_id,
+                    ) from exc
+                except PDFExtractionError as exc:
+                    raise PipelineError(
+                        error="extraction_failed",
+                        reason=contract.RETRIEVE_PDF_EXTRACTION_ERROR,
+                        request_id=request_id,
+                    ) from exc
+                except OSError as exc:
+                    # Host fault, not input: retain the closed warning even if
+                    # cancellation is pending while the worker/spool is drained.
+                    logger.warning("retrieve_spool_error")
+                    raise PipelineError(
+                        error="extraction_failed",
+                        reason=contract.RETRIEVE_PDF_SPOOL_ERROR,
+                        request_id=request_id,
+                    ) from exc
         else:
             html_text = fetch_result.response_body.decode("utf-8", errors="replace")
-            extraction = await asyncio.to_thread(extract_html, html_text, request.url)
+            async with completed_thread(
+                asyncio.to_thread(extract_html, html_text, request.url)
+            ) as html_worker:
+                extraction = html_worker.result()
             del html_text
         # The three post-stage-1 scalars leave the fetch result here, so the
         # body and its decoded copy go with the slot: a request parked on the
@@ -613,6 +608,16 @@ async def run_retrieve_pipeline(
     # The catch is the backstop, not the control: the pre-check above already
     # refused an over-budget page, and this maps the classifier's own refusal
     # to the same 422 should the two ever disagree.
+    wait_timed_out = False
+
+    def classification_wait_timed_out() -> None:
+        # Explicit stage-3 outcome: the model may finish warming after the
+        # request-entry snapshot used for the cache key. Count at the event,
+        # even if later structuring is cancelled or fails.
+        nonlocal wait_timed_out
+        wait_timed_out = True
+        retrieve_metrics.classification_wait_timeouts += 1
+
     try:
         sanitization = await sanitize_and_structure(
             extraction=extraction,
@@ -630,6 +635,7 @@ async def run_retrieve_pipeline(
             ),
             classification_semaphore=classification_semaphore,
             classification_wait_seconds=settings.promptguard_wait_seconds,
+            on_classification_wait_timeout=classification_wait_timed_out,
         )
     except PromptGuardBudgetExceededError as exc:
         raise PipelineError(
@@ -652,20 +658,6 @@ async def run_retrieve_pipeline(
         domain_changed_on_redirect=domain_changed_on_redirect,
     )
 
-    # A loaded classifier cannot produce an `unavailable_*` state through
-    # `run_promptguard` — `stage3_promptguard.py` returns `model_unavailable`
-    # only when the classifier is absent or still warming — so the
-    # combination is exactly and only the classification-wait timeout above,
-    # under either policy (`unavailable_blocked` fail-closed,
-    # `unavailable_allowed` fail-open). Derived rather than threaded back so
-    # the counter and the cache condition below read the same fact.
-    wait_timed_out = classifier_loaded and content.promptguard_state in {
-        "unavailable_blocked",
-        "unavailable_allowed",
-    }
-    if wait_timed_out:
-        retrieve_metrics.classification_wait_timeouts += 1
-
     # -- Step 8: Cache safe result --
     #
     # A wait-timeout body never enters the content cache. `cache.py`'s
@@ -683,9 +675,7 @@ async def run_retrieve_pipeline(
         cache is not None
         and request.cache_ttl_hours > 0
         and not content.injection_detected
-        and not (
-            content.promptguard_state == "unavailable_allowed" and classifier_loaded
-        )
+        and not wait_timed_out
         and content.trust_tier
         not in {
             TrustTier.UNTRUSTED,

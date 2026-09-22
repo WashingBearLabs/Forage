@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncGenerator, Coroutine
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from models import Stage3Verdict, TrustTier
 
@@ -25,6 +27,33 @@ DEFAULT_THRESHOLD = 0.85
 INJECTION_PENALTY = -0.5
 
 SkipReason = Literal["trusted_tier", "model_unavailable", "structural_block"]
+
+
+@asynccontextmanager
+async def completed_thread[T](
+    work: Coroutine[Any, Any, T],
+) -> AsyncGenerator[asyncio.Task[T]]:
+    """Drain owned thread work before allowing its caller to release a gate.
+
+    Cancelling a to_thread await cannot stop its thread. Keep its task intact
+    through repeated cancellation, then let the caller retrieve/map its outcome
+    synchronously (including the fetched-PDF spool warning). Pending cancellation
+    wins only after that outcome is observed. Queued gate acquisition is outside
+    this scope and remains promptly cancellable.
+    """
+    worker = asyncio.create_task(work)
+    cancellation: asyncio.CancelledError | None = None
+    while not worker.done():
+        try:
+            await asyncio.wait({worker})
+        except asyncio.CancelledError as exc:
+            if cancellation is None:
+                cancellation = exc
+    try:
+        yield worker
+    finally:
+        if cancellation is not None:
+            raise cancellation
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,11 +183,10 @@ async def run_promptguard(
 
     # Run synchronous PyTorch inference in a thread to avoid blocking
     # the event loop.
-    score, flagged_chunks = await asyncio.to_thread(
-        classifier.classify,
-        text,
-        max_chunks=max_chunks,
-    )
+    async with completed_thread(
+        asyncio.to_thread(classifier.classify, text, max_chunks=max_chunks)
+    ) as inference:
+        score, flagged_chunks = inference.result()
 
     if score > threshold:
         return PromptGuardResult(

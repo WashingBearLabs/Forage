@@ -28,7 +28,7 @@ from pipeline import contract, orchestrator
 from pipeline.extraction_limits import extraction_settings_from_config
 from pipeline.orchestrator import PipelineError, run_retrieve_pipeline
 from pipeline.retrieve_limits import retrieve_settings_from_config
-from pipeline.stage1_extraction import extract_html
+from pipeline.stage1_extraction import ExtractionResult, extract_html
 from pipeline.stage2_structural import scan_structural
 from pipeline.stage4_structuring import structure_sanitization_result
 from pipeline.stage5_url_audit import FetchResult
@@ -351,6 +351,163 @@ async def test_every_path_hands_the_slot_back(
         await depth_one.run()
         assert after.calls == 1
         _assert_idle(controller)
+
+
+@pytest.mark.parametrize("cancel_count", [1, 3])
+@pytest.mark.parametrize("worker_fails", [False, True])
+async def test_html_cancellation_retains_slot_until_extractor_exits(
+    depth_one: _Admission, monkeypatch: pytest.MonkeyPatch,
+    cancel_count: int, worker_fails: bool,
+) -> None:
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    finish = threading.Event()
+    exited = threading.Event()
+    calls = 0
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def extract(text: str, url: str) -> ExtractionResult:
+        nonlocal active, peak, calls
+        with lock:
+            calls += 1
+            first = calls == 1
+            active += 1
+            peak = max(peak, active)
+        try:
+            if first:
+                loop.call_soon_threadsafe(entered.set)
+                assert finish.wait(5), "test did not release HTML worker"
+                if worker_fails:
+                    raise ValueError("extraction-failure-sentinel")
+            return extract_html(text, url)
+        finally:
+            with lock:
+                active -= 1
+            if first:
+                exited.set()
+
+    fetch = _GatedFetch()
+    fetch.gate.set()
+    monkeypatch.setattr(orchestrator, "fetch_url", fetch)
+    monkeypatch.setattr(orchestrator, "extract_html", extract)
+    controller = depth_one.controller
+    first = asyncio.create_task(depth_one.run())
+    second: asyncio.Task[Any] | None = None
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        for _ in range(cancel_count):
+            first.cancel()
+            await asyncio.sleep(0)
+            assert not first.done()
+            assert not exited.is_set()
+            assert controller.active == 1
+        second = asyncio.create_task(depth_one.run())
+        await _until(lambda: controller.queued == 1)
+        assert fetch.calls == 1
+        assert calls == 1
+        assert controller.queued_bytes == 10485760
+        with pytest.raises(PipelineError) as refused:
+            await depth_one.run()
+        assert refused.value.error == "busy"
+        finish.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        assert exited.is_set()
+        await second
+        assert fetch.calls == 2
+        assert calls == 2
+        assert peak == 1
+        assert active == 0
+        _assert_idle(controller)
+    finally:
+        finish.set()
+        await asyncio.gather(first, *([second] if second is not None else []),
+                             return_exceptions=True)
+
+
+@pytest.mark.parametrize("redirects", [False, True])
+async def test_total_fetch_deadline_stops_periodic_stream_and_unblocks_queue(
+    depth_one: _Admission, monkeypatch: pytest.MonkeyPatch, redirects: bool,
+) -> None:
+    """Real fetcher, fake transport: chunks cannot renew the absolute deadline."""
+    started = asyncio.Event()
+    closed = asyncio.Event()
+    chunks: list[float] = []
+    requests: list[str] = []
+    loop = asyncio.get_running_loop()
+    deadline = 0.2
+
+    class SlowStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncGenerator[bytes]:
+            started.set()
+            # Every chunk is far inside the inactivity interval. Without the
+            # total deadline this stream keeps the sole slot indefinitely.
+            while True:
+                chunks.append(loop.time())
+                yield b"small chunk "
+                await asyncio.sleep(0.01)
+
+        async def aclose(self) -> None:
+            closed.set()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        if request.url.path == "/":
+            if redirects:
+                await asyncio.sleep(0.08)
+                return httpx.Response(302, headers={"location": "/redirected"})
+            return httpx.Response(200, stream=SlowStream())
+        if request.url.path == "/redirected":
+            await asyncio.sleep(0.04)
+            return httpx.Response(200, stream=SlowStream())
+        return httpx.Response(200, content=_PAGE, headers={"content-type": "text/html"})
+
+    # Only transport and DNS are faked; use the production fetcher and its
+    # redirect/body handling without sockets or relaxed pytest-socket guards.
+    real_client = httpx.AsyncClient
+
+    def mock_client(**kwargs: Any) -> httpx.AsyncClient:
+        return real_client(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr("pipeline.stage5_url_audit.httpx.AsyncClient", mock_client)
+    monkeypatch.setattr("pipeline.stage5_url_audit.validate_url",
+                        _async_return(("93.184.216.34", "example.com")))
+    monkeypatch.setattr(orchestrator, "DEFAULT_TIMEOUT", deadline)
+    start = loop.time()
+    first = asyncio.create_task(depth_one.run())
+    await asyncio.wait_for(started.wait(), 5)
+
+    # The queued request's deadline begins only after admission.
+    async def unrelated() -> object:
+        return await run_retrieve_pipeline(
+            RetrieveRequest(url="https://example.com/unrelated"),
+            cache=None, classifier=None, config={}, sanitizer_revision="test",
+            settings=depth_one.settings, retrieve_metrics=depth_one.metrics,
+            classification_semaphore=depth_one.semaphore,
+            extraction_settings=extraction_settings_from_config({}),
+            admission=depth_one.controller,
+        )
+
+    second = asyncio.create_task(unrelated())
+    try:
+        await _until(lambda: depth_one.controller.queued == 1)
+        assert "/unrelated" not in requests
+        with pytest.raises(PipelineError) as expired:
+            await asyncio.wait_for(first, 2)
+        assert expired.value.error == "fetch_timeout"
+        assert expired.value.reason == f"Request timed out fetching {_URL}"
+        assert closed.is_set()
+        assert len(chunks) >= 2
+        assert loop.time() - start < 0.6
+        await asyncio.wait_for(second, 2)
+        assert requests == (["/", "/redirected", "/unrelated"] if redirects
+                            else ["/", "/unrelated"])
+        _assert_idle(depth_one.controller)
+    finally:
+        first.cancel()
+        await asyncio.gather(first, second, return_exceptions=True)
 
 
 # ---------------------------------------------------------------------------
