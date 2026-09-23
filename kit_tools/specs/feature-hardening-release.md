@@ -1902,6 +1902,66 @@ Story definitions and acceptance checkboxes are unchanged. Result remains
 **partial / needs-work** solely for the unavailable completion-PR
 description and the explicitly deferred full-suite gate.
 
+#### US-004 retry — completion PR notice persisted (2026-09-23)
+
+Restored the verified implementation by fast-forwarding this retry branch
+from `2cd2e1b` through `e12182f02ae977336b44e19040305a38d3e519c9`
+and `8e934c49723f1553c77668ad2de40b66c4f33f67`. Neither commit was
+rewritten, so the pin rollback instruction above still names the original
+ancestor commit. No runtime, generated artifact or revision input changed.
+
+**The missing PR-description criterion is now satisfied.** Created the actual
+draft completion PR [#30](https://github.com/WashingBearLabs/Forage/pull/30),
+`epic/forage-hardening-US-004-attempt-2` into `main`. Its description explicitly
+names the **outstanding unpublished-tag window on main**, requires the owner
+to cut from this PR's merge commit in the same sitting that it merges, and
+gives the exact fallback command:
+
+```bash
+git revert e12182f02ae977336b44e19040305a38d3e519c9
+```
+
+Read the persisted description back with `gh pr view 30 --json ...`;
+verified its complete body against the submitted text, the outstanding notice,
+same-sitting merge-commit requirement, exact revert command, open/draft state
+and `main` base. This is remote PR evidence, not merely a repository-only
+notice. The attempt-1 blocked finding above is historical and superseded.
+The PR remains unmerged; creating it does not authorize a cut or close the
+window. Its description keeps US-003/US-005 and both 86M owner gates pending.
+
+Fresh retry evidence: all six complete affected modules pass **725 tests**,
+including all **79** Compose tests. Whole-tree `--collect-only -q` and separate
+per-module `--collect-only -qq tests/test_*.py` both report **4126 tests** in
+**38 modules**. Compared their actual outputs against every TESTING_GUIDE
+row and all four total-count sites; all agree, with **41** top-level test
+Python files. Rechecked both exact-scope classification tables: **115** and
+**57** matching lines, zero missing, extra or duplicate classifications.
+Both image pins, envelope/model passthroughs, full-only HMAC wiring, four
+secret-grep patterns, five anchor quotations, retained release entries and
+supported-versions table agree. GOTCHAS' split value plus all **41** rotation
+rows appear in bootstrap. An initial ad-hoc history comparison extended into
+intentionally changed tag-scheme prose; bounding it at `Withdrawn tags`
+confirmed the actual published entries are unchanged.
+
+Safe Ruff fix/format passes on the two restored Python files changed nothing.
+Repository Ruff lint/format, strict Pyright (**0 errors**), contract export
+`--check` and whitespace checks pass. Scoped and collection logs are retained
+in this retry session's `files/us004-retry-*.log`; the read-back PR evidence is
+`files/us004-completion-pr.json`.
+
+**Still unverified: the full-suite acceptance gate.** This invocation expressly
+prohibits a full-suite run, so neither the 725 scoped passes nor fresh collection
+is represented as `uv run pytest` success. The authorized regression/end-of-epic
+gate must independently run Compose, reconcile collection and execute the full
+suite on its final tree. PR CI and the owner release pre-flight are not asserted
+green here. The result remains **partial / needs-work** for that deferred gate,
+not for the now-resolved completion-PR description.
+
+Only the named non-release branch was pushed, with `--no-follow-tags`; the
+workflow's publish jobs exclude pull requests. No merge, credential inspection,
+local image build, model acquisition, benchmark, owner gate, tag push, release
+or publication was performed. Story definitions and checkboxes remain unchanged.
+
 <!-- Populated during execution. US-001/US-002 record their rotations and the rehearsal extraction;
 US-004 records both classified sweeps; US-003 records the cut, the four-way sha256 table and the
 config-grep facts; US-005 records the three smoke runs, the credential-free pull, the leak check and
