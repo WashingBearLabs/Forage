@@ -433,7 +433,7 @@ refreshed; `uv run pytest` is green in this story's own scope.
   last recorded, read from the table, not `41ac98ca…`; zero hits is a failure, not a pass.
 
 **Acceptance Criteria:**
-- [ ] A `RequestValidationError` handler is registered with `_MAX_VALIDATION_ERRORS = 100`,
+- [x] A `RequestValidationError` handler is registered with `_MAX_VALIDATION_ERRORS = 100`,
       `_VALIDATION_PLACEHOLDER = "[redacted]"` and `_VALIDATION_WINDOW_KEYS` as named constants,
       coerces and fails closed (non-mapping entries dropped, `msg`/`type` `str()`-coerced,
       non-`int`/`str` `loc` segments dropped and counted, one blanket `except Exception` returning
@@ -444,15 +444,15 @@ refreshed; `uv run pytest` is green in this story's own scope.
       placeholders equal to `"[redacted]"`, and `assert_mirrors(HTTPValidationError, response)`
       holding on all three routes after `_strip_window_keys` (the validation arm joins the module's
       parity convention on the trio).
-- [ ] The marker fuzz posts the marker one field at a time (type-valid-but-invalid for validated
+- [x] The marker fuzz posts the marker one field at a time (type-valid-but-invalid for validated
       fields; inside a wrong-typed container for `min_length`-only fields), asserts every field of both
       request models and the `/extract` `Form` params produced at least one `detail` entry in its own
       case, asserts every validated field produced `value_error` or `assertion_error` in its own case,
       asserts the marker appears 0 times in `response.text` (every `msg`, `loc` and `type`), and
       enumerates the covered fields in Implementation Notes.
-- [ ] A guard-of-the-guard (an interpolating validator monkeypatched onto a real request model) turns
+- [x] A guard-of-the-guard (an interpolating validator monkeypatched onto a real request model) turns
       the fuzz red.
-- [ ] `_ROUTE_LOC_ALLOWLIST` is a module-level map built from `SearchRequest.model_fields`,
+- [x] `_ROUTE_LOC_ALLOWLIST` is a module-level map built from `SearchRequest.model_fields`,
       `RetrieveRequest.model_fields` and the six `/extract` parameter names, keyed by the closed route
       token, read through `request.scope["route"].path` only (`grep -c endpoint_path
       retrieval_app.py` is 0) and no FastAPI internal; a test asserts the `/extract` entry equals
@@ -463,7 +463,7 @@ refreshed; `uv run pytest` is green in this story's own scope.
       mapping-typed field; handler tests in `tests/test_contract_errors.py` show a caller-shaped `loc`
       segment is dropped, and that with no `route` in scope every non-framework `str` segment is
       dropped with one `validation_422_loc_dropped` WARNING (deny by default).
-- [ ] A 50,000-item list yields at most 100 entries and one `validation_422_truncated` WARNING whose
+- [x] A 50,000-item list yields at most 100 entries and one `validation_422_truncated` WARNING whose
       route token is a member of `{"/search", "/retrieve", "/extract", "other"}` (`caplog`); no
       `retrieval_app` record contains the marker; a root-level `caplog` capture shows the marker in no
       record on any logger (root-level `caplog.at_level(logging.DEBUG)` with the canary, the
@@ -471,10 +471,10 @@ refreshed; `uv run pytest` is green in this story's own scope.
       a `loc` segment that is neither `int` nor `str`, and a non-serialisable `msg` each yield 422,
       not 500 (the never-raises guarantee; no uvicorn-logger assertion — it is vacuous under
       `ASGITransport`).
-- [ ] The middleware-raised 4xx paths still bypass the handler
+- [x] The middleware-raised 4xx paths still bypass the handler
       (`tests/test_orchestrator.py::test_post_retrieve_error_response`, the 413 and 404 tests pass untouched);
       `test_our_validation_mirror_matches_fastapis_own_definition` passes with its docstring re-grounded.
-- [ ] `contract/GOVERNANCE.md` gains the next-lettered ruling with **Ruling** and **Source** (an
+- [x] `contract/GOVERNANCE.md` gains the next-lettered ruling with **Ruling** and **Source** (an
       **expedited MINOR with a compatibility window** — the MINOR row's own category — argued from
       `openapi.yaml:1271-1278` **and answering § "Example 6 in full" step by step**: step 1 the
       `"[redacted]"` placeholders, step 2 the one-release window, step 3 the drop as a second MINOR
@@ -490,7 +490,7 @@ refreshed; `uv run pytest` is green in this story's own scope.
       dated heading reads the new count, `contract/GOVERNANCE.md:174` included with its scope clause
       naming both epics; `_NUMBER_WORDS` extends through twenty and pins the ruling count;
       `tests/test_governance_docs.py` green.
-- [ ] `kit_tools/arch/SECURITY.md`: `grep -c 'echoes the offending value verbatim' kit_tools/arch/SECURITY.md`
+- [x] `kit_tools/arch/SECURITY.md`: `grep -c 'echoes the offending value verbatim' kit_tools/arch/SECURITY.md`
       is 0; the rewritten `providers` paragraph names `apply_request_policy` as the bound, the new
       ruling (derived letter) as the closure and the surviving rationale for no schema bound, and its
       "Pinned by" sentence names `tests/test_models.py` and `tests/test_contract_errors.py`; the
@@ -500,14 +500,14 @@ refreshed; `uv run pytest` is green in this story's own scope.
       `validation_422_truncated` and `validation_422_loc_dropped` are each documented at the
       LOGGING.md, MONITORING.md and TROUBLESHOOTING.md sites (`grep -rn 'validation_422_'` over the
       explicit path set hits source, tests and each site for both tokens).
-- [ ] Contract regenerated: the docstring clause appended with the derived letter; `uv run python -m
+- [x] Contract regenerated: the docstring clause appended with the derived letter; `uv run python -m
       scripts.export_contract` run; the document differs only in the five validation-422 descriptions
       (`ValidationErrorDetail`, `HTTPValidationError`, its `detail` field, `_PIPELINE_422_DESCRIPTION`,
       the `/extract` inline literal) at the six `openapi.yaml` sites (anchored by text), with no
       property added, removed or retyped;
       golden unchanged (expected); `_EXPECTED_ONE_THREE_ZERO_DIFF` unchanged (expected); the four
       anchor-quoting pages equal `contract/openapi.yaml.sha256`; `--check` clean.
-- [ ] Rotation recorded: the measured before/after in `docs/bootstrap-notes.md`, `CLAUDE.md`,
+- [x] Rotation recorded: the measured before/after in `docs/bootstrap-notes.md`, `CLAUDE.md`,
       `kit_tools/arch/DECISIONS.md`, `kit_tools/docs/GOTCHAS.md`'s rotation table and
       `kit_tools/arch/CODE_ARCH.md`; the pre-story rotation count (the ordinal of the last
       bootstrap-notes rotation heading, cross-checked against GOTCHAS rows minus the origin row —
@@ -515,13 +515,13 @@ refreshed; `uv run pytest` is green in this story's own scope.
       `(times|rotations)` on the explicit path set (6 hits today) with every hit outside the dated
       ordinal lines rewritten (`kit_tools/docs/TROUBLESHOOTING.md:399` included); zero hits is a
       failure.
-- [ ] The marker fuzz, the guard-of-the-guard, the two `loc` handler tests (dropped segment; no
+- [x] The marker fuzz, the guard-of-the-guard, the two `loc` handler tests (dropped segment; no
       route in scope), the cap test, the two log-capture tests, the four never-raises tests, the
       `/extract`-signature test, the `/search`-token test and the placeholder-keys test are new
       tests in `tests/test_contract_errors.py`, and the two `loc` structural assertions are new in
       `tests/test_models.py`; no existing test in either module was deleted.
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
 
 ### US-002: Close the 1.3.0 contract record — final entry, coverage sweep, frozen golden
 
