@@ -1,10 +1,11 @@
 <!-- Template Version: 2.1.0 -->
 ---
 epic: forage-hardening
-status: active
+status: completed
 vision_ref: "T2.2 — Forage hardening"
 created: 2026-09-14
-updated: 2026-09-19
+updated: 2026-09-23
+completed: 2026-09-23
 ---
 
 # Epic: Forage Hardening — Retrieve Parity, Search-Text and URL Audit, Cache Integrity, Provider Bounds, Configurable Envelope, PromptGuard 86M
@@ -24,6 +25,14 @@ updated: 2026-09-19
 
 ## Goal
 
+**Completed 2026-09-23:** shipped and verified as v1.2.1 / contract 1.3.0;
+defective v1.2.0 withdrawn. See the
+[release handoff](archive/feature-hardening-release.md). The original planning
+text below is retained as history. Spec 7 US-005 and US-004 use their sanctioned
+gate-not-run completion paths: no 86M allowlisting or benchmark measurements
+are claimed. The shipped retrieve budget default is the documented `0`
+compatibility window, not the original planning value `256`.
+
 Make the extraction service itself sturdier now that it is a standalone, third-party-reusable image:
 the `/retrieve` path gets the same budgets, isolation and off-loop execution `/extract` already has;
 search text and search-result URLs are scanned in the forms attackers actually control; cached
@@ -37,14 +46,14 @@ contiguity gating against chunk-boundary evasion — all measured, all recorded,
 
 | Seq | Feature Spec | Status | Stories | Human gate | Dependencies |
 |-----|-------------|--------|---------|------------|--------------|
-| 1 | [feature-hardening-search-sanitization](feature-hardening-search-sanitization.md) | Planned | 4 | — | — |
-| 2 | [feature-hardening-retrieve-parity](feature-hardening-retrieve-parity.md) | Planned | 6 | — | hardening-search-sanitization |
-| 3 | [feature-hardening-hostname-and-config](feature-hardening-hostname-and-config.md) | Planned | 7 | — | hardening-retrieve-parity |
-| 4 | [feature-hardening-cache-integrity](feature-hardening-cache-integrity.md) | Planned | 4 | — | hardening-hostname-and-config |
-| 5 | [feature-hardening-provider-bounds](feature-hardening-provider-bounds.md) | Planned | 5 | — | hardening-cache-integrity |
-| 6 | [feature-hardening-resource-envelope](feature-hardening-resource-envelope.md) | Planned | 4 | — | hardening-provider-bounds |
-| 7 | [feature-hardening-promptguard-86m](feature-hardening-promptguard-86m.md) | Planned | 7 | **US-005** (owner vendors the 86M weights with the HF token) and **US-004** (owner runs the benchmark) | hardening-resource-envelope |
-| 8 | [feature-hardening-release](feature-hardening-release.md) | Planned | 5 | **US-003** (owner-gated `v1.2.0` cut) and **US-005** (owner-run post-release verification + handoff) | hardening-promptguard-86m |
+| 1 | [feature-hardening-search-sanitization](archive/feature-hardening-search-sanitization.md) | Completed | 4 | — | — |
+| 2 | [feature-hardening-retrieve-parity](archive/feature-hardening-retrieve-parity.md) | Completed | 6 | — | hardening-search-sanitization |
+| 3 | [feature-hardening-hostname-and-config](archive/feature-hardening-hostname-and-config.md) | Completed | 7 | — | hardening-retrieve-parity |
+| 4 | [feature-hardening-cache-integrity](archive/feature-hardening-cache-integrity.md) | Completed | 4 | — | hardening-hostname-and-config |
+| 5 | [feature-hardening-provider-bounds](archive/feature-hardening-provider-bounds.md) | Completed | 5 | — | hardening-cache-integrity |
+| 6 | [feature-hardening-resource-envelope](archive/feature-hardening-resource-envelope.md) | Completed | 4 | — | hardening-provider-bounds |
+| 7 | [feature-hardening-promptguard-86m](archive/feature-hardening-promptguard-86m.md) | Completed | 7 | **US-005** vendoring and **US-004** benchmark: both gate-not-run alternatives recorded, not executed | hardening-resource-envelope |
+| 8 | [feature-hardening-release](archive/feature-hardening-release.md) | Completed | 5 | **US-003** verified `v1.2.1` replacement and **US-005** post-release verification + handoff; v1.2.0 withdrawn | hardening-promptguard-86m |
 
 Spec 6 precedes spec 7 so the benchmark can run at `FORAGE_CPUS=1` and `4` through the envelope
 knobs. Spec 1 opens the contract window (ruling 5) so every later wire addition lands inside it.
@@ -439,17 +448,17 @@ mirrors the defaulted fields; nothing here removes or redefines a member.
 
 ## Completion Criteria
 
-- [ ] All eight feature specs completed and archived; every human gate recorded in its spec.
-- [ ] Contract `1.3.0` frozen: docstring record complete, `tests/golden/contract_1_3_0.json` final,
+- [x] All eight feature specs completed and archived; every human gate recorded in its spec.
+- [x] Contract `1.3.0` frozen: docstring record complete, `tests/golden/contract_1_3_0.json` final,
       anchor committed, GOVERNANCE current-version sentence updated.
-- [ ] Every hashed-file story's rotation recorded (`docs/bootstrap-notes.md` rotation count grew by the
+- [x] Every hashed-file story's rotation recorded (`docs/bootstrap-notes.md` rotation count grew by the
       number of such stories).
-- [ ] `v1.2.0` published: index digest equal for `latest` / `1.2` / `1.2.0`, Release body carries
+- [x] Replacement `v1.2.1` published: index digest equal for `latest` / `1.2` / `1.2.1`, Release body carries
       `contract: 1.3.0` and every docstring line, both `contract_smoke.py` modes exit 0 with `--anchor`.
-- [ ] Handoff table (tag, digest, contract, anchor, tagged sha, publish run, key-less and keyed
+- [x] Handoff table (tag, digest, contract, anchor, tagged sha, publish run, key-less and keyed
       `/health`, spend posture, envelope defaults, benchmark pointer) in `feature-hardening-release.md`
       Implementation Notes, and Poppy's split doc updated at the next handoff.
-- [ ] MILESTONES and PRODUCT_VISION T2.2 marked shipped; `epic-forage-injection-corpus` unblocked.
+- [x] MILESTONES and PRODUCT_VISION T2.2 marked shipped; `epic-forage-injection-corpus` unblocked.
 
 ## Non-goals
 

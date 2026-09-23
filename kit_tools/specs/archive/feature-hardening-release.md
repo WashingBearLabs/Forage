@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: hardening-release
-status: active
+status: completed
 session_ready: true
 depends_on: [hardening-promptguard-86m]
 vision_ref: "T2.2 — Forage hardening"
@@ -12,7 +12,8 @@ epic_seq: 8
 epic_final: true
 execution_order: [US-001, US-002, US-004, US-003, US-005]
 created: 2026-09-19
-updated: 2026-09-19
+updated: 2026-09-23
+completed: 2026-09-23
 ---
 
 # Feature Spec: Validation-422 Tightening + Contract 1.3.0 Close-Out + v1.2.0 Release Cut
@@ -884,27 +885,27 @@ the story stops and reports, and nothing is asserted.
   facts (pattern set from the tagged tree, the success line from the log).
 
 **Acceptance Criteria:**
-- [ ] If the gate has not run: Implementation Notes carry `### US-003 — gate not run, <date>` naming
+- [x] If the gate has not run: Implementation Notes carry `### US-003 — gate not run, <date>` naming
       the missing prerequisites **and the open unpublished-tag window on `main`** (US-004's pin
       commit sha and the `git revert` instruction); nothing else changes.
-- [ ] Pre-flight recorded: six checks green on the tagged commit; `export_contract --check` clean;
+- [x] Pre-flight recorded: six checks green on the tagged commit; `export_contract --check` clean;
       `CONTRACT_VERSION` is `1.3.0`; US-004's two sweeps re-run and classified; the four anchors and
       the suite counts verified; the `awk` extraction recorded verbatim (first line `* ``1.3.0`` `, no
       `1.2.0` line); the cut time is outside 23:55–00:05 UTC.
-- [ ] `v1.2.0` is cut by the owner and no `searxng-v*` tag is pushed; `publish` is green; the
+- [x] `v1.2.0` is cut by the owner and no `searxng-v*` tag is pushed; `publish` is green; the
       multi-arch `1.2.0` image is on GHCR; run URL, tagged commit sha and OCI index digest recorded.
-- [ ] Four-way sha256 equality at `v1.2.0` verified and the four values recorded, the in-image leg
+- [x] Four-way sha256 equality at `v1.2.0` verified and the four values recorded, the in-image leg
       read through the `@sha256:<index digest>` ref (the ref recorded).
-- [ ] `gh release view v1.2.0 --json body --jq '.body' | tr -d '\r'` matches `^contract: 1\.3\.0$` and
+- [x] `gh release view v1.2.0 --json body --jq '.body' | tr -d '\r'` matches `^contract: 1\.3\.0$` and
       contains every line of the rehearsal extraction (`grep -F` per line); both Release assertions
       green; assets `openapi.yaml` and `openapi.yaml.sha256` present.
-- [ ] `docker buildx imagetools inspect` prints one identical index digest for `latest`, `1.2` and
+- [x] `docker buildx imagetools inspect` prints one identical index digest for `latest`, `1.2` and
       `1.2.0`; recorded.
-- [ ] `secret-grep` and the publish config grep are green; the tagged `ci.yml`'s one `grep -Eiq '`
+- [x] `secret-grep` and the publish config grep are green; the tagged `ci.yml`'s one `grep -Eiq '`
       line (found by value) carries exactly the tagged tree's `_REQUIRED_GREP_PATTERNS` alternatives;
       both success lines recorded; the rehearsal extraction's ruling letter equals the `### (`
       heading US-001 added to `contract/GOVERNANCE.md`.
-- [ ] If a replacement tag was cut, US-004's two by-value sweeps were re-run for the new value
+- [x] If a replacement tag was cut, US-004's two by-value sweeps were re-run for the new value
       before US-005 and the withdrawn tag is recorded under § "Withdrawn tags", not § "Released
       versions" (both recorded).
 
@@ -1016,9 +1017,9 @@ Implementation Notes carry `### US-005 — gate not run, <date>` naming the miss
   risk in the handoff (the quickstart pointed at an unpublished tag for that interval).
 
 **Acceptance Criteria:**
-- [ ] If US-003 has not run: Implementation Notes carry `### US-005 — gate not run, <date>`; nothing
+- [x] If US-003 has not run: Implementation Notes carry `### US-005 — gate not run, <date>`; nothing
       else changes.
-- [ ] Smoke runs (1) and (2) from the `v1.2.0` checkout exit 0 with `--anchor contract/openapi.yaml.sha256`
+- [x] Smoke runs (1) and (2) from the `v1.2.0` checkout exit 0 with `--anchor contract/openapi.yaml.sha256`
       of that checkout; run (3) is recorded as its own command block with `--env-file "$g"` written
       from placeholders, `--no-deps valkey forage`, the shared fixed-name volume (warm or cold, stated),
       `cache_unauthenticated` key-less and `healthy` + `capabilities.cache_hmac_key: 1` + a cache hit
@@ -1026,14 +1027,14 @@ Implementation Notes carry `### US-005 — gate not run, <date>` naming the miss
       the project-scoped Valkey volume; commands and exit codes recorded; every
       credential reached a container only through `--env-file`; no `docker compose config` /
       `docker inspect` / `docker ps --no-trunc` output in the record.
-- [ ] Credential-free pull after `docker image rm` recorded (both exit 0); the GHCR login state at the
+- [x] Credential-free pull after `docker image rm` recorded (both exit 0); the GHCR login state at the
       end of the story is recorded (restored with a scoped token, or logged out); key-less `/health`
       shows `contract_version: "1.3.0"` and `promptguard_model`; the placeholder leak check is four
       zeros and the validation-422 marker witness (`docker logs` count 0, trio plus placeholders
       only) is the fifth.
-- [ ] The whole-tree leak grep (with the `SEARXNG_SECRET=` and `VALKEY_URL` credential patterns) over
+- [x] The whole-tree leak grep (with the `SEARXNG_SECRET=` and `VALKEY_URL` credential patterns) over
       the record's diff returns nothing; both token files were mode 0600 and are recorded as deleted.
-- [ ] The handoff table with the four new posture rows is in the Implementation Notes;
+- [x] The handoff table with the four new posture rows is in the Implementation Notes;
       `docs/releases.md`'s `v1.2.0` block has its heading date, digest and tagged commit filled and
       its `NOT YET PUBLISHED` line removed, and `kit_tools/SYNOPSIS.md:36` its digest and tag claim; the by-value status grep over the roadmap, vision, synopsis, README and GOVERNANCE
       has zero unflipped hits for this epic (classified in Implementation Notes), MILESTONES' hardening
@@ -1171,6 +1172,135 @@ Implementation Notes carry `### US-005 — gate not run, <date>` naming the miss
   the rotation table)
 
 ## Implementation Notes
+
+### US-003 — v1.2.1 replacement cut and publish, 2026-09-23
+
+**Current completion record.** The owner authorized the original v1.2.0
+cut, then the v1.2.1 repair and withdrawal after the real-model failure
+recorded below. Per US-003's replacement rule, final US-003/US-005 checks
+refer to v1.2.1. Their two gate-not-run conditional branches are inapplicable,
+not claims that the executed gates were skipped. Earlier pending/failure
+notes below remain historical evidence.
+
+- Repair PR #31 merged at 17:51:04Z as
+  `e8cf83c51e8786abf30d79ae0a3d6608c5f8df2c`, tree
+  `b1a81e8a216ce0b18430a3089e35cd8635989007`.
+  PR CI `35897937946` and actual-main CI `35898440256` passed all six gates;
+  the main publish job also passed. The protected merge path was used.
+- Clean actual-main preflight: export check passed; 4253 tests collected over
+  39 modules exactly matched TESTING_GUIDE; both Compose image pins were
+  1.2.1; contract 1.3.0 and the committed anchor matched. The two by-value
+  sweeps retained historical contract 1.2.0 references, classified old-image
+  references as withdrawal/history or hostile extractor fixtures, and left
+  no unclassified current-version sites.
+- `git tag v1.2.1 e8cf83c51e8786abf30d79ae0a3d6608c5f8df2c` followed by
+  `git push origin v1.2.1`; cut preflight at 18:01:18Z, outside the UTC
+  midnight exclusion. No companion-image tag was cut.
+- [Tag run 35899600447](https://github.com/WashingBearLabs/Forage/actions/runs/35899600447)
+  passed, publishing at 18:06:50Z. Published amd64 matched all 19 gated
+  filesystem layers. Warm cache evidence: 15 CACHED lines in build-amd64,
+  30 in publish.
+- The tagged workflow's single published-config grep carries the same four
+  alternatives as its test constant: `HF_TOKEN`, `hf_[A-Za-z0-9]{20,}`,
+  `FORAGE_BRAVE_API_KEY`, `FORAGE_CACHE_HMAC_KEY`. Secret-grep passed and
+  publish logged `No forbidden pattern in the published image config.`
+- The Release has `contract: 1.3.0` and all 112 lines of the verbatim
+  US-002 rehearsal entry already recorded in this spec, unchanged at SHA-256
+  `7bdf3582aced1b2ce15c568defea6b38ff320592368f041474cd6f78dd41e928`.
+  The later repair preamble preserves that entry. Both contract assets were
+  downloaded and checked against the committed same-tag anchor.
+
+| Contract leg | SHA-256 |
+|---|---|
+| Committed anchor at v1.2.1 | `74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72` |
+| Git OpenAPI document | `74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72` |
+| Release document | `74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72` |
+| In-image document, read by the immutable ref below | `74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72` |
+
+### US-005 — v1.2.1 verification and consumer handoff, 2026-09-23
+
+Executed from the clean detached v1.2.1 checkout, against
+`ghcr.io/washingbearlabs/forage@sha256:a29329af38ee563dcc890c9b68749e4d7bc32e20c422640b2f5ffecaa8c89e7b`.
+The three registry tags `latest`, `1.2`, `1.2.1` resolve to that index
+(linux/amd64 and linux/arm64). Runtime verification was on native arm64 and
+completed at 18:09:41Z; it was repeated on the published artifact after the
+successful prepublication candidate rehearsal, not inferred from that rehearsal.
+
+| Witness | Result |
+|---|---|
+| No-env, no-volume image smoke | Exit 0; degraded, model unloaded, promptguard_unavailable |
+| Shared verified warm-cache image smoke | Exit 0; healthy, model loaded, memory cache, no degraded reasons |
+| Full Compose, keyless external Valkey | Model loaded, cache connected, degraded solely by cache_unauthenticated |
+| Full Compose, keyed external Valkey | Exit 0; healthy, capabilities.cache_hmac_key = 1 |
+| Real retrieve/cache round-trip | example.com returned 200 twice; second cache_hit = true |
+| Minimal Compose, keyless | Healthy, memory backend, no Brave-key capability or cache_unauthenticated |
+| Real search | 200, three results, SearXNG; startpage reported unresponsive, other results served |
+| Anonymous pull after removing local digest ref | Removal and pull exit 0; isolated empty Docker auth config, global auth unchanged |
+| Validation 422 runtime | Marker absent; each entry only loc/msg/type plus redacted input/ctx/url |
+| Paid calls | 0; provider chain remained searxng even with an ephemeral Brave marker |
+
+The two image smoke commands were `uv run python contract_smoke.py --base-url
+<loopback-url> --image <immutable-ref> --anchor contract/openapi.yaml.sha256
+--expect-status <degraded-or-healthy> --timeout-seconds 540`. The anchor came
+from the tagged checkout, never the downloaded asset. Containers used
+loopback-only ephemeral ports. Runtime credentials were freshly generated
+verification markers supplied only through mode-0600 environment files;
+no real HF token or paid key was obtained.
+
+The full-Compose run was its own command block, repeated keyless then keyed:
+
+```bash
+docker compose --project-name forage-121-release-full --env-file "$g" \
+  -f compose/full.yml -f <digest-and-loopback-port-override> \
+  up -d --no-deps valkey forage
+# Poll the health body; keyed smoke and retrieve/cache round-trip follow.
+docker compose --project-name forage-121-release-full --env-file "$g" \
+  -f compose/full.yml -f <digest-and-loopback-port-override> down
+docker volume rm forage-121-release-full_forage-valkey-data
+```
+
+All commands exited 0. The shared fixed-name model volume was warm and
+preserved. No `down -v` was used. Standalone containers, both Compose
+projects/networks, the disposable Valkey volume and every temporary env file
+were removed; the latter's absence was asserted. The five marker-leak counts
+were all **0**: Brave in health/metrics, HMAC in health/metrics, Brave in logs,
+HMAC in logs, and the validation marker in logs. No marker values appear here.
+The strict whole-record leak grep returned **zero hits** against pre-record
+commit `7579d8734bbbec47a6f64dae997eadf5ad7f2eca` before this record was pushed.
+
+| Handoff field | Verified value |
+|---|---|
+| Image tag | `v1.2.1` |
+| Pinnable image | `ghcr.io/washingbearlabs/forage@sha256:a29329af38ee563dcc890c9b68749e4d7bc32e20c422640b2f5ffecaa8c89e7b` |
+| Contract / anchor | `1.3.0` / `74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72` |
+| Tagged commit | `e8cf83c51e8786abf30d79ae0a3d6608c5f8df2c` |
+| Publish run | `https://github.com/WashingBearLabs/Forage/actions/runs/35899600447` |
+| Sanitizer revision | `021378efee6ab43f22b887af2f0c0c40ef76183a39802120fbfd0ca7a3a33900` |
+| Cache-integrity posture | Keyed Valkey healthy/signing enabled; keyless Valkey loudly unauthenticated; memory needs no key |
+| Model posture | Verified default 22M loaded; 86M unallowlisted/unvendored; spec 7 US-005 and US-004 retain gate-not-run records |
+| Benchmark pointer | `docs/weights.md` and archived spec 7; no benchmark measurements claimed |
+| Envelope defaults | Unset CPU limit means no cap; default memory limit 1024m |
+| Spend posture | No built-in budget cap; runtime verification made zero paid calls |
+| Supply-chain posture | No image signature, provenance attestation or SBOM; integrity through index digest and anchored four-way contract equality |
+| Consumer action | Re-vendor contract 1.3.0 against this tag's committed anchor and pin this image by digest; no Poppy files changed here |
+
+**Withdrawn predecessor and incident.** v1.2.0's default-model failure is
+recorded below. After replacement verification, GHCR version `1285701898`
+and its remote tag were deleted. Updating its Release notice after deletion
+unexpectedly recreated that tag at current main (`e8cf83c`) and triggered
+run `35900738954`. The tag was deleted again; that run was cancelled with
+**zero publish steps executed**. Final 18:14:07Z read-back found no old ref,
+package API 404, image tag not found, and all replacement aliases unchanged.
+The old Release is a draft. Do not edit it after final tag deletion.
+
+**Accepted release windows:** original main pin from 16:51:21Z to 17:08:19Z;
+replacement main pin from 17:51:04Z to 18:06:50Z. Both windows are closed.
+v1.2.0 is under Withdrawn tags, not Released versions. The by-value current
+status sweep over roadmap, vision, synopsis, README and GOVERNANCE is clean:
+T2.2 shipped, corpus planning unblocked, no unclassified pending hardening
+state. Eight specs are archived. Completion includes the two explicit
+86M gate-not-run alternatives, not fictional weights or benchmark evidence.
+Accepted Stage-5 fetch-decoder residual `2026-09-16-020` remains open.
 
 ### Published-model failure and authorized replacement — 2026-09-23
 

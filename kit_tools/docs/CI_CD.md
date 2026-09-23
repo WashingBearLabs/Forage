@@ -347,8 +347,9 @@ verified against GHCR afterwards rather than assumed: `v1.0.0` (commit `f4c2b16`
 minted `latest`, `1.0` and `1.0.0` at index digest `sha256:d83639cc…`, and `v1.1.0` (commit
 `06b01b14`, 2026-09-18 UTC) moved `latest` and minted `1.1` and `1.1.0` at `sha256:e1b875cc…`.
 `docs/releases.md` § "Released versions" carries the full digests, anchors and tagged commits.
-The current release target, **v1.2.1 / contract 1.3.0**, is not yet published;
-US-003 owns the cut and US-005 records the new digest and alias equality.
+The current release, **v1.2.1 / contract 1.3.0**, published and passed
+artifact/runtime verification 2026-09-23. The archived US-003/US-005 handoff
+records the digest, alias equality and v1.2.0 withdrawal.
 
 ---
 
@@ -513,8 +514,11 @@ gh cache delete <id>                # delete each index-publish-* entry
 ## Cutting a Release and Rolling Back
 
 The git tag **is** the version (`pyproject.toml`'s `version` is inert packaging metadata),
-and the image tag and `contract_version` are independent semvers — the pending
-image `v1.2.1` will serve contract `1.3.0`.
+and the image tag and `contract_version` are independent semvers:
+image `v1.2.1` serves contract `1.3.0`.
+
+The recorded cut below is historical; never re-run it for an existing tag.
+For the next release, choose a new version and repeat all owner gates.
 
 ```bash
 git switch main && git pull
@@ -534,11 +538,11 @@ not a release.
 deploy stage to revert. Re-pin the previous tag in the consumer's compose file
 (`image: ghcr.io/washingbearlabs/forage:<previous>`) and `docker compose -f <file> up -d`.
 `kit_tools/docs/DEPLOYMENT.md` has the operator view, including the pull/pin/verify
-sequence. The compose fragments pin `1.2.1` ahead of `v1.2.1`: cut from the
-replacement PR's merge commit in the same sitting or restore a verified release
-per `docs/releases.md`, never defective v1.2.0.
-Until then the unpublished-tag window on `main` is outstanding and must be
-named in the replacement PR description, with the exact pin commit.
+sequence. The compose fragments pin published and verified `1.2.1`.
+Its merge-to-publication window is closed; never restore withdrawn v1.2.0.
+Finalize withdrawal notices before deleting a tag: editing the old Release
+after deletion recreated its tag at `main` during this recovery.
+`docs/releases.md` records the corrected state and cancelled workflow.
 
 ---
 

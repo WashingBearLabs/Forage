@@ -27,13 +27,13 @@ preserved). See `docs/bootstrap-notes.md` for the pin record.
 
 | Aspect | Status |
 |--------|--------|
-| Maturity | `v1.2.1` / contract `1.3.0` replacement prepared, **NOT YET PUBLISHED**; v1.2.0 published but failed the real-model smoke and must not be deployed. The owner authorized repair and withdrawal after replacement verification. The schema golden is frozen |
+| Maturity | `v1.2.1` / contract `1.3.0` published and verified 2026-09-23; hardening epic complete. Defective v1.2.0 is withdrawn. The schema golden is frozen; 86M vendoring/benchmark gates remain unrun |
 | Repo visibility | **Public** since the US-008 flip (2026-09-10), repository and both packages; `main` is PR-only, with six required status checks (audit-measured 2026-09-11 — this row said "Private" for a month after the flip) |
-| Tests | 4253 collected and **4253 passed, no xfails** at the local patch release gate (2026-09-23); fresh PR CI is still required. Hermetic via `pytest-socket`, **enforced in CI**, with a committed hermeticity canary |
+| Tests | 4253 collected and **4253 passed, no xfails** at the local patch release gate (2026-09-23); PR, main and tag CI green. Hermetic via `pytest-socket`, **enforced in CI**, with a committed hermeticity canary |
 | Lint | `uv run ruff check .` and `ruff format --check .` both clean — **enforced in CI** |
 | Types | `uv run pyright` (strict) is **clean — 0 errors**, no baseline; **enforced in CI** |
 | CI | `.github/workflows/ci.yml` — ten jobs in two lanes: `lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke`, `publish` for the service image, and `searxng-build`/`-smoke`/`-publish` for the companion |
-| Published image | `ghcr.io/washingbearlabs/forage` — replacement target `1.2.1`, **NOT YET PUBLISHED**. Index digest and `latest` / `1.2` / `1.2.1` equality are filled by US-005 after the replacement cut and registry read-back; `docs/releases.md` records v1.2.0's defect and pending withdrawal |
+| Published image | `ghcr.io/washingbearlabs/forage` — `1.2.1`, index `sha256:a29329af38ee563dcc890c9b68749e4d7bc32e20c422640b2f5ffecaa8c89e7b`; `latest` / `1.2` / `1.2.1` equality verified. Tag commit `e8cf83c51e8786abf30d79ae0a3d6608c5f8df2c`; [handoff](specs/archive/feature-hardening-release.md). `docs/releases.md` records v1.2.0's withdrawal |
 | Deployment | Poppy's in-tree copy is still the deployed source of truth (coexistence rule) |
 
 **Coexistence rule:** until Poppy pins a published Forage image, any fix to the extracted
