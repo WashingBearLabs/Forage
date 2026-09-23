@@ -1802,6 +1802,55 @@ Resume with the owner following US-005's licence-first procedure and failure
 paths, recording the real evidence before enabling 86M. This invocation stops
 at the sanctioned gates-unrun state, with result `partial` / `needs-work`.
 
+### US-004 — gate not run, 2026-09-22
+
+**Blocked on the owner gate; not complete.** Starting commit `bb29d87`,
+clean tracked worktree. No owner-authorized benchmark session or measured
+reference-container evidence was supplied. Missing prerequisites/evidence:
+
+- Completed US-005 vendoring: its Implementation Notes record `gate not run`;
+  `weights_manifest.json` still contains only the 22M entry and
+  `ALLOWED_MODEL_IDS` remains the one-member default set. There is no committed
+  86M pin/manifest entry or supplied verified mirror evidence to benchmark.
+- An owner-provisioned `HF_TOKEN` for approved gated-repository access, passed
+  only through the temporary mode-0600 `--env-file` recipe, with cleanup recorded.
+- Owner-confirmed Docker availability and the reference envelope for both
+  models at `FORAGE_CPUS=1` and `4`, with CPU/memory/thread settings and image
+  commit recorded, plus sufficient model-cache capacity and acquisition access.
+
+These prerequisites were not provisioned or verified here; this is not a claim
+that the host lacks Docker, resources or credentials. No credential values were
+inspected, no credential file was created, and no file-mode/deletion evidence is
+claimed. No image build, container run, model acquisition, tokenizer copy-out,
+health query or benchmark was attempted. US-005 observed no 403, so `access
+pending` is not an observed outcome; neither is `never healthy within 900 s`.
+
+All four required model/CPU rows remain **unmeasured**, including their health
+provenance, cold/warm latencies, budget dimensions, after-warm-up memory,
+`memory.peak`, OOM and exit records. Matrix wall-clock, 86M cold-start time,
+added volume size and all three real-tokenizer window counts per model are
+unmeasured. Optional 2-CPU runs and contiguity FPR smoke were not run. No result
+is inferred from hermetic tests, and the 900 MiB peak / 2x warm-p50 questions
+remain open.
+
+The gate-not-run branch requires an Implementation Notes-only tracked change:
+the sizing table, pending-vendoring configuration references, opt-in/acquisition
+documentation, benchmark config, model defaults and contiguity settings remain
+unchanged. No runtime, manifest, contract or sanitizer-revision input changes;
+no push, tag, release or publication occurred. Story definitions and acceptance
+checkboxes are untouched; this record does not complete either owner gate.
+
+Resume only after the owner completes US-005. Follow `docs/weights.md`'s
+two-fresh-service procedure: four model/CPU rows require eight containers and
+eight independent `--input 1w` / `--input budget` artifacts, paired only after
+provenance/configuration agreement. Preserve both outcomes and labelled
+per-input memory/peak/OOM/exit records, even on failure. Leave `VALKEY_URL` unset;
+confirm healthy/loaded readiness within the harness's 900-second bound.
+Run window-count confirmation and optional FPR probes after timed requests and
+memory readings, never before either process-cold sample. Populate the table,
+sizing/staleness lines and acquisition caveats only from that owner run.
+This invocation reports `partial` / `needs-work`, not benchmark success.
+
 ## Refinement Notes
 
 ### Research Findings
