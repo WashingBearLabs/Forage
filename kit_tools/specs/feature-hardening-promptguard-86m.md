@@ -658,16 +658,16 @@ tests/test_orchestrator.py` passes with the doubles migrated; `git diff --stat` 
   `tests/test_stage3_promptguard.py:288`); stage 3 is its only removed production caller (US-007).
 
 **Acceptance Criteria:**
-- [ ] `classify_windows` exists and `classify` is implemented through it; every pre-existing stage-3
+- [x] `classify_windows` exists and `classify` is implemented through it; every pre-existing stage-3
       and orchestrator verdict/score assertion passes with the doubles updated; `:151` and `:164`
       assert on both attributes; `:172` is untouched (US-007 re-points it); stage 3 still calls
       `classify()` (`grep -c 'classifier.classify,' pipeline/stage3_promptguard.py` is 1).
-- [ ] `git diff --stat` against the eight `_REVISION_SOURCES` files is empty;
+- [x] `git diff --stat` against the eight `_REVISION_SOURCES` files is empty;
       `derive_sanitizer_revision({})` equals the pre-story value (recorded).
-- [ ] `kit_tools/arch/CODE_ARCH.md`'s `promptguard/` row names `classify_windows`.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
+- [x] `kit_tools/arch/CODE_ARCH.md`'s `promptguard/` row names `classify_windows`.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
 
 ### US-007: Contiguity gating in stage 3 — rule, config keys, routes, telemetry (shipped off)
 
