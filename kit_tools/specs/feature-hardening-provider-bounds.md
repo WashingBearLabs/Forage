@@ -751,7 +751,7 @@ class and detail unchanged).
   `searxng_unavailable` reason token on the `[searxng]`-only chain, with the Brave asymmetry.
 
 **Acceptance Criteria:**
-- [ ] Both providers read through `pipeline/bounded_body.py::read_bounded_body` over `aiter_raw()`,
+- [x] Both providers read through `pipeline/bounded_body.py::read_bounded_body` over `aiter_raw()`,
       each from its own `settings.max_response_bytes`; `grep -n 'aiter_bytes' pipeline/search_providers/
       pipeline/bounded_body.py` returns nothing; `grep -n 'flush(' pipeline/bounded_body.py` returns
       nothing; the four over-bound shapes of the Independent Test — plain, ≥ 64×-expansion gzip,
@@ -761,31 +761,31 @@ class and detail unchanged).
       instance), reading stopped at that
       point (`ChunkStream.chunks_yielded` shows no further chunk), and, for the filler, total raw bytes
       read ≤ `4 × max_response_bytes` and the outcome not `timeout`; pinned on both providers.
-- [ ] A truncated gzip stream, a corrupt deflate stream and a two-member gzip stream return
+- [x] A truncated gzip stream, a corrupt deflate stream and a two-member gzip stream return
       `ProviderFailure("hard_error", "malformed_body")` with `compressed` set, on both providers; `eof`
       unset at end of stream is `malformed_body`, never a served partial body; `eof` with non-empty
       `unused_data`, a raw chunk after `eof`, and a zero-output no-progress `decompress()` are each
       `malformed_body`; `str(exc)` of `BodyTooLarge`, `UnsupportedEncoding` and `MalformedBody` is the
       fixed token and never the header value; `tests/test_bounded_body.py` exists and
       `TESTING_GUIDE.md` carries its `test_mapping:` row and module row; pinned.
-- [ ] `gzip`, zlib-wrapped `deflate` and raw `deflate` bodies under the bound are served; `br`, `zstd`,
+- [x] `gzip`, zlib-wrapped `deflate` and raw `deflate` bodies under the bound are served; `br`, `zstd`,
       an unknown token and `gzip, br` return `ProviderFailure("hard_error", "unsupported_encoding")`
       before any body byte is read, whatever `Content-Length` says; both `AsyncClient` constructions
       pass `Accept-Encoding: identity` explicitly (asserted on the construction call — this is a new
       header); `docs/searxng.md`'s limiter section and `kit_tools/docs/GOTCHAS.md`'s limiter entry
       each name the header and its 429 → `rate_limited` consequence on a limiter-enabled instance;
       pinned on both.
-- [ ] A `Content-Length` longer than 20 characters, or above the raw ceiling of its path (`max_bytes`
+- [x] A `Content-Length` longer than 20 characters, or above the raw ceiling of its path (`max_bytes`
       identity, `4 × max_bytes` compressed), is `body_too_large` on both providers on the
       direct-construction path before any body byte; a gzip body announcing a length between
       `max_bytes` and `4 × max_bytes` gets the same outcome with and without the header; with the
       criterion text stating that a real peer surfaces as `connect_error` / `transport_error` through
       h11's own 20-digit bound; pinned.
-- [ ] Both providers return `ProviderFailure("timeout", "timeout")` for a trickling body after more
+- [x] Both providers return `ProviderFailure("timeout", "timeout")` for a trickling body after more
       than the budget has elapsed (lower bound only); the budget covers the HTTP interaction only (a
       slow parse after a fast body is never a timeout); the arm catches the builtin `TimeoutError`
       before the catch-all; the SearXNG client is constructed with `follow_redirects=False`; pinned.
-- [ ] `ProviderSearchResult.compressed` and `ProviderFailure.compressed` exist and are stamped from
+- [x] `ProviderSearchResult.compressed` and `ProviderFailure.compressed` exist and are stamped from
       the one header-read site before status mapping and before every exception arm; at the
       `run_search_pipeline` level with a recording sink, a served, an over-bound, an undecodable, a
       malformed, a compressed-429, a compressed-timeout-after-headers, a re-classified compressed
@@ -797,7 +797,7 @@ class and detail unchanged).
       block; a `br` response on a
       configured `[searxng]`-only chain is a 422 `searxng_unavailable` whose `reason` ends in
       `: unsupported_encoding` (`tests/test_app.py`, body pinned); pinned.
-- [ ] `search.provider_compressed_body` and `search.provider_timeouts` are on `/metrics`
+- [x] `search.provider_compressed_body` and `search.provider_timeouts` are on `/metrics`
       (`SearchMetricsSink` — its docstring no longer counts fields — `_NullSearchMetrics`,
       `SearchMetrics`, the handler dict, `SearchMetricsResponse` with the header-seen and the
       both-timeout-kinds descriptions); the two order guards in `tests/test_contract_metrics.py` pass
@@ -806,14 +806,14 @@ class and detail unchanged).
       carries both names in its literal set; `tests/fakes.py::RecordingSearchMetrics` and
       `tests/test_app.py:482-490`'s literal carry both keys; `MONITORING.md:433-439`'s runbook names
       the Protocol and `_NullSearchMetrics` sites.
-- [ ] Window mechanics (R36): docstring line appended in the `* ``1.3.0`` — …` format; `uv run
+- [x] Window mechanics (R36): docstring line appended in the `* ``1.3.0`` — …` format; `uv run
       python -m scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via
       `_SCHEMA_MODELS`; `_EXPECTED_ONE_THREE_ZERO_DIFF` reviewed and **nothing appended** (no property,
       no enum member — R36 corrected); the four anchor-quoting pages refreshed; `uv run python -m
       scripts.export_contract --check` green — with Implementation Notes recording that the golden is
       byte-identical and the diff list carries no entry, and why; the docstring line names both
       counters and the `unsupported_encoding` reason token on the `[searxng]`-only chain.
-- [ ] `FAILURE_CLASSES` (`base.py:21,32`) is unchanged; `_SEARXNG_FAILURE_DETAILS` and
+- [x] `FAILURE_CLASSES` (`base.py:21,32`) is unchanged; `_SEARXNG_FAILURE_DETAILS` and
       `_BRAVE_FAILURE_DETAILS` each gain exactly `unsupported_encoding`; the only other edits to
       `base.py` are the additive `compressed` field on the two dataclasses and two docstring
       corrections — `ProviderFailure`'s (`:64-72`) and the matching sentence in `FailureClass`'s
@@ -823,7 +823,7 @@ class and detail unchanged).
       `failure_class` alone) — with the dataclass fields otherwise untouched; `tests/test_brave_provider.py`'s
       closed-token test asserts thirteen tokens with a new `unsupported_encoding` `_FAILURE_CASES` row,
       and `grep -rn 'twelve' pipeline/ tests/` returns nothing.
-- [ ] The SearXNG doubles are stream-shaped and real: `grep -nE '(mock_client|client|inner|
+- [x] The SearXNG doubles are stream-shaped and real: `grep -nE '(mock_client|client|inner|
       return_value)\.get\.' tests/test_orchestrator.py tests/test_search_providers.py tests/test_app.py`
       returns nothing (**ten** sites at planning time, executed — `test_orchestrator.py:903,905,2122,
       2403,2505`, `test_search_providers.py:325,327,378,388`, `test_app.py:1830`; `grep -c` is the
@@ -843,7 +843,7 @@ class and detail unchanged).
       tests/test_search_providers.py` returns 0), and the no-leak sweep asserts no record
       carries the raw `Content-Encoding` value on either provider; every other pre-existing SearXNG
       assertion keeps its subject and expected value.
-- [ ] Docs: `grep -rn '10 s' kit_tools/arch/patterns/ERROR_HANDLING.md kit_tools/docs/API_GUIDE.md
+- [x] Docs: `grep -rn '10 s' kit_tools/arch/patterns/ERROR_HANDLING.md kit_tools/docs/API_GUIDE.md
       kit_tools/docs/TROUBLESHOOTING.md docs/configuration.md` returns only `TROUBLESHOOTING.md:702`
       (Poppy's healthcheck note); both timeout rows in `docs/configuration.md` contain "wall-clock
       budget" and the raise-it-for-a-slow-instance sentence; every page `grep -rn 'malformed_body'
@@ -858,14 +858,14 @@ class and detail unchanged).
       'provider_compressed_body' kit_tools/arch/SECURITY.md` hitting it; `kit_tools/roadmap/BACKLOG.md`
       carries the stage-5 item, `SECURITY.md`'s documented-non-vulnerabilities table the matching
       accepted-risk row, and `AUDIT_FINDINGS.md`'s `-020` entry the scope line.
-- [ ] `sanitizer_revision` rotation measured (revert `pipeline/orchestrator.py` and
+- [x] `sanitizer_revision` rotation measured (revert `pipeline/orchestrator.py` and
       `pipeline/contract.py` each in turn, with a both-reverted control reproducing the pre-story
       hash) and recorded at the five sites ruling 6 names — `docs/bootstrap-notes.md`, `CLAUDE.md`,
       `kit_tools/arch/DECISIONS.md`, `kit_tools/docs/GOTCHAS.md` (divergence table) and
       `kit_tools/arch/CODE_ARCH.md`.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-002: Outbound SearXNG query cap — `search_searxng_query_max_chars`
 
