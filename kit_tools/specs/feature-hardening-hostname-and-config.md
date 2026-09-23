@@ -1804,6 +1804,31 @@ and the same for `kit_tools/arch/SERVICE_MAP.md` each return at least `1`; the f
   unavailable-cache socket-guard warnings). Full-suite validation and the review
   loop remain with the parent validator; this does not complete or archive the spec.
 
+### Implementation validation (2026-09-22, Copilot)
+
+- Validated `epic/forage-hardening` at `c6e7770` against all seven stories in
+  this spec, using the full 68-file `main...HEAD` scope. Completed prerequisite
+  specs were treated as intentional epic scope, not scope creep.
+- The independent quality, security and compliance reviewers all returned
+  **clean / ready**, with no active defects. The earlier domain-list type
+  handling and threshold-comment findings are resolved by `30bd903` and
+  `c6e7770`; no further implementation fix was needed in this run.
+- Full-suite acceptance is now verified at the current head: **3,127 passed,
+  13 non-failing warnings in 20.40s**. Repository Ruff lint/format (141 files),
+  strict Pyright (zero errors/warnings), generated-contract drift and diff
+  whitespace checks all pass. The recorded pre-epic baseline was clean.
+- Default and shipped config both retain revision
+  `e00049c4ea9d02893c2f3c4f567a6a75f5a4fdfdb145bbf6d6fc701ec7c7ed5c`;
+  the OpenAPI artifact matches anchor
+  `014e873a2e7fae9b87b781e5e7b8bd5446d1e2259ad7ddcf52089d4840480194`.
+  Published 1.0.0, 1.1.0 and 1.2.0 goldens remain byte-identical to `main`.
+- One review round, zero fix loops; **0 critical, 0 warning, 1 informational**
+  finding (the passing test-gate record). Results are in
+  `kit_tools/AUDIT_FINDINGS.md` and the three `.validate_impl_*.json` files.
+  Autonomous mode followed the explicit invocation; stored guarded execution
+  mode is unchanged. The spec remains active: no pause, completion, archival
+  or orchestrator-state transition was performed.
+
 ## Refinement Notes
 
 ### Research Findings
