@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # GOTCHAS.md
 
-> Last updated: 2026-09-16
-> Updated by: Claude (forage-contract US-004)
+> Last updated: 2026-09-22
+> Updated by: Copilot (hardening-release US-002)
 
 ## Overview
 
@@ -15,6 +15,157 @@ live in, and losing them in the move was an identified risk.
 ---
 
 ## Active Gotchas
+
+### Contiguity narrows overflow evasion but can also amplify false-positive blocks
+
+Stage 3's max-score rule remains `max_score > promptguard_threshold`. The opt-in
+run rule additionally blocks when 2–8 consecutive window scores meet the absolute
+server-side threshold (`>=`, default 0.5); windows `0` ships off pending corpus
+measurements. Windows `1` refuses boot rather than silently becoming a second max
+rule. A permissive caller max threshold cannot override the run rule.
+
+Fragments separated by a benign roughly 448-token window can still evade both
+rules. In the opposite direction, sustained mid-band content in an attacker-owned
+comment/review can aim to block a page or omit its result. Adjacent windows overlap
+by 64 tokens and therefore correlate. Both shapes require corpus measurements
+before a default flip. `/search` coverage is content-dependent: equal character
+length does not imply equal window count; a one-window input cannot fire the run
+rule. The fixture tokenizer pins both shapes, not production-tokenizer counts.
+
+`/metrics` is the aggregate signal (one dedicated counter per `retrieve`, `search`
+and `extraction` section); WARNING `promptguard_contiguity_verdict — run=<n> windows=<m>`
+is the per-event signal, visible without changing logging configuration. It emits
+only longest-run/window counts, never text or scores. Flags stay internal: the
+unchanged stage-4 quarantine replaces the union with a closed diagnostic label.
+Both configuration values key the content cache through `sanitizer_revision`;
+there is no per-request contiguity override.
+
+### Torch and the fast tokenizer see the host's cores, not the cgroup quota
+
+The 2026-09-12 cutover ran behind a 1-CPU quota on a 28-core host. Leaving
+`promptguard_threads: 0` lets both libraries size themselves to the host, not the
+quota. A positive `config.yaml` value pins torch's intra-op threads and disables
+the fast tokenizer's parallel pool; there is no env override or CPU auto-detection.
+Keep threads × classification concurrency within a non-zero `FORAGE_CPUS`.
+See [`Sizing the container`](../../docs/configuration.md#sizing-the-container);
+mount the complete config, since a short replacement silently resets these knobs.
+
+### A healthy container is not a classifying container
+
+Both Compose fragments ship a status-only `/health` probe that discards the body.
+HTTP 200 is liveness even when weights are absent or Valkey is down. Never gate
+traffic, `depends_on: service_healthy`, or consumer activation on Docker's healthy
+state; read `promptguard_loaded`, `degraded_reasons` and `search.unscanned_results`.
+Plain Compose does not restart an unhealthy process. The probe also drives a
+zero-traffic reconnect WARNING/failure-counter baseline while Valkey is down.
+
+### A successful zlib header read does not identify the deflate format
+
+Raw deflate can begin with a valid zlib header. The valid raw body
+`780100feff20010200fdff7b7d` decodes to ` {}`, but the wrapped decoder accepts its
+first two bytes before rejecting later input. Larger valid raw bodies can even
+produce speculative wrapped output before rejection. Retrying only the first
+transport chunk, or only until output appears, makes acceptance chunk-dependent.
+
+`pipeline/bounded_body.py` retains deflate input within the existing **4× raw
+budget** until the wrapped interpretation is validated or retried as raw. A retry
+discards speculative output and uses the same `remaining + 1` decoded-output
+bound, including when the wrong interpretation overflowed. It also handles a
+missing wrapped EOF at stream end. This replay history is additional bounded
+memory on the deflate path, not an unbounded decoder allocation; identity and
+gzip need no replay history. Exactly one complete member is still required.
+The helper and both-provider regressions cover whole, split and bytewise delivery.
+
+### A cache read bound depends on binary replies, not a client keyword alone
+
+redis-py's URL query options override `from_url` keyword arguments. Therefore
+`decode_responses=False` alone does not pin byte mode. `ValkeyStorage` refuses
+the query keys `decode_responses`, `encoding`, `encoding_errors` and `protocol`
+before connecting, logging only the option name. Socket timeout options remain
+operator tunable. A malformed URL still follows the guarded connect's degraded
+path; lifespan-less `/health` never constructs storage and remains non-raising.
+
+`GETRANGE key 0 max_value_bytes` is atomic and returns at most bound + 1 bytes.
+Empty means miss, not corrupt or unsigned; `WRONGTYPE` means reject, not
+disconnected. The signed prefix is **68 bytes**, not the spec hint's 67.
+Measure serialized UTF-8 bytes, and delete a superseded entry before an
+oversize write skip. The 4 MiB default leaves headroom above the 2 MiB extraction
+budget, but JSON escaping can still inflate a pathological value past it;
+that is a write skip, never an integrity signal. Keep the same bound across
+replicas; lowering it rejects old larger writes without proving tampering.
+
+### Concurrent requests cannot own overlapping global mock contexts
+
+`unittest.mock.patch` changes a module attribute process-wide, not per task.
+Two overlapping `_retrieve_under` contexts exited out of order and restored
+each other's mocks, leaving `orchestrator.fetch_url` mocked for the following
+admission tests. The US-005 retry moves both fetch and validation patches into
+one test-scoped fixture and drains every concurrent request before teardown.
+Keep that ownership outside the coroutines. Use bounded entered-event/waiter
+synchronization for threaded classification; fixed `sleep(0)` iteration counts
+do not establish that a worker has started. Always release gates and drain
+tasks on assertion failure, before restoring their mocked dependencies.
+
+### A YAML boolean threshold disables blocking on `/extract` only
+
+`promptguard_threshold: true` is invalid for the shared `/retrieve` and `/search`
+default: boot logs one `config_invalid_value` WARNING naming the key, falls back
+to 0.85 and publishes that validated default separately from the raw config.
+The WARNING explicitly says `/extract reads the raw value through its own guard`.
+That route retains `float(raw_value)` plus a range check; `float(True) == 1.0`
+passes, so no classifier score can exceed it. The operator ceiling does not
+reach `/extract`. This known divergence is pinned by
+`test_boolean_threshold_keeps_extracts_raw_coercion_only`; closing it remains an
+open question under ruling R10, not part of US-005. Use a numeric threshold.
+
+Both fetch routes now default from the configured key, then cap against the
+operator ceiling. Operators who previously raised it just for uploads now loosen
+fetch blocking too unless capped; lowering it tightens both. The raw configured
+value remains a revision input; the active threshold also enters the cache
+fingerprint. Null and an explicit equal default therefore share a cache key.
+
+### Hostname matching is a hashed cache-key input, not an unhashed helper
+
+`url_validator.py` is a cache-key input in substance **and in the actual hash**:
+search-sanitization US-003 added `_ROOT_REVISION_SOURCES = ("url_validator.py",)`.
+The hostname spec's earlier warning that `_REVISION_SOURCES` alone does not hash it
+is historically true but incomplete; both tuples feed the revision now. A
+matcher-only change rotates automatically, so old-policy cached content is not
+served until its TTL. Do not remove the root tuple to avoid a rotation.
+The old open question is resolved: the cost of hashing this whole file is that
+even comment-only edits invalidate all cached sanitizations, accepted to prevent
+stale privilege decisions. US-001 therefore measures three changed hashed files,
+not the two the older spec assumed.
+
+### JSON surrogate escapes reach the handler as Python strings
+
+FastAPI parses JSON before validating the Python object; unlike
+`RetrieveRequest.model_validate_json`, this admits lone surrogate escapes in a
+`list[str]`. A strict UTF-8 encode in the byte-budget helper therefore raised a
+500 instead of dropping an invalid entry. `domain_list_bytes` uses `surrogatepass`
+**only for sizing**, charging three bytes per surrogate; canonicalisation still
+rejects the entry and the handler counts it. The regression sends escaped JSON
+through the actual ASGI route. Do not "fix" it with lossy replacement before the
+matcher or by logging the bad entry.
+
+### YAML domain lists need type checks before string normalisation
+
+`seed_blocklist: [null, true, 123]` must warn and drop those members, not crash
+in `.strip()`. A scalar `seed_blocklist: evil.com` must not become a list of
+single-character hostnames. The lifespan checks both list containers and string
+members before calling the string-only normaliser. Non-string members log only
+`[non-string]`; non-list containers publish `[]` and warn once with
+`dropped=1 entries=[invalid-container]`. The same boundary applies to `news_domains`.
+Never stringify arbitrary YAML values into these logs or broaden this fallback to
+non-mapping whole documents or other subsystem blocks: their refusal behavior is unchanged.
+
+### YAML integers can overflow a float before validation
+
+`pipeline/config_bounds.bounded_float` must compare the original numeric value with
+its bounds **before** widening it to float. YAML accepts 401-digit decimal integers;
+converting first raises `OverflowError` instead of the caller's closed-vocabulary
+configuration error. US-005's retry pins both signs through the settings reader and
+lifespan, including the exact message and absence of the supplied value in logs.
 
 ### PromptGuard model absent → the service reports **degraded**, and you must treat it as unscanned
 
@@ -31,6 +182,8 @@ weightless by design, not by accident. Forage reports `status: "degraded"` with
 `promptguard_unavailable` in `degraded_reasons` and `promptguard_loaded: false`, and the
 ML injection scan does not happen. Stage 2's deterministic regex pass still runs; stage 3
 does not.
+An unknown `FORAGE_MODEL_ID` is different: `ModelConfigurationError` refuses boot
+with `model_id_not_allowed`, rather than serving degraded; blank means the default.
 
 **The tell, since US-001, is one log line at start:** `weights_fetch_skipped — no
 HF_TOKEN in the environment`. If instead you see `weights_pin_unusable`, the token is not
@@ -397,6 +550,13 @@ A deployment that must expose it opts in with `SEARXNG_LIMITER=true` plus
 scoped IP-trust relaxation, made by the operator who needs it. `docs/searxng.md` has the
 recipe.
 
+Forage now sends `Accept-Encoding: identity`, tripping `http_accept_encoding`
+as a **second** rule beside `http_accept_language`, which already refuses
+httpx's missing `Accept-Language`: the limiter-enabled response remains
+429 → `rate_limited` (and a paid call on `[searxng, brave]`) unless its pass
+list admits Forage. This header changes neither the existing refusal nor
+the pass-list advice; the baked image still ships `limiter: false`.
+
 ---
 
 ### `sanitizer_revision` has deliberately diverged from Poppy's
@@ -406,9 +566,12 @@ recipe.
 **Added:** 2026-09-07 (forage-repo-bootstrap US-002)
 
 **What happens:**
-`derive_sanitizer_revision()` hashes eight source files plus the model identity and the
-active threshold. Forage's revision has moved fourteen times, each time at a boundary and
-each time deliberately:
+`derive_sanitizer_revision()` hashes nine source files — the eight under `pipeline/` plus
+repo-root `url_validator.py` — plus the model identity, the `idna` version
+(`idna@<version>`: UTS-46 tables decide which hosts are dropped) and the active
+threshold. Forage's revision has moved forty-two times. The twenty-sixth was
+reconciled from the preceding validation commit during US-001's pre-flight; the rest
+were recorded at their implementation boundaries:
 
 | When | Value | What moved it |
 |---|---|---|
@@ -427,11 +590,57 @@ each time deliberately:
 | `search-fallback` US-002 | `f0b93318…70d62` | `run_search_pipeline` classifies a zero-result, non-empty-`unresponsive_engines` `ProviderSearchResult` as a failure in `orchestrator.py` — SearXNG's real production failure shape; a lone-`searxng` chain is carved out and unaffected |
 | `search-policy-and-health` US-010 | `dc3ff92a…eded9` | `contract.py` gained `POLICY_EXCLUDED_ALL_PROVIDERS`, the fixed-literal `reason` the `/search` handler raises when the new `apply_request_policy` narrows a request's effective chain to empty; `retrieval_app.py`, where the raise site lives, is not a `_REVISION_SOURCES` member |
 | `search-policy-and-health` US-003 | `41ac98ca…b4e318` | `contract.py`'s `CONTRACT_VERSION` docstring gained the completed 1.2.0 change record (every field, counter and enum member specs 1-4 added, all additive) plus a note that the `/search`/`/retrieve` boundary text rides the same unpublished window; `retrieval_app.py` and `models.py`, where that boundary text lives, are not `_REVISION_SOURCES` members |
+| `hardening-search-sanitization` US-001 | `b0ca8d9a…aed73` | **the first rotation that changes sanitization behaviour.** `orchestrator.py` gained `_scan_forms_for_search_text`, which returns `(wire_form, scan_form)` for `title` and `snippet`: the scan form keeps line breaks so Stage 2's `^System:` / `^POPPY:` / `^assistant:` patterns fire on any line, and the wire form is its whitespace collapse. Two entity decode levels before the scan, two control strips (one before the parser for raw bytes, one after the decodes), truncation once on the scan form, and a `_SEARCH_PARSER_INPUT_MULTIPLIER * max_length` parser-input bound. `orchestrator.py` is the only hashed file that moved, measured from a clean tree |
+| `hardening-search-sanitization` US-002 | `42485686…ec17f` | **the second rotation that changes sanitization behaviour.** `orchestrator.py`'s `_canonicalize_search_url` became `_SEARCH_URL_RULES`, an ordered registry of named pure rule functions run over the **raw** provider URL, first rejection wins, returning a frozen `SearchUrlOutcome` that carries the omission reason and a closed `SearchUrlRule` log token: presence/length (rejection, never truncation, at 2 048 characters), raw character class (controls, whitespace and RFC 3986 excluded characters rejected, never deleted), parse (`urlsplit` and the `parsed.port` read each in their own `try`), host code points (WHATWG forbidden set, IPv6 colons exempt, `%25` zone id its own token), then a structural scan of **both** `html.unescape(value)` and `unquote(html.unescape(value))`. `_sanitize_search_text` — which routed the URL through `extract_html`, and so ate tag-shaped text before the scan saw it — is deleted. `orchestrator.py` is the only hashed file that moved, measured from a clean tree |
+| `hardening-search-sanitization` US-004 | `05dbbb5c…82c0b` | contract `1.3.0` — **two** hashed files: `contract.py` (`OMIT_BLOCKED_URL`, the version bump) and `orchestrator.py` (`_MAX_SEARCH_ENGINE_LENGTH = 64`, routing `SearchResult.engine` through the same `_normalize_search_text` call `title`/`snippet` already use). Bounds and normalizes a field rather than scanning one, so **not** a third rotation that changes sanitization behaviour; both-reverted control reproduces `42485686…ec17f`, measured |
+| `hardening-search-sanitization` US-003 | `840c78fa…ee4be` | the **search-time URL audit**, and the first rotation that adds *inputs*. Two hashed files — `orchestrator.py` (rules (3a)–(3c) of `_SEARCH_URL_RULES`, `SearchHostClass`, `domain` from `CanonicalHost.host`) and `contract.py` (the `1.3.0` continuation line) — plus two new inputs: repo-root `url_validator.py` as `_ROOT_REVISION_SOURCES` and `idna@<version>`. All four measured alone; the control that reverts both files *and* removes both inputs reproduces `05dbbb5c…82c0b`. **Changes sanitization behaviour** (the third of the epic) |
+| `hardening-search-sanitization` validation fix | `6f0fa2de…66671` | **the fourth rotation that changes sanitization behaviour.** The `/search` scan loop now scans **both** forms of each text field, not only the newline-preserving one. Two of the twenty-four Stage 2 patterns carry no `re.DOTALL`, so a payload split across a newline scanned clean on the scanned form and blocked on the served one — a bypass US-001 introduced and spec-level validation caught. `orchestrator.py` alone; the revert reproduces `840c78fa…ee4be`. |
+| `hardening-retrieve-parity` US-001 | `e55b5f06…4d3c0` | **not** a behaviour-changing rotation. `run_retrieve_pipeline` gained five keyword-only dependencies (`settings`, `retrieve_metrics`, `classification_semaphore`, `extraction_settings` required; `admission` defaulted for US-002 only) plus the character pre-check that refuses an over-budget fetched page `content_too_large` / `promptguard_budget`; `contract.py` gained `PROMPTGUARD_BUDGET` and the `1.3.0` continuation line. Two hashed files, each reverted in turn; the both-reverted control reproduces `6f0fa2de…66671`. The shipped default `retrieve.max_promptguard_chunks: 0` means no pre-check at all, so no served byte moves. |
+| `hardening-retrieve-parity` US-006 | `d0433876…fc88e` | **not** a behaviour-changing rotation. `orchestrator.py` gained `_bounded_permit` (the one place `asyncio.timeout` and `semaphore.acquire()` appear), the two defaulted classification parameters on `sanitize_and_structure` and `run_search_pipeline`, the `/extract` file route's acquisition moving inward to the stage-3 seam, and step 8's refusal to cache a wait-timeout body; `stage3_promptguard.py` gained the pure `unavailable_result` seam; `contract.py` gained the `1.3.0` continuation line. **Three** hashed files, each reverted in turn; the all-reverted control reproduces `e55b5f06…4d3c0`. No sanitization behaviour moved — what moved is when stage 3 runs and what happens when the permit wait expires. |
+| `hardening-retrieve-parity` US-002 | `f654be77…c92fb` | **not** a behaviour-changing rotation. Two hashed files, each reverted alone (`orchestrator.py` → `16b9631f…`, `contract.py` → `646b4f27…`), both-reverted control landing exactly on `d0433876…`. `orchestrator.py`: `extract_html`, `scan_structural` and `structure_sanitization_result` moved onto `asyncio.to_thread`, `admission` became a required `AdmissionSlot` acquired after the cache read and released in `finally` after stage 1, and `fetch_result` / `html_text` are deleted before the classification wait; `contract.py`: `busy` in `RetrieveErrorCode`, `RETRIEVE_ADMISSION_QUEUE_FULL`, the `1.3.0` continuation line. `stage4_structuring.py` untouched. |
+| `hardening-retrieve-parity` US-003 | `464b6ad5…fead2` | **not** a rotation that changes how text is sanitized, but it moves a served outcome at the shipped defaults. Two hashed files, each reverted alone (`orchestrator.py` → `a018345e…`, `contract.py` → `80b39055…`), both-reverted control landing exactly on `f654be77…`. `orchestrator.py`: fetched PDFs go through `asyncio.to_thread(extract_pdf_bytes_in_subprocess, …)` inside the admission slot, retaining ownership through cleanup under repeated task cancellation, mapped most-specific first to `content_too_large` / `promptguard_budget` or `extraction_failed` with four reasons; `contract.py`: `extraction_failed` in `RetrieveErrorCode`, the `RETRIEVE_PDF_*` literals, the `1.3.0` continuation line. Supersedes the unaccepted `6fd320da…` candidate's cancellation bug. `pdf_subprocess.py` (`spool_dir()`, the bytes entry point) is not hashed. A PDF within bounds serves identical text; one over 114,688 characters or the worker's rlimits is now refused 422 rather than served or answered 500. |
+| `hardening-retrieve-parity` US-004 | `664ee603…c04b` | **not** a sanitization-behaviour change. Only `contract.py`'s 1.3.0 continuation line for `cache.corrupt_entries` moves the hash; its read-only whole-file revert reproduces `464b6ad5…fead2` exactly. `cache.py`'s guarded parse and `retrieval_app.py`'s metrics mirror/emission are not hashed. Invalid cached JSON/schema is counted, logged without payload bytes, deleted and treated as a miss rather than a 500; parse success is still not authenticity. |
+| `hardening-retrieve-parity` US-005 | `d98f7dbe…69359` | **not** a sanitization-behaviour change at shipped defaults. Only `contract.py`'s 1.3.0 continuation line for the three effective-policy fields moves the hash; its read-only whole-file revert reproduces `664ee603…c04b` exactly under default and shipped config. Request replacement and post-pipeline stamping in `retrieval_app.py`, and the fields in `models.py`, are not hashed. Opt-in bounds reach the fingerprint through the replaced request, never a parallel pipeline kwarg; trusted-tier skip and VERIFIED fail-open remain exempt. |
+| `hardening-retrieve-parity` validation (`fe211e3`) | `5a470872…bf623` | Twenty-sixth: `orchestrator.py` and `stage3_promptguard.py` gained cancellation ownership, absolute fetch deadline and timeout accounting; not a sanitization-algorithm change. Read-only pre-validation control reproduces `d98f7dbe…`. |
+| `hardening-hostname-and-config` US-001 | `328d386c…93286` | Twenty-seventh, **fifth sanitization-behaviour change**: directional matching and canonical private-name precedence. `orchestrator.py`, `contract.py`, and already-hashed root `url_validator.py` each move the revision; all-reverted control reproduces `5a470872…` under default and shipped config. Leading-dot trust skips classification for subdomains; multi-label denylists block them. |
+| `hardening-hostname-and-config` US-007 | `c8a907cf…546b8` | Twenty-eighth, **sixth policy-driven sanitization-behaviour change**: over-budget allowlist tails can no longer grant trust, and denylists are refused whole; in-budget matching/text scanning remain unchanged. `orchestrator.py` removes the entry pass, merges operator-first and counts wildcard resolutions; `contract.py` announces counters/reason; already-hashed `url_validator.py` removes its pass and safely sizes surrogate escapes before rejecting them. All three individual reversals were measured; all-reverted reproduces `328d386c…` under default and shipped config. |
+| `hardening-hostname-and-config` US-002 | `de1cea65…6be91` | Twenty-ninth, **seventh policy-driven sanitization-behaviour change**: `/search` merges the operator seed list first, then canonical `blocked_domains=` entries, and omits matches after URL auditing but before content scans. The existing blocked outcome emits `blocked_url` and `host_class=policy_blocklist`; raw sufficiency prevents paid fallback. Only `orchestrator.py` and `contract.py` move; both individual read-only reversals were measured and both-reverted reproduces `c8a907cf…` under default and shipped config. The empty-seed/no-new-field baseline is unchanged. |
+| `hardening-hostname-and-config` US-005 | `e00049c4…7ed5c` | Thirtieth, **eighth policy-driven sanitization-behaviour change**, for tuned deployments: both fetch routes default from validated config before the ceiling, with a new caller threshold on search. `orchestrator.py` passes a required resolved float to classification and cache fingerprint; `contract.py` announces the additions/defaults. Only these two hashed files move; individual read-only reversals measured, both-reverted reproduces `de1cea65…` under default and shipped config. Shipped 0.85 behavior, text-scanning algorithms, raw configured hash input and `/extract`'s raw guard remain unchanged. |
+| `hardening-cache-integrity` US-001 | `aa288bc5…5b39c` | Thirty-first, **not a text-sanitization change**. Only `contract.py` moves, announcing `cache.integrity_rejects` and widened `storage_oversize_skips` producers. Read-only reversal against clean `b79504d` reproduces `e00049c4…` under default and shipped config; all eight other sources are unchanged. The HMAC/bounds and wiring are in unhashed root modules. Old keys are orphaned; full measurements in `docs/bootstrap-notes.md`. |
+| `hardening-cache-integrity` US-002 | `0866963a…c1e80` | Thirty-second, **not a text-sanitization change**. Only `contract.py` moves for `cache_unauthenticated` and the continuation naming that reason and `cache_hmac_key`. Read-only whole-file reversal against clean `1e467c1` reproduces `aa288bc5…` under default and shipped config; the other eight hashed sources are unchanged. One-read key resolution and Valkey-only signing are unhashed. Old keys are orphaned; full measurements in `docs/bootstrap-notes.md`. |
+| `hardening-provider-bounds` US-003 | `c9bf6e0d…f2f76` | Thirty-third, **not a text-sanitization change**. Only `orchestrator.py` (two counters before every exit and re-classification flag) and `contract.py` (counters and SearXNG-only reason token) move. Read-only whole-file reversals against clean `abf9df6`: `61d54562…` with orchestrator reverted, `e736bb76…` with contract reverted; both reproduce `0866963a…` under default and shipped config. Helper/providers remain unhashed; upstream byte/encoding/time acceptance tightens without changing text scanning. Full values: `docs/bootstrap-notes.md`. |
+| `hardening-provider-bounds` US-004 | `e3b9c138…73d91` | Thirty-fourth, **not a text-sanitization change**. Only `contract.py` moves for the paid-prefix description and the all-paid-chain policy 422. Read-only whole-file reversal against clean `0139ad6` reproduces `c9bf6e0d…` under default and shipped config; the other eight sources are unchanged. `policy.py` and `models.py` are unhashed. Production has only one paid name and collapses configured duplicates, so the changed multi-paid outcome is unreachable until T3.1 (GOVERNANCE ruling (k)). Full values: `docs/bootstrap-notes.md`. |
+| `hardening-provider-bounds` US-005 | `d9db7586…1b6e0` | Thirty-fifth, **not a text-sanitization change**. Only `orchestrator.py` moves for the extracted provider loop, retired pipeline-only URL keyword, reason/domain omission logs and guarded failure tokens. Read-only whole-file reversal against clean `2a275c5` reproduces `e3b9c138…` under default and shipped config; all other eight sources are unchanged. Four wire/counter and two exhaustion pins were committed first (`8e449fc`) and remain unchanged. Keep sink increments inside the helper: deferring them to its caller loses counts on a raise. Full values: `docs/bootstrap-notes.md`. |
+| `hardening-resource-envelope` US-004 | `bf5a1f3e…3e75d` | Thirty-sixth, **not a text-sanitization change**. Only `orchestrator.py` (configurable observational targets, overrun count and whole-loop max) and `contract.py` (held 1.3.0 continuation) move. Read-only whole-file reversals against clean `7087c04`: `66b50985…` with orchestrator reverted, `3c699860…` with contract reverted, exactly `d9db7586…` with both, under default/shipped/maximum-target config. Other seven sources and hash definition unchanged; the new settings module and keys are not hash inputs. The max includes structural scan, PromptGuard and waits across all results, not one wait; compare at the same `num_results`, with exceeded count and requests. It never resets without a container restart. Full values: `docs/bootstrap-notes.md`. |
+| `hardening-resource-envelope` US-002 | `4913fdc1…aa1fb` | Thirty-seventh, **not a sanitization or response-shape change**. Only `contract.py` records the shipped Compose probe's health-description correction. Read-only whole-file reversal against clean `2aa6356` reproduces `bf5a1f3e…` under default and shipped config; other eight sources and hash definition unchanged. OpenAPI and the held golden really move (`HealthResponse.description`), but the added-paths set does not. Historical goldens retain the old description by design. The status-only probe is liveness, never classifier readiness; plain Compose does not restart unhealthy containers. Full values: `docs/bootstrap-notes.md`. |
+| `hardening-promptguard-86m` US-006 | `85394a95…3d0c0` | Thirty-eighth, **not a sanitization change at shipped defaults**. Only `contract.py` changes among nine hashed sources, announcing `/health.promptguard_model`. Whole-file read-only reversal against clean `06a56b2` reproduces `4913fdc1…` under default and shipped config. The selected-id hash input differs only for a non-default model; the allowlist still ships only 22M. The lifespan refuses unknown ids; loading checks binary labels and derives the injection index. Health reports configuration even while unloaded. Full values: `docs/bootstrap-notes.md`. |
+| `hardening-promptguard-86m` US-007 | `b641e6a5…698f5` | Thirty-ninth: exactly stage 3, orchestrator and contract change in the nine hashed sources; two ASCII inputs join after the max threshold (contiguity windows, then threshold). Each file/input reversed read-only against clean `967748d`; all-reverted reproduces `85394a95…` for default/shipped config. Stage 4 is byte-unchanged. Run rule ships off but all old cache keys invalidate; enabling changes verdicts. The max rule and trusted/absent-model policy remain unchanged. Full values and both residuals: `docs/bootstrap-notes.md`. |
+| `hardening-release` US-001 | `bffeb7ba…47fe1` | Fortieth, **not a text-sanitization change**. Only `contract.py` announces redacted request-validation 422s, their 100-entry cap and one-minor-release placeholders (GOVERNANCE ruling (l)). Whole-file read-only reversal against clean `7a4819b` reproduces `b641e6a5…` under default and shipped config; the other eight sources and hash definition are unchanged. The total handler and location allowlist live in unhashed `retrieval_app.py`. Existing 36th–39th bootstrap heading forms and stale count prose were reconciled before the mandatory preflight. Full values: `docs/bootstrap-notes.md`. |
+| `hardening-release` US-002 | `6884dc29…bd7ec` | Forty-first, **no wire or sanitization behavior change**. Only `contract.py`'s final single 1.3.0 announcement and timeless 1.2.0 entry move; whole-file read-only reversal against clean `3ea0b32` reproduces `bffeb7ba…` under default and shipped config. The other eight sources and hash definition are unchanged. The six-model golden is frozen, cache metrics retain dedicated coverage, and OpenAPI/anchors are byte-identical. Publication remains pending. Full values: `docs/bootstrap-notes.md`. |
+| Whole-epic release gate | `021378ef…33900` | Forty-second: `orchestrator.py` pins unavailable classifier readiness before skipping admission; `url_validator.py` compares IPv6 policy identities by address value while preserving wire spelling. Both hashed files individually reversed against `84c02af`; both-reverted reproduces `6884dc29…` under default/shipped config. Policy enforcement changes, not text scanning or response shape. Raw-threshold UTF-8 hashing preserves ASCII inputs; provider transport sources stay unhashed. Full measurements: `docs/bootstrap-notes.md`. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**None of the fourteen rotations changed sanitization behaviour** — but the fourth and fifth
+**Thirty-three of the forty-two rotations changed no sanitization policy or algorithm at shipped defaults; the
+fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
+US-001, US-002, US-003 and its validation fix) and the twenty-seventh
+through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005),
+and the forty-second release-gate policy repair are the nine
+that did, and the seventeenth
+(US-004, contract `1.3.0`) does not join them** — hostname policy can now skip
+classification on an opted-in trusted suffix; search-sanitization US-001's
+is that `/search` scans `title` and `snippet` newline-preserved now, so line-anchored Stage 2
+patterns fire on any line rather than at character 0 only, and a rising `structural_blocked`
+after it is expected; US-003's is that `/search` now drops results whose host is a private,
+embedded-private or blocklisted one and serves `domain` as the canonicalised ASCII host;
+the validation fix scans both the newline-preserving and collapsed wire forms.
+Hostname/config US-002 closes search's bypass of operator and caller domain
+policy without changing raw-result sufficiency or the text-scanning algorithm.
+US-005 shares configured threshold policy across both fetch routes, before the
+operator ceiling; its behavior change is for tuned deployments, not shipped 0.85.
+US-004 bounds and normalizes `SearchResult.engine` without routing it through that same scan.
+Among the other thirty, the fourth and fifth
 are different *kinds* of rotation and worth reading as such. The first three moved because
 the hash is over bytes and someone reformatted or retyped a hashed file. The fourth moved
 because an **input changed**: weights are a runtime, per-deployment thing now
@@ -479,6 +688,36 @@ it made unavoidable: a multi-valued attribute (bs4's `AttributeValueList`) used 
 **Why it matters:**
 Any cross-repo work that assumes Poppy↔Forage revision parity will be wrong. The
 consuming-side spec must compare contracts, not revisions.
+
+---
+
+### Cancelling a PDF await does not stop its worker thread
+
+`asyncio.to_thread` cancellation cancels the await, not the running thread. A
+`finally: await admission.release()` around that await alone therefore frees capacity
+while a PDF worker and its content-bearing spool remain live. A stub that raises
+`CancelledError` synchronously cannot test this: it unwinds the thread normally.
+
+`hardening-retrieve-parity` US-003 keeps the fetched-PDF task and waits without forwarding
+cancellation to it (`asyncio.wait`), deferring even repeated cancellation until the
+existing bounded worker is reaped and the spool unlinked. The worker's outcome is retrieved
+(and a spool fault still logs `retrieve_spool_error`), then pending cancellation propagates.
+No classification or cache write follows a cancelled parse. The regression blocks the
+path worker with a threading event, calls the actual pipeline task's `cancel()`, refuses
+replacement admission, and checks cleanup before cancellation completes. This is separate
+from the pre-existing queued-waiter handoff residual below; neither the controller nor
+`/extract`'s cancellation behavior changes here.
+
+### The admission controller's handoff leaks a slot on a racing cancellation
+
+The controller's `release()` does a **handoff**: it pops the first waiter, sets its result and returns *without* decrementing `_active`, the woken waiter inheriting the slot; `acquire()`'s `except BaseException` restores accounting only for a waiter still in `_waiters`. So a waiter cancelled after its grant loses the slot — and the window is wider than that: `Task.cancel()` marks the awaited future done at once, so a waiter cancelled while still **queued** has `waiter.done()` before its own `except` runs, and if the holder's `release()` takes the lock in that window it pops the cancelled future, decrements `_queued_bytes`, skips `set_result` and returns without decrementing `_active`; the woken task then finds itself gone from `_waiters` and restores nothing. Net: `active == limit` with nobody holding a slot, and at `fetch_concurrency: 1` one occurrence wedges `/retrieve` for the life of the process — reachable by a plain queued cancellation racing a normal release, not only by a post-grant cancellation. It is latent on `/extract` (the route ships disabled) and reachable on `/retrieve` only by task cancellation — server shutdown; Starlette does not cancel a handler task when an HTTP client disconnects — and never by a timer, because no timer wraps `acquire()` (`hardening-retrieve-parity` US-002 declined one for exactly this reason). **Accepted residual, pre-existing, not fixed here.** Fix direction: make the handoff idempotent — `release()` always decrements, and the woken waiter re-increments under the lock. Open question for the resource-envelope spec.
+
+**Why it matters:** never wrap `ExtractionAdmissionController.acquire()` in a timer
+(`asyncio.timeout`, `wait_for`) until the handoff is fixed — a timeout firing in the grant
+window is the reliable way to reach the leak. The `/retrieve` tests pin the *safe*
+interleaving (the cancelled waiter runs its `except` before the holder releases) and say so;
+the racing one is not deterministic and is not a tested property. `retrieve.semaphore_saturation`
+climbing while `retrieve.requests` flatlines after a shutdown-less cancellation is the shape.
 
 ---
 
@@ -552,7 +791,7 @@ guards keep it deleted, and both run on every PR:
 | Guard | Scope | Where |
 |---|---|---|
 | `tests/test_dockerfile.py` (20 tests) | the Dockerfile's **text** — no secret-shaped ARG/ENV/RUN assignment, no `from_pretrained`, no token-shaped literal | the `test` lane, and every local `uv run pytest` |
-| the `secret-grep` CI job | the **built image's** `docker history --no-trunc`, for `HF_TOKEN`, `hf_[A-Za-z0-9]{20,}` and `FORAGE_BRAVE_API_KEY` | `.github/workflows/ci.yml`, on the artifact `build-amd64` produced |
+| the `secret-grep` CI job | the **built image's** `docker history --no-trunc`, for four patterns: `HF_TOKEN`, `hf_[A-Za-z0-9]{20,}`, `FORAGE_BRAVE_API_KEY` and `FORAGE_CACHE_HMAC_KEY` | `.github/workflows/ci.yml`, on the artifact `build-amd64` produced |
 
 Both were mutation-verified: re-adding `ARG HF_TOKEN` fails three of the source guards,
 and a deliberately-leaking canary image built with a synthetic token matched both Hugging

@@ -18,12 +18,23 @@ string.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+from dataclasses import dataclass, replace
 from typing import Any, cast
 from urllib.parse import urlsplit
 
 import httpx
 
+from pipeline.bounded_body import (
+    BodyTooLarge,
+    MalformedBody,
+    UnsupportedEncoding,
+    read_bounded_body,
+)
+from pipeline.config_bounds import bounded_float, bounded_int
+from pipeline.provider_transport import BoundedProviderTransport
 from pipeline.search_providers.base import (
     FailureClass,
     ProviderFailure,
@@ -54,12 +65,8 @@ DEFAULT_SEARXNG_URL = "http://searxng:8080"
 # searxng/config/settings.yml.
 SEARXNG_ENGINES = "duckduckgo,brave,startpage,mojeek"
 
-# The body bound is checked against `len(resp.content)` *before* `resp.json()`
-# runs (contract point 2): an overrun is a typed failure, never a parse of a
-# megabyte of attacker-influenced JSON.
-_MAX_SEARXNG_RESPONSE_BYTES = 1024 * 1024
-
-_SEARXNG_TIMEOUT_SECONDS = 10.0
+DEFAULT_SEARXNG_TIMEOUT_SECONDS = 10.0
+DEFAULT_SEARXNG_QUERY_MAX_CHARS = 400
 
 # The closed `detail` vocabulary, minus the one open family: a status-derived
 # detail is `http_` followed by the integer status code (`http_429`,
@@ -71,6 +78,7 @@ _SEARXNG_FAILURE_DETAILS = frozenset(
         "timeout",
         "connect_error",
         "body_too_large",
+        "unsupported_encoding",
         "bad_json",
         "malformed_body",
         "unexpected",
@@ -88,6 +96,42 @@ _RATE_LIMITED_STATUS = 429
 # scheme and a hostname at all. A closed token rather than the raw string,
 # which could carry userinfo (contract point 7).
 UNPARSEABLE_ENDPOINT = "unparseable-endpoint"
+
+
+class SearxngConfigurationError(ValueError):
+    """Raised when a SearXNG tunable in ``config.yaml`` exceeds its safe bounds."""
+
+
+@dataclass(frozen=True, slots=True)
+class SearxngSettings:
+    """Validated SearXNG tunables for one process start."""
+
+    timeout_seconds: float = DEFAULT_SEARXNG_TIMEOUT_SECONDS
+    # Both raw input and Forage-decoded output are bounded before JSON parsing.
+    max_response_bytes: int = 1_048_576
+    query_max_chars: int = DEFAULT_SEARXNG_QUERY_MAX_CHARS
+
+
+def searxng_settings_from_config(config: dict[str, Any]) -> SearxngSettings:
+    """Validate settings at boot even when SearXNG is absent from the chain."""
+    return SearxngSettings(
+        timeout_seconds=bounded_float(
+            config,
+            "search_searxng_timeout_seconds",
+            DEFAULT_SEARXNG_TIMEOUT_SECONDS,
+            minimum=1.0,
+            maximum=60.0,
+            error=SearxngConfigurationError,
+        ),
+        query_max_chars=bounded_int(
+            config,
+            "search_searxng_query_max_chars",
+            DEFAULT_SEARXNG_QUERY_MAX_CHARS,
+            minimum=50,
+            maximum=400,
+            error=SearxngConfigurationError,
+        ),
+    )
 
 
 def _compute_origin(base_url: str) -> str:
@@ -143,8 +187,13 @@ class SearxngProvider:
     name = SEARXNG_PROVIDER_NAME
     paid = False
 
-    def __init__(self, base_url: str = DEFAULT_SEARXNG_URL) -> None:
+    def __init__(
+        self,
+        base_url: str = DEFAULT_SEARXNG_URL,
+        settings: SearxngSettings | None = None,
+    ) -> None:
         self.base_url = base_url
+        self.settings = settings if settings is not None else SearxngSettings()
         # Typed `str | None` to match the protocol member exactly — a
         # protocol's mutable attributes are invariant, so a narrower `str`
         # here would make this class stop satisfying `SearchProvider`. The
@@ -154,40 +203,72 @@ class SearxngProvider:
     async def search(
         self, query: str, max_results: int
     ) -> ProviderSearchResult | ProviderFailure:
-        """Search SearXNG for *query*, returning at most *max_results* dicts."""
+        """Search with a capped outbound copy, leaving the caller's query intact."""
+        outbound_query = query[: self.settings.query_max_chars]
+        compressed = False
         try:
             async with httpx.AsyncClient(
-                timeout=_SEARXNG_TIMEOUT_SECONDS, trust_env=False
+                transport=BoundedProviderTransport(self.settings.max_response_bytes),
+                timeout=self.settings.timeout_seconds,
+                trust_env=False,
+                follow_redirects=False,
+                headers={"Accept-Encoding": "identity"},
             ) as client:
-                resp = await client.get(
-                    f"{self.base_url}/search",
-                    params={
-                        "q": query,
-                        "format": "json",
-                        "pageno": 1,
-                        "engines": SEARXNG_ENGINES,
-                    },
-                )
-                resp.raise_for_status()
-                if len(resp.content) > _MAX_SEARXNG_RESPONSE_BYTES:
-                    return self._failure("hard_error", "body_too_large")
+                async with asyncio.timeout(self.settings.timeout_seconds):
+                    async with client.stream(
+                        "GET",
+                        f"{self.base_url}/search",
+                        params={
+                            "q": outbound_query,
+                            "format": "json",
+                            "pageno": 1,
+                            "engines": SEARXNG_ENGINES,
+                        },
+                    ) as response:
+                        compressed = (
+                            response.headers.get("content-encoding", "identity")
+                            .strip()
+                            .lower()
+                            != "identity"
+                        )
+                        status = response.status_code
+                        if not 200 <= status < 300:
+                            failure_class: FailureClass = (
+                                "rate_limited"
+                                if status == _RATE_LIMITED_STATUS
+                                else "hard_error"
+                            )
+                            return self._failure(
+                                failure_class,
+                                f"{HTTP_STATUS_DETAIL_PREFIX}{status}",
+                                compressed=compressed,
+                            )
+                        body = await read_bounded_body(
+                            response, max_bytes=self.settings.max_response_bytes
+                        )
                 try:
-                    payload = cast("object", resp.json())
-                except Exception:
-                    return self._failure("hard_error", "bad_json")
-                return self._build_result(payload, max_results)
-        except httpx.TimeoutException:
-            return self._failure("timeout", "timeout")
-        except httpx.HTTPStatusError as exc:
-            status = exc.response.status_code
-            failure_class: FailureClass = (
-                "rate_limited" if status == _RATE_LIMITED_STATUS else "hard_error"
+                    payload = cast("object", json.loads(body))
+                except ValueError:
+                    return self._failure(
+                        "hard_error", "bad_json", compressed=compressed
+                    )
+                return replace(
+                    self._build_result(payload, max_results), compressed=compressed
+                )
+        except (TimeoutError, httpx.TimeoutException):
+            return self._failure("timeout", "timeout", compressed=compressed)
+        except BodyTooLarge:
+            return self._failure("hard_error", "body_too_large", compressed=compressed)
+        except UnsupportedEncoding:
+            return self._failure(
+                "hard_error", "unsupported_encoding", compressed=compressed
             )
-            return self._failure(failure_class, f"{HTTP_STATUS_DETAIL_PREFIX}{status}")
+        except MalformedBody:
+            return self._failure("hard_error", "malformed_body", compressed=compressed)
         except httpx.HTTPError:
-            return self._failure("hard_error", "connect_error")
+            return self._failure("hard_error", "connect_error", compressed=compressed)
         except Exception:
-            return self._failure("hard_error", "unexpected")
+            return self._failure("hard_error", "unexpected", compressed=compressed)
 
     def _build_result(
         self, payload: object, max_results: int
@@ -225,7 +306,9 @@ class SearxngProvider:
             unresponsive_engines=cast("list[str]", unresponsive_engines),
         )
 
-    def _failure(self, failure_class: FailureClass, detail: str) -> ProviderFailure:
+    def _failure(
+        self, failure_class: FailureClass, detail: str, *, compressed: bool = False
+    ) -> ProviderFailure:
         """Log the closed tokens and return the typed failure.
 
         The vocabulary is closed *by construction* rather than by review: a
@@ -259,4 +342,5 @@ class SearxngProvider:
             provider_name=self.name,
             failure_class=failure_class,
             detail=detail,
+            compressed=compressed,
         )

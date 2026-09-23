@@ -114,6 +114,31 @@ class RetrievedContent(BaseModel):
             "structural_blocked, unavailable_blocked, or unavailable_allowed"
         ),
     )
+    effective_promptguard_fail_closed: bool = Field(
+        default=True,
+        description=(
+            "Policy applied to this request's promptguard_fail_closed flag, "
+            "bounded by the operator's floor. Decides behaviour only when the "
+            "classifier is unavailable (absent or classification wait timed out), "
+            "not whether content was scanned; read promptguard_state for that. "
+            "Neither effective policy field overrides caller-supplied trust tiers: "
+            "a trusted_domains match skips classification (trusted_tier), and a "
+            "verified_domains match (VERIFIED) degrades open when unavailable."
+        ),
+    )
+    effective_promptguard_threshold: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Block threshold applied to this request, bounded by the operator's "
+            "ceiling. Reports policy, not whether content was scanned; read "
+            "promptguard_state for that. Neither effective policy field overrides "
+            "caller-supplied trust tiers: a trusted_domains match skips "
+            "classification (trusted_tier), and a verified_domains match "
+            "(VERIFIED) degrades open when the classifier is unavailable."
+        ),
+    )
 
     # -- Provenance --
     domain: str = Field(..., min_length=1, description="Domain of final_url")
@@ -225,15 +250,14 @@ class RetrieveRequest(BaseModel):
     pipeline, cached by `sanitizer_revision`; `/search` finds and returns
     provider-extracted content for a query across sources — snippets or
     chunks, per result `content_kind` — from the configured provider chain,
-    every result sanitized, never cached. `promptguard_fail_closed` is
-    honoured on both routes; this route additionally honours
-    `promptguard_threshold`, `trusted_domains`, `verified_domains`,
-    `blocked_domains` and `cache_ttl_hours`, while `/search` additionally
-    honours `providers` and `allow_paid_fallback` (contract 1.2.0) and scans
-    every result at the fixed 0.85 default at trust tier `standard`
-    (`config.yaml`'s `promptguard_threshold` is not applied there). This
-    documents today's divergence; changing it belongs to
-    `epic-forage-hardening`.
+    every result sanitized, never cached. Only `/retrieve` honours
+    `cache_ttl_hours`, `extract_mode`, `trusted_domains` and `verified_domains`;
+    only `/search` honours `allow_paid_fallback`, `num_results` and `providers`
+    and scans every result at trust tier `standard`.
+    Shared by both routes: `blocked_domains`, `promptguard_threshold` and
+    `promptguard_fail_closed`. On both routes, an omitted or null threshold
+    uses the validated `config.yaml` default (shipped as 0.85), then
+    `promptguard_threshold_ceiling` bounds the requested or default value.
     """
 
     url: str = Field(..., min_length=1, description="URL to retrieve")
@@ -247,25 +271,62 @@ class RetrieveRequest(BaseModel):
         description="Maximum age of cached content; zero disables caching",
     )
     trusted_domains: list[str] = Field(
-        default_factory=list, description="Domains to treat as trusted"
+        default_factory=list,
+        description=(
+            "Domains to treat as trusted: bare entries match exactly; a leading dot "
+            "covers the apex and every subdomain; an IP literal matches only itself. "
+            "A leading-dot trusted_domains entry skips injection classification for "
+            "every host under that suffix. Never name a multi-tenant or registry-level "
+            "apex (.co.uk, .github.io, .s3.amazonaws.com). "
+            "policy_suffix_trusted_skip counts wildcard-caused resolution to either "
+            "trusted or verified (counter added by US-007)."
+        ),
     )
     verified_domains: list[str] = Field(
-        default_factory=list, description="Domains to treat as verified"
+        default_factory=list,
+        description=(
+            "Domains to treat as verified: bare entries match exactly; a leading dot "
+            "covers the apex and every subdomain; an IP literal matches only itself. "
+            "A leading-dot verified_domains entry makes every host under that suffix "
+            "degrade open when the classifier is unavailable, including under "
+            "promptguard_fail_closed_floor and a load-triggered classification wait "
+            "timeout. Never name a multi-tenant or registry-level apex "
+            "(.co.uk, .github.io, .s3.amazonaws.com). "
+            "policy_suffix_trusted_skip counts "
+            "wildcard-caused resolution to either trusted or verified "
+            "(counter added by US-007)."
+        ),
     )
     blocked_domains: list[str] = Field(
-        default_factory=list, description="Domains to block outright"
+        default_factory=list,
+        description=(
+            "Domains to block outright: blocked_domains always covers subdomains "
+            "for multi-label names, with or without a leading dot; an IP literal "
+            "matches only itself. Single-label entries match exactly. Upgrade note: "
+            "existing multi-label entries now cover subdomains; review apex entries "
+            "before upgrading, because a multi-tenant apex removes every tenant. "
+            "Single-label entries keep matching exactly as before."
+        ),
     )
-    promptguard_threshold: float = Field(
-        default=0.85,
+    promptguard_threshold: float | None = Field(
+        default=None,
         ge=0.0,
         le=1.0,
-        description="PromptGuard confidence threshold",
+        description=(
+            "PromptGuard max-score threshold; the server-side contiguity rule can "
+            "block independently. Null or omitted uses the server's "
+            "validated config.yaml default (shipped as 0.85). The requested or "
+            "default value is bounded by promptguard_threshold_ceiling."
+        ),
     )
     promptguard_fail_closed: bool = Field(
         default=True,
         description=(
             "When True, block content if PromptGuard is unavailable "
-            "(fail-closed). When False, allow with a trust penalty (fail-open)."
+            "(fail-closed). When False, allow with a trust penalty (fail-open). "
+            "Bounded by the operator's floor; trusted_domains skips classification "
+            "(trusted_tier), and verified_domains (VERIFIED) degrades open when "
+            "unavailable regardless of this flag."
         ),
     )
 
@@ -277,26 +338,37 @@ class SearchRequest(BaseModel):
     across sources — snippets or chunks, per result `content_kind` — from
     the configured provider chain, every result sanitized, never cached;
     `/retrieve` fetches and sanitizes one caller-named URL through the full
-    pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` is
-    honoured on both routes; this route additionally honours `providers`
-    and `allow_paid_fallback` (contract 1.2.0) and scans every result at
-    the fixed 0.85 default at trust tier `standard` (`config.yaml`'s
-    `promptguard_threshold` is not applied here), while `/retrieve`
-    additionally honours `promptguard_threshold`, `trusted_domains`,
-    `verified_domains`, `blocked_domains` and `cache_ttl_hours`. This
-    documents today's divergence; changing it belongs to
-    `epic-forage-hardening`.
+    pipeline, cached by `sanitizer_revision`. Only `/search` honours
+    `allow_paid_fallback`, `num_results` and `providers` and scans every result
+    at trust tier `standard`; only `/retrieve` honours `cache_ttl_hours`,
+    `extract_mode`, `trusted_domains` and `verified_domains`.
+    Shared by both routes: `blocked_domains`, `promptguard_threshold` and
+    `promptguard_fail_closed`. On both routes, an omitted or null threshold
+    uses the validated `config.yaml` default (shipped as 0.85), then
+    `promptguard_threshold_ceiling` bounds the requested or default value.
     """
 
     query: str = Field(..., min_length=1, description="Search query")
     num_results: int = Field(
         default=5, ge=1, le=20, description="Number of results to return"
     )
+    promptguard_threshold: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "PromptGuard max-score threshold; the server-side contiguity rule can "
+            "block independently. Null or omitted uses the server's "
+            "validated config.yaml default (shipped as 0.85). The requested or "
+            "default value is bounded by promptguard_threshold_ceiling."
+        ),
+    )
     promptguard_fail_closed: bool = Field(
         default=True,
         description=(
             "When True, drop search results if PromptGuard is unavailable "
-            "(fail-closed). When False, allow with a suspicion marker (fail-open)."
+            "(fail-closed). When False, allow with a suspicion marker (fail-open). "
+            "Bounded by the operator's floor."
         ),
     )
     providers: list[str] = Field(
@@ -304,13 +376,37 @@ class SearchRequest(BaseModel):
         description=(
             "Restrict-only filter of the configured provider chain, in "
             "configured order: can exclude paid providers only, never add, "
-            "reorder, or key one — free providers always run. Entries are "
+            "reorder, or key one — free providers always run. A non-empty list "
+            "keeps only the longest prefix of the configured paid sequence "
+            "whose every member is named; a named paid provider after an unnamed "
+            "paid provider is dropped, never promoted. provider_used never names "
+            "a dropped provider; if you named a paid provider and provider_used "
+            "is not it, check its position in FORAGE_SEARCH_PROVIDERS. On an "
+            "all-paid configured chain, a later-paid-only selection leaves no "
+            "provider and returns 422 search_unavailable with reason "
+            "policy_excluded_all_providers. Entries are "
             "matched after strip() and lower-casing against the names "
             "/health's `search_providers` publishes. Entries beyond the "
             "first eight, and entries matching no configured provider, are "
             "ignored and counted on /metrics `search.policy_unknown_provider` "
             "rather than rejected. Empty (the default) means the configured "
             "chain runs unrestricted. Honoured from contract 1.2.0."
+        ),
+    )
+    blocked_domains: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Domains to omit from search results as blocked_url, merged after the "
+            "operator's seed_blocklist, which cannot be overridden. Multi-label "
+            "names cover the apex and every dot-boundary subdomain, with or without "
+            "a leading dot; single-label names and IP literals match exactly. "
+            "Entries are stripped and UTS-46-canonicalised once; invalid entries "
+            "are ignored and counted on search.policy_invalid_domain_entry, never "
+            "echoed. No entry-count cap. A raw list over "
+            "policy_domain_entries_max_bytes "
+            "(UTF-8 bytes including newline separators) is refused whole with 422 "
+            "search_unavailable / policy_domain_list_too_large before normalisation. "
+            "Honoured from contract 1.3.0."
         ),
     )
     allow_paid_fallback: bool = Field(
@@ -335,17 +431,32 @@ class SearchResult(BaseModel):
         ...,
         min_length=1,
         description=(
-            "Lower-cased hostname of `url` (`urlsplit(url).hostname`), with no "
-            "userinfo or port — a provenance signal, not a trust decision. This "
-            "is the hostname, not the registrable domain (eTLD+1); derive that "
-            "yourself if you need it. For an IPv6 literal this is the "
-            "unbracketed form ('2001:db8::1') while `url` carries the bracketed "
-            "form ('[2001:db8::1]') — the one case where `domain` is not a "
+            "The canonicalised ASCII host of `url`, with no userinfo or port "
+            "— a provenance signal, not a trust decision. A name is "
+            "UTS-46-encoded, so an internationalised host appears here in "
+            "punycode ('xn--strae-oqa.de') while `url` keeps the provider's "
+            "spelling ('http://straße.de/'); an address literal is the raw "
+            "lower-cased literal as it was written. This is the host, not the "
+            "registrable domain (eTLD+1); derive that yourself if you need it. "
+            "For an IPv6 literal this is the unbracketed form "
+            "('2606:4700::1111') while `url` carries the bracketed form "
+            "('[2606:4700::1111]') — the one case where `domain` is not a "
             "substring of `url`. Added in contract 1.2.0."
         ),
     )
     snippet: str = Field(..., description="Result snippet / description")
-    engine: str | None = Field(default=None, description="Search engine used")
+    engine: str | None = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Search engine used, NFC-normalized with C0/C1 controls deleted "
+            "and whitespace runs collapsed, truncated to 64 characters. A "
+            "non-string or an empty-after-normalisation value is null. Bound "
+            "and normalisation added in contract 1.3.0 — provider-controlled "
+            "provenance metadata, not page content: neither structurally "
+            "scanned nor part of the PromptGuard input."
+        ),
+    )
     content_kind: ContentKind = Field(
         default=CONTENT_KIND_SNIPPET,
         description=(
@@ -365,7 +476,19 @@ class SearchResult(BaseModel):
     )
     suspicious: bool = Field(
         default=False,
-        description="Whether Stage 2 or Stage 3 flagged this result as suspicious",
+        description=(
+            "Whether Stage 2 or Stage 3 flagged this result as suspicious — "
+            "and also set for every result PromptGuard did not scan at all, "
+            "either because the classifier was absent or because the "
+            "request's classification wait expired while it was busy. "
+            "`promptguard_unavailable` says whether any result in this "
+            "response was unscanned and `unscanned_results` says how many, "
+            "so the consumer rule is: on `promptguard_unavailable: true`, "
+            "treat every `suspicious` result as unscanned rather than as "
+            "scanned-and-flagged. Since contract 1.3.0 a single response may "
+            "mix the two — the wait budget is per request, so earlier results "
+            "can be scanned and later ones not."
+        ),
     )
 
     @field_validator("date", mode="before")
@@ -395,6 +518,18 @@ class SearchResult(BaseModel):
 class SearchResponse(BaseModel):
     """Response wrapper for search results."""
 
+    effective_promptguard_threshold: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Policy applied to this request's PromptGuard threshold after resolving "
+            "the configured default and operator ceiling, not whether results were "
+            "scanned; read omissions, suspicious, promptguard_unavailable and "
+            "unscanned_results for that. This route uses STANDARD tier; /retrieve "
+            "retains its trusted_tier skip and VERIFIED unavailable exemption."
+        ),
+    )
     results: list[SearchResult] = Field(
         default_factory=lambda: [], description="Search results"
     )
@@ -445,14 +580,19 @@ class SearchResponse(BaseModel):
     omitted_by_reason: dict[str, int] = Field(
         default_factory=dict,
         description=(
-            "Withheld-result counts keyed by contract.OMIT_* reason. Four keys "
-            "are defined in contract 1.1.0 — 'invalid_url', "
-            "'structural_blocked', 'injection_detected' and "
-            "'promptguard_unavailable'. Only non-zero reasons appear. "
-            "Deliberately a dict rather than an enum: a consumer sums the "
-            "values and buckets keys it does not know (as /metrics does, under "
-            "'other'), so a future omission reason is an additive-safe MINOR "
-            "change instead of a validation failure on an old client."
+            "Withheld-result counts keyed by contract.OMIT_* reason. Five keys "
+            "are defined — 'invalid_url', 'structural_blocked', "
+            "'injection_detected' and 'promptguard_unavailable' in contract "
+            "1.1.0, and 'blocked_url' added in contract 1.3.0. 'invalid_url' is "
+            "a URL that is missing, over-length, or could not be parsed or "
+            "canonicalised at all; 'blocked_url' is a URL that parsed cleanly "
+            "but names a literal private, loopback, link-local, "
+            "documentation-range or blocklisted host — policy, not "
+            "malformation. Only non-zero reasons appear. Deliberately a dict "
+            "rather than an enum: a consumer sums the values and buckets keys "
+            "it does not know (as /metrics does, under 'other'), so a future "
+            "omission reason is an additive-safe MINOR change instead of a "
+            "validation failure on an old client."
         ),
     )
     unscanned_results: int = Field(
@@ -466,5 +606,19 @@ class SearchResponse(BaseModel):
             "PromptGuard was needed but did not run on at least one examined "
             "result (withheld or returned) — a stage-2 structural block never "
             "needed a scan and does not count"
+        ),
+    )
+    effective_promptguard_fail_closed: bool = Field(
+        default=True,
+        description=(
+            "Policy applied to this request's promptguard_fail_closed flag, "
+            "bounded by the operator's floor. Decides behaviour only when the "
+            "classifier is unavailable (absent or classification wait timed out), "
+            "not whether results were scanned; read omissions, suspicious, "
+            "promptguard_unavailable and unscanned_results for that. This route "
+            "uses STANDARD tier; the floor does not override caller-supplied "
+            "trust tiers on /retrieve: trusted_domains skips classification "
+            "(trusted_tier), and verified_domains (VERIFIED) degrades open "
+            "when unavailable."
         ),
     )

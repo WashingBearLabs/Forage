@@ -21,7 +21,7 @@ from pipeline.stage5_url_audit import (
     TooManyRedirectsError,
     fetch_url,
 )
-from tests.fakes import assert_frozen
+from tests.fakes import assert_frozen, make_response, make_stream_cm
 from url_validator import BlockedDomainError, PrivateIPError
 
 # ---------------------------------------------------------------------------
@@ -45,15 +45,12 @@ def _make_response(
     content: bytes = b"<html>OK</html>",
     headers: dict[str, str] | None = None,
 ) -> httpx.Response:
-    """Build a minimal httpx.Response."""
-    hdrs = {"content-type": "text/html; charset=utf-8"}
-    if headers:
-        hdrs.update(headers)
-    return httpx.Response(
-        status_code=status_code,
-        content=content,
-        headers=hdrs,
-        request=httpx.Request("GET", "https://example.com"),
+    return make_response(
+        status_code,
+        content,
+        headers,
+        url="https://example.com",
+        content_type="text/html; charset=utf-8",
     )
 
 
@@ -67,11 +64,7 @@ def _make_redirect(location: str, status_code: int = 301) -> httpx.Response:
 
 
 def _make_stream_cm(response: httpx.Response) -> MagicMock:
-    """Async context manager mock that yields *response* on __aenter__."""
-    cm = MagicMock()
-    cm.__aenter__ = AsyncMock(return_value=response)
-    cm.__aexit__ = AsyncMock(return_value=False)
-    return cm
+    return make_stream_cm(response)
 
 
 def _stream_side_effect(*responses: httpx.Response) -> Callable[..., Any]:
@@ -172,6 +165,32 @@ class TestRFC1918DuringFetch:
 
 class TestBlocklistDuringFetch:
     """Blocked domains must be rejected without HTTP requests."""
+
+    @pytest.mark.parametrize(
+        ("target", "error"),
+        [
+            ("https://www.blocked.example/", BlockedDomainError),
+            ("https://xn--/", ValueError),
+        ],
+    )
+    async def test_redirect_hop_refused_before_dns_or_http(
+        self, target: str, error: type[Exception]
+    ) -> None:
+        with (
+            patch(
+                "url_validator.socket.getaddrinfo", return_value=_fake_addrinfo()
+            ) as dns,
+            patch(
+                "httpx.AsyncClient.stream",
+                return_value=_make_stream_cm(_make_redirect(target)),
+            ) as stream,
+        ):
+            with pytest.raises(error):
+                await fetch_url(
+                    "https://safe.example/", blocked_domains=["blocked.example"]
+                )
+            assert dns.call_count == 1
+            assert stream.call_count == 1
 
     @pytest.mark.asyncio
     async def test_blocked_domain_rejected(self) -> None:

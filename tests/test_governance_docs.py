@@ -43,7 +43,10 @@ import pytest
 import yaml
 
 from pipeline.contract import CONTRACT_VERSION
-from pipeline.sanitizer_revision import _REVISION_SOURCES
+from pipeline.sanitizer_revision import (
+    _REVISION_SOURCES,
+    _ROOT_REVISION_SOURCES,
+)
 from scripts.export_contract import ANCHOR_PATH, CONTRACT_PATH, REGEN_COMMAND
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -87,13 +90,27 @@ _SIX_EXAMPLES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("An urgent security tightening", ("MINOR",)),
 )
 
-# The five rulings this epic recorded, by the heading marker each section
-# carries. (a2) is US-001's verification finding and is listed separately from
+# The thirteen rulings the contract and hardening epics recorded, by heading.
+# (a2) is US-001's verification finding and is listed separately from
 # (a) precisely because it is a different ruling about a different thing.
-_RULING_MARKERS = ("### (a) ", "### (a2) ", "### (b) ", "### (c) ", "### (d) ")
+_RULING_MARKERS = (
+    "### (a) ",
+    "### (a2) ",
+    "### (b) ",
+    "### (c) ",
+    "### (d) ",
+    "### (e) ",
+    "### (f) ",
+    "### (g) ",
+    "### (h) ",
+    "### (i) ",
+    "### (j) ",
+    "### (k) ",
+    "### (l) ",
+)
 
 # Counts these documents state in words. Both are read back out of the code —
-# the hashed-source count from `_REVISION_SOURCES`, the required-check count
+# the hashed-source count from both hashed tuples, the required-check count
 # from the jobs `publish` hangs off — so a number that goes stale is a red test
 # rather than a confidently wrong instruction.
 _NUMBER_WORDS = {
@@ -104,10 +121,76 @@ _NUMBER_WORDS = {
     8: "eight",
     9: "nine",
     10: "ten",
+    11: "eleven",
+    12: "twelve",
+    13: "thirteen",
+    14: "fourteen",
+    15: "fifteen",
+    16: "sixteen",
+    17: "seventeen",
+    18: "eighteen",
+    19: "nineteen",
+    20: "twenty",
+    21: "twenty-one",
+    22: "twenty-two",
+    23: "twenty-three",
+    24: "twenty-four",
+    25: "twenty-five",
+    26: "twenty-six",
+    27: "twenty-seven",
+    28: "twenty-eight",
+    29: "twenty-nine",
+    30: "thirty",
+    31: "thirty-one",
+    32: "thirty-two",
+    33: "thirty-three",
+    34: "thirty-four",
+    35: "thirty-five",
+    36: "thirty-six",
+    37: "thirty-seven",
+    38: "thirty-eight",
+    39: "thirty-nine",
+    40: "forty",
 }
 
 _MARKDOWN_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 _TABLE_ROW_RE = re.compile(r"^\|\s*(\d)\s*\|")
+
+
+def test_threshold_boundary_descriptions_have_no_stale_route_exceptions() -> None:
+    stale = re.compile(
+        r"not applied (here|there|on this route)|no per-request threshold"
+        r"|ceiling is /retrieve-only|/search still classifies at 0\.85",
+        re.I,
+    )
+    for name in (
+        "models.py",
+        "retrieval_app.py",
+        "config.yaml",
+        "kit_tools/docs/API_GUIDE.md",
+        "docs/configuration.md",
+        "README.md",
+    ):
+        assert not stale.search(" ".join((_REPO_ROOT / name).read_text().split())), name
+    document = yaml.safe_load(CONTRACT_PATH.read_text())
+    descriptions = [
+        document["paths"][route]["post"]["description"]
+        for route in ("/retrieve", "/search")
+    ] + [
+        document["components"]["schemas"][model]["description"]
+        for model in ("RetrieveRequest", "SearchRequest")
+    ]
+    for description in descriptions:
+        assert not stale.search(" ".join(description.split()))
+        assert "promptguard_threshold_ceiling" in description
+    guide = (_REPO_ROOT / "kit_tools/docs/API_GUIDE.md").read_text()
+    search = guide.split("Request fields (`SearchRequest`):", 1)[1]
+    request_table, response_section = search.split(
+        "Response fields to read (`SearchResponse`):", 1
+    )
+    assert "| `promptguard_threshold` | float \\| null | `null`" in request_table
+    assert "promptguard_threshold_ceiling" in request_table
+    assert "| `effective_promptguard_threshold` |" in response_section
 
 
 @pytest.fixture(scope="module")
@@ -352,7 +435,89 @@ class TestTheSixWorkedExamples:
 
 
 class TestTheRecordedRulings:
-    """The five rulings, each with a source a reader can go and check."""
+    """The thirteen rulings, each with a source a reader can go and check."""
+
+    def test_ruling_count_matches_the_governance_and_invariant_text(
+        self, governance: str
+    ) -> None:
+        count = _NUMBER_WORDS[len(_RULING_MARKERS)]
+        assert f"{count.capitalize()} rulings" in _section(
+            governance, "## Recorded rulings"
+        )
+        assert f"records the {count} rulings" in (_REPO_ROOT / "CLAUDE.md").read_text()
+
+    def test_governance_rulings_sentence_and_registered_headings_match(
+        self, governance: str
+    ) -> None:
+        headings = re.findall(r"^### \([a-z]\d?\) ", governance, re.MULTILINE)
+        assert tuple(headings) == _RULING_MARKERS
+        assert len(_RULING_MARKERS) == len(set(_RULING_MARKERS))
+        sentence = re.search(
+            r"^([\w-]+) rulings",
+            _section(governance, "## Recorded rulings"),
+            re.MULTILINE,
+        )
+        assert sentence is not None
+        assert sentence.group(1).lower() == _NUMBER_WORDS[len(_RULING_MARKERS)]
+
+    def test_validation_redaction_ruling_records_the_real_window(
+        self, governance: str
+    ) -> None:
+        body = _section(governance, "### (l)")
+        for phrase in (
+            "expedited MINOR with a compatibility window",
+            "Example 6 in full",
+            "Step 1",
+            "Step 2",
+            "Step 3",
+            "Step 4",
+            '"[redacted]"',
+            "second MINOR, not a MAJOR",
+            "description-admitted-key carve-out",
+            "_MAX_VALIDATION_ERRORS = 100",
+            "exc.body",
+            "str(exc)",
+            "repr(exc)",
+            'request.scope["route"].path',
+            "validation_422_truncated",
+            "validation_422_loc_dropped",
+            "network placement",
+        ):
+            assert phrase in body
+
+    def test_cache_oversize_ruling_preserves_the_counter_meaning(
+        self, governance: str
+    ) -> None:
+        body = _section(governance, "### (j)")
+        for phrase in (
+            "Example 4",
+            "documentation-only",
+            "cache.max_value_bytes",
+            "cache.max_bytes",
+            "1.3.0",
+            "backends",
+            "meaning",
+        ):
+            assert phrase in body
+
+    def test_directional_matching_ruling_records_the_security_exception(
+        self, governance: str
+    ) -> None:
+        body = _section(governance, "### (h)")
+        for text in (
+            "Example 6",
+            "Step 1",
+            "considered and declined",
+            "step 2",
+            "compatibility window",
+            "docs/configuration.md",
+            "Release-body",
+            "no single-label loosening",
+            "blocked_domain",
+            "private_ip",
+            "policy_domain_list_too_large",
+        ):
+            assert text in body
 
     @pytest.mark.parametrize("marker", _RULING_MARKERS)
     def test_the_ruling_has_a_section(self, governance: str, marker: str) -> None:
@@ -583,13 +748,17 @@ class TestPullRequestTemplate:
     def test_the_hashed_source_count_matches_the_code(self, pr_template: str) -> None:
         # The template tells an author how many files rotate the revision. That
         # number lives in pipeline/sanitizer_revision.py and has moved before.
-        expected = _NUMBER_WORDS[len(_REVISION_SOURCES)]
+        # Both hashed tuples, not just the `pipeline/` one: an oracle derived
+        # from `_REVISION_SOURCES` alone stays green on a stale "eight" the
+        # moment a root source joins the hash.
+        expected = _NUMBER_WORDS[len(_REVISION_SOURCES) + len(_ROOT_REVISION_SOURCES)]
         # Flowed, because the template wraps at 92 columns and a phrase that
         # happens to straddle a line break is still the phrase.
         flowed = " ".join(pr_template.split())
         assert f"{expected} hashed" in flowed, (
             f"The PR template must say '{expected} hashed' — "
-            f"_REVISION_SOURCES currently holds {len(_REVISION_SOURCES)} files, "
+            f"the hashed tuples currently hold "
+            f"{len(_REVISION_SOURCES) + len(_ROOT_REVISION_SOURCES)} files, "
             "and an author counting on a stale number takes a rotation they "
             "did not mean to take."
         )

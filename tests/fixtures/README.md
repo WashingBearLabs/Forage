@@ -3,6 +3,56 @@
 Committed fixtures for the test suite. Nothing here is shipped in the image —
 `.dockerignore` excludes `tests/` outright.
 
+## `search/` pipeline pins
+
+`test_search_pipeline_pins.py` captures four complete synthetic search responses
+and their five pinned counters, plus two exhaustion payloads and their actual
+handler status/counters. Captured before the provider-loop refactor at
+`2a275c50165d0538ed07d05a9bb3a9ea2dcbb36d`: clean SearXNG (with an unresponsive
+engine), fallback to Brave, every omission reason, honest served-empty, lone
+SearXNG exhaustion and mixed-chain exhaustion. Inputs are synthetic SearXNG
+dicts and the scrubbed `brave/llm_context_sample.json`, through streaming
+doubles; no live fetch or Brave-authored result text is persisted.
+`request_id` is removed **before writing**; all other response fields are pinned.
+
+Regenerate, never hand-edit, only for a deliberate wire or pinned-counter change:
+
+```bash
+uv run pytest tests/test_search_pipeline_pins.py --regenerate-search-pins -q
+```
+
+Commit regenerated pins with that change and explain what moved and why in the
+commit message. Without the flag tests only compare. New metrics outside the
+five-counter projection do not move these pins. The token guard walks all fixture
+directories by default, except exactly `tiny_model/`, `contract/` and this README.
+Four long schema key names in these dumps are recognized only in JSON key
+positions; their spelling as a payload value remains forbidden.
+
+## `search/baseline_pre_blocked_domains.json`
+
+Captured on 2026-09-22 from commit
+`a80b2819f5626b44c161c47fddd72c6982f9149d`, **before** implementing
+`hardening-hostname-and-config` US-002 or touching its handler. The real
+`run_search_pipeline` ran with the socket guard enabled, empty config, a
+`FakeSearchProvider` named `searxng` followed by an uncalled paid `brave`,
+and a loaded classifier double returning `(0.1, [])` at threshold **0.85**.
+The request was `{"query": "domain policy baseline", "num_results": 3}`,
+sending neither `blocked_domains` nor `promptguard_threshold`.
+
+The three fake results, in order, use hosts `a.example`,
+`www.blocked.example`, and `blocked.example`; each URL is
+`https://<host>/article`. Their titles are `Result 1` through `Result 3`,
+their `content` values are `Calm search excerpt 1.` through
+`Calm search excerpt 3.`, and each engine is `google`.
+
+Only `results`, `omitted_by_reason`, `fallback_fired`, `provider_used`, and
+`provider_errors` are pinned, not whole-response equality: later stories in
+the 1.3.0 window add envelope fields. This fixture is deliberately **not
+regenerable after this story**. If it goes red later for a request sending
+neither new field, the change to these five fields is a behaviour change
+that the later story must classify under `contract/GOVERNANCE.md` before
+editing this fixture.
+
 ## `contract/unregenerated_openapi.yaml`
 
 The contract drift check's own failure case, committed rather than staged by hand.
@@ -137,6 +187,7 @@ redistributing response text, and a shape fixture needs none of it).
   documentation page does not list (it documents an optional `description` instead).
 
 **Guard.** `tests/test_brave_provider.py` (US-001) walks `tests/fixtures/` and asserts no
-file carries an auth header name, and walks `tests/fixtures/brave/` for any token-shaped
-literal (24 or more letters, digits, `_` or `-` in a row). Re-capturing is a fixture
+file carries an auth header name, and walks all payload fixtures (the exact exclusions
+above) for any token-shaped literal (24 or more letters, digits, `_` or `-` in a row).
+Re-capturing is a fixture
 change: repeat the procedure above and update this note's date, byte size and counts.

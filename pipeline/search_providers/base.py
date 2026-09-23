@@ -24,9 +24,11 @@ FailureClass = Literal["rate_limited", "timeout", "hard_error", "auth", "quota"]
 Every provider maps its own errors onto this fixed set and pairs each with a
 ``detail`` token from its own closed vocabulary (never ``str(exc)``, never a
 URL). ``FailureClass`` stays internal to ``pipeline/search_providers/`` — the
-orchestrator composes wire strings from a provider's ``name`` and
-``failure_class``; the Literal itself never crosses into
-``pipeline/contract.py``.
+orchestrator composes ``provider_errors`` and ``search_unavailable`` from
+``name`` and ``failure_class`` alone. A configured ``[searxng]``-only chain
+also exposes SearXNG's closed ``detail`` in its ``searxng_unavailable`` 422
+reason; Brave's detail is not wire-visible. The Literal itself never crosses
+into ``pipeline/contract.py``.
 """
 
 FAILURE_CLASSES = frozenset(get_args(FailureClass))
@@ -58,6 +60,7 @@ class ProviderSearchResult:
     results: list[dict[str, Any]]
     unresponsive_engines: list[str]
     content_kind: ContentKind = CONTENT_KIND_SNIPPET
+    compressed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,14 +69,17 @@ class ProviderFailure:
 
     ``detail`` is always a token drawn from the provider's own closed
     vocabulary — never ``str(exc)``, never a URL, never a header or parameter
-    value. Consumers compose wire-facing strings (a ``provider_errors`` entry,
-    a ``search_unavailable`` reason) from ``provider_name`` and
-    ``failure_class`` alone.
+    value. ``provider_errors`` and ``search_unavailable`` compose from
+    ``provider_name`` and ``failure_class`` alone; Brave's detail is not
+    wire-visible. On a configured ``[searxng]``-only chain, SearXNG's detail
+    also reaches the ``searxng_unavailable`` 422 reason, which is why that
+    vocabulary must remain closed.
     """
 
     provider_name: str
     failure_class: FailureClass
     detail: str
+    compressed: bool = False
 
 
 class SearchProvider(Protocol):

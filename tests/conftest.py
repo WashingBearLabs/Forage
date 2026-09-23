@@ -45,13 +45,24 @@ if str(_REPO_ROOT) not in sys.path:
 _CLEARED_ENV_VARS = (
     "HF_TOKEN",
     "HF_HOME",
+    "FORAGE_MODEL_ID",
     "FORAGE_MODEL_REVISION",
     "FORAGE_WEIGHTS_MIRROR",
     "FORAGE_MIRROR_TOKEN",
     "VALKEY_URL",
     "FORAGE_SEARCH_PROVIDERS",
     "FORAGE_BRAVE_API_KEY",
+    "FORAGE_CACHE_HMAC_KEY",
 )
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--regenerate-search-pins",
+        action="store_true",
+        default=False,
+        help="Rewrite the synthetic search wire, counter and exhaustion fixtures.",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -65,3 +76,11 @@ def forbid_inherited_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     """Run every test against an environment with no inherited configuration."""
     for name in _CLEARED_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def clear_manifest_entry_cache() -> None:
+    """Each test owns the process-lifetime manifest memo it populates."""
+    import model_fetcher
+
+    model_fetcher._manifest_entry.cache_clear()

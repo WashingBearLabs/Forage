@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document logging patterns, levels, and conventions.
 
-> Last updated: 2026-09-13
-> Updated by: Claude (seed-project)
+> Last updated: 2026-09-22
+> Updated by: Copilot (hardening-promptguard-86m US-006)
 
 ## Overview
 
@@ -41,8 +41,8 @@ Every module obtains its logger with `logger = logging.getLogger(__name__)` at m
 
 | Logger | Defined at | Levels used | What it emits |
 |--------|------------|-------------|---------------|
-| `retrieval_app` | `retrieval_app.py:76` | INFO, WARNING | Startup lines; `config.yaml not found at %s`; `break_glass_advertisement_active — %s=1 is forcing /health ...`; `document extraction completed` (INFO, content-free `extra=` dict) |
-| `cache` | `cache.py:38` | WARNING | The two closed-vocabulary lines (see below) |
+| `retrieval_app` | `retrieval_app.py` | INFO, WARNING | Startup lines; `config.yaml not found at %s`; `config_unknown_key — key=%s` (WARNING, one per unknown dotted key, never its value, tokens in the message not `extra=`); `config_invalid_value — key=%s dropped=%d entries=%s` (operator domain-list drops); `config_invalid_value — key=promptguard_threshold. /extract reads the raw value through its own guard` (WARNING, never the invalid value); `promptguard_threshold_resolved — value=%s` (once per boot, INFO, validated numeric default only); `break_glass_advertisement_active — %s=1 is forcing /health ...`; `document extraction completed` (INFO, content-free `extra=` dict); `validation_422_truncated — count=%d route=%s` and `validation_422_loc_dropped — dropped=%d route=%s` (WARNING, counts and closed route tokens only) |
+| `cache` | `cache.py` | WARNING | Connection/operation reason mapper, `cache_entry_corrupt`, and six `cache_integrity_reject` reasons with a credential-free key digest; `cache_bounds_inverted` and `valkey_url_option_forbidden` startup diagnostics. Signing-key boot markers are emitted by `retrieval_app`, below. |
 | `model_fetcher` | `model_fetcher.py:141` | INFO, WARNING, ERROR, exception | All `weights_*` markers and `model_revision_invalid` |
 | `promptguard.classifier` | `promptguard/classifier.py:21` | DEBUG, INFO, WARNING | Model loaded; `PromptGuard model not available — ML injection detection disabled` (WARNING with `exc_info=True`, so a traceback follows); `classify() called but model not loaded — returning safe fallback` |
 | `pipeline.orchestrator` | `pipeline/orchestrator.py:80` | INFO, WARNING | `Cache hit for %s`; search-result omission lines; `search_promptguard_complete`; quarantine WARNING; `search_promptguard_local_latency_target_exceeded` (WARNING, `extra=` only); `search_provider_failed provider=%s failure_class=%s detail=%s` (WARNING, one per failed provider during chain traversal — the closed tokens ride in the message as `key=value`, and the line pairs with the provider's own WARNING: cause at the provider, effect on the chain) |
@@ -58,15 +58,17 @@ Every module obtains its logger with `logger = logging.getLogger(__name__)` at m
 
 - **Dependency-state transitions**, at WARNING or ERROR so they are visible: the cache connect failure with its closed reason; the cache not being available at startup; every weights-acquisition outcome through a `weights_*` marker; a verified weight set that will not load (`weights_load_failed`, preceded by the classifier's WARNING with traceback).
 - **A decision that changed what the caller received** because a dependency was absent: the `stage3_promptguard` fail-closed / fail-open lines and the orchestrator quarantine line. The response body carries the machine-readable version (`promptguard_state`, `degraded_reasons`, `omitted_by_reason`); the log line is the operator's cue to look at `/health`.
-- **Operator-facing misconfiguration** at boot: break-glass armed (naming the variable that armed it), `config.yaml` missing, `FORAGE_MODEL_REVISION` not a 40-hex sha (`model_revision_invalid`, value not echoed), `FORAGE_WEIGHTS_MIRROR` malformed (`weights_mirror_invalid`, reference redacted).
+- **Operator-facing misconfiguration** at boot: break-glass armed (naming the variable that armed it), `config.yaml` missing, `config_invalid_value` for domain lists (one WARNING per affected list, key, dropped count and operator entries in the message, not `extra=`; credential/URL-shaped mistakes redacted, non-string members represented only by `[non-string]`, non-list containers by `dropped=1 entries=[invalid-container]`), or for `promptguard_threshold` (one WARNING, key only, never the value, explicitly noting `/extract`'s separate raw guard; fetch routes fall back to 0.85), `FORAGE_MODEL_REVISION` not a 40-hex sha (`model_revision_invalid`, value not echoed), `FORAGE_WEIGHTS_MIRROR` malformed (`weights_mirror_invalid`, reference redacted).
 
 ### Never log
 
 - `VALKEY_URL`, in whole or in part: not the password, not the host, not `str(exc)` from the redis client. Enforced by `tests/test_cache.py::TestReconnect::test_connect_failure_never_logs_url_or_secret` and `tests/test_app.py::test_no_selection_path_logs_the_valkey_url`.
+- `FORAGE_CACHE_HMAC_KEY`, signed cache envelopes or their payloads. The real-lifespan sentinel tests cover startup, signed writes, integrity rejects, connection failure and shutdown, including each captured record's arguments.
 - `HF_TOKEN` and `FORAGE_MIRROR_TOKEN`, `huggingface_hub` exception text, and `oras` stdout/stderr. Enforced by `tests/test_model_fetcher.py::TestHuggingFaceFetch::test_a_failed_download_never_logs_the_token` and `::TestNoSourceProducedWeights::test_neither_token_ever_reaches_a_log_line`.
 - A mirror reference before it has passed `redact_reference()` (`model_fetcher.py:957`, userinfo becomes `***@host`). Enforced by `::TestMirrorReferenceResolution::test_a_credential_bearing_reference_is_refused_and_redacted`.
 - `SEARXNG_SECRET`. Forage does not read it (it belongs to the SearXNG companion and arrives via the compose env file), so no Forage line can carry it; keep it that way.
 - Fetched page content, extracted text, upload bytes, search snippets, or query text. `/extract`'s single INFO line carries only `request_id`, `size`, `content_type`, `verdict`, `reason`, `duration` (`retrieval_app.py:1507`); quarantine returns and logs a content-free response.
+- Search-result URLs, including omitted Brave results. Content-omission INFO records carry `search_result_omitted reason=<token> domain=<validated-host>` (plus structural field or classifier score), never paths or query strings. URL rejection/block records remain host-free. The orchestrator no-leak test sweeps every record's rendered message.
 - Anything from `docker-entrypoint.sh`. It is `set -euo pipefail; exec "$@"` and prints nothing, by its own comment, because it is the one place a chatty launcher would echo `VALKEY_URL` into the container log.
 
 ---
@@ -75,20 +77,75 @@ Every module obtains its logger with `logger = logging.getLogger(__name__)` at m
 
 Tests are the enforcement mechanism for both vocabularies: each fixed string below has a `caplog` assertion that it appears and that the value it stands in for does not. A new reason or marker without a test is incomplete.
 
+### `retrieval_app.py` request validation
+
+`validation_422_truncated — count=<n> route=<token>` means the caller produced
+more than `_MAX_VALIDATION_ERRORS` (100) failures: the response was truncated,
+but the request was still fully parsed. `validation_422_loc_dropped —
+dropped=<n> route=<token>` means non-allowlisted or non-string/non-integer
+location segments were dropped from the emitted prefix. Each is at most one
+WARNING per request, visible under default container logging. Route tokens are
+only `/search`, `/retrieve`, `/extract`, `other`, derived from the matched
+template, never the raw request path. Neither exception text nor `exc.body`
+may reach a log or traceback; construction/render failures return a fixed 422.
+Enforced by `tests/test_contract_errors.py::test_validation_422_cap_and_closed_route`,
+`::test_validation_location_without_owned_route_fails_closed` and
+`::test_validation_marker_never_reaches_any_logger` (root capture, messages and
+arguments, with a live-capture canary). Log volume remains under the accepted
+admitted-caller exhaustion risk; see GOVERNANCE ruling (l).
+
 ### `cache.py`
 
-`_closed_vocabulary_reason(exc, *, default)` (`cache.py:297-305`) returns `timeout` when `exc` is a `TimeoutError` and otherwise the caller's `default`. Exactly three strings can ever appear: `connect_failed`, `operation_failed`, `timeout`.
+`_closed_vocabulary_reason(exc, *, default)` (`cache.py:362-370`) returns `timeout` when `exc` is a
+`TimeoutError` and otherwise the caller's `default`: `connect_failed`,
+`operation_failed`, `timeout`. It is an exception mapper, not a token registry.
+The cache parse guard logs the fixed literal `cache_entry_corrupt` directly.
 
 | Level | Line | Reason values | Site |
 |-------|------|---------------|------|
-| WARNING | `Valkey connection failed for content cache (%s)` | `connect_failed`, `timeout` | `_attempt_connect`, `cache.py:419-422` |
-| WARNING | `Content cache operation failed (%s)` | `operation_failed`, `timeout` | `_mark_disconnected`, `cache.py:482-485` |
+| WARNING | `Valkey connection failed for content cache (%s)` | `connect_failed`, `timeout` | `_attempt_connect`, `cache.py:490-513` |
+| WARNING | `Content cache operation failed (%s)` | `operation_failed`, `timeout` | `_mark_disconnected`, `cache.py:563-571` |
+| WARNING | `Content cache entry rejected (%s) key=%s` | `cache_entry_corrupt` and the credential-free `ret:<sha256>` key digest only | `ContentCache._parse_entry` |
+| WARNING | `cache_integrity_reject — reason=%s key=%s` | `CACHE_INTEGRITY_REASONS`: `unsigned`, `bad_mac`, `malformed_envelope`, `oversize`, `unexpected_envelope`, `wrong_type`; only the `ret:<sha256>` digest beside the token | `ContentCache.get`, `ValkeyStorage.get` |
+| WARNING | `cache_bounds_inverted — cache.max_value_bytes exceeds cache.max_bytes; the in-memory storage applies cache.max_bytes` | Fixed key names, never values; boot continues | `cache_settings_from_config` |
+| WARNING | `valkey_url_option_forbidden — option=%s` | Only `decode_responses`, `encoding`, `encoding_errors`, `protocol`; no URL or option value; boot refuses | `ValkeyStorage.__init__` |
 
-Startup logs only the backend literal (`Content cache connected (valkey|memory)`) or the fixed canary `Content cache not available at startup`. Pinned by `tests/test_cache.py::TestReconnect::test_connect_failure_never_logs_url_or_secret` (drives both `ContentCache.connect()` and the real lifespan with a credentialed URL) and `tests/test_app.py::test_no_selection_path_logs_the_valkey_url` (five start modes).
+Integrity rejects emit one un-rate-limited WARNING per rejected read, not per failed
+check. The digest is an opaque, credential-free correlation handle, not URL concealment:
+it is confirmable against a guessed URL. Ordinary misses
+and Forage's write-side oversize skips emit no integrity WARNING; the latter
+increment `storage_oversize_skips`. `TestSignedValues` and
+`TestBoundedValkeyReads` assert the closed records without secrets or raw values.
+
+The corrupt-entry line never carries the raw value, URL, exception text or traceback.
+`tests/test_cache.py::TestCorruptCacheEntries` asserts the exact record and absence of
+sentinels in both the value and URL, including when deletion also fails.
+
+Startup connection logs name only the backend literal (`Content cache connected (valkey|memory)`) or the fixed canary `Content cache not available at startup`. Pinned by `tests/test_cache.py::TestReconnect::test_connect_failure_never_logs_url_or_secret` (drives both `ContentCache.connect()` and the real lifespan with a credentialed URL) and `tests/test_app.py::test_no_selection_path_logs_the_valkey_url`.
+
+The signing verdict has four additional boot markers, emitted by `retrieval_app`
+at WARNING, each naming `FORAGE_CACHE_HMAC_KEY` but never its value:
+
+| Marker | Meaning |
+|---|---|
+| `cache_hmac_key_missing` | Valkey without a key; starts degraded with `cache_unauthenticated`, cached content served without proof of origin. |
+| `cache_hmac_key_unused` | Usable key with memory storage; starts without signing, no cache degraded reason. |
+| `cache_hmac_key_too_short` | Fewer than 32 UTF-8 bytes after edge space/tab/LF stripping; raises `CacheConfigurationError`, startup refused. |
+| `cache_hmac_key_invalid` | Non-printable/non-ASCII, interior whitespace or controls including CR; raises `CacheConfigurationError`, startup refused. |
+
+See [credential handling](../../../docs/configuration.md#credential-handling-for-forage_cache_hmac_key)
+for generation and stop-all rotation, and [Monitoring](../../docs/MONITORING.md#reading-cacheintegrity_rejects)
+for interpreting the six integrity reasons. Length validation cannot establish entropy.
 
 ### `model_fetcher.py`
 
-Every line starts with a snake_case marker followed by ` — ` and a fixed clause; variable parts are closed codes, a revision sha, a byte count, a duration, or a redacted reference.
+Lines use snake_case markers; identity refusals are bare closed tokens. Variable
+parts are closed codes, a revision sha, a byte count, a duration, or a redacted reference.
+
+`FORAGE_MODEL_REVISION` uses the selected model's committed pin; a malformed value
+falls back to the pin with `model_revision_invalid`; a well-formed value that is not
+that pin refuses to verify (`weights_revision_unpinned`). Neither the override nor
+any path appears in the unpinned-revision or identity-mismatch record.
 
 | Level | Marker | Meaning |
 |-------|--------|---------|
@@ -97,6 +154,12 @@ Every line starts with a snake_case marker followed by ` — ` and a fixed claus
 | ERROR | `weights_verification_failed` | Manifest verification refused the set; lists `REASON_*` codes |
 | ERROR | `weights_quarantined` / `weights_quarantine_failed` | Refused set moved to `$HF_HOME/quarantine/`, or could not be |
 | ERROR | `weights_pin_unusable` | `weights_manifest.json` pins nothing verifiable; no fetch attempted |
+| ERROR | `weights_verification_failed` with `manifest_model_unknown` / `weights_revision_unpinned` | No entry for the selected id / requested revision is not that entry's pin; no snapshot lookup or source attempted |
+| ERROR | `model_identity_mismatch` | At the load site, manifest and requested snapshot directories differ or the directory vanished; `load()` uncalled |
+| WARNING | `model_id_not_allowed` | Unknown `FORAGE_MODEL_ID`; lifespan raises `ModelConfigurationError`, never echoing the value |
+| WARNING | `model_labels_unexpected` (`promptguard.classifier`) | Config lacks exactly two indexed BENIGN/INJECTION labels; no classifier is published |
+| WARNING | `manifest_pin_unavailable — reason=<code>` | Default model retains its fallback revision for hashing; one warning per memoised path/model, no manifest reread per request |
+| WARNING | `model_cache_dir_missing` (`promptguard.classifier`) | Supplied hub-cache directory does not exist; neither auto-class is called |
 | ERROR | `weights_load_failed` | Verified set did not load into the classifier |
 | ERROR | `weights_mirror_invalid` / `model_revision_invalid` | Malformed `FORAGE_WEIGHTS_MIRROR` (redacted) / `FORAGE_MODEL_REVISION` (not echoed) |
 | ERROR+traceback | `weights_acquisition_crashed` | `logger.exception`; the acquisition thread never raises |
@@ -108,7 +171,7 @@ Closed codes that fill the `reason=` and `Attempts:` slots:
 
 - Hugging Face leg, `_fetch_reason()` (`model_fetcher.py:938`): `http_<status>`, `timeout`, `io_failed`, `fetch_failed`.
 - Mirror leg, `OUTCOME_*` (`model_fetcher.py:281-298`): `ok`, `skipped_no_token`, `misconfigured`, `oras_missing`, `insufficient_space`, `pull_failed`, `timeout`, `no_artifact`, `artifact_oversized`, `extract_failed`, `install_failed`, `refused_verification`.
-- Verification, `REASON_*` (`model_fetcher.py:260-274`): `manifest_missing`, `manifest_unreadable`, `manifest_empty`, `manifest_unparseable`, `manifest_invalid`, `manifest_disallowed_format`, `snapshot_missing`, `file_missing`, `file_extra`, `disallowed_format`, `size_mismatch`, `hash_mismatch`, `unreadable_file`, `symlink_escape`, `disallowed_entry`.
+- Verification, `REASON_*`: `manifest_missing`, `manifest_unreadable`, `manifest_empty`, `manifest_unparseable`, `manifest_invalid`, `manifest_disallowed_format`, `manifest_model_unknown`, `weights_revision_unpinned`, `snapshot_missing`, `file_missing`, `file_extra`, `disallowed_format`, `size_mismatch`, `hash_mismatch`, `unreadable_file`, `symlink_escape`, `disallowed_entry`.
 
 Pinned by, among others, `tests/test_model_fetcher.py::TestHuggingFaceFetch::test_an_http_status_survives_as_a_closed_reason_code` (`http_401` present, upstream prose absent), `::TestQuarantine::test_a_refusal_is_logged_loudly_with_its_reasons`, `::TestNoSourceProducedWeights::test_the_ending_names_every_source_in_order`, `::TestRevisionPin::test_an_invalid_override_is_reported_without_echoing_it`, and `::TestDegradedRecoveryRetry::test_every_retry_says_so_at_warning`.
 

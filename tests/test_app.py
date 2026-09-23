@@ -2,25 +2,35 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import hashlib
+import hmac
+import inspect
 import json
 import logging
+import os
+import stat
 import tempfile
 import threading
 import time
 from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import ExitStack, asynccontextmanager, contextmanager
+from copy import deepcopy
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import yaml
 from fastapi import FastAPI
 from starlette.types import Message, Receive, Scope, Send
 
 import model_fetcher
 import retrieval_app
+import url_validator
 from cache import (
     DEFAULT_CACHE_MAX_BYTES,
     DEFAULT_CACHE_MAX_ENTRIES,
@@ -30,28 +40,41 @@ from cache import (
     ContentCache,
     InMemoryStorage,
     ValkeyStorage,
+    _effective_ttl_hours,
 )
 from model_fetcher import DEFAULT_MODEL_REVISION, ModelMetrics
 from models import (
     RetrievedContent,
+    RetrieveRequest,
+    SearchRequest,
     SearchResponse,
     Stage2Verdict,
     Stage3Verdict,
     TrustTier,
 )
-from pipeline import contract
+from pipeline import contract, orchestrator
 from pipeline.contract import (
     CONTRACT_VERSION,
+    DEGRADED_CACHE_UNAUTHENTICATED,
     DEGRADED_CACHE_UNAVAILABLE,
     DEGRADED_PROMPTGUARD_UNAVAILABLE,
     DIAG_STRUCTURAL_BLOCKED,
 )
 from pipeline.extraction_limits import (
+    CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL,
     MAX_PROMPTGUARD_CHUNKS,
+    MEBIBYTE,
+    PARENT_RESERVATION_BYTES,
+    PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES,
     ExtractionConfigurationError,
     extraction_settings_from_config,
 )
 from pipeline.orchestrator import PipelineError
+from pipeline.retrieve_limits import (
+    RetrieveConfigurationError,
+    RetrieveSettings,
+    retrieve_settings_from_config,
+)
 from pipeline.search_providers import SearchProviderConfigurationError
 from pipeline.search_providers.base import (
     ProviderFailure,
@@ -59,15 +82,33 @@ from pipeline.search_providers.base import (
     SearchProvider,
 )
 from pipeline.search_providers.brave import BRAVE_API_KEY_ENV_VAR
-from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL
+from pipeline.search_providers.searxng import (
+    DEFAULT_SEARXNG_URL,
+    SearxngConfigurationError,
+    SearxngProvider,
+)
+from pipeline.search_targets import (
+    SearchTargets,
+    SearchTargetsConfigurationError,
+    search_targets_from_config,
+)
+from pipeline.stage1_extraction import ExtractionResult, extract_html
+from pipeline.stage3_promptguard import (
+    PromptGuardConfigurationError,
+    PromptGuardSettings,
+    promptguard_settings_from_config,
+)
+from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES, FetchResult
 from promptguard.classifier import (
     CHUNK_OVERLAP,
+    DEFAULT_MODEL_ID,
     MAX_SEQ_LEN,
-    MODEL_ID,
     PromptGuardClassifier,
+    PromptGuardThreadsConfigurationError,
 )
 from retrieval_app import (
     _MAX_DOCUMENT_BYTES,
+    CACHE_HMAC_KEY_ENV_VAR,
     DocumentSizeLimitMiddleware,
     ExtractionAdmissionController,
     ExtractionMetrics,
@@ -78,10 +119,17 @@ from retrieval_app import (
     lifespan,
 )
 from tests.fakes import (
+    CACHE_HMAC_SENTINEL as _CACHE_HMAC_SENTINEL,
+)
+from tests.fakes import (
     FakeContentCache,
     FakeSearchProvider,
     FakeStorage,
+    assert_frozen,
+    client_patch,
     hub_download_double,
+    make_mock_classifier,
+    make_response,
     weights_manifest_document,
 )
 
@@ -91,8 +139,15 @@ def client() -> httpx.AsyncClient:
     """Create an async test client for the retrieval app."""
     # Ensure app.state has the expected attributes (normally set by lifespan)
     app.state.classifier = PromptGuardClassifier()
+    app.state.promptguard_model = DEFAULT_MODEL_ID
     app.state.cache = FakeContentCache()
+    app.state.cache_signing_active = False
     app.state.config = {"extract_route_enabled": True}
+    app.state.retrieve_settings = retrieve_settings_from_config(app.state.config)
+    app.state.search_targets = SearchTargets()
+    app.state.promptguard_threshold_default = 0.85
+    app.state.promptguard_settings = PromptGuardSettings()
+    app.state.policy_domain_entries_max_bytes = 65536
     settings = extraction_settings_from_config(app.state.config)
     app.state.extraction_settings = settings
     app.state.extraction_metrics = ExtractionMetrics()
@@ -102,6 +157,9 @@ def client() -> httpx.AsyncClient:
     )
     app.state.search_metrics = SearchMetrics()
     app.state.retrieve_metrics = RetrieveMetrics()
+    app.state.retrieve_admission = ExtractionAdmissionController.from_retrieve_settings(
+        RetrieveSettings(), app.state.retrieve_metrics
+    )
     app.state.model_metrics = ModelMetrics()
     app.state.classification_semaphore = asyncio.Semaphore(
         settings.classification_concurrency
@@ -121,6 +179,7 @@ def test_extraction_limit_defaults_are_bounded_and_derived() -> None:
     assert settings.child_cpu_seconds == 20
     assert settings.wall_clock_seconds == 90
     assert settings.extraction_concurrency == 1
+    assert settings.classification_concurrency == 1
     assert settings.max_extracted_characters == (
         (MAX_SEQ_LEN - CHUNK_OVERLAP) * MAX_PROMPTGUARD_CHUNKS * 4
     )
@@ -137,6 +196,7 @@ async def test_health_returns_200(client: httpx.AsyncClient) -> None:
     data = resp.json()
     assert data["status"] == "degraded"
     assert isinstance(data["promptguard_loaded"], bool)
+    assert data["promptguard_model"] == DEFAULT_MODEL_ID
     assert isinstance(data["cache_connected"], bool)
     assert "search_sanitization" not in data["capabilities"]
 
@@ -487,6 +547,14 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "fallback_fired": 0,
         "paid_calls": 0,
         "policy_unknown_provider": 0,
+        "policy_invalid_domain_entry": 0,
+        "policy_suffix_trusted_skip": 0,
+        "classification_wait_timeouts": 0,
+        "provider_compressed_body": 0,
+        "provider_timeouts": 0,
+        "promptguard_latency_target_exceeded": 0,
+        "sanitization_latency_max_ms": 0,
+        "promptguard_contiguity_detections": 0,
     }
     assert body["retrieve"] == {
         "requests": 0,
@@ -495,6 +563,12 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "cache_misses": 0,
         "blocked_by_reason": {},
         "promptguard_state": {},
+        "policy_invalid_domain_entry": 0,
+        "policy_suffix_trusted_skip": 0,
+        "classification_wait_timeouts": 0,
+        "semaphore_saturation": 0,
+        "busy_rejections": 0,
+        "promptguard_contiguity_detections": 0,
     }
     assert set(body["cache"]) == {
         "reconnect_attempts",
@@ -505,7 +579,131 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "storage_misses",
         "storage_evictions",
         "storage_oversize_skips",
+        "corrupt_entries",
+        "integrity_rejects",
     }
+
+
+@pytest.mark.parametrize(
+    "shape", ["invalid-json", "wrong-schema", "wrong-retrieved-at"]
+)
+async def test_retrieve_repopulates_a_corrupt_cache_entry(
+    client: httpx.AsyncClient,
+    shape: str,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metrics = CacheMetrics()
+    storage = FakeStorage(metrics=metrics)
+    app.state.cache = ContentCache(storage=storage, metrics=metrics)
+    monkeypatch.setattr(app.state, "cache_metrics", metrics)
+    url = "https://example.com/article"
+    request = {"url": url, "trusted_domains": ["example.com"]}
+    fetched = FetchResult(
+        final_url=url,
+        content_type="text/html",
+        response_body=b"<html><body><p>A safe article.</p></body></html>",
+        status_code=200,
+    )
+    with (
+        patch(
+            "pipeline.orchestrator.validate_url",
+            return_value=("93.184.216.34", "example.com"),
+        ),
+        patch("pipeline.orchestrator.fetch_url", return_value=fetched) as fetch,
+        caplog.at_level(logging.WARNING, logger="cache"),
+    ):
+        warm = await client.post("/retrieve", json=request)
+        assert warm.status_code == 200
+        assert not warm.json()["cache_hit"]
+        (key,) = storage.entries
+        if shape == "invalid-json":
+            raw = "not-json-CORRUPT-VALUE-SENTINEL"
+        elif shape == "wrong-schema":
+            raw = '{"not": "CORRUPT-VALUE-SENTINEL"}'
+        else:
+            raw = json.dumps(
+                warm.json() | {"retrieved_at": {"secret": "CORRUPT-VALUE-SENTINEL"}}
+            )
+        await storage.set(key, raw, ttl_seconds=3600)
+
+        response = await client.post("/retrieve", json=request)
+        assert response.status_code == 200
+        assert response.json()["cache_hit"] is False
+        assert response.json()["body"] == warm.json()["body"]
+        assert storage.delete_calls == 1
+        assert metrics.corrupt_entries == 1
+        assert (
+            RetrievedContent.model_validate_json(storage.entries[key][0]).body
+            == (warm.json()["body"])
+        )
+
+        hit = await client.post("/retrieve", json=request)
+        assert hit.status_code == 200
+        assert hit.json()["cache_hit"] is True
+        assert hit.json()["body"] == warm.json()["body"]
+        assert fetch.call_count == 2
+        assert metrics.corrupt_entries == 1
+
+    warnings = [record for record in caplog.records if record.name == "cache"]
+    assert len(warnings) == 1
+    assert warnings[0].levelno == logging.WARNING
+    assert warnings[0].getMessage() == (
+        f"Content cache entry rejected (cache_entry_corrupt) key={key}"
+    )
+    assert "CORRUPT-VALUE-SENTINEL" not in caplog.text
+    response_metrics = await client.get("/metrics")
+    assert response_metrics.status_code == 200
+    assert response_metrics.json()["cache"]["corrupt_entries"] == 1
+    assert response_metrics.json()["retrieve"]["cache_misses"] == 2
+    assert response_metrics.json()["retrieve"]["cache_hits"] == 1
+
+
+async def test_retrieve_serves_oversize_cache_values_uncached(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    metrics = CacheMetrics()
+    storage = InMemoryStorage(metrics=metrics)
+    monkeypatch.setattr(
+        app.state,
+        "cache",
+        ContentCache(
+            storage=storage, metrics=metrics, hmac_key=b"x" * 32, max_value_bytes=4096
+        ),
+    )
+    monkeypatch.setattr(app.state, "cache_metrics", metrics)
+    url = "https://example.com/article"
+    text = "A safe article with useful information. " * 200
+    fetched = FetchResult(
+        final_url=url,
+        content_type="text/html",
+        response_body=f"<html><body><p>{text}</p></body></html>".encode(),
+        status_code=200,
+    )
+    with (
+        patch(
+            "pipeline.orchestrator.validate_url",
+            return_value=("93.184.216.34", "example.com"),
+        ),
+        patch("pipeline.orchestrator.fetch_url", return_value=fetched) as fetch,
+    ):
+        for _ in range(2):
+            response = await client.post(
+                "/retrieve",
+                json={
+                    "url": url,
+                    "trusted_domains": ["example.com"],
+                    "extract_mode": "full",
+                },
+            )
+            assert response.status_code == 200
+            assert not response.json()["cache_hit"]
+            assert response.json()["body"] == text.strip()
+        assert fetch.call_count == 2
+    assert storage.entry_count == 0
+    body = (await client.get("/metrics")).json()["cache"]
+    assert body["storage_oversize_skips"] == 2
+    assert body["integrity_rejects"] == 0
 
 
 async def test_metrics_exposes_the_model_acquisition_counters(
@@ -567,9 +765,14 @@ async def test_metrics_retrieve_records_cache_hit_and_promptguard_state(
     )
     with patch(
         "retrieval_app.run_retrieve_pipeline", new=AsyncMock(return_value=content)
-    ):
+    ) as pipeline:
         resp = await client.post("/retrieve", json={"url": "https://example.com/a"})
     assert resp.status_code == 200
+    effective = pipeline.call_args.args[0]
+    assert isinstance(effective, RetrieveRequest)
+    assert effective.trusted_domains == []
+    assert effective.verified_domains == []
+    assert effective.blocked_domains == []
 
     metrics_resp = await client.get("/metrics")
     retrieve_metrics = metrics_resp.json()["retrieve"]
@@ -578,6 +781,239 @@ async def test_metrics_retrieve_records_cache_hit_and_promptguard_state(
     assert retrieve_metrics["cache_misses"] == 0
     assert retrieve_metrics["promptguard_state"] == {"scanned": 1}
     assert retrieve_metrics["blocked_by_reason"] == {}
+
+
+def test_retrieve_copies_once_and_comparison_sites_never_normalize() -> None:
+    source = inspect.getsource(retrieval_app.retrieve)
+    tree = ast.parse(source)
+    copies = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "body"
+        and node.func.attr == "model_copy"
+    ]
+    assert len(copies) == 1
+    update = copies[0].keywords[0]
+    assert update.arg == "update"
+    assert isinstance(update.value, ast.Dict)
+    assert {
+        key.value for key in update.value.keys if isinstance(key, ast.Constant)
+    } == {"trusted_domains", "verified_domains", "blocked_domains"}
+    assert (
+        "_promptguard_policy_updates( body, retrieve_settings, "
+        "request.app.state.promptguard_threshold_default )" in " ".join(source.split())
+    )
+    root = Path(__file__).resolve().parent.parent
+    for filename in ("pipeline/orchestrator.py", "cache.py"):
+        assert "normalize_domain_entries(" not in (root / filename).read_text()
+    assert (root / "url_validator.py").read_text().count(
+        "normalize_domain_entries("
+    ) == 1
+
+
+@pytest.mark.parametrize("field", ["trusted_domains", "verified_domains"])
+@pytest.mark.parametrize("over_budget", [False, True])
+@pytest.mark.parametrize("invalid_entry", ["com", "\ud800"])
+async def test_retrieve_normalizes_each_list_once_in_the_single_policy_copy(
+    client: httpx.AsyncClient,
+    field: str,
+    over_budget: bool,
+    invalid_entry: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    budget = 4096
+    monkeypatch.setattr(app.state, "policy_domain_entries_max_bytes", budget)
+    monkeypatch.setattr(
+        app.state,
+        "retrieve_settings",
+        RetrieveSettings(
+            promptguard_fail_closed_floor=True, promptguard_threshold_ceiling=0.5
+        ),
+    )
+    if over_budget:
+        prefix = " .Example.COM. "
+        tail = "straße.de"
+        padding = " " * (budget - len((prefix + "\n" + tail).encode("utf-8")))
+        raw_entries = [prefix, padding + tail, "overbudget.example", "bad..entry"]
+        assert url_validator.domain_list_bytes(raw_entries[:2]) == budget
+        expected = [".example.com", "xn--strae-oqa.de"]
+        dropped = 2
+    else:
+        raw_entries = [invalid_entry, " .Example.COM. "] + [
+            f"Site{index}.EXAMPLE." for index in range(68)
+        ]
+        expected = [".example.com"] + [f"site{index}.example" for index in range(68)]
+        assert len(raw_entries) == 70
+        assert len(expected) == 69
+        dropped = 1
+    other_field = (
+        "verified_domains" if field == "trusted_domains" else "trusted_domains"
+    )
+    payload = {
+        "url": "https://example.com/",
+        "promptguard_threshold": 0.9,
+        "promptguard_fail_closed": False,
+        field: raw_entries,
+        other_field: [" " * (budget - len(".Other.EXAMPLE")) + ".Other.EXAMPLE"],
+        "blocked_domains": [" Evil.COM. ", "straße.de"]
+        + (["\ud800"] if over_budget else []),
+    }
+    content = RetrievedContent(
+        request_id="domain-policy",
+        source_url="https://example.com/",
+        final_url="https://example.com/",
+        body="A calm page.",
+        word_count=3,
+        content_type="html",
+        trust_score=0.7,
+        trust_tier=TrustTier.STANDARD,
+        stage2_verdict=Stage2Verdict.CLEAN,
+        stage3_verdict=Stage3Verdict.SAFE,
+        domain="example.com",
+    )
+    with (
+        patch("retrieval_app.run_retrieve_pipeline", return_value=content) as pipeline,
+        patch(
+            "retrieval_app.normalize_domain_entries",
+            wraps=url_validator.normalize_domain_entries,
+        ) as normalize,
+        patch.object(
+            RetrieveRequest,
+            "model_copy",
+            autospec=True,
+            side_effect=RetrieveRequest.model_copy,
+        ) as copy,
+    ):
+        response = await client.post(
+            "/retrieve",
+            content=json.dumps(payload),
+            headers={"content-type": "application/json"},
+        )
+    assert response.status_code == 200
+    effective = pipeline.call_args.args[0]
+    assert isinstance(effective, RetrieveRequest)
+    assert getattr(effective, field) == expected
+    assert getattr(effective, other_field) == [".other.example"]
+    assert effective.blocked_domains == ["evil.com", "xn--strae-oqa.de"]
+    assert effective.promptguard_threshold == 0.5
+    assert effective.promptguard_fail_closed is True
+    assert normalize.call_count == 3
+    assert [call.kwargs for call in normalize.call_args_list] == [
+        {"denylist": False, "budget_bytes": budget},
+        {"denylist": False, "budget_bytes": budget},
+        {"denylist": True, "budget_bytes": None},
+    ]
+    copy.assert_called_once()
+    assert getattr(copy.call_args.args[0], field) == raw_entries
+    assert set(copy.call_args.kwargs["update"]) == {
+        "trusted_domains",
+        "verified_domains",
+        "blocked_domains",
+        "promptguard_threshold",
+        "promptguard_fail_closed",
+    }
+    counters = (await client.get("/metrics")).json()
+    assert counters["retrieve"]["policy_invalid_domain_entry"] == dropped + (
+        1 if over_budget else 0
+    )
+    assert counters["search"]["policy_invalid_domain_entry"] == 0
+    assert counters["search"]["policy_suffix_trusted_skip"] == 0
+    assert "\ud800" not in caplog.text
+    assert "overbudget.example" not in caplog.text
+
+
+@pytest.mark.parametrize("budget", [4096, 65536, 1048576])
+async def test_retrieve_refuses_over_budget_denylist_before_any_canonicalization(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, budget: int
+) -> None:
+    monkeypatch.setattr(app.state, "policy_domain_entries_max_bytes", budget)
+    # Raw bytes, not the stripped spelling or entry count, determine refusal.
+    entries = [" " * budget + "evil.com"]
+    with (
+        patch("retrieval_app.run_retrieve_pipeline") as pipeline,
+        patch("url_validator.canonicalize_host") as canonicalize,
+        patch("retrieval_app.normalize_domain_entries") as normalize,
+    ):
+        response = await client.post(
+            "/retrieve",
+            json={
+                "url": "https://example.com/",
+                "blocked_domains": entries,
+                "trusted_domains": [".example.com"],
+                "verified_domains": [".other.example"],
+            },
+        )
+    assert response.status_code == 422
+    assert response.json() == {
+        "error": "content_too_large",
+        "reason": contract.POLICY_DOMAIN_LIST_TOO_LARGE,
+        "request_id": response.json()["request_id"],
+    }
+    assert len(response.json()["request_id"]) == 32
+    pipeline.assert_not_called()
+    canonicalize.assert_not_called()
+    normalize.assert_not_called()
+    counters = (await client.get("/metrics")).json()["retrieve"]
+    assert counters["errors"] == {"content_too_large": 1}
+    assert counters["requests"] == 1
+    assert counters["policy_invalid_domain_entry"] == 0
+
+
+async def test_retrieve_enforces_a_denylist_at_the_exact_raw_byte_budget(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app.state, "policy_domain_entries_max_bytes", 4096)
+    entries = [" " * (4096 - len("EVIL.com")) + "EVIL.com"]
+    with (
+        patch("pipeline.orchestrator.validate_url", new=url_validator.validate_url),
+        patch("url_validator.socket.getaddrinfo") as dns,
+    ):
+        response = await client.post(
+            "/retrieve",
+            json={"url": "https://www.evil.com/", "blocked_domains": entries},
+        )
+    assert response.status_code == 422
+    assert response.json()["error"] == "blocked_domain"
+    dns.assert_not_called()
+    assert app.state.retrieve_metrics.policy_invalid_domain_entry == 0
+
+
+@pytest.mark.parametrize("field", ["trusted_domains", "verified_domains"])
+@pytest.mark.parametrize("entry", [".example.com", "www.example.com"])
+async def test_retrieve_wildcard_resolution_reaches_served_metrics(
+    client: httpx.AsyncClient, field: str, entry: str
+) -> None:
+    classifier = make_mock_classifier(loaded=field == "trusted_domains")
+    app.state.classifier = classifier
+    url = "https://www.example.com/"
+    with (
+        patch(
+            "pipeline.orchestrator.validate_url",
+            return_value=("93.184.216.34", "www.example.com"),
+        ),
+        patch(
+            "pipeline.orchestrator.fetch_url",
+            return_value=FetchResult(
+                final_url=url,
+                response_body=b"<html><body><p>A calm article.</p></body></html>",
+                content_type="text/html",
+                status_code=200,
+            ),
+        ),
+    ):
+        response = await client.post("/retrieve", json={"url": url, field: [entry]})
+    assert response.status_code == 200
+    state = "skipped_trusted" if field == "trusted_domains" else "unavailable_allowed"
+    assert response.json()["promptguard_state"] == state
+    counters = (await client.get("/metrics")).json()["retrieve"]
+    assert counters["policy_suffix_trusted_skip"] == int(entry.startswith("."))
+    assert counters["promptguard_state"] == {state: 1}
+    classifier.classify.assert_not_called()
+    classifier.classify_windows.assert_not_called()
 
 
 async def test_metrics_retrieve_records_blocked_by_reason_from_diagnostic(
@@ -692,6 +1128,51 @@ async def test_metrics_search_records_omitted_and_unscanned_from_response(
     assert search_metrics["requests"] == 1
     assert search_metrics["omitted_by_reason"] == {contract.OMIT_INVALID_URL: 1}
     assert search_metrics["unscanned_results"] == 2
+
+
+async def test_metrics_search_records_the_url_audit_blocks(
+    client: httpx.AsyncClient,
+) -> None:
+    """US-003: drive A's eighteen blocks reach `/metrics` through the handler.
+
+    The real pipeline, not a stubbed `SearchResponse`: `blocked_url` has to
+    survive `contract.OMISSION_REASONS` membership or it buckets to `other`,
+    and that membership is the half a response-level assertion cannot see.
+    """
+    from tests.test_orchestrator import _AUDIT_DRIVE_A_ROWS
+
+    hostile = [raw for raw, reason, _token in _AUDIT_DRIVE_A_ROWS if reason is not None]
+    assert len(hostile) == 18
+    fake = FakeSearchProvider(
+        name="searxng",
+        outcome=ProviderSearchResult(
+            provider_name="searxng",
+            results=[
+                {"title": f"h{index}", "url": raw, "content": "a snippet"}
+                for index, raw in enumerate(hostile)
+            ],
+            unresponsive_engines=[],
+        ),
+    )
+
+    with _borrowed_search_providers([fake]):
+        resp = await client.post(
+            "/search",
+            json={
+                "query": "audit",
+                "num_results": 10,
+                "promptguard_fail_closed": False,
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["results"] == []
+    assert resp.json()["omitted_by_reason"] == {contract.OMIT_BLOCKED_URL: 18}
+
+    metrics_resp = await client.get("/metrics")
+    search_metrics = metrics_resp.json()["search"]
+    assert search_metrics["omitted_by_reason"] == {contract.OMIT_BLOCKED_URL: 18}
+    assert contract.METRICS_OTHER_BUCKET not in search_metrics["omitted_by_reason"]
 
 
 async def test_metrics_search_omitted_by_reason_unknown_key_buckets_to_other(
@@ -858,6 +1339,8 @@ async def _first_attempt_failed(*, timeout: float = 15.0) -> None:
 @asynccontextmanager
 async def _fetchable_environment(
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    model_id: str = DEFAULT_MODEL_ID,
 ) -> AsyncGenerator[MagicMock, None]:
     """A cache root, a manifest and a token that let exactly one fetch succeed.
 
@@ -880,7 +1363,7 @@ async def _fetchable_environment(
             json.dumps(
                 weights_manifest_document(
                     files,
-                    model_id=MODEL_ID,
+                    model_id=model_id,
                     revision=DEFAULT_MODEL_REVISION,
                 )
             ),
@@ -933,9 +1416,10 @@ async def test_lifespan_startup_yields_immediately(
 ) -> None:
     """Startup must not wait on the fetch — uvicorn serves nothing until it returns.
 
-    The compose healthcheck is 10 s x 5 retries with no `start_period`, so a
-    startup that blocked for a ~270 MiB download would be restart-looped
-    before it ever finished. The acquisition parks for up to 10 s here; if
+    Our compose probe (`curl -fsS -o /dev/null`, 30 s interval, 5 s timeout,
+    3 retries, 30 s `start_period`) checks liveness, not health. Blocking for a
+    ~270 MiB download would report unhealthy, not trigger a Compose restart.
+    The acquisition parks for up to 10 s here; if
     startup were awaiting it, this test would take that long instead of
     milliseconds.
     """
@@ -992,6 +1476,73 @@ async def test_health_answers_while_the_fetch_is_in_flight(
             assert model_metrics.fetch_in_progress is True
     finally:
         release.set()
+
+
+async def test_health_answers_while_a_fetched_page_is_being_extracted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`/health` stays responsive while stage 1 parses a fetched page.
+
+    The shape of the test above, with the same connected cache for the same
+    reason — no reconnect floor to hide behind — and a different thing held:
+    a `/retrieve` whose `extract_html` is parked in its worker thread, standing
+    in for a pathological page. With stage 1 on the event loop every `/health`
+    would wait for it (`hardening-retrieve-parity` US-002).
+    """
+    acquisition = threading.Event()
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _blocking_acquisition(acquisition)
+    )
+    entered = threading.Event()
+    release = threading.Event()
+
+    def _blocking_extract_html(
+        html_content: str, source_url: str | None = None
+    ) -> ExtractionResult:
+        entered.set()
+        release.wait(timeout=10)
+        return extract_html(html_content, source_url)
+
+    fetch = AsyncMock(
+        return_value=FetchResult(
+            final_url="https://example.com/",
+            response_body=b"<html><body><p>A calm page.</p></body></html>",
+            content_type="text/html",
+            status_code=200,
+        )
+    )
+    try:
+        with (
+            patch(
+                "pipeline.orchestrator.validate_url",
+                new=AsyncMock(return_value=("93.184.216.34", "example.com")),
+            ),
+            patch("pipeline.orchestrator.fetch_url", new=fetch),
+            patch("pipeline.orchestrator.extract_html", new=_blocking_extract_html),
+        ):
+            async with _running_app(cache_connected=True) as client:
+                retrieve = asyncio.create_task(
+                    client.post("/retrieve", json={"url": "https://example.com/"})
+                )
+                deadline = time.monotonic() + 10
+                while not entered.is_set():
+                    assert time.monotonic() < deadline, "extraction never started"
+                    await asyncio.sleep(0.01)
+
+                latencies: list[float] = []
+                for _ in range(5):
+                    started_at = time.monotonic()
+                    response = await client.get("/health")
+                    latencies.append(time.monotonic() - started_at)
+                    assert response.status_code == 200
+
+                assert max(latencies) < 1.0
+                assert retrieve.done() is False
+                release.set()
+                assert (await retrieve).status_code == 200
+    finally:
+        release.set()
+        acquisition.set()
 
 
 async def test_metrics_reports_fetch_in_progress_while_downloading(
@@ -1187,6 +1738,125 @@ async def test_the_lifespan_calls_the_fetcher_off_the_event_loop(
     assert threads and threads[0] != threading.get_ident()
 
 
+@pytest.mark.parametrize("model_id", [DEFAULT_MODEL_ID, "acme/second-guard"])
+async def test_lifespan_passes_selected_model_through_acquisition_and_both_loaders(
+    monkeypatch: pytest.MonkeyPatch, model_id: str
+) -> None:
+    monkeypatch.setattr(
+        model_fetcher, "ALLOWED_MODEL_IDS", frozenset({DEFAULT_MODEL_ID, model_id})
+    )
+    monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, model_id)
+    received: list[str | None] = []
+    original = model_fetcher.acquire_and_load
+
+    def _record(
+        classifier: PromptGuardClassifier,
+        *,
+        metrics: ModelMetrics | None = None,
+        model_id: str | None = None,
+        **_kwargs: object,
+    ) -> bool:
+        received.append(model_id)
+        return original(classifier, model_id=model_id, metrics=metrics)
+
+    monkeypatch.setattr(model_fetcher, "acquire_and_load", _record)
+    with (
+        patch("transformers.AutoTokenizer.from_pretrained") as tokenizer,
+        patch(
+            "transformers.AutoModelForSequenceClassification.from_pretrained"
+        ) as model,
+        patch("retrieval_app._warn_if_envelope_memory_rule_unmet") as envelope,
+    ):
+        model.return_value.config.id2label = {0: "BENIGN", 1: "INJECTION"}
+        async with (
+            _fetchable_environment(monkeypatch, model_id=model_id),
+            _running_app() as running,
+        ):
+            assert await _settled(app.state.model_task) is True
+            acquisition: model_fetcher.WeightAcquisition = app.state.model_acquisition
+            assert acquisition._model_id == model_id
+            assert received == [model_id]
+            assert tokenizer.call_args.args == (model_id,)
+            assert model.call_args.args == (model_id,)
+            assert envelope.call_args.kwargs["model_id"] == model_id
+            assert tokenizer.call_args.kwargs["local_files_only"] is True
+            assert model.call_args.kwargs["use_safetensors"] is True
+            assert model.call_args.kwargs["revision"] == DEFAULT_MODEL_REVISION
+            assert tokenizer.call_args.kwargs["revision"] == DEFAULT_MODEL_REVISION
+
+            monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, "secret-sentinel")
+            with patch(
+                "model_fetcher.resolve_model_id",
+                side_effect=AssertionError("health must read startup state"),
+            ):
+                for loaded in (True, False):
+                    app.state.classifier._loaded = loaded
+                    response = await running.get("/health")
+                    assert response.status_code == 200
+                    assert response.json()["promptguard_model"] == model_id
+                    assert response.json()["promptguard_loaded"] is loaded
+
+
+@pytest.mark.parametrize("configured", [None, "", " \t\n", DEFAULT_MODEL_ID])
+async def test_lifespan_default_model_is_reported_even_when_unloaded(
+    monkeypatch: pytest.MonkeyPatch, configured: str | None
+) -> None:
+    if configured is not None:
+        monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, configured)
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _acquisition_that_never_loads
+    )
+    async with _running_app() as running:
+        response = await running.get("/health")
+        assert response.status_code == 200
+        assert response.json()["promptguard_model"] == DEFAULT_MODEL_ID
+        assert response.json()["promptguard_loaded"] is False
+
+
+@pytest.mark.parametrize(
+    "configured",
+    ["evil/model", "meta-llama/Llama-Prompt-Guard-2-86M", "secret-sentinel\ninjected"],
+)
+async def test_lifespan_refuses_disallowed_model_without_echoing_the_value(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    configured: str,
+) -> None:
+    monkeypatch.setattr(
+        model_fetcher, "ALLOWED_MODEL_IDS", frozenset({DEFAULT_MODEL_ID})
+    )
+    monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, configured)
+    with (
+        patch("model_fetcher.WeightAcquisition") as acquisition,
+        pytest.raises(
+            model_fetcher.ModelConfigurationError, match=r"^model_id_not_allowed$"
+        ),
+    ):
+        async with lifespan(FastAPI()):
+            pytest.fail("disallowed model reached serving startup")
+    acquisition.assert_not_called()
+    assert [(record.levelname, record.getMessage()) for record in caplog.records] == [
+        ("WARNING", "model_id_not_allowed")
+    ]
+    assert configured not in caplog.text
+
+
+async def test_lifespan_free_health_never_resolves_model_selection(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delattr(app.state, "promptguard_model")
+    monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, "evil/model")
+    monkeypatch.setattr(app.state, "sanitizer_revision", "test-revision", raising=False)
+    with patch(
+        "model_fetcher.resolve_model_id",
+        side_effect=AssertionError("health must not resolve a model"),
+    ):
+        assert (await client.get("/health")).json()[
+            "promptguard_model"
+        ] == DEFAULT_MODEL_ID
+
+
 # `feature-forage-cache-fallback` US-001. The `cache:` bounds are validated at
 # startup whichever storage is selected, so these run through the real lifespan
 # for the same reason the weight-acquisition tests above do: the `client`
@@ -1205,6 +1875,900 @@ async def test_lifespan_publishes_the_validated_cache_settings(
         assert settings.max_bytes == DEFAULT_CACHE_MAX_BYTES
 
 
+@pytest.mark.parametrize("concurrency", range(1, 9))
+async def test_lifespan_sizes_classification_semaphore(
+    monkeypatch: pytest.MonkeyPatch, concurrency: int
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _acquisition_that_never_loads
+    )
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {"extraction": {"classification_concurrency": concurrency}},
+    )
+    async with _running_app():
+        semaphore = cast(asyncio.Semaphore, app.state.classification_semaphore)
+        async with asyncio.timeout(5):
+            for _ in range(concurrency):
+                await semaphore.acquire()
+        try:
+            assert semaphore.locked()
+            assert app.state.extraction_settings.extraction_concurrency == 1
+        finally:
+            for _ in range(concurrency):
+                semaphore.release()
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"extraction": {"classification_concurrency": value}}
+        for value in (0, 9, True, False, 1.0, "2", None)
+    ]
+    + [{"extraction": {"extraction_concurrency": 2}}],
+)
+async def test_lifespan_refuses_invalid_classification_concurrency(
+    monkeypatch: pytest.MonkeyPatch, config: dict[str, Any]
+) -> None:
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    with pytest.raises(ExtractionConfigurationError):
+        async with lifespan(FastAPI()):
+            pytest.fail("invalid configuration reached serving startup")
+
+
+@pytest.mark.parametrize("value", [-1, 17, "abc", True, False, 2.0, None])
+async def test_lifespan_refuses_invalid_promptguard_threads(
+    monkeypatch: pytest.MonkeyPatch, value: object
+) -> None:
+    monkeypatch.setattr(
+        retrieval_app, "_load_config", lambda: {"promptguard_threads": value}
+    )
+    with (
+        patch("retrieval_app.ContentCache", return_value=_LifespanCache()),
+        pytest.raises(PromptGuardThreadsConfigurationError),
+    ):
+        async with lifespan(FastAPI()):
+            pytest.fail("invalid thread setting reached serving startup")
+
+
+@pytest.mark.parametrize(
+    "config", [{}, {"promptguard_threads": 0}, {"promptguard_threads": 2}]
+)
+async def test_lifespan_threads_reach_the_loading_classifier(
+    monkeypatch: pytest.MonkeyPatch, config: dict[str, Any]
+) -> None:
+    monkeypatch.setenv("TOKENIZERS_PARALLELISM", "operator-sentinel")
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+
+    def load(classifier: PromptGuardClassifier, **_kwargs: object) -> bool:
+        return classifier.load()
+
+    monkeypatch.setattr(model_fetcher, "acquire_and_load", load)
+    with (
+        patch("torch.set_num_threads") as set_threads,
+        patch("transformers.AutoTokenizer.from_pretrained") as tokenizer,
+        patch(
+            "transformers.AutoModelForSequenceClassification.from_pretrained"
+        ) as model,
+    ):
+        model.return_value.config.id2label = {0: "BENIGN", 1: "INJECTION"}
+
+        def before_tokenization(*_args: object, **_kwargs: object) -> MagicMock:
+            if config.get("promptguard_threads", 0):
+                set_threads.assert_called_once_with(2)
+                assert os.environ["TOKENIZERS_PARALLELISM"] == "false"
+            else:
+                set_threads.assert_not_called()
+                assert os.environ["TOKENIZERS_PARALLELISM"] == "operator-sentinel"
+            return MagicMock()
+
+        tokenizer.side_effect = before_tokenization
+        async with _running_app():
+            assert await _settled(app.state.model_task) is True
+            assert app.state.classifier.loaded is True
+            assert not hasattr(app.state, "promptguard_threads")
+            tokenizer.assert_called_once()
+
+
+def test_provisional_memory_rule_constants_and_default_margins() -> None:
+    assert PARENT_RESERVATION_BYTES == 512 * MEBIBYTE
+    assert CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL == {DEFAULT_MODEL_ID: 0}
+    assert PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES == 64 * MEBIBYTE
+    settings = extraction_settings_from_config({})
+    shared = (
+        PARENT_RESERVATION_BYTES
+        + CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[DEFAULT_MODEL_ID]
+        + settings.classification_concurrency * PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES
+        + settings.extraction_concurrency * settings.child_address_space_bytes
+    )
+    assert shared + CacheSettings().max_bytes == 992 * MEBIBYTE
+    assert 1024 * MEBIBYTE - (shared + CacheSettings().max_bytes) == 32 * MEBIBYTE
+    assert shared + CacheSettings().max_value_bytes == 964 * MEBIBYTE
+    assert 1024 * MEBIBYTE - (shared + CacheSettings().max_value_bytes) == 60 * MEBIBYTE
+
+
+@pytest.mark.parametrize(
+    ("config", "limit", "required_mib", "delta_mib", "warns"),
+    [
+        ({}, 1024 * MEBIBYTE, 992, 0, False),
+        ({}, 992 * MEBIBYTE, 992, 0, False),
+        ({}, 992 * MEBIBYTE - 1, 992, 0, True),
+        ({}, None, 992, 0, False),
+        (
+            {"extraction": {"classification_concurrency": 4}},
+            1024 * MEBIBYTE,
+            1184,
+            0,
+            True,
+        ),
+        (
+            {"extraction": {"classification_concurrency": 4}},
+            1184 * MEBIBYTE,
+            1184,
+            0,
+            False,
+        ),
+        ({"cache": {"max_bytes": 128 * MEBIBYTE}}, 1024 * MEBIBYTE, 1088, 0, True),
+        (
+            {"extraction": {"child_address_space_bytes": 512 * MEBIBYTE}},
+            1024 * MEBIBYTE,
+            1120,
+            0,
+            True,
+        ),
+        ({}, 1024 * MEBIBYTE, 1440, 448, True),
+    ],
+)
+async def test_lifespan_memory_rule_counts_configured_terms_once(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    config: dict[str, Any],
+    limit: int | None,
+    required_mib: int,
+    delta_mib: int,
+    warns: bool,
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _acquisition_that_never_loads
+    )
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    model_id = "test-model-with-larger-resident-set" if delta_mib else DEFAULT_MODEL_ID
+    monkeypatch.setattr(
+        model_fetcher, "ALLOWED_MODEL_IDS", frozenset({DEFAULT_MODEL_ID, model_id})
+    )
+    monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, model_id)
+    monkeypatch.setattr(
+        retrieval_app,
+        "CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL",
+        {DEFAULT_MODEL_ID: 0, model_id: delta_mib * MEBIBYTE},
+    )
+    with patch.object(
+        retrieval_app,
+        "_cgroup_memory_snapshot",
+        return_value={"cgroup_memory_max_bytes": limit},
+    ) as snapshot:
+        async with _running_app() as client:
+            for _ in range(2):
+                assert (await client.get("/health")).status_code == 200
+            snapshot.assert_called_once_with()
+            assert app.state.cache_backend == "memory"
+            settings = app.state.extraction_settings
+            cache_settings = app.state.cache_settings
+
+    warnings = [
+        r for r in caplog.records if "envelope_memory_rule_unmet" in r.getMessage()
+    ]
+    assert len(warnings) == int(warns)
+    if warns:
+        assert warnings[0].levelno == logging.WARNING
+        assert warnings[0].getMessage() == (
+            f"envelope_memory_rule_unmet — memory_max={limit} "
+            f"required={required_mib * MEBIBYTE} "
+            f"classification_concurrency={settings.classification_concurrency} "
+            "extraction_concurrency=1 "
+            f"child_address_space_bytes={settings.child_address_space_bytes} "
+            f"model_id={model_id} parent_bytes={(512 + delta_mib) * MEBIBYTE} "
+            f"cache_backend=memory cache_term_bytes={cache_settings.max_bytes}"
+        )
+
+
+@pytest.mark.parametrize("concurrency", [1, 2])
+async def test_retrieve_classifications_overlap_only_with_two_boot_permits(
+    monkeypatch: pytest.MonkeyPatch, concurrency: int
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _acquisition_that_never_loads
+    )
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {"extraction": {"classification_concurrency": concurrency}},
+    )
+    loop = asyncio.get_running_loop()
+    entered = [asyncio.Event(), asyncio.Event()]
+    release = [threading.Event(), threading.Event()]
+    starts: list[float] = []
+    ends: dict[int, float] = {}
+    lock = threading.Lock()
+
+    def classify_windows(text: str, **_kwargs: object) -> tuple[list[float], list[str]]:
+        with lock:
+            index = len(starts)
+            starts.append(time.monotonic())
+        loop.call_soon_threadsafe(entered[index].set)
+        assert release[index].wait(10), "test did not release classifier"
+        with lock:
+            ends[index] = time.monotonic()
+        return [0.0], [text]
+
+    classifier = make_mock_classifier()
+    classifier.classify_windows.side_effect = classify_windows
+    monkeypatch.setattr(retrieval_app, "PromptGuardClassifier", lambda: classifier)
+    with (
+        patch(
+            "pipeline.orchestrator.validate_url",
+            return_value=("93.184.216.34", "example.com"),
+        ),
+        patch(
+            "pipeline.orchestrator.fetch_url",
+            return_value=FetchResult(
+                final_url="https://example.com/article",
+                content_type="text/html",
+                response_body=(
+                    b"<html><body><p>A calm article about gardening.</p></body></html>"
+                ),
+                status_code=200,
+            ),
+        ),
+    ):
+        async with _running_app() as client:
+            tasks: list[asyncio.Task[httpx.Response]] = []
+            try:
+                tasks.append(
+                    asyncio.create_task(
+                        client.post(
+                            "/retrieve", json={"url": "https://example.com/first"}
+                        )
+                    )
+                )
+                await asyncio.wait_for(entered[0].wait(), 5)
+                tasks.append(
+                    asyncio.create_task(
+                        client.post(
+                            "/retrieve", json={"url": "https://example.com/second"}
+                        )
+                    )
+                )
+                semaphore = cast(asyncio.Semaphore, app.state.classification_semaphore)
+                if concurrency == 2:
+                    await asyncio.wait_for(entered[1].wait(), 5)
+                else:
+                    async with asyncio.timeout(5):
+                        while not semaphore._waiters:
+                            await asyncio.sleep(0.01)
+                    assert not entered[1].is_set()
+                release[0].set()
+                await asyncio.wait_for(entered[1].wait(), 5)
+                release[1].set()
+                responses = await asyncio.wait_for(asyncio.gather(*tasks), 5)
+                for response in responses:
+                    assert response.status_code == 200
+                    assert response.json()["promptguard_state"] == "scanned"
+                assert classifier.classify_windows.call_count == 2
+                assert (starts[1] < ends[0]) is (concurrency == 2)
+            finally:
+                for gate in release:
+                    gate.set()
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True), 15
+                )
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        [],
+        ["cache"],
+        "scalar",
+        1,
+        None,
+        {"cache": "yes"},
+        {"extraction": []},
+        {"retrieve": None},
+    ],
+)
+def test_unknown_key_warning_leaves_malformed_values_to_readers(
+    config: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    assert retrieval_app._warn_unknown_config_keys(config) == []
+    assert not caplog.records
+
+
+def test_unknown_blocks_are_not_walked_and_values_are_never_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    config = {
+        "unknown_block": {"nested": "SENTINEL-VALUE"},
+        "cache": MappingProxyType({"max_entires": {"nested": "SENTINEL-VALUE"}}),
+        "extraction": {"max_pages": {"not_a_config_key": "SENTINEL-VALUE"}},
+    }
+    assert retrieval_app._warn_unknown_config_keys(config) == [
+        "unknown_block",
+        "cache.max_entires",
+    ]
+    assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
+        (logging.WARNING, "config_unknown_key — key=unknown_block"),
+        (logging.WARNING, "config_unknown_key — key=cache.max_entires"),
+    ]
+    assert "SENTINEL-VALUE" not in caplog.text
+
+
+def test_unknown_key_warning_discovers_new_registered_blocks(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(
+        retrieval_app,
+        "KNOWN_CONFIG_KEYS",
+        retrieval_app.KNOWN_CONFIG_KEYS | {"future", "future.limit"},
+    )
+    assert retrieval_app._warn_unknown_config_keys(
+        {"future": {"limit": 1, "typo": "SENTINEL-VALUE"}}
+    ) == ["future.typo"]
+    assert [record.getMessage() for record in caplog.records] == [
+        "config_unknown_key — key=future.typo"
+    ]
+
+
+@pytest.mark.parametrize("with_typos", [False, True])
+async def test_lifespan_warns_for_unknown_keys_without_changing_health(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    with_typos: bool,
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(app, "state", type(app.state)())
+    async with _running_app() as running:
+        baseline = (await running.get("/health")).json()
+    caplog.clear()
+    config = retrieval_app._load_config()
+    expected: list[str] = []
+    if with_typos:
+        config["promtguard_threshold"] = "SENTINEL-VALUE"
+        config["extraction"]["max_pagse"] = "SENTINEL-VALUE"
+        config["retrieve"]["max_promptguard_chnuks"] = "SENTINEL-VALUE"
+        expected = [
+            "extraction.max_pagse",
+            "retrieve.max_promptguard_chnuks",
+            "promtguard_threshold",
+        ]
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    with caplog.at_level(logging.DEBUG):
+        async with _running_app() as running:
+            response = await running.get("/health")
+            assert response.status_code == 200
+            health = response.json()
+            for field in (
+                "status",
+                "degraded_reasons",
+                "promptguard_loaded",
+                "cache_connected",
+                "sanitizer_revision",
+            ):
+                assert health[field] == baseline[field]
+    warnings = [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if "config_unknown_key" in record.getMessage()
+    ]
+    assert warnings == [
+        (logging.WARNING, f"config_unknown_key — key={key}") for key in expected
+    ]
+    assert "SENTINEL-VALUE" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("config", "error"),
+    [
+        ({"cache": "yes"}, CacheConfigurationError),
+        ({"cache": {"max_entries": False}}, CacheConfigurationError),
+        ({"extraction": []}, ExtractionConfigurationError),
+        ({"extraction": {"max_pages": False}}, ExtractionConfigurationError),
+        ({"retrieve": "yes"}, RetrieveConfigurationError),
+        ({"retrieve": {"fetch_concurrency": False}}, RetrieveConfigurationError),
+    ],
+)
+async def test_known_bad_config_values_still_refuse_boot(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    config: dict[str, Any],
+    error: type[ValueError],
+) -> None:
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    with pytest.raises(error):
+        async with lifespan(FastAPI()):
+            pytest.fail("invalid configuration started")
+    assert not any(
+        "config_unknown_key" in record.getMessage() for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize(
+    "document_yaml", ["[secret-value]", '"secret-value"', "true", "123"]
+)
+async def test_domain_list_fallback_does_not_accept_non_mapping_config_documents(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    document_yaml: str,
+) -> None:
+    raw = yaml.safe_load(document_yaml)
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: raw)
+    with pytest.raises(AttributeError):
+        async with lifespan(FastAPI()):
+            pytest.fail("non-mapping configuration started")
+    assert not any(
+        "config_invalid_value" in record.getMessage() for record in caplog.records
+    )
+    assert "secret-value" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("config", "expected", "warn"),
+    [
+        ({}, 65536, False),
+        ({"policy_domain_entries_max_bytes": 4096}, 4096, False),
+        ({"policy_domain_entries_max_bytes": 1048576}, 1048576, False),
+        *[
+            ({"policy_domain_entries_max_bytes": value}, 65536, True)
+            for value in (
+                4095,
+                1048577,
+                True,
+                False,
+                None,
+                "secret-value",
+                65536.0,
+                list[str](),
+            )
+        ],
+    ],
+)
+async def test_lifespan_domain_budget_warns_and_falls_back_without_echoing_value(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    config: dict[str, Any],
+    expected: int,
+    warn: bool,
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    # The global app's state is shared across tests; isolate this boot.
+    monkeypatch.setattr(app, "state", type(app.state)())
+    async with _running_app():
+        assert app.state.policy_domain_entries_max_bytes == expected
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if "config_invalid_value" in record.getMessage()
+    ]
+    assert warnings == (
+        ["config_invalid_value — key=policy_domain_entries_max_bytes"] if warn else []
+    )
+    assert "secret-value" not in caplog.text
+
+
+def test_shipped_domain_budget_is_64_kib() -> None:
+    assert retrieval_app._load_config()["policy_domain_entries_max_bytes"] == 65536
+
+
+@pytest.mark.parametrize(
+    ("config", "expected", "warn"),
+    [
+        (dict[str, Any](), 0.85, False),
+        *[
+            ({"promptguard_threshold": value}, 0.85, True)
+            for value in (
+                "abc",
+                "invalid-\u2603",
+                "invalid-\ud800",
+                -0.1,
+                1.7,
+                True,
+                False,
+                None,
+                list[str](),
+                dict[str, object](),
+                float("nan"),
+                float("inf"),
+                -float("inf"),
+                10**400,
+                -(10**400),
+            )
+        ],
+        *[
+            ({"promptguard_threshold": value}, float(value), False)
+            for value in ("0.85", "0.5", "\uff10.\uff18\uff15", 0, 1, 0.5)
+        ],
+    ],
+)
+async def test_lifespan_validates_threshold_once_without_mutating_raw_config(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    config: dict[str, Any],
+    expected: float,
+    warn: bool,
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    monkeypatch.setattr(app, "state", type(app.state)())
+    with caplog.at_level(logging.INFO, logger="retrieval_app"):
+        async with _running_app():
+            assert app.state.promptguard_threshold_default == expected
+            if "promptguard_threshold" in config:
+                assert (
+                    app.state.config["promptguard_threshold"]
+                    is config["promptguard_threshold"]
+                )
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+        and "config_invalid_value" in record.getMessage()
+    ]
+    assert warnings == (
+        [
+            "config_invalid_value — key=promptguard_threshold. "
+            "/extract reads the raw value through its own guard"
+        ]
+        if warn
+        else []
+    )
+    resolved = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.INFO
+        and "promptguard_threshold_resolved" in record.getMessage()
+    ]
+    assert resolved == [f"promptguard_threshold_resolved — value={expected}"]
+
+
+async def test_boolean_threshold_keeps_extracts_raw_coercion_only(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _park_the_retry(monkeypatch)
+    raw = {"promptguard_threshold": True, "extract_route_enabled": True}
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: raw)
+    monkeypatch.setattr(app, "state", type(app.state)())
+    async with _running_app() as session:
+        assert app.state.promptguard_threshold_default == 0.85
+        classifier = make_mock_classifier(score=0.9)
+        app.state.classifier = classifier
+        app.state.search_providers = [
+            FakeSearchProvider(
+                name="searxng",
+                outcome=ProviderSearchResult(
+                    provider_name="searxng",
+                    results=[
+                        {
+                            "url": "https://example.com/",
+                            "title": "Gardening",
+                            "snippet": "A calm article.",
+                        }
+                    ],
+                    unresponsive_engines=[],
+                ),
+            )
+        ]
+        with (
+            patch(
+                "pipeline.orchestrator.validate_url",
+                return_value=("93.184.216.34", "example.com"),
+            ),
+            patch(
+                "pipeline.orchestrator.fetch_url",
+                return_value=FetchResult(
+                    final_url="https://example.com/",
+                    content_type="text/html",
+                    response_body=b"<p>A calm article.</p>",
+                    status_code=200,
+                ),
+            ),
+            patch(
+                "pipeline.orchestrator.run_promptguard",
+                wraps=orchestrator.run_promptguard,
+            ) as scan,
+        ):
+            retrieve = await session.post(
+                "/retrieve", json={"url": "https://example.com/"}
+            )
+            search = await session.post("/search", json={"query": "gardening"})
+            extract = await session.post(
+                "/extract",
+                files={"file": ("article.txt", b"A calm article.", "text/plain")},
+                data={"filename": "article.txt"},
+            )
+        assert [response.status_code for response in (retrieve, search, extract)] == [
+            200,
+            200,
+            200,
+        ]
+        assert retrieve.json()["injection_detected"] is True
+        assert search.json()["omitted_by_reason"] == {"injection_detected": 1}
+        for response in (retrieve, search):
+            assert response.json()["effective_promptguard_threshold"] == 0.85
+        assert extract.json()["injection_detected"] is False
+        assert [call.kwargs["threshold"] for call in scan.call_args_list] == [
+            0.85,
+            0.85,
+            1.0,
+        ]
+    assert [
+        record.getMessage()
+        for record in caplog.records
+        if "config_invalid_value" in record.getMessage()
+    ] == [
+        "config_invalid_value — key=promptguard_threshold. "
+        "/extract reads the raw value through its own guard"
+    ]
+
+
+async def test_lifespan_normalizes_domain_lists_and_names_drops(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _park_the_retry(monkeypatch)
+    raw: dict[str, Any] = {
+        "seed_blocklist": [" Evil.COM. ", "bad..entry", "intranet"],
+        "news_domains": ["BBC.co.uk", ".Example.ORG", "com"],
+    }
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: raw)
+    with (
+        patch("pipeline.orchestrator.validate_url", new=url_validator.validate_url),
+        patch(
+            "url_validator.socket.getaddrinfo",
+            return_value=[(2, 1, 6, "", ("93.184.216.34", 0))],
+        ),
+        patch(
+            "pipeline.orchestrator.fetch_url",
+            new=AsyncMock(
+                return_value=FetchResult(
+                    final_url="https://wiki.intranet/",
+                    response_body=b"<html><body><p>A calm page.</p></body></html>",
+                    content_type="text/html",
+                    status_code=200,
+                )
+            ),
+        ),
+    ):
+        async with _running_app() as client:
+            assert app.state.config["seed_blocklist"] == ["evil.com", "intranet"]
+            assert app.state.config["news_domains"] == ["bbc.co.uk", ".example.org"]
+            assert raw["seed_blocklist"] == [" Evil.COM. ", "bad..entry", "intranet"]
+            assert raw["news_domains"] == ["BBC.co.uk", ".Example.ORG", "com"]
+            assert (
+                _effective_ttl_hours(
+                    24,
+                    domain="bbc.co.uk",
+                    news_domains=app.state.config["news_domains"],
+                )
+                == 1
+            )
+            for host in ("www.evil.com", "intranet"):
+                response = await client.post(
+                    "/retrieve", json={"url": f"https://{host}/"}
+                )
+                assert response.status_code == 422
+                assert response.json()["error"] == "blocked_domain"
+            response = await client.post(
+                "/retrieve",
+                json={
+                    "url": "https://wiki.intranet/",
+                    "promptguard_fail_closed": False,
+                },
+            )
+            assert response.status_code == 200
+            response = await client.post(
+                "/retrieve",
+                json={"url": "https://evil.local/", "blocked_domains": ["evil.local"]},
+            )
+            assert response.status_code == 422
+            assert response.json()["error"] == "private_ip"
+    warnings = [
+        record
+        for record in caplog.records
+        if "config_invalid_value" in record.getMessage()
+    ]
+    assert len(warnings) == 2
+    for record, key, entry in zip(
+        warnings, ("seed_blocklist", "news_domains"), ("bad..entry", "com"), strict=True
+    ):
+        assert record.levelno == logging.WARNING
+        assert f"key={key} dropped=1 entries={entry}" in record.getMessage()
+
+
+@pytest.mark.parametrize(
+    "member_yaml",
+    [
+        "null",
+        "true",
+        "false",
+        "123",
+        "1.5",
+        "2026-09-22",
+        "!!binary c2VjcmV0",
+        "[secret-value]",
+        "{password: secret-value}",
+        "!!set {secret-value: null}",
+    ],
+)
+@pytest.mark.parametrize("mixed", [False, True])
+async def test_lifespan_domain_lists_drop_non_string_yaml_members(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    member_yaml: str,
+    mixed: bool,
+) -> None:
+    _park_the_retry(monkeypatch)
+    entries_yaml = (
+        f'[" Evil.COM. ", "bad..entry", {member_yaml}, '
+        '"https://user:secret-value@example.com/path", ".Example.ORG"]'
+        if mixed
+        else f"[{member_yaml}]"
+    )
+    raw: dict[str, Any] = yaml.safe_load(
+        f"seed_blocklist: {entries_yaml}\nnews_domains: {entries_yaml}\n"
+    )
+    original = deepcopy(raw)
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: raw)
+    monkeypatch.setattr(app, "state", type(app.state)())
+    with caplog.at_level(logging.DEBUG):
+        async with _running_app() as client:
+            assert (await client.get("/health")).status_code == 200
+            assert app.state.config["seed_blocklist"] == (
+                ["evil.com", "example.org"] if mixed else []
+            )
+            assert app.state.config["news_domains"] == (
+                ["evil.com", ".example.org"] if mixed else []
+            )
+            assert app.state.config is not raw
+            for key in ("seed_blocklist", "news_domains"):
+                assert app.state.config[key] is not raw[key]
+    assert raw == original
+    dropped = 3 if mixed else 1
+    entries = "bad..entry,[non-string],[redacted]" if mixed else "[non-string]"
+    assert [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if "config_invalid_value" in record.getMessage()
+    ] == [
+        (
+            logging.WARNING,
+            f"config_invalid_value — key={key} dropped={dropped} entries={entries}",
+        )
+        for key in ("seed_blocklist", "news_domains")
+    ]
+    assert "secret" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "container_yaml",
+    [
+        "null",
+        "true",
+        "false",
+        "123",
+        "1.5",
+        '""',
+        '"Evil.COM"',
+        '"https://user:secret-value@example.com/path"',
+        "{}",
+        "{password: secret-value}",
+        "!!set {secret-value: null}",
+    ],
+)
+async def test_lifespan_domain_lists_reject_non_list_yaml_containers(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    container_yaml: str,
+) -> None:
+    _park_the_retry(monkeypatch)
+    raw: dict[str, Any] = yaml.safe_load(
+        f"seed_blocklist: {container_yaml}\nnews_domains: {container_yaml}\n"
+    )
+    original = deepcopy(raw)
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: raw)
+    monkeypatch.setattr(app, "state", type(app.state)())
+    with caplog.at_level(logging.DEBUG):
+        async with _running_app() as client:
+            assert (await client.get("/health")).status_code == 200
+            assert app.state.config["seed_blocklist"] == []
+            assert app.state.config["news_domains"] == []
+            assert app.state.config is not raw
+    assert raw == original
+    assert [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if "config_invalid_value" in record.getMessage()
+    ] == [
+        (
+            logging.WARNING,
+            f"config_invalid_value — key={key} dropped=1 entries=[invalid-container]",
+        )
+        for key in ("seed_blocklist", "news_domains")
+    ]
+    assert "secret" not in caplog.text
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+async def test_lifespan_missing_or_empty_domain_lists_are_quiet(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    explicit: bool,
+) -> None:
+    _park_the_retry(monkeypatch)
+    raw: dict[str, Any] = {"seed_blocklist": [], "news_domains": []} if explicit else {}
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: raw)
+    monkeypatch.setattr(app, "state", type(app.state)())
+    async with _running_app():
+        assert app.state.config["seed_blocklist"] == []
+        assert app.state.config["news_domains"] == []
+    assert not any(
+        "config_invalid_value" in record.getMessage() for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize("shipped", [True, False])
+async def test_lifespan_valid_domain_lists_are_unbudgeted_and_quiet(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, shipped: bool
+) -> None:
+    _park_the_retry(monkeypatch)
+    entries = [f"news{index}.example" for index in range(70)]
+    if not shipped:
+        monkeypatch.setattr(
+            retrieval_app, "_load_config", lambda: {"news_domains": entries}
+        )
+    async with _running_app():
+        if shipped:
+            assert app.state.config["news_domains"] == [
+                ".reuters.com",
+                ".apnews.com",
+                ".bbc.co.uk",
+                ".nytimes.com",
+                ".theguardian.com",
+                ".cnn.com",
+            ]
+            assert (
+                _effective_ttl_hours(
+                    24,
+                    domain="www.bbc.co.uk",
+                    news_domains=app.state.config["news_domains"],
+                )
+                == 1
+            )
+        else:
+            assert app.state.config["news_domains"] == entries
+    assert not any(
+        "config_invalid_value" in record.getMessage() for record in caplog.records
+    )
+
+
+async def test_domain_config_warning_does_not_echo_misplaced_credentials(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {"news_domains": ["https://user:secret@example.com/"]},
+    )
+    async with _running_app():
+        assert app.state.config["news_domains"] == []
+    assert "key=news_domains dropped=1 entries=[redacted]" in caplog.text
+    assert "secret" not in caplog.text
+
+
 async def test_lifespan_refuses_an_out_of_range_cache_bound(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1221,17 +2785,756 @@ async def test_lifespan_refuses_an_out_of_range_cache_bound(
             pass
 
 
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("promptguard_contiguity_windows", value)
+        for value in [
+            -1,
+            1,
+            9,
+            2.0,
+            True,
+            False,
+            "2",
+            None,
+            list[object](),
+            dict[str, object](),
+        ]
+    ]
+    + [
+        ("promptguard_contiguity_threshold", value)
+        for value in [
+            -0.1,
+            1.1,
+            float("nan"),
+            float("inf"),
+            -(10**1000),
+            10**1000,
+            True,
+            False,
+            "0.5",
+            None,
+            list[object](),
+            dict[str, object](),
+        ]
+    ],
+)
+async def test_lifespan_refuses_invalid_contiguity(
+    monkeypatch: pytest.MonkeyPatch, key: str, value: object
+) -> None:
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: {key: value})
+    with pytest.raises(PromptGuardConfigurationError, match=key):
+        async with lifespan(FastAPI()):
+            pytest.fail("invalid contiguity config reached a serving lifespan")
+
+
+@pytest.mark.parametrize("route", ["retrieve", "extract", "search"])
+@pytest.mark.parametrize(
+    ("scores", "windows", "detections"),
+    [
+        ([0.6, 0.6], 2, 1),
+        ([0.9, 0.6, 0.6], 2, 1),
+        ([0.6, 0.6], 0, 0),
+        ([0.9, 0.1], 2, 0),
+    ],
+)
+async def test_contiguity_from_boot_through_each_route_and_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    route: str,
+    scores: list[float],
+    windows: int,
+    detections: int,
+) -> None:
+    config = {
+        "extract_route_enabled": True,
+        "promptguard_contiguity_windows": windows,
+        "promptguard_contiguity_threshold": 0.5,
+    }
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    monkeypatch.setattr(retrieval_app, "spool_dir", lambda: tmp_path)
+    monkeypatch.setattr(model_fetcher.WeightAcquisition, "run", AsyncMock())
+    builder = MagicMock(wraps=promptguard_settings_from_config)
+    monkeypatch.setattr(retrieval_app, "promptguard_settings_from_config", builder)
+    monkeypatch.setattr(
+        orchestrator,
+        "validate_url",
+        AsyncMock(return_value=("93.184.216.34", "example.com")),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "fetch_url",
+        AsyncMock(
+            return_value=FetchResult(
+                final_url="https://example.com/page",
+                response_body=b"<html><body><p>A quiet garden grows.</p></body></html>",
+                content_type="text/html",
+                status_code=200,
+            )
+        ),
+    )
+    classifier = make_mock_classifier()
+    chunks = [f"private-chunk-{i}" for i in range(len(scores))]
+    classifier.classify_windows.side_effect = None
+    classifier.classify_windows.return_value = scores, chunks
+    with caplog.at_level(logging.INFO, logger="pipeline.orchestrator"):
+        async with _running_app() as live:
+            builder.assert_called_once_with(config)
+            monkeypatch.setattr(app.state, "classifier", classifier)
+            monkeypatch.setattr(app.state, "cache", FakeContentCache())
+            monkeypatch.setattr(
+                app.state,
+                "search_providers",
+                [
+                    FakeSearchProvider(
+                        name="searxng",
+                        outcome=ProviderSearchResult(
+                            provider_name="searxng",
+                            results=[
+                                {
+                                    "title": "A quiet garden",
+                                    "url": "https://example.com/page",
+                                    "content": "Fresh produce for local families.",
+                                }
+                            ],
+                            unresponsive_engines=[],
+                        ),
+                    )
+                ],
+            )
+            if route == "extract":
+                response = await live.post(
+                    "/extract",
+                    files={
+                        "file": ("garden.txt", b"A quiet garden grows.", "text/plain")
+                    },
+                    data={"filename": "garden.txt"},
+                )
+            else:
+                response = await live.post(
+                    f"/{route}",
+                    json={
+                        **(
+                            {"url": "https://example.com/page"}
+                            if route == "retrieve"
+                            else {"query": "garden"}
+                        ),
+                        "promptguard_threshold": 1.0 if scores == [0.6, 0.6] else 0.85,
+                    },
+                )
+            assert response.status_code == 200, response.text
+            data = response.json()
+            blocked = bool(detections or max(scores) > 0.85)
+            if route == "search":
+                assert data["omitted_by_reason"] == (
+                    {"injection_detected": 1} if blocked else {}
+                )
+                assert len(data["results"]) == int(not blocked)
+                if blocked:
+                    rule = (
+                        "both"
+                        if detections and max(scores) > 0.85
+                        else ("contiguity" if detections else "max_score")
+                    )
+                    assert f"rule={rule}" in caplog.text
+            else:
+                assert data["injection_detected"] is blocked
+                assert data["injection_spans"] == (
+                    [contract.DIAG_INJECTION_DETECTED] if blocked else []
+                )
+            assert all(chunk not in response.text for chunk in chunks)
+            metrics_response = await live.get("/metrics")
+            assert metrics_response.status_code == 200
+            metrics = metrics_response.json()
+            section = "extraction" if route == "extract" else route
+            for name in ("extraction", "retrieve", "search"):
+                assert metrics[name]["promptguard_contiguity_detections"] == (
+                    detections if name == section else 0
+                )
+            classifier.classify_windows.assert_called_once()
+    warnings = [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("promptguard_contiguity_verdict")
+    ]
+    assert len(warnings) == detections
+
+
+# ---------------------------------------------------------------------------
+# Search latency targets (`hardening-resource-envelope` US-004)
+# ---------------------------------------------------------------------------
+
+
+def test_search_targets_defaults_and_shipped_values_are_frozen() -> None:
+    shipped = yaml.safe_load(
+        (Path(__file__).resolve().parent.parent / "config.yaml").read_text()
+    )
+    defaults = search_targets_from_config({})
+    assert defaults == SearchTargets(1_000, 5_000)
+    assert search_targets_from_config(shipped) == defaults
+    assert_frozen(defaults, "promptguard_latency_target_ms", 100)
+    assert_frozen(defaults, "first_token_target_ms", 100)
+
+
+@pytest.mark.parametrize(
+    ("key", "field", "maximum"),
+    [
+        (
+            "search_promptguard_latency_target_ms",
+            "promptguard_latency_target_ms",
+            60_000,
+        ),
+        ("search_first_token_target_ms", "first_token_target_ms", 120_000),
+    ],
+)
+def test_search_targets_accept_inclusive_bounds(
+    key: str, field: str, maximum: int
+) -> None:
+    for value in (100, maximum):
+        assert getattr(search_targets_from_config({key: value}), field) == value
+
+
+@pytest.mark.parametrize(
+    ("key", "maximum"),
+    [
+        ("search_promptguard_latency_target_ms", 60_000),
+        ("search_first_token_target_ms", 120_000),
+    ],
+)
+@pytest.mark.parametrize("value", [5, 99, True, False, "1000", 1000.0, None])
+def test_search_targets_reject_invalid_values(
+    key: str, maximum: int, value: object
+) -> None:
+    for invalid in (value, maximum + 1):
+        with pytest.raises(SearchTargetsConfigurationError, match=key):
+            search_targets_from_config({key: invalid})
+
+
+@pytest.mark.parametrize(
+    "key", ["search_promptguard_latency_target_ms", "search_first_token_target_ms"]
+)
+@pytest.mark.parametrize("providers", ["searxng", "brave"])
+async def test_lifespan_refuses_out_of_range_search_targets(
+    monkeypatch: pytest.MonkeyPatch, key: str, providers: str
+) -> None:
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", providers)
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: {key: 5})
+    with pytest.raises(SearchTargetsConfigurationError, match=key):
+        async with lifespan(FastAPI()):
+            pytest.fail("Invalid latency targets must refuse boot")
+
+
+@pytest.mark.parametrize("target", [None, 100, 5_000])
+async def test_lifespan_search_targets_reach_logs_and_latency_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    target: int | None,
+) -> None:
+    config = (
+        {}
+        if target is None
+        else {
+            "search_promptguard_latency_target_ms": target,
+            "search_first_token_target_ms": 12_345,
+        }
+    )
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _acquisition_that_never_loads
+    )
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    monkeypatch.setattr(app.state, "search_targets", SearchTargets())
+    delay = 0.15 if target == 100 else 0.0
+
+    def classify_windows(text: str, **_kwargs: object) -> tuple[list[float], list[str]]:
+        time.sleep(delay)
+        return [0.0], [text]
+
+    classifier = make_mock_classifier()
+    classifier.classify_windows.side_effect = classify_windows
+    monkeypatch.setattr(retrieval_app, "PromptGuardClassifier", lambda: classifier)
+    provider = FakeSearchProvider(
+        name="searxng",
+        outcome=ProviderSearchResult(
+            "searxng",
+            [
+                {
+                    "title": "Gardening",
+                    "url": "https://example.com",
+                    "content": "Flowers",
+                }
+            ],
+            [],
+        ),
+    )
+    caplog.set_level(logging.INFO, logger="pipeline.orchestrator")
+    with _borrowed_search_providers(None):
+        async with _running_app() as running:
+            assert app.state.search_targets == search_targets_from_config(config)
+            app.state.search_providers = [provider]
+            before = (await running.get("/metrics")).json()["search"]
+            assert before["sanitization_latency_max_ms"] == 0
+            assert before["promptguard_latency_target_exceeded"] == 0
+            response = await running.post(
+                "/search", json={"query": "q", "num_results": 1}
+            )
+            assert response.status_code == 200
+            assert len(response.json()["results"]) == 1
+            assert classifier.classify_windows.call_count == 1
+            measured = [
+                record
+                for record in caplog.records
+                if record.getMessage() == "search_promptguard_complete"
+            ][-1]
+            duration = measured.__dict__["duration_ms"]
+            assert measured.__dict__["local_target_ms"] == (target or 1_000)
+            assert measured.__dict__["tool_augmented_first_token_target_ms"] == (
+                5_000 if target is None else 12_345
+            )
+            first = (await running.get("/metrics")).json()["search"]
+            assert first["requests"] == 1
+            assert first["sanitization_latency_max_ms"] == int(duration)
+            assert first["promptguard_latency_target_exceeded"] == int(target == 100)
+            if target == 100:
+                assert duration >= 150
+                warning = [
+                    record
+                    for record in caplog.records
+                    if record.getMessage()
+                    == "search_promptguard_local_latency_target_exceeded"
+                ][-1]
+                assert warning.__dict__["duration_ms"] == duration
+                assert warning.__dict__["local_target_ms"] == 100
+                assert (
+                    warning.__dict__["tool_augmented_first_token_target_ms"] == 12_345
+                )
+                delay = 0.0
+                response = await running.post(
+                    "/search", json={"query": "q", "num_results": 1}
+                )
+                assert response.status_code == 200
+                second_duration = [
+                    record.__dict__["duration_ms"]
+                    for record in caplog.records
+                    if record.getMessage() == "search_promptguard_complete"
+                ][-1]
+                assert second_duration < duration
+                second = (await running.get("/metrics")).json()["search"]
+                assert (
+                    second["sanitization_latency_max_ms"]
+                    == first["sanitization_latency_max_ms"]
+                )
+
+
+@pytest.mark.parametrize(
+    ("duration_ms", "expected_max", "exceeded"),
+    [
+        (0.0, 0, 0),
+        (99.999, 100, 0),
+        (100.0, 100, 0),
+        (100.01, 100, 1),
+        (150.99, 150, 1),
+        (150.999, 151, 1),
+    ],
+)
+async def test_search_latency_strict_boundary_rounding_and_once_per_request(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    duration_ms: float,
+    expected_max: int,
+    exceeded: int,
+) -> None:
+    monkeypatch.setattr(
+        app.state,
+        "search_targets",
+        search_targets_from_config(
+            {
+                "search_promptguard_latency_target_ms": 100,
+                "search_first_token_target_ms": 100,
+            }
+        ),
+    )
+    provider = FakeSearchProvider(
+        name="searxng",
+        outcome=ProviderSearchResult(
+            "searxng",
+            [
+                {"title": "Clean", "url": f"https://example.com/{i}", "content": "Text"}
+                for i in range(3)
+            ],
+            [],
+        ),
+    )
+    with (
+        _borrowed_search_providers([provider]),
+        patch.object(orchestrator, "time") as clock,
+    ):
+        clock.perf_counter.side_effect = [0.0, duration_ms / 1_000]
+        response = await client.post(
+            "/search",
+            json={"query": "q", "num_results": 3, "promptguard_fail_closed": False},
+        )
+        assert response.status_code == 200
+        assert len(response.json()["results"]) == 3
+        assert clock.perf_counter.call_count == 2
+    search = (await client.get("/metrics")).json()["search"]
+    assert search["promptguard_latency_target_exceeded"] == exceeded
+    assert search["sanitization_latency_max_ms"] == expected_max
+
+
+async def test_search_first_token_target_is_log_only(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(app.state, "search_targets", SearchTargets(5_000, 100))
+    caplog.set_level(logging.INFO, logger="pipeline.orchestrator")
+    with (
+        _borrowed_search_providers([FakeSearchProvider(name="searxng")]),
+        patch.object(orchestrator, "time") as clock,
+    ):
+        clock.perf_counter.side_effect = [0.0, 0.250]
+        response = await client.post("/search", json={"query": "q"})
+    assert response.status_code == 200
+    search = (await client.get("/metrics")).json()["search"]
+    assert search["sanitization_latency_max_ms"] == 250
+    assert search["promptguard_latency_target_exceeded"] == 0
+    record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "search_promptguard_complete"
+    )
+    assert record.__dict__["tool_augmented_first_token_target_ms"] == 100
+    assert "search_promptguard_local_latency_target_exceeded" not in caplog.text
+
+
+async def test_served_empty_search_measures_but_pre_loop_refusal_does_not(
+    client: httpx.AsyncClient,
+) -> None:
+    with (
+        _borrowed_search_providers([FakeSearchProvider(name="searxng")]),
+        patch.object(orchestrator, "time") as clock,
+    ):
+        clock.perf_counter.side_effect = [0.0, 0.012345]
+        response = await client.post("/search", json={"query": "q"})
+        assert response.status_code == 200
+        assert response.json()["results"] == []
+        assert clock.perf_counter.call_count == 2
+    first = (await client.get("/metrics")).json()["search"]
+    assert first["sanitization_latency_max_ms"] == 12
+    assert first["promptguard_latency_target_exceeded"] == 0
+
+    failure = FakeSearchProvider(
+        name="brave", paid=True, outcome=ProviderFailure("brave", "timeout", "timeout")
+    )
+    with (
+        _borrowed_search_providers([failure]),
+        patch.object(orchestrator, "time") as clock,
+    ):
+        response = await client.post("/search", json={"query": "q"})
+        assert response.status_code == 422
+        assert response.json()["error"] == "search_unavailable"
+        clock.perf_counter.assert_not_called()
+    second = (await client.get("/metrics")).json()["search"]
+    assert second["requests"] == 2
+    assert second["sanitization_latency_max_ms"] == first["sanitization_latency_max_ms"]
+    assert second["promptguard_latency_target_exceeded"] == 0
+
+
+# ---------------------------------------------------------------------------
+# `retrieve:` limits (`hardening-retrieve-parity` US-001)
+# ---------------------------------------------------------------------------
+
+
+class TestRetrieveSettingsReader:
+    """`retrieve_settings_from_config` — defaults, bounds, and the derivation."""
+
+    def test_an_empty_config_is_todays_behaviour(self) -> None:
+        settings = retrieve_settings_from_config({})
+        assert settings.max_promptguard_chunks == 0
+        assert settings.max_extracted_characters is None
+        assert settings.fetch_concurrency == 1
+        assert settings.admission_queue_depth == 4
+        assert settings.max_queued_fetch_bytes == 31457280
+        assert settings.promptguard_fail_closed_floor is False
+        assert settings.promptguard_threshold_ceiling == 1.0
+        assert settings.promptguard_wait_seconds == 30.0
+
+    def test_the_byte_bound_binds_before_the_depth_bound_at_the_defaults(self) -> None:
+        """Both bounds are exercisable — the default is not depth x 10 MB."""
+        settings = retrieve_settings_from_config({})
+        assert (
+            settings.max_queued_fetch_bytes
+            < settings.admission_queue_depth * DEFAULT_MAX_CONTENT_BYTES
+        )
+
+    def test_a_set_budget_derives_the_character_ceiling(self) -> None:
+        settings = retrieve_settings_from_config(
+            {"retrieve": {"max_promptguard_chunks": 256}}
+        )
+        assert settings.max_promptguard_chunks == 256
+        assert settings.max_extracted_characters == 458752
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("max_promptguard_chunks", -1),
+            ("max_promptguard_chunks", 1025),
+            ("fetch_concurrency", 0),
+            ("fetch_concurrency", 2),
+            ("admission_queue_depth", -1),
+            ("admission_queue_depth", 17),
+            ("max_queued_fetch_bytes", 1024),
+            ("max_queued_fetch_bytes", 167772161),
+            ("max_promptguard_chunks", True),
+            ("fetch_concurrency", "1"),
+        ],
+    )
+    def test_an_out_of_range_or_mistyped_block_key_refuses(
+        self, key: str, value: object
+    ) -> None:
+        with pytest.raises(RetrieveConfigurationError):
+            retrieve_settings_from_config({"retrieve": {key: value}})
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("promptguard_fail_closed_floor", "yes"),
+            ("promptguard_threshold_ceiling", 1.5),
+            ("promptguard_threshold_ceiling", -0.1),
+            ("promptguard_threshold_ceiling", True),
+            ("promptguard_wait_seconds", 0.01),
+            ("promptguard_wait_seconds", 300.1),
+            ("promptguard_wait_seconds", "30"),
+        ],
+    )
+    def test_an_out_of_range_or_mistyped_top_level_key_refuses(
+        self, key: str, value: object
+    ) -> None:
+        with pytest.raises(RetrieveConfigurationError):
+            retrieve_settings_from_config({key: value})
+
+    @pytest.mark.parametrize("sign", ["", "-"], ids=["positive", "negative"])
+    def test_a_large_yaml_integer_ceiling_refuses_without_echoing_it(
+        self, sign: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        literal = f"{sign}1{'0' * 400}"
+        config = yaml.safe_load(f"promptguard_threshold_ceiling: {literal}\n")
+        assert isinstance(config["promptguard_threshold_ceiling"], int)
+        with pytest.raises(RetrieveConfigurationError) as exc:
+            retrieve_settings_from_config(config)
+        assert type(exc.value) is RetrieveConfigurationError
+        assert str(exc.value) == (
+            "promptguard_threshold_ceiling must be between 0.0 and 1.0"
+        )
+        assert literal not in str(exc.value)
+        assert literal not in caplog.text
+
+    def test_a_non_mapping_block_refuses(self) -> None:
+        with pytest.raises(RetrieveConfigurationError):
+            retrieve_settings_from_config({"retrieve": []})
+
+    def test_the_wait_is_a_float_so_sub_second_values_are_in_range(self) -> None:
+        settings = retrieve_settings_from_config({"promptguard_wait_seconds": 0.25})
+        assert settings.promptguard_wait_seconds == 0.25
+
+    def test_the_shipped_config_is_readable_and_at_its_defaults(self) -> None:
+        """The shipped file stays the complete, boot-valid example."""
+        config = yaml.safe_load(
+            (Path(__file__).resolve().parent.parent / "config.yaml").read_text()
+        )
+        assert retrieve_settings_from_config(config) == RetrieveSettings()
+
+
+async def test_lifespan_refuses_an_out_of_range_retrieve_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `retrieve:` bound outside its range fails the boot rather than widening."""
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {"retrieve": {"fetch_concurrency": 4}},
+    )
+
+    probe_app = FastAPI()
+    with pytest.raises(RetrieveConfigurationError):
+        async with lifespan(probe_app):
+            pass
+
+
+@pytest.mark.parametrize("value", ["credential-sentinel", 0, 1, None, [], {}])
+async def test_lifespan_refuses_a_non_boolean_policy_floor_without_echoing_it(
+    monkeypatch: pytest.MonkeyPatch, value: object
+) -> None:
+    monkeypatch.setattr(
+        retrieval_app, "_load_config", lambda: {"promptguard_fail_closed_floor": value}
+    )
+    with pytest.raises(RetrieveConfigurationError) as exc:
+        async with lifespan(FastAPI()):
+            pytest.fail("invalid policy started")
+    assert str(exc.value) == "promptguard_fail_closed_floor must be a boolean"
+
+
+@pytest.mark.parametrize(
+    ("value", "reason"),
+    [
+        ("credential-sentinel", "must be a number"),
+        (True, "must be a number"),
+        (None, "must be a number"),
+        ([], "must be a number"),
+        (-0.01, "must be between 0.0 and 1.0"),
+        (1.01, "must be between 0.0 and 1.0"),
+        (float("nan"), "must be between 0.0 and 1.0"),
+        (float("inf"), "must be between 0.0 and 1.0"),
+        (-float("inf"), "must be between 0.0 and 1.0"),
+    ],
+)
+async def test_lifespan_refuses_an_invalid_policy_ceiling_without_echoing_it(
+    monkeypatch: pytest.MonkeyPatch, value: object, reason: str
+) -> None:
+    monkeypatch.setattr(
+        retrieval_app, "_load_config", lambda: {"promptguard_threshold_ceiling": value}
+    )
+    with pytest.raises(RetrieveConfigurationError) as exc:
+        async with lifespan(FastAPI()):
+            pytest.fail("invalid policy started")
+    assert str(exc.value) == f"promptguard_threshold_ceiling {reason}"
+
+
+@pytest.mark.parametrize("sign", ["", "-"], ids=["positive", "negative"])
+async def test_lifespan_refuses_a_large_yaml_integer_ceiling_without_echoing_it(
+    monkeypatch: pytest.MonkeyPatch, sign: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    literal = f"{sign}1{'0' * 400}"
+    config = yaml.safe_load(f"promptguard_threshold_ceiling: {literal}\n")
+    assert isinstance(config["promptguard_threshold_ceiling"], int)
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    with pytest.raises(RetrieveConfigurationError) as exc:
+        async with lifespan(FastAPI()):
+            pytest.fail("invalid policy started")
+    assert type(exc.value) is RetrieveConfigurationError
+    assert str(exc.value) == (
+        "promptguard_threshold_ceiling must be between 0.0 and 1.0"
+    )
+    assert literal not in str(exc.value)
+    assert literal not in caplog.text
+
+
+@pytest.mark.parametrize("ceiling", [0, 0.5, 1])
+async def test_lifespan_publishes_nondefault_policy_bounds(
+    monkeypatch: pytest.MonkeyPatch, ceiling: float
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(app.state, "retrieve_settings", app.state.retrieve_settings)
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {
+            "promptguard_fail_closed_floor": True,
+            "promptguard_threshold_ceiling": ceiling,
+        },
+    )
+    async with _running_app():
+        settings: RetrieveSettings = app.state.retrieve_settings
+        assert settings.promptguard_fail_closed_floor is True
+        assert settings.promptguard_threshold_ceiling == ceiling
+        assert isinstance(settings.promptguard_threshold_ceiling, float)
+
+
+@pytest.mark.parametrize(
+    ("plant", "token"),
+    [("mode_0755", "spool_dir_mode"), ("symlink", "spool_dir_symlink")],
+)
+async def test_lifespan_refuses_an_unsafe_spool_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    plant: str,
+    token: str,
+) -> None:
+    """A planted spool directory refuses the boot — refused, never repaired.
+
+    The refusal is a ``RetrieveConfigurationError`` carrying the closed token,
+    so boot refusals keep one vocabulary and no path reaches the message.
+    """
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: dict[str, Any]())
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    spool = tmp_path / f"forage-spool-{os.geteuid()}"
+    if plant == "mode_0755":
+        spool.mkdir()
+        spool.chmod(0o755)
+    else:
+        target = tmp_path / "planted"
+        target.mkdir(mode=0o700)
+        spool.symlink_to(target)
+
+    probe_app = FastAPI()
+    with pytest.raises(RetrieveConfigurationError) as exc_info:
+        async with lifespan(probe_app):
+            pass
+
+    assert str(exc_info.value) == token
+    assert str(tmp_path) not in str(exc_info.value)
+    if plant == "mode_0755":
+        assert stat.S_IMODE(os.lstat(spool).st_mode) == 0o755
+    else:
+        assert spool.is_symlink()
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        ({}, True),
+        ({"retrieve": {"max_promptguard_chunks": 0}}, True),
+        ({"retrieve": {"max_promptguard_chunks": 256}}, False),
+    ],
+)
+async def test_lifespan_warns_exactly_once_while_the_budget_is_unset(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    config: dict[str, object],
+    expected: bool,
+) -> None:
+    """One closed-token WARNING naming the coming default, nothing more."""
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+
+    probe_app = FastAPI()
+    with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+        async with lifespan(probe_app):
+            pass
+
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if "retrieve_budget_unset" in record.getMessage()
+    ]
+    assert warnings == (
+        ["retrieve_budget_unset coming_default=256"] if expected else []
+    )
+
+
+async def test_the_module_level_fallback_publishes_settings_and_logs_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The lifespan-free path exists for tests, so it emits no boot warning."""
+    assert isinstance(retrieval_app.app.state.retrieve_settings, RetrieveSettings)
+    assert retrieval_app.app.state.retrieve_settings.max_promptguard_chunks == 0
+    assert "retrieve_budget_unset" not in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # Backend selection from VALKEY_URL (`feature-forage-cache-fallback` US-002)
 # ---------------------------------------------------------------------------
 #
-# Five starts, one per configuration the operator can produce:
+# Six starts, one per configuration the operator can produce:
 #
 #   fully unset   -> in-memory, healthy, and no connection attempted at all
-#   valid         -> Valkey, healthy
-#   unreachable   -> Valkey, `degraded: cache_unavailable`
-#   unparseable   -> Valkey, `degraded: cache_unavailable`
-#   empty string  -> Valkey, `degraded: cache_unavailable`
+#   valid + key   -> Valkey, healthy
+#   valid, no key -> Valkey, `degraded: cache_unauthenticated`
+#   unreachable   -> Valkey, `cache_unavailable`, `cache_unauthenticated`
+#   unparseable   -> Valkey, `cache_unavailable`, `cache_unauthenticated`
+#   empty string  -> Valkey, `cache_unavailable`, `cache_unauthenticated`
 #
 # They run through the real `lifespan` *and the real `ContentCache`* — unlike
 # `_running_app` above, which patches the cache away. That is the whole point:
@@ -1249,7 +3552,7 @@ def _valkey_double() -> AsyncMock:
     """A Valkey client that answers every command this cache issues."""
     client = AsyncMock()
     client.ping = AsyncMock(return_value=True)
-    client.get = AsyncMock(return_value=None)
+    client.getrange = AsyncMock(return_value=b"")
     client.set = AsyncMock(return_value=True)
     client.delete = AsyncMock(return_value=1)
     client.aclose = AsyncMock(return_value=None)
@@ -1297,6 +3600,7 @@ async def _started_with_valkey_url(
         monkeypatch.delenv("VALKEY_URL", raising=False)
     else:
         monkeypatch.setenv("VALKEY_URL", valkey_url)
+    monkeypatch.setattr(app.state, "cache_signing_active", False)
 
     async with lifespan(app):
         transport = httpx.ASGITransport(app=app)
@@ -1304,6 +3608,83 @@ async def _started_with_valkey_url(
             transport=transport, base_url="http://test"
         ) as selection_client:
             yield selection_client
+
+
+@pytest.mark.parametrize(
+    ("concurrency", "value_mib", "required_mib"),
+    [(1, 4, 964), (4, 4, 1156), (4, 8, 1160)],
+)
+async def test_lifespan_memory_rule_counts_one_bounded_valkey_read(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    concurrency: int,
+    value_mib: int,
+    required_mib: int,
+) -> None:
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {
+            "extraction": {"classification_concurrency": concurrency},
+            "cache": {"max_value_bytes": value_mib * MEBIBYTE},
+        },
+    )
+    with (
+        patch("cache.aioredis") as aioredis,
+        patch.object(
+            retrieval_app,
+            "_cgroup_memory_snapshot",
+            return_value={"cgroup_memory_max_bytes": 1024 * MEBIBYTE},
+        ) as snapshot,
+    ):
+        aioredis.from_url.return_value = _valkey_double()
+        async with _started_with_valkey_url(
+            monkeypatch, valkey_url=_WORKING_VALKEY_URL
+        ) as client:
+            assert (await client.get("/health")).status_code == 200
+            assert isinstance(app.state.cache.storage, ValkeyStorage)
+            assert app.state.cache_settings.max_bytes == 32 * MEBIBYTE
+            snapshot.assert_called_once_with()
+    warnings = [
+        r for r in caplog.records if "envelope_memory_rule_unmet" in r.getMessage()
+    ]
+    assert len(warnings) == int(required_mib > 1024)
+    if warnings:
+        assert warnings[0].levelno == logging.WARNING
+        assert warnings[0].getMessage() == (
+            f"envelope_memory_rule_unmet — memory_max={1024 * MEBIBYTE} "
+            f"required={required_mib * MEBIBYTE} "
+            f"classification_concurrency={concurrency} extraction_concurrency=1 "
+            f"child_address_space_bytes={384 * MEBIBYTE} model_id={DEFAULT_MODEL_ID} "
+            f"parent_bytes={512 * MEBIBYTE} cache_backend=valkey "
+            f"cache_term_bytes={value_mib * MEBIBYTE}"
+        )
+    assert _WORKING_VALKEY_URL not in caplog.text
+
+
+async def test_shipped_memory_envelope_is_silent_at_one_gib(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _acquisition_that_never_loads
+    )
+    with patch.object(
+        retrieval_app,
+        "_cgroup_memory_snapshot",
+        return_value={"cgroup_memory_max_bytes": 1024 * MEBIBYTE},
+    ):
+        async with _running_app() as client:
+            assert app.state.config["promptguard_threads"] == 0
+            assert app.state.extraction_settings.classification_concurrency == 1
+            assert app.state.extraction_settings.extraction_concurrency == 1
+            assert (
+                app.state.extraction_settings.child_address_space_bytes
+                == 384 * MEBIBYTE
+            )
+            assert app.state.cache_settings.max_bytes == 32 * MEBIBYTE
+            assert (await client.get("/health")).status_code == 200
+    assert "envelope_memory_rule_unmet" not in caplog.text
 
 
 def test_only_a_fully_unset_valkey_url_reads_as_absent(
@@ -1329,7 +3710,7 @@ def test_only_a_fully_unset_valkey_url_reads_as_absent(
 async def test_unset_valkey_url_runs_in_memory_healthy_and_never_connects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Case 1 of 5 — fully unset: in-memory, healthy, no connection attempted.
+    """Case 1 of 6 — fully unset: in-memory, healthy, no connection attempted.
 
     The "no connection attempted" half is the behavioural form of "no baked
     env default remains": with the old `retrieval_app.py` default in place
@@ -1354,7 +3735,8 @@ async def test_unset_valkey_url_runs_in_memory_healthy_and_never_connects(
 async def test_a_working_valkey_url_selects_valkey_and_stays_healthy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Case 2 of 5 — set and working: Valkey, healthy, one connection made."""
+    """Case 2 of 6 — working and keyed: Valkey, healthy, one connection made."""
+    monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, _CACHE_HMAC_SENTINEL)
     with patch("cache.aioredis") as aioredis:
         aioredis.from_url.return_value = _valkey_double()
         async with _started_with_valkey_url(
@@ -1372,6 +3754,432 @@ async def test_a_working_valkey_url_selects_valkey_and_stays_healthy(
             assert data["cache_connected"] is True
 
 
+async def test_a_keyless_working_valkey_url_reports_cache_unauthenticated(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Case 3 of 6 — a reachable but unsigned Valkey is degraded, not healthy."""
+    with patch("cache.aioredis") as aioredis:
+        aioredis.from_url.return_value = _valkey_double()
+        async with _started_with_valkey_url(
+            monkeypatch, valkey_url=_WORKING_VALKEY_URL
+        ) as client:
+            for _ in range(2):
+                response = await client.get("/health")
+                assert response.status_code == 200
+                data = response.json()
+                assert data["status"] == "degraded"
+                assert data["degraded_reasons"] == ["cache_unauthenticated"]
+                assert data["cache_connected"] is True
+                assert "cache_hmac_key" not in data["capabilities"]
+            cache = cast(ContentCache, app.state.cache)
+            assert cache._hmac_key is None
+            assert app.state.cache_signing_active is False
+    warnings = [r for r in caplog.records if "cache_hmac_key_" in r.getMessage()]
+    assert len(warnings) == 1
+    assert warnings[0].levelno == logging.WARNING
+    assert warnings[0].getMessage() == (
+        "cache_hmac_key_missing — FORAGE_CACHE_HMAC_KEY is unset; cached content "
+        "is served unsigned (/health reports cache_unauthenticated)"
+    )
+
+
+@pytest.mark.parametrize("valkey_url", [None, _WORKING_VALKEY_URL])
+@pytest.mark.parametrize("key", [None, "", " \t\n", _CACHE_HMAC_SENTINEL])
+async def test_cache_signing_boot_state_and_diagnostics_never_expose_the_key(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    valkey_url: str | None,
+    key: str | None,
+) -> None:
+    """Real cache, real lifespan; object repr must never become a key-bearing dump."""
+    if key is not None:
+        monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, key)
+    active = valkey_url is not None and key == _CACHE_HMAC_SENTINEL
+    with (
+        caplog.at_level(logging.DEBUG),
+        patch("cache.aioredis") as aioredis,
+    ):
+        aioredis.from_url.return_value = _valkey_double()
+        async with _started_with_valkey_url(
+            monkeypatch, valkey_url=valkey_url
+        ) as client:
+            cache = cast(ContentCache, app.state.cache)
+            assert cache._hmac_key == (
+                _CACHE_HMAC_SENTINEL.encode() if active else None
+            )
+            assert app.state.cache_signing_active is active
+            for _ in range(2):
+                health = await client.get("/health")
+                metrics = await client.get("/metrics")
+                assert health.status_code == metrics.status_code == 200
+                data = health.json()
+                assert data["capabilities"].get("cache_hmac_key") == (
+                    1 if active else None
+                )
+                assert ("cache_unauthenticated" in data["degraded_reasons"]) == (
+                    valkey_url is not None and not active
+                )
+                assert _CACHE_HMAC_SENTINEL not in health.text + metrics.text
+            assert _CACHE_HMAC_SENTINEL not in repr(cache)
+    warnings = [r for r in caplog.records if "cache_hmac_key_" in r.getMessage()]
+    expected_marker = (
+        "cache_hmac_key_missing"
+        if valkey_url is not None and not active
+        else "cache_hmac_key_unused"
+        if valkey_url is None and key == _CACHE_HMAC_SENTINEL
+        else None
+    )
+    assert len(warnings) == (0 if expected_marker is None else 1)
+    if expected_marker is not None:
+        assert warnings[0].levelno == logging.WARNING
+        assert warnings[0].name == "retrieval_app"
+        assert warnings[0].getMessage().startswith(expected_marker)
+        assert CACHE_HMAC_KEY_ENV_VAR in warnings[0].getMessage()
+    assert _CACHE_HMAC_SENTINEL not in caplog.text
+    assert all(_CACHE_HMAC_SENTINEL not in repr(vars(r)) for r in caplog.records)
+
+
+@pytest.mark.parametrize("valkey_url", [None, _WORKING_VALKEY_URL])
+@pytest.mark.parametrize(
+    ("key", "marker"),
+    [
+        ("short-test-key-20byte", "cache_hmac_key_too_short"),
+        ("x" * 31, "cache_hmac_key_too_short"),
+        ("x" * 16 + " " + "x" * 16, "cache_hmac_key_invalid"),
+        ("x" * 16 + "\t" + "x" * 16, "cache_hmac_key_invalid"),
+        ("x" * 16 + "\n" + "x" * 16, "cache_hmac_key_invalid"),
+        ("x" * 32 + "\r", "cache_hmac_key_invalid"),
+        ("\r", "cache_hmac_key_invalid"),
+        ("x" * 32 + "\x1f", "cache_hmac_key_invalid"),
+        ("x" * 32 + "\x7f", "cache_hmac_key_invalid"),
+        ("x" * 32 + "\x85", "cache_hmac_key_invalid"),
+        ("x" * 32 + "\u00e9", "cache_hmac_key_invalid"),
+        ("x" * 32 + "\udcff", "cache_hmac_key_invalid"),
+    ],
+)
+async def test_invalid_cache_hmac_keys_warn_once_then_refuse_boot_without_leaking(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    valkey_url: str | None,
+    key: str,
+    marker: str,
+) -> None:
+    """Validation is unconditional, including a memory backend that cannot sign."""
+    monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, key)
+    with (
+        caplog.at_level(logging.DEBUG),
+        patch("retrieval_app.ContentCache") as cache_factory,
+        pytest.raises(CacheConfigurationError) as caught,
+    ):
+        async with _started_with_valkey_url(monkeypatch, valkey_url=valkey_url):
+            pytest.fail("invalid credentials must refuse startup")
+    cache_factory.assert_not_called()
+    assert CACHE_HMAC_KEY_ENV_VAR in str(caught.value)
+    assert key not in str(caught.value)
+    warnings = [r for r in caplog.records if "cache_hmac_key_" in r.getMessage()]
+    assert len(warnings) == 1
+    assert warnings[0].levelno == logging.WARNING
+    assert warnings[0].name == "retrieval_app"
+    assert warnings[0].getMessage().startswith(marker)
+    assert CACHE_HMAC_KEY_ENV_VAR in warnings[0].getMessage()
+    assert key not in caplog.text
+    assert all(key not in repr(vars(r)) for r in caplog.records)
+
+
+@pytest.mark.parametrize("key", ["x" * 32, _CACHE_HMAC_SENTINEL])
+async def test_cache_signing_resolves_once_and_keeps_the_stripped_boot_key(
+    monkeypatch: pytest.MonkeyPatch, key: str
+) -> None:
+    """The length boundary is accepted, not mistaken for an entropy guarantee."""
+    monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, f" \t\n{key}\n\t ")
+    with (
+        patch("cache.aioredis") as aioredis,
+        patch(
+            "retrieval_app._resolve_cache_hmac_key",
+            wraps=retrieval_app._resolve_cache_hmac_key,
+        ) as resolve,
+    ):
+        aioredis.from_url.return_value = _valkey_double()
+        async with _started_with_valkey_url(
+            monkeypatch, valkey_url=_WORKING_VALKEY_URL
+        ) as client:
+            cache = cast(ContentCache, app.state.cache)
+            assert cache._hmac_key == key.encode()
+            for changed in ("too-short", ""):
+                monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, changed)
+                data = (await client.get("/health")).json()
+                assert data["capabilities"]["cache_hmac_key"] == 1
+                assert data["degraded_reasons"] == []
+                assert cache._hmac_key == key.encode()
+            resolve.assert_called_once_with()
+
+
+def test_cache_hmac_environment_has_one_read_site_and_one_boot_resolution() -> None:
+    assert CACHE_HMAC_KEY_ENV_VAR == "FORAGE_CACHE_HMAC_KEY"
+    source = inspect.getsource(retrieval_app)
+    read = "os.environ.get(CACHE_HMAC_KEY_ENV_VAR)"
+    assert source.count(read) == 1
+    assert read in inspect.getsource(retrieval_app._resolve_cache_hmac_key)
+    assert source.count("_resolve_cache_hmac_key()") == 2
+    assert inspect.getsource(lifespan).count("_resolve_cache_hmac_key()") == 1
+
+
+async def test_boot_key_signs_a_real_cache_round_trip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, _CACHE_HMAC_SENTINEL)
+    valkey = _valkey_double()
+    content = RetrievedContent(
+        request_id="signed-at-boot",
+        source_url="https://example.com/",
+        final_url="https://example.com/",
+        body="A calm page.",
+        word_count=3,
+        content_type="html",
+        trust_score=0.7,
+        trust_tier=TrustTier.STANDARD,
+        stage2_verdict=Stage2Verdict.CLEAN,
+        stage3_verdict=Stage3Verdict.SAFE,
+        domain="example.com",
+    )
+    with patch("cache.aioredis") as aioredis:
+        aioredis.from_url.return_value = valkey
+        async with _started_with_valkey_url(
+            monkeypatch, valkey_url=_WORKING_VALKEY_URL
+        ):
+            cache = cast(ContentCache, app.state.cache)
+            assert await cache.put(content.source_url, content)
+            stored_key, envelope = valkey.set.call_args.args
+            assert isinstance(stored_key, str)
+            assert isinstance(envelope, str)
+            tag, mac, payload = envelope.encode().split(b".", 2)
+            assert tag == b"v1"
+            assert (
+                mac
+                == hmac.new(
+                    _CACHE_HMAC_SENTINEL.encode(),
+                    b"v1\0" + stored_key.encode() + b"\0" + payload,
+                    hashlib.sha256,
+                )
+                .hexdigest()
+                .encode()
+            )
+            valkey.getrange.return_value = envelope.encode()
+            returned = await cache.get(content.source_url)
+            assert returned is not None
+            assert returned.body == content.body
+            assert returned.cache_hit is True
+            assert app.state.cache_metrics.integrity_rejects == 0
+
+
+class TestCacheHmacKeyNeverLeaks:
+    """Mirror tests/test_brave_provider.py::TestKeyNeverLeaks through real boot.
+
+    The default object repr is safe today; guard against a future dataclass
+    conversion exposing the key. Capture every logger, including shutdown.
+    """
+
+    @pytest.mark.parametrize("connect_failure", [False, True], ids=["signed", "outage"])
+    async def test_cache_operations_refusal_and_diagnostics(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        connect_failure: bool,
+    ) -> None:
+        monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, _CACHE_HMAC_SENTINEL)
+        valkey = _valkey_double()
+        if connect_failure:
+            valkey.ping.side_effect = ConnectionError(
+                f"synthetic connection failure key={_CACHE_HMAC_SENTINEL}"
+            )
+        with caplog.at_level(logging.DEBUG), patch("cache.aioredis") as aioredis:
+            aioredis.from_url.return_value = valkey
+            async with _started_with_valkey_url(
+                monkeypatch, valkey_url=_WORKING_VALKEY_URL
+            ) as client:
+                cache = app.state.cache
+                assert isinstance(cache, ContentCache)
+                assert isinstance(cache.storage, ValkeyStorage)
+                assert cache._hmac_key == _CACHE_HMAC_SENTINEL.encode()
+                valkey.ping.assert_awaited_once()
+                if not connect_failure:
+                    content = RetrievedContent(
+                        request_id="cache-leak-sentinel",
+                        source_url="https://example.com/",
+                        final_url="https://example.com/",
+                        body="A calm page.",
+                        word_count=3,
+                        content_type="html",
+                        trust_score=0.7,
+                        trust_tier=TrustTier.STANDARD,
+                        stage2_verdict=Stage2Verdict.CLEAN,
+                        stage3_verdict=Stage3Verdict.SAFE,
+                        domain="example.com",
+                    )
+                    assert await cache.put(content.source_url, content)
+                    valkey.set.assert_awaited_once()
+                    stored_key, envelope = valkey.set.call_args.args
+                    assert isinstance(stored_key, str)
+                    assert isinstance(envelope, str)
+                    assert envelope.startswith("v1.")
+                    assert _CACHE_HMAC_SENTINEL not in envelope
+                    valkey.getrange.return_value = (
+                        envelope + _CACHE_HMAC_SENTINEL
+                    ).encode()
+                    assert await cache.get(content.source_url) is None
+                    valkey.getrange.assert_awaited_once()
+                    valkey.delete.assert_awaited_once_with(stored_key)
+                    assert app.state.cache_metrics.integrity_rejects == 1
+
+                refusal = await client.post(
+                    "/retrieve",
+                    json={
+                        "url": "https://blocked.example/",
+                        "blocked_domains": ["blocked.example"],
+                    },
+                )
+                assert refusal.status_code == 422
+                assert refusal.json()["error"] == "blocked_domain"
+                health = await client.get("/health")
+                metrics = await client.get("/metrics")
+                assert health.status_code == metrics.status_code == 200
+                assert health.json()["capabilities"]["cache_hmac_key"] == 1
+                assert health.json()["status"] == (
+                    "degraded" if connect_failure else "healthy"
+                )
+                assert health.json()["degraded_reasons"] == (
+                    ["cache_unavailable"] if connect_failure else []
+                )
+                assert metrics.json()["cache"]["integrity_rejects"] == (
+                    0 if connect_failure else 1
+                )
+                for surface in (refusal.text, health.text, metrics.text, repr(cache)):
+                    assert _CACHE_HMAC_SENTINEL not in surface
+        expected_log = (
+            "Valkey connection failed for content cache"
+            if connect_failure
+            else "cache_integrity_reject"
+        )
+        assert expected_log in caplog.text
+        if not connect_failure:
+            assert "reason=bad_mac" in caplog.text
+        assert _CACHE_HMAC_SENTINEL not in caplog.text
+        assert all(_CACHE_HMAC_SENTINEL not in repr(vars(r)) for r in caplog.records)
+
+
+@pytest.mark.parametrize("keyed", [False, True])
+async def test_cache_health_signing_is_independent_of_connectivity_and_break_glass(
+    monkeypatch: pytest.MonkeyPatch, keyed: bool
+) -> None:
+    if keyed:
+        monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, _CACHE_HMAC_SENTINEL)
+    monkeypatch.setenv("FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION", "1")
+    valkey = _valkey_double()
+    valkey.ping.side_effect = ConnectionError("unavailable")
+    with patch("cache.aioredis") as aioredis:
+        aioredis.from_url.return_value = valkey
+        async with _started_with_valkey_url(
+            monkeypatch, valkey_url=_WORKING_VALKEY_URL, promptguard_loaded=False
+        ) as client:
+            monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, _CACHE_HMAC_SENTINEL)
+            response = await client.get("/health")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "degraded"
+            assert data["capabilities"].get("cache_hmac_key") == (1 if keyed else None)
+            assert data["capabilities"]["search_sanitization"] == 1
+            assert data["degraded_reasons"] == [
+                "promptguard_unavailable",
+                "cache_unavailable",
+            ] + ([] if keyed else ["cache_unauthenticated"])
+
+
+@pytest.mark.parametrize("key", [None, _CACHE_HMAC_SENTINEL, "invalid"])
+async def test_lifespanless_health_never_resolves_or_advertises_a_cache_key(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, key: str | None
+) -> None:
+    monkeypatch.delattr(app.state, "cache_backend", raising=False)
+    monkeypatch.delattr(app.state, "cache_signing_active")
+    monkeypatch.setattr(app.state, "cache", None)
+    if key is not None:
+        monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, key)
+    for backend in ("memory", "valkey"):
+        if backend == "valkey":
+            monkeypatch.setenv("VALKEY_URL", _WORKING_VALKEY_URL)
+        response = await client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["cache_backend"] == backend
+        assert "cache_hmac_key" not in data["capabilities"]
+        assert data["degraded_reasons"] == [
+            "promptguard_unavailable",
+            "cache_unavailable",
+        ] + (["cache_unauthenticated"] if backend == "valkey" else [])
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        "decode_responses=1",
+        "encoding=latin1",
+        "encoding_errors=replace",
+        "protocol=3",
+        "decode_responses=",
+        "decode_responses",
+    ],
+)
+async def test_lifespan_refuses_reply_shaping_valkey_options_without_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    option: str,
+) -> None:
+    url = f"redis://:OPTION-PASSWORD@option-host:6379/4?{option}"
+    with (
+        caplog.at_level(logging.WARNING, logger="cache"),
+        pytest.raises(CacheConfigurationError) as caught,
+    ):
+        async with _started_with_valkey_url(monkeypatch, valkey_url=url):
+            pytest.fail("reply-shaping URL unexpectedly started")
+    name = option.split("=", 1)[0]
+    assert str(caught.value) == f"VALKEY_URL forbids the {name} query option"
+    records = [record for record in caplog.records if record.name == "cache"]
+    assert [(record.levelno, record.getMessage()) for record in records] == [
+        (logging.WARNING, f"valkey_url_option_forbidden — option={name}")
+    ]
+    for value in (url, "option-host", "OPTION-PASSWORD"):
+        assert value not in str(caught.value)
+        assert value not in caplog.text
+
+
+@pytest.mark.parametrize("backend", ["memory", "valkey"])
+async def test_lifespan_forwards_value_bound_to_cache_and_storage(
+    monkeypatch: pytest.MonkeyPatch, backend: str
+) -> None:
+    bound = 512 * 2**10
+    monkeypatch.setattr(
+        retrieval_app, "_load_config", lambda: {"cache": {"max_value_bytes": bound}}
+    )
+    with patch("cache.aioredis") as redis:
+        redis.from_url.return_value = _valkey_double()
+        async with _started_with_valkey_url(
+            monkeypatch,
+            valkey_url=f"{_WORKING_VALKEY_URL}?socket_timeout=90"
+            if backend == "valkey"
+            else None,
+        ) as client:
+            cache = cast(ContentCache, app.state.cache)
+            assert cache._max_value_bytes == bound
+            assert cache._hmac_key is None
+            if backend == "valkey":
+                assert isinstance(cache.storage, ValkeyStorage)
+                assert cache.storage._max_value_bytes == bound
+                assert redis.from_url.call_args.kwargs["decode_responses"] is False
+            else:
+                assert isinstance(cache.storage, InMemoryStorage)
+            assert (await client.get("/health")).json()["cache_connected"]
+
+
 @pytest.mark.parametrize(
     "valkey_url",
     [
@@ -1384,7 +4192,7 @@ async def test_a_broken_valkey_url_degrades_and_never_falls_back_to_memory(
     monkeypatch: pytest.MonkeyPatch,
     valkey_url: str,
 ) -> None:
-    """Cases 3-5 of 5 — configured and failing: Valkey, `cache_unavailable`.
+    """Cases 4-6 of 6 — failing and unsigned: both cache degraded reasons.
 
     Unreachable, unparseable and empty are one behaviour on purpose. Each is a
     configuration the operator *wrote*, so each fails loudly rather than
@@ -1401,18 +4209,26 @@ async def test_a_broken_valkey_url_degrades_and_never_falls_back_to_memory(
 
         data = resp.json()
         assert data["status"] == "degraded"
-        assert data["degraded_reasons"] == ["cache_unavailable"]
+        assert data["degraded_reasons"] == [
+            "cache_unavailable",
+            "cache_unauthenticated",
+        ]
         assert data["cache_connected"] is False
 
 
 @pytest.mark.parametrize(
-    ("valkey_url", "secret"),
+    ("valkey_url", "secret", "keyed"),
     [
-        pytest.param(None, None, id="unset"),
-        pytest.param(_WORKING_VALKEY_URL, "working-secret", id="valid"),
-        pytest.param(_UNREACHABLE_VALKEY_URL, "unreachable-secret", id="unreachable"),
-        pytest.param(_UNPARSEABLE_VALKEY_URL, "unparseable-secret", id="unparseable"),
-        pytest.param("", None, id="empty-string"),
+        pytest.param(None, None, False, id="unset"),
+        pytest.param(_WORKING_VALKEY_URL, "working-secret", True, id="valid-keyed"),
+        pytest.param(_WORKING_VALKEY_URL, "working-secret", False, id="valid-keyless"),
+        pytest.param(
+            _UNREACHABLE_VALKEY_URL, "unreachable-secret", False, id="unreachable"
+        ),
+        pytest.param(
+            _UNPARSEABLE_VALKEY_URL, "unparseable-secret", False, id="unparseable"
+        ),
+        pytest.param("", None, False, id="empty-string"),
     ],
 )
 async def test_no_selection_path_logs_the_valkey_url(
@@ -1420,14 +4236,17 @@ async def test_no_selection_path_logs_the_valkey_url(
     caplog: pytest.LogCaptureFixture,
     valkey_url: str | None,
     secret: str | None,
+    keyed: bool,
 ) -> None:
-    """All five starts keep the closed log vocabulary — no URL, no password.
+    """All six starts keep the closed log vocabulary — no URL, no password.
 
     `cache.py`'s invariant, asserted here at the layer that now *chooses* the
     URL: selection reads the variable and hands it on, so a helpful "couldn't
     parse VALKEY_URL=…" anywhere along that path would leak a credential out
     of the one variable that routinely carries one.
     """
+    if keyed:
+        monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, _CACHE_HMAC_SENTINEL)
     with patch("cache.aioredis") as aioredis:
         aioredis.from_url.return_value = _valkey_double()
         with caplog.at_level(logging.DEBUG):
@@ -1447,6 +4266,7 @@ async def test_no_selection_path_logs_the_valkey_url(
     assert "redis://" not in caplog.text
     assert "wrong-scheme-host" not in caplog.text
     assert "valkey-that-is-not-there" not in caplog.text
+    assert _CACHE_HMAC_SENTINEL not in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -1493,7 +4313,7 @@ async def test_no_selection_path_logs_the_valkey_url(
             "degraded",
             "valkey",
             False,
-            [DEGRADED_CACHE_UNAVAILABLE],
+            [DEGRADED_CACHE_UNAVAILABLE, DEGRADED_CACHE_UNAUTHENTICATED],
             id="valkey-down-degraded",
         ),
     ],
@@ -1519,6 +4339,7 @@ async def test_health_names_the_backend_it_selected_for_this_start(
     """
     with ExitStack() as stack:
         if valkey_reachable:
+            monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, _CACHE_HMAC_SENTINEL)
             aioredis = stack.enter_context(patch("cache.aioredis"))
             aioredis.from_url.return_value = _valkey_double()
         async with _started_with_valkey_url(
@@ -1826,8 +4647,8 @@ async def test_a_following_search_still_sees_the_real_provider(
         await client.post("/search", json={"query": "chain test"})
 
     with patch("pipeline.search_providers.searxng.httpx.AsyncClient") as client_cls:
-        inner = AsyncMock()
-        inner.get.side_effect = httpx.ConnectError("not available")
+        inner = MagicMock()
+        inner.stream.side_effect = httpx.ConnectError("not available")
         inner.__aenter__ = AsyncMock(return_value=inner)
         inner.__aexit__ = AsyncMock(return_value=False)
         client_cls.return_value = inner
@@ -1836,6 +4657,30 @@ async def test_a_following_search_still_sees_the_real_provider(
 
     assert resp.status_code == 422
     assert resp.json()["error"] == "searxng_unavailable"
+
+
+async def test_searxng_only_unsupported_encoding_is_a_closed_wire_reason(
+    client: httpx.AsyncClient,
+) -> None:
+    with (
+        _borrowed_search_providers([SearxngProvider("http://searxng:8080")]),
+        client_patch(
+            "pipeline.search_providers.searxng.httpx.AsyncClient",
+            response=make_response(headers={"content-encoding": "br"}),
+        ),
+    ):
+        response = await client.post("/search", json={"query": "q"})
+    assert response.status_code == 422
+    body = response.json()
+    assert isinstance(body["request_id"], str) and len(body["request_id"]) == 32
+    assert body == {
+        "error": "searxng_unavailable",
+        "reason": "SearXNG not reachable at http://searxng:8080: unsupported_encoding",
+        "request_id": body["request_id"],
+    }
+    counters = (await client.get("/metrics")).json()["search"]
+    assert counters["provider_compressed_body"] == 1
+    assert counters["provider_timeouts"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1986,6 +4831,409 @@ def _searxng_result(**overrides: Any) -> ProviderSearchResult:
     }
     defaults.update(overrides)
     return ProviderSearchResult(**defaults)
+
+
+def _domain_policy_results(
+    hosts: tuple[str, ...] = (
+        "a.example",
+        "www.blocked.example",
+        "blocked.example",
+    ),
+) -> ProviderSearchResult:
+    return _searxng_result(
+        results=[
+            {
+                "title": f"Result {i}",
+                "url": f"https://{host}/article",
+                "content": f"Calm search excerpt {i}.",
+                "engine": "google",
+            }
+            for i, host in enumerate(hosts, start=1)
+        ]
+    )
+
+
+def test_search_blocked_domains_has_no_validation_constraints() -> None:
+    first = SearchRequest(query="q")
+    second = SearchRequest(query="q")
+    assert first.blocked_domains == []
+    first.blocked_domains.append("anything")
+    assert second.blocked_domains == []
+    assert SearchRequest.model_fields["blocked_domains"].metadata == []
+    schema = SearchRequest.model_json_schema()["properties"]["blocked_domains"]
+    assert schema["items"] == {"type": "string"}
+    assert not {"maxItems", "minItems", "pattern"} & schema.keys()
+    assert "request.blocked_domains" not in inspect.getsource(
+        orchestrator.run_search_pipeline
+    )
+    source = inspect.getsource(contract)
+    doc = source.split("SearchErrorCode = Literal[", 1)[1].split(
+        "SEARCH_ERROR_CODES =", 1
+    )[0]
+    assert all(
+        text in doc
+        for text in (
+            "policy_excluded_all_providers",
+            "policy_domain_list_too_large",
+            "permanent client errors",
+            "retryable",
+        )
+    )
+
+
+async def test_search_without_domain_policy_matches_pre_story_baseline(
+    client: httpx.AsyncClient,
+) -> None:
+    classifier = make_mock_classifier(score=0.1)
+    app.state.classifier = classifier
+    free = FakeSearchProvider(name="searxng", outcome=_domain_policy_results())
+    paid = FakeSearchProvider(name="brave", paid=True)
+    with (
+        _borrowed_search_providers([free, paid]),
+        patch(
+            "pipeline.orchestrator.run_promptguard", wraps=orchestrator.run_promptguard
+        ) as pg,
+    ):
+        response = await client.post(
+            "/search", json={"query": "domain policy baseline", "num_results": 3}
+        )
+    assert response.status_code == 200
+    baseline = json.loads(
+        (
+            Path(__file__).parent / "fixtures/search/baseline_pre_blocked_domains.json"
+        ).read_text()
+    )
+    assert set(baseline) == {
+        "results",
+        "omitted_by_reason",
+        "fallback_fired",
+        "provider_used",
+        "provider_errors",
+    }
+    assert {key: response.json()[key] for key in baseline} == baseline
+    assert paid.calls == []
+    assert classifier.classify_windows.call_count == 3
+    assert all(call.kwargs["threshold"] == 0.85 for call in pg.call_args_list)
+
+
+@pytest.mark.parametrize("all_blocked", [False, True])
+async def test_search_domain_policy_omits_before_scans_without_paid_fallback(
+    client: httpx.AsyncClient,
+    caplog: pytest.LogCaptureFixture,
+    all_blocked: bool,
+) -> None:
+    free = FakeSearchProvider(name="searxng", outcome=_domain_policy_results())
+    paid = FakeSearchProvider(name="brave", paid=True)
+    entries = ["blocked.example"] + (["a.example"] if all_blocked else [])
+    with (
+        _borrowed_search_providers([free, paid]),
+        caplog.at_level(logging.INFO, logger="pipeline.orchestrator"),
+        patch(
+            "pipeline.orchestrator.scan_structural", wraps=orchestrator.scan_structural
+        ) as scan,
+        patch(
+            "pipeline.orchestrator.run_promptguard", wraps=orchestrator.run_promptguard
+        ) as pg,
+    ):
+        response = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "num_results": 3,
+                "blocked_domains": entries,
+                "promptguard_fail_closed": False,
+            },
+        )
+    assert response.status_code == 200
+    data = response.json()
+    count = 3 if all_blocked else 2
+    assert [result["domain"] for result in data["results"]] == (
+        [] if all_blocked else ["a.example"]
+    )
+    assert data["omitted_by_reason"] == {contract.OMIT_BLOCKED_URL: count}
+    assert data["fallback_fired"] is False
+    assert data["provider_errors"] == []
+    assert paid.calls == []
+    assert pg.await_count == (0 if all_blocked else 1)
+    assert scan.call_count == (0 if all_blocked else 6)
+    for call in [*scan.call_args_list, *pg.call_args_list]:
+        assert "blocked.example" not in call.args[0]
+        assert "Result 2" not in call.args[0]
+        assert "excerpt 2" not in call.args[0]
+    records = [
+        r for r in caplog.records if r.getMessage().startswith("search_url_blocked")
+    ]
+    assert len(records) == count
+    for record in records:
+        assert record.levelno == logging.INFO
+        assert record.getMessage().startswith(
+            "search_url_blocked host_class=policy_blocklist provider=searxng"
+        )
+        assert "example" not in record.getMessage()
+        assert "https://" not in record.getMessage()
+    counters = (await client.get("/metrics")).json()["search"]
+    assert counters["omitted_by_reason"] == {contract.OMIT_BLOCKED_URL: count}
+    assert counters["paid_calls"] == counters["fallback_fired"] == 0
+
+
+async def test_search_domain_policy_accepts_70_entries_and_single_label_exact_only(
+    client: httpx.AsyncClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    entries = [" BLOCKED.example. ", "com", "bad..entry"] + [
+        f"other{i}.example" for i in range(67)
+    ]
+    free = FakeSearchProvider(
+        name="searxng",
+        outcome=_domain_policy_results(
+            (
+                "www.blocked.example",
+                "blocked.example",
+                "com",
+                "a.com",
+                "notblocked.example",
+            )
+        ),
+    )
+    with _borrowed_search_providers([free]), caplog.at_level(logging.INFO):
+        response = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "num_results": 5,
+                "blocked_domains": entries,
+                "promptguard_fail_closed": False,
+            },
+        )
+    assert response.status_code == 200
+    assert [result["domain"] for result in response.json()["results"]] == [
+        "a.com",
+        "notblocked.example",
+    ]
+    assert response.json()["omitted_by_reason"] == {contract.OMIT_BLOCKED_URL: 3}
+    counters = (await client.get("/metrics")).json()["search"]
+    assert counters["policy_invalid_domain_entry"] == 1
+    assert counters["policy_suffix_trusted_skip"] == 0
+    assert "bad..entry" not in caplog.text
+    assert "bad..entry" not in response.text
+
+
+async def test_search_domain_policy_seed_normalized_at_boot_and_cannot_be_evicted(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {"seed_blocklist": [" Blocked.Example. "]},
+    )
+    free = FakeSearchProvider(name="searxng", outcome=_domain_policy_results())
+    paid = FakeSearchProvider(name="brave", paid=True)
+    async with _running_app() as live:
+        assert app.state.config["seed_blocklist"] == ["blocked.example"]
+        with (
+            _borrowed_search_providers([free, paid]),
+            caplog.at_level(logging.INFO, logger="pipeline.orchestrator"),
+            patch(
+                "pipeline.orchestrator.hostname_matches",
+                wraps=url_validator.hostname_matches,
+            ) as match,
+        ):
+            for entries in (None, [f"caller{i}.example" for i in range(500)]):
+                body: dict[str, Any] = {
+                    "query": "q",
+                    "num_results": 3,
+                    "promptguard_fail_closed": False,
+                }
+                if entries is not None:
+                    body["blocked_domains"] = entries
+                response = await live.post("/search", json=body)
+                assert response.status_code == 200
+                assert [r["domain"] for r in response.json()["results"]] == [
+                    "a.example"
+                ]
+                assert response.json()["omitted_by_reason"] == {
+                    contract.OMIT_BLOCKED_URL: 2
+                }
+                assert response.json()["fallback_fired"] is False
+        assert all(
+            call.args[1] == "blocked.example"
+            for call in match.call_args_list
+            if call.args[0] in {"www.blocked.example", "blocked.example"}
+        )
+        assert app.state.config["seed_blocklist"] == ["blocked.example"]
+        assert app.state.search_metrics.policy_invalid_domain_entry == 0
+    assert paid.calls == []
+    assert (
+        sum(
+            record.getMessage().startswith(
+                "search_url_blocked host_class=policy_blocklist provider="
+            )
+            for record in caplog.records
+        )
+        == 4
+    )
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        ["blocked.example", "x" * 4096],
+        ["blocked.example", "é" * 2048],
+        ["blocked.example", "\ud800" * 1366],
+        ["blocked.example".ljust(4093), "\ud800"],
+    ],
+)
+async def test_search_domain_policy_over_budget_refuses_before_encoding(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    entries: list[str],
+) -> None:
+    monkeypatch.setattr(app.state, "policy_domain_entries_max_bytes", 4096)
+    monkeypatch.setitem(app.state.config, "seed_blocklist", ["blocked.example"])
+    free = FakeSearchProvider(name="searxng", outcome=_domain_policy_results())
+    with (
+        _borrowed_search_providers([free]),
+        patch(
+            "retrieval_app.normalize_domain_entries",
+            side_effect=AssertionError("must not normalize"),
+        ) as normalize,
+        patch(
+            "url_validator.canonicalize_host",
+            side_effect=AssertionError("must not encode"),
+        ),
+        caplog.at_level(logging.INFO),
+    ):
+        response = await client.post(
+            "/search",
+            content=json.dumps({"query": "q", "blocked_domains": entries}),
+            headers={"content-type": "application/json"},
+        )
+    assert response.status_code == 422
+    data = response.json()
+    assert set(data) == {"error", "reason", "request_id"}
+    assert data["error"] == "search_unavailable"
+    assert data["reason"] == contract.POLICY_DOMAIN_LIST_TOO_LARGE
+    assert data["request_id"]
+    assert free.calls == []
+    normalize.assert_not_called()
+    counters = (await client.get("/metrics")).json()["search"]
+    assert counters["requests"] == 1
+    assert counters["errors"] == {"search_unavailable": 1}
+    assert counters["policy_invalid_domain_entry"] == 0
+    assert counters["omitted_by_reason"] == {}
+    assert "blocked.example" not in response.text + caplog.text
+    assert entries[1] not in response.text + caplog.text
+
+
+async def test_search_domain_policy_exact_byte_budget_and_malformed_surrogate(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entries = ["blocked.example".ljust(4092), "\ud800"]
+    budget = url_validator.domain_list_bytes(entries)
+    assert budget == 4096
+    monkeypatch.setattr(app.state, "policy_domain_entries_max_bytes", budget)
+    free = FakeSearchProvider(name="searxng", outcome=_domain_policy_results())
+    with _borrowed_search_providers([free]):
+        response = await client.post(
+            "/search",
+            content=json.dumps(
+                {
+                    "query": "q",
+                    "num_results": 3,
+                    "blocked_domains": entries,
+                    "promptguard_fail_closed": False,
+                }
+            ),
+            headers={"content-type": "application/json"},
+        )
+    assert response.status_code == 200
+    assert response.json()["omitted_by_reason"] == {contract.OMIT_BLOCKED_URL: 2}
+    assert app.state.search_metrics.policy_invalid_domain_entry == 1
+
+
+async def test_search_domain_policy_encodes_entries_once_and_hosts_once(
+    client: httpx.AsyncClient,
+) -> None:
+    entries = [" STRAẞE.de. ", ".blocked.example"]
+    hosts = ("straße.de", "xn--strae-oqa.de", "www.blocked.example", "a.example")
+    free = FakeSearchProvider(name="searxng", outcome=_domain_policy_results(hosts))
+    with (
+        _borrowed_search_providers([free]),
+        patch(
+            "retrieval_app.normalize_domain_entries",
+            wraps=url_validator.normalize_domain_entries,
+        ) as normalize,
+        patch(
+            "url_validator.canonicalize_host", wraps=url_validator.canonicalize_host
+        ) as entry_host,
+        patch(
+            "pipeline.orchestrator.canonicalize_host",
+            wraps=orchestrator.canonicalize_host,
+        ) as result_host,
+        patch(
+            "retrieval_app.run_search_pipeline", wraps=orchestrator.run_search_pipeline
+        ) as pipeline,
+    ):
+        response = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "num_results": 4,
+                "blocked_domains": entries,
+                "promptguard_fail_closed": False,
+            },
+        )
+    assert response.status_code == 200
+    assert [r["domain"] for r in response.json()["results"]] == ["a.example"]
+    assert response.json()["omitted_by_reason"] == {contract.OMIT_BLOCKED_URL: 3}
+    normalize.assert_called_once_with(entries, denylist=True, budget_bytes=None)
+    assert entry_host.call_count == len(entries)
+    assert result_host.call_count == len(hosts)
+    assert pipeline.call_args.kwargs["blocked_domains"] == [
+        "xn--strae-oqa.de",
+        "blocked.example",
+    ]
+
+
+async def test_search_domain_policy_pipeline_parameter_is_the_only_channel() -> None:
+    request = SearchRequest(
+        query="q",
+        num_results=3,
+        blocked_domains=["a.example"],
+        promptguard_fail_closed=False,
+    )
+    response = await orchestrator.run_search_pipeline(
+        request,
+        config={},
+        blocked_domains=["blocked.example"],
+        providers=[
+            FakeSearchProvider(name="searxng", outcome=_domain_policy_results())
+        ],
+    )
+    assert [result.domain for result in response.results] == ["a.example"]
+    assert response.omitted_by_reason == {contract.OMIT_BLOCKED_URL: 2}
+
+
+async def test_search_domain_policy_runs_after_private_host_audit(
+    client: httpx.AsyncClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    free = FakeSearchProvider(
+        name="searxng", outcome=_domain_policy_results(("localhost",))
+    )
+    with _borrowed_search_providers([free]), caplog.at_level(logging.INFO):
+        response = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "blocked_domains": ["localhost"],
+            },
+        )
+    assert response.status_code == 200
+    assert response.json()["omitted_by_reason"] == {contract.OMIT_BLOCKED_URL: 1}
+    assert "search_url_blocked host_class=blocklisted_name provider=" in caplog.text
+    assert "policy_blocklist" not in caplog.text
 
 
 async def test_omitted_policy_params_traverse_the_configured_chain(
@@ -2221,6 +5469,35 @@ async def test_policy_excludes_all_providers_via_allow_paid_fallback(
     assert metrics_body["search"]["errors"] == {"search_unavailable": 1}
 
 
+async def test_a_later_paid_only_selection_on_an_all_paid_chain_is_the_policy_422(
+    client: httpx.AsyncClient,
+) -> None:
+    paida = FakeSearchProvider(name="paida", paid=True)
+    paidb = FakeSearchProvider(
+        name="paidb", paid=True, outcome=_searxng_result(provider_name="paidb")
+    )
+
+    with _borrowed_search_providers([paida, paidb]):
+        resp = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "providers": ["paidb"],
+                "promptguard_fail_closed": False,
+            },
+        )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["error"] == "search_unavailable"
+    assert body["reason"] == "policy_excluded_all_providers"
+    assert paida.calls == paidb.calls == []
+    metrics_body = (await client.get("/metrics")).json()
+    assert metrics_body["search"]["errors"] == {"search_unavailable": 1}
+    assert metrics_body["search"]["policy_unknown_provider"] == 0
+    assert metrics_body["search"]["paid_calls"] == 0
+
+
 async def test_policy_excludes_all_providers_via_an_unregistered_name(
     client: httpx.AsyncClient,
 ) -> None:
@@ -2377,12 +5654,7 @@ async def test_a_hostile_providers_entry_leaks_nowhere(
 
 
 def _brave_stream_response() -> httpx.Response:
-    return httpx.Response(
-        status_code=200,
-        content=b"{}",
-        headers={"content-type": "application/json"},
-        request=httpx.Request("GET", "https://api.search.brave.com/res/v1/llm/context"),
-    )
+    return make_response(url="https://api.search.brave.com/res/v1/llm/context")
 
 
 def _brave_client_double() -> MagicMock:
@@ -2423,6 +5695,63 @@ async def test_lifespan_wires_the_configured_brave_timeout_into_the_client(
 
     assert isinstance(outcome, ProviderSearchResult)
     assert client_cls.call_args.kwargs["timeout"] == 45.0
+
+
+async def test_lifespan_wires_the_configured_searxng_settings_into_the_chain(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng")
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {
+            "search_searxng_timeout_seconds": 30.0,
+            "search_searxng_query_max_chars": 75,
+        },
+    )
+    with _borrowed_search_providers(None):
+        async with _running_app():
+            chain = cast("list[SearchProvider]", app.state.search_providers)
+            assert len(chain) == 1
+            provider = chain[0]
+            assert isinstance(provider, SearxngProvider)
+            assert provider.settings is app.state.searxng_settings
+            assert provider.settings.timeout_seconds == 30.0
+            assert provider.settings.query_max_chars == 75
+    assert "config_unknown_key" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("search_searxng_timeout_seconds", 0.5),
+        ("search_searxng_timeout_seconds", 61.0),
+        ("search_searxng_timeout_seconds", "abc"),
+        ("search_searxng_timeout_seconds", True),
+        ("search_searxng_query_max_chars", 49),
+        ("search_searxng_query_max_chars", 401),
+        ("search_searxng_query_max_chars", "400"),
+        ("search_searxng_query_max_chars", 400.0),
+        ("search_searxng_query_max_chars", True),
+        ("search_searxng_query_max_chars", None),
+    ],
+)
+@pytest.mark.parametrize("providers", ["searxng", "brave"])
+async def test_invalid_searxng_settings_refuse_boot_regardless_of_chain(
+    monkeypatch: pytest.MonkeyPatch, key: str, value: object, providers: str
+) -> None:
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", providers)
+    monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "sentinel-key")
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {key: value},
+    )
+    with pytest.raises(SearxngConfigurationError, match=key):
+        async with lifespan(FastAPI()):
+            pytest.fail("Invalid SearXNG settings must refuse boot")
 
 
 async def test_a_key_set_after_startup_does_not_change_the_resolved_chain(

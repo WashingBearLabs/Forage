@@ -10,16 +10,19 @@ Stage 3 halts the pipeline and returns a quarantine
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import re
 import time
 import unicodedata
 import uuid
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
-from urllib.parse import unquote, urlparse, urlsplit, urlunsplit
+from typing import TYPE_CHECKING, Any, Literal, Protocol, get_args
+from urllib.parse import SplitResult, unquote, urlparse, urlsplit, urlunsplit
 
 import httpx
 
@@ -45,9 +48,12 @@ from pipeline.extraction_limits import (
 )
 from pipeline.pdf_subprocess import (
     PDFClassifiableTextLimitError,
+    extract_pdf_bytes_in_subprocess,
     extract_pdf_in_subprocess,
 )
+from pipeline.retrieve_limits import RetrieveSettings
 from pipeline.search_providers.base import (
+    FAILURE_CLASSES,
     ProviderFailure,
     ProviderSearchResult,
     SearchProvider,
@@ -59,7 +65,7 @@ from pipeline.search_providers.searxng import (
     SEARXNG_PROVIDER_NAME,
     SearxngProvider,
 )
-from pipeline.stage1_extraction import ExtractionResult, extract_html
+from pipeline.stage1_extraction import ExtractionResult, extract_html, normalize_text
 from pipeline.stage1_pdf import (
     PDFEncryptedError,
     PDFExtractionError,
@@ -76,16 +82,32 @@ from pipeline.stage1_upload import (
     extract_upload_text_file,
 )
 from pipeline.stage2_structural import scan_structural
-from pipeline.stage3_promptguard import PromptGuardResult, run_promptguard
+from pipeline.stage3_promptguard import (
+    PromptGuardResult,
+    PromptGuardSettings,
+    completed_thread,
+    run_promptguard,
+    unavailable_result,
+)
 from pipeline.stage4_structuring import (
     SanitizationResult,
     build_extracted_content,
     build_retrieved_content,
     structure_sanitization_result,
 )
-from pipeline.stage5_url_audit import ContentTooLargeError, fetch_url
+from pipeline.stage5_url_audit import DEFAULT_TIMEOUT, ContentTooLargeError, fetch_url
 from promptguard.classifier import PromptGuardBudgetExceededError
-from url_validator import BlockedDomainError, PrivateIPError, validate_url
+from url_validator import (
+    BlockedDomainError,
+    CanonicalHost,
+    PrivateIPError,
+    canonicalize_host,
+    hostname_matches,
+    is_blocklisted_hostname,
+    matched_entry,
+    private_address_class,
+    validate_url,
+)
 
 if TYPE_CHECKING:
     from promptguard.classifier import PromptGuardClassifier
@@ -157,6 +179,50 @@ def document_failure(error: str, request_id: str) -> PipelineError:
     )
 
 
+@asynccontextmanager
+async def _bounded_permit(
+    semaphore: asyncio.Semaphore,
+    seconds: float | None,
+) -> AsyncGenerator[bool]:
+    """Hold one classification permit, waiting at most *seconds* for it.
+
+    Yields ``True`` while the permit is held and ``False`` when the wait
+    expired, so a caller branches on an outcome instead of catching an
+    exception. ``None`` seconds waits without a deadline — the ``/extract``
+    file route's untimed acquisition.
+
+    The release is in ``finally`` and runs **only when the permit was
+    acquired**: the deadline cancels the pending ``acquire()``, and a
+    grant that lands after that cancellation is handed back by
+    ``Semaphore.acquire``'s own cancellation handling. Releasing on the
+    timeout path as well would hand out a permit this coroutine never held and
+    grow the pool by one on every timeout.
+
+    The shape is ``cache.py``'s ``_attempt_connect`` (``:405-425``), not a new
+    one: one fixed deadline around exactly one awaited call, with a
+    closed-token WARNING at the caller.
+    """
+    acquired = False
+    try:
+        try:
+            # The deadline context takes ``None`` as its no-deadline form, so
+            # the untimed `/extract` acquisition is this same one statement
+            # rather than a second bare ``acquire()`` for a reviewer to check.
+            async with asyncio.timeout(seconds):
+                await semaphore.acquire()
+        except TimeoutError:
+            yield False
+            return
+        acquired = True
+        yield True
+    finally:
+        if acquired:
+            semaphore.release()
+
+
+_DEFAULT_PROMPTGUARD_SETTINGS = PromptGuardSettings()
+
+
 async def sanitize_and_structure(
     *,
     extraction: ExtractionResult,
@@ -164,31 +230,103 @@ async def sanitize_and_structure(
     classifier: PromptGuardClassifier | None,
     promptguard_threshold: float,
     promptguard_fail_closed: bool,
+    promptguard_settings: PromptGuardSettings = _DEFAULT_PROMPTGUARD_SETTINGS,
+    promptguard_metrics: PromptGuardMetricsSink | None = None,
     extract_mode: str,
     content_type: str,
     sanitizer_revision: str = "",
     domain_changed_on_redirect: bool = False,
     max_promptguard_chunks: int | None = None,
+    classification_semaphore: asyncio.Semaphore | None = None,
+    classification_wait_seconds: float | None = None,
+    on_classification_wait_timeout: Callable[[], None] | None = None,
 ) -> SanitizationResult:
-    """Run the shared Stage 2-4 gauntlet for any extracted content source."""
-    structural = scan_structural(extraction.raw_text)
+    """Run the shared Stage 2-4 gauntlet for any extracted content source.
+
+    *classification_semaphore* bounds stage 3 — and stage 3 only — across every
+    route that classifies: the two fetch routes and the ``/extract`` file
+    route, which moved its acquisition in here rather than wrapping stages 2
+    and 4 with it. ``None`` acquires nothing, which is what the unguarded
+    callers (``run_extract_pipeline``, direct callers) keep doing.
+
+    *classification_wait_seconds* bounds the wait for that permit. ``None``
+    waits without a deadline — the ``/extract`` file route, whose acquisition
+    stays untimed and uncounted — and a float is ``/retrieve``'s
+    ``promptguard_wait_seconds``, after which the request takes the
+    classifier-unavailable outcome under its own policy instead of queueing.
+
+    Stages 2 and 4 run on the default executor through ``asyncio.to_thread``,
+    the way stage 3's inference already does, so a pathological page cannot
+    stall ``/health`` on either route that comes through here. The functions
+    are pure, so the output is byte-identical to the synchronous calls.
+    """
+    structural = await asyncio.to_thread(scan_structural, extraction.raw_text)
     promptguard = PromptGuardResult(
         verdict=Stage3Verdict.SAFE,
         score=0.0,
         skipped=True,
         skip_reason="structural_block",
     )
-    if structural.verdict != Stage2Verdict.BLOCKED:
-        promptguard = await run_promptguard(
+    # Pin unavailability: the loader may publish readiness before stage 3
+    # checks again, but a request that skipped admission must not infer.
+    admitted_classifier = (
+        classifier if classifier is not None and classifier.loaded else None
+    )
+
+    async def classify() -> PromptGuardResult:
+        return await run_promptguard(
             extraction.raw_text,
-            classifier,
+            admitted_classifier,
             threshold=promptguard_threshold,
             trust_tier=trust_tier,
             fail_closed=promptguard_fail_closed,
             max_chunks=max_promptguard_chunks,
+            contiguity_windows=promptguard_settings.contiguity_windows,
+            contiguity_threshold=promptguard_settings.contiguity_threshold,
         )
 
-    return structure_sanitization_result(
+    if structural.verdict != Stage2Verdict.BLOCKED:
+        # The permit is taken only under the condition `run_promptguard`
+        # itself classifies on: a loaded classifier *and* a non-TRUSTED tier.
+        # `stage3_promptguard.py` returns `skip_reason="trusted_tier"` before
+        # the absent-classifier branch and before any inference, so a
+        # `trusted_domains` page must never queue behind a 256-chunk one for
+        # work it will not do. With either condition false nothing is
+        # acquired and no counter moves.
+        if (
+            classification_semaphore is not None
+            and admitted_classifier is not None
+            and trust_tier != TrustTier.TRUSTED
+        ):
+            async with _bounded_permit(
+                classification_semaphore, classification_wait_seconds
+            ) as acquired:
+                if acquired:
+                    promptguard = await classify()
+                else:
+                    # Its own closed token, carrying nothing caller-derived.
+                    # The classifier here is loaded and *busy*; the
+                    # "PromptGuard unavailable" lines would send an operator
+                    # to the model loader instead of to contention.
+                    #
+                    # `route=retrieve` is a literal because only `/retrieve`
+                    # passes a deadline into this function: the `/extract`
+                    # file route passes `classification_wait_seconds=None`,
+                    # which cannot time out, and `/search` never calls here.
+                    logger.warning("classification_wait_timeout route=retrieve")
+                    if on_classification_wait_timeout is not None:
+                        on_classification_wait_timeout()
+                    promptguard = unavailable_result(
+                        trust_tier.value, fail_closed=promptguard_fail_closed
+                    )
+        else:
+            promptguard = await classify()
+
+    if promptguard.rule in ("contiguity", "both") and promptguard_metrics is not None:
+        promptguard_metrics.promptguard_contiguity_detections += 1
+
+    return await asyncio.to_thread(
+        structure_sanitization_result,
         extraction=extraction,
         structural=structural,
         promptguard=promptguard,
@@ -212,6 +350,13 @@ async def run_retrieve_pipeline(
     classifier: PromptGuardClassifier | None,
     config: dict[str, Any],
     sanitizer_revision: str,
+    promptguard_threshold: float,
+    settings: RetrieveSettings,
+    retrieve_metrics: RetrieveMetricsSink,
+    classification_semaphore: asyncio.Semaphore,
+    extraction_settings: ExtractionSettings,
+    admission: AdmissionSlot,
+    promptguard_settings: PromptGuardSettings = _DEFAULT_PROMPTGUARD_SETTINGS,
 ) -> RetrievedContent:
     """Run the full 5-stage retrieval pipeline.
 
@@ -231,6 +376,29 @@ async def run_retrieve_pipeline(
         passed in the way ``run_extract_pipeline`` already takes it. It keys
         the cache: content sanitized under an older pipeline must not be
         replayed by a newer one.
+    settings:
+        Boot-validated ``retrieve:`` limits. Required, not defaulted — a
+        defaulted limits parameter would be the second, unbounded limits path
+        this spec exists to prevent, exactly as
+        ``run_extract_pipeline_from_file`` takes its ``ExtractionSettings``.
+    promptguard_threshold:
+        Handler-resolved threshold, shared by classification and the cache
+        fingerprint. The nullable request field is never read here.
+    retrieve_metrics:
+        The ``/metrics`` retrieve counters this pipeline increments directly.
+    classification_semaphore:
+        Bounds concurrent PromptGuard work across both fetch routes.
+    extraction_settings:
+        The ``extraction:`` limits a fetched PDF's bounded worker runs under —
+        ``app.state.extraction_settings``, whose character ceiling (not
+        ``settings``') is the one a fetched PDF is refused against.
+    admission:
+        The ``/retrieve`` admission slot, ``app.state.retrieve_admission``.
+        Acquired after the cache read (a hit never waits) and before the fetch
+        (a queued request holds no body), with no timer around the
+        acquisition, and released in ``finally`` once stage 1 is done — so
+        the fetched body goes with the slot, before the classification wait.
+        A full queue is refused 422 ``busy`` / ``admission_queue_full``.
 
     Returns
     -------
@@ -243,20 +411,18 @@ async def run_retrieve_pipeline(
         timeout, invalid URL, etc.).
     """
     request_id = uuid.uuid4().hex
+    classifier_loaded = classifier is not None and classifier.loaded
 
-    # Merge blocklists: request-level + config seed_blocklist
-    blocked_domains = list(request.blocked_domains)
+    # Operator entries precede the independently budgeted caller list.
     seed_blocklist: list[str] = config.get("seed_blocklist", [])
-    for domain in seed_blocklist:
-        if domain not in blocked_domains:
-            blocked_domains.append(domain)
+    blocked_domains = list(dict.fromkeys([*seed_blocklist, *request.blocked_domains]))
     cache_policy = cache_policy_fingerprint(
         trusted_domains=request.trusted_domains,
         verified_domains=request.verified_domains,
         blocked_domains=blocked_domains,
-        promptguard_threshold=request.promptguard_threshold,
+        promptguard_threshold=promptguard_threshold,
         promptguard_fail_closed=request.promptguard_fail_closed,
-        classifier_loaded=classifier is not None and classifier.loaded,
+        classifier_loaded=classifier_loaded,
         sanitizer_revision=sanitizer_revision,
     )
     news_domains: list[str] = config.get("news_domains", [])
@@ -303,59 +469,153 @@ async def run_retrieve_pipeline(
                 logger.info("Cache hit for %s", request.url)
                 return cached.model_copy(update={"request_id": request_id})
 
-    # -- Step 3: Fetch content --
-    user_agents: list[str] = config.get("user_agents", [])
-    try:
-        fetch_result = await fetch_url(
-            request.url,
-            blocked_domains=blocked_domains,
-            user_agents=user_agents if user_agents else None,
+    # -- Step 3: Take an admission slot, fetch, and run Stage 1 --
+    # After the cache read, so a hit never waits, and before the fetch, so a
+    # queued request holds no body. No timer around `acquire()`: the
+    # controller's handoff is not cancellation-safe after a grant (recorded in
+    # GOTCHAS.md), and its bounded queue depth and reserved bytes are the
+    # backpressure — a full queue refuses at once rather than waiting.
+    if not await admission.acquire():
+        raise PipelineError(
+            error="busy",
+            reason=contract.RETRIEVE_ADMISSION_QUEUE_FULL,
+            request_id=request_id,
         )
-    except PrivateIPError as exc:
-        raise PipelineError(
-            error="private_ip",
-            reason=str(exc),
-            request_id=request_id,
-        ) from exc
-    except BlockedDomainError as exc:
-        raise PipelineError(
-            error="blocked_domain",
-            reason=str(exc),
-            request_id=request_id,
-        ) from exc
-    except httpx.TimeoutException as exc:
-        raise PipelineError(
-            error="fetch_timeout",
-            reason=f"Request timed out fetching {request.url}",
-            request_id=request_id,
-        ) from exc
-    except ContentTooLargeError as exc:
+    try:
+        user_agents: list[str] = config.get("user_agents", [])
+        try:
+            # Absolute deadline across redirects and streaming, not just httpx's
+            # per-operation inactivity timeout. Admission and stage 1 are outside.
+            fetch_result = await asyncio.wait_for(
+                fetch_url(
+                    request.url,
+                    blocked_domains=blocked_domains,
+                    user_agents=user_agents if user_agents else None,
+                ),
+                timeout=DEFAULT_TIMEOUT,
+            )
+        except PrivateIPError as exc:
+            raise PipelineError(
+                error="private_ip",
+                reason=str(exc),
+                request_id=request_id,
+            ) from exc
+        except BlockedDomainError as exc:
+            raise PipelineError(
+                error="blocked_domain",
+                reason=str(exc),
+                request_id=request_id,
+            ) from exc
+        except (httpx.TimeoutException, TimeoutError) as exc:
+            raise PipelineError(
+                error="fetch_timeout",
+                reason=f"Request timed out fetching {request.url}",
+                request_id=request_id,
+            ) from exc
+        except ContentTooLargeError as exc:
+            raise PipelineError(
+                error="content_too_large",
+                reason=str(exc),
+                request_id=request_id,
+            ) from exc
+        except Exception as exc:
+            raise PipelineError(
+                error="fetch_error",
+                reason=f"Failed to fetch {request.url}: {exc}",
+                request_id=request_id,
+            ) from exc
+
+        # -- Step 4: Detect content type and run Stage 1 extraction --
+        content_type = detect_content_type(
+            fetch_result.content_type,
+            fetch_result.response_body,
+        )
+
+        if content_type == "pdf":
+            # `/extract`'s spawned, rlimited worker, from a 0600 file in the
+            # process-private spool directory — so a fetched PDF runs under
+            # `extraction.max_promptguard_chunks`, the ceiling the worker's
+            # rlimits were sized for, not `retrieve.max_promptguard_chunks`.
+            # Most-specific first: every PDF failure is a `PDFExtractionError`
+            # subclass, and the classifiable-text refusal is not a parse
+            # failure.
+            async with completed_thread(
+                asyncio.to_thread(
+                    extract_pdf_bytes_in_subprocess,
+                    fetch_result.response_body,
+                    extraction_settings,
+                )
+            ) as pdf_worker:
+                try:
+                    extraction = pdf_worker.result()
+                except PDFClassifiableTextLimitError as exc:
+                    raise PipelineError(
+                        error="content_too_large",
+                        reason=contract.PROMPTGUARD_BUDGET,
+                        request_id=request_id,
+                    ) from exc
+                except PDFEncryptedError as exc:
+                    raise PipelineError(
+                        error="extraction_failed",
+                        reason=contract.RETRIEVE_PDF_ENCRYPTED,
+                        request_id=request_id,
+                    ) from exc
+                except PDFNoTextError as exc:
+                    raise PipelineError(
+                        error="extraction_failed",
+                        reason=contract.RETRIEVE_PDF_NO_TEXT,
+                        request_id=request_id,
+                    ) from exc
+                except PDFExtractionError as exc:
+                    raise PipelineError(
+                        error="extraction_failed",
+                        reason=contract.RETRIEVE_PDF_EXTRACTION_ERROR,
+                        request_id=request_id,
+                    ) from exc
+                except OSError as exc:
+                    # Host fault, not input: retain the closed warning even if
+                    # cancellation is pending while the worker/spool is drained.
+                    logger.warning("retrieve_spool_error")
+                    raise PipelineError(
+                        error="extraction_failed",
+                        reason=contract.RETRIEVE_PDF_SPOOL_ERROR,
+                        request_id=request_id,
+                    ) from exc
+        else:
+            html_text = fetch_result.response_body.decode("utf-8", errors="replace")
+            async with completed_thread(
+                asyncio.to_thread(extract_html, html_text, request.url)
+            ) as html_worker:
+                extraction = html_worker.result()
+            del html_text
+        # The three post-stage-1 scalars leave the fetch result here, so the
+        # body and its decoded copy go with the slot: a request parked on the
+        # classification permit holds only its extracted text.
+        final_url = fetch_result.final_url
+        redirect_chain = fetch_result.redirect_chain
+        domain_changed_on_redirect = fetch_result.domain_changed_on_redirect
+        del fetch_result
+    finally:
+        await admission.release()
+
+    # -- Step 4a: Refuse an over-budget page before classifying it --
+    # The primary control: a page whose extracted text exceeds the character
+    # ceiling derived from `retrieve.max_promptguard_chunks` is refused rather
+    # than chunked and classified in full, so one hostile page cannot burn
+    # unbounded CPU. Characters only -- `/extract`'s second, byte limb is not
+    # copied here: at the coming default of 256 chunks the character limb
+    # (458 752) admits at most 1 835 008 UTF-8 bytes, under the 2 MiB output
+    # ceiling, so a byte limb could not bind below 293 chunks.
+    budget_characters = settings.max_extracted_characters
+    if budget_characters is not None and len(extraction.raw_text) > budget_characters:
         raise PipelineError(
             error="content_too_large",
-            reason=str(exc),
+            reason=contract.PROMPTGUARD_BUDGET,
             request_id=request_id,
-        ) from exc
-    except Exception as exc:
-        raise PipelineError(
-            error="fetch_error",
-            reason=f"Failed to fetch {request.url}: {exc}",
-            request_id=request_id,
-        ) from exc
-
-    # -- Step 4: Detect content type and run Stage 1 extraction --
-    content_type = detect_content_type(
-        fetch_result.content_type,
-        fetch_result.response_body,
-    )
-
-    if content_type == "pdf":
-        extraction = extract_pdf(fetch_result.response_body)
-    else:
-        html_text = fetch_result.response_body.decode("utf-8", errors="replace")
-        extraction = extract_html(html_text, request.url)
+        )
 
     # Determine domain from final URL
-    parsed_final = urlparse(fetch_result.final_url)
+    parsed_final = urlparse(final_url)
     domain = parsed_final.hostname or ""
     trust_tier = TrustTier(
         _resolve_request_trust_tier(
@@ -365,16 +625,57 @@ async def run_retrieve_pipeline(
             blocked_domains,
         )
     )
-    sanitization = await sanitize_and_structure(
-        extraction=extraction,
-        trust_tier=trust_tier,
-        classifier=classifier,
-        promptguard_threshold=request.promptguard_threshold,
-        promptguard_fail_closed=request.promptguard_fail_closed,
-        extract_mode=request.extract_mode,
-        content_type=content_type,
-        domain_changed_on_redirect=fetch_result.domain_changed_on_redirect,
-    )
+    if trust_tier in (TrustTier.TRUSTED, TrustTier.VERIFIED):
+        host = canonicalize_host(domain)
+        if isinstance(host, CanonicalHost):
+            entry = matched_entry(
+                host.host,
+                request.trusted_domains
+                if trust_tier == TrustTier.TRUSTED
+                else request.verified_domains,
+            )
+            if entry is not None and entry.startswith("."):
+                retrieve_metrics.policy_suffix_trusted_skip += 1
+    # The catch is the backstop, not the control: the pre-check above already
+    # refused an over-budget page, and this maps the classifier's own refusal
+    # to the same 422 should the two ever disagree.
+    wait_timed_out = False
+
+    def classification_wait_timed_out() -> None:
+        # Explicit stage-3 outcome: the model may finish warming after the
+        # request-entry snapshot used for the cache key. Count at the event,
+        # even if later structuring is cancelled or fails.
+        nonlocal wait_timed_out
+        wait_timed_out = True
+        retrieve_metrics.classification_wait_timeouts += 1
+
+    try:
+        sanitization = await sanitize_and_structure(
+            extraction=extraction,
+            trust_tier=trust_tier,
+            classifier=classifier,
+            promptguard_threshold=promptguard_threshold,
+            promptguard_fail_closed=request.promptguard_fail_closed,
+            promptguard_settings=promptguard_settings,
+            promptguard_metrics=retrieve_metrics,
+            extract_mode=request.extract_mode,
+            content_type=content_type,
+            domain_changed_on_redirect=domain_changed_on_redirect,
+            max_promptguard_chunks=(
+                settings.max_promptguard_chunks
+                if settings.max_promptguard_chunks > 0
+                else None
+            ),
+            classification_semaphore=classification_semaphore,
+            classification_wait_seconds=settings.promptguard_wait_seconds,
+            on_classification_wait_timeout=classification_wait_timed_out,
+        )
+    except PromptGuardBudgetExceededError as exc:
+        raise PipelineError(
+            error="content_too_large",
+            reason=contract.PROMPTGUARD_BUDGET,
+            request_id=request_id,
+        ) from exc
     if sanitization.injection_detected:
         logger.warning(
             "Content quarantined for %s — returning content-free response",
@@ -383,18 +684,31 @@ async def run_retrieve_pipeline(
     content = build_retrieved_content(
         request_id=request_id,
         source_url=request.url,
-        final_url=fetch_result.final_url,
+        final_url=final_url,
         domain=domain,
         sanitization=sanitization,
-        redirect_chain=fetch_result.redirect_chain,
-        domain_changed_on_redirect=fetch_result.domain_changed_on_redirect,
+        redirect_chain=redirect_chain,
+        domain_changed_on_redirect=domain_changed_on_redirect,
     )
 
     # -- Step 8: Cache safe result --
+    #
+    # A wait-timeout body never enters the content cache. `cache.py`'s
+    # `cache_policy_fingerprint` note explains why `classifier_loaded` is a
+    # key input: before this story an unscanned body could only exist while
+    # the flag was `False`, and the model loading orphaned it. A fail-open
+    # wait timeout is the first unscanned body with `classifier_loaded=True`,
+    # so without the condition below a saturation event lasting
+    # `promptguard_wait_seconds` would let an in-network caller pin an
+    # attacker-chosen unscanned body for `cache_ttl_hours` and replay it to
+    # every later request — including ones a free permit would have
+    # classified. The absent-classifier fail-open body still caches under its
+    # `classifier_loaded=False` key exactly as before.
     if (
         cache is not None
         and request.cache_ttl_hours > 0
         and not content.injection_detected
+        and not wait_timed_out
         and content.trust_tier
         not in {
             TrustTier.UNTRUSTED,
@@ -429,6 +743,8 @@ async def run_extract_pipeline(
     classifier: PromptGuardClassifier | None,
     promptguard_threshold: float,
     sanitizer_revision: str,
+    promptguard_settings: PromptGuardSettings = _DEFAULT_PROMPTGUARD_SETTINGS,
+    extraction_metrics: PromptGuardMetricsSink | None = None,
 ) -> ExtractedContent:
     """Extract and sanitize an untrusted uploaded PDF or UTF-8 text document.
 
@@ -467,6 +783,8 @@ async def run_extract_pipeline(
             classifier=classifier,
             promptguard_threshold=promptguard_threshold,
             promptguard_fail_closed=True,
+            promptguard_settings=promptguard_settings,
+            promptguard_metrics=extraction_metrics,
             extract_mode=extract_mode,
             content_type=content_type,
             sanitizer_revision=sanitizer_revision,
@@ -494,6 +812,8 @@ async def run_extract_pipeline_from_file(
     sanitizer_revision: str,
     settings: ExtractionSettings,
     classification_semaphore: asyncio.Semaphore,
+    promptguard_settings: PromptGuardSettings = _DEFAULT_PROMPTGUARD_SETTINGS,
+    extraction_metrics: PromptGuardMetricsSink | None = None,
 ) -> ExtractedContent:
     """Extract a spooled upload with bounded PDF parsing and classification."""
     try:
@@ -536,18 +856,26 @@ async def run_extract_pipeline_from_file(
         raise document_failure("content_too_large_to_classify", request_id)
 
     try:
-        async with classification_semaphore:
-            sanitization = await sanitize_and_structure(
-                extraction=extraction,
-                trust_tier=TrustTier.UNTRUSTED,
-                classifier=classifier,
-                promptguard_threshold=promptguard_threshold,
-                promptguard_fail_closed=True,
-                extract_mode=extract_mode,
-                content_type=content_type,
-                sanitizer_revision=sanitizer_revision,
-                max_promptguard_chunks=settings.max_promptguard_chunks,
-            )
+        # Stage 3 only, and exactly once: the permit used to wrap stages 2, 3
+        # and 4 out here, which would only lengthen as those stages move off
+        # the event loop. Untimed and uncounted — `/extract` is the
+        # authenticated route and keeps waiting — and never both an outer and
+        # an inner acquisition, which on a size-1 semaphore is a deadlock.
+        sanitization = await sanitize_and_structure(
+            extraction=extraction,
+            trust_tier=TrustTier.UNTRUSTED,
+            classifier=classifier,
+            promptguard_threshold=promptguard_threshold,
+            promptguard_fail_closed=True,
+            promptguard_settings=promptguard_settings,
+            promptguard_metrics=extraction_metrics,
+            extract_mode=extract_mode,
+            content_type=content_type,
+            sanitizer_revision=sanitizer_revision,
+            max_promptguard_chunks=settings.max_promptguard_chunks,
+            classification_semaphore=classification_semaphore,
+            classification_wait_seconds=None,
+        )
     except PromptGuardBudgetExceededError as exc:
         raise document_failure("content_too_large_to_classify", request_id) from exc
 
@@ -583,8 +911,19 @@ _MAX_UNRESPONSIVE_ENGINE_LENGTH = 64
 _MAX_SEARCH_TITLE_LENGTH = 512
 _MAX_SEARCH_URL_LENGTH = 2_048
 _MAX_SEARCH_SNIPPET_LENGTH = 2_000
-_LOCAL_PROMPTGUARD_TARGET_MS = 1_000
-_TOOL_AUGMENTED_FIRST_TOKEN_TARGET_MS = 5_000
+# `SearchResult.engine` is provider-controlled provenance metadata (which
+# configured engine answered), not page content — it is bounded and
+# normalized like `unresponsive_engines` but, deliberately, never
+# structurally scanned or part of the PromptGuard input (contract 1.3.0).
+_MAX_SEARCH_ENGINE_LENGTH = 64
+# A bound on what `extract_html` parses, not a contract cap. `title` and
+# `snippet` are now truncated *after* extraction, so without this the parser
+# would be handed the provider's whole body (up to 1 MiB) per field per result.
+# The multiplier is measured, not picked: the parser's cost is superlinear on
+# unclosed-tag input, so 4x is a ~2 s lever on an unauthenticated, undeadlined
+# route where 8x is a ~6 s one. Any change re-derives from the three-shape
+# table in `kit_tools/specs/feature-hardening-search-sanitization.md`.
+_SEARCH_PARSER_INPUT_MULTIPLIER = 4
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
 
@@ -598,54 +937,328 @@ def _normalize_search_text(value: object, *, max_length: int) -> str:
     return normalized[:max_length]
 
 
-def _sanitize_search_text(value: object, *, max_length: int) -> tuple[str, str]:
-    """Apply Stage 1 extraction to one bounded search text field."""
-    normalized = _normalize_search_text(value, max_length=max_length)
-    extraction = extract_html(f"<div>{normalized}</div>")
-    return (
-        _normalize_search_text(extraction.raw_text, max_length=max_length),
-        _normalize_search_text(extraction.raw_text, max_length=max_length),
-    )
+def _scan_forms_for_search_text(value: object, *, max_length: int) -> tuple[str, str]:
+    """Return ``(wire_form, scan_form)`` for one model-visible search text field.
 
+    The scan form keeps line breaks so Stage 2's line-anchored BLOCK patterns
+    (``^System:``, ``^POPPY:``, ``^assistant:`` under ``MULTILINE``) fire on any
+    line of a title or snippet, exactly as they do on a fetched page. The wire
+    form is the single-line text ``/search`` has always served.
 
-def _canonicalize_search_url(value: object) -> tuple[str, str, str] | None:
-    """Normalize a result URL and allow only canonical HTTP(S) URLs.
+    Guarantees:
 
-    Returns ``(canonical_url, scanned_text, domain)``. ``domain`` is bound
-    from ``parsed.hostname`` before the IPv6 re-bracketing below, so an IPv6
-    literal reaches the wire unbracketed (``2001:db8::1``) even though
-    ``canonical_url`` carries the bracketed form (``[2001:db8::1]``) — the one
-    case where ``domain`` is not a substring of ``canonical_url``.
+    * ``wire_form == " ".join(scan_form.split())`` -- the wire form is derived
+      from the scanned string, never built alongside it.
+    * Every non-whitespace character of the wire form appears, in order, in the
+      scan form, so nothing reaches the wire unscanned.
+    * Truncation happens once, on the scan form, before the wire form is
+      derived, so blank-line padding cannot push a payload past the scan and
+      leave it on the wire.
+
+    Both returned forms are scanned by the caller, and neither alone is
+    sufficient. The scan form is what makes the line-anchored BLOCK patterns
+    fire per line; the wire form is what makes the patterns compiled without
+    ``re.DOTALL`` fire across what was a line break. Scanning only one of them
+    is a bypass in whichever direction that pattern class runs.
+
+    There are two control-character strips because there are two sources. The
+    first runs on the raw provider value: the HTML parser maps a raw NUL to
+    U+FFFD, which is outside ``_CONTROL_CHARS_RE``'s class, so a raw control
+    stripped only afterwards would ship as a replacement character. The second
+    runs after both decode levels -- the parser's one entity level plus
+    ``html.unescape`` -- because those decodes mint C0/C1 characters of their
+    own, and ``stage1_extraction._normalize_text`` removes only nine zero-width
+    and bidi code points, not the C0/C1 range.
     """
-    normalized = _normalize_search_text(value, max_length=_MAX_SEARCH_URL_LENGTH)
-    if not normalized or any(character.isspace() for character in normalized):
-        return None
+    if not isinstance(value, str):
+        return ("", "")
+    text = unicodedata.normalize("NFC", value)
+    text = _CONTROL_CHARS_RE.sub("", text)
+    text = text[: _SEARCH_PARSER_INPUT_MULTIPLIER * max_length]
+    extraction = extract_html(f"<div>{text}</div>")
+    scan_form = html.unescape(extraction.raw_text)
+    scan_form = _CONTROL_CHARS_RE.sub("", scan_form)
+    scan_form = normalize_text(scan_form)[:max_length]
+    return (" ".join(scan_form.split()), scan_form)
 
-    # Stage 1 processes this field before its Stage 2 structural scan, even
-    # though the model-visible form is the canonical URL rather than prose.
-    _visible, scanned = _sanitize_search_text(
-        unquote(normalized),
-        max_length=_MAX_SEARCH_URL_LENGTH,
+
+SearchUrlRule = Literal[
+    "missing",
+    "too_long",
+    "raw_chars",
+    "unparseable",
+    "invalid_port",
+    "parse",
+    "userinfo",
+    "host_code_point",
+    "zone_id",
+    "numeric_host",
+    "idna",
+]
+"""Closed vocabulary for why `_canonicalize_search_url` rejected a result URL.
+
+The token is content-free: it names the rule that fired, never the URL or its
+host (invariant 6). `run_search_pipeline` logs it as `search_url_rejected
+rule=<token> provider=<name>` and `kit_tools/docs/MONITORING.md` aggregates on
+that pair. It stays internal -- the wire reason is the `contract.OMIT_*`
+constant carried beside it.
+"""
+
+SEARCH_URL_RULES = frozenset(get_args(SearchUrlRule))
+
+SearchHostClass = Literal[
+    "private_literal",
+    "embedded_private",
+    "blocklisted_name",
+    "policy_blocklist",
+]
+"""Closed vocabulary for why the search-time audit *blocked* a result URL.
+
+Deliberately disjoint from `SearchUrlRule`: a rejected URL is malformed and
+logs `search_url_rejected`, a blocked one is well-formed and points somewhere
+policy refuses, and logs `search_url_blocked host_class=<token>`. The two
+vocabularies never share a token, so an operator aggregating on one is never
+reading the other's records. Like `SearchUrlRule` it is content-free -- it
+names the class, never the host.
+"""
+
+SEARCH_HOST_CLASSES = frozenset(get_args(SearchHostClass))
+
+
+@dataclass(frozen=True, slots=True)
+class SearchUrlOutcome:
+    """The verdict on one result URL -- internal, never the wire shape.
+
+    Exactly two shapes. A cleared URL carries `canonical_url`, `domain` and the
+    two `scan_texts`, with `omission_reason` and `rule` both `None`; a
+    rejected or blocked one carries the reason pair and leaves the other three
+    empty. `domain` is never derived from a URL that did not clear every rule.
+
+    `rule` carries either vocabulary: a `SearchUrlRule` beside
+    `contract.OMIT_INVALID_URL`, a `SearchHostClass` beside
+    `contract.OMIT_BLOCKED_URL`. Widening the carrier rather than the
+    `SearchUrlRule` `Literal` is what keeps the two log vocabularies disjoint.
+
+    `scan_texts` is `(entity-decoded, once-percent-decoded)` -- the two forms
+    Stage 2 scans. Neither is routed through `extract_html`: the extractor eats
+    tag-shaped text, which is how an envelope tag could ride a path onto the
+    wire unscanned.
+    """
+
+    canonical_url: str | None
+    scan_texts: tuple[str, str]
+    domain: str | None
+    omission_reason: str | None
+    rule: SearchUrlRule | SearchHostClass | None
+
+
+@dataclass(frozen=True, slots=True)
+class _UrlState:
+    """The value threaded through `_SEARCH_URL_RULES`, one rule at a time."""
+
+    raw: object
+    value: str = ""
+    parsed: SplitResult | None = None
+    port: int | None = None
+    canonical: CanonicalHost | None = None
+
+
+def _reject_search_url(rule: SearchUrlRule) -> SearchUrlOutcome:
+    """Build the rejection outcome for *rule*."""
+    return SearchUrlOutcome(
+        canonical_url=None,
+        scan_texts=("", ""),
+        domain=None,
+        omission_reason=contract.OMIT_INVALID_URL,
+        rule=rule,
     )
+
+
+def _block_search_url(host_class: SearchHostClass) -> SearchUrlOutcome:
+    """Build the blocked outcome for *host_class*.
+
+    Separate from `_reject_search_url` because the wire reason differs:
+    `blocked_url` is policy on a well-formed URL, `invalid_url` is
+    malformation. Counting them together would hide "a provider is returning
+    internal addresses" inside "a provider is returning junk".
+    """
+    return SearchUrlOutcome(
+        canonical_url=None,
+        scan_texts=("", ""),
+        domain=None,
+        omission_reason=contract.OMIT_BLOCKED_URL,
+        rule=host_class,
+    )
+
+
+# Everything a URL may not carry in the raw provider value: C0 controls, space
+# and tab/LF/CR (`\x00-\x20`), DEL and C1 (`\x7f-\x9f`), any other Unicode
+# whitespace, and RFC 3986's excluded set. Rejection, never deletion --
+# `_normalize_search_text` used to delete these, which is how
+# `http://example.com/\x01foo` was served pointing at a different resource.
+_RAW_URL_REJECT_RE = re.compile(r'[\x00-\x20\x7f-\x9f\s<>"{}|\\^`]')
+
+# WHATWG's forbidden domain code points. `urlsplit` consumes `/ ? # @ [ ]`
+# structurally and `:` for `host:port`, so what actually survives into
+# `parsed.hostname` is `% \ < > ^ |`, space and control characters.
+_FORBIDDEN_DOMAIN_CODE_POINTS = frozenset(
+    [chr(code_point) for code_point in range(0x20)] + list("\x7f #%/:<>?@[\\]^|")
+)
+
+
+def _url_rule_presence_and_length(state: _UrlState) -> _UrlState | SearchUrlOutcome:
+    """Rule (0): a non-empty string of at most `_MAX_SEARCH_URL_LENGTH` characters."""
+    if not isinstance(state.raw, str):
+        return _reject_search_url("missing")
+    value = state.raw.strip()
+    if not value:
+        return _reject_search_url("missing")
+    if len(value) > _MAX_SEARCH_URL_LENGTH:
+        # Rejection, never truncation: a shortened URL points at a different
+        # resource, and nothing downstream -- `html.unescape`, `unquote`,
+        # `urlsplit`, `scan_structural` -- may be handed more than the bound.
+        # `scan_structural` has no input cap of its own and `_line_number_of`
+        # is O(n) per match, so an unbounded URL is a CPU lever.
+        return _reject_search_url("too_long")
+    return replace(state, value=value)
+
+
+def _url_rule_raw_character_class(state: _UrlState) -> _UrlState | SearchUrlOutcome:
+    """Rule (1): reject controls, whitespace and RFC 3986's excluded characters."""
+    if _RAW_URL_REJECT_RE.search(state.value):
+        return _reject_search_url("raw_chars")
+    return state
+
+
+def _url_rule_parse(state: _UrlState) -> _UrlState | SearchUrlOutcome:
+    """Rule (2): parse, read the port, and require a bare HTTP(S) origin."""
     try:
-        parsed = urlsplit(normalized)
+        parsed = urlsplit(state.value)
+    except ValueError:
+        # A bracketed IPv6 literal is validated eagerly, so `[fe80::zz]` raises
+        # here rather than yielding a host nothing downstream can read.
+        return _reject_search_url("unparseable")
+    try:
         port = parsed.port
     except ValueError:
-        return None
+        # `urlsplit("http://example.com:99999/")` parses fine with
+        # `hostname == "example.com"`; it is the port read that raises. Both
+        # reads live in this rule, and `port` travels on in `_UrlState`, so the
+        # canonicalisation tail never touches `parsed.port` itself -- an
+        # unhandled `ValueError` there would be a 500 on an unauthenticated
+        # route from a provider-supplied URL.
+        return _reject_search_url("invalid_port")
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        return _reject_search_url("parse")
+    if parsed.username is not None or parsed.password is not None:
+        return _reject_search_url("userinfo")
+    return replace(state, parsed=parsed, port=port)
 
-    if (
-        parsed.scheme.lower() not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-    ):
-        return None
 
-    domain = parsed.hostname.lower()
-    host = domain
+def _url_rule_host_code_points(state: _UrlState) -> _UrlState | SearchUrlOutcome:
+    """Rule (3): no forbidden domain code point, and no IPv6 zone id."""
+    parsed = state.parsed
+    if parsed is None or not parsed.hostname:
+        return _reject_search_url("parse")
+    host = parsed.hostname
     if ":" in host:
-        host = f"[{host}]"
-    netloc = host if port is None else f"{host}:{port}"
+        # An IPv6 literal -- `urlsplit` has already stripped the brackets. Its
+        # colons are exempt; a `%25` zone id is not.
+        if "%" in host:
+            return _reject_search_url("zone_id")
+        forbidden = _FORBIDDEN_DOMAIN_CODE_POINTS - {":"}
+    else:
+        forbidden = _FORBIDDEN_DOMAIN_CODE_POINTS
+    if any(character in forbidden for character in host):
+        return _reject_search_url("host_code_point")
+    return state
+
+
+def _url_rule_canonicalize_host(state: _UrlState) -> _UrlState | SearchUrlOutcome:
+    """Rule (3a): canonicalise the host, literals first. No DNS, ever.
+
+    `canonicalize_host` is the one canonicaliser and the one UTS-46 call site
+    in this service. `validate_url` is deliberately *not* reachable from here:
+    it resolves DNS, and Forage does not look up a URL nobody asked to fetch.
+    """
+    parsed = state.parsed
+    if parsed is None or not parsed.hostname:
+        return _reject_search_url("parse")
+    canonical = canonicalize_host(parsed.hostname)
+    if not isinstance(canonical, CanonicalHost):
+        # The token is read off the rejection, never recomputed -- the caller
+        # may not re-run the encode to learn why it failed.
+        return _reject_search_url(canonical.reason)
+    return replace(state, canonical=canonical)
+
+
+def _url_rule_address_class(state: _UrlState) -> _UrlState | SearchUrlOutcome:
+    """Rule (3b): an address literal that is private, or embeds one, is blocked."""
+    canonical = state.canonical
+    if canonical is None or canonical.address is None:
+        return state
+    host_class = private_address_class(canonical.address)
+    if host_class is not None:
+        # Decided by the helper, never recomputed here: the token says *how*
+        # the address was reached, which a second `in`-check could not.
+        return _block_search_url(host_class)
+    return state
+
+
+def _url_rule_blocklisted_name(state: _UrlState) -> _UrlState | SearchUrlOutcome:
+    """Rule (3c): a name on the built-in private-name list is blocked."""
+    canonical = state.canonical
+    if canonical is None or canonical.kind != "name":
+        return state
+    if is_blocklisted_hostname(canonical.host):
+        return _block_search_url("blocklisted_name")
+    return state
+
+
+# Ordered registry, first rejection wins: the order is data and each rule is a
+# pure function, unit-testable on its own. The shape follows
+# `pipeline/stage2_structural.py`'s `_PATTERNS` -- name-first pairs iterated in
+# order.
+_SEARCH_URL_RULES: tuple[
+    tuple[str, Callable[[_UrlState], _UrlState | SearchUrlOutcome]], ...
+] = (
+    ("presence_and_length", _url_rule_presence_and_length),
+    ("raw_character_class", _url_rule_raw_character_class),
+    ("parse", _url_rule_parse),
+    ("host_code_points", _url_rule_host_code_points),
+    ("canonicalize_host", _url_rule_canonicalize_host),
+    ("address_class", _url_rule_address_class),
+    ("blocklisted_name", _url_rule_blocklisted_name),
+)
+
+
+def _canonicalize_search_url(value: object) -> SearchUrlOutcome:
+    """Bound, screen and canonicalize one provider-supplied result URL.
+
+    Iterates `_SEARCH_URL_RULES` over the **raw** provider value, first
+    rejection wins, and canonicalizes only a value every rule cleared.
+    `domain` is `CanonicalHost.host`, which for an IPv6 literal is the raw
+    unbracketed literal (``2606:4700::1111``) even though `canonical_url`
+    carries the bracketed form (``[2606:4700::1111]``) -- the one case where
+    `domain` is not a substring of `canonical_url`.
+    """
+    state = _UrlState(raw=value)
+    for _rule_name, rule in _SEARCH_URL_RULES:
+        outcome = rule(state)
+        if isinstance(outcome, SearchUrlOutcome):
+            return outcome
+        state = outcome
+
+    parsed = state.parsed
+    if parsed is None or not parsed.hostname or state.canonical is None:
+        return _reject_search_url("parse")
+    # `domain` is the canonicalised ASCII host; `canonical_url` keeps the
+    # provider's spelling of it. The two diverge for an IDN host -- `domain`
+    # is punycode, `url` is not -- because Goal 2 freezes the served URL.
+    domain = state.canonical.host
+    raw_host = parsed.hostname.lower()
+    host = f"[{raw_host}]" if ":" in raw_host else raw_host
+    netloc = host if state.port is None else f"{host}:{state.port}"
     canonical = urlunsplit(
         (
             parsed.scheme.lower(),
@@ -655,10 +1268,17 @@ def _canonicalize_search_url(value: object) -> tuple[str, str, str] | None:
             "",
         )
     )
-    return (
-        _normalize_search_text(canonical, max_length=_MAX_SEARCH_URL_LENGTH),
-        scanned,
-        domain,
+    # Rule (4)'s two texts, built from the trimmed raw value rather than the
+    # canonical form. Exactly one `unquote` pass: `%253C...` stays encoded on
+    # the wire and is out of scope. Both are at most `_MAX_SEARCH_URL_LENGTH`
+    # characters -- rule (0) bounded the value and neither decode lengthens it.
+    unescaped = html.unescape(state.value)
+    return SearchUrlOutcome(
+        canonical_url=canonical,
+        scan_texts=(unescaped, unquote(unescaped)),
+        domain=domain,
+        omission_reason=None,
+        rule=None,
     )
 
 
@@ -732,7 +1352,7 @@ def _search_unavailable_error(
 
     *provider_errors* is the chain-order list of ``"<provider.name>:
     <failure_class>"`` entries built while traversing — one per provider
-    tried, each composed from two closed vocabularies and nothing else, so no
+    tried, each composed from a guarded name token and closed failure class, so no
     endpoint, credential, header or exception text can reach a 422 body
     through this path, whatever a third-party API put in its response. The
     reason is those entries joined by ``"; "``.
@@ -744,8 +1364,77 @@ def _search_unavailable_error(
     )
 
 
-class SearchMetricsSink(Protocol):
-    """The two ``/metrics`` search counters ``run_search_pipeline`` increments directly.
+class AdmissionSlot(Protocol):
+    """One admission slot ``run_retrieve_pipeline`` holds for the work it does.
+
+    ``retrieval_app.ExtractionAdmissionController`` satisfies this
+    structurally — declared here, on the consumer side, because ``pipeline/``
+    never imports ``retrieval_app`` (the rule :class:`SearchMetricsSink`
+    records and ``cache.py`` records from the other end).
+
+    ``acquire`` returns ``False`` when the queue is full rather than raising,
+    so the caller decides what refusal the wire carries.
+    """
+
+    async def acquire(self) -> bool: ...
+
+    async def release(self) -> None: ...
+
+
+class AdmissionMetrics(Protocol):
+    """The two admission counters an :class:`AdmissionSlot` increments.
+
+    One Protocol for the pair, not two, because the controller increments both
+    or neither: a saturated semaphore and a refused request are the two halves
+    of the same story.
+    """
+
+    semaphore_saturation: int
+    busy_rejections: int
+
+
+class PromptGuardMetricsSink(Protocol):
+    """The shared per-route counter, incremented before quarantine structuring."""
+
+    promptguard_contiguity_detections: int
+
+
+class RetrieveMetricsSink(AdmissionMetrics, PromptGuardMetricsSink, Protocol):
+    """The ``/metrics`` retrieve counters ``run_retrieve_pipeline`` increments.
+
+    ``retrieval_app.RetrieveMetrics`` satisfies this structurally, the same
+    seam shape as :class:`SearchMetricsSink`.
+    """
+
+    classification_wait_timeouts: int
+    policy_suffix_trusted_skip: int
+
+
+class _NullRetrieveMetrics:
+    """A real counter nobody reads, for callers with no sink to hand over.
+
+    The ``_NullSearchMetrics`` idiom: process-local scratch space satisfying
+    :class:`RetrieveMetricsSink` structurally, so an increment site never
+    needs an ``is not None`` branch.
+    """
+
+    def __init__(self) -> None:
+        self.semaphore_saturation = 0
+        self.busy_rejections = 0
+        self.classification_wait_timeouts = 0
+        self.policy_suffix_trusted_skip = 0
+        self.promptguard_contiguity_detections = 0
+
+
+# Structural conformance, checked by the type checker rather than asserted in
+# prose: a counter added to `RetrieveMetricsSink` without a matching field on
+# the null sink is an error here, at the seam, instead of an `AttributeError`
+# in whichever later story first increments it.
+_NULL_RETRIEVE_METRICS: RetrieveMetricsSink = _NullRetrieveMetrics()
+
+
+class SearchMetricsSink(PromptGuardMetricsSink, Protocol):
+    """The ``/metrics`` search measurements ``run_search_pipeline`` updates directly.
 
     ``retrieval_app.SearchMetrics`` satisfies this structurally — neither
     module imports the other. Declaring it here, on the consumer side, is the
@@ -754,6 +1443,11 @@ class SearchMetricsSink(Protocol):
 
     fallback_fired: int
     paid_calls: int
+    classification_wait_timeouts: int
+    provider_compressed_body: int
+    provider_timeouts: int
+    promptguard_latency_target_exceeded: int
+    sanitization_latency_max_ms: int
 
 
 class _NullSearchMetrics:
@@ -769,18 +1463,159 @@ class _NullSearchMetrics:
     def __init__(self) -> None:
         self.fallback_fired = 0
         self.paid_calls = 0
+        self.classification_wait_timeouts = 0
+        self.provider_compressed_body = 0
+        self.provider_timeouts = 0
+        self.promptguard_latency_target_exceeded = 0
+        self.sanitization_latency_max_ms = 0
+        self.promptguard_contiguity_detections = 0
+
+
+@dataclass(frozen=True, slots=True)
+class _ServedChain:
+    serving_provider: SearchProvider
+    raw_results: list[dict[str, Any]]
+    serving_max_results: int
+    unresponsive_engines: list[str]
+    content_kind: contract.ContentKind
+    provider_errors: list[str]
+    fallback_fired: bool
+
+
+_UNRESPONSIVE_ENGINES_DETAIL = "unresponsive_engines"
+_PROVIDER_TOKEN_RE = re.compile(r"[a-z0-9_]{1,32}")
+
+
+def _provider_token(value: str, *, fallback: str) -> str:
+    return value if _PROVIDER_TOKEN_RE.fullmatch(value) else fallback
+
+
+def _log_provider_failure(provider: str, failure_class: str, detail: str) -> None:
+    logger.warning(
+        "search_provider_failed provider=%s failure_class=%s detail=%s",
+        provider,
+        failure_class,
+        detail,
+    )
+
+
+async def _query_provider_chain(
+    request: SearchRequest,
+    *,
+    chain: Sequence[SearchProvider],
+    configured_chain: Sequence[SearchProvider],
+    metrics: SearchMetricsSink,
+    request_id: str,
+) -> _ServedChain:
+    """Query in order, mutating the sink before each call and each exit.
+
+    The failure boundary validates class, detail and name before either logging
+    or composing an error. The name fallback hardens future operator-pluggable
+    providers; today's registry already supplies fixed, valid names.
+    """
+    if not chain:
+        raise ValueError(
+            "run_search_pipeline received an empty provider chain; a caller "
+            "with no provider to offer must not call the pipeline"
+        )
+    legacy_codes = _legacy_searxng_codes(configured_chain)
+    # The candidate budget is a request, not a trusted bound: the caller
+    # re-applies the serving provider's slice before scanning.
+    fetch_limit = min(request.num_results * 2, _MAX_SEARCH_RESULTS_SCANNED)
+    provider_errors: list[str] = []
+    fallback_fired = False
+    for index, provider in enumerate(chain):
+        if index > 0 and not fallback_fired:
+            fallback_fired = True
+            metrics.fallback_fired += 1
+        max_results = request.num_results if provider.paid else fetch_limit
+        if provider.paid:
+            metrics.paid_calls += 1
+        try:
+            call_outcome = await provider.search(request.query, max_results)
+        except Exception:
+            # Preserve the orchestrator-side floor for a defective provider:
+            # advance the chain without exposing exception text (ruling 27).
+            call_outcome = ProviderFailure(
+                provider_name=provider.name,
+                failure_class="hard_error",
+                detail="unexpected",
+            )
+
+        if call_outcome.compressed:
+            metrics.provider_compressed_body += 1
+        if (
+            isinstance(call_outcome, ProviderFailure)
+            and call_outcome.failure_class == "timeout"
+        ):
+            metrics.provider_timeouts += 1
+
+        name = _provider_token(provider.name, fallback="unknown")
+        if (
+            isinstance(call_outcome, ProviderSearchResult)
+            and not call_outcome.results
+            and call_outcome.unresponsive_engines
+        ):
+            # A configured chain of exactly one `searxng` (search epic ruling 28)
+            # serves this shape as before; otherwise an empty 200 with failed
+            # engines advances the chain. Judge raw results, not sanitization.
+            if legacy_codes:
+                _log_provider_failure(
+                    name, "rate_limited", _UNRESPONSIVE_ENGINES_DETAIL
+                )
+            else:
+                call_outcome = ProviderFailure(
+                    provider_name=name,
+                    failure_class="rate_limited",
+                    detail=_UNRESPONSIVE_ENGINES_DETAIL,
+                    compressed=call_outcome.compressed,
+                )
+
+        if isinstance(call_outcome, ProviderFailure):
+            failure = replace(
+                call_outcome,
+                provider_name=name,
+                failure_class=(
+                    call_outcome.failure_class
+                    if call_outcome.failure_class in FAILURE_CLASSES
+                    else "hard_error"
+                ),
+                detail=_provider_token(call_outcome.detail, fallback="unexpected"),
+            )
+            provider_errors.append(f"{name}: {failure.failure_class}")
+            _log_provider_failure(name, failure.failure_class, failure.detail)
+            if legacy_codes and index == len(chain) - 1:
+                raise _searxng_pipeline_error(provider, failure, request_id=request_id)
+            continue
+
+        return _ServedChain(
+            serving_provider=provider,
+            raw_results=call_outcome.results,
+            serving_max_results=max_results,
+            unresponsive_engines=call_outcome.unresponsive_engines,
+            content_kind=call_outcome.content_kind,
+            provider_errors=provider_errors,
+            fallback_fired=fallback_fired,
+        )
+
+    raise _search_unavailable_error(provider_errors, request_id=request_id)
 
 
 async def run_search_pipeline(
     request: SearchRequest,
     *,
-    searxng_url: str = _DEFAULT_SEARXNG_URL,
     providers: Sequence[SearchProvider] | None = None,
     configured_chain: Sequence[SearchProvider] | None = None,
+    blocked_domains: Sequence[str] = (),
     search_metrics: SearchMetricsSink | None = None,
     config: dict[str, Any],
     classifier: Any = None,
     promptguard_threshold: float = 0.85,
+    promptguard_settings: PromptGuardSettings = _DEFAULT_PROMPTGUARD_SETTINGS,
+    classification_semaphore: asyncio.Semaphore | None = None,
+    classification_wait_seconds: float | None = None,
+    promptguard_latency_target_ms: int = 1_000,
+    first_token_target_ms: int = 5_000,
 ) -> SearchResponse:
     """Run a web search through a search provider chain with sanitized results.
 
@@ -804,9 +1639,9 @@ async def run_search_pipeline(
       ``"<name>: rate_limited"``): this is how SearXNG actually fails in
       production, a 200 that never raises. Sufficiency is judged on raw
       results before sanitization, so a poisoned or fail-closed result set
-      that sanitization later empties out is still a success. A chain of
-      exactly one ``searxng`` provider has nothing to fall back to, so that
-      one shape is served as-is there instead of advancing. Replace-not-merge:
+      that sanitization later empties out is still a success. A chain
+      configured as exactly one ``searxng`` provider has no fallback, so that
+      shape is served as-is there instead of advancing. Replace-not-merge:
       a served response's ``results`` and ``unresponsive_engines`` come only
       from the serving provider; nothing from a failed provider survives into
       it. An exhausted chain raises :class:`PipelineError` — today's
@@ -816,9 +1651,8 @@ async def run_search_pipeline(
 
     *providers* is the chain the lifespan resolved from
     ``FORAGE_SEARCH_PROVIDERS``, tried in order. ``None`` means "no chain
-    supplied" and builds the default one-element SearXNG chain from
-    *searxng_url* — the test call sites that still pass ``searxng_url=`` take
-    this path. The check is ``is None`` and never a falsy one: an empty
+    supplied" and builds the default one-element SearXNG chain. The check
+    is ``is None`` and never a falsy one: an empty
     non-``None`` sequence is a caller programming error with no wire code,
     and a falsy check would silently serve the default chain instead of
     surfacing it.
@@ -829,130 +1663,57 @@ async def run_search_pipeline(
     *providers* when not supplied; spec 4 passes the configured chain
     explicitly once per-request policy can narrow *providers*.
 
+    *blocked_domains* carries canonical request entries from the handler,
+    merged after the operator's canonical ``seed_blocklist``. Only this
+    parameter supplies caller domain policy; multi-label names match by
+    dot-boundary suffix, single-label names and IP literals by equality.
+    Policy omissions follow the URL audit and precede content scanning;
+    they never trigger fallback, which is decided on raw provider results.
+
     *search_metrics* is incremented directly during traversal: ``paid_calls``
     once per call to a ``paid=True`` provider (before the call, so a call that
     times out is still counted), and ``fallback_fired`` once per request in
     which traversal advances past the first provider — both move even when
     the chain is ultimately exhausted and the call ends in a raised
     :class:`PipelineError`. ``None`` (the default) is a private null object,
-    so every increment site is unconditional.
+    so every increment site is unconditional. ``classification_wait_timeouts``
+    moves at most once per request, below.
+
+    *classification_semaphore* is the same permit the two other classifying
+    routes take, held around one result's Stage 3 call and released between
+    results. *classification_wait_seconds* is a **per-request** budget, not a
+    per-result one: one deadline is computed before the result loop, and once
+    it passes, that result and every remaining one take the
+    classifier-unavailable branch under the effective ``promptguard_fail_closed``
+    without touching the semaphore. Both default to ``None`` — no permit, no
+    deadline, today's behaviour — so no existing call site changes.
 
     This function never reads the environment.
     """
-    if providers is not None and len(providers) == 0:
-        raise ValueError(
-            "run_search_pipeline received an empty provider chain; a caller "
-            "with no provider to offer must not call the pipeline"
-        )
-
     request_id = uuid.uuid4().hex
+    effective_blocklist = [*config.get("seed_blocklist", []), *blocked_domains]
 
     # -- Call the search provider chain, free-first --
-    # Request extra results to compensate for any BLOCKED omissions. The
-    # candidate budget is a *request* to the provider, never a trusted bound:
-    # the slice below is re-applied to whatever comes back, so
-    # `_MAX_SEARCH_RESULTS_SCANNED` stays enforced on this side of the seam.
-    fetch_limit = min(request.num_results * 2, _MAX_SEARCH_RESULTS_SCANNED)
     chain: Sequence[SearchProvider] = (
-        [SearxngProvider(searxng_url)] if providers is None else providers
-    )
-    resolved_configured_chain: Sequence[SearchProvider] = (
-        chain if configured_chain is None else configured_chain
+        [SearxngProvider(_DEFAULT_SEARXNG_URL)] if providers is None else providers
     )
 
     metrics: SearchMetricsSink = (
         search_metrics if search_metrics is not None else _NullSearchMetrics()
     )
 
-    outcome: ProviderSearchResult | None = None
-    serving_provider: SearchProvider | None = None
-    serving_max_results: int | None = None
-    provider_errors: list[str] = []
-    last_failure: ProviderFailure | None = None
-    last_provider: SearchProvider | None = None
-    fallback_fired = False
-    for index, provider in enumerate(chain):
-        if index > 0 and not fallback_fired:
-            fallback_fired = True
-            metrics.fallback_fired += 1
-        max_results = request.num_results if provider.paid else fetch_limit
-        if provider.paid:
-            metrics.paid_calls += 1
-        try:
-            call_outcome = await provider.search(request.query, max_results)
-        except Exception:
-            # Ruling 27 already guarantees every provider's own mapping ends
-            # in this catch-all; this guard is a second, orchestrator-side
-            # floor so a defect in provider *n* can never become a 500 or
-            # skip the free floor at *n+1*.
-            call_outcome = ProviderFailure(
-                provider_name=provider.name,
-                failure_class="hard_error",
-                detail="unexpected",
-            )
-
-        if (
-            isinstance(call_outcome, ProviderSearchResult)
-            and not call_outcome.results
-            and call_outcome.unresponsive_engines
-        ):
-            # Ruling 17's headline rule: a 200 with zero raw results and every
-            # engine listed as unresponsive is how SearXNG actually fails in
-            # production (kit_tools/docs/GOTCHAS.md "SearXNG :latest rots") —
-            # it never raises, so it is only visible here. A chain of exactly
-            # one `searxng` provider has nothing to fall back to, so this
-            # shape is not a trigger there: it is served exactly as before
-            # the provider seam existed.
-            if _legacy_searxng_codes(resolved_configured_chain):
-                logger.warning(
-                    "search_provider_failed provider=%s failure_class=%s detail=%s",
-                    provider.name,
-                    "rate_limited",
-                    "unresponsive_engines",
-                )
-                outcome = call_outcome
-                serving_provider = provider
-                serving_max_results = max_results
-                break
-            call_outcome = ProviderFailure(
-                provider_name=provider.name,
-                failure_class="rate_limited",
-                detail="unresponsive_engines",
-            )
-
-        if isinstance(call_outcome, ProviderFailure):
-            provider_errors.append(f"{provider.name}: {call_outcome.failure_class}")
-            logger.warning(
-                "search_provider_failed provider=%s failure_class=%s detail=%s",
-                provider.name,
-                call_outcome.failure_class,
-                call_outcome.detail,
-            )
-            last_failure = call_outcome
-            last_provider = provider
-            continue
-
-        outcome = call_outcome
-        serving_provider = provider
-        serving_max_results = max_results
-        break
-
-    if outcome is None or serving_provider is None or serving_max_results is None:
-        if last_failure is None or last_provider is None:
-            raise ValueError(
-                "run_search_pipeline received an empty provider chain; a caller "
-                "with no provider to offer must not call the pipeline"
-            )
-        if _legacy_searxng_codes(resolved_configured_chain):
-            raise _searxng_pipeline_error(
-                last_provider, last_failure, request_id=request_id
-            )
-        raise _search_unavailable_error(provider_errors, request_id=request_id)
-
-    raw_results: list[dict[str, Any]] = outcome.results[:serving_max_results]
+    served = await _query_provider_chain(
+        request,
+        chain=chain,
+        configured_chain=chain if configured_chain is None else configured_chain,
+        metrics=metrics,
+        request_id=request_id,
+    )
+    serving_provider = served.serving_provider
+    raw_results = served.raw_results[: served.serving_max_results]
     unresponsive_engines: list[str] = [
         _normalize_search_text(name, max_length=_MAX_UNRESPONSIVE_ENGINE_LENGTH)
-        for name in outcome.unresponsive_engines[:_MAX_UNRESPONSIVE_ENGINES]
+        for name in served.unresponsive_engines[:_MAX_UNRESPONSIVE_ENGINES]
     ]
 
     # -- Sanitize complete results through Stages 1-3 --
@@ -962,25 +1723,82 @@ async def run_search_pipeline(
     unscanned_results = 0
     promptguard_unavailable = False
     omitted_by_reason: Counter[str] = Counter()
+
+    # One deadline per request, tested explicitly before every acquisition.
+    # The explicit test is what makes "every remaining result is unscanned"
+    # true: `Semaphore.acquire()` returns without yielding when a permit is
+    # free, so a zero-length deadline around it never fires, and a
+    # permit released mid-loop after the deadline would otherwise be taken
+    # and the result classified.
+    loop = asyncio.get_running_loop()
+    classification_deadline: float | None = (
+        loop.time() + classification_wait_seconds
+        if classification_semaphore is not None
+        and classification_wait_seconds is not None
+        else None
+    )
+    wait_expired = False
+
+    def wait_timed_out() -> PromptGuardResult:
+        """Take the classifier-unavailable outcome, counted once per request."""
+        nonlocal wait_expired
+        if not wait_expired:
+            wait_expired = True
+            # The classifier is loaded and busy, not absent: its own closed
+            # token, nothing caller-derived.
+            logger.warning("classification_wait_timeout route=search")
+            metrics.classification_wait_timeouts += 1
+        return unavailable_result(
+            TrustTier.STANDARD.value,
+            fail_closed=request.promptguard_fail_closed,
+        )
+
     for raw in raw_results:
         if len(sanitized_results) >= request.num_results:
             break
 
-        title, title_scan_text = _sanitize_search_text(
+        title, title_scan_text = _scan_forms_for_search_text(
             raw.get("title", ""),
             max_length=_MAX_SEARCH_TITLE_LENGTH,
         )
-        canonical_url = _canonicalize_search_url(raw.get("url", ""))
-        if canonical_url is None:
-            logger.info("Omitting search result with invalid URL")
-            omitted_by_reason[contract.OMIT_INVALID_URL] += 1
+        url_outcome = _canonicalize_search_url(raw.get("url", ""))
+        if url_outcome.domain is not None and any(
+            hostname_matches(url_outcome.domain, entry, allow_suffix=True)
+            for entry in effective_blocklist
+        ):
+            url_outcome = _block_search_url("policy_blocklist")
+        url = url_outcome.canonical_url
+        domain = url_outcome.domain
+        omission_reason = url_outcome.omission_reason
+        if omission_reason is not None or url is None or domain is None:
+            # Content-free: the token and the provider name, never the URL or
+            # its host (invariant 6). An operator watching `invalid_url` or
+            # `blocked_url` climb needs to know which rule or host class fired
+            # on which provider, not the bytes -- and the two records carry
+            # disjoint vocabularies, so aggregating on one never picks up the
+            # other. `contract.OMIT_INVALID_URL` is the floor -- a cleared
+            # outcome always carries both halves.
+            if omission_reason == contract.OMIT_BLOCKED_URL:
+                logger.info(
+                    "search_url_blocked host_class=%s provider=%s",
+                    url_outcome.rule,
+                    serving_provider.name,
+                )
+            else:
+                logger.info(
+                    "search_url_rejected rule=%s provider=%s",
+                    url_outcome.rule,
+                    serving_provider.name,
+                )
+            omitted_by_reason[omission_reason or contract.OMIT_INVALID_URL] += 1
             continue
-        url, url_scan_text, domain = canonical_url
-        snippet, snippet_scan_text = _sanitize_search_text(
+        snippet, snippet_scan_text = _scan_forms_for_search_text(
             raw.get("content", ""),
             max_length=_MAX_SEARCH_SNIPPET_LENGTH,
         )
-        engine = raw.get("engine")
+        engine = _normalize_search_text(
+            raw.get("engine"), max_length=_MAX_SEARCH_ENGINE_LENGTH
+        )
         # `content_kind` describes the whole batch the provider returned;
         # `date` is per-result and is filtered to a strict calendar date by
         # `SearchResult` itself, so anything else becomes None there.
@@ -990,16 +1808,34 @@ async def run_search_pipeline(
         # Stage 2: scan every model-visible field before exposing the result.
         blocked = False
         for field_name, field_text in (
+            # Both forms of each text field, for the same reason rule (4)
+            # scans two URL texts: the loop's break/flag behaviour is the
+            # BLOCKED > SUSPICIOUS > clean ladder, so the worse verdict wins
+            # without a second comparator.
+            #
+            # The scan form keeps line breaks so the line-anchored patterns
+            # fire per line; the wire form is its whitespace collapse. Neither
+            # is a superset of the other for Stage 2's purposes: a pattern
+            # compiled without `re.DOTALL` -- `disregard.*instructions`
+            # (stage2_structural.py, BLOCK) and the `!\[.*?\]\(` exfil beacon
+            # (SUSPICIOUS) are the two such patterns among the 24 registered --
+            # matches across a space but not across a newline. Scanning only
+            # the newline-preserving form therefore served a payload that its
+            # own collapsed wire form would have blocked. Scan both.
             ("title", title_scan_text),
-            ("url", url_scan_text),
+            ("title", title),
+            ("url", url_outcome.scan_texts[0]),
+            ("url", url_outcome.scan_texts[1]),
             ("snippet", snippet_scan_text),
+            ("snippet", snippet),
         ):
             scan = scan_structural(field_text)
             if scan.verdict == Stage2Verdict.BLOCKED:
                 logger.info(
-                    "Omitting blocked search result (%s structural): %s",
+                    "search_result_omitted reason=%s domain=%s field=%s",
+                    contract.OMIT_STRUCTURAL_BLOCKED,
+                    domain,
                     field_name,
-                    url,
                 )
                 blocked = True
                 break
@@ -1011,27 +1847,69 @@ async def run_search_pipeline(
 
         # Stage 3 always runs, including when the classifier is unavailable.
         # run_promptguard then honors request.promptguard_fail_closed.
-        pg_result = await run_promptguard(
-            _search_result_promptguard_input(title, url, snippet),
-            classifier,
-            threshold=promptguard_threshold,
-            trust_tier="standard",
-            fail_closed=request.promptguard_fail_closed,
+        #
+        # The acquisition guard is the condition `run_promptguard` itself
+        # classifies on — a classifier that is present *and* loaded. A warming
+        # model is not None and not loaded, which is exactly when the other
+        # two routes are contending for the same permit.
+        pg_result: PromptGuardResult
+        admitted_classifier = (
+            classifier if classifier is not None and classifier.loaded else None
         )
+        if classification_semaphore is None or admitted_classifier is None:
+            pg_result = await run_promptguard(
+                _search_result_promptguard_input(title, url, snippet),
+                admitted_classifier,
+                threshold=promptguard_threshold,
+                contiguity_windows=promptguard_settings.contiguity_windows,
+                contiguity_threshold=promptguard_settings.contiguity_threshold,
+                trust_tier="standard",
+                fail_closed=request.promptguard_fail_closed,
+            )
+        elif wait_expired or (
+            classification_deadline is not None
+            and loop.time() >= classification_deadline
+        ):
+            pg_result = wait_timed_out()
+        else:
+            async with _bounded_permit(
+                classification_semaphore,
+                (
+                    None
+                    if classification_deadline is None
+                    else classification_deadline - loop.time()
+                ),
+            ) as acquired:
+                if acquired:
+                    pg_result = await run_promptguard(
+                        _search_result_promptguard_input(title, url, snippet),
+                        admitted_classifier,
+                        threshold=promptguard_threshold,
+                        contiguity_windows=promptguard_settings.contiguity_windows,
+                        contiguity_threshold=promptguard_settings.contiguity_threshold,
+                        trust_tier="standard",
+                        fail_closed=request.promptguard_fail_closed,
+                    )
+                else:
+                    pg_result = wait_timed_out()
+        if pg_result.rule in ("contiguity", "both"):
+            metrics.promptguard_contiguity_detections += 1
         if pg_result.verdict == Stage3Verdict.INJECTION_DETECTED:
             if pg_result.skip_reason == "model_unavailable":
                 logger.info(
-                    "Omitting search result — PromptGuard unavailable "
-                    "(fail-closed): %s",
-                    url,
+                    "search_result_omitted reason=%s domain=%s",
+                    contract.OMIT_PROMPTGUARD_UNAVAILABLE,
+                    domain,
                 )
                 omitted_by_reason[contract.OMIT_PROMPTGUARD_UNAVAILABLE] += 1
                 promptguard_unavailable = True
             else:
                 logger.info(
-                    "Omitting blocked search result (promptguard score=%.2f): %s",
+                    "search_result_omitted reason=%s domain=%s score=%.2f rule=%s",
+                    contract.OMIT_INJECTION_DETECTED,
+                    domain,
                     pg_result.score,
-                    url,
+                    pg_result.rule,
                 )
                 omitted_by_reason[contract.OMIT_INJECTION_DETECTED] += 1
             continue
@@ -1052,8 +1930,8 @@ async def run_search_pipeline(
                 url=url,
                 domain=domain,
                 snippet=snippet,
-                engine=engine if isinstance(engine, str) else None,
-                content_kind=outcome.content_kind,
+                engine=engine or None,
+                content_kind=served.content_kind,
                 date=result_date,
                 suspicious=suspicious,
             )
@@ -1064,6 +1942,9 @@ async def run_search_pipeline(
         (time.perf_counter() - promptguard_started) * 1000,
         2,
     )
+    metrics.sanitization_latency_max_ms = max(
+        metrics.sanitization_latency_max_ms, int(promptguard_duration_ms)
+    )
     logger.info(
         "search_promptguard_complete",
         extra={
@@ -1073,21 +1954,18 @@ async def run_search_pipeline(
             "omitted_by_reason": dict(omitted_by_reason),
             "unscanned_results": unscanned_results,
             "duration_ms": promptguard_duration_ms,
-            "local_target_ms": _LOCAL_PROMPTGUARD_TARGET_MS,
-            "tool_augmented_first_token_target_ms": (
-                _TOOL_AUGMENTED_FIRST_TOKEN_TARGET_MS
-            ),
+            "local_target_ms": promptguard_latency_target_ms,
+            "tool_augmented_first_token_target_ms": first_token_target_ms,
         },
     )
-    if promptguard_duration_ms > _LOCAL_PROMPTGUARD_TARGET_MS:
+    if promptguard_duration_ms > promptguard_latency_target_ms:
+        metrics.promptguard_latency_target_exceeded += 1
         logger.warning(
             "search_promptguard_local_latency_target_exceeded",
             extra={
                 "duration_ms": promptguard_duration_ms,
-                "local_target_ms": _LOCAL_PROMPTGUARD_TARGET_MS,
-                "tool_augmented_first_token_target_ms": (
-                    _TOOL_AUGMENTED_FIRST_TOKEN_TARGET_MS
-                ),
+                "local_target_ms": promptguard_latency_target_ms,
+                "tool_augmented_first_token_target_ms": first_token_target_ms,
             },
         )
 
@@ -1096,8 +1974,8 @@ async def run_search_pipeline(
         request_id=request_id,
         query=request.query,
         provider_used=serving_provider.name,
-        fallback_fired=fallback_fired,
-        provider_errors=provider_errors,
+        fallback_fired=served.fallback_fired,
+        provider_errors=served.provider_errors,
         unresponsive_engines=unresponsive_engines,
         omitted_results=omitted_results,
         omitted_by_reason=dict(omitted_by_reason),
@@ -1117,12 +1995,20 @@ def _resolve_request_trust_tier(
     verified_domains: list[str],
     blocked_domains: list[str],
 ) -> str:
-    """Resolve the trust tier string for a domain from request lists."""
-    lower = domain.lower()
-    if lower in {d.lower() for d in blocked_domains}:
-        return "blocked"
-    if lower in {d.lower() for d in trusted_domains}:
-        return "trusted"
-    if lower in {d.lower() for d in verified_domains}:
-        return "verified"
+    """Resolve the trust tier string for a domain from canonical request lists."""
+    host = canonicalize_host(domain)
+    if not isinstance(host, CanonicalHost):
+        return "standard"
+    for tier, domains, denylist in (
+        ("blocked", blocked_domains, True),
+        ("trusted", trusted_domains, False),
+        ("verified", verified_domains, False),
+    ):
+        if any(
+            hostname_matches(
+                host.host, entry, allow_suffix=denylist or entry.startswith(".")
+            )
+            for entry in domains
+        ):
+            return tier
     return "standard"

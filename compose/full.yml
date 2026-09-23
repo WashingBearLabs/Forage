@@ -11,6 +11,7 @@
 #   {
 #     echo "HF_TOKEN=hf_your_token_here"
 #     echo "SEARXNG_SECRET=$(head -c 32 /dev/urandom | base64)"
+#     echo "FORAGE_CACHE_HMAC_KEY=$(head -c 32 /dev/urandom | base64)"
 #   } > .env
 #   docker compose -f full.yml up -d
 #   curl -s localhost:8020/health | jq .cache_backend   # => "valkey"
@@ -37,12 +38,12 @@ name: forage-full
 
 services:
   forage:
-    # ghcr.io/washingbearlabs/forage, tag 1.1.0 — the release carrying contract
-    # 1.2.0 (the search-provider chain and Brave fallback), published by
-    # `v1.1.0` on 2026-09-18 (search-release US-002). A pin that runs ahead of
-    # the newest published tag fails with `manifest unknown` until it publishes
-    # — that is sequencing, not breakage. docs/releases.md has the tag scheme.
-    image: ghcr.io/washingbearlabs/forage:1.1.0
+    # ghcr.io/washingbearlabs/forage, tag 1.2.0 — contract 1.3.0 hardening.
+    # Pinned ahead of the owner-gated `v1.2.0` cut; until then a pull fails
+    # with `manifest unknown`. Cut from the completion PR's merge commit in
+    # the same sitting or revert the US-004 pin commit: this window remains
+    # outstanding. docs/releases.md has the pending-release record.
+    image: ghcr.io/washingbearlabs/forage:1.2.0
     restart: unless-stopped
     # Loopback only — see the DEPLOYMENT POSTURE note above.
     ports:
@@ -52,14 +53,26 @@ services:
       # not. Running without it is a supported degraded mode — see
       # docs/weights.md § "Bring your own token".
       - HF_TOKEN
+      # Model selection and its pin: bare names like HF_TOKEN, genuinely unset
+      # unless supplied in `.env` or your shell. Default: the vendored 22M pin.
+      - FORAGE_MODEL_ID
+      - FORAGE_MODEL_REVISION
       # The search-provider chain — bare names, like HF_TOKEN: passed through
       # when set in `compose/.env`, genuinely unset (the default `searxng`
       # chain) when not. FORAGE_BRAVE_API_KEY is a credential, so it belongs
       # in `compose/.env`, never inline. See compose/minimal.yml.
       - FORAGE_SEARCH_PROVIDERS
       - FORAGE_BRAVE_API_KEY
-      # The one line that distinguishes this fragment from `minimal.yml`, and
-      # it is a LITERAL on purpose. `VALKEY_URL=${VALKEY_URL}` would render an
+      # FORAGE_CACHE_HMAC_KEY is a credential: set it in `compose/.env`,
+      # never inline here. Bare name: genuinely unset when not supplied.
+      # Valkey-backed health needs this key as well as loaded PromptGuard
+      # weights and a reachable cache to be healthy.
+      # Set FORAGE_CACHE_HMAC_KEY in `compose/.env`: without it this external
+      # Valkey serves cached content unsigned and /health reports
+      # cache_unauthenticated, even with loaded weights and a reachable cache.
+      - FORAGE_CACHE_HMAC_KEY
+      # The cache backend selector is a LITERAL on purpose.
+      # `VALKEY_URL=${VALKEY_URL}` would render an
       # empty string whenever the host variable is unset, and an empty value is
       # a *configured* Valkey that cannot be reached — `degraded:
       # cache_unavailable`, not memory mode. If you need a password here,
@@ -77,7 +90,33 @@ services:
       # Canonical name and mount point, both pinned by docs/weights.md §
       # "The model cache volume".
       - forage-model-cache:/app/model-cache
-    mem_limit: 1024m
+    # Resource envelope: FORAGE_CPUS unset or 0 = no CPU limit (today's
+    # behaviour; Compose omits the key). Below 1 vCPU is unsupported.
+    # Service-level `cpus` needs Docker Compose v2 (Compose Spec); verified
+    # on v2.40.3. FORAGE_MEM_LIMIT takes Docker's byte-unit syntax, default
+    # 1024m; FORAGE_MEM_LIMIT=abc fails at Compose, before Forage starts.
+    # See docs/configuration.md § "Sizing the container" for both variables
+    # and the CPU/memory rules before raising concurrency or cache bounds.
+    cpus: ${FORAGE_CPUS:-0}
+    mem_limit: ${FORAGE_MEM_LIMIT:-1024m}
+    # Liveness, not health: /health's body is health; this status-only probe
+    # discards it so Docker's State.Health.Log[].Output captures no body.
+    # One /health every 30 s calls cache.ping_if_due(), detecting recovery
+    # within one interval even with no traffic. A reconnect can take 2 s
+    # (_RECONNECT_TIMEOUT_S), inside the 5 s probe timeout.
+    # With the cache down, expect at most one reconnect WARNING per probe —
+    # one per probe on connection refused, about one per two on a connect
+    # timeout; reconnect_attempts / reconnect_failures climb without traffic.
+    # Plain docker compose reports unhealthy but never restarts for it:
+    # `restart:` reacts to exits. A healthy container may have the classifier
+    # unloaded — never gate traffic, `depends_on: service_healthy` or a
+    # consumer's activation on this probe.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8020/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   searxng:
     # Same companion image and the same load-bearing service name as

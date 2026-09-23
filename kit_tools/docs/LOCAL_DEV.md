@@ -10,8 +10,8 @@
 
 > **TEMPLATE_INTENT:** Complete local development setup guide. Get a new developer running quickly.
 
-> Last updated: 2026-09-13
-> Updated by: Claude (seed-project)
+> Last updated: 2026-09-23
+> Updated by: Copilot (hardening-release US-004)
 
 ---
 
@@ -124,12 +124,14 @@ The variables you will actually touch locally:
 |----------|---------|---------|
 | `HF_TOKEN` | unset (a supported, degraded mode) | Hugging Face read token for the gated PromptGuard repo. Read only on a cold weights acquisition, never logged. Runtime only — never a build argument. |
 | `VALKEY_URL` | **unset** — bounded in-memory content cache | A standard `redis://` URL selects the Valkey backend. Only a *fully unset* value means memory mode; an empty string is "configured and broken" and reports `degraded: cache_unavailable`. May carry a password — supply it from an env file, never inline `-e`. |
+| `FORAGE_CACHE_HMAC_KEY` | unset | Optional runtime signing secret for Valkey; without it Valkey is `degraded: cache_unauthenticated`, even if reachable. Memory needs no key. Generate with the [CSPRNG env-file recipe](../../docs/configuration.md#credential-handling-for-forage_cache_hmac_key), never use a passphrase or inline value; stop all replicas before enabling or rotating. |
 | `SEARXNG_URL` | `http://searxng:8080` | Base URL of the SearXNG instance behind `POST /search`. The default assumes a compose network with a service literally named `searxng`. |
 | `HF_HOME` | `/app/model-cache` (image `ENV`; the same default is `model_fetcher.DEFAULT_CACHE_ROOT`) | Weights cache root. Mount the `forage-model-cache` volume here or the weights are re-fetched on every container recreate. |
 
 `config.yaml` keys worth knowing: `promptguard_threshold` (`0.85`), `extract_route_enabled`
 (`false` — `POST /extract` returns 404 until you flip it and restart),
-`cache.max_entries` / `cache.max_bytes` (256 entries / 32 MiB, the in-memory bounds) and
+`cache.max_entries` and `cache.max_bytes` (256 entries / 32 MiB, the in-memory bounds),
+`cache.max_value_bytes` (4 MiB per value, both backends; range 512 KiB-8 MiB), and
 the `extraction.*` limits, which are validated at boot and refuse to start on a bad value.
 Override it in the container with `-v "$PWD/config.yaml:/app/config.yaml:ro"`.
 
@@ -154,7 +156,7 @@ uv run pyright                                 # strict, zero errors, no baselin
 All four are blocking jobs in `.github/workflows/ci.yml` (`lint`, `typecheck`, `test`).
 The suite is **hermetic**: an autouse `pytest-socket` guard in `tests/conftest.py`
 (`disable_socket(allow_unix_socket=True)`) fails any test that reaches the real network,
-and a second autouse fixture clears `HF_TOKEN`, `HF_HOME`, `FORAGE_MODEL_REVISION`,
+and a second autouse fixture clears `HF_TOKEN`, `HF_HOME`, `FORAGE_MODEL_ID`, `FORAGE_MODEL_REVISION`,
 `FORAGE_WEIGHTS_MIRROR`, `FORAGE_MIRROR_TOKEN` and `VALKEY_URL` before every test so your
 shell exports cannot leak in. Mock at the seam; never relax the guard.
 
@@ -204,7 +206,8 @@ While the download converges, watch `/metrics` (`model.fetch_in_progress`, then
 `model.retries_scheduled`), not `docker logs` — the success narrative is logged at INFO
 and nothing configures logging (see Troubleshooting). `promptguard_loaded` flips to
 `true` in place. A warm start from the volume needs no network (about 9 s warm, 19 s cold
-on the 1 vCPU / 1 GB reference envelope). Volume layout and the full walk-through:
+on the reference envelope (1 vCPU / 1 GB), configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` —
+see `docs/configuration.md` § Sizing the container). Volume layout and the full walk-through:
 [`docs/weights.md`](../../docs/weights.md).
 
 #### Compose fragments
@@ -226,13 +229,16 @@ curl -s localhost:8020/health | jq
 ```
 
 Two caveats. First, **the fragments pull published images; they do not build your
-working tree.** Both pin `ghcr.io/washingbearlabs/forage:1.1.0` and
-`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`; both pins resolve (`v1.1.0` published
-2026-09-18 — the `manifest unknown` a `docker compose up` returned before then was
-sequencing, not breakage). To run the image you just built, use the `docker run` form
-above. Second,
-neither fragment declares a `healthcheck:` and the `Dockerfile` has no `HEALTHCHECK` — the
-"10 s x 5 retries" check that source comments mention belongs to Poppy's compose, not this repo.
+working tree.** Both pin `ghcr.io/washingbearlabs/forage:1.2.0` and
+`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`; the companion is published,
+but the service pin awaits the owner-gated `v1.2.0` cut and returns `manifest unknown`
+until then. This unpublished-tag window is outstanding: cut in the completion
+PR's merge sitting or revert the US-004 pin commit (`docs/releases.md`).
+To run the image you just built, use the `docker run` form
+above. Second, the image has no `HEALTHCHECK` instruction; both compose fragments declare a liveness probe.
+Its `curl -fsS -o /dev/null` discards `/health`'s body: a Docker-healthy container
+need not be classifying. Read `promptguard_loaded` and `degraded_reasons`;
+never use this probe to gate traffic, start ordering or consumer activation.
 
 #### Bare host (inferred — not a documented workflow)
 
@@ -264,9 +270,13 @@ Everything else — engines, pin bumps, the tag lane — is
 [`docs/searxng.md`](../../docs/searxng.md).
 
 **Valkey** backs the content cache, wired by `VALKEY_URL`. Leave it fully unset and the
-cache runs in a bounded in-memory store (`cache.max_entries` / `cache.max_bytes`); set it
+cache runs in a bounded in-memory store (`cache.max_entries` and `cache.max_bytes`); set it
 and the Valkey backend is chosen at start regardless of reachability, with an unreachable
 server reported as `degraded: cache_unavailable` and reconnected on a 1 s → 30 s backoff.
+Both backends also enforce `cache.max_value_bytes` per value; keep it equal across
+replicas, and expect `oversize` rejects against old larger values if you lower it.
+Valkey without `FORAGE_CACHE_HMAC_KEY` additionally reports `cache_unauthenticated`;
+connectivity is not authenticity, and cached content is served without re-sanitization.
 `compose/full.yml` runs `valkey/valkey:8` with the literal `VALKEY_URL=redis://valkey:6379/4`
 (DB index 4 is the `ContentCache` default). Which mode you are in is `cache_backend`
 (`memory` or `valkey`) on `/health`; the selection rules are in
@@ -303,7 +313,9 @@ docker rm -f forage-smoke
 `contract_smoke.py` asserts the `/health` contract in one of two modes:
 `--expect-status degraded` (the default, and what CI runs) for a *token-less, weights-free*
 container like the one above, and `--expect-status healthy` for a container started with
-weights (e.g. `--env-file` carrying `HF_TOKEN`). The wait is status-aware — under `healthy`
+weights and an operational cache (e.g. `--env-file` carrying `HF_TOKEN`, plus
+`FORAGE_CACHE_HMAC_KEY` if Valkey is selected at contract 1.3.0).
+The wait is status-aware — under `healthy`
 it keeps polling through the background PromptGuard load — so raise `--timeout-seconds` for a
 cold weights fetch.
 

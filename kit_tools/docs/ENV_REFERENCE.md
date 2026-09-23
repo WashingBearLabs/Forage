@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document environment variables and secrets. What config exists and where to find it.
 
-> Last updated: 2026-09-16
-> Updated by: Claude (seed-project)
+> Last updated: 2026-09-22
+> Updated by: Copilot (hardening-promptguard-86m US-006)
 
 ## Overview
 
@@ -25,7 +25,7 @@ No key exists in both, so there is no precedence rule to learn; a change to eith
 
 Naming rule (`CLAUDE.md` invariant 1): the primary name of every Forage-specific variable is `FORAGE_*`. Legacy `POPPY_*` names survive only as back-compat aliases of a `FORAGE_*` primary, and no new name may contain "poppy".
 
-**`docs/configuration.md` is the canonical, full-semantics reference** (the five-case cache-selection table, the weights acquisition sequence, break-glass semantics, every allowed range). This page is the operator's map: one row per variable with the facts that reference does not line up in one place, namely who reads it, when, where to set it, and what happens when it is unset.
+**`docs/configuration.md` is the canonical, full-semantics reference** (the six-case cache-selection table, the weights acquisition sequence, break-glass semantics, every allowed range). This page is the operator's map: one row per variable with the facts that reference does not line up in one place, namely who reads it, when, where to set it, and what happens when it is unset.
 
 ---
 
@@ -37,7 +37,8 @@ Naming rule (`CLAUDE.md` invariant 1): the primary name of every Forage-specific
 
 | Variable | Legacy alias | Default | Required | Secret | Read by | When unset |
 |---|---|---|---|---|---|---|
-| `VALKEY_URL` | none | unset | no | **yes** (may embed a password: `redis://:PASSWORD@host:6379/4`) | `retrieval_app._configured_valkey_url()`, start | Bounded in-memory content cache; `/health.cache_backend` reads `"memory"`. **Only a fully unset variable means this.** |
+| `VALKEY_URL` | none | unset | no | **yes** (may embed a password: `redis://:PASSWORD@host:6379/4`) | `retrieval_app._configured_valkey_url()`, start | Bounded in-memory content cache; `/health.cache_backend` reads `"memory"`. **Only a fully unset variable means this.** When set, remove the forbidden query options `decode_responses`, `encoding`, `encoding_errors` and `protocol`: any one refuses boot. |
+| `FORAGE_CACHE_HMAC_KEY` | none | unset | no | **yes** | `retrieval_app._resolve_cache_hmac_key()`, start | Valkey reports `cache_unauthenticated` and logs `cache_hmac_key_missing`: cached content is served without proof of origin or re-sanitization. Memory needs no key; one configured there logs `cache_hmac_key_unused` without signing. Strip leading/trailing space/tab/LF; blank means absent, otherwise require printable ASCII without whitespace/controls and at least 32 UTF-8 bytes, never base64-decoded. Invalid values refuse boot with a value-free WARNING. See [credential handling](../../docs/configuration.md#credential-handling-for-forage_cache_hmac_key) for the CSPRNG recipe (not a passphrase) and stop-all-replicas rotation. |
 | `SEARXNG_URL` | none | `http://searxng:8080` | no | no | `retrieval_app.py` line 82, **import** | Default used; assumes a compose service literally named `searxng`. An unreachable SearXNG surfaces as `searxng_unavailable` on `/search`, never as a boot failure. The client is built with `trust_env=False` (`search-provider-abstraction` US-002), so an ambient `HTTP_PROXY` / `HTTPS_PROXY` / `.netrc` / `SSL_CERT_FILE` no longer affects the SearXNG call — the one deliberate behaviour change of that extraction. Only scheme, host and port are echoed on the wire. |
 | `FORAGE_SEARCH_PROVIDERS` | none | `searxng` | no | no | `retrieval_app._configured_provider_names()`, start | Default one-element chain `["searxng"]`. Ordered and comma-separated; parsed by `pipeline.search_providers.parse_provider_names` (strip, lower-case, drop empty tokens, collapse duplicates keeping the first) and resolved by `build_provider_chain` through a static dict literal — no dynamic import. Known names: `searxng` and `brave`. An unknown name raises `SearchProviderConfigurationError` out of the lifespan and **refuses the boot**; the message names the entry's 1-based position and the known names, never the token or the raw value. Set but blank: WARNING `search_providers_blank`, default applies. **Any entry other than `searxng` sends the caller's query to that provider.** The resolved names (and nothing else) are logged at start; `app.state.search_providers` holds the chain objects, never names. |
 | `FORAGE_BRAVE_API_KEY` | none | unset | no | **yes** | `retrieval_app._resolve_brave_key()`, start | A `brave` entry in `FORAGE_SEARCH_PROVIDERS` is skipped (WARNING `brave_skipped_missing_key`) rather than refusing the boot; a chain left entirely empty by such skips falls back to SearXNG (WARNING `search_chain_defaulted_to_searxng`). Presence is `pipeline.search_providers.brave.brave_key_present()` — non-empty after stripping spaces/tabs/LF, ASCII, printable, no interior whitespace or control character (a lone CR included) — the same predicate `/health`'s `capabilities["brave_api_key"]` (spec 4 US-002) reads, so the two can never disagree. A present-but-unusable value logs `brave_key_invalid` and is treated as absent; the value itself is never logged. |
@@ -49,9 +50,24 @@ Naming rule (`CLAUDE.md` invariant 1): the primary name of every Forage-specific
 |---|---|---|---|---|---|---|
 | `HF_HOME` | none | `/app/model-cache` (Dockerfile `ENV`, line 156; code `DEFAULT_CACHE_ROOT` restates it) | no | no | `resolve_cache_root()`, acquisition | Code default `/app/model-cache`; weights land in `$HF_HOME/hub/`, refused sets in `$HF_HOME/quarantine/`. Always set in the image; on a bare host the default path does not exist. |
 | `HF_TOKEN` | none | unset | no | **yes** | `_resolve_token()`, acquisition, cold fetch only | Hugging Face leg skipped (`weights_fetch_skipped`, outcome `skipped_no_token`). With no mirror token either and no warm volume: `degraded` with `promptguard_unavailable`, indefinitely and honestly. |
-| `FORAGE_MODEL_REVISION` | none | `11614a155199674a0a95e6602d6ab0417b790ed0` (`DEFAULT_MODEL_REVISION`, equal to `weights_manifest.json`) | no | no | `resolve_revision()`, acquisition | Committed pin used. Anything but a 40-hex sha logs `model_revision_invalid` and the pin is used; the value is never echoed. |
+| `FORAGE_MODEL_ID` | none | `meta-llama/Llama-Prompt-Guard-2-22M` | no | no | `resolve_model_id()` in `model_fetcher.py`; lifespan and revision hashing | Unset or stripped-blank uses 22M. Unknown values refuse boot with `ModelConfigurationError` / `model_id_not_allowed`, without echoing the value. Pending vendoring: the allowlist ships with the 22M; the 86M id is added by the vendoring gate. Selected once at startup for acquisition and `/health.promptguard_model`; both Compose fragments pass it and the revision through as bare names. |
+| `FORAGE_MODEL_REVISION` | none | The selected model's `weights_manifest.json` → `models[model_id].revision` (22M: `11614a155199674a0a95e6602d6ab0417b790ed0`, equal to `DEFAULT_MODEL_REVISION`) | no | no | `resolve_revision(model_id)`, acquisition | Uses the selected model's committed pin; a malformed value falls back to the pin with `model_revision_invalid`; a well-formed value that is not that pin refuses to verify (`weights_revision_unpinned`). The value is never echoed. |
 | `FORAGE_WEIGHTS_MIRROR` | none | `ghcr.io/washingbearlabs/forage-weights` (`DEFAULT_WEIGHTS_MIRROR`) | no | no | `resolve_mirror_repository()`, acquisition | Default private mirror. Must be lower-case `<registry>/<owner>/<name>`, optional `https://`; anything else logs `weights_mirror_invalid` and the mirror is treated as unconfigured. The tag is always the revision. |
 | `FORAGE_MIRROR_TOKEN` | none | unset | no | **yes** | `_resolve_mirror_token()`, acquisition; fed to `oras login --password-stdin` | Mirror leg skipped, the same shape as a missing `HF_TOKEN`. Third parties cannot read the mirror, so leave both unset. |
+
+### Container envelope (never read by Forage; Compose substitution only)
+
+| Variable | Default | Required | Secret | Effect |
+|---|---|---|---|---|
+| `FORAGE_CPUS` | `0` | no | no | Both fragments substitute service-level `cpus`; unset or `0` makes Compose omit the cap, exposing every host core. Non-zero quotas require explicit thread sizing in `config.yaml`. Below 1 vCPU is unsupported. |
+| `FORAGE_MEM_LIMIT` | `1024m` | no | no | Both fragments substitute `mem_limit` using Docker byte-unit syntax. Invalid syntax fails before startup; verify the applied ceiling with `/metrics` `extraction.cgroup_memory_max_bytes`. |
+
+Use Docker Compose v2 (Compose Spec; verified v2.40.3). Set these in `compose/.env`
+or the Compose process's environment, not the service's runtime environment;
+they do not belong in `tests/conftest.py`'s `_CLEARED_ENV_VARS`. Runtime tunables
+remain in a full-file bind-mounted `config.yaml`, with no env override for
+`promptguard_threads`. See
+[`docs/configuration.md` § Sizing the container](../../docs/configuration.md#sizing-the-container).
 
 ### Companion SearXNG container (never read by Forage)
 
@@ -70,7 +86,7 @@ Naming rule (`CLAUDE.md` invariant 1): the primary name of every Forage-specific
 
 ### Tests
 
-No test-only variables exist. `tests/conftest.py` autouse-clears `HF_TOKEN`, `HF_HOME`, `FORAGE_MODEL_REVISION`, `FORAGE_WEIGHTS_MIRROR`, `FORAGE_MIRROR_TOKEN`, `VALKEY_URL`, `FORAGE_SEARCH_PROVIDERS`, and `FORAGE_BRAVE_API_KEY` before every test and blocks the network. CI's `smoke` job runs the built image with **no environment at all** and asserts the degraded `/health` contract, so a token-less start is a tested mode, not an accident.
+No test-only variables exist. `tests/conftest.py` autouse-clears `HF_TOKEN`, `HF_HOME`, `FORAGE_MODEL_ID`, `FORAGE_MODEL_REVISION`, `FORAGE_WEIGHTS_MIRROR`, `FORAGE_MIRROR_TOKEN`, `VALKEY_URL`, `FORAGE_SEARCH_PROVIDERS`, `FORAGE_BRAVE_API_KEY`, and `FORAGE_CACHE_HMAC_KEY` before every test and blocks the network. CI's `smoke` job runs the built image with **no environment at all** and asserts the degraded `/health` contract, so a token-less start is a tested mode, not an accident.
 
 ---
 
@@ -78,20 +94,48 @@ No test-only variables exist. `tests/conftest.py` autouse-clears `HF_TOKEN`, `HF
 
 Loaded by `retrieval_app._load_config()` in the lifespan; a missing file logs a WARNING (`config.yaml not found at ...`) and every key falls to its code default. Override in a container with `-v "$PWD/config.yaml:/app/config.yaml:ro"`. The shipped file is not always the code default, so both columns are shown.
 
+Unknown keys are ignored with one boot WARNING `config_unknown_key — key=<dotted.name>`,
+never the value. The `KNOWN_CONFIG_KEYS` registry checks top-level names and one level
+inside registered blocks; an unknown block is named once, without walking its children.
+Invalid known bounds still refuse boot through their typed readers. The separate
+`config_invalid_value` exceptions are the fetch-route threshold, domain-list byte budget,
+and invalid operator domain entries; see the canonical reference for their fallbacks.
+
 ### Top-level keys
 
 | Key | Code default | Shipped | Type / range | Controls | Read site |
 |---|---|---|---|---|---|
 | `user_agents` | empty list | 5 desktop browser UAs | list of strings | Outbound User-Agent pool for stage-5 fetches; empty falls to `DEFAULT_USER_AGENTS` in `pipeline/stage5_url_audit.py` | `pipeline/orchestrator.py` line 294, per `/retrieve` |
-| `news_domains` | empty list | reuters.com, apnews.com, bbc.co.uk, nytimes.com, theguardian.com, cnn.com | list of strings | Cache TTL for exact-host matches capped at 1 h regardless of the caller's `cache_ttl_hours` | `pipeline/orchestrator.py` line 249, then `cache.py` line 171, per `/retrieve` |
-| `seed_blocklist` | empty list | empty list | list of strings | Merged into every request's `blocked_domains` before URL validation: the one deployment-wide trust setting. The trust-tier lists themselves (`trusted_domains`, `verified_domains`, `blocked_domains`) are per-request body fields, not config | `pipeline/orchestrator.py` line 236, per `/retrieve` |
-| `promptguard_threshold` | `0.85` | `0.85` | float, 0.0 to 1.0 | Stage-3 injection cutoff for `/extract`; also hashed into `sanitizer_revision`, so changing it rotates that value and invalidates the content cache by design | `retrieval_app.py` line 1474 (`/extract`, per request; a non-numeric or out-of-range value is rejected per request); `pipeline/sanitizer_revision.py` line 41 (start) |
+| `promptguard_threads` | `0` | `0` | integer, 0 to 16; invalid raises `PromptGuardThreadsConfigurationError` and refuses boot | `0` leaves torch's and the tokenizer's defaults (every visible core) untouched. For a positive value, use the actual CPU quota — `FORAGE_CPUS`, a Kubernetes limit, a host-level cgroup or an orchestrator's cap — because torch sees the host core count, not the quota. Pins torch intra-op threads and disables the tokenizer pool. Not a sanitizer-revision input, but latency can exhaust `promptguard_wait_seconds` and make a fail-open request serve unscanned content | `promptguard/classifier.py`'s `promptguard_threads_from_config()`, boot; `configure_threads()` retains it for each `load()` |
+| `news_domains` | empty list | .reuters.com, .apnews.com, .bbc.co.uk, .nytimes.com, .theguardian.com, .cnn.com | list of strings | Cache TTL capped at 1 h; bare entries match only themselves, leading-dot entries cover apex and subdomains. Upgrade: operator bare entries stay exact; shipped entries now opt in with a dot | `pipeline/orchestrator.py`, then `cache.py`, per `/retrieve`; normalised at boot |
+| `seed_blocklist` | empty list | empty list | list of strings | Merged operator-first with every request's `blocked_domains` on both `/retrieve` and `/search`; callers cannot evict entries. Fetch matches are refused; search matches are omitted as `blocked_url` before content scanning. The trust-tier lists themselves (`trusted_domains`, `verified_domains`) remain per-request `/retrieve` fields | `pipeline/orchestrator.py`, `run_retrieve_pipeline` and `run_search_pipeline` |
+| `promptguard_threshold` | `0.85` | `0.85` | float, 0.0 to 1.0; numeric strings accepted | Max-score rule only; server-side contiguity can block independently. Default on `/retrieve` and `/search` for null/omitted request values, then operator-capped; invalid (including bool) warns and falls back to 0.85. `/extract` keeps its raw `float()` and range guard, so YAML true still becomes 1.0 there only. Changing the raw value rotates `sanitizer_revision`; the resolved value also keys the content cache | `retrieval_app.promptguard_threshold_from_config` (boot), `_promptguard_policy_updates` (fetch handlers), `/extract` (per request); `pipeline/sanitizer_revision.py` (boot hash) |
+| `promptguard_contiguity_windows` | `0` | `0` | integer, 0 or 2–8; `1` and bool refuse boot | Server-only run rule on all three routes; disabled pending corpus measurements. `/search` coverage is content-dependent. Restart after changing; invalid raises `PromptGuardConfigurationError` | `pipeline.stage3_promptguard.promptguard_settings_from_config` once in lifespan; `pipeline/sanitizer_revision.py` hashes it after the max threshold |
+| `promptguard_contiguity_threshold` | `0.5` | `0.5` | number, 0.0–1.0; strings, bool and non-finite refuse boot | Absolute `>=` run threshold, independent of request max threshold; both rules apply. Validated even when off. See [opt-in recipe and residuals](../../docs/configuration.md#opting-in-to-contiguity-gating) | Same builder; hashed after contiguity windows |
+| `policy_domain_entries_max_bytes` | `65536` | `65536` | integer, 4096 to 1048576; invalid warns and falls back | Raw UTF-8 byte budget per caller domain list, including separators. `/retrieve` truncates allowlists and counts drops; an over-budget denylist is refused whole, 422 `content_too_large` / `policy_domain_list_too_large`. Bounds encode work, not JSON body admission | `retrieval_app.py` lifespan via `bounded_int`, published as `app.state.policy_domain_entries_max_bytes`; consumed by the handler |
 | `extract_route_enabled` | `false` | `false` | boolean (a non-boolean refuses boot) | Release gate: while `false`, `POST /extract` returns **404** from `ExtractionAdmissionMiddleware`. No authentication exists behind it | `pipeline/extraction_limits.py` line 100, start |
-| `search_brave_timeout_seconds` | `15.0` | `15.0` | float, 1.0 to 60.0 (wrong-typed or out-of-range refuses boot) | Per-request timeout for the Brave LLM-Context HTTP call — `/search`'s worst-case latency on a Brave-only chain until spec 3's fallback exists | `pipeline/search_providers/brave.py`'s `brave_settings_from_config()`, start |
+| `search_promptguard_latency_target_ms` | `1000` | `1000` | integer, 100 to 60000; invalid raises `SearchTargetsConfigurationError` and refuses boot | Observational target for the per-result sanitization loop: structural scan, PromptGuard and any semaphore wait. Strict overruns increment `search.promptguard_latency_target_exceeded`; the maximum is `search.sanitization_latency_max_ms`. Compare only at the same `num_results` (1–20). Not a deadline or revision input; restart to apply | `pipeline/search_targets.py`'s `search_targets_from_config()`, boot; `/search` passes `app.state.search_targets` to the pipeline |
+| `search_first_token_target_ms` | `5000` | `5000` | integer, 100 to 120000; invalid raises `SearchTargetsConfigurationError` and refuses boot | Log-only today: the complete/overrun log payloads, no counter comparison or deadline. Not a revision input; restart to apply | Same reader and handler as the sanitization target |
+| `promptguard_fail_closed_floor` | `false` | `false` | boolean; wrong type refuses boot | `/retrieve` and `/search` apply `request.promptguard_fail_closed or floor` and report the result on every 200; trusted-tier skip and VERIFIED fail-open remain exempt | `pipeline/retrieve_limits.py` `retrieve_settings_from_config()`, start; `retrieval_app.py` `_promptguard_policy_updates()`, per request |
+| `promptguard_threshold_ceiling` | `1.0` | `1.0` | finite number, 0.0 to 1.0; invalid refuses boot | Both fetch routes apply `min(resolved threshold, ceiling)` after selecting the explicit request value or configured default, and report it on every 200; `/extract` is unchanged | Same reader and handler helper as the floor; config.yaml-only, see [delivery and scope](../../docs/configuration.md#top-level-promptguard-policy-keys) |
+| `search_brave_timeout_seconds` | `15.0` | `15.0` | float, 1.0 to 60.0 (wrong-typed or out-of-range refuses boot) | Wall-clock budget for connect, headers and body together, not parse or sanitization. An N-provider chain can spend the sum of its budgets. Raise it for a slow Brave instance; raise `search_searxng_timeout_seconds` for a slow SearXNG. Defaults are unchanged but now bound the whole interaction, not each socket operation. | `pipeline/search_providers/brave.py`'s `brave_settings_from_config()`, start |
 | `search_brave_chunk_max_chars` | `2000` | `2000` | integer, 200 to 2000 (wrong-typed or out-of-range refuses boot) | Cap on each Brave result's extracted-chunk text before it reaches sanitization | `pipeline/search_providers/brave.py`'s `brave_settings_from_config()`, start |
+| `search_searxng_timeout_seconds` | `10.0` | `10.0` | float, 1.0 to 60.0 (wrong-typed or out-of-range refuses boot with `SearxngConfigurationError`) | Wall-clock budget for connect, headers and body together; the chain may spend the sum of its budgets. Raise `search_searxng_timeout_seconds` for a slow instance: the unchanged default is tighter than per-socket-operation timing, and a formerly working four-engine fan-out can now time out and buy a paid call. No fan-out latency distribution has been measured; watch `search.provider_timeouts`. | `pipeline/search_providers/searxng.py`'s `searxng_settings_from_config()`, start, even without SearXNG in the chain |
+| `search_searxng_query_max_chars` | `400` | `400` | integer, 50 to 400 (wrong-typed or out-of-range refuses boot with `SearxngConfigurationError`) | Cap on the outbound query only: results reflect the first N characters; the echoed `query` is the caller's. Truncation is deliberately unobservable (no flag, counter or log); diagnose by comparing query length with the cap. Restart to apply changes. | `pipeline/search_providers/searxng.py`'s `searxng_settings_from_config()`, start, even without SearXNG in the chain |
 | `search_brave_query_max_chars` | `400` | `400` | integer, 50 to 400 (wrong-typed or out-of-range refuses boot) | Cap on the outbound query text sent to Brave | `pipeline/search_providers/brave.py`'s `brave_settings_from_config()`, start |
 
-Observation, not a decision: `/retrieve` scans at the request body's own `promptguard_threshold` field (default 0.85) and `/search` passes no threshold at all, so `/search` always scans at the hard default 0.85 even after an operator changes this key. Only `/extract` honours the config value (`kit_tools/arch/SECURITY.md`, "Observation: `/search` scans at the hard default").
+Forage sets `TOKENIZERS_PARALLELISM=false` at load time when `promptguard_threads > 0`,
+overriding whatever the operator set; `0` writes nothing.
+
+Domain lists use canonical UTS-46 names: denylist `evil.com` covers `www.evil.com`,
+never `notevil.com`; allowlist `example.com` matches only itself and `.example.com`
+adds every subdomain. IP literals and single-label denylist entries match only themselves;
+single-label allowlists are invalid. Config lists are normalised at boot without a budget,
+with one `config_invalid_value` WARNING per list naming invalid entries.
+
+Upgrade note: a configured threshold above 0.85 now loosens both fetch routes unless
+the ceiling bounds it; below 0.85 tightens both. See the canonical configuration row
+for the raw `/extract` boolean divergence and the cache re-key.
 
 ### `cache:` block
 
@@ -101,10 +145,15 @@ Validated at start by `cache.cache_settings_from_config()` **regardless of backe
 |---|---|---|---|---|
 | `cache.max_entries` | `256` | `256` | 1 to 4096 | Entries held by `InMemoryStorage` (expired-first, then LRU eviction) |
 | `cache.max_bytes` | `33554432` (32 MiB) | `33554432` | 1 MiB to 128 MiB | Serialised bytes held in memory; a single larger response is served uncached and counted in `cache.storage_oversize_skips` |
+| `cache.max_value_bytes` | `4194304` (4 MiB) | `4194304` | 512 KiB to 8 MiB | Per-value UTF-8 bytes, including envelope, on both backends; one atomic bounded Valkey read. Above `cache.max_bytes` warns but boots. Keep equal across replicas; lowering it can reject old writes. See the canonical configuration reference for aggregate memory sizing. |
+
+`VALKEY_URL` query keys `decode_responses`, `encoding`, `encoding_errors` and
+`protocol` are forbidden at construction, with one key-only WARNING before boot
+refusal. Remove them before upgrading; socket timeout options remain tunable.
 
 ### `extraction:` block
 
-Validated at start by `pipeline.extraction_limits.extraction_settings_from_config()`; a non-integer, boolean, or out-of-range value raises `ExtractionConfigurationError` and the boot is refused. Shipped values equal the maxima, so these knobs can only tighten.
+Validated at start by `pipeline.extraction_limits.extraction_settings_from_config()`; a non-integer, boolean, or out-of-range value raises `ExtractionConfigurationError` and the boot is refused. Shipped values equal the maxima except three keys that may be raised: `classification_concurrency` (1–8, under the memory rule), `child_address_space_bytes` (128–512 MiB — a sandbox limit: raising it widens the untrusted-PDF child's `RLIMIT_AS`) and `admission_queue_depth` (0–4).
 
 | Key | Code default = shipped | Allowed range | Controls |
 |---|---|---|---|
@@ -115,9 +164,21 @@ Validated at start by `pipeline.extraction_limits.extraction_settings_from_confi
 | `wall_clock_seconds` | `90` | 1 to 90 | Whole-extraction wall budget |
 | `max_promptguard_chunks` | `64` | 1 to 64 | Stage-3 chunk budget; derives the 114,688 classifiable-character ceiling |
 | `extraction_concurrency` | `1` | 1 to 1 | Pinned; the memory envelope assumes one worker |
-| `classification_concurrency` | `1` | 1 to 1 | Pinned, same reason |
+| `classification_concurrency` | `1` | 1 to 8 | Bounds the shared classification semaphore on `/extract`, `/retrieve` and `/search` (fetch routes since spec 2 US-006). Memory rule: container limit ≥ `PARENT_RESERVATION_BYTES + CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[model_id] + classification_concurrency × PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES + extraction_concurrency × child_address_space_bytes + cache_term_bytes`. Overcommitting can cause an OOM kill, which `/health` cannot report; boot warns `envelope_memory_rule_unmet` if the readable cgroup limit is below the rule. Not a sanitizer-revision input, but latency can exhaust `promptguard_wait_seconds` and make a fail-open request serve unscanned content. See the rule below and `docs/configuration.md` § Sizing the container (US-003) |
 | `admission_queue_depth` | `1` | 0 to 4 | Requests that may wait for the slot; `0` means immediate `busy` (429) |
 | `max_queued_upload_bytes` | `52428800` (50 MiB) | 0 to 50 MiB | Bytes of queued uploads held in flight; `0` disables queuing |
+
+The parent reservation is **512 MiB with the 22M model resident and no classification
+in flight**; that model's resident delta is `0`. The working-set coefficient is
+**provisional 64 MiB, not measured**: `1024 − 512 − 384 − 32 = 96 MiB` residual,
+less a retained 32 MiB margin. Spec 7 measures the marginal classification RSS and
+each model's idle resident delta before enabling a second model. The child term
+reads the configured `child_address_space_bytes`, not the shipped literal.
+`cache_term_bytes` is `cache.max_bytes` in memory mode and `cache.max_value_bytes`
+under Valkey (one in-flight bounded read). Shipped totals are 992 / 964 MiB,
+leaving 32 / 60 MiB below 1 GiB. This advisory is not a peak-RSS guarantee.
+Equality or an unreadable/unlimited cgroup limit is silent; under-sizing warns once
+with model, backend and all term values, never refuses boot.
 
 ---
 
@@ -159,10 +220,10 @@ Rules: `.env` and `compose/.env` are gitignored and must stay uncommitted (GitHu
 - **Secrets never enter the image build.** No `ARG`, ever, and no `ENV` with a secret-shaped name; both are tested. Poppy's `services/retrieval/Dockerfile` still carries `ARG HF_TOKEN` and must never be pushed.
 - **`HF_HUB_OFFLINE=1` in the environment does nothing at runtime.** `huggingface_hub` samples it once at import; `model_fetcher._offline_hub()` flips the constant in-process for the load path only.
 - **Break-glass arms on the exact string `1`.** `true`, `yes`, and `0` do not arm it. Both names are checked; the WARNING names whichever armed it.
-- **`FORAGE_MODEL_REVISION` refuses branch names.** A movable `main` would turn the next upstream commit into "corruption"; only a 40-hex sha is accepted, and a bad value falls back to the pin with an ERROR that never echoes it.
+- **`FORAGE_MODEL_REVISION` is not a way around the per-model manifest.** A malformed value falls back with `model_revision_invalid`; a shaped non-pin refuses before a snapshot lookup (`weights_revision_unpinned`). Only the default model has the `DEFAULT_MODEL_REVISION` fallback on an unreadable manifest, preserving its hash with one WARNING; an unknown model resolves to `unpinned` and acquisition refuses `manifest_model_unknown`.
 - **`FORAGE_WEIGHTS_MIRROR` points at a private mirror.** Without `FORAGE_MIRROR_TOKEN` the leg is skipped; with a token that cannot read it, `pull_failed`. Third parties: leave both unset and use `HF_TOKEN`.
 - **`config.yaml` validation refuses boot; a missing file does not.** A bad `cache.*` or `extraction.*` value fails the start with a `ValueError` subclass; an absent file logs one WARNING and runs on code defaults, which differ from the shipped file for `user_agents` and `news_domains`.
-- **`/search` ignores `promptguard_threshold`.** See the observation under the top-level keys.
+- **`/extract` reads the raw threshold.** A YAML boolean `true` becomes 1.0 there only; the fetch routes reject it at boot with a warning and use 0.85.
 - **INFO logs are invisible.** Nothing calls `logging.basicConfig()`, so the weights success narrative never reaches `docker logs`; watch `/metrics` (`model.fetch_in_progress`, `model.retries_scheduled`) instead.
 - **`SEARXNG_LIMITER=true` breaks `/search`.** The limiter 429s Forage's own client on the first request. `SEARXNG_VALKEY_URL` is not the content cache's Valkey; do not wire it to `full.yml`'s `valkey` service.
 - **`docker inspect` prints the whole environment.** An env file keeps a password out of shell history and `ps`, not out of the Docker socket; restrict socket access accordingly.

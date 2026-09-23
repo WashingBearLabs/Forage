@@ -33,8 +33,7 @@ be credited in the advisory unless you ask not to be.
 | The most recent release | **yes** — fixes ship as a new tag |
 | Anything older | no — no backports, no patch branches |
 
-Pre-1.0 (where the project is today) that means **the latest release only**, release
-candidates included. From `1.0.0` onward it means **the latest minor of the current major**:
+Post-1.0, support covers **the latest release only** on **the latest minor of the current major**:
 a fix lands on the newest minor and the upgrade path is forward, not sideways.
 
 Release tags, the pre-release policy and what a green publish does and does not prove are

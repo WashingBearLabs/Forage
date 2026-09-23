@@ -17,6 +17,132 @@ Every non-pre-release tag, newest first. The `contract:`, `anchor:`, `index dige
 into `kit_tools/specs/feature-search-release.md`'s Implementation Notes — that table is what
 the Poppy `epic-search-policy` session reads to pin a digest; nothing here pushes to Poppy.
 
+### v1.2.0 — (date filled by US-005)
+
+NOT YET PUBLISHED — filled by US-005
+
+- contract: 1.3.0
+- anchor: `74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72`
+- index digest: (filled at the cut)
+- tagged commit: (filled at the cut)
+
+Compose is pinned ahead of the cut; the tag lands with `v1.2.0`.
+The recorded index digest is the **pinnable form**
+(`ghcr.io/washingbearlabs/forage@sha256:…`) for deployments that need
+immutability; the full-semver tag pin remains the quickstart default.
+
+**Outstanding unpublished-tag window:** merging the completion PR makes `main`'s
+quickstart pull an unpublished tag until the owner runs US-003. Cut from that
+merge commit in the same sitting; if the gate is not run, use
+`git revert <US-004 pin commit>` before leaving that window open. The gate-not-run
+record in the release spec's Implementation Notes identifies the exact commit.
+The completion PR description must carry the same outstanding item; neither
+publication nor post-release verification is complete.
+
+What shipped (draft, pending the owner cut):
+
+- Search scans both newline-preserving and whitespace-collapsed title/snippet
+  forms, truncating after extraction; escaped injection-shaped markup is blocked
+  rather than stripped and served. URL auditing rejects malformed, private and
+  blocked hosts before content scanning, with `blocked_url` in
+  `omitted_by_reason`. `domain` is canonical ASCII/UTS-46 while `url` retains
+  provider spelling; `engine` is NFC-normalised and bounded to 64 characters
+  but remains outside structural/PromptGuard scanning.
+- Fetch routes refuse private-IPv4-embedding IPv6 forms and `.localhost` names
+  as `private_ip`. Directional hostname policy gives bare allowlists exact
+  matching and leading-dot allowlists apex-plus-subdomain matching; multi-label
+  denylists cover subdomains, but IP literals and single-label entries remain
+  exact. Private-name rejection precedes caller denylists.
+- `/retrieve` gains bounded admission (`busy` / `admission_queue_full`, 422,
+  not `/extract`'s 429), off-event-loop extraction and cancellation-safe worker
+  ownership. Fetched PDFs use the rlimited worker; former 500s become
+  `extraction_failed` with `pdf_encrypted`, `pdf_no_text`,
+  `pdf_extraction_error` or `pdf_spool_error`. PDF chunk overflows use
+  `content_too_large` / `promptguard_budget`.
+- The page-level `retrieve.max_promptguard_chunks` budget ships at `0` for
+  this compatibility window, warning `retrieve_budget_unset`; the next MINOR
+  defaults to `256`, with `0` retained as an explicit opt-out.
+- Both fetch responses report `effective_promptguard_fail_closed` and
+  `effective_promptguard_threshold` on every 200, including cache hits.
+  Omitted/null thresholds use the validated configured default (shipped 0.85)
+  before the operator ceiling. The fail-closed floor does not override trusted
+  classification skips or VERIFIED unavailable fail-open; `/extract` stays
+  fail-closed and gains neither response field.
+- Search accepts `blocked_domains` after the operator seed list without
+  triggering paid fallback. Oversized denylists are refused whole with
+  `policy_domain_list_too_large` (`content_too_large` on retrieve,
+  `search_unavailable` on search), non-retryable without changing policy;
+  allowlists drop their over-budget tail. Leading-dot trust must never name
+  a multi-tenant apex.
+- Classification waits are bounded; search can mix scanned and unscanned
+  results in one response. With `promptguard_unavailable: true`, treat
+  `suspicious` results as unscanned rather than scanned-and-flagged. Paid
+  selection retains only the named paid prefix; later-paid-only selection on
+  an all-paid chain yields `policy_excluded_all_providers` (not reachable with
+  today's single registered paid backend).
+- Cached JSON/schema failures become counted misses. Valkey reads and writes
+  are bounded and optionally HMAC-authenticated with key binding.
+  **Upgrade action:** every external-Valkey deployment sets
+  `FORAGE_CACHE_HMAC_KEY` to a **high-entropy, per-deployment** value; without it
+  cached content is served unsigned and `/health` reports
+  `cache_unauthenticated`. Follow the
+  [generation and rotation procedure](configuration.md#credential-handling-for-forage_cache_hmac_key),
+  not a verification placeholder. Stop every replica, change the key, then
+  start; do not mix keyed/keyless replicas or rotate one at a time.
+- `/health.capabilities.cache_hmac_key` reports boot-enabled Valkey signing
+  independently of connectivity (absent in memory mode); `promptguard_model`
+  reports the configured model even while unloaded. Model selection is wired,
+  but **the allowlist still contains only 22M**: the 86M vendoring and benchmark
+  owner gates have not run. The optional consecutive-window contiguity rule
+  ships disabled and can block independently of the caller's max threshold.
+- Compose exposes CPU/memory tuning and a status-only liveness probe:
+  Docker-healthy does not imply loaded weights, and Compose does not restart
+  on an unhealthy probe. Search latency targets are observational, not deadlines.
+- `/metrics` adds `retrieve.classification_wait_timeouts`,
+  `search.classification_wait_timeouts`, `retrieve.semaphore_saturation`,
+  `retrieve.busy_rejections`, both routes' `policy_invalid_domain_entry` and
+  `policy_suffix_trusted_skip` (search's suffix counter stays zero),
+  `cache.corrupt_entries`, `cache.integrity_rejects`,
+  `search.provider_compressed_body`, `search.provider_timeouts`,
+  `search.promptguard_latency_target_exceeded`,
+  `search.sanitization_latency_max_ms`, and `promptguard_contiguity_detections`
+  in retrieve/search/extraction. `cache.storage_oversize_skips` keeps its
+  meaning but now counts write-side refusals on both backends. The latency
+  maximum covers the whole result loop, not one semaphore wait.
+- Request-validation 422s no longer echo caller content; the cap and one-MINOR
+  placeholder window below are the consumer migration. Pipeline refusals
+  remain unchanged.
+
+**Request-validation 422 compatibility window (contract 1.3.0):**
+`/search`, `/retrieve` and enabled `/extract` now return at most
+`_MAX_VALIDATION_ERRORS` (100) entries with content-free `loc`, `msg`, `type`.
+`input`/`ctx`/`url` carry `"[redacted]"` in contract 1.3.0 and are dropped at the
+next MINOR; consumers reading `detail[].input` must stop. The one-minor-release
+window preserves key presence, not the old values or `ctx`'s mapping type.
+This is an expedited MINOR under Example 6 step 1, with a second MINOR for
+the drop of description-admitted, never-declared keys (GOVERNANCE ruling (l)).
+Delete `_VALIDATION_PLACEHOLDER`, `_VALIDATION_WINDOW_KEYS` and the tests'
+`_strip_window_keys` helper with those keys. Pipeline refusals, including
+`/retrieve`'s private-IP `reason`, are unchanged. The cap bounds response
+entries only: large requests are still fully parsed.
+
+**Upgrade actions:** Search provider timeouts now bound the **whole HTTP interaction**
+(connect, headers and body), rather than each socket operation separately; their
+values are unchanged (SearXNG 10.0 seconds, Brave 15.0 seconds). A previously working
+slow SearXNG may now produce a 422 `searxng_unavailable` ending in `: timeout` on
+the default chain, or a `searxng: timeout` `provider_errors` entry **with a paid call**
+on `[searxng, brave]`. Read `search.provider_timeouts` and raise
+`search_searxng_timeout_seconds` for such an instance. No four-engine fan-out latency
+distribution has been measured; parsing, sanitization and classification remain
+outside the budgets. The chain has no overall deadline.
+
+Both providers request `Accept-Encoding: identity` but serve bounded gzip and
+deflate replies from a compressing proxy. `search.provider_compressed_body` counts
+every non-identity response header, including failed replies; `unsupported_encoding`
+means this build cannot decode it. On a configured `[searxng]`-only chain this new
+closed token can appear in the 422 reason; Brave's detail remains log-only.
+Contract 1.3.0 adds these two counters without changing `SearchResponse`.
+
 ### v1.1.0 — 2026-09-18
 
 - contract: 1.2.0
@@ -120,6 +246,31 @@ release gates into wishful thinking.
 
 A tag pushed onto a red tree still *runs* the gates. They fail, and `publish`
 never starts.
+
+**The contract 1.3.0 window is closed; publication is still pending.**
+`hardening-release` US-002 froze the six-model
+`tests/golden/contract_1_3_0.json` and `_EXPECTED_ONE_THREE_ZERO_DIFF`.
+The exact-additions sweep and the release-entry completeness/tense guards run
+in the hermetic suite. Historical goldens remain untouched; no further
+in-place regeneration is permitted. That freeze is not authorization to cut
+a tag: US-003's owner gate and its full-suite pre-flight still apply.
+
+**The `retrieve.max_promptguard_chunks` compatibility window.** The release that ships
+contract `1.3.0` keeps that key's default at **`0`** — no pre-check on `/retrieve`, exactly
+the behaviour that shipped before the key existed — and boot logs one WARNING,
+`retrieve_budget_unset coming_default=256`. The **next MINOR** flips the default to `256`;
+`0` remains a legal, documented opt-out after the flip, so no MAJOR is ever cut for it.
+That is worked example 6 step 1 with the window named, and it belongs in this release's
+Release body as well as here (`contract/GOVERNANCE.md` ruling (g)).
+
+**Consumer note for the pending hardening release (spec 8 handoff).** From
+`hardening-retrieve-parity`, a caller sending `promptguard_fail_closed: false` is
+exposed to an unscanned-but-marked response whenever the classification permit is
+contended for longer than `promptguard_wait_seconds`, signalled by `promptguard_state`
+on `/retrieve` and `suspicious` / `promptguard_unavailable` / `unscanned_results` on
+`/search`; `promptguard_fail_closed_floor: true` is the operator-side control
+(`config.yaml`-only until spec 6's bind-mount procedure), bounding the flag but not
+the caller's trusted-tier skip or VERIFIED fail-open exemption.
 
 ## Architectures
 
@@ -261,6 +412,73 @@ Release rather than a missing one.
 extracted locally from the tagged tree (`git show "$TAG":pipeline/contract.py`
 through the same `awk` program) so the Release carries it verbatim — or
 deleting the Release and re-running the job.
+
+### Cache-integrity upgrade note for the pending hardening release
+
+**Spec 8 Release-body handoff:** `/metrics.cache` gains `integrity_rejects`.
+`storage_oversize_skips` keeps its meaning but can now rise on Valkey as well
+as memory, at the new `cache.max_value_bytes` bound (4 MiB by default).
+No published contract golden is changed; these additions ride the held 1.3.0
+window. The revision rotation orphans old cache keys.
+
+Remove `decode_responses`, `encoding`, `encoding_errors` and `protocol` from
+`VALKEY_URL` query options before upgrading: their presence now refuses boot
+with a key-only diagnostic, because they can break byte-bounded reads.
+Socket timeout tuning remains allowed. Use the same byte bound across all
+replicas sharing Valkey; lowering it can reject past larger writes as
+`oversize`, which is not by itself tampering. See
+[`configuration.md`](configuration.md#the-cache-block) for the memory-sizing
+relationship. The constructor-level HMAC machinery lands in US-001;
+environment-key wiring and keyless-Valkey health reporting follow in US-002.
+
+### Domain-list upgrade note for the pending hardening release
+
+**Spec 8 Release-body handoff, the 1.3.0 window:** existing multi-label
+`blocked_domains` and `seed_blocklist` entries now cover subdomains; review apex
+entries before upgrading, because a multi-tenant apex removes every tenant.
+Single-label entries keep matching exactly as before. Bare allowlist entries
+stay exact; add a leading dot to opt into the apex and all subdomains. The six
+shipped `news_domains` entries now opt in, so `www.bbc.co.uk` gets the one-hour TTL.
+Canonical private-name rejection precedes caller denylists (`blocked_domain` →
+`private_ip` when both match). GOVERNANCE ruling (h) records the explicit
+Example 6 exception; this paragraph is the upgrade announcement, not a claim
+that an opt-in compatibility window was implemented.
+
+US-007 adds a **64 KiB raw UTF-8 budget per caller domain list**, configurable
+with `policy_domain_entries_max_bytes` (4 KiB–1 MiB). `/retrieve` refuses an
+oversized `blocked_domains` list whole with 422 `content_too_large` and reason
+`policy_domain_list_too_large`; retrying unchanged cannot help. Allowlists keep
+their in-budget prefix, counting invalid entries and over-budget remainders on
+`retrieve.policy_invalid_domain_entry`. The operator's denylist cannot be evicted.
+`retrieve.policy_suffix_trusted_skip` measures wildcard trusted **and verified**
+resolutions; both corresponding `search.*` counters are also declared, with
+search drop increments enabled by US-002 and suffix skips permanently zero.
+Consumer-size evidence available in this checkout: **none** (no production
+request capture); the default is the specified configurable bound, not a claim
+about measured production headroom. This bounds encode work, not request-body
+admission.
+
+US-002 adds optional `/search` `blocked_domains`, merged after the operator's
+`seed_blocklist` using the same directional hostname semantics as `/retrieve`.
+Matching results are omitted whole as `blocked_url` before content scanning,
+without firing paid fallback even when no result survives. This closes the
+previous search bypass of an operator's existing seed policy. Invalid caller
+entries increment `search.policy_invalid_domain_entry`; an over-budget list is
+refused whole as 422 `search_unavailable` / `policy_domain_list_too_large`.
+Like `policy_excluded_all_providers`, that reason is a permanent client error,
+not retryable unchanged. The baseline for callers sending neither new field,
+with the shipped empty seed list, remains unchanged.
+
+US-005 adds optional `/search` `promptguard_threshold` and reports
+`effective_promptguard_threshold` on every search 200. Both fetch routes now
+interpret null/omitted threshold as the validated `config.yaml` default, then
+cap it with `promptguard_threshold_ceiling`. Shipped 0.85 behavior is unchanged.
+**Upgrade in both directions:** a key raised above 0.85 to quiet upload false
+positives now **loosens** `/retrieve` and `/search` blocking unless capped; below
+0.85 **tightens** them. The old upload-only config knob is gone and the content
+cache re-keys. Invalid defaults warn and fall back to 0.85 on the fetch routes,
+but `/extract` retains its raw guard, including YAML `true` becoming 1.0.
+Consumers should use the effective field as policy, not proof of scanning.
 
 ### The Release carries the contract itself
 

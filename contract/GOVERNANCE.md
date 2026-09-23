@@ -26,7 +26,7 @@ response, and does every name it already knows still mean what it meant?
 | Schema fixtures | `tests/golden/contract_X_Y_Z.json` | by hand, one per contract version |
 | What the running service serves | `/openapi.json` `info.version`, `/health`'s `contract_version` | from `CONTRACT_VERSION` at import |
 
-The current contract version is **1.2.0**. *(That sentence is checked against
+The current contract version is **1.3.0**. *(That sentence is checked against
 `pipeline/contract.py` by `tests/test_governance_docs.py`; a bump that leaves it stale is
 a red test, not a stale doc.)*
 
@@ -59,12 +59,13 @@ publishing a frozen, sha256-anchored contract for the first time, and a contract
 **US-004**, whose job it is to land the in-image `COPY` and the Release assets first; a
 `v1.0.0` tagged before them would ship a contract-less release that nothing can re-cut.)
 
-The mapping has moved once since, and is currently **pending**:
-`search-provider-abstraction` US-004 bumps `CONTRACT_VERSION` to `1.2.0` in the tree, and
-the image that serves it is `v1.1.0`, cut by that epic's release spec. Until then a
-process built from this tree reports `1.2.0` on `/health` while no published image
-advertises it — expected, not drift to chase, and it closes the way the first one did:
-the release spec lands the artifacts, then cuts the tag.
+`v1.1.0` shipped on **2026-09-18**, serving contract `1.2.0`.
+The next mapping is **pending**: image `v1.2.0` will serve contract `1.3.0`,
+whose window opened in `hardening-search-sanitization` US-004 and is frozen by
+`hardening-release` US-002. No published image serves `1.3.0` yet.
+`hardening-release` US-003 owns the release cut; US-005 records the publication
+date here after verification. A process built from this tree reports `1.3.0`
+on `/health` — expected, not drift to chase.
 
 A human line in a release note claiming "this image serves contract 1.1.0" would be the
 last unmechanized integrity claim in the release path, so it is not a human line. The
@@ -171,7 +172,8 @@ An urgent fix does not get to skip the rules; it gets a faster lane through them
 
 ## Recorded rulings
 
-Five rulings this epic already made, kept here so the next change re-reads them instead of
+Thirteen rulings — five from `feature-forage-contract`, eight from
+`epic-forage-hardening` — kept here so the next change re-reads them instead of
 re-litigating them. Each cites its source.
 
 ### (a) The documentation pass does not bump the contract
@@ -257,13 +259,16 @@ regenerates the *current* fixture (ruling (a)); a wire change adds a **new** fil
 
 **The current version's own fixture is regenerated in place until that version ships.**
 Retention is about *published* contracts: a version nobody can pull is not yet a thing a
-consumer could have been written against. So while `1.2.0` is in the tree but unpublished
-— across `search-provider-abstraction` specs 2-4, until the `v1.1.0` image publishes it —
-`contract_1_2_0.json` is rewritten by each story that moves the shape, exactly as a
-documentation-only change rewrites the current fixture under ruling (a). The moment an
-image serves a version, its fixture freezes like every other. This is not a seventh worked
-example and adds no row to the table below (`test_there_are_exactly_six`); it is a
-qualification of *when* this ruling starts applying to a given file.
+consumer could have been written against. `1.2.0` went through exactly this window across
+`search-provider-abstraction` specs 2-4, with `contract_1_2_0.json` rewritten by each
+story that moved the shape, exactly as a documentation-only change rewrites the current
+fixture under ruling (a) — and froze the moment `v1.1.0` published it.
+**`contract_1_3_0.json` is now frozen**, ahead of the release cut, by
+`hardening-release` US-002. Its window opened in `hardening-search-sanitization`
+US-004 and allowed in-place regeneration only through that close-out. Later
+shape or description changes require a new version and a new golden, never an
+edit to this one. This is not a seventh worked example and adds no row to the
+table below (`test_there_are_exactly_six`); it qualifies *when* retention starts.
 
 **Source:** `kit_tools/specs/archive/feature-forage-contract.md`, US-003 *Implementation Hints*
 ruling (c); the fixture semantics are recorded in US-001 *Implementation Notes* and
@@ -291,6 +296,44 @@ zero-wire-byte epic.
 ruling (d) (round-2 security note); the emission path is `url_validator.py:174` →
 `pipeline/orchestrator.py`'s `private_ip` raise sites. Repeated for reporters in
 [`SECURITY.md`](../SECURITY.md).
+
+### (e) Bounding and normalising an unexamined pass-through field is additive-behavioural, not PATCH
+
+**Ruling:** routing `SearchResult.engine` through the same normalisation as `title` and
+`snippet` — NFC, C0/C1 control deletion, whitespace-run collapse — and truncating it to 64
+characters is a **MINOR**, not a PATCH, even though nothing about it adds a field or an
+enum member.
+
+**Why PATCH does not fit.** This document's PATCH row is scoped to "the published document
+moves but the wire does not" — a description fix, a tightened annotation, a schema render
+that changes with no served byte moving. `engine` fails that test on inspection: before this
+change it was a bare `isinstance(engine, str)` pass-through with no cap and no
+normalisation, so a provider-asserted value over 64 characters, or carrying a control
+character, a decomposed Unicode form, or a run of whitespace, now serves differently than it
+did — four distinct emitted-value moves (truncation past 64, NFC normalisation, control and
+whitespace normalisation, and an empty-after-normalisation value serving as `null` where an
+unexamined `""` served before). A `maxLength: 64` annotation is not the only thing that
+moved; real response bytes did too, on inputs well under the old (nonexistent) bound.
+
+**Why it is additive rather than breaking.** No existing consumer read anything out of
+`engine` that this change removes or renames, and every value the field can still take was
+already a legal value of the old, wider type (`str | None`). A consumer that stored the raw
+value verbatim sees a narrower one for a minority of inputs; a consumer that did nothing
+with it is unaffected. That is the MINOR row's "new response field" case, restated for a
+field whose *shape* is unchanged but whose *emitted values* have moved for the first time —
+the same class as ruling (b), but a behavioural narrowing on an existing field rather than a
+new vocabulary member, so it does not carry ruling (b)'s announcement obligation.
+
+**What does not change.** `engine` remains outside Stage 2's structural scan and outside the
+Stage 3 PromptGuard input — it is provider-controlled provenance metadata, not page content
+a result's website controls, and this rotation does not add scanning. The residual is
+recorded in [`kit_tools/arch/SECURITY.md`](../kit_tools/arch/SECURITY.md)'s
+documented-non-vulnerabilities row.
+
+**Source:** `kit_tools/specs/feature-hardening-search-sanitization.md`, US-004 *Implementation
+Hints* ("The `engine` bound"); the normalisation function is
+`pipeline/orchestrator.py::_normalize_search_text`, already applied to
+`unresponsive_engines` under `_MAX_UNRESPONSIVE_ENGINE_LENGTH`.
 
 ---
 
@@ -389,3 +432,265 @@ statement. `sanitizer_revision` has deliberately diverged between Forage and Pop
 in-tree copy and says nothing about wire compatibility. The **image tag** is not a
 compatibility statement either — image `v1.0.0` serves contract `1.1.0`, and the two move
 for different reasons ("Two semvers", above).
+
+### (f) The search audit's fetch-time narrowing is an expedited MINOR
+
+**Source:** `hardening-search-sanitization` US-003.
+
+**Ruling:** `/retrieve` and `/extract` stop accepting two classes of URL they accepted
+before — an IPv6 literal that *embeds* a private IPv4 (6to4 `2002:7f00:1::`, Teredo
+`2001:0:0:0::80ff:fffe`, NAT64 `64:ff9b::a00:1`, IPv4-compatible `::127.0.0.1`), and any
+name under the `.localhost` suffix (`api.localhost`). Each is now refused 422 `private_ip`
+where it was fetched. This ships as an **expedited MINOR** inside the open `1.3.0` window,
+with **no compatibility window**.
+
+**Why it is not the MAJOR the table says.** The table's "an accepted request value stops
+being accepted" row exists to protect a consumer whose working request suddenly breaks. The
+values being withdrawn here are exactly the SSRF vectors the row's own security carve-out
+(worked example 6) names: an IPv6 literal that embeds a private IPv4 *is* the private IPv4
+request, spelled so the guard did not recognise it, and `api.localhost` is `localhost` with
+a label prepended — RFC 6761 §6.3 reserves the whole domain for loopback. No legitimate
+consumer fetch names one of these; a consumer that does is the request the guard was always
+meant to refuse. Worked example 6 routes precisely this to an expedited MINOR.
+
+**Why no compatibility window.** A compatibility window means continuing to serve the
+vulnerable behaviour for a named period. For a documentation change that is cheap; for an
+SSRF bypass it is the vulnerability, on purpose, for longer. The narrowing is announced
+instead: the `1.3.0` docstring entry in `pipeline/contract.py` names both tightenings, and
+`kit_tools/docs/TROUBLESHOOTING.md`'s `private_ip` row enumerates the newly refused classes
+so an operator reading a 422 finds the reason rather than guessing.
+
+**Scope.** One ruling, two tightenings — the embedded-address classes and the `.localhost`
+suffix — because they are the same argument applied to an address and to a name. The
+prefix guards are part of the ruling: the NAT64 and IPv4-compatible unwraps only fire
+inside `64:ff9b::/96` and `::/96`, because an unguarded low-32 mask would refuse ordinary
+public IPv6 (a real Google AAAA, `2a00:1450:4001:80e::200e`, masks to `0.0.32.14`) and
+*that* would be a MAJOR-shaped break on legitimate traffic.
+
+### (g) A security tightening that arrives as a new refusal condition on an accepting route
+
+**Source:** `hardening-retrieve-parity` US-001.
+
+**Ruling:** `/retrieve`'s `content_too_large` gains a second `reason`, the fixed literal
+`promptguard_budget` (`pipeline/contract.py`). With `retrieve.max_promptguard_chunks` set,
+a fetched page whose extracted text exceeds the derived character ceiling is refused rather
+than chunked and classified in full. This is **worked example 6 step 1** — a security
+tightening shipped compatibly — inside the open `1.3.0` window, and it is the epic's ruling
+for this whole *class* of change: a new refusal condition added to a route that previously
+accepted the request.
+
+**The four steps, by number** (`contract/GOVERNANCE.md:150-167`):
+
+1. *Shipped compatibly, off by default with the knob.* `retrieve.max_promptguard_chunks`
+   ships at `0`, which means no pre-check and no `max_chunks` handed to the classifier —
+   byte-for-byte today's behaviour. A consumer upgrading on this MINOR sees no new refusal
+   at all. The new reason exists in the vocabulary before anything raises it, the shape
+   `1.2.0`'s `chunk` and `1.3.0`'s `blocked_url` both used.
+2. *The window is one minor release, and it is named.* The release that ships contract
+   `1.3.0` keeps the default at `0`; the next MINOR flips it to `256`. That window is
+   stated in `docs/releases.md` and belongs in the Release body, and boot logs one WARNING
+   `retrieve_budget_unset coming_default=256` so an operator finds it without reading
+   either.
+3. *The MAJOR is never reached.* Step 3 cuts a MAJOR when the old behaviour is removed.
+   It is not removed: `0` stays a legal, documented opt-out after the flip, so an operator
+   who needs the old behaviour keeps it by configuration rather than by pinning a version.
+4. *Not the step-4 case.* Step 4 is for a vulnerability that cannot be fixed compatibly.
+   This one can — the knob is the proof — so it does not get step 4's immediate MAJOR.
+   Ruling (f) is the contrasting case in this same epic: an SSRF bypass, where continuing
+   to serve the vulnerable behaviour for a named window *is* the vulnerability, so it
+   shipped as an expedited MINOR with no window at all.
+
+**What this ruling does not cover.** The two later refusals this spec adds are a different
+lane, and the consumer note lists all three with their lanes so nobody merges them:
+
+- `busy` (US-002) is a **capacity** refusal, not a security tightening — a new 422 code,
+  MINOR under ruling (b) and carrying that ruling's announcement obligation. The operator's
+  knobs are `retrieve.admission_queue_depth` and `retrieve.max_queued_fetch_bytes`;
+  `retrieve.fetch_concurrency` is pinned at 1 and is **not** a knob.
+- `extraction_failed` (US-003) turns an uncoded 500 into a coded 422, also under ruling (b).
+  Nothing that used to be accepted stops being accepted; a failure that used to be shapeless
+  gains a shape.
+
+Neither is a worked-example-6 tightening, and neither needs step 2's window.
+
+### (h) Directional domain matching tightens denylists and adds opt-in allowlist suffixes
+
+**Source:** `kit_tools/specs/feature-hardening-hostname-and-config.md`, US-001,
+the epic's R8 and ruling 42.
+
+**Ruling:** in the 1.3.0 window, existing multi-label denylist entries cover their
+subdomains as well as their apex. This is a pure tightening: single-label denylist
+entries remain accepted and exact-only, with **no single-label loosening**.
+Bare allowlist entries retain their existing meaning; the leading-dot suffix form
+is additive. IP literals remain equality-only.
+
+**Example 6 ("expedited security changes") applies explicitly.** Step 1's compatible
+alternative — opt-in leading dots on denylists too — was considered and declined:
+it leaves `www.evil.com` unblocked for every existing `evil.com` entry, which is the
+bug. For this tightening, the upgrade note in `docs/configuration.md` and the
+Release-body line carried by spec 8 stand in for step 2's compatibility window;
+this is an explicit expedited MINOR exception, not a claim that an opt-in window
+was shipped. Operators must review apex entries before upgrading: a multi-tenant
+denylist apex removes every tenant. The old suffix gap is not retained.
+
+The same ruling classifies the `blocked_domain` → `private_ip` precedence swap:
+canonical private-name rejection now runs before caller-list comparison, so
+`https://evil.local/` with `blocked_domains: ["evil.local"]` returns the latter.
+It is a value swap between two existing 422 codes, not a status or shape change,
+and rides this announced tightening in the 1.3.0 window.
+
+Ruling 42's `policy_domain_list_too_large` is a **new closed reason** on each
+route's existing 422 code (`content_too_large` on `/retrieve`, `search_unavailable` on
+`/search`), not a new status or response shape. Its raisers and byte cap belong
+to US-007 and US-002 respectively; they do not ship in US-001. US-007 now ships
+the `/retrieve` raiser, the configurable 65536-byte per-list default and four
+additive metrics fields. `/search`'s raiser remains US-002's. A denylist over
+budget is refused whole rather than silently truncated; allowlists retain the
+in-budget prefix and count the dropped remainder. The byte cap bounds encode
+work after JSON parsing, not request-body admission.
+
+### (i) Shared configurable thresholds are MINOR, with an operator upgrade note
+
+**Source:** `kit_tools/specs/archive/feature-hardening-hostname-and-config.md`, US-005,
+epic rulings R10 and R36.
+
+**Ruling:** `SearchRequest.promptguard_threshold` and
+`SearchResponse.effective_promptguard_threshold` are additive and ride the held
+1.3.0 MINOR. Both request models accept null, meaning the validated configured
+default, with the operator ceiling applied **after** default selection on both
+fetch routes. `/retrieve`'s default changes from literal 0.85 to the configured
+default, shipped as 0.85. This is MINOR because a 1.2.0 client on shipped config
+sees identical behavior; the visible default change is bounded to operators who
+tuned that key.
+
+The upgrade note must travel to the consumer/release in both directions: a key
+above 0.85 now loosens fetch-route blocking unless the ceiling bounds it; below
+0.85 tightens it. The old upload-only config knob is gone and the content cache
+re-keys. Caller overrides remain bounded. `/extract`'s raw-value coercion and
+guard are unchanged, including YAML `true` becoming 1.0; the boot warning names
+that exception rather than implying service-wide rejection. Its closure remains
+an open question, not an unannounced change in this MINOR.
+
+### (j) Cache oversize skips gain a backend, not a new meaning
+
+**Ruling:** widening `cache.storage_oversize_skips` from memory-only to both
+backends is additive behaviour, not a redefinition. It still counts values
+Forage itself refused to store as over a per-entry byte bound.
+`ContentCache.put` now produces it at `cache.max_value_bytes` on either backend;
+`InMemoryStorage.set` still produces it at `cache.max_bytes`. Correcting the
+description that promised "Always 0 on Valkey" is documentation-only within
+the unpublished 1.3.0 window and carries no additional bump.
+
+**Example 4 was considered:** it does not apply because the counter's meaning
+has not changed, only the set of backends that can produce it. Memory-only
+`storage_evictions` is unchanged. The separate new `cache.integrity_rejects`
+field is an additive counter in the same held MINOR, not part of this
+description-only ruling.
+
+**Source:** `kit_tools/specs/archive/feature-hardening-cache-integrity.md`, US-001,
+round-4 widening ruling and round-5 counter ownership clarification.
+
+### (k) The paid-prefix rule changes an outcome no production chain can reach
+
+**Ruling:** keeping only the longest named prefix of the configured paid
+sequence carries **no additional bump** inside the unpublished 1.3.0 window.
+On an all-paid configured chain, a later-paid-only selection now returns
+422 `search_unavailable` / `policy_excluded_all_providers`, without calling
+any provider, instead of serving the later provider's results. This is a
+behavioural consequence, not merely a schema-description edit.
+
+**Basis: ruling (a2)'s unreachability reasoning, and only that.** A status
+code a client observes changing is a MAJOR under the classification table.
+Here no production client can observe the flipped case:
+`pipeline/search_providers/__init__.py`'s `_KNOWN_PROVIDER_NAMES` contains
+`searxng` (free) and `brave` (the only paid name), and `parse_provider_names`
+collapses duplicates before chain construction. A multi-paid configured
+chain is therefore unconstructible today. The regression's two paid fakes
+exercise the future rule, not a currently deployable configuration.
+As in (a2), setting the documented behaviour of an unreachable case right
+does not change a status any existing client can observe.
+
+The case becomes reachable the day **T3.1 registers a second paid backend**.
+That story inherits this ruling and the already-documented prefix rule;
+it must preserve this policy 422 rather than introduce an undocumented
+MAJOR by promoting a later paid provider. The `SearchRequest.providers`
+description and held golden are regenerated now; no new field, enum member,
+counter or log is added.
+
+**Source:** `kit_tools/specs/feature-hardening-provider-bounds.md`, US-004
+and Edge Cases; `pipeline/search_providers/policy.py`;
+`tests/test_search_policy.py` and `tests/test_app.py`.
+
+### (l) Request-validation 422 redaction: expedited MINOR with a compatibility window
+
+**Ruling:** `hardening-release` US-001 ships an **expedited MINOR with a
+compatibility window** in contract 1.3.0, the category already named in the
+MINOR row. The shipped `contract/openapi.yaml` description of
+`ValidationErrorDetail` explicitly admitted pydantic's extra `input` and
+sometimes `ctx`/`url` keys. This is documented-behaviour tightening, not a
+PATCH and not an enum addition under ruling (b).
+
+**Example 6 in full: expedited security changes**, applied step by step:
+its trigger is "a value that used to be accepted must stop being accepted".
+Here nothing the caller sends stops being accepted; this is the response-side
+mirror, so the steps apply to what consumers read.
+
+1. **Step 1 is taken.** Every item keeps `input`, `ctx` and `url`, each with
+   the fixed string `"[redacted]"`, alongside `loc`, `msg`, `type`. A consumer
+   reading a key still finds it while the reflector closes immediately.
+   An opt-in flag preserving real values was rejected: it leaves the reflector
+   open for the consumers who never read the note. The window preserves key
+   presence, not the old values or `ctx`'s mapping type; no known consumer
+   depends on those. No declared property is removed or retyped, so no MAJOR
+   was chosen for this first step.
+2. **Step 2's window is one minor release.** `input`/`ctx`/`url` carry
+   `"[redacted]"` in contract 1.3.0 and are dropped at the next MINOR;
+   consumers reading `detail[].input` must stop. The contract docstring and
+   `docs/releases.md` carry that exact migration obligation for the Release body.
+3. **Step 3's drop is a second MINOR, not a MAJOR.** This is an explicit
+   description-admitted-key carve-out: only `loc`, `msg`, `type` were declared
+   properties. Removing the three extras moves no declared property, so the
+   classification table's MAJOR row ("a response field is removed") does not
+   reach them. Announce the drop again, and delete the window constants and
+   test helper with the keys. This is not a general exception for declared fields.
+4. **Step 4 is not entered.** Compatible key presence actually survives the
+   window, unlike an immediate drop accompanied by a note-only window.
+
+**Invariants:** no value from the request reaches a log or a traceback from the
+request-validation path. Neither `exc.body` nor `str(exc)`/`repr(exc)` may be
+logged; the exception object is never passed to a logger or re-raised. The
+handler catches construction, coercion and JSON rendering failures and returns
+the fixed `422 {"detail": []}` rather than chaining the original exception into
+a server traceback. Non-mapping errors are dropped; `msg` and `type` are
+string-coerced. Request validators must not interpolate input into their
+messages or raise `PydanticCustomError` with a caller-derived code: `msg` stays
+stock, content-free validation text and `type` stays a fixed identifier.
+
+`loc` admits integer indexes and only framework strings (`body`, `query`,
+`path`, `header`) or names from the matched route's owned fields:
+`SearchRequest.model_fields`, `RetrieveRequest.model_fields`, and `/extract`'s
+six Form/File parameter names, pinned against its signature. The only route
+source is `request.scope["route"].path`, checked against `/search`, `/retrieve`,
+`/extract`; absent or unknown routes use the closed token `other` and drop all
+non-framework strings. Other segment types are dropped too, never replaced
+with caller text. One WARNING `validation_422_loc_dropped — dropped=<n>
+route=<token>` counts drops per request. Structural canaries prohibit
+`extra="forbid"` and mapping-typed fields on request models; the runtime
+allowlist is the guarantee even if those canaries are violated.
+
+`_MAX_VALIDATION_ERRORS = 100` caps emitted entries only. A larger error list
+emits at most one WARNING `validation_422_truncated — count=<n> route=<token>`
+per request, using the same closed route vocabulary, never the raw URL path.
+The request was still fully parsed; neither that cost nor WARNING volume is
+bounded by this response cap. Both stay under the unchanged "resource
+exhaustion by an admitted caller" row in `kit_tools/arch/SECURITY.md`, with
+network placement as the control.
+
+The closure is limited to request-validation 422s on the three POST routes.
+Pipeline 422 `reason` is unchanged; ruling (d)'s private-IP echo survives.
+Both extraction middlewares still refuse before routing.
+
+**Source:** `retrieval_app.py`; `tests/test_contract_errors.py` (per-field
+marker liveness, interpolating-validator counterexample, never-raises guards
+and closed-log captures); `tests/test_models.py` (structural canaries);
+`kit_tools/arch/SECURITY.md`; `docs/releases.md`.

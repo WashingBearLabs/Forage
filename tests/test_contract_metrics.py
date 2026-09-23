@@ -24,16 +24,20 @@ Three claims are checked here, each the way it is stated:
 
 from __future__ import annotations
 
+import ast
 import dataclasses
+import gzip
 import json
 import re
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import nullcontext
 from pathlib import Path
-from typing import Any
-from unittest.mock import patch
+from typing import Any, cast
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+import yaml
 from fastapi import FastAPI
 from fastapi.exceptions import ResponseValidationError
 from pydantic import BaseModel
@@ -42,9 +46,15 @@ from starlette.routing import Route
 
 import retrieval_app
 from cache import CacheMetrics
-from model_fetcher import ModelMetrics
+from model_fetcher import ModelMetrics, WeightAcquisition
+from models import SearchRequest
 from pipeline.contract import CONTRACT_VERSION
 from pipeline.extraction_limits import extraction_settings_from_config
+from pipeline.orchestrator import run_search_pipeline
+from pipeline.search_providers.base import ProviderFailure, ProviderSearchResult
+from pipeline.search_providers.brave import BraveApiProvider, BraveSettings
+from pipeline.search_providers.searxng import SearxngProvider, SearxngSettings
+from promptguard.classifier import promptguard_threads_from_config
 from retrieval_app import (
     CacheMetricsResponse,
     ExtractionMetricsResponse,
@@ -54,9 +64,50 @@ from retrieval_app import (
     SearchMetricsResponse,
     app,
 )
+from tests.fakes import (
+    FakeSearchProvider,
+    RecordingSearchMetrics,
+    client_patch,
+    make_response,
+)
+from tests.test_ci_workflow import _slice_entry
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CONFIGURATION_DOC = _REPO_ROOT / "docs" / "configuration.md"
+
+_CONFIG_READER_MODULES = (
+    "retrieval_app.py",
+    "cache.py",
+    "pipeline/extraction_limits.py",
+    "pipeline/search_providers/brave.py",
+    "pipeline/search_providers/searxng.py",
+    "pipeline/orchestrator.py",
+    "pipeline/sanitizer_revision.py",
+    "pipeline/retrieve_limits.py",
+    "pipeline/search_targets.py",
+    "pipeline/stage3_promptguard.py",
+    "pipeline/config_bounds.py",
+    "promptguard/classifier.py",
+)
+_BOUNDED_HELPERS = {
+    "_bounded_int",
+    "_bounded_float",
+    "bounded_int",
+    "bounded_float",
+    "bounded_bool",
+}
+# The old extraction-local helper migrated to config_bounds; its float/bool
+# siblings and lifespan's domain-list loop are now variable-key reads as well.
+# These sites never count toward the literal-read floor.
+_VARIABLE_KEY_READS = {
+    ("cache.py", "_bounded_int", "key"),
+    ("pipeline/search_providers/brave.py", "_bounded_int", "key"),
+    ("pipeline/search_providers/brave.py", "_bounded_float", "key"),
+    ("pipeline/config_bounds.py", "bounded_int", "key"),
+    ("pipeline/config_bounds.py", "bounded_float", "key"),
+    ("pipeline/config_bounds.py", "bounded_bool", "key"),
+    ("retrieval_app.py", "lifespan", "key"),
+}
 
 _SECTION_MODELS = {
     "extraction": ExtractionMetricsResponse,
@@ -65,6 +116,74 @@ _SECTION_MODELS = {
     "cache": CacheMetricsResponse,
     "model": ModelMetricsResponse,
 }
+
+# Field sets from v1.1.0's published contract 1.2.0, without editing old goldens.
+_ONE_TWO_ZERO_SECTION_FIELDS = {
+    "extraction": {
+        "requests",
+        "active",
+        "queued",
+        "queued_bytes",
+        "verdicts",
+        "semaphore_saturation",
+        "busy_rejections",
+        "cgroup_memory_current_bytes",
+        "cgroup_memory_max_bytes",
+        "oom_proximity_ratio",
+    },
+    "search": {
+        "requests",
+        "errors",
+        "omitted_by_reason",
+        "unscanned_results",
+        "fallback_fired",
+        "paid_calls",
+        "policy_unknown_provider",
+    },
+    "retrieve": {
+        "requests",
+        "errors",
+        "cache_hits",
+        "cache_misses",
+        "blocked_by_reason",
+        "promptguard_state",
+    },
+    "cache": {
+        "reconnect_attempts",
+        "reconnect_successes",
+        "reconnect_failures",
+        "operation_failures",
+        "storage_hits",
+        "storage_misses",
+        "storage_evictions",
+        "storage_oversize_skips",
+    },
+    "model": {
+        "fetch_in_progress",
+        "fetch_failures",
+        "verify_failures",
+        "quarantines",
+        "retries_scheduled",
+    },
+}
+
+
+def test_every_1_3_0_metric_addition_is_named_in_the_contract_entry() -> None:
+    entry = _slice_entry((_REPO_ROOT / "pipeline" / "contract.py").read_text(), "1.3.0")
+    assert set(_ONE_TWO_ZERO_SECTION_FIELDS) == set(_SECTION_MODELS)
+    for section, model in _SECTION_MODELS.items():
+        previous = _ONE_TWO_ZERO_SECTION_FIELDS[section]
+        assert previous <= set(model.model_fields), section
+        assert all(
+            f"``{section}.{name}``" in entry
+            for name in set(model.model_fields) ^ previous
+        ), section
+    assert {field.name for field in dataclasses.fields(CacheMetrics)} == set(
+        CacheMetricsResponse.model_fields
+    )
+    # This existing counter changed producers, not field presence.
+    assert "``cache.storage_oversize_skips``" in entry
+
 
 # Flat in `extraction`, not nested under a `memory` object. The splat that puts
 # them there is `retrieval_app.metrics`'s `**_cgroup_memory_snapshot()`.
@@ -188,6 +307,204 @@ async def test_every_section_the_handler_emits_has_a_model(
     assert set(payload) == {"contract_version", *_SECTION_MODELS}
     for section, model in _SECTION_MODELS.items():
         assert set(payload[section]) == set(model.model_fields)
+
+
+@pytest.mark.parametrize("section", ["extraction", "retrieve", "search"])
+async def test_contiguity_counter_is_typed_and_emitted(
+    client: httpx.AsyncClient, section: str
+) -> None:
+    name = "promptguard_contiguity_detections"
+    field = _SECTION_MODELS[section].model_fields[name]
+    assert field.is_required()
+    assert field.annotation is int
+    before = (await client.get("/metrics")).json()
+    assert before[section][name] == 0
+    setattr(getattr(app.state, f"{section}_metrics"), name, 3)
+    response = await client.get("/metrics")
+    assert response.status_code == 200
+    assert response.json()[section][name] == 3
+
+
+async def test_domain_policy_counters_match_classes_models_and_wire(
+    client: httpx.AsyncClient,
+) -> None:
+    payload = (await client.get("/metrics")).json()
+    for section in ("retrieve", "search"):
+        counters: retrieval_app.RetrieveMetrics | retrieval_app.SearchMetrics = getattr(
+            app.state, f"{section}_metrics"
+        )
+        assert set(vars(counters)) == set(_SECTION_MODELS[section].model_fields)
+        for name in ("policy_invalid_domain_entry", "policy_suffix_trusted_skip"):
+            assert payload[section][name] == 0
+            setattr(counters, name, 7)
+    payload = (await client.get("/metrics")).json()
+    for section in ("retrieve", "search"):
+        for name in ("policy_invalid_domain_entry", "policy_suffix_trusted_skip"):
+            assert payload[section][name] == 7
+
+
+async def test_provider_and_latency_metrics_are_appended_and_emitted(
+    client: httpx.AsyncClient,
+) -> None:
+    counters = app.state.search_metrics
+    counters.provider_compressed_body = 3
+    counters.provider_timeouts = 2
+    counters.promptguard_latency_target_exceeded = 1
+    counters.sanitization_latency_max_ms = 1250
+    payload = (await client.get("/metrics")).json()["search"]
+    assert list(payload)[-5:] == [
+        "provider_compressed_body",
+        "provider_timeouts",
+        "promptguard_latency_target_exceeded",
+        "sanitization_latency_max_ms",
+        "promptguard_contiguity_detections",
+    ]
+    assert payload["provider_compressed_body"] == 3
+    assert payload["provider_timeouts"] == 2
+    assert payload["promptguard_latency_target_exceeded"] == 1
+    assert payload["sanitization_latency_max_ms"] == 1250
+
+
+@pytest.mark.parametrize("name", ["searxng", "brave"])
+@pytest.mark.parametrize(
+    "case",
+    [
+        "served",
+        "oversize",
+        "unsupported",
+        "malformed",
+        "status-429",
+        "budget-timeout",
+        "operation-timeout",
+        "transport-mid-body",
+        "unexpected-mid-body",
+        "connect-before-headers",
+        "timeout-before-headers",
+        "plain",
+    ],
+)
+async def test_provider_header_and_timeout_signals_survive_every_outcome(
+    name: str,
+    case: str,
+) -> None:
+    provider = (
+        SearxngProvider(settings=SearxngSettings(max_response_bytes=1000))
+        if name == "searxng"
+        else BraveApiProvider("sentinel", BraveSettings(max_response_bytes=1000))
+    )
+    target = f"pipeline.search_providers.{name}.httpx.AsyncClient"
+    compressed = case not in {
+        "plain",
+        "connect-before-headers",
+        "timeout-before-headers",
+    }
+    body = gzip.compress(b"{}")
+    headers = {"content-encoding": "gzip"} if compressed else {}
+    if case == "oversize":
+        body = gzip.compress(b"x" * 1001)
+    elif case == "unsupported":
+        headers["content-encoding"] = "br"
+    elif case == "malformed":
+        body = body[:-1]
+    elif case == "plain":
+        body = b"{}"
+    response = make_response(429 if case == "status-429" else 200, body, headers)
+    after_headers: Exception | None = {
+        "budget-timeout": TimeoutError("private"),
+        "operation-timeout": httpx.ReadTimeout("private"),
+        "transport-mid-body": httpx.ReadError("private"),
+        "unexpected-mid-body": RuntimeError("private"),
+    }.get(case)
+    before_headers: Exception | None = {
+        "connect-before-headers": httpx.ConnectError("private"),
+        "timeout-before-headers": httpx.ConnectTimeout("private"),
+    }.get(case)
+
+    async def failing_body() -> AsyncIterator[bytes]:
+        yield body[:2]
+        assert after_headers is not None
+        raise after_headers
+
+    sink = RecordingSearchMetrics()
+    with (
+        client_patch(target, response=response, stream_error=before_headers),
+        patch.object(response, "aiter_raw", side_effect=failing_body)
+        if after_headers is not None
+        else nullcontext(),
+    ):
+        outcome = await provider.search("q", 3)
+    assert outcome.compressed is compressed
+    timeout = case in {"budget-timeout", "operation-timeout", "timeout-before-headers"}
+    if timeout:
+        assert isinstance(outcome, ProviderFailure)
+        assert (outcome.failure_class, outcome.detail) == ("timeout", "timeout")
+    # Feed the real provider outcome through traversal, including failure-continue
+    # and ordinary serve-and-break, without reusing its already-consumed stream.
+    await run_search_pipeline(
+        SearchRequest(query="q", promptguard_fail_closed=False),
+        providers=[
+            FakeSearchProvider(name=name, outcome=outcome),
+            FakeSearchProvider(name="backup", paid=True),
+        ],
+        search_metrics=sink,
+        config={},
+    )
+    assert sink.provider_compressed_body == int(compressed)
+    assert sink.provider_timeouts == int(timeout)
+
+
+@pytest.mark.parametrize("lone", [False, True])
+async def test_compressed_zero_results_counts_before_either_reclassification_exit(
+    lone: bool,
+) -> None:
+    sink = RecordingSearchMetrics()
+    searxng = SearxngProvider()
+    body = gzip.compress(b'{"results":[],"unresponsive_engines":["mojeek"]}')
+    chain = (
+        [searxng] if lone else [searxng, FakeSearchProvider(name="brave", paid=True)]
+    )
+    with client_patch(
+        "pipeline.search_providers.searxng.httpx.AsyncClient",
+        response=make_response(content=body, headers={"content-encoding": "gzip"}),
+    ):
+        await run_search_pipeline(
+            SearchRequest(query="q", promptguard_fail_closed=False),
+            providers=chain,
+            search_metrics=sink,
+            config={},
+        )
+    assert sink.provider_compressed_body == 1
+    assert sink.provider_timeouts == 0
+    assert sink.fallback_fired == int(not lone)
+
+
+def test_provider_compression_defaults_are_false() -> None:
+    assert not ProviderSearchResult("searxng", [], []).compressed
+    assert not ProviderFailure("searxng", "timeout", "timeout").compressed
+
+
+def test_search_latency_descriptions_pin_the_window_and_comparability() -> None:
+    fields = SearchMetricsResponse.model_fields
+    for name in ("promptguard_latency_target_exceeded", "sanitization_latency_max_ms"):
+        description = fields[name].description
+        assert description is not None
+        for required in (
+            "search_promptguard_latency_target_ms",
+            "per-result sanitization loop: structural scan, "
+            "PromptGuard and any semaphore wait",
+            "num_results (1-20)",
+            "only at the same num_results",
+        ):
+            assert required in description
+    maximum = fields["sanitization_latency_max_ms"].description
+    assert maximum is not None
+    for required in (
+        "Per-process",
+        "Never resets",
+        "restarting the container",
+        "search.promptguard_latency_target_exceeded and search.requests",
+    ):
+        assert required in maximum
 
 
 async def test_cgroup_keys_stay_flat_in_the_extraction_section(
@@ -401,3 +718,458 @@ def test_posture_doc_states_the_docs_endpoints_are_unauthenticated() -> None:
         )
         assert row is not None, f"{path} has no row in the posture table"
         assert "| none |" in row
+
+
+def test_config_registry_equals_documented_keys() -> None:
+    """Borrow the single-source helpers, as test_contract_smoke does for schemas.
+
+    The function-scoped import follows its _SCHEMA_MODELS precedent rather than
+    moving helpers out of an existing contract guard just for this consumer.
+    Only a key table's first column defines names; prose and request tables do not.
+    """
+    from tests.test_governance_docs import _cells, _section
+
+    section = _section(_CONFIGURATION_DOC.read_text(), "## `config.yaml`")
+    headings = [("### Top-level keys", "")]
+    fenced = False
+    for line in section.splitlines():
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+        if not fenced and (match := re.fullmatch(r"### The `(\w+):` block", line)):
+            headings.append((line, f"{match.group(1)}."))
+    assert len(headings) > 1
+    documented: set[str] = set()
+    for heading, prefix in headings:
+        body = _section(section, heading)
+        tables = re.findall(
+            r"^\| Key \|[^\n]*\n((?:\|[^\n]*(?:\n|$))+)", body, flags=re.MULTILINE
+        )
+        assert len(tables) == 1, f"Expected one key table under {heading}"
+        keys = [
+            _cells(row)[0].strip("`")
+            for row in tables[0].splitlines()
+            if _cells(row)[0].startswith("`")
+        ]
+        assert keys, f"Empty key table under {heading}"
+        assert len(keys) == len(set(keys)), f"Duplicate keys under {heading}"
+        documented.update(f"{prefix}{key}" for key in keys)
+    assert isinstance(retrieval_app.KNOWN_CONFIG_KEYS, frozenset)
+    assert documented == retrieval_app.KNOWN_CONFIG_KEYS
+    blocks = {key.partition(".")[0] for key in documented if "." in key}
+    assert blocks <= documented
+
+
+def test_config_registry_covers_the_shipped_yaml() -> None:
+    """Read the shipped file, on TestCacheSettings' documented-defaults precedent."""
+    shipped: dict[str, Any] = yaml.safe_load((_REPO_ROOT / "config.yaml").read_text())
+    assert shipped
+    keys = set(shipped)
+    for block, value in shipped.items():
+        if isinstance(value, dict):
+            leaves = cast(dict[str, Any], value)
+            assert leaves, f"Shipped block {block} is empty"
+            keys.update(f"{block}.{leaf}" for leaf in leaves)
+    assert keys <= retrieval_app.KNOWN_CONFIG_KEYS
+
+
+# Security-relevant: decides whether/how content is scanned, served or sandboxed.
+# Include thresholds, policy, route gates, envelope keys and PDF sandbox limits.
+# Not: pure resource/throughput bounds, cosmetic lists or bare block names.
+# Names are the dotted KNOWN_CONFIG_KEYS vocabulary, including block leaves.
+SECURITY_RELEVANT_CONFIG_KEYS = frozenset(
+    {
+        "promptguard_threshold",
+        "promptguard_contiguity_windows",
+        "promptguard_contiguity_threshold",
+        "extract_route_enabled",
+        "seed_blocklist",
+        "promptguard_fail_closed_floor",
+        "promptguard_threshold_ceiling",
+        "promptguard_wait_seconds",
+        "policy_domain_entries_max_bytes",
+        "promptguard_threads",
+        "extraction.classification_concurrency",
+        "search_promptguard_latency_target_ms",
+        "search_first_token_target_ms",
+        "extraction.child_address_space_bytes",
+        "extraction.child_cpu_seconds",
+        "extraction.wall_clock_seconds",
+        "extraction.max_input_bytes",
+        "extraction.max_pages",
+        "extraction.max_promptguard_chunks",
+        "retrieve.max_promptguard_chunks",
+    }
+)
+_NOT_SECURITY_RELEVANT_CONFIG_KEYS = frozenset(
+    {
+        "user_agents",
+        "news_domains",
+        "search_brave_timeout_seconds",
+        "search_searxng_timeout_seconds",
+        "search_searxng_query_max_chars",
+        "search_brave_chunk_max_chars",
+        "search_brave_query_max_chars",
+        "cache",
+        "cache.max_entries",
+        "cache.max_bytes",
+        "cache.max_value_bytes",
+        "extraction",
+        "extraction.extraction_concurrency",
+        "extraction.admission_queue_depth",
+        "extraction.max_queued_upload_bytes",
+        "retrieve",
+        "retrieve.fetch_concurrency",
+        "retrieve.admission_queue_depth",
+        "retrieve.max_queued_fetch_bytes",
+    }
+)
+
+
+def test_config_security_classification_partitions_the_registry() -> None:
+    overlap = SECURITY_RELEVANT_CONFIG_KEYS & _NOT_SECURITY_RELEVANT_CONFIG_KEYS
+    classified = SECURITY_RELEVANT_CONFIG_KEYS | _NOT_SECURITY_RELEVANT_CONFIG_KEYS
+    assert not overlap, f"Multiply classified config keys: {sorted(overlap)}"
+    assert classified == retrieval_app.KNOWN_CONFIG_KEYS, (
+        f"Unclassified: {sorted(retrieval_app.KNOWN_CONFIG_KEYS - classified)}; "
+        f"unregistered: {sorted(classified - retrieval_app.KNOWN_CONFIG_KEYS)}"
+    )
+
+
+async def test_shipped_security_relevant_config_equals_code_defaults(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Pin the shipped baseline, not an operator's later hardened replacement."""
+    shipped: dict[str, Any] = yaml.safe_load((_REPO_ROOT / "config.yaml").read_text())
+    empty_config: dict[str, Any] = {}
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: empty_config)
+    monkeypatch.setattr(retrieval_app, "spool_dir", lambda: tmp_path)
+    monkeypatch.setattr(WeightAcquisition, "run", AsyncMock(return_value=False))
+    isolated_app = FastAPI()
+    async with retrieval_app.lifespan(isolated_app):
+        state = isolated_app.state
+        extraction = dataclasses.asdict(state.extraction_settings)
+        retrieve = dataclasses.asdict(state.retrieve_settings)
+        targets = dataclasses.asdict(state.search_targets)
+        defaults: dict[str, Any] = {
+            "seed_blocklist": state.config["seed_blocklist"],
+            "promptguard_threshold": state.promptguard_threshold_default,
+            "promptguard_contiguity_windows": (
+                state.promptguard_settings.contiguity_windows
+            ),
+            "promptguard_contiguity_threshold": (
+                state.promptguard_settings.contiguity_threshold
+            ),
+            "policy_domain_entries_max_bytes": state.policy_domain_entries_max_bytes,
+            "extract_route_enabled": extraction.pop("route_enabled"),
+            "promptguard_threads": promptguard_threads_from_config({}),
+            **{f"extraction.{key}": value for key, value in extraction.items()},
+            **{
+                key if key.startswith("promptguard_") else f"retrieve.{key}": value
+                for key, value in retrieve.items()
+            },
+            **{f"search_{key}": value for key, value in targets.items()},
+        }
+    assert defaults.keys() >= SECURITY_RELEVANT_CONFIG_KEYS, (
+        "Missing default readers: "
+        f"{sorted(SECURITY_RELEVANT_CONFIG_KEYS - defaults.keys())}"
+    )
+    for key in sorted(SECURITY_RELEVANT_CONFIG_KEYS):
+        block, separator, leaf = key.partition(".")
+        assert block in shipped, f"Missing shipped key: {key}"
+        if separator:
+            assert leaf in shipped[block], f"Missing shipped key: {key}"
+            actual = shipped[block][leaf]
+        else:
+            actual = shipped[key]
+        assert actual == defaults[key], (
+            f"{key}: shipped {actual!r} != code default {defaults[key]!r}"
+        )
+
+
+def _literal_key(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _config_read(node: ast.AST) -> tuple[ast.expr, ast.expr] | None:
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "get"
+        and node.args
+    ):
+        return node.func.value, node.args[0]
+    if isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load):
+        return node.value, node.slice
+    return None
+
+
+class _ConfigKeySweep(ast.NodeVisitor):
+    """Follow function-local mapping aliases, including the readers' cast seam."""
+
+    def __init__(self) -> None:
+        self.keys: set[str] = set()
+        self.literal_reads = 0
+        self.bounded_readers: set[str] = set()
+        self.variable_reads: list[tuple[str, str]] = []
+        self.shared_calls: dict[str, set[str]] = {}
+        self._shared_imports: dict[str, str] = {}
+        self._aliases: dict[str, str] = {}
+        self._function = "<module>"
+
+    def _prefix(self, node: ast.expr) -> str | None:
+        if isinstance(node, ast.Name):
+            return "" if node.id == "config" else self._aliases.get(node.id)
+        if isinstance(node, ast.Attribute) and node.attr == "config":
+            return ""
+        if isinstance(node, ast.Call):
+            if (
+                isinstance(node.func, ast.Name)
+                and node.func.id == "cast"
+                and len(node.args) == 2
+            ):
+                return self._prefix(node.args[1])
+            if isinstance(node.func, ast.Attribute) and node.func.attr == "copy":
+                return self._prefix(node.func.value)
+        if read := _config_read(node):
+            receiver, key_node = read
+            prefix, key = self._prefix(receiver), _literal_key(key_node)
+            if prefix is not None and key is not None:
+                return f"{prefix}{key}."
+        return None
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        if node.module == "pipeline.config_bounds":
+            for alias in node.names:
+                self._shared_imports[alias.asname or alias.name] = alias.name
+
+    def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        previous = self._function, self._aliases
+        self._function, self._aliases = node.name, {}
+        self.generic_visit(node)
+        self._function, self._aliases = previous
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self.visit_FunctionDef(node)
+
+    def _bind(self, target: ast.expr, value: ast.expr | None) -> None:
+        if isinstance(target, ast.Name):
+            prefix = self._prefix(value) if value is not None else None
+            if prefix is None:
+                self._aliases.pop(target.id, None)
+            else:
+                self._aliases[target.id] = prefix
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        for target in node.targets:
+            self._bind(target, node.value)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self._bind(node.target, node.value)
+        self.generic_visit(node)
+
+    def _record_read(self, node: ast.AST) -> None:
+        if read := _config_read(node):
+            receiver, key_node = read
+            prefix = self._prefix(receiver)
+            if prefix is not None:
+                key = _literal_key(key_node)
+                if key is None:
+                    self.variable_reads.append((self._function, ast.unparse(key_node)))
+                else:
+                    self.keys.add(f"{prefix}{key}")
+                    self.literal_reads += 1
+
+    def visit_Call(self, node: ast.Call) -> None:
+        self._record_read(node)
+        if isinstance(node.func, ast.Name):
+            helper = self._shared_imports.get(node.func.id, node.func.id)
+            if helper in _BOUNDED_HELPERS:
+                assert len(node.args) >= 2, ast.unparse(node)
+                prefix = (
+                    ""
+                    if isinstance(node.args[0], ast.Dict)
+                    else self._prefix(node.args[0])
+                )
+                key = _literal_key(node.args[1])
+                assert prefix is not None and key is not None, ast.unparse(node)
+                dotted = f"{prefix}{key}"
+                self.keys.add(dotted)
+                self.bounded_readers.add(self._function)
+                if node.func.id in self._shared_imports:
+                    self.shared_calls.setdefault(helper, set()).add(dotted)
+        self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript) -> None:
+        self._record_read(node)
+        self.generic_visit(node)
+
+
+def _swept_config_keys(path: Path) -> _ConfigKeySweep:
+    sweep = _ConfigKeySweep()
+    sweep.visit(ast.parse(path.read_text()))
+    return sweep
+
+
+def test_config_registry_covers_every_reader() -> None:
+    """Adding a config reader means adding its module to _CONFIG_READER_MODULES.
+
+    config_bounds is helper-only: its variable-key reads are resolved from
+    callers' literal second arguments, not counted as direct literal sites.
+    Check each helper's read and callers so that module cannot silently go dark.
+    """
+    sweeps = {
+        name: _swept_config_keys(_REPO_ROOT / name) for name in _CONFIG_READER_MODULES
+    }
+    variable_reads = [
+        (name, function, key)
+        for name, sweep in sweeps.items()
+        for function, key in sweep.variable_reads
+    ]
+    assert set(variable_reads) == _VARIABLE_KEY_READS
+    assert len(variable_reads) == len(_VARIABLE_KEY_READS)
+    assert sum(sweep.literal_reads for sweep in sweeps.values()) >= 8
+    for module, reader in (
+        ("cache.py", "cache_settings_from_config"),
+        ("pipeline/extraction_limits.py", "extraction_settings_from_config"),
+        ("pipeline/retrieve_limits.py", "retrieve_settings_from_config"),
+        ("pipeline/search_targets.py", "search_targets_from_config"),
+        ("pipeline/search_providers/brave.py", "brave_settings_from_config"),
+        ("pipeline/search_providers/searxng.py", "searxng_settings_from_config"),
+        ("promptguard/classifier.py", "promptguard_threads_from_config"),
+        ("retrieval_app.py", "lifespan"),
+        ("retrieval_app.py", "promptguard_threshold_from_config"),
+    ):
+        assert reader in sweeps[module].bounded_readers, (module, reader)
+    shared = sweeps["pipeline/config_bounds.py"]
+    resolved: set[str] = set()
+    for helper in ("bounded_int", "bounded_float", "bounded_bool"):
+        assert (helper, "key") in shared.variable_reads
+        call_keys = set[str]().union(
+            *(sweep.shared_calls.get(helper, set[str]()) for sweep in sweeps.values())
+        )
+        assert call_keys, f"No literal callers of config_bounds.{helper}"
+        resolved.update(call_keys)
+    all_keys: set[str] = set()
+    for name, sweep in sweeps.items():
+        keys = sweep.keys | (
+            resolved if name == "pipeline/config_bounds.py" else set[str]()
+        )
+        assert keys, f"No literal config keys resolved in {name}"
+        assert keys <= retrieval_app.KNOWN_CONFIG_KEYS, (
+            name,
+            keys - retrieval_app.KNOWN_CONFIG_KEYS,
+        )
+        all_keys.update(keys)
+    blocks = {
+        key.partition(".")[0] for key in retrieval_app.KNOWN_CONFIG_KEYS if "." in key
+    }
+    for block in blocks:
+        assert any(key.startswith(f"{block}.") for key in all_keys), block
+
+
+@pytest.mark.parametrize(
+    ("source", "expected", "direct", "bounded"),
+    [
+        ('config.get("planted_key")', {"planted_key"}, 1, False),
+        ('request.app.state.config.get("planted_key", 0)', {"planted_key"}, 1, False),
+        ('app.state.config["planted_key"]', {"planted_key"}, 1, False),
+        (
+            'raw = config.get("cache", {})\n'
+            "local = cast(dict[str, object], raw)\n"
+            "alias = local\n"
+            '_bounded_int(alias, "planted_key", 1)\n'
+            'alias.get("other_key")\n'
+            'alias["third_key"]',
+            {"cache", "cache.planted_key", "cache.other_key", "cache.third_key"},
+            3,
+            True,
+        ),
+        ('bounded_float(config, "planted_key", 1.0)', {"planted_key"}, 0, True),
+        ('bounded_bool(config, "planted_key", False)', {"planted_key"}, 0, True),
+    ],
+)
+def test_config_sweep_reports_planted_unregistered_keys(
+    tmp_path: Path, source: str, expected: set[str], direct: int, bounded: bool
+) -> None:
+    module = tmp_path / "planted_reader.py"
+    module.write_text("def reader(config):\n    " + source.replace("\n", "\n    "))
+    sweep = _swept_config_keys(module)
+    assert sweep.keys == expected
+    assert sweep.keys - retrieval_app.KNOWN_CONFIG_KEYS == expected - {"cache"}
+    assert sweep.literal_reads == direct
+    assert sweep.bounded_readers == ({"reader"} if bounded else set())
+
+
+def test_config_sweep_keeps_mapping_aliases_function_local(tmp_path: Path) -> None:
+    module = tmp_path / "scoped_readers.py"
+    module.write_text(
+        "def cache_reader(config):\n"
+        '    local = config.get("cache", {})\n'
+        '    local.get("max_entries")\n'
+        "def retrieve_reader(config):\n"
+        '    local = config.get("retrieve", {})\n'
+        '    local["max_promptguard_chunks"]\n'
+        "def unrelated(local):\n"
+        '    local.get("not_config")\n'
+    )
+    assert _swept_config_keys(module).keys == {
+        "cache",
+        "cache.max_entries",
+        "retrieve",
+        "retrieve.max_promptguard_chunks",
+    }
+
+
+def test_config_sweep_resolves_shared_helper_imports(tmp_path: Path) -> None:
+    module = tmp_path / "shared_reader.py"
+    module.write_text(
+        "from pipeline.config_bounds import bounded_float as read_float\n"
+        "def reader(config):\n"
+        '    read_float({"planted_key": 0.5}, "planted_key", 0.85)\n'
+    )
+    sweep = _swept_config_keys(module)
+    assert sweep.keys == {"planted_key"}
+    assert sweep.shared_calls == {"bounded_float": {"planted_key"}}
+    assert sweep.literal_reads == 0
+    assert sweep.bounded_readers == {"reader"}
+
+
+def test_config_sweep_refuses_an_unresolved_block_helper(tmp_path: Path) -> None:
+    module = tmp_path / "opaque_reader.py"
+    module.write_text(
+        "def reader(config):\n"
+        "    local = opaque_helper(config)\n"
+        '    bounded_int(local, "planted_key", 1)\n'
+    )
+    with pytest.raises(AssertionError, match="planted_key"):
+        _swept_config_keys(module)
+
+
+def test_unknown_config_key_warning_is_documented() -> None:
+    from tests.test_governance_docs import _cells, _section
+
+    section = _section(_CONFIGURATION_DOC.read_text(), "## `config.yaml`")
+    for phrase in (
+        "Unknown keys are ignored",
+        "WARNING",
+        "config_unknown_key",
+        "ExtractionConfigurationError",
+        "CacheConfigurationError",
+        "promptguard_threshold",
+        "policy_domain_entries_max_bytes",
+        "seed_blocklist",
+        "news_domains",
+        "config_invalid_value",
+    ):
+        assert phrase in section
+    monitoring = (_REPO_ROOT / "kit_tools/docs/MONITORING.md").read_text()
+    startup = _section(monitoring, "### Startup lines you may see")
+    rows = [_cells(line) for line in startup.splitlines() if line.startswith("|")]
+    assert any(row[0] == "WARNING" and "config_unknown_key" in row[1] for row in rows)
+    logging = (_REPO_ROOT / "kit_tools/arch/patterns/LOGGING.md").read_text()
+    assert "config_unknown_key" in _section(logging, "## Logger Inventory")
+    troubleshooting = (_REPO_ROOT / "kit_tools/docs/TROUBLESHOOTING.md").read_text()
+    assert "restart" in _section(troubleshooting, "### config_unknown_key")

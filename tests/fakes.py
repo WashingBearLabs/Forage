@@ -2,23 +2,303 @@
 
 from __future__ import annotations
 
+import asyncio
+import gc
 import hashlib
 import os
 import socket
+import sys
 import time
+import zlib
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from functools import partial
+from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from cache import CacheMetrics
 from model_fetcher import repo_dirname
 from pipeline.search_providers.base import ProviderFailure, ProviderSearchResult
+from promptguard.classifier import PromptGuardClassifier
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import AsyncGenerator, Callable, Generator, Mapping
+    from types import FrameType
 
     from models import RetrievedContent
+
+
+CACHE_HMAC_SENTINEL = "cache-hmac-test-only-" + "x" * 24
+
+
+def make_mock_classifier(
+    score: float = 0.0,
+    flagged_chunks: list[str] | None = None,
+    loaded: bool = True,
+) -> MagicMock:
+    """Stub window inference while retaining the real single-score pooling."""
+    classifier = MagicMock(spec=PromptGuardClassifier)
+    classifier.loaded = loaded
+
+    def windows(
+        text: str, *, max_chunks: int | None = None
+    ) -> tuple[list[float], list[str]]:
+        chunks = flagged_chunks or [text]
+        return [score] * len(chunks), chunks
+
+    classifier.classify_windows.side_effect = windows
+    classifier.classify.side_effect = partial(
+        PromptGuardClassifier.classify, classifier
+    )
+    return classifier
+
+
+class ChunkStream(httpx.AsyncByteStream):
+    """Yield and record raw chunks, optionally delaying before each one."""
+
+    def __init__(self, chunks: list[bytes], *, delay: float = 0.0) -> None:
+        self._chunks = chunks
+        self._delay = delay
+        self.chunks_yielded: list[bytes] = []
+
+    @property
+    def largest_chunk(self) -> int:
+        """Largest raw chunk actually yielded, not a decoded-output bound."""
+        return max((len(chunk) for chunk in self.chunks_yielded), default=0)
+
+    async def __aiter__(self) -> AsyncGenerator[bytes]:
+        for chunk in self._chunks:
+            if self._delay > 0:
+                await asyncio.sleep(self._delay)
+            self.chunks_yielded.append(chunk)
+            yield chunk
+
+
+def make_response(
+    status_code: int = 200,
+    content: bytes = b"{}",
+    headers: dict[str, str] | None = None,
+    *,
+    url: str = "https://example.invalid/search",
+    content_type: str = "application/json",
+) -> httpx.Response:
+    """Build a stream-backed response usable by ``aiter_raw`` or ``aiter_bytes``.
+
+    No ``content-length`` is synthesized: tests relying on it must set it.
+    ``aiter_bytes`` still decodes this shape, as the stage-5 fetcher expects.
+    Each response is single-use, like a real HTTP stream.
+    """
+    hdrs = {"content-type": content_type}
+    if headers:
+        hdrs.update(headers)
+    return httpx.Response(
+        status_code=status_code,
+        headers=hdrs,
+        stream=ChunkStream([content]),
+        request=httpx.Request("GET", url),
+    )
+
+
+def make_stream_cm(response: httpx.Response) -> MagicMock:
+    """An async context manager yielding the supplied response."""
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=response)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return cm
+
+
+@contextmanager
+def client_patch(
+    target: str,
+    *,
+    response: httpx.Response | None = None,
+    stream_error: Exception | None = None,
+) -> Generator[tuple[MagicMock, MagicMock]]:
+    """Intercept a per-call streaming client at the caller's patch target."""
+    client = MagicMock()
+    envelope = response if response is not None else make_response()
+    client.stream = MagicMock(
+        return_value=make_stream_cm(envelope), side_effect=stream_error
+    )
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    with patch(target, return_value=client) as client_cls:
+        yield client_cls, client
+
+
+class RecordingDecompressor:
+    """Proxy zlib while recording each output size and every attempted call."""
+
+    def __init__(self, wbits: int) -> None:
+        self._decoder = zlib.decompressobj(wbits)
+        self.output_sizes: list[int] = []
+        self.calls = 0
+
+    def decompress(self, data: bytes, max_length: int = 0) -> bytes:
+        self.calls += 1
+        out = self._decoder.decompress(data, max_length)
+        self.output_sizes.append(len(out))
+        return out
+
+    @property
+    def largest_output(self) -> int:
+        return max(self.output_sizes, default=0)
+
+    @property
+    def eof(self) -> bool:
+        return self._decoder.eof
+
+    @property
+    def unconsumed_tail(self) -> bytes:
+        return self._decoder.unconsumed_tail
+
+    @property
+    def unused_data(self) -> bytes:
+        return self._decoder.unused_data
+
+
+@dataclass
+class DecompressorRecording:
+    """Aggregate every decoder, including a raw-deflate retry's new instance."""
+
+    instances: list[RecordingDecompressor] = field(
+        default_factory=list[RecordingDecompressor]
+    )
+
+    @property
+    def largest_output(self) -> int:
+        return max((item.largest_output for item in self.instances), default=0)
+
+    @property
+    def calls(self) -> int:
+        return sum(item.calls for item in self.instances)
+
+
+@contextmanager
+def record_decompressors() -> Generator[DecompressorRecording]:
+    """Patch only the bounded reader's factory, never process-global zlib."""
+    recording = DecompressorRecording()
+
+    def factory(wbits: int) -> RecordingDecompressor:
+        decoder = RecordingDecompressor(wbits)
+        recording.instances.append(decoder)
+        return decoder
+
+    with patch("pipeline.bounded_body._decompressobj", new=factory):
+        yield recording
+
+
+@dataclass
+class DecodedBufferRecording:
+    """Simultaneously live decoded payload, not largest decoder return or RSS."""
+
+    accumulation_peak: int = 0
+    return_peak: int = 0
+    returns: int = 0
+
+
+@contextmanager
+def record_decoded_buffers() -> Generator[DecodedBufferRecording]:
+    """Trace the reader's payload owners, outputs and exception-held frames.
+
+    CPython exposes BytesIO's backing bytes via gc.get_referents. Inspecting
+    those (without retaining them) neither copies nor exports a buffer view:
+    getbuffer() would itself force copy-on-write at getvalue(). Count populated
+    payload lengths, as with len(bytearray), not allocator slack/zlib state.
+    Deduplicate by buffer identity, including the bytes returned to the caller.
+    """
+    from pipeline import bounded_body
+
+    recording = DecodedBufferRecording()
+
+    def trace(frame: FrameType, event: str, arg: Any) -> Any:
+        if frame.f_code.co_filename != bounded_body.__file__:
+            return None
+        buffers: dict[int, int] = {}
+        visited: set[int] = set()
+
+        def add(value: object) -> None:
+            if isinstance(value, BytesIO):
+                if not value.closed:
+                    for backing in gc.get_referents(value):
+                        if isinstance(backing, bytes):
+                            buffers[id(backing)] = value.tell()
+            elif isinstance(value, bytes | bytearray):
+                buffers[id(value)] = len(value)
+
+        def visit(current: FrameType | None) -> None:
+            if current is None or id(current) in visited:
+                return
+            visited.add(id(current))
+            if current.f_code.co_filename == bounded_body.__file__:
+                state = current.f_locals
+                for name in ("body", "output", "result"):
+                    add(state.get(name))
+                for name in ("self", "decoder"):
+                    decoder = state.get(name)
+                    if isinstance(decoder, bounded_body._BoundedDecoder):
+                        add(getattr(decoder, "body", None))
+                # The discarded wrapped decoder can still be held by a caught
+                # exception while raw replay is in progress.
+                error = state.get("error")
+                if isinstance(error, BaseException):
+                    traceback = error.__traceback__
+                    while traceback is not None:
+                        visit(traceback.tb_frame)
+                        traceback = traceback.tb_next
+            visit(current.f_back)
+
+        visit(frame)
+        if event == "return" and isinstance(arg, bytes):
+            add(arg)
+            recording.return_peak = max(recording.return_peak, sum(buffers.values()))
+            recording.returns += 1
+        else:
+            recording.accumulation_peak = max(
+                recording.accumulation_peak, sum(buffers.values())
+            )
+        return trace
+
+    previous = sys.gettrace()
+    sys.settrace(trace)
+    try:
+        yield recording
+    finally:
+        sys.settrace(previous)
+
+
+@dataclass
+class RecordingSearchMetrics:
+    """The complete ``SearchMetricsSink`` surface, local to each test."""
+
+    fallback_fired: int = 0
+    paid_calls: int = 0
+    classification_wait_timeouts: int = 0
+    provider_compressed_body: int = 0
+    provider_timeouts: int = 0
+    promptguard_latency_target_exceeded: int = 0
+    sanitization_latency_max_ms: int = 0
+    promptguard_contiguity_detections: int = 0
+
+    @property
+    def counters(self) -> dict[str, int]:
+        return {
+            "fallback_fired": self.fallback_fired,
+            "paid_calls": self.paid_calls,
+            "classification_wait_timeouts": self.classification_wait_timeouts,
+            "provider_compressed_body": self.provider_compressed_body,
+            "provider_timeouts": self.provider_timeouts,
+            "promptguard_latency_target_exceeded": (
+                self.promptguard_latency_target_exceeded
+            ),
+            "sanitization_latency_max_ms": self.sanitization_latency_max_ms,
+            "promptguard_contiguity_detections": self.promptguard_contiguity_detections,
+        }
 
 
 def assert_frozen(instance: object, field: str, value: object) -> None:
@@ -159,15 +439,23 @@ def weights_manifest_document(
     *,
     model_id: str,
     revision: str,
+    models: Mapping[str, tuple[str, Mapping[str, bytes]]] | None = None,
 ) -> dict[str, Any]:
-    """The manifest that exactly describes *files* — nothing more, nothing less."""
+    """Build exact-set entries, with optional additional model/revision pairs."""
     return {
-        "model_id": model_id,
-        "revision": revision,
-        "files": [
-            {"path": name, "sha256": sha256_hex(payload), "size": len(payload)}
-            for name, payload in sorted(files.items())
-        ],
+        "models": {
+            identity: {
+                "revision": pin,
+                "files": [
+                    {"path": name, "sha256": sha256_hex(payload), "size": len(payload)}
+                    for name, payload in sorted(contents.items())
+                ],
+            }
+            for identity, (pin, contents) in {
+                **(models or {}),
+                model_id: (revision, files),
+            }.items()
+        }
     }
 
 

@@ -5,9 +5,10 @@ produced and handed on as an artifact — with no Hugging Face token, and then
 runs this module against it. What it asserts is Epic 1's wire contract for a
 weights-free image, the handshake Poppy depends on:
 
-* ``/health`` answers **HTTP 200** — always, even degraded, because the
-  container healthcheck is a bare ``curl -f`` and a non-2xx would flap the
-  container instead of surfacing the problem;
+* ``/health`` answers **HTTP 200** — always, even degraded. The compose probe
+  (``curl -fsS -o /dev/null``, 30 s interval, 5 s timeout, 3 retries, 30 s
+  ``start_period``) checks status only and discards the body: liveness, not
+  health. Plain Compose reports unhealthy probes but does not restart on them;
 * ``status`` is exactly ``"degraded"`` — never ``"healthy"``, never ``"ok"``,
   and never a crash;
 * ``promptguard_unavailable`` is in ``degraded_reasons``;
@@ -42,9 +43,10 @@ started:
   written.
 * ``--expect-status healthy`` — a container started with weights (an
   ``--env-file`` carrying the token, say) **and** a reachable cache when
-  ``VALKEY_URL`` is set: ``/health`` reports ``degraded`` for
-  ``cache_unavailable`` just as it does for ``promptguard_unavailable``, so a
-  weights-loaded container with an unreachable Valkey never reaches
+  ``VALKEY_URL`` is set, with a usable ``FORAGE_CACHE_HMAC_KEY``:
+  ``/health`` reports ``degraded`` for ``cache_unavailable`` or
+  ``cache_unauthenticated`` just as it does for ``promptguard_unavailable``, so a
+  weights-loaded container with an unreachable or unsigned Valkey never reaches
   ``healthy``. The three PromptGuard-coupled checks
   invert: ``status`` is exactly ``"healthy"``, ``promptguard_unavailable`` is
   *absent* from ``degraded_reasons``, and ``capabilities`` *does* advertise
@@ -61,8 +63,8 @@ raise it for a container fetching weights cold.
 **``--anchor``** names the committed anchor the in-image copy is verified
 against — by default this checkout's ``contract/openapi.yaml.sha256``. To verify
 a release image from any checkout, pass the anchor committed at that tag
-(``git show v1.1.0:contract/openapi.yaml.sha256 > anchor.sha256``, or a clean
-checkout of the tag). Take it from the git history only —
+(``git show v1.2.0:contract/openapi.yaml.sha256 > anchor.sha256`` after the cut,
+or a clean checkout of the tag). Take it from the git history only —
 never from the Release assets and never from the image. Both are mutable
 copies, and a tampered document-plus-anchor pair verifies against itself.
 
@@ -92,9 +94,9 @@ Run it by hand against a container, or anything else serving the contract::
     uv run python contract_smoke.py --base-url http://127.0.0.1:8020 \
         --image forage:ci --expect-status degraded
 
-    # a weights-loaded container, verified against the anchor at its tag
+    # after the v1.2.0 cut: a weights-loaded container and its tagged anchor
     anchor="$(mktemp)"
-    git show v1.1.0:contract/openapi.yaml.sha256 > "$anchor"
+    git show v1.2.0:contract/openapi.yaml.sha256 > "$anchor"
     uv run python contract_smoke.py --base-url http://127.0.0.1:8020 \
         --image <ref> --expect-status healthy --anchor "$anchor" \
         --timeout-seconds 600

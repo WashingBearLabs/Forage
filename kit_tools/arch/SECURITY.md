@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document authentication, authorization, and secrets management. Security architecture reference.
 
-> Last updated: 2026-09-16
-> Updated by: Claude (seed-project)
+> Last updated: 2026-09-22
+> Updated by: Copilot (hardening-promptguard-86m US-006)
 
 ---
 
@@ -22,6 +22,12 @@ Two facts shape the whole threat model:
 
 1. **Outbound fetching is the job**, so server-side request forgery is the standing threat. Anyone who can reach port 8020 can make Forage fetch a URL of their choosing; the defences in `url_validator.py` and `pipeline/stage5_url_audit.py` decide which URLs are refused.
 2. **There is no authentication on any route.** Eight paths are reachable, all unauthenticated: `GET /health`, `GET /metrics`, `POST /search`, `POST /retrieve`, `POST /extract` (404 until `extract_route_enabled: true`), plus FastAPI's `/openapi.json`, `/docs` (an interactive client for an SSRF-capable service), and `/redoc` (`/docs/oauth2-redirect` also answers but is inert). Network placement is the operator's first control; everything below is defence in depth behind it. `GET /health` deliberately discloses the resolved search chain and paid-key presence, by design (`search_providers`, `capabilities.brave_api_key`; `search-policy-and-health` US-002) — never the key value itself, and never over a second channel that `/search` varies by (see "Documented non-vulnerabilities").
+
+`/health.promptguard_model` unconditionally publishes the startup-selected id,
+not readiness. The identity is contract-relevant and inferable from behaviour;
+contiguity settings are tuning an attacker would otherwise have to guess and
+are not published here. This is not a secrecy claim: the planned per-rule
+metrics offer a differential channel, recorded below.
 
 **Auth provider:** none, by design (see "Authentication and Authorization").
 **Secrets management:** runtime environment variables only; no secret store, no build-time secrets.
@@ -36,6 +42,7 @@ The security architecture at a glance:
 | Prompt-injection signalling and quarantine | `pipeline/stage1_extraction.py`, `pipeline/stage1_pdf.py`, `pipeline/stage2_structural.py`, `pipeline/stage3_promptguard.py`, `pipeline/stage4_structuring.py` | `tests/test_stage1_extraction.py`, `tests/test_stage1_pdf.py`, `tests/test_stage2_structural.py`, `tests/test_stage3_promptguard.py`, `tests/test_orchestrator.py` |
 | Input bounds and process isolation | `models.py`, `pipeline/extraction_limits.py`, `pipeline/stage1_upload.py`, `pipeline/pdf_subprocess.py`, `retrieval_app.py` | `tests/test_app.py`, `tests/test_contract_errors.py`, `tests/test_models.py` |
 | Secrets hygiene | `Dockerfile` (zero `ARG`), `cache.py`, `model_fetcher.py`, `docker-entrypoint.sh` | `tests/test_dockerfile.py`, `tests/test_cache.py`, CI `secret-grep` |
+| Cache-value integrity and authenticity, when keyed | `cache.py` key-bound HMAC envelope and atomic byte-bounded read; `retrieval_app.py` boot signing verdict | `tests/test_cache.py`, `tests/test_app.py` |
 | Supply-chain integrity | `uv.lock`, `Dockerfile`, `weights_manifest.json`, `contract/openapi.yaml.sha256`, `.github/workflows/ci.yml` | `tests/test_dependency_lock.py`, `tests/test_model_fetcher.py`, `tests/test_contract_export.py`, `tests/test_ci_workflow.py` |
 | Honest degradation | `retrieval_app.py` `/health` | `tests/test_app.py`, CI `smoke` (`contract_smoke.py`) |
 
@@ -74,16 +81,46 @@ Use GitHub private vulnerability reporting (verified enabled 2026-09-11). There 
 
 ## SSRF Defences
 
-There are two entry points: `validate_url(url, blocked_domains)` in `url_validator.py`, and `fetch_url(...)` in `pipeline/stage5_url_audit.py`. `/retrieve` validates once before the cache lookup (`pipeline/orchestrator.py`) and again inside every fetch hop; `/search` validates every SearXNG result URL and counts failures under `omitted_by_reason["invalid_url"]` rather than fetching them.
+There are two entry points: `validate_url(url, blocked_domains)` in `url_validator.py`, and `fetch_url(...)` in `pipeline/stage5_url_audit.py`. `/retrieve` validates once before the cache lookup (`pipeline/orchestrator.py`) and again inside every fetch hop; `/search` validates every result URL and counts failures under `omitted_by_reason["invalid_url"]` rather than fetching them.
+
+Since `hardening-search-sanitization` US-002 that validation is an **ordered registry of named rule functions** (`_SEARCH_URL_RULES` in `pipeline/orchestrator.py`), run over the **raw provider value** rather than a normalized one, first rejection wins, each rule pure and unit-testable on its own: **(0) presence and length** — a non-`str`, `None`, empty or whitespace-only value is `missing`; surrounding whitespace is trimmed (a trailing newline in an engine's JSON field costs nothing) and a value longer than 2 048 characters is `too_long`. **Rejection, never truncation**: a shortened URL points at a different resource, and nothing downstream — `html.unescape`, `unquote`, `urlsplit`, `scan_structural` — is ever handed more than the bound, which is what keeps `scan_structural` (no input cap of its own, `_line_number_of` O(n) per match) off the denial-of-service ladder. **(1) raw character class** — any C0/C1 control, tab/LF/CR, any other Unicode whitespace, or any RFC 3986 excluded character (`<`, `>`, `"`, `{`, `}`, `|`, `\`, `^`, backtick) is `raw_chars`. Rejection, never deletion: the old path deleted these and served the mutated URL, so `http://example.com/\x01foo` reached the wire as `http://example.com/foo`. **(2) parse** — a `ValueError` from `urlsplit` itself is `unparseable` (a bracketed IPv6 literal is validated eagerly), one from the `parsed.port` read is `invalid_port`, a non-`http(s)` scheme or a missing hostname is `parse`, and userinfo is `userinfo`. **(3) host code points** — no WHATWG forbidden domain code point may appear in `parsed.hostname` (`host_code_point`), except that an IPv6 literal's colons are exempt while a `%25` zone id is `zone_id`. **(4) structural scan, two texts** — only a URL every earlier rule cleared is canonicalised, and Stage 2 then scans **both** `html.unescape(value)` and `unquote(html.unescape(value))`, exactly one percent-decode pass. Neither text is routed through `extract_html`: the extractor eats tag-shaped text, which is how an envelope tag could ride a path onto the wire unscanned.
+
+Since `hardening-search-sanitization` US-003 three further rules run between (3) and (4) — the **search-time host audit**, which resolves no DNS at all. **(3a) canonicalise**, `url_validator.canonicalize_host`, literals first and in this order: a colon-bearing host is an IPv6 literal, recognised structurally and parsed with `ipaddress` (it never reaches the UTS-46 encode, which raises on U+003A, so the branch cannot be reached by an NFKC-mapped spelling); every other host loses **exactly one** trailing dot (a host still ending in a dot, or carrying an empty interior label, is `idna` — `localhost..` would otherwise strip to `localhost.`, which matches neither blocklist entry and would be served), is lower-cased, is UTS-46-encoded through `idna` (a direct dependency floored at `>=3.7` for CVE-2024-3651, since the hosts reaching that call are provider-controlled), and is classified **only then**: a host whose every label is a decimal or `0x`-hex digit run is numeric and must parse as a canonical dotted quad, so `2130706433`, `0177.0.0.1`, `0x7f000001`, `0x7f.0.0.1` and `127.1` are `numeric_host` rather than names a resolver would answer `127.0.0.1` for. Classifying **after** the encode is the point: `①②⑦.⓪.⓪.①` and `127。0。0。1` are not numeric until UTS-46 maps them. **(3b) address class** — an IPv4 or IPv6 literal goes through `private_address_class`, and a non-`None` verdict is `blocked_url` carrying the class (`private_literal` or `embedded_private`) as its log token. **(3c) blocklisted name** — a canonicalised name on the built-in private-name list is `blocked_url` / `blocklisted_name`.
+
+Two properties are worth stating explicitly. First, **the fetch-time boundary has not moved**: `validate_url` remains the DNS-pinned check, and the search-time audit is purely lexical — it never resolves a URL nobody asked to fetch, which is both ruling 7 and the reason the hermetic socket guard turns any slip into a red test. Second, **`omitted_by_reason["blocked_url"]` is not an internal-network oracle**. Because the audit is lexical, the counter tells an unauthenticated caller only that *a provider returned an internal-looking address* for their query; it performs no lookup, so it cannot confirm that any host exists, resolves or is reachable from inside the network. The cost of the IDNA2008 encode is a deliberate **yield cut**: a handful of hosts a permissive resolver would accept — an underscore label, a label over 63 bytes — are refused as `idna` rather than served, and that trade is accepted.
+
+The URL-side guarantee is therefore: **the served `url` is the provider's trimmed raw value modulo canonicalisation** (scheme and host lower-cased, fragment dropped, IPv6 re-bracketed), **at most 2 048 characters, and both its entity-decoded and its once-percent-decoded forms were scanned**. The reason split is deliberate: rules (0)–(3) and (3a) count under `invalid_url`, (3b)–(3c) under `blocked_url` and rule (4) under `structural_blocked`, each rejection counted exactly once under the first rule that fired. `domain` is computed only after every rule passes, so it is never derived from a rejected or blocked URL; it is `CanonicalHost.host`, the canonicalised ASCII form, so an IDN result's `domain` is punycode while its `url` keeps the provider's spelling. Every `invalid_url` rejection emits one content-free `search_url_rejected rule=<token> provider=<name>` record and every block one `search_url_blocked host_class=<token> provider=<name>` — the token and the provider name, never the URL or its host (invariant 6). The two vocabularies are disjoint by construction (`SearchUrlRule` and `SearchHostClass`), so aggregating on one never picks up the other.
+
+Since `hardening-search-sanitization` US-001 a result's `title` and `snippet` are **scanned newline-preserved and shipped collapsed**: `_scan_forms_for_search_text` returns `(wire_form, scan_form)` with `wire_form == " ".join(scan_form.split())`, so every non-whitespace character on the wire was scanned, in order, and a payload cannot be padded past the scan and left on the wire. Two entity decode levels run before the scan — the HTML parser's one level in text nodes, then `html.unescape` for the second, so `&#83;ystem:` and `&amp;lt;system&amp;gt;` are both blocked rather than served — and **two control strips** bracket them: the first on the raw provider value, because the parser maps a raw NUL to U+FFFD which is outside `_CONTROL_CHARS_RE`'s class, and the second after both decodes, because `stage1_extraction._normalize_text` removes only nine zero-width and bidi code points, not C0/C1. Truncation happens once, on the scan form, and `extract_html` never receives more than `_SEARCH_PARSER_INPUT_MULTIPLIER * max_length` characters per field.
 
 ### `validate_url`
 
 - **Scheme allowlist.** Only `http` and `https`; anything else raises `ValueError`, surfaced as `invalid_url`.
-- **Hostname rejection.** `_BLOCKED_HOSTNAMES = {"localhost"}` and `_BLOCKED_SUFFIXES = {".local"}`, matched case-insensitively.
-- **Reserved-range rejection** (`_is_private_ip`). Fifteen IPv4 networks: `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10` (carrier-grade NAT), `127.0.0.0/8`, `169.254.0.0/16` (link-local, which covers the `169.254.169.254` cloud-metadata endpoint), `172.16.0.0/12`, `192.0.0.0/24`, `192.0.2.0/24`, `192.168.0.0/16`, `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24`, `224.0.0.0/4`, `240.0.0.0/4`, `255.255.255.255/32`. Six IPv6 networks: `::1/128`, `fe80::/10`, `fc00::/7`, `::ffff:0:0/96`, `2001:db8::/32`, `ff00::/8`. IPv4-mapped IPv6 addresses are unwrapped and checked against the IPv4 list; `0.0.0.0` and `::` are rejected explicitly.
+- **Hostname rejection.** `_BLOCKED_HOSTNAMES = {"localhost"}` and `_BLOCKED_SUFFIXES = {".local", ".localhost"}`, matched case-insensitively. The `.localhost` suffix landed in `hardening-search-sanitization` US-003: RFC 6761 §6.3 reserves the whole domain for loopback, so `api.localhost` is `localhost` with a label prepended and was accepted before.
+- **Reserved-range rejection** (`_is_private_ip`). Fifteen IPv4 networks: `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10` (carrier-grade NAT), `127.0.0.0/8`, `169.254.0.0/16` (link-local, which covers the `169.254.169.254` cloud-metadata endpoint), `172.16.0.0/12`, `192.0.0.0/24`, `192.0.2.0/24`, `192.168.0.0/16`, `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24`, `224.0.0.0/4`, `240.0.0.0/4`, `255.255.255.255/32`. Six IPv6 networks: `::1/128`, `fe80::/10`, `fc00::/7`, `::ffff:0:0/96`, `2001:db8::/32`, `ff00::/8`. **Five classes of embedded IPv4 are unwrapped** and checked against the IPv4 list instead — IPv4-mapped (`::ffff:a.b.c.d`), 6to4 (`2002::/16`), Teredo (the *client* field, which is the ones-complement of the low 32 bits, so a literal that looks like it embeds `127.0.0.1` embeds `128.255.255.254`), NAT64 (low 32 bits, **only inside `64:ff9b::/96`**) and IPv4-compatible (low 32 bits, **only inside `::/96`**) — the first match deciding, and returning at once so a public embedding is never re-blocked by `::ffff:0:0/96`. The transition ranges are unwrapped **with their prefix guards and never blanket-listed**: `64:ff9b::/96` maps the whole public IPv4 space, so a list entry would make an IPv6-only DNS64/NAT64 deployment refuse every fetch, and an unguarded low-32 mask would refuse ordinary public IPv6 whose low 32 bits land in a private range (`2a00:1450:4001:80e::200e` masks to `0.0.32.14`). ISATAP is deliberately not unwrapped — its prefix is deployment-specific and not enumerable. `0.0.0.0` and `::` are rejected explicitly, and `::1` is named before the `::/96` unwrap so a loopback literal is reported as a literal rather than as an embedding. The four embedded-private classes and the `.localhost` suffix are **newly refused** as of `hardening-search-sanitization` US-003 (`contract/GOVERNANCE.md` ruling (f)).
 - **Unparseable is private.** An address that `ipaddress` cannot parse is treated as private, so the check fails closed.
 - **Every resolved address is checked.** `socket.getaddrinfo` runs off the event loop; if *any* returned address is private the whole URL is rejected. DNS failure or an empty result is `invalid_url`.
-- **Exact-host blocklist.** The request's `blocked_domains` are merged with `config.yaml` `seed_blocklist` (currently `[]`) and matched case-insensitively as exact hosts; a hit raises `BlockedDomainError`, surfaced as `blocked_domain` (422), before any HTTP request is made.
+- **Dot-boundary blocklist.** The operator's `config.yaml` `seed_blocklist` (currently `[]`) and the request's `blocked_domains` are merged into both routes, operator-first. Canonical multi-label entries cover the apex and every subdomain: `evil.com` blocks `www.evil.com`, never `notevil.com`. IP literals and single-label entries match only themselves. On `/retrieve`, a hit raises `BlockedDomainError`, surfaced as `blocked_domain` (422), before any HTTP request. Private names are refused first as `private_ip`, even if also denylisted. On `/search`, matches are omitted as `blocked_url` after the lexical URL audit and before content scanning, without DNS or paid fallback. The content-free INFO token `host_class=policy_blocklist` distinguishes this expected policy from suspicious-host audit omissions.
+
+Allowlists deliberately differ: `example.com` matches only itself; `.example.com`
+includes the apex and every subdomain. A wildcard `trusted_domains` entry skips injection
+classification for all covered hosts; a wildcard `verified_domains` entry makes them
+degrade open on unavailable classification, even under `promptguard_fail_closed_floor`
+or a load-triggered wait timeout. Neither should name a multi-tenant or registry-level
+apex (`.co.uk`, `.github.io`, `.s3.amazonaws.com`). US-007's
+`retrieve.policy_suffix_trusted_skip` counts wildcard-caused uncached resolutions
+to either tier, even when verified content is classified.
+Single-label allowlists are invalid. The normaliser and host side share exactly one
+UTS-46 implementation; malformed hosts are refused regardless of configured lists.
+
+`/retrieve` normalises caller lists once in the handler under
+`policy_domain_entries_max_bytes` (65536 raw UTF-8 bytes per list, including
+separators). An over-budget denylist is refused before any entry canonicalisation;
+allowlists keep only the in-budget prefix and count the remainder as drops.
+Operator entries are unbudgeted, canonical at boot, and merged first. The three
+comparison sites now require canonical entries and still canonicalise their host.
+**The budget bounds encode work, not request-body admission:** FastAPI parses the
+whole JSON first; `/retrieve` and `/search` body sizes remain unbounded here.
 
 ### `fetch_url`
 
@@ -104,7 +141,7 @@ A `/retrieve` refusal `reason` echoes `URL '<url>' resolves to private IP <ip>` 
 | Reserved IPv4/IPv6 ranges, unparseable-is-private, `::` | `tests/test_url_validator.py::TestIsPrivateIP` (`test_private_ipv4`, `test_private_ipv6`, `test_unparseable_ip_is_private`, `test_zero_ipv6`) |
 | Any private address among several rejects the URL | `TestRFC1918Rejection::test_mixed_ips_rejected_if_any_private` |
 | `localhost` and `.local` regardless of case or nesting | `TestHostnameRejection::test_localhost_uppercase_rejected`, `::test_nested_local_domain_rejected` |
-| Exact-host blocklist | `TestBlockedDomains` |
+| Dot-boundary blocklist and exact-only single-label entries | `TestBlockedDomains`, `test_domain_matching` |
 | Scheme allowlist, DNS failure | `TestEdgeCases::test_unsupported_scheme_raises_valueerror`, `::test_dns_failure_raises_valueerror` |
 | Private IP reached mid-fetch or via redirect | `tests/test_stage5_url_audit.py::TestRFC1918DuringFetch`, `TestRedirectTracking::test_redirect_to_private_ip_rejected` |
 | Redirect budget and relative `Location` | `TestRedirectTracking::test_too_many_redirects`, `::test_relative_redirect_resolved` |
@@ -136,16 +173,69 @@ Forage never decides whether content is safe; it produces signals and, for the c
 | `exfil_beacon` | `suspicious` | a markdown image whose URL carries double-brace, `${`, or `%7B` templating |
 | `envelope_breakout` | `suspicious` | any `<`, `&lt;`, `&#60;`, or `&#x3c;` spelling of the `retrieved_content`, `retrieval_note`, `retrieval_warning`, or `retrieval_cache_note` tags |
 
+`/retrieve` pre-checks a fetched page's extracted text against the character ceiling derived from `retrieve.max_promptguard_chunks` **before** Stage 3 runs, and refuses an over-budget page 422 `content_too_large` with the fixed reason `promptguard_budget`, so one hostile page cannot burn unbounded classification CPU. The classifier's own `PromptGuardBudgetExceededError` is caught around the same call and mapped to the same refusal as a backstop. At the shipped default of `0` there is no pre-check (`contract/GOVERNANCE.md` ruling (g)).
+
 A blocking hit yields verdict `blocked` and quarantine. Each suspicious hit costs `-0.15` trust, capped at `-0.45` (`penalty = max(-0.45, -0.15 * suspicious_count)`); blocking always overrides suspicious. `tests/test_stage2_structural.py` (78 tests) has a class per category plus `TestMixedContent::test_blocking_overrides_suspicious` and `::test_penalty_cap`.
 
 ### Stage 3: Llama Prompt Guard 2
 
-`promptguard/classifier.py` loads `meta-llama/Llama-Prompt-Guard-2-22M` (a DeBERTa-v3 sequence classifier) on CPU with `use_safetensors=True`. Text is chunked at `MAX_SEQ_LEN = 512` tokens with `CHUNK_OVERLAP = 64`, up to `MAX_PROMPTGUARD_CHUNKS = 64`; over budget raises `PromptGuardBudgetExceededError` rather than silently classifying a prefix. `pipeline/stage3_promptguard.py` applies `DEFAULT_THRESHOLD = 0.85` (`config.yaml` `promptguard_threshold`; overridable per `/retrieve` request within 0.0 to 1.0): a score above threshold is `injection_detected` with `INJECTION_PENALTY = -0.5`.
+`promptguard/classifier.py` loads `meta-llama/Llama-Prompt-Guard-2-22M` (a DeBERTa-v3 sequence classifier) on CPU with `use_safetensors=True`. Text is chunked at `MAX_SEQ_LEN = 512` tokens with `CHUNK_OVERLAP = 64`, up to `MAX_PROMPTGUARD_CHUNKS = 64`; over budget raises `PromptGuardBudgetExceededError` rather than silently classifying a prefix. `pipeline/stage3_promptguard.py` applies the handler-resolved threshold (`config.yaml` `promptguard_threshold`, shipped as 0.85; overridable per `/retrieve` or `/search` request within 0.0 to 1.0, then operator-capped): a score above threshold is `injection_detected` with `INJECTION_PENALTY = -0.5`.
+
+Stage 3 consumes `classify_windows`: the unchanged **max-score** rule fires on
+`max_score > threshold`; the opt-in **contiguity** rule fires on any run of at
+least `promptguard_contiguity_windows` scores `>= promptguard_contiguity_threshold`.
+Either blocks. Windows ships at `0` (off), otherwise 2–8; the run threshold ships
+at `0.5` and is absolute/server-side, never a per-request override. Both values
+enter the sanitizer revision. `/search` coverage is content-dependent: character
+caps do not imply a one-window input. Both-rule results carry the document-order
+union of flagged window indices internally, but quarantine replaces those texts
+with the existing diagnostic label before the wire.
+
+**Residuals in both directions.** Fragments separated by one benign roughly
+448-token window can still pass both rules. Conversely, sustained mid-band text
+placed by an attacker in a comment or review can aim to block the entire page
+or omit its search result once the rule is enabled. Adjacent windows share
+`CHUNK_OVERLAP = 64` tokens, so correlated scores are not independent evidence.
+Both evasion and adversarial false-positive shapes must enter
+`epic-forage-injection-corpus` before a default flip. Dedicated per-route counters
+are the aggregate signal; the WARNING `promptguard_contiguity_verdict` carries
+only the longest qualifying run and total window count as the per-event signal.
+
+The acquisition path verifies the requested `(model_id, revision)` against that
+model's own exact-set manifest entry. `_load_verified` re-derives the manifest and
+requested snapshot paths and requires equality plus directory existence before
+calling `load()`. The classifier checks only that the supplied hub-cache directory
+exists: **the classifier trusts the path the verifier handed it**. This is one
+agreement check, not two independent observations, and it does not close a
+filesystem-mutation race after hashing. Model metadata such as `_name_or_path`
+is not identity evidence. Missing entries and unpinned revisions refuse before
+any snapshot lookup or source attempt.
 
 Two policy branches matter for security:
 
 - **Trusted-tier skip.** `trust_tier == "trusted"` skips inference entirely (`promptguard_state: skipped_trusted`). Marking a domain trusted means opting it out of the ML scan.
 - **Model absent, fail closed.** With `promptguard_fail_closed=True` (the default), `standard` and `untrusted` content is blocked (`unavailable_blocked`, penalty `-0.5`); with `fail_closed=False`, or for the `verified` tier, it is allowed with `-0.1` (`unavailable_allowed`). `/extract` ignores request policy and always runs as `TrustTier.UNTRUSTED` with `promptguard_fail_closed=True`.
+
+**Operator policy (hardening-retrieve-parity US-005).** The floor is the operator's,
+the request is the consumer's; the floor bounds `promptguard_fail_closed` and the
+ceiling bounds `promptguard_threshold`; neither overrides caller-supplied trust tiers,
+which decide whether the flag is consulted at all — the `trusted_tier` skip and the
+VERIFIED fail-open exemption. The floor covers `/retrieve` and `/search`, default
+`false`; the threshold ceiling covers both fetch routes, default `1.0`.
+Null/omitted thresholds resolve to the validated config default before capping.
+`/extract` remains permanently fail-closed with its own threshold; neither bound
+reaches it and it carries neither field. Wrong-typed floors and invalid ceilings
+refuse boot. Config delivery is [config.yaml-only](../../docs/configuration.md#top-level-promptguard-policy-keys),
+with the full bind-mount procedure owned by spec 6.
+
+Handlers replace the request once, before both the cache fingerprint and pipeline
+read it, then stamp `effective_promptguard_fail_closed` (both routes) and
+`effective_promptguard_threshold` (both routes) on every 200, including cache
+hits; 422 bodies carry neither. The fields report **policy applied, not whether
+content was scanned**. The flag decides behaviour only when classification is
+unavailable to the request (absent or permit wait timed out). `promptguard_state`
+(`/retrieve`) and omissions / `suspicious` / `promptguard_unavailable` /
+`unscanned_results` (`/search`) describe what actually happened.
 
 ### Quarantine
 
@@ -155,9 +245,15 @@ When stage 2 says `blocked` or stage 3 says `injection_detected`, `finalize_quar
 
 `pipeline/stage4_structuring.py` composes `trust_score` from a per-tier base in `_BASE_SCORES` (`trusted` 0.95, `verified` 0.85, `standard` 0.70, `untrusted` 0.40, `blocked` 0.0) plus the stage-2 penalty, the stage-3 penalty, and `-0.1` for a redirect that changed domain, clamped to 0 to 1. The tier is resolved per request by `orchestrator._resolve_request_trust_tier` in the order `blocked_domains`, then `trusted_domains`, then `verified_domains`, else `standard`; `config.yaml` `news_domains` affects cache TTL only. The wire fields a consumer should read are `injection_detected`, `injection_spans`, `structural_flags`, `stage2_verdict`, `stage3_verdict`, `promptguard_state` (one of `scanned`, `skipped_trusted`, `structural_blocked`, `unavailable_blocked`, `unavailable_allowed`), `trust_score`, `trust_tier`, `redirect_chain`, and `domain_changed_on_redirect`; `/search` adds `omitted_by_reason`, `unscanned_results`, and `promptguard_unavailable`. The vocabulary is fixed in `pipeline/contract.py`.
 
-### Observation: `/search` scans at the hard default
+### Shared fetch threshold, separate raw upload guard
 
-The `/search` handler makes one stage-3 pass over the title, URL, and snippet of each result at `standard` tier and does not pass `config.yaml`'s `promptguard_threshold`, so it always scans at the hard default 0.85 even when the operator has changed the threshold that `/retrieve` and `/extract` honour. The architecture exploration recorded this as an observation; nothing in the repo documents it as intentional, and no decision has been made.
+`/search` scans title, URL and snippet at `standard` tier using the same threshold
+resolver as `/retrieve` (hardening-hostname-and-config US-005). The validated default
+is boot state, never re-read per request; the resolved float reaches classification
+and the retrieve cache fingerprint explicitly. `/extract` retains its raw `float()`
+conversion and range guard. A YAML boolean `true` therefore disables blocking on
+`/extract` only, while both fetch routes warn and use 0.85; this known divergence
+is pinned by a regression test, not silently repaired.
 
 ### Tests
 
@@ -171,7 +267,36 @@ The `/search` handler makes one stage-3 pass over the title, URL, and snippet of
 
 `models.py` (Pydantic v2) bounds every request field but one (`SearchRequest.providers`, below): `RetrieveRequest.url` has `min_length=1`, `extract_mode` is a `Literal`, `cache_ttl_hours` is 0 to 8760, `promptguard_threshold` is 0.0 to 1.0; `SearchRequest.query` has `min_length=1` and `num_results` is 1 to 20. Response `content_type` validators restrict to `html`, `pdf`, or `text`. Pinned by `tests/test_models.py::TestRetrieveRequest` and `::TestSearchRequest`.
 
-`SearchRequest.providers` and its items carry no pydantic bound by design — no `maxItems`, no `maxLength`, no pattern (`allow_paid_fallback` is a plain `bool`). A validation 422 echoes the offending value verbatim under `detail[].input`, which would make the field an unbounded reflector of caller text on a service whose contract is that every returned string was sanitized; the only 422 the field can produce is pydantic's type error, shared with every field. The bound lives in the policy function instead, `apply_request_policy` in `pipeline/search_providers/policy.py`: it normalises each entry (`strip()`, lower-case), considers only the first eight, and every considered entry either matches a configured provider or is ignored; ignored entries, including every one past the eighth, are counted on `/metrics` `search.policy_unknown_provider` and never stored, echoed or logged (`search-policy-and-health` US-010). Pinned by `tests/test_models.py::TestSearchRequest` (no schema bound) and `tests/test_search_policy.py`.
+`SearchRequest.providers` and its items remain unbounded at the pydantic schema —
+no `maxItems`, no `maxLength`, no pattern (`allow_paid_fallback` is a plain `bool`).
+The echo risk that originally motivated that split is now **closed** on the
+request-validation 422 path for `/search`, `/retrieve` and enabled `/extract`
+(`hardening-release` US-001; GOVERNANCE ruling (l)). The surviving rationale is
+that a request-side bound tightens acceptance under "Example 6 in full"; the
+effect is already bounded in `apply_request_policy`
+(`pipeline/search_providers/policy.py`), which normalises (`strip()`, lower-case)
+only the first eight entries and matches or ignores them. Ignored entries,
+including those beyond eight, still increment `search.policy_unknown_provider`
+without storing, echoing or logging them. Full-body parse cost stays under the
+unchanged exhaustion-by-an-admitted-caller row below; this is not body admission.
+Pinned by `tests/test_models.py`, `tests/test_contract_errors.py` and
+`tests/test_search_policy.py`.
+
+**Validation invariants:** no value from the request reaches a log or a traceback
+from the request-validation path. `exc.body` and `str(exc)`/`repr(exc)` are the
+carriers and must never be logged or chained by a handler raise. The total handler
+coerces messages/types, drops non-mappings and catches construction/rendering
+failures into `422 {"detail": []}`. Request validators must keep `msg` stock and
+content-free and must never interpolate a caller value into a `PydanticCustomError`
+code. Runtime `loc` enforcement retains integer indexes and only the framework
+segments `body`, `query`, `path`, `header` plus the matched route's owned
+model fields (or `/extract`'s signature-pinned Form/File names). No or unknown
+matched route drops every non-framework string; other segment types are dropped,
+never replaced. Structural canaries additionally disallow `extra="forbid"` and
+mapping-typed request fields. The handler obtains the route only from
+`request.scope["route"].path`, then closes it to `/search`, `/retrieve`, `/extract`
+or `other`, never logging the caller's path. Pipeline 422 `reason` is unchanged:
+ruling (d)'s resolved-private-IP echo remains deliberately outside this closure.
 
 ### The `/extract` release gate
 
@@ -179,25 +304,59 @@ The `/search` handler makes one stage-3 pass over the title, URL, and snippet of
 
 ### Upload ceilings
 
-`pipeline/extraction_limits.py` defines hard ceilings that `config.yaml` may lower but never raise: `MAX_INPUT_BYTES` 50 MiB, `MAX_PDF_PAGES` 500, `MAX_CHILD_CPU_SECONDS` 20, `MAX_CHILD_ADDRESS_SPACE_BYTES` 384 MiB (Linux `RLIMIT_AS`), `MAX_EXTRACTION_WALL_SECONDS` 90, `MAX_EXTRACTED_OUTPUT_BYTES` 2 MiB, and a character ceiling of `(512 - 64) * 64 * 4 = 114688` derived from the PromptGuard chunk budget. `extraction_settings_from_config` rejects booleans-as-integers and out-of-range values with `ExtractionConfigurationError`.
+`pipeline/extraction_limits.py` defines hard ceilings: `MAX_INPUT_BYTES` 50 MiB,
+`MAX_PDF_PAGES` 500, `MAX_CHILD_CPU_SECONDS` 20, `MAX_EXTRACTION_WALL_SECONDS` 90,
+`MAX_EXTRACTED_OUTPUT_BYTES` 2 MiB, and a character ceiling of
+`(512 - 64) * 64 * 4 = 114688` derived from the PromptGuard chunk budget.
+These remain ceilings, unlike three keys that may exceed shipped values:
+`classification_concurrency` (1–8 under the memory rule and boot
+`envelope_memory_rule_unmet` WARNING), `child_address_space_bytes` (128–512 MiB),
+and `admission_queue_depth` (0–4). Despite its name, `MAX_CHILD_ADDRESS_SPACE_BYTES`
+is the **384 MiB shipped default**, not the maximum: raising the key widens the
+untrusted-PDF child's Linux `RLIMIT_AS`. `extraction_settings_from_config` rejects
+booleans-as-integers and out-of-range values with `ExtractionConfigurationError`.
+See [`docs/configuration.md` § Sizing the container](../../docs/configuration.md#sizing-the-container).
 
 ### The upload path
 
-In `retrieval_app.py`, `DocumentSizeLimitMiddleware` counts ASGI body bytes as they arrive and does **not** trust `Content-Length`; `_spool_upload` spools to a `0600` temp file under a second cap and always unlinks it; `_sanitize_upload_metadata` bounds `filename` and `mime_hint` to 255 characters, constrains `request_id` to `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`, strips control characters, reduces `filename` to a basename, and rejects `""`, `.`, and `..`. `UploadProvenance` in `models.py` documents that `filename` and `mime_hint` are display-only and never used as filesystem paths.
+In `retrieval_app.py`, `DocumentSizeLimitMiddleware` counts ASGI body bytes as they arrive and does **not** trust `Content-Length`; `_spool_upload` spools to a `0600` temp file under a second cap and always unlinks it — inside `pipeline.pdf_subprocess.spool_dir()`, the process-private `0700` `forage-spool-<uid>` directory (created with that mode, verified with `lstat` on every call and refused rather than repaired if it is a symlink, a non-directory, foreign-owned or group/other-accessible; the lifespan's check refuses boot); `_sanitize_upload_metadata` bounds `filename` and `mime_hint` to 255 characters, constrains `request_id` to `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`, strips control characters, reduces `filename` to a basename, and rejects `""`, `.`, and `..`. `UploadProvenance` in `models.py` documents that `filename` and `mime_hint` are display-only and never used as filesystem paths.
 
 ### Content-type detection and process isolation
 
-`pipeline/stage1_upload.py` decides the format from bytes, not from the caller: `%PDF-` magic wins; otherwise the body must decode as strict UTF-8, contain no NUL byte, and have at most 5 % non-whitespace control characters (`_MAX_CONTROL_CHARACTER_RATIO = 0.05`); `mime_hint` is explicitly discarded (`del mime_hint`). PDF parsing runs in a spawned, killable subprocess (`pipeline/pdf_subprocess.py`) under `RLIMIT_CPU`, `RLIMIT_AS`, and a `setitimer` wall clock; the result comes back over a length-framed JSON pipe capped at `max_ipc_result_bytes`, and parser exceptions map to fixed status tokens so document-derived text never crosses the pipe.
+`pipeline/stage1_upload.py` decides the format from bytes, not from the caller: `%PDF-` magic wins; otherwise the body must decode as strict UTF-8, contain no NUL byte, and have at most 5 % non-whitespace control characters (`_MAX_CONTROL_CHARACTER_RATIO = 0.05`); `mime_hint` is explicitly discarded (`del mime_hint`). PDF parsing runs in a spawned, killable subprocess (`pipeline/pdf_subprocess.py`) under `RLIMIT_CPU`, `RLIMIT_AS`, and a `setitimer` wall clock; the result comes back over a length-framed JSON pipe capped at `max_ipc_result_bytes`, and parser exceptions map to fixed status tokens so document-derived text never crosses the pipe. Since `hardening-retrieve-parity` US-003 this is true of **both** routes: a fetched PDF on `/retrieve` is spooled to a `0600` `forage-retrieve-*` file in the same private directory and parsed by the same worker under `/extract`'s rlimits, and every failure is a coded 422 (`extraction_failed` with a fixed reason, or `content_too_large` / `promptguard_budget`) rather than the 500 an in-process `pypdf` exception produced before. The spool file holds fetched third-party content; it is unlinked on every normal exit path, and an orphan left by a SIGKILL on a non-tmpfs `TMPDIR` is content-bearing (`docs/configuration.md`, "The spool directory").
 
 ### Admission control (the only rate limiting)
+
+On `/retrieve`, task cancellation waits for the bounded PDF worker to be reaped and the
+spool unlinked before releasing admission, including repeated `Task.cancel()` calls.
+The Python thread cannot itself be cancelled; retaining and draining its task prevents
+live PDF work from escaping the admission budget. This fixes the recovered US-003
+candidate, not the distinct pre-existing queued-waiter handoff residual below.
 
 | Route | Limit | Over capacity |
 |---|---|---|
 | `POST /extract` | `extraction_concurrency=1`, `admission_queue_depth=1` (configurable 0 to 4), `max_queued_upload_bytes` 50 MiB (`ExtractionAdmissionController`) | `429 {"error": "busy"}` |
-| PromptGuard inference, all routes | `classification_semaphore = asyncio.Semaphore(classification_concurrency=1)` | queued |
-| `POST /retrieve`, `POST /search`, `GET /health`, `GET /metrics` | none | not applicable |
+| PromptGuard inference, all routes | Shared `asyncio.Semaphore`, `classification_concurrency=1` shipped, configurable 1–8 under the memory rule; below-rule boot WARNING is advisory, not OOM protection | `/retrieve` and `/search` wait at most `promptguard_wait_seconds`, then take the classifier-unavailable outcome; `/extract` queues with **no wait timeout** |
+| `POST /retrieve` | a second `ExtractionAdmissionController` over fetch and stage 1 (`hardening-retrieve-parity` US-002): `retrieve.fetch_concurrency` (pinned 1), `retrieve.admission_queue_depth` (default 4, 0 to 16), `retrieve.max_queued_fetch_bytes` (default 30 MiB, one 10 MB reservation per queued request), a wait bounded by construction with no timer. A queued request holds no body; the body is released with the slot, before the classification wait. It bounds the *rate* through stage 1, not the population of classification waiters past it (no `--limit-concurrency`; each waiter holds at most ≈ 459 KB of extracted text) | `422 {"error": "busy", "reason": "admission_queue_full"}`, counted under `retrieve.busy_rejections`. PDF parsing inside the slot runs in the `/extract` worker under `/extract`'s rlimits (`child_cpu_seconds`, `child_address_space_bytes`, `wall_clock_seconds`, `max_pages`; `hardening-retrieve-parity` US-003); a worker failure is 422 `extraction_failed`, never a 500 |
+| `POST /search`, `GET /health`, `GET /metrics` | none | not applicable |
+
+"All routes" in that middle row was aspirational until `hardening-retrieve-parity` US-006; it is literally true now. All three classifying routes take the same permit around **stage 3 only** — `/extract` moved its acquisition inward from the outer `async with` that used to wrap stages 2, 3 and 4 — through one `_bounded_permit` context manager in `pipeline/orchestrator.py`, whose release runs only when the permit was actually acquired, so a timed-out wait can never strand it.
+
+**Security Considerations — a saturated semaphore is a route around the classifier.** When the permit is held and the wait expires, a `/retrieve` or `/search` request that set `promptguard_fail_closed: false` is served **unscanned**: the body is marked (`promptguard_state: unavailable_allowed` on `/retrieve`; `suspicious: true` with `promptguard_unavailable: true` and a non-zero `unscanned_results` on `/search`), but no ML classification ran. That outcome is load-triggerable on an unauthenticated service — an in-network caller who can saturate the single classification permit can steer another caller's fail-open request past Stage 3 — and it is counted, not silent: `retrieve.classification_wait_timeouts` and `search.classification_wait_timeouts` on `/metrics`, plus one WARNING per event carrying the closed token `classification_wait_timeout route=<retrieve|search>` and nothing caller-derived.
+
+**Under-sizing is a security decision:** a classification wait that outlives
+`promptguard_wait_seconds` is `unavailable_blocked` for fail-closed requests and
+`unavailable_allowed` (served unscanned and marked) for fail-open ones. An envelope
+that cannot keep the loop under the target chooses between availability and scanning
+for its fail-open callers; see `docs/configuration.md` § Sizing the container.
+
+Three things bound the exposure. **The policy posture:** the request default is `promptguard_fail_closed: true`, so STANDARD/UNTRUSTED fail-open outcomes require an explicit opt-out and an operator floor of `false` (the shipped default). Setting `promptguard_fail_closed_floor: true` closes that flag-controlled route, but not the caller's `trusted_tier` skip or VERIFIED fail-open exemption. **The cache is not poisonable through it:** a fail-open wait-timeout body is never written to the content cache. `cache_policy_fingerprint`'s `classifier_loaded` input assumes an unscanned body implies `classifier_loaded=False`, which a wait timeout breaks, so `run_retrieve_pipeline` refuses to store a body that is `unavailable_allowed` while the classifier is loaded — otherwise a saturation event lasting `promptguard_wait_seconds` would pin an attacker-chosen unscanned body for a whole `cache_ttl_hours` and replay it to every later request. The absent-classifier fail-open body still caches under its `classifier_loaded=False` key exactly as before. **Nothing is acquired that would not classify anyway:** with the classifier absent or still warming, or with the domain in `trusted_domains`, no route touches the permit and no counter moves.
+
+**The coupling runs one way, and `/extract` has no counter of its own.** `/extract`'s own admission controller bounds its fetch and extraction work, but no longer bounds its *classification* wait once fetch traffic holds the permit: `/extract` waits with **no wait timeout** and increments nothing when it does. So unauthenticated `/retrieve` and `/search` traffic can block an authenticated `/extract` classification for an unbounded time, and the only visible symptom is latency. This is accepted and recorded. `extract.route_enabled` ships `false`, so the exposure is latent until an operator turns the route on; widening `classification_concurrency` belongs to the resource-envelope spec.
 
 Resource exhaustion by a caller who is allowed to call is a documented non-vulnerability (root `SECURITY.md`). Note also that the companion `forage-searxng` ships `limiter: false`, because a working SearXNG limiter refuses the JSON API Forage depends on (`searxng/config/settings.yml`; `kit_tools/docs/GOTCHAS.md`).
+
+**Accepted residual — the admission handoff is not cancellation-safe.** The controller's `release()` does a **handoff**: it pops the first waiter, sets its result and returns *without* decrementing `_active`, the woken waiter inheriting the slot; `acquire()`'s `except BaseException` restores accounting only for a waiter still in `_waiters`. So a waiter cancelled after its grant loses the slot — and the window is wider than that: `Task.cancel()` marks the awaited future done at once, so a waiter cancelled while still **queued** has `waiter.done()` before its own `except` runs, and if the holder's `release()` takes the lock in that window it pops the cancelled future, decrements `_queued_bytes`, skips `set_result` and returns without decrementing `_active`; the woken task then finds itself gone from `_waiters` and restores nothing. Net: `active == limit` with nobody holding a slot, and at `fetch_concurrency: 1` one occurrence wedges `/retrieve` for the life of the process — reachable by a plain queued cancellation racing a normal release, not only by a post-grant cancellation. It is latent on `/extract` (the route ships disabled) and reachable on `/retrieve` only by task cancellation — server shutdown; Starlette does not cancel a handler task when an HTTP client disconnects — and never by a timer, because no timer wraps `acquire()` (`hardening-retrieve-parity` US-002 declined one for exactly this reason). **Accepted residual, pre-existing, not fixed here.** Fix direction: make the handoff idempotent — `release()` always decrements, and the woken waiter re-increments under the lock. Open question for the resource-envelope spec.
 
 ### The documented-but-unreachable 413
 
@@ -207,11 +366,53 @@ Resource exhaustion by a caller who is allowed to call is a documented non-vulne
 
 ---
 
+## Cache Poisoning and Signed Values
+
+A `/retrieve` cache hit is served **without re-sanitization**. A cache key is computable
+from public code, the requested URL and policy; it is not an access-control secret.
+Without `FORAGE_CACHE_HMAC_KEY`, anyone able to write the shared Valkey can plant
+parseable, fabricated "already sanitized" content. Schema validation is not proof of
+origin. `/health` reports this open poisoning path as `cache_unauthenticated`, even
+when Valkey is reachable; process-private memory mode needs no key.
+
+With an **uncompromised, CSPRNG-generated** key, integrity and authenticity of cached
+values are assured: `ContentCache` verifies `v1.<hex-mac>.<json>` before parsing,
+using HMAC-SHA256 over `b"v1\0" + cache_key.encode() + b"\0" + payload` and a
+constant-time comparison. Copying a valid envelope to a different cache key does
+not verify. Valkey reads use one atomic `GETRANGE key 0 max_value_bytes`, never a
+racy size-probe-plus-read. Empty replies are misses; oversized, wrong-type,
+unsigned, malformed or unverifiable values are deleted and counted, not served.
+Forage's own write-side bound prevents new over-bound values from entering the cache.
+
+**Four residual risks remain:**
+
+| Residual | Consequence and control |
+|---|---|
+| **Availability, including log volume** | A cache writer can still delete or overwrite entries, forcing misses, outbound fetches and classifier inference. Every integrity rejection emits one **un-rate-limited WARNING**: a writer able to `SET` can drive one attacker-chosen rejection line per request for as long as they keep writing (closed reason and digest, not arbitrary logged payload). Aggregate cache-read work and reject-log volume remain **unbounded** here; existing fetch/worker admission is not an end-to-end request bound. Spec 6, [`feature-hardening-resource-envelope`](../specs/feature-hardening-resource-envelope.md), supplies the concurrency and latency controls intended to bound both. That is future work, not a shipped guarantee; log rate limiting remains an open question. |
+| **Confidentiality** | HMAC does not encrypt. A Valkey reader can see cached content and metadata; the digest is confirmable against a guessed URL. Restrict Valkey ACLs, network placement, transport and persistence access. |
+| **Replay** | A captured valid envelope restored under the same cache key pins one Forage-authored snapshot. Its signed `retrieved_at` and read-time TTL check bound replay to the effective `cache_ttl_hours` (news domains are additionally capped). Do not raise that window casually on shared Valkey: resetting Valkey's expiry does not reset the signed timestamp. |
+| **Key compromise** | A leaked or weak key lets an adversary forge envelopes that verify for any computable cache key with **zero `integrity_rejects`**. A flat counter cannot detect this. Stop every replica, rotate to a fresh CSPRNG value, then start the fleet with the same key; every prior signature is invalidated. Envelopes carry no key id, so there is no narrower revocation; key-id/scoped revocation remains an open question. |
+
+Length is not entropy: a passphrase of 32 bytes passes the boot floor but does not
+meet this security assumption. Follow the
+[generation and stop-all rotation recipe](../../docs/configuration.md#credential-handling-for-forage_cache_hmac_key).
+The [incident runbook](../docs/MONITORING.md#reading-cacheintegrity_rejects) distinguishes
+an upgrade's cold cache from a key-only migration's rejection burst and bound-reduction
+`oversize` from stronger foreign-writer signals. None of those counters can establish
+integrity after key compromise.
+
+The posture is deliberately advertised on **unauthenticated `/health`**, through
+`cache_unauthenticated` and `capabilities.cache_hmac_key`. Honest health outranks
+obscurity: anyone able to write the cache can already observe the same fact through
+whether unsigned content is accepted. The endpoint discloses presence, never the key.
+
+---
+
 ## Secrets Management
 
 ### Model
 
-Twelve-factor, runtime environment only. There is no Vault or OpenBao client, no secret store, and no configuration database (`README.md`; the comment in `retrieval_app.py` where `VALKEY_URL` is read). `docker-entrypoint.sh` is `set -euo pipefail` followed by `exec "$@"` and prints nothing, deliberately, so a `VALKEY_URL` password can never reach container logs at start. Rotation is "change the variable and restart". `docs/configuration.md` "Credential handling" is the operator reference: use an env file or a secret store, never inline `-e` (shell history, `ps`); remember that `docker inspect` exposes the environment to anyone with socket access. Variable-by-variable detail is in `kit_tools/docs/ENV_REFERENCE.md`.
+Twelve-factor, runtime environment only. There is no Vault or OpenBao client, no secret store, and no configuration database (`README.md`; the comment in `retrieval_app.py` where `VALKEY_URL` is read). `docker-entrypoint.sh` is `set -euo pipefail` followed by `exec "$@"` and prints nothing, deliberately, so a `VALKEY_URL` password can never reach container logs at start. Runtime changes require a restart; **cache-signing-key rotation requires stopping every replica before changing the key**, then starting them with the same new value. `docs/configuration.md` "Credential handling" is the operator reference: use an env file or a secret store, never inline `-e` (shell history, `ps`); remember that `docker inspect` exposes the environment to anyone with socket access. Variable-by-variable detail is in `kit_tools/docs/ENV_REFERENCE.md`.
 
 ### Secrets inventory
 
@@ -220,6 +421,7 @@ Twelve-factor, runtime environment only. There is no Vault or OpenBao client, no
 | `HF_TOKEN` | Gated Hugging Face download of the PromptGuard weights | No; absent is the supported degraded mode | Read at runtime by `model_fetcher.py`; never a build argument |
 | `FORAGE_MIRROR_TOKEN` | Read-only credential for the private OCI weights mirror | No | Passed to `oras` on stdin, never argv, log, or disk |
 | `VALKEY_URL` | Content-cache connection string; may embed a password (`redis://:PASSWORD@host:6379/4`) | No; fully unset means the in-memory cache | Read once at start; never logged (closed vocabulary below) |
+| `FORAGE_CACHE_HMAC_KEY` | Key-bound HMAC authentication for Valkey content-cache values | No; absent on Valkey means `degraded: cache_unauthenticated`; memory needs no key | **CSPRNG-generated**, never a passphrase; at least 32 UTF-8 bytes, never base64-decoded. Read once by `retrieval_app._resolve_cache_hmac_key()` at startup. Runtime only, never logged or built into an image. Invalid/short keys refuse boot; rotate with the stop-all procedure. |
 | `FORAGE_BRAVE_API_KEY` | API key for Brave's paid LLM-Context search endpoint | No; absent means a `brave` entry in `FORAGE_SEARCH_PROVIDERS` is skipped and the chain falls back to SearXNG | Read once at start by the lifespan (`retrieval_app._resolve_brave_key()`); travels only in the `X-Subscription-Token` header, never a URL or query string; never logged (`pipeline/search_providers/brave.py`'s closed vocabulary) |
 | `SEARXNG_SECRET` | The companion SearXNG's own secret | Yes for the companion; `${SEARXNG_SECRET:?...}` in compose, no baked default | Never read by Forage itself |
 
@@ -230,20 +432,20 @@ Related but not a secret: `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION` (alias `PO
 `Dockerfile` declares **zero** `ARG` instructions. A build ARG is not a secret: `docker history --no-trunc` reads it back out of any registry the image reaches. Two mechanical guards keep it that way:
 
 1. `tests/test_dockerfile.py::TestNoSecretEntersTheBuild`: `test_the_build_takes_no_arguments_at_all` (the absolute), `test_no_arg_declares_a_secret_name`, `test_no_env_declares_a_secret_name`, `test_no_instruction_assigns_a_secret_valued_variable`, `test_no_hf_token_in_any_instruction`, `test_no_model_bake_step`, `test_no_token_shaped_literal_anywhere`. The absolute is asserted because it is the part that survives review: once "no ARG" stops being true, the next one only has to look as harmless as the last.
-2. CI's `secret-grep` job runs `docker history --no-trunc` on the exact built artifact (scope: layer metadata, not file contents) and greps for three patterns: `HF_TOKEN`, `hf_[A-Za-z0-9]{20,}` and `FORAGE_BRAVE_API_KEY` (the variable name only; no bare `BRAVE_API_KEY`, no key-shape regex); the `publish` job re-greps the *published* image config for the same three patterns after push. The two copies are deliberately duplicated in `ci.yml` and pinned by one constant, `tests/test_ci_workflow.py::_REQUIRED_GREP_PATTERNS`, which both `::TestSecretGrepJob::test_secret_grep_pattern_set_is_defined_in_the_workflow` and `::TestPublishJob::test_publish_greps_the_published_config_for_secrets` iterate.
+2. CI's `secret-grep` job runs `docker history --no-trunc` on the exact built artifact (scope: layer metadata, not file contents) and greps for four patterns: `HF_TOKEN`, `hf_[A-Za-z0-9]{20,}`, `FORAGE_BRAVE_API_KEY` and `FORAGE_CACHE_HMAC_KEY` (the latter two are variable names only, no key-shape regex); the `publish` job re-greps the *published* image config for the same four patterns after push. The two copies are deliberately duplicated in `ci.yml` and pinned by one constant, `tests/test_ci_workflow.py::_REQUIRED_GREP_PATTERNS`, which both `::TestSecretGrepJob::test_secret_grep_pattern_set_is_defined_in_the_workflow` and `::TestPublishJob::test_publish_greps_the_published_config_for_secrets` iterate.
 
 The image is deliberately single-stage so that `docker history` covers everything (`tests/test_dockerfile.py::TestBaseImagePin::test_single_from_instruction`). Poppy's in-tree `services/retrieval/Dockerfile` still carries `ARG HF_TOKEN`; never push an image built from that file.
 
 ### Closed log vocabularies (CLAUDE.md invariant 6)
 
-`cache._closed_vocabulary_reason` maps every Valkey failure to one of `connect_failed`, `operation_failed`, or `timeout` and never emits `str(exc)` or the URL. `tests/test_cache.py::TestReconnect::test_connect_failure_never_logs_url_or_secret` drives both the cache path and a real lifespan with `redis://:hunter2-startup-password@...` and asserts the password appears nowhere; `tests/test_app.py::test_no_selection_path_logs_the_valkey_url` covers five start modes. `model_fetcher.py` uses the same pattern (`http_401`, `timeout`, `io_failed`, `fetch_failed`, `pull_failed`, `oras_missing`). Any new startup or cache code must preserve this; `kit_tools/arch/patterns/LOGGING.md` carries the general convention.
+`cache._closed_vocabulary_reason` maps Valkey connection/operation failures to `connect_failed`, `operation_failed`, or `timeout` and never emits `str(exc)` or the URL. Integrity rejections use the separate six-token `CACHE_INTEGRITY_REASONS` vocabulary and a `ret:<sha256>` digest; corrupt parses use `cache_entry_corrupt`. `tests/test_cache.py::TestReconnect::test_connect_failure_never_logs_url_or_secret` drives both the cache path and a real lifespan with a synthetic credentialed URL and asserts the password appears nowhere; `tests/test_app.py::test_no_selection_path_logs_the_valkey_url` covers backend selection. The HMAC sentinel drives also assert the signing key is absent from every log record, response and cache repr. `model_fetcher.py` uses the same pattern (`http_401`, `timeout`, `io_failed`, `fetch_failed`, `pull_failed`, `oras_missing`). Any new startup or cache code must preserve this; `kit_tools/arch/patterns/LOGGING.md` carries the general convention.
 
 ### Repository hygiene
 
 - `.gitignore` excludes `.env` and `compose/.env` because they carry live tokens; the compose fragments use bare `- HF_TOKEN` pass-through so an unset variable stays unset.
 - `.gitleaksignore` holds exactly one entry, `ba73b078...:tests/test_stage2_structural.py:generic-api-key:170`: the synthetic `Token: abc123def456` literal in `test_short_base64_no_match`, which exists to prove that short base64-like strings do *not* trigger stage 2. Triaged 2026-09-08 at the public flip; the full-history scan record (gitleaks 8.30.1, 88 commits, one false positive) is `docs/bootstrap-scan.txt`.
 - GitHub's own secret scanning and push protection were enabled on the repository at the public flip.
-- `tests/conftest.py` clears `HF_TOKEN`, `HF_HOME`, `FORAGE_MODEL_REVISION`, `FORAGE_WEIGHTS_MIRROR`, `FORAGE_MIRROR_TOKEN`, and `VALKEY_URL` before every test, so a developer's shell credentials cannot change which branch runs.
+- `tests/conftest.py` clears the complete `_CLEARED_ENV_VARS` set before every test: `HF_TOKEN`, `HF_HOME`, `FORAGE_MODEL_ID`, `FORAGE_MODEL_REVISION`, `FORAGE_WEIGHTS_MIRROR`, `FORAGE_MIRROR_TOKEN`, `VALKEY_URL`, `FORAGE_SEARCH_PROVIDERS`, `FORAGE_BRAVE_API_KEY`, and `FORAGE_CACHE_HMAC_KEY`, so a developer's shell credentials cannot change which branch runs.
 
 ### Adding a new secret
 
@@ -251,6 +453,12 @@ The image is deliberately single-stage so that `docker history` covers everythin
 2. Give every failure path a fixed reason string; add a test in the style of `test_connect_failure_never_logs_url_or_secret` that asserts the value never reaches a log record.
 3. Add the variable to `tests/conftest.py`'s cleared list, to `docs/configuration.md`, and to `kit_tools/docs/ENV_REFERENCE.md`.
 4. If it must reach a subprocess, pass it on stdin as `FORAGE_MIRROR_TOKEN` is, never on argv.
+
+`FORAGE_CACHE_HMAC_KEY` follows all four steps: (1) the one boot resolver reads only
+the runtime environment; (2) value-free refusal markers and the app/cache sentinel
+tests cover failures, responses and logs; (3) the exact hermetic cleared set and both
+operator references include it; (4) it is not passed to any subprocess at all.
+Distribution guards also pin both CI grep copies and the full-compose-only passthrough.
 
 ---
 
@@ -266,7 +474,20 @@ The base is `python:3.12-slim@sha256:78387bc3...` (digest, with the resolved tag
 
 ### Model weights
 
-Weights are a runtime input, never baked. `model_fetcher.py` pins `DEFAULT_MODEL_REVISION = "11614a155199674a0a95e6602d6ab0417b790ed0"` (override via `FORAGE_MODEL_REVISION`) and verifies downloads against `weights_manifest.json`, an **exact-set** allowlist of five files with sha256 and size. `ALLOWED_SUFFIXES` is `.safetensors`, `.json`, `.txt`, `.model`, so a pickle `.bin` can never be blessed or loaded, belt-and-braces with the loader's `use_safetensors=True`. Symlinks are resolved and containment-checked; a failed set is quarantined for one generation; a mirror tarball is extracted with `tarfile` `filter="data"` into a throwaway root and verified before install; `FORAGE_WEIGHTS_MIRROR` must be a bare lowercase `<registry>/<owner>/<name>` and TLS is non-negotiable. `tests/test_model_fetcher.py` (`TestManifestFailsClosed`, `TestExactSetVerification`, `TestFormatAllowlist`, `TestSymlinkResolution`, `TestQuarantine`, `TestMirrorExtractionIsSafe`, `TestWarmStartTouchesNoNetwork`) and `tests/test_vendor_weights.py`.
+Weights are a runtime input, never baked. `weights_manifest.json.models` holds one
+**exact-set** allowlist per model, with revision, path, sha256 and size. The default
+22M still pins the same five files at `11614a155199674a0a95e6602d6ab0417b790ed0`,
+equal to the 22M-only `DEFAULT_MODEL_REVISION` fallback. `FORAGE_MODEL_REVISION`
+cannot select an uncommitted pin: malformed values fall back loudly; shaped
+non-pins refuse before disk lookup (`weights_revision_unpinned`). Entry failures
+are isolated to that model, while a broken document refuses every model.
+`ALLOWED_SUFFIXES` is `.safetensors`, `.json`, `.txt`, `.model`, so a pickle `.bin`
+can never be blessed or loaded, alongside the loader's `use_safetensors=True`.
+Symlinks are resolved and containment-checked; a failed set is quarantined for one
+generation; a mirror tarball is extracted with `filter="data"` into a throwaway
+root and verified before install. `FORAGE_WEIGHTS_MIRROR` must be a bare lowercase
+`<registry>/<owner>/<name>` and TLS is non-negotiable. These controls are pinned by
+`tests/test_model_fetcher.py` and `tests/test_vendor_weights.py`.
 
 ### Contract anchor
 
@@ -288,7 +509,7 @@ The `sanitizer_revision` (`pipeline/sanitizer_revision.py`, a sha256 over eight 
 
 ## Honest Degradation (CLAUDE.md invariant 5)
 
-`/health` always returns HTTP 200; the truth is in the body. `status` is `healthy` or `degraded`; `degraded_reasons` is a typed `Literal` list drawn from `promptguard_unavailable` and `cache_unavailable` (an unlisted reason fails response validation); `promptguard_loaded`, `cache_connected`, `cache_backend` (`memory` or `valkey`), `capabilities`, `search_providers`, `sanitizer_revision`, and `contract_version` complete the picture. `promptguard_loaded: false` means the ML scan **did not run**, and a consumer must treat standard-tier content as unscanned (`kit_tools/docs/GOTCHAS.md` "PromptGuard model absent"). An empty or unreachable `VALKEY_URL` is configured-and-missing, reported as `degraded`, never a silent fallback to memory.
+`/health` always returns HTTP 200; the truth is in the body. `status` is `healthy` or `degraded`; `degraded_reasons` is a typed `Literal` list drawn from `promptguard_unavailable`, `cache_unavailable` and `cache_unauthenticated` (an unlisted reason fails response validation); `promptguard_loaded`, `cache_connected`, `cache_backend` (`memory` or `valkey`), `capabilities`, `search_providers`, `sanitizer_revision`, and `contract_version` complete the picture. `promptguard_loaded: false` means the ML scan **did not run**, and a consumer must treat standard-tier content as unscanned (`kit_tools/docs/GOTCHAS.md` "PromptGuard model absent"). An empty or unreachable `VALKEY_URL` is configured-and-missing, reported as `degraded`, never a silent fallback to memory. An unsigned Valkey also reports `cache_unauthenticated`; both cache reasons may coexist, and memory mode reports neither.
 
 This is a security property because of the incident it answers: an earlier version reported `healthy` regardless of the model, a fail-closed consumer silently dropped every standard-tier search result (reading it as "no matches"), and nobody noticed for nine days in production. Do not regress it in the name of a cleaner status code. CI enforces it mechanically: the `smoke` job runs the image with no token and `contract_smoke.py` asserts `status: degraded`, `promptguard_unavailable` in `degraded_reasons`, and no `search_sanitization` capability. `tests/test_app.py::test_health_degraded_reports_promptguard_unavailable`, `::test_a_broken_valkey_url_degrades_and_never_falls_back_to_memory`, `::test_health_break_glass_override_unset_withholds_advertisement`, `tests/test_ci_workflow.py::TestSmokeJob`. Operational guidance for reading `/health` and `/metrics` is in `kit_tools/docs/MONITORING.md`.
 
@@ -296,7 +517,24 @@ This is a security property because of the incident it answers: an earlier versi
 
 ## Security-Relevant Logging and Metrics
 
-Forage has no audit log in the authentication sense; there is no identity to record. What it does log is constrained: the root logger runs at WARNING, so `logger.info` output is invisible in the container (`kit_tools/docs/GOTCHAS.md`), and the failure paths that could touch a credential use the closed vocabularies above. For observing security behaviour prefer `GET /metrics`, which exposes `retrieve.blocked_by_reason`, `retrieve.promptguard_state`, `search.omitted_by_reason`, `search.unscanned_results`, `extraction.busy_rejections`, `extraction.verdicts`, and `model.fetch_failures`, `model.verify_failures`, and `model.quarantines` as typed counters (`kit_tools/arch/CODE_ARCH.md`; `kit_tools/docs/MONITORING.md`). Logging conventions are in `kit_tools/arch/patterns/LOGGING.md`; which error reasons are content-free is in `kit_tools/arch/patterns/ERROR_HANDLING.md`.
+**Cache parsing is not authenticity.** `ContentCache` deletes values that fail
+`RetrievedContent` JSON or schema validation, counts them in `cache.corrupt_entries`,
+and treats them as misses. The WARNING carries only `cache_entry_corrupt` and the
+`ret:<sha256>` key digest, never the stored value or exception text. **Parse success is
+not authenticity**. Since cache-integrity US-001, a `ContentCache` supplied
+`hmac_key` verifies the HMAC-SHA256 envelope over version, cache key and exact
+payload bytes before parsing. Copied, unsigned or mutated entries cannot pass
+as authenticated values. Bare JSON remains supported without a key; runtime
+environment-key wiring and the keyless-Valkey health signal belong to US-002.
+`corrupt_entries` still counts parsing failures, not tampering.
+`integrity_rejects` counts six closed reasons, including atomic Valkey read
+bound/type failures; key rotation and lowering byte bounds can also move it.
+The WARNING carries only the reason and key digest, never key material, URL or
+payload. It is not rate-limited; request/log volume remains an availability
+residual. HMAC does not stop deletion, replay under the same key, or a writer
+that has obtained the secret. Cache reads currently sit outside admission.
+
+Forage has no audit log in the authentication sense; there is no identity to record. What it does log is constrained: the root logger runs at WARNING, so `logger.info` output is invisible in the container (`kit_tools/docs/GOTCHAS.md`), and the failure paths that could touch a credential use the closed vocabularies above. For observing security behaviour prefer `GET /metrics`, which exposes `retrieve.blocked_by_reason`, `retrieve.promptguard_state`, `retrieve.classification_wait_timeouts`, `search.omitted_by_reason`, `search.unscanned_results`, `search.classification_wait_timeouts`, `extraction.busy_rejections`, `extraction.verdicts`, and `model.fetch_failures`, `model.verify_failures`, and `model.quarantines` as typed counters (`kit_tools/arch/CODE_ARCH.md`; `kit_tools/docs/MONITORING.md`). Logging conventions are in `kit_tools/arch/patterns/LOGGING.md`; which error reasons are content-free is in `kit_tools/arch/patterns/ERROR_HANDLING.md`.
 
 ---
 
@@ -331,6 +569,20 @@ Forage has no audit log in the authentication sense; there is no identity to rec
 
 ---
 
+The request-validation 422 reflector is **closed**, not an accepted residual
+(`hardening-release` US-001; GOVERNANCE ruling (l)). In contract 1.3.0 each item
+has `loc`, `msg`, `type` plus `input`/`ctx`/`url` fixed to `"[redacted]"`;
+the three placeholders are dropped at the next MINOR. `_MAX_VALIDATION_ERRORS`
+(100) bounds response entries only, not the fully parsed request. The
+`validation_422_truncated` WARNING is emitted at most once per request when the
+cap bites; `validation_422_loc_dropped` is emitted once if segments are dropped.
+Only counts and the closed route token reach either line. Parse cost and WARNING
+volume remain under the unchanged resource-exhaustion-by-an-admitted-caller row
+above; private-network placement is the control. Neither this response cap nor
+the runtime location guard changes pipeline refusals or ruling (d)'s DNS oracle.
+The per-field marker/liveness, root-log-capture and never-raises guards live in
+`tests/test_contract_errors.py`; `tests/test_models.py` pins the structural canaries.
+
 ## Known Limitations and Open Questions
 
 ### Documented non-vulnerabilities
@@ -344,38 +596,46 @@ These are recorded in the repo with a source and a reason; they are decisions, n
 | Private-IP echo in the `/retrieve` refusal `reason` (DNS oracle) | root `SECURITY.md`; `contract/GOVERNANCE.md` ruling (d) |
 | Over-sized `/extract` upload answers 400, not the documented 413 | `contract/GOVERNANCE.md` ruling (a2); `kit_tools/docs/GOTCHAS.md` |
 | No rate limiting on `/retrieve` or `/search`; exhaustion by an admitted caller is out of scope | root `SECURITY.md` |
+| Accepted risk, finding 2026-09-16-054: `search.policy_unknown_provider` increments once per ignored entry, including duplicates and every entry beyond eight, with no cap on entry count. `/search` has no body cap: both size/admission middlewares early-return unless `scope["path"] == "/extract"`, and `SearchRequest.providers` has no `max_length`. The caller's array is parsed in full before the policy's eight-entry slice; both the counter value and parse cost scale with an uncapped request body. The impact is an inflated/misleading counter value and CPU cost, not resource exhaustion bounded by the counter. Network placement is the control. A body cap would change accepted requests into rejections and requires its own GOVERNANCE ruling; per-entry counting is deliberately unchanged. | `hardening-provider-bounds` US-004, R14; `retrieval_app.py::search`, `DocumentSizeLimitMiddleware`, `ExtractionAdmissionMiddleware`; `models.py::SearchRequest`; `pipeline/search_providers/policy.py` |
+| A slow upstream can hold a `/search` for **at least** the sum of the configured per-provider budgets — 10 s on the default `[searxng]` chain, 25 s on `searxng,brave` at the shipped defaults, up to 2 × 60 s at the ranges' maxima — plus parse, sanitization and classification time, which sit outside the budget. There is no chain-wide deadline and no concurrency ceiling on the provider-fetch phase; the classification semaphore bounds stage 3, not the fetch. Network placement and the per-call budget are the controls. | `hardening-provider-bounds` US-003; `docs/configuration.md` |
+| Accepted risk: `/retrieve` still counts decoded bytes from `aiter_bytes()` after httpx's uncapped decoder, on a caller-chosen URL. The 10 MB cap bounds accepted body bytes, not peak decoder output allocation. Adopt `pipeline/bounded_body.py` in a fetch-path story; the provider fix does not cover stage 5. | `pipeline/stage5_url_audit.py`; `kit_tools/roadmap/BACKLOG.md`, finding 2026-09-16-020 (open) |
 | Companion SearXNG runs `limiter: false` | `searxng/config/settings.yml`; `kit_tools/docs/GOTCHAS.md` |
 | Weights are not shipped; a token-less container is degraded indefinitely | root `SECURITY.md`; `README.md` |
+| Verifier/loader directory agreement — fixed by `hardening-promptguard-86m` US-001; a requested unpinned or missing snapshot is never loaded | `model_fetcher._load_verified`; `tests/test_model_fetcher.py::TestModelIdentity` |
 | The break-glass switch makes `capabilities` lie for a transition window | `docs/configuration.md` "Break-glass" |
 | A keyed deployment is identifiable from `/health` (`search_providers`, `capabilities.brave_api_key`) | `search-policy-and-health` US-002; rulings 12, 15 |
+| `/health.promptguard_model` publishes the configured identity, but not contiguity settings. Once US-007 adds `promptguard_contiguity_detections`, a caller who can post content and read `/metrics` can infer those settings by bisection; withholding them from health is not secrecy and no absence of a second differential channel is claimed. | `hardening-promptguard-86m` US-006 / US-007; decision R29 |
 | `/search`'s status varies with key presence for the same body in two reproduced cases — a Brave-only chain with `allow_paid_fallback: false` (keyed: 422 `policy_excluded_all_providers`; key-less: the `[searxng]` boot fallback answers 200) and a `searxng,brave` chain whose SearXNG answers 200 with unresponsive engines (keyed: 422 `search_unavailable`; key-less: the lone-`searxng` carve-out answers 200). Nothing is disclosed that `/health` and `provider_used` do not already publish; the "no oracle" rule is "same body, same upstream outcome, over the resolved chain `/health` reports" — no *second, differential* channel, not secrecy | `search-policy-and-health` US-003; rulings 15, 28 |
-| Operator spend: with `FORAGE_BRAVE_API_KEY` set and `brave` in the chain, every unauthenticated `POST /search` that reaches Brave is one billable call, and Forage enforces no spend or concurrency ceiling. Network placement is the control, `/metrics` `search.paid_calls` the observability floor, and the budget breaker is the consumer's | ruling 12; `docs/releases.md` v1.1.0 entry |
-| A validation 422 echoes the offending value verbatim under `detail[].input` on every POST route (FastAPI's default `RequestValidationError` handler); those bytes are caller text, not sanitized output. Dropping `input`/`ctx` is a 422 wire change and goes through `contract/GOVERNANCE.md` | "Request models" above; `contract/GOVERNANCE.md` |
+| Operator spend: with `FORAGE_BRAVE_API_KEY` set and `brave` in the chain, every unauthenticated `POST /search` that reaches Brave is one billable call, and Forage enforces no spend or provider-fetch concurrency ceiling. On `[searxng, brave]` the **free peer's failures control paid calls**: an over-bound, undecodable, malformed or timed-out SearXNG body each buys one Brave call. A caller-induced URI-length failure at SearXNG can no longer buy a paid call under the common 8 KB request-line limit: `search_searxng_query_max_chars` caps its outbound query at 400 characters or fewer (US-002). Post-sanitization omissions never trigger paid fallback (search epic ruling 17); unknown request policy names are ignored, never themselves a 422. `SEARXNG_URL` defaults to plain HTTP, so an on-path party can force those calls. Network placement is the control; `/metrics` `search.paid_calls` and `search.provider_compressed_body` are the detection floor, and the budget breaker is the consumer's. | ruling 12; `hardening-provider-bounds` US-002 / US-003; `docs/configuration.md` |
 | arm64 image built but never executed by CI | `docs/releases.md` |
 | No image signing, provenance, or SBOM | `.github/workflows/ci.yml` publish job comment |
-| `SearchResult.engine` is an unbounded `isinstance(engine, str)` pass-through — no length cap, no normalisation, no structural scan — and from contract `1.2.0` its provenance widens from the operator's own SearXNG to any provider in the chain, including spec 2's third-party API | `pipeline/orchestrator.py` (the sanitization loop); `search-provider-abstraction` US-004 |
+| `engine` is provider-controlled, bounded to 64 characters and NFC-normalised in contract `1.3.0`, and neither structurally scanned nor part of the PromptGuard input — a hostile or compromised search backend can place up to 64 unscanned model-visible characters per result (`searxng.py:52` notes SearXNG can report engines outside the vetted list, so the field is not a closed vocabulary either). `SearchResponse.unresponsive_engines` is the second bounded-but-unscanned provider-controlled string (16 × 64 by `_MAX_UNRESPONSIVE_ENGINES` / `_MAX_UNRESPONSIVE_ENGINE_LENGTH`) — so `engine` is not the *only* such field, and the aggregate is at most 20 × 64 + 16 × 64 = 2 304 unscanned, model-visible, provider-controlled characters per `/search` response | `pipeline/orchestrator.py` (the sanitization loop, `_MAX_SEARCH_ENGINE_LENGTH` / `_MAX_UNRESPONSIVE_ENGINE_LENGTH`); `models.py:348,434-437`; `search-provider-abstraction` US-004; `hardening-search-sanitization` US-004 |
 
-The `engine` row is the one that *changed shape* rather than merely being restated.
-`engine` is provenance, not identity (`SearchProvider.name` is identity), and it has always
-been passed through unbounded — but until contract `1.2.0` the only thing that could
-populate it was the operator's own SearXNG deployment. It is now whatever a chained
-provider puts in the field, which from spec 2 includes a third-party API's response. The
-risk is carried forward deliberately rather than fixed here: bounding `engine` is a wire
-change and belongs with the provider that first widens it. The two fields `1.2.0` *adds*
-are closed by construction — `content_kind` is a `Literal` validated on the way out, and
-`date` is filtered to a strict `YYYY-MM-DD` calendar date or `None`, so neither can carry
-free text (GOVERNANCE ruling 19 is why they need no scan).
+The `engine` row moved once already and moved again here. `engine` is provenance, not
+identity (`SearchProvider.name` is identity). Until contract `1.2.0` the only thing that
+could populate it was the operator's own SearXNG deployment; from `1.2.0` it is whatever a
+chained provider puts in the field, including a third-party API's response, and until
+`1.3.0` it was passed through completely unbounded and unexamined — no length cap, no
+normalisation. `1.3.0` closes the unbounded half (`_MAX_SEARCH_ENGINE_LENGTH = 64`, the same
+`_normalize_search_text` call `title`/`snippet`/`unresponsive_engines` already use) but
+deliberately not the unscanned half: `engine` is search-backend-assigned provenance
+metadata — which configured engine answered — not page content a result's website
+controls, unlike `title`, `url` and `snippet`, and a future spec (T3.2) plans to let
+consumers weight source trust off it. The two fields `1.2.0` *adds* are closed by
+construction — `content_kind` is a `Literal` validated on the way out, and `date` is
+filtered to a strict `YYYY-MM-DD` calendar date or `None`, so neither can carry free text
+(GOVERNANCE ruling 19 is why they need no scan).
 
 ### Observed absences (for the owner to rule on)
 
 The exploration found no source that either accepts or rejects these. They are listed so that a decision can be recorded, not because one has been made.
 
 - **Exception text on the wire.** `/retrieve` `fetch_error` is now the **only** reason that interpolates `str(exc)` into the response body (`pipeline/orchestrator.py`, the fetch catch-all). Whether upstream error text can carry anything sensitive is neither documented nor tested there. Redaction would be a wire change under `contract/GOVERNANCE.md`. `/search`'s `searxng_unavailable` was the other case and is closed: `search-provider-abstraction` US-002 replaced `str(exc)` with the provider's closed `detail` token and replaced the raw `SEARXNG_URL` echo with `SearxngProvider.origin` — scheme, host and port, userinfo stripped — so a credential in `SEARXNG_URL` can no longer reach a 422 body on an unauthenticated route. The host:port echo stays deliberately (GOVERNANCE ruling (d) treats it as a documented caveat; it is what makes a misconfigured deployment diagnosable from the response alone).
-- **Container hardening beyond non-root.** The compose fragments set `mem_limit: 1024m` and nothing else: no `read_only` rootfs, no `cap_drop`, no `no-new-privileges`, no seccomp profile, no `pids_limit`, no CPU quota. Unknown whether that is a deliberate omission.
+- **Container hardening beyond non-root.** The compose fragments set `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` and `cpus: ${FORAGE_CPUS:-0}` (no CPU quota unless the operator sets one) and nothing else: no `read_only` rootfs, no `cap_drop`, no `no-new-privileges`, no seccomp profile, no `pids_limit`. Unknown whether that is a deliberate omission.
 - **TLS to companions.** Whether the Valkey and SearXNG links must be TLS-protected on the private network is not stated; `VALKEY_URL` examples are plain `redis://`.
 - **Dependency vulnerability scanning.** None found (see "Supply Chain Integrity").
 - **Fuzzing.** None found (see "Security Testing").
-- **`/search` threshold.** Scans at the hard default 0.85 regardless of `config.yaml` (see "Prompt-Injection Signalling").
+- **`/extract` threshold.** Its raw guard accepts YAML `true` as 1.0, unlike the fetch routes' validated default (see "Prompt-Injection Signalling").
 
 ---
 

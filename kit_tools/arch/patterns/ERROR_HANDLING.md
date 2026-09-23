@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document error handling patterns and conventions.
 
-> Last updated: 2026-09-16
-> Updated by: Claude (seed-project)
+> Last updated: 2026-09-22
+> Updated by: Copilot (hardening-promptguard-86m US-006)
 
 ## Overview
 
@@ -55,7 +55,7 @@ Reference"; the consumer-facing one is `kit_tools/docs/API_GUIDE.md` "Error resp
 | Capacity / admission | `busy` | `/extract` 429 | `ExtractionAdmissionMiddleware` (queue depth 1, 50 MiB queued-bytes reservation) | not logged; counted in `/metrics.extraction.busy_rejections` |
 | Upload size, streaming | `content_too_large` | `/extract` 413 declared, **400 observed** (see Observed rough edges) | `DocumentSizeLimitMiddleware` via `_RequestBodyTooLargeError` | not logged |
 | Route disabled / not wired | none (bare `detail`) | `/extract` 404 / 503 | `ExtractionAdmissionMiddleware`; the handler repeats the 404 as `HTTPException` | not logged |
-| Boot-time configuration | none (no HTTP) | process refuses to serve | `ExtractionConfigurationError`, `CacheConfigurationError` raised out of `lifespan` | the exception leaves `lifespan`; uvicorn reports it |
+| Boot-time configuration | none (no HTTP) | process refuses to serve | Typed readers, including `ExtractionConfigurationError`, `CacheConfigurationError`, `SearchProviderConfigurationError` and `ModelConfigurationError`, raise out of `lifespan` | uvicorn reports it; unknown model selection also logs the closed WARNING `model_id_not_allowed` |
 | Internal | none | 500, Starlette default body | no `Exception` handler is registered; the recorded cases are `/health` failing response validation on an unlisted `degraded_reasons` value and an unmodeled `/metrics` counter (`extra="forbid"`) | not logged by the app |
 
 The WARNING lines that accompany non-error degradations: quarantine on `/retrieve`
@@ -161,15 +161,20 @@ upload exception through `document_failure`, adds `OSError` to `extraction_faile
 (`pipeline/search_providers/searxng.py`) classifies them behind the seam and returns a
 `ProviderFailure`, and the orchestrator maps its closed `detail` token — a status-derived
 `http_<code>` to `searxng_error`, everything else (`timeout`, `connect_error`,
-`body_too_large`, `bad_json`, `malformed_body`, `unexpected`) to `searxng_unavailable`.
+`body_too_large`, `bad_json`, `malformed_body`, `unsupported_encoding`, `unexpected`)
+to `searxng_unavailable`.
 
 That legacy pair is selected by the **configured chain**, not by the failing provider:
 `_legacy_searxng_codes` is true only for a chain of exactly one provider whose `name`
 is `searxng`, compared as a name and never with `isinstance` (ruling 28). Every other
 chain refuses with `search_unavailable` (contract `1.2.0`), whose reason is composed from
-two closed vocabularies — one `<provider_name>: <failure_class>` entry per failed
-provider, in chain order, joined by `"; "` — so no endpoint, credential or upstream text
-can reach the body through it.
+two guarded vocabularies — one `<provider_name>: <failure_class>` entry per failed
+provider, in chain order, joined by `"; "`. `_query_provider_chain` maps a class
+outside `FAILURE_CLASSES` to `hard_error`, a detail outside
+`[a-z0-9_]{1,32}` to `unexpected`, and a provider name outside that same token
+pattern to `unknown` before logging or composing an error. The name fallback
+hardens future operator-pluggable providers; today's registry has fixed names.
+No endpoint, credential or upstream exception text can reach the body through it.
 
 The route handlers add bookkeeping, not decisions: `/retrieve` calls
 `RetrieveMetrics.record_error(exc.error)` and re-raises; `/extract` records the verdict
@@ -241,9 +246,9 @@ pairs that emit a body today; `/health` and `/metrics` declare none.
 | Operation | Timeout | Retries | Backoff | Source |
 |-----------|---------|---------|---------|--------|
 | Outbound page fetch (`fetch_url`) | 30 s (`DEFAULT_TIMEOUT`) per request; 10 MiB body cap; max 5 manual redirect hops | none | none | `pipeline/stage5_url_audit.py` |
-| SearXNG query | 10 s (`httpx.AsyncClient(timeout=10.0)`) | none | none | `pipeline/search_providers/searxng.py` |
-| Brave LLM-Context query | `search_brave_timeout_seconds` (`config.yaml`, default 15 s) | none | none | `pipeline/search_providers/brave.py` |
-| Provider chain traversal (`run_search_pipeline`) | sum of the per-provider timeouts (10 s SearXNG + `search_brave_timeout_seconds` when configured) | none | none | `pipeline/orchestrator.py` |
+| SearXNG query | `search_searxng_timeout_seconds` (default `10.0`, wall-clock) | none | none | `pipeline/search_providers/searxng.py` |
+| Brave LLM-Context query | `search_brave_timeout_seconds` (default `15.0`, wall-clock) | none | none | `pipeline/search_providers/brave.py` |
+| Provider chain traversal (`run_search_pipeline`) | the sum of the configured per-provider wall-clock budgets (`search_searxng_timeout_seconds` + `search_brave_timeout_seconds` when configured); parse, sanitization and classification are outside these HTTP budgets | none | none | `pipeline/orchestrator.py` |
 | Valkey connect and reconnect | 2 s per attempt (`_RECONNECT_TIMEOUT_S`) | on the next operation once the backoff elapses; forever | 1 s doubling to 30 s (`_RECONNECT_INITIAL_BACKOFF_S`, `_RECONNECT_MAX_BACKOFF_S`); single-flight `_reconnect_lock`, concurrent callers get an immediate miss; `ping_if_due` from `/health` detects recovery in idle windows | `cache.py` |
 | Weights acquisition (`WeightAcquisition.run`) | 1800 s for an `oras` pull (`ORAS_TIMEOUT_S`) | forever until loaded; cancellable | 30 s doubling to 600 s, plus or minus 20% jitter applied to the sleep only (`RETRY_INITIAL_BACKOFF_S`, `RETRY_MAX_BACKOFF_S`, `RETRY_JITTER_FRACTION`); single-flight, a second caller is refused not queued | `model_fetcher.py` |
 | PDF extraction child | 90 s wall (`ITIMER_REAL`), 20 s CPU (`RLIMIT_CPU`), 384 MiB address space (`RLIMIT_AS`, Linux only) | none | none; `process.kill()` and `process.join()` in `finally` on every abnormal outcome | `pipeline/pdf_subprocess.py` |
@@ -262,6 +267,8 @@ health semantics are in `kit_tools/docs/MONITORING.md` "Health Checks".
 |------------------------------|--------------------|--------------------|
 | PromptGuard weights (no token, download pending, verification refused) | No substitute classifier. Fail-closed default: standard and untrusted content is quarantined (`unavailable_blocked`), search results are omitted (`promptguard_unavailable`). Fail-open callers get `unavailable_allowed` with a -0.1 penalty. Background loop keeps retrying. | `/health` `status: degraded`, `degraded_reasons` contains `promptguard_unavailable`, `promptguard_loaded: false`; `/metrics.model` (`fetch_in_progress`, `retries_scheduled`, `fetch_failures`, `verify_failures`, `quarantines`); `promptguard_state` per response; WARNING `weights_*` lines |
 | Valkey configured but unreachable | No fallback to memory. Every cache operation is a miss; requests proceed uncached; reconnect on backoff. | `/health` `degraded_reasons` contains `cache_unavailable`, `cache_connected: false`; `/metrics.cache.reconnect_*`; WARNING with a closed-vocabulary reason |
+| Valkey signing key absent | Cached `/retrieve` content is served without proof of origin or re-sanitization; an open cache-poisoning path on shared Valkey. Memory mode needs no key. | `/health` `degraded_reasons` contains `cache_unauthenticated`, even if connected; `cache_hmac_key_missing` at boot. Stop all replicas, set the same CSPRNG key, start; see `docs/configuration.md` |
+| Cache signing key malformed or too short | Boot refused, including in memory mode; no silent fallback to unsigned storage. | `CacheConfigurationError` after `cache_hmac_key_invalid` or `cache_hmac_key_too_short`; no `/health`, no value logged |
 | `VALKEY_URL` fully unset | Bounded in-memory LRU. This is selection, not fallback; memory mode cannot degrade. | `/health` `cache_backend: "memory"`, `cache_connected: true` |
 | SearXNG unreachable or erroring | The next provider in the configured chain serves; `/search` is a 422 only when the chain is exhausted. | `/search` 422 `searxng_unavailable` or `searxng_error` on the default lone-`searxng` chain, `search_unavailable` on any other; not a `/health` field |
 | Target site slow, oversized, private, or over-redirecting | No fallback. | `/retrieve` 422 with `fetch_timeout`, `content_too_large`, `private_ip`, `blocked_domain`, `invalid_url`, or `fetch_error` |

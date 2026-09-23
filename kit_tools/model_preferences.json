@@ -1,11 +1,11 @@
 {
   "version": 1,
   "models": {
-    "implementer": "sonnet",
-    "verifier": "opus",
-    "validator": "opus",
-    "reviewer": "opus",
-    "second_opinion": "sonnet",
-    "escalation": { "to": "opus", "on_attempt": 2, "sizes": ["L", "XL"] }
+    "implementer": "gpt-6-astra",
+    "verifier": "gpt-6-astra",
+    "validator": "gpt-6-astra",
+    "reviewer": "gpt-6-astra",
+    "second_opinion": "gpt-6-astra",
+    "escalation": { "to": "gpt-6-astra", "on_attempt": 2, "sizes": ["L", "XL"] }
   }
 }

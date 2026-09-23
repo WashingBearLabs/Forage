@@ -39,24 +39,32 @@ def apply_request_policy(
 
     Algorithm, in order (ruling 29):
 
-    1. **normalise** -- ``strip()`` and ``lower()`` every entry, keep the
-       first eight; every entry past the eighth is ignored and counted.
-    2. **match** -- each kept entry that equals no ``name`` in *chain* is
+    1. Normalise the first eight entries and count the remainder.
+       Apply ``strip()`` and ``lower()`` to each kept entry; every entry
+       past the eighth is ignored and counted.
+    2. Match configured names and count each ignored entry.
+       Each kept entry that equals no ``name`` in *chain* is
        ignored and counted (one increment per ignored entry, duplicates
        included; a duplicate of a matching name counts nothing); the matched
        names form the named set.
-    3. **filter**, only when ``request.providers`` is non-empty -- remove
-       from *chain* every ``paid=True`` provider whose name is not in the
-       named set. Free providers are never removed and nothing is reordered.
-    4. ``request.allow_paid_fallback is False`` removes every remaining
+    3. Keep the longest named paid prefix and every free provider.
+       Only when ``request.providers`` is non-empty, keep the longest prefix
+       of the configured paid sequence whose every member is in the named
+       set. A paid provider after an unnamed paid provider is dropped even
+       if named. Free providers are never removed and nothing is reordered.
+    4. Remove every remaining paid provider when paid fallback is forbidden.
+       ``request.allow_paid_fallback is False`` removes every remaining
        ``paid=True`` provider.
 
-    The output is always *chain* minus a subset of its paid providers --
-    never reordered and never keyed by anything but provider name.
+    The output retains every free provider and only a prefix of *chain*'s
+    paid sequence -- never reordered or keyed by anything but provider name.
+    Empty ``providers`` keeps the whole paid sequence unless step 4 removes it.
     """
+    # step 1 — Normalise the first eight entries and count the remainder.
     kept = [entry.strip().lower() for entry in request.providers[:_MAX_POLICY_ENTRIES]]
     ignored = max(0, len(request.providers) - _MAX_POLICY_ENTRIES)
 
+    # step 2 — Match configured names and count each ignored entry.
     chain_names = {provider.name for provider in chain}
     named: set[str] = set()
     for entry in kept:
@@ -65,13 +73,16 @@ def apply_request_policy(
         else:
             ignored += 1
 
-    effective = [
-        provider
-        for provider in chain
-        if not provider.paid
-        or (
-            (not request.providers or provider.name in named)
-            and request.allow_paid_fallback
-        )
-    ]
+    # step 3 — Keep the longest named paid prefix and every free provider.
+    effective: list[SearchProvider] = []
+    paid_prefix_open = True
+    for provider in chain:
+        if provider.paid and request.providers and provider.name not in named:
+            paid_prefix_open = False
+        if not provider.paid or paid_prefix_open:
+            effective.append(provider)
+
+    # step 4 — Remove every remaining paid provider when paid fallback is forbidden.
+    if request.allow_paid_fallback is False:
+        effective = [provider for provider in effective if not provider.paid]
     return effective, ignored

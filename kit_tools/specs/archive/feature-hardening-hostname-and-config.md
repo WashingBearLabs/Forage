@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: hardening-hostname-and-config
-status: active
+status: completed
 session_ready: true
 depends_on: [hardening-retrieve-parity, hardening-search-sanitization]
 vision_ref: "T2.2 — Forage hardening"
@@ -12,7 +12,8 @@ epic_seq: 3
 epic_final: false
 execution_order: [US-001, US-007, US-002, US-005, US-003, US-004, US-006]
 created: 2026-09-19
-updated: 2026-09-19
+updated: 2026-09-23
+completed: 2026-09-23
 ---
 
 # Feature Spec: Hostname Semantics + Config Single-Sourcing
@@ -398,7 +399,7 @@ the `["xn--strae-oqa.de"]` spelling both raise `BlockedDomainError` after this s
   `config_unknown_key`).
 
 **Acceptance Criteria:**
-- [ ] Pre-flight (this is the first story in `execution_order`): before any other work, a check
+- [x] Pre-flight (this is the first story in `execution_order`): before any other work, a check
       asserts each assumed seam exists with the assumed shape — `canonicalize_host` importable from
       `url_validator` and returning `CanonicalHost | HostRejection`; `pipeline.config_bounds.
       bounded_float` and `bounded_int` importable; `contract.OMIT_BLOCKED_URL in OMISSION_REASONS`;
@@ -409,7 +410,7 @@ the `["xn--strae-oqa.de"]` spelling both raise `BlockedDomainError` after this s
       the window stories depend on the diff machinery, not the file); the operator-policy resolver
       locatable in `retrieval_app.py` by `promptguard_threshold_ceiling`. A failing pre-flight stops the spec
       (recorded in Implementation Notes) instead of surfacing in US-005.
-- [ ] `hostname_matches`, `normalize_domain_entries`, `matched_entry`, `domain_list_bytes` and
+- [x] `hostname_matches`, `normalize_domain_entries`, `matched_entry`, `domain_list_bytes` and
       `DomainEntry` exist in `url_validator.py`;
       the three list sites call `hostname_matches` on canonical strings (`grep -c hostname_matches`
       ≥ 1 in `url_validator.py`, `pipeline/orchestrator.py` and `cache.py`); the three inline
@@ -418,10 +419,10 @@ the `["xn--strae-oqa.de"]` spelling both raise `BlockedDomainError` after this s
       nothing); no function signature among `validate_url`, `_resolve_request_trust_tier`,
       `_effective_ttl_hours` and `cache_policy_fingerprint` changes; `uv run pyright` passes with no
       type-ignore comment.
-- [ ] Exactly one IDNA implementation: `grep -cE "idna\.(encode|decode)|encode\(\"idna\"\)"
+- [x] Exactly one IDNA implementation: `grep -cE "idna\.(encode|decode)|encode\(\"idna\"\)"
       url_validator.py pipeline/orchestrator.py` sums to 1, inside spec 1's `canonicalize_host`;
       `idna` is listed in `pyproject.toml` `dependencies` (spec 1's work, verified here).
-- [ ] Parametrised matcher test covers at least: equal; `www.` prefix; deeper subdomain;
+- [x] Parametrised matcher test covers at least: equal; `www.` prefix; deeper subdomain;
       `notevil.com`; `evil.com.attacker.net`; trailing dot on host and entry; `münchen.de` vs
       `xn--mnchen-3ya.de` and `straße.de` vs `xn--strae-oqa.de` in both directions; bare vs
       leading-dot allowlist entry; an IPv4 and an IPv6 literal host matching an identical entry and
@@ -431,7 +432,7 @@ the `["xn--strae-oqa.de"]` spelling both raise `BlockedDomainError` after this s
       exact-only (`intranet` matches `intranet` and never `wiki.intranet`) and `.com`, `""`,
       `bad..entry` are still dropped. A separate test asserts `normalize_domain_entries(...,
       denylist=False)` rejects every single-label entry (the private-name guard is closed by test).
-- [ ] `validate_url("https://www.evil.com/x", blocked_domains=["evil.com"])` raises
+- [x] `validate_url("https://www.evil.com/x", blocked_domains=["evil.com"])` raises
       `BlockedDomainError`; `blocked_domains=["notevil.com"]` does not;
       `validate_url("https://straße.de/", blocked_domains=["straße.de"])` and with
       `["xn--strae-oqa.de"]` both raise `BlockedDomainError` after this story alone (the seam never
@@ -440,7 +441,7 @@ the `["xn--strae-oqa.de"]` spelling both raise `BlockedDomainError` after this s
       (`tests/test_stage5_url_audit.py::TestBlocklistDuringFetch`); an un-canonicalisable host is
       refused by `validate_url` with `blocked_domains=None`, with `[]` and with a non-empty list,
       and a redirect hop onto one is refused, never fetched.
-- [ ] `https://localhost/`, `https://localhost./`, `https://anything.localhost/`,
+- [x] `https://localhost/`, `https://localhost./`, `https://anything.localhost/`,
       `https://printer.local/` and `https://deep.sub.myhost.local/` raise `PrivateIPError` at the
       hostname stage before DNS, with and without a blocklist; `https://local/` is unchanged
       (allowed at the hostname stage); `TestHostnameRejection` passes unchanged; `_BLOCKED_SUFFIXES`
@@ -448,15 +449,15 @@ the `["xn--strae-oqa.de"]` spelling both raise `BlockedDomainError` after this s
       both denylisted and private-named (`blocked_domains=["evil.local"]`, `https://evil.local/`)
       raises `PrivateIPError`, so `/retrieve` maps it to `private_ip` (the precedence the
       GOVERNANCE ruling records).
-- [ ] `_resolve_request_trust_tier("www.example.com", ["example.com"], [], [])` returns `"standard"`;
+- [x] `_resolve_request_trust_tier("www.example.com", ["example.com"], [], [])` returns `"standard"`;
       with `[".example.com"]` it returns `"trusted"`; with `blocked_domains=["example.com"]` as well
       it returns `"blocked"`; `_resolve_request_trust_tier("a.com", ["com"], [], [])` returns
       `"standard"` — `com` is dropped by the allowlist normalisation the site runs in this story (the
       handler's after US-007), and a single-label entry is exact-only in any case; counting it under
       `policy_invalid_domain_entry` is US-007's.
-- [ ] `_effective_ttl_hours(24, domain="www.bbc.co.uk", news_domains=["bbc.co.uk"])` returns `24`
+- [x] `_effective_ttl_hours(24, domain="www.bbc.co.uk", news_domains=["bbc.co.uk"])` returns `24`
       and with `[".bbc.co.uk"]` returns `1`; `["bbc.co.uk"]` with `domain="bbc.co.uk"` returns `1`.
-- [ ] Lifespan normalisation: `seed_blocklist: [" Evil.COM. ", "bad..entry", "intranet"]` and
+- [x] Lifespan normalisation: `seed_blocklist: [" Evil.COM. ", "bad..entry", "intranet"]` and
       `news_domains: ["BBC.co.uk", ".Example.ORG", "com"]` publish `["evil.com", "intranet"]` and
       `["bbc.co.uk", ".example.org"]`; `www.evil.com` and `intranet` are refused on `/retrieve`,
       `wiki.intranet` is not, and `bbc.co.uk` gets the one-hour TTL; exactly one
@@ -465,16 +466,16 @@ the `["xn--strae-oqa.de"]` spelling both raise `BlockedDomainError` after this s
       `config.yaml` logs no such WARNING and its six `news_domains` entries carry the leading dot,
       so `_effective_ttl_hours(24, domain="www.bbc.co.uk",
       news_domains=app.state.config["news_domains"])` returns `1`.
-- [ ] `trusted_domains=["example.com"]` and `trusted_domains=[".example.com"]` produce different
+- [x] `trusted_domains=["example.com"]` and `trusted_domains=[".example.com"]` produce different
       `cache_policy_fingerprint` values for the same URL (the marker reaches the fingerprint as a
       string), and two spellings of one entry (`"Example.COM "` / `"example.com"`) produce the same
       value.
-- [ ] No test in `tests/test_url_validator.py`, `tests/test_stage5_url_audit.py`,
+- [x] No test in `tests/test_url_validator.py`, `tests/test_stage5_url_audit.py`,
       `tests/test_orchestrator.py` and `tests/test_cache.py` is deleted, weakened or has its call
       shape changed (`tests/test_cache.py:506`'s `domain="CNN.com"` included — the helper
       canonicalises its host); any test that asserted exact-only **denylist** behaviour is updated in place
       and named in the Implementation Notes with the reason.
-- [ ] `grep -rn -iE "exact-host|exact host|exact, case-insensitive" docs kit_tools/docs
+- [x] `grep -rn -iE "exact-host|exact host|exact, case-insensitive" docs kit_tools/docs
       kit_tools/arch README.md` returns nothing (nine line sites at the start); the six files
       state the two-direction rule (`grep -c notevil.com` ≥ 1 in `docs/configuration.md`,
       `kit_tools/docs/API_GUIDE.md` and `kit_tools/arch/SECURITY.md`); the multi-tenant caution is on
@@ -483,7 +484,7 @@ the `["xn--strae-oqa.de"]` spelling both raise `BlockedDomainError` after this s
       unchanged) and the observability sentence; the `news_domains` row carries its note; MONITORING
       has the `config_invalid_value` row and LOGGING.md lists the marker; `kit_tools/docs/GOTCHAS.md`
       states that `url_validator.py` is an unhashed cache-key input.
-- [ ] 1.3.0 window (R36): the docstring line for the three list descriptions is appended in the
+- [x] 1.3.0 window (R36): the docstring line for the three list descriptions is appended in the
       `* ``1.3.0`` — …` format; `uv run python -m scripts.export_contract` run;
       `tests/golden/contract_1_3_0.json` re-created via `_SCHEMA_MODELS` (a no-op — `RetrieveRequest`
       is outside `_SCHEMA_MODELS`, so the golden does not move); nothing appended to
@@ -500,13 +501,13 @@ the `["xn--strae-oqa.de"]` spelling both raise `BlockedDomainError` after this s
       `private_ip` precedence swap and the new `policy_domain_list_too_large` reason, is a
       `### (<letter>) ` section with a `**Source:**` line, and `_RULING_MARKERS` plus the four count
       words are updated as found.
-- [ ] The `sanitizer_revision` rotation (`pipeline/orchestrator.py`, `pipeline/contract.py`) is
+- [x] The `sanitizer_revision` rotation (`pipeline/orchestrator.py`, `pipeline/contract.py`) is
       measured by revert-and-reproduce and recorded at the five sites (`docs/bootstrap-notes.md`,
       `CLAUDE.md`, `kit_tools/arch/DECISIONS.md` table and preamble as found,
       `kit_tools/docs/GOTCHAS.md` counter and table, `kit_tools/arch/CODE_ARCH.md`).
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-007: Request domain lists normalised once per request, with the `policy_invalid_domain_entry` and `policy_suffix_trusted_skip` counters
 
@@ -649,19 +650,19 @@ lands.
   `tests/test_orchestrator.py` trust-tier test at the name above.
 
 **Acceptance Criteria:**
-- [ ] The `/retrieve` handler contains exactly one `body.model_copy(update=...)` call, carrying the
+- [x] The `/retrieve` handler contains exactly one `body.model_copy(update=...)` call, carrying the
       three normalised lists together with the resolved threshold / fail-closed values (assert on
       the handler function's source, not a whole-file `grep -c`); the pipeline never normalises;
       `grep -c "normalize_domain_entries(" url_validator.py` returns 1 (the definition) and `grep -n
       "normalize_domain_entries(" pipeline/orchestrator.py cache.py` returns nothing (US-001's
       interim per-comparison pass is gone; the lifespan and handler calls live in `retrieval_app.py`).
-- [ ] 70 `trusted_domains` entries including `"com"` → 69 valid normalised entries applied (no entry
+- [x] 70 `trusted_domains` entries including `"com"` → 69 valid normalised entries applied (no entry
       count), `retrieve.policy_invalid_domain_entry` advanced by one, no 422; an allowlist over
       `policy_domain_entries_max_bytes` → entries up to the budget boundary applied, the remainder
       counted, no 422; the same for `verified_domains`; `grep -n "budget_bytes=" retrieval_app.py`
       shows the two allowlist calls and `grep -rn "limit=64\|limit=4096" retrieval_app.py pipeline
       url_validator.py` returns nothing.
-- [ ] 500 valid junk `blocked_domains` plus a config `seed_blocklist` domain → the seed domain is
+- [x] 500 valid junk `blocked_domains` plus a config `seed_blocklist` domain → the seed domain is
       refused and all 500 caller entries are enforced; a `blocked_domains` list over the budget →
       422 `content_too_large` with reason `policy_domain_list_too_large`, raised before any entry is
       canonicalised (a patched `canonicalize_host` records zero calls) and recorded on `/metrics`
@@ -670,30 +671,30 @@ lands.
       `pipeline/orchestrator.py` lists the operator entries first; `policy_domain_entries_max_bytes`
       is read at boot with `bounded_int`, a malformed value warns (`config_invalid_value`) and falls
       back to 65536, and the shipped `config.yaml` carries the key.
-- [ ] `retrieve.policy_suffix_trusted_skip` advances by one for a wildcard-caused trusted skip, by
+- [x] `retrieve.policy_suffix_trusted_skip` advances by one for a wildcard-caused trusted skip, by
       one for a wildcard-caused `verified` resolution, and by zero for an exact-entry match of
       either tier; `promptguard_state` is `skipped_trusted` for both trusted cases;
       `_resolve_request_trust_tier`'s signature and `str` return are unchanged and `matched_entry`
       is called only on the trusted/verified branches (a `standard` resolution never calls it).
-- [ ] All four counters exist on the counter classes, the response models and the handler dicts;
+- [x] All four counters exist on the counter classes, the response models and the handler dicts;
       `test_an_unmodeled_counter_fails_loudly` and `test_served_metrics_are_the_handlers_dict_serialized`
       pass; `GET /metrics` serves the `search.*` pair at `0`.
-- [ ] MONITORING has the four rows with the per-entry unit and the two causes;
+- [x] MONITORING has the four rows with the per-entry unit and the two causes;
       `docs/configuration.md` has the `policy_domain_entries_max_bytes` row; TROUBLESHOOTING has the
       `### policy_invalid_domain_entry` section with the two causes, the per-route difference and
       the 422 sentence.
-- [ ] 1.3.0 window (R36): docstring line appended; `uv run python -m scripts.export_contract` run;
+- [x] 1.3.0 window (R36): docstring line appended; `uv run python -m scripts.export_contract` run;
       `tests/golden/contract_1_3_0.json` re-created via `_SCHEMA_MODELS`; **nothing** appended to
       `_EXPECTED_ONE_THREE_ZERO_DIFF` (the `*MetricsResponse` models are outside `_SCHEMA_MODELS`;
       the new reason is announced in the docstring line and not appended — R8 corrected, round 5);
       the search field-set pin (`tests/test_contract_schema.py:368`) is extended by the two names
       and a `RetrieveMetricsResponse` twin pinned to the post-story set exists; the four
       anchor-quoting pages refreshed; `--check` green; `contract_1_2_0.json` unchanged.
-- [ ] The `sanitizer_revision` rotation (`pipeline/orchestrator.py`, `pipeline/contract.py`) is
+- [x] The `sanitizer_revision` rotation (`pipeline/orchestrator.py`, `pipeline/contract.py`) is
       measured and recorded at the five sites.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-002: `/search` honours `blocked_domains` and the operator's `seed_blocklist`
 
@@ -793,7 +794,7 @@ equal the committed pre-story baseline's.
   the five-site protocol named in US-001.
 
 **Acceptance Criteria:**
-- [ ] `SearchRequest.blocked_domains` exists, defaults to `[]`, carries no pydantic validation; a
+- [x] `SearchRequest.blocked_domains` exists, defaults to `[]`, carries no pydantic validation; a
       test sends 70 entries including `" BLOCKED.example. "`, `"com"` and `"bad..entry"` and asserts
       the match fires, `com` is applied exact-only (a result on `com` itself is omitted, one on
       `a.com` is not), `search.policy_invalid_domain_entry` advances by one (for `bad..entry`), and
@@ -803,28 +804,28 @@ equal the committed pre-story baseline's.
       never partially enforced; `run_search_pipeline`'s source contains no `request.blocked_domains`
       read (the `blocked_domains=` parameter is the only channel); `SearchErrorCode`'s docstring
       names the two policy refusals as non-retryable.
-- [ ] A result whose `domain` matches a request entry or a `seed_blocklist` entry is omitted with
+- [x] A result whose `domain` matches a request entry or a `seed_blocklist` entry is omitted with
       `blocked_url`, counted in `omitted_by_reason`, after URL canonicalisation and before stage 2/3;
       `fallback_fired` is `False` and the paid fake's `calls == []`; each omission logs one INFO
       record whose `getMessage()` starts with `search_url_blocked host_class=policy_blocklist
       provider=` and carries no URL and no host (substring check, never exact equality).
-- [ ] The committed baseline's five fields equal the response's for a request sending no
+- [x] The committed baseline's five fields equal the response's for a request sending no
       `blocked_domains` and no `promptguard_threshold`; `tests/fixtures/README.md` has the section.
-- [ ] 1.3.0 window (R36): docstring line appended; `uv run python -m scripts.export_contract` run;
+- [x] 1.3.0 window (R36): docstring line appended; `uv run python -m scripts.export_contract` run;
       `tests/golden/contract_1_3_0.json` re-created via `_SCHEMA_MODELS`; `blocked_domains` appended
       to `_EXPECTED_ONE_THREE_ZERO_DIFF`; the four anchor-quoting pages refreshed; `--check` green;
       `contract_1_2_0.json` unchanged; none of the seven boundary-text copies in `models.py`,
       `retrieval_app.py`, `kit_tools/docs/API_GUIDE.md`, `docs/configuration.md` and `README.md` calls
       `blocked_domains` a `/retrieve`-only knob (each of the five files is checked by name).
-- [ ] `kit_tools/docs/API_GUIDE.md` has the `/search` request row (`grep -c blocked_domains
+- [x] `kit_tools/docs/API_GUIDE.md` has the `/search` request row (`grep -c blocked_domains
       kit_tools/docs/API_GUIDE.md` ≥ 2) and its `omitted_by_reason` enumeration includes
       `blocked_url`; MONITORING's `omitted_by_reason` row names the three causes and the token and
       says `policy_blocklist` is expected policy; `docs/configuration.md`'s `seed_blocklist` row
       says both routes.
-- [ ] The `sanitizer_revision` rotation is measured and recorded on the five-site protocol.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] The `sanitizer_revision` rotation is measured and recorded on the five-site protocol.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-005: `promptguard_threshold` added to `/search`, defaulted from `config.yaml` on both routes, capped by the operator ceiling
 
@@ -946,24 +947,24 @@ table carries a `promptguard_threshold` row and its response table an
   `RetrieveRequest` with a threshold.
 
 **Acceptance Criteria:**
-- [ ] `promptguard_threshold` is `float | None` defaulting to `None` on both request models (new on
+- [x] `promptguard_threshold` is `float | None` defaulting to `None` on both request models (new on
       `SearchRequest`); `tests/test_models.py`'s default assertion is updated.
-- [ ] `/search` passes the resolved threshold into `run_search_pipeline`; with config `0.5` and a
+- [x] `/search` passes the resolved threshold into `run_search_pipeline`; with config `0.5` and a
       `0.6`-scoring classifier, omitting the field blocks on `/search` and `/retrieve`, an explicit
       `0.85` serves; `/extract`'s tests pass unchanged.
-- [ ] Ceiling order: config `0.85` + ceiling `0.5` + omitted field → classification at `0.5`,
+- [x] Ceiling order: config `0.85` + ceiling `0.5` + omitted field → classification at `0.5`,
       `effective_promptguard_threshold == 0.5` on both responses, `0.5` in the `/retrieve` fingerprint.
-- [ ] `grep -n "request.promptguard_threshold" pipeline/orchestrator.py` returns nothing; `uv run
+- [x] `grep -n "request.promptguard_threshold" pipeline/orchestrator.py` returns nothing; `uv run
       pyright` passes with no type-ignore comment added.
-- [ ] A config `promptguard_threshold` of `"abc"`, `-0.1`, `1.7` or `true` boots, logs exactly one
+- [x] A config `promptguard_threshold` of `"abc"`, `-0.1`, `1.7` or `true` boots, logs exactly one
       `config_invalid_value` WARNING naming the key and never the value, and resolves to `0.85`
       (`grep -n "bounded_float" retrieval_app.py` shows the reader is the shared one; for this key
       the WARNING's `getMessage()` also names `/extract`'s own read); a quoted
       `"0.85"` resolves to `0.85` with no WARNING; an absent key resolves to `0.85`; the resolved
       default is logged once at INFO as `promptguard_threshold_resolved`, which MONITORING's
       "Dropped (INFO)" line and LOGGING.md's inventory name.
-- [ ] The cache-key assertions (null vs explicit default vs ceiling) pass.
-- [ ] 1.3.0 window (R36): docstring line appended; `uv run python -m scripts.export_contract` run;
+- [x] The cache-key assertions (null vs explicit default vs ceiling) pass.
+- [x] 1.3.0 window (R36): docstring line appended; `uv run python -m scripts.export_contract` run;
       `tests/golden/contract_1_3_0.json` re-created via `_SCHEMA_MODELS`; the new field and the
       `SearchResponse` field appended to `_EXPECTED_ONE_THREE_ZERO_DIFF`; the four anchor-quoting
       pages refreshed; `--check` green; a test that collapses runs of whitespace in each of the five
@@ -974,18 +975,18 @@ table carries a `promptguard_threshold` row and its response table an
       as its own `### (<letter>) ` section with a `**Source:**` line, `_RULING_MARKERS` and the
       count words updated as found (US-001's mechanism); `derive_sanitizer_revision`'s docstring
       says "configured".
-- [ ] `kit_tools/docs/API_GUIDE.md`'s `/search` request table has the `promptguard_threshold` row
+- [x] `kit_tools/docs/API_GUIDE.md`'s `/search` request table has the `promptguard_threshold` row
       and its response table the `effective_promptguard_threshold` row.
-- [ ] `docs/configuration.md`'s `promptguard_threshold` row carries the two-direction upgrade note,
+- [x] `docs/configuration.md`'s `promptguard_threshold` row carries the two-direction upgrade note,
       names `promptguard_threshold_ceiling` as the bound and states the three-route reading.
-- [ ] A test pins the `/extract` divergence as known-and-unchanged: `promptguard_threshold: true`
+- [x] A test pins the `/extract` divergence as known-and-unchanged: `promptguard_threshold: true`
       boots with one `config_invalid_value` WARNING, resolves to `0.85` on `/retrieve` and
       `/search`, and still reaches `/extract`'s `float()` coercion at `1.0`;
       `kit_tools/docs/GOTCHAS.md` states it.
-- [ ] The `sanitizer_revision` rotation is measured and recorded on the five-site protocol.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] The `sanitizer_revision` rotation is measured and recorded on the five-site protocol.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-003: `config.yaml` key registry — warn on unknown keys, docs and code parity by test
 
@@ -1094,37 +1095,37 @@ every string-literal key the readers pass to `config.get(...)` / `config[...]` i
   `derive_sanitizer_revision({})` is unchanged after the story).
 
 **Acceptance Criteria:**
-- [ ] `KNOWN_CONFIG_KEYS` is a frozenset of dotted key names (plus the bare block names, `retrieve`
+- [x] `KNOWN_CONFIG_KEYS` is a frozenset of dotted key names (plus the bare block names, `retrieve`
       included, and `policy_domain_entries_max_bytes`) in `retrieval_app.py`; a test asserts it is a
       superset of every key in the shipped `config.yaml`.
-- [ ] The docs-parity test discovers every `config.yaml` table by heading (backticks verbatim),
+- [x] The docs-parity test discovers every `config.yaml` table by heading (backticks verbatim),
       asserts each slice is non-empty, and asserts `KNOWN_CONFIG_KEYS` equals the union of their
       first-column keys with the prefixing rule (a key without a row, or a row without a key, is
       red).
-- [ ] The AST sweep over the reader modules reads the key from the bounded helpers' second argument,
+- [x] The AST sweep over the reader modules reads the key from the bounded helpers' second argument,
       prefixes leaves read through a block-local mapping with the block name, matches the
       attribute-chain receiver shape, asserts every literal config key read is in the registry,
       asserts it found ≥ eight literal-key read sites (the named list, with the four variable-key
       sites in a named skip list), ≥ one shape-(b) site per bounded reader, ≥ one dotted leaf per
       registered block and ≥ one literal key in every listed module, and reports a planted
       unregistered key.
-- [ ] Booting with an unknown top-level key, an unknown `extraction.` key and an unknown `retrieve.`
+- [x] Booting with an unknown top-level key, an unknown `extraction.` key and an unknown `retrieve.`
       key logs exactly one WARNING per key whose `getMessage()` contains `config_unknown_key` and the
       dotted key and never the value; the service starts; `/health` status is unchanged.
-- [ ] `_warn_unknown_config_keys` called directly with a list, a scalar, and a mapping whose
+- [x] `_warn_unknown_config_keys` called directly with a list, a scalar, and a mapping whose
       `cache:` value is not a mapping returns `[]`, logs no `config_unknown_key` record and raises
       nothing (a unit test on the function — never a boot: the readers' typed refusals for a
       non-mapping block are unchanged, and a test asserts `cache: "yes"` still refuses boot with
       `CacheConfigurationError`).
-- [ ] Booting with the shipped `config.yaml` logs no `config_unknown_key` record.
-- [ ] `docs/configuration.md`'s `## `config.yaml`` section states the warn-and-ignore rule and the
+- [x] Booting with the shipped `config.yaml` logs no `config_unknown_key` record.
+- [x] `docs/configuration.md`'s `## `config.yaml`` section states the warn-and-ignore rule and the
       bad-value split; MONITORING's startup-lines table has the `WARNING` / `config_unknown_key`
       row; LOGGING's inventory lists it; TROUBLESHOOTING has the `### config_unknown_key` section.
-- [ ] `docs/bootstrap-notes.md`'s latest `sanitizer_revision` record still matches
+- [x] `docs/bootstrap-notes.md`'s latest `sanitizer_revision` record still matches
       `derive_sanitizer_revision({})`.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-004: Boundary-text knob-parity guard across all seven copies
 
@@ -1182,25 +1183,25 @@ set in one copy makes it fail twice.
 - `models.py`, `retrieval_app.py` and the tests are not hashed; this story rotates nothing.
 
 **Acceptance Criteria:**
-- [ ] The new test derives both sets from `model_fields` minus the named identity fields and asserts
+- [x] The new test derives both sets from `model_fields` minus the named identity fields and asserts
       every name in the four OpenAPI strings and the three fenced Markdown regions, plus each shared
       name inside the shared-knobs sentence; deleting one route-specific name and one shared name
       from any copy (and regenerating where applicable) makes it fail.
-- [ ] Each of the three Markdown files has exactly one `boundary-text:start` / `:end` fence pair
+- [x] Each of the three Markdown files has exactly one `boundary-text:start` / `:end` fence pair
       (`grep -c "boundary-text:start"` returns 1 for each); the test is red on zero or two.
-- [ ] All seven copies name every route-specific knob and mark the shared ones: every `_SHARED`
+- [x] All seven copies name every route-specific knob and mark the shared ones: every `_SHARED`
       name appears inside the one sentence each copy opens with the fixed lead-in `Shared by both
       routes:` (a knob described anywhere else in the copy is red by construction — the negative
       "is not applied" assertion was dropped in round 5 because an absent English phrasing is a
       heuristic that rots); the existing `test_search_and_retrieve_descriptions_name_the_boundary`
       still passes.
-- [ ] `contract/openapi.yaml` regenerated; `tests/golden/contract_1_3_0.json` re-created;
+- [x] `contract/openapi.yaml` regenerated; `tests/golden/contract_1_3_0.json` re-created;
       `uv run python -m scripts.export_contract --check` green; the four anchor-quoting pages refreshed.
-- [ ] `docs/bootstrap-notes.md`'s latest `sanitizer_revision` record still matches
+- [x] `docs/bootstrap-notes.md`'s latest `sanitizer_revision` record still matches
       `derive_sanitizer_revision({})`.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-006: Name the engine-list sync mechanism (ruling 11)
 
@@ -1225,10 +1226,10 @@ and the same for `kit_tools/arch/SERVICE_MAP.md` each return at least `1`; the f
 - Doc-only story; nothing rotates, no code.
 
 **Acceptance Criteria:**
-- [ ] `docs/searxng.md` and `kit_tools/arch/SERVICE_MAP.md` each name
+- [x] `docs/searxng.md` and `kit_tools/arch/SERVICE_MAP.md` each name
       `test_enabled_engines_match_the_orchestrator` as the engine-list sync mechanism (occurrence
       count ≥ 1 by `grep -o … | wc -l`); `SERVICE_MAP.md:106`'s sentence is extended, not duplicated.
-- [ ] Full test suite passes (`uv run pytest`).
+- [x] Full test suite passes (`uv run pytest`).
 
 ## Edge Cases
 
@@ -1436,6 +1437,407 @@ and the same for `kit_tools/arch/SERVICE_MAP.md` each return at least `1`; the f
 - Known Issues: [GOTCHAS.md](../docs/GOTCHAS.md)
 
 ## Implementation Notes
+
+### US-001 implementation (2026-09-22)
+
+- Pre-flight passed before edits: canonical host/rejection return shape, both config
+  bound helpers, `OMIT_BLOCKED_URL`, the held 1.3.0 golden, the complete 1.2.0-schema
+  diff sweep, and the operator-policy resolver all exist. Read the actual spec-1
+  US-003 notes: the rejection reasons are `unparseable`, `numeric_host`, `idna`;
+  `.localhost` was already added there.
+- Added the canonical-string domain normaliser and directional matcher, plus byte
+  measure and matching-entry helper. No signature change at any of the three
+  comparison sites or the fingerprint. The interim per-comparison entry pass remains
+  unbudgeted until US-007; no request counters or cap raisers were added here.
+  Config entries are each normalised once at boot into a published copy, retaining the
+  untouched raw config for revision derivation. One warning names each list's drops;
+  misplaced URL/credential-shaped entries are redacted to preserve invariant 6.
+- The spec's unhashed-helper assumption is superseded: `url_validator.py` already
+  belongs to `_ROOT_REVISION_SOURCES`. Removing it or documenting it as unhashed would
+  regress spec 1. GOTCHAS records the resolved question and whole-file invalidation
+  cost instead. Three source files rotate the revision. Read-only single-file
+  reversals and the all-reverted control reproduce the clean base under both default
+  and shipped config; all five rotation records are updated.
+- Reconciled the preceding, previously unrecorded validation rotation from `fe211e3`
+  separately: `d98f7dbe…` → `5a470872…` (twenty-sixth). This story is twenty-seventh,
+  `5a470872…` → `328d386c…`, the fifth sanitization-behaviour change.
+- The three request descriptions and GOVERNANCE ruling (h) land in the 1.3.0 window.
+  Exported OpenAPI anchor: `b176ced35f6cacd32adbca96c5ca78daaaa2a50c99fc7a349be036018f24ccff`.
+  Re-created the held golden through `_SCHEMA_MODELS`, byte-identical; older goldens
+  and `_EXPECTED_ONE_THREE_ZERO_DIFF` stay unchanged. All four anchor quotations updated.
+- No pre-existing matcher test was removed, weakened or given a different call shape.
+  `test_config_loading` now expects `.reuters.com`, the intentionally changed shipped
+  spelling. Formatting touched existing lines in the modified orchestrator test file;
+  its pre-existing untyped tokenizer lambda became a typed equivalent for pyright.
+  The lifespan regression explicitly installs the real validator at its import seam:
+  a prior concurrent-mock test leaks a validator mock when the modules run together,
+  while this regression passes independently without that patch.
+- Full-suite execution remains deferred by the story-implementer instruction.
+  Repository-wide formatting currently reports pre-existing drift in untouched
+  `tests/test_retrieve_admission.py` from `fe211e3`; do not confuse that gate with a
+  failure of the hostname tests. This file is outside the permitted changed-file
+  formatter scope and was left untouched.
+- Final focused gate: 1,142 tests across the twelve related modules passed; five
+  expected unavailable-cache socket-guard warnings and one upstream Torch deprecation.
+  Repository lint and strict pyright pass, as do changed-file formatting and
+  `export_contract --check`. A separate AST/read-only check pins unchanged public
+  signatures, one IDNA call site, the direct dependency, and all retained goldens.
+
+### US-007 implementation (2026-09-22)
+
+- `/retrieve` makes exactly one request `model_copy`, carrying all three canonical
+  lists plus resolved fail-closed/threshold fields. The policy helper now returns
+  updates rather than copying; `/search` still makes one copy with unchanged
+  policy semantics. No pipeline parameter or public comparison signature changed.
+- The boot `bounded_int` read publishes a per-list byte cap (default 65536,
+  inclusive bounds 4096–1048576); invalid values warn with only the key and fall
+  back. `promptguard_threshold_from_config` and `KNOWN_CONFIG_KEYS` do not exist
+  at this execution point; their later stories own those additions. Allowlists
+  keep the in-budget prefix; an oversized denylist raises the handler's coded
+  422 before any caller entry is canonicalised. Operator entries merge first.
+  The three interim entry passes are gone; host canonicalisation remains.
+- Consumer-size evidence: **none**. This standalone checkout contains no
+  production consumer request capture from which to measure the largest list.
+  The 64 KiB default is confirmed as the specified configurable bound, not as
+  measured production headroom; the release handoff records that limitation.
+  This limits canonicalisation work after JSON parsing, not body admission.
+- Added all four counter class/model/handler fields, extended the exact search
+  field-set pin and added its retrieve twin. Wildcard accounting calls
+  `matched_entry` only for trusted/verified resolutions, including verified
+  with unavailable classification; exact-entry matches and standard resolutions
+  do not increment. Cached responses do not re-resolve tiers. Search counters
+  remain zero pending US-002 (suffix skips permanently reserved).
+- Closed a budget-boundary edge discovered during implementation: FastAPI's
+  JSON-to-Python path admits lone surrogate escapes that
+  `RetrieveRequest.model_validate_json` rejects. Strict UTF-8 sizing raised
+  `UnicodeEncodeError`; sizing now charges three bytes per surrogate using
+  `surrogatepass`, without replacing or accepting it as a domain. The normaliser
+  rejects and counts it. Real ASGI regressions cover both allowlists and the
+  denylist; valid UTF-8 budgets are unchanged.
+- Regenerated OpenAPI and its drift fixture; anchor
+  `416f86c93f74489b28083086bac7f9424ab700220fd46f275ca6333da428f97b`.
+  Re-created held 1.3.0 golden through `_SCHEMA_MODELS`, byte-identical; all
+  older goldens and `_EXPECTED_ONE_THREE_ZERO_DIFF` are unchanged. Four
+  anchor quotations, monitoring rows, troubleshooting, config and release
+  handoff documentation are current.
+- Twenty-eighth rotation: `328d386c…` → `c8a907cf…`. Three hashed sources move,
+  not the spec's two: `url_validator.py` was already hashed. Individual
+  read-only reversals and all-reverted control measured under default and
+  shipped config; all five sites recorded. In-budget matching and scanning
+  are unchanged, but an over-budget allowlist cannot grant trust through its
+  tail (sixth policy-driven sanitization change).
+- Validation: **1,196 tests passed** across twelve directly related modules;
+  **15 admission tests passed separately**. Repository lint, strict pyright,
+  changed-file formatting, contract drift and `git diff --check` pass.
+  No story definitions or acceptance checkboxes changed.
+- Readiness remains **partial / needs-work**: full-suite execution is explicitly
+  deferred by the implementer instructions. Repository formatting still fails
+  solely in untouched `tests/test_retrieve_admission.py`. Running that module
+  after `tests/test_orchestrator.py` also exposes two inherited failures:
+  `test_active_classification_cancellation_retains_ownership` overlaps the
+  `_retrieve_under` patch contexts and leaves `orchestrator.fetch_url` as an
+  `AsyncMock`, so the admission stream's `started` event never fires. Both
+  functions' ASTs are identical to clean `03bc764`; running the 12-case
+  cancellation test alone confirms the leaked mock. No unrelated test or
+  production change was made to conceal either gate failure.
+
+### US-002 implementation (2026-09-22)
+
+- Captured `tests/fixtures/search/baseline_pre_blocked_domains.json` from clean
+  `a80b2819f5626b44c161c47fddd72c6982f9149d` before touching the handler.
+  The three prescribed hosts, fake content, loaded classifier score 0.1 and
+  threshold 0.85 are documented in the fixture README, including the rule
+  against regenerating after this story without a GOVERNANCE classification.
+  The real route still matches all five pinned fields without either new field.
+- Added unconstrained `SearchRequest.blocked_domains`, raw-byte refusal before
+  caller encoding, once-only normalization and per-entry invalid counters.
+  The canonical list reaches the pipeline solely through `blocked_domains=`;
+  the raw request field is never read there. Canonical operator entries merge
+  first with no cap or eviction. Existing host canonicalisation is reused, not
+  repeated per entry or after the URL audit.
+- Matching results use `_block_search_url("policy_blocklist")`, preserving the
+  common `SearchUrlOutcome` reason/log path and `contract.OMIT_BLOCKED_URL`.
+  Private-host audit reasons retain precedence, Stage 2/3 never receive blocked
+  content, and even an all-omitted raw success does not call the paid fallback.
+  The INFO record is exactly the existing two-token template, without host/URL.
+- Regressions cover 70 caller entries including a malformed entry and exact-only
+  `com`, 500 entries unable to evict a boot-normalized seed, all-results-blocked
+  non-fallback, UTS-46/leading-dot matching, one canonicalisation per entry and
+  per host, the explicit parameter as the only channel, exact 4096-byte admission
+  and 4097-byte refusal, UTF-8 sizing, and JSON lone-surrogate escapes. Refusal
+  invokes neither normalization nor provider and increments the shared error
+  metric once; malformed in-budget entries are counted without echo.
+- The 1.3.0 window stays held: appended the contract continuation, regenerated
+  OpenAPI and its drift fixture, re-created the golden through `_SCHEMA_MODELS`,
+  and appended only `SearchRequest.blocked_domains` to the additions set.
+  Older goldens are unchanged. Anchor:
+  `9c27428a293dfc033439074084776564ff22a26ec3220ac92602fc49d38593b9`;
+  all four quotations refreshed and `export_contract --check` passes.
+- All seven boundary copies across the five named files now identify
+  `blocked_domains` as shared. API_GUIDE already enumerated `blocked_url` from
+  spec 1 US-004, so no missing-token handoff was needed. US-007 had already
+  documented three policy reason shapes; this story replaces its future-tense
+  raiser notes and explicitly names both literal reasons as permanent,
+  non-retryable client errors. MONITORING separates expected `policy_blocklist`
+  from suspicious-host audit omissions. SERVICE_MAP's configuration row had
+  been narrowed to "search policy plumbing is US-002" by US-001; updated it to
+  the now-true "also applied to `/search` result URLs" claim rather than leaving
+  the stale future-tense wording. Configuration, security, environment and
+  release handoff docs now describe both routes.
+- Twenty-ninth rotation, **seventh policy-driven sanitization change**:
+  `c8a907cf…` → `de1cea65…`. Only `orchestrator.py` and `contract.py` move
+  among the nine hashed sources; each individual read-only reversal and the
+  both-reverted control were measured under default and shipped configuration.
+  All five rotation sites record it. Text scanning and the empty-seed baseline
+  are unchanged; search can no longer bypass the operator's existing seed list.
+- Validation: **1,032 related tests passed** across twelve modules; repository
+  Ruff lint, strict Pyright, changed-file formatting, generated-contract drift,
+  older-golden preservation and `git diff --check` pass. The socket guard stayed
+  enabled; two existing unavailable-cache warnings and one upstream Torch
+  deprecation warning remain non-failing.
+- Readiness remains **partial / needs-work**, not a gate waiver: repository-wide
+  formatting still fails solely in untouched `tests/test_retrieve_admission.py`.
+  The full suite was not run because implementer instructions prohibit it;
+  that acceptance gate remains for the orchestrator. No unrelated test repair,
+  story-definition edit or acceptance-checkbox change was made.
+
+### US-005 — shared configured PromptGuard threshold (2026-09-22, Copilot)
+
+- Both request models now use nullable, bounded `promptguard_threshold`, with
+  null/omitted selecting the boot-validated default before the operator ceiling.
+  `_promptguard_policy_updates` returns a TypedDict so the handler owns narrowing
+  and passes an explicit float to both pipelines without a cast or suppression.
+  The request is still replaced once. Retrieve classification and its cache
+  fingerprint consume that one keyword, never the nullable request field;
+  both successful responses are stamped after the pipeline.
+- `promptguard_threshold_from_config` reuses `bounded_float`, preserving quoted
+  numeric strings but rejecting bool, invalid types, out-of-range/non-finite
+  values and oversized integers. A bad default warns once, key only, explicitly
+  naming `/extract`'s raw guard, and uses 0.85 without refusing boot. The validated
+  default is published separately and logged once at INFO; the raw config is
+  unchanged. `/extract`'s AST is unchanged, including
+  its existing error mapping and YAML `true` becoming 1.0; an actual boot and
+  three-route regression pins that divergence.
+- Regressions cover score 0.6 at default 0.5 versus explicit 0.85, default-before-
+  ceiling at 0.85/0.5, explicit zero, all nullable model bounds, single-source
+  keyword isolation, and equal cache keys for null/explicit default/capped
+  equivalent requests. No socket guard was relaxed.
+- Held contract 1.3.0: continuation line, regenerated OpenAPI and failure fixture,
+  current golden re-created through `_SCHEMA_MODELS`, exactly two additions in
+  the expected diff, every older golden retained unchanged. Anchor
+  `83242c6917cacb809b92f24b3b1b94fc1c149bfc0835e1c09a9c39ed86bbd81b`
+  matches all four quotations. GOVERNANCE ruling (i) records the MINOR
+  classification; the marker tuple and count words now say ten. The
+  whitespace-normalizing regression checks all five authored files and all
+  four generated descriptions, and pins both API-guide table rows.
+- Operator, security, architecture, logging and monitoring docs now describe
+  both fetch routes' policy. Configuration and release handoff state the upgrade
+  in both directions: values above 0.85 loosen fetch blocking unless capped,
+  values below tighten it; the old upload-only config knob is gone and the
+  content cache re-keys. Raw versus active hash/fingerprint inputs are explicit.
+- Thirtieth rotation, **eighth policy-driven sanitization change for tuned
+  deployments**: `de1cea65…` → `e00049c4…`. Only `orchestrator.py` and
+  `contract.py` move among hashed sources. Each read-only reversal was measured
+  under default and shipped config; both-reverted reproduces the clean
+  `6cc45cf` baseline exactly. All five records updated; shipped 0.85 behavior,
+  text-scanning algorithms and the raw configured hash input are unchanged.
+- Validation: **1,151 related tests passed plus 15 admission tests in a separate
+  process**. Repository Ruff lint/format, strict Pyright, export `--check`,
+  historical-golden preservation, unchanged `/extract` AST, final revision and
+  `git diff --check` pass. The previously inherited admission formatting drift
+  was mechanically cleared because the required pipeline keyword now changes
+  that file; no unrelated formatter run was applied.
+- **Readiness remains partial / needs-work.** Combined test order exposes an
+  inherited leak: `test_two_retrieve_classifications_serialise_through_the_permit`
+  overlaps `_retrieve_under`'s global fetch mocks across coroutines, leaving
+  `orchestrator.fetch_url` mocked after teardown; the two subsequent admission
+  streaming-deadline cases time out. A temporary untouched `6cc45cf` source
+  snapshot reproduced exactly those failures (345 passed, 2 failed).
+  Separate-process success is not a gate waiver; this unrelated test defect
+  was not repaired here. Full-suite execution remains the orchestrator's gate
+  because implementer instructions prohibit it. Six existing non-failing
+  warnings (five unavailable-cache socket warnings and one Torch deprecation)
+  remain visible. No story definition or acceptance checkbox changed.
+
+### US-005 retry 2 — concurrent test isolation (2026-09-22, Copilot)
+
+- Reapplied preserved `ec8d698` onto its exact clean `6cc45cf` base without
+  changing production threshold behavior. The previous attempt's notes above
+  remain historical; this retry resolves its combined-test readiness blocker.
+- `_retrieve_under` no longer owns any process-global patches. Every caller
+  uses one test-scoped `_mock_retrieve_io` fixture, installed before concurrent
+  tasks start and restored after their cleanup; teardown asserts both original
+  function identities. No real fetcher is replaced in the admission deadline
+  tests to hide the leak.
+- The three retrieve/retrieve, retrieve/search and retrieve/extract
+  serialization tests wait for an explicit worker-entered event and a bounded
+  semaphore-waiter condition instead of fixed `sleep(0)` iteration counts.
+  Their assertions still prove the competing classifier cannot start early.
+  Gates are released and tasks cancelled/drained in `finally`; cancellation,
+  admission-deadline startup and body-lifetime tests also drain their tasks on
+  assertion failure. Single scheduler yields between deliberate repeated
+  `Task.cancel()` calls remain intentional, not worker-start synchronization.
+- Validation: the required orchestrator/admission pair passes **347 tests**;
+  the final single-process selection passes **1,196 tests across sixteen
+  related modules**, including that pair, threshold policy, boot, cache,
+  model, contract, search policy and PromptGuard regressions. Repository Ruff
+  lint/format, strict Pyright, export `--check` and `git diff --check` pass.
+  Six pre-existing non-failing warnings remain visible (five unavailable-cache
+  socket warnings and one upstream Torch deprecation); no guard was relaxed.
+- Re-ran the exporter and regenerated the held golden through `_SCHEMA_MODELS`;
+  output is byte-identical to the preserved implementation. All older goldens,
+  `/extract`'s AST, four anchor quotations, both single-file read-only revision
+  reversals and the combined control pass again under default and shipped
+  config. The thirtieth rotation stays `de1cea65…` → `e00049c4…`; the retry's
+  test/documentation-only repair adds no rotation.
+- Story implementation is ready for verification. The full-suite acceptance
+  gate is explicitly deferred to end-of-epic validation per retry instructions,
+  not claimed as passed. No story definition or acceptance checkbox changed.
+
+### US-003 — config key registry and parity guards (2026-09-22, Copilot)
+
+- Added 31 registered names beside `_load_config`, with block discovery derived from
+  dotted leaves rather than a second block vocabulary. The lifespan warns immediately
+  after loading. Unknown blocks are reported once; registered non-mapping values are
+  untouched, so existing typed startup refusals still fire. Only key names are logged.
+- Real-lifespan regressions cover the shipped config and all three planted typos,
+  exactly one WARNING per key, no sentinel value at any log level, and unchanged
+  health/revision. Unit tests cover malformed documents, non-dict Mapping blocks,
+  no recursive descent into values, and an added future registry block. Cache,
+  extraction and retrieve invalid-value refusals remain independently asserted.
+- Docs parity borrows `_section` / `_cells` by function-scoped import, following
+  `test_contract_smoke`'s single-source precedent. It discovers backtick-bearing
+  block headings and checks only each key table's first column. Added the missing
+  retrieve and three top-level policy rows to the main table, standardized the
+  retrieve heading (retaining its old anchor), and documented the warning/value
+  split in the reference, environment guide and three logging/runbook surfaces.
+- The eight-module AST sweep follows `.get`, subscripts, trailing `.config`
+  attribute chains, function-local aliases and casts, and bounded helpers' second
+  arguments (including `bounded_bool` and the threshold reader's literal dict).
+  It measures 11 direct literal reads, requires each bounded reader and each block
+  to contribute, and fails on opaque mapping aliases rather than silently skipping
+  them. Temporary-module regressions plant unknown keys in each supported shape.
+- Reconciled the spec's pre-dependency anchors with actual code: `config_bounds.py`
+  has **no literal keys**; its three variable-key helpers are resolved from imported
+  callers' literal arguments. Each helper must retain its named variable read and
+  have literal callers; those resolved keys satisfy that helper-only module's
+  coverage gate. The named skip list now has seven sites: cache's helper, Brave's
+  two, config_bounds' three (including the migrated extraction helper), and the
+  lifespan's domain-list loop. None count toward the literal-site floor.
+- No sanitizer rotation: before and after are
+  `e00049c4ea9d02893c2f3c4f567a6a75f5a4fdfdb145bbf6d6fc701ec7c7ed5c`,
+  under default and shipped config, matching the latest bootstrap record. All nine
+  hashed sources, the derivation module, response models and contract artifacts
+  are byte-identical to the pre-story commit; no export or golden change is needed.
+- Validation: 1,053 tests pass in one process across app, metrics/docs, governance,
+  cache, Brave, provider registry, PromptGuard policy, contract smoke/errors/export.
+  Repository Ruff lint/format, strict Pyright (zero errors), contract export check
+  and diff whitespace pass. Six existing non-failing warnings remain (one Torch
+  deprecation and five unavailable-cache socket-guard warnings), unsuppressed.
+  Full pytest remains explicitly deferred to end-of-epic validation by the
+  implementer instruction; this is not a claim that its acceptance gate was run.
+
+### Provider-bounds US-001 reader-list handoff (2026-09-22)
+
+- Extended the implemented US-003 AST reader list, `_CONFIG_READER_MODULES` in
+  `tests/test_contract_metrics.py`, with `pipeline/search_providers/searxng.py`.
+  Its bounded-reader assertion now requires `searxng_settings_from_config`;
+  the shared-helper sweep resolves `search_searxng_timeout_seconds` through
+  `bounded_float` and checks it against `KNOWN_CONFIG_KEYS` and both config docs.
+  The archived story definition and completed acceptance checkboxes are unchanged.
+
+### US-004 - boundary-text knob parity (2026-09-22)
+
+- Derived the route-specific and shared sets from `SearchRequest.model_fields`
+  and `RetrieveRequest.model_fields`, excluding only `url` and `query`: seven
+  route-specific knobs and three shared knobs. All seven authored copies now
+  include `extract_mode` and `num_results`, use the real `cache_ttl_hours` name,
+  and place every shared knob in one `Shared by both routes:` sentence.
+- The export guard reads all four descriptions from `CONTRACT_PATH` and the
+  three Markdown copies through exactly one ordered fence pair each. README
+  fences surround the entire uninterrupted HTTP table; only rows with the
+  exact `/search` and `/retrieve` first cells contribute names.
+- Mutation regressions remove every knob from each copy, move or duplicate
+  shared knobs outside their sentence, remove or duplicate that lead-in,
+  remove/duplicate/reverse fences, move README fences into the table, and
+  plant missing names in the three unrelated endpoint rows. Every case is
+  rejected by the same guard used for the committed copies.
+- Regenerated OpenAPI, its anchor and the drift twin, re-created the held
+  1.3.0 golden through `_SCHEMA_MODELS`, and refreshed all four anchor-quoting
+  pages. New anchor:
+  `014e873a2e7fae9b87b781e5e7b8bd5446d1e2259ad7ddcf52089d4840480194`.
+  A structural comparison to the pre-story tree finds exactly four OpenAPI
+  description changes and only `SearchRequest.description` in the golden.
+  All older goldens are byte-identical. Ruling 5 keeps this description-only
+  change in the open 1.3.0 window; no `CONTRACT_VERSION` entry was appended.
+- Production ASTs are identical after stripping docstrings. All nine hashed
+  sources and the derivation module are unchanged; before and after, default
+  and shipped config reproduce
+  `e00049c4ea9d02893c2f3c4f567a6a75f5a4fdfdb145bbf6d6fc701ec7c7ed5c`,
+  matching the latest `docs/bootstrap-notes.md` rotation record.
+- Validation: 657 related tests pass in one process across export/schema,
+  governance, models, app, errors, metrics and sanitizer revision. Safe fixers
+  ran only on the three changed Python files; repository Ruff lint/format,
+  strict Pyright (zero errors), exporter `--check` and whitespace checks pass.
+  Three existing non-failing warnings remain unsuppressed (one Torch
+  deprecation and two unavailable-cache socket-guard warnings). The full
+  pytest gate remains deferred as explicitly required by the implementer
+  instructions, not claimed as passed.
+
+### Validation fix — 2026-09-22-001 (2026-09-22, Copilot)
+
+- Reproduced the lifespan crash for a YAML `null` member and the scalar-string
+  container bug (`Evil.COM` became single-character denylist entries) with failing
+  regressions before applying the fix. Both domain lists now check container and
+  member types at the lifespan boundary, before the existing string-only normaliser.
+- Non-string members are dropped using only the fixed `[non-string]` log token;
+  valid entries retain canonical order and the denylist/allowlist distinction.
+  Non-list containers publish `[]` and report `dropped=1 entries=[invalid-container]`,
+  never iterating or stringifying their contents. Each affected list still emits
+  exactly one WARNING; existing credential/URL redaction is unchanged. Missing and
+  empty lists remain quiet, and the loaded raw configuration is not mutated.
+- Added 37 parametrized regression cases for both lists, mixed/all-invalid members,
+  malformed scalar/mapping/set containers, safe logging, missing/empty lists, and
+  unchanged non-mapping whole-document refusal. Existing cache/extraction/retrieve
+  block-refusal regressions pass. No public type/signature, hostname rule, request
+  validation or other subsystem fallback changed.
+- Updated the configuration reference, monitoring/logging descriptions and gotcha.
+  All nine hashed sanitizer sources, the derivation module, contract artifacts,
+  goldens, response models and dependency lock are byte-identical to `3290146`.
+  Default and shipped config still derive
+  `e00049c4ea9d02893c2f3c4f567a6a75f5a4fdfdb145bbf6d6fc701ec7c7ed5c`;
+  lifespan is not hashed, so no rotation or contract regeneration is needed.
+- Validation: 783 focused tests pass across app, URL validator, metrics/docs,
+  sanitizer revision, contract export and type-policy modules. Repository Ruff
+  lint/format checks and strict Pyright pass (zero errors). Three existing
+  non-failing warnings remain unsuppressed (one Torch deprecation and two
+  unavailable-cache socket-guard warnings). Full-suite validation and the review
+  loop remain with the parent validator; this does not complete or archive the spec.
+
+### Implementation validation (2026-09-22, Copilot)
+
+- Validated `epic/forage-hardening` at `c6e7770` against all seven stories in
+  this spec, using the full 68-file `main...HEAD` scope. Completed prerequisite
+  specs were treated as intentional epic scope, not scope creep.
+- The independent quality, security and compliance reviewers all returned
+  **clean / ready**, with no active defects. The earlier domain-list type
+  handling and threshold-comment findings are resolved by `30bd903` and
+  `c6e7770`; no further implementation fix was needed in this run.
+- Full-suite acceptance is now verified at the current head: **3,127 passed,
+  13 non-failing warnings in 20.40s**. Repository Ruff lint/format (141 files),
+  strict Pyright (zero errors/warnings), generated-contract drift and diff
+  whitespace checks all pass. The recorded pre-epic baseline was clean.
+- Default and shipped config both retain revision
+  `e00049c4ea9d02893c2f3c4f567a6a75f5a4fdfdb145bbf6d6fc701ec7c7ed5c`;
+  the OpenAPI artifact matches anchor
+  `014e873a2e7fae9b87b781e5e7b8bd5446d1e2259ad7ddcf52089d4840480194`.
+  Published 1.0.0, 1.1.0 and 1.2.0 goldens remain byte-identical to `main`.
+- One review round, zero fix loops; **0 critical, 0 warning, 1 informational**
+  finding (the passing test-gate record). Results are in
+  `kit_tools/AUDIT_FINDINGS.md` and the three `.validate_impl_*.json` files.
+  Autonomous mode followed the explicit invocation; stored guarded execution
+  mode is unchanged. The spec remains active: no pause, completion, archival
+  or orchestrator-state transition was performed.
 
 ## Refinement Notes
 

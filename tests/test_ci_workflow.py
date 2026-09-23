@@ -749,6 +749,14 @@ def _compose_validate_step(jobs: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _compose_envelope_step(jobs: dict[str, Any]) -> dict[str, Any]:
+    name = "Validate the compose fragments with the resource envelope set"
+    for step in _steps(jobs, _COMPOSE_VALIDATE_JOB):
+        if step.get("name") == name:
+            return step
+    raise AssertionError(f"No step in {_COMPOSE_VALIDATE_JOB!r} named {name!r}")
+
+
 class TestComposeFragmentValidation:
     """`compose/*.yml` must be machine-checked on every commit.
 
@@ -782,6 +790,28 @@ class TestComposeFragmentValidation:
                 "`config` is pure local parsing: it pulls nothing, starts "
                 "nothing, and costs seconds."
             )
+
+    def test_a_second_step_validates_the_resource_envelope(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        default = _compose_validate_step(jobs)
+        envelope = _compose_envelope_step(jobs)
+        steps = _steps(jobs, _COMPOSE_VALIDATE_JOB)
+        assert steps.index(envelope) == steps.index(default) + 1
+        assert default["env"] == {
+            "SEARXNG_SECRET": "compose-config-validation-placeholder",
+        }
+        assert envelope["env"] == {
+            "SEARXNG_SECRET": "compose-config-validation-placeholder",
+            "FORAGE_CPUS": "2",
+            "FORAGE_MEM_LIMIT": "2048m",
+        }
+        script = str(envelope.get("run", ""))
+        for fragment in _COMPOSE_FRAGMENTS:
+            assert f"-f {fragment} config -q" in script
+        assert "set -euo pipefail" in script
+        assert envelope.get("continue-on-error") is not True
+        assert envelope.get("if") is None
 
     def test_the_validation_runs_in_a_required_job(self, jobs: dict[str, Any]) -> None:
         assert _COMPOSE_VALIDATE_JOB in _PUBLISH_GATES, (
@@ -840,12 +870,22 @@ class TestComposeFragmentValidation:
         # secret-shaped in a workflow file, even a fake one: `secret-grep` and
         # `gitleaks` both read for shapes, and a plausible-looking literal
         # costs someone an investigation.
-        env_block: dict[str, Any] = _compose_validate_step(jobs).get("env") or {}
-        for name, value in env_block.items():
-            assert "placeholder" in str(value).lower(), (
-                f"The compose step's {name} value should say it is a "
-                f"placeholder; got {value!r}"
-            )
+        size_shapes = {
+            "FORAGE_CPUS": r"^\d+(\.\d+)?$",
+            "FORAGE_MEM_LIMIT": r"^\d+[kKmMgG]?[bB]?$",
+        }
+        for step in (_compose_validate_step(jobs), _compose_envelope_step(jobs)):
+            env_block: dict[str, Any] = step.get("env") or {}
+            for name, value in env_block.items():
+                if name in size_shapes:
+                    assert re.fullmatch(size_shapes[name], str(value)), (
+                        f"The compose step's {name} must be a size; got {value!r}"
+                    )
+                else:
+                    assert "placeholder" in str(value).lower(), (
+                        f"The compose step's {name} value should say it is a "
+                        f"placeholder; got {value!r}"
+                    )
 
     def test_the_placement_reasoning_is_recorded_in_the_job(self, raw: str) -> None:
         prose = _comment_prose(raw)
@@ -1067,9 +1107,16 @@ _DOWNLOAD_ACTION = "actions/download-artifact"
 # is the shape of a Hugging Face token itself, so a differently-named carrier
 # is caught too. tests/test_dockerfile.py applies those two to the source.
 # `FORAGE_BRAVE_API_KEY` is the paid search provider's credential (ruling 20d):
-# the name only — no bare `BRAVE_API_KEY`, no key-shape regex. Both copies in
-# the workflow (secret-grep's heredoc and publish's config grep) iterate this.
-_REQUIRED_GREP_PATTERNS = ("HF_TOKEN", "hf_[A-Za-z0-9]{20,}", "FORAGE_BRAVE_API_KEY")
+# the name only — no bare `BRAVE_API_KEY`, no key-shape regex.
+# `FORAGE_CACHE_HMAC_KEY` is also name-only: no fixed token format.
+# Both copies in the workflow (secret-grep's heredoc and publish's config grep)
+# iterate this.
+_REQUIRED_GREP_PATTERNS = (
+    "HF_TOKEN",
+    "hf_[A-Za-z0-9]{20,}",
+    "FORAGE_BRAVE_API_KEY",
+    "FORAGE_CACHE_HMAC_KEY",
+)
 
 
 class TestBuildAmd64Job:
@@ -1315,11 +1362,24 @@ class TestSecretGrepJob:
     def test_secret_grep_pattern_set_is_defined_in_the_workflow(
         self, jobs: dict[str, Any], pattern: str
     ) -> None:
-        assert pattern in _run_text(jobs, "secret-grep"), (
+        patterns = re.search(
+            r"done <<'PATTERNS'\n(.*?)\nPATTERNS",
+            _run_text(jobs, "secret-grep"),
+            re.DOTALL,
+        )
+        assert patterns is not None
+        assert pattern in patterns.group(1).splitlines(), (
             f"The pattern {pattern!r} is missing from secret-grep. The set is "
             "deliberately short and lives in the workflow rather than in a "
             "checked-out script, so weakening it is a visible workflow edit."
         )
+
+    def test_comment_documents_four_patterns_and_the_cache_key(self, raw: str) -> None:
+        prose = _comment_prose(raw)
+        assert "`forage_cache_hmac_key` is the cache-signing credential" in prose
+        assert "name-only" in prose
+        assert "the same four patterns" in prose
+        assert "three patterns" not in raw
 
     def test_secret_grep_does_not_check_out_the_repository(
         self, jobs: dict[str, Any]
@@ -2043,12 +2103,6 @@ class TestPublishJob:
             "A forbidden pattern in the published config must fail the run. "
             "Branch body was:\n" + body
         )
-        for pattern in _REQUIRED_GREP_PATTERNS:
-            assert pattern in run_text, (
-                f"The published-config grep is missing {pattern!r}. It must use "
-                "the same pattern set secret-grep defines — one vocabulary, two "
-                "vantage points"
-            )
         condition = next(
             line
             for line in run_text.splitlines()
@@ -2057,6 +2111,12 @@ class TestPublishJob:
             and "grep" in line
             and "HF_TOKEN" in line
         )
+        for pattern in _REQUIRED_GREP_PATTERNS:
+            assert pattern in condition, (
+                f"The published-config grep is missing {pattern!r}. It must use "
+                "the same pattern set secret-grep defines — one vocabulary, two "
+                "vantage points"
+            )
         assert "grep -Eiq" in condition, (
             "The published-config grep must be case-insensitive like "
             "secret-grep's (`grep -Eiq`): the two gates share one vocabulary, so "
@@ -2287,6 +2347,64 @@ def _slice_entry(text: str, version: str) -> str:
 
 class TestReleaseContractMapping:
     """US-003: the Release says which contract it serves, and the job proves it."""
+
+    def test_docstring_entry_tense_has_no_publication_state(self) -> None:
+        source = (_REPO_ROOT / _CONTRACT_SOURCE_FILE).read_text(encoding="utf-8")
+        bullets = list(re.finditer(r"^\* ``(\d+\.\d+\.\d+)`` ", source, re.M))
+        assert bullets
+        for bullet in bullets:
+            entry = _slice_entry(source[bullet.start() :], bullet.group(1))
+            assert not (
+                re.search(r"\bheld\b.*\b(until|pending)\b", entry, re.S)
+                or re.search(r"\buntil\b.*\bpublish(es|ed)\b", entry, re.S)
+                or "published by" in entry
+            ), (
+                "docstring entries carry no publication state — it lives in "
+                "docs/releases.md and GOVERNANCE § Two semvers; rephrase, "
+                f"do not delete the guard:\n{entry}"
+            )
+
+    def test_each_version_has_one_complete_docstring_entry(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        source = _REPO_ROOT / _CONTRACT_SOURCE_FILE
+        text = source.read_text(encoding="utf-8")
+        versions = re.findall(r"^\* ``(\d+\.\d+\.\d+)`` ", text, re.M)
+        assert versions
+        assert len(versions) == len(set(versions)), "one bullet per contract version"
+        for version in versions:
+            entry = _slice_entry(text, version)
+            assert entry.startswith(f"* ``{version}`` —")
+            assert all(
+                line.startswith("  ") and line.strip()
+                for line in entry.splitlines()[1:]
+            )
+            assert _run_entry_extractor(jobs, version, source) == entry
+
+    @pytest.mark.parametrize(
+        "clause",
+        [
+            "This version is **held**: ``tests/golden/contract_1_2_0.json`` is\n"
+            "  regenerated in place across ``search-provider-abstraction``"
+            " specs 2-4 and\n"
+            "  every ``search-fallback``/``search-policy-and-health``"
+            " story that moved\n"
+            "  this shape, until the ``v1.1.0`` image publishes it.",
+            "held in contract_1_3_0.json pending the cut",
+            "until v1.2.0 publishes the contract",
+            "until v1.2.0 published the contract",
+            "published by v1.2.0",
+        ],
+    )
+    def test_docstring_entry_tense_guard_rejects_publication_clauses(
+        self, clause: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source = tmp_path / _CONTRACT_SOURCE_FILE
+        source.parent.mkdir()
+        source.write_text(f"* ``1.2.0`` — {clause}\n", encoding="utf-8")
+        monkeypatch.setattr("tests.test_ci_workflow._REPO_ROOT", tmp_path)
+        with pytest.raises(AssertionError, match="carry no publication state"):
+            self.test_docstring_entry_tense_has_no_publication_state()
 
     @pytest.mark.parametrize("name", _CONTRACT_STEPS)
     def test_the_step_exists(self, jobs: dict[str, Any], name: str) -> None:

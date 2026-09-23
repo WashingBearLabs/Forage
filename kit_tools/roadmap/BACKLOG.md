@@ -35,6 +35,14 @@ live in `MILESTONES.md` instead.
 
 ## Future Work (no spec yet)
 
+### Bound the `/retrieve` fetch path's decoder
+**Priority:** High · **Effort:** Medium
+`pipeline/stage5_url_audit.py` counts decoded bytes from `aiter_bytes()` after
+httpx's uncapped decoder, on a caller-chosen URL under the 10 MB cap. Adopt
+`pipeline/bounded_body.py`; the accepted-body cap is not a peak-allocation
+bound. Provider-bounds US-003 closes only the provider seam; finding
+2026-09-16-020 remains open for this path.
+
 ### Rename modules into a `forage/` package
 **Priority:** Low · **Effort:** Medium
 Deliberately deferred at extraction — the flat layout keeps the Dockerfile,

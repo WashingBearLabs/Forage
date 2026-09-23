@@ -5,14 +5,25 @@ user_agents:
   - "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
   - "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 news_domains:
-  - reuters.com
-  - apnews.com
-  - bbc.co.uk
-  - nytimes.com
-  - theguardian.com
-  - cnn.com
+  - .reuters.com
+  - .apnews.com
+  - .bbc.co.uk
+  - .nytimes.com
+  - .theguardian.com
+  - .cnn.com
 seed_blocklist: []
 promptguard_threshold: 0.85
+# Opt-in adjacent-window rule; 0 disables it, otherwise 2-8 windows.
+# Absolute server-side threshold, independent of each request's max-score rule.
+promptguard_contiguity_windows: 0
+promptguard_contiguity_threshold: 0.5
+# 0 leaves torch/tokenizer defaults (every visible core). For a positive count,
+# match the actual CPU quota: FORAGE_CPUS, Kubernetes, host cgroup or orchestrator.
+# Torch sees the host core count, not that quota; the tokenizer pool is disabled.
+promptguard_threads: 0
+# Raw UTF-8 bytes per caller domain list, including newline separators.
+# Allowlists truncate; an over-budget denylist is refused whole.
+policy_domain_entries_max_bytes: 65536
 # Brave LLM-Context search provider tunables (feature-brave-provider US-010).
 # Read unconditionally at startup by brave_settings_from_config, whether or
 # not "brave" is in FORAGE_SEARCH_PROVIDERS, so an out-of-range value refuses
@@ -20,29 +31,81 @@ promptguard_threshold: 0.85
 search_brave_timeout_seconds: 15.0
 search_brave_chunk_max_chars: 2000
 search_brave_query_max_chars: 400
+# SearXNG tunables are also validated at boot, even when absent from the chain.
+search_searxng_timeout_seconds: 10.0
+# Outbound copy only: results reflect the prefix, but the response echoes the caller.
+search_searxng_query_max_chars: 400
+# Observational targets, not request deadlines; first-token is log-only today.
+search_promptguard_latency_target_ms: 1000
+search_first_token_target_ms: 5000
 # Release gate: /extract remains invisible (404) until this is enabled and the
 # service is restarted. Forage ships no authentication, so once the gate is
 # open the route is reachable by anything that can reach port 8020 — network
 # placement is the only control (docs/configuration.md, "Deployment posture").
 extract_route_enabled: false
 cache:
-  # Bounds for the bounded in-memory cache storage. The 1 GiB container
-  # already reserves 512 MiB for the parent process and 384 MiB for the
-  # extraction child, leaving ~128 MiB — 32 MiB spends a quarter of it.
+  # Bounds for cache values on both backends and total in-memory storage.
+  # The reference 1 GiB envelope reserves 512 MiB for the parent and 384 MiB
+  # for the child. Of ~128 MiB left, 32 MiB is cache, 64 MiB provisional
+  # classifier working set, 32 MiB margin; larger models add a resident delta.
+  # See docs/configuration.md, "Sizing the container" before changing bounds.
   max_entries: 256
   max_bytes: 33554432
+  max_value_bytes: 4194304
 extraction:
   # Hard bounds enforced in code: 50 MiB input, 500 pages, 20 s CPU, 90 s wall.
   max_input_bytes: 52428800
   max_pages: 500
   child_cpu_seconds: 20
-  # The 1 GiB container reserves >=512 MiB for parent FastAPI + PromptGuard;
-  # the spawned pypdf worker may consume at most this independent 384 MiB.
+  # Worker address space is bounded per worker, and the ceiling is the SUM:
+  # (extraction.extraction_concurrency + retrieve.fetch_concurrency) x
+  # child_address_space_bytes, plus the parent's >=512 MiB FastAPI +
+  # PromptGuard reservation. At the shipped defaults that is
+  # 2 x 384 MiB + 512 MiB = 1 280 MiB, against the 1 GiB container this same
+  # file describes above. What prevents two workers running at once today is
+  # `extract_route_enabled: false` — nobody can upload while a fetched PDF
+  # parses. See docs/configuration.md, "Sizing the container": the advisory
+  # boot rule counts one extraction slot, not both routes' combined workers.
+  # Enabling uploads requires budgeting both plus classification and cache.
   child_address_space_bytes: 402653184
   wall_clock_seconds: 90
   # Derived character ceiling = (512 - 64) * 64 * 4 = 114688.
   max_promptguard_chunks: 64
   extraction_concurrency: 1
+  # 1-8 under the advisory memory rule; extraction workers stay pinned at 1.
   classification_concurrency: 1
   admission_queue_depth: 1
   max_queued_upload_bytes: 52428800
+retrieve:
+  # Classification budget for a FETCHED page, separate from `extraction`'s
+  # ceiling for uploads and fetched PDFs. `0` means no pre-check and no
+  # `max_chunks` handed to the classifier — today's behaviour — and boot logs
+  # one WARNING `retrieve_budget_unset coming_default=256`. It ships as `0`
+  # for one minor release; the next MINOR flips the default to 256, and `0`
+  # stays a legal opt-out after that (contract/GOVERNANCE.md ruling (g)).
+  # Derived character ceiling at 256 = (512 - 64) * 256 * 4 = 458752.
+  max_promptguard_chunks: 0
+  # Pinned at exactly 1, for the reason `extraction.extraction_concurrency` is:
+  # a fetched PDF spawns the same bounded worker under the same
+  # `child_address_space_bytes` rlimit, so N fetch slots would put
+  # N x 384 MiB of worker address space in the reference 1 GiB envelope.
+  # See docs/configuration.md, "Sizing the container".
+  fetch_concurrency: 1
+  # Requests allowed to wait for the single fetch slot, and the total queued
+  # body bytes they may represent. The byte bound is deliberately NOT
+  # depth x 10 MB, so at these defaults it binds first and both bounds are
+  # exercisable.
+  admission_queue_depth: 4
+  max_queued_fetch_bytes: 31457280
+# Per-request PromptGuard policy floors for the fetch routes. A request may
+# not relax below `promptguard_fail_closed_floor` nor above
+# `promptguard_threshold_ceiling`; the shipped values (false / 1.0) impose no
+# additional bound. Both /retrieve and /search select the requested threshold
+# or configured default before applying the ceiling. Neither overrides
+# caller-supplied trust tiers (trusted-tier skip / VERIFIED fail-open), nor
+# /extract's separate raw-config policy.
+promptguard_fail_closed_floor: false
+promptguard_threshold_ceiling: 1.0
+# How long either fetch route waits for a classification slot before giving
+# up. A float so sub-second values are expressible.
+promptguard_wait_seconds: 30.0

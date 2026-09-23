@@ -52,7 +52,7 @@ from model_fetcher import (
     snapshot_path,
     verify_weights,
 )
-from promptguard.classifier import MODEL_ID
+from promptguard.classifier import DEFAULT_MODEL_ID
 from scripts import vendor_weights
 from scripts.vendor_weights import (
     GHCR_TOKEN_ENV_VAR,
@@ -81,10 +81,11 @@ from scripts.vendor_weights import (
     read_manifest_document,
     redact,
     require_oras,
+    run_plan,
     verify_package_is_private,
     write_manifest,
 )
-from tests.fakes import materialize_hub_snapshot, sha256_hex
+from tests.fakes import hub_download_double, materialize_hub_snapshot, sha256_hex
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _MODULE_SOURCE = (_REPO_ROOT / "scripts" / "vendor_weights.py").read_text(
@@ -118,7 +119,7 @@ def _snapshot(
     return materialize_hub_snapshot(
         cache_root,
         files,
-        model_id=MODEL_ID,
+        model_id=DEFAULT_MODEL_ID,
         revision=revision,
         symlinks=symlinks,
     )
@@ -126,7 +127,12 @@ def _snapshot(
 
 def _generated(snapshot: Path, *, revision: str = _REVISION) -> dict[str, Any]:
     """The manifest this script would commit for *snapshot*."""
-    return generate_manifest(snapshot, model_id=MODEL_ID, revision=revision)
+    return generate_manifest(
+        snapshot,
+        model_id=DEFAULT_MODEL_ID,
+        revision=revision,
+        manifest_path=snapshot.parent / "unwritten-manifest.json",
+    )
 
 
 def _vendored(
@@ -225,14 +231,14 @@ class TestSingleSourceOfTruth:
     """The script reuses the service's constants; it never restates them."""
 
     def test_the_model_id_comes_from_the_classifier(self) -> None:
-        assert vendor_weights.MODEL_ID is MODEL_ID
+        assert vendor_weights.DEFAULT_MODEL_ID is DEFAULT_MODEL_ID
 
     def test_the_revision_default_is_the_committed_pin(self) -> None:
         parser = build_parser()
 
         args = parser.parse_args([])
 
-        assert args.revision == DEFAULT_MODEL_REVISION
+        assert build_plan(args).revision == DEFAULT_MODEL_REVISION
         assert vendor_weights.DEFAULT_MODEL_REVISION is DEFAULT_MODEL_REVISION
 
     def test_the_allowlist_is_the_services_allowlist(self) -> None:
@@ -272,7 +278,7 @@ class TestSingleSourceOfTruth:
         ref = mirror_ref(DEFAULT_MODEL_REVISION)
 
         assert ref == f"{MIRROR_REPOSITORY}:{DEFAULT_MODEL_REVISION}"
-        assert ref.endswith(f":{document['revision']}")
+        assert ref.endswith(f":{document['models'][DEFAULT_MODEL_ID]['revision']}")
         assert MIRROR_REPOSITORY == "ghcr.io/washingbearlabs/forage-weights"
 
     def test_the_mirror_repository_is_lower_case(self) -> None:
@@ -412,7 +418,9 @@ class TestGenerationTimeAllowlist:
 
         document = _generated(snapshot)
 
-        assert [entry["path"] for entry in document["files"]] == sorted(_FILES)
+        assert [
+            entry["path"] for entry in document["models"][DEFAULT_MODEL_ID]["files"]
+        ] == sorted(_FILES)
 
 
 # ---------------------------------------------------------------------------
@@ -423,12 +431,64 @@ class TestGenerationTimeAllowlist:
 class TestManifestGeneration:
     """What the generated document says, and how it is written."""
 
+    def test_adding_and_replacing_a_model_preserves_other_entries(
+        self, tmp_path: Path
+    ) -> None:
+        snapshot = _snapshot(tmp_path / "cache")
+        manifest_path = tmp_path / "manifest.json"
+        original = _generated(snapshot)
+        write_manifest(original, manifest_path)
+        original_entry_bytes = json.dumps(original["models"][DEFAULT_MODEL_ID]).encode()
+        other = "acme/other"
+        for revision in ("b" * 40, "c" * 40):
+            generated = generate_manifest(
+                snapshot,
+                model_id=other,
+                revision=revision,
+                manifest_path=manifest_path,
+            )
+            write_manifest(generated, manifest_path)
+            parsed = read_manifest_document(manifest_path)
+            assert parsed is not None
+            assert json.dumps(parsed["models"][DEFAULT_MODEL_ID]).encode() == (
+                original_entry_bytes
+            )
+            assert parsed["_comment"] == original["_comment"]
+            assert set(parsed["models"]) == {DEFAULT_MODEL_ID, other}
+            for model_id, expected in (
+                (other, revision),
+                (DEFAULT_MODEL_ID, _REVISION),
+            ):
+                pin, failures = model_fetcher._load_manifest(manifest_path, model_id)
+                assert pin is not None
+                assert pin.revision == expected
+                assert failures == ()
+
+    @pytest.mark.parametrize("contents", ["{broken", '{"files":[]}', '{"models":[]}'])
+    def test_generation_never_discards_an_unreadable_existing_manifest(
+        self, tmp_path: Path, contents: str
+    ) -> None:
+        snapshot = _snapshot(tmp_path / "cache")
+        path = tmp_path / "manifest.json"
+        path.write_text(contents)
+        with pytest.raises(ManifestGenerationError, match="refusing to discard"):
+            generate_manifest(
+                snapshot,
+                model_id=DEFAULT_MODEL_ID,
+                revision=_REVISION,
+                manifest_path=path,
+            )
+        assert path.read_text() == contents
+
     def test_every_entry_carries_the_real_sha256_and_size(self, tmp_path: Path) -> None:
         snapshot = _snapshot(tmp_path / "cache")
 
         document = _generated(snapshot)
 
-        by_path = {entry["path"]: entry for entry in document["files"]}
+        by_path = {
+            entry["path"]: entry
+            for entry in document["models"][DEFAULT_MODEL_ID]["files"]
+        }
         for name, payload in _FILES.items():
             assert by_path[name]["sha256"] == sha256_hex(payload)
             assert by_path[name]["size"] == len(payload)
@@ -442,7 +502,10 @@ class TestManifestGeneration:
 
         document = _generated(snapshot)
 
-        by_path = {entry["path"]: entry for entry in document["files"]}
+        by_path = {
+            entry["path"]: entry
+            for entry in document["models"][DEFAULT_MODEL_ID]["files"]
+        }
         assert by_path["config.json"]["sha256"] == sha256_hex(b'{"tampered": true}')
 
     def test_it_pins_the_model_and_the_revision(self, tmp_path: Path) -> None:
@@ -450,8 +513,8 @@ class TestManifestGeneration:
 
         document = _generated(snapshot)
 
-        assert document["model_id"] == MODEL_ID
-        assert document["revision"] == _REVISION
+        assert DEFAULT_MODEL_ID in document["models"]
+        assert document["models"][DEFAULT_MODEL_ID]["revision"] == _REVISION
 
     def test_it_carries_the_bump_together_rule_in_the_file(
         self, tmp_path: Path
@@ -472,7 +535,9 @@ class TestManifestGeneration:
 
         document = _generated(snapshot)
 
-        paths = [entry["path"] for entry in document["files"]]
+        paths = [
+            entry["path"] for entry in document["models"][DEFAULT_MODEL_ID]["files"]
+        ]
         assert paths == sorted(paths)
 
     def test_it_is_written_as_formatted_json_with_a_trailing_newline(
@@ -522,7 +587,7 @@ class TestManifestRoundTrip:
         pin = read_manifest_pin(manifest_path)
 
         assert pin is not None
-        assert (pin.model_id, pin.revision) == (MODEL_ID, _REVISION)
+        assert (pin.model_id, pin.revision) == (DEFAULT_MODEL_ID, _REVISION)
         assert pin.total_bytes == sum(len(payload) for payload in _FILES.values())
 
     def test_tampering_after_generation_is_caught(self, tmp_path: Path) -> None:
@@ -553,6 +618,26 @@ class TestManifestRoundTrip:
 class TestManifestDiff:
     """Regenerating prints what changed, because a re-vendor should be read."""
 
+    def test_adding_a_second_model_scopes_the_review_to_that_model(
+        self, tmp_path: Path
+    ) -> None:
+        snapshot = _snapshot(tmp_path / "cache")
+        original = _generated(snapshot)
+        path = tmp_path / "manifest.json"
+        write_manifest(original, path)
+        other = "acme/other"
+        generated = generate_manifest(
+            snapshot, model_id=other, revision="b" * 40, manifest_path=path
+        )
+        lines = manifest_diff(original, generated, model_id=other)
+        assert lines[0] == f"model: {other} (added)"
+        assert lines[1] == f"revision: None -> {'b' * 40!r}"
+        assert sum(line.startswith("+ ") for line in lines) == len(_FILES)
+        assert not any(line.startswith(("-", "~")) for line in lines)
+        assert [line for line in lines if DEFAULT_MODEL_ID in line] == [
+            f"{DEFAULT_MODEL_ID}: untouched"
+        ]
+
     def test_a_first_generation_says_so(self, tmp_path: Path) -> None:
         snapshot = _snapshot(tmp_path / "cache")
 
@@ -579,9 +664,11 @@ class TestManifestDiff:
     def test_a_size_only_change_is_reported(self, tmp_path: Path) -> None:
         snapshot = _snapshot(tmp_path / "cache")
         before = _generated(snapshot)
-        entry = before["files"][0]
+        entry = before["models"][DEFAULT_MODEL_ID]["files"][0]
         after = json.loads(json.dumps(before))
-        after["files"][0]["size"] = cast(int, entry["size"]) + 1
+        after["models"][DEFAULT_MODEL_ID]["files"][0]["size"] = (
+            cast(int, entry["size"]) + 1
+        )
 
         lines = manifest_diff(before, cast(dict[str, Any], after))
 
@@ -601,8 +688,8 @@ class TestManifestDiff:
     def test_a_revision_bump_is_reported(self, tmp_path: Path) -> None:
         snapshot = _snapshot(tmp_path / "cache")
         before = _generated(snapshot)
-        after = dict(before)
-        after["revision"] = "b" * 40
+        after = json.loads(json.dumps(before))
+        after["models"][DEFAULT_MODEL_ID]["revision"] = "b" * 40
 
         lines = manifest_diff(before, after)
 
@@ -776,7 +863,9 @@ class TestExtractAndVerify:
         _cache, _manifest, tarball = _vendored(tmp_path)
         placeholder = tmp_path / "placeholder.json"
         placeholder.write_text(
-            json.dumps({"model_id": MODEL_ID, "revision": _REVISION, "files": []}),
+            json.dumps(
+                {"models": {DEFAULT_MODEL_ID: {"revision": _REVISION, "files": []}}}
+            ),
             encoding="utf-8",
         )
 
@@ -829,7 +918,7 @@ class TestDownload:
             )
 
         call = cast(MagicMock, download).call_args
-        assert call.args == (MODEL_ID,)
+        assert call.args == (DEFAULT_MODEL_ID,)
         assert call.kwargs["revision"] == _REVISION
         assert Path(call.kwargs["cache_dir"]) == hub_cache_dir(cache_root)
         assert set(call.kwargs["allow_patterns"]) == set(ALLOW_PATTERNS)
@@ -865,7 +954,7 @@ class TestDownload:
         message = str(excinfo.value)
         assert _FAKE_HF_TOKEN not in message
         assert "_LeakyError" in message
-        assert MODEL_ID in message
+        assert DEFAULT_MODEL_ID in message
 
     def test_a_download_that_lands_nothing_is_reported(self, tmp_path: Path) -> None:
         with patch("huggingface_hub.snapshot_download") as download:
@@ -1152,6 +1241,34 @@ class TestVisibilityCheck:
 class TestPlan:
     """What an invocation resolved to, before anything runs."""
 
+    def test_the_model_flag_not_the_environment_selects_the_model(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("FORAGE_MODEL_ID", "acme/ignored")
+        assert build_plan(build_parser().parse_args([])).model_id == DEFAULT_MODEL_ID
+        path = tmp_path / "manifest.json"
+        snapshot = _snapshot(tmp_path / "cache")
+        write_manifest(
+            generate_manifest(
+                snapshot, model_id="acme/other", revision="b" * 40, manifest_path=path
+            ),
+            path,
+        )
+        plan = build_plan(
+            build_parser().parse_args(
+                ["--model-id", "acme/other", "--manifest", str(path)]
+            )
+        )
+        assert plan.model_id == "acme/other"
+        assert plan.revision == "b" * 40
+        assert plan.snapshot_dir == snapshot_path(
+            plan.cache_root, "acme/other", "b" * 40
+        )
+
+    def test_an_unvendored_model_cannot_inherit_the_default_revision(self) -> None:
+        with pytest.raises(VendorError, match="supply --revision"):
+            build_plan(build_parser().parse_args(["--model-id", "acme/unvendored"]))
+
     def test_the_work_dir_drives_the_cache_and_the_tarball(
         self, tmp_path: Path
     ) -> None:
@@ -1167,7 +1284,7 @@ class TestPlan:
         plan = build_plan(build_parser().parse_args(["--work-dir", str(tmp_path)]))
 
         assert plan.snapshot_dir == snapshot_path(
-            plan.cache_root, MODEL_ID, plan.revision
+            plan.cache_root, DEFAULT_MODEL_ID, plan.revision
         )
         assert plan.snapshot_dir.is_relative_to(hub_cache_dir(plan.cache_root))
 
@@ -1210,7 +1327,7 @@ class TestPlan:
 
         assert _FAKE_HF_TOKEN not in printed
         assert _FAKE_GHCR_TOKEN not in printed
-        assert MODEL_ID in printed
+        assert DEFAULT_MODEL_ID in printed
         assert mirror_ref(plan.revision) in printed
 
     def test_no_credential_is_a_command_line_flag(self) -> None:
@@ -1295,6 +1412,57 @@ class TestDryRun:
 
 class TestCli:
     """Exit status, and the shape of a failure."""
+
+    def test_an_explicit_model_flows_through_all_six_phases(
+        self, tmp_path: Path
+    ) -> None:
+        other = "acme/other"
+        revision = "b" * 40
+        manifest_path = tmp_path / "manifest.json"
+        plan = build_plan(
+            build_parser().parse_args(
+                [
+                    "--model-id",
+                    other,
+                    "--revision",
+                    revision,
+                    "--work-dir",
+                    str(tmp_path),
+                    "--manifest",
+                    str(manifest_path),
+                ]
+            )
+        )
+        with (
+            patch(
+                "huggingface_hub.snapshot_download",
+                side_effect=hub_download_double(_FILES),
+            ) as download,
+            patch.object(vendor_weights, "push_artifact") as push,
+            patch.object(
+                vendor_weights, "verify_package_is_private", return_value="private"
+            ),
+        ):
+            run_plan(plan, environ={HF_TOKEN_ENV_VAR: _FAKE_HF_TOKEN})
+        assert download.call_args.args == (other,)
+        assert download.call_args.kwargs["revision"] == revision
+        assert push.call_args.kwargs["model_id"] == other
+        assert push.call_args.kwargs["revision"] == revision
+        document = read_manifest_document(manifest_path)
+        assert document is not None
+        assert set(document["models"]) == {other}
+        assert extract_and_verify(
+            plan.tarball_path, manifest_path=manifest_path, model_id=other
+        ).ok
+        assert f"org.opencontainers.image.source=https://huggingface.co/{other}" in (
+            push_argv(
+                oras="oras",
+                ref=mirror_ref(revision),
+                tarball_name="weights.tar.gz",
+                revision=revision,
+                model_id=other,
+            )
+        )
 
     def test_a_full_local_sequence_succeeds(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

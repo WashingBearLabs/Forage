@@ -13,14 +13,15 @@ import re
 import tempfile
 import time
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Annotated, Any, Literal, get_args
+from typing import Annotated, Any, Literal, TypedDict, cast, get_args
 
 import yaml
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.datastructures import State
@@ -28,6 +29,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 import model_fetcher
 from cache import (
+    CacheConfigurationError,
     CacheMetrics,
     CacheSettings,
     CacheStorage,
@@ -45,10 +47,13 @@ from models import (
     SearchResponse,
 )
 from pipeline import contract
+from pipeline.config_bounds import bounded_float, bounded_int
 from pipeline.contract import (
     CONTRACT_VERSION,
+    DEGRADED_CACHE_UNAUTHENTICATED,
     DEGRADED_CACHE_UNAVAILABLE,
     DEGRADED_PROMPTGUARD_UNAVAILABLE,
+    POLICY_DOMAIN_LIST_TOO_LARGE,
     POLICY_EXCLUDED_ALL_PROVIDERS,
     Admission413ErrorCode,
     DegradedReason,
@@ -58,18 +63,29 @@ from pipeline.contract import (
     RateLimit429ErrorCode,
 )
 from pipeline.extraction_limits import (
+    CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL,
     MAX_INPUT_BYTES,
+    PARENT_RESERVATION_BYTES,
+    PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES,
     ExtractionSettings,
     extraction_settings_from_config,
 )
 from pipeline.orchestrator import (
     DOCUMENT_FAILURE_REASONS,
+    AdmissionMetrics,
     PipelineError,
     UnsupportedFormatError,
     document_failure,
     run_extract_pipeline_from_file,
     run_retrieve_pipeline,
     run_search_pipeline,
+)
+from pipeline.pdf_subprocess import SpoolDirectoryError, spool_dir
+from pipeline.retrieve_limits import (
+    COMING_MAX_PROMPTGUARD_CHUNKS,
+    RetrieveConfigurationError,
+    RetrieveSettings,
+    retrieve_settings_from_config,
 )
 from pipeline.sanitizer_revision import derive_sanitizer_revision
 from pipeline.search_providers import (
@@ -85,10 +101,27 @@ from pipeline.search_providers.brave import (
     usable_brave_key,
 )
 from pipeline.search_providers.policy import apply_request_policy
-from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL, SearxngProvider
-from promptguard.classifier import PromptGuardClassifier
+from pipeline.search_providers.searxng import (
+    DEFAULT_SEARXNG_URL,
+    SearxngProvider,
+    searxng_settings_from_config,
+)
+from pipeline.search_targets import SearchTargets, search_targets_from_config
+from pipeline.stage3_promptguard import (
+    PromptGuardSettings,
+    promptguard_settings_from_config,
+)
+from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES
+from promptguard.classifier import (
+    DEFAULT_MODEL_ID,
+    PromptGuardClassifier,
+    promptguard_threads_from_config,
+)
+from url_validator import domain_list_bytes, normalize_domain_entries
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_POLICY_DOMAIN_ENTRIES_MAX_BYTES = 65536
 
 # Runtime configuration is 12-factor: every setting arrives as an environment
 # variable at container start (see ``docs/configuration.md``). There is no
@@ -101,6 +134,7 @@ SEARXNG_URL = os.environ.get("SEARXNG_URL", DEFAULT_SEARXNG_URL)
 # carries it on the wire (contract 1.1.0). Two literals, one source — a third
 # name cannot appear in one place and not the others.
 CacheBackend = Literal["valkey", "memory"]
+CACHE_HMAC_KEY_ENV_VAR = "FORAGE_CACHE_HMAC_KEY"
 
 # Break-glass capability override. ``FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION``
 # is the current name — deliberately self-describing, so nobody arms it thinking
@@ -225,6 +259,44 @@ def _resolve_brave_key() -> str | None:
     return None
 
 
+def _resolve_cache_hmac_key() -> bytes | None:
+    """Resolve the cache signing key once at boot, refusing unusable credentials.
+
+    Strip only space, tab and newline; a blank value is silently absent.
+    Printable ASCII without interior whitespace is a shape rule borrowed from
+    Brave's header-transport constraint, not an HMAC transport requirement.
+    Carriage returns, other controls and non-ASCII characters are refused.
+
+    The 32 UTF-8 byte floor checks length, not entropy: a same-length passphrase
+    is not an acceptable substitute for the CSPRNG recipe
+    ``head -c 32 /dev/urandom | base64`` in ``docs/configuration.md``.
+    Warnings precede refusal so operators can read the module logger's stderr
+    output in ``docker logs`` even when the container exits during startup.
+    Neither diagnostic includes the value.
+    """
+    raw = os.environ.get(CACHE_HMAC_KEY_ENV_VAR)
+    if raw is None:
+        return None
+    key = raw.strip(" \t\n")
+    if not key:
+        return None
+    if any(not "!" <= char <= "~" for char in key):
+        logger.warning(
+            "cache_hmac_key_invalid — %s must be printable ASCII without "
+            "interior whitespace or control characters",
+            CACHE_HMAC_KEY_ENV_VAR,
+        )
+        raise CacheConfigurationError(f"{CACHE_HMAC_KEY_ENV_VAR} is malformed")
+    encoded = key.encode("utf-8")
+    if len(encoded) < 32:
+        logger.warning(
+            "cache_hmac_key_too_short — %s must contain at least 32 UTF-8 bytes",
+            CACHE_HMAC_KEY_ENV_VAR,
+        )
+        raise CacheConfigurationError(f"{CACHE_HMAC_KEY_ENV_VAR} is too short")
+    return encoded
+
+
 def _configured_cache_backend() -> CacheBackend:
     """Name the backend this start selects, without building it.
 
@@ -259,11 +331,14 @@ def _select_cache_storage(
     vocabulary. Nothing here inspects, splits or logs it — the value may carry
     a password, and a parse attempt at this layer would be a second place for
     one to escape into a log line.
+    The query-key safety check lives in ``cache.py`` beside the guarded connect.
     """
     url = _configured_valkey_url()
     if url is None:
         return InMemoryStorage(settings=settings, metrics=metrics), "memory"
-    return ValkeyStorage(url, metrics=metrics), "valkey"
+    return ValkeyStorage(
+        url, metrics=metrics, max_value_bytes=settings.max_value_bytes
+    ), "valkey"
 
 
 def _resolved_cache_backend(state: State) -> CacheBackend:
@@ -283,6 +358,17 @@ def _resolved_cache_backend(state: State) -> CacheBackend:
     return backend if backend is not None else _configured_cache_backend()
 
 
+def _resolved_cache_signing_active(state: State) -> bool:
+    """Read the boot verdict, never the environment, defaulting to unsigned.
+
+    Without a lifespan, the backend fallback re-reads ``VALKEY_URL`` but this
+    verdict stays false: no cache was constructed to sign anything. Such a
+    Valkey-backed ``/health`` honestly reports ``cache_unauthenticated``.
+    """
+    active: bool = getattr(state, "cache_signing_active", False)
+    return active
+
+
 def _resolved_sanitizer_revision(state: State) -> str:
     """Return the revision derived at start, deriving one if there is none."""
     revision: str | None = getattr(state, "sanitizer_revision", None)
@@ -290,6 +376,12 @@ def _resolved_sanitizer_revision(state: State) -> str:
         return revision
     config: dict[str, Any] | None = getattr(state, "config", None)
     return derive_sanitizer_revision(config) if config is not None else "unknown"
+
+
+def _resolved_promptguard_model(state: State) -> str:
+    """Read the boot selection; lifespan-free transports use the default id."""
+    model_id: str = getattr(state, "promptguard_model", DEFAULT_MODEL_ID)
+    return model_id
 
 
 def _resolved_search_providers(state: State) -> list[SearchProvider]:
@@ -326,6 +418,73 @@ def _resolved_search_key_capabilities(state: State) -> tuple[str, ...]:
     return capabilities if capabilities is not None else ()
 
 
+# Later hardening specs append search_searxng_*,
+# resource-envelope and contiguity keys here alongside their readers and docs.
+KNOWN_CONFIG_KEYS: frozenset[str] = frozenset(
+    {
+        "user_agents",
+        "news_domains",
+        "seed_blocklist",
+        "promptguard_threshold",
+        "promptguard_contiguity_windows",
+        "promptguard_contiguity_threshold",
+        "promptguard_threads",
+        "promptguard_fail_closed_floor",
+        "promptguard_threshold_ceiling",
+        "promptguard_wait_seconds",
+        "policy_domain_entries_max_bytes",
+        "search_promptguard_latency_target_ms",
+        "search_first_token_target_ms",
+        "search_brave_timeout_seconds",
+        "search_searxng_timeout_seconds",
+        "search_searxng_query_max_chars",
+        "search_brave_chunk_max_chars",
+        "search_brave_query_max_chars",
+        "extract_route_enabled",
+        "cache",
+        "cache.max_entries",
+        "cache.max_bytes",
+        "cache.max_value_bytes",
+        "extraction",
+        "extraction.max_input_bytes",
+        "extraction.max_pages",
+        "extraction.child_cpu_seconds",
+        "extraction.child_address_space_bytes",
+        "extraction.wall_clock_seconds",
+        "extraction.max_promptguard_chunks",
+        "extraction.extraction_concurrency",
+        "extraction.classification_concurrency",
+        "extraction.admission_queue_depth",
+        "extraction.max_queued_upload_bytes",
+        "retrieve",
+        "retrieve.max_promptguard_chunks",
+        "retrieve.fetch_concurrency",
+        "retrieve.admission_queue_depth",
+        "retrieve.max_queued_fetch_bytes",
+    }
+)
+
+
+def _warn_unknown_config_keys(config: object) -> list[str]:
+    """Warn on names only; leave malformed values to the settings readers."""
+    if not isinstance(config, dict):
+        return []
+    top_level = {key for key in KNOWN_CONFIG_KEYS if "." not in key}
+    blocks = {key.split(".", 1)[0] for key in KNOWN_CONFIG_KEYS if "." in key}
+    unknown: list[str] = []
+    for key, value in cast(dict[object, object], config).items():
+        if key not in top_level:
+            unknown.append(str(key))
+        elif key in blocks and isinstance(value, Mapping):
+            for leaf in cast(Mapping[object, object], value):
+                dotted = f"{key}.{leaf}"
+                if dotted not in KNOWN_CONFIG_KEYS:
+                    unknown.append(dotted)
+    for dotted in unknown:
+        logger.warning("config_unknown_key — key=%s", dotted)
+    return unknown
+
+
 def _load_config() -> dict[str, Any]:
     """Load sidecar configuration from ``config.yaml``."""
     config_path = Path(__file__).parent / "config.yaml"
@@ -338,30 +497,42 @@ def _load_config() -> dict[str, Any]:
 
 # -- Response models --
 
-# The two capability keys ``/health`` can advertise, named once so the CI
+# The three capability keys ``/health`` can advertise, named once so the CI
 # contract smoke (``contract_smoke.py``) can import the sanitization one
 # instead of restating the wire string. The literals are still pinned by
 # ``tests/test_app.py``, which spells them out: the constants single-source
 # the *symbol*, those tests pin the *value*, and renaming a value without
-# meaning to fails them. The two are computed independently (see
+# meaning to fails them. The three are computed independently (see
 # ``HealthResponse.capabilities``): ``search_sanitization`` is a runtime
 # claim the break-glass override can force, ``brave_api_key`` an environment
-# fact no override touches.
+# fact no override touches, and ``cache_hmac_key`` the boot verdict that a
+# usable key is signing the Valkey backend, also untouched by the override.
 CAPABILITY_SEARCH_SANITIZATION = "search_sanitization"
 CAPABILITY_BRAVE_API_KEY = "brave_api_key"
+CAPABILITY_CACHE_HMAC_KEY = "cache_hmac_key"
 
 
 class HealthResponse(BaseModel):
     """Response body for ``GET /health``.
 
     HTTP status is always 200, even when ``status == "degraded"`` (family
-    decision 11) — the compose healthcheck is a bare ``curl -f`` that only
-    inspects the HTTP status code, so consumers must read ``status`` and
-    ``degraded_reasons`` rather than the response's non-2xx-ness.
+    decision 11). The compose healthcheck's ``curl -fsS -o /dev/null`` inspects
+    only the HTTP status and discards the body: liveness, not health. Consumers
+    must read ``status`` and ``degraded_reasons`` in the body; a Docker-healthy
+    container may still have its classifier unloaded.
     """
 
     status: Literal["healthy", "degraded"]
     promptguard_loaded: bool
+    promptguard_model: str = Field(
+        description=(
+            "The model id selected at startup, whether loaded or not; "
+            "promptguard_loaded reports whether it serves. The identity is "
+            "contract-relevant and inferable from behaviour; contiguity settings "
+            "are tuning an attacker would otherwise have to guess and are not "
+            "published here."
+        )
+    )
     cache_connected: bool = Field(
         description=(
             "Whether the selected cache backend is operational. In Valkey mode "
@@ -375,15 +546,19 @@ class HealthResponse(BaseModel):
         description=(
             "Capabilities this deployment advertises, as a presence map: a "
             "key is present with the value 1 when the capability is "
-            "available and absent otherwise. Two keys are defined in "
-            "contract 1.2.0. 'search_sanitization' (contract 1.1.0) is a "
+            "available and absent otherwise. Three keys are defined in "
+            "contract 1.3.0. 'search_sanitization' (contract 1.1.0) is a "
             "runtime claim, present when PromptGuard is loaded — or when "
             "the break-glass override is armed; see docs/configuration.md, "
             "which only ever forces this key. 'brave_api_key' (contract "
             "1.2.0) is an environment fact, present when this start "
             "resolved a usable FORAGE_BRAVE_API_KEY, independently of "
             "whether 'brave' actually appears in search_providers and "
-            "untouched by the break-glass override. Deliberately a dict "
+            "untouched by the break-glass override. 'cache_hmac_key' (contract "
+            "1.3.0) is present only when this start resolved a usable "
+            "FORAGE_CACHE_HMAC_KEY and selected the Valkey backend, independently "
+            "of cache connectivity and untouched by the break-glass override. "
+            "Memory mode does not sign and never advertises it. Deliberately a dict "
             "rather than an enum: a consumer reads the keys it knows and "
             "ignores the rest, so a future capability is an additive-safe "
             "MINOR change."
@@ -483,6 +658,11 @@ class ExtractionMetricsResponse(BaseModel):
             "max is zero. The concrete OOM-proximity signal an operator reads."
         )
     )
+    promptguard_contiguity_detections: int = Field(
+        description=(
+            "Uploads blocked by the contiguity rule, including both-rule verdicts."
+        )
+    )
 
 
 class SearchMetricsResponse(BaseModel):
@@ -533,6 +713,72 @@ class SearchMetricsResponse(BaseModel):
             "bad name from a missing key."
         )
     )
+    policy_invalid_domain_entry: int = Field(
+        description=(
+            "Dropped invalid denylist entries, one increment per entry, never "
+            "the offending value. Request entries are normalised once; "
+            "an over-budget denylist is refused, never truncated or counted."
+        )
+    )
+    policy_suffix_trusted_skip: int = Field(
+        description=(
+            "Reserved for parity with /retrieve; always zero because /search "
+            "has no trusted or verified tiers."
+        )
+    )
+    classification_wait_timeouts: int = Field(
+        description=(
+            "`/search` requests whose per-request PromptGuard wait budget "
+            "expired — at most one per request, however many results were "
+            "left unscanned afterwards. The classifier was loaded and busy, "
+            "not absent: compare against `/health` `promptguard_loaded` and "
+            "the `retrieve` counter of the same name."
+        )
+    )
+    provider_compressed_body: int = Field(
+        description=(
+            "Non-identity Content-Encoding responses seen from any provider, "
+            "whatever the outcome: served, refused as body_too_large or "
+            "unsupported_encoding, malformed, non-2xx, or failed after headers. "
+            "A zero count means no compression."
+        )
+    )
+    provider_timeouts: int = Field(
+        description=(
+            "Provider calls that ended as timeout: the per-operation httpx timeout "
+            "or the whole-interaction budget. A rise after upgrading on a previously "
+            "working slow SearXNG is the budget tightening; raise "
+            "search_searxng_timeout_seconds."
+        )
+    )
+    promptguard_latency_target_exceeded: int = Field(
+        description=(
+            "Search requests whose duration strictly exceeds "
+            "search_promptguard_latency_target_ms, counted once per request. "
+            "Measures the per-result sanitization loop: structural scan, "
+            "PromptGuard and any semaphore wait. The loop runs once per served "
+            "result, so the duration scales with num_results (1-20); compare "
+            "readings only at the same num_results."
+        )
+    )
+    sanitization_latency_max_ms: int = Field(
+        description=(
+            "Per-process high-water mark in milliseconds, truncated from the "
+            "rounded duration of the per-result sanitization loop: structural "
+            "scan, PromptGuard and any semaphore wait. Updated even below "
+            "search_promptguard_latency_target_ms, including served-empty searches, "
+            "but not pre-loop refusals. The loop runs once per served result, "
+            "so the duration scales with num_results (1-20); compare readings "
+            "only at the same num_results. Never resets; restarting the container "
+            "is the only way to clear it. Only meaningful read together with "
+            "search.promptguard_latency_target_exceeded and search.requests."
+        )
+    )
+    promptguard_contiguity_detections: int = Field(
+        description=(
+            "Results omitted by the contiguity rule, including both-rule verdicts."
+        )
+    )
 
 
 class RetrieveMetricsResponse(BaseModel):
@@ -563,6 +809,54 @@ class RetrieveMetricsResponse(BaseModel):
             "bucketed the same way."
         )
     )
+    policy_invalid_domain_entry: int = Field(
+        description=(
+            "Dropped request domain entries, one increment per entry: invalid "
+            "entries in any list or the over-budget remainder of an allowlist. "
+            "The two allowlist drop causes both narrow privilege; an over-budget "
+            "denylist is refused, never truncated or counted. Offending entries "
+            "are not stored."
+        )
+    )
+    policy_suffix_trusted_skip: int = Field(
+        description=(
+            "Uncached retrievals resolving to trusted or verified through a "
+            "leading-dot entry. Covers both the trusted classifier skip and "
+            "the verified exemption when classification is unavailable, even "
+            "if classification is available on this request. Exact matches "
+            "through bare entries do not increment it."
+        )
+    )
+    classification_wait_timeouts: int = Field(
+        description=(
+            "`/retrieve` requests that waited `promptguard_wait_seconds` for "
+            "the classification permit and gave up, taking the "
+            "classifier-unavailable outcome under the request's own "
+            "`promptguard_fail_closed`. Rising with `promptguard_loaded: true` "
+            "on `/health` means permit contention, not a missing model."
+        )
+    )
+    semaphore_saturation: int = Field(
+        description=(
+            "`/retrieve` requests that found every fetch slot of the admission "
+            "gate busy (`retrieve.fetch_concurrency`) — not the classification "
+            "permit, which is `classification_wait_timeouts`. Counts queueing "
+            "as well as refusal, so it is always >= busy_rejections."
+        )
+    )
+    busy_rejections: int = Field(
+        description=(
+            "`/retrieve` requests refused 422 `busy` (reason "
+            "`admission_queue_full`) because the admission queue was at "
+            "`retrieve.admission_queue_depth` or its byte reservation would "
+            "have exceeded `retrieve.max_queued_fetch_bytes`."
+        )
+    )
+    promptguard_contiguity_detections: int = Field(
+        description=(
+            "Retrievals blocked by the contiguity rule, including both-rule verdicts."
+        )
+    )
 
 
 class CacheMetricsResponse(BaseModel):
@@ -573,8 +867,8 @@ class CacheMetricsResponse(BaseModel):
     ``storage_*`` counters here count *storage operations* underneath the
     cache's policy layer, so a zero-TTL purge or a policy-stale entry moves
     one and not the other. Only the in-memory storage can move
-    ``storage_evictions``/``storage_oversize_skips`` — Valkey does its own
-    eviction and has no byte bound of ours.
+    ``storage_evictions``; ``storage_oversize_skips`` counts Forage's own
+    write-side refusals on both backends.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -599,8 +893,24 @@ class CacheMetricsResponse(BaseModel):
     )
     storage_oversize_skips: int = Field(
         description=(
-            "Entries the in-memory storage refused as over its per-entry byte "
-            "bound. Always 0 on Valkey."
+            "Values Forage refused to store over cache.max_value_bytes on either "
+            "backend, or over the memory backend's cache.max_bytes bound."
+        )
+    )
+    corrupt_entries: int = Field(
+        description=(
+            "Stored values that failed RetrievedContent JSON or schema validation "
+            "and were treated as misses, with deletion attempted. Counts parse "
+            "failures, not tampering; parse success does not prove authenticity."
+        )
+    )
+    integrity_rejects: int = Field(
+        description=(
+            "Stored values rejected before parsing for an invalid or unexpected "
+            "signature envelope, an oversized value, or a wrong Valkey type. "
+            "Deletion is attempted and the read becomes a miss. Key changes and "
+            "lowered byte bounds can also move this counter; inspect the closed "
+            "reason token and cache-key digest in cache_integrity_reject logs."
         )
     )
 
@@ -724,7 +1034,12 @@ class Pipeline422ErrorResponse(BaseModel):
         description=(
             "Stable machine-readable refusal code. The fetch and URL-validation "
             "codes arrive on /retrieve, the searxng_* codes and "
-            "search_unavailable on /search."
+            "search_unavailable on /search. busy arrives on /retrieve only, "
+            "at 422, as the admission refusal (reason admission_queue_full); "
+            "the same literal is /extract's 429. extraction_failed arrives on "
+            "/retrieve only, as a fetched PDF the worker could not parse or "
+            "spool (reason pdf_encrypted, pdf_no_text, pdf_extraction_error "
+            "or pdf_spool_error)."
         )
     )
     reason: str = Field(
@@ -803,11 +1118,12 @@ class DetailResponse(BaseModel):
 
 
 class ValidationErrorDetail(BaseModel):
-    """One entry of FastAPI's default request-validation error list.
+    """One entry of the service's redacted request-validation error list.
 
-    Deliberately **not** ``extra=\"forbid\"``: pydantic adds ``input`` and
-    sometimes ``ctx``/``url`` per error type, and this model documents the
-    stable trio rather than pretending to close the set.
+    The handler emits the declared trio ``loc``, ``msg``, ``type``, capped at
+    ``_MAX_VALIDATION_ERRORS`` entries. For contract 1.3.0 ``input``, ``ctx``
+    and ``url`` are present with the fixed value ``"[redacted]"``; they are
+    dropped at the next MINOR (GOVERNANCE ruling (l)).
     """
 
     loc: list[str | int] = Field(
@@ -818,18 +1134,21 @@ class ValidationErrorDetail(BaseModel):
 
 
 class HTTPValidationError(BaseModel):
-    """FastAPI's default 422 body for a malformed request.
+    """The service's redacted 422 body for a malformed request.
 
     Mirrored here because declaring a 422 response stops FastAPI auto-adding
     its own — verified against the locked FastAPI in
-    ``tests/test_contract_errors.py`` — and the service genuinely still returns
-    this body for a request that fails schema validation before any pipeline
-    code runs. Every declared 422 is therefore a union of the route's pipeline
-    shape and this one.
+    ``tests/test_contract_errors.py``. The request-validation handler emits
+    this body before any pipeline code runs. Every declared 422 is therefore
+    a union of the route's pipeline shape and this one.
     """
 
     detail: list[ValidationErrorDetail] = Field(
-        default=[], description="One entry per failed field."
+        default=[],
+        description=(
+            "One entry per failed field, at most _MAX_VALIDATION_ERRORS (100) "
+            "entries (GOVERNANCE ruling (l))."
+        ),
     )
 
 
@@ -837,6 +1156,17 @@ _MAX_FILENAME_LENGTH = 255
 _MAX_MIME_HINT_LENGTH = 255
 _MAX_REQUEST_ID_LENGTH = 128
 _MAX_DOCUMENT_BYTES = MAX_INPUT_BYTES
+_MAX_VALIDATION_ERRORS = 100
+_VALIDATION_PLACEHOLDER = "[redacted]"
+_VALIDATION_WINDOW_KEYS = ("input", "ctx", "url")
+_ROUTE_LOC_ALLOWLIST: dict[str, frozenset[str]] = {
+    "/search": frozenset(SearchRequest.model_fields),
+    "/retrieve": frozenset(RetrieveRequest.model_fields),
+    "/extract": frozenset(
+        {"file", "filename", "mime_hint", "extract_mode", "request_id", "timeout_s"}
+    ),
+}
+_FRAMEWORK_LOC_SEGMENTS = frozenset({"body", "query", "path", "header"})
 _UPLOAD_READ_CHUNK_SIZE = 1024 * 1024
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -862,6 +1192,7 @@ class ExtractionMetrics:
         self.busy_rejections = 0
         self.semaphore_saturation = 0
         self.verdicts: dict[str, int] = {}
+        self.promptguard_contiguity_detections = 0
 
     def record_verdict(self, verdict: str) -> None:
         """Record one content-free extraction outcome."""
@@ -873,7 +1204,7 @@ _PROMPTGUARD_STATES = frozenset(get_args(PromptGuardState))
 
 
 class SearchMetrics:
-    """In-process counters exported by the internal ``/metrics`` endpoint."""
+    """In-process measurements exported by the internal ``/metrics`` endpoint."""
 
     def __init__(self) -> None:
         self.requests = 0
@@ -883,6 +1214,15 @@ class SearchMetrics:
         self.fallback_fired = 0
         self.paid_calls = 0
         self.policy_unknown_provider = 0
+        self.policy_invalid_domain_entry = 0
+        self.policy_suffix_trusted_skip = 0
+        # Moved at most once per request by the classification wait budget.
+        self.classification_wait_timeouts = 0
+        self.provider_compressed_body = 0
+        self.provider_timeouts = 0
+        self.promptguard_latency_target_exceeded = 0
+        self.sanitization_latency_max_ms = 0
+        self.promptguard_contiguity_detections = 0
 
     def record_error(self, error: str) -> None:
         """Record one content-free search error, keyed by ``PipelineError.error``."""
@@ -910,6 +1250,17 @@ class RetrieveMetrics:
         self.cache_misses = 0
         self.blocked_by_reason: dict[str, int] = {}
         self.promptguard_state: dict[str, int] = {}
+        self.policy_invalid_domain_entry = 0
+        self.policy_suffix_trusted_skip = 0
+        # The capacity counters `pipeline.orchestrator.RetrieveMetricsSink`
+        # declares. The first two are the `/retrieve` admission controller's
+        # (`app.state.retrieve_admission` increments them by attribute, the
+        # way `/extract`'s controller increments `ExtractionMetrics`); the
+        # third is the classification-permit wait timeout.
+        self.semaphore_saturation = 0
+        self.busy_rejections = 0
+        self.classification_wait_timeouts = 0
+        self.promptguard_contiguity_detections = 0
 
     def record_error(self, error: str) -> None:
         """Record one content-free retrieve error, keyed by ``PipelineError.error``."""
@@ -942,7 +1293,7 @@ class ExtractionAdmissionController:
     def __init__(
         self,
         settings: ExtractionSettings,
-        metrics: ExtractionMetrics,
+        metrics: AdmissionMetrics,
     ) -> None:
         self._limit = settings.extraction_concurrency
         self._queue_depth = settings.admission_queue_depth
@@ -953,6 +1304,41 @@ class ExtractionAdmissionController:
         self._queued_bytes = 0
         self._waiters: list[asyncio.Future[None]] = []
         self._lock = asyncio.Lock()
+
+    @classmethod
+    def from_retrieve_settings(
+        cls,
+        settings: RetrieveSettings,
+        metrics: AdmissionMetrics,
+    ) -> ExtractionAdmissionController:
+        """Build ``/retrieve``'s admission controller from ``retrieve:`` limits.
+
+        The controller reads exactly four fields off an ``ExtractionSettings``,
+        so this builds an ``ExtractionSettings``-shaped view carrying
+        ``/retrieve``'s values in them: ``fetch_concurrency`` as the slot
+        count, ``admission_queue_depth`` as the queue depth,
+        ``max_queued_fetch_bytes`` as the queued-byte bound and the 10 MB fetch
+        cap (``DEFAULT_MAX_CONTENT_BYTES``) as each queued request's
+        reservation.
+
+        The view is a **field carrier, not a validated ``extraction:``
+        configuration**. ``ExtractionSettings`` has no ``__post_init__`` — its
+        bounds live in ``extraction_settings_from_config``'s reader, which
+        ``dataclasses.replace`` bypasses — so the view may legitimately hold an
+        ``admission_queue_depth`` up to 16 and a queued-byte bound up to
+        160 MB, above the ``extraction:`` maxima. ``retrieve_settings_from_config``
+        is the gate that already bounded those values; nothing here re-checks
+        them against the ``extraction:`` ranges, and nothing else reads the
+        view.
+        """
+        view = replace(
+            extraction_settings_from_config({}),
+            extraction_concurrency=settings.fetch_concurrency,
+            admission_queue_depth=settings.admission_queue_depth,
+            max_queued_upload_bytes=settings.max_queued_fetch_bytes,
+            max_input_bytes=DEFAULT_MAX_CONTENT_BYTES,
+        )
+        return cls(view, metrics)
 
     @property
     def active(self) -> int:
@@ -1027,6 +1413,47 @@ def _cgroup_memory_snapshot() -> dict[str, int | float | None]:
         "cgroup_memory_max_bytes": maximum,
         "oom_proximity_ratio": ratio,
     }
+
+
+def _warn_if_envelope_memory_rule_unmet(
+    settings: ExtractionSettings,
+    cache_settings: CacheSettings,
+    backend: CacheBackend,
+    *,
+    model_id: str,
+    memory_max: int | float | None,
+) -> None:
+    """Advise once at boot; missing cgroups and deliberate oversubscription work."""
+    parent_bytes = (
+        PARENT_RESERVATION_BYTES + CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[model_id]
+    )
+    cache_term_bytes = (
+        cache_settings.max_bytes
+        if backend == "memory"
+        else cache_settings.max_value_bytes
+    )
+    required = (
+        parent_bytes
+        + settings.classification_concurrency * PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES
+        + settings.extraction_concurrency * settings.child_address_space_bytes
+        + cache_term_bytes
+    )
+    if memory_max is not None and memory_max < required:
+        logger.warning(
+            "envelope_memory_rule_unmet — memory_max=%d required=%d "
+            "classification_concurrency=%d extraction_concurrency=%d "
+            "child_address_space_bytes=%d model_id=%s parent_bytes=%d "
+            "cache_backend=%s cache_term_bytes=%d",
+            memory_max,
+            required,
+            settings.classification_concurrency,
+            settings.extraction_concurrency,
+            settings.child_address_space_bytes,
+            model_id,
+            parent_bytes,
+            backend,
+            cache_term_bytes,
+        )
 
 
 class DocumentSizeLimitMiddleware:
@@ -1130,13 +1557,18 @@ async def _spool_upload(
     max_bytes: int,
     chunk_size: int = _UPLOAD_READ_CHUNK_SIZE,
 ) -> _SpoolResult:
-    """Spool a bounded upload to a 0600 sidecar-owned file for the parser child."""
+    """Spool a bounded upload to a 0600 sidecar-owned file for the parser child.
+
+    Into :func:`spool_dir`, the process-private 0700 directory ``/retrieve``'s
+    fetched PDFs share; created on first use, so a lifespan-free caller works.
+    """
     path: Path | None = None
     received_bytes = 0
     try:
         with tempfile.NamedTemporaryFile(
             prefix="poppy-extract-",
             suffix=".upload",
+            dir=spool_dir(),
             delete=False,
         ) as temporary:
             path = Path(temporary.name)
@@ -1209,11 +1641,88 @@ def _sanitize_upload_metadata(
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Startup/shutdown lifecycle."""
+    model_id, model_allowed = model_fetcher.resolve_model_id()
+    if not model_allowed:
+        raise model_fetcher.ModelConfigurationError("model_id_not_allowed")
+    app.state.promptguard_model = model_id
     # Load config
     config = _load_config()
-    app.state.config = config
+    _warn_unknown_config_keys(config)
+    published_config = config.copy()
+    for key, denylist in (("seed_blocklist", True), ("news_domains", False)):
+        raw_entries: object = config.get(key, [])
+        entries: list[object] = []
+        normalized: list[str] = []
+        dropped: list[str] = []
+        if isinstance(raw_entries, list):
+            entries = cast(list[object], raw_entries)
+        else:
+            # Do not iterate a scalar/mapping or echo arbitrary YAML values.
+            dropped.append("[invalid-container]")
+        for entry in entries:
+            if not isinstance(entry, str):
+                dropped.append("[non-string]")
+                continue
+            values, count = normalize_domain_entries(
+                [entry], denylist=denylist, budget_bytes=None
+            )
+            normalized.extend(values)
+            if count:
+                # A misplaced URL/credential is not safe to echo as a domain.
+                dropped.append(
+                    "[redacted]" if any(char in entry for char in ":/@") else entry
+                )
+        published_config[key] = normalized
+        if dropped:
+            logger.warning(
+                "config_invalid_value — key=%s dropped=%d entries=%s",
+                key,
+                len(dropped),
+                ",".join(dropped),
+            )
+    app.state.config = published_config
+    app.state.promptguard_threshold_default = promptguard_threshold_from_config(config)
+    app.state.promptguard_settings = promptguard_settings_from_config(config)
+    logger.info(
+        "promptguard_threshold_resolved — value=%s",
+        app.state.promptguard_threshold_default,
+    )
+    try:
+        policy_domain_entries_max_bytes = bounded_int(
+            config,
+            "policy_domain_entries_max_bytes",
+            _DEFAULT_POLICY_DOMAIN_ENTRIES_MAX_BYTES,
+            minimum=4096,
+            maximum=1048576,
+            error=ValueError,
+        )
+    except ValueError:
+        logger.warning("config_invalid_value — key=policy_domain_entries_max_bytes")
+        policy_domain_entries_max_bytes = _DEFAULT_POLICY_DOMAIN_ENTRIES_MAX_BYTES
+    app.state.policy_domain_entries_max_bytes = policy_domain_entries_max_bytes
     settings = extraction_settings_from_config(config)
     app.state.extraction_settings = settings
+    retrieve_settings = retrieve_settings_from_config(config)
+    app.state.retrieve_settings = retrieve_settings
+    app.state.search_targets = search_targets_from_config(config)
+    # The spool directory is checked once here so a planted symlink, a foreign
+    # owner or a group/other bit refuses the boot, under the same closed
+    # vocabulary as every other `retrieve:` refusal — the token, never the
+    # path. Each spool re-runs the same check, because a directory verified now
+    # can be removed and re-created by another local user later.
+    try:
+        spool_dir()
+    except SpoolDirectoryError as exc:
+        raise RetrieveConfigurationError(str(exc)) from exc
+    if retrieve_settings.max_promptguard_chunks == 0:
+        # Exactly one WARNING, closed token plus the integer — no URL, no
+        # config dump. `0` is the shipped default for one minor release
+        # (`contract/GOVERNANCE.md` ruling (g)); this names the value the next
+        # MINOR flips to, so an operator reading boot logs finds the window
+        # rather than discovering it in a Release body.
+        logger.warning(
+            "retrieve_budget_unset coming_default=%d", COMING_MAX_PROMPTGUARD_CHUNKS
+        )
     app.state.extraction_metrics = ExtractionMetrics()
     app.state.extraction_admission = ExtractionAdmissionController(
         settings,
@@ -1221,6 +1730,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     app.state.search_metrics = SearchMetrics()
     app.state.retrieve_metrics = RetrieveMetrics()
+    app.state.retrieve_admission = ExtractionAdmissionController.from_retrieve_settings(
+        retrieve_settings,
+        app.state.retrieve_metrics,
+    )
     app.state.model_metrics = ModelMetrics()
     app.state.classification_semaphore = asyncio.Semaphore(
         settings.classification_concurrency
@@ -1240,6 +1753,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ahead of the chain build below because `build_provider_chain` needs
     # the resolved settings to hand a registered `BraveApiProvider`.
     app.state.brave_settings = brave_settings_from_config(config)
+    app.state.searxng_settings = searxng_settings_from_config(config)
 
     # Resolve the ordered search-provider chain from the environment, once.
     # An unknown name raises `SearchProviderConfigurationError` straight out
@@ -1260,6 +1774,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         searxng_url=SEARXNG_URL,
         brave_api_key=brave_key,
         brave_settings=app.state.brave_settings,
+        searxng_settings=app.state.searxng_settings,
     )
     app.state.search_providers = search_providers
     app.state.search_key_capabilities = (
@@ -1281,17 +1796,43 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # as the test-facing constructor convenience it always was.
     app.state.cache_settings = cache_settings_from_config(config)
     app.state.cache_metrics = CacheMetrics()
+    cache_hmac_key = _resolve_cache_hmac_key()
     storage, backend = _select_cache_storage(
         settings=app.state.cache_settings,
         metrics=app.state.cache_metrics,
     )
-    cache = ContentCache(storage=storage, metrics=app.state.cache_metrics)
+    _warn_if_envelope_memory_rule_unmet(
+        settings,
+        app.state.cache_settings,
+        backend,
+        model_id=model_id,
+        memory_max=_cgroup_memory_snapshot()["cgroup_memory_max_bytes"],
+    )
+    if backend == "memory" and cache_hmac_key is not None:
+        logger.warning(
+            "cache_hmac_key_unused — %s is set but the in-memory backend "
+            "is process-private; signing is not applicable",
+            CACHE_HMAC_KEY_ENV_VAR,
+        )
+    elif backend == "valkey" and cache_hmac_key is None:
+        logger.warning(
+            "cache_hmac_key_missing — %s is unset; cached content is served "
+            "unsigned (/health reports cache_unauthenticated)",
+            CACHE_HMAC_KEY_ENV_VAR,
+        )
+    cache = ContentCache(
+        storage=storage,
+        metrics=app.state.cache_metrics,
+        max_value_bytes=app.state.cache_settings.max_value_bytes,
+        hmac_key=cache_hmac_key if backend == "valkey" else None,
+    )
     cache_ok = await cache.connect()
     app.state.cache = cache
     # Published for `/health` on the `sanitizer_revision` precedent above:
     # decided once per start, read per request, never recomputed from the
     # environment while the process runs.
     app.state.cache_backend = backend
+    app.state.cache_signing_active = cache_hmac_key is not None and backend == "valkey"
     if cache_ok:
         # `backend` is one of two literals, never the URL.
         logger.info("Content cache connected (%s)", backend)
@@ -1303,9 +1844,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # A task around a thread, never an `await` — and the difference is the
     # whole point. `snapshot_download` + `from_pretrained` is minutes of
     # blocking network and torch work for a ~270 MiB weight set; uvicorn
-    # serves nothing until lifespan startup returns, and the compose
-    # healthcheck (10 s x 5 retries, no `start_period`) would restart-loop the
-    # container before the first byte landed. So startup yields immediately,
+    # serves nothing until lifespan startup returns. Our compose liveness
+    # probe (`curl -fsS -o /dev/null`, 30 s interval, 5 s timeout, 3 retries,
+    # 30 s `start_period`) would report unhealthy during a blocking download;
+    # plain Compose does not restart on that status. So startup yields immediately,
     # `/health` answers honestly `degraded` with `promptguard_unavailable`
     # throughout, and `promptguard_loaded` flips to true in place when the
     # load finishes — no restart, no second request path.
@@ -1320,9 +1862,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # future caller that wants an acquisition has to go through the same lock
     # rather than starting a second ~270 MiB download alongside this one.
     classifier = PromptGuardClassifier()
+    classifier.configure_threads(promptguard_threads_from_config(config))
     app.state.classifier = classifier
     acquisition = model_fetcher.WeightAcquisition(
         classifier,
+        model_id=model_id,
         metrics=app.state.model_metrics,
     )
     app.state.model_acquisition = acquisition
@@ -1377,6 +1921,16 @@ app = FastAPI(
 )
 _initial_extraction_settings = extraction_settings_from_config({})
 app.state.extraction_settings = _initial_extraction_settings
+# The file route's module-level fallback shape, for a transport that never
+# fires lifespan events. Deliberately silent: the `retrieve_budget_unset`
+# WARNING belongs to the lifespan, so a lifespan-free test does not emit a
+# boot warning nobody configured.
+app.state.retrieve_settings = retrieve_settings_from_config({})
+# The search handler also supports transports that never fire lifespan events.
+app.state.search_targets = SearchTargets()
+app.state.promptguard_threshold_default = 0.85
+app.state.promptguard_settings = PromptGuardSettings()
+app.state.policy_domain_entries_max_bytes = _DEFAULT_POLICY_DOMAIN_ENTRIES_MAX_BYTES
 app.state.extraction_metrics = ExtractionMetrics()
 app.state.extraction_admission = ExtractionAdmissionController(
     _initial_extraction_settings,
@@ -1384,6 +1938,13 @@ app.state.extraction_admission = ExtractionAdmissionController(
 )
 app.state.search_metrics = SearchMetrics()
 app.state.retrieve_metrics = RetrieveMetrics()
+# One process-wide instance for every lifespan-free transport, exactly like
+# `extraction_admission` above: a test that saturates it must build its own or
+# reset this attribute, or it leaks held slots into the next test.
+app.state.retrieve_admission = ExtractionAdmissionController.from_retrieve_settings(
+    app.state.retrieve_settings,
+    app.state.retrieve_metrics,
+)
 app.state.model_metrics = ModelMetrics()
 # Declared here as well as in the lifespan so the attributes exist for a
 # transport that never fires lifespan events (`httpx.ASGITransport`, which the
@@ -1400,6 +1961,7 @@ app.state.classification_semaphore = asyncio.Semaphore(
     _initial_extraction_settings.classification_concurrency
 )
 app.state.cache_metrics = CacheMetrics()
+app.state.cache_signing_active = False
 app.add_middleware(DocumentSizeLimitMiddleware)
 app.add_middleware(ExtractionAdmissionMiddleware)
 
@@ -1407,12 +1969,74 @@ app.add_middleware(ExtractionAdmissionMiddleware)
 # -- Error handler --
 
 
+@app.exception_handler(RequestValidationError)
+async def request_validation_error_handler(
+    request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    """Never let validation input escape through a body or chained traceback.
+
+    Request validators must keep messages and error codes content-free.
+    Locations are guarded here against the owned models and route signature.
+    The description-admitted window keys and constants retire at the next
+    MINOR (GOVERNANCE ruling (l)).
+    """
+    try:
+        path = getattr(request.scope.get("route"), "path", None)
+        route = (
+            path if isinstance(path, str) and path in _ROUTE_LOC_ALLOWLIST else "other"
+        )
+        allowed = _FRAMEWORK_LOC_SEGMENTS | _ROUTE_LOC_ALLOWLIST.get(route, frozenset())
+        errors = exc.errors()
+        items: list[dict[str, object]] = []
+        dropped = 0
+        for error in errors[:_MAX_VALIDATION_ERRORS]:
+            if not isinstance(error, Mapping):
+                continue
+            entry = cast(Mapping[str, Any], error)
+            loc: list[str | int] = []
+            for segment in entry.get("loc", ()):
+                if isinstance(segment, int) or (
+                    isinstance(segment, str) and segment in allowed
+                ):
+                    loc.append(segment)
+                else:
+                    dropped += 1
+            items.append(
+                {
+                    "loc": loc,
+                    "msg": str(entry.get("msg", "")),
+                    "type": str(entry.get("type", "")),
+                    **dict.fromkeys(_VALIDATION_WINDOW_KEYS, _VALIDATION_PLACEHOLDER),
+                }
+            )
+        response = JSONResponse(status_code=422, content={"detail": items})
+        if len(errors) > _MAX_VALIDATION_ERRORS:
+            logger.warning(
+                "validation_422_truncated — count=%d route=%s", len(errors), route
+            )
+        if dropped:
+            logger.warning(
+                "validation_422_loc_dropped — dropped=%d route=%s", dropped, route
+            )
+        return response
+    except Exception:
+        # Raising here chains exc, whose string/repr and body carry caller bytes.
+        return JSONResponse(status_code=422, content={"detail": []})
+
+
 @app.exception_handler(PipelineError)
 async def pipeline_error_handler(
     request: Request,
     exc: PipelineError,
 ) -> JSONResponse:
-    """Return structured JSON for pipeline errors."""
+    """Return structured JSON for pipeline errors.
+
+    The status is chosen by route and code together, never by code alone:
+    ``busy`` is 429 on ``/extract`` and 422 everywhere else, because
+    ``/retrieve``'s admission refusal carries the same literal and a new
+    status on a route would be a MAJOR contract change.
+    """
     content = exc.to_dict()
     if request.url.path == "/extract":
         content["sanitizer_revision"] = getattr(
@@ -1421,7 +2045,9 @@ async def pipeline_error_handler(
             derive_sanitizer_revision(request.app.state.config),
         )
     return JSONResponse(
-        status_code=429 if exc.error == "busy" else 422,
+        status_code=(
+            429 if exc.error == "busy" and request.url.path == "/extract" else 422
+        ),
         content=content,
     )
 
@@ -1437,7 +2063,9 @@ async def pipeline_error_handler(
 
 _PIPELINE_422_DESCRIPTION = (
     "Pipeline refusal (coded body) or request validation failure "
-    "(FastAPI's default body)."
+    "(redacted loc/msg/type entries, at most _MAX_VALIDATION_ERRORS (100); "
+    "input/ctx/url carry '[redacted]' in contract 1.3.0 and are dropped "
+    "at the next MINOR)."
 )
 
 
@@ -1445,14 +2073,17 @@ _PIPELINE_422_DESCRIPTION = (
 async def health(request: Request) -> HealthResponse:
     """Return service health status.
 
-    Always responds 200, even when degraded — the compose healthcheck
-    (bare ``curl -f``) only inspects the HTTP status, so a non-2xx here would
-    flap the container instead of surfacing the real problem. Callers must
-    check ``status``/``degraded_reasons`` in the body.
+    Always responds 200, even when degraded. The compose healthcheck's
+    ``curl -fsS -o /dev/null`` inspects only the HTTP status and discards the
+    body: liveness, not health. Plain Compose reports unhealthy probes but
+    does not restart on them. Callers must check ``status``/``degraded_reasons``
+    in the body; Docker-healthy does not imply that the classifier is loaded.
     """
     # Ping (subject to backoff) so a zero-traffic window still detects recovery
     cache = getattr(request.app.state, "cache", None)
     cache_connected = cache is not None and await cache.ping_if_due()
+    cache_backend = _resolved_cache_backend(request.app.state)
+    cache_signing_active = _resolved_cache_signing_active(request.app.state)
     sanitizer_revision = _resolved_sanitizer_revision(request.app.state)
 
     classifier_loaded = request.app.state.classifier.loaded
@@ -1461,6 +2092,8 @@ async def health(request: Request) -> HealthResponse:
         degraded_reasons.append(DEGRADED_PROMPTGUARD_UNAVAILABLE)
     if not cache_connected:
         degraded_reasons.append(DEGRADED_CACHE_UNAVAILABLE)
+    if cache_backend == "valkey" and not cache_signing_active:
+        degraded_reasons.append(DEGRADED_CACHE_UNAUTHENTICATED)
     capabilities = (
         {CAPABILITY_SEARCH_SANITIZATION: 1}
         if classifier_loaded or _break_glass_advertisement_enabled()
@@ -1471,15 +2104,18 @@ async def health(request: Request) -> HealthResponse:
     # the environment here.
     for key in _resolved_search_key_capabilities(request.app.state):
         capabilities[key] = 1
+    if cache_signing_active:
+        capabilities[CAPABILITY_CACHE_HMAC_KEY] = 1
 
     return HealthResponse(
         status="degraded" if degraded_reasons else "healthy",
         promptguard_loaded=classifier_loaded,
+        promptguard_model=_resolved_promptguard_model(request.app.state),
         cache_connected=cache_connected,
         capabilities=capabilities,
         sanitizer_revision=sanitizer_revision,
         contract_version=CONTRACT_VERSION,
-        cache_backend=_resolved_cache_backend(request.app.state),
+        cache_backend=cache_backend,
         search_providers=[
             provider.name for provider in _resolved_search_providers(request.app.state)
         ],
@@ -1513,6 +2149,9 @@ async def metrics(request: Request) -> dict[str, Any]:
             "queued_bytes": controller.queued_bytes,
             "verdicts": extraction_metrics.verdicts,
             **_cgroup_memory_snapshot(),
+            "promptguard_contiguity_detections": (
+                extraction_metrics.promptguard_contiguity_detections
+            ),
         },
         "search": {
             "requests": search_metrics.requests,
@@ -1522,6 +2161,20 @@ async def metrics(request: Request) -> dict[str, Any]:
             "fallback_fired": search_metrics.fallback_fired,
             "paid_calls": search_metrics.paid_calls,
             "policy_unknown_provider": search_metrics.policy_unknown_provider,
+            "policy_invalid_domain_entry": search_metrics.policy_invalid_domain_entry,
+            "policy_suffix_trusted_skip": search_metrics.policy_suffix_trusted_skip,
+            "classification_wait_timeouts": (
+                search_metrics.classification_wait_timeouts
+            ),
+            "provider_compressed_body": search_metrics.provider_compressed_body,
+            "provider_timeouts": search_metrics.provider_timeouts,
+            "promptguard_latency_target_exceeded": (
+                search_metrics.promptguard_latency_target_exceeded
+            ),
+            "sanitization_latency_max_ms": search_metrics.sanitization_latency_max_ms,
+            "promptguard_contiguity_detections": (
+                search_metrics.promptguard_contiguity_detections
+            ),
         },
         "retrieve": {
             "requests": retrieve_metrics.requests,
@@ -1530,6 +2183,16 @@ async def metrics(request: Request) -> dict[str, Any]:
             "cache_misses": retrieve_metrics.cache_misses,
             "blocked_by_reason": retrieve_metrics.blocked_by_reason,
             "promptguard_state": retrieve_metrics.promptguard_state,
+            "policy_invalid_domain_entry": retrieve_metrics.policy_invalid_domain_entry,
+            "policy_suffix_trusted_skip": retrieve_metrics.policy_suffix_trusted_skip,
+            "classification_wait_timeouts": (
+                retrieve_metrics.classification_wait_timeouts
+            ),
+            "semaphore_saturation": retrieve_metrics.semaphore_saturation,
+            "busy_rejections": retrieve_metrics.busy_rejections,
+            "promptguard_contiguity_detections": (
+                retrieve_metrics.promptguard_contiguity_detections
+            ),
         },
         # A different layer from `retrieve.cache_hits`/`cache_misses` above,
         # not a duplicate of it — :class:`CacheMetricsResponse` says why, and
@@ -1543,6 +2206,8 @@ async def metrics(request: Request) -> dict[str, Any]:
             "storage_misses": cache_metrics.storage_misses,
             "storage_evictions": cache_metrics.storage_evictions,
             "storage_oversize_skips": cache_metrics.storage_oversize_skips,
+            "corrupt_entries": cache_metrics.corrupt_entries,
+            "integrity_rejects": cache_metrics.integrity_rejects,
         },
         # Weight acquisition (feature-forage-model-bootstrap); the states these
         # five counters separate are documented on
@@ -1558,6 +2223,51 @@ async def metrics(request: Request) -> dict[str, Any]:
             "retries_scheduled": model_metrics.retries_scheduled,
         },
     }
+
+
+def promptguard_threshold_from_config(config: dict[str, Any]) -> float:
+    """Validate the fetch routes' default without changing the raw config."""
+    value = config.get("promptguard_threshold", 0.85)
+    try:
+        if isinstance(value, str):
+            value = float(value)
+        return bounded_float(
+            {"promptguard_threshold": value},
+            "promptguard_threshold",
+            0.85,
+            minimum=0.0,
+            maximum=1.0,
+            error=ValueError,
+        )
+    except ValueError:
+        logger.warning(
+            "config_invalid_value — key=promptguard_threshold. "
+            "/extract reads the raw value through its own guard"
+        )
+        return 0.85
+
+
+class _PromptGuardPolicyUpdates(TypedDict):
+    promptguard_fail_closed: bool
+    promptguard_threshold: float
+
+
+def _promptguard_policy_updates(
+    body: RetrieveRequest | SearchRequest,
+    settings: RetrieveSettings,
+    threshold_default: float,
+) -> _PromptGuardPolicyUpdates:
+    threshold = body.promptguard_threshold
+    if threshold is None:
+        threshold = threshold_default
+    updates: _PromptGuardPolicyUpdates = {
+        "promptguard_fail_closed": (
+            body.promptguard_fail_closed or settings.promptguard_fail_closed_floor
+        ),
+        "promptguard_threshold": min(threshold, settings.promptguard_threshold_ceiling),
+    }
+    assert updates.keys() <= type(body).model_fields.keys()
+    return updates
 
 
 @app.post(
@@ -1579,30 +2289,73 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
     chunks, per result `content_kind` — from the configured provider chain,
     every result sanitized, never cached.
 
-    `promptguard_fail_closed` is honoured on both routes; `/retrieve`
-    additionally honours `promptguard_threshold`, `trusted_domains`,
-    `verified_domains`, `blocked_domains` and `cache_ttl_hours`, while
-    `/search` additionally honours `providers` and `allow_paid_fallback`
-    (contract 1.2.0) and scans every result at the fixed 0.85 default at
-    trust tier `standard` (`config.yaml`'s `promptguard_threshold` is not
-    applied there). This documents today's divergence; changing it belongs
-    to `epic-forage-hardening`.
+    Only `/retrieve` honours `cache_ttl_hours`, `extract_mode`, `trusted_domains`
+    and `verified_domains`; only `/search` honours `allow_paid_fallback`,
+    `num_results` and `providers` and scans every result at trust tier `standard`.
+    Shared by both routes: `blocked_domains`, `promptguard_threshold` and
+    `promptguard_fail_closed`. On both routes, an omitted or null threshold
+    uses the validated `config.yaml` default (shipped as 0.85), then
+    `promptguard_threshold_ceiling` bounds the requested or default value.
     """
     retrieve_metrics: RetrieveMetrics = request.app.state.retrieve_metrics
     retrieve_metrics.requests += 1
     try:
+        retrieve_settings: RetrieveSettings = request.app.state.retrieve_settings
+        budget: int = request.app.state.policy_domain_entries_max_bytes
+        # Refuse the entire denylist before canonicalising any caller entry.
+        if domain_list_bytes(body.blocked_domains) > budget:
+            raise PipelineError(
+                error="content_too_large",
+                reason=POLICY_DOMAIN_LIST_TOO_LARGE,
+                request_id=uuid.uuid4().hex,
+            )
+        trusted_domains, trusted_dropped = normalize_domain_entries(
+            body.trusted_domains, denylist=False, budget_bytes=budget
+        )
+        verified_domains, verified_dropped = normalize_domain_entries(
+            body.verified_domains, denylist=False, budget_bytes=budget
+        )
+        blocked_domains, blocked_dropped = normalize_domain_entries(
+            body.blocked_domains, denylist=True, budget_bytes=None
+        )
+        retrieve_metrics.policy_invalid_domain_entry += (
+            trusted_dropped + verified_dropped + blocked_dropped
+        )
+        policy = _promptguard_policy_updates(
+            body, retrieve_settings, request.app.state.promptguard_threshold_default
+        )
+        body = body.model_copy(
+            update={
+                **policy,
+                "trusted_domains": trusted_domains,
+                "verified_domains": verified_domains,
+                "blocked_domains": blocked_domains,
+            }
+        )
         content = await run_retrieve_pipeline(
             body,
             cache=request.app.state.cache,
             classifier=request.app.state.classifier,
             config=request.app.state.config,
             sanitizer_revision=_resolved_sanitizer_revision(request.app.state),
+            promptguard_threshold=policy["promptguard_threshold"],
+            promptguard_settings=request.app.state.promptguard_settings,
+            settings=retrieve_settings,
+            retrieve_metrics=retrieve_metrics,
+            classification_semaphore=request.app.state.classification_semaphore,
+            extraction_settings=request.app.state.extraction_settings,
+            admission=request.app.state.retrieve_admission,
         )
     except PipelineError as exc:
         retrieve_metrics.record_error(exc.error)
         raise
     retrieve_metrics.record_content(content)
-    return content
+    return content.model_copy(
+        update={
+            "effective_promptguard_fail_closed": policy["promptguard_fail_closed"],
+            "effective_promptguard_threshold": policy["promptguard_threshold"],
+        }
+    )
 
 
 @app.post(
@@ -1642,7 +2395,9 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
             "model": Extract422ErrorResponse | HTTPValidationError,
             "description": (
                 "Document failure (coded body, carrying sanitizer_revision) or "
-                "request validation failure (FastAPI's default body)."
+                "request validation failure (redacted loc/msg/type entries, "
+                "at most _MAX_VALIDATION_ERRORS (100); input/ctx/url carry "
+                "'[redacted]' in contract 1.3.0 and are dropped at the next MINOR)."
             ),
         },
         429: {
@@ -1722,6 +2477,8 @@ async def extract(
             request_id=safe_request_id,
             classifier=request.app.state.classifier,
             promptguard_threshold=threshold,
+            promptguard_settings=request.app.state.promptguard_settings,
+            extraction_metrics=request.app.state.extraction_metrics,
             sanitizer_revision=getattr(
                 request.app.state,
                 "sanitizer_revision",
@@ -1783,21 +2540,38 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
     `/retrieve` fetches and sanitizes one caller-named URL through the full
     pipeline, cached by `sanitizer_revision`.
 
-    `promptguard_fail_closed` is honoured on both routes; `/search`
-    additionally honours `providers` and `allow_paid_fallback` (contract
-    1.2.0) and scans every result at the fixed 0.85 default at trust tier
-    `standard` (`config.yaml`'s `promptguard_threshold` is not applied
-    here), while `/retrieve` additionally honours `promptguard_threshold`,
-    `trusted_domains`, `verified_domains`, `blocked_domains` and
-    `cache_ttl_hours`. This documents today's divergence; changing it
-    belongs to `epic-forage-hardening`.
+    Only `/search` honours `allow_paid_fallback`, `num_results` and `providers`
+    and scans every result at trust tier `standard`; only `/retrieve` honours
+    `cache_ttl_hours`, `extract_mode`, `trusted_domains` and `verified_domains`.
+    Shared by both routes: `blocked_domains`, `promptguard_threshold` and
+    `promptguard_fail_closed`. On both routes, an omitted or null threshold
+    uses the validated `config.yaml` default (shipped as 0.85), then
+    `promptguard_threshold_ceiling` bounds the requested or default value.
     """
     search_metrics: SearchMetrics = request.app.state.search_metrics
     search_metrics.requests += 1
+    search_targets: SearchTargets = request.app.state.search_targets
+    policy = _promptguard_policy_updates(
+        body,
+        request.app.state.retrieve_settings,
+        request.app.state.promptguard_threshold_default,
+    )
+    body = body.model_copy(update=policy)
     configured_chain = _resolved_search_providers(request.app.state)
     effective_chain, ignored_count = apply_request_policy(configured_chain, body)
     search_metrics.policy_unknown_provider += ignored_count
     try:
+        budget: int = request.app.state.policy_domain_entries_max_bytes
+        if domain_list_bytes(body.blocked_domains) > budget:
+            raise PipelineError(
+                error="search_unavailable",
+                reason=POLICY_DOMAIN_LIST_TOO_LARGE,
+                request_id=uuid.uuid4().hex,
+            )
+        blocked_domains, blocked_dropped = normalize_domain_entries(
+            body.blocked_domains, denylist=True, budget_bytes=None
+        )
+        search_metrics.policy_invalid_domain_entry += blocked_dropped
         # The policy 422 is raised inside the same `try` as the pipeline's
         # own, so one `except` records every `search_unavailable` from the
         # exception's typed `error` — there is no second, string-literal
@@ -1812,12 +2586,26 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
             body,
             providers=effective_chain,
             configured_chain=configured_chain,
+            blocked_domains=blocked_domains,
             config=request.app.state.config,
             classifier=request.app.state.classifier,
+            promptguard_threshold=policy["promptguard_threshold"],
+            promptguard_settings=request.app.state.promptguard_settings,
             search_metrics=search_metrics,
+            classification_semaphore=request.app.state.classification_semaphore,
+            classification_wait_seconds=(
+                request.app.state.retrieve_settings.promptguard_wait_seconds
+            ),
+            promptguard_latency_target_ms=search_targets.promptguard_latency_target_ms,
+            first_token_target_ms=search_targets.first_token_target_ms,
         )
     except PipelineError as exc:
         search_metrics.record_error(exc.error)
         raise
     search_metrics.record_response(response)
-    return response
+    return response.model_copy(
+        update={
+            "effective_promptguard_fail_closed": policy["promptguard_fail_closed"],
+            "effective_promptguard_threshold": policy["promptguard_threshold"],
+        }
+    )

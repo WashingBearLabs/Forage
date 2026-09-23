@@ -25,7 +25,11 @@ from pipeline.search_providers.brave import (
     BraveSettings,
     usable_brave_key,
 )
-from pipeline.search_providers.searxng import SEARXNG_PROVIDER_NAME, SearxngProvider
+from pipeline.search_providers.searxng import (
+    SEARXNG_PROVIDER_NAME,
+    SearxngProvider,
+    SearxngSettings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +90,7 @@ def build_provider_chain(
     searxng_url: str,
     brave_api_key: str | None = None,
     brave_settings: BraveSettings | None = None,
+    searxng_settings: SearxngSettings | None = None,
 ) -> list[SearchProvider]:
     """Resolve *names* into constructed providers, in chain order.
 
@@ -111,7 +116,9 @@ def build_provider_chain(
     nothing here — an unused key is not a misconfiguration.
     """
     registry: dict[str, Callable[[], SearchProvider]] = {
-        SEARXNG_PROVIDER_NAME: lambda: SearxngProvider(searxng_url),
+        SEARXNG_PROVIDER_NAME: lambda: SearxngProvider(
+            searxng_url, settings=searxng_settings
+        ),
     }
     key = usable_brave_key(brave_api_key)
     if key is not None:
@@ -151,5 +158,5 @@ def build_provider_chain(
             "provider was skipped, so the key-less SearXNG floor is used "
             "instead"
         )
-        chain = [SearxngProvider(searxng_url)]
+        chain = [SearxngProvider(searxng_url, settings=searxng_settings)]
     return chain

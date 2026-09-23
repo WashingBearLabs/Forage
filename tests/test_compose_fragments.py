@@ -45,6 +45,7 @@ test_mapping:
 from __future__ import annotations
 
 import inspect
+import json
 import re
 from pathlib import Path
 from typing import Any, cast
@@ -72,9 +73,9 @@ _FRAGMENTS = sorted(_FRAGMENT_PATHS)
 _SEARXNG_SERVICE = "searxng"
 _FORAGE_SERVICE = "forage"
 
-# The forage release the fragments pin (search-release US-004). One edit here
+# The forage release the fragments pin (hardening-release US-004). One edit here
 # at the next release, together with the two `image:` lines it checks.
-_FORAGE_RELEASE_TAG = "1.1.0"
+_FORAGE_RELEASE_TAG = "1.2.0"
 
 # Passed through to the forage service as bare names, like HF_TOKEN: set in
 # `compose/.env` they reach the container, left out they are genuinely unset
@@ -87,10 +88,9 @@ _SEARCH_PASSTHROUGH_NAMES = ("FORAGE_SEARCH_PROVIDERS", "FORAGE_BRAVE_API_KEY")
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 
 # `<repo>:<tag>` where the tag is an explicit semver-shaped version, optionally
-# followed by a digest. Deliberately refuses `latest` (does not exist for
-# either image yet, and is a moving pointer when it does), a bare repository,
-# and the `sha-<short>` tags every main push produces — a real tag, but not one
-# an example should teach anyone to pull.
+# followed by a digest. Deliberately refuses the moving `latest` pointer,
+# a bare repository, and the `sha-<short>` tags every main push produces —
+# a real tag, but not one an example should teach anyone to pull.
 _PINNED_IMAGE_RE = re.compile(
     r"^(?P<repo>[a-z0-9][a-z0-9._/-]*)"
     r":(?P<tag>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)"
@@ -550,8 +550,27 @@ class TestSearchProviderPassthrough:
         )
 
 
+@pytest.mark.parametrize("variable", ["FORAGE_MODEL_ID", "FORAGE_MODEL_REVISION"])
+@pytest.mark.parametrize("name", _FRAGMENTS)
+def test_model_selection_is_a_bare_passthrough_only_on_forage(
+    fragments: dict[str, dict[str, Any]], name: str, variable: str
+) -> None:
+    services = _services(fragments[name])
+    environment = _environment(services[_FORAGE_SERVICE])
+    assert variable in environment
+    assert environment[variable] is None
+    for service_name, service in services.items():
+        if service_name != _FORAGE_SERVICE:
+            assert variable not in _environment(service)
+
+
 class TestMinimalIsGenuinelyValkeyFree:
     """Only a *fully unset* VALKEY_URL selects the in-memory backend."""
+
+    def test_no_cache_signing_key_even_in_the_recipe(
+        self, raw_fragments: dict[str, str]
+    ) -> None:
+        assert "FORAGE_CACHE_HMAC_KEY" not in raw_fragments["minimal"]
 
     def test_no_service_carries_valkey_url(
         self, fragments: dict[str, dict[str, Any]]
@@ -603,7 +622,46 @@ class TestMinimalIsGenuinelyValkeyFree:
 
 
 class TestFullWiresValkeyLiterally:
-    """The one line that distinguishes the two fragments, and its traps."""
+    """The external cache selector, its signing key, and their traps."""
+
+    def test_cache_signing_key_is_a_bare_passthrough_on_forage(
+        self, fragments: dict[str, dict[str, Any]]
+    ) -> None:
+        environment = _environment(_services(fragments["full"])[_FORAGE_SERVICE])
+        assert "FORAGE_CACHE_HMAC_KEY" in environment
+        assert environment["FORAGE_CACHE_HMAC_KEY"] is None
+        for name, service in _services(fragments["full"]).items():
+            if name != _FORAGE_SERVICE:
+                assert "FORAGE_CACHE_HMAC_KEY" not in _environment(service)
+
+    def test_header_generates_the_cache_signing_key(
+        self, raw_fragments: dict[str, str]
+    ) -> None:
+        recipe = raw_fragments["full"].split("#   {", 1)[1].split("#   } > .env", 1)[0]
+        assert (
+            '#     echo "FORAGE_CACHE_HMAC_KEY=$(head -c 32 /dev/urandom | base64)"'
+            in recipe.splitlines()
+        )
+        assert 'echo "FORAGE_CACHE_HMAC_KEY="' not in recipe
+
+    def test_comment_explains_credential_handling_and_health(
+        self, raw_fragments: dict[str, str]
+    ) -> None:
+        prose = _comment_prose(raw_fragments["full"])
+        assert "forage_cache_hmac_key is a credential" in prose
+        assert "set it in `compose/.env`, never inline" in prose
+        assert "valkey-backed health needs this key" in prose
+        assert "cache_unauthenticated" in prose
+        quickstart = (
+            _README_PATH.read_text()
+            .split("## Quickstart\n", 1)[1]
+            .split("### The two cache modes", 1)[0]
+        )
+        for text in (prose, " ".join(quickstart.lower().split())):
+            text = text.replace("`", "")
+            assert "set forage_cache_hmac_key in compose/.env" in text
+            assert "serves cached content unsigned" in text
+            assert "/health reports cache_unauthenticated" in text
 
     def test_valkey_url_is_set_on_forage(
         self, fragments: dict[str, dict[str, Any]]
@@ -611,7 +669,7 @@ class TestFullWiresValkeyLiterally:
         environment = _environment(_services(fragments["full"])[_FORAGE_SERVICE])
         assert environment.get("VALKEY_URL"), (
             "compose/full.yml must set VALKEY_URL on the forage service — it "
-            "is the whole difference between the two fragments"
+            "selects the external cache rather than minimal.yml's memory mode"
         )
 
     def test_valkey_url_is_a_literal_not_an_interpolation(
@@ -702,6 +760,75 @@ class TestFullWiresValkeyLiterally:
         )
 
 
+@pytest.mark.parametrize("name", _FRAGMENTS)
+class TestResourceEnvelope:
+    def test_defaults_preserve_the_existing_resource_limits(
+        self, fragments: dict[str, dict[str, Any]], name: str
+    ) -> None:
+        service = _services(fragments[name])[_FORAGE_SERVICE]
+        assert service["cpus"] == "${FORAGE_CPUS:-0}"
+        assert service["mem_limit"] == "${FORAGE_MEM_LIMIT:-1024m}"
+
+    def test_healthcheck_is_status_only_liveness(
+        self, fragments: dict[str, dict[str, Any]], name: str
+    ) -> None:
+        assert _services(fragments[name])[_FORAGE_SERVICE]["healthcheck"] == {
+            "test": [
+                "CMD",
+                "curl",
+                "-fsS",
+                "-o",
+                "/dev/null",
+                "http://127.0.0.1:8020/health",
+            ],
+            "interval": "30s",
+            "timeout": "5s",
+            "retries": 3,
+            "start_period": "30s",
+        }
+
+    def test_no_config_bind_mount_is_required(
+        self, fragments: dict[str, dict[str, Any]], name: str
+    ) -> None:
+        assert _volume_mounts(_services(fragments[name])[_FORAGE_SERVICE]) == [
+            "forage-model-cache:/app/model-cache"
+        ]
+
+    def test_comments_explain_sizing_and_liveness_limits(
+        self, raw_fragments: dict[str, str], name: str
+    ) -> None:
+        prose = _comment_prose(raw_fragments[name])
+        for phrase in (
+            "forage_cpus unset or 0 = no cpu limit",
+            "compose omits the key",
+            "below 1 vcpu is unsupported",
+            "docker compose v2 (compose spec)",
+            "v2.40.3",
+            "forage_mem_limit takes docker's byte-unit syntax",
+            "forage_mem_limit=abc fails at compose, before forage starts",
+            "sizing the container",
+            "liveness, not health",
+            "status-only",
+            "state.health.log[].output captures no body",
+            "one /health every 30 s",
+            "cache.ping_if_due()",
+            "within one interval even with no traffic",
+            "reconnect can take 2 s",
+            "5 s probe timeout",
+            "at most one reconnect warning per probe",
+            "one per probe on connection refused",
+            "about one per two on a connect timeout",
+            "reconnect_attempts / reconnect_failures climb without traffic",
+            "reports unhealthy but never restarts",
+            "`restart:` reacts to exits",
+            "healthy container may have the classifier unloaded",
+            "never gate traffic",
+            "`depends_on: service_healthy`",
+            "consumer's activation",
+        ):
+            assert phrase in prose, f"{name} does not document {phrase!r}"
+
+
 class TestTheDuplicationDoesNotDrift:
     """`full.yml` repeats `minimal.yml` on purpose; the repeat is asserted."""
 
@@ -728,6 +855,22 @@ class TestTheDuplicationDoesNotDrift:
         }
         assert len(set(map(tuple, published.values()))) == 1, (
             f"The two fragments publish Forage differently: {published}"
+        )
+
+    def test_the_shared_services_declare_the_same_envelope(
+        self, fragments: dict[str, dict[str, Any]]
+    ) -> None:
+        envelopes = {
+            name: (
+                service["cpus"],
+                service["mem_limit"],
+                json.dumps(service["healthcheck"], sort_keys=True),
+            )
+            for name, fragment in fragments.items()
+            for service in [_services(fragment)[_FORAGE_SERVICE]]
+        }
+        assert len(set(envelopes.values())) == 1, (
+            f"The two fragments declare different resource envelopes: {envelopes}"
         )
 
     def test_the_shared_services_mount_the_same_model_cache(

@@ -86,10 +86,24 @@ components:
 
         one and not the other. Only the in-memory storage can move
 
-        ``storage_evictions``/``storage_oversize_skips`` — Valkey does its own
+        ``storage_evictions``; ``storage_oversize_skips`` counts Forage''s own
 
-        eviction and has no byte bound of ours.'
+        write-side refusals on both backends.'
       properties:
+        corrupt_entries:
+          description: Stored values that failed RetrievedContent JSON or schema validation
+            and were treated as misses, with deletion attempted. Counts parse failures, not
+            tampering; parse success does not prove authenticity.
+          title: Corrupt Entries
+          type: integer
+        integrity_rejects:
+          description: Stored values rejected before parsing for an invalid or unexpected
+            signature envelope, an oversized value, or a wrong Valkey type. Deletion is attempted
+            and the read becomes a miss. Key changes and lowered byte bounds can also move
+            this counter; inspect the closed reason token and cache-key digest in cache_integrity_reject
+            logs.
+          title: Integrity Rejects
+          type: integer
         operation_failures:
           description: Cache operations that failed against the backend.
           title: Operation Failures
@@ -120,8 +134,8 @@ components:
           title: Storage Misses
           type: integer
         storage_oversize_skips:
-          description: Entries the in-memory storage refused as over its per-entry byte bound.
-            Always 0 on Valkey.
+          description: Values Forage refused to store over cache.max_value_bytes on either
+            backend, or over the memory backend's cache.max_bytes bound.
           title: Storage Oversize Skips
           type: integer
       required:
@@ -133,6 +147,8 @@ components:
       - storage_misses
       - storage_evictions
       - storage_oversize_skips
+      - corrupt_entries
+      - integrity_rejects
       title: CacheMetricsResponse
       type: object
     DetailResponse:
@@ -349,6 +365,10 @@ components:
           description: current/max as a fraction, or null when either side is null or max
             is zero. The concrete OOM-proximity signal an operator reads.
           title: Oom Proximity Ratio
+        promptguard_contiguity_detections:
+          description: Uploads blocked by the contiguity rule, including both-rule verdicts.
+          title: Promptguard Contiguity Detections
+          type: integer
         queued:
           description: Requests waiting for a slot right now.
           title: Queued
@@ -386,27 +406,27 @@ components:
       - cgroup_memory_current_bytes
       - cgroup_memory_max_bytes
       - oom_proximity_ratio
+      - promptguard_contiguity_detections
       title: ExtractionMetricsResponse
       type: object
     HTTPValidationError:
-      description: 'FastAPI''s default 422 body for a malformed request.
+      description: 'The service''s redacted 422 body for a malformed request.
 
 
         Mirrored here because declaring a 422 response stops FastAPI auto-adding
 
         its own — verified against the locked FastAPI in
 
-        ``tests/test_contract_errors.py`` — and the service genuinely still returns
+        ``tests/test_contract_errors.py``. The request-validation handler emits
 
-        this body for a request that fails schema validation before any pipeline
+        this body before any pipeline code runs. Every declared 422 is therefore
 
-        code runs. Every declared 422 is therefore a union of the route''s pipeline
-
-        shape and this one.'
+        a union of the route''s pipeline shape and this one.'
       properties:
         detail:
           default: []
-          description: One entry per failed field.
+          description: One entry per failed field, at most _MAX_VALIDATION_ERRORS (100) entries
+            (GOVERNANCE ruling (l)).
           items:
             $ref: '#/components/schemas/ValidationErrorDetail'
           title: Detail
@@ -419,11 +439,13 @@ components:
 
         HTTP status is always 200, even when ``status == "degraded"`` (family
 
-        decision 11) — the compose healthcheck is a bare ``curl -f`` that only
+        decision 11). The compose healthcheck''s ``curl -fsS -o /dev/null`` inspects
 
-        inspects the HTTP status code, so consumers must read ``status`` and
+        only the HTTP status and discards the body: liveness, not health. Consumers
 
-        ``degraded_reasons`` rather than the response''s non-2xx-ness.'
+        must read ``status`` and ``degraded_reasons`` in the body; a Docker-healthy
+
+        container may still have its classifier unloaded.'
       properties:
         cache_backend:
           description: 'Which storage the content cache selected at start: ''valkey'' when
@@ -445,14 +467,17 @@ components:
             type: integer
           description: 'Capabilities this deployment advertises, as a presence map: a key
             is present with the value 1 when the capability is available and absent otherwise.
-            Two keys are defined in contract 1.2.0. ''search_sanitization'' (contract 1.1.0)
+            Three keys are defined in contract 1.3.0. ''search_sanitization'' (contract 1.1.0)
             is a runtime claim, present when PromptGuard is loaded — or when the break-glass
             override is armed; see docs/configuration.md, which only ever forces this key.
             ''brave_api_key'' (contract 1.2.0) is an environment fact, present when this start
             resolved a usable FORAGE_BRAVE_API_KEY, independently of whether ''brave'' actually
-            appears in search_providers and untouched by the break-glass override. Deliberately
-            a dict rather than an enum: a consumer reads the keys it knows and ignores the
-            rest, so a future capability is an additive-safe MINOR change.'
+            appears in search_providers and untouched by the break-glass override. ''cache_hmac_key''
+            (contract 1.3.0) is present only when this start resolved a usable FORAGE_CACHE_HMAC_KEY
+            and selected the Valkey backend, independently of cache connectivity and untouched
+            by the break-glass override. Memory mode does not sign and never advertises it.
+            Deliberately a dict rather than an enum: a consumer reads the keys it knows and
+            ignores the rest, so a future capability is an additive-safe MINOR change.'
           title: Capabilities
           type: object
         contract_version:
@@ -469,12 +494,20 @@ components:
             enum:
             - promptguard_unavailable
             - cache_unavailable
+            - cache_unauthenticated
             type: string
           title: Degraded Reasons
           type: array
         promptguard_loaded:
           title: Promptguard Loaded
           type: boolean
+        promptguard_model:
+          description: The model id selected at startup, whether loaded or not; promptguard_loaded
+            reports whether it serves. The identity is contract-relevant and inferable from
+            behaviour; contiguity settings are tuning an attacker would otherwise have to
+            guess and are not published here.
+          title: Promptguard Model
+          type: string
         sanitizer_revision:
           title: Sanitizer Revision
           type: string
@@ -498,6 +531,7 @@ components:
       required:
       - status
       - promptguard_loaded
+      - promptguard_model
       - cache_connected
       - capabilities
       - sanitizer_revision
@@ -601,9 +635,15 @@ components:
         error:
           description: Stable machine-readable refusal code. The fetch and URL-validation
             codes arrive on /retrieve, the searxng_* codes and search_unavailable on /search.
+            busy arrives on /retrieve only, at 422, as the admission refusal (reason admission_queue_full);
+            the same literal is /extract's 429. extraction_failed arrives on /retrieve only,
+            as a fetched PDF the worker could not parse or spool (reason pdf_encrypted, pdf_no_text,
+            pdf_extraction_error or pdf_spool_error).
           enum:
           - blocked_domain
+          - busy
           - content_too_large
+          - extraction_failed
           - fetch_error
           - fetch_timeout
           - invalid_url
@@ -679,6 +719,12 @@ components:
             outside the closed vocabulary.
           title: Blocked By Reason
           type: object
+        busy_rejections:
+          description: '`/retrieve` requests refused 422 `busy` (reason `admission_queue_full`)
+            because the admission queue was at `retrieve.admission_queue_depth` or its byte
+            reservation would have exceeded `retrieve.max_queued_fetch_bytes`.'
+          title: Busy Rejections
+          type: integer
         cache_hits:
           description: Requests served from the content cache. A *request* outcome — see the
             cache section for the storage-operation counters underneath.
@@ -688,12 +734,37 @@ components:
           description: Requests that had to fetch.
           title: Cache Misses
           type: integer
+        classification_wait_timeouts:
+          description: '`/retrieve` requests that waited `promptguard_wait_seconds` for the
+            classification permit and gave up, taking the classifier-unavailable outcome under
+            the request''s own `promptguard_fail_closed`. Rising with `promptguard_loaded:
+            true` on `/health` means permit contention, not a missing model.'
+          title: Classification Wait Timeouts
+          type: integer
         errors:
           additionalProperties:
             type: integer
           description: Refusals keyed by the /retrieve error code.
           title: Errors
           type: object
+        policy_invalid_domain_entry:
+          description: 'Dropped request domain entries, one increment per entry: invalid entries
+            in any list or the over-budget remainder of an allowlist. The two allowlist drop
+            causes both narrow privilege; an over-budget denylist is refused, never truncated
+            or counted. Offending entries are not stored.'
+          title: Policy Invalid Domain Entry
+          type: integer
+        policy_suffix_trusted_skip:
+          description: Uncached retrievals resolving to trusted or verified through a leading-dot
+            entry. Covers both the trusted classifier skip and the verified exemption when
+            classification is unavailable, even if classification is available on this request.
+            Exact matches through bare entries do not increment it.
+          title: Policy Suffix Trusted Skip
+          type: integer
+        promptguard_contiguity_detections:
+          description: Retrievals blocked by the contiguity rule, including both-rule verdicts.
+          title: Promptguard Contiguity Detections
+          type: integer
         promptguard_state:
           additionalProperties:
             type: integer
@@ -705,6 +776,13 @@ components:
           description: Retrieve requests that reached the handler.
           title: Requests
           type: integer
+        semaphore_saturation:
+          description: '`/retrieve` requests that found every fetch slot of the admission
+            gate busy (`retrieve.fetch_concurrency`) — not the classification permit, which
+            is `classification_wait_timeouts`. Counts queueing as well as refusal, so it is
+            always >= busy_rejections.'
+          title: Semaphore Saturation
+          type: integer
       required:
       - requests
       - errors
@@ -712,6 +790,12 @@ components:
       - cache_misses
       - blocked_by_reason
       - promptguard_state
+      - policy_invalid_domain_entry
+      - policy_suffix_trusted_skip
+      - classification_wait_timeouts
+      - semaphore_saturation
+      - busy_rejections
+      - promptguard_contiguity_detections
       title: RetrieveMetricsResponse
       type: object
     RetrieveRequest:
@@ -726,26 +810,29 @@ components:
 
         chunks, per result `content_kind` — from the configured provider chain,
 
-        every result sanitized, never cached. `promptguard_fail_closed` is
+        every result sanitized, never cached. Only `/retrieve` honours
 
-        honoured on both routes; this route additionally honours
+        `cache_ttl_hours`, `extract_mode`, `trusted_domains` and `verified_domains`;
 
-        `promptguard_threshold`, `trusted_domains`, `verified_domains`,
+        only `/search` honours `allow_paid_fallback`, `num_results` and `providers`
 
-        `blocked_domains` and `cache_ttl_hours`, while `/search` additionally
+        and scans every result at trust tier `standard`.
 
-        honours `providers` and `allow_paid_fallback` (contract 1.2.0) and scans
+        Shared by both routes: `blocked_domains`, `promptguard_threshold` and
 
-        every result at the fixed 0.85 default at trust tier `standard`
+        `promptguard_fail_closed`. On both routes, an omitted or null threshold
 
-        (`config.yaml`''s `promptguard_threshold` is not applied there). This
+        uses the validated `config.yaml` default (shipped as 0.85), then
 
-        documents today''s divergence; changing it belongs to
-
-        `epic-forage-hardening`.'
+        `promptguard_threshold_ceiling` bounds the requested or default value.'
       properties:
         blocked_domains:
-          description: Domains to block outright
+          description: 'Domains to block outright: blocked_domains always covers subdomains
+            for multi-label names, with or without a leading dot; an IP literal matches only
+            itself. Single-label entries match exactly. Upgrade note: existing multi-label
+            entries now cover subdomains; review apex entries before upgrading, because a
+            multi-tenant apex removes every tenant. Single-label entries keep matching exactly
+            as before.'
           items:
             type: string
           title: Blocked Domains
@@ -768,18 +855,28 @@ components:
         promptguard_fail_closed:
           default: true
           description: When True, block content if PromptGuard is unavailable (fail-closed).
-            When False, allow with a trust penalty (fail-open).
+            When False, allow with a trust penalty (fail-open). Bounded by the operator's
+            floor; trusted_domains skips classification (trusted_tier), and verified_domains
+            (VERIFIED) degrades open when unavailable regardless of this flag.
           title: Promptguard Fail Closed
           type: boolean
         promptguard_threshold:
-          default: 0.85
-          description: PromptGuard confidence threshold
-          maximum: 1.0
-          minimum: 0.0
+          anyOf:
+          - maximum: 1.0
+            minimum: 0.0
+            type: number
+          - type: 'null'
+          description: PromptGuard max-score threshold; the server-side contiguity rule can
+            block independently. Null or omitted uses the server's validated config.yaml default
+            (shipped as 0.85). The requested or default value is bounded by promptguard_threshold_ceiling.
           title: Promptguard Threshold
-          type: number
         trusted_domains:
-          description: Domains to treat as trusted
+          description: 'Domains to treat as trusted: bare entries match exactly; a leading
+            dot covers the apex and every subdomain; an IP literal matches only itself. A
+            leading-dot trusted_domains entry skips injection classification for every host
+            under that suffix. Never name a multi-tenant or registry-level apex (.co.uk, .github.io,
+            .s3.amazonaws.com). policy_suffix_trusted_skip counts wildcard-caused resolution
+            to either trusted or verified (counter added by US-007).'
           items:
             type: string
           title: Trusted Domains
@@ -790,7 +887,14 @@ components:
           title: Url
           type: string
         verified_domains:
-          description: Domains to treat as verified
+          description: 'Domains to treat as verified: bare entries match exactly; a leading
+            dot covers the apex and every subdomain; an IP literal matches only itself. A
+            leading-dot verified_domains entry makes every host under that suffix degrade
+            open when the classifier is unavailable, including under promptguard_fail_closed_floor
+            and a load-triggered classification wait timeout. Never name a multi-tenant or
+            registry-level apex (.co.uk, .github.io, .s3.amazonaws.com). policy_suffix_trusted_skip
+            counts wildcard-caused resolution to either trusted or verified (counter added
+            by US-007).'
           items:
             type: string
           title: Verified Domains
@@ -835,6 +939,27 @@ components:
           description: Whether the domain changed between source_url and final_url
           title: Domain Changed On Redirect
           type: boolean
+        effective_promptguard_fail_closed:
+          default: true
+          description: 'Policy applied to this request''s promptguard_fail_closed flag, bounded
+            by the operator''s floor. Decides behaviour only when the classifier is unavailable
+            (absent or classification wait timed out), not whether content was scanned; read
+            promptguard_state for that. Neither effective policy field overrides caller-supplied
+            trust tiers: a trusted_domains match skips classification (trusted_tier), and
+            a verified_domains match (VERIFIED) degrades open when unavailable.'
+          title: Effective Promptguard Fail Closed
+          type: boolean
+        effective_promptguard_threshold:
+          default: 0.85
+          description: 'Block threshold applied to this request, bounded by the operator''s
+            ceiling. Reports policy, not whether content was scanned; read promptguard_state
+            for that. Neither effective policy field overrides caller-supplied trust tiers:
+            a trusted_domains match skips classification (trusted_tier), and a verified_domains
+            match (VERIFIED) degrades open when the classifier is unavailable.'
+          maximum: 1.0
+          minimum: 0.0
+          title: Effective Promptguard Threshold
+          type: number
         final_url:
           description: URL after redirects resolved
           minLength: 1
@@ -940,6 +1065,13 @@ components:
       additionalProperties: false
       description: The ``search`` section of ``GET /metrics``.
       properties:
+        classification_wait_timeouts:
+          description: '`/search` requests whose per-request PromptGuard wait budget expired
+            — at most one per request, however many results were left unscanned afterwards.
+            The classifier was loaded and busy, not absent: compare against `/health` `promptguard_loaded`
+            and the `retrieve` counter of the same name.'
+          title: Classification Wait Timeouts
+          type: integer
         errors:
           additionalProperties:
             type: integer
@@ -969,15 +1101,61 @@ components:
             serve the response. Zero on a chain with no paid provider configured.
           title: Paid Calls
           type: integer
+        policy_invalid_domain_entry:
+          description: Dropped invalid denylist entries, one increment per entry, never the
+            offending value. Request entries are normalised once; an over-budget denylist
+            is refused, never truncated or counted.
+          title: Policy Invalid Domain Entry
+          type: integer
+        policy_suffix_trusted_skip:
+          description: Reserved for parity with /retrieve; always zero because /search has
+            no trusted or verified tiers.
+          title: Policy Suffix Trusted Skip
+          type: integer
         policy_unknown_provider:
           description: Per-request `providers` entries ignored — beyond the first eight, or
             matching no configured provider — never the offending name itself. Compare against
             `/health` `search_providers` to tell a bad name from a missing key.
           title: Policy Unknown Provider
           type: integer
+        promptguard_contiguity_detections:
+          description: Results omitted by the contiguity rule, including both-rule verdicts.
+          title: Promptguard Contiguity Detections
+          type: integer
+        promptguard_latency_target_exceeded:
+          description: 'Search requests whose duration strictly exceeds search_promptguard_latency_target_ms,
+            counted once per request. Measures the per-result sanitization loop: structural
+            scan, PromptGuard and any semaphore wait. The loop runs once per served result,
+            so the duration scales with num_results (1-20); compare readings only at the same
+            num_results.'
+          title: Promptguard Latency Target Exceeded
+          type: integer
+        provider_compressed_body:
+          description: 'Non-identity Content-Encoding responses seen from any provider, whatever
+            the outcome: served, refused as body_too_large or unsupported_encoding, malformed,
+            non-2xx, or failed after headers. A zero count means no compression.'
+          title: Provider Compressed Body
+          type: integer
+        provider_timeouts:
+          description: 'Provider calls that ended as timeout: the per-operation httpx timeout
+            or the whole-interaction budget. A rise after upgrading on a previously working
+            slow SearXNG is the budget tightening; raise search_searxng_timeout_seconds.'
+          title: Provider Timeouts
+          type: integer
         requests:
           description: Search requests that reached the handler.
           title: Requests
+          type: integer
+        sanitization_latency_max_ms:
+          description: 'Per-process high-water mark in milliseconds, truncated from the rounded
+            duration of the per-result sanitization loop: structural scan, PromptGuard and
+            any semaphore wait. Updated even below search_promptguard_latency_target_ms, including
+            served-empty searches, but not pre-loop refusals. The loop runs once per served
+            result, so the duration scales with num_results (1-20); compare readings only
+            at the same num_results. Never resets; restarting the container is the only way
+            to clear it. Only meaningful read together with search.promptguard_latency_target_exceeded
+            and search.requests.'
+          title: Sanitization Latency Max Ms
           type: integer
         unscanned_results:
           description: Results returned without an ML injection scan (degraded mode).
@@ -991,6 +1169,14 @@ components:
       - fallback_fired
       - paid_calls
       - policy_unknown_provider
+      - policy_invalid_domain_entry
+      - policy_suffix_trusted_skip
+      - classification_wait_timeouts
+      - provider_compressed_body
+      - provider_timeouts
+      - promptguard_latency_target_exceeded
+      - sanitization_latency_max_ms
+      - promptguard_contiguity_detections
       title: SearchMetricsResponse
       type: object
     SearchRequest:
@@ -1005,23 +1191,21 @@ components:
 
         `/retrieve` fetches and sanitizes one caller-named URL through the full
 
-        pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` is
+        pipeline, cached by `sanitizer_revision`. Only `/search` honours
 
-        honoured on both routes; this route additionally honours `providers`
+        `allow_paid_fallback`, `num_results` and `providers` and scans every result
 
-        and `allow_paid_fallback` (contract 1.2.0) and scans every result at
+        at trust tier `standard`; only `/retrieve` honours `cache_ttl_hours`,
 
-        the fixed 0.85 default at trust tier `standard` (`config.yaml`''s
+        `extract_mode`, `trusted_domains` and `verified_domains`.
 
-        `promptguard_threshold` is not applied here), while `/retrieve`
+        Shared by both routes: `blocked_domains`, `promptguard_threshold` and
 
-        additionally honours `promptguard_threshold`, `trusted_domains`,
+        `promptguard_fail_closed`. On both routes, an omitted or null threshold
 
-        `verified_domains`, `blocked_domains` and `cache_ttl_hours`. This
+        uses the validated `config.yaml` default (shipped as 0.85), then
 
-        documents today''s divergence; changing it belongs to
-
-        `epic-forage-hardening`.'
+        `promptguard_threshold_ceiling` bounds the requested or default value.'
       properties:
         allow_paid_fallback:
           default: true
@@ -1032,6 +1216,19 @@ components:
             1.2.0.'
           title: Allow Paid Fallback
           type: boolean
+        blocked_domains:
+          description: Domains to omit from search results as blocked_url, merged after the
+            operator's seed_blocklist, which cannot be overridden. Multi-label names cover
+            the apex and every dot-boundary subdomain, with or without a leading dot; single-label
+            names and IP literals match exactly. Entries are stripped and UTS-46-canonicalised
+            once; invalid entries are ignored and counted on search.policy_invalid_domain_entry,
+            never echoed. No entry-count cap. A raw list over policy_domain_entries_max_bytes
+            (UTF-8 bytes including newline separators) is refused whole with 422 search_unavailable
+            / policy_domain_list_too_large before normalisation. Honoured from contract 1.3.0.
+          items:
+            type: string
+          title: Blocked Domains
+          type: array
         num_results:
           default: 5
           description: Number of results to return
@@ -1042,17 +1239,34 @@ components:
         promptguard_fail_closed:
           default: true
           description: When True, drop search results if PromptGuard is unavailable (fail-closed).
-            When False, allow with a suspicion marker (fail-open).
+            When False, allow with a suspicion marker (fail-open). Bounded by the operator's
+            floor.
           title: Promptguard Fail Closed
           type: boolean
+        promptguard_threshold:
+          anyOf:
+          - maximum: 1.0
+            minimum: 0.0
+            type: number
+          - type: 'null'
+          description: PromptGuard max-score threshold; the server-side contiguity rule can
+            block independently. Null or omitted uses the server's validated config.yaml default
+            (shipped as 0.85). The requested or default value is bounded by promptguard_threshold_ceiling.
+          title: Promptguard Threshold
         providers:
           description: 'Restrict-only filter of the configured provider chain, in configured
             order: can exclude paid providers only, never add, reorder, or key one — free
-            providers always run. Entries are matched after strip() and lower-casing against
-            the names /health''s `search_providers` publishes. Entries beyond the first eight,
-            and entries matching no configured provider, are ignored and counted on /metrics
-            `search.policy_unknown_provider` rather than rejected. Empty (the default) means
-            the configured chain runs unrestricted. Honoured from contract 1.2.0.'
+            providers always run. A non-empty list keeps only the longest prefix of the configured
+            paid sequence whose every member is named; a named paid provider after an unnamed
+            paid provider is dropped, never promoted. provider_used never names a dropped
+            provider; if you named a paid provider and provider_used is not it, check its
+            position in FORAGE_SEARCH_PROVIDERS. On an all-paid configured chain, a later-paid-only
+            selection leaves no provider and returns 422 search_unavailable with reason policy_excluded_all_providers.
+            Entries are matched after strip() and lower-casing against the names /health''s
+            `search_providers` publishes. Entries beyond the first eight, and entries matching
+            no configured provider, are ignored and counted on /metrics `search.policy_unknown_provider`
+            rather than rejected. Empty (the default) means the configured chain runs unrestricted.
+            Honoured from contract 1.2.0.'
           items:
             type: string
           title: Providers
@@ -1069,6 +1283,28 @@ components:
     SearchResponse:
       description: Response wrapper for search results.
       properties:
+        effective_promptguard_fail_closed:
+          default: true
+          description: 'Policy applied to this request''s promptguard_fail_closed flag, bounded
+            by the operator''s floor. Decides behaviour only when the classifier is unavailable
+            (absent or classification wait timed out), not whether results were scanned; read
+            omissions, suspicious, promptguard_unavailable and unscanned_results for that.
+            This route uses STANDARD tier; the floor does not override caller-supplied trust
+            tiers on /retrieve: trusted_domains skips classification (trusted_tier), and verified_domains
+            (VERIFIED) degrades open when unavailable.'
+          title: Effective Promptguard Fail Closed
+          type: boolean
+        effective_promptguard_threshold:
+          default: 0.85
+          description: Policy applied to this request's PromptGuard threshold after resolving
+            the configured default and operator ceiling, not whether results were scanned;
+            read omissions, suspicious, promptguard_unavailable and unscanned_results for
+            that. This route uses STANDARD tier; /retrieve retains its trusted_tier skip and
+            VERIFIED unavailable exemption.
+          maximum: 1.0
+          minimum: 0.0
+          title: Effective Promptguard Threshold
+          type: number
         fallback_fired:
           default: false
           description: 'True iff the provider chain advanced past the first provider before
@@ -1081,9 +1317,13 @@ components:
         omitted_by_reason:
           additionalProperties:
             type: integer
-          description: 'Withheld-result counts keyed by contract.OMIT_* reason. Four keys
-            are defined in contract 1.1.0 — ''invalid_url'', ''structural_blocked'', ''injection_detected''
-            and ''promptguard_unavailable''. Only non-zero reasons appear. Deliberately a
+          description: 'Withheld-result counts keyed by contract.OMIT_* reason. Five keys
+            are defined — ''invalid_url'', ''structural_blocked'', ''injection_detected''
+            and ''promptguard_unavailable'' in contract 1.1.0, and ''blocked_url'' added in
+            contract 1.3.0. ''invalid_url'' is a URL that is missing, over-length, or could
+            not be parsed or canonicalised at all; ''blocked_url'' is a URL that parsed cleanly
+            but names a literal private, loopback, link-local, documentation-range or blocklisted
+            host — policy, not malformation. Only non-zero reasons appear. Deliberately a
             dict rather than an enum: a consumer sums the values and buckets keys it does
             not know (as /metrics does, under ''other''), so a future omission reason is an
             additive-safe MINOR change instead of a validation failure on an old client.'
@@ -1175,20 +1415,27 @@ components:
             exist — is null. Added in contract 1.2.0.
           title: Date
         domain:
-          description: Lower-cased hostname of `url` (`urlsplit(url).hostname`), with no userinfo
-            or port — a provenance signal, not a trust decision. This is the hostname, not
-            the registrable domain (eTLD+1); derive that yourself if you need it. For an IPv6
-            literal this is the unbracketed form ('2001:db8::1') while `url` carries the bracketed
-            form ('[2001:db8::1]') — the one case where `domain` is not a substring of `url`.
-            Added in contract 1.2.0.
+          description: The canonicalised ASCII host of `url`, with no userinfo or port — a
+            provenance signal, not a trust decision. A name is UTS-46-encoded, so an internationalised
+            host appears here in punycode ('xn--strae-oqa.de') while `url` keeps the provider's
+            spelling ('http://straße.de/'); an address literal is the raw lower-cased literal
+            as it was written. This is the host, not the registrable domain (eTLD+1); derive
+            that yourself if you need it. For an IPv6 literal this is the unbracketed form
+            ('2606:4700::1111') while `url` carries the bracketed form ('[2606:4700::1111]')
+            — the one case where `domain` is not a substring of `url`. Added in contract 1.2.0.
           minLength: 1
           title: Domain
           type: string
         engine:
           anyOf:
-          - type: string
+          - maxLength: 64
+            type: string
           - type: 'null'
-          description: Search engine used
+          description: 'Search engine used, NFC-normalized with C0/C1 controls deleted and
+            whitespace runs collapsed, truncated to 64 characters. A non-string or an empty-after-normalisation
+            value is null. Bound and normalisation added in contract 1.3.0 — provider-controlled
+            provenance metadata, not page content: neither structurally scanned nor part of
+            the PromptGuard input.'
           title: Engine
         snippet:
           description: Result snippet / description
@@ -1196,7 +1443,15 @@ components:
           type: string
         suspicious:
           default: false
-          description: Whether Stage 2 or Stage 3 flagged this result as suspicious
+          description: 'Whether Stage 2 or Stage 3 flagged this result as suspicious — and
+            also set for every result PromptGuard did not scan at all, either because the
+            classifier was absent or because the request''s classification wait expired while
+            it was busy. `promptguard_unavailable` says whether any result in this response
+            was unscanned and `unscanned_results` says how many, so the consumer rule is:
+            on `promptguard_unavailable: true`, treat every `suspicious` result as unscanned
+            rather than as scanned-and-flagged. Since contract 1.3.0 a single response may
+            mix the two — the wait budget is per request, so earlier results can be scanned
+            and later ones not.'
           title: Suspicious
           type: boolean
         title:
@@ -1268,14 +1523,16 @@ components:
       title: UploadProvenance
       type: object
     ValidationErrorDetail:
-      description: 'One entry of FastAPI''s default request-validation error list.
+      description: 'One entry of the service''s redacted request-validation error list.
 
 
-        Deliberately **not** ``extra="forbid"``: pydantic adds ``input`` and
+        The handler emits the declared trio ``loc``, ``msg``, ``type``, capped at
 
-        sometimes ``ctx``/``url`` per error type, and this model documents the
+        ``_MAX_VALIDATION_ERRORS`` entries. For contract 1.3.0 ``input``, ``ctx``
 
-        stable trio rather than pretending to close the set.'
+        and ``url`` are present with the fixed value ``"[redacted]"``; they are
+
+        dropped at the next MINOR (GOVERNANCE ruling (l)).'
       properties:
         loc:
           description: Path to the offending field within the request.
@@ -1315,7 +1572,7 @@ info:
     Forage is not a trust boundary. A `healthy` Forage is not a promise that the content it
     returned is safe. See `docs/configuration.md`, "Deployment posture".'
   title: Forage
-  version: 1.2.0
+  version: 1.3.0
 openapi: 3.1.0
 paths:
   /extract:
@@ -1391,7 +1648,9 @@ paths:
                 - $ref: '#/components/schemas/HTTPValidationError'
                 title: Response 422 Extract Extract Post
           description: Document failure (coded body, carrying sanitizer_revision) or request
-            validation failure (FastAPI's default body).
+            validation failure (redacted loc/msg/type entries, at most _MAX_VALIDATION_ERRORS
+            (100); input/ctx/url carry '[redacted]' in contract 1.3.0 and are dropped at the
+            next MINOR).
         '429':
           content:
             application/json:
@@ -1411,13 +1670,15 @@ paths:
       description: 'Return service health status.
 
 
-        Always responds 200, even when degraded — the compose healthcheck
+        Always responds 200, even when degraded. The compose healthcheck''s
 
-        (bare ``curl -f``) only inspects the HTTP status, so a non-2xx here would
+        ``curl -fsS -o /dev/null`` inspects only the HTTP status and discards the
 
-        flap the container instead of surfacing the real problem. Callers must
+        body: liveness, not health. Plain Compose reports unhealthy probes but
 
-        check ``status``/``degraded_reasons`` in the body.'
+        does not restart on them. Callers must check ``status``/``degraded_reasons``
+
+        in the body; Docker-healthy does not imply that the classifier is loaded.'
       operationId: health_health_get
       responses:
         '200':
@@ -1464,21 +1725,19 @@ paths:
         every result sanitized, never cached.
 
 
-        `promptguard_fail_closed` is honoured on both routes; `/retrieve`
+        Only `/retrieve` honours `cache_ttl_hours`, `extract_mode`, `trusted_domains`
 
-        additionally honours `promptguard_threshold`, `trusted_domains`,
+        and `verified_domains`; only `/search` honours `allow_paid_fallback`,
 
-        `verified_domains`, `blocked_domains` and `cache_ttl_hours`, while
+        `num_results` and `providers` and scans every result at trust tier `standard`.
 
-        `/search` additionally honours `providers` and `allow_paid_fallback`
+        Shared by both routes: `blocked_domains`, `promptguard_threshold` and
 
-        (contract 1.2.0) and scans every result at the fixed 0.85 default at
+        `promptguard_fail_closed`. On both routes, an omitted or null threshold
 
-        trust tier `standard` (`config.yaml`''s `promptguard_threshold` is not
+        uses the validated `config.yaml` default (shipped as 0.85), then
 
-        applied there). This documents today''s divergence; changing it belongs
-
-        to `epic-forage-hardening`.'
+        `promptguard_threshold_ceiling` bounds the requested or default value.'
       operationId: retrieve_retrieve_post
       requestBody:
         content:
@@ -1501,8 +1760,9 @@ paths:
                 - $ref: '#/components/schemas/Pipeline422ErrorResponse'
                 - $ref: '#/components/schemas/HTTPValidationError'
                 title: Response 422 Retrieve Retrieve Post
-          description: Pipeline refusal (coded body) or request validation failure (FastAPI's
-            default body).
+          description: Pipeline refusal (coded body) or request validation failure (redacted
+            loc/msg/type entries, at most _MAX_VALIDATION_ERRORS (100); input/ctx/url carry
+            '[redacted]' in contract 1.3.0 and are dropped at the next MINOR).
       summary: Retrieve
   /search:
     post:
@@ -1520,21 +1780,19 @@ paths:
         pipeline, cached by `sanitizer_revision`.
 
 
-        `promptguard_fail_closed` is honoured on both routes; `/search`
+        Only `/search` honours `allow_paid_fallback`, `num_results` and `providers`
 
-        additionally honours `providers` and `allow_paid_fallback` (contract
+        and scans every result at trust tier `standard`; only `/retrieve` honours
 
-        1.2.0) and scans every result at the fixed 0.85 default at trust tier
+        `cache_ttl_hours`, `extract_mode`, `trusted_domains` and `verified_domains`.
 
-        `standard` (`config.yaml`''s `promptguard_threshold` is not applied
+        Shared by both routes: `blocked_domains`, `promptguard_threshold` and
 
-        here), while `/retrieve` additionally honours `promptguard_threshold`,
+        `promptguard_fail_closed`. On both routes, an omitted or null threshold
 
-        `trusted_domains`, `verified_domains`, `blocked_domains` and
+        uses the validated `config.yaml` default (shipped as 0.85), then
 
-        `cache_ttl_hours`. This documents today''s divergence; changing it
-
-        belongs to `epic-forage-hardening`.'
+        `promptguard_threshold_ceiling` bounds the requested or default value.'
       operationId: search_search_post
       requestBody:
         content:
@@ -1557,6 +1815,7 @@ paths:
                 - $ref: '#/components/schemas/Pipeline422ErrorResponse'
                 - $ref: '#/components/schemas/HTTPValidationError'
                 title: Response 422 Search Search Post
-          description: Pipeline refusal (coded body) or request validation failure (FastAPI's
-            default body).
+          description: Pipeline refusal (coded body) or request validation failure (redacted
+            loc/msg/type entries, at most _MAX_VALIDATION_ERRORS (100); input/ctx/url carry
+            '[redacted]' in contract 1.3.0 and are dropped at the next MINOR).
       summary: Search

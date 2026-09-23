@@ -26,16 +26,20 @@ design:
 | `POST /retrieve` | none |
 | `POST /extract` | none (and gated off by default — see `extract_route_enabled`) |
 
+<!-- boundary-text:start -->
+
 `/search` finds and returns provider-extracted content for a query across sources —
 snippets or chunks, per result `content_kind` — from the configured provider chain, every
 result sanitized, never cached; `/retrieve` fetches and sanitizes one caller-named URL
-through the full pipeline, cached by `sanitizer_revision`. `promptguard_fail_closed` is
-honoured on both routes; `/retrieve` additionally honours `promptguard_threshold`,
-`trusted_domains`, `verified_domains`, `blocked_domains` and `cache_ttl_hours`, while
-`/search` additionally honours `providers` and `allow_paid_fallback` (contract 1.2.0) and
-scans every result at the fixed 0.85 default at trust tier `standard` (`config.yaml`'s
-`promptguard_threshold` is not applied on this route). This documents today's divergence;
-changing it belongs to `epic-forage-hardening`.
+through the full pipeline, cached by `sanitizer_revision`. Only `/retrieve` honours
+`cache_ttl_hours`, `extract_mode`, `trusted_domains` and `verified_domains`; only
+`/search` honours `allow_paid_fallback`, `num_results` and `providers` and scans every
+result at trust tier `standard`. Shared by both routes: `blocked_domains`,
+`promptguard_threshold` and `promptguard_fail_closed`. On both routes an omitted or
+null threshold uses the validated `config.yaml` default (shipped as 0.85), then
+`promptguard_threshold_ceiling` bounds the requested or default value.
+
+<!-- boundary-text:end -->
 
 **And so are the three documentation endpoints FastAPI serves alongside them** — easy to
 forget, because nothing in this repo declares them:
@@ -97,7 +101,8 @@ instance is private-network-only and Forage is its only client.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `VALKEY_URL` | **unset** — the content cache runs in memory | Connection string for the Valkey/Redis content cache. Standard `redis://` URL, including the database index. Setting it selects the Valkey backend; leaving it unset selects the bounded in-memory one. **May carry a password — see credential handling below.** |
+| `VALKEY_URL` | **unset** — the content cache runs in memory | Connection string for the Valkey/Redis content cache. Standard `redis://` URL, including the database index. Setting it selects the Valkey backend; leaving it unset selects the bounded in-memory one. **May carry a password — see credential handling below. Upgrade note:** remove query options `decode_responses`, `encoding`, `encoding_errors` and `protocol` before upgrading: their presence now refuses boot with `CacheConfigurationError` and one `valkey_url_option_forbidden` WARNING naming only the option. redis-py's URL options override keyword arguments, so these options cannot safely coexist with the atomic byte-bounded read. `socket_timeout` and `socket_connect_timeout` remain operator-overridable tuning; the independent 2 s connect deadline is unchanged. |
+| `FORAGE_CACHE_HMAC_KEY` | unset | Optional runtime-only cache signing secret, read once at boot. An unsigned Valkey reports `cache_unauthenticated`; memory mode needs no key and warns if one is set. Invalid or shorter-than-32-byte keys refuse boot. See [credential handling](#credential-handling-for-forage_cache_hmac_key) for validation, the CSPRNG recipe and stop-all rotation. |
 | `SEARXNG_URL` | `http://searxng:8080` | Base URL of the SearXNG instance backing `POST /search`. |
 | `FORAGE_SEARCH_PROVIDERS` | `searxng` | Ordered, comma-separated chain of search backends `POST /search` resolves at container start. Known names are `searxng` and `brave`; **any entry other than `searxng` sends the caller's query to that provider**, so add one only if you mean to. An unknown name refuses the boot (the resolved names are in the startup log); a set-but-blank value logs a WARNING and resolves to the default. Read once at start — restart to apply. |
 | `FORAGE_BRAVE_API_KEY` | unset | API key for Brave's paid LLM-Context search endpoint. **Carries a credential** — supply it the same way as `VALKEY_URL`, with `--env-file` or an explicit `environment:` entry until spec 5 US-004 adds the compose passthrough. With it set, a `brave` entry in `FORAGE_SEARCH_PROVIDERS` sends the caller's query text — whatever the calling agent put in it, truncated to `search_brave_query_max_chars` — to Brave's API under the operator's account and terms; the call needs direct HTTPS egress and ignores proxy variables by design. A key-less `brave` entry is skipped (WARNING `brave_skipped_missing_key`) rather than refusing the boot, and a chain where every entry was skipped this way falls back to SearXNG alone (a second WARNING, `search_chain_defaulted_to_searxng`, marks the substitution): **no key means SearXNG-only, fully supported.** Read once at start — restart to apply. |
@@ -105,8 +110,10 @@ instance is private-network-only and Forage is its only client.
 | `POPPY_RETRIEVAL_LEGACY_CAPABILITY` | unset | Deprecated alias of `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION`, kept so a pre-extraction deployment keeps working. Identical semantics. |
 | `HF_HOME` | `/app/model-cache` (set by the image) | Hugging Face cache directory the PromptGuard weights are fetched into and read from. Override only if you mount the weights elsewhere. Mount a volume here or the weights are re-fetched on every container recreate. |
 | `HF_TOKEN` | unset | Hugging Face access token for the **gated** `meta-llama/Llama-Prompt-Guard-2-22M` repository. Optional — see "Weights acquisition" below. **Carries a credential**; supply it the same way as `VALKEY_URL`. |
-| `FORAGE_MODEL_REVISION` | the committed pin (a 40-character commit sha) | Which upstream revision of the weights to fetch, verify and load. Only a full commit sha is accepted — a branch name is refused with an error and the committed pin is used instead. |
+| `FORAGE_MODEL_ID` | `meta-llama/Llama-Prompt-Guard-2-22M` | Model selected at startup; surrounding whitespace is stripped and unset or blank uses the default. Unknown values refuse boot with `ModelConfigurationError` and WARNING `model_id_not_allowed`, never echoing the value. Pending vendoring: the allowlist ships with the 22M; the 86M id is added by the vendoring gate. Both Compose fragments pass this and `FORAGE_MODEL_REVISION` through as bare names. Restart to apply; `/health.promptguard_model` reports the configured id even while unloaded. |
+| `FORAGE_MODEL_REVISION` | the selected model's committed pin (a 40-character commit sha) | Uses the selected model's committed pin; a malformed value falls back to the pin with `model_revision_invalid`; a well-formed value that is not that pin refuses to verify (`weights_revision_unpinned`). Each pin lives at `weights_manifest.json` → `models[model_id].revision`; acquisition refuses before any cache lookup or fetch. |
 | `FORAGE_WEIGHTS_MIRROR` | `ghcr.io/washingbearlabs/forage-weights` | The OCI **repository** holding the vendored weights, used when Hugging Face cannot supply them. A repository, never a tag: the tag is always `FORAGE_MODEL_REVISION`, so redirecting the mirror cannot also redirect which revision it serves. Validated to a lower-case `<registry>/<owner>/<name>`, optionally prefixed `https://` — anything else (an `http://` scheme, embedded credentials, a tag or digest) is refused with an error and the mirror is treated as unconfigured. |
+| `TMPDIR` | the platform default (`/tmp` in the image) | Parent of the process-private spool directory `forage-spool-<uid>` that `/extract` uploads and `/retrieve`'s fetched PDFs are written to for the PDF worker. **Must be sticky or not writable by other users**; tmpfs recommended. See "The spool directory" below. |
 | `FORAGE_MIRROR_TOKEN` | unset | Registry credential for `FORAGE_WEIGHTS_MIRROR`. Optional — without it the mirror is skipped exactly as a missing `HF_TOKEN` skips Hugging Face. **Carries a credential**; supply it the same way as `VALKEY_URL`. A **read-only** token, scoped as narrowly as your registry allows — see `docs/weights.md` § "The mirror read token". |
 
 `SEARXNG_URL`'s default is a deliberately neutral service name — it assumes a compose
@@ -115,9 +122,62 @@ chain an unreachable SearXNG surfaces per request as a `/search` 422
 (`searxng_unavailable`), never as a `degraded_reasons` value — `/health` never probes
 SearXNG. Provider *status* is instead
 the `search_providers` field on `/health`: the resolved chain's names, a configuration
-echo rather than a liveness probe. A missing PromptGuard (`promptguard_unavailable`) or a
-configured-but-unreachable Valkey (`cache_unavailable`, see the table below) is what
-degrades the service.
+echo rather than a liveness probe. A missing PromptGuard (`promptguard_unavailable`),
+a configured-but-unreachable Valkey (`cache_unavailable`), or Valkey without signing
+(`cache_unauthenticated`, see the table below) degrades the service.
+
+### The spool directory (`TMPDIR`)
+
+The PDF worker is a spawned child that re-opens its input **by path**, so both PDF routes
+write the document to a spool file first: `/extract` its upload (`poppy-extract-*`) and,
+since `hardening-retrieve-parity` US-003, `/retrieve` every fetched PDF
+(`forage-retrieve-*`). Both land in one directory,
+`<TMPDIR>/forage-spool-<uid>`, which Forage creates for you on first use with mode `0700`
+— never wider at any instant, because it is created with that mode rather than chmod-ed
+after. The boot checks it once and each spool checks it again: if the path already
+exists as a symlink, as a non-directory, owned by another user, or with any group or other
+permission bit, the boot is **refused** (`RetrieveConfigurationError` with a closed token
+such as `spool_dir_mode`) and a `/retrieve` fetched PDF is refused 422 `extraction_failed`
+/ `pdf_spool_error`. Forage never repairs such a directory: one already present with the
+wrong owner or mode is evidence that something else put it there. Remove it and restart.
+
+**The parent requirement.** `TMPDIR` itself must be **sticky** (like `/tmp`, mode `1777`)
+**or not writable by other users**. The per-call check re-establishes owner and mode before
+every spool, but inside a world-writable, non-sticky parent another local user could
+delete and re-create the directory between two requests; the sticky bit, or a parent
+nobody else can write, is what stops that.
+
+**Why it matters — confidentiality, not only integrity.** A spool file holds fetched
+third-party content, possibly from an internal or authenticated URL the agent was asked to
+read. It is `0600` inside a `0700` directory and unlinked on every normal exit path —
+success, every worker failure, a failed spool write and a cancelled request. A **tmpfs**
+`TMPDIR` keeps that content off durable storage altogether. On a non-tmpfs `TMPDIR`, a
+process killed with SIGKILL (an OOM kill, `docker kill`) mid-parse leaves its
+`forage-retrieve-*` or `poppy-extract-*` file behind, and those orphans are
+**content-bearing**: they survive until the next manual clear of the spool directory. No
+sweep runs at boot (an open question in the resource-envelope spec).
+
+**Cancellation ownership.** Cancelling a `/retrieve` task cannot stop its Python
+worker thread. The request therefore keeps its admission slot and waits for the existing
+bounded PDF worker to finish (or hit its wall-clock limit and be killed/reaped), then
+unlinks the spool before propagating cancellation. Repeated cancellation does not detach
+that work or admit a replacement early. Shutdown must allow this cleanup time; SIGKILL
+still bypasses it. This does not change `/extract`'s cancellation behavior.
+
+**Disk footprint.** The combined worst case is the two routes' reservations added
+together: `/extract`'s existing `extraction_concurrency × max_input_bytes` +
+`admission_queue_depth × max_input_bytes` (50 MiB + 50 MiB ≈ 100 MiB at the defaults)
+plus `/retrieve`'s `fetch_concurrency × 10 MiB` active + `max_queued_fetch_bytes` queued
+(10 MiB + 30 MiB = 40 MiB) — about **140 MiB** at the defaults. It is an upper bound: a
+queued request has not spooled yet. On a tmpfs `TMPDIR` that figure is **memory**, and it
+sits beside the container's memory ceiling rather than inside the worker's 384 MiB rlimit
+— size the tmpfs and the container limit together.
+
+**Latency.** The worker spawns a fresh interpreter per call
+(`multiprocessing.get_context("spawn")`), which costs on the order of **hundreds of
+milliseconds** on a cold spawn. A fetched PDF now pays that on its first fetch; repeat
+fetches of the same URL are served by the content cache and spawn nothing. Set the
+consumer's `/retrieve` request timeout accordingly.
 
 ### Cache backend selection
 
@@ -127,10 +187,15 @@ start. There are two backends and one rule:
 | `VALKEY_URL` | Backend | `/health` `cache_backend` | `/health` `status` |
 |---|---|---|---|
 | **Fully unset** | Bounded in-memory (see the `cache:` block below) | `memory` | `healthy` — nothing is missing, this is a supported deployment |
-| Set and reachable | Valkey | `valkey` | `healthy` |
-| Set but unreachable | Valkey | `valkey` | `degraded`, `cache_unavailable` |
-| Set to an unparseable URL | Valkey | `valkey` | `degraded`, `cache_unavailable` — never a failed boot |
-| **Set to the empty string** | Valkey | `valkey` | `degraded`, `cache_unavailable` |
+| Reachable, usable signing key | Valkey | `valkey` | `healthy` |
+| Reachable, no signing key | Valkey | `valkey` | `degraded`, `cache_unauthenticated` |
+| Set but unreachable | Valkey | `valkey` | `degraded`, `cache_unavailable`, plus `cache_unauthenticated` without a key |
+| Set to an unparseable URL | Valkey | `valkey` | `degraded`, `cache_unavailable`, plus `cache_unauthenticated` without a key — never a failed boot from the malformed URL |
+| **Set to the empty string** | Valkey | `valkey` | `degraded`, `cache_unavailable`, plus `cache_unauthenticated` without a key |
+
+The table assumes PromptGuard is loaded; otherwise `promptguard_unavailable` also
+appears. A usable signing key is independent of connectivity and does not repair an
+unreachable Valkey.
 
 `cache_backend` reports the choice this container made, not the one its environment would
 make now: it is decided once, at start, and fixed for the life of the process. Changing
@@ -156,8 +221,8 @@ Consequences of memory mode, in one place:
 
 - The cache lives in the one uvicorn worker's process. Nothing is shared with another
   container and nothing survives a restart.
-- It is bounded — `cache.max_entries` and `cache.max_bytes` below — and evicts rather
-  than grows.
+- It is bounded by `cache.max_entries` and `cache.max_bytes` and evicts rather than
+  grows; `cache.max_value_bytes` also bounds each value on either backend.
 - `cache_connected` in `/health` means "the selected backend is operational", so it is
   always `true` in memory mode. It is not a statement that Valkey is present —
   `cache_backend` is the field that answers that one.
@@ -175,6 +240,76 @@ Consequences of memory mode, in one place:
 > epic's live checklist asserts `cache_backend == "valkey"` on the running container
 > rather than trusting the config. If you run more than one Forage replica, or want the
 > cache to survive a restart, set `VALKEY_URL`.
+
+### Credential handling for `FORAGE_CACHE_HMAC_KEY`
+
+`FORAGE_CACHE_HMAC_KEY` is read once during startup. Leading/trailing spaces, tabs
+and LF newlines are stripped; blank means absent. Every remaining character must
+be printable ASCII without whitespace or controls (including CR), and the value
+must be at least **32 UTF-8 bytes**. This is a length floor, **not an entropy
+check**: a same-length passphrase passes the boot check but is not an acceptable
+substitute. The value **must come from a CSPRNG**. Generate 32 random bytes and encode
+them as 44 printable characters; Forage uses those characters as **UTF-8 bytes,
+never base64-decoded**:
+
+```bash
+# From the repository root; first enable only, not a rotation command.
+set +x
+umask 077
+touch compose/.env
+chmod 600 compose/.env
+printf 'FORAGE_CACHE_HMAC_KEY=%s\n' "$(head -c 32 /dev/urandom | base64)" >> compose/.env
+```
+
+The command writes directly into the gitignored runtime file without printing the key.
+Keep exactly one assignment for this variable. `compose/full.yml` passes it to Forage
+only; `compose/minimal.yml` deliberately does not. For a direct container use
+`docker run --env-file compose/.env ...`. Runtime environment only, **never a build
+argument**; no secret store is read at boot. Never paste the value into a command line,
+print the env file, enable shell tracing around the recipe, or log the value.
+Docker socket access can reveal container environment values even with an env file.
+
+Startup refuses a malformed or too-short value with `CacheConfigurationError`,
+even in memory mode. Read **stderr / `docker logs`** for the preceding WARNING
+`cache_hmac_key_invalid` or `cache_hmac_key_too_short`; diagnostics name only the
+variable, never its value. A keyless Valkey logs `cache_hmac_key_missing` once and
+reports `status: degraded` with `cache_unauthenticated` on `/health` (still HTTP 200),
+even when Valkey is reachable. Cached `/retrieve` content cannot be proven to be
+Forage's own and is served without re-sanitization: on shared Valkey this is an
+**open cache-poisoning path** until a key is set. Memory mode is
+process-private and never signs: a configured key logs `cache_hmac_key_unused`
+once, without adding a degraded reason. `/health.capabilities.cache_hmac_key`
+is `1` only for a usable key on Valkey, absent otherwise; it says signing is
+enabled, not that the cache is reachable or the key has adequate entropy.
+
+**Rotate safely: stop every replica, change the key, start.** Generate a fresh CSPRNG
+value with the recipe above, replacing the old assignment while every replica is
+stopped, and distribute the same private env-file value to every replica sharing
+Valkey before starting any. Use this stop-all procedure for first enable on an existing
+fleet too. Do not use a rolling restart: replicas with different keys delete each
+other's entries for as long as both run; a mixed keyed/keyless fleet does the same.
+The key is read once at boot. Rotation invalidates every old signature; reads delete
+those entries and refetch. There is no key id or narrower revocation.
+
+**Read `cache.integrity_rejects` with the logs, not alone.** Upgrading to the 1.3.0
+image changes `sanitizer_revision` and `cache_policy_fingerprint`, hence every cache
+key: old bare JSON is orphaned, not rejected. Expect a cold cache, near-zero `unsigned`,
+and no first-enable burst on that upgrade. Enabling or rotating just the key on an
+existing 1.3.0 fleet does not change cache keys: expect a working-set-bounded burst of
+`unsigned` on enable or `bad_mac` on rotation. A bound reduction can likewise produce
+`oversize` against old larger writes; keep `cache.max_value_bytes` equal across replicas.
+Forage's new over-bound writes increment `storage_oversize_skips`, not integrity rejects.
+
+With a key set and no migration/rotation in flight, sustained `unsigned`, `bad_mac`
+or `wrong_type` rejects are a security event: rotate safely, audit Valkey ACLs and
+network placement, and identify foreign writers. The `cache_integrity_reject` reason
+and `ret:<sha256>` digest are the discriminator; the digest is an opaque,
+credential-free correlation handle, **not URL concealment** (a guessed URL is
+confirmable). A flat counter is not evidence of an unpoisoned cache if the key may
+be compromised: a forged envelope under the real key verifies and counts nothing.
+See the [incident runbook](../kit_tools/docs/MONITORING.md#reading-cacheintegrity_rejects)
+for all six reasons and the four residual risks in
+[`kit_tools/arch/SECURITY.md`](../kit_tools/arch/SECURITY.md#cache-poisoning-and-signed-values).
 
 ### Credential handling for `VALKEY_URL`
 
@@ -269,7 +404,8 @@ classifier is not loaded.
 - **It fires a loud warning on every boot**, naming whichever variable actually armed
   it, so an operator reading the log knows which one to unset.
 - **Only `capabilities.search_sanitization` lies.** `status`, `degraded_reasons`,
-  `promptguard_loaded`, `search_providers`, and `capabilities.brave_api_key` all stay
+  `promptguard_loaded`, `search_providers`, `capabilities.brave_api_key`, and
+  `capabilities.cache_hmac_key` all stay
   honest — a Forage running with the override still reports itself `degraded` with
   `promptguard_unavailable`.
 
@@ -340,7 +476,8 @@ pulled with `oras` (shipped in the image), extracted into a staging directory un
 `HF_HOME`, checked against `weights_manifest.json` **there**, and only then moved into the
 cache the loader reads. Unverified bytes never enter it. The staging directory is removed
 on every path, successful or not, along with `huggingface_hub`'s own `$HF_HOME/xet/`
-chunk cache — on a 1 GB container those are the space the next fetch needs.
+chunk cache — on the reference 1 GB container those are the space the next fetch needs
+(see [Sizing the container](#sizing-the-container)).
 
 #### When neither source answers
 
@@ -359,13 +496,16 @@ could not be used, and anything else means the source was reached and did not de
 Once the volume holds a verified set at the pinned revision, start-up **verifies it and
 loads it, and that is all** — no download, no `oras`, and no request to Hugging Face at
 any point, so a warm start works on a container with no egress whatsoever. Measured on
-the reference envelope (1 vCPU / 1 GB): **19 s cold, 9 s warm** — the warm figure taken
-with `--network none`.
+the reference envelope (1 vCPU / 1 GB), configurable via `FORAGE_CPUS` /
+`FORAGE_MEM_LIMIT`: **19 s cold, 9 s warm** — the warm figure taken with `--network none`.
+These are weights-boot latencies, not classify latencies; see
+[Sizing the container](#sizing-the-container) for the separate classify benchmark.
 
-The three environment variables above are the whole surface, and two of them only matter
-on a cold boot: `FORAGE_MODEL_REVISION` decides which set counts as "the" set (change it
-and the next start is cold again), while `HF_TOKEN` and `FORAGE_MIRROR_TOKEN` are simply
-never read for their purpose when the cache already satisfies the pin.
+`FORAGE_MODEL_REVISION` must match the selected model's committed manifest entry,
+including on a warm boot; a different shaped revision refuses before a snapshot
+lookup. `HF_TOKEN` and `FORAGE_MIRROR_TOKEN` are never read for their purpose when
+the cache already satisfies that pin. A re-vendored manifest and its matching
+revision make the next start cold if that snapshot is not on the volume.
 
 > **If you do not mount a volume at `HF_HOME`, the cache lives in the container's writable
 > layer.** That works and is not an error — it just means every `docker run` is a cold
@@ -411,6 +551,183 @@ standard-tier content as unscanned while it reads `false`.
 
 ---
 
+## Sizing the container
+
+The host envelope is an operator choice, not a fixed box. These are starting
+recommendations for the 22M model, not measured throughput guarantees. The reference
+envelope (1 vCPU / 1 GB) is configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT`;
+the fragments' unchanged defaults are **no CPU limit**, `1024m`, threads `0` and
+classification concurrency `1`, not the tuned first row below.
+
+| Host envelope | FORAGE_CPUS | FORAGE_MEM_LIMIT | promptguard_threads | classification_concurrency | cache.max_bytes | classify latency (`num_results=1`; measurement pending) |
+|---|---|---|---|---|---|---|
+| 1 vCPU / 1 GB (reference envelope) | 1 | 1024m | 1 | 1 | 33554432 | measured in spec 7 (`feature-hardening-promptguard-86m` US-004) |
+| 2 / 2 GB | 2 | 2048m | 2 | 1 | 67108864 | measured in spec 7 (`feature-hardening-promptguard-86m` US-004) |
+| 4 / 4 GB | 4 | 4096m | 2 | 2 | 134217728 | measured in spec 7 (`feature-hardening-promptguard-86m` US-004) |
+
+See [Benchmarking the classifier](weights.md#benchmarking-the-classifier) for the
+host-side service harness: each input uses a separate fresh service for process-cold
+timing; measurements are **single-in-flight latency** and do not characterise
+behaviour at `classification_concurrency > 1`.
+
+The `4 / 4 GB` row's `cache.max_bytes` `134217728` sits **at**
+`_MAX_CACHE_MAX_BYTES` (`cache.py`, 128 MiB): the column does not keep doubling with
+the host, and the ceiling is not configurable. The search sanitization loop runs
+once per served result; figures are comparable only at the same `num_results`
+(1–20). Spec 7 must record the result count alongside any measured figure.
+
+### Memory rule
+
+`FORAGE_MEM_LIMIT ≥ PARENT_RESERVATION_BYTES + CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[selected model] + classification_concurrency × CLASSIFIER_WORKING_SET + extraction_concurrency × extraction.child_address_space_bytes + (cache.max_bytes if the in-memory backend is selected, else cache.max_value_bytes)`.
+
+These five terms count each reservation once. `PARENT_RESERVATION_BYTES` is the
+named 512 MiB reservation in `pipeline/extraction_limits.py`: the parent with the
+22M classifier resident and **no classification in flight**. The model's additional
+resident memory is shared, not multiplied by concurrency:
+
+| Selected model | Resident delta over 22M (`CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL`) | Per-classification working set |
+|---|---|---|
+| `meta-llama/Llama-Prompt-Guard-2-22M` | 0 MiB (baseline) | provisional 64 MiB |
+| 86M (not yet selectable) | measured in spec 7 (`feature-hardening-promptguard-86m` US-004) | measured in spec 7 (`feature-hardening-promptguard-86m` US-004) |
+
+`CLASSIFIER_WORKING_SET` is currently
+`PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES = 64 MiB`. It has **no measurement behind
+it**: the residual `1024 − 512 − 384 − 32 = 96 MiB` leaves 64 MiB after reserving a
+32 MiB margin. Spec 7 US-004 replaces it with the measured RSS delta between
+classification concurrency 1 and 2, and measures idle RSS per model to fill the
+resident-delta column; US-006 routes the selected model into the rule.
+
+The child term uses the **configured** `extraction.child_address_space_bytes`
+(384 MiB shipped, 128–512 MiB allowed), never a fixed 384 MiB or a classifier
+estimate. The cache term is `cache.max_bytes` under the in-memory backend, or
+`cache.max_value_bytes` for **one in-flight read** under Valkey. `full.yml`'s Valkey
+moves the cache's storage memory into its own container and leaves one read's worth
+here. Concurrent reads and decoding copies need extra headroom: cache reads have
+no concurrency bound. Enabling `/extract` also requires budgeting simultaneous
+upload and fetched-PDF workers, as explained under the `retrieve:` block; the
+advisory boot rule is not a measured peak-RSS guarantee.
+
+The worked reference row on `minimal.yml` is
+`512 + 0 + 64 + 384 + 32 = 992 MiB` under `1024m`, a **32 MiB margin**.
+On `full.yml` it is `512 + 0 + 64 + 384 + 4 = 964 MiB`, a 60 MiB margin.
+Thus the old ~128 MiB headroom holds the 32 MiB cache, the 64 MiB provisional
+classifier working set and a 32 MiB margin; it is not all classifier working set.
+Boot warns `envelope_memory_rule_unmet` when the cgroup limit is readable and strictly
+below the rule; above it the failure is an OOM kill `/health` cannot report.
+Here "above it" means allocations above the container limit, not a guarantee that
+meeting the advisory rule prevents OOM. Equality and unreadable/unlimited cgroup
+limits do not warn. If spec 7's measurement exceeds the available budget (a working
+set above 96 MiB at the other reference defaults), **the shipped default does not
+move**: the reference row's recommended `FORAGE_MEM_LIMIT` rises and 1 GiB hosts
+get the WARNING.
+
+**Under-sizing is a security decision.** Under spec 2 US-006, a classification wait
+that outlives `promptguard_wait_seconds` is `unavailable_blocked` for fail-closed
+requests and `unavailable_allowed` (served unscanned and marked) for fail-open ones;
+an envelope that cannot keep the loop under the target is choosing between
+availability and scanning for its fail-open callers. The latency targets are
+observational, not deadlines; the wait budget is what selects that outcome.
+
+### CPU rule and verification
+
+**When `FORAGE_CPUS` is set to a non-zero value**, keep
+`promptguard_threads × classification_concurrency ≤ FORAGE_CPUS`; with `FORAGE_CPUS`
+unset or `0` the container sees every host core and the rule does not apply — size
+`promptguard_threads` to the cores you actually intend Forage to use, since torch
+cannot see a cgroup quota. With no variable set the fragment imposes no CPU limit
+(Compose omits the key). Below 1 vCPU is unsupported.
+
+Use **Docker Compose v2 (Compose Spec; verified v2.40.3)** for service-level `cpus`.
+Set `FORAGE_CPUS` and `FORAGE_MEM_LIMIT` in `compose/.env` or the Compose invocation's
+environment; they are substitution-only variables, **never read by Forage**.
+`FORAGE_MEM_LIMIT` uses Docker byte-unit syntax; invalid syntax fails before boot.
+Confirm `FORAGE_MEM_LIMIT` landed via `/metrics`
+`extraction.cgroup_memory_max_bytes` (`retrieval_app._cgroup_memory_snapshot`;
+`null` where cgroup v2 is unavailable).
+Confirm the CPU quota with
+`docker inspect -f '{{.HostConfig.NanoCpus}}' <container>` — there is no in-service
+CPU-quota signal; auto-detection is deferred.
+
+With `extraction.classification_concurrency` above one, model inference may run
+in parallel. The classifier serializes each shared tokenizer operation (encoding,
+decoding and per-chunk tensor construction, including backend configuration),
+not inference: another request cannot enable truncation during the initial
+full-document encode and silently leave a tail unscanned. This lock is separate
+from `TOKENIZERS_PARALLELISM`, which controls the tokenizer's internal worker
+pool, not concurrent callers. The default remains one classification permit.
+
+### Delivering `config.yaml` through the fragments
+
+The fragments do **not** mount `config.yaml`: `Dockerfile` bakes it at
+`/app/config.yaml`, and Forage's only shipped volume is `forage-model-cache`.
+The table's three config columns (`promptguard_threads`,
+`extraction.classification_concurrency`, `cache.max_bytes`) and the two latency
+keys therefore need a bind mount. Start with the repo's **complete** `config.yaml`
+copied alongside your fragment, or copy the running image's file (from `compose/`):
+
+```bash
+docker compose -f minimal.yml cp forage:/app/config.yaml ./config.yaml
+# Use -f full.yml instead for that deployment.
+```
+
+Add the config line to the existing service's volumes, retaining the model volume:
+
+```yaml
+services:
+  forage:
+    volumes:
+      - forage-model-cache:/app/model-cache
+      - ./config.yaml:/app/config.yaml:ro
+```
+
+Edit keys **in that full copied file**, not by replacing it with this excerpt:
+
+```yaml
+# Excerpt only: these values show the tuned reference row, not a complete file.
+promptguard_threshold: 0.85
+promptguard_contiguity_windows: 0
+promptguard_contiguity_threshold: 0.5
+extract_route_enabled: false
+seed_blocklist: []
+promptguard_fail_closed_floor: false
+promptguard_threshold_ceiling: 1.0
+promptguard_threads: 1
+search_promptguard_latency_target_ms: 1000
+search_first_token_target_ms: 5000
+extraction:
+  classification_concurrency: 1
+  child_address_space_bytes: 402653184
+cache:
+  max_bytes: 33554432
+```
+
+**Replace, never merge.** `_load_config` replaces the baked file; it does not merge
+missing keys back in. A two-line file silently drops `user_agents` and `news_domains`
+to their empty code defaults **and resets every omitted security-relevant key to
+its code default**: `promptguard_threshold`, both contiguity keys, `extract_route_enabled`, `seed_blocklist`,
+`promptguard_fail_closed_floor`, `promptguard_threshold_ceiling`, and the four
+envelope keys — `promptguard_threads` (back to `0`: torch sizes to the host's cores
+under a CPU quota, the 2026-09-12 incident), `extraction.classification_concurrency`
+(back to `1`), `search_promptguard_latency_target_ms` (1000) and
+`search_first_token_target_ms` (5000). Sandbox limits and classification budgets
+also revert. An envelope reset to defaults on a tuned host pushes fail-open requests
+toward `unavailable_allowed` under spec 2 US-006.
+
+An operator who hardened one copy and later mounts a shorter one silently loses
+the hardening, and **nothing but this warning protects the operator's own
+baseline**. The shipped-equals-code-default test over
+`SECURITY_RELEVANT_CONFIG_KEYS` proves only that a short file cannot loosen those
+keys relative to the **shipped** file, not relative to your tuned file. As the
+reference below says, **the shipped file is not always the code default**:
+`user_agents` and `news_domains` deliberately differ.
+
+The host path must already exist as a **file**: a missing short-syntax bind source
+mounts a *directory*, and the container will not boot. Recreate the service after
+editing (`docker compose -f minimal.yml up -d --force-recreate`, or `full.yml`).
+For envelope tuning, pulling the updated fragments changes nothing until a variable
+or key is set; the status-only liveness probe is the separately shipped visible
+addition, not a readiness or classifier check.
+
 ## `config.yaml`
 
 Loaded from the directory containing `retrieval_app.py` — inside the image that is
@@ -427,68 +744,344 @@ If the file is missing, Forage logs a warning and every key below falls back to 
 default. The repository ships a working `config.yaml`; the "shipped" column records what
 that file sets, which is not always the code default.
 
+Unknown keys are ignored, with one boot WARNING per key:
+`config_unknown_key — key=<dotted.name>`. The message names only the key, never
+its value. An unknown top-level block gets one warning, not one per child;
+known blocks are checked one level deep. Correct the spelling and restart.
+This is not value validation: an invalid known safety setting still refuses boot
+through its reader's typed error (`ExtractionConfigurationError`,
+`CacheConfigurationError`, or the corresponding retrieve/Brave error).
+The warn-and-fall-back exceptions are `promptguard_threshold` (fetch routes use
+0.85; `/extract` retains its raw-value guard), `policy_domain_entries_max_bytes`
+(65536), and invalid entries in `seed_blocklist` / `news_domains` (dropped at boot).
+Those emit `config_invalid_value`, not `config_unknown_key`.
+
 ### Top-level keys
 
 | Key | Type | Code default | Shipped | Purpose |
 |-----|------|--------------|---------|---------|
 | `user_agents` | list of strings | `[]` | 5 desktop browser UAs | Pool rotated across outbound fetches. Empty means the fetcher's own built-in default is used. |
-| `news_domains` | list of strings | `[]` | 6 wire/major outlets | Domains whose cached entries expire after **at most 1 hour**, regardless of the caller's requested TTL (news goes stale fast). Matched case-insensitively on the exact host. |
-| `seed_blocklist` | list of strings | `[]` | `[]` | Domains merged into every request's `blocked_domains` before URL validation — a permanent, deployment-wide deny list. |
-| `promptguard_threshold` | float | `0.85` | `0.85` | Injection score at or above which stage 3 marks content as injected. Also feeds the `sanitizer_revision` hash, so changing it changes that value by design. |
+| `promptguard_threads` | integer, 0–16 | `0` | `0` | `0` leaves torch's and the tokenizer's defaults (every visible core) untouched. Set a positive count to the CPU quota the container actually runs under — `FORAGE_CPUS`, a Kubernetes limit, a host-level cgroup or an orchestrator's cap — because torch reads the host's core count, not the quota. At model load, sets torch's intra-op threads and disables the tokenizer pool with `TOKENIZERS_PARALLELISM=false`, overriding the operator's environment value. Read at boot by `promptguard_threads_from_config`; invalid values (including booleans) refuse boot with `PromptGuardThreadsConfigurationError`. Apply failures warn `promptguard_threads_apply_failed` without disabling the model. This is not a sanitizer-revision input, but latency can exhaust `promptguard_wait_seconds` and make a fail-open request serve unscanned content. |
+| `news_domains` | list of strings | `[]` | 6 leading-dot wire/major outlets | Domains whose cached entries expire after **at most 1 hour**. Bare entries match only the apex; a leading dot covers the apex and every subdomain. **Upgrade note:** your bare entries stay exact; add the dot for subdomains. The six shipped entries now have it (`.bbc.co.uk` covers `www.bbc.co.uk`). |
+| `seed_blocklist` | list of strings | `[]` | `[]` | Deployment-wide denylist merged into both routes, `/retrieve` and `/search`, before caller `blocked_domains`; caller entries cannot evict it. **Upgrade note:** existing multi-label entries now cover subdomains; review apex entries before upgrading, because a multi-tenant apex removes every tenant. Single-label entries keep matching exactly as before. This list is policy, not a secret: observable through `/retrieve`'s refusal message and `/search`'s `blocked_url` counts. |
+| `promptguard_threshold` | float | `0.85` | `0.85` | Max-score rule only: a score strictly above this marks content as injected; the server-side contiguity rule can block independently. `/retrieve` and `/search` use this boot-validated default when the request omits the field or sends `null`, then apply `min(value, promptguard_threshold_ceiling)`; an explicit request value is capped too. Numeric strings remain accepted. Invalid values (including YAML booleans, non-finite or out-of-range numbers) warn once with `config_invalid_value` and fall back to `0.85`, never refusing boot for this validation; `promptguard_threshold_resolved` logs the validated default once at INFO. `/extract` instead retains its own per-request `float(raw_value)` conversion and range guard, outside the resolver and ceiling: invalid numeric strings/ranges still give its existing unsupported-format refusal, but YAML `true` becomes `1.0`, disabling max-score blocking on `/extract` only while the fetch routes warn and default to `0.85`. The WARNING explicitly says `/extract reads the raw value through its own guard`; closing that divergence is an open question. The raw configured value still feeds `sanitizer_revision`; the resolved active threshold feeds `cache_policy_fingerprint`. **Upgrade note (1.3.0):** raising this key above `0.85` to quiet `/extract` false positives now **loosens** max-score blocking on `/retrieve` and `/search` unless `promptguard_threshold_ceiling` bounds it; a value below `0.85` **tightens** both. The old per-route config knob is gone (caller overrides remain), and the content cache re-keys. |
+| `promptguard_contiguity_windows` | integer, 0 or 2–8 | `0` | `0` | Opt-in run rule on all three routes: `0` disables it; otherwise at least this many consecutive windows must score at or above the absolute contiguity threshold. `1`, booleans, non-integers and out-of-range values refuse boot with `PromptGuardConfigurationError`. Read once by `promptguard_settings_from_config`; restart to change it. Both contiguity keys enter `sanitizer_revision`, even when disabled. No per-request override. |
+| `promptguard_contiguity_threshold` | float, 0.0–1.0 | `0.5` | `0.5` | Absolute server-side run threshold (`>=`), independent of the caller's max-score threshold. Both rules apply; raising the max threshold cannot override this one. Booleans, strings, non-finite and out-of-range values refuse boot with `PromptGuardConfigurationError`, even when the rule is off. See the opt-in recipe below. |
+| `policy_domain_entries_max_bytes` | integer | `65536` (64 KiB) | `65536` | Raw UTF-8 bytes per caller domain list, including newline separators; range **4096–1048576** (4 KiB–1 MiB). Each `/retrieve` list and `/search`'s denylist has its own budget. An over-budget denylist is refused whole with 422 `content_too_large` on `/retrieve` or `search_unavailable` on `/search`, reason `policy_domain_list_too_large`; allowlists retain the in-budget prefix and count all remaining entries as drops. Invalid configuration logs `config_invalid_value — key=policy_domain_entries_max_bytes` and falls back to 65536, never refuses boot. Read once at startup; restart after changing it. |
 | `extract_route_enabled` | boolean | `false` | `false` | Release gate for `POST /extract`. While `false` the route returns **404** — it is invisible, not merely refused. Requires a restart to take effect. Remember there is no authentication in front of it. |
-| `search_brave_timeout_seconds` | float | `15.0` | `15.0` | Per-request timeout for the Brave LLM-Context HTTP call. This is `/search`'s worst-case latency on a Brave-only chain until spec 3's fallback exists. Out of range (1.0 to 60.0) or wrong-typed refuses boot. A caller's `/search` timeout must exceed the sum of the configured chain's per-provider timeouts — 10 s + this value for `searxng,brave` — so lower this value rather than raising the caller's. |
+| `search_promptguard_latency_target_ms` | integer, 100–60000 | `1000` | `1000` | Observational target for the per-result sanitization loop: structural scan, PromptGuard and any semaphore wait. A strictly greater duration increments `search.promptguard_latency_target_exceeded` once per request; `search.sanitization_latency_max_ms` records the per-process maximum even below target. Scales with `num_results` (1–20); compare only at the same `num_results`. Not a deadline or sanitizer-revision input. Validated unconditionally at boot by `search_targets_from_config`; invalid values, including booleans, raise `SearchTargetsConfigurationError`. Restart after changes. |
+| `search_first_token_target_ms` | integer, 100–120000 | `5000` | `5000` | **log-only today**: tunes the `search_promptguard_complete` log line; no counter compares it. Also appears on the overrun WARNING's `extra` dict; neither payload renders under default container logging. Not a deadline or sanitizer-revision input. The same unconditional boot reader refuses invalid values with `SearchTargetsConfigurationError`; restart after changes. |
+| `search_brave_timeout_seconds` | float | `15.0` | `15.0` | Wall-clock budget for one Brave call — connect, headers and body together; a request on an N-provider chain can take the sum of the configured budgets. Out of range (1.0 to 60.0) or wrong-typed refuses boot. The caller's timeout must exceed the sum of the configured per-provider budgets — 25 s at the shipped defaults on a `searxng,brave` chain — plus parse, sanitization and classification time. Raise this budget for a slow Brave instance; for a slow SearXNG raise `search_searxng_timeout_seconds`. Defaults are unchanged but now bound the whole interaction, not each socket operation separately. |
 | `search_brave_chunk_max_chars` | integer | `2000` | `2000` | Cap on each Brave result's extracted-chunk text before it reaches sanitization. Out of range (200 to 2000) or wrong-typed refuses boot. |
+| `search_searxng_timeout_seconds` | float | `10.0` | `10.0` | Wall-clock budget for one SearXNG call — connect, headers and body together; a request on an N-provider chain can take the sum of the configured budgets. Validated unconditionally at boot; range 1.0 to 60.0, wrong-typed or out-of-range values raise `SearxngConfigurationError`. Raise `search_searxng_timeout_seconds` for a slow instance: four-engine fan-out waits for the slowest, and its latency distribution has not been measured. The unchanged default now bounds the whole interaction rather than each socket operation, so a previously working slow instance can time out and buy a paid call on `searxng,brave`; read `search.provider_timeouts`. |
+| `search_searxng_query_max_chars` | integer | `400` | `400` | Cap on the outbound SearXNG query only; results reflect the first N characters; the echoed `query` is the caller's. Validated unconditionally at boot, even without SearXNG in the chain; range **50–400**, wrong-typed or out-of-range values raise `SearxngConfigurationError`. Restart after changing it. Truncation is **deliberately unobservable**: no response flag, counter or log (INFO is not rendered by default; a WARNING per request would be noise). To diagnose results that look truncated, compare the caller's query length with this cap. At 400 characters even four-byte UTF-8 needs at most 4,800 percent-encoded bytes, below the common 8 KB request-line limit; this is a guardrail, not routine truncation. |
 | `search_brave_query_max_chars` | integer | `400` | `400` | Cap on the outbound query text sent to Brave. Out of range (50 to 400) or wrong-typed refuses boot. |
-| `cache` | mapping | `{}` (all defaults) | both keys at their defaults | Bounds for the bounded in-memory content-cache storage — see below. |
-| `extraction` | mapping | `{}` (all defaults) | all keys set to their maxima | Resource limits for untrusted document extraction — see below. |
+| `cache` | mapping | `{}` (all defaults) | all three keys at their defaults | Bounds for individual values on both backends and total in-memory content-cache storage — see below. |
+| `extraction` | mapping | `{}` (all defaults) | all keys at their defaults | Resource limits for untrusted document extraction — see below. |
+| `retrieve` | mapping | `{}` (all defaults) | all four keys at their defaults | Fetch-route admission and classification limits — see the `retrieve:` block below. |
+| `promptguard_fail_closed_floor` | boolean | `false` | `false` | Operator fail-closed floor on both fetch routes; see "Top-level PromptGuard policy keys" below. |
+| `promptguard_threshold_ceiling` | float | `1.0` | `1.0` | Operator threshold ceiling on both fetch routes; see "Top-level PromptGuard policy keys" below. |
+| `promptguard_wait_seconds` | float | `30.0` | `30.0` | Classification-permit wait budget on both fetch routes; see "Top-level PromptGuard policy keys" below. |
+
+Domain matching is directional: denylist `evil.com` blocks `evil.com` and
+`www.evil.com`, never `notevil.com` or `evil.com.attacker.net`. Allowlist
+`example.com` matches only itself; `.example.com` includes every subdomain.
+IP literals match only themselves; single-label denylists are exact-only and
+single-label allowlists are rejected. All entries use the same UTS-46 host
+canonicaliser (case and one trailing dot normalised). Config lists are unbudgeted,
+normalised at boot, and invalid entries produce one `config_invalid_value` WARNING
+per list naming the dropped entries; misplaced credential/URL-shaped entries are redacted.
+Non-string YAML members (including `null`, booleans, numbers and nested collections)
+are dropped with the fixed `[non-string]` token, never their values; valid members
+remain canonicalised in order. A non-list container (including a scalar string,
+`null` or a mapping) publishes `[]` and warns once with
+`dropped=1 entries=[invalid-container]`, without iterating or logging its contents.
+Missing lists and empty lists are quiet. These fallbacks affect only `seed_blocklist`
+and `news_domains`; malformed whole documents and other subsystem blocks retain
+their existing startup refusal behavior. The loaded raw configuration is not mutated.
+
+Request lists are normalised once in the `/retrieve` and `/search` handlers before pipeline entry.
+`blocked_domains` is measured before **any** caller entry is canonicalised, then
+normalised in full if in budget. `trusted_domains` and `verified_domains` consume
+raw bytes in order before normalising each retained entry; the first entry that
+exceeds the budget and every following entry are dropped. There is no entry-count
+cap. The operator's canonical `seed_blocklist` is merged first and has no caller
+budget, so caller entries can never evict it. Invalid entries and over-budget
+allowlist drops increment `retrieve.policy_invalid_domain_entry` once per entry,
+without logging or storing the offending value. `/search` counts invalid denylist
+entries on `search.policy_invalid_domain_entry`; an oversized denylist on either
+route is refused before normalisation, not partially enforced or counted as drops.
+
+**This is an encode-work bound, not request-body admission.** FastAPI has already
+parsed the entire JSON body into `list[str]` before the handler runs; neither
+`/retrieve` nor `/search` has a request-body size limit here. Retain private-network
+placement and enforce body-size limits at the caller-facing proxy as appropriate.
+
+| Per-request allowlist | Consequence and caution |
+|---|---|
+| `trusted_domains` | A leading-dot entry skips injection classification for every host under the suffix. Never name a multi-tenant or registry-level apex (`.co.uk`, `.github.io`, `.s3.amazonaws.com`). `retrieve.policy_suffix_trusted_skip` counts wildcard-caused resolutions on uncached retrievals. |
+| `verified_domains` | A leading-dot entry makes every host under the suffix degrade open when the classifier is unavailable, including under `promptguard_fail_closed_floor` and a load-triggered classification wait timeout. Never name a multi-tenant or registry-level apex (`.co.uk`, `.github.io`, `.s3.amazonaws.com`). The same `retrieve.policy_suffix_trusted_skip` counts these resolutions, even when classification is available. |
+
+### Opting in to contiguity gating
+
+The rule ships **off** pending false-positive and evasion measurements in
+`epic-forage-injection-corpus`. To opt in, set these keys in the mounted
+`config.yaml` and restart:
+
+```yaml
+promptguard_contiguity_windows: 2
+promptguard_contiguity_threshold: 0.5
+```
+
+Stage 3 blocks if **either** `max_score > promptguard_threshold` or any run of
+at least two scores is `>= 0.5`. The absolute server-side run threshold does
+not track per-request max thresholds. A caller lowering the max threshold
+below the run threshold gets the stricter of the two rules; raising it to
+`1.0` still cannot bypass contiguity. This independent policy and its unmeasured
+false-positive rate are why it ships off. `1` window is refused because it
+would merely add a second, lower max rule rather than test adjacency.
+
+The rule applies to `/retrieve`, both upload pipeline entry points behind
+`/extract`, and `/search`. Search coverage is **content-dependent**: the same
+maximum-length title/URL/snippet input can occupy one tokenizer window or
+several. One window cannot trigger a rule requiring two. Hermetic fixture
+tokenizer tests pin both shapes; production-tokenizer counts and performance
+are measured only at the US-004 owner gate, not inferred from character length.
+Trusted-tier skips and unavailable-model policy remain unchanged.
+
+Two residuals need measurement before changing the default: injection fragments
+separated by a benign roughly 448-token window can still evade both rules;
+conversely, sustained mid-band text in an attacker-controlled comment/review can
+aim to block the whole page or omit its result. Adjacent windows share 64 tokens,
+so their scores are correlated, not independent evidence.
+
+`/metrics` is the aggregate signal: `promptguard_contiguity_detections` in
+`retrieve`, `search` and `extraction` counts both contiguity-only and both-rule
+verdicts (search counts results, not requests). The per-event signal is WARNING
+`promptguard_contiguity_verdict — run=<n> windows=<m>`: longest qualifying run
+and total windows only, never scores or text. Quarantine still exposes only
+the existing diagnostic label in `injection_spans`; no new omission reason
+or block-reason key is introduced.
 
 ### The `cache:` block
 
-Bounds for `InMemoryStorage`, the bounded in-process content-cache storage that sits
-under the cache's policy layer — the backend an unset `VALKEY_URL` selects (see "Cache
-backend selection" above). They are validated at startup regardless of which storage
-is active, so a typo fails the boot loudly rather than silently widening a memory bound.
+Bounds for individual cache values on both backends and for `InMemoryStorage`, the
+bounded in-process storage selected by an unset `VALKEY_URL` (see "Cache backend
+selection" above). They are validated at startup regardless of which storage
+is active, so an invalid known value refuses boot rather than silently widening a
+memory bound. A misspelled key instead warns and is ignored.
 
-The budget is the container's real headroom: `mem_limit: 1024m` already reserves 512 MiB
+The reference budget uses `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` (default `1024m`): 512 MiB
 for the parent FastAPI + torch + PromptGuard process and 384 MiB for the spawned
-extraction worker, leaving roughly 128 MiB. The 32 MiB default spends a quarter of it.
+extraction worker leave roughly 128 MiB. The 32 MiB cache spends a quarter of it;
+64 MiB is the provisional classifier working set and 32 MiB is margin. See
+[Sizing the container](#sizing-the-container) before changing any operand.
 
 | Key | Default | Allowed range | Purpose |
 |-----|---------|---------------|---------|
 | `max_entries` | `256` | 1 – 4096 | Maximum cached responses held in memory. Beyond it, entries are evicted — already-expired ones first, then least-recently-used. |
 | `max_bytes` | `33554432` (32 MiB) | 1 MiB – 128 MiB | Maximum total serialised bytes held in memory, accounted exactly (values are stored as the same JSON bytes Valkey would hold). A single response larger than this bound is never cached: it is served uncached and counted in `/metrics` as `cache.storage_oversize_skips`. |
+| `max_value_bytes` | `4194304` (4 MiB) | 512 KiB – 8 MiB | Per-value UTF-8 byte bound on both backends, including a signed envelope's **68-byte** prefix. The default leaves headroom above `MAX_EXTRACTED_OUTPUT_BYTES` (2 MiB) for JSON escaping and metadata; unusually inflated serialization can still be served uncached. Over-bound writes delete the superseded entry and increment `cache.storage_oversize_skips`, never `integrity_rejects`. Valkey reads use one atomic `GETRANGE key 0 max_value_bytes` (at most bound + 1 bytes). If `cache.max_value_bytes > cache.max_bytes`, boot **warns**, not refuses: `cache_bounds_inverted` says memory storage applies `cache.max_bytes`. Peak cache-read allocation scales as `max_value_bytes × in-flight /retrieve requests` (plus decoding/verification copies); cache reads sit under **no concurrency bound**. See [Sizing the container](#sizing-the-container), which includes `+ cache.max_value_bytes` for one in-flight Valkey read. **Every replica sharing Valkey must use the same bound**, just as signed writers must use the same key: the cache block is not a cache-key input. Lowering the bound causes a bounded burst of `oversize` rejects against Forage's own larger past writes, a tuning consequence rather than proof of tampering. |
 
-The cache serves `POST /retrieve` only — `/search` has never been cached — and it is
-per-process by design (one uvicorn worker, nothing shared, nothing persisted across a
-restart).
+The cache serves `POST /retrieve` only — `/search` has never been cached. Memory
+storage is per-process (one uvicorn worker, nothing persisted across a restart);
+Valkey can be shared.
 
 Two layers of counter appear in `/metrics` and are not duplicates of each other:
 `retrieve.cache_hits` / `cache_misses` count **request** outcomes, while
 `cache.storage_hits` / `storage_misses` / `storage_evictions` /
-`storage_oversize_skips` count **storage operations** underneath the policy layer. Only
-the in-memory storage can move the last two.
+`storage_oversize_skips` count cache/storage operations. `storage_evictions` stays
+memory-only; `storage_oversize_skips` counts Forage's own write-side refusals at
+`cache.max_value_bytes` on either backend and at `cache.max_bytes` in memory.
+`cache.integrity_rejects` counts rejected reads, with six log reasons: `unsigned`,
+`bad_mac`, `malformed_envelope`, `oversize`, `unexpected_envelope`, `wrong_type`.
+Empty reads are ordinary misses, never tampering signals. Valkey's oversize and
+wrong-type rejects move neither storage hits nor misses; later envelope rejects
+leave the storage's existing count alone.
 
 ### The `extraction:` block
 
 Every value is validated at startup. A non-integer, a boolean, or an out-of-range value
 raises `ExtractionConfigurationError` and the service refuses to start — these are
-safety limits, so a typo fails loudly rather than silently widening a bound.
+safety limits. A misspelled key instead warns and is ignored.
 
-Note the pattern: for most keys the shipped value **is** the maximum, so these knobs
-exist to make the service *more* conservative, not less.
+Shipped values equal the maxima except three keys that may be raised:
+`classification_concurrency` (1–8, under the memory rule), `child_address_space_bytes`
+(128–512 MiB — a sandbox limit: raising it widens the untrusted-PDF child's `RLIMIT_AS`)
+and `admission_queue_depth` (0–4).
 
 | Key | Default | Allowed range | Purpose |
 |-----|---------|---------------|---------|
 | `max_input_bytes` | `52428800` (50 MiB) | 1 MiB – 50 MiB | Hard ceiling on an uploaded document. Enforced by streaming byte count, not by `Content-Length`. |
 | `max_pages` | `500` | 1 – 500 | Maximum PDF pages parsed before the extraction is abandoned. |
 | `child_cpu_seconds` | `20` | 1 – 20 | CPU-time rlimit on the spawned pypdf worker process. |
-| `child_address_space_bytes` | `402653184` (384 MiB) | 128 MiB – 512 MiB | Address-space rlimit on that worker. The 1 GiB container reserves ≥512 MiB for the parent FastAPI + torch + PromptGuard process, so parser working memory cannot eat the parent's reservation. |
+| `child_address_space_bytes` | `402653184` (384 MiB) | 128 MiB – 512 MiB | Address-space rlimit on that worker, raisable above shipped. The reference parent reservation is 512 MiB; see [Sizing the container](#sizing-the-container) for the full rule before widening this sandbox. |
 | `wall_clock_seconds` | `90` | 1 – 90 | Total wall-clock budget for one extraction, worker included. |
-| `max_promptguard_chunks` | `64` | 1 – 64 | PromptGuard chunk budget for one document. Derives the classifiable character ceiling: `(512 − 64) × chunks × 4` = 114,688 characters at the default. |
+| `max_promptguard_chunks` | `64` | 1 – 64 | PromptGuard chunk budget for one document. Derives the classifiable character ceiling: `(512 − 64) × chunks × 4` = 114,688 characters at the default. Fetched PDFs run under `extraction.max_promptguard_chunks`; fetched HTML under `retrieve.max_promptguard_chunks` — a fetched PDF over this ceiling is refused 422 `content_too_large` / `promptguard_budget` (`hardening-retrieve-parity` US-003). |
 | `extraction_concurrency` | `1` | 1 – 1 | Concurrent extractions. Pinned at 1 — the memory reservation above assumes exactly one worker. |
-| `classification_concurrency` | `1` | 1 – 1 | Concurrent PromptGuard classifications. Pinned at 1 for the same reason. |
+| `classification_concurrency` | `1` | 1 – 8 | Bounds the shared classification semaphore on `/extract`, `/retrieve` and `/search` (the fetch routes since `hardening-retrieve-parity` US-006). Memory rule: container limit ≥ `PARENT_RESERVATION_BYTES + CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[model_id] + classification_concurrency × PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES + extraction_concurrency × child_address_space_bytes + cache_term_bytes`; see [Sizing the container](#sizing-the-container). Exceeding available memory can cause an OOM kill, which `/health` cannot report; boot warns `envelope_memory_rule_unmet` when the cgroup limit is readable and below the rule. This is not a sanitizer-revision input, but latency can exhaust `promptguard_wait_seconds` and make a fail-open request serve unscanned content. |
 | `admission_queue_depth` | `1` | 0 – 4 | Requests allowed to wait for the extraction slot. `0` means reject immediately with `busy` (HTTP 429) whenever the slot is taken. |
 | `max_queued_upload_bytes` | `52428800` (50 MiB) | 0 – 50 MiB | Total bytes of queued uploads held in flight. `0` disables queuing of upload bodies. |
+
+#### Advisory memory rule
+
+The boot check reads cgroup v2 `memory.max`, not an environment-variable string.
+`FORAGE_MEM_LIMIT` denotes the intended container ceiling in both fragments.
+See [Sizing the container](#sizing-the-container) for the rule and worked rows.
+Missing/unlimited cgroup values are supported and produce no warning.
+A limit **strictly below** the sum warns once and still boots; equality is silent.
+This is an advisory reservation, not a measured peak-RSS guarantee.
+The WARNING includes `memory_max`, `required`,
+`classification_concurrency`, `extraction_concurrency`, `child_address_space_bytes`,
+`model_id`, `parent_bytes`, `cache_backend` and `cache_term_bytes`.
+
+<a id="retrieve--fetch-route-limits"></a>
+
+### The `retrieve:` block
+
+The `/retrieve` counterpart to `extraction:`, read by
+`pipeline/retrieve_limits.py` at boot: an out-of-range value refuses startup rather than
+surfacing as a strange refusal on the first request.
+
+Unlike `extraction:`, which is bounded *at* its defaults on every key but three because its
+memory reservation assumes exactly one worker, three of these four keys are **raisable**.
+They bound queued and classified text, which the 10 MB fetch cap already bounds per body.
+`fetch_concurrency` is the exception and is pinned at `1` for the same worker reason
+`extraction.extraction_concurrency` is: a fetched PDF spawns the same bounded child under
+the same `child_address_space_bytes` rlimit, so N fetch slots would put N × 384 MiB of
+worker address space in a 1 GiB container. The constraint is worker address space, not
+fetched-body size — which means an HTML-only deployment, whose fetch path spawns no worker
+at all, is throttled to single flight by a bound sized for PDFs. That is accepted; sizing
+the envelope is covered in [Sizing the container](#sizing-the-container), without
+widening these worker counts.
+
+**Admission.** Since `hardening-retrieve-parity` US-002 the fetch and stage 1 run under a
+second admission controller — the same class `/extract` uses, with its own counters. A
+request takes a slot after the cache read (a cache hit never waits) and before the fetch, and
+gives it back once stage 1 is done. When no slot is free it queues, holding **nothing** — it
+has not fetched — behind a queue bounded in depth (`admission_queue_depth`) and in reserved
+bytes (`max_queued_fetch_bytes`, one 10 MB fetch-cap reservation per queued request). Beyond
+either bound it is refused at once: **422 `busy`, reason `admission_queue_full`**, counted
+under `retrieve.busy_rejections` (every request that found no free slot, queued or refused,
+counts under `retrieve.semaphore_saturation`). There is no timer on the queue wait; it is
+bounded by construction. At the shipped defaults that means single flight, at most four
+queued by depth and three by bytes — the byte bound binds first — so the fifth concurrent
+`/retrieve` (one fetching, three queued) is refused.
+
+**Worst-case queue latency** is a derived number, not a knob:
+`admission_queue_depth / fetch_concurrency × max(fetch timeout 30 s, PDF worker wall clock)`
+— at the defaults, 4 × 30 s = **120 s** before a queued request reaches the fetch, plus the
+stage-1 time of the requests ahead of it.
+
+**Memory, honestly.** At most `fetch_concurrency` bodies are alive during fetch and stage 1;
+a queued request holds nothing; the queue is bounded in depth and reserved bytes; a request
+waiting on the classification permit holds only its extracted text, because the body and its
+decoded copy are released with the slot. The stage-1 peak is
+`fetch_concurrency × (10 MB body + its decoded str + the ExtractionResult's raw_text and
+main_content)` — the body and its decoded copy are alive together while HTML extraction
+runs, so an in-flight page costs three to five times the 10 MB body term, and the 10 MB cap
+bounds the body term only. What is **not** bounded is the population of classification
+waiters: `uvicorn` runs with no `--limit-concurrency` and both middlewares gate on `/extract`
+alone, so admission bounds the *rate* through stage 1, not the number of requests past it.
+Each such waiter costs at most `max_extracted_characters(256)` ≈ 459 KB of text for at most
+`promptguard_wait_seconds`, so the waiter term is
+`arrival rate × promptguard_wait_seconds × ≤ 0.5 MB`. `--limit-concurrency` is the envelope
+knob that bounds it, and the resource-envelope spec owns it.
+
+**Disk.** The HTML path writes nothing to disk: the fetched body lives in memory, inside the
+slot, and nowhere else. The PDF path (`hardening-retrieve-parity` US-003) spools the fetched
+body to a `0600` `forage-retrieve-*` file in the process-private spool directory and parses
+it in `/extract`'s spawned, rlimited worker, under `extraction.max_promptguard_chunks`
+rather than this block's budget; the file is unlinked as soon as the worker returns, on
+every outcome. See "The spool directory (`TMPDIR`)" above for the requirement, the footprint and
+the spawn latency. Every fetched-PDF failure is a 422 — `extraction_failed` with reason
+`pdf_encrypted`, `pdf_no_text`, `pdf_extraction_error` or `pdf_spool_error`, or
+`content_too_large` / `promptguard_budget` over the ceiling — never a 500. Stage 1 runs on the default thread pool (`asyncio.to_thread`, shared
+with stage 3's inference), which is uncancellable — the slot is what keeps hostile pages from
+starving the classifier of threads. No wall clock is put on HTML extraction; the 30 s fetch
+timeout and the 10 MB cap bound its input.
+
+There is **no environment-variable override for any key below**. `config.yaml` is copied
+into the image, so changing one in a deployed container means bind-mounting a replacement
+file — the procedure the resource-envelope spec documents.
+
+| Key | Default | Allowed range | Purpose |
+|-----|---------|---------------|---------|
+| `max_promptguard_chunks` | `0` | 0 – 1024 | PromptGuard chunk budget for one **fetched page**. `0` means **no pre-check** and no `max_chunks` handed to the classifier — today's behaviour — and boot logs one WARNING `retrieve_budget_unset coming_default=256`. Non-zero derives the classifiable character ceiling `(512 − 64) × chunks × 4` (458,752 at the coming default of 256); a page over it is refused 422 `content_too_large` with reason `promptguard_budget`. Ships at `0` for one minor release; the next MINOR flips the default to `256`, and `0` stays a legal opt-out (`contract/GOVERNANCE.md` ruling (g)). |
+| `fetch_concurrency` | `1` | 1 – 1 | Admission slots: concurrent `/retrieve` fetch-and-stage-1 work. Fixed at one for the PDF worker budget above; widening remains deferred. |
+| `admission_queue_depth` | `4` | 0 – 16 | Requests allowed to wait for the fetch slot, holding no body while they wait. Beyond it a request is refused 422 `busy` / `admission_queue_full` (`retrieve.busy_rejections`). `0` means refuse immediately whenever the slot is taken. Worst-case queue latency is `admission_queue_depth / fetch_concurrency × 30 s` — 120 s at the defaults. |
+| `max_queued_fetch_bytes` | `31457280` (30 MiB) | 10 MiB – 160 MiB | Bytes reserved for queued requests, one 10 MB fetch-cap reservation each — three at the default. A request whose reservation would exceed it is refused 422 `busy` / `admission_queue_full` (`retrieve.busy_rejections`). Deliberately **not** `admission_queue_depth × 10 MB`, so at the shipped defaults the byte bound binds before the depth bound and both are exercisable. |
+
+### Top-level PromptGuard policy keys
+
+Read at boot by `retrieve_settings_from_config`, which owns the fetch-route policy.
+A non-boolean floor or a non-numeric, non-finite or out-of-range ceiling refuses boot
+with a closed-vocabulary `RetrieveConfigurationError`; values are never echoed.
+Numeric bounds are checked before conversion to float, so even arbitrarily large
+YAML integers receive the same range refusal; integer endpoints `0` and `1` are valid.
+These are **config.yaml-only**, with no environment override. For a deployed container,
+bind-mount a complete replacement over `/app/config.yaml` read-only and restart; start
+from the shipped file, because replacement **never merges** and omitted security keys
+reset to code defaults. The full Compose delivery procedure is tracked by
+[resource-envelope spec 6 US-003](../kit_tools/specs/feature-hardening-resource-envelope.md#us-003-operator-documentation--the-sizing-section-and-the-by-value-sweeps);
+it has not landed yet.
+
+| Key | Default | Allowed range | Route | Purpose |
+|-----|---------|---------------|-------|---------|
+| `promptguard_fail_closed_floor` | `false` | `true` / `false` | `/retrieve` and `/search` | Effective flag is `request.promptguard_fail_closed or floor`: `true` blocks STANDARD/UNTRUSTED content when the classifier is absent or the classification wait expires, even if the caller requests fail-open. `false` imposes no floor. Every 200 reports `effective_promptguard_fail_closed`; trust-tier exemptions remain. Set through the deployed-container bind mount described above. |
+| `promptguard_threshold_ceiling` | `1.0` | 0.0 – 1.0 | `/retrieve` and `/search` | Effective threshold is `min(requested value or validated config default, ceiling)` where only null/omitted selects the default (zero remains zero). The default is resolved **before** capping. A lower ceiling blocks at a lower classifier score; `1.0` imposes no ceiling. Every 200 reports `effective_promptguard_threshold`, including retrieve cache hits. Set through the deployed-container bind mount described above. |
+| `promptguard_wait_seconds` | `30.0` | 0.05 – 300.0 | **both fetch routes** (`/retrieve` and `/search`) | How long a request waits for a classification slot before giving up. A float, so sub-second values are expressible. On `/search` it is one budget for the whole request, not per result. `/extract` takes the same permit but waits without a deadline. |
+
+The threshold ceiling applies to both fetch routes, including their configured default.
+`/extract` stays permanently fail-closed with its own raw-value threshold guard;
+neither bound reaches it and it carries neither effective field. These fields report
+**policy, not proof of scanning**. Neither bound overrides caller-supplied trust tiers:
+`trusted_domains` skips classification (`trusted_tier`), and `verified_domains` (VERIFIED)
+degrades open when the classifier is unavailable, even under a true floor. Read
+`promptguard_state` on `/retrieve` and omissions / `suspicious` /
+`promptguard_unavailable` / `unscanned_results` on `/search`. Refusal 422 bodies carry
+no policy fields. The handler resolves policy before caching and stamps after the
+pipeline, so fingerprint inputs and reported values agree on hits and misses.
+
+#### Sizing `promptguard_wait_seconds` against `retrieve.max_promptguard_chunks`
+
+`extraction.classification_concurrency` defaults to one permit (configurable 1–8), and since
+`hardening-retrieve-parity` US-006 all three classifying routes take it: `/retrieve` and
+`/search` around their own stage 3, `/extract` around its own. So the wait one request
+faces is the time the *other* routes hold the permit, and the rule is a single sentence:
+
+> `promptguard_wait_seconds` must exceed the worst-case single permit hold, which is
+> `retrieve.max_promptguard_chunks` × the per-window classify latency on the operator's
+> CPU.
+
+A wait timeout under ordinary mixed traffic therefore means the permit holder exceeded the
+wait — not that the model is missing. The fix is to raise `promptguard_wait_seconds` or to
+lower `retrieve.max_promptguard_chunks`, and lowering the budget is the better of the two:
+it bounds the hold rather than waiting longer for an unbounded one.
+
+Until the resource-envelope spec measures the per-window number on the reference envelope,
+a **provisional** pairing: at an assumed 100 ms per window on a 2-vCPU container, the
+coming default of 256 chunks is a ~25.6 s hold, which the shipped `30.0` clears with
+little margin. An operator who cannot meet that on their hardware lowers
+`retrieve.max_promptguard_chunks` — to 128 for a ~12.8 s hold, to 64 for ~6.4 s — rather
+than raising the wait, because a longer wait parks more requests behind the same permit
+without making any of them finish sooner.
+
+One honest qualification: **while `retrieve.max_promptguard_chunks` is `0` the rule does
+not hold**, because there is no chunk budget to multiply — the worst-case hold is bounded
+only by the 10 MB fetch cap, which is far more windows than any wait in range covers. An
+operator who wants the sizing rule to apply sets the key explicitly; the
+`retrieve_budget_unset` boot WARNING says so. The shipped default pair (`0` and `30.0`) is
+recorded under Known risks for exactly that reason: on a CPU-bound classifier it makes
+wait timeouts likely under even modest concurrency.
+
+**Known risk — the shipped default pair.** `retrieve.max_promptguard_chunks: 0` with
+`promptguard_wait_seconds: 30.0` leaves the permit hold unbounded by anything but the fetch
+cap, so a single large fetched page can time out every other request's wait. The signal is
+`retrieve.classification_wait_timeouts` and `search.classification_wait_timeouts` on
+`/metrics` rising while `/health` still reports `promptguard_loaded: true` — contention,
+not a missing model. Watch both counters after enabling `/retrieve` at volume, and set
+`retrieve.max_promptguard_chunks` to bound the hold.
 
 ---
 
@@ -536,12 +1129,14 @@ curl -s localhost:8020/health | jq
 | Field | What it tells you |
 |-------|-------------------|
 | `status` | `healthy` or `degraded`. |
-| `degraded_reasons` | `promptguard_unavailable` (no weights — the ML scan is not running), `cache_unavailable` (a *configured* Valkey is unreachable or its URL is unusable — see "Cache backend selection"; memory mode never reports it). |
+| `degraded_reasons` | `promptguard_unavailable` (no weights — the ML scan is not running), `cache_unavailable` (a *configured* Valkey is unreachable or its URL is unusable), `cache_unauthenticated` (Valkey signing is not enabled). Both cache reasons can coexist; memory mode reports neither. |
+| `capabilities.cache_hmac_key` | Present as `1` only when a usable `FORAGE_CACHE_HMAC_KEY` was resolved at boot and the backend is Valkey. Independent of connectivity and the break-glass override; absent in memory mode. |
 | `promptguard_loaded` | Always honest, even with the break-glass override set. |
+| `promptguard_model` | The startup-selected model id, even when unloaded; a configuration echo, not readiness. |
 | `cache_connected` | "The selected backend is operational." A live ping in Valkey mode, subject to reconnect backoff; always `true` in memory mode, where there is no connection to lose. It is **not** a statement that Valkey is present — read `cache_backend` for that. |
 | `cache_backend` | `valkey` or `memory` — which storage the content cache selected at start, decided once from `VALKEY_URL` and fixed for the life of the process. Added in contract `1.1.0`. This is the field that separates "healthily in memory mode" from "silently lost its Valkey"; `cache_connected` alone reports `true` for both. |
 | `search_providers` | The resolved search-provider chain's names, in traversal order, after key-gated skips — e.g. `["searxng"]` or `["searxng", "brave"]`. Configuration echo fixed for the life of the process, not a liveness probe. Added in contract `1.2.0`. |
-| `sanitizer_revision` | Opaque hash of the sanitization sources, the model identity, and `promptguard_threshold`. Changes when sanitization behaviour changes. |
+| `sanitizer_revision` | Opaque hash of the sanitization sources, the model identity, `idna@version`, `promptguard_threshold`, then `promptguard_contiguity_windows` and `promptguard_contiguity_threshold`. Changes when sanitization behaviour changes; adding the disabled defaults also invalidates old cache keys. |
 | `contract_version` | Response-contract version. Consumers should refuse to activate on a mismatch rather than guess. |
 
 ```bash

@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document cloud resources, networking, and infrastructure. The map of deployed systems.
 
-> Last updated: 2026-09-17
-> Updated by: Claude (seed-project)
+> Last updated: 2026-09-23
+> Updated by: Copilot (hardening-release US-004)
 
 ---
 
@@ -101,7 +101,7 @@ final stage, so a multi-stage build would narrow what CI's `secret-grep` gate ca
 | Not copied | `tests/`, `scripts/`, `kit_tools/`, `contract_smoke.py`, `searxng_smoke.py` (`.dockerignore` plus filename-enumerated `COPY`) |
 | Build-time check | `RUN PYTHONDONTWRITEBYTECODE=1 python -c "import retrieval_app"` — fails the build on an import error without writing `.pyc` into the layer |
 | Port / process | `EXPOSE 8020`; `ENTRYPOINT ["/app/docker-entrypoint.sh"]` (`exec "$@"`, prints nothing); `CMD uvicorn retrieval_app:app --host 0.0.0.0 --port 8020`, one worker |
-| Healthcheck | **No `HEALTHCHECK` instruction.** Any healthcheck is the operator's compose to declare |
+| Healthcheck | **No image-level `HEALTHCHECK` instruction; both compose fragments declare a status-only liveness probe.** |
 | Size | ~348 MB, 16-19 layers (recorded at `forage-ci-and-image` US-003; not re-measured here) |
 
 The flat module layout is load-bearing for the `COPY` lines above (`CLAUDE.md` invariant
@@ -143,22 +143,27 @@ docker compose -f minimal.yml up -d && curl -s localhost:8020/health | jq
 
 | Service | In | Image (as pinned today) | Ports | Volumes | Limits / env |
 |---------|----|-------------------------|-------|---------|--------------|
-| `forage` | both | `ghcr.io/washingbearlabs/forage:1.1.0` | `127.0.0.1:8020:8020` | `forage-model-cache:/app/model-cache` | `mem_limit: 1024m`, `restart: unless-stopped`; bare `HF_TOKEN`, `FORAGE_SEARCH_PROVIDERS` and `FORAGE_BRAVE_API_KEY` pass-through (each stays unset if unset; the Brave key is a credential and belongs in `compose/.env`, never inline); `SEARXNG_URL` not set (default `http://searxng:8080`) |
-| `forage` extras | full only | same | same | same | literal `VALKEY_URL=redis://valkey:6379/4` (DB 4 matches `ContentCache`'s default); minimal omits `VALKEY_URL` entirely so the cache runs in memory mode |
+| `forage` | both | `ghcr.io/washingbearlabs/forage:1.2.0` (pending cut) | `127.0.0.1:8020:8020` | `forage-model-cache:/app/model-cache` | `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` (default `1024m`), `cpus: ${FORAGE_CPUS:-0}`, `restart: unless-stopped`; bare `HF_TOKEN`, `FORAGE_MODEL_ID`, `FORAGE_MODEL_REVISION`, `FORAGE_SEARCH_PROVIDERS` and `FORAGE_BRAVE_API_KEY` pass-through (each stays unset if unset; credentials belong in `compose/.env`, never inline); `SEARXNG_URL` not set (default `http://searxng:8080`) |
+| `forage` extras | full only | same | same | same | literal `VALKEY_URL=redis://valkey:6379/4` (DB 4 matches `ContentCache`'s default), bare `FORAGE_CACHE_HMAC_KEY` for signing; unset means unsigned cached content and `cache_unauthenticated`. Minimal omits `VALKEY_URL` entirely so the cache runs in memory mode |
 | `searxng` | both | `ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc` | **none published** | none | `SEARXNG_SECRET: ${SEARXNG_SECRET:?...}` — unset is a hard start failure; service name `searxng` is load-bearing for Forage's default URL |
 | `valkey` | full only | `valkey/valkey:8@sha256:3fbd2e3e4b6e85e046c1e7c215e8f79087bc0357789184305806664e320996f3` (8.1.10) | none | `forage-valkey-data:/data` (project-scoped) | `valkey-server --save 60 1 --appendonly no`; no password |
 
-Things both fragments deliberately lack:
+Controls and deliberate omissions in both fragments:
 
-- **No `healthcheck:`** on any service and **no `depends_on`**. Forage does not need SearXNG
+- **Liveness healthcheck on Forage, no `depends_on`**. Forage does not need SearXNG
   or Valkey to start; a missing SearXNG surfaces per request as a 422, and a missing Valkey
   surfaces as `degraded: cache_unavailable` in `/health` (see `kit_tools/arch/SERVICE_MAP.md`).
-- **No CPU quota and no `pids_limit`**; `mem_limit` is the only resource control.
+- **Configurable CPU quota** via `cpus: ${FORAGE_CPUS:-0}` (unset/0 omits the cap),
+  plus the memory limit; `pids_limit` is still absent.
 - **No TLS, no auth.** The `127.0.0.1` binding is the deployment-posture control.
 
-**Pins:** both fragments pin `forage:1.1.0` and `forage-searxng:0.1.1-rc`. The forage pin
-resolves — `v1.1.0` published it (`search-release` US-002). The searxng pin stays a
-pre-release because no non-pre-release `searxng-v*` tag exists.
+**Pins:** both fragments pin `forage:1.2.0` and `forage-searxng:0.1.1-rc`.
+The current release target is **v1.2.0 / contract 1.3.0**, not yet published.
+The service pin fails with `manifest unknown` until the owner cut; cut from the
+completion PR's merge commit in the same sitting or revert the US-004 pin commit.
+That window is outstanding, with the exact commit recorded in the release spec.
+The companion is published and stays a pre-release because no non-pre-release
+`searxng-v*` tag exists.
 
 ---
 
@@ -192,8 +197,8 @@ the post-push layer-parity gate; deletion of its GHCR package version is recorde
 "Released versions" has the digests.
 
 The git tag **is** the version. `pyproject.toml`'s `version = "0.1.0"` is inert packaging
-metadata, and the image tag and `contract_version` (`1.2.0`, served by `v1.1.0`; `v1.0.0`
-served `1.1.0`) are independent semvers. **arm64 is built under QEMU but never executed in CI** — run `contract_smoke.py`
+metadata, and the image tag (`v1.2.0`, pending) and `contract_version` (`1.3.0`)
+are independent semvers. **arm64 is built under QEMU but never executed in CI** — run `contract_smoke.py`
 against your own arm64 container before trusting it.
 
 ### Registry access
@@ -220,7 +225,8 @@ cold start.
 | `forage-valkey-data` (project-scoped) | `/data` | `compose/full.yml` only | Valkey RDB (`--save 60 1`, AOF off) | Operator's concern; not read by Forage |
 
 A warm volume means a start with **zero network** (measured 9 s warm vs 19 s cold on the
-1 vCPU / 1 GB reference host). Without a token the container stays up and loud:
+reference envelope (1 vCPU / 1 GB), configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` —
+see `docs/configuration.md` § Sizing the container). Without a token the container stays up and loud:
 `/health` reports `status: degraded`, `degraded_reasons: ["promptguard_unavailable"]`, and a
 terminal ERROR is logged on every retry. Full details: `docs/weights.md` and
 `kit_tools/docs/MONITORING.md`.
@@ -255,25 +261,29 @@ the service is ever exposed beyond a private network — another reason not to.
 
 ## Resource Envelope
 
-The reference envelope is **1 vCPU / 1 GB RAM** plus the ~270 MiB volume; these are the
+The reference envelope (1 vCPU / 1 GB) is configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT`;
+see [`docs/configuration.md` § Sizing the container](../../docs/configuration.md#sizing-the-container).
+Add the ~270 MiB volume; these are the
 figures the measurements in `docs/configuration.md` were taken on, not a tested floor or
 ceiling. Torch is CPU-only by construction (no CUDA wheels in the lock), so no GPU is ever
 used.
 
 | Budget | Value | Source |
 |--------|-------|--------|
-| Container memory cap | `mem_limit: 1024m` | both compose fragments |
+| Container memory cap | `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` (default `1024m`) | both compose fragments |
+| Container CPU cap | `${FORAGE_CPUS:-0}` (0 = no limit) | both compose fragments |
 | — parent process (FastAPI + torch + PromptGuard) | ~512 MiB | budget breakdown in `docs/configuration.md` |
 | — extraction child address space | 384 MiB (`extraction.*` in `config.yaml`) | same |
-| — headroom incl. 32 MiB in-memory content cache | ~128 MiB | same |
-| Extraction admission | concurrency 1, queue depth 1, 50 MiB input, 500 pages, 20 s CPU, 90 s wall | `config.yaml` (see `kit_tools/docs/ENV_REFERENCE.md`) |
-| Boot to `/health` 200 | 19 s cold / 9 s warm on the reference host | `docs/configuration.md` |
+| — headroom | ~128 MiB: 32 MiB in-memory cache + 64 MiB provisional classifier working set + 32 MiB margin | same |
+| Extraction admission | extraction concurrency 1, queue depth 1 (0–4), 50 MiB input, 500 pages, 20 s CPU, 90 s wall; `classification_concurrency` 1–8 under the memory rule | `config.yaml` (see `kit_tools/docs/ENV_REFERENCE.md`) |
+| Weights boot to classifier loaded | 19 s cold / 9 s warm on the reference host; `/health` serves during acquisition, not a classify-latency figure | `docs/configuration.md` § Sizing the container |
 | CI smoke budget | 120 s to first `/health` 200 | `SMOKE_TIMEOUT_SECONDS` in `ci.yml` |
 | Disk | ~270 MiB volume; ~348 MB image (recorded, not re-measured); ~1 GB free recommended for vendoring | `docs/weights.md` |
 
 Live memory pressure is readable from `/metrics` `extraction.cgroup_memory_current_bytes`,
 `cgroup_memory_max_bytes`, and `oom_proximity_ratio` (cgroup v2 only; `null` on macOS).
-No CPU requirement beyond the reference figure is documented.
+For non-zero `FORAGE_CPUS`, keep threads × classification concurrency within the
+quota; `docker inspect -f '{{.HostConfig.NanoCpus}}' <container>` verifies it.
 
 ---
 
@@ -344,6 +354,8 @@ See `kit_tools/arch/SECURITY.md` for the full posture. The infrastructure-level 
 - **Non-root process** — `USER poppy`; the model cache is the only writable path it needs.
 - **Pinned supply chain** — base image, `uv`, `oras`, Valkey, and SearXNG by digest or
   per-arch sha256; every GitHub Action by commit SHA; `uv sync --locked`.
-- **Not provided** — image signing, provenance, SBOM (explicitly deferred); a container
-  `HEALTHCHECK`; CPU or pids limits; log shipping. Alerting is the operator's to build on
+- **Provided at Compose level** — a status-only liveness healthcheck and the `cpus`
+  knob; neither is an in-service classifier readiness or CPU auto-detection signal.
+- **Not provided** — image signing, provenance, SBOM (explicitly deferred);
+  pids limits; log shipping. Alerting is the operator's to build on
   the `/health` body and `/metrics` (`kit_tools/docs/MONITORING.md`).
