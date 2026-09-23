@@ -680,6 +680,8 @@ Edit keys **in that full copied file**, not by replacing it with this excerpt:
 ```yaml
 # Excerpt only: these values show the tuned reference row, not a complete file.
 promptguard_threshold: 0.85
+promptguard_contiguity_windows: 0
+promptguard_contiguity_threshold: 0.5
 extract_route_enabled: false
 seed_blocklist: []
 promptguard_fail_closed_floor: false
@@ -697,7 +699,7 @@ cache:
 **Replace, never merge.** `_load_config` replaces the baked file; it does not merge
 missing keys back in. A two-line file silently drops `user_agents` and `news_domains`
 to their empty code defaults **and resets every omitted security-relevant key to
-its code default**: `promptguard_threshold`, `extract_route_enabled`, `seed_blocklist`,
+its code default**: `promptguard_threshold`, both contiguity keys, `extract_route_enabled`, `seed_blocklist`,
 `promptguard_fail_closed_floor`, `promptguard_threshold_ceiling`, and the four
 envelope keys — `promptguard_threads` (back to `0`: torch sizes to the host's cores
 under a CPU quota, the 2026-09-12 incident), `extraction.classification_concurrency`
@@ -757,7 +759,9 @@ Those emit `config_invalid_value`, not `config_unknown_key`.
 | `promptguard_threads` | integer, 0–16 | `0` | `0` | `0` leaves torch's and the tokenizer's defaults (every visible core) untouched. Set a positive count to the CPU quota the container actually runs under — `FORAGE_CPUS`, a Kubernetes limit, a host-level cgroup or an orchestrator's cap — because torch reads the host's core count, not the quota. At model load, sets torch's intra-op threads and disables the tokenizer pool with `TOKENIZERS_PARALLELISM=false`, overriding the operator's environment value. Read at boot by `promptguard_threads_from_config`; invalid values (including booleans) refuse boot with `PromptGuardThreadsConfigurationError`. Apply failures warn `promptguard_threads_apply_failed` without disabling the model. This is not a sanitizer-revision input, but latency can exhaust `promptguard_wait_seconds` and make a fail-open request serve unscanned content. |
 | `news_domains` | list of strings | `[]` | 6 leading-dot wire/major outlets | Domains whose cached entries expire after **at most 1 hour**. Bare entries match only the apex; a leading dot covers the apex and every subdomain. **Upgrade note:** your bare entries stay exact; add the dot for subdomains. The six shipped entries now have it (`.bbc.co.uk` covers `www.bbc.co.uk`). |
 | `seed_blocklist` | list of strings | `[]` | `[]` | Deployment-wide denylist merged into both routes, `/retrieve` and `/search`, before caller `blocked_domains`; caller entries cannot evict it. **Upgrade note:** existing multi-label entries now cover subdomains; review apex entries before upgrading, because a multi-tenant apex removes every tenant. Single-label entries keep matching exactly as before. This list is policy, not a secret: observable through `/retrieve`'s refusal message and `/search`'s `blocked_url` counts. |
-| `promptguard_threshold` | float | `0.85` | `0.85` | Injection score above which stage 3 marks content as injected. `/retrieve` and `/search` use this boot-validated default when the request omits the field or sends `null`, then apply `min(value, promptguard_threshold_ceiling)`; an explicit request value is capped too. Numeric strings remain accepted. Invalid values (including YAML booleans, non-finite or out-of-range numbers) warn once with `config_invalid_value` and fall back to `0.85`, never refusing boot for this validation; `promptguard_threshold_resolved` logs the validated default once at INFO. `/extract` instead retains its own per-request `float(raw_value)` conversion and range guard, outside the resolver and ceiling: invalid numeric strings/ranges still give its existing unsupported-format refusal, but YAML `true` becomes `1.0`, disabling blocking on `/extract` only while the fetch routes warn and default to `0.85`. The WARNING explicitly says `/extract reads the raw value through its own guard`; closing that divergence is an open question. The raw configured value still feeds `sanitizer_revision`; the resolved active threshold feeds `cache_policy_fingerprint`. **Upgrade note (1.3.0):** raising this key above `0.85` to quiet `/extract` false positives now **loosens** injection blocking on `/retrieve` and `/search` unless `promptguard_threshold_ceiling` bounds it; a value below `0.85` **tightens** both. The old per-route config knob is gone (caller overrides remain), and the content cache re-keys. |
+| `promptguard_threshold` | float | `0.85` | `0.85` | Max-score rule only: a score strictly above this marks content as injected; the server-side contiguity rule can block independently. `/retrieve` and `/search` use this boot-validated default when the request omits the field or sends `null`, then apply `min(value, promptguard_threshold_ceiling)`; an explicit request value is capped too. Numeric strings remain accepted. Invalid values (including YAML booleans, non-finite or out-of-range numbers) warn once with `config_invalid_value` and fall back to `0.85`, never refusing boot for this validation; `promptguard_threshold_resolved` logs the validated default once at INFO. `/extract` instead retains its own per-request `float(raw_value)` conversion and range guard, outside the resolver and ceiling: invalid numeric strings/ranges still give its existing unsupported-format refusal, but YAML `true` becomes `1.0`, disabling max-score blocking on `/extract` only while the fetch routes warn and default to `0.85`. The WARNING explicitly says `/extract reads the raw value through its own guard`; closing that divergence is an open question. The raw configured value still feeds `sanitizer_revision`; the resolved active threshold feeds `cache_policy_fingerprint`. **Upgrade note (1.3.0):** raising this key above `0.85` to quiet `/extract` false positives now **loosens** max-score blocking on `/retrieve` and `/search` unless `promptguard_threshold_ceiling` bounds it; a value below `0.85` **tightens** both. The old per-route config knob is gone (caller overrides remain), and the content cache re-keys. |
+| `promptguard_contiguity_windows` | integer, 0 or 2–8 | `0` | `0` | Opt-in run rule on all three routes: `0` disables it; otherwise at least this many consecutive windows must score at or above the absolute contiguity threshold. `1`, booleans, non-integers and out-of-range values refuse boot with `PromptGuardConfigurationError`. Read once by `promptguard_settings_from_config`; restart to change it. Both contiguity keys enter `sanitizer_revision`, even when disabled. No per-request override. |
+| `promptguard_contiguity_threshold` | float, 0.0–1.0 | `0.5` | `0.5` | Absolute server-side run threshold (`>=`), independent of the caller's max-score threshold. Both rules apply; raising the max threshold cannot override this one. Booleans, strings, non-finite and out-of-range values refuse boot with `PromptGuardConfigurationError`, even when the rule is off. See the opt-in recipe below. |
 | `policy_domain_entries_max_bytes` | integer | `65536` (64 KiB) | `65536` | Raw UTF-8 bytes per caller domain list, including newline separators; range **4096–1048576** (4 KiB–1 MiB). Each `/retrieve` list and `/search`'s denylist has its own budget. An over-budget denylist is refused whole with 422 `content_too_large` on `/retrieve` or `search_unavailable` on `/search`, reason `policy_domain_list_too_large`; allowlists retain the in-budget prefix and count all remaining entries as drops. Invalid configuration logs `config_invalid_value — key=policy_domain_entries_max_bytes` and falls back to 65536, never refuses boot. Read once at startup; restart after changing it. |
 | `extract_route_enabled` | boolean | `false` | `false` | Release gate for `POST /extract`. While `false` the route returns **404** — it is invisible, not merely refused. Requires a restart to take effect. Remember there is no authentication in front of it. |
 | `search_promptguard_latency_target_ms` | integer, 100–60000 | `1000` | `1000` | Observational target for the per-result sanitization loop: structural scan, PromptGuard and any semaphore wait. A strictly greater duration increments `search.promptguard_latency_target_exceeded` once per request; `search.sanitization_latency_max_ms` records the per-process maximum even below target. Scales with `num_results` (1–20); compare only at the same `num_results`. Not a deadline or sanitizer-revision input. Validated unconditionally at boot by `search_targets_from_config`; invalid values, including booleans, raise `SearchTargetsConfigurationError`. Restart after changes. |
@@ -812,6 +816,47 @@ placement and enforce body-size limits at the caller-facing proxy as appropriate
 |---|---|
 | `trusted_domains` | A leading-dot entry skips injection classification for every host under the suffix. Never name a multi-tenant or registry-level apex (`.co.uk`, `.github.io`, `.s3.amazonaws.com`). `retrieve.policy_suffix_trusted_skip` counts wildcard-caused resolutions on uncached retrievals. |
 | `verified_domains` | A leading-dot entry makes every host under the suffix degrade open when the classifier is unavailable, including under `promptguard_fail_closed_floor` and a load-triggered classification wait timeout. Never name a multi-tenant or registry-level apex (`.co.uk`, `.github.io`, `.s3.amazonaws.com`). The same `retrieve.policy_suffix_trusted_skip` counts these resolutions, even when classification is available. |
+
+### Opting in to contiguity gating
+
+The rule ships **off** pending false-positive and evasion measurements in
+`epic-forage-injection-corpus`. To opt in, set these keys in the mounted
+`config.yaml` and restart:
+
+```yaml
+promptguard_contiguity_windows: 2
+promptguard_contiguity_threshold: 0.5
+```
+
+Stage 3 blocks if **either** `max_score > promptguard_threshold` or any run of
+at least two scores is `>= 0.5`. The absolute server-side run threshold does
+not track per-request max thresholds. A caller lowering the max threshold
+below the run threshold gets the stricter of the two rules; raising it to
+`1.0` still cannot bypass contiguity. This independent policy and its unmeasured
+false-positive rate are why it ships off. `1` window is refused because it
+would merely add a second, lower max rule rather than test adjacency.
+
+The rule applies to `/retrieve`, both upload pipeline entry points behind
+`/extract`, and `/search`. Search coverage is **content-dependent**: the same
+maximum-length title/URL/snippet input can occupy one tokenizer window or
+several. One window cannot trigger a rule requiring two. Hermetic fixture
+tokenizer tests pin both shapes; production-tokenizer counts and performance
+are measured only at the US-004 owner gate, not inferred from character length.
+Trusted-tier skips and unavailable-model policy remain unchanged.
+
+Two residuals need measurement before changing the default: injection fragments
+separated by a benign roughly 448-token window can still evade both rules;
+conversely, sustained mid-band text in an attacker-controlled comment/review can
+aim to block the whole page or omit its result. Adjacent windows share 64 tokens,
+so their scores are correlated, not independent evidence.
+
+`/metrics` is the aggregate signal: `promptguard_contiguity_detections` in
+`retrieve`, `search` and `extraction` counts both contiguity-only and both-rule
+verdicts (search counts results, not requests). The per-event signal is WARNING
+`promptguard_contiguity_verdict — run=<n> windows=<m>`: longest qualifying run
+and total windows only, never scores or text. Quarantine still exposes only
+the existing diagnostic label in `injection_spans`; no new omission reason
+or block-reason key is introduced.
 
 ### The `cache:` block
 
@@ -1086,7 +1131,7 @@ curl -s localhost:8020/health | jq
 | `cache_connected` | "The selected backend is operational." A live ping in Valkey mode, subject to reconnect backoff; always `true` in memory mode, where there is no connection to lose. It is **not** a statement that Valkey is present — read `cache_backend` for that. |
 | `cache_backend` | `valkey` or `memory` — which storage the content cache selected at start, decided once from `VALKEY_URL` and fixed for the life of the process. Added in contract `1.1.0`. This is the field that separates "healthily in memory mode" from "silently lost its Valkey"; `cache_connected` alone reports `true` for both. |
 | `search_providers` | The resolved search-provider chain's names, in traversal order, after key-gated skips — e.g. `["searxng"]` or `["searxng", "brave"]`. Configuration echo fixed for the life of the process, not a liveness probe. Added in contract `1.2.0`. |
-| `sanitizer_revision` | Opaque hash of the sanitization sources, the model identity, and `promptguard_threshold`. Changes when sanitization behaviour changes. |
+| `sanitizer_revision` | Opaque hash of the sanitization sources, the model identity, `idna@version`, `promptguard_threshold`, then `promptguard_contiguity_windows` and `promptguard_contiguity_threshold`. Changes when sanitization behaviour changes; adding the disabled defaults also invalidates old cache keys. |
 | `contract_version` | Response-contract version. Consumers should refuse to activate on a mismatch rather than guess. |
 
 ```bash

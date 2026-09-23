@@ -29,6 +29,41 @@ INJECTION_PENALTY = -0.5
 SkipReason = Literal["trusted_tier", "model_unavailable", "structural_block"]
 
 
+class PromptGuardConfigurationError(ValueError):
+    """Raised when a contiguity setting is outside its supported bounds."""
+
+
+@dataclass(frozen=True, slots=True)
+class PromptGuardSettings:
+    """Server-only contiguity policy, validated once at process start."""
+
+    contiguity_windows: int = 0
+    contiguity_threshold: float = 0.5
+
+
+def promptguard_settings_from_config(config: dict[str, Any]) -> PromptGuardSettings:
+    """Read bounded settings without accepting bools or echoing invalid values."""
+    windows = config.get("promptguard_contiguity_windows", 0)
+    if (
+        isinstance(windows, bool)
+        or not isinstance(windows, int)
+        or windows not in (0, *range(2, 9))
+    ):
+        raise PromptGuardConfigurationError(
+            "promptguard_contiguity_windows must be 0 or an integer between 2 and 8"
+        )
+    threshold = config.get("promptguard_contiguity_threshold", 0.5)
+    if (
+        isinstance(threshold, bool)
+        or not isinstance(threshold, int | float)
+        or not 0.0 <= threshold <= 1.0
+    ):
+        raise PromptGuardConfigurationError(
+            "promptguard_contiguity_threshold must be a number between 0.0 and 1.0"
+        )
+    return PromptGuardSettings(windows, float(threshold))
+
+
 @asynccontextmanager
 async def completed_thread[T](
     work: Coroutine[Any, Any, T],
@@ -66,6 +101,7 @@ class PromptGuardResult:
     penalty: float = 0.0
     skipped: bool = False
     skip_reason: SkipReason | None = None
+    rule: Literal["max_score", "contiguity", "both"] | None = None
 
 
 def unavailable_result(
@@ -119,6 +155,9 @@ async def run_promptguard(
     trust_tier: TrustTier | str = "standard",
     fail_closed: bool = True,
     max_chunks: int | None = None,
+    *,
+    contiguity_windows: int = 0,
+    contiguity_threshold: float = 0.5,
 ) -> PromptGuardResult:
     """Run PromptGuard classification on *text*.
 
@@ -130,8 +169,11 @@ async def run_promptguard(
         The loaded :class:`PromptGuardClassifier`, or ``None`` if
         unavailable.
     threshold:
-        Injection confidence threshold (0.0-1.0).  Scores above this
-        produce ``INJECTION_DETECTED``.
+        Max-score threshold (0.0-1.0), strictly exceeded to fire.
+    contiguity_windows:
+        Zero disables the run rule; otherwise at least this many adjacent
+        windows must reach the absolute server-side ``contiguity_threshold``.
+        The two rules are independent: either can block.
     trust_tier:
         The resolved trust tier for the domain.  ``"trusted"`` domains
         skip ML classification entirely.
@@ -184,17 +226,51 @@ async def run_promptguard(
     # Run synchronous PyTorch inference in a thread to avoid blocking
     # the event loop.
     async with completed_thread(
-        asyncio.to_thread(classifier.classify, text, max_chunks=max_chunks)
+        asyncio.to_thread(classifier.classify_windows, text, max_chunks=max_chunks)
     ) as inference:
-        score, flagged_chunks = inference.result()
+        scores, chunks = inference.result()
 
-    if score > threshold:
+    score = max(scores, default=0.0)
+    max_fired = score > threshold
+    contiguous: set[int] = set()
+    longest_run = 0
+    if contiguity_windows:
+        start = 0
+        # The final boundary flushes a run ending at the last window.
+        for end in range(len(scores) + 1):
+            if end < len(scores) and scores[end] >= contiguity_threshold:
+                continue
+            length = end - start
+            if length >= contiguity_windows:
+                contiguous.update(range(start, end))
+                longest_run = max(longest_run, length)
+            start = end + 1
+
+    if contiguous:
+        logger.warning(
+            "promptguard_contiguity_verdict — run=%d windows=%d",
+            longest_run,
+            len(scores),
+        )
+
+    if max_fired or contiguous:
         return PromptGuardResult(
             verdict=Stage3Verdict.INJECTION_DETECTED,
             score=score,
-            flagged_chunks=flagged_chunks,
+            flagged_chunks=[
+                chunks[index]
+                for index, value in enumerate(scores)
+                if (max_fired and value == score) or index in contiguous
+            ],
             penalty=INJECTION_PENALTY,
             skipped=False,
+            rule=(
+                "both"
+                if max_fired and contiguous
+                else "max_score"
+                if max_fired
+                else "contiguity"
+            ),
         )
 
     return PromptGuardResult(

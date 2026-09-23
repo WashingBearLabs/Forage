@@ -84,6 +84,7 @@ _CONFIG_READER_MODULES = (
     "pipeline/sanitizer_revision.py",
     "pipeline/retrieve_limits.py",
     "pipeline/search_targets.py",
+    "pipeline/stage3_promptguard.py",
     "pipeline/config_bounds.py",
     "promptguard/classifier.py",
 )
@@ -239,6 +240,22 @@ async def test_every_section_the_handler_emits_has_a_model(
         assert set(payload[section]) == set(model.model_fields)
 
 
+@pytest.mark.parametrize("section", ["extraction", "retrieve", "search"])
+async def test_contiguity_counter_is_typed_and_emitted(
+    client: httpx.AsyncClient, section: str
+) -> None:
+    name = "promptguard_contiguity_detections"
+    field = _SECTION_MODELS[section].model_fields[name]
+    assert field.is_required()
+    assert field.annotation is int
+    before = (await client.get("/metrics")).json()
+    assert before[section][name] == 0
+    setattr(getattr(app.state, f"{section}_metrics"), name, 3)
+    response = await client.get("/metrics")
+    assert response.status_code == 200
+    assert response.json()[section][name] == 3
+
+
 async def test_domain_policy_counters_match_classes_models_and_wire(
     client: httpx.AsyncClient,
 ) -> None:
@@ -266,11 +283,12 @@ async def test_provider_and_latency_metrics_are_appended_and_emitted(
     counters.promptguard_latency_target_exceeded = 1
     counters.sanitization_latency_max_ms = 1250
     payload = (await client.get("/metrics")).json()["search"]
-    assert list(payload)[-4:] == [
+    assert list(payload)[-5:] == [
         "provider_compressed_body",
         "provider_timeouts",
         "promptguard_latency_target_exceeded",
         "sanitization_latency_max_ms",
+        "promptguard_contiguity_detections",
     ]
     assert payload["provider_compressed_body"] == 3
     assert payload["provider_timeouts"] == 2
@@ -692,6 +710,8 @@ def test_config_registry_covers_the_shipped_yaml() -> None:
 SECURITY_RELEVANT_CONFIG_KEYS = frozenset(
     {
         "promptguard_threshold",
+        "promptguard_contiguity_windows",
+        "promptguard_contiguity_threshold",
         "extract_route_enabled",
         "seed_blocklist",
         "promptguard_fail_closed_floor",
@@ -764,6 +784,12 @@ async def test_shipped_security_relevant_config_equals_code_defaults(
         defaults: dict[str, Any] = {
             "seed_blocklist": state.config["seed_blocklist"],
             "promptguard_threshold": state.promptguard_threshold_default,
+            "promptguard_contiguity_windows": (
+                state.promptguard_settings.contiguity_windows
+            ),
+            "promptguard_contiguity_threshold": (
+                state.promptguard_settings.contiguity_threshold
+            ),
             "policy_domain_entries_max_bytes": state.policy_domain_entries_max_bytes,
             "extract_route_enabled": extraction.pop("route_enabled"),
             "promptguard_threads": promptguard_threads_from_config({}),

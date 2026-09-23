@@ -507,6 +507,21 @@ sanitization change at shipped defaults, but old cache keys are invalidated.
 Full measurements and consumer handoff are in `docs/bootstrap-notes.md`;
 no 86M owner gate ran.
 
+The thirty-ninth rotation is `85394a95…` → `b641e6a5…` for
+`hardening-promptguard-86m` US-007. Exactly three hashed sources move:
+`stage3_promptguard.py` (ordered window scores, strict max OR opt-in run rule),
+`orchestrator.py` (settings/telemetry on every route and omission rule), and
+`contract.py` (held 1.3.0 counters/description continuation). Two ASCII inputs
+join after the max threshold: contiguity windows then contiguity threshold,
+including disabled defaults `0` / `0.5`. Each file and input was reversed
+read-only against clean `967748d`; the all-reverted control reproduces
+`85394a95…` exactly for default and shipped config. Stage 4 and the other five
+hashed sources remain byte-unchanged. The run rule ships off, but all old cache
+keys invalidate. When enabled it changes sanitization decisions; the max rule
+and trusted/absent-model policy remain unchanged. Full
+measurements and the consumer/corpus handoff are in `docs/bootstrap-notes.md`.
+No owner gate ran.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:

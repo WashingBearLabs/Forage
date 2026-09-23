@@ -16,6 +16,30 @@ live in, and losing them in the move was an identified risk.
 
 ## Active Gotchas
 
+### Contiguity narrows overflow evasion but can also amplify false-positive blocks
+
+Stage 3's max-score rule remains `max_score > promptguard_threshold`. The opt-in
+run rule additionally blocks when 2–8 consecutive window scores meet the absolute
+server-side threshold (`>=`, default 0.5); windows `0` ships off pending corpus
+measurements. Windows `1` refuses boot rather than silently becoming a second max
+rule. A permissive caller max threshold cannot override the run rule.
+
+Fragments separated by a benign roughly 448-token window can still evade both
+rules. In the opposite direction, sustained mid-band content in an attacker-owned
+comment/review can aim to block a page or omit its result. Adjacent windows overlap
+by 64 tokens and therefore correlate. Both shapes require corpus measurements
+before a default flip. `/search` coverage is content-dependent: equal character
+length does not imply equal window count; a one-window input cannot fire the run
+rule. The fixture tokenizer pins both shapes, not production-tokenizer counts.
+
+`/metrics` is the aggregate signal (one dedicated counter per `retrieve`, `search`
+and `extraction` section); WARNING `promptguard_contiguity_verdict — run=<n> windows=<m>`
+is the per-event signal, visible without changing logging configuration. It emits
+only longest-run/window counts, never text or scores. Flags stay internal: the
+unchanged stage-4 quarantine replaces the union with a closed diagnostic label.
+Both configuration values key the content cache through `sanitizer_revision`;
+there is no per-request contiguity override.
+
 ### Torch and the fast tokenizer see the host's cores, not the cgroup quota
 
 The 2026-09-12 cutover ran behind a 1-CPU quota on a 28-core host. Leaving
@@ -590,6 +614,7 @@ were recorded at their implementation boundaries:
 | `hardening-resource-envelope` US-004 | `bf5a1f3e…3e75d` | Thirty-sixth, **not a text-sanitization change**. Only `orchestrator.py` (configurable observational targets, overrun count and whole-loop max) and `contract.py` (held 1.3.0 continuation) move. Read-only whole-file reversals against clean `7087c04`: `66b50985…` with orchestrator reverted, `3c699860…` with contract reverted, exactly `d9db7586…` with both, under default/shipped/maximum-target config. Other seven sources and hash definition unchanged; the new settings module and keys are not hash inputs. The max includes structural scan, PromptGuard and waits across all results, not one wait; compare at the same `num_results`, with exceeded count and requests. It never resets without a container restart. Full values: `docs/bootstrap-notes.md`. |
 | `hardening-resource-envelope` US-002 | `4913fdc1…aa1fb` | Thirty-seventh, **not a sanitization or response-shape change**. Only `contract.py` records the shipped Compose probe's health-description correction. Read-only whole-file reversal against clean `2aa6356` reproduces `bf5a1f3e…` under default and shipped config; other eight sources and hash definition unchanged. OpenAPI and the held golden really move (`HealthResponse.description`), but the added-paths set does not. Historical goldens retain the old description by design. The status-only probe is liveness, never classifier readiness; plain Compose does not restart unhealthy containers. Full values: `docs/bootstrap-notes.md`. |
 | `hardening-promptguard-86m` US-006 | `85394a95…3d0c0` | Thirty-eighth, **not a sanitization change at shipped defaults**. Only `contract.py` changes among nine hashed sources, announcing `/health.promptguard_model`. Whole-file read-only reversal against clean `06a56b2` reproduces `4913fdc1…` under default and shipped config. The selected-id hash input differs only for a non-default model; the allowlist still ships only 22M. The lifespan refuses unknown ids; loading checks binary labels and derives the injection index. Health reports configuration even while unloaded. Full values: `docs/bootstrap-notes.md`. |
+| `hardening-promptguard-86m` US-007 | `b641e6a5…698f5` | Thirty-ninth: exactly stage 3, orchestrator and contract change in the nine hashed sources; two ASCII inputs join after the max threshold (contiguity windows, then threshold). Each file/input reversed read-only against clean `967748d`; all-reverted reproduces `85394a95…` for default/shipped config. Stage 4 is byte-unchanged. Run rule ships off but all old cache keys invalidate; enabling changes verdicts. The max rule and trusted/absent-model policy remain unchanged. Full values and both residuals: `docs/bootstrap-notes.md`. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.

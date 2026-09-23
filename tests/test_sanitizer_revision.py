@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
+import json
 from pathlib import Path
 
 import idna
 import pytest
 
 import model_fetcher
+from cache import cache_policy_fingerprint
 from model_fetcher import DEFAULT_MODEL_REVISION, MODEL_REVISION_ENV_VAR
+from models import RetrieveRequest, SearchRequest
 from pipeline import sanitizer_revision
 from promptguard.classifier import DEFAULT_MODEL_ID
 
@@ -114,6 +118,50 @@ def test_sanitizer_revision_changes_for_behavior_config() -> None:
     ) != sanitizer_revision.derive_sanitizer_revision({"promptguard_threshold": 0.86})
 
 
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("promptguard_contiguity_windows", 2),
+        ("promptguard_contiguity_threshold", 0.6),
+    ],
+)
+def test_contiguity_is_configuration_only_and_keys_the_cache(
+    key: str, value: int | float
+) -> None:
+    assert key not in RetrieveRequest.model_fields
+    assert key not in SearchRequest.model_fields
+    baseline = sanitizer_revision.derive_sanitizer_revision({})
+    changed = sanitizer_revision.derive_sanitizer_revision({key: value})
+    assert baseline != changed
+    inputs: dict[str, object] = {
+        "blocked_domains": [],
+        "classifier_loaded": True,
+        "promptguard_fail_closed": True,
+        "promptguard_threshold": 0.85,
+        "sanitizer_revision": baseline,
+        "trusted_domains": [],
+        "verified_domains": [],
+    }
+    assert set(inspect.signature(cache_policy_fingerprint).parameters) == set(inputs)
+    expected = hashlib.sha256(
+        json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:16]
+
+    def fingerprint(revision: str) -> str:
+        return cache_policy_fingerprint(
+            trusted_domains=[],
+            verified_domains=[],
+            blocked_domains=[],
+            promptguard_threshold=0.85,
+            promptguard_fail_closed=True,
+            classifier_loaded=True,
+            sanitizer_revision=revision,
+        )
+
+    assert fingerprint(baseline) == expected
+    assert fingerprint(changed) != expected
+
+
 def test_sanitizer_revision_changes_for_promptguard_artifact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -165,9 +213,12 @@ def test_sanitizer_revision_is_stable_at_the_committed_pin(
 
 
 @pytest.mark.parametrize("model_id", [DEFAULT_MODEL_ID, "acme/second-guard"])
+@pytest.mark.parametrize(("windows", "threshold"), [(0, 0.5), (2, 0.6)])
 def test_the_hashed_model_identity_is_model_id_at_revision(
     monkeypatch: pytest.MonkeyPatch,
     model_id: str,
+    windows: int,
+    threshold: float,
 ) -> None:
     """The exact composition, recomputed independently.
 
@@ -197,9 +248,17 @@ def test_the_hashed_model_identity_is_model_id_at_revision(
     expected.update(f"{model_id}@{revision}".encode())
     expected.update(f"idna@{idna.__version__}".encode())
     expected.update(b"0.85")
+    expected.update(str(windows).encode("ascii"))
+    expected.update(str(threshold).encode("ascii"))
 
     assert (
-        sanitizer_revision.derive_sanitizer_revision({"promptguard_threshold": 0.85})
+        sanitizer_revision.derive_sanitizer_revision(
+            {
+                "promptguard_threshold": 0.85,
+                "promptguard_contiguity_windows": windows,
+                "promptguard_contiguity_threshold": threshold,
+            }
+        )
         == expected.hexdigest()
     )
 

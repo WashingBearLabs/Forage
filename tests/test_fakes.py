@@ -232,6 +232,7 @@ def test_recording_search_metrics_covers_the_protocol_and_is_instance_local() ->
     sink.fallback_fired += 1
     sink.paid_calls += 2
     sink.classification_wait_timeouts += 3
+    sink.promptguard_contiguity_detections += 4
     assert metrics.counters == {
         "fallback_fired": 1,
         "paid_calls": 2,
@@ -240,6 +241,7 @@ def test_recording_search_metrics_covers_the_protocol_and_is_instance_local() ->
         "provider_timeouts": 0,
         "promptguard_latency_target_exceeded": 0,
         "sanitization_latency_max_ms": 0,
+        "promptguard_contiguity_detections": 4,
     }
     assert all(type(value) is int for value in metrics.counters.values())
     assert all(value == 0 for value in RecordingSearchMetrics().counters.values())

@@ -84,6 +84,7 @@ from pipeline.stage1_upload import (
 from pipeline.stage2_structural import scan_structural
 from pipeline.stage3_promptguard import (
     PromptGuardResult,
+    PromptGuardSettings,
     completed_thread,
     run_promptguard,
     unavailable_result,
@@ -219,6 +220,9 @@ async def _bounded_permit(
             semaphore.release()
 
 
+_DEFAULT_PROMPTGUARD_SETTINGS = PromptGuardSettings()
+
+
 async def sanitize_and_structure(
     *,
     extraction: ExtractionResult,
@@ -226,6 +230,8 @@ async def sanitize_and_structure(
     classifier: PromptGuardClassifier | None,
     promptguard_threshold: float,
     promptguard_fail_closed: bool,
+    promptguard_settings: PromptGuardSettings = _DEFAULT_PROMPTGUARD_SETTINGS,
+    promptguard_metrics: PromptGuardMetricsSink | None = None,
     extract_mode: str,
     content_type: str,
     sanitizer_revision: str = "",
@@ -270,6 +276,8 @@ async def sanitize_and_structure(
             trust_tier=trust_tier,
             fail_closed=promptguard_fail_closed,
             max_chunks=max_promptguard_chunks,
+            contiguity_windows=promptguard_settings.contiguity_windows,
+            contiguity_threshold=promptguard_settings.contiguity_threshold,
         )
 
     if structural.verdict != Stage2Verdict.BLOCKED:
@@ -310,6 +318,9 @@ async def sanitize_and_structure(
         else:
             promptguard = await classify()
 
+    if promptguard.rule in ("contiguity", "both") and promptguard_metrics is not None:
+        promptguard_metrics.promptguard_contiguity_detections += 1
+
     return await asyncio.to_thread(
         structure_sanitization_result,
         extraction=extraction,
@@ -341,6 +352,7 @@ async def run_retrieve_pipeline(
     classification_semaphore: asyncio.Semaphore,
     extraction_settings: ExtractionSettings,
     admission: AdmissionSlot,
+    promptguard_settings: PromptGuardSettings = _DEFAULT_PROMPTGUARD_SETTINGS,
 ) -> RetrievedContent:
     """Run the full 5-stage retrieval pipeline.
 
@@ -640,6 +652,8 @@ async def run_retrieve_pipeline(
             classifier=classifier,
             promptguard_threshold=promptguard_threshold,
             promptguard_fail_closed=request.promptguard_fail_closed,
+            promptguard_settings=promptguard_settings,
+            promptguard_metrics=retrieve_metrics,
             extract_mode=request.extract_mode,
             content_type=content_type,
             domain_changed_on_redirect=domain_changed_on_redirect,
@@ -725,6 +739,8 @@ async def run_extract_pipeline(
     classifier: PromptGuardClassifier | None,
     promptguard_threshold: float,
     sanitizer_revision: str,
+    promptguard_settings: PromptGuardSettings = _DEFAULT_PROMPTGUARD_SETTINGS,
+    extraction_metrics: PromptGuardMetricsSink | None = None,
 ) -> ExtractedContent:
     """Extract and sanitize an untrusted uploaded PDF or UTF-8 text document.
 
@@ -763,6 +779,8 @@ async def run_extract_pipeline(
             classifier=classifier,
             promptguard_threshold=promptguard_threshold,
             promptguard_fail_closed=True,
+            promptguard_settings=promptguard_settings,
+            promptguard_metrics=extraction_metrics,
             extract_mode=extract_mode,
             content_type=content_type,
             sanitizer_revision=sanitizer_revision,
@@ -790,6 +808,8 @@ async def run_extract_pipeline_from_file(
     sanitizer_revision: str,
     settings: ExtractionSettings,
     classification_semaphore: asyncio.Semaphore,
+    promptguard_settings: PromptGuardSettings = _DEFAULT_PROMPTGUARD_SETTINGS,
+    extraction_metrics: PromptGuardMetricsSink | None = None,
 ) -> ExtractedContent:
     """Extract a spooled upload with bounded PDF parsing and classification."""
     try:
@@ -843,6 +863,8 @@ async def run_extract_pipeline_from_file(
             classifier=classifier,
             promptguard_threshold=promptguard_threshold,
             promptguard_fail_closed=True,
+            promptguard_settings=promptguard_settings,
+            promptguard_metrics=extraction_metrics,
             extract_mode=extract_mode,
             content_type=content_type,
             sanitizer_revision=sanitizer_revision,
@@ -1367,7 +1389,13 @@ class AdmissionMetrics(Protocol):
     busy_rejections: int
 
 
-class RetrieveMetricsSink(AdmissionMetrics, Protocol):
+class PromptGuardMetricsSink(Protocol):
+    """The shared per-route counter, incremented before quarantine structuring."""
+
+    promptguard_contiguity_detections: int
+
+
+class RetrieveMetricsSink(AdmissionMetrics, PromptGuardMetricsSink, Protocol):
     """The ``/metrics`` retrieve counters ``run_retrieve_pipeline`` increments.
 
     ``retrieval_app.RetrieveMetrics`` satisfies this structurally, the same
@@ -1391,6 +1419,7 @@ class _NullRetrieveMetrics:
         self.busy_rejections = 0
         self.classification_wait_timeouts = 0
         self.policy_suffix_trusted_skip = 0
+        self.promptguard_contiguity_detections = 0
 
 
 # Structural conformance, checked by the type checker rather than asserted in
@@ -1400,7 +1429,7 @@ class _NullRetrieveMetrics:
 _NULL_RETRIEVE_METRICS: RetrieveMetricsSink = _NullRetrieveMetrics()
 
 
-class SearchMetricsSink(Protocol):
+class SearchMetricsSink(PromptGuardMetricsSink, Protocol):
     """The ``/metrics`` search measurements ``run_search_pipeline`` updates directly.
 
     ``retrieval_app.SearchMetrics`` satisfies this structurally — neither
@@ -1435,6 +1464,7 @@ class _NullSearchMetrics:
         self.provider_timeouts = 0
         self.promptguard_latency_target_exceeded = 0
         self.sanitization_latency_max_ms = 0
+        self.promptguard_contiguity_detections = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1577,6 +1607,7 @@ async def run_search_pipeline(
     config: dict[str, Any],
     classifier: Any = None,
     promptguard_threshold: float = 0.85,
+    promptguard_settings: PromptGuardSettings = _DEFAULT_PROMPTGUARD_SETTINGS,
     classification_semaphore: asyncio.Semaphore | None = None,
     classification_wait_seconds: float | None = None,
     promptguard_latency_target_ms: int = 1_000,
@@ -1827,6 +1858,8 @@ async def run_search_pipeline(
                 _search_result_promptguard_input(title, url, snippet),
                 classifier,
                 threshold=promptguard_threshold,
+                contiguity_windows=promptguard_settings.contiguity_windows,
+                contiguity_threshold=promptguard_settings.contiguity_threshold,
                 trust_tier="standard",
                 fail_closed=request.promptguard_fail_closed,
             )
@@ -1849,11 +1882,15 @@ async def run_search_pipeline(
                         _search_result_promptguard_input(title, url, snippet),
                         classifier,
                         threshold=promptguard_threshold,
+                        contiguity_windows=promptguard_settings.contiguity_windows,
+                        contiguity_threshold=promptguard_settings.contiguity_threshold,
                         trust_tier="standard",
                         fail_closed=request.promptguard_fail_closed,
                     )
                 else:
                     pg_result = wait_timed_out()
+        if pg_result.rule in ("contiguity", "both"):
+            metrics.promptguard_contiguity_detections += 1
         if pg_result.verdict == Stage3Verdict.INJECTION_DETECTED:
             if pg_result.skip_reason == "model_unavailable":
                 logger.info(
@@ -1865,10 +1902,11 @@ async def run_search_pipeline(
                 promptguard_unavailable = True
             else:
                 logger.info(
-                    "search_result_omitted reason=%s domain=%s score=%.2f",
+                    "search_result_omitted reason=%s domain=%s score=%.2f rule=%s",
                     contract.OMIT_INJECTION_DETECTED,
                     domain,
                     pg_result.score,
+                    pg_result.rule,
                 )
                 omitted_by_reason[contract.OMIT_INJECTION_DETECTED] += 1
             continue

@@ -313,7 +313,8 @@ class RetrieveRequest(BaseModel):
         ge=0.0,
         le=1.0,
         description=(
-            "PromptGuard confidence threshold; null or omitted uses the server's "
+            "PromptGuard max-score threshold; the server-side contiguity rule can "
+            "block independently. Null or omitted uses the server's "
             "validated config.yaml default (shipped as 0.85). The requested or "
             "default value is bounded by promptguard_threshold_ceiling."
         ),
@@ -356,7 +357,8 @@ class SearchRequest(BaseModel):
         ge=0.0,
         le=1.0,
         description=(
-            "PromptGuard confidence threshold; null or omitted uses the server's "
+            "PromptGuard max-score threshold; the server-side contiguity rule can "
+            "block independently. Null or omitted uses the server's "
             "validated config.yaml default (shipped as 0.85). The requested or "
             "default value is bounded by promptguard_threshold_ceiling."
         ),

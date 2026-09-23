@@ -365,6 +365,10 @@ components:
           description: current/max as a fraction, or null when either side is null or max
             is zero. The concrete OOM-proximity signal an operator reads.
           title: Oom Proximity Ratio
+        promptguard_contiguity_detections:
+          description: Uploads blocked by the contiguity rule, including both-rule verdicts.
+          title: Promptguard Contiguity Detections
+          type: integer
         queued:
           description: Requests waiting for a slot right now.
           title: Queued
@@ -402,6 +406,7 @@ components:
       - cgroup_memory_current_bytes
       - cgroup_memory_max_bytes
       - oom_proximity_ratio
+      - promptguard_contiguity_detections
       title: ExtractionMetricsResponse
       type: object
     HTTPValidationError:
@@ -757,6 +762,10 @@ components:
             Exact matches through bare entries do not increment it.
           title: Policy Suffix Trusted Skip
           type: integer
+        promptguard_contiguity_detections:
+          description: Retrievals blocked by the contiguity rule, including both-rule verdicts.
+          title: Promptguard Contiguity Detections
+          type: integer
         promptguard_state:
           additionalProperties:
             type: integer
@@ -787,6 +796,7 @@ components:
       - classification_wait_timeouts
       - semaphore_saturation
       - busy_rejections
+      - promptguard_contiguity_detections
       title: RetrieveMetricsResponse
       type: object
     RetrieveRequest:
@@ -857,9 +867,9 @@ components:
             minimum: 0.0
             type: number
           - type: 'null'
-          description: PromptGuard confidence threshold; null or omitted uses the server's
-            validated config.yaml default (shipped as 0.85). The requested or default value
-            is bounded by promptguard_threshold_ceiling.
+          description: PromptGuard max-score threshold; the server-side contiguity rule can
+            block independently. Null or omitted uses the server's validated config.yaml default
+            (shipped as 0.85). The requested or default value is bounded by promptguard_threshold_ceiling.
           title: Promptguard Threshold
         trusted_domains:
           description: 'Domains to treat as trusted: bare entries match exactly; a leading
@@ -1109,6 +1119,10 @@ components:
             `/health` `search_providers` to tell a bad name from a missing key.
           title: Policy Unknown Provider
           type: integer
+        promptguard_contiguity_detections:
+          description: Results omitted by the contiguity rule, including both-rule verdicts.
+          title: Promptguard Contiguity Detections
+          type: integer
         promptguard_latency_target_exceeded:
           description: 'Search requests whose duration strictly exceeds search_promptguard_latency_target_ms,
             counted once per request. Measures the per-result sanitization loop: structural
@@ -1163,6 +1177,7 @@ components:
       - provider_timeouts
       - promptguard_latency_target_exceeded
       - sanitization_latency_max_ms
+      - promptguard_contiguity_detections
       title: SearchMetricsResponse
       type: object
     SearchRequest:
@@ -1235,9 +1250,9 @@ components:
             minimum: 0.0
             type: number
           - type: 'null'
-          description: PromptGuard confidence threshold; null or omitted uses the server's
-            validated config.yaml default (shipped as 0.85). The requested or default value
-            is bounded by promptguard_threshold_ceiling.
+          description: PromptGuard max-score threshold; the server-side contiguity rule can
+            block independently. Null or omitted uses the server's validated config.yaml default
+            (shipped as 0.85). The requested or default value is bounded by promptguard_threshold_ceiling.
           title: Promptguard Threshold
         providers:
           description: 'Restrict-only filter of the configured provider chain, in configured

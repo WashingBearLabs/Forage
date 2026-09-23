@@ -415,6 +415,7 @@ def test_search_metrics_response_1_3_0_field_set_is_pinned_exactly() -> None:
         "provider_timeouts",
         "promptguard_latency_target_exceeded",
         "sanitization_latency_max_ms",
+        "promptguard_contiguity_detections",
     }
 
 
@@ -431,6 +432,7 @@ def test_retrieve_metrics_response_1_3_0_field_set_is_pinned_exactly() -> None:
         "busy_rejections",
         "policy_invalid_domain_entry",
         "policy_suffix_trusted_skip",
+        "promptguard_contiguity_detections",
     }
 
 

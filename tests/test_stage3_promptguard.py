@@ -28,6 +28,8 @@ from pipeline.stage3_promptguard import (
     DEFAULT_THRESHOLD,
     INJECTION_PENALTY,
     PromptGuardResult,
+    PromptGuardSettings,
+    promptguard_settings_from_config,
     run_promptguard,
 )
 from pipeline.stage4_structuring import SanitizationResult
@@ -171,7 +173,7 @@ class TestTrustedDomainSkip:
         result = await run_promptguard("Text.", classifier, trust_tier="standard")
         assert result.skipped is False
         assert result.skip_reason is None
-        classifier.classify.assert_called_once()
+        classifier.classify_windows.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_untrusted_not_skipped(self) -> None:
@@ -643,8 +645,185 @@ class TestWindowScores:
         assert result.penalty == (INJECTION_PENALTY if flagged else 0.0)
         assert result.skipped is False
         assert result.skip_reason is None
-        classifier.classify.assert_called_once_with("input", max_chunks=3)
+        classifier.classify.assert_not_called()
         classifier.classify_windows.assert_called_once_with("input", max_chunks=3)
+
+
+@pytest.mark.parametrize(
+    ("scores", "windows", "threshold", "rule", "flagged"),
+    [
+        ([0.6, 0.6], 2, 0.85, "contiguity", [0, 1]),
+        ([0.6, 0.2, 0.6], 2, 0.85, None, []),
+        ([0.86], 2, 0.85, "max_score", [0]),
+        ([0.6, 0.6], 0, 0.85, None, []),
+        ([0.9, 0.6, 0.6], 2, 0.85, "both", [0, 1, 2]),
+        ([0.2, 0.6, 0.6], 2, 0.85, "contiguity", [1, 2]),
+        ([0.5, 0.5], 2, 0.85, "contiguity", [0, 1]),
+        ([0.85], 2, 0.85, None, []),
+        ([0.6, 0.6, 0.6], 3, 0.85, "contiguity", [0, 1, 2]),
+        ([0.6, 0.6], 3, 0.85, None, []),
+        ([0.6] * 8, 8, 0.85, "contiguity", list(range(8))),
+        ([0.6] * 7, 8, 0.85, None, []),
+        ([0.9, 0.1, 0.6, 0.6, 0.1, 0.9], 2, 0.85, "both", [0, 2, 3, 5]),
+        ([0.6, 0.6, 0.1, 0.6, 0.6], 2, 0.85, "contiguity", [0, 1, 3, 4]),
+        ([0.6, 0.6], 2, 1.0, "contiguity", [0, 1]),
+        ([0.4, 0.4], 2, 0.3, "max_score", [0, 1]),
+        ([], 2, 0.85, None, []),
+    ],
+)
+async def test_contiguity_verdicts(
+    scores: list[float],
+    windows: int,
+    threshold: float,
+    rule: str | None,
+    flagged: list[int],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    classifier = _make_mock_classifier()
+    chunks = [f"private-window-{index}" for index in range(len(scores))]
+    classifier.classify_windows.side_effect = None
+    classifier.classify_windows.return_value = scores, chunks
+    result = await run_promptguard(
+        "document",
+        classifier,
+        threshold=threshold,
+        contiguity_windows=windows,
+        contiguity_threshold=0.5,
+    )
+    assert result.rule == rule
+    assert result.verdict == (
+        Stage3Verdict.INJECTION_DETECTED if rule else Stage3Verdict.SAFE
+    )
+    assert result.score == max(scores, default=0.0)
+    assert result.flagged_chunks == [chunks[index] for index in flagged]
+    assert result.penalty == (INJECTION_PENALTY if rule else 0.0)
+    classifier.classify_windows.assert_called_once_with("document", max_chunks=None)
+    classifier.classify.assert_not_called()
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("promptguard_contiguity_verdict")
+    ]
+    assert len(records) == (1 if rule in ("contiguity", "both") else 0)
+    if records:
+        longest = max(
+            len(run)
+            for run in "".join("x" if s >= 0.5 else " " for s in scores).split()
+        )
+        assert records[0].levelno == logging.WARNING
+        assert records[0].getMessage() == (
+            f"promptguard_contiguity_verdict — run={longest} windows={len(scores)}"
+        )
+
+
+async def test_contiguity_empty_text_is_safe() -> None:
+    classifier = _make_mock_classifier(score=0.0)
+    result = await run_promptguard("", classifier, contiguity_windows=2)
+    assert result == PromptGuardResult(verdict=Stage3Verdict.SAFE, score=0.0)
+    classifier.classify_windows.assert_called_once_with("", max_chunks=None)
+
+
+@pytest.mark.parametrize("threshold", [0.0, 1.0])
+async def test_contiguity_threshold_endpoints_are_inclusive(threshold: float) -> None:
+    classifier = _make_mock_classifier(score=threshold, flagged_chunks=["a", "b"])
+    result = await run_promptguard(
+        "document",
+        classifier,
+        threshold=1.0,
+        contiguity_windows=2,
+        contiguity_threshold=threshold,
+    )
+    assert result.rule == "contiguity"
+    assert result.flagged_chunks == ["a", "b"]
+
+
+@pytest.mark.parametrize("tier", list(TrustTier))
+@pytest.mark.parametrize("loaded", [False, True])
+async def test_contiguity_respects_existing_skip_policy(
+    tier: TrustTier,
+    loaded: bool,
+) -> None:
+    classifier = _make_mock_classifier(
+        score=0.6, flagged_chunks=["a", "b"], loaded=loaded
+    )
+    result = await run_promptguard(
+        "document",
+        classifier,
+        trust_tier=tier,
+        contiguity_windows=2,
+    )
+    if tier == TrustTier.TRUSTED or not loaded:
+        assert result.rule is None
+        classifier.classify_windows.assert_not_called()
+    else:
+        assert result.rule == "contiguity"
+
+
+async def test_contiguity_union_preserves_distinct_equal_text_windows() -> None:
+    classifier = _make_mock_classifier(score=0.9, flagged_chunks=["same", "same"])
+    result = await run_promptguard("document", classifier, contiguity_windows=2)
+    assert result.rule == "both"
+    assert result.flagged_chunks == ["same", "same"]
+
+
+def test_contiguity_defaults_are_frozen() -> None:
+    settings = promptguard_settings_from_config({})
+    assert settings == PromptGuardSettings(0, 0.5)
+    assert_frozen(settings, "contiguity_windows", 2)
+
+
+@pytest.mark.parametrize("windows", [0, *range(2, 9)])
+@pytest.mark.parametrize("threshold", [0, 0.5, 1])
+def test_contiguity_accepts_only_supported_settings(
+    windows: int, threshold: float
+) -> None:
+    settings = promptguard_settings_from_config(
+        {
+            "promptguard_contiguity_windows": windows,
+            "promptguard_contiguity_threshold": threshold,
+        }
+    )
+    assert settings == PromptGuardSettings(windows, float(threshold))
+    assert type(settings.contiguity_threshold) is float
+
+
+@pytest.mark.parametrize("prose", [False, True])
+async def test_search_window_count_is_content_dependent(
+    prose: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pipeline.orchestrator import (
+        _MAX_SEARCH_SNIPPET_LENGTH,
+        _MAX_SEARCH_TITLE_LENGTH,
+        _MAX_SEARCH_URL_LENGTH,
+        _search_result_promptguard_input,
+    )
+
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    tokenizer = AutoTokenizer.from_pretrained(
+        Path(__file__).parent / "fixtures" / "tiny_model", local_files_only=True
+    )
+    seed = (
+        "The quiet garden provides fresh produce for local families. " if prose else "a"
+    )
+    title = (seed * 512)[:_MAX_SEARCH_TITLE_LENGTH]
+    url = (
+        "https://example.com/"
+        + (seed.replace(" ", "-") * 2048)[
+            : _MAX_SEARCH_URL_LENGTH - len("https://example.com/")
+        ]
+    )
+    snippet = (seed * 2000)[:_MAX_SEARCH_SNIPPET_LENGTH]
+    text = _search_result_promptguard_input(title, url, snippet)
+    assert len(text) == 4583
+    classifier = PromptGuardClassifier()
+    classifier._tokenizer = tokenizer
+    chunks = classifier._chunk_text(text)
+    assert len(chunks) >= 2 if prose else len(chunks) == 1
+    double = _make_mock_classifier()
+    double.classify_windows.side_effect = None
+    double.classify_windows.return_value = [0.6] * len(chunks), chunks
+    result = await run_promptguard(text, double, contiguity_windows=2)
+    assert result.rule == ("contiguity" if prose else None)
 
 
 class TestChunking:

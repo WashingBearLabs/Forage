@@ -665,7 +665,7 @@
           }
         ],
         "default": null,
-        "description": "PromptGuard confidence threshold; null or omitted uses the server's validated config.yaml default (shipped as 0.85). The requested or default value is bounded by promptguard_threshold_ceiling.",
+        "description": "PromptGuard max-score threshold; the server-side contiguity rule can block independently. Null or omitted uses the server's validated config.yaml default (shipped as 0.85). The requested or default value is bounded by promptguard_threshold_ceiling.",
         "title": "Promptguard Threshold"
       },
       "providers": {

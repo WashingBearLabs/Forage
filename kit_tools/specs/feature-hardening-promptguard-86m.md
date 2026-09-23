@@ -1595,6 +1595,103 @@ Reuse `pipeline.config_bounds` for the forthcoming settings triple; this story's
 `PromptGuardThreadsConfigurationError` leaves `PromptGuardConfigurationError`
 unambiguous for that reader.
 
+### US-007 implementation — 2026-09-22 (Copilot)
+
+Starting commit `967748d6edb4f8f87c47d69cac73e297fbff7bd0`, clean tree.
+Stage 3 now calls `classify_windows` once, retaining its completed-thread
+cancellation ownership, budget propagation, trusted skip and unavailable-model
+policy. `score` stays the maximum; `rule` is `max_score`, `contiguity`, `both`
+or `None`. Strict `>` max pooling is unchanged. Every qualifying `>=` run is
+included, including trailing and disjoint runs; the union deduplicates window
+indices in document order rather than deleting distinct equal-text windows
+(preserving the previous max-tie behavior).
+
+The local frozen settings/error/builder triple validates once in lifespan,
+including while the rule is off: windows `0` or 2–8, threshold 0.0–1.0,
+no bool/string/non-finite acceptance and no float conversion before the
+out-of-range huge-integer check. Shipped values remain `0` / `0.5`.
+The immutable settings object follows the existing threshold seam through
+retrieve, both extract entry points, and both search permit branches, with
+scalar values passed to stage 3. No per-request contiguity field exists.
+
+Telemetry uses dedicated flat counters, not new keys in the closed
+`blocked_by_reason`/`omitted_by_reason` vocabularies. A shared structural
+`PromptGuardMetricsSink` lets retrieve and extraction count before stage 4
+without importing the app; search counts each omitted result. Exactly one
+WARNING carries the longest qualifying run and total windows, not text or
+scores. The INFO omission line additionally names the rule. ASGI tests start
+through the real lifespan, assert the builder runs once, drive all three
+routes and `/metrics`, and verify contiguity-only, both, max-only and disabled
+cases. Raising the caller max threshold to 1.0 does not suppress contiguity.
+Quarantine tests cover the multi-window union on both fetch/upload responses;
+`stage4_structuring.py` is byte-unchanged.
+
+The two maximum-length fixture-tokenizer shapes both measure **4,583
+characters**. This story's explicit seeds measure **1,040 tokens / 3 windows**
+for prose and **15 tokens / 1 window** for a repeated character. These differ
+from the spec author's unspecified example seeds (1,004 / 442 tokens), but
+pin the required content-dependent window facts: prose at least two,
+repeated runs exactly one, and the rule inert for the latter. The real
+production-tokenizer count remains **unmeasured**, reserved for US-004.
+**Handoff to `epic-forage-injection-corpus`:** require both fragments separated
+by a benign roughly 448-token window (residual evasion) and sustained mid-band
+comment/review text (adversarial false-positive page blocking/result omission,
+with 64-token overlap correlation). `/search` coverage is content-dependent.
+Measure both directions before any default flip.
+
+**Held 1.3.0 window:** three additive metric counters and max-rule-only request
+threshold descriptions (GOVERNANCE row 3, description-only, no property/bound
+move). Export regenerated; anchor
+`579c32ee93ec3b1c528ce6df4a8d6ba5b4eb285890ecd8119b74098f39e7a3a9`
+is updated on all four quoting pages. The golden is re-created from
+`_SCHEMA_MODELS` and moves only the SearchRequest threshold description.
+**Nothing is appended to `_EXPECTED_ONE_THREE_ZERO_DIFF`.** The newer
+`test_contract_schema.py` also pins exact search/retrieve counter sets;
+those two sets gain the counter, independently of the additions ledger.
+All three section mirrors/emission paths are pinned in `test_contract_metrics`.
+MONITORING's counter grep is exactly 3 and its WARNING grep is 1.
+Historical goldens remain unchanged.
+
+**Thirty-ninth revision rotation, default and shipped config:**
+`85394a954e32ec00bb499d08c01811dc4d00b363708e3f839311ae8fde33d0c0` →
+`b641e6a51ef7cb45a5209a42321a5fff135f432264d256dd8eec9fe9e62698f5`.
+Only `stage3_promptguard.py`, `orchestrator.py` and `contract.py` change among
+the nine hashed sources; windows then threshold are new ASCII inputs after
+the max threshold. Every source/input was reversed independently read-only
+against the starting commit, with all-reverted reproducing the old value
+exactly; `docs/bootstrap-notes.md` records the complete nine-row matrix and
+all five required rotation sites are current. The run rule ships off, but
+adding its defaults still invalidates all old content-cache keys.
+`cache_policy_fingerprint`'s exact seven inputs and both request models'
+absence of contiguity fields are pinned.
+
+Validation: **1,743 related tests pass**, with three existing non-failing
+torch/socket warnings. Repository Ruff lint/format, strict Pyright (zero
+errors), and `export_contract --check` pass. The full-suite criterion remains
+**unverified** because this invocation explicitly forbids the full suite:
+partial / needs-work records that remaining gate, not a functional defect.
+No story definition/checkbox, owner-gate state, weights/dependency manifest,
+classifier source, NOTICE, tag or release changed. Neither owner gate ran;
+no weights downloaded, no push or publication occurred.
+
+### US-007 retry — 2026-09-22 (Copilot)
+
+Restored the preceding implementation from `ca269ab` onto its unchanged
+pre-story baseline, then reproduced and fixed the verifier's shared-fake
+failure. `RecordingSearchMetrics.counters` now exposes
+`promptguard_contiguity_detections`; its exact dictionary regression increments
+that counter and checks the nonzero value, alongside protocol-field completeness
+and instance isolation. No production or contract bytes changed from that attempt.
+
+All **635 prescribed T0/T1 tests pass**, plus **951 related route, metrics,
+schema, policy, export, governance and search-pin tests**. The latter emit three
+existing non-failing torch/socket warnings. Repository Ruff lint/format, strict
+Pyright and contract drift checks pass. All nine default/shipped revision probes
+reproduce the preceding measurement; stage 4 and historical goldens are unchanged.
+The full-suite gate remains explicitly **deferred to end-of-epic validation**;
+the result stays partial / needs-work for that unverified gate, not the now-fixed
+fake regression. Owner gates and acceptance checkboxes remain untouched.
+
 ## Refinement Notes
 
 ### Research Findings

@@ -1840,3 +1840,59 @@ Historical goldens and `contract_smoke.py` remain unchanged; the existing
 candidate-image smoke validates the whole current `HealthResponse`, so its
 synthetic test body gains the field without adding a model-specific assertion.
 **Not replayed to Poppy**; no publish, push, tag or release occurred.
+
+### US-007: opt-in contiguity rule and cache-revision inputs (2026-09-22)
+
+`hardening-promptguard-86m` US-007 makes the thirty-ninth rotation.
+Measured from clean starting commit `967748d6edb4f8f87c47d69cac73e297fbff7bd0`,
+with read-only whole-file reversals (substituting the starting bytes for the
+hash reads, never checking files out) and in-memory removal of each new hash
+update. Default `{}` and shipped `config.yaml` produce the same value in
+**every row**:
+
+| Probe | Full sanitizer revision |
+|---|---|
+| Before / all three source files and both inputs reverted | `85394a954e32ec00bb499d08c01811dc4d00b363708e3f839311ae8fde33d0c0` |
+| After | `b641e6a51ef7cb45a5209a42321a5fff135f432264d256dd8eec9fe9e62698f5` |
+| Only `contract.py` reverted | `4f4937dad3b5863890f7e6d3219b19831e2383cfa7a89cb8bf2e85af788b9028` |
+| Only `orchestrator.py` reverted | `a19cff5fcfa4a07cd8a1cfdac6ed606a31e6086ea0b7792e09e29660ab454f24` |
+| Only `stage3_promptguard.py` reverted | `e17928ef9a42ac1bd59b650aa7ad9bb956b899343c168e4d87c549dde23cbd3e` |
+| Only contiguity-windows hash input removed | `73215666609d407f1a93d2f3b5ec152b063ca2e32393550e29f64f0db6ce8ef4` |
+| Only contiguity-threshold hash input removed | `49ec3dbcbfe7d2b6a77df1c1a301313a5e73985201f908219ec9d5cae6969953` |
+| Both new inputs removed, current source bytes | `aec760f1c9aba57fe9acd6c8e59e045b507c944562aeecfb733e9d9f3629e24e` |
+| Three sources reverted, new inputs retained | `fed0423bb7e62f3662ca126aed31f60fd4389fe3053865a541409fbb77d7506a` |
+
+Only those three of the nine hashed sources move; `stage4_structuring.py`
+and the other five are byte-unchanged. `sanitizer_revision.py` is not itself
+hashed: its change appends windows then threshold after `promptguard_threshold`,
+all three as ASCII. The default now includes `b"0"` and `b"0.5"`, so **all
+deployments invalidate old cache keys**, including deployments leaving the
+rule off. No per-request contiguity override exists; `cache_policy_fingerprint`
+retains its exact input set, with the settings carried through the revision.
+
+Stage 3 consumes ordered window scores. The strict max rule remains `>`; the
+opt-in run rule uses `>=` and requires 2–8 adjacent windows. Flags are a union
+of window indices in document order, deduplicated across rules, not across
+distinct windows with identical text (preserving max-pooling ties). The longest
+qualifying run and total window count are the only fields on its WARNING.
+The max rule and trusted/absent-model policies are unchanged; a benign
+single-window empty input is SAFE. Stages 2 and 4 are unchanged.
+
+**Consumer handoff:** held contract 1.3.0 gains
+`promptguard_contiguity_detections` in `retrieve`, `search` and `extraction`
+on `/metrics`; `promptguard_threshold` governs the max rule only, and the
+server-side run rule can block independently. The request description is a
+description-only change under GOVERNANCE row 3. The re-created held golden
+moves only `SearchRequest.promptguard_threshold`'s description;
+`_EXPECTED_ONE_THREE_ZERO_DIFF` is unchanged. The generated same-tag anchor is
+`579c32ee93ec3b1c528ce6df4a8d6ba5b4eb285890ecd8119b74098f39e7a3a9`.
+No new diagnostic or omission reason is introduced, and quarantine still
+replaces all flagged text with a diagnostic label.
+
+**Corpus handoff:** require both benign-window-separated injection fragments
+(remaining evasion) and sustained mid-band comment/review text (adversarial
+false positives, correlated by 64-token overlap) before any default flip.
+Search coverage is content-dependent; the fixture tokenizer is not evidence
+of production-model coverage or latency. No 86M weights or owner benchmark
+were acquired/run, no owner gate changed, and no push/tag/release occurred.
+**Not replayed to Poppy.**

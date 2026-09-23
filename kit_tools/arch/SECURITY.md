@@ -181,6 +181,26 @@ A blocking hit yields verdict `blocked` and quarantine. Each suspicious hit cost
 
 `promptguard/classifier.py` loads `meta-llama/Llama-Prompt-Guard-2-22M` (a DeBERTa-v3 sequence classifier) on CPU with `use_safetensors=True`. Text is chunked at `MAX_SEQ_LEN = 512` tokens with `CHUNK_OVERLAP = 64`, up to `MAX_PROMPTGUARD_CHUNKS = 64`; over budget raises `PromptGuardBudgetExceededError` rather than silently classifying a prefix. `pipeline/stage3_promptguard.py` applies the handler-resolved threshold (`config.yaml` `promptguard_threshold`, shipped as 0.85; overridable per `/retrieve` or `/search` request within 0.0 to 1.0, then operator-capped): a score above threshold is `injection_detected` with `INJECTION_PENALTY = -0.5`.
 
+Stage 3 consumes `classify_windows`: the unchanged **max-score** rule fires on
+`max_score > threshold`; the opt-in **contiguity** rule fires on any run of at
+least `promptguard_contiguity_windows` scores `>= promptguard_contiguity_threshold`.
+Either blocks. Windows ships at `0` (off), otherwise 2–8; the run threshold ships
+at `0.5` and is absolute/server-side, never a per-request override. Both values
+enter the sanitizer revision. `/search` coverage is content-dependent: character
+caps do not imply a one-window input. Both-rule results carry the document-order
+union of flagged window indices internally, but quarantine replaces those texts
+with the existing diagnostic label before the wire.
+
+**Residuals in both directions.** Fragments separated by one benign roughly
+448-token window can still pass both rules. Conversely, sustained mid-band text
+placed by an attacker in a comment or review can aim to block the entire page
+or omit its search result once the rule is enabled. Adjacent windows share
+`CHUNK_OVERLAP = 64` tokens, so correlated scores are not independent evidence.
+Both evasion and adversarial false-positive shapes must enter
+`epic-forage-injection-corpus` before a default flip. Dedicated per-route counters
+are the aggregate signal; the WARNING `promptguard_contiguity_verdict` carries
+only the longest qualifying run and total window count as the per-event signal.
+
 The acquisition path verifies the requested `(model_id, revision)` against that
 model's own exact-set manifest entry. `_load_verified` re-derives the manifest and
 requested snapshot paths and requires equality plus directory existence before

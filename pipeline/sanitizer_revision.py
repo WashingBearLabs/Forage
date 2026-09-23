@@ -32,10 +32,12 @@ _ROOT_REVISION_SOURCES = ("url_validator.py",)
 
 
 def derive_sanitizer_revision(config: dict[str, Any]) -> str:
-    """Return an opaque hash of source, model identity, and configured threshold.
+    """Return an opaque hash of source, model identity, and configured rules.
 
     The configured value is hashed unchanged; the active, handler-resolved
     threshold reaches the content cache key through ``cache_policy_fingerprint``.
+    Contiguity is configuration-only: windows then threshold follow the max
+    threshold as ASCII, including the disabled defaults.
 
     Model identity is ``resolved_model_id@revision``, not the model id alone
     (``feature-forage-model-bootstrap`` US-001). Weights arrive at runtime now,
@@ -73,4 +75,8 @@ def derive_sanitizer_revision(config: dict[str, Any]) -> str:
     digest.update(f"{model_id}@{resolve_revision(model_id)}".encode())
     digest.update(f"idna@{idna.__version__}".encode())
     digest.update(str(config.get("promptguard_threshold", 0.85)).encode("ascii"))
+    digest.update(str(config.get("promptguard_contiguity_windows", 0)).encode("ascii"))
+    digest.update(
+        str(config.get("promptguard_contiguity_threshold", 0.5)).encode("ascii")
+    )
     return digest.hexdigest()

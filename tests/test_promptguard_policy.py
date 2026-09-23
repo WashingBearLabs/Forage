@@ -26,6 +26,7 @@ from pipeline.extraction_limits import extraction_settings_from_config
 from pipeline.orchestrator import PipelineError
 from pipeline.retrieve_limits import RetrieveSettings
 from pipeline.search_providers.base import ProviderSearchResult
+from pipeline.stage3_promptguard import PromptGuardSettings
 from pipeline.stage5_url_audit import FetchResult
 from retrieval_app import (
     ExtractionAdmissionController,
@@ -58,6 +59,7 @@ async def client(
     state: dict[str, object] = {
         "config": config,
         "promptguard_threshold_default": 0.95,
+        "promptguard_settings": PromptGuardSettings(),
         "retrieve_settings": settings,
         "policy_domain_entries_max_bytes": 65536,
         "extraction_settings": extraction_settings,
@@ -310,7 +312,7 @@ async def test_ceiling_changes_both_fetch_routes_but_not_extract(
     assert extract.status_code == 200
     assert extract.json()["injection_detected"] is False
     assert not any(key.startswith("effective_") for key in extract.json())
-    assert classifier.classify.call_count == 3
+    assert classifier.classify_windows.call_count == 3
 
 
 @pytest.mark.parametrize("floor", [False, True])
@@ -412,7 +414,7 @@ async def test_cache_hits_are_stamped_after_reading_even_for_pre_upgrade_entries
         assert response.json()["effective_promptguard_fail_closed"] is True
         assert response.json()["effective_promptguard_threshold"] == 0.5
         assert response.json()["body"] == miss.json()["body"]
-    classifier.classify.assert_called_once()
+    classifier.classify_windows.assert_called_once()
     assert storage.entries[key][0] == json.dumps(cached).encode()
 
 

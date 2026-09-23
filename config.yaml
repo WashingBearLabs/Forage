@@ -13,6 +13,10 @@ news_domains:
   - .cnn.com
 seed_blocklist: []
 promptguard_threshold: 0.85
+# Opt-in adjacent-window rule; 0 disables it, otherwise 2-8 windows.
+# Absolute server-side threshold, independent of each request's max-score rule.
+promptguard_contiguity_windows: 0
+promptguard_contiguity_threshold: 0.5
 # 0 leaves torch/tokenizer defaults (every visible core). For a positive count,
 # match the actual CPU quota: FORAGE_CPUS, Kubernetes, host cgroup or orchestrator.
 # Torch sees the host core count, not that quota; the tokenizer pool is disabled.

@@ -217,13 +217,20 @@ MINOR when fields are only added.
 * ``1.3.0`` — ``hardening-promptguard-86m`` US-006 adds
   ``HealthResponse.promptguard_model``: the configured model id, reported
   whether loaded or not. ``promptguard_loaded`` keeps its serving-state meaning.
+* ``1.3.0`` — ``hardening-promptguard-86m`` US-007 adds
+  ``promptguard_contiguity_detections`` to each ``/metrics`` section
+  ``retrieve``, ``search`` and ``extraction`` (additive counters, pinned by
+  ``tests/test_contract_metrics.py``). Request ``promptguard_threshold``
+  descriptions clarify max-rule-only scope; the opt-in server-side contiguity
+  rule can block independently. Description-only under GOVERNANCE row 3,
+  inside the held window; no request property or bound changes.
 
 This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy
 at ``poppy/core/retrieval/client.py``): ``sanitizer_revision`` is a
 mechanically-derived hash of pipeline *behavior* (source, model identity,
-configured threshold), while ``contract_version`` is a hand-bumped *wire-shape*
-contract. Neither replaces the other.
+configured max threshold and contiguity settings), while ``contract_version``
+is a hand-bumped *wire-shape* contract. Neither replaces the other.
 """
 
 # ---------------------------------------------------------------------------

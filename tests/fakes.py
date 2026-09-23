@@ -283,6 +283,7 @@ class RecordingSearchMetrics:
     provider_timeouts: int = 0
     promptguard_latency_target_exceeded: int = 0
     sanitization_latency_max_ms: int = 0
+    promptguard_contiguity_detections: int = 0
 
     @property
     def counters(self) -> dict[str, int]:
@@ -296,6 +297,7 @@ class RecordingSearchMetrics:
                 self.promptguard_latency_target_exceeded
             ),
             "sanitization_latency_max_ms": self.sanitization_latency_max_ms,
+            "promptguard_contiguity_detections": self.promptguard_contiguity_detections,
         }
 
 

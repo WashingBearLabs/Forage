@@ -106,6 +106,10 @@ from pipeline.search_providers.searxng import (
     searxng_settings_from_config,
 )
 from pipeline.search_targets import SearchTargets, search_targets_from_config
+from pipeline.stage3_promptguard import (
+    PromptGuardSettings,
+    promptguard_settings_from_config,
+)
 from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES
 from promptguard.classifier import (
     DEFAULT_MODEL_ID,
@@ -421,6 +425,8 @@ KNOWN_CONFIG_KEYS: frozenset[str] = frozenset(
         "news_domains",
         "seed_blocklist",
         "promptguard_threshold",
+        "promptguard_contiguity_windows",
+        "promptguard_contiguity_threshold",
         "promptguard_threads",
         "promptguard_fail_closed_floor",
         "promptguard_threshold_ceiling",
@@ -651,6 +657,11 @@ class ExtractionMetricsResponse(BaseModel):
             "max is zero. The concrete OOM-proximity signal an operator reads."
         )
     )
+    promptguard_contiguity_detections: int = Field(
+        description=(
+            "Uploads blocked by the contiguity rule, including both-rule verdicts."
+        )
+    )
 
 
 class SearchMetricsResponse(BaseModel):
@@ -762,6 +773,11 @@ class SearchMetricsResponse(BaseModel):
             "search.promptguard_latency_target_exceeded and search.requests."
         )
     )
+    promptguard_contiguity_detections: int = Field(
+        description=(
+            "Results omitted by the contiguity rule, including both-rule verdicts."
+        )
+    )
 
 
 class RetrieveMetricsResponse(BaseModel):
@@ -833,6 +849,11 @@ class RetrieveMetricsResponse(BaseModel):
             "`admission_queue_full`) because the admission queue was at "
             "`retrieve.admission_queue_depth` or its byte reservation would "
             "have exceeded `retrieve.max_queued_fetch_bytes`."
+        )
+    )
+    promptguard_contiguity_detections: int = Field(
+        description=(
+            "Retrievals blocked by the contiguity rule, including both-rule verdicts."
         )
     )
 
@@ -1155,6 +1176,7 @@ class ExtractionMetrics:
         self.busy_rejections = 0
         self.semaphore_saturation = 0
         self.verdicts: dict[str, int] = {}
+        self.promptguard_contiguity_detections = 0
 
     def record_verdict(self, verdict: str) -> None:
         """Record one content-free extraction outcome."""
@@ -1184,6 +1206,7 @@ class SearchMetrics:
         self.provider_timeouts = 0
         self.promptguard_latency_target_exceeded = 0
         self.sanitization_latency_max_ms = 0
+        self.promptguard_contiguity_detections = 0
 
     def record_error(self, error: str) -> None:
         """Record one content-free search error, keyed by ``PipelineError.error``."""
@@ -1221,6 +1244,7 @@ class RetrieveMetrics:
         self.semaphore_saturation = 0
         self.busy_rejections = 0
         self.classification_wait_timeouts = 0
+        self.promptguard_contiguity_detections = 0
 
     def record_error(self, error: str) -> None:
         """Record one content-free retrieve error, keyed by ``PipelineError.error``."""
@@ -1642,6 +1666,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             )
     app.state.config = published_config
     app.state.promptguard_threshold_default = promptguard_threshold_from_config(config)
+    app.state.promptguard_settings = promptguard_settings_from_config(config)
     logger.info(
         "promptguard_threshold_resolved — value=%s",
         app.state.promptguard_threshold_default,
@@ -1888,6 +1913,7 @@ app.state.retrieve_settings = retrieve_settings_from_config({})
 # The search handler also supports transports that never fire lifespan events.
 app.state.search_targets = SearchTargets()
 app.state.promptguard_threshold_default = 0.85
+app.state.promptguard_settings = PromptGuardSettings()
 app.state.policy_domain_entries_max_bytes = _DEFAULT_POLICY_DOMAIN_ENTRIES_MAX_BYTES
 app.state.extraction_metrics = ExtractionMetrics()
 app.state.extraction_admission = ExtractionAdmissionController(
@@ -2049,6 +2075,9 @@ async def metrics(request: Request) -> dict[str, Any]:
             "queued_bytes": controller.queued_bytes,
             "verdicts": extraction_metrics.verdicts,
             **_cgroup_memory_snapshot(),
+            "promptguard_contiguity_detections": (
+                extraction_metrics.promptguard_contiguity_detections
+            ),
         },
         "search": {
             "requests": search_metrics.requests,
@@ -2069,6 +2098,9 @@ async def metrics(request: Request) -> dict[str, Any]:
                 search_metrics.promptguard_latency_target_exceeded
             ),
             "sanitization_latency_max_ms": search_metrics.sanitization_latency_max_ms,
+            "promptguard_contiguity_detections": (
+                search_metrics.promptguard_contiguity_detections
+            ),
         },
         "retrieve": {
             "requests": retrieve_metrics.requests,
@@ -2084,6 +2116,9 @@ async def metrics(request: Request) -> dict[str, Any]:
             ),
             "semaphore_saturation": retrieve_metrics.semaphore_saturation,
             "busy_rejections": retrieve_metrics.busy_rejections,
+            "promptguard_contiguity_detections": (
+                retrieve_metrics.promptguard_contiguity_detections
+            ),
         },
         # A different layer from `retrieve.cache_hits`/`cache_misses` above,
         # not a duplicate of it — :class:`CacheMetricsResponse` says why, and
@@ -2230,6 +2265,7 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
             config=request.app.state.config,
             sanitizer_revision=_resolved_sanitizer_revision(request.app.state),
             promptguard_threshold=policy["promptguard_threshold"],
+            promptguard_settings=request.app.state.promptguard_settings,
             settings=retrieve_settings,
             retrieve_metrics=retrieve_metrics,
             classification_semaphore=request.app.state.classification_semaphore,
@@ -2365,6 +2401,8 @@ async def extract(
             request_id=safe_request_id,
             classifier=request.app.state.classifier,
             promptguard_threshold=threshold,
+            promptguard_settings=request.app.state.promptguard_settings,
+            extraction_metrics=request.app.state.extraction_metrics,
             sanitizer_revision=getattr(
                 request.app.state,
                 "sanitizer_revision",
@@ -2476,6 +2514,7 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
             config=request.app.state.config,
             classifier=request.app.state.classifier,
             promptguard_threshold=policy["promptguard_threshold"],
+            promptguard_settings=request.app.state.promptguard_settings,
             search_metrics=search_metrics,
             classification_semaphore=request.app.state.classification_semaphore,
             classification_wait_seconds=(

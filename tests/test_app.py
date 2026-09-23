@@ -93,6 +93,11 @@ from pipeline.search_targets import (
     search_targets_from_config,
 )
 from pipeline.stage1_extraction import ExtractionResult, extract_html
+from pipeline.stage3_promptguard import (
+    PromptGuardConfigurationError,
+    PromptGuardSettings,
+    promptguard_settings_from_config,
+)
 from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES, FetchResult
 from promptguard.classifier import (
     CHUNK_OVERLAP,
@@ -141,6 +146,7 @@ def client() -> httpx.AsyncClient:
     app.state.retrieve_settings = retrieve_settings_from_config(app.state.config)
     app.state.search_targets = SearchTargets()
     app.state.promptguard_threshold_default = 0.85
+    app.state.promptguard_settings = PromptGuardSettings()
     app.state.policy_domain_entries_max_bytes = 65536
     settings = extraction_settings_from_config(app.state.config)
     app.state.extraction_settings = settings
@@ -548,6 +554,7 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "provider_timeouts": 0,
         "promptguard_latency_target_exceeded": 0,
         "sanitization_latency_max_ms": 0,
+        "promptguard_contiguity_detections": 0,
     }
     assert body["retrieve"] == {
         "requests": 0,
@@ -561,6 +568,7 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "classification_wait_timeouts": 0,
         "semaphore_saturation": 0,
         "busy_rejections": 0,
+        "promptguard_contiguity_detections": 0,
     }
     assert set(body["cache"]) == {
         "reconnect_attempts",
@@ -2150,7 +2158,7 @@ async def test_retrieve_classifications_overlap_only_with_two_boot_permits(
                 for response in responses:
                     assert response.status_code == 200
                     assert response.json()["promptguard_state"] == "scanned"
-                assert classifier.classify.call_count == 2
+                assert classifier.classify_windows.call_count == 2
                 assert (starts[1] < ends[0]) is (concurrency == 2)
             finally:
                 for gate in release:
@@ -2775,6 +2783,183 @@ async def test_lifespan_refuses_an_out_of_range_cache_bound(
             pass
 
 
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("promptguard_contiguity_windows", value)
+        for value in [
+            -1,
+            1,
+            9,
+            2.0,
+            True,
+            False,
+            "2",
+            None,
+            list[object](),
+            dict[str, object](),
+        ]
+    ]
+    + [
+        ("promptguard_contiguity_threshold", value)
+        for value in [
+            -0.1,
+            1.1,
+            float("nan"),
+            float("inf"),
+            -(10**1000),
+            10**1000,
+            True,
+            False,
+            "0.5",
+            None,
+            list[object](),
+            dict[str, object](),
+        ]
+    ],
+)
+async def test_lifespan_refuses_invalid_contiguity(
+    monkeypatch: pytest.MonkeyPatch, key: str, value: object
+) -> None:
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: {key: value})
+    with pytest.raises(PromptGuardConfigurationError, match=key):
+        async with lifespan(FastAPI()):
+            pytest.fail("invalid contiguity config reached a serving lifespan")
+
+
+@pytest.mark.parametrize("route", ["retrieve", "extract", "search"])
+@pytest.mark.parametrize(
+    ("scores", "windows", "detections"),
+    [
+        ([0.6, 0.6], 2, 1),
+        ([0.9, 0.6, 0.6], 2, 1),
+        ([0.6, 0.6], 0, 0),
+        ([0.9, 0.1], 2, 0),
+    ],
+)
+async def test_contiguity_from_boot_through_each_route_and_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    route: str,
+    scores: list[float],
+    windows: int,
+    detections: int,
+) -> None:
+    config = {
+        "extract_route_enabled": True,
+        "promptguard_contiguity_windows": windows,
+        "promptguard_contiguity_threshold": 0.5,
+    }
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    monkeypatch.setattr(retrieval_app, "spool_dir", lambda: tmp_path)
+    monkeypatch.setattr(model_fetcher.WeightAcquisition, "run", AsyncMock())
+    builder = MagicMock(wraps=promptguard_settings_from_config)
+    monkeypatch.setattr(retrieval_app, "promptguard_settings_from_config", builder)
+    monkeypatch.setattr(
+        orchestrator,
+        "validate_url",
+        AsyncMock(return_value=("93.184.216.34", "example.com")),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "fetch_url",
+        AsyncMock(
+            return_value=FetchResult(
+                final_url="https://example.com/page",
+                response_body=b"<html><body><p>A quiet garden grows.</p></body></html>",
+                content_type="text/html",
+                status_code=200,
+            )
+        ),
+    )
+    classifier = make_mock_classifier()
+    chunks = [f"private-chunk-{i}" for i in range(len(scores))]
+    classifier.classify_windows.side_effect = None
+    classifier.classify_windows.return_value = scores, chunks
+    with caplog.at_level(logging.INFO, logger="pipeline.orchestrator"):
+        async with _running_app() as live:
+            builder.assert_called_once_with(config)
+            monkeypatch.setattr(app.state, "classifier", classifier)
+            monkeypatch.setattr(app.state, "cache", FakeContentCache())
+            monkeypatch.setattr(
+                app.state,
+                "search_providers",
+                [
+                    FakeSearchProvider(
+                        name="searxng",
+                        outcome=ProviderSearchResult(
+                            provider_name="searxng",
+                            results=[
+                                {
+                                    "title": "A quiet garden",
+                                    "url": "https://example.com/page",
+                                    "content": "Fresh produce for local families.",
+                                }
+                            ],
+                            unresponsive_engines=[],
+                        ),
+                    )
+                ],
+            )
+            if route == "extract":
+                response = await live.post(
+                    "/extract",
+                    files={
+                        "file": ("garden.txt", b"A quiet garden grows.", "text/plain")
+                    },
+                    data={"filename": "garden.txt"},
+                )
+            else:
+                response = await live.post(
+                    f"/{route}",
+                    json={
+                        **(
+                            {"url": "https://example.com/page"}
+                            if route == "retrieve"
+                            else {"query": "garden"}
+                        ),
+                        "promptguard_threshold": 1.0 if scores == [0.6, 0.6] else 0.85,
+                    },
+                )
+            assert response.status_code == 200, response.text
+            data = response.json()
+            blocked = bool(detections or max(scores) > 0.85)
+            if route == "search":
+                assert data["omitted_by_reason"] == (
+                    {"injection_detected": 1} if blocked else {}
+                )
+                assert len(data["results"]) == int(not blocked)
+                if blocked:
+                    rule = (
+                        "both"
+                        if detections and max(scores) > 0.85
+                        else ("contiguity" if detections else "max_score")
+                    )
+                    assert f"rule={rule}" in caplog.text
+            else:
+                assert data["injection_detected"] is blocked
+                assert data["injection_spans"] == (
+                    [contract.DIAG_INJECTION_DETECTED] if blocked else []
+                )
+            assert all(chunk not in response.text for chunk in chunks)
+            metrics_response = await live.get("/metrics")
+            assert metrics_response.status_code == 200
+            metrics = metrics_response.json()
+            section = "extraction" if route == "extract" else route
+            for name in ("extraction", "retrieve", "search"):
+                assert metrics[name]["promptguard_contiguity_detections"] == (
+                    detections if name == section else 0
+                )
+            classifier.classify_windows.assert_called_once()
+    warnings = [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("promptguard_contiguity_verdict")
+    ]
+    assert len(warnings) == detections
+
+
 # ---------------------------------------------------------------------------
 # Search latency targets (`hardening-resource-envelope` US-004)
 # ---------------------------------------------------------------------------
@@ -2895,7 +3080,7 @@ async def test_lifespan_search_targets_reach_logs_and_latency_metrics(
             )
             assert response.status_code == 200
             assert len(response.json()["results"]) == 1
-            assert classifier.classify.call_count == 1
+            assert classifier.classify_windows.call_count == 1
             measured = [
                 record
                 for record in caplog.records
@@ -4725,7 +4910,7 @@ async def test_search_without_domain_policy_matches_pre_story_baseline(
     }
     assert {key: response.json()[key] for key in baseline} == baseline
     assert paid.calls == []
-    assert classifier.classify.call_count == 3
+    assert classifier.classify_windows.call_count == 3
     assert all(call.kwargs["threshold"] == 0.85 for call in pg.call_args_list)
 
 
