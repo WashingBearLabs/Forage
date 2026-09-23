@@ -30,6 +30,7 @@ for whether a key is usable at all: :func:`brave_key_present`.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -39,6 +40,12 @@ from typing import Any, Final, cast
 
 import httpx
 
+from pipeline.bounded_body import (
+    BodyTooLarge,
+    MalformedBody,
+    UnsupportedEncoding,
+    read_bounded_body,
+)
 from pipeline.contract import CONTENT_KIND_CHUNK
 from pipeline.search_providers.base import (
     FailureClass,
@@ -144,12 +151,11 @@ _BRAVE_AUTH_HEADER: Final = "X-Subscription-Token"
 _ISO_CALENDAR_DATE_RE: Final = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 # The captured envelope was 30,344 bytes; this is at least ten times that,
-# checked against `Content-Length` before any read and against a running
-# total of decoded bytes while streaming, so a compressed body cannot expand
-# past it either.
+# decoded bytes bounded by Forage's own decompressor. We request identity,
+# serve decodable compressed replies, and refuse others as unsupported_encoding.
 _BRAVE_MAX_RESPONSE_BYTES: Final = 1_048_576
 
-# The closed `detail` vocabulary this provider ever emits. Twelve fixed
+# The closed `detail` vocabulary this provider ever emits. Thirteen fixed
 # tokens, never `str(exc)`, never a URL — `_failure` collapses anything else
 # to `unexpected` so no future caller can widen what reaches the wire.
 _BRAVE_FAILURE_DETAILS: Final = frozenset(
@@ -165,6 +171,7 @@ _BRAVE_FAILURE_DETAILS: Final = frozenset(
         "bad_json",
         "malformed_body",
         "body_too_large",
+        "unsupported_encoding",
         "unexpected",
     }
 )
@@ -201,7 +208,6 @@ class BraveSettings:
     timeout_seconds: float = DEFAULT_BRAVE_TIMEOUT_SECONDS
     chunk_max_chars: int = DEFAULT_BRAVE_CHUNK_MAX_CHARS
     query_max_chars: int = DEFAULT_BRAVE_QUERY_MAX_CHARS
-    # Test seam only; search() keeps the module constant until US-003.
     max_response_bytes: int = _BRAVE_MAX_RESPONSE_BYTES
 
 
@@ -289,7 +295,7 @@ class BraveApiProvider:
 
     ``search()`` never raises: every exception and every non-2xx response is
     caught and mapped onto a :class:`ProviderFailure` from a closed,
-    twelve-token vocabulary (contract point 4).
+    thirteen-token vocabulary (contract point 4).
     """
 
     name = BRAVE_PROVIDER_NAME
@@ -318,42 +324,36 @@ class BraveApiProvider:
             async with httpx.AsyncClient(
                 timeout=self.settings.timeout_seconds,
                 follow_redirects=False,
+                headers={"Accept-Encoding": "identity"},
                 trust_env=False,
                 verify=ssl.create_default_context(),
             ) as client:
-                async with client.stream(
-                    "GET",
-                    _BRAVE_LLM_CONTEXT_URL,
-                    params={"q": outbound_query, "count": max_results},
-                    headers={_BRAVE_AUTH_HEADER: self._api_key},
-                ) as response:
-                    if response.status_code != 200:
-                        return self._failure_for_status(response.status_code)
-
-                    content_length = response.headers.get("content-length")
-                    if (
-                        content_length is not None
-                        and content_length.isdigit()
-                        and int(content_length) > _BRAVE_MAX_RESPONSE_BYTES
-                    ):
-                        return self._failure("hard_error", "body_too_large")
-
-                    chunks: list[bytes] = []
-                    running = 0
-                    async for chunk in response.aiter_bytes():
-                        running += len(chunk)
-                        if running > _BRAVE_MAX_RESPONSE_BYTES:
-                            return self._failure("hard_error", "body_too_large")
-                        chunks.append(chunk)
-                    body = b"".join(chunks)
+                async with asyncio.timeout(self.settings.timeout_seconds):
+                    async with client.stream(
+                        "GET",
+                        _BRAVE_LLM_CONTEXT_URL,
+                        params={"q": outbound_query, "count": max_results},
+                        headers={_BRAVE_AUTH_HEADER: self._api_key},
+                    ) as response:
+                        if response.status_code != 200:
+                            return self._failure_for_status(response.status_code)
+                        body = await read_bounded_body(
+                            response, max_bytes=self.settings.max_response_bytes
+                        )
 
                 try:
                     payload = cast("object", json.loads(body))
                 except ValueError:
                     return self._failure("hard_error", "bad_json")
                 return self._build_result(payload, max_results)
-        except httpx.TimeoutException:
+        except (TimeoutError, httpx.TimeoutException):
             return self._failure("timeout", "timeout")
+        except BodyTooLarge:
+            return self._failure("hard_error", "body_too_large")
+        except UnsupportedEncoding:
+            return self._failure("hard_error", "unsupported_encoding")
+        except MalformedBody:
+            return self._failure("hard_error", "malformed_body")
         except httpx.HTTPError:
             return self._failure("hard_error", "transport_error")
         except Exception:
@@ -489,7 +489,7 @@ class BraveApiProvider:
         """Log the closed tokens and return the typed failure.
 
         The vocabulary is closed *by construction* rather than by review: a
-        ``detail`` that is not one of the twelve fixed tokens collapses to
+        ``detail`` that is not one of the thirteen fixed tokens collapses to
         ``unexpected`` here. The tokens go in the message itself, as ``%s``
         arguments (``kit_tools/arch/patterns/LOGGING.md`` ~138: ``extra=``
         renders nowhere an operator can see it) — never a URL, a header
