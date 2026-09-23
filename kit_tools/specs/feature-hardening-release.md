@@ -1962,6 +1962,29 @@ workflow's publish jobs exclude pull requests. No merge, credential inspection,
 local image build, model acquisition, benchmark, owner gate, tag push, release
 or publication was performed. Story definitions and checkboxes remain unchanged.
 
+#### US-004 attempt 3 — portable IPv6 policy assertion (2026-09-23)
+
+Fast-forwarded this attempt from `2cd2e1b` to preserved `b08c1d2`; the exact
+pin commit and draft completion PR #30 remain intact. Read back the PR's
+outstanding-window notice and its same-sitting cut or
+`git revert e12182f02ae977336b44e19040305a38d3e519c9` requirement.
+
+The previous [CI run](https://github.com/WashingBearLabs/Forage/actions/runs/35830193440)
+failed only `test_the_ipv6_list_is_unchanged_at_six_entries`: CI formatted the
+mapped prefix as `::ffff:0:0/96`, while the assertion required
+`::ffff:0.0.0.0/96` (also the local Python 3.12.12 spelling). Compare all six
+ordered `IPv6Network` values instead of their version-dependent strings.
+No range, prefix length, ordering or SSRF implementation changes; no runtime
+or sanitizer-revision input changes. The existing test remains one test.
+
+Safe Ruff fixes/formatting applied only to the changed test. The seven related
+modules (the previous six plus URL validation) pass **982 tests**, including
+**257** URL-validation and **79** Compose tests. Fresh whole-tree collection
+and separately selected explicit-module collection still report **4126** tests
+in **38** modules. This is not full-suite execution. The full-suite gate will
+be obtained from ordinary PR CI, whose two publish jobs exclude pull requests;
+no local full-suite command or owner release gate is authorized here.
+
 <!-- Populated during execution. US-001/US-002 record their rotations and the rehearsal extraction;
 US-004 records both classified sweeps; US-003 records the cut, the four-way sha256 table and the
 config-grep facts; US-005 records the three smoke runs, the credential-free pull, the leak check and

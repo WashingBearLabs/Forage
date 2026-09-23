@@ -381,14 +381,14 @@ class TestPrivateAddressClass:
         whole public IPv4 space, so an IPv6-only DNS64/NAT64 deployment would
         find every fetch refused.
         """
-        assert [str(net) for net in _PRIVATE_NETWORKS_V6] == [
-            "::1/128",
-            "fe80::/10",
-            "fc00::/7",
-            "::ffff:0.0.0.0/96",
-            "2001:db8::/32",
-            "ff00::/8",
-        ]
+        assert [
+            ipaddress.IPv6Network("::1/128"),
+            ipaddress.IPv6Network("fe80::/10"),
+            ipaddress.IPv6Network("fc00::/7"),
+            ipaddress.IPv6Network("::ffff:0.0.0.0/96"),
+            ipaddress.IPv6Network("2001:db8::/32"),
+            ipaddress.IPv6Network("ff00::/8"),
+        ] == _PRIVATE_NETWORKS_V6
 
     @pytest.mark.parametrize(
         ("address", "expected"),
