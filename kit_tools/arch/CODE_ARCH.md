@@ -386,7 +386,9 @@ The configured id reaches acquisition, both classifier auto-classes, the memory
 advisory and the revision's `model_id@revision` input. `/health.promptguard_model`
 reports it even while unloaded, never inferring readiness from configuration.
 `load()` checks `id2label` after the import/load `try`: exactly two indexed
-BENIGN/INJECTION labels, case-insensitive, or `model_labels_unexpected` and no
+BENIGN/INJECTION labels, case-insensitive, or the exact pinned 22M
+`LABEL_0`/`LABEL_1` mapping documented in `docs/weights.md`; otherwise
+`model_labels_unexpected` and no
 publication. The successful labels supply the instance's injection index.
 
 This is the thirty-eighth rotation (`4913fdc1…` → `85394a95…`), not a

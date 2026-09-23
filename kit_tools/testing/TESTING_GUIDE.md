@@ -96,10 +96,10 @@ crash reads as a false regression.
 
 **39 `test_*.py` modules** under `tests/`, flat, one per subject — 42 Python files in all
 once `conftest.py`, `fakes.py` and `__init__.py` are counted — plus `golden/` and
-`fixtures/`. **4244 tests collected** on 2026-09-23 (whole-epic release gate,
+`fixtures/`. **4253 tests collected** on 2026-09-23 (patch release gate,
 `uv run pytest --collect-only -q`). Every per-module row below is remeasured
 from collection, not incremented from a previous story's count; their sum
-equals the total. The complete local run reports **4244 passed, no xfails**;
+equals the total. The complete local run reports **4253 passed, no xfails**;
 fresh PR CI is still required. The former six strict raw-read xfails have
 moved to `test_provider_transport.py`, where both real provider stacks drive a
 network double that honors `read(max_bytes)`; all six now enforce the exact
@@ -147,9 +147,9 @@ the story implementer did not run it.
 | `tests/test_models.py` | 80 | Pydantic request/response models |
 | `tests/test_app.py` | 489 | FastAPI endpoints, `/health`, capability break-glass, `/metrics`, provider policy, and lifespan wiring; closed-message policy bound refusals, threshold-default warning/fallback for invalid values (including booleans, non-finite and oversized numbers), numeric strings, Unicode/surrogate threshold boot safety, once-only INFO default publication, and the unchanged `/extract` boolean divergence; SearXNG query-cap boot wiring and unconditional refusal of invalid values |
 | `tests/test_promptguard_policy.py` | 131 | Handler-side policy resolution, field-name guard, nullable bounded thresholds on both routes, default-before-ceiling classification and zero preservation, null/explicit/capped cache-key equivalence, resolved-keyword isolation, absent/contended classifier floors, trusted/VERIFIED exemptions, stamped hits (including old entries), unchanged `/extract` and policy-free 422s (recounted at hostname/config US-005) |
-| `tests/test_stage3_promptguard.py` | 155 | ML scan; transformers/torch mocked |
+| `tests/test_stage3_promptguard.py` | 164 | ML scan; mocked inference plus real pinned-config resolution |
 | `tests/test_ci_workflow.py` | 289 | Workflow shape, SHA pins/permissions, six-gate graph and both publish lanes; image/contract mapping, Release body/assets read-back against the anchor, reproducible exporters and four secret-grep patterns. Executes the actual POSIX awk docstring extractor against live and hostile inputs; whole-entry tense and uniqueness guards reject provisional publication-state clauses, with five permanent counterexamples for the frozen 1.3.0 announcement |
-| `tests/test_compose_fragments.py` | 79 | Compose fragments, parse-only shape guards and the pending `forage:1.2.0` pin; search/model bare-name passthroughs on both services, the full-only HMAC key, resource envelope and status-only liveness probe |
+| `tests/test_compose_fragments.py` | 79 | Compose fragments, parse-only shape guards and the pending `forage:1.2.1` pin; search/model bare-name passthroughs on both services, the full-only HMAC key, resource envelope and status-only liveness probe |
 | `tests/test_contract_smoke.py` | 94 | `contract_smoke.py`: every `/health` clause, polling, the single-source ties to the golden schema, and — since US-004 — the in-image contract checks: the `docker run --rm --entrypoint cat` argv it builds, the anchor comparisons against the committed trust root, and the `info.version` ↔ live `contract_version` claim, all driven through an injected runner so the suite never starts a container. `search-release` US-004 adds the status-aware `--expect-status`/`--anchor` coverage: a healthy body passes under `healthy` and fails under the default, a degraded body fails under `healthy`, `wait_for_health` under `healthy` keeps polling past a 200 `degraded` body until a `healthy` one arrives (or returns the last body once the deadline passes), and the in-image anchor is compared against the `--anchor` file rather than a hard-coded path |
 | `tests/test_stage5_url_audit.py` | 30 | Outbound fetch + redirect-chain audit |
 | `tests/test_fakes.py` | 18 | Shared streaming doubles: raw/decoded reads, no implicit Content-Length, delayed chunks, client patch restoration, per-instance and aggregate decoder observations including raw-deflate retry, and complete `SearchMetricsSink` parity |

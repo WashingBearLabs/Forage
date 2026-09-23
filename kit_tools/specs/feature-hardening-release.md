@@ -1172,6 +1172,60 @@ Implementation Notes carry `### US-005 — gate not run, <date>` naming the miss
 
 ## Implementation Notes
 
+### Published-model failure and authorized replacement — 2026-09-23
+
+PR #30 merged as `d747a2bd41da993914229c7f31622ab20148dc32`.
+Actual-main CI `35891633312` and v1.2.0 tag CI `35892927967` passed;
+publication completed at 17:08:19Z, index
+`sha256:f96827955cd8b43c6b5a2c46d53637eded8b2030fda7f864f7f2f6ae62ea4858`.
+All three aliases agreed; the four contract hashes matched
+`74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72`;
+the Release carried all 112 announcement lines; anonymous pull after removal
+succeeded using an isolated empty auth config without changing global login.
+
+US-005 did **not** pass: no-env degraded smoke succeeded, but the healthy
+warm-cache smoke timed out after 540 seconds. Real verified weights loaded,
+then `model_labels_unexpected` refused them. The pinned config omits
+`id2label`/`label2id`; transformers resolves `LABEL_0`/`LABEL_1`.
+Spec 5's named-label-only assumption was false. No weights or manifest were
+modified to bypass it. Diagnostic containers and temporary env files were
+cleaned; the shared model volume and user's main checkout were preserved.
+
+The owner selected: "Warn now; fix and publish v1.2.1, then withdraw v1.2.0
+(delete its git tag and GHCR version)." The public warning is applied.
+The replacement is on `fix/promptguard-labels-v1.2.1`, isolated from the
+planning checkout. The published tag is never moved. Withdrawal remains
+pending replacement verification, not falsely recorded as complete.
+
+The repair accepts generic labels only for the exact verified 22M pin.
+Explicit named-label handling is unchanged; unknown/reversed/non-binary
+generic mappings still refuse. A genuine config fixture is hash-anchored to
+the manifest and passed through real offline AutoConfig. Its two scoring
+regressions failed before the fix and pass afterwards. A read-only,
+network-disabled probe of the actual cached model loads successfully and
+scores a benign input 0.001107 and an injection probe 0.997931.
+This is not an 86M benchmark or a claim that those owner gates ran.
+
+No response shape, contract version, model identity or hashed source changes.
+The config fixture's exact-file token-scan exception is needed for long public
+architecture/key names and guarded by its manifest hash; no payload directory
+is exempted. The replacement pin fan-out follows US-003's recovery rule.
+There is no `kit_tools/BUMP_VERSION.md`; the generic bump workflow cannot run.
+The existing `docs/releases.md` / US-003 tag procedure is authoritative:
+`pyproject.toml`'s version is inert packaging metadata and remains untouched.
+The old runner remains stopped and epic completion remains blocked on
+replacement publication, actual-image runtime verification and withdrawal.
+
+Prepublication rehearsal completed against a newly built, unmodified local
+candidate image `sha256:171c10d3cb42f4c9f14de836833bc935eee7e7a4f0e198c3bce212de69611038`
+at 17:42:02Z: no-env degraded, warm-cache healthy, full Compose keyless
+`cache_unauthenticated`, keyed healthy with signing enabled, two retrieves
+with the second a cache hit, and minimal Compose search (200, three results).
+All five marker counts were zero and the validation 422 had only the six
+specified keys. Temporary files, project resources and the disposable
+Valkey volume were removed; shared weights and global auth were preserved.
+This is candidate evidence, not yet the published v1.2.1 witness.
+
 ### US-001
 
 letter: (l)

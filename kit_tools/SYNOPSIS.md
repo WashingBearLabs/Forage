@@ -27,13 +27,13 @@ preserved). See `docs/bootstrap-notes.md` for the pin record.
 
 | Aspect | Status |
 |--------|--------|
-| Maturity | `v1.2.0` / contract `1.3.0` prepared, **NOT YET PUBLISHED** (`hardening-release` US-003 owner gate pending); the schema golden is frozen. `v1.0.0` (2026-09-12) remains the first non-pre-release cut |
+| Maturity | `v1.2.1` / contract `1.3.0` replacement prepared, **NOT YET PUBLISHED**; v1.2.0 published but failed the real-model smoke and must not be deployed. The owner authorized repair and withdrawal after replacement verification. The schema golden is frozen |
 | Repo visibility | **Public** since the US-008 flip (2026-09-10), repository and both packages; `main` is PR-only, with six required status checks (audit-measured 2026-09-11 — this row said "Private" for a month after the flip) |
-| Tests | 4244 collected and **4244 passed, no xfails** at the local whole-epic release gate (2026-09-23); fresh PR CI is still required. Hermetic via `pytest-socket`, **enforced in CI**, with a committed hermeticity canary |
+| Tests | 4253 collected and **4253 passed, no xfails** at the local patch release gate (2026-09-23); fresh PR CI is still required. Hermetic via `pytest-socket`, **enforced in CI**, with a committed hermeticity canary |
 | Lint | `uv run ruff check .` and `ruff format --check .` both clean — **enforced in CI** |
 | Types | `uv run pyright` (strict) is **clean — 0 errors**, no baseline; **enforced in CI** |
 | CI | `.github/workflows/ci.yml` — ten jobs in two lanes: `lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke`, `publish` for the service image, and `searxng-build`/`-smoke`/`-publish` for the companion |
-| Published image | `ghcr.io/washingbearlabs/forage` — target `1.2.0`, **NOT YET PUBLISHED**. Index digest and `latest` / `1.2` / `1.2.0` equality are filled by US-005 only after the owner cut and registry read-back; `docs/releases.md` retains the verified older releases and the marked draft |
+| Published image | `ghcr.io/washingbearlabs/forage` — replacement target `1.2.1`, **NOT YET PUBLISHED**. Index digest and `latest` / `1.2` / `1.2.1` equality are filled by US-005 after the replacement cut and registry read-back; `docs/releases.md` records v1.2.0's defect and pending withdrawal |
 | Deployment | Poppy's in-tree copy is still the deployed source of truth (coexistence rule) |
 
 **Coexistence rule:** until Poppy pins a published Forage image, any fix to the extracted

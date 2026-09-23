@@ -60,12 +60,13 @@ publishing a frozen, sha256-anchored contract for the first time, and a contract
 `v1.0.0` tagged before them would ship a contract-less release that nothing can re-cut.)
 
 `v1.1.0` shipped on **2026-09-18**, serving contract `1.2.0`.
-The next mapping is **pending**: image `v1.2.0` will serve contract `1.3.0`,
-whose window opened in `hardening-search-sanitization` US-004 and is frozen by
-`hardening-release` US-002. No published image serves `1.3.0` yet.
-`hardening-release` US-003 owns the release cut; US-005 records the publication
-date here after verification. A process built from this tree reports `1.3.0`
-on `/health` — expected, not drift to chase.
+Image `v1.2.0` published contract `1.3.0` on **2026-09-23**, but failed
+healthy-model verification and must not be deployed. The corrected image
+`v1.2.1` is pending; it retains contract `1.3.0`, whose window opened in
+`hardening-search-sanitization` US-004 and was frozen by `hardening-release`
+US-002. Withdrawing a defective image does not withdraw its contract version.
+US-005 records replacement verification; `docs/releases.md` records recovery.
+A process built from this tree reports `1.3.0` on `/health`.
 
 A human line in a release note claiming "this image serves contract 1.1.0" would be the
 last unmechanized integrity claim in the release path, so it is not a human line. The

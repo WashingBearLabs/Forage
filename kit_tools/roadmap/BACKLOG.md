@@ -21,7 +21,7 @@ live in `MILESTONES.md` instead.
 ---
 
 ## Forage Hardening (Epic)
-- [Epic Overview](../specs/epic-forage-hardening.md) — Web Access family Epic 4, Forage half; planned 2026-09-19; ships `v1.2.0` at contract 1.3.0
+- [Epic Overview](../specs/epic-forage-hardening.md) — Web Access family Epic 4, Forage half; planned 2026-09-19; ships `v1.2.1` at contract 1.3.0
 - [Search sanitization](../specs/feature-hardening-search-sanitization.md) — newline-preserving structural scan, URL wire-form scan, search-result URL audit, contract window opens
 - [Retrieve parity](../specs/feature-hardening-retrieve-parity.md) — chunk budget + semaphore, off-loop extraction, corrupt cache entry = miss, operator fail-closed floor (depends on: search-sanitization)
 - [Hostname and config](../specs/feature-hardening-hostname-and-config.md) — dot-boundary hostname matching, `/search` `blocked_domains` + honoured threshold, `config.yaml` key registry (depends on: retrieve-parity)
@@ -29,7 +29,7 @@ live in `MILESTONES.md` instead.
 - [Provider bounds](../specs/feature-hardening-provider-bounds.md) — streamed body caps, wall-clock timeouts, query cap, policy monotonicity, the orchestrator cleanup rotation (depends on: cache-integrity)
 - [Resource envelope](../specs/feature-hardening-resource-envelope.md) — `FORAGE_CPUS` / `FORAGE_MEM_LIMIT`, threads, latency target on `/metrics`, sizing table (depends on: provider-bounds)
 - [PromptGuard 86M](../specs/feature-hardening-promptguard-86m.md) — `FORAGE_MODEL_ID`, contiguity gating, benchmark harness, owner-run benchmark (depends on: resource-envelope)
-- [Release](../specs/feature-hardening-release.md) — validation-422 trim, contract 1.3.0 frozen, owner-gated `v1.2.0` cut (depends on: promptguard-86m)
+- [Release](../specs/feature-hardening-release.md) — validation-422 trim, contract 1.3.0 frozen, owner-gated `v1.2.1` cut (depends on: promptguard-86m)
 
 ---
 
