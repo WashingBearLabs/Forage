@@ -1232,26 +1232,26 @@ the tree changes; the story stops and reports.
   1 CPU exceeds 2× the 22M figure, say so and leave the open question open.
 
 **Acceptance Criteria:**
-- [ ] If the gate has not run: Implementation Notes carry `### US-004 — gate not run, <date>` naming
+- [x] If the gate has not run: Implementation Notes carry `### US-004 — gate not run, <date>` naming
       the missing prerequisites; nothing else in the tree changes.
-- [ ] Implementation Notes carry the populated table (four required rows, `promptguard_model` and
+- [x] Implementation Notes carry the populated table (four required rows, `promptguard_model` and
       `sanitizer_revision` from `/health` per row, the `memory.peak` column; `not measured — access
       pending` where US-005 recorded a 403), the OOM/exit-code line per run, the volume-size line,
       the matrix wall-clock, the tokenizer copy-out command per model (with `git status --porcelain
       bench/` empty afterwards), and every command as run with
       `--env-file "$f"`, `-p 127.0.0.1:8020:8020` and `docker rm -f` — no token value, no `docker
       inspect` / `docker ps --no-trunc` / `docker compose config` output.
-- [ ] `docs/configuration.md` sizing table's classifier column is filled for 1 and 4 vCPU with both
+- [x] `docs/configuration.md` sizing table's classifier column is filled for 1 and 4 vCPU with both
       models (2 vCPU marked `not measured` or filled), with the staleness line naming both manifest
       revisions and the commit; the opt-in recipe and its acquisition caveat appear once each
       (`grep -c 'FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-86M' docs/configuration.md` ≥ 1); the
       wait was `wait_for_health(..., expect_status=STATUS_HEALTHY, ...)` and the recipe carried no
       `VALKEY_URL` (both recorded).
-- [ ] The optional FPR smoke, if run, is recorded with its counts and the config used.
-- [ ] The per-model window-count line (three texts per model, measured in the container with the
+- [x] The optional FPR smoke, if run, is recorded with its counts and the config used.
+- [x] The per-model window-count line (three texts per model, measured in the container with the
       real tokenizer) is under the table and agrees with the harness's host-side counts for the two
       benchmark documents.
-- [ ] `grep -nE 'hf_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}' docs/configuration.md docs/weights.md
+- [x] `grep -nE 'hf_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}' docs/configuration.md docs/weights.md
       bench/config.yaml` returns nothing (token shapes only over the story's artifacts; the spec
       file and `kit_tools/` excluded — ruling R29 as corrected in round 4, R43; executed 2026-09-19:
       nothing); the token file is recorded as mode 0600 and deleted.
