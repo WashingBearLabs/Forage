@@ -1170,27 +1170,27 @@ record.
   sites).
 
 **Acceptance Criteria:**
-- [ ] `_query_provider_chain` exists at module level in `pipeline/orchestrator.py` and takes the
+- [x] `_query_provider_chain` exists at module level in `pipeline/orchestrator.py` and takes the
       metrics sink; `run_search_pipeline`'s body contains no `await provider.search(` and no
       `for ... in enumerate(chain)`; exactly one `search_provider_failed` WARNING statement remains;
       `_legacy_searxng_codes` is called once per request; one empty-chain `ValueError` site remains.
-- [ ] The sink is mutated inside `_query_provider_chain` at the same points as before: the four
+- [x] The sink is mutated inside `_query_provider_chain` at the same points as before: the four
       fixture runs produce identical `_PINNED_COUNTERS` projections before and after; the exhaustion
       captures show the increments already landed when the `PipelineError` is raised.
-- [ ] `_ServedChain` carries the serving provider, raw results, `max_results`, `unresponsive_engines`,
+- [x] `_ServedChain` carries the serving provider, raw results, `max_results`, `unresponsive_engines`,
       `content_kind`, `provider_errors` and `fallback_fired`, and one committed fixture run has a
       non-empty `unresponsive_engines` that survives the pin; `ERROR_HANDLING.md:166-172` names the
       `unknown` provider-name fallback.
-- [ ] `grep -n 'searxng_url' pipeline/orchestrator.py` returns nothing; no `run_search_pipeline(`
+- [x] `grep -n 'searxng_url' pipeline/orchestrator.py` returns nothing; no `run_search_pipeline(`
       call in `tests/` passes `searxng_url=`; `build_provider_chain`'s `searxng_url=` keyword and its
       callers are unchanged.
-- [ ] No omission log line contains a result URL: the extended no-leak test passes; the three
+- [x] No omission log line contains a result URL: the extended no-leak test passes; the three
       rewritten lines carry the reason token and `domain=`. **This is a deliberate delta**, pinned by
       that test.
-- [ ] A `ProviderFailure` with an out-of-vocabulary class, detail or provider name reaches the wire
+- [x] A `ProviderFailure` with an out-of-vocabulary class, detail or provider name reaches the wire
       as `"<name>: hard_error"` / `"unknown: …"` with `detail=unexpected` in the log, pinned by a
       test. **This is a deliberate delta** for inputs the pins do not contain.
-- [ ] Wire, sink and exhaustion output pinned: for inputs whose provider outcomes are in-vocabulary,
+- [x] Wire, sink and exhaustion output pinned: for inputs whose provider outcomes are in-vocabulary,
       the four committed captures (the served-empty run included) produce identical `model_dump()`
       (exclusion list `{"request_id"}`) and identical `_PINNED_COUNTERS` projections (the literal is
       pinned in the test), and the two exhaustion inputs raise a `PipelineError` with identical
@@ -1203,11 +1203,11 @@ record.
       pre-existing search tests in
       `tests/test_orchestrator.py`, `tests/test_search_providers.py` and `tests/test_app.py` pass with
       no assertion changed apart from the two removed legacy-parameter tests.
-- [ ] `sanitizer_revision` rotation measured (revert-and-reproduce on `pipeline/orchestrator.py`) and
+- [x] `sanitizer_revision` rotation measured (revert-and-reproduce on `pipeline/orchestrator.py`) and
       recorded at the five sites ruling 6 names.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ## Edge Cases
 
