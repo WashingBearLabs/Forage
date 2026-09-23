@@ -792,42 +792,42 @@ tokens → 1 window (measured, round 2).
   epic measures the adversarial trip alongside the evasion before the default flips).
 
 **Acceptance Criteria:**
-- [ ] The six verdict cases in the Independent Test plus `[0.2, 0.6, 0.6]` (run at the end fires), a
+- [x] The six verdict cases in the Independent Test plus `[0.2, 0.6, 0.6]` (run at the end fires), a
       score exactly at `contiguity_threshold` counts (`>=`), a score exactly at `promptguard_threshold`
       does not fire the max rule (`>`), and an empty text (`SAFE`) are pinned by tests.
-- [ ] Both keys validated at boot (out-of-range refuses like
+- [x] Both keys validated at boot (out-of-range refuses like
       `tests/test_app.py::test_lifespan_refuses_an_out_of_range_cache_bound`; `windows: 1` refuses
       with `PromptGuardConfigurationError`, tested), defaults `0` / `0.5`,
       registered in `KNOWN_CONFIG_KEYS`, documented in `docs/configuration.md` with the enabling recipe
       and the absolute-threshold note.
-- [ ] All three routes apply the rule (one end-to-end test per route through the ASGI app with the
+- [x] All three routes apply the rule (one end-to-end test per route through the ASGI app with the
       mocked classifier); the `/search` firing case (double returning ≥ 2 window scores) is tested;
       both tokenisation shapes are pinned against `tests/fixtures/tiny_model` (prose → ≥ 2 windows,
       repeated runs → 1 window, rule inert); `tests/test_stage3_promptguard.py:172` is re-pointed to
       `classify_windows.assert_called_once()` here; `models.py`'s `promptguard_threshold` description
       and `docs/configuration.md` state the max-rule-only scope.
-- [ ] A `contiguity` or `both` verdict returns only the diagnostic label in `injection_spans` (the
+- [x] A `contiguity` or `both` verdict returns only the diagnostic label in `injection_spans` (the
       `tests/test_orchestrator.py:2038,2068` shape extended to a multi-chunk union);
       `stage4_structuring.py` is byte-unchanged.
-- [ ] The three counters exist on the named section models, are pinned by
+- [x] The three counters exist on the named section models, are pinned by
       `tests/test_contract_metrics.py`; the window block is done (docstring line, regenerate, golden
       re-created, **nothing appended** to `_EXPECTED_ONE_THREE_ZERO_DIFF` — stated in Implementation
       Notes — anchor pages, `--check` clean).
-- [ ] `derive_sanitizer_revision` includes both values after `promptguard_threshold`;
+- [x] `derive_sanitizer_revision` includes both values after `promptguard_threshold`;
       `tests/test_sanitizer_revision.py:95-116` recomputes them in the same order; a test pins
       `cache_policy_fingerprint()`'s inputs; the rotation is measured and recorded at the five sites (`docs/bootstrap-notes.md`,
       `CLAUDE.md`, `kit_tools/arch/DECISIONS.md`, `kit_tools/docs/GOTCHAS.md`'s rotation table,
       `kit_tools/arch/CODE_ARCH.md`).
-- [ ] SECURITY.md's stage-3 paragraph names both rules and both residual directions; GOTCHAS entry
+- [x] SECURITY.md's stage-3 paragraph names both rules and both residual directions; GOTCHAS entry
       present and states that `/metrics` is the aggregate signal and the WARNING the per-event one;
       `kit_tools/docs/MONITORING.md` carries the three counter rows, the `:64` hash-input sentence and
       the WARNING row (the two `grep -c` counts above); the corpus-epic handoff line in Implementation Notes names both shapes and says `/search`
       coverage is content-dependent; `kit_tools/arch/CODE_ARCH.md`'s stage-3 row names the rule; the
       config triple (`promptguard_settings_from_config`, `PromptGuardConfigurationError`, one lifespan
       call) exists and an out-of-range value refuses boot with that error.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
 
 ### US-003: Benchmark harness — host-side, against the running service
 
