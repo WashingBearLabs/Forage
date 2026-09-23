@@ -7,7 +7,10 @@ for prompt-injection detection.  Runs on CPU only.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+import os
+from typing import TYPE_CHECKING, Any
+
+from pipeline.config_bounds import bounded_int
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -29,6 +32,22 @@ MAX_PROMPTGUARD_CHUNKS = 64
 _INJECTION_LABEL_INDEX = 1
 
 
+class PromptGuardThreadsConfigurationError(ValueError):
+    """Raised when the configured CPU thread count is invalid."""
+
+
+def promptguard_threads_from_config(config: dict[str, Any]) -> int:
+    """Read the boot thread count; zero leaves both libraries' defaults alone."""
+    return bounded_int(
+        config,
+        "promptguard_threads",
+        0,
+        minimum=0,
+        maximum=16,
+        error=PromptGuardThreadsConfigurationError,
+    )
+
+
 class PromptGuardClassifier:
     """Wraps PromptGuard 2 22M for injection detection.
 
@@ -41,6 +60,11 @@ class PromptGuardClassifier:
         self._model: PreTrainedModel | None = None
         self._tokenizer: PreTrainedTokenizerBase | None = None
         self._loaded: bool = False
+        self._threads = 0
+
+    def configure_threads(self, threads: int) -> None:
+        """Retain the validated boot setting for every load attempt."""
+        self._threads = threads
 
     @property
     def loaded(self) -> bool:
@@ -70,6 +94,18 @@ class PromptGuardClassifier:
         """
         try:
             import torch
+
+            if self._threads > 0:
+                try:
+                    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+                    torch.set_num_threads(self._threads)
+                except Exception as exc:
+                    logger.warning(
+                        "promptguard_threads_apply_failed — n=%d error=%s",
+                        self._threads,
+                        type(exc).__name__,
+                    )
+
             from transformers import (
                 AutoModelForSequenceClassification,
                 AutoTokenizer,

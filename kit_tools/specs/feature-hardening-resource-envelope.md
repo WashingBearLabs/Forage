@@ -1314,6 +1314,56 @@ next.
 
 ## Implementation Notes
 
+### US-001 implementation — 2026-09-22
+
+- Added the classifier-owned bounded thread reader and `configure_threads` seam.
+  Every load attempt applies positive counts before tokenizer construction; zero
+  touches neither torch nor the environment. A failed torch setter logs only the
+  count and exception type at WARNING and model loading continues. Acquisition
+  signatures, the environment-clearing fixture and app-state defaults are untouched.
+- Widened only classification concurrency to 1–8; extraction remains 1–1.
+  Boot-created semaphores are exercised at every accepted count; two real ASGI
+  `/retrieve` requests use timestamped, event-gated classifier doubles to prove
+  overlap at two and serialization at one, with both tasks drained before mocks exit.
+- The once-per-boot cgroup advisory follows actual backend selection. It counts the
+  named 512 MiB parent plus the selected model's resident delta, provisional 64 MiB
+  per classification, configured child limit per extraction slot and memory storage
+  or one bounded Valkey read. Regressions pin strict inequality, unreadable cgroups,
+  992/964 MiB defaults and their 32/60 MiB margins, concurrency four, enlarged cache,
+  enlarged child, a synthetic 448 MiB model delta and a raised Valkey value bound.
+  This remains an advisory, not a peak-RSS guarantee: the existing combined PDF-slot
+  and concurrent-cache-read caveats are retained in the configuration reference.
+- Registered both the key and its AST-swept reader. Updated both operator references
+  and startup/boot-failure monitoring rows; preserved the extraction-concurrency
+  rows. The two reference preambles name all three raisable extraction keys.
+  US-003 still owns the wider documentation sweep and the Sizing the container
+  section; US-002 owns the Compose variables.
+- **Spec 7 handoff:** US-004 must replace the provisional coefficient using the
+  concurrency 1→2 RSS measurement for both models, and fill the 86M resident-delta
+  row from idle loaded RSS (86M minus 22M), not the marginal classification delta.
+  Add a per-model sizing-table column; US-006 must pass the selected model id into
+  the boot rule. The table belongs to this spec's US-003, not US-002. If the measured
+  coefficient exceeds 96 MiB, keep the 1024m shipped ceiling and publish the measured
+  minimum: a 1 GiB deployment warns rather than refusing boot or silently resizing.
+  Matching handoff recorded in spec 7's Implementation Notes.
+- **Unchanged surface:** starting commit `8fdb50fce95ff4351c60bc8a65e296a3d0ce0ba0`.
+  All nine hashed sources and the hash definition, `models.py`, `contract/`,
+  `model_fetcher.py` and `tests/conftest.py` are byte-identical. Default, shipped
+  and maximum-performance-knob configurations all derive
+  `d9db75863ea8a464147da8b38c9fc6b8772cf75c485f58cab896e8130c81b6e0`;
+  no revision rotation or contract regeneration is needed.
+- **Evidence:** 65 focused checks passed, then 1,252 related tests passed (ten
+  existing non-failing Torch/socket-guard warnings). Strict Pyright reports zero
+  errors; changed-file Ruff lint and formatting, contract export `--check` and
+  whitespace checks pass. Full suite not run, as this implementer invocation
+  explicitly forbids it. Repository Ruff lint/format gates are blocked by
+  pre-existing files: `pipeline/bounded_body.py:53` and
+  `tests/test_search_providers.py:762,764,784,787` (five E501 findings, two
+  unformatted files). Reproduced directly from the starting commit with
+  `git show` piped to pinned Ruff; neither unrelated file was edited.
+  Result remains partial / needs-work for these outstanding gates, not a failing
+  sizing regression.
+
 ## Refinement Notes
 
 ### Research Findings

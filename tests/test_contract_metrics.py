@@ -83,6 +83,7 @@ _CONFIG_READER_MODULES = (
     "pipeline/sanitizer_revision.py",
     "pipeline/retrieve_limits.py",
     "pipeline/config_bounds.py",
+    "promptguard/classifier.py",
 )
 _BOUNDED_HELPERS = {
     "_bounded_int",
@@ -800,6 +801,7 @@ def test_config_registry_covers_every_reader() -> None:
         ("pipeline/retrieve_limits.py", "retrieve_settings_from_config"),
         ("pipeline/search_providers/brave.py", "brave_settings_from_config"),
         ("pipeline/search_providers/searxng.py", "searxng_settings_from_config"),
+        ("promptguard/classifier.py", "promptguard_threads_from_config"),
         ("retrieval_app.py", "lifespan"),
         ("retrieval_app.py", "promptguard_threshold_from_config"),
     ):

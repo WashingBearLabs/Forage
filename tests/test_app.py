@@ -61,7 +61,11 @@ from pipeline.contract import (
     DIAG_STRUCTURAL_BLOCKED,
 )
 from pipeline.extraction_limits import (
+    CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL,
     MAX_PROMPTGUARD_CHUNKS,
+    MEBIBYTE,
+    PARENT_RESERVATION_BYTES,
+    PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES,
     ExtractionConfigurationError,
     extraction_settings_from_config,
 )
@@ -90,6 +94,7 @@ from promptguard.classifier import (
     MAX_SEQ_LEN,
     MODEL_ID,
     PromptGuardClassifier,
+    PromptGuardThreadsConfigurationError,
 )
 from retrieval_app import (
     _MAX_DOCUMENT_BYTES,
@@ -159,6 +164,7 @@ def test_extraction_limit_defaults_are_bounded_and_derived() -> None:
     assert settings.child_cpu_seconds == 20
     assert settings.wall_clock_seconds == 90
     assert settings.extraction_concurrency == 1
+    assert settings.classification_concurrency == 1
     assert settings.max_extracted_characters == (
         (MAX_SEQ_LEN - CHUNK_OVERLAP) * MAX_PROMPTGUARD_CHUNKS * 4
     )
@@ -1727,6 +1733,293 @@ async def test_lifespan_publishes_the_validated_cache_settings(
         assert settings.max_bytes == DEFAULT_CACHE_MAX_BYTES
 
 
+@pytest.mark.parametrize("concurrency", range(1, 9))
+async def test_lifespan_sizes_classification_semaphore(
+    monkeypatch: pytest.MonkeyPatch, concurrency: int
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _acquisition_that_never_loads
+    )
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {"extraction": {"classification_concurrency": concurrency}},
+    )
+    async with _running_app():
+        semaphore = cast(asyncio.Semaphore, app.state.classification_semaphore)
+        async with asyncio.timeout(5):
+            for _ in range(concurrency):
+                await semaphore.acquire()
+        try:
+            assert semaphore.locked()
+            assert app.state.extraction_settings.extraction_concurrency == 1
+        finally:
+            for _ in range(concurrency):
+                semaphore.release()
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"extraction": {"classification_concurrency": value}}
+        for value in (0, 9, True, False, 1.0, "2", None)
+    ]
+    + [{"extraction": {"extraction_concurrency": 2}}],
+)
+async def test_lifespan_refuses_invalid_classification_concurrency(
+    monkeypatch: pytest.MonkeyPatch, config: dict[str, Any]
+) -> None:
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    with pytest.raises(ExtractionConfigurationError):
+        async with lifespan(FastAPI()):
+            pytest.fail("invalid configuration reached serving startup")
+
+
+@pytest.mark.parametrize("value", [-1, 17, "abc", True, False, 2.0, None])
+async def test_lifespan_refuses_invalid_promptguard_threads(
+    monkeypatch: pytest.MonkeyPatch, value: object
+) -> None:
+    monkeypatch.setattr(
+        retrieval_app, "_load_config", lambda: {"promptguard_threads": value}
+    )
+    with (
+        patch("retrieval_app.ContentCache", return_value=_LifespanCache()),
+        pytest.raises(PromptGuardThreadsConfigurationError),
+    ):
+        async with lifespan(FastAPI()):
+            pytest.fail("invalid thread setting reached serving startup")
+
+
+@pytest.mark.parametrize(
+    "config", [{}, {"promptguard_threads": 0}, {"promptguard_threads": 2}]
+)
+async def test_lifespan_threads_reach_the_loading_classifier(
+    monkeypatch: pytest.MonkeyPatch, config: dict[str, Any]
+) -> None:
+    monkeypatch.setenv("TOKENIZERS_PARALLELISM", "operator-sentinel")
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+
+    def load(classifier: PromptGuardClassifier, **_kwargs: object) -> bool:
+        return classifier.load()
+
+    monkeypatch.setattr(model_fetcher, "acquire_and_load", load)
+    with (
+        patch("torch.set_num_threads") as set_threads,
+        patch("transformers.AutoTokenizer.from_pretrained") as tokenizer,
+        patch("transformers.AutoModelForSequenceClassification.from_pretrained"),
+    ):
+
+        def before_tokenization(*_args: object, **_kwargs: object) -> MagicMock:
+            if config.get("promptguard_threads", 0):
+                set_threads.assert_called_once_with(2)
+                assert os.environ["TOKENIZERS_PARALLELISM"] == "false"
+            else:
+                set_threads.assert_not_called()
+                assert os.environ["TOKENIZERS_PARALLELISM"] == "operator-sentinel"
+            return MagicMock()
+
+        tokenizer.side_effect = before_tokenization
+        async with _running_app():
+            assert await _settled(app.state.model_task) is True
+            assert app.state.classifier.loaded is True
+            assert not hasattr(app.state, "promptguard_threads")
+            tokenizer.assert_called_once()
+
+
+def test_provisional_memory_rule_constants_and_default_margins() -> None:
+    assert PARENT_RESERVATION_BYTES == 512 * MEBIBYTE
+    assert CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL == {MODEL_ID: 0}
+    assert PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES == 64 * MEBIBYTE
+    settings = extraction_settings_from_config({})
+    shared = (
+        PARENT_RESERVATION_BYTES
+        + CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[MODEL_ID]
+        + settings.classification_concurrency * PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES
+        + settings.extraction_concurrency * settings.child_address_space_bytes
+    )
+    assert shared + CacheSettings().max_bytes == 992 * MEBIBYTE
+    assert 1024 * MEBIBYTE - (shared + CacheSettings().max_bytes) == 32 * MEBIBYTE
+    assert shared + CacheSettings().max_value_bytes == 964 * MEBIBYTE
+    assert 1024 * MEBIBYTE - (shared + CacheSettings().max_value_bytes) == 60 * MEBIBYTE
+
+
+@pytest.mark.parametrize(
+    ("config", "limit", "required_mib", "delta_mib", "warns"),
+    [
+        ({}, 1024 * MEBIBYTE, 992, 0, False),
+        ({}, 992 * MEBIBYTE, 992, 0, False),
+        ({}, 992 * MEBIBYTE - 1, 992, 0, True),
+        ({}, None, 992, 0, False),
+        (
+            {"extraction": {"classification_concurrency": 4}},
+            1024 * MEBIBYTE,
+            1184,
+            0,
+            True,
+        ),
+        (
+            {"extraction": {"classification_concurrency": 4}},
+            1184 * MEBIBYTE,
+            1184,
+            0,
+            False,
+        ),
+        ({"cache": {"max_bytes": 128 * MEBIBYTE}}, 1024 * MEBIBYTE, 1088, 0, True),
+        (
+            {"extraction": {"child_address_space_bytes": 512 * MEBIBYTE}},
+            1024 * MEBIBYTE,
+            1120,
+            0,
+            True,
+        ),
+        ({}, 1024 * MEBIBYTE, 1440, 448, True),
+    ],
+)
+async def test_lifespan_memory_rule_counts_configured_terms_once(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    config: dict[str, Any],
+    limit: int | None,
+    required_mib: int,
+    delta_mib: int,
+    warns: bool,
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _acquisition_that_never_loads
+    )
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    model_id = "test-model-with-larger-resident-set" if delta_mib else MODEL_ID
+    monkeypatch.setattr(retrieval_app, "MODEL_ID", model_id)
+    monkeypatch.setattr(
+        retrieval_app,
+        "CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL",
+        {MODEL_ID: 0, model_id: delta_mib * MEBIBYTE},
+    )
+    with patch.object(
+        retrieval_app,
+        "_cgroup_memory_snapshot",
+        return_value={"cgroup_memory_max_bytes": limit},
+    ) as snapshot:
+        async with _running_app() as client:
+            for _ in range(2):
+                assert (await client.get("/health")).status_code == 200
+            snapshot.assert_called_once_with()
+            assert app.state.cache_backend == "memory"
+            settings = app.state.extraction_settings
+            cache_settings = app.state.cache_settings
+
+    warnings = [
+        r for r in caplog.records if "envelope_memory_rule_unmet" in r.getMessage()
+    ]
+    assert len(warnings) == int(warns)
+    if warns:
+        assert warnings[0].levelno == logging.WARNING
+        assert warnings[0].getMessage() == (
+            f"envelope_memory_rule_unmet — memory_max={limit} "
+            f"required={required_mib * MEBIBYTE} "
+            f"classification_concurrency={settings.classification_concurrency} "
+            "extraction_concurrency=1 "
+            f"child_address_space_bytes={settings.child_address_space_bytes} "
+            f"model_id={model_id} parent_bytes={(512 + delta_mib) * MEBIBYTE} "
+            f"cache_backend=memory cache_term_bytes={cache_settings.max_bytes}"
+        )
+
+
+@pytest.mark.parametrize("concurrency", [1, 2])
+async def test_retrieve_classifications_overlap_only_with_two_boot_permits(
+    monkeypatch: pytest.MonkeyPatch, concurrency: int
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _acquisition_that_never_loads
+    )
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {"extraction": {"classification_concurrency": concurrency}},
+    )
+    loop = asyncio.get_running_loop()
+    entered = [asyncio.Event(), asyncio.Event()]
+    release = [threading.Event(), threading.Event()]
+    starts: list[float] = []
+    ends: dict[int, float] = {}
+    lock = threading.Lock()
+
+    def classify(_text: str, **_kwargs: object) -> tuple[float, list[str]]:
+        with lock:
+            index = len(starts)
+            starts.append(time.monotonic())
+        loop.call_soon_threadsafe(entered[index].set)
+        assert release[index].wait(10), "test did not release classifier"
+        with lock:
+            ends[index] = time.monotonic()
+        return 0.0, []
+
+    classifier = MagicMock(spec=PromptGuardClassifier, loaded=True)
+    classifier.classify.side_effect = classify
+    monkeypatch.setattr(retrieval_app, "PromptGuardClassifier", lambda: classifier)
+    with (
+        patch(
+            "pipeline.orchestrator.validate_url",
+            return_value=("93.184.216.34", "example.com"),
+        ),
+        patch(
+            "pipeline.orchestrator.fetch_url",
+            return_value=FetchResult(
+                final_url="https://example.com/article",
+                content_type="text/html",
+                response_body=(
+                    b"<html><body><p>A calm article about gardening.</p></body></html>"
+                ),
+                status_code=200,
+            ),
+        ),
+    ):
+        async with _running_app() as client:
+            tasks: list[asyncio.Task[httpx.Response]] = []
+            try:
+                tasks.append(
+                    asyncio.create_task(
+                        client.post(
+                            "/retrieve", json={"url": "https://example.com/first"}
+                        )
+                    )
+                )
+                await asyncio.wait_for(entered[0].wait(), 5)
+                tasks.append(
+                    asyncio.create_task(
+                        client.post(
+                            "/retrieve", json={"url": "https://example.com/second"}
+                        )
+                    )
+                )
+                semaphore = cast(asyncio.Semaphore, app.state.classification_semaphore)
+                if concurrency == 2:
+                    await asyncio.wait_for(entered[1].wait(), 5)
+                else:
+                    async with asyncio.timeout(5):
+                        while not semaphore._waiters:
+                            await asyncio.sleep(0.01)
+                    assert not entered[1].is_set()
+                release[0].set()
+                await asyncio.wait_for(entered[1].wait(), 5)
+                release[1].set()
+                responses = await asyncio.wait_for(asyncio.gather(*tasks), 5)
+                for response in responses:
+                    assert response.status_code == 200
+                    assert response.json()["promptguard_state"] == "scanned"
+                assert classifier.classify.call_count == 2
+                assert (starts[1] < ends[0]) is (concurrency == 2)
+            finally:
+                for gate in release:
+                    gate.set()
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True), 15
+                )
+
+
 @pytest.mark.parametrize(
     "config",
     [
@@ -2709,6 +3002,83 @@ async def _started_with_valkey_url(
             transport=transport, base_url="http://test"
         ) as selection_client:
             yield selection_client
+
+
+@pytest.mark.parametrize(
+    ("concurrency", "value_mib", "required_mib"),
+    [(1, 4, 964), (4, 4, 1156), (4, 8, 1160)],
+)
+async def test_lifespan_memory_rule_counts_one_bounded_valkey_read(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    concurrency: int,
+    value_mib: int,
+    required_mib: int,
+) -> None:
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {
+            "extraction": {"classification_concurrency": concurrency},
+            "cache": {"max_value_bytes": value_mib * MEBIBYTE},
+        },
+    )
+    with (
+        patch("cache.aioredis") as aioredis,
+        patch.object(
+            retrieval_app,
+            "_cgroup_memory_snapshot",
+            return_value={"cgroup_memory_max_bytes": 1024 * MEBIBYTE},
+        ) as snapshot,
+    ):
+        aioredis.from_url.return_value = _valkey_double()
+        async with _started_with_valkey_url(
+            monkeypatch, valkey_url=_WORKING_VALKEY_URL
+        ) as client:
+            assert (await client.get("/health")).status_code == 200
+            assert isinstance(app.state.cache.storage, ValkeyStorage)
+            assert app.state.cache_settings.max_bytes == 32 * MEBIBYTE
+            snapshot.assert_called_once_with()
+    warnings = [
+        r for r in caplog.records if "envelope_memory_rule_unmet" in r.getMessage()
+    ]
+    assert len(warnings) == int(required_mib > 1024)
+    if warnings:
+        assert warnings[0].levelno == logging.WARNING
+        assert warnings[0].getMessage() == (
+            f"envelope_memory_rule_unmet — memory_max={1024 * MEBIBYTE} "
+            f"required={required_mib * MEBIBYTE} "
+            f"classification_concurrency={concurrency} extraction_concurrency=1 "
+            f"child_address_space_bytes={384 * MEBIBYTE} model_id={MODEL_ID} "
+            f"parent_bytes={512 * MEBIBYTE} cache_backend=valkey "
+            f"cache_term_bytes={value_mib * MEBIBYTE}"
+        )
+    assert _WORKING_VALKEY_URL not in caplog.text
+
+
+async def test_shipped_memory_envelope_is_silent_at_one_gib(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _acquisition_that_never_loads
+    )
+    with patch.object(
+        retrieval_app,
+        "_cgroup_memory_snapshot",
+        return_value={"cgroup_memory_max_bytes": 1024 * MEBIBYTE},
+    ):
+        async with _running_app() as client:
+            assert app.state.config["promptguard_threads"] == 0
+            assert app.state.extraction_settings.classification_concurrency == 1
+            assert app.state.extraction_settings.extraction_concurrency == 1
+            assert (
+                app.state.extraction_settings.child_address_space_bytes
+                == 384 * MEBIBYTE
+            )
+            assert app.state.cache_settings.max_bytes == 32 * MEBIBYTE
+            assert (await client.get("/health")).status_code == 200
+    assert "envelope_memory_rule_unmet" not in caplog.text
 
 
 def test_only_a_fully_unset_valkey_url_reads_as_absent(

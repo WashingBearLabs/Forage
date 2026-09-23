@@ -1,14 +1,25 @@
-"""Pinned resource limits for untrusted document extraction."""
+"""Bounded resource limits for untrusted document extraction.
+
+Classification concurrency intentionally no longer shares extraction concurrency's
+default-is-the-maximum idiom: extraction remains memory-pinned to one worker.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
 
 from pipeline.config_bounds import bounded_int
-from promptguard.classifier import CHUNK_OVERLAP, MAX_SEQ_LEN
+from promptguard.classifier import CHUNK_OVERLAP, MAX_SEQ_LEN, MODEL_ID
 
 MEBIBYTE = 1024 * 1024
+# Parent with the 22M model resident, but no classification in flight.
+PARENT_RESERVATION_BYTES = 512 * MEBIBYTE
+CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL: Mapping[str, int] = {MODEL_ID: 0}
+# Provisional, not measured: 1024 - 512 - 384 - 32 = 96 MiB residual;
+# reserve 32 MiB of that as margin. Spec 7 replaces this with measured RSS deltas.
+PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES = 64 * MEBIBYTE
 MAX_INPUT_BYTES = 50 * MEBIBYTE
 MAX_EXTRACTED_OUTPUT_BYTES = 2 * MEBIBYTE
 MAX_PDF_PAGES = 500
@@ -26,6 +37,7 @@ _MIN_INPUT_BYTES = MEBIBYTE
 _MIN_CHILD_ADDRESS_SPACE_BYTES = 128 * MEBIBYTE
 _MAX_CHILD_ADDRESS_SPACE_BYTES = 512 * MEBIBYTE
 _MAX_ADMISSION_QUEUE_DEPTH = 4
+_MAX_CLASSIFICATION_CONCURRENCY = 8
 
 
 class ExtractionConfigurationError(ValueError):
@@ -151,7 +163,7 @@ def extraction_settings_from_config(config: dict[str, Any]) -> ExtractionSetting
             "classification_concurrency",
             CLASSIFICATION_CONCURRENCY,
             minimum=1,
-            maximum=CLASSIFICATION_CONCURRENCY,
+            maximum=_MAX_CLASSIFICATION_CONCURRENCY,
             error=ExtractionConfigurationError,
         ),
         admission_queue_depth=bounded_int(

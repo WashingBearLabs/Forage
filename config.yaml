@@ -13,6 +13,10 @@ news_domains:
   - .cnn.com
 seed_blocklist: []
 promptguard_threshold: 0.85
+# 0 leaves torch/tokenizer defaults (every visible core). For a positive count,
+# match the actual CPU quota: FORAGE_CPUS, Kubernetes, host cgroup or orchestrator.
+# Torch sees the host core count, not that quota; the tokenizer pool is disabled.
+promptguard_threads: 0
 # Raw UTF-8 bytes per caller domain list, including newline separators.
 # Allowlists truncate; an over-budget denylist is refused whole.
 policy_domain_entries_max_bytes: 65536
@@ -60,6 +64,7 @@ extraction:
   # Derived character ceiling = (512 - 64) * 64 * 4 = 114688.
   max_promptguard_chunks: 64
   extraction_concurrency: 1
+  # 1-8 under the advisory memory rule; extraction workers stay pinned at 1.
   classification_concurrency: 1
   admission_queue_depth: 1
   max_queued_upload_bytes: 52428800

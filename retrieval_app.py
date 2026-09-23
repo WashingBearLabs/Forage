@@ -62,7 +62,10 @@ from pipeline.contract import (
     RateLimit429ErrorCode,
 )
 from pipeline.extraction_limits import (
+    CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL,
     MAX_INPUT_BYTES,
+    PARENT_RESERVATION_BYTES,
+    PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES,
     ExtractionSettings,
     extraction_settings_from_config,
 )
@@ -103,7 +106,11 @@ from pipeline.search_providers.searxng import (
     searxng_settings_from_config,
 )
 from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES
-from promptguard.classifier import PromptGuardClassifier
+from promptguard.classifier import (
+    MODEL_ID,
+    PromptGuardClassifier,
+    promptguard_threads_from_config,
+)
 from url_validator import domain_list_bytes, normalize_domain_entries
 
 logger = logging.getLogger(__name__)
@@ -407,6 +414,7 @@ KNOWN_CONFIG_KEYS: frozenset[str] = frozenset(
         "news_domains",
         "seed_blocklist",
         "promptguard_threshold",
+        "promptguard_threads",
         "promptguard_fail_closed_floor",
         "promptguard_threshold_ceiling",
         "promptguard_wait_seconds",
@@ -1323,6 +1331,47 @@ def _cgroup_memory_snapshot() -> dict[str, int | float | None]:
     }
 
 
+def _warn_if_envelope_memory_rule_unmet(
+    settings: ExtractionSettings,
+    cache_settings: CacheSettings,
+    backend: CacheBackend,
+    *,
+    model_id: str,
+    memory_max: int | float | None,
+) -> None:
+    """Advise once at boot; missing cgroups and deliberate oversubscription work."""
+    parent_bytes = (
+        PARENT_RESERVATION_BYTES + CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[model_id]
+    )
+    cache_term_bytes = (
+        cache_settings.max_bytes
+        if backend == "memory"
+        else cache_settings.max_value_bytes
+    )
+    required = (
+        parent_bytes
+        + settings.classification_concurrency * PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES
+        + settings.extraction_concurrency * settings.child_address_space_bytes
+        + cache_term_bytes
+    )
+    if memory_max is not None and memory_max < required:
+        logger.warning(
+            "envelope_memory_rule_unmet — memory_max=%d required=%d "
+            "classification_concurrency=%d extraction_concurrency=%d "
+            "child_address_space_bytes=%d model_id=%s parent_bytes=%d "
+            "cache_backend=%s cache_term_bytes=%d",
+            memory_max,
+            required,
+            settings.classification_concurrency,
+            settings.extraction_concurrency,
+            settings.child_address_space_bytes,
+            model_id,
+            parent_bytes,
+            backend,
+            cache_term_bytes,
+        )
+
+
 class DocumentSizeLimitMiddleware:
     """Reject oversized extract requests while their ASGI body is still streaming."""
 
@@ -1662,6 +1711,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings=app.state.cache_settings,
         metrics=app.state.cache_metrics,
     )
+    _warn_if_envelope_memory_rule_unmet(
+        settings,
+        app.state.cache_settings,
+        backend,
+        model_id=MODEL_ID,
+        memory_max=_cgroup_memory_snapshot()["cgroup_memory_max_bytes"],
+    )
     if backend == "memory" and cache_hmac_key is not None:
         logger.warning(
             "cache_hmac_key_unused — %s is set but the in-memory backend "
@@ -1715,6 +1771,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # future caller that wants an acquisition has to go through the same lock
     # rather than starting a second ~270 MiB download alongside this one.
     classifier = PromptGuardClassifier()
+    classifier.configure_threads(promptguard_threads_from_config(config))
     app.state.classifier = classifier
     acquisition = model_fetcher.WeightAcquisition(
         classifier,

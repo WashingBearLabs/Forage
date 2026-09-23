@@ -1387,6 +1387,25 @@ and US-007 record their rotations; US-005 records the licence check, the vendori
 scoped manifest diff and the allowlist edit; US-004 records the benchmark table, the matrix wall-clock
 and the sizing-table fill. -->
 
+### Resource-envelope US-001 handoff — 2026-09-22
+
+The boot advisory now uses `PARENT_RESERVATION_BYTES = 512 MiB` (22M resident,
+no classification running), `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` (22M row
+`0` only), and `PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES = 64 MiB`, all in
+`pipeline/extraction_limits.py`. US-004 must measure two distinct quantities:
+idle loaded RSS for each model (86M minus 22M fills the resident-delta row) and
+the concurrency 1→2 RSS delta (replaces the provisional classification coefficient).
+Shared weights belong in the parent, never the per-classification term.
+The sizing table is resource-envelope **US-003**, not US-002; add its per-model
+column. US-006 must route the selected `FORAGE_MODEL_ID` into
+`retrieval_app._warn_if_envelope_memory_rule_unmet`, which currently receives the
+fixed `MODEL_ID`. Keep the 1024m shipped ceiling even if the measured coefficient
+exceeds 96 MiB; state the measured minimum and let under-sized boots warn.
+Neither owner benchmark nor weight-vendoring gate has been performed here.
+Reuse `pipeline.config_bounds` for the forthcoming settings triple; this story's
+`PromptGuardThreadsConfigurationError` leaves `PromptGuardConfigurationError`
+unambiguous for that reader.
+
 ## Refinement Notes
 
 ### Research Findings

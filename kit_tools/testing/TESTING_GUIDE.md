@@ -287,7 +287,7 @@ test_mapping:
   "pipeline/stage4_structuring.py": "tests/test_stage4_structuring.py"
   "pipeline/stage5_url_audit.py": "tests/test_stage5_url_audit.py"
   "pipeline/smart_extraction.py": "tests/test_smart_extraction.py"
-  "pipeline/extraction_limits.py": "tests/test_stage1_extraction.py"
+  "pipeline/extraction_limits.py": ["tests/test_stage1_extraction.py", "tests/test_app.py"]
   "pipeline/config_bounds.py": ["tests/test_stage1_extraction.py", "tests/test_app.py"]
   "pipeline/retrieve_limits.py": ["tests/test_app.py", "tests/test_promptguard_policy.py"]
   "pipeline/search_providers/__init__.py": "tests/test_search_providers.py"

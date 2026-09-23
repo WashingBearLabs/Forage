@@ -5,6 +5,8 @@ All tests use mocked models — no real model download required.
 
 from __future__ import annotations
 
+import logging
+import os
 from collections.abc import Sequence
 from unittest.mock import MagicMock, patch
 
@@ -21,6 +23,8 @@ from pipeline.stage3_promptguard import (
 from promptguard.classifier import (
     MAX_SEQ_LEN,
     PromptGuardClassifier,
+    PromptGuardThreadsConfigurationError,
+    promptguard_threads_from_config,
 )
 from tests.fakes import assert_frozen
 
@@ -282,6 +286,70 @@ class TestClassifierUnit:
     def test_initial_state(self) -> None:
         c = PromptGuardClassifier()
         assert c.loaded is False
+
+    @pytest.mark.parametrize("threads", [0, 1, 2, 16])
+    def test_thread_configuration_bounds(self, threads: int) -> None:
+        assert promptguard_threads_from_config({}) == 0
+        assert (
+            promptguard_threads_from_config({"promptguard_threads": threads}) == threads
+        )
+
+    @pytest.mark.parametrize(
+        "value", [-1, 17, "abc", "2", 2.0, True, False, None, [], {}]
+    )
+    def test_invalid_thread_configuration(self, value: object) -> None:
+        with pytest.raises(PromptGuardThreadsConfigurationError):
+            promptguard_threads_from_config({"promptguard_threads": value})
+
+    @pytest.mark.parametrize("threads", [0, 2, 16])
+    @pytest.mark.parametrize("apply_fails", [False, True])
+    def test_threads_are_applied_before_tokenization_on_every_load(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        threads: int,
+        apply_fails: bool,
+    ) -> None:
+        monkeypatch.setenv("TOKENIZERS_PARALLELISM", "operator-sentinel")
+        classifier = PromptGuardClassifier()
+        classifier.configure_threads(threads)
+
+        with (
+            patch("torch.set_num_threads") as set_threads,
+            patch("transformers.AutoTokenizer.from_pretrained") as tokenizer,
+            patch("transformers.AutoModelForSequenceClassification.from_pretrained"),
+        ):
+            if apply_fails:
+                set_threads.side_effect = RuntimeError("do-not-log-exception-text")
+
+            def before_tokenization(*_args: object, **_kwargs: object) -> MagicMock:
+                if threads:
+                    set_threads.assert_called_with(threads)
+                    assert os.environ["TOKENIZERS_PARALLELISM"] == "false"
+                else:
+                    set_threads.assert_not_called()
+                    assert os.environ["TOKENIZERS_PARALLELISM"] == "operator-sentinel"
+                return MagicMock()
+
+            tokenizer.side_effect = before_tokenization
+            for _ in range(2):
+                assert classifier.load() is True
+                assert classifier.loaded is True
+            assert set_threads.call_count == (2 if threads else 0)
+
+        warnings = [
+            record
+            for record in caplog.records
+            if "promptguard_threads_apply_failed" in record.getMessage()
+        ]
+        assert len(warnings) == (2 if apply_fails and threads else 0)
+        for record in warnings:
+            assert record.levelno == logging.WARNING
+            assert record.getMessage() == (
+                f"promptguard_threads_apply_failed — n={threads} error=RuntimeError"
+            )
+        assert "PromptGuard model not available" not in caplog.text
+        assert "do-not-log-exception-text" not in caplog.text
 
     def test_classify_when_not_loaded(self) -> None:
         c = PromptGuardClassifier()

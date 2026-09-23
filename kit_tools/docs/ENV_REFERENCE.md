@@ -91,6 +91,7 @@ and invalid operator domain entries; see the canonical reference for their fallb
 | Key | Code default | Shipped | Type / range | Controls | Read site |
 |---|---|---|---|---|---|
 | `user_agents` | empty list | 5 desktop browser UAs | list of strings | Outbound User-Agent pool for stage-5 fetches; empty falls to `DEFAULT_USER_AGENTS` in `pipeline/stage5_url_audit.py` | `pipeline/orchestrator.py` line 294, per `/retrieve` |
+| `promptguard_threads` | `0` | `0` | integer, 0 to 16; invalid raises `PromptGuardThreadsConfigurationError` and refuses boot | `0` leaves torch's and the tokenizer's defaults (every visible core) untouched. For a positive value, use the actual CPU quota — `FORAGE_CPUS`, a Kubernetes limit, a host-level cgroup or an orchestrator's cap — because torch sees the host core count, not the quota. Pins torch intra-op threads and disables the tokenizer pool. Not a sanitizer-revision input, but latency can exhaust `promptguard_wait_seconds` and make a fail-open request serve unscanned content | `promptguard/classifier.py`'s `promptguard_threads_from_config()`, boot; `configure_threads()` retains it for each `load()` |
 | `news_domains` | empty list | .reuters.com, .apnews.com, .bbc.co.uk, .nytimes.com, .theguardian.com, .cnn.com | list of strings | Cache TTL capped at 1 h; bare entries match only themselves, leading-dot entries cover apex and subdomains. Upgrade: operator bare entries stay exact; shipped entries now opt in with a dot | `pipeline/orchestrator.py`, then `cache.py`, per `/retrieve`; normalised at boot |
 | `seed_blocklist` | empty list | empty list | list of strings | Merged operator-first with every request's `blocked_domains` on both `/retrieve` and `/search`; callers cannot evict entries. Fetch matches are refused; search matches are omitted as `blocked_url` before content scanning. The trust-tier lists themselves (`trusted_domains`, `verified_domains`) remain per-request `/retrieve` fields | `pipeline/orchestrator.py`, `run_retrieve_pipeline` and `run_search_pipeline` |
 | `promptguard_threshold` | `0.85` | `0.85` | float, 0.0 to 1.0; numeric strings accepted | Default on `/retrieve` and `/search` for null/omitted request values, then operator-capped; invalid (including bool) warns and falls back to 0.85. `/extract` keeps its raw `float()` and range guard, so YAML true still becomes 1.0 there only. Changing the raw value rotates `sanitizer_revision`; the resolved value also keys the content cache | `retrieval_app.promptguard_threshold_from_config` (boot), `_promptguard_policy_updates` (fetch handlers), `/extract` (per request); `pipeline/sanitizer_revision.py` (boot hash) |
@@ -103,6 +104,9 @@ and invalid operator domain entries; see the canonical reference for their fallb
 | `search_searxng_timeout_seconds` | `10.0` | `10.0` | float, 1.0 to 60.0 (wrong-typed or out-of-range refuses boot with `SearxngConfigurationError`) | Wall-clock budget for connect, headers and body together; the chain may spend the sum of its budgets. Raise `search_searxng_timeout_seconds` for a slow instance: the unchanged default is tighter than per-socket-operation timing, and a formerly working four-engine fan-out can now time out and buy a paid call. No fan-out latency distribution has been measured; watch `search.provider_timeouts`. | `pipeline/search_providers/searxng.py`'s `searxng_settings_from_config()`, start, even without SearXNG in the chain |
 | `search_searxng_query_max_chars` | `400` | `400` | integer, 50 to 400 (wrong-typed or out-of-range refuses boot with `SearxngConfigurationError`) | Cap on the outbound query only: results reflect the first N characters; the echoed `query` is the caller's. Truncation is deliberately unobservable (no flag, counter or log); diagnose by comparing query length with the cap. Restart to apply changes. | `pipeline/search_providers/searxng.py`'s `searxng_settings_from_config()`, start, even without SearXNG in the chain |
 | `search_brave_query_max_chars` | `400` | `400` | integer, 50 to 400 (wrong-typed or out-of-range refuses boot) | Cap on the outbound query text sent to Brave | `pipeline/search_providers/brave.py`'s `brave_settings_from_config()`, start |
+
+Forage sets `TOKENIZERS_PARALLELISM=false` at load time when `promptguard_threads > 0`,
+overriding whatever the operator set; `0` writes nothing.
 
 Domain lists use canonical UTS-46 names: denylist `evil.com` covers `www.evil.com`,
 never `notevil.com`; allowlist `example.com` matches only itself and `.example.com`
@@ -130,7 +134,7 @@ refusal. Remove them before upgrading; socket timeout options remain tunable.
 
 ### `extraction:` block
 
-Validated at start by `pipeline.extraction_limits.extraction_settings_from_config()`; a non-integer, boolean, or out-of-range value raises `ExtractionConfigurationError` and the boot is refused. Shipped values equal the maxima, so these knobs can only tighten.
+Validated at start by `pipeline.extraction_limits.extraction_settings_from_config()`; a non-integer, boolean, or out-of-range value raises `ExtractionConfigurationError` and the boot is refused. Shipped values equal the maxima except three keys that may be raised: `classification_concurrency` (1–8, under the memory rule), `child_address_space_bytes` (128–512 MiB — a sandbox limit: raising it widens the untrusted-PDF child's `RLIMIT_AS`) and `admission_queue_depth` (0–4).
 
 | Key | Code default = shipped | Allowed range | Controls |
 |---|---|---|---|
@@ -141,9 +145,21 @@ Validated at start by `pipeline.extraction_limits.extraction_settings_from_confi
 | `wall_clock_seconds` | `90` | 1 to 90 | Whole-extraction wall budget |
 | `max_promptguard_chunks` | `64` | 1 to 64 | Stage-3 chunk budget; derives the 114,688 classifiable-character ceiling |
 | `extraction_concurrency` | `1` | 1 to 1 | Pinned; the memory envelope assumes one worker |
-| `classification_concurrency` | `1` | 1 to 1 | Pinned, same reason |
+| `classification_concurrency` | `1` | 1 to 8 | Bounds the shared classification semaphore on `/extract`, `/retrieve` and `/search` (fetch routes since spec 2 US-006). Memory rule: container limit ≥ `PARENT_RESERVATION_BYTES + CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[model_id] + classification_concurrency × PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES + extraction_concurrency × child_address_space_bytes + cache_term_bytes`. Overcommitting can cause an OOM kill, which `/health` cannot report; boot warns `envelope_memory_rule_unmet` if the readable cgroup limit is below the rule. Not a sanitizer-revision input, but latency can exhaust `promptguard_wait_seconds` and make a fail-open request serve unscanned content. See the rule below and `docs/configuration.md` § Sizing the container (US-003) |
 | `admission_queue_depth` | `1` | 0 to 4 | Requests that may wait for the slot; `0` means immediate `busy` (429) |
 | `max_queued_upload_bytes` | `52428800` (50 MiB) | 0 to 50 MiB | Bytes of queued uploads held in flight; `0` disables queuing |
+
+The parent reservation is **512 MiB with the 22M model resident and no classification
+in flight**; that model's resident delta is `0`. The working-set coefficient is
+**provisional 64 MiB, not measured**: `1024 − 512 − 384 − 32 = 96 MiB` residual,
+less a retained 32 MiB margin. Spec 7 measures the marginal classification RSS and
+each model's idle resident delta before enabling a second model. The child term
+reads the configured `child_address_space_bytes`, not the shipped literal.
+`cache_term_bytes` is `cache.max_bytes` in memory mode and `cache.max_value_bytes`
+under Valkey (one in-flight bounded read). Shipped totals are 992 / 964 MiB,
+leaving 32 / 60 MiB below 1 GiB. This advisory is not a peak-RSS guarantee.
+Equality or an unreadable/unlimited cgroup limit is silent; under-sizing warns once
+with model, backend and all term values, never refuses boot.
 
 ---
 

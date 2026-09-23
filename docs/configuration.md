@@ -579,6 +579,7 @@ Those emit `config_invalid_value`, not `config_unknown_key`.
 | Key | Type | Code default | Shipped | Purpose |
 |-----|------|--------------|---------|---------|
 | `user_agents` | list of strings | `[]` | 5 desktop browser UAs | Pool rotated across outbound fetches. Empty means the fetcher's own built-in default is used. |
+| `promptguard_threads` | integer, 0–16 | `0` | `0` | `0` leaves torch's and the tokenizer's defaults (every visible core) untouched. Set a positive count to the CPU quota the container actually runs under — `FORAGE_CPUS`, a Kubernetes limit, a host-level cgroup or an orchestrator's cap — because torch reads the host's core count, not the quota. At model load, sets torch's intra-op threads and disables the tokenizer pool with `TOKENIZERS_PARALLELISM=false`, overriding the operator's environment value. Read at boot by `promptguard_threads_from_config`; invalid values (including booleans) refuse boot with `PromptGuardThreadsConfigurationError`. Apply failures warn `promptguard_threads_apply_failed` without disabling the model. This is not a sanitizer-revision input, but latency can exhaust `promptguard_wait_seconds` and make a fail-open request serve unscanned content. |
 | `news_domains` | list of strings | `[]` | 6 leading-dot wire/major outlets | Domains whose cached entries expire after **at most 1 hour**. Bare entries match only the apex; a leading dot covers the apex and every subdomain. **Upgrade note:** your bare entries stay exact; add the dot for subdomains. The six shipped entries now have it (`.bbc.co.uk` covers `www.bbc.co.uk`). |
 | `seed_blocklist` | list of strings | `[]` | `[]` | Deployment-wide denylist merged into both routes, `/retrieve` and `/search`, before caller `blocked_domains`; caller entries cannot evict it. **Upgrade note:** existing multi-label entries now cover subdomains; review apex entries before upgrading, because a multi-tenant apex removes every tenant. Single-label entries keep matching exactly as before. This list is policy, not a secret: observable through `/retrieve`'s refusal message and `/search`'s `blocked_url` counts. |
 | `promptguard_threshold` | float | `0.85` | `0.85` | Injection score above which stage 3 marks content as injected. `/retrieve` and `/search` use this boot-validated default when the request omits the field or sends `null`, then apply `min(value, promptguard_threshold_ceiling)`; an explicit request value is capped too. Numeric strings remain accepted. Invalid values (including YAML booleans, non-finite or out-of-range numbers) warn once with `config_invalid_value` and fall back to `0.85`, never refusing boot for this validation; `promptguard_threshold_resolved` logs the validated default once at INFO. `/extract` instead retains its own per-request `float(raw_value)` conversion and range guard, outside the resolver and ceiling: invalid numeric strings/ranges still give its existing unsupported-format refusal, but YAML `true` becomes `1.0`, disabling blocking on `/extract` only while the fetch routes warn and default to `0.85`. The WARNING explicitly says `/extract reads the raw value through its own guard`; closing that divergence is an open question. The raw configured value still feeds `sanitizer_revision`; the resolved active threshold feeds `cache_policy_fingerprint`. **Upgrade note (1.3.0):** raising this key above `0.85` to quiet `/extract` false positives now **loosens** injection blocking on `/retrieve` and `/search` unless `promptguard_threshold_ceiling` bounds it; a value below `0.85` **tightens** both. The old per-route config knob is gone (caller overrides remain), and the content cache re-keys. |
@@ -590,7 +591,7 @@ Those emit `config_invalid_value`, not `config_unknown_key`.
 | `search_searxng_query_max_chars` | integer | `400` | `400` | Cap on the outbound SearXNG query only; results reflect the first N characters; the echoed `query` is the caller's. Validated unconditionally at boot, even without SearXNG in the chain; range **50–400**, wrong-typed or out-of-range values raise `SearxngConfigurationError`. Restart after changing it. Truncation is **deliberately unobservable**: no response flag, counter or log (INFO is not rendered by default; a WARNING per request would be noise). To diagnose results that look truncated, compare the caller's query length with this cap. At 400 characters even four-byte UTF-8 needs at most 4,800 percent-encoded bytes, below the common 8 KB request-line limit; this is a guardrail, not routine truncation. |
 | `search_brave_query_max_chars` | integer | `400` | `400` | Cap on the outbound query text sent to Brave. Out of range (50 to 400) or wrong-typed refuses boot. |
 | `cache` | mapping | `{}` (all defaults) | all three keys at their defaults | Bounds for individual values on both backends and total in-memory content-cache storage — see below. |
-| `extraction` | mapping | `{}` (all defaults) | all keys set to their maxima | Resource limits for untrusted document extraction — see below. |
+| `extraction` | mapping | `{}` (all defaults) | all keys at their defaults | Resource limits for untrusted document extraction — see below. |
 | `retrieve` | mapping | `{}` (all defaults) | all four keys at their defaults | Fetch-route admission and classification limits — see the `retrieve:` block below. |
 | `promptguard_fail_closed_floor` | boolean | `false` | `false` | Operator fail-closed floor on both fetch routes; see "Top-level PromptGuard policy keys" below. |
 | `promptguard_threshold_ceiling` | float | `1.0` | `1.0` | Operator threshold ceiling on both fetch routes; see "Top-level PromptGuard policy keys" below. |
@@ -675,8 +676,10 @@ Every value is validated at startup. A non-integer, a boolean, or an out-of-rang
 raises `ExtractionConfigurationError` and the service refuses to start — these are
 safety limits. A misspelled key instead warns and is ignored.
 
-Note the pattern: for most keys the shipped value **is** the maximum, so these knobs
-exist to make the service *more* conservative, not less.
+Shipped values equal the maxima except three keys that may be raised:
+`classification_concurrency` (1–8, under the memory rule), `child_address_space_bytes`
+(128–512 MiB — a sandbox limit: raising it widens the untrusted-PDF child's `RLIMIT_AS`)
+and `admission_queue_depth` (0–4).
 
 | Key | Default | Allowed range | Purpose |
 |-----|---------|---------------|---------|
@@ -687,9 +690,46 @@ exist to make the service *more* conservative, not less.
 | `wall_clock_seconds` | `90` | 1 – 90 | Total wall-clock budget for one extraction, worker included. |
 | `max_promptguard_chunks` | `64` | 1 – 64 | PromptGuard chunk budget for one document. Derives the classifiable character ceiling: `(512 − 64) × chunks × 4` = 114,688 characters at the default. Fetched PDFs run under `extraction.max_promptguard_chunks`; fetched HTML under `retrieve.max_promptguard_chunks` — a fetched PDF over this ceiling is refused 422 `content_too_large` / `promptguard_budget` (`hardening-retrieve-parity` US-003). |
 | `extraction_concurrency` | `1` | 1 – 1 | Concurrent extractions. Pinned at 1 — the memory reservation above assumes exactly one worker. |
-| `classification_concurrency` | `1` | 1 – 1 | Concurrent PromptGuard classifications. Pinned at 1 for the same reason. Since `hardening-retrieve-parity` US-006 it sizes **all three** classifying routes, not just `/extract`: `/retrieve` and `/search` take the same permit around their own stage 3. See the sizing rule below. |
+| `classification_concurrency` | `1` | 1 – 8 | Bounds the shared classification semaphore on `/extract`, `/retrieve` and `/search` (the fetch routes since `hardening-retrieve-parity` US-006). Memory rule: container limit ≥ `PARENT_RESERVATION_BYTES + CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[model_id] + classification_concurrency × PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES + extraction_concurrency × child_address_space_bytes + cache_term_bytes`; see the advisory rule below and § Sizing the container (US-003). Exceeding available memory can cause an OOM kill, which `/health` cannot report; boot warns `envelope_memory_rule_unmet` when the cgroup limit is readable and below the rule. This is not a sanitizer-revision input, but latency can exhaust `promptguard_wait_seconds` and make a fail-open request serve unscanned content. |
 | `admission_queue_depth` | `1` | 0 – 4 | Requests allowed to wait for the extraction slot. `0` means reject immediately with `busy` (HTTP 429) whenever the slot is taken. |
 | `max_queued_upload_bytes` | `52428800` (50 MiB) | 0 – 50 MiB | Total bytes of queued uploads held in flight. `0` disables queuing of upload bodies. |
+
+#### Advisory memory rule
+
+The boot check reads cgroup v2 `memory.max`, not an environment-variable string.
+`FORAGE_MEM_LIMIT` denotes the intended container ceiling; Compose parameterisation
+lands in US-002. Missing/unlimited cgroup values are supported and produce no warning.
+A limit **strictly below** the sum warns once and still boots; equality is silent.
+This is an advisory reservation, not a measured peak-RSS guarantee.
+
+- `PARENT_RESERVATION_BYTES = 512 MiB`: the parent with the default 22M model resident
+  and **no classification in flight**.
+- `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[model_id]`: additional shared resident
+  memory above the 22M baseline. The only currently allowed model,
+  `meta-llama/Llama-Prompt-Guard-2-22M`, has delta `0`. Weights are counted once,
+  not once per classification.
+- `classification_concurrency × PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES`: starts
+  at the first classification. The coefficient is **provisional 64 MiB, not measured**:
+  the reference envelope leaves `1024 − 512 − 384 − 32 = 96 MiB`; choosing 64 MiB
+  retains a 32 MiB margin. Spec 7 US-004 replaces it with the `docker stats` RSS
+  delta between concurrency 1 and 2 for the 22M and 86M, and measures the idle
+  86M-minus-22M resident delta. US-006 then routes the selected model into the rule.
+- `extraction_concurrency × extraction.child_address_space_bytes`: uses the
+  **configured** child address-space limit, 384 MiB shipped, not a classifier figure.
+- `cache_term_bytes`: `cache.max_bytes` for backend `memory`; `cache.max_value_bytes`
+  for backend `valkey`, reserving one bounded in-flight read, not the separate
+  Valkey container's storage. Concurrent reads and decoding copies need additional
+  headroom (see the cache table); simultaneous PDF workers on both routes still
+  require the combined-slot budget described below.
+
+At shipped defaults, memory mode needs `512 + 0 + 64 + 384 + 32 = 992 MiB`
+(32 MiB margin under 1 GiB); Valkey needs `512 + 0 + 64 + 384 + 4 = 964 MiB`
+(60 MiB margin). The WARNING includes `memory_max`, `required`,
+`classification_concurrency`, `extraction_concurrency`, `child_address_space_bytes`,
+`model_id`, `parent_bytes`, `cache_backend` and `cache_term_bytes`.
+If spec 7 measures a coefficient above 96 MiB, the shipped 1024m ceiling stays put:
+the sizing table will state the measured minimum and 1 GiB boots will warn, never
+silently claim adequate memory. See § Sizing the container (US-003).
 
 <a id="retrieve--fetch-route-limits"></a>
 
@@ -800,7 +840,7 @@ pipeline, so fingerprint inputs and reported values agree on hits and misses.
 
 #### Sizing `promptguard_wait_seconds` against `retrieve.max_promptguard_chunks`
 
-`extraction.classification_concurrency` is one permit, and since
+`extraction.classification_concurrency` defaults to one permit (configurable 1–8), and since
 `hardening-retrieve-parity` US-006 all three classifying routes take it: `/retrieve` and
 `/search` around their own stage 3, `/extract` around its own. So the wait one request
 faces is the time the *other* routes hold the permit, and the rule is a single sentence:
