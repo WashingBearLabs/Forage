@@ -100,6 +100,9 @@ from retrieval_app import (
     lifespan,
 )
 from tests.fakes import (
+    CACHE_HMAC_SENTINEL as _CACHE_HMAC_SENTINEL,
+)
+from tests.fakes import (
     FakeContentCache,
     FakeSearchProvider,
     FakeStorage,
@@ -2636,7 +2639,6 @@ async def test_the_module_level_fallback_publishes_settings_and_logs_nothing(
 _UNREACHABLE_VALKEY_URL = "redis://:unreachable-secret@valkey-that-is-not-there:6379/4"
 _UNPARSEABLE_VALKEY_URL = "http://:unparseable-secret@wrong-scheme-host:6379/0"
 _WORKING_VALKEY_URL = "redis://:working-secret@valkey:6379/4"
-_CACHE_HMAC_SENTINEL = "cache-hmac-test-only-" + "x" * 24
 
 
 def _valkey_double() -> AsyncMock:
@@ -2985,6 +2987,101 @@ async def test_boot_key_signs_a_real_cache_round_trip(
             assert returned.body == content.body
             assert returned.cache_hit is True
             assert app.state.cache_metrics.integrity_rejects == 0
+
+
+class TestCacheHmacKeyNeverLeaks:
+    """Mirror tests/test_brave_provider.py::TestKeyNeverLeaks through real boot.
+
+    The default object repr is safe today; guard against a future dataclass
+    conversion exposing the key. Capture every logger, including shutdown.
+    """
+
+    @pytest.mark.parametrize("connect_failure", [False, True], ids=["signed", "outage"])
+    async def test_cache_operations_refusal_and_diagnostics(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        connect_failure: bool,
+    ) -> None:
+        monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, _CACHE_HMAC_SENTINEL)
+        valkey = _valkey_double()
+        if connect_failure:
+            valkey.ping.side_effect = ConnectionError(
+                f"synthetic connection failure key={_CACHE_HMAC_SENTINEL}"
+            )
+        with caplog.at_level(logging.DEBUG), patch("cache.aioredis") as aioredis:
+            aioredis.from_url.return_value = valkey
+            async with _started_with_valkey_url(
+                monkeypatch, valkey_url=_WORKING_VALKEY_URL
+            ) as client:
+                cache = app.state.cache
+                assert isinstance(cache, ContentCache)
+                assert isinstance(cache.storage, ValkeyStorage)
+                assert cache._hmac_key == _CACHE_HMAC_SENTINEL.encode()
+                valkey.ping.assert_awaited_once()
+                if not connect_failure:
+                    content = RetrievedContent(
+                        request_id="cache-leak-sentinel",
+                        source_url="https://example.com/",
+                        final_url="https://example.com/",
+                        body="A calm page.",
+                        word_count=3,
+                        content_type="html",
+                        trust_score=0.7,
+                        trust_tier=TrustTier.STANDARD,
+                        stage2_verdict=Stage2Verdict.CLEAN,
+                        stage3_verdict=Stage3Verdict.SAFE,
+                        domain="example.com",
+                    )
+                    assert await cache.put(content.source_url, content)
+                    valkey.set.assert_awaited_once()
+                    stored_key, envelope = valkey.set.call_args.args
+                    assert isinstance(stored_key, str)
+                    assert isinstance(envelope, str)
+                    assert envelope.startswith("v1.")
+                    assert _CACHE_HMAC_SENTINEL not in envelope
+                    valkey.getrange.return_value = (
+                        envelope + _CACHE_HMAC_SENTINEL
+                    ).encode()
+                    assert await cache.get(content.source_url) is None
+                    valkey.getrange.assert_awaited_once()
+                    valkey.delete.assert_awaited_once_with(stored_key)
+                    assert app.state.cache_metrics.integrity_rejects == 1
+
+                refusal = await client.post(
+                    "/retrieve",
+                    json={
+                        "url": "https://blocked.example/",
+                        "blocked_domains": ["blocked.example"],
+                    },
+                )
+                assert refusal.status_code == 422
+                assert refusal.json()["error"] == "blocked_domain"
+                health = await client.get("/health")
+                metrics = await client.get("/metrics")
+                assert health.status_code == metrics.status_code == 200
+                assert health.json()["capabilities"]["cache_hmac_key"] == 1
+                assert health.json()["status"] == (
+                    "degraded" if connect_failure else "healthy"
+                )
+                assert health.json()["degraded_reasons"] == (
+                    ["cache_unavailable"] if connect_failure else []
+                )
+                assert metrics.json()["cache"]["integrity_rejects"] == (
+                    0 if connect_failure else 1
+                )
+                for surface in (refusal.text, health.text, metrics.text, repr(cache)):
+                    assert _CACHE_HMAC_SENTINEL not in surface
+        expected_log = (
+            "Valkey connection failed for content cache"
+            if connect_failure
+            else "cache_integrity_reject"
+        )
+        assert expected_log in caplog.text
+        if not connect_failure:
+            assert "reason=bad_mac" in caplog.text
+        assert _CACHE_HMAC_SENTINEL not in caplog.text
+        assert all(_CACHE_HMAC_SENTINEL not in repr(vars(r)) for r in caplog.records)
 
 
 @pytest.mark.parametrize("keyed", [False, True])

@@ -43,7 +43,7 @@ from cache import (
 )
 from models import RetrievedContent, Stage2Verdict, Stage3Verdict
 from pipeline.extraction_limits import MAX_EXTRACTED_OUTPUT_BYTES
-from tests.fakes import FakeStorage, ManualClock, assert_frozen
+from tests.fakes import CACHE_HMAC_SENTINEL, FakeStorage, ManualClock, assert_frozen
 from url_validator import normalize_domain_entries
 
 
@@ -512,6 +512,29 @@ class TestContentCacheGetPut:
 # ---------------------------------------------------------------------------
 # Signed values
 # ---------------------------------------------------------------------------
+
+
+class TestFixtureCarriesNoCacheSecret:
+    """Mirror tests/test_brave_provider.py::TestFixtureCarriesNoSecret.
+
+    Contract prose may name the variable, but no fixture may carry its value.
+    Read bytes so the sentinel guard also covers binary fixtures.
+    """
+
+    @pytest.mark.parametrize("check_value", [True, False], ids=["value", "name"])
+    def test_no_cache_secret_in_fixtures(self, check_value: bool) -> None:
+        fixtures_dir = Path(__file__).parent / "fixtures"
+        forbidden = (
+            CACHE_HMAC_SENTINEL.encode() if check_value else b"FORAGE_CACHE_HMAC_KEY"
+        )
+        for path in sorted(fixtures_dir.rglob("*")):
+            if not path.is_file():
+                continue
+            if not check_value and path.is_relative_to(fixtures_dir / "contract"):
+                continue
+            assert forbidden not in path.read_bytes(), (
+                f"{path} contains a cache credential value or variable name"
+            )
 
 
 class TestSignedValues:

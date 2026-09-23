@@ -11,6 +11,7 @@
 #   {
 #     echo "HF_TOKEN=hf_your_token_here"
 #     echo "SEARXNG_SECRET=$(head -c 32 /dev/urandom | base64)"
+#     echo "FORAGE_CACHE_HMAC_KEY=$(head -c 32 /dev/urandom | base64)"
 #   } > .env
 #   docker compose -f full.yml up -d
 #   curl -s localhost:8020/health | jq .cache_backend   # => "valkey"
@@ -58,8 +59,14 @@ services:
       # in `compose/.env`, never inline. See compose/minimal.yml.
       - FORAGE_SEARCH_PROVIDERS
       - FORAGE_BRAVE_API_KEY
-      # The one line that distinguishes this fragment from `minimal.yml`, and
-      # it is a LITERAL on purpose. `VALKEY_URL=${VALKEY_URL}` would render an
+      # FORAGE_CACHE_HMAC_KEY is a credential: set it in `compose/.env`,
+      # never inline here. Bare name: genuinely unset when not supplied.
+      # Valkey-backed health needs this key as well as loaded PromptGuard
+      # weights and a reachable cache to be healthy; without the key it is
+      # degraded with cache_unauthenticated.
+      - FORAGE_CACHE_HMAC_KEY
+      # The cache backend selector is a LITERAL on purpose.
+      # `VALKEY_URL=${VALKEY_URL}` would render an
       # empty string whenever the host variable is unset, and an empty value is
       # a *configured* Valkey that cannot be reached — `degraded:
       # cache_unavailable`, not memory mode. If you need a password here,

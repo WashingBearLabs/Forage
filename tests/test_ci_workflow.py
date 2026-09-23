@@ -1067,9 +1067,16 @@ _DOWNLOAD_ACTION = "actions/download-artifact"
 # is the shape of a Hugging Face token itself, so a differently-named carrier
 # is caught too. tests/test_dockerfile.py applies those two to the source.
 # `FORAGE_BRAVE_API_KEY` is the paid search provider's credential (ruling 20d):
-# the name only — no bare `BRAVE_API_KEY`, no key-shape regex. Both copies in
-# the workflow (secret-grep's heredoc and publish's config grep) iterate this.
-_REQUIRED_GREP_PATTERNS = ("HF_TOKEN", "hf_[A-Za-z0-9]{20,}", "FORAGE_BRAVE_API_KEY")
+# the name only — no bare `BRAVE_API_KEY`, no key-shape regex.
+# `FORAGE_CACHE_HMAC_KEY` is also name-only: no fixed token format.
+# Both copies in the workflow (secret-grep's heredoc and publish's config grep)
+# iterate this.
+_REQUIRED_GREP_PATTERNS = (
+    "HF_TOKEN",
+    "hf_[A-Za-z0-9]{20,}",
+    "FORAGE_BRAVE_API_KEY",
+    "FORAGE_CACHE_HMAC_KEY",
+)
 
 
 class TestBuildAmd64Job:
@@ -1315,11 +1322,24 @@ class TestSecretGrepJob:
     def test_secret_grep_pattern_set_is_defined_in_the_workflow(
         self, jobs: dict[str, Any], pattern: str
     ) -> None:
-        assert pattern in _run_text(jobs, "secret-grep"), (
+        patterns = re.search(
+            r"done <<'PATTERNS'\n(.*?)\nPATTERNS",
+            _run_text(jobs, "secret-grep"),
+            re.DOTALL,
+        )
+        assert patterns is not None
+        assert pattern in patterns.group(1).splitlines(), (
             f"The pattern {pattern!r} is missing from secret-grep. The set is "
             "deliberately short and lives in the workflow rather than in a "
             "checked-out script, so weakening it is a visible workflow edit."
         )
+
+    def test_comment_documents_four_patterns_and_the_cache_key(self, raw: str) -> None:
+        prose = _comment_prose(raw)
+        assert "`forage_cache_hmac_key` is the cache-signing credential" in prose
+        assert "name-only" in prose
+        assert "the same four patterns" in prose
+        assert "three patterns" not in raw
 
     def test_secret_grep_does_not_check_out_the_repository(
         self, jobs: dict[str, Any]
@@ -2043,12 +2063,6 @@ class TestPublishJob:
             "A forbidden pattern in the published config must fail the run. "
             "Branch body was:\n" + body
         )
-        for pattern in _REQUIRED_GREP_PATTERNS:
-            assert pattern in run_text, (
-                f"The published-config grep is missing {pattern!r}. It must use "
-                "the same pattern set secret-grep defines — one vocabulary, two "
-                "vantage points"
-            )
         condition = next(
             line
             for line in run_text.splitlines()
@@ -2057,6 +2071,12 @@ class TestPublishJob:
             and "grep" in line
             and "HF_TOKEN" in line
         )
+        for pattern in _REQUIRED_GREP_PATTERNS:
+            assert pattern in condition, (
+                f"The published-config grep is missing {pattern!r}. It must use "
+                "the same pattern set secret-grep defines — one vocabulary, two "
+                "vantage points"
+            )
         assert "grep -Eiq" in condition, (
             "The published-config grep must be case-insensitive like "
             "secret-grep's (`grep -Eiq`): the two gates share one vocabulary, so "

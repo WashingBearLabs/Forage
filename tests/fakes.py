@@ -21,6 +21,9 @@ if TYPE_CHECKING:
     from models import RetrievedContent
 
 
+CACHE_HMAC_SENTINEL = "cache-hmac-test-only-" + "x" * 24
+
+
 def assert_frozen(instance: object, field: str, value: object) -> None:
     """Assert *instance* refuses assignment to *field* — the frozen guarantee.
 

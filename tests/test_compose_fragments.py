@@ -553,6 +553,11 @@ class TestSearchProviderPassthrough:
 class TestMinimalIsGenuinelyValkeyFree:
     """Only a *fully unset* VALKEY_URL selects the in-memory backend."""
 
+    def test_no_cache_signing_key_even_in_the_recipe(
+        self, raw_fragments: dict[str, str]
+    ) -> None:
+        assert "FORAGE_CACHE_HMAC_KEY" not in raw_fragments["minimal"]
+
     def test_no_service_carries_valkey_url(
         self, fragments: dict[str, dict[str, Any]]
     ) -> None:
@@ -603,7 +608,36 @@ class TestMinimalIsGenuinelyValkeyFree:
 
 
 class TestFullWiresValkeyLiterally:
-    """The one line that distinguishes the two fragments, and its traps."""
+    """The external cache selector, its signing key, and their traps."""
+
+    def test_cache_signing_key_is_a_bare_passthrough_on_forage(
+        self, fragments: dict[str, dict[str, Any]]
+    ) -> None:
+        environment = _environment(_services(fragments["full"])[_FORAGE_SERVICE])
+        assert "FORAGE_CACHE_HMAC_KEY" in environment
+        assert environment["FORAGE_CACHE_HMAC_KEY"] is None
+        for name, service in _services(fragments["full"]).items():
+            if name != _FORAGE_SERVICE:
+                assert "FORAGE_CACHE_HMAC_KEY" not in _environment(service)
+
+    def test_header_generates_the_cache_signing_key(
+        self, raw_fragments: dict[str, str]
+    ) -> None:
+        recipe = raw_fragments["full"].split("#   {", 1)[1].split("#   } > .env", 1)[0]
+        assert (
+            '#     echo "FORAGE_CACHE_HMAC_KEY=$(head -c 32 /dev/urandom | base64)"'
+            in recipe.splitlines()
+        )
+        assert 'echo "FORAGE_CACHE_HMAC_KEY="' not in recipe
+
+    def test_comment_explains_credential_handling_and_health(
+        self, raw_fragments: dict[str, str]
+    ) -> None:
+        prose = _comment_prose(raw_fragments["full"])
+        assert "forage_cache_hmac_key is a credential" in prose
+        assert "set it in `compose/.env`, never inline" in prose
+        assert "valkey-backed health needs this key" in prose
+        assert "cache_unauthenticated" in prose
 
     def test_valkey_url_is_set_on_forage(
         self, fragments: dict[str, dict[str, Any]]
@@ -611,7 +645,7 @@ class TestFullWiresValkeyLiterally:
         environment = _environment(_services(fragments["full"])[_FORAGE_SERVICE])
         assert environment.get("VALKEY_URL"), (
             "compose/full.yml must set VALKEY_URL on the forage service — it "
-            "is the whole difference between the two fragments"
+            "selects the external cache rather than minimal.yml's memory mode"
         )
 
     def test_valkey_url_is_a_literal_not_an_interpolation(

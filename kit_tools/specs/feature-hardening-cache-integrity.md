@@ -1238,6 +1238,39 @@ legitimately names — `scripts/export_contract.py:263-270` writes it on every e
   explicit restriction**; partial / needs-work records that outstanding gate,
   not a known functional defect. No owner release gate is claimed.
 
+### US-004 — distribution wiring and leak sentinels (2026-09-22)
+
+- `compose/full.yml` passes the signing key as a bare runtime name, documents
+  env-file credential handling and keyed Valkey health, and generates the key
+  from 32 random bytes in its header recipe. Minimal stays byte-identical and
+  carries no signing-key name. Compose guards cover the passthrough, recipe,
+  comments and absence from every other service.
+- Both CI grep copies now carry the name-only cache-key pattern and the comment
+  says four patterns. Guards inspect the actual heredoc and publish condition,
+  rather than accepting a name mentioned elsewhere in the step. Both real
+  pattern sets match synthetic upper-, lower- and mixed-case carriers.
+- Real-lifespan sentinel drives preserve `ContentCache` and double only Valkey:
+  a signed put, a rejected get containing the sentinel in the tampered payload,
+  and a ping failure containing it in the exception. Both connected and failed
+  starts exercise a real blocked-domain `/retrieve` 422, `/health`, `/metrics`
+  and cache repr; all loggers are captured through shutdown, including record
+  arguments. The existing synthetic sentinel is shared through `tests/fakes.py`
+  with a byte-wise fixture walk. Only the variable-name check excludes contract
+  fixtures; the value check excludes nothing. Brave's header-name tuple and
+  US-002's hermetic environment-clear guard are unchanged.
+- Both Compose fragments render correctly using only synthetic placeholders,
+  copied into an automatically cleaned scratch project, with `--env-file
+  /dev/null` and an explicit environment. No rendered config or operator value
+  was retained. Runtime, hashed sources, contract artifacts, historical goldens
+  and fixture files are unchanged; there is no sanitizer rotation.
+- Validation: **1,087 related tests pass**, with the same thirteen non-failing
+  Torch/socket-guard warnings left unsuppressed. Repository Ruff lint/format
+  and strict Pyright pass. **Full `uv run pytest` remains unverified because
+  this invocation explicitly prohibits the full suite**; partial / needs-work
+  records that outstanding acceptance gate, not a functional defect.
+  US-003 retains the broader documentation fan-out; release pins and owner
+  release gates are untouched.
+
 ## Refinement Notes
 
 ### Research Findings
