@@ -1117,17 +1117,17 @@ no other change; the story stops and reports, and nothing is asserted.
   Llama" line unchanged).
 
 **Acceptance Criteria:**
-- [ ] If the gate has not run: Implementation Notes carry `### US-005 — gate not run, <date>` naming
+- [x] If the gate has not run: Implementation Notes carry `### US-005 — gate not run, <date>` naming
       the missing prerequisites, and nothing else in the tree changes (the verifier accepts this state).
-- [ ] The 86M licence check is recorded with both identifier strings and its outcome; on mismatch
+- [x] The 86M licence check is recorded with both identifier strings and its outcome; on mismatch
       nothing is vendored and the remaining criteria are void.
-- [ ] `weights_manifest.json` carries the 86M entry (revision + files with `path`/`sha256`/`size`);
+- [x] `weights_manifest.json` carries the 86M entry (revision + files with `path`/`sha256`/`size`);
       `ALLOWED_MODEL_IDS` names the 86M in the same commit; `ALLOWED_SUFFIXES` unchanged; a test with a
       synthetic snapshot matching the committed entry reaches `weights_verified` under
       `FORAGE_MODEL_ID=<86M>`; the scoped `manifest_diff` recorded shows the 22M entry untouched.
-- [ ] The mirror holds `forage-weights:<86M revision>`; `docs/weights.md` states both pins, that the
+- [x] The mirror holds `forage-weights:<86M revision>`; `docs/weights.md` states both pins, that the
       mirror tag is the revision, and carries the one-file credential recipe (no `export …=` of a value).
-- [ ] `NOTICE` names both model ids; the credential file was mode 0600 and is recorded as deleted;
+- [x] `NOTICE` names both model ids; the credential file was mode 0600 and is recorded as deleted;
       the secret grep is **token shapes only over the story's produced artifacts** (ruling R29 as
       corrected in round 4, R43 — the spec file and `kit_tools/` are excluded because the round-3
       form self-matched its own pattern text): `grep -nE 'hf_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}'
