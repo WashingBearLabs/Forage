@@ -56,6 +56,7 @@ async def read_bounded_body(response: httpx.Response, *, max_bytes: int) -> byte
         else None
     )
     first = True
+    prefix = b""
     raw_total = 0
     body = bytearray()
     async for chunk in response.aiter_raw():
@@ -71,6 +72,14 @@ async def read_bounded_body(response: httpx.Response, *, max_bytes: int) -> byte
             raise MalformedBody()
 
         data = chunk
+        if first and encoding == "deflate":
+            # zlib needs both header bytes to distinguish wrapped from raw
+            # deflate; a transport boundary after one byte must not disable retry.
+            data = prefix + data
+            if len(data) < 2:
+                prefix = data
+                continue
+            prefix = b""
         while data:
             try:
                 # Zero means unlimited to zlib: the extra byte keeps an exact-cap

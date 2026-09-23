@@ -695,6 +695,22 @@ class SearchMetricsResponse(BaseModel):
             "the `retrieve` counter of the same name."
         )
     )
+    provider_compressed_body: int = Field(
+        description=(
+            "Non-identity Content-Encoding responses seen from any provider, "
+            "whatever the outcome: served, refused as body_too_large or "
+            "unsupported_encoding, malformed, non-2xx, or failed after headers. "
+            "A zero count means no compression."
+        )
+    )
+    provider_timeouts: int = Field(
+        description=(
+            "Provider calls that ended as timeout: the per-operation httpx timeout "
+            "or the whole-interaction budget. A rise after upgrading on a previously "
+            "working slow SearXNG is the budget tightening; raise "
+            "search_searxng_timeout_seconds."
+        )
+    )
 
 
 class RetrieveMetricsResponse(BaseModel):
@@ -1111,9 +1127,10 @@ class SearchMetrics:
         self.policy_unknown_provider = 0
         self.policy_invalid_domain_entry = 0
         self.policy_suffix_trusted_skip = 0
-        # `pipeline.orchestrator.SearchMetricsSink`'s third counter, moved at
-        # most once per request by the per-request classification wait budget.
+        # Moved at most once per request by the classification wait budget.
         self.classification_wait_timeouts = 0
+        self.provider_compressed_body = 0
+        self.provider_timeouts = 0
 
     def record_error(self, error: str) -> None:
         """Record one content-free search error, keyed by ``PipelineError.error``."""
@@ -1933,6 +1950,8 @@ async def metrics(request: Request) -> dict[str, Any]:
             "classification_wait_timeouts": (
                 search_metrics.classification_wait_timeouts
             ),
+            "provider_compressed_body": search_metrics.provider_compressed_body,
+            "provider_timeouts": search_metrics.provider_timeouts,
         },
         "retrieve": {
             "requests": retrieve_metrics.requests,

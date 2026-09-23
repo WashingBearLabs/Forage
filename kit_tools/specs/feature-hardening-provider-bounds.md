@@ -1424,6 +1424,78 @@ record.
   was explicitly prohibited by this invocation; its acceptance gate is unverified,
   so the implementation result is `partial` / `needs-work`, not a functional failure.
 
+### US-003 - streamed bodies, wall-clock budgets and counters (2026-09-22, Copilot)
+
+- Landed the shared reader and Brave path first (`5ddc16f`), then SearXNG's
+  production/double migration together (`416ec57`); compression flags/counters
+  follow, with window/export mechanics last. Both providers now stream raw bytes,
+  bound decoded outputs through `remaining + 1`, and retain per-operation httpx
+  timeouts inside a whole-interaction deadline. No decoder flush or new dependency.
+- The required exception names are public aliases of classes with `Error` suffixes,
+  satisfying Ruff N818 without a suppression. Each message is its fixed token.
+  Raw deflate retries are recorded across both instances; a two-byte prefix handles
+  transport splits inside the format header. A stream still incomplete after
+  spending exactly its raw budget is refused immediately, without awaiting a
+  further filler chunk. Reading may hold the currently delivered transport chunk;
+  no transport can retract bytes already yielded.
+- SearXNG failure matrices now own fresh real responses via factories because raw
+  streams are single-use. Fifteen SearXNG cases and thirteen Brave tokens are pinned;
+  the artificial RuntimeError-from-response.json row is gone. An additional
+  buffer-backed Brave double in `test_app.py` was migrated as well. The parser-input
+  test's one-MiB field plus framing exceeded the newly honest HTTP bound: its helper
+  supplies a two-MiB test-only provider setting so the unchanged parser assertions
+  still test their original subject. Production caps remain one MiB.
+- Flags survive status failures, body refusals, invalid JSON, timeout and transport
+  errors after headers; before-header failures stay false. Both counters increment
+  once before the loop's re-classification/exit branches. The app regression pins
+  the exact three-field lone-SearXNG 422 envelope and new reason token. Dataclass
+  defaults, field sets, metrics order, model descriptions and all five sink sites
+  move together; `FAILURE_CLASSES` is unchanged.
+- Contract remains held at 1.3.0. Ran the exporter, re-created the golden through
+  `_SCHEMA_MODELS`, reviewed `_EXPECTED_ONE_THREE_ZERO_DIFF`, and ran `--check`.
+  The golden is byte-identical (sha256
+  `d827f19c7224bf2d6cd055170f8972c0b48f27bff27d5534915cae505129c0ad`);
+  **nothing appended** to the diff list: search metrics are outside the golden,
+  and a reason-string token is not a property or enum. All published goldens are
+  untouched. OpenAPI anchor:
+  `ec61da286abc37aadc5bf783cfcf9ab4444f1ef85424ad0dd319f502e24750ea`,
+  refreshed on all four anchor-quoting pages.
+- Measured only two changed hashed sources against clean `abf9df6`, under both
+  default and shipped config: before/both-reverted
+  `0866963aac3ae860f135061b1cfac397c3678333103a8139fc36fde27d2c1e80`;
+  after `c9bf6e0d87beaa5bf32e05e38dd5fdb092fac0e764e46c409220f81a336f2f76`;
+  orchestrator-only reversal
+  `61d5456277f013809998155e08b2fca3d18cd1f408245ef48d2bedf0ce157e01`;
+  contract-only reversal
+  `e736bb763376c7fe1e57f57f36c8057a96f8f76f3aefd2602c2e208a22d9f5af`.
+  All five rotation sites record this. `bounded_body.py` remains unhashed;
+  transport acceptance/timing changes, not the text-sanitization algorithm.
+- Operator docs now explain identity requests, the second SearXNG limiter rule,
+  sum-of-budgets latency and free-peer-driven paid calls. Spec 8 US-004 must fold
+  `docs/releases.md`'s **Unreleased** upgrade action into v1.2.0. Stage 5 remains
+  open: BACKLOG and the accepted-risk table name its uncapped decoder; the old
+  -020 heading had been replaced by later validation output, so its open scope
+  record was restored in the local ignored `AUDIT_FINDINGS.md`.
+- Mechanical sweeps: zero provider `aiter_bytes`, helper flush, SearXNG get-shaped
+  double/injected-response keywords, or stale twelve-token vocabulary references.
+  The broad `twelve` sweep still finds the unrelated pre-existing "twelve lines"
+  comment in `pipeline/config_bounds.py`; it was not edited to game the grep.
+  The scoped `10 s` doc sweep leaves only Poppy's historical healthcheck note.
+  The `20 s` substring also matches pre-existing **120 s** retrieve-admission
+  arithmetic; there is no twenty-second provider-chain claim. All enumerated
+  detail vocabularies include `unsupported_encoding`.
+- Validation: 1,639 related tests passed across sixteen modules; one existing
+  governance-doc test fails because ruling (j) still cites the now-archived
+  `kit_tools/specs/feature-hardening-cache-integrity.md`. Both the ruling and its
+  test are byte-identical to pre-story `abf9df6`; the archived file exists.
+  This unrelated defect is left unchanged. Ruff lint/format, strict Pyright,
+  exporter `--check` and whitespace checks pass. Three existing non-failing
+  warnings remain (Torch deprecation, two socket-guard warnings).
+  Full-suite execution was explicitly prohibited, so that acceptance gate is
+  unverified. Result is `partial` / `needs-work`, not a claim that the full gate
+  passed. Real httpx teardown under cancellation remains accepted untested as
+  specified; both fake-client timeout regressions assert client exit.
+
 ## Refinement Notes
 
 ### Research Findings

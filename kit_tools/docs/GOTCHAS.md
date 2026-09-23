@@ -488,6 +488,13 @@ A deployment that must expose it opts in with `SEARXNG_LIMITER=true` plus
 scoped IP-trust relaxation, made by the operator who needs it. `docs/searxng.md` has the
 recipe.
 
+Forage now sends `Accept-Encoding: identity`, tripping `http_accept_encoding`
+as a **second** rule beside `http_accept_language`, which already refuses
+httpx's missing `Accept-Language`: the limiter-enabled response remains
+429 → `rate_limited` (and a paid call on `[searxng, brave]`) unless its pass
+list admits Forage. This header changes neither the existing refusal nor
+the pass-list advice; the baked image still ships `limiter: false`.
+
 ---
 
 ### `sanitizer_revision` has deliberately diverged from Poppy's
@@ -539,11 +546,12 @@ were recorded at their implementation boundaries:
 | `hardening-hostname-and-config` US-005 | `e00049c4…7ed5c` | Thirtieth, **eighth policy-driven sanitization-behaviour change**, for tuned deployments: both fetch routes default from validated config before the ceiling, with a new caller threshold on search. `orchestrator.py` passes a required resolved float to classification and cache fingerprint; `contract.py` announces the additions/defaults. Only these two hashed files move; individual read-only reversals measured, both-reverted reproduces `de1cea65…` under default and shipped config. Shipped 0.85 behavior, text-scanning algorithms, raw configured hash input and `/extract`'s raw guard remain unchanged. |
 | `hardening-cache-integrity` US-001 | `aa288bc5…5b39c` | Thirty-first, **not a text-sanitization change**. Only `contract.py` moves, announcing `cache.integrity_rejects` and widened `storage_oversize_skips` producers. Read-only reversal against clean `b79504d` reproduces `e00049c4…` under default and shipped config; all eight other sources are unchanged. The HMAC/bounds and wiring are in unhashed root modules. Old keys are orphaned; full measurements in `docs/bootstrap-notes.md`. |
 | `hardening-cache-integrity` US-002 | `0866963a…c1e80` | Thirty-second, **not a text-sanitization change**. Only `contract.py` moves for `cache_unauthenticated` and the continuation naming that reason and `cache_hmac_key`. Read-only whole-file reversal against clean `1e467c1` reproduces `aa288bc5…` under default and shipped config; the other eight hashed sources are unchanged. One-read key resolution and Valkey-only signing are unhashed. Old keys are orphaned; full measurements in `docs/bootstrap-notes.md`. |
+| `hardening-provider-bounds` US-003 | `c9bf6e0d…f2f76` | Thirty-third, **not a text-sanitization change**. Only `orchestrator.py` (two counters before every exit and re-classification flag) and `contract.py` (counters and SearXNG-only reason token) move. Read-only whole-file reversals against clean `abf9df6`: `61d54562…` with orchestrator reverted, `e736bb76…` with contract reverted; both reproduce `0866963a…` under default and shipped config. Helper/providers remain unhashed; upstream byte/encoding/time acceptance tightens without changing text scanning. Full values: `docs/bootstrap-notes.md`. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Twenty-four of the thirty-two rotations changed no sanitization policy or algorithm; the
+**Twenty-five of the thirty-three rotations changed no sanitization policy or algorithm; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
 US-001, US-002, US-003 and its validation fix) and the twenty-seventh
 through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005) are the eight

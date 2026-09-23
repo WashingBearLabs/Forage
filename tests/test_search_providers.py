@@ -115,6 +115,7 @@ def test_provider_search_result_fields_are_exact() -> None:
         "results",
         "unresponsive_engines",
         "content_kind",
+        "compressed",
     }
 
 
@@ -128,7 +129,7 @@ def test_provider_search_result_content_kind_defaults_to_snippet() -> None:
 
 def test_provider_failure_fields_are_exact() -> None:
     names = {f.name for f in fields(ProviderFailure)}
-    assert names == {"provider_name", "failure_class", "detail"}
+    assert names == {"provider_name", "failure_class", "detail", "compressed"}
 
 
 def test_provider_search_result_is_frozen() -> None:
@@ -598,6 +599,40 @@ def bounded_provider(
 
 
 class TestProviderBoundedBodies:
+    async def test_status_mapping_precedes_any_body_read(
+        self,
+        bounded_provider: tuple[SearxngProvider | BraveApiProvider, str],
+    ) -> None:
+        provider, target = bounded_provider
+        stream = ChunkStream([b"unread"])
+        response = httpx.Response(
+            429, headers={"content-encoding": "br"}, stream=stream
+        )
+        with client_patch(target, response=response):
+            outcome = await provider.search("q", 3)
+        assert isinstance(outcome, ProviderFailure)
+        assert (outcome.failure_class, outcome.detail) == ("rate_limited", "http_429")
+        assert outcome.compressed
+        assert not stream.chunks_yielded
+
+    @pytest.mark.parametrize("raw", [b"not-json", b"\xff"])
+    async def test_json_and_unicode_decode_failures_are_bad_json(
+        self,
+        bounded_provider: tuple[SearxngProvider | BraveApiProvider, str],
+        raw: bytes,
+    ) -> None:
+        provider, target = bounded_provider
+        with client_patch(
+            target,
+            response=make_response(
+                content=gzip.compress(raw), headers={"content-encoding": "gzip"}
+            ),
+        ):
+            outcome = await provider.search("q", 3)
+        assert isinstance(outcome, ProviderFailure)
+        assert (outcome.failure_class, outcome.detail) == ("hard_error", "bad_json")
+        assert outcome.compressed
+
     @pytest.mark.parametrize(
         "shape", ["plain", "gzip-bomb", "final-chunk", "raw-filler"]
     )
@@ -666,6 +701,7 @@ class TestProviderBoundedBodies:
         with client_patch(target, response=response):
             outcome = await provider.search("q", 3)
         assert isinstance(outcome, ProviderSearchResult)
+        assert outcome.compressed
 
     @pytest.mark.parametrize("encoding", ["br", "zstd", "HEADER-PRIVATE", "gzip, br"])
     async def test_unsupported_encoding_precedes_length_and_read(
@@ -687,6 +723,7 @@ class TestProviderBoundedBodies:
             "hard_error",
             "unsupported_encoding",
         )
+        assert outcome.compressed
         assert not stream.chunks_yielded
 
     @pytest.mark.parametrize(
@@ -767,6 +804,7 @@ class TestProviderBoundedBodies:
             "hard_error",
             "malformed_body",
         )
+        assert outcome.compressed
 
     async def test_json_parse_is_outside_the_http_deadline(
         self,
@@ -930,6 +968,9 @@ _FAILURE_CASES: list[tuple[str, Callable[[], dict[str, Any]], str, str]] = [
 
 class TestSearxngProviderFailures:
     """Closed classes, closed tokens, and never an exception out of ``search()``."""
+
+    def test_failure_matrix_retains_fifteen_peer_reachable_paths(self) -> None:
+        assert len(_FAILURE_CASES) == 15
 
     @pytest.mark.asyncio()
     @pytest.mark.parametrize(

@@ -89,7 +89,8 @@ those eight — so Forage's revision moved:
 | After search domain policy (`hardening-hostname-and-config` US-002) | `de1cea65…6be91` |
 | After shared threshold resolution (`hardening-hostname-and-config` US-005) | `e00049c4…7ed5c` |
 | `hardening-cache-integrity` US-001, signed and bounded cache values | `aa288bc5…5b39c` |
-| **Current (`hardening-cache-integrity` US-002, boot signing and health)** | **`0866963a…c1e80`** |
+| `hardening-cache-integrity` US-002, boot signing and health | `0866963a…c1e80` |
+| **Current (`hardening-provider-bounds` US-003, provider counters and reason token)** | **`c9bf6e0d…f2f76`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -1532,3 +1533,42 @@ twin and anchor were regenerated; the four anchor pages now quote
 200 and memory-mode health are unchanged. A Valkey-backed healthy-mode smoke
 needs the runtime signing key as well as weights and cache connectivity.
 **Not replayed to Poppy**; compare contract versions, not sanitizer revisions.
+
+### The thirty-third rotation: bounded provider bodies and telemetry (`hardening-provider-bounds` US-003, 2026-09-22)
+
+Only `pipeline/orchestrator.py` and `pipeline/contract.py` move among the nine
+hashed sources. The orchestrator adds the two counters to its Protocol/null
+sink and counts outcomes before any traversal exit, retaining compression on
+re-classification; the contract docstring announces both counters and the
+`unsupported_encoding` reason token on a configured `[searxng]`-only chain.
+`pipeline/bounded_body.py` and both provider modules are **not hashed**.
+No hash input was added or removed. This is **not a text-sanitization change**,
+but the provider byte/encoding/whole-interaction bounds do change which
+upstream responses can be served and may trigger paid fallback.
+
+Measured with live `derive_sanitizer_revision`, substituting whole-file bytes
+read-only through `Path.read_bytes` from clean pre-story `abf9df6`. Default
+`{}` and shipped `config.yaml` produce identical values for every row:
+
+| State | Revision |
+|---|---|
+| Before / both files reverted (control) | `0866963aac3ae860f135061b1cfac397c3678333103a8139fc36fde27d2c1e80` |
+| After | `c9bf6e0d87beaa5bf32e05e38dd5fdb092fac0e764e46c409220f81a336f2f76` |
+| Only `orchestrator.py` reverted | `61d5456277f013809998155e08b2fca3d18cd1f408245ef48d2bedf0ce157e01` |
+| Only `contract.py` reverted | `e736bb763376c7fe1e57f57f36c8057a96f8f76f3aefd2602c2e208a22d9f5af` |
+
+All seven other hashed sources are byte-identical to the baseline; the control
+reproduces the pre-story hash exactly. Old content-cache keys are orphaned
+and expire normally.
+
+The exporter regenerated OpenAPI, its drift twin and anchor:
+`ec61da286abc37aadc5bf783cfcf9ab4444f1ef85424ad0dd319f502e24750ea`.
+The held `contract_1_3_0.json` was re-created through `_SCHEMA_MODELS` and is
+**byte-identical** (sha256 `d827f19c7224bf2d6cd055170f8972c0b48f27bff27d5534915cae505129c0ad`).
+No entry was appended to `_EXPECTED_ONE_THREE_ZERO_DIFF`: search metrics are
+outside that golden and the new reason-string token is not an enum/property.
+Consumer handoff: ignore unknown additive metrics and keep treating the
+SearXNG 422 reason as opaque text; Brave's detail is not wire-visible.
+The timeout upgrade action is under `docs/releases.md` **Unreleased**, for
+spec 8 US-004 to fold into v1.2.0. `/retrieve`'s decoder is still open in BACKLOG.
+**Not replayed to Poppy**; no release or tag was published.

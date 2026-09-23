@@ -297,6 +297,30 @@ The cache envelope and byte/type bounds (`cache.py`) and wiring
 (`retrieval_app.py`) are not hashed; the rotation still orphans old cache keys.
 Nothing downstream may assume Poppy↔Forage revision parity.
 
+The thirty-third rotation (`0866963a…` → `c9bf6e0d…`,
+`hardening-provider-bounds` US-003) moves exactly `orchestrator.py` and
+`contract.py`: provider compression/timeout counters before traversal exits,
+the re-classification flag, and the 1.3.0 continuation announcing counters
+and SearXNG's new reason token. Read-only whole-file reversals against clean
+`abf9df6` yield `61d54562…` with only the orchestrator reverted,
+`e736bb76…` with only the contract reverted, and the exact pre-story
+`0866963a…` with both reverted, for default and shipped config. The other
+seven hashed sources are unchanged; no input was added. It changes upstream
+acceptance/timing, not the text-sanitization algorithm. Full measurements:
+`docs/bootstrap-notes.md`.
+
+**Provider bodies are self-decoded under bounds.** The shared
+`pipeline/bounded_body.py` reads raw bytes, bounds decoded output at 1 MiB
+(plus one overflow-detection byte) and raw input at 4×, accepts identity,
+gzip and wrapped/raw deflate, and rejects unknown encodings or incomplete,
+concatenated or trailing compressed data with fixed tokens. It never flushes
+the decoder. Both providers request identity and bound their HTTP interaction
+with `asyncio.timeout`, retaining httpx's per-operation guard; JSON parsing is
+outside the deadline. This helper is not a revision source and does not yet
+cover stage 5. Internal outcomes carry a header-derived compression flag;
+the orchestrator counts compression and both kinds of provider timeout before
+any re-classification/exit, without adding fields to `SearchResponse`.
+
 **Domain lists cross boundaries as canonical strings.** `url_validator.py` owns the
 normaliser, byte measure and matcher; there is still one IDNA implementation in
 `canonicalize_host`. A leading dot remains in allowlist strings (and fingerprints)

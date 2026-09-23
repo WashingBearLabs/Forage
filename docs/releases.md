@@ -17,6 +17,25 @@ Every non-pre-release tag, newest first. The `contract:`, `anchor:`, `index dige
 into `kit_tools/specs/feature-search-release.md`'s Implementation Notes — that table is what
 the Poppy `epic-search-policy` session reads to pin a digest; nothing here pushes to Poppy.
 
+### Unreleased
+
+**Upgrade actions:** Search provider timeouts now bound the **whole HTTP interaction**
+(connect, headers and body), rather than each socket operation separately; their
+values are unchanged (SearXNG 10.0 seconds, Brave 15.0 seconds). A previously working
+slow SearXNG may now produce a 422 `searxng_unavailable` ending in `: timeout` on
+the default chain, or a `searxng: timeout` `provider_errors` entry **with a paid call**
+on `[searxng, brave]`. Read `search.provider_timeouts` and raise
+`search_searxng_timeout_seconds` for such an instance. No four-engine fan-out latency
+distribution has been measured; parsing, sanitization and classification remain
+outside the budgets. The chain has no overall deadline.
+
+Both providers request `Accept-Encoding: identity` but serve bounded gzip and
+deflate replies from a compressing proxy. `search.provider_compressed_body` counts
+every non-identity response header, including failed replies; `unsupported_encoding`
+means this build cannot decode it. On a configured `[searxng]`-only chain this new
+closed token can appear in the 422 reason; Brave's detail remains log-only.
+Contract 1.3.0 adds these two counters without changing `SearchResponse`.
+
 ### v1.1.0 — 2026-09-18
 
 - contract: 1.2.0

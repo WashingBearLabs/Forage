@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -193,6 +193,7 @@ class SearxngProvider:
         self, query: str, max_results: int
     ) -> ProviderSearchResult | ProviderFailure:
         """Search SearXNG for *query*, returning at most *max_results* dicts."""
+        compressed = False
         try:
             async with httpx.AsyncClient(
                 timeout=self.settings.timeout_seconds,
@@ -211,6 +212,12 @@ class SearxngProvider:
                             "engines": SEARXNG_ENGINES,
                         },
                     ) as response:
+                        compressed = (
+                            response.headers.get("content-encoding", "identity")
+                            .strip()
+                            .lower()
+                            != "identity"
+                        )
                         status = response.status_code
                         if not 200 <= status < 300:
                             failure_class: FailureClass = (
@@ -219,7 +226,9 @@ class SearxngProvider:
                                 else "hard_error"
                             )
                             return self._failure(
-                                failure_class, f"{HTTP_STATUS_DETAIL_PREFIX}{status}"
+                                failure_class,
+                                f"{HTTP_STATUS_DETAIL_PREFIX}{status}",
+                                compressed=compressed,
                             )
                         body = await read_bounded_body(
                             response, max_bytes=self.settings.max_response_bytes
@@ -227,20 +236,26 @@ class SearxngProvider:
                 try:
                     payload = cast("object", json.loads(body))
                 except ValueError:
-                    return self._failure("hard_error", "bad_json")
-                return self._build_result(payload, max_results)
+                    return self._failure(
+                        "hard_error", "bad_json", compressed=compressed
+                    )
+                return replace(
+                    self._build_result(payload, max_results), compressed=compressed
+                )
         except (TimeoutError, httpx.TimeoutException):
-            return self._failure("timeout", "timeout")
+            return self._failure("timeout", "timeout", compressed=compressed)
         except BodyTooLarge:
-            return self._failure("hard_error", "body_too_large")
+            return self._failure("hard_error", "body_too_large", compressed=compressed)
         except UnsupportedEncoding:
-            return self._failure("hard_error", "unsupported_encoding")
+            return self._failure(
+                "hard_error", "unsupported_encoding", compressed=compressed
+            )
         except MalformedBody:
-            return self._failure("hard_error", "malformed_body")
+            return self._failure("hard_error", "malformed_body", compressed=compressed)
         except httpx.HTTPError:
-            return self._failure("hard_error", "connect_error")
+            return self._failure("hard_error", "connect_error", compressed=compressed)
         except Exception:
-            return self._failure("hard_error", "unexpected")
+            return self._failure("hard_error", "unexpected", compressed=compressed)
 
     def _build_result(
         self, payload: object, max_results: int
@@ -278,7 +293,9 @@ class SearxngProvider:
             unresponsive_engines=cast("list[str]", unresponsive_engines),
         )
 
-    def _failure(self, failure_class: FailureClass, detail: str) -> ProviderFailure:
+    def _failure(
+        self, failure_class: FailureClass, detail: str, *, compressed: bool = False
+    ) -> ProviderFailure:
         """Log the closed tokens and return the typed failure.
 
         The vocabulary is closed *by construction* rather than by review: a
@@ -312,4 +329,5 @@ class SearxngProvider:
             provider_name=self.name,
             failure_class=failure_class,
             detail=detail,
+            compressed=compressed,
         )

@@ -110,6 +110,7 @@ from tests.fakes import (
     FakeContentCache,
     FakeSearchProvider,
     FakeStorage,
+    client_patch,
     hub_download_double,
     make_response,
     weights_manifest_document,
@@ -527,6 +528,8 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "policy_invalid_domain_entry": 0,
         "policy_suffix_trusted_skip": 0,
         "classification_wait_timeouts": 0,
+        "provider_compressed_body": 0,
+        "provider_timeouts": 0,
     }
     assert body["retrieve"] == {
         "requests": 0,
@@ -3678,6 +3681,30 @@ async def test_a_following_search_still_sees_the_real_provider(
 
     assert resp.status_code == 422
     assert resp.json()["error"] == "searxng_unavailable"
+
+
+async def test_searxng_only_unsupported_encoding_is_a_closed_wire_reason(
+    client: httpx.AsyncClient,
+) -> None:
+    with (
+        _borrowed_search_providers([SearxngProvider("http://searxng:8080")]),
+        client_patch(
+            "pipeline.search_providers.searxng.httpx.AsyncClient",
+            response=make_response(headers={"content-encoding": "br"}),
+        ),
+    ):
+        response = await client.post("/search", json={"query": "q"})
+    assert response.status_code == 422
+    body = response.json()
+    assert isinstance(body["request_id"], str) and len(body["request_id"]) == 32
+    assert body == {
+        "error": "searxng_unavailable",
+        "reason": "SearXNG not reachable at http://searxng:8080: unsupported_encoding",
+        "request_id": body["request_id"],
+    }
+    counters = (await client.get("/metrics")).json()["search"]
+    assert counters["provider_compressed_body"] == 1
+    assert counters["provider_timeouts"] == 0
 
 
 # ---------------------------------------------------------------------------

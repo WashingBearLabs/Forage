@@ -161,7 +161,8 @@ upload exception through `document_failure`, adds `OSError` to `extraction_faile
 (`pipeline/search_providers/searxng.py`) classifies them behind the seam and returns a
 `ProviderFailure`, and the orchestrator maps its closed `detail` token — a status-derived
 `http_<code>` to `searxng_error`, everything else (`timeout`, `connect_error`,
-`body_too_large`, `bad_json`, `malformed_body`, `unexpected`) to `searxng_unavailable`.
+`body_too_large`, `bad_json`, `malformed_body`, `unsupported_encoding`, `unexpected`)
+to `searxng_unavailable`.
 
 That legacy pair is selected by the **configured chain**, not by the failing provider:
 `_legacy_searxng_codes` is true only for a chain of exactly one provider whose `name`
@@ -241,9 +242,9 @@ pairs that emit a body today; `/health` and `/metrics` declare none.
 | Operation | Timeout | Retries | Backoff | Source |
 |-----------|---------|---------|---------|--------|
 | Outbound page fetch (`fetch_url`) | 30 s (`DEFAULT_TIMEOUT`) per request; 10 MiB body cap; max 5 manual redirect hops | none | none | `pipeline/stage5_url_audit.py` |
-| SearXNG query | 10 s (`httpx.AsyncClient(timeout=10.0)`) | none | none | `pipeline/search_providers/searxng.py` |
-| Brave LLM-Context query | `search_brave_timeout_seconds` (`config.yaml`, default 15 s) | none | none | `pipeline/search_providers/brave.py` |
-| Provider chain traversal (`run_search_pipeline`) | sum of the per-provider timeouts (10 s SearXNG + `search_brave_timeout_seconds` when configured) | none | none | `pipeline/orchestrator.py` |
+| SearXNG query | `search_searxng_timeout_seconds` (default `10.0`, wall-clock) | none | none | `pipeline/search_providers/searxng.py` |
+| Brave LLM-Context query | `search_brave_timeout_seconds` (default `15.0`, wall-clock) | none | none | `pipeline/search_providers/brave.py` |
+| Provider chain traversal (`run_search_pipeline`) | the sum of the configured per-provider wall-clock budgets (`search_searxng_timeout_seconds` + `search_brave_timeout_seconds` when configured); parse, sanitization and classification are outside these HTTP budgets | none | none | `pipeline/orchestrator.py` |
 | Valkey connect and reconnect | 2 s per attempt (`_RECONNECT_TIMEOUT_S`) | on the next operation once the backoff elapses; forever | 1 s doubling to 30 s (`_RECONNECT_INITIAL_BACKOFF_S`, `_RECONNECT_MAX_BACKOFF_S`); single-flight `_reconnect_lock`, concurrent callers get an immediate miss; `ping_if_due` from `/health` detects recovery in idle windows | `cache.py` |
 | Weights acquisition (`WeightAcquisition.run`) | 1800 s for an `oras` pull (`ORAS_TIMEOUT_S`) | forever until loaded; cancellable | 30 s doubling to 600 s, plus or minus 20% jitter applied to the sleep only (`RETRY_INITIAL_BACKOFF_S`, `RETRY_MAX_BACKOFF_S`, `RETRY_JITTER_FRACTION`); single-flight, a second caller is refused not queued | `model_fetcher.py` |
 | PDF extraction child | 90 s wall (`ITIMER_REAL`), 20 s CPU (`RLIMIT_CPU`), 384 MiB address space (`RLIMIT_AS`, Linux only) | none | none; `process.kill()` and `process.join()` in `finally` on every abnormal outcome | `pipeline/pdf_subprocess.py` |

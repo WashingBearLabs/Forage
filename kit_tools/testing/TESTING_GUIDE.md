@@ -125,7 +125,7 @@ the story implementer did not run it.
 
 | Module | Tests | Covers |
 |--------|------:|--------|
-| `tests/test_bounded_body.py` | 44 | Raw and decoded byte ceilings, bounded gzip/zlib/raw-deflate outputs, encoding-first dispatch, path-specific length prechecks, exactly-one-member EOF validation, no-progress guard and fixed exception messages. No real waits. |
+| `tests/test_bounded_body.py` | 46 | Raw and decoded byte ceilings, bounded gzip/zlib/raw-deflate outputs (including split deflate headers), encoding-first dispatch, path-specific length prechecks, exactly-one-member EOF validation, no-progress guard and fixed exception messages. No real waits. |
 | `tests/test_model_fetcher.py` | 212 | `model_fetcher.py`: fail-closed manifest verification, exact-set + safetensors-only allowlist, symlink-resolving hashing, one-generation quarantine, the loadable safetensors fixture, the acquisition pipeline (revision pin, `$HF_HOME/hub` resolution, the mocked HF fetch, the `oras` mirror leg, token redaction), and US-005's warm start + retry loop — the counted-attempt proof that a warm load reaches no network, the normative 30 s→10 min jittered schedule, quarantine→re-fetch→loaded recovery on the real loader, single-flight, and clean cancellation |
 | `tests/test_vendor_weights.py` | 102 | `scripts/vendor_weights.py`: the symlink-dereferenced tarball (built, extracted, bytes compared), tar determinism, generation-time allowlist refusal, the manifest round-trip through the real verifier, credential hygiene on the `oras` path, and the private-package visibility check — all fixture-driven, no registry and no token |
 | `tests/test_stage2_structural.py` | 78 | Deterministic regex injection scan |

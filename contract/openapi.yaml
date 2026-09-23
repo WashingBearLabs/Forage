@@ -1100,6 +1100,18 @@ components:
             `/health` `search_providers` to tell a bad name from a missing key.
           title: Policy Unknown Provider
           type: integer
+        provider_compressed_body:
+          description: 'Non-identity Content-Encoding responses seen from any provider, whatever
+            the outcome: served, refused as body_too_large or unsupported_encoding, malformed,
+            non-2xx, or failed after headers. A zero count means no compression.'
+          title: Provider Compressed Body
+          type: integer
+        provider_timeouts:
+          description: 'Provider calls that ended as timeout: the per-operation httpx timeout
+            or the whole-interaction budget. A rise after upgrading on a previously working
+            slow SearXNG is the budget tightening; raise search_searxng_timeout_seconds.'
+          title: Provider Timeouts
+          type: integer
         requests:
           description: Search requests that reached the handler.
           title: Requests
@@ -1119,6 +1131,8 @@ components:
       - policy_invalid_domain_entry
       - policy_suffix_trusted_skip
       - classification_wait_timeouts
+      - provider_compressed_body
+      - provider_timeouts
       title: SearchMetricsResponse
       type: object
     SearchRequest:

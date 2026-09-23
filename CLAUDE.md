@@ -414,6 +414,19 @@ a text-sanitization change; the rotation invalidates old cache keys.
 Full measurements are in `docs/bootstrap-notes.md`.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.
 
+The thirty-third rotation is `0866963a…` → `c9bf6e0d…` for
+`hardening-provider-bounds` US-003. Only `orchestrator.py` (compression/timeout
+counters before every provider-loop exit, plus the re-classification flag) and
+`contract.py` (1.3.0 continuation for both counters and the SearXNG-only
+`unsupported_encoding` reason token) move in the hash. Whole-file read-only
+reversals against clean `abf9df6` give `61d54562…` with only the orchestrator
+reverted, `e736bb76…` with only the contract reverted, and the exact pre-story
+`0866963a…` with both reverted, under default and shipped config.
+The shared `bounded_body.py` and provider modules remain unhashed. This is
+not a text-sanitization change, although bounded upstream reads and tightened
+whole-interaction timeouts can change served outcomes and paid fallback.
+Full values and the consumer handoff are in `docs/bootstrap-notes.md`.
+
 ---
 
 ## Session Scratchpad

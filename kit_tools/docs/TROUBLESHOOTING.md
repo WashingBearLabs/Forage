@@ -208,9 +208,9 @@ eighteen.
 | `brave: auth` | 422 | `/search` | Brave rejected the key on the LLM-Context call — wrong, revoked, or not entitled (`401`/`403`) | Replace `FORAGE_BRAVE_API_KEY` and **restart the container** — `BraveApiProvider` reads the key once, at process start |
 | `brave: rate_limited` | 422 | `/search` | Brave answered `429` — a per-second limit and plan exhaustion share the same status | Retry after a pause; if it persists, check the Brave account's plan, since a transient limit and an exhausted quota look identical here |
 | `brave: timeout` | 422 | `/search` | The LLM-Context call exceeded `search_brave_timeout_seconds` (default 15 s) | Raise `search_brave_timeout_seconds` in `config.yaml`, or check egress latency to `api.search.brave.com` |
-| `brave: hard_error` | 422 | `/search` | Everything else — a non-2xx status, a redirect, an oversized or unparseable body, or an unexpected exception — collapsed to one class; the diagnosis is in the `brave_search_failed` log line's `detail` token | Grep the `brave_search_failed` line for `detail`: `transport_error` → egress/DNS/proxy, `redirect_refused` → the endpoint moved, `bad_json`/`malformed_body` → capture a fresh sample, `body_too_large` → the response bound, `http_4xx` → a 4xx other than 401/403/429, so the request shape or endpoint changed (capture a fresh sample), `http_5xx` → Brave-side, `unexpected` → file a bug report |
+| `brave: hard_error` | 422 | `/search` | Everything else — a non-2xx status, a redirect, an oversized or unparseable body, or an unexpected exception — collapsed to one class; the diagnosis is in the `brave_search_failed` log line's `detail` token | Grep the `brave_search_failed` line for `detail`: `transport_error` → egress/DNS/proxy, `redirect_refused` → the endpoint moved, `bad_json`/`malformed_body` → capture a fresh sample, `unsupported_encoding` → this build cannot decode the proxy's encoding (gzip and deflate are supported), `body_too_large` → the response bound, `http_4xx` → a 4xx other than 401/403/429, so the request shape or endpoint changed (capture a fresh sample), `http_5xx` → Brave-side, `unexpected` → file a bug report |
 | `searxng_error` | 422 | `/search` | SearXNG answered non-2xx; reason `SearXNG returned HTTP error (http_<n>)`. A **429** here means the SearXNG limiter is on | `SEARXNG_LIMITER` must stay unset. Persistent 4xx/5xx with the limiter off is engine rot: bump the digest pin (`docs/searxng.md`) |
-| `searxng_unavailable` | 422 | `/search` | Connection refused, DNS failure, 10 s timeout, an oversized body, or an unparseable envelope; reason `SearXNG not reachable at <scheme>://<host>:<port>: <detail>`, where `detail` is one of the closed tokens `timeout`, `connect_error`, `body_too_large`, `bad_json`, `malformed_body`, `unexpected` — no exception text, and no userinfo from `SEARXNG_URL` | Is the `searxng` container up? It exits 1 without `SEARXNG_SECRET`. `SEARXNG_URL` is read at import time: restart Forage after changing it |
+| `searxng_unavailable` | 422 | `/search` | Connection refused, DNS failure, configured wall-clock timeout, an oversized body, or an unparseable envelope; reason `SearXNG not reachable at <scheme>://<host>:<port>: <detail>`, where `detail` is one of the closed tokens `timeout`, `connect_error`, `body_too_large`, `bad_json`, `malformed_body`, `unsupported_encoding`, `unexpected` — no exception text, and no userinfo from `SEARXNG_URL` | Is the `searxng` container up? It exits 1 without `SEARXNG_SECRET`. Raise `search_searxng_timeout_seconds` for a previously working slow instance and read `search.provider_timeouts`; `unsupported_encoding` means this build cannot decode the reply. `SEARXNG_URL` is read at import time: restart Forage after changing it |
 | `unsupported_format` | 422 | `/extract` | Upload is neither `%PDF-` nor valid UTF-8 text: empty, NUL bytes, invalid UTF-8, or no visible text (`pipeline/stage1_upload.py`) | The bytes, not the `mime_hint`; magic bytes decide |
 
 Bodies without an error code, all on `/extract` unless noted:
@@ -587,11 +587,15 @@ service. Neither is configurable in `config.yaml`, and there are no retries.
 ### `/search` fails: `searxng_error` versus `searxng_unavailable`
 
 **Symptom:** 422 with one of the two codes. `/health` stays `healthy`: SearXNG is **not
-probed**, so the only signals are `search.errors.searxng_error` /
-`search.errors.searxng_unavailable` in `/metrics` and the response itself.
+probed**. Read `search.errors.searxng_error` / `search.errors.searxng_unavailable`,
+`search.provider_timeouts` and `search.provider_compressed_body` in `/metrics`,
+the response itself and the `search_provider_failed` WARNING.
 
-**Cause:** `searxng_unavailable` is transport: refused, DNS, the 10 s httpx timeout, or an
-unparseable JSON envelope. `searxng_error` is an HTTP status from SearXNG; **429 means the
+**Cause:** `searxng_unavailable` is transport: refused, DNS, the configured
+`search_searxng_timeout_seconds` wall-clock budget, or an oversized, undecodable or
+unparseable envelope. A previously working slow instance may need a larger budget
+after upgrading: connect, headers and streaming now share it.
+`searxng_error` is an HTTP status from SearXNG; **429 means the
 SearXNG limiter is on**, which blocks Forage's own httpx client on the first request (no
 `Accept-Language`) and caps JSON formats at 4 requests per hour regardless.
 

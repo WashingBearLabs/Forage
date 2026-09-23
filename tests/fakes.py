@@ -172,6 +172,8 @@ class RecordingSearchMetrics:
     fallback_fired: int = 0
     paid_calls: int = 0
     classification_wait_timeouts: int = 0
+    provider_compressed_body: int = 0
+    provider_timeouts: int = 0
 
     @property
     def counters(self) -> dict[str, int]:
@@ -179,6 +181,8 @@ class RecordingSearchMetrics:
             "fallback_fired": self.fallback_fired,
             "paid_calls": self.paid_calls,
             "classification_wait_timeouts": self.classification_wait_timeouts,
+            "provider_compressed_body": self.provider_compressed_body,
+            "provider_timeouts": self.provider_timeouts,
         }
 
 

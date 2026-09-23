@@ -103,6 +103,12 @@ apply — which is an IP-trust relaxation, scoped to one network, made
 deliberately by the operator who needs it, rather than baked into an image
 everybody pulls.
 
+Forage now sends `Accept-Encoding: identity`, which trips `http_accept_encoding`
+as a **second** rule beside the existing `http_accept_language` refusal: a
+limiter-enabled instance still answers 429 → `rate_limited` (and a paid call on
+`[searxng, brave]`) unless the same pass list admits Forage; the header changes
+neither the pre-existing refusal nor the pass-list advice.
+
 ### The environment variable name, verified
 
 **`SEARXNG_VALKEY_URL`.** This was the one name in the plan that nothing in

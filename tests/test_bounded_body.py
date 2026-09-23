@@ -180,6 +180,20 @@ async def test_corruption_after_first_deflate_chunk_does_not_retry_raw() -> None
     assert len(recording.instances) == 1
 
 
+@pytest.mark.parametrize("wbits", [zlib.MAX_WBITS, -zlib.MAX_WBITS])
+async def test_deflate_header_split_across_single_byte_chunks(wbits: int) -> None:
+    raw = zlib.compress(b"{}", wbits=wbits)
+    response = httpx.Response(
+        200,
+        headers={"content-encoding": "deflate"},
+        stream=ChunkStream([raw[index : index + 1] for index in range(len(raw))]),
+    )
+    with record_decompressors() as recording:
+        assert await read_bounded_body(response, max_bytes=100) == b"{}"
+    assert len(recording.instances) == (2 if wbits < 0 else 1)
+    assert recording.largest_output <= 101
+
+
 async def test_no_progress_tail_cannot_spin() -> None:
     class StalledDecompressor(RecordingDecompressor):
         def decompress(self, data: bytes, max_length: int = 0) -> bytes:

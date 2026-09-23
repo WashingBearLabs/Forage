@@ -35,7 +35,7 @@ import json
 import logging
 import re
 import ssl
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Final, cast
 
 import httpx
@@ -320,6 +320,7 @@ class BraveApiProvider:
         ``SearchRequest.query`` itself carries no such limit on the wire.
         """
         outbound_query = query[: self.settings.query_max_chars]
+        compressed = False
         try:
             async with httpx.AsyncClient(
                 timeout=self.settings.timeout_seconds,
@@ -335,8 +336,17 @@ class BraveApiProvider:
                         params={"q": outbound_query, "count": max_results},
                         headers={_BRAVE_AUTH_HEADER: self._api_key},
                     ) as response:
+                        compressed = (
+                            response.headers.get("content-encoding", "identity")
+                            .strip()
+                            .lower()
+                            != "identity"
+                        )
                         if response.status_code != 200:
-                            return self._failure_for_status(response.status_code)
+                            return replace(
+                                self._failure_for_status(response.status_code),
+                                compressed=compressed,
+                            )
                         body = await read_bounded_body(
                             response, max_bytes=self.settings.max_response_bytes
                         )
@@ -344,20 +354,26 @@ class BraveApiProvider:
                 try:
                     payload = cast("object", json.loads(body))
                 except ValueError:
-                    return self._failure("hard_error", "bad_json")
-                return self._build_result(payload, max_results)
+                    return self._failure(
+                        "hard_error", "bad_json", compressed=compressed
+                    )
+                return replace(
+                    self._build_result(payload, max_results), compressed=compressed
+                )
         except (TimeoutError, httpx.TimeoutException):
-            return self._failure("timeout", "timeout")
+            return self._failure("timeout", "timeout", compressed=compressed)
         except BodyTooLarge:
-            return self._failure("hard_error", "body_too_large")
+            return self._failure("hard_error", "body_too_large", compressed=compressed)
         except UnsupportedEncoding:
-            return self._failure("hard_error", "unsupported_encoding")
+            return self._failure(
+                "hard_error", "unsupported_encoding", compressed=compressed
+            )
         except MalformedBody:
-            return self._failure("hard_error", "malformed_body")
+            return self._failure("hard_error", "malformed_body", compressed=compressed)
         except httpx.HTTPError:
-            return self._failure("hard_error", "transport_error")
+            return self._failure("hard_error", "transport_error", compressed=compressed)
         except Exception:
-            return self._failure("hard_error", "unexpected")
+            return self._failure("hard_error", "unexpected", compressed=compressed)
 
     def _build_result(
         self, payload: object, max_results: int
@@ -485,7 +501,9 @@ class BraveApiProvider:
             return self._failure("hard_error", "http_4xx")
         return self._failure("hard_error", "unexpected")
 
-    def _failure(self, failure_class: FailureClass, detail: str) -> ProviderFailure:
+    def _failure(
+        self, failure_class: FailureClass, detail: str, *, compressed: bool = False
+    ) -> ProviderFailure:
         """Log the closed tokens and return the typed failure.
 
         The vocabulary is closed *by construction* rather than by review: a
@@ -503,4 +521,5 @@ class BraveApiProvider:
             provider_name=self.name,
             failure_class=failure_class,
             detail=detail,
+            compressed=compressed,
         )

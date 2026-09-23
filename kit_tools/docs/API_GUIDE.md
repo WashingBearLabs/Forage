@@ -55,7 +55,7 @@ activate on a mismatch; a MINOR difference is additive and safe. `/health` also 
 | GET | `/health` | Liveness plus honest degradation state | none | `HealthResponse` | always 200 | none |
 | GET | `/metrics` | In-process counters as JSON | none | `MetricsResponse` | reset on restart | none |
 | POST | `/retrieve` | Fetch, extract and sanitise one URL | `RetrieveRequest` (JSON) | `RetrievedContent` | 30 s fetch timeout, 5 redirects, 10 MiB response cap | none |
-| POST | `/search` | Finds and returns provider-extracted content for a query across sources, sanitised, never cached | `SearchRequest` (JSON) | `SearchResponse` | `num_results` 1..20; 10 s per provider call | at least one provider of the configured chain (`/health` `search_providers`) reachable |
+| POST | `/search` | Finds and returns provider-extracted content for a query across sources, sanitised, never cached | `SearchRequest` (JSON) | `SearchResponse` | `num_results` 1..20; configured per-provider wall-clock HTTP budgets, plus parse/sanitization/classification time | at least one provider of the configured chain (`/health` `search_providers`) reachable |
 | POST | `/extract` | Sanitise an uploaded PDF or UTF-8 text document | multipart form | `ExtractedContent` | 50 MiB upload, 500 PDF pages, admission queue depth 1 | `config.yaml` `extract_route_enabled` (shipped `false`; route answers 404) |
 
 Also present and unauthenticated: `GET /openapi.json`, `GET /docs`, `GET /redoc`. They
@@ -509,7 +509,7 @@ in-tree copy and says nothing about wire compatibility. The image tag (for examp
 CI verifies two of the three on every release: the `smoke` job reads the in-image copy
 back out of the candidate image, and the `publish` job downloads the Release assets back
 from the API; both are checked against the anchor committed at the tag (currently
-`71c627270f3e44fe5f07b729096255b63068ecb6dcc235b1e5dcf65cdba58bdc`).
+`ec61da286abc37aadc5bf783cfcf9ab4444f1ef85424ad0dd319f502e24750ea`).
 
 **Vendoring procedure** (`contract/GOVERNANCE.md` "Consumers"):
 

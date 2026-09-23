@@ -190,6 +190,11 @@ MINOR when fields are only added.
 * ``1.3.0`` — ``hardening-cache-integrity`` US-002 adds the ``/health``
   degraded reason ``cache_unauthenticated`` for unsigned Valkey caches and the
   capability ``cache_hmac_key`` for Valkey signing enabled at boot.
+* ``1.3.0`` — ``hardening-provider-bounds`` US-003 adds
+  ``search.provider_compressed_body`` and ``search.provider_timeouts`` to
+  ``/metrics``. On a configured ``[searxng]``-only chain,
+  ``searxng_unavailable`` reasons may end in ``unsupported_encoding``;
+  Brave's detail remains internal, with only its failure class wire-visible.
 
 This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy

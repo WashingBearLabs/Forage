@@ -26,9 +26,11 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import gzip
 import json
 import re
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
@@ -45,8 +47,13 @@ from starlette.routing import Route
 import retrieval_app
 from cache import CacheMetrics
 from model_fetcher import ModelMetrics
+from models import SearchRequest
 from pipeline.contract import CONTRACT_VERSION
 from pipeline.extraction_limits import extraction_settings_from_config
+from pipeline.orchestrator import run_search_pipeline
+from pipeline.search_providers.base import ProviderFailure, ProviderSearchResult
+from pipeline.search_providers.brave import BraveApiProvider, BraveSettings
+from pipeline.search_providers.searxng import SearxngProvider, SearxngSettings
 from retrieval_app import (
     CacheMetricsResponse,
     ExtractionMetricsResponse,
@@ -55,6 +62,12 @@ from retrieval_app import (
     RetrieveMetricsResponse,
     SearchMetricsResponse,
     app,
+)
+from tests.fakes import (
+    FakeSearchProvider,
+    RecordingSearchMetrics,
+    client_patch,
+    make_response,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -239,6 +252,136 @@ async def test_domain_policy_counters_match_classes_models_and_wire(
     for section in ("retrieve", "search"):
         for name in ("policy_invalid_domain_entry", "policy_suffix_trusted_skip"):
             assert payload[section][name] == 7
+
+
+async def test_provider_counters_are_appended_and_emitted(
+    client: httpx.AsyncClient,
+) -> None:
+    counters = app.state.search_metrics
+    counters.provider_compressed_body = 3
+    counters.provider_timeouts = 2
+    payload = (await client.get("/metrics")).json()["search"]
+    assert list(payload)[-2:] == ["provider_compressed_body", "provider_timeouts"]
+    assert payload["provider_compressed_body"] == 3
+    assert payload["provider_timeouts"] == 2
+
+
+@pytest.mark.parametrize("name", ["searxng", "brave"])
+@pytest.mark.parametrize(
+    "case",
+    [
+        "served",
+        "oversize",
+        "unsupported",
+        "malformed",
+        "status-429",
+        "budget-timeout",
+        "operation-timeout",
+        "transport-mid-body",
+        "unexpected-mid-body",
+        "connect-before-headers",
+        "timeout-before-headers",
+        "plain",
+    ],
+)
+async def test_provider_header_and_timeout_signals_survive_every_outcome(
+    name: str,
+    case: str,
+) -> None:
+    provider = (
+        SearxngProvider(settings=SearxngSettings(max_response_bytes=1000))
+        if name == "searxng"
+        else BraveApiProvider("sentinel", BraveSettings(max_response_bytes=1000))
+    )
+    target = f"pipeline.search_providers.{name}.httpx.AsyncClient"
+    compressed = case not in {
+        "plain",
+        "connect-before-headers",
+        "timeout-before-headers",
+    }
+    body = gzip.compress(b"{}")
+    headers = {"content-encoding": "gzip"} if compressed else {}
+    if case == "oversize":
+        body = gzip.compress(b"x" * 1001)
+    elif case == "unsupported":
+        headers["content-encoding"] = "br"
+    elif case == "malformed":
+        body = body[:-1]
+    elif case == "plain":
+        body = b"{}"
+    response = make_response(429 if case == "status-429" else 200, body, headers)
+    after_headers: Exception | None = {
+        "budget-timeout": TimeoutError("private"),
+        "operation-timeout": httpx.ReadTimeout("private"),
+        "transport-mid-body": httpx.ReadError("private"),
+        "unexpected-mid-body": RuntimeError("private"),
+    }.get(case)
+    before_headers: Exception | None = {
+        "connect-before-headers": httpx.ConnectError("private"),
+        "timeout-before-headers": httpx.ConnectTimeout("private"),
+    }.get(case)
+
+    async def failing_body() -> AsyncIterator[bytes]:
+        yield body[:2]
+        assert after_headers is not None
+        raise after_headers
+
+    sink = RecordingSearchMetrics()
+    with (
+        client_patch(target, response=response, stream_error=before_headers),
+        patch.object(response, "aiter_raw", side_effect=failing_body)
+        if after_headers is not None
+        else nullcontext(),
+    ):
+        outcome = await provider.search("q", 3)
+    assert outcome.compressed is compressed
+    timeout = case in {"budget-timeout", "operation-timeout", "timeout-before-headers"}
+    if timeout:
+        assert isinstance(outcome, ProviderFailure)
+        assert (outcome.failure_class, outcome.detail) == ("timeout", "timeout")
+    # Feed the real provider outcome through traversal, including failure-continue
+    # and ordinary serve-and-break, without reusing its already-consumed stream.
+    await run_search_pipeline(
+        SearchRequest(query="q", promptguard_fail_closed=False),
+        providers=[
+            FakeSearchProvider(name=name, outcome=outcome),
+            FakeSearchProvider(name="backup", paid=True),
+        ],
+        search_metrics=sink,
+        config={},
+    )
+    assert sink.provider_compressed_body == int(compressed)
+    assert sink.provider_timeouts == int(timeout)
+
+
+@pytest.mark.parametrize("lone", [False, True])
+async def test_compressed_zero_results_counts_before_either_reclassification_exit(
+    lone: bool,
+) -> None:
+    sink = RecordingSearchMetrics()
+    searxng = SearxngProvider()
+    body = gzip.compress(b'{"results":[],"unresponsive_engines":["mojeek"]}')
+    chain = (
+        [searxng] if lone else [searxng, FakeSearchProvider(name="brave", paid=True)]
+    )
+    with client_patch(
+        "pipeline.search_providers.searxng.httpx.AsyncClient",
+        response=make_response(content=body, headers={"content-encoding": "gzip"}),
+    ):
+        await run_search_pipeline(
+            SearchRequest(query="q", promptguard_fail_closed=False),
+            providers=chain,
+            search_metrics=sink,
+            config={},
+        )
+    assert sink.provider_compressed_body == 1
+    assert sink.provider_timeouts == 0
+    assert sink.fallback_fired == int(not lone)
+
+
+def test_provider_compression_defaults_are_false() -> None:
+    assert not ProviderSearchResult("searxng", [], []).compressed
+    assert not ProviderFailure("searxng", "timeout", "timeout").compressed
 
 
 async def test_cgroup_keys_stay_flat_in_the_extraction_section(

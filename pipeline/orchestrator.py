@@ -1402,7 +1402,7 @@ _NULL_RETRIEVE_METRICS: RetrieveMetricsSink = _NullRetrieveMetrics()
 
 
 class SearchMetricsSink(Protocol):
-    """The two ``/metrics`` search counters ``run_search_pipeline`` increments directly.
+    """The ``/metrics`` search counters ``run_search_pipeline`` increments directly.
 
     ``retrieval_app.SearchMetrics`` satisfies this structurally — neither
     module imports the other. Declaring it here, on the consumer side, is the
@@ -1412,6 +1412,8 @@ class SearchMetricsSink(Protocol):
     fallback_fired: int
     paid_calls: int
     classification_wait_timeouts: int
+    provider_compressed_body: int
+    provider_timeouts: int
 
 
 class _NullSearchMetrics:
@@ -1428,6 +1430,8 @@ class _NullSearchMetrics:
         self.fallback_fired = 0
         self.paid_calls = 0
         self.classification_wait_timeouts = 0
+        self.provider_compressed_body = 0
+        self.provider_timeouts = 0
 
 
 async def run_search_pipeline(
@@ -1571,6 +1575,14 @@ async def run_search_pipeline(
                 detail="unexpected",
             )
 
+        if call_outcome.compressed:
+            metrics.provider_compressed_body += 1
+        if (
+            isinstance(call_outcome, ProviderFailure)
+            and call_outcome.failure_class == "timeout"
+        ):
+            metrics.provider_timeouts += 1
+
         if (
             isinstance(call_outcome, ProviderSearchResult)
             and not call_outcome.results
@@ -1598,6 +1610,7 @@ async def run_search_pipeline(
                 provider_name=provider.name,
                 failure_class="rate_limited",
                 detail="unresponsive_engines",
+                compressed=call_outcome.compressed,
             )
 
         if isinstance(call_outcome, ProviderFailure):
