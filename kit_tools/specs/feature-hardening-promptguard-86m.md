@@ -1017,7 +1017,7 @@ every key is a `KNOWN_CONFIG_KEYS` member.
   for the new module.
 
 **Acceptance Criteria:**
-- [ ] `scripts/bench_promptguard.py` reuses `contract_smoke.py`'s `http_get` and `wait_for_health` for
+- [x] `scripts/bench_promptguard.py` reuses `contract_smoke.py`'s `http_get` and `wait_for_health` for
       the `/health` reads, `run_command` and the dataclasses (imports, not copies), implements the
       multipart POST behind `post_fn` with `httpx.post(files=, data=)` (no hand-built boundary),
       waits for `healthy` through `wait_for_health(..., expect_status=STATUS_HEALTHY,
@@ -1031,7 +1031,7 @@ every key is a `KNOWN_CONFIG_KEYS` member.
       (parsed in the module — `grep -c '_json_object' scripts/bench_promptguard.py` is 0) into the
       JSON, and writes the fixed-key JSON including `"concurrency": 1`, `"outcome"`,
       `non_2xx_reason` and the three `budget_*` measurements.
-- [ ] Both inputs are generated from a seed and sized by tokenising with `--tokenizer-dir`
+- [x] Both inputs are generated from a seed and sized by tokenising with `--tokenizer-dir`
       (`tests/fixtures/tiny_model` in the unit tests; `grep -c CHARACTERS_PER_PROMPTGUARD_TOKEN
       scripts/bench_promptguard.py` is 0); the unit tests assert determinism, that the one-window
       document is exactly one window, that the budget document satisfies **both** `len(text) ≤
@@ -1039,7 +1039,7 @@ every key is a `KNOWN_CONFIG_KEYS` member.
       `max_promptguard_chunks` — by the harness's arithmetic and by
       `PromptGuardClassifier._chunk_text` — and that one more word breaches a bound; percentile
       maths is nearest-rank and pinned (`[1..20]` → 10 / 19; `--runs 4` → p95 `null`).
-- [ ] Failure paths are pinned by unit tests with injected fakes: health wait not ending at
+- [x] Failure paths are pinned by unit tests with injected fakes: health wait not ending at
       `healthy` + `promptguard_loaded: true` → `never_healthy`, exit 2 naming the timeout and the
       last status, no JSON; `promptguard_model ≠ --model-id` → `model_mismatch`, exit 2, no JSON;
       first-request non-2xx (the 404 case and the `content_too_large_to_classify` 422 case
@@ -1048,22 +1048,22 @@ every key is a `KNOWN_CONFIG_KEYS` member.
       samples so far and null percentiles, non-zero exit; `--container` omitted / `docker stats`
       failure → `container_mem_mib: null` + one WARNING and a complete run; no token or env value in
       any message.
-- [ ] `bench/config.yaml` is committed with the first-line warning, `extract_route_enabled: true`, the
+- [x] `bench/config.yaml` is committed with the first-line warning, `extract_route_enabled: true`, the
       contiguity keys, and a test that `yaml.safe_load`s it, runs the four `*_settings_from_config`
       validators over it, asserts only `KNOWN_CONFIG_KEYS` members, the same key set as `config.yaml`
       and `extract_route_enabled` as the only differing value; `bench/*.json` and
       `bench/tokenizer-*/` are gitignored.
-- [ ] `Dockerfile` and `tests/test_dockerfile.py` are unchanged (`git diff --stat` on the two is
+- [x] `Dockerfile` and `tests/test_dockerfile.py` are unchanged (`git diff --stat` on the two is
       empty); `.dockerignore` gains exactly the line `bench/` (`grep -c '^bench/$' .dockerignore` is 1;
       `git diff --stat .dockerignore` is one line); positively, `grep -c bench Dockerfile` is 0 (today
       0) and `grep -rl 'bench/config' compose/` is empty (today empty) — the benchmark config can
       never be deployed (security, rounds 2 and 3).
-- [ ] `docs/weights.md` carries the benchmark subsection with the throwaway/loopback warning;
+- [x] `docs/weights.md` carries the benchmark subsection with the throwaway/loopback warning;
       `docs/configuration.md`'s sizing table carries the cross-reference and the single-in-flight caveat;
       TESTING_GUIDE lists the module; the module docstring carries a `test_mapping:` block.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
 
 ### US-005: Vendor the 86M weights — licence, manifest entry, mirror, allowlist (owner gate)
 
