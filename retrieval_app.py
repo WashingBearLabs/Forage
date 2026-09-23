@@ -21,6 +21,7 @@ from typing import Annotated, Any, Literal, TypedDict, cast, get_args
 
 import yaml
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.datastructures import State
@@ -1117,11 +1118,12 @@ class DetailResponse(BaseModel):
 
 
 class ValidationErrorDetail(BaseModel):
-    """One entry of FastAPI's default request-validation error list.
+    """One entry of the service's redacted request-validation error list.
 
-    Deliberately **not** ``extra=\"forbid\"``: pydantic adds ``input`` and
-    sometimes ``ctx``/``url`` per error type, and this model documents the
-    stable trio rather than pretending to close the set.
+    The handler emits the declared trio ``loc``, ``msg``, ``type``, capped at
+    ``_MAX_VALIDATION_ERRORS`` entries. For contract 1.3.0 ``input``, ``ctx``
+    and ``url`` are present with the fixed value ``"[redacted]"``; they are
+    dropped at the next MINOR (GOVERNANCE ruling (l)).
     """
 
     loc: list[str | int] = Field(
@@ -1132,18 +1134,21 @@ class ValidationErrorDetail(BaseModel):
 
 
 class HTTPValidationError(BaseModel):
-    """FastAPI's default 422 body for a malformed request.
+    """The service's redacted 422 body for a malformed request.
 
     Mirrored here because declaring a 422 response stops FastAPI auto-adding
     its own — verified against the locked FastAPI in
-    ``tests/test_contract_errors.py`` — and the service genuinely still returns
-    this body for a request that fails schema validation before any pipeline
-    code runs. Every declared 422 is therefore a union of the route's pipeline
-    shape and this one.
+    ``tests/test_contract_errors.py``. The request-validation handler emits
+    this body before any pipeline code runs. Every declared 422 is therefore
+    a union of the route's pipeline shape and this one.
     """
 
     detail: list[ValidationErrorDetail] = Field(
-        default=[], description="One entry per failed field."
+        default=[],
+        description=(
+            "One entry per failed field, at most _MAX_VALIDATION_ERRORS (100) "
+            "entries (GOVERNANCE ruling (l))."
+        ),
     )
 
 
@@ -1151,6 +1156,17 @@ _MAX_FILENAME_LENGTH = 255
 _MAX_MIME_HINT_LENGTH = 255
 _MAX_REQUEST_ID_LENGTH = 128
 _MAX_DOCUMENT_BYTES = MAX_INPUT_BYTES
+_MAX_VALIDATION_ERRORS = 100
+_VALIDATION_PLACEHOLDER = "[redacted]"
+_VALIDATION_WINDOW_KEYS = ("input", "ctx", "url")
+_ROUTE_LOC_ALLOWLIST: dict[str, frozenset[str]] = {
+    "/search": frozenset(SearchRequest.model_fields),
+    "/retrieve": frozenset(RetrieveRequest.model_fields),
+    "/extract": frozenset(
+        {"file", "filename", "mime_hint", "extract_mode", "request_id", "timeout_s"}
+    ),
+}
+_FRAMEWORK_LOC_SEGMENTS = frozenset({"body", "query", "path", "header"})
 _UPLOAD_READ_CHUNK_SIZE = 1024 * 1024
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -1953,6 +1969,62 @@ app.add_middleware(ExtractionAdmissionMiddleware)
 # -- Error handler --
 
 
+@app.exception_handler(RequestValidationError)
+async def request_validation_error_handler(
+    request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    """Never let validation input escape through a body or chained traceback.
+
+    Request validators must keep messages and error codes content-free.
+    Locations are guarded here against the owned models and route signature.
+    The description-admitted window keys and constants retire at the next
+    MINOR (GOVERNANCE ruling (l)).
+    """
+    try:
+        path = getattr(request.scope.get("route"), "path", None)
+        route = (
+            path if isinstance(path, str) and path in _ROUTE_LOC_ALLOWLIST else "other"
+        )
+        allowed = _FRAMEWORK_LOC_SEGMENTS | _ROUTE_LOC_ALLOWLIST.get(route, frozenset())
+        errors = exc.errors()
+        items: list[dict[str, object]] = []
+        dropped = 0
+        for error in errors[:_MAX_VALIDATION_ERRORS]:
+            if not isinstance(error, Mapping):
+                continue
+            entry = cast(Mapping[str, Any], error)
+            loc: list[str | int] = []
+            for segment in entry.get("loc", ()):
+                if isinstance(segment, int) or (
+                    isinstance(segment, str) and segment in allowed
+                ):
+                    loc.append(segment)
+                else:
+                    dropped += 1
+            items.append(
+                {
+                    "loc": loc,
+                    "msg": str(entry.get("msg", "")),
+                    "type": str(entry.get("type", "")),
+                    **dict.fromkeys(_VALIDATION_WINDOW_KEYS, _VALIDATION_PLACEHOLDER),
+                }
+            )
+        response = JSONResponse(status_code=422, content={"detail": items})
+        if len(errors) > _MAX_VALIDATION_ERRORS:
+            logger.warning(
+                "validation_422_truncated — count=%d route=%s", len(errors), route
+            )
+        if dropped:
+            logger.warning(
+                "validation_422_loc_dropped — dropped=%d route=%s", dropped, route
+            )
+        return response
+    except Exception:
+        # Raising here chains exc, whose string/repr and body carry caller bytes.
+        return JSONResponse(status_code=422, content={"detail": []})
+
+
 @app.exception_handler(PipelineError)
 async def pipeline_error_handler(
     request: Request,
@@ -1991,7 +2063,9 @@ async def pipeline_error_handler(
 
 _PIPELINE_422_DESCRIPTION = (
     "Pipeline refusal (coded body) or request validation failure "
-    "(FastAPI's default body)."
+    "(redacted loc/msg/type entries, at most _MAX_VALIDATION_ERRORS (100); "
+    "input/ctx/url carry '[redacted]' in contract 1.3.0 and are dropped "
+    "at the next MINOR)."
 )
 
 
@@ -2321,7 +2395,9 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
             "model": Extract422ErrorResponse | HTTPValidationError,
             "description": (
                 "Document failure (coded body, carrying sanitizer_revision) or "
-                "request validation failure (FastAPI's default body)."
+                "request validation failure (redacted loc/msg/type entries, "
+                "at most _MAX_VALIDATION_ERRORS (100); input/ctx/url carry "
+                "'[redacted]' in contract 1.3.0 and are dropped at the next MINOR)."
             ),
         },
         429: {

@@ -569,7 +569,7 @@ the pass-list advice; the baked image still ships `limiter: false`.
 `derive_sanitizer_revision()` hashes nine source files — the eight under `pipeline/` plus
 repo-root `url_validator.py` — plus the model identity, the `idna` version
 (`idna@<version>`: UTS-46 tables decide which hosts are dropped) and the active
-threshold. Forage's revision has moved thirty-eight times. The twenty-sixth was
+threshold. Forage's revision has moved forty times. The twenty-sixth was
 reconciled from the preceding validation commit during US-001's pre-flight; the rest
 were recorded at their implementation boundaries:
 
@@ -615,11 +615,12 @@ were recorded at their implementation boundaries:
 | `hardening-resource-envelope` US-002 | `4913fdc1…aa1fb` | Thirty-seventh, **not a sanitization or response-shape change**. Only `contract.py` records the shipped Compose probe's health-description correction. Read-only whole-file reversal against clean `2aa6356` reproduces `bf5a1f3e…` under default and shipped config; other eight sources and hash definition unchanged. OpenAPI and the held golden really move (`HealthResponse.description`), but the added-paths set does not. Historical goldens retain the old description by design. The status-only probe is liveness, never classifier readiness; plain Compose does not restart unhealthy containers. Full values: `docs/bootstrap-notes.md`. |
 | `hardening-promptguard-86m` US-006 | `85394a95…3d0c0` | Thirty-eighth, **not a sanitization change at shipped defaults**. Only `contract.py` changes among nine hashed sources, announcing `/health.promptguard_model`. Whole-file read-only reversal against clean `06a56b2` reproduces `4913fdc1…` under default and shipped config. The selected-id hash input differs only for a non-default model; the allowlist still ships only 22M. The lifespan refuses unknown ids; loading checks binary labels and derives the injection index. Health reports configuration even while unloaded. Full values: `docs/bootstrap-notes.md`. |
 | `hardening-promptguard-86m` US-007 | `b641e6a5…698f5` | Thirty-ninth: exactly stage 3, orchestrator and contract change in the nine hashed sources; two ASCII inputs join after the max threshold (contiguity windows, then threshold). Each file/input reversed read-only against clean `967748d`; all-reverted reproduces `85394a95…` for default/shipped config. Stage 4 is byte-unchanged. Run rule ships off but all old cache keys invalidate; enabling changes verdicts. The max rule and trusted/absent-model policy remain unchanged. Full values and both residuals: `docs/bootstrap-notes.md`. |
+| `hardening-release` US-001 | `bffeb7ba…47fe1` | Fortieth, **not a text-sanitization change**. Only `contract.py` announces redacted request-validation 422s, their 100-entry cap and one-minor-release placeholders (GOVERNANCE ruling (l)). Whole-file read-only reversal against clean `7a4819b` reproduces `b641e6a5…` under default and shipped config; the other eight sources and hash definition are unchanged. The total handler and location allowlist live in unhashed `retrieval_app.py`. Existing 36th–39th bootstrap heading forms and stale count prose were reconciled before the mandatory preflight. Full values: `docs/bootstrap-notes.md`. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Thirty of the thirty-eight rotations changed no sanitization policy or algorithm at shipped defaults; the
+**Thirty-two of the forty rotations changed no sanitization policy or algorithm at shipped defaults; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
 US-001, US-002, US-003 and its validation fix) and the twenty-seventh
 through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005) are the eight

@@ -410,24 +410,23 @@ components:
       title: ExtractionMetricsResponse
       type: object
     HTTPValidationError:
-      description: 'FastAPI''s default 422 body for a malformed request.
+      description: 'The service''s redacted 422 body for a malformed request.
 
 
         Mirrored here because declaring a 422 response stops FastAPI auto-adding
 
         its own — verified against the locked FastAPI in
 
-        ``tests/test_contract_errors.py`` — and the service genuinely still returns
+        ``tests/test_contract_errors.py``. The request-validation handler emits
 
-        this body for a request that fails schema validation before any pipeline
+        this body before any pipeline code runs. Every declared 422 is therefore
 
-        code runs. Every declared 422 is therefore a union of the route''s pipeline
-
-        shape and this one.'
+        a union of the route''s pipeline shape and this one.'
       properties:
         detail:
           default: []
-          description: One entry per failed field.
+          description: One entry per failed field, at most _MAX_VALIDATION_ERRORS (100) entries
+            (GOVERNANCE ruling (l)).
           items:
             $ref: '#/components/schemas/ValidationErrorDetail'
           title: Detail
@@ -1524,14 +1523,16 @@ components:
       title: UploadProvenance
       type: object
     ValidationErrorDetail:
-      description: 'One entry of FastAPI''s default request-validation error list.
+      description: 'One entry of the service''s redacted request-validation error list.
 
 
-        Deliberately **not** ``extra="forbid"``: pydantic adds ``input`` and
+        The handler emits the declared trio ``loc``, ``msg``, ``type``, capped at
 
-        sometimes ``ctx``/``url`` per error type, and this model documents the
+        ``_MAX_VALIDATION_ERRORS`` entries. For contract 1.3.0 ``input``, ``ctx``
 
-        stable trio rather than pretending to close the set.'
+        and ``url`` are present with the fixed value ``"[redacted]"``; they are
+
+        dropped at the next MINOR (GOVERNANCE ruling (l)).'
       properties:
         loc:
           description: Path to the offending field within the request.
@@ -1647,7 +1648,9 @@ paths:
                 - $ref: '#/components/schemas/HTTPValidationError'
                 title: Response 422 Extract Extract Post
           description: Document failure (coded body, carrying sanitizer_revision) or request
-            validation failure (FastAPI's default body).
+            validation failure (redacted loc/msg/type entries, at most _MAX_VALIDATION_ERRORS
+            (100); input/ctx/url carry '[redacted]' in contract 1.3.0 and are dropped at the
+            next MINOR).
         '429':
           content:
             application/json:
@@ -1757,8 +1760,9 @@ paths:
                 - $ref: '#/components/schemas/Pipeline422ErrorResponse'
                 - $ref: '#/components/schemas/HTTPValidationError'
                 title: Response 422 Retrieve Retrieve Post
-          description: Pipeline refusal (coded body) or request validation failure (FastAPI's
-            default body).
+          description: Pipeline refusal (coded body) or request validation failure (redacted
+            loc/msg/type entries, at most _MAX_VALIDATION_ERRORS (100); input/ctx/url carry
+            '[redacted]' in contract 1.3.0 and are dropped at the next MINOR).
       summary: Retrieve
   /search:
     post:
@@ -1811,6 +1815,7 @@ paths:
                 - $ref: '#/components/schemas/Pipeline422ErrorResponse'
                 - $ref: '#/components/schemas/HTTPValidationError'
                 title: Response 422 Search Search Post
-          description: Pipeline refusal (coded body) or request validation failure (FastAPI's
-            default body).
+          description: Pipeline refusal (coded body) or request validation failure (redacted
+            loc/msg/type entries, at most _MAX_VALIDATION_ERRORS (100); input/ctx/url carry
+            '[redacted]' in contract 1.3.0 and are dropped at the next MINOR).
       summary: Search

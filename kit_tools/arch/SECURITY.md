@@ -267,7 +267,36 @@ is pinned by a regression test, not silently repaired.
 
 `models.py` (Pydantic v2) bounds every request field but one (`SearchRequest.providers`, below): `RetrieveRequest.url` has `min_length=1`, `extract_mode` is a `Literal`, `cache_ttl_hours` is 0 to 8760, `promptguard_threshold` is 0.0 to 1.0; `SearchRequest.query` has `min_length=1` and `num_results` is 1 to 20. Response `content_type` validators restrict to `html`, `pdf`, or `text`. Pinned by `tests/test_models.py::TestRetrieveRequest` and `::TestSearchRequest`.
 
-`SearchRequest.providers` and its items carry no pydantic bound by design — no `maxItems`, no `maxLength`, no pattern (`allow_paid_fallback` is a plain `bool`). A validation 422 echoes the offending value verbatim under `detail[].input`, which would make the field an unbounded reflector of caller text on a service whose contract is that every returned string was sanitized; the only 422 the field can produce is pydantic's type error, shared with every field. The bound lives in the policy function instead, `apply_request_policy` in `pipeline/search_providers/policy.py`: it normalises each entry (`strip()`, lower-case), considers only the first eight, and every considered entry either matches a configured provider or is ignored; ignored entries, including every one past the eighth, are counted on `/metrics` `search.policy_unknown_provider` and never stored, echoed or logged (`search-policy-and-health` US-010). Pinned by `tests/test_models.py::TestSearchRequest` (no schema bound) and `tests/test_search_policy.py`.
+`SearchRequest.providers` and its items remain unbounded at the pydantic schema —
+no `maxItems`, no `maxLength`, no pattern (`allow_paid_fallback` is a plain `bool`).
+The echo risk that originally motivated that split is now **closed** on the
+request-validation 422 path for `/search`, `/retrieve` and enabled `/extract`
+(`hardening-release` US-001; GOVERNANCE ruling (l)). The surviving rationale is
+that a request-side bound tightens acceptance under "Example 6 in full"; the
+effect is already bounded in `apply_request_policy`
+(`pipeline/search_providers/policy.py`), which normalises (`strip()`, lower-case)
+only the first eight entries and matches or ignores them. Ignored entries,
+including those beyond eight, still increment `search.policy_unknown_provider`
+without storing, echoing or logging them. Full-body parse cost stays under the
+unchanged exhaustion-by-an-admitted-caller row below; this is not body admission.
+Pinned by `tests/test_models.py`, `tests/test_contract_errors.py` and
+`tests/test_search_policy.py`.
+
+**Validation invariants:** no value from the request reaches a log or a traceback
+from the request-validation path. `exc.body` and `str(exc)`/`repr(exc)` are the
+carriers and must never be logged or chained by a handler raise. The total handler
+coerces messages/types, drops non-mappings and catches construction/rendering
+failures into `422 {"detail": []}`. Request validators must keep `msg` stock and
+content-free and must never interpolate a caller value into a `PydanticCustomError`
+code. Runtime `loc` enforcement retains integer indexes and only the framework
+segments `body`, `query`, `path`, `header` plus the matched route's owned
+model fields (or `/extract`'s signature-pinned Form/File names). No or unknown
+matched route drops every non-framework string; other segment types are dropped,
+never replaced. Structural canaries additionally disallow `extra="forbid"` and
+mapping-typed request fields. The handler obtains the route only from
+`request.scope["route"].path`, then closes it to `/search`, `/retrieve`, `/extract`
+or `other`, never logging the caller's path. Pipeline 422 `reason` is unchanged:
+ruling (d)'s resolved-private-IP echo remains deliberately outside this closure.
 
 ### The `/extract` release gate
 
@@ -540,6 +569,20 @@ Forage has no audit log in the authentication sense; there is no identity to rec
 
 ---
 
+The request-validation 422 reflector is **closed**, not an accepted residual
+(`hardening-release` US-001; GOVERNANCE ruling (l)). In contract 1.3.0 each item
+has `loc`, `msg`, `type` plus `input`/`ctx`/`url` fixed to `"[redacted]"`;
+the three placeholders are dropped at the next MINOR. `_MAX_VALIDATION_ERRORS`
+(100) bounds response entries only, not the fully parsed request. The
+`validation_422_truncated` WARNING is emitted at most once per request when the
+cap bites; `validation_422_loc_dropped` is emitted once if segments are dropped.
+Only counts and the closed route token reach either line. Parse cost and WARNING
+volume remain under the unchanged resource-exhaustion-by-an-admitted-caller row
+above; private-network placement is the control. Neither this response cap nor
+the runtime location guard changes pipeline refusals or ruling (d)'s DNS oracle.
+The per-field marker/liveness, root-log-capture and never-raises guards live in
+`tests/test_contract_errors.py`; `tests/test_models.py` pins the structural canaries.
+
 ## Known Limitations and Open Questions
 
 ### Documented non-vulnerabilities
@@ -564,7 +607,6 @@ These are recorded in the repo with a source and a reason; they are decisions, n
 | `/health.promptguard_model` publishes the configured identity, but not contiguity settings. Once US-007 adds `promptguard_contiguity_detections`, a caller who can post content and read `/metrics` can infer those settings by bisection; withholding them from health is not secrecy and no absence of a second differential channel is claimed. | `hardening-promptguard-86m` US-006 / US-007; decision R29 |
 | `/search`'s status varies with key presence for the same body in two reproduced cases — a Brave-only chain with `allow_paid_fallback: false` (keyed: 422 `policy_excluded_all_providers`; key-less: the `[searxng]` boot fallback answers 200) and a `searxng,brave` chain whose SearXNG answers 200 with unresponsive engines (keyed: 422 `search_unavailable`; key-less: the lone-`searxng` carve-out answers 200). Nothing is disclosed that `/health` and `provider_used` do not already publish; the "no oracle" rule is "same body, same upstream outcome, over the resolved chain `/health` reports" — no *second, differential* channel, not secrecy | `search-policy-and-health` US-003; rulings 15, 28 |
 | Operator spend: with `FORAGE_BRAVE_API_KEY` set and `brave` in the chain, every unauthenticated `POST /search` that reaches Brave is one billable call, and Forage enforces no spend or provider-fetch concurrency ceiling. On `[searxng, brave]` the **free peer's failures control paid calls**: an over-bound, undecodable, malformed or timed-out SearXNG body each buys one Brave call. A caller-induced URI-length failure at SearXNG can no longer buy a paid call under the common 8 KB request-line limit: `search_searxng_query_max_chars` caps its outbound query at 400 characters or fewer (US-002). Post-sanitization omissions never trigger paid fallback (search epic ruling 17); unknown request policy names are ignored, never themselves a 422. `SEARXNG_URL` defaults to plain HTTP, so an on-path party can force those calls. Network placement is the control; `/metrics` `search.paid_calls` and `search.provider_compressed_body` are the detection floor, and the budget breaker is the consumer's. | ruling 12; `hardening-provider-bounds` US-002 / US-003; `docs/configuration.md` |
-| A validation 422 echoes the offending value verbatim under `detail[].input` on every POST route (FastAPI's default `RequestValidationError` handler); those bytes are caller text, not sanitized output. Dropping `input`/`ctx` is a 422 wire change and goes through `contract/GOVERNANCE.md` | "Request models" above; `contract/GOVERNANCE.md` |
 | arm64 image built but never executed by CI | `docs/releases.md` |
 | No image signing, provenance, or SBOM | `.github/workflows/ci.yml` publish job comment |
 | `engine` is provider-controlled, bounded to 64 characters and NFC-normalised in contract `1.3.0`, and neither structurally scanned nor part of the PromptGuard input — a hostile or compromised search backend can place up to 64 unscanned model-visible characters per result (`searxng.py:52` notes SearXNG can report engines outside the vetted list, so the field is not a closed vocabulary either). `SearchResponse.unresponsive_engines` is the second bounded-but-unscanned provider-controlled string (16 × 64 by `_MAX_UNRESPONSIVE_ENGINES` / `_MAX_UNRESPONSIVE_ENGINE_LENGTH`) — so `engine` is not the *only* such field, and the aggregate is at most 20 × 64 + 16 × 64 = 2 304 unscanned, model-visible, provider-controlled characters per `/search` response | `pipeline/orchestrator.py` (the sanitization loop, `_MAX_SEARCH_ENGINE_LENGTH` / `_MAX_UNRESPONSIVE_ENGINE_LENGTH`); `models.py:348,434-437`; `search-provider-abstraction` US-004; `hardening-search-sanitization` US-004 |

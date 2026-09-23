@@ -19,6 +19,19 @@ the Poppy `epic-search-policy` session reads to pin a digest; nothing here pushe
 
 ### Unreleased
 
+**Request-validation 422 compatibility window (contract 1.3.0):**
+`/search`, `/retrieve` and enabled `/extract` now return at most
+`_MAX_VALIDATION_ERRORS` (100) entries with content-free `loc`, `msg`, `type`.
+`input`/`ctx`/`url` carry `"[redacted]"` in contract 1.3.0 and are dropped at the
+next MINOR; consumers reading `detail[].input` must stop. The one-minor-release
+window preserves key presence, not the old values or `ctx`'s mapping type.
+This is an expedited MINOR under Example 6 step 1, with a second MINOR for
+the drop of description-admitted, never-declared keys (GOVERNANCE ruling (l)).
+Delete `_VALIDATION_PLACEHOLDER`, `_VALIDATION_WINDOW_KEYS` and the tests'
+`_strip_window_keys` helper with those keys. Pipeline refusals, including
+`/retrieve`'s private-IP `reason`, are unchanged. The cap bounds response
+entries only: large requests are still fully parsed.
+
 **Upgrade actions:** Search provider timeouts now bound the **whole HTTP interaction**
 (connect, headers and body), rather than each socket operation separately; their
 values are unchanged (SearXNG 10.0 seconds, Brave 15.0 seconds). A previously working

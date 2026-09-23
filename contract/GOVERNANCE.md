@@ -173,7 +173,8 @@ An urgent fix does not get to skip the rules; it gets a faster lane through them
 
 ## Recorded rulings
 
-Twelve rulings this epic already made, kept here so the next change re-reads them instead of
+Thirteen rulings — five from `feature-forage-contract`, eight from
+`epic-forage-hardening` — kept here so the next change re-reads them instead of
 re-litigating them. Each cites its source.
 
 ### (a) The documentation pass does not bump the contract
@@ -619,3 +620,77 @@ counter or log is added.
 **Source:** `kit_tools/specs/feature-hardening-provider-bounds.md`, US-004
 and Edge Cases; `pipeline/search_providers/policy.py`;
 `tests/test_search_policy.py` and `tests/test_app.py`.
+
+### (l) Request-validation 422 redaction: expedited MINOR with a compatibility window
+
+**Ruling:** `hardening-release` US-001 ships an **expedited MINOR with a
+compatibility window** in contract 1.3.0, the category already named in the
+MINOR row. The shipped `contract/openapi.yaml` description of
+`ValidationErrorDetail` explicitly admitted pydantic's extra `input` and
+sometimes `ctx`/`url` keys. This is documented-behaviour tightening, not a
+PATCH and not an enum addition under ruling (b).
+
+**Example 6 in full: expedited security changes**, applied step by step:
+its trigger is "a value that used to be accepted must stop being accepted".
+Here nothing the caller sends stops being accepted; this is the response-side
+mirror, so the steps apply to what consumers read.
+
+1. **Step 1 is taken.** Every item keeps `input`, `ctx` and `url`, each with
+   the fixed string `"[redacted]"`, alongside `loc`, `msg`, `type`. A consumer
+   reading a key still finds it while the reflector closes immediately.
+   An opt-in flag preserving real values was rejected: it leaves the reflector
+   open for the consumers who never read the note. The window preserves key
+   presence, not the old values or `ctx`'s mapping type; no known consumer
+   depends on those. No declared property is removed or retyped, so no MAJOR
+   was chosen for this first step.
+2. **Step 2's window is one minor release.** `input`/`ctx`/`url` carry
+   `"[redacted]"` in contract 1.3.0 and are dropped at the next MINOR;
+   consumers reading `detail[].input` must stop. The contract docstring and
+   `docs/releases.md` carry that exact migration obligation for the Release body.
+3. **Step 3's drop is a second MINOR, not a MAJOR.** This is an explicit
+   description-admitted-key carve-out: only `loc`, `msg`, `type` were declared
+   properties. Removing the three extras moves no declared property, so the
+   classification table's MAJOR row ("a response field is removed") does not
+   reach them. Announce the drop again, and delete the window constants and
+   test helper with the keys. This is not a general exception for declared fields.
+4. **Step 4 is not entered.** Compatible key presence actually survives the
+   window, unlike an immediate drop accompanied by a note-only window.
+
+**Invariants:** no value from the request reaches a log or a traceback from the
+request-validation path. Neither `exc.body` nor `str(exc)`/`repr(exc)` may be
+logged; the exception object is never passed to a logger or re-raised. The
+handler catches construction, coercion and JSON rendering failures and returns
+the fixed `422 {"detail": []}` rather than chaining the original exception into
+a server traceback. Non-mapping errors are dropped; `msg` and `type` are
+string-coerced. Request validators must not interpolate input into their
+messages or raise `PydanticCustomError` with a caller-derived code: `msg` stays
+stock, content-free validation text and `type` stays a fixed identifier.
+
+`loc` admits integer indexes and only framework strings (`body`, `query`,
+`path`, `header`) or names from the matched route's owned fields:
+`SearchRequest.model_fields`, `RetrieveRequest.model_fields`, and `/extract`'s
+six Form/File parameter names, pinned against its signature. The only route
+source is `request.scope["route"].path`, checked against `/search`, `/retrieve`,
+`/extract`; absent or unknown routes use the closed token `other` and drop all
+non-framework strings. Other segment types are dropped too, never replaced
+with caller text. One WARNING `validation_422_loc_dropped — dropped=<n>
+route=<token>` counts drops per request. Structural canaries prohibit
+`extra="forbid"` and mapping-typed fields on request models; the runtime
+allowlist is the guarantee even if those canaries are violated.
+
+`_MAX_VALIDATION_ERRORS = 100` caps emitted entries only. A larger error list
+emits at most one WARNING `validation_422_truncated — count=<n> route=<token>`
+per request, using the same closed route vocabulary, never the raw URL path.
+The request was still fully parsed; neither that cost nor WARNING volume is
+bounded by this response cap. Both stay under the unchanged "resource
+exhaustion by an admitted caller" row in `kit_tools/arch/SECURITY.md`, with
+network placement as the control.
+
+The closure is limited to request-validation 422s on the three POST routes.
+Pipeline 422 `reason` is unchanged; ruling (d)'s private-IP echo survives.
+Both extraction middlewares still refuse before routing.
+
+**Source:** `retrieval_app.py`; `tests/test_contract_errors.py` (per-field
+marker liveness, interpolating-validator counterexample, never-raises guards
+and closed-log captures); `tests/test_models.py` (structural canaries);
+`kit_tools/arch/SECURITY.md`; `docs/releases.md`.

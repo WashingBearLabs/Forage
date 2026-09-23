@@ -224,6 +224,13 @@ MINOR when fields are only added.
   descriptions clarify max-rule-only scope; the opt-in server-side contiguity
   rule can block independently. Description-only under GOVERNANCE row 3,
   inside the held window; no request property or bound changes.
+* ``1.3.0`` — the request-validation 422 body no longer echoes the request:
+  ``loc``, ``msg``, ``type`` per entry, at most ``_MAX_VALIDATION_ERRORS``
+  entries, and for this contract version ``input``, ``ctx`` and ``url``
+  present with the fixed value ``"[redacted]"`` — an expedited MINOR under
+  Example 6 step 1: the shipped description documented pydantic's extra keys;
+  consumers reading ``detail[].input`` must stop — the three keys are dropped
+  at the next MINOR (GOVERNANCE ruling (l)).
 
 This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy

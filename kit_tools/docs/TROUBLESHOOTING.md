@@ -125,7 +125,7 @@ docker logs <container> 2>&1 | grep -E 'weights_verification_failed|weights_quar
 docker logs <container> 2>&1 | grep -E 'Valkey connection failed for content cache|Content cache operation failed|Content cache not available at startup|cache_entry_corrupt|cache_integrity_reject|cache_hmac_key_|cache_bounds_inverted|valkey_url_option_forbidden'
 
 # Per-request noise on a degraded container, and quarantines
-docker logs <container> 2>&1 | grep -E 'PromptGuard unavailable|Content quarantined'
+docker logs <container> 2>&1 | grep -E 'PromptGuard unavailable|Content quarantined|validation_422_truncated|validation_422_loc_dropped'
 
 # Configuration warnings
 docker logs <container> 2>&1 | grep -E 'break_glass_advertisement_active|config.yaml not found|model_revision_invalid|weights_mirror_invalid|manifest_model_unknown|weights_revision_unpinned'
@@ -542,7 +542,7 @@ different `sanitizer_revision` than before the deploy.
 
 **Cause:** expected, not a bug. `sanitizer_revision` hashes eight `pipeline/*.py` files, the
 model identity and `promptguard_threshold`, and it is part of the content-cache key
-fingerprint, so a rotation invalidates every existing entry on purpose. Fourteen rotations
+fingerprint, so a rotation invalidates every existing entry on purpose. Forty rotations
 are recorded in `docs/bootstrap-notes.md` (`e6b2b56d` → ... → `41ac98ca`); that file, not
 this count, is the record. Any consumer cache keyed on the revision must flush too.
 
@@ -794,7 +794,7 @@ git show v1.0.0:contract/openapi.yaml.sha256 | diff - openapi.yaml.sha256 && sha
 **Symptom:** someone concludes the two deployments are "out of sync" because the revisions
 differ.
 
-**Cause:** wrong measure. Forage's revision has deliberately diverged from Poppy's fourteen times
+**Cause:** wrong measure. Forage's revision has deliberately diverged from Poppy's forty times
 (recorded in `docs/bootstrap-notes.md`); it hashes source bytes, model identity and the
 threshold, not the wire shape.
 

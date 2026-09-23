@@ -67,7 +67,7 @@ Design principles:
 ├── contract/                # the frozen wire contract: openapi.yaml (generated) and
 │                            # openapi.yaml.sha256, the committed anchor every other
 │                            # copy is verified against (generated, never hand-edited),
-│                            # plus GOVERNANCE.md — the semver rules, the five recorded
+│                            # plus GOVERNANCE.md — the semver rules, the thirteen recorded
 │                            # rulings, and the consumer vendoring procedure. Copied
 │                            # whole into the image and published as Release assets
 ├── SECURITY.md              # reporting channel, supported versions, in/out of scope;
@@ -407,6 +407,24 @@ hashed sources are unchanged. All cache keys invalidate even with the run rule
 off; enabling it changes verdicts. The max rule and trusted/absent-model policy
 are unchanged. Full measurements and handoff: `docs/bootstrap-notes.md`.
 
+**Request-validation errors are redacted and bounded.** `hardening-release`
+US-001 registers a total handler beside the pipeline handler, after both
+middlewares. It caps the error list at 100 and emits `loc`, `msg`, `type` plus
+three fixed `"[redacted]"` placeholders for contract 1.3.0; those extras retire
+at the next MINOR (GOVERNANCE ruling (l)). A matched-route allowlist derived
+from owned request models and the signature-pinned upload parameters drops
+caller-named location strings. Closed WARNINGs count truncation and location
+drops without logging input, exception text or caller paths. Request validators
+must preserve content-free messages and codes; per-field live-marker tests and
+an interpolating-validator counterexample enforce that invariant.
+
+The fortieth rotation is `b641e6a5…` → `bffeb7ba…`: only `contract.py`'s held
+1.3.0 continuation changes among the nine hashed sources. Its read-only
+whole-file reversal against clean `7a4819b` reproduces `b641e6a5…` under
+default and shipped config; all other sources and hash inputs are unchanged.
+The handler is unhashed. No text-sanitization change, but old cache keys
+invalidate. Full measurements: `docs/bootstrap-notes.md`.
+
 **Provider bodies are self-decoded under bounds.** The shared
 `pipeline/bounded_body.py` reads raw bytes, bounds decoded output at 1 MiB
 (plus one overflow-detection byte) and raw input at 4×, accepts identity,
@@ -502,9 +520,10 @@ add a new golden under `tests/golden/` (older ones are retained, never edited), 
 `contract/` with `uv run python -m scripts.export_contract`, and note it for the consuming
 repo. Since `feature-forage-contract` US-003 the rules are written down rather than
 remembered: **`contract/GOVERNANCE.md`** classifies any change (MAJOR / MINOR / PATCH / no
-bump), carries the five rulings this epic recorded — the documentation pass taking no bump,
+bump), carries the thirteen rulings the contract and hardening epics recorded — including the documentation pass taking no bump,
 the unreachable `/extract` 413 and what fixing it would cost, enum additions as MINOR with
-an announcement obligation, fixture retention, and the private-IP echo caveat — and states
+an announcement obligation, fixture retention, the private-IP echo caveat and validation
+redaction's one-release compatibility window — and states
 the image↔contract mapping that the `publish` job now emits into the Release body and
 asserts back out of it.
 

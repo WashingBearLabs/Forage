@@ -90,8 +90,8 @@ _SIX_EXAMPLES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("An urgent security tightening", ("MINOR",)),
 )
 
-# The twelve rulings this epic recorded, by the heading marker each section
-# carries. (a2) is US-001's verification finding and is listed separately from
+# The thirteen rulings the contract and hardening epics recorded, by heading.
+# (a2) is US-001's verification finding and is listed separately from
 # (a) precisely because it is a different ruling about a different thing.
 _RULING_MARKERS = (
     "### (a) ",
@@ -106,6 +106,7 @@ _RULING_MARKERS = (
     "### (i) ",
     "### (j) ",
     "### (k) ",
+    "### (l) ",
 )
 
 # Counts these documents state in words. Both are read back out of the code —
@@ -122,6 +123,34 @@ _NUMBER_WORDS = {
     10: "ten",
     11: "eleven",
     12: "twelve",
+    13: "thirteen",
+    14: "fourteen",
+    15: "fifteen",
+    16: "sixteen",
+    17: "seventeen",
+    18: "eighteen",
+    19: "nineteen",
+    20: "twenty",
+    21: "twenty-one",
+    22: "twenty-two",
+    23: "twenty-three",
+    24: "twenty-four",
+    25: "twenty-five",
+    26: "twenty-six",
+    27: "twenty-seven",
+    28: "twenty-eight",
+    29: "twenty-nine",
+    30: "thirty",
+    31: "thirty-one",
+    32: "thirty-two",
+    33: "thirty-three",
+    34: "thirty-four",
+    35: "thirty-five",
+    36: "thirty-six",
+    37: "thirty-seven",
+    38: "thirty-eight",
+    39: "thirty-nine",
+    40: "forty",
 }
 
 _MARKDOWN_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
@@ -406,13 +435,15 @@ class TestTheSixWorkedExamples:
 
 
 class TestTheRecordedRulings:
-    """The twelve rulings, each with a source a reader can go and check."""
+    """The thirteen rulings, each with a source a reader can go and check."""
 
     def test_ruling_count_matches_the_governance_and_invariant_text(
         self, governance: str
     ) -> None:
         count = _NUMBER_WORDS[len(_RULING_MARKERS)]
-        assert f"{count.capitalize()} rulings this epic" in governance
+        assert f"{count.capitalize()} rulings" in _section(
+            governance, "## Recorded rulings"
+        )
         assert f"records the {count} rulings" in (_REPO_ROOT / "CLAUDE.md").read_text()
 
     def test_governance_rulings_sentence_and_registered_headings_match(
@@ -420,9 +451,39 @@ class TestTheRecordedRulings:
     ) -> None:
         headings = re.findall(r"^### \([a-z]\d?\) ", governance, re.MULTILINE)
         assert tuple(headings) == _RULING_MARKERS
-        sentence = re.search(r"(\w+) rulings this epic already made", governance)
+        assert len(_RULING_MARKERS) == len(set(_RULING_MARKERS))
+        sentence = re.search(
+            r"^([\w-]+) rulings",
+            _section(governance, "## Recorded rulings"),
+            re.MULTILINE,
+        )
         assert sentence is not None
         assert sentence.group(1).lower() == _NUMBER_WORDS[len(_RULING_MARKERS)]
+
+    def test_validation_redaction_ruling_records_the_real_window(
+        self, governance: str
+    ) -> None:
+        body = _section(governance, "### (l)")
+        for phrase in (
+            "expedited MINOR with a compatibility window",
+            "Example 6 in full",
+            "Step 1",
+            "Step 2",
+            "Step 3",
+            "Step 4",
+            '"[redacted]"',
+            "second MINOR, not a MAJOR",
+            "description-admitted-key carve-out",
+            "_MAX_VALIDATION_ERRORS = 100",
+            "exc.body",
+            "str(exc)",
+            "repr(exc)",
+            'request.scope["route"].path',
+            "validation_422_truncated",
+            "validation_422_loc_dropped",
+            "network placement",
+        ):
+            assert phrase in body
 
     def test_cache_oversize_ruling_preserves_the_counter_meaning(
         self, governance: str

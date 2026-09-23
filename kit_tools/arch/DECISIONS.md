@@ -930,6 +930,42 @@ constraint; `docs/bootstrap-notes.md` for the measured rotations.
 
 ---
 
+### 2026-09-23: Redact validation values now, retain placeholder keys for one MINOR
+
+**Status:** Accepted, `hardening-release` US-001; GOVERNANCE ruling (l).
+
+**Context:** the published validation-error description admitted pydantic's
+`input`, `ctx` and `url`, so an immediate key removal with only a release note
+would not be a real compatibility window.
+
+**Options considered:** immediate removal, a flag retaining raw values, MAJOR,
+or an expedited MINOR retaining key presence with fixed values.
+
+**Decision and rationale:** Example 6 step 1 keeps all three keys with
+`"[redacted]"` throughout contract 1.3.0; they disappear at the next MINOR.
+No declared property moves at either step; ruling (l) records the explicit
+description-admitted-key carve-out for step 3. Preserving actual values behind
+a flag would preserve the reflector. The total handler never logs/re-raises
+the validation exception; location strings come from owned route fields plus
+framework tokens. Malformed entries fail closed and rendering is inside the
+same guard. The cap is 100 response entries, not request-body admission.
+
+**Consequences:** consumers reading `detail[].input` must stop. Closed
+`validation_422_truncated` and `validation_422_loc_dropped` WARNINGs reveal
+only counts and a matched route token. Parse cost and log volume remain the
+accepted admitted-caller exhaustion risk; the pipeline DNS-oracle caveat stays.
+The fortieth revision rotation is `b641e6a5…` → `bffeb7ba…`: only
+`contract.py` moves among the nine hashed sources. Read-only whole-file reversal
+against clean `7a4819b` reproduces the former under default and shipped config.
+The other eight sources/hash definition are unchanged; no text-sanitization
+algorithm changes, but old cache keys invalidate.
+
+**Source:** `retrieval_app.py`, `contract/GOVERNANCE.md`, `docs/releases.md`,
+`tests/test_contract_errors.py`, `tests/test_models.py`;
+`docs/bootstrap-notes.md` for full measurements and the consumer handoff.
+
+---
+
 <!-- Copy the structure of any entry above for new decisions: the heading is the ISO date and a
      short title, followed by Status, Context, Options Considered (or "not recorded"), Decision,
      Rationale, Consequences and Source. Add new decisions here first; promote to CLAUDE.md only

@@ -1172,6 +1172,119 @@ Implementation Notes carry `### US-005 — gate not run, <date>` naming the miss
 
 ## Implementation Notes
 
+### US-001
+
+letter: (l)
+
+**Retry preflight, 2026-09-23.** Retained the previous attempt's reservation,
+derived from the last GOVERNANCE heading `(k)` at baseline
+`7a4819b781a3f61e773ff56bbb12a6ed7257f929` (also this retry's clean starting
+commit). No intervening `(l)` ruling exists. The prior attempt stopped at
+35 exact-heading rotations versus 39 table-derived rotations and implemented
+nothing. As requested by its verifier, reconciled only the heading forms for
+the existing rotation-36 through rotation-39 records; their historical
+measurements and body text are unchanged. The mandatory derivation still
+uses the last exact `### The <ordinal> rotation:` heading, not heading count.
+No owner gate or release action is part of this story.
+
+**Implementation and measurements, 2026-09-23.** The preflight now agrees:
+last exact bootstrap heading `thirty-ninth`, GOTCHAS 40 data rows minus
+`At split` = 39. The required count-word sweep initially returned zero
+because six prose sites still said 14, 23 or 38. Those sites were explicitly
+reconciled to the artifact-derived 39, and the repeated
+`\b(thirty-nine|39) (times|rotations)\b` sweep returned six hits (GOTCHAS
+twice, TROUBLESHOOTING twice, DEPLOYMENT and SERVICE_MAP). All six now say
+forty; SERVICE_MAP's revision moved from the table's pre-story `b641e6a5…`
+to `bffeb7ba…`. This is a repair of stale prose, not a substitute derivation.
+
+Ruling (l) is present once, after (k), and answers Example 6 steps 1–4.
+The pre-story marker tuple had 12 entries (`_NUMBER_WORDS[12] == "twelve"`):
+the explicit-path sweep found four hits, all now thirteen. Four additional
+live prose sites still said five; those and CODE_ARCH's wrapped tree label
+now say thirteen too. DECISIONS' dated five-rulings ADR heading is retained.
+The introduction names five original contract rulings plus eight hardening
+rulings, and tests pin the count and unique marker/headings correspondence.
+`_NUMBER_WORDS` extends through forty because this retry's actual rotation
+artifact has outgrown the spec's twenty-entry minimum.
+
+The registered handler slices at `_MAX_VALIDATION_ERRORS = 100`, ignores
+non-mappings, string-coerces messages/types, guards `loc` against owned route
+fields plus framework strings and integer indexes, and catches construction
+and JSON rendering into the fixed empty-detail 422. Neither the exception nor
+its body/string/repr reaches a logger or is re-raised. The two WARNINGs carry
+only counts and a matched template closed to the three routes or `other`.
+The fallback does not turn failure into success. The three window keys are
+always fixed placeholders; the constants/helper are explicitly retired with
+the keys at the next MINOR in the release note. Pipeline refusals and both
+middleware paths are unchanged.
+
+**Per-field fuzz coverage (21 fields):**
+- `SearchRequest`: `query`, `num_results`, `promptguard_threshold`,
+  `promptguard_fail_closed`, `providers`, `blocked_domains`, `allow_paid_fallback`.
+- `RetrieveRequest`: `url`, `extract_mode`, `cache_ttl_hours`, `trusted_domains`,
+  `verified_domains`, `blocked_domains`, `promptguard_threshold`,
+  `promptguard_fail_closed`.
+- `/extract`: `file`, `filename`, `mime_hint`, `extract_mode`, `request_id`,
+  `timeout_s`, derived from the live signature minus `request`.
+
+Every case must place the marker in its own `exc.errors()[].input` and
+produce its own field error. All current request-model fields lack custom
+validators; the fuzz introspects decorator/Annotated metadata and requires a
+semantic `value_error` or `assertion_error` for any that appear. The
+counterexample temporarily patches the real `SearchRequest`'s compiled schema,
+validator and decorator metadata with an interpolating after-validator,
+rebuilds the real endpoint's route in a probe app (existing routes cache their
+compiled schema), and proves the same fuzz assertion fails. JSON fields use
+wrong-typed marker containers; string Form parameters receive an UploadFile
+whose filename carries the marker (content bytes alone are not in its repr),
+while the file, literal and numeric parameters receive marker form text.
+The structural model canaries disallow mapping annotations/extra-forbid.
+
+Named new guards include `test_validation_422_cap_and_closed_route` (50,000
+errors, exactly 100 items, one WARNING, `/search`), the explicit normal-search
+scope witness, signature/allowlist parity, fixed window placeholders,
+caller-location dropping and absent/unknown-route fail-closed tests, root
+DEBUG log capture with live httpx/WARNING canaries, four malformed-entry cases,
+and failures in error access, `str()` and actual JSON UTF-8 rendering. Both
+messages and log arguments are checked. Existing test functions were retained;
+the pipeline 422, ASGI-only 413, actual multipart 400 and disabled-route 404
+regressions pass unchanged.
+
+`contract.py` alone changed among all nine hashed sources. Before/reverted:
+`b641e6a51ef7cb45a5209a42321a5fff135f432264d256dd8eec9fe9e62698f5`;
+after: `bffeb7bac1b319c566253ff7512ca61fad12df75ecbdb4d8284c9aeeb0d47fe1`.
+Read-only whole-file substitution against the clean starting commit
+reproduces the former under default and shipped config; all other hashed
+sources/hash definition are unchanged. This is the fortieth rotation, not
+a text-sanitization change; recorded at all five required sites.
+
+Exporter regenerated the document, anchor and drift twin. Exactly six YAML
+description paths changed (five source descriptions); no property changes.
+Anchor `74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72`
+was copied into all four quoting pages, then `--check` passed. Re-created
+`contract_1_3_0.json` through `_SCHEMA_MODELS`: **golden unchanged, expected**
+(sha256 `2cfd8808eec3e533237fc45448be812e85c476c4153a7648ae140a58fffc2fe2`).
+Neither validation model is in that producer set; no golden-visible field
+moved and `_EXPECTED_ONE_THREE_ZERO_DIFF` is unchanged. Historical goldens
+and root SECURITY.md are byte-identical. Both DNS-oracle rows survive unchanged.
+The closing marker-home sweep finds both WARNING tokens in source, tests,
+LOGGING, MONITORING and TROUBLESHOOTING. All new ruling references use (l);
+the legitimate pre-existing engine ruling (e) references remain unchanged.
+
+**Verification:** the final combined story-scoped run passed **1,615 tests**
+across `test_contract_errors`, `test_models`, `test_governance_docs`,
+`test_contract_export`, `test_contract_schema`, `test_contract_metrics`,
+`test_app`, `test_orchestrator`, `test_ci_workflow` and
+`test_sanitizer_revision` (13.54 s; three existing dependency/socket-guard
+warnings). Repository-wide `uv run ruff check .`, `uv run ruff format --check .`
+and `uv run pyright` pass (zero errors); export `--check` and `git diff --check`
+pass. Only changed Python files received safe fixes/formatting. The full
+`uv run pytest` suite was **not run**, honoring the story implementer's explicit
+targeted-only instruction; its full-suite acceptance gate remains for the
+authorized verifier, not claimed green from these scoped results. No story
+definition or acceptance checkbox was modified. No image/model/benchmark,
+push, tag, release, publication or owner-gate action was performed.
+
 ### Spec 2 US-005 consumer-note handoff (2026-09-22)
 
 The existing release deliverable `docs/releases.md` now carries the pending-hardening

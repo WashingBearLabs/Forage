@@ -1668,7 +1668,7 @@ unchanged. Direct Python callers replace the retired keyword with
 are no longer available in omission logs. **Not replayed to Poppy**; no
 tag, release or push occurred.
 
-### Search latency targets and telemetry — thirty-sixth rotation (2026-09-22)
+### The thirty-sixth rotation: search latency targets and telemetry (2026-09-22)
 
 `hardening-resource-envelope` US-004 moves exactly two of the nine hashed
 sources. `orchestrator.py` replaces the two fixed log targets with defaulted
@@ -1714,7 +1714,7 @@ semaphore wait. A served-empty request reaches it; a pre-loop 422 does not.
 existing pinned counter changes. **Not replayed to Poppy**; no push, tag or
 release occurred.
 
-### Compose liveness descriptions — thirty-seventh rotation (2026-09-22)
+### The thirty-seventh rotation: Compose liveness descriptions (2026-09-22)
 
 `hardening-resource-envelope` US-002 parameterizes the two fragments' CPU
 and memory ceilings with unchanged defaults and adds a status-only liveness
@@ -1790,7 +1790,7 @@ race after hashing. No default sanitization, API response, contract artifact or
 golden changed. No 86M weights, deployment selection or benchmark is enabled by
 this story. **Not replayed to Poppy**; no publish, push, tag or release occurred.
 
-### Allowlisted model selection — thirty-eighth rotation (2026-09-22)
+### The thirty-eighth rotation: allowlisted model selection (2026-09-22)
 
 `hardening-promptguard-86m` US-006 adds `FORAGE_MODEL_ID`, a total
 `(model_id, allowed)` resolver and a lifespan-only `ModelConfigurationError`
@@ -1841,7 +1841,7 @@ candidate-image smoke validates the whole current `HealthResponse`, so its
 synthetic test body gains the field without adding a model-specific assertion.
 **Not replayed to Poppy**; no publish, push, tag or release occurred.
 
-### US-007: opt-in contiguity rule and cache-revision inputs (2026-09-22)
+### The thirty-ninth rotation: opt-in contiguity rule and cache-revision inputs (2026-09-22)
 
 `hardening-promptguard-86m` US-007 makes the thirty-ninth rotation.
 Measured from clean starting commit `967748d6edb4f8f87c47d69cac73e297fbff7bd0`,
@@ -1896,3 +1896,50 @@ Search coverage is content-dependent; the fixture tokenizer is not evidence
 of production-model coverage or latency. No 86M weights or owner benchmark
 were acquired/run, no owner gate changed, and no push/tag/release occurred.
 **Not replayed to Poppy.**
+
+### The fortieth rotation: redacted request-validation 422s (`hardening-release` US-001, 2026-09-23)
+
+Retry preflight reconciled the existing 36th–39th heading forms without changing
+their records. The last exact `### The <ordinal> rotation:` heading then read
+thirty-ninth, matching the GOTCHAS table's 40 data rows minus its `At split`
+origin. Six current-count sentences were stale (14, 23 or 38); these were first
+reconciled to that independently derived 39, then the required case-insensitive
+digit-or-word sweep found all six. This story moves those six to forty.
+
+Measured from clean starting commit
+`7a4819b781a3f61e773ff56bbb12a6ed7257f929`. Only `pipeline/contract.py` moves
+among the nine hashed sources, adding the held 1.3.0 redaction/window clause.
+Live `derive_sanitizer_revision` with read-only `Path.read_bytes` substitution
+of that entire pre-story file gives identical values for default `{}` and
+shipped `config.yaml`, using the default model identity:
+
+| State | Revision |
+|---|---|
+| Before / whole `contract.py`-reverted control | `b641e6a51ef7cb45a5209a42321a5fff135f432264d256dd8eec9fe9e62698f5` |
+| After | `bffeb7bac1b319c566253ff7512ca61fad12df75ecbdb4d8284c9aeeb0d47fe1` |
+
+The other eight hashed sources and hash definition are byte-identical to the
+baseline. The handler, constants and allowlist are in unhashed `retrieval_app.py`.
+This changes request-validation responses, **not text sanitization**, and the
+source rotation still invalidates old cache keys.
+
+The regenerated document differs at exactly six description paths: both
+validation models, `HTTPValidationError.detail`, and each POST route's 422
+description. No schema property was added, removed or retyped. The anchor is
+`74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72`;
+all four quoting pages were copied from the generated anchor. The current
+golden was re-created through `_SCHEMA_MODELS`, byte-identically: sha256
+`2cfd8808eec3e533237fc45448be812e85c476c4153a7648ae140a58fffc2fe2`.
+Neither validation model is in that set, so golden unchanged is expected;
+`_EXPECTED_ONE_THREE_ZERO_DIFF` gains nothing. Historical goldens are untouched.
+
+**Consumer handoff:** GOVERNANCE ruling (l), an expedited MINOR under
+Example 6 step 1, closes caller-byte reflection on request-validation 422s.
+Each item keeps `loc`, `msg`, `type` plus `input`/`ctx`/`url` fixed to
+`"[redacted]"` for contract 1.3.0. Consumers reading `detail[].input` must stop;
+the three extras are dropped at the next MINOR. At most 100 entries are
+returned; the request is still parsed in full. The two closed WARNINGs are
+`validation_422_truncated` and `validation_422_loc_dropped`, each at most once
+per request, with count and matched route token only. Pipeline refusals and
+the private-IP echo are unchanged. **Not replayed to Poppy**; no model
+acquisition, benchmark, owner gate, push, tag or release occurred.

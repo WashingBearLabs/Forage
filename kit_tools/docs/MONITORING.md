@@ -354,6 +354,22 @@ Dropped (INFO): `Sidecar config loaded (<n> keys); contract_version=<v>`, `Conte
 
 ### Closed vocabularies
 
+**`retrieval_app.py` request-validation 422s** — each WARNING is at most once
+per request. `route` is the matched template checked against `/search`,
+`/retrieve`, `/extract`, with fallback `other`, never a caller-provided path.
+No input, exception text, message text or dropped location is logged.
+
+| Level | Line | Operator meaning |
+|-------|------|------------------|
+| WARNING | `validation_422_truncated — count=<n> route=<token>` | A caller sent more than `_MAX_VALIDATION_ERRORS` (100) validation failures; only the response was truncated. The request was still fully parsed. |
+| WARNING | `validation_422_loc_dropped — dropped=<n> route=<token>` | The emitted prefix contained location segments outside the owned field/framework allowlist or neither strings nor integers; those segments were dropped, not echoed. |
+
+This bounds response entries, not parse cost or log volume. Both remain under
+the accepted admitted-caller exhaustion risk (network placement is the control).
+The root-level log-capture and cap tests in `tests/test_contract_errors.py`
+enforce these closed vocabularies. GOVERNANCE ruling (l) records the
+one-release `"[redacted]"` placeholder window.
+
 **`cache.py`** — `_closed_vocabulary_reason()` maps connection/operation failures to `connect_failed`, `operation_failed` or `timeout` (the last when the exception is a `TimeoutError`). The parse guard and integrity checks have separate closed vocabularies, not that exception mapper:
 
 | Level | Line | Reason values |

@@ -41,7 +41,7 @@ Every module obtains its logger with `logger = logging.getLogger(__name__)` at m
 
 | Logger | Defined at | Levels used | What it emits |
 |--------|------------|-------------|---------------|
-| `retrieval_app` | `retrieval_app.py` | INFO, WARNING | Startup lines; `config.yaml not found at %s`; `config_unknown_key — key=%s` (WARNING, one per unknown dotted key, never its value, tokens in the message not `extra=`); `config_invalid_value — key=%s dropped=%d entries=%s` (operator domain-list drops); `config_invalid_value — key=promptguard_threshold. /extract reads the raw value through its own guard` (WARNING, never the invalid value); `promptguard_threshold_resolved — value=%s` (once per boot, INFO, validated numeric default only); `break_glass_advertisement_active — %s=1 is forcing /health ...`; `document extraction completed` (INFO, content-free `extra=` dict) |
+| `retrieval_app` | `retrieval_app.py` | INFO, WARNING | Startup lines; `config.yaml not found at %s`; `config_unknown_key — key=%s` (WARNING, one per unknown dotted key, never its value, tokens in the message not `extra=`); `config_invalid_value — key=%s dropped=%d entries=%s` (operator domain-list drops); `config_invalid_value — key=promptguard_threshold. /extract reads the raw value through its own guard` (WARNING, never the invalid value); `promptguard_threshold_resolved — value=%s` (once per boot, INFO, validated numeric default only); `break_glass_advertisement_active — %s=1 is forcing /health ...`; `document extraction completed` (INFO, content-free `extra=` dict); `validation_422_truncated — count=%d route=%s` and `validation_422_loc_dropped — dropped=%d route=%s` (WARNING, counts and closed route tokens only) |
 | `cache` | `cache.py` | WARNING | Connection/operation reason mapper, `cache_entry_corrupt`, and six `cache_integrity_reject` reasons with a credential-free key digest; `cache_bounds_inverted` and `valkey_url_option_forbidden` startup diagnostics. Signing-key boot markers are emitted by `retrieval_app`, below. |
 | `model_fetcher` | `model_fetcher.py:141` | INFO, WARNING, ERROR, exception | All `weights_*` markers and `model_revision_invalid` |
 | `promptguard.classifier` | `promptguard/classifier.py:21` | DEBUG, INFO, WARNING | Model loaded; `PromptGuard model not available — ML injection detection disabled` (WARNING with `exc_info=True`, so a traceback follows); `classify() called but model not loaded — returning safe fallback` |
@@ -76,6 +76,23 @@ Every module obtains its logger with `logger = logging.getLogger(__name__)` at m
 ## Closed Vocabularies
 
 Tests are the enforcement mechanism for both vocabularies: each fixed string below has a `caplog` assertion that it appears and that the value it stands in for does not. A new reason or marker without a test is incomplete.
+
+### `retrieval_app.py` request validation
+
+`validation_422_truncated — count=<n> route=<token>` means the caller produced
+more than `_MAX_VALIDATION_ERRORS` (100) failures: the response was truncated,
+but the request was still fully parsed. `validation_422_loc_dropped —
+dropped=<n> route=<token>` means non-allowlisted or non-string/non-integer
+location segments were dropped from the emitted prefix. Each is at most one
+WARNING per request, visible under default container logging. Route tokens are
+only `/search`, `/retrieve`, `/extract`, `other`, derived from the matched
+template, never the raw request path. Neither exception text nor `exc.body`
+may reach a log or traceback; construction/render failures return a fixed 422.
+Enforced by `tests/test_contract_errors.py::test_validation_422_cap_and_closed_route`,
+`::test_validation_location_without_owned_route_fails_closed` and
+`::test_validation_marker_never_reaches_any_logger` (root capture, messages and
+arguments, with a live-capture canary). Log volume remains under the accepted
+admitted-caller exhaustion risk; see GOVERNANCE ruling (l).
 
 ### `cache.py`
 

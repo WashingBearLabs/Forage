@@ -86,8 +86,8 @@ consuming repo.
 
 **The bump policy is written down: [`contract/GOVERNANCE.md`](contract/GOVERNANCE.md).**
 Read it before touching `pipeline/contract.py` or the response models in `models.py`. It
-classifies any change, answers the six standing examples, and records the twelve rulings
-this epic already made — including the one that is not obvious from the code: the
+classifies any change, answers the six standing examples, and records the thirteen rulings
+the contract and hardening epics already made — including the one that is not obvious from the code: the
 `/extract` 413 is documented but unreachable (FastAPI turns it into a 400), documenting it
 carried no bump, and *correcting* it is a MAJOR. `.github/pull_request_template.md` is the
 short form of the same checklist.
@@ -521,6 +521,18 @@ keys invalidate. When enabled it changes sanitization decisions; the max rule
 and trusted/absent-model policy remain unchanged. Full
 measurements and the consumer/corpus handoff are in `docs/bootstrap-notes.md`.
 No owner gate ran.
+
+The fortieth rotation is `b641e6a5…` → `bffeb7ba…` for
+`hardening-release` US-001. Only `contract.py` moves among nine hashed
+sources, announcing redacted request-validation 422s and their one-release
+placeholder window (GOVERNANCE ruling (l)). A read-only whole-file reversal
+against clean `7a4819b` reproduces `b641e6a5…` exactly under default and
+shipped config; the other eight sources and hash definition are unchanged.
+The total handler and runtime location allowlist in `retrieval_app.py` are
+not hashed. No text-sanitization algorithm changes; old cache keys invalidate.
+Full measurements and the consumer migration are in `docs/bootstrap-notes.md`.
+The 36th–39th bootstrap headings were reconciled before the count preflight;
+the last heading ordinal and GOTCHAS table now agree on forty rotations.
 
 ## Session Scratchpad
 
