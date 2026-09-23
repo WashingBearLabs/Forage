@@ -908,18 +908,18 @@ exactly `search_searxng_query_max_chars` characters, the request is accepted end
   in `_REVISION_SOURCES`).
 
 **Acceptance Criteria:**
-- [ ] `search_searxng_query_max_chars` exists in `config.yaml` (default 400), is bounded 50–400 at
+- [x] `search_searxng_query_max_chars` exists in `config.yaml` (default 400), is bounded 50–400 at
       boot (`SearxngConfigurationError` out of range), has `docs/configuration.md` and
       `ENV_REFERENCE.md` rows and a `KNOWN_CONFIG_KEYS` entry.
-- [ ] The outbound SearXNG `q` is truncated to the cap on the chain `build_provider_chain` builds
+- [x] The outbound SearXNG `q` is truncated to the cap on the chain `build_provider_chain` builds
       (asserted on `client.stream.call_args`); `SearchRequest.query` is unchanged on the wire;
       a query shorter than the cap is sent untouched; a 400-character multi-byte query is sent whole.
-- [ ] `SECURITY.md`'s operator-spend row names the SearXNG URI-length path as closed by this story.
-- [ ] `git diff --stat` shows no change under `pipeline/orchestrator.py`, `pipeline/contract.py`,
+- [x] `SECURITY.md`'s operator-spend row names the SearXNG URI-length path as closed by this story.
+- [x] `git diff --stat` shows no change under `pipeline/orchestrator.py`, `pipeline/contract.py`,
       `models.py` or `contract/`.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-004: Cost-monotonic policy by construction — the paid-prefix rule
 
