@@ -259,13 +259,15 @@ Request fields (`SearchRequest`):
 | `num_results` | int | 5 | 1..20 | Forage asks SearXNG for up to `min(2 * num_results, 20)` candidates and scans at most 20 |
 | `promptguard_threshold` | float \| null | `null` | 0.0..1.0 | Null or omitted uses the server's validated configured threshold (shipped as `0.85`), then `promptguard_threshold_ceiling` caps the requested or default value. Scores above it omit results as `injection_detected`. Added in `1.3.0` |
 | `promptguard_fail_closed` | bool | `true` | | When the classifier is absent or the permit wait expires: `true` withholds results (`omitted_by_reason.promptguard_unavailable`), `false` returns them marked `suspicious` and counts them in `unscanned_results`; bounded by the operator's `promptguard_fail_closed_floor` via `request or floor` |
-| `providers` | list of str | `[]` | at most 8 honoured, rest ignored | Restrict-only filter of the configured chain, in configured order: can exclude paid providers only, never add, reorder, or key one — free providers always run, and a non-empty list removes every paid provider it does not name. Matched after `strip()` and lower-casing; entries beyond the first eight, and entries matching no configured provider, are ignored and counted on `/metrics` `search.policy_unknown_provider` rather than rejected. Empty (the default) runs the configured chain unrestricted |
+| `providers` | list of str | `[]` | at most 8 honoured, rest ignored | Restrict-only filter of the configured chain, in configured order: free providers always remain, and a non-empty list keeps only the longest prefix of the configured paid sequence whose every member is named. A named paid provider after an unnamed paid provider is dropped, never promoted. `provider_used` never names a dropped provider; if you named a paid provider and `provider_used` is not it, check its position in `FORAGE_SEARCH_PROVIDERS`. On an all-paid configured chain, a later-paid-only selection leaves no provider and returns 422 `search_unavailable` / `policy_excluded_all_providers`. Matched after `strip()` and lower-casing; entries beyond the first eight, and entries matching no configured provider, are ignored and counted on `/metrics` `search.policy_unknown_provider` rather than rejected. Empty (the default) runs the configured chain unrestricted |
 | `blocked_domains` | list of str | `[]` | raw UTF-8 list bytes, not entry count | Merged after the operator's `seed_blocklist`, which cannot be overridden. Multi-label names omit apex and dot-boundary subdomains; single-label names and IP literals match exactly. Entries are stripped and UTS-46-canonicalised once; malformed entries are ignored and counted on `search.policy_invalid_domain_entry`, never echoed. A list exceeding `policy_domain_entries_max_bytes` (including newline separators) is refused whole before encoding, 422 `search_unavailable` / `policy_domain_list_too_large`. Matches are omitted as `blocked_url` after the URL audit and before content scanning, without triggering paid fallback. Added in `1.3.0` |
 | `allow_paid_fallback` | bool | `true` | | When `false`, excludes every paid provider from this request's effective chain regardless of `providers` — free providers always run. Applied after `providers`' own filtering, one-way: can only narrow the configured chain, never widen, reorder, or key it |
 
 A consumer sources the names it may put in `providers` from `/health`'s `search_providers`
 and reconciles against that field, not against `FORAGE_SEARCH_PROVIDERS` or any other
 local copy of the chain.
+Prefix drops emit no counter or log. Checking `FORAGE_SEARCH_PROVIDERS` is
+an operator diagnosis, not an alternative source of names for the consumer.
 
 Search always uses trust tier `standard`; callers cannot opt results out through a
 trusted-domain list. Its resolved threshold is reported on every successful response.
@@ -509,7 +511,7 @@ in-tree copy and says nothing about wire compatibility. The image tag (for examp
 CI verifies two of the three on every release: the `smoke` job reads the in-image copy
 back out of the candidate image, and the `publish` job downloads the Release assets back
 from the API; both are checked against the anchor committed at the tag (currently
-`ec61da286abc37aadc5bf783cfcf9ab4444f1ef85424ad0dd319f502e24750ea`).
+`87bd958cb471614f5ecab22418eab6562a07e1a4c30d85ae45d5dce3ae2b3495`).
 
 **Vendoring procedure** (`contract/GOVERNANCE.md` "Consumers"):
 

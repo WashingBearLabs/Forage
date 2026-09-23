@@ -90,7 +90,8 @@ those eight — so Forage's revision moved:
 | After shared threshold resolution (`hardening-hostname-and-config` US-005) | `e00049c4…7ed5c` |
 | `hardening-cache-integrity` US-001, signed and bounded cache values | `aa288bc5…5b39c` |
 | `hardening-cache-integrity` US-002, boot signing and health | `0866963a…c1e80` |
-| **Current (`hardening-provider-bounds` US-003, provider counters and reason token)** | **`c9bf6e0d…f2f76`** |
+| `hardening-provider-bounds` US-003, provider counters and reason token | `c9bf6e0d…f2f76` |
+| **Current (`hardening-provider-bounds` US-004, paid-prefix policy record)** | **`e3b9c138…73d91`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -1572,3 +1573,48 @@ SearXNG 422 reason as opaque text; Brave's detail is not wire-visible.
 The timeout upgrade action is under `docs/releases.md` **Unreleased**, for
 spec 8 US-004 to fold into v1.2.0. `/retrieve`'s decoder is still open in BACKLOG.
 **Not replayed to Poppy**; no release or tag was published.
+
+### The thirty-fourth rotation: paid-prefix policy (`hardening-provider-bounds` US-004, 2026-09-22)
+
+Only `pipeline/contract.py` moves among the nine hashed sources: its 1.3.0
+continuation announces the `SearchRequest.providers` description and the
+all-paid-chain policy 422. `pipeline/search_providers/policy.py` and
+`models.py` are not revision sources; no hash input was added or removed.
+This is **not a text-sanitization change**, and no currently constructible
+production chain changes outcome. GOVERNANCE ruling (k), based only on
+(a2)'s unreachability reasoning, records why: the registry has exactly one
+paid name and configured duplicates collapse.
+
+Measured with live `derive_sanitizer_revision` and whole-file `Path.read_bytes`
+substitution from clean pre-story `0139ad62344bb9fec1e1c1d3d9ba0519de0314bc`.
+Both default `{}` and shipped `config.yaml`, with the default model pin,
+produce the same values:
+
+| State | Revision |
+|---|---|
+| Before / only `contract.py` reverted (control) | `c9bf6e0d87beaa5bf32e05e38dd5fdb092fac0e764e46c409220f81a336f2f76` |
+| After | `e3b9c13866a53939ee542debe3bc4bbd9ca53dded740e40958dd984914d73d91` |
+
+All eight other hashed sources were compared byte-for-byte with the base
+and are unchanged. The read-only reversal reproduces the before value
+exactly, without temporarily replacing a worktree file. Old content-cache
+keys are orphaned and expire normally.
+
+The exporter regenerated OpenAPI, its drift twin and anchor:
+`87bd958cb471614f5ecab22418eab6562a07e1a4c30d85ae45d5dce3ae2b3495`.
+The held `contract_1_3_0.json` was re-created through `_SCHEMA_MODELS`;
+only `SearchRequest.providers`' description changes. Nothing was appended
+to `_EXPECTED_ONE_THREE_ZERO_DIFF`: `_added_paths` counts new properties
+and enum members, neither of which was added. Every older golden remains
+unchanged, including published `contract_1_2_0.json`.
+
+**Consumer handoff:** a non-empty `providers` list keeps only the longest
+named prefix of the configured paid sequence, with every free provider
+retained in order. An all-paid chain with a later-paid-only selection
+returns `search_unavailable` / `policy_excluded_all_providers` before any
+call. T3.1 inherits this rule when it registers the second paid backend.
+Prefix drops emit no log or counter; `provider_used` cannot name a dropped
+provider, so diagnose its position in `FORAGE_SEARCH_PROVIDERS`.
+`policy_unknown_provider` still counts each ignored entry, without an
+entry-count/body bound; accepted risk 2026-09-16-054 is in the architecture
+SECURITY table. **Not replayed to Poppy**; no tag or release was published.

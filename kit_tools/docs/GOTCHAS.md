@@ -524,7 +524,7 @@ the pass-list advice; the baked image still ships `limiter: false`.
 `derive_sanitizer_revision()` hashes nine source files — the eight under `pipeline/` plus
 repo-root `url_validator.py` — plus the model identity, the `idna` version
 (`idna@<version>`: UTS-46 tables decide which hosts are dropped) and the active
-threshold. Forage's revision has moved twenty-nine times. The twenty-sixth was
+threshold. Forage's revision has moved thirty-four times. The twenty-sixth was
 reconciled from the preceding validation commit during US-001's pre-flight; the rest
 were recorded at their implementation boundaries:
 
@@ -564,11 +564,12 @@ were recorded at their implementation boundaries:
 | `hardening-cache-integrity` US-001 | `aa288bc5…5b39c` | Thirty-first, **not a text-sanitization change**. Only `contract.py` moves, announcing `cache.integrity_rejects` and widened `storage_oversize_skips` producers. Read-only reversal against clean `b79504d` reproduces `e00049c4…` under default and shipped config; all eight other sources are unchanged. The HMAC/bounds and wiring are in unhashed root modules. Old keys are orphaned; full measurements in `docs/bootstrap-notes.md`. |
 | `hardening-cache-integrity` US-002 | `0866963a…c1e80` | Thirty-second, **not a text-sanitization change**. Only `contract.py` moves for `cache_unauthenticated` and the continuation naming that reason and `cache_hmac_key`. Read-only whole-file reversal against clean `1e467c1` reproduces `aa288bc5…` under default and shipped config; the other eight hashed sources are unchanged. One-read key resolution and Valkey-only signing are unhashed. Old keys are orphaned; full measurements in `docs/bootstrap-notes.md`. |
 | `hardening-provider-bounds` US-003 | `c9bf6e0d…f2f76` | Thirty-third, **not a text-sanitization change**. Only `orchestrator.py` (two counters before every exit and re-classification flag) and `contract.py` (counters and SearXNG-only reason token) move. Read-only whole-file reversals against clean `abf9df6`: `61d54562…` with orchestrator reverted, `e736bb76…` with contract reverted; both reproduce `0866963a…` under default and shipped config. Helper/providers remain unhashed; upstream byte/encoding/time acceptance tightens without changing text scanning. Full values: `docs/bootstrap-notes.md`. |
+| `hardening-provider-bounds` US-004 | `e3b9c138…73d91` | Thirty-fourth, **not a text-sanitization change**. Only `contract.py` moves for the paid-prefix description and the all-paid-chain policy 422. Read-only whole-file reversal against clean `0139ad6` reproduces `c9bf6e0d…` under default and shipped config; the other eight sources are unchanged. `policy.py` and `models.py` are unhashed. Production has only one paid name and collapses configured duplicates, so the changed multi-paid outcome is unreachable until T3.1 (GOVERNANCE ruling (k)). Full values: `docs/bootstrap-notes.md`. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Twenty-five of the thirty-three rotations changed no sanitization policy or algorithm; the
+**Twenty-six of the thirty-four rotations changed no sanitization policy or algorithm; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
 US-001, US-002, US-003 and its validation fix) and the twenty-seventh
 through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005) are the eight
@@ -585,7 +586,7 @@ policy without changing raw-result sufficiency or the text-scanning algorithm.
 US-005 shares configured threshold policy across both fetch routes, before the
 operator ceiling; its behavior change is for tuned deployments, not shipped 0.85.
 US-004 bounds and normalizes `SearchResult.engine` without routing it through that same scan.
-Among the other twenty-four, the fourth and fifth
+Among the other twenty-six, the fourth and fifth
 are different *kinds* of rotation and worth reading as such. The first three moved because
 the hash is over bytes and someone reformatted or retyped a hashed file. The fourth moved
 because an **input changed**: weights are a runtime, per-deployment thing now

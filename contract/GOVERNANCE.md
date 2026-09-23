@@ -173,7 +173,7 @@ An urgent fix does not get to skip the rules; it gets a faster lane through them
 
 ## Recorded rulings
 
-Eleven rulings this epic already made, kept here so the next change re-reads them instead of
+Twelve rulings this epic already made, kept here so the next change re-reads them instead of
 re-litigating them. Each cites its source.
 
 ### (a) The documentation pass does not bump the contract
@@ -588,3 +588,34 @@ description-only ruling.
 
 **Source:** `kit_tools/specs/feature-hardening-cache-integrity.md`, US-001,
 round-4 widening ruling and round-5 counter ownership clarification.
+
+### (k) The paid-prefix rule changes an outcome no production chain can reach
+
+**Ruling:** keeping only the longest named prefix of the configured paid
+sequence carries **no additional bump** inside the unpublished 1.3.0 window.
+On an all-paid configured chain, a later-paid-only selection now returns
+422 `search_unavailable` / `policy_excluded_all_providers`, without calling
+any provider, instead of serving the later provider's results. This is a
+behavioural consequence, not merely a schema-description edit.
+
+**Basis: ruling (a2)'s unreachability reasoning, and only that.** A status
+code a client observes changing is a MAJOR under the classification table.
+Here no production client can observe the flipped case:
+`pipeline/search_providers/__init__.py`'s `_KNOWN_PROVIDER_NAMES` contains
+`searxng` (free) and `brave` (the only paid name), and `parse_provider_names`
+collapses duplicates before chain construction. A multi-paid configured
+chain is therefore unconstructible today. The regression's two paid fakes
+exercise the future rule, not a currently deployable configuration.
+As in (a2), setting the documented behaviour of an unreachable case right
+does not change a status any existing client can observe.
+
+The case becomes reachable the day **T3.1 registers a second paid backend**.
+That story inherits this ruling and the already-documented prefix rule;
+it must preserve this policy 422 rather than introduce an undocumented
+MAJOR by promoting a later paid provider. The `SearchRequest.providers`
+description and held golden are regenerated now; no new field, enum member,
+counter or log is added.
+
+**Source:** `kit_tools/specs/feature-hardening-provider-bounds.md`, US-004
+and Edge Cases; `pipeline/search_providers/policy.py`;
+`tests/test_search_policy.py` and `tests/test_app.py`.

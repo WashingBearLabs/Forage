@@ -4495,6 +4495,35 @@ async def test_policy_excludes_all_providers_via_allow_paid_fallback(
     assert metrics_body["search"]["errors"] == {"search_unavailable": 1}
 
 
+async def test_a_later_paid_only_selection_on_an_all_paid_chain_is_the_policy_422(
+    client: httpx.AsyncClient,
+) -> None:
+    paida = FakeSearchProvider(name="paida", paid=True)
+    paidb = FakeSearchProvider(
+        name="paidb", paid=True, outcome=_searxng_result(provider_name="paidb")
+    )
+
+    with _borrowed_search_providers([paida, paidb]):
+        resp = await client.post(
+            "/search",
+            json={
+                "query": "q",
+                "providers": ["paidb"],
+                "promptguard_fail_closed": False,
+            },
+        )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["error"] == "search_unavailable"
+    assert body["reason"] == "policy_excluded_all_providers"
+    assert paida.calls == paidb.calls == []
+    metrics_body = (await client.get("/metrics")).json()
+    assert metrics_body["search"]["errors"] == {"search_unavailable": 1}
+    assert metrics_body["search"]["policy_unknown_provider"] == 0
+    assert metrics_body["search"]["paid_calls"] == 0
+
+
 async def test_policy_excludes_all_providers_via_an_unregistered_name(
     client: httpx.AsyncClient,
 ) -> None:

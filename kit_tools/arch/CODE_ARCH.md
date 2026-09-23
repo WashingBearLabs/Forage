@@ -119,7 +119,7 @@ file in the repo. |
 | `pipeline/search_providers/base.py` | 146 | The `SearchProvider` protocol (`name`, `paid`, `origin`, `search()`) plus the internal `ProviderSearchResult` / `ProviderFailure` types and the closed `FailureClass` vocabulary every backend implements. First nested package under `pipeline/` (its `__init__.py` is the registry, below, not a bare marker); not in `_REVISION_SOURCES` — provider code changes what is fetched, not how it is sanitized. |
 | `pipeline/search_providers/brave.py` | 504 | `BraveApiProvider` (`feature-brave-provider`) — the paid Brave LLM-Context backend, `paid = True`, returning content chunks (`content_kind="chunk"`, `engine="brave-api"`, deliberately distinct from SearXNG's own `brave` sub-engine) parsed against one owner-captured pinned sample (`tests/fixtures/brave/llm_context_sample.json`). A hardened per-call `httpx.AsyncClient` (`trust_env=False`, `follow_redirects=False`, TLS verified) against a fixed constant endpoint, a response body bounded before any `json.loads`, and `config.yaml`-tunable timeout/chunk/query caps read unconditionally in the lifespan. Also home of `brave_key_present()` — strip, non-empty; the one key-presence helper the registry and `/health` share (ruling 28) — and of the closed `_BRAVE_FAILURE_DETAILS` vocabulary every failure's `detail` token is drawn from (`http_401`/`http_403` → `auth`, `http_429` → `rate_limited`, everything else → `hard_error`). Not in `_REVISION_SOURCES`, for the same reason as the other two provider modules. |
 | `pipeline/search_providers/__init__.py` | 154 | The provider **registry and chain builder**: `build_provider_chain(...)` turns the `FORAGE_SEARCH_PROVIDERS` names into ordered `SearchProvider` instances, refuses boot on an unknown name, and skips a configured `brave` that has no usable key with the WARNING `brave_skipped_missing_key` (the key-less floor); `_KNOWN_PROVIDER_NAMES` is the closed set of chain tokens (ruling 23). Not in `_REVISION_SOURCES`. |
-| `pipeline/search_providers/policy.py` | 77 | `apply_request_policy(...)` (`search-policy-and-health` US-010): normalises a request's `providers` list (strip, lower-case, first eight), keeps the configured order, never adds, reorders or promotes a provider, honours `allow_paid_fallback`, and counts every ignored entry on `search.policy_unknown_provider`. Restrict-only by construction (rulings 16, 29). Not in `_REVISION_SOURCES`. |
+| `pipeline/search_providers/policy.py` | 88 | `apply_request_policy(...)` (`search-policy-and-health` US-010, `hardening-provider-bounds` US-004): four docstring-mirrored blocks normalise the first eight entries, match names/count ignored entries, keep the longest named paid prefix and all free providers, then remove all paid providers if fallback is forbidden. Configured order is preserved; a paid provider after an unnamed paid provider is never promoted. Known prefix drops have no counter or log; ignored entries retain per-entry `search.policy_unknown_provider` counting. Not in `_REVISION_SOURCES`. |
 
 ---
 
@@ -308,6 +308,17 @@ and SearXNG's new reason token. Read-only whole-file reversals against clean
 seven hashed sources are unchanged; no input was added. It changes upstream
 acceptance/timing, not the text-sanitization algorithm. Full measurements:
 `docs/bootstrap-notes.md`.
+
+The thirty-fourth (`c9bf6e0d…` → `e3b9c138…`,
+`hardening-provider-bounds` US-004) moves only `contract.py`, whose 1.3.0
+continuation records the paid-prefix description and all-paid-chain policy
+422. A read-only whole-file reversal against clean `0139ad6` reproduces
+`c9bf6e0d…` under default and shipped config; the other eight hashed sources
+are unchanged. The policy and request model are unhashed. No text-scanning
+algorithm or currently constructible production-chain outcome changes;
+GOVERNANCE ruling (k) records the one-paid-name/duplicate-collapse basis
+and T3.1's obligation when a second paid backend is registered. Full values
+are in `docs/bootstrap-notes.md`.
 
 **Provider bodies are self-decoded under bounds.** The shared
 `pipeline/bounded_body.py` reads raw bytes, bounds decoded output at 1 MiB

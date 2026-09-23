@@ -86,7 +86,7 @@ consuming repo.
 
 **The bump policy is written down: [`contract/GOVERNANCE.md`](contract/GOVERNANCE.md).**
 Read it before touching `pipeline/contract.py` or the response models in `models.py`. It
-classifies any change, answers the six standing examples, and records the eleven rulings
+classifies any change, answers the six standing examples, and records the twelve rulings
 this epic already made — including the one that is not obvious from the code: the
 `/extract` 413 is documented but unreachable (FastAPI turns it into a 400), documenting it
 carried no bump, and *correcting* it is a MAJOR. `.github/pull_request_template.md` is the
@@ -426,6 +426,18 @@ The shared `bounded_body.py` and provider modules remain unhashed. This is
 not a text-sanitization change, although bounded upstream reads and tightened
 whole-interaction timeouts can change served outcomes and paid fallback.
 Full values and the consumer handoff are in `docs/bootstrap-notes.md`.
+
+The thirty-fourth rotation is `c9bf6e0d…` → `e3b9c138…` for
+`hardening-provider-bounds` US-004. Only `contract.py` moves among the nine
+hashed sources, announcing the paid-prefix rule and its all-paid-chain
+policy 422. A read-only whole-file reversal against clean `0139ad6`
+reproduces `c9bf6e0d…` exactly under default and shipped config; the other
+eight sources are unchanged. `policy.py` and `models.py` are not hashed.
+This changes neither text sanitization nor any currently constructible
+production chain's outcome: one paid name plus duplicate collapse makes
+the multi-paid case unreachable (GOVERNANCE ruling (k)). T3.1 inherits the
+rule when it registers a second paid backend. Full measurements and the
+consumer handoff are in `docs/bootstrap-notes.md`.
 
 ---
 

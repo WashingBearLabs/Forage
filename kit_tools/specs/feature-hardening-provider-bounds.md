@@ -1577,6 +1577,68 @@ record.
   invocation, so the full-suite acceptance gate remains deferred and the
   result is `partial` / `needs-work` for that validation only.
 
+### US-004 - paid-prefix request policy (2026-09-22, Copilot)
+
+- Split the policy into four marked blocks whose first-line text exactly
+  mirrors the numbered docstring steps, checked through `inspect.getsource`.
+  Steps 1/2 retain their code and per-entry counts; step 3 retains the
+  longest named paid prefix across intervening free providers; step 4
+  independently removes every paid provider when fallback is forbidden.
+  Empty `providers` remains unrestricted. No log or counter was added.
+- Extended the existing 30-shape harness with later-paid-only selections
+  and every subset of configured names, each crossed with both fallback
+  values. It asserts the exact longest prefix, free-provider order,
+  subsequence, unchanged inputs and no calls. Named regressions cover the
+  skipped first paid provider, a middle gap across free providers, and an
+  earlier name beyond the eighth entry. The all-paid HTTP regression
+  returns 422 `search_unavailable` / `policy_excluded_all_providers` with
+  no provider called, no paid call counted and no unknown-name increment.
+  Before implementation, all six new/extended regression checks failed
+  against the old policy; afterwards all 16 focused cases passed.
+- GOVERNANCE already had eleven rulings through (j), not planning-time
+  five through (d). The next free letter is **(k)**, and all three count
+  sites plus CLAUDE's count now say **twelve**, with the marker and
+  `_NUMBER_WORDS` updated. The only classification basis is ruling (a2)'s
+  unreachability reasoning: the registry has one paid name and configured
+  duplicates collapse. T3.1 inherits the rule when it registers a second
+  paid backend. `five rulings` has no matches in `contract/` or `tests/`.
+- The request description and API guide state the prefix rule, the all-paid
+  policy 422 and diagnosis through `provider_used`/`FORAGE_SEARCH_PROVIDERS`.
+  Finding 2026-09-16-054 is accepted in the architecture SECURITY table:
+  per-entry counts and full-body parse cost remain uncapped; network
+  placement is the control, and a body cap needs its own rejection ruling.
+  `retrieval_app.py` and `MONITORING.md` are byte-identical to the base.
+- Appended the `* ``1.3.0`` —` contract line, regenerated OpenAPI/anchor/drift
+  twin and re-created the held golden through `_SCHEMA_MODELS`. Both schema
+  comparisons differ **only** at `SearchRequest.providers.description`.
+  Nothing was appended to `_EXPECTED_ONE_THREE_ZERO_DIFF` (no property or
+  enum member added); its test file and every older golden are untouched.
+  The four current-anchor pages quote
+  `87bd958cb471614f5ecab22418eab6562a07e1a4c30d85ae45d5dce3ae2b3495`.
+- Thirty-fourth revision rotation, measured against clean pre-story
+  `0139ad62344bb9fec1e1c1d3d9ba0519de0314bc`: before
+  `c9bf6e0d87beaa5bf32e05e38dd5fdb092fac0e764e46c409220f81a336f2f76`,
+  after `e3b9c13866a53939ee542debe3bc4bbd9ca53dded740e40958dd984914d73d91`.
+  Live derivation with only `contract.py`'s whole-file bytes substituted
+  read-only reproduces the before value under default and shipped config.
+  The other eight hashed sources are byte-identical; policy/models are
+  unhashed. No text-sanitization algorithm or currently constructible
+  production outcome changes. Recorded at all five sites: these notes,
+  `docs/bootstrap-notes.md`, `CLAUDE.md`, `CODE_ARCH.md` and `GOTCHAS.md`.
+- After safe Ruff fixes/formatting restricted to changed Python files,
+  the related run passed **1,129 tests** and failed only the inherited
+  ruling-(j) citation test: the cache-integrity spec moved to `specs/archive/`,
+  but its source citation still names the old path. Reproduced against
+  pre-story GOVERNANCE with the unchanged check; left outside this story.
+  The additional sanitizer-revision module passed **12 tests**.
+  Repository Ruff lint/format, strict Pyright (zero errors), exporter
+  `--check` and `git diff --check` pass. Three inherited Torch/socket-guard
+  warnings remain unsuppressed. Full pytest is prohibited for this
+  invocation, so the result is `partial` / `needs-work` for the deferred
+  full-suite gate and inherited governance failure, not a known policy
+  defect. No branch switch, dependency change, Poppy edit, push, tag or
+  release occurred.
+
 ## Refinement Notes
 
 ### Research Findings

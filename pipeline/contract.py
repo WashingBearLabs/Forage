@@ -195,6 +195,14 @@ MINOR when fields are only added.
   ``/metrics``. On a configured ``[searxng]``-only chain,
   ``searxng_unavailable`` reasons may end in ``unsupported_encoding``;
   Brave's detail remains internal, with only its failure class wire-visible.
+* ``1.3.0`` — ``hardening-provider-bounds`` US-004 describes the paid-prefix
+  rule in ``SearchRequest.providers`` and diagnosis through ``provider_used``:
+  on an all-paid configured chain a later-paid-only selection is now the
+  policy 422, ``search_unavailable`` / ``policy_excluded_all_providers``.
+  No production chain can reach that changed outcome yet: only one paid
+  backend is registered and configured duplicates are collapsed (GOVERNANCE
+  ruling (k), on ruling (a2)'s unreachability basis). Response shapes and
+  ``search.policy_unknown_provider``'s per-entry counting are unchanged.
 
 This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy
