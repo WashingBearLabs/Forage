@@ -1027,7 +1027,7 @@ next.
   section (a comment-only `.py` edit, so the gates run).
 
 **Acceptance Criteria:**
-- [ ] `docs/configuration.md` has the top-level `## Sizing the container` section before
+- [x] `docs/configuration.md` has the top-level `## Sizing the container` section before
       `## config.yaml`, with the three rows, the `num_results` in the classify column's header and the
       `4 / 4 GB` row's at-the-ceiling sentence, the five-term memory rule (the named parent constant
       plus the selected model's resident delta with its per-model column, the child term as the
@@ -1043,13 +1043,13 @@ next.
       the "nothing but this warning protects the operator's own baseline" sentence, the missing-path
       warning, and the classify-latency column deferring to spec 7 by name; the weights-acquisition
       paragraph distinguishes boot latency from classify latency.
-- [ ] The shipped-equals-code-default test exists and passes over `SECURITY_RELEVANT_CONFIG_KEYS`
+- [x] The shipped-equals-code-default test exists and passes over `SECURITY_RELEVANT_CONFIG_KEYS`
       (the three keys of today, spec 2's floor and ceiling, this spec's four envelope keys,
       `extraction.child_address_space_bytes`), and its partition assertion places every
       `KNOWN_CONFIG_KEYS` entry — as dotted registry names — in exactly one of the two explicit sets,
       with `extraction.admission_queue_depth` and the bare block names in the not-relevant set and the
       membership rule written beside the constant.
-- [ ] Every grep in the Independent Test — `Sizing the container` (six files), `FORAGE_CPUS` (four),
+- [x] Every grep in the Independent Test — `Sizing the container` (six files), `FORAGE_CPUS` (four),
       the healthcheck/CPU-quota claims, `only tighten` / `never raise` (five tracked hits at planning
       time, each either three-key or single-key-scoped afterwards), `1000 ms`, `Pinned at 1`,
       `liveness` — returns exactly what it states, each scoped as written (R43); the `1 vCPU / 1 GB`,
@@ -1058,7 +1058,7 @@ next.
       *is* the classifier's working set, and `grep -rn 'mem_limit: 1024m' --include='*.md'
       --include='*.py' --exclude-dir=specs --exclude-dir=.seed_cache --exclude-dir=golden .` returns
       only lines that also contain `FORAGE_MEM_LIMIT` or "default".
-- [ ] `INFRA_ARCH.md`'s Resource Envelope table has the CPU-cap row and the restated memory row;
+- [x] `INFRA_ARCH.md`'s Resource Envelope table has the CPU-cap row and the restated memory row;
       `ENV_REFERENCE.md` has the "Container envelope" section with both variables and
       `tests/test_hermeticity.py`'s exact-set test is unchanged; `README.md` names both variables after
       the Quickstart fence; `MONITORING.md` and `DEPLOYMENT.md` carry the liveness paragraph with the
@@ -1067,11 +1067,11 @@ next.
       `SECURITY.md`'s never-raise list no longer contains `MAX_CHILD_ADDRESS_SPACE_BYTES` and names the
       three raisable keys, and the file carries the admission-row caveat, the verbatim `:374`
       restatement and the under-sizing sentence.
-- [ ] `DECISIONS.md` has the dated decision entry with the config-not-env rationale; `GOTCHAS.md` has
+- [x] `DECISIONS.md` has the dated decision entry with the config-not-env rationale; `GOTCHAS.md` has
       both gotchas under "Active Gotchas"; the upgrade sentence exists; `grep -n 'Pinned at 1'
       docs/configuration.md` returns only the `extraction_concurrency` row (`:488` at planning time).
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ## Edge Cases
 
