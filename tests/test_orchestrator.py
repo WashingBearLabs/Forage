@@ -99,6 +99,7 @@ from tests.fakes import (
     FakeStorage,
     RecordingSearchMetrics,
     assert_frozen,
+    make_mock_classifier,
     make_response,
     make_stream_cm,
 )
@@ -159,9 +160,7 @@ def test_request_trust_tier_uses_canonical_directional_matching(
 async def test_retrieve_counts_only_wildcard_trusted_or_verified_resolutions(
     tier: str, entries: list[str], domain: str, expected: int, loaded: bool
 ) -> None:
-    classifier = MagicMock(spec=PromptGuardClassifier)
-    classifier.loaded = loaded
-    classifier.classify.return_value = (0.0, [])
+    classifier = make_mock_classifier(loaded=loaded)
     metrics = _NullRetrieveMetrics()
     request = RetrieveRequest(
         url=f"https://{domain}/",
@@ -196,6 +195,7 @@ async def test_retrieve_counts_only_wildcard_trusted_or_verified_resolutions(
     if tier == "trusted":
         assert result.promptguard_state == "skipped_trusted"
         classifier.classify.assert_not_called()
+        classifier.classify_windows.assert_not_called()
     elif tier == "verified" and not loaded:
         assert result.promptguard_state == "unavailable_allowed"
     if tier == "standard":
@@ -907,8 +907,7 @@ async def test_retrieve_trusted_tier_loaded_classifier_reports_skipped_trusted(
     mock_extract.return_value = _make_extraction()
     mock_scan.return_value = _make_structural_clean()
 
-    classifier = MagicMock()
-    classifier.loaded = True
+    classifier = make_mock_classifier()
 
     result = await run_retrieve_pipeline(
         _make_retrieve_request(trusted_domains=["example.com"]),
@@ -922,6 +921,7 @@ async def test_retrieve_trusted_tier_loaded_classifier_reports_skipped_trusted(
     assert result.promptguard_state == "skipped_trusted"
     assert result.injection_detected is False
     classifier.classify.assert_not_called()
+    classifier.classify_windows.assert_not_called()
 
 
 @pytest.mark.asyncio()
@@ -965,9 +965,7 @@ async def test_retrieve_cache_misses_when_classifier_loads_after_fail_open_cache
     assert model_absent_result.promptguard_state == "unavailable_allowed"
     assert fetch.await_count == 1
 
-    loaded_classifier = MagicMock()
-    loaded_classifier.loaded = True
-    loaded_classifier.classify.return_value = (0.0, [])
+    loaded_classifier = make_mock_classifier()
 
     model_loaded_result = await run_retrieve_pipeline(
         request,
@@ -2134,7 +2132,6 @@ def client() -> httpx.AsyncClient:
     """Create an async test client for the retrieval app."""
     from pipeline.extraction_limits import extraction_settings_from_config
     from pipeline.retrieve_limits import retrieve_settings_from_config
-    from promptguard.classifier import PromptGuardClassifier
     from retrieval_app import (
         ExtractionAdmissionController,
         ExtractionMetrics,
@@ -2147,9 +2144,7 @@ def client() -> httpx.AsyncClient:
     # Ensure app.state has the required attributes for route handlers.
     # Use a mock classifier that reports as loaded and returns safe,
     # so search pipeline PromptGuard checks don't fail-closed in tests.
-    mock_classifier = MagicMock(spec=PromptGuardClassifier)
-    mock_classifier.loaded = True
-    mock_classifier.classify.return_value = (0.0, [])
+    mock_classifier = make_mock_classifier()
     app.state.cache = FakeContentCache()
     app.state.classifier = mock_classifier
     app.state.config = _SAMPLE_CONFIG
@@ -2795,9 +2790,7 @@ def test_upload_text_validity_gate_normalizes_bom_and_unicode() -> None:
 
 async def test_extract_pipeline_returns_upload_only_model() -> None:
     """The pipeline returns a source-neutral sanitized upload response."""
-    classifier = MagicMock()
-    classifier.loaded = True
-    classifier.classify.return_value = (0.0, [])
+    classifier = make_mock_classifier()
 
     result = await run_extract_pipeline(
         b"Hello from an uploaded document.",
@@ -5783,12 +5776,15 @@ async def test_a_fetched_page_one_character_over_the_budget_is_refused() -> None
     ceiling = settings.max_extracted_characters
     assert ceiling == 458752
     classifier = _loaded_classifier()
-    classifier.classify.side_effect = AssertionError("pre-check must precede inference")
+    classifier.classify_windows.side_effect = AssertionError(
+        "pre-check must precede inference"
+    )
 
     with pytest.raises(PipelineError) as excinfo:
         await _retrieve_with_text("a" * (ceiling + 1), settings, classifier)
 
     classifier.classify.assert_not_called()
+    classifier.classify_windows.assert_not_called()
     assert excinfo.value.error == "content_too_large"
     assert excinfo.value.reason == contract.PROMPTGUARD_BUDGET
     assert excinfo.value.reason == "promptguard_budget"
@@ -5833,7 +5829,9 @@ async def test_a_set_budget_is_handed_to_the_classifier_as_the_backstop() -> Non
 async def test_the_classifier_budget_error_maps_to_the_same_refusal() -> None:
     """The backstop: a classifier-side refusal wears the same code and reason."""
     classifier = _loaded_classifier()
-    classifier.classify.side_effect = PromptGuardBudgetExceededError("over budget")
+    classifier.classify_windows.side_effect = PromptGuardBudgetExceededError(
+        "over budget"
+    )
     with pytest.raises(PipelineError) as excinfo:
         await _retrieve_with_text("short text", _budget_settings(256), classifier)
 
@@ -5920,31 +5918,29 @@ def test_the_app_retrieve_metrics_satisfies_the_sink_protocol() -> None:
 def _blocking_classifier(
     gate: threading.Event, entered: asyncio.Event, *, score: float = 0.1
 ) -> MagicMock:
-    """A loaded classifier whose ``classify`` parks until *gate* is set.
+    """A loaded classifier whose window inference parks until *gate* is set.
 
     ``run_promptguard`` runs ``classify`` through ``asyncio.to_thread``, so a
     plain ``threading.Event`` is what actually holds the permit while the
     event loop stays free for the second request.
     """
-    classifier = MagicMock(spec=PromptGuardClassifier)
-    classifier.loaded = True
+    classifier = make_mock_classifier()
     loop = asyncio.get_running_loop()
 
-    def _classify(text: str, max_chunks: int | None = None) -> tuple[float, list[str]]:
+    def _classify_windows(
+        text: str, *, max_chunks: int | None = None
+    ) -> tuple[list[float], list[str]]:
         loop.call_soon_threadsafe(entered.set)
         assert gate.wait(timeout=10.0), "test did not release inference"
-        return (score, [])
+        return [score], [text]
 
-    classifier.classify = MagicMock(side_effect=_classify)
+    classifier.classify_windows.side_effect = _classify_windows
     return classifier
 
 
 def _loaded_classifier(*, score: float = 0.1) -> MagicMock:
     """A loaded classifier that returns at once."""
-    classifier = MagicMock(spec=PromptGuardClassifier)
-    classifier.loaded = True
-    classifier.classify = MagicMock(return_value=(score, []))
-    return classifier
+    return make_mock_classifier(score=score)
 
 
 def _retrieve_patches(page: bytes = b"<html><body><p>Hello.</p></body></html>"):
@@ -6231,9 +6227,9 @@ async def test_active_classification_cancellation_retains_ownership(
     calls = 0
     lock = threading.Lock()
 
-    def classify(
+    def classify_windows(
         text: str, *, max_chunks: int | None = None
-    ) -> tuple[float, list[str]]:
+    ) -> tuple[list[float], list[str]]:
         nonlocal active, peak, calls
         with lock:
             calls += 1
@@ -6246,14 +6242,14 @@ async def test_active_classification_cancellation_retains_ownership(
                 assert finish.wait(5), "test did not release inference"
                 if worker_fails:
                     raise RuntimeError("inference-failure-sentinel")
-            return (0.1, [])
+            return [0.1], [text]
         finally:
             with lock:
                 active -= 1
             if first:
                 exited.set()
 
-    classifier.classify.side_effect = classify
+    classifier.classify_windows.side_effect = classify_windows
     path = tmp_path / "notes.txt"
     path.write_text("A calm page about gardening.")
 
@@ -6369,6 +6365,7 @@ async def test_model_warmup_during_fetch_counts_timeout_and_never_caches(
     assert metrics.classification_wait_timeouts == 1
     assert sum(_WAIT_TIMEOUT_TOKEN in r.getMessage() for r in caplog.records) == 1
     classifier.classify.assert_not_called()
+    classifier.classify_windows.assert_not_called()
     cache.put.assert_not_called()
     assert semaphore._value == 0
     assert not semaphore._waiters
@@ -6655,6 +6652,7 @@ async def test_five_cancelled_classification_waits_preserve_exact_permit(
             assert semaphore._value == 0
             assert not semaphore._waiters
             classifier.classify.assert_not_called()
+            classifier.classify_windows.assert_not_called()
         finally:
             waiter.cancel()
             await asyncio.gather(waiter, return_exceptions=True)
@@ -6671,9 +6669,12 @@ async def test_five_cancelled_classification_waits_preserve_exact_permit(
 async def test_five_classifier_budget_backstops_preserve_exact_permit() -> None:
     semaphore = asyncio.Semaphore(1)
     classifier = _loaded_classifier()
+    window_inference = classifier.classify_windows.side_effect
     metrics = _NullRetrieveMetrics()
     for round_number in range(5):
-        classifier.classify.side_effect = PromptGuardBudgetExceededError("budget")
+        classifier.classify_windows.side_effect = PromptGuardBudgetExceededError(
+            "budget"
+        )
         with pytest.raises(PipelineError) as raised:
             await _retrieve_under(
                 classifier=classifier,
@@ -6686,7 +6687,7 @@ async def test_five_classifier_budget_backstops_preserve_exact_permit() -> None:
         assert classifier.classify.call_count == round_number + 1
         assert semaphore._value == 1
         assert not semaphore._waiters
-    classifier.classify.side_effect = None
+    classifier.classify_windows.side_effect = window_inference
     content = await _retrieve_under(
         classifier=classifier,
         semaphore=semaphore,
@@ -6928,18 +6929,19 @@ async def test_search_classifies_the_first_results_then_marks_the_rest(
     """Partial classification: the state this story makes reachable."""
     semaphore = asyncio.Semaphore(1)
     metrics = RecordingSearchMetrics()
-    classifier = MagicMock(spec=PromptGuardClassifier)
-    classifier.loaded = True
+    classifier = make_mock_classifier()
     calls = {"n": 0}
 
-    def _classify(text: str, max_chunks: int | None = None) -> tuple[float, list[str]]:
+    def _classify_windows(
+        text: str, *, max_chunks: int | None = None
+    ) -> tuple[list[float], list[str]]:
         calls["n"] += 1
         if calls["n"] == 2:
             # Burn the whole budget inside the second classification.
             time.sleep(0.12)
-        return (0.1, [])
+        return [0.1], [text]
 
-    classifier.classify = MagicMock(side_effect=_classify)
+    classifier.classify_windows.side_effect = _classify_windows
 
     response = await _search_under(
         classifier=classifier,

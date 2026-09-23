@@ -33,28 +33,13 @@ from pipeline.stage3_promptguard import (
 from pipeline.stage4_structuring import SanitizationResult
 from promptguard.classifier import (
     MAX_SEQ_LEN,
+    PromptGuardBudgetExceededError,
     PromptGuardClassifier,
     PromptGuardThreadsConfigurationError,
     promptguard_threads_from_config,
 )
 from tests.fakes import assert_frozen
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_mock_classifier(
-    score: float = 0.0,
-    flagged_chunks: list[str] | None = None,
-    loaded: bool = True,
-) -> MagicMock:
-    """Create a mock PromptGuardClassifier returning a fixed score."""
-    mock = MagicMock(spec=PromptGuardClassifier)
-    mock.loaded = loaded
-    mock.classify.return_value = (score, flagged_chunks or [])
-    return mock
-
+from tests.fakes import make_mock_classifier as _make_mock_classifier
 
 # ---------------------------------------------------------------------------
 # run_promptguard — safe verdicts
@@ -164,6 +149,7 @@ class TestTrustedDomainSkip:
         assert result.flagged_chunks == []
         # Classifier should NOT have been called
         classifier.classify.assert_not_called()
+        classifier.classify_windows.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_trusted_enum(self) -> None:
@@ -177,6 +163,7 @@ class TestTrustedDomainSkip:
         assert result.skipped is True
         assert result.skip_reason == "trusted_tier"
         classifier.classify.assert_not_called()
+        classifier.classify_windows.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_standard_not_skipped(self) -> None:
@@ -482,6 +469,182 @@ class TestClassifierUnit:
         with pytest.raises(ValueError, match="synthetic tokenizer failure"):
             classifier.classify("next input")
         assert not classifier._tokenizer_lock.locked()
+
+
+class TestWindowScores:
+    """The window seam preserves inference, budgets and single-score pooling."""
+
+    @pytest.mark.parametrize("max_chunks", [None, 3, 4])
+    @pytest.mark.parametrize("injection_index", [0, 1])
+    def test_scores_and_chunk_texts_stay_in_document_order(
+        self, max_chunks: int | None, injection_index: int
+    ) -> None:
+        classifier = PromptGuardClassifier()
+        tokenizer = MagicMock()
+        tokens = list(range(1000))
+        tokenizer.encode.return_value = tokens
+        chunks = ["first window", "second window", "tail"]
+        tokenizer.decode.side_effect = chunks
+        tokenizer.return_value = {"input_ids": torch.tensor([[1]])}
+        logits = [torch.tensor([pair]) for pair in ([0.0, 4.0], [3.0, 0.0], [0.0, 4.0])]
+        model = MagicMock(
+            side_effect=[SimpleNamespace(logits=value) for value in logits]
+        )
+        classifier._loaded = True
+        classifier._tokenizer = tokenizer
+        classifier._model = model
+        classifier._injection_label_index = injection_index
+
+        scores, actual_chunks = classifier.classify_windows(
+            "long input", max_chunks=max_chunks
+        )
+
+        assert actual_chunks == chunks
+        assert scores == [
+            float(torch.softmax(value, dim=-1)[0, injection_index].item())
+            for value in logits
+        ]
+        tokenizer.encode.assert_called_once_with("long input", add_special_tokens=False)
+        assert [call.args[0] for call in tokenizer.decode.call_args_list] == [
+            tokens[:512],
+            tokens[448:960],
+            tokens[896:],
+        ]
+        assert [call.args[0] for call in tokenizer.call_args_list] == chunks
+        for call in tokenizer.call_args_list:
+            assert call.kwargs == {
+                "return_tensors": "pt",
+                "truncation": True,
+                "max_length": MAX_SEQ_LEN,
+                "padding": True,
+            }
+        assert model.call_count == 3
+
+    @pytest.mark.parametrize("max_chunks", [0, 2])
+    @pytest.mark.parametrize("entrypoint", ["classify", "classify_windows"])
+    def test_budget_refuses_before_any_window_inference(
+        self, max_chunks: int, entrypoint: str
+    ) -> None:
+        classifier = PromptGuardClassifier()
+        tokenizer = MagicMock()
+        tokenizer.encode.return_value = list(range(1000))
+        tokenizer.decode.side_effect = ["first", "second", "third"]
+        model = MagicMock()
+        classifier._loaded = True
+        classifier._tokenizer = tokenizer
+        classifier._model = model
+
+        with pytest.raises(
+            PromptGuardBudgetExceededError,
+            match=r"^PromptGuard classification input exceeds the chunk budget$",
+        ):
+            getattr(classifier, entrypoint)("long input", max_chunks=max_chunks)
+
+        tokenizer.assert_not_called()
+        model.assert_not_called()
+
+    @pytest.mark.parametrize("entrypoint", ["classify", "classify_windows"])
+    @pytest.mark.parametrize("missing", ["loaded", "model", "tokenizer"])
+    def test_unavailable_fallback_precedes_torch_and_preserves_warning(
+        self, entrypoint: str, missing: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        classifier = PromptGuardClassifier()
+        classifier._loaded = missing != "loaded"
+        classifier._model = None if missing == "model" else MagicMock()
+        classifier._tokenizer = None if missing == "tokenizer" else MagicMock()
+        with (
+            patch.dict("sys.modules", {"torch": None}),
+            patch.object(classifier, "_chunk_text") as chunk_text,
+        ):
+            result = getattr(classifier, entrypoint)("input", max_chunks=0)
+        assert result == ((0.0, []) if entrypoint == "classify" else ([], []))
+        chunk_text.assert_not_called()
+        assert [
+            (record.levelname, record.getMessage()) for record in caplog.records
+        ] == [
+            (
+                "WARNING",
+                "classify() called but model not loaded — returning safe fallback",
+            )
+        ]
+
+    @pytest.mark.parametrize(
+        ("scores", "chunks", "expected"),
+        [
+            (list[float](), list[str](), (0.0, list[str]())),
+            ([0.0], ["clean"], (0.0, ["clean"])),
+            ([0.0, 0.0], ["first", "second"], (0.0, ["first", "second"])),
+            ([0.1, 0.9, 0.2, 0.9], ["a", "b", "c", "d"], (0.9, ["b", "d"])),
+            ([0.9, 0.9], ["same", "same"], (0.9, ["same", "same"])),
+        ],
+    )
+    @pytest.mark.parametrize("max_chunks", [None, 64])
+    def test_classify_delegates_and_preserves_all_max_ties(
+        self,
+        scores: list[float],
+        chunks: list[str],
+        expected: tuple[float, list[str]],
+        max_chunks: int | None,
+    ) -> None:
+        classifier = PromptGuardClassifier()
+        with patch.object(
+            classifier, "classify_windows", return_value=(scores, chunks)
+        ) as windows:
+            assert classifier.classify("input", max_chunks=max_chunks) == expected
+        windows.assert_called_once_with("input", max_chunks=max_chunks)
+
+    def test_empty_text_is_still_one_classified_window(self) -> None:
+        classifier = PromptGuardClassifier()
+        tokenizer = MagicMock()
+        tokenizer.encode.return_value = []
+        tokenizer.return_value = {}
+        model = MagicMock(
+            return_value=SimpleNamespace(logits=torch.tensor([[0.0, 0.0]]))
+        )
+        classifier._loaded = True
+        classifier._tokenizer = tokenizer
+        classifier._model = model
+
+        assert classifier.classify_windows("", max_chunks=1) == ([0.5], [""])
+        tokenizer.decode.assert_not_called()
+        model.assert_called_once_with()
+
+    def test_no_chunks_produces_empty_scores_without_inference(self) -> None:
+        classifier = PromptGuardClassifier()
+        classifier._loaded = True
+        classifier._tokenizer = MagicMock()
+        model = MagicMock()
+        classifier._model = model
+        with patch.object(classifier, "_chunk_text", return_value=[]):
+            assert classifier.classify_windows("input", max_chunks=0) == ([], [])
+        model.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("score", "verdict", "flagged"),
+        [
+            (0.0, Stage3Verdict.SAFE, []),
+            (DEFAULT_THRESHOLD, Stage3Verdict.SAFE, []),
+            (0.851, Stage3Verdict.INJECTION_DETECTED, ["first", "last"]),
+        ],
+    )
+    async def test_stage3_retains_threshold_and_flagged_chunks(
+        self, score: float, verdict: Stage3Verdict, flagged: list[str]
+    ) -> None:
+        classifier = _make_mock_classifier()
+        classifier.classify_windows.side_effect = None
+        classifier.classify_windows.return_value = (
+            [score, 0.0, score],
+            ["first", "middle", "last"],
+        )
+        result = await run_promptguard("input", classifier, max_chunks=3)
+        assert result.verdict == verdict
+        assert result.score == score
+        assert result.flagged_chunks == flagged
+        assert result.penalty == (INJECTION_PENALTY if flagged else 0.0)
+        assert result.skipped is False
+        assert result.skip_reason is None
+        classifier.classify.assert_called_once_with("input", max_chunks=3)
+        classifier.classify_windows.assert_called_once_with("input", max_chunks=3)
 
 
 class TestChunking:

@@ -18,7 +18,7 @@ from pipeline.config_bounds import bounded_int
 if TYPE_CHECKING:
     # Import-time only: torch and transformers are heavyweight and optional at
     # runtime (the classifier degrades to "unavailable" without them), so the
-    # real imports stay inside load()/classify(). See typings/transformers for
+    # real imports stay inside load()/classify_windows(). See typings/transformers for
     # the stub that makes the auto-class factories return something knowable.
     from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
@@ -51,7 +51,8 @@ class PromptGuardClassifier:
 
     Call :meth:`load` once at startup, then :meth:`classify` per request.
     Degrades gracefully — if the model is unavailable, ``loaded`` stays
-    ``False`` and :meth:`classify` returns ``(0.0, [])``.
+    ``False`` and :meth:`classify` returns ``(0.0, [])``. Use
+    :meth:`classify_windows` for scores and texts in document order.
     """
 
     def __init__(self) -> None:
@@ -234,13 +235,33 @@ class PromptGuardClassifier:
 
         If the model is not loaded, returns ``(0.0, [])``.
         """
+        scores, chunks = self.classify_windows(text, max_chunks=max_chunks)
+        if not scores:
+            return 0.0, []
+
+        max_score = max(scores)
+        flagged = [chunks[i] for i, s in enumerate(scores) if s == max_score]
+
+        return max_score, flagged
+
+    def classify_windows(
+        self,
+        text: str,
+        *,
+        max_chunks: int | None = None,
+    ) -> tuple[list[float], list[str]]:
+        """Return ``(scores, chunks)`` in document order, one score per chunk.
+
+        Enforce *max_chunks* before inference, never classify only a prefix.
+        If the model is not loaded, return ``([], [])`` with a warning.
+        """
         model = self._model
         tokenizer = self._tokenizer
         if not self._loaded or model is None or tokenizer is None:
             logger.warning(
                 "classify() called but model not loaded — returning safe fallback"
             )
-            return 0.0, []
+            return [], []
 
         import torch
 
@@ -268,13 +289,7 @@ class PromptGuardClassifier:
             injection_prob = float(probs[0, self._injection_label_index].item())
             scores.append(injection_prob)
 
-        if not scores:
-            return 0.0, []
-
-        max_score = max(scores)
-        flagged = [chunks[i] for i, s in enumerate(scores) if s == max_score]
-
-        return max_score, flagged
+        return scores, chunks
 
 
 class PromptGuardBudgetExceededError(ValueError):

@@ -123,6 +123,7 @@ from tests.fakes import (
     assert_frozen,
     client_patch,
     hub_download_double,
+    make_mock_classifier,
     make_response,
     weights_manifest_document,
 )
@@ -978,8 +979,7 @@ async def test_retrieve_enforces_a_denylist_at_the_exact_raw_byte_budget(
 async def test_retrieve_wildcard_resolution_reaches_served_metrics(
     client: httpx.AsyncClient, field: str, entry: str
 ) -> None:
-    classifier = MagicMock(spec=PromptGuardClassifier)
-    classifier.loaded = field == "trusted_domains"
+    classifier = make_mock_classifier(loaded=field == "trusted_domains")
     app.state.classifier = classifier
     url = "https://www.example.com/"
     with (
@@ -1005,6 +1005,7 @@ async def test_retrieve_wildcard_resolution_reaches_served_metrics(
     assert counters["policy_suffix_trusted_skip"] == int(entry.startswith("."))
     assert counters["promptguard_state"] == {state: 1}
     classifier.classify.assert_not_called()
+    classifier.classify_windows.assert_not_called()
 
 
 async def test_metrics_retrieve_records_blocked_by_reason_from_diagnostic(
@@ -2086,7 +2087,7 @@ async def test_retrieve_classifications_overlap_only_with_two_boot_permits(
     ends: dict[int, float] = {}
     lock = threading.Lock()
 
-    def classify(_text: str, **_kwargs: object) -> tuple[float, list[str]]:
+    def classify_windows(text: str, **_kwargs: object) -> tuple[list[float], list[str]]:
         with lock:
             index = len(starts)
             starts.append(time.monotonic())
@@ -2094,10 +2095,10 @@ async def test_retrieve_classifications_overlap_only_with_two_boot_permits(
         assert release[index].wait(10), "test did not release classifier"
         with lock:
             ends[index] = time.monotonic()
-        return 0.0, []
+        return [0.0], [text]
 
-    classifier = MagicMock(spec=PromptGuardClassifier, loaded=True)
-    classifier.classify.side_effect = classify
+    classifier = make_mock_classifier()
+    classifier.classify_windows.side_effect = classify_windows
     monkeypatch.setattr(retrieval_app, "PromptGuardClassifier", lambda: classifier)
     with (
         patch(
@@ -2433,9 +2434,7 @@ async def test_boolean_threshold_keeps_extracts_raw_coercion_only(
     monkeypatch.setattr(app, "state", type(app.state)())
     async with _running_app() as session:
         assert app.state.promptguard_threshold_default == 0.85
-        classifier = MagicMock(spec=PromptGuardClassifier)
-        classifier.loaded = True
-        classifier.classify.return_value = (0.9, [])
+        classifier = make_mock_classifier(score=0.9)
         app.state.classifier = classifier
         app.state.search_providers = [
             FakeSearchProvider(
@@ -2862,12 +2861,12 @@ async def test_lifespan_search_targets_reach_logs_and_latency_metrics(
     monkeypatch.setattr(app.state, "search_targets", SearchTargets())
     delay = 0.15 if target == 100 else 0.0
 
-    def classify(_text: str, **_kwargs: object) -> tuple[float, list[str]]:
+    def classify_windows(text: str, **_kwargs: object) -> tuple[list[float], list[str]]:
         time.sleep(delay)
-        return 0.0, []
+        return [0.0], [text]
 
-    classifier = MagicMock(spec=PromptGuardClassifier, loaded=True)
-    classifier.classify.side_effect = classify
+    classifier = make_mock_classifier()
+    classifier.classify_windows.side_effect = classify_windows
     monkeypatch.setattr(retrieval_app, "PromptGuardClassifier", lambda: classifier)
     provider = FakeSearchProvider(
         name="searxng",
@@ -4698,9 +4697,7 @@ def test_search_blocked_domains_has_no_validation_constraints() -> None:
 async def test_search_without_domain_policy_matches_pre_story_baseline(
     client: httpx.AsyncClient,
 ) -> None:
-    classifier = MagicMock(spec=PromptGuardClassifier)
-    classifier.loaded = True
-    classifier.classify.return_value = (0.1, [])
+    classifier = make_mock_classifier(score=0.1)
     app.state.classifier = classifier
     free = FakeSearchProvider(name="searxng", outcome=_domain_policy_results())
     paid = FakeSearchProvider(name="brave", paid=True)

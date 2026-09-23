@@ -1,4 +1,4 @@
-"""Contract tests for the shared streaming and search-metrics doubles."""
+"""Contract tests for the shared streaming, classifier and metrics doubles."""
 
 from __future__ import annotations
 
@@ -18,10 +18,41 @@ from tests.fakes import (
     RecordingDecompressor,
     RecordingSearchMetrics,
     client_patch,
+    make_mock_classifier,
     make_response,
     make_stream_cm,
     record_decompressors,
 )
+
+
+@pytest.mark.parametrize(
+    ("score", "chunks", "loaded"),
+    [(0.0, None, True), (0.95, ["a", "b"], True), (0.0, None, False)],
+)
+def test_mock_classifier_exposes_windows_and_real_pooling(
+    score: float, chunks: list[str] | None, loaded: bool
+) -> None:
+    classifier = make_mock_classifier(score, chunks, loaded)
+    expected_chunks = chunks or ["input"]
+    assert classifier.loaded is loaded
+    assert classifier.classify_windows("input", max_chunks=3) == (
+        [score] * len(expected_chunks),
+        expected_chunks,
+    )
+    classifier.classify_windows.reset_mock()
+    assert classifier.classify("input", max_chunks=3) == (score, expected_chunks)
+    classifier.classify_windows.assert_called_once_with("input", max_chunks=3)
+
+
+def test_mock_classifier_overrides_the_window_seam_for_both_entrypoints() -> None:
+    classifier = make_mock_classifier()
+    classifier.classify_windows.side_effect = None
+    classifier.classify_windows.return_value = ([0.1, 0.9, 0.9], ["a", "b", "c"])
+    assert classifier.classify("input") == (0.9, ["b", "c"])
+    classifier.classify_windows.assert_called_once_with("input", max_chunks=None)
+    classifier.classify_windows.side_effect = ValueError("synthetic failure")
+    with pytest.raises(ValueError, match="synthetic failure"):
+        classifier.classify("input")
 
 
 async def test_chunk_stream_records_only_raw_chunks_actually_yielded() -> None:

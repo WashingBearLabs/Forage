@@ -1527,6 +1527,50 @@ prohibits running it: result is partial / needs-work for that reason alone.
 No story definition/checkbox, weights manifest, vendoring default, NOTICE,
 dependency manifest, historical golden, branch, tag or release was changed.
 
+### US-002 implementation — 2026-09-22 (Copilot)
+
+Starting commit `b8c0cbd128d0182c7780d873bb91fc08d91a61de`, clean tree.
+`classify_windows(text, *, max_chunks=None)` owns the unchanged chunking,
+budget check and inference loop, returning aligned score/text lists in document
+order. `classify()` delegates once and retains max pooling, every tied chunk
+(including duplicate texts), and `(0.0, [])` for no scores. The window seam
+returns `([], [])` when unavailable; the existing WARNING is byte-identical.
+Loading, tokenizer locks, chunking and thread settings are unchanged.
+
+The starting recursive `grep -c 'classify\.' tests/ --include='*.py'` count
+was **53**: stage3 **4**, orchestrator **34**, app **8**, policy **6**, admission
+**1**. Spec line numbers predate those additional policy/concurrency doubles.
+All inference doubles now use the shared `tests.fakes.make_mock_classifier`:
+window scores/side effects drive the real `classify` pooling implementation,
+including blocking, cancellation and budget-error doubles. A default double
+uses the input as its one chunk, as real inference does; stage 3 still suppresses
+flags on safe results. No pre-existing verdict/score assertion was weakened.
+Ending count is **39**: stage3 **4**, orchestrator **25**, app **4**, policy **5**,
+admission **0**, shared fakes **1** (the real-method wrapper).
+Both trusted-tier skip assertions cover both methods; the existing
+`test_standard_not_skipped` is AST-identical to baseline. Stage 3 retains its
+one `classifier.classify,` call; moving it remains US-007.
+
+Default and shipped revision before and after:
+`85394a954e32ec00bb499d08c01811dc4d00b363708e3f839311ae8fde33d0c0`.
+Byte comparisons against the starting commit cover all eight pipeline sources,
+the ninth root source and the hash definition; the hashed-source `git diff
+--stat` is empty. Configuration, model manifest, dependencies and generated
+contract artifacts are unchanged. `CODE_ARCH.md` names the new seam.
+
+Validation: the nine related modules passed **1,312** tests before the change
+and **1,347** afterwards (35 new cases), including real-loader, tokenizer
+concurrency, route/cancellation, policy and frozen search-pin coverage.
+New cases pin ordered window scores/texts, both label indices, all max ties,
+budget boundaries before inference, unloaded warning/fallback, empty text,
+empty chunks and exact-threshold behavior. Final post-format rerun passes;
+repository Ruff lint/format and strict Pyright pass with zero errors.
+The three existing torch/socket warnings remain non-failing.
+Full-suite success is **unverified** because this invocation explicitly
+prohibits running it; partial / needs-work records only that outstanding gate.
+No story definition/checkbox, response shape or owner-gate state changed;
+no weights were downloaded, no owner benchmark ran, and nothing was published.
+
 <!-- Populated during execution. US-001 and US-002 record the unchanged default revision value; US-006
 and US-007 record their rotations; US-005 records the licence check, the vendoring transcript, the
 scoped manifest diff and the allowlist edit; US-004 records the benchmark table, the matrix wall-clock

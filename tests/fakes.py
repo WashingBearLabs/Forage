@@ -12,6 +12,7 @@ import time
 import zlib
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from functools import partial
 from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
@@ -23,6 +24,7 @@ import pytest
 from cache import CacheMetrics
 from model_fetcher import repo_dirname
 from pipeline.search_providers.base import ProviderFailure, ProviderSearchResult
+from promptguard.classifier import PromptGuardClassifier
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator, Mapping
@@ -32,6 +34,28 @@ if TYPE_CHECKING:
 
 
 CACHE_HMAC_SENTINEL = "cache-hmac-test-only-" + "x" * 24
+
+
+def make_mock_classifier(
+    score: float = 0.0,
+    flagged_chunks: list[str] | None = None,
+    loaded: bool = True,
+) -> MagicMock:
+    """Stub window inference while retaining the real single-score pooling."""
+    classifier = MagicMock(spec=PromptGuardClassifier)
+    classifier.loaded = loaded
+
+    def windows(
+        text: str, *, max_chunks: int | None = None
+    ) -> tuple[list[float], list[str]]:
+        chunks = flagged_chunks or [text]
+        return [score] * len(chunks), chunks
+
+    classifier.classify_windows.side_effect = windows
+    classifier.classify.side_effect = partial(
+        PromptGuardClassifier.classify, classifier
+    )
+    return classifier
 
 
 class ChunkStream(httpx.AsyncByteStream):

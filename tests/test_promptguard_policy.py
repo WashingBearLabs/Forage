@@ -27,7 +27,6 @@ from pipeline.orchestrator import PipelineError
 from pipeline.retrieve_limits import RetrieveSettings
 from pipeline.search_providers.base import ProviderSearchResult
 from pipeline.stage5_url_audit import FetchResult
-from promptguard.classifier import PromptGuardClassifier
 from retrieval_app import (
     ExtractionAdmissionController,
     ExtractionMetrics,
@@ -36,7 +35,7 @@ from retrieval_app import (
     _promptguard_policy_updates,
     app,
 )
-from tests.fakes import FakeSearchProvider, FakeStorage
+from tests.fakes import FakeSearchProvider, FakeStorage, make_mock_classifier
 
 _URL = "https://example.com/article"
 _PAGE = b"<html><body><p>A calm article about gardening.</p></body></html>"
@@ -115,10 +114,7 @@ async def client(
 
 
 def _classifier(score: float) -> MagicMock:
-    classifier = MagicMock(spec=PromptGuardClassifier)
-    classifier.loaded = True
-    classifier.classify.return_value = (score, [])
-    return classifier
+    return make_mock_classifier(score=score)
 
 
 @pytest.mark.parametrize("floor", [False, True])
@@ -195,6 +191,7 @@ async def test_retrieve_floor_blocks_unavailable_standard_and_untrusted_content(
         1 if unavailable == "wait-timeout" else 0
     )
     classifier.classify.assert_not_called()
+    classifier.classify_windows.assert_not_called()
     assert semaphore._value == 0
 
 
@@ -221,6 +218,7 @@ async def test_search_floor_omits_unavailable_results(
         1 if unavailable == "wait-timeout" else 0
     )
     classifier.classify.assert_not_called()
+    classifier.classify_windows.assert_not_called()
 
 
 @pytest.mark.parametrize("flag", [False, True])
@@ -279,6 +277,7 @@ async def test_trust_exemptions_are_not_overridden_by_the_floor(
     assert body["effective_promptguard_fail_closed"] is True
     assert body["effective_promptguard_threshold"] == 0.5
     classifier.classify.assert_not_called()
+    classifier.classify_windows.assert_not_called()
     assert app.state.retrieve_metrics.classification_wait_timeouts == (
         1 if unavailable == "wait-timeout" and trust_list == "verified_domains" else 0
     )

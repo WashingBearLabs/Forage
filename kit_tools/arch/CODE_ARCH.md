@@ -2,7 +2,7 @@
 # CODE_ARCH.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-promptguard-86m US-006)
+> Updated by: Copilot (hardening-promptguard-86m US-002)
 
 ---
 
@@ -61,7 +61,7 @@ Design principles:
 ├── pyproject.toml           # uv/hatchling/ruff/pyright/pytest config
 ├── uv.lock                  # CPU-pinned torch on Linux; `grep nvidia-` must stay empty
 ├── pipeline/                # the five sanitization stages + orchestrator + contract
-├── promptguard/             # Llama Prompt Guard 2 classifier wrapper
+├── promptguard/             # Llama Prompt Guard 2: classify_windows + max-score classify
 ├── searxng/                 # the forage-searxng companion image: Dockerfile
 │                            # (digest-pinned base) + config/ (settings.yml, limiter.toml)
 ├── contract/                # the frozen wire contract: openapi.yaml (generated) and
@@ -106,7 +106,7 @@ file in the repo. |
 | `url_validator.py` | 336 | Private-IP rejection and DNS-rebinding protection, plus the service's one host canonicaliser. `canonicalize_host` / `canonical_host` (literals first: an IPv6 literal is recognised by its colons and never reaches the encode; every other host loses exactly one trailing dot, is lower-cased, is UTS-46-encoded via **`idna`** — a direct dependency, floor `>=3.7` for CVE-2024-3651 — and only then classified as numeric or named) and `private_address_class`, which reports *how* an address was reached (`private_literal` / `embedded_private`) and unwraps IPv4-mapped, 6to4, Teredo, prefix-guarded NAT64 and prefix-guarded IPv4-compatible embeddings. In `_ROOT_REVISION_SOURCES` since `hardening-search-sanitization` US-003. |
 | `pipeline/extraction_limits.py` | 181 | Resource limits from `config.yaml`'s `extraction:` block. |
 | `pipeline/stage1_upload.py` | 172 | Upload path for `/extract` (gated by `extract_route_enabled`). |
-| `promptguard/classifier.py` | 211 | Loads and runs Llama Prompt Guard 2 (`use_safetensors=True` — the loader can never fall back to a pickle); absent weights → degraded, never silent. |
+| `promptguard/classifier.py` | 296 | Loads and runs Llama Prompt Guard 2 (`use_safetensors=True` — the loader can never fall back to a pickle); absent weights → degraded, never silent. `classify_windows(text, *, max_chunks=None)` returns per-window scores and chunk texts in document order, enforcing the budget before inference; `classify()` delegates to it and preserves max-score pooling and all tied chunks. Stage 3 still calls `classify()` until US-007. This behavior-preserving seam is not a sanitizer-revision input. |
 | `model_fetcher.py` | 1995 | Per-model weight acquisition. `_manifest_entry(path, model_id)` memoises both entries and failures; `resolve_revision(model_id)` is total (shaped override, selected pin, default-only fallback, otherwise `unpinned`). `acquire_and_load` refuses an unusable/unknown entry or unpinned revision before any snapshot lookup, then verifies cache → **Hugging Face → GHCR mirror**. All legs verify the requested pair against `weights_manifest.json.models`, exact-set and safetensors-only, with symlink containment and one-generation quarantine. The mirror extracts with `filter="data"` into bounded staging, verifies there and installs by rename. `_load_verified` independently re-derives requested and manifest snapshot paths, requiring equality and existence before loading from `$HF_HOME/hub` offline. `WeightAcquisition(model_id=...)` forwards identity through its single-flight, 30 s→10 min jittered retry loop. Six runtime environment variables since US-006: `resolve_model_id()` returns `(id, allowed)` for `FORAGE_MODEL_ID`; only the lifespan raises `ModelConfigurationError`, keeping revision fallbacks total. The allowlist ships only 22M until the owner vendors a second entry. |
 | `pipeline/stage1_pdf.py` | 156 | PDF branch of stage 1. |
 | `pipeline/stage3_promptguard.py` | 151 | ML injection scan; skipped for trusted domains. |

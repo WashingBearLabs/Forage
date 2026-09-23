@@ -33,7 +33,6 @@ from pipeline.stage1_extraction import ExtractionResult, extract_html
 from pipeline.stage2_structural import scan_structural
 from pipeline.stage4_structuring import structure_sanitization_result
 from pipeline.stage5_url_audit import FetchResult
-from promptguard.classifier import PromptGuardClassifier
 from retrieval_app import (
     ExtractionAdmissionController,
     ExtractionMetrics,
@@ -41,7 +40,7 @@ from retrieval_app import (
     SearchMetrics,
     app,
 )
-from tests.fakes import FakeContentCache
+from tests.fakes import FakeContentCache, make_mock_classifier
 
 _URL = "https://example.com/"
 _PAGE = b"<html><body><p>A calm page about gardening.</p></body></html>"
@@ -58,10 +57,7 @@ def _fetch_result(body: bytes = _PAGE) -> FetchResult:
 
 
 def _loaded_classifier() -> MagicMock:
-    classifier = MagicMock(spec=PromptGuardClassifier)
-    classifier.loaded = True
-    classifier.classify.return_value = (0.0, [])
-    return classifier
+    return make_mock_classifier()
 
 
 def _assert_idle(controller: ExtractionAdmissionController) -> None:
