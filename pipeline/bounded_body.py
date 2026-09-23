@@ -50,7 +50,8 @@ class _BoundedDecoder:
                 # while write copies it. Zero means unlimited to zlib, so keep
                 # one overflow-detection byte even at the exact cap.
                 output = self.decoder.decompress(
-                    data, max_length=max(1, (self.max_bytes + 1 - self.body.tell()) // 2)
+                    data,
+                    max_length=max(1, (self.max_bytes + 1 - self.body.tell()) // 2),
                 )
             except zlib.error:
                 raise MalformedBody() from None

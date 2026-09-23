@@ -1654,6 +1654,92 @@ same two files; neither is edited. These prevent an all-gates-ready verdict,
 not completion of a deferred owner benchmark. No branch switch, dependency
 change, Poppy edit, push, tag or release occurred.
 
+### Validation fixes — 2026-09-22
+
+- **2026-09-22-013 (required static gate):** applied pinned Ruff 0.16.6
+  formatting only to `pipeline/bounded_body.py` and
+  `tests/test_search_providers.py`, splitting the remaining overlong xfail
+  reason without changing its value. Captured the ASTs before formatting and
+  asserted equality afterwards against the starting commit. Their AST SHA-256s
+  remain, respectively,
+  `a7bf9572c534bf8d196bfd421e16157cdca66f88c979a6ed639a080a9e34caa7`
+  and `f74f85b1a745f6391dc7a506a9375626841f453572248524580cc20630d5e313`.
+  All six strict xfails retain their original semantics.
+- **2026-09-22-015 (HIGH shared-tokenizer truncation race):** a per-classifier
+  thread lock now covers every full tokenizer operation: initial encode,
+  each decode and per-chunk tensor construction, including backend
+  truncation/padding configuration. Model inference remains outside the lock.
+  Concurrent calls can no longer enable 512-token truncation between another
+  request's full-document configuration and encoding. This is independent of
+  the tokenizer's internal parallelism setting. The 1–8 permit range, shipped
+  one-permit default, thread configuration and wire behavior are unchanged.
+  `docs/configuration.md` documents the distinction.
+- **Regression evidence:** the socket-guarded test uses the committed tiny
+  tokenizer fixture through the installed real tokenizer, production classifier,
+  production sanitizer and two configured semaphore permits. Only model scores
+  are synthetic. Events gate the vulnerable configuration/encode boundary;
+  an observed acquire delegates to the real lock to release the gate on actual
+  contention, without scheduling sleeps. Both unlimited and 64-chunk cases
+  classify the 701-token target in 512/255-token model inputs, detect the tail
+  marker and return the same quarantined, `scanned` result as serial execution.
+  The benign competitor remains safe/scanned; no wait timeout or permit leak
+  occurs. A two-party barrier inside model calls proves parallel inference.
+  Bounded waits and final draining clean up workers on failure. A separate
+  unit test pins encode/decode/tensor lock coverage and exception release.
+  Replacing only the lock with an in-memory no-op negative control makes both
+  real-tokenizer cases fail at serial/concurrent output equality, reproducing
+  the missing tail coverage; no repository files were edited for that control.
+  Both positive cases also passed ten fresh-process repetitions. These are
+  coverage/concurrency tests, not production-model accuracy benchmarks.
+- **Verification:** the affected classifier, app, model-fetcher, bounded-body,
+  provider, orchestrator, policy/admission, wire-pin, revision and governance
+  modules passed: **1,859 passed, 6 xfailed**, with three existing non-failing
+  warnings. Repository-wide `uv run ruff check .`,
+  `uv run ruff format --check .` and `uv run pyright` all pass (zero typing
+  diagnostics). Full-suite revalidation remains with the parent validator.
+  All nine hashed sources are byte-identical to the starting commit; default
+  and shipped revision remain
+  `4913fdc1982cb48ba2db9c6972fcea10107408349970c45c9dc6b3ae5c1aa1fb`.
+  No contract, dependency, lifecycle state or acceptance criterion changed.
+
+### Validation recheck — 2026-09-22
+
+- Fresh autonomous validation at `ebde6b9` includes the six uncommitted
+  repair files already present on entry. One parallel quality/security/
+  compliance round; no new fix loop. All three reviewers confirm the
+  tokenizer and Ruff blockers resolved. No remaining criticals; the merged
+  reports contain one inherited warning and two informational findings.
+- The security reviewer independently reproduces the tokenizer fix with
+  three hermetic regressions and both no-op-lock negative controls: complete
+  tail coverage and quarantine are preserved with the lock, the missed-tail
+  safe/scanned outcome returns without it, and inference remains parallel.
+  This verifies scan coverage with synthetic scores, not model accuracy.
+- Full `uv run pytest -q --tb=short`: **3,741 passed, 6 xfailed, 13
+  non-failing warnings in 43.22s**, within the five-minute limit. Pinned Ruff
+  lint/format (146 files), strict Pyright (zero diagnostics), exporter
+  `--check` and whitespace gates pass. Both isolated placeholder-only Compose
+  renders pass at default and configured envelopes; no live `NanoCpus` probe
+  was repeated, and prior story evidence is not relabeled as fresh.
+- Current default/shipped sanitizer identity remains
+  `4913fdc1982cb48ba2db9c6972fcea10107408349970c45c9dc6b3ae5c1aa1fb`;
+  OpenAPI matches anchor
+  `c9cd19bad84decd7415ba912ae81c826447f2a19edc41b57c857d4a7b4d42ab2`.
+  Historical goldens remain byte-identical to `main`.
+- **Advisory outcome, not a clean release verdict:** the existing MEDIUM
+  IPv6 denylist-equivalence issue (`2026-09-22-009`) remains reproducible.
+  Architecture prose still incorrectly says a Compose healthcheck would
+  restart-loop a container (`014`, informational); `016` records passing
+  gates and retained xfails. Older prerequisite advisories remain tracked,
+  including the warmup admission race and raw-read-budget limitation.
+  The historical peak-copy report is not reaffirmed against the intervening
+  `BytesIO` repair without its own measurement.
+- Results are in `kit_tools/AUDIT_FINDINGS.md` and the four
+  `.validate_impl_*.json` reports; immutable diffs, prior reports and fresh
+  gate logs are in session `f8b30f1c-645b-4ea6-b5f2-63897f37873f/files`.
+  Existing fixes were preserved, not committed here. No pause marker,
+  completion skill, archival or execution-state change; spec-7 measurements
+  and owner gates remain deferred.
+
 ## Refinement Notes
 
 ### Research Findings

@@ -5,21 +5,32 @@ All tests use mocked models — no real model download required.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import threading
 from collections.abc import Sequence
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Protocol, cast
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import torch
+from transformers import AutoTokenizer
 
-from models import Stage3Verdict, TrustTier
+from models import Stage2Verdict, Stage3Verdict, TrustTier
+from pipeline.extraction_limits import extraction_settings_from_config
+from pipeline.orchestrator import sanitize_and_structure
+from pipeline.stage1_extraction import ExtractionResult
 from pipeline.stage3_promptguard import (
     DEFAULT_THRESHOLD,
     INJECTION_PENALTY,
     PromptGuardResult,
     run_promptguard,
 )
+from pipeline.stage4_structuring import SanitizationResult
 from promptguard.classifier import (
     MAX_SEQ_LEN,
     PromptGuardClassifier,
@@ -364,6 +375,44 @@ class TestClassifierUnit:
         assert result is False
         assert c.loaded is False
 
+    def test_all_tokenizer_operations_locked_but_inference_unlocked(self) -> None:
+        classifier = PromptGuardClassifier()
+        tokenizer = MagicMock()
+
+        def encode(*_args: object, **_kwargs: object) -> list[int]:
+            assert classifier._tokenizer_lock.locked()
+            return list(range(701))
+
+        def decode(*_args: object, **_kwargs: object) -> str:
+            assert classifier._tokenizer_lock.locked()
+            return "window"
+
+        def tensors(*_args: object, **_kwargs: object) -> dict[str, torch.Tensor]:
+            assert classifier._tokenizer_lock.locked()
+            return {"input_ids": torch.tensor([[1]])}
+
+        def infer(**_inputs: torch.Tensor) -> SimpleNamespace:
+            assert not classifier._tokenizer_lock.locked()
+            return SimpleNamespace(logits=torch.tensor([[10.0, 0.0]]))
+
+        tokenizer.encode.side_effect = encode
+        tokenizer.decode.side_effect = decode
+        tokenizer.side_effect = tensors
+        model = MagicMock(side_effect=infer)
+        classifier._tokenizer = tokenizer
+        classifier._model = model
+        classifier._loaded = True
+        score, _ = classifier.classify("long input")
+        assert score < DEFAULT_THRESHOLD
+        assert tokenizer.encode.call_count == 1
+        assert tokenizer.decode.call_count == 2
+        assert tokenizer.call_count == model.call_count == 2
+        # A failed tokenizer call must not strand later classification workers.
+        tokenizer.encode.side_effect = ValueError("synthetic tokenizer failure")
+        with pytest.raises(ValueError, match="synthetic tokenizer failure"):
+            classifier.classify("next input")
+        assert not classifier._tokenizer_lock.locked()
+
 
 class TestChunking:
     """Test the chunking logic with a mocked tokenizer."""
@@ -409,6 +458,151 @@ class TestChunking:
         c._tokenizer = None
         chunks = c._chunk_text("Any text.")
         assert chunks == ["Any text."]
+
+
+class _ConfigurableTokenizer(Protocol):
+    """The fast-backend scheduling seam used only by the regression below."""
+
+    def set_truncation_and_padding(self, *args: object, **kwargs: object) -> None: ...
+
+
+@pytest.mark.parametrize("max_chunks", [None, 64])
+async def test_concurrent_real_tokenizer_preserves_tail_and_parallel_inference(
+    monkeypatch: pytest.MonkeyPatch,
+    max_chunks: int | None,
+) -> None:
+    """Real encoding, chunking and sanitizer; only model scoring is synthetic.
+
+    Pause after the long encode disables backend truncation, before encode_batch.
+    Without the lock, the other request enables 512-token truncation and silently
+    hides the tail. With the lock, observed contention releases that pause without
+    a sleep or a timeout-based guess about the competing worker's progress.
+    """
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setenv("TOKENIZERS_PARALLELISM", "false")
+    tokenizer = AutoTokenizer.from_pretrained(
+        Path(__file__).parent / "fixtures" / "tiny_model", local_files_only=True
+    )
+    text = "tok0 " * 700 + "tok58"
+    assert len(tokenizer.encode(text, add_special_tokens=False)) == 701
+    (marker_id,) = tokenizer.encode("tok58", add_special_tokens=False)
+    calls: list[tuple[int, bool]] = []
+    calls_lock = threading.Lock()
+    paused = threading.Event()
+    resume = threading.Event()
+    contended = threading.Event()
+    inference_barrier = threading.Barrier(2, timeout=5)
+    concurrent = False
+
+    def score_marker(**inputs: torch.Tensor) -> SimpleNamespace:
+        ids = inputs["input_ids"]
+        marker_seen = bool((ids == marker_id).any())
+        with calls_lock:
+            calls.append((ids.numel(), marker_seen))
+        if concurrent and ids.numel() in (3, MAX_SEQ_LEN):
+            if ids.numel() == 3:
+                # Also releases the long encode in an unlocked negative control,
+                # AFTER this request has enabled real backend truncation.
+                resume.set()
+            # Both requests must be inside model inference at once. Holding the
+            # tokenizer lock (or a whole-classification lock) here breaks this.
+            inference_barrier.wait()
+        return SimpleNamespace(
+            logits=torch.tensor([[0.0, 10.0] if marker_seen else [10.0, 0.0]])
+        )
+
+    classifier = PromptGuardClassifier()
+    classifier._tokenizer = tokenizer
+    classifier._model = MagicMock(side_effect=score_marker)
+    classifier._loaded = True
+    settings = extraction_settings_from_config(
+        {"extraction": {"classification_concurrency": 2}}
+    )
+    semaphore = asyncio.Semaphore(settings.classification_concurrency)
+    wait_timeout = MagicMock()
+
+    async def sanitize(body: str) -> SanitizationResult:
+        return await sanitize_and_structure(
+            extraction=ExtractionResult(
+                title=None,
+                author=None,
+                date=None,
+                raw_text=body,
+                main_content=body,
+                word_count=len(body.split()),
+            ),
+            trust_tier=TrustTier.STANDARD,
+            classifier=classifier,
+            promptguard_threshold=0.85,
+            promptguard_fail_closed=True,
+            extract_mode="full",
+            content_type="html",
+            max_promptguard_chunks=max_chunks,
+            classification_semaphore=semaphore,
+            classification_wait_seconds=15.0,
+            on_classification_wait_timeout=wait_timeout,
+        )
+
+    serial = await sanitize(text)
+    assert serial.injection_detected
+    assert calls == [(512, False), (255, True)]
+    calls.clear()
+    concurrent = True
+    real_lock = classifier._tokenizer_lock
+
+    class ObservedLock:
+        """Delegate to the actual lock, observing a blocked acquire."""
+
+        def __enter__(self) -> None:
+            if not real_lock.acquire(blocking=False):
+                contended.set()
+                resume.set()
+                assert real_lock.acquire(timeout=5), "tokenizer lock never released"
+
+        def __exit__(self, *_args: object) -> None:
+            real_lock.release()
+
+    monkeypatch.setattr(classifier, "_tokenizer_lock", ObservedLock())
+    # This installed fast-tokenizer method is intentionally not mocked: the hook
+    # calls it unchanged, then gates scheduling before the real backend encode.
+    configure = cast(_ConfigurableTokenizer, tokenizer).set_truncation_and_padding
+
+    def gated_configuration(*args: object, **kwargs: object) -> None:
+        configure(*args, **kwargs)
+        if not paused.is_set():
+            paused.set()
+            assert resume.wait(5), "competing request never reached tokenizer/model"
+
+    monkeypatch.setattr(tokenizer, "set_truncation_and_padding", gated_configuration)
+    tasks = [asyncio.create_task(sanitize(text))]
+    try:
+        assert await asyncio.to_thread(paused.wait, 5), "long encode never paused"
+        tasks.append(asyncio.create_task(sanitize("tok0")))
+        target, competitor = await asyncio.wait_for(asyncio.gather(*tasks), 15)
+    finally:
+        resume.set()
+        inference_barrier.abort()
+        # Drain owned worker work even when an assertion or barrier fails.
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    assert target == serial
+    assert target.stage2_verdict == Stage2Verdict.CLEAN
+    assert target.stage3_verdict == Stage3Verdict.INJECTION_DETECTED
+    assert target.promptguard_state == "scanned"
+    assert "tok58" not in target.body
+    assert target.body != text
+    assert sorted(calls) == [(3, False), (255, True), (512, False)]
+    assert competitor.stage3_verdict == Stage3Verdict.SAFE
+    assert competitor.promptguard_state == "scanned"
+    assert competitor.injection_detected is False
+    assert competitor.body == "tok0"
+    assert contended.is_set()
+    wait_timeout.assert_not_called()
+    # No leaked classification permits after the concurrent requests.
+    await asyncio.wait_for(semaphore.acquire(), 1)
+    await asyncio.wait_for(semaphore.acquire(), 1)
+    semaphore.release()
+    semaphore.release()
 
 
 # ---------------------------------------------------------------------------

@@ -641,6 +641,14 @@ Confirm the CPU quota with
 `docker inspect -f '{{.HostConfig.NanoCpus}}' <container>` — there is no in-service
 CPU-quota signal; auto-detection is deferred.
 
+With `extraction.classification_concurrency` above one, model inference may run
+in parallel. The classifier serializes each shared tokenizer operation (encoding,
+decoding and per-chunk tensor construction, including backend configuration),
+not inference: another request cannot enable truncation during the initial
+full-document encode and silently leave a tail unscanned. This lock is separate
+from `TOKENIZERS_PARALLELISM`, which controls the tokenizer's internal worker
+pool, not concurrent callers. The default remains one classification permit.
+
 ### Delivering `config.yaml` through the fragments
 
 The fragments do **not** mount `config.yaml`: `Dockerfile` bakes it at

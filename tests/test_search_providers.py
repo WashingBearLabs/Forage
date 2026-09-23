@@ -759,9 +759,13 @@ class TestProviderBoundedBodies:
 
     @pytest.mark.xfail(
         strict=True,
-        reason="2026-09-22-012: httpx response seam cannot limit the next upstream read",
+        reason=(
+            "2026-09-22-012: httpx response seam cannot limit the next upstream read"
+        ),
     )
-    @pytest.mark.parametrize("cap,chunk_size", [(1000, 997), (1000, 999), (1048576, 65535)])
+    @pytest.mark.parametrize(
+        "cap,chunk_size", [(1000, 997), (1000, 999), (1048576, 65535)]
+    )
     async def test_exact_raw_read_budget_with_non_dividing_upstream_chunks(
         self,
         bounded_provider: tuple[SearxngProvider | BraveApiProvider, str],
@@ -781,10 +785,16 @@ class TestProviderBoundedBodies:
         response = httpx.Response(
             200, headers={"content-encoding": "deflate"}, stream=stream
         )
-        with client_patch(target, response=response), record_decompressors() as recording:
+        with (
+            client_patch(target, response=response),
+            record_decompressors() as recording,
+        ):
             outcome = await provider.search("q", 3)
         assert isinstance(outcome, ProviderFailure)
-        assert (outcome.failure_class, outcome.detail) == ("hard_error", "body_too_large")
+        assert (outcome.failure_class, outcome.detail) == (
+            "hard_error",
+            "body_too_large",
+        )
         assert outcome.compressed
         assert recording.largest_output == 0
         downloaded = sum(map(len, stream.chunks_yielded))

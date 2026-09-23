@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from typing import TYPE_CHECKING, Any
 
 from pipeline.config_bounds import bounded_int
@@ -59,6 +60,10 @@ class PromptGuardClassifier:
     def __init__(self) -> None:
         self._model: PreTrainedModel | None = None
         self._tokenizer: PreTrainedTokenizerBase | None = None
+        # Fast tokenizers configure shared backend truncation/padding before
+        # encoding. Keep each complete tokenizer operation atomic across
+        # classification workers, but never hold this lock during inference.
+        self._tokenizer_lock = threading.Lock()
         self._loaded: bool = False
         self._threads = 0
 
@@ -166,7 +171,8 @@ class PromptGuardClassifier:
         if tokenizer is None:
             return [text]
 
-        token_ids = tokenizer.encode(text, add_special_tokens=False)
+        with self._tokenizer_lock:
+            token_ids = tokenizer.encode(text, add_special_tokens=False)
 
         if len(token_ids) <= MAX_SEQ_LEN:
             return [text]
@@ -175,7 +181,8 @@ class PromptGuardClassifier:
         step = MAX_SEQ_LEN - CHUNK_OVERLAP
         for start in range(0, len(token_ids), step):
             window = token_ids[start : start + MAX_SEQ_LEN]
-            chunk_text = tokenizer.decode(window, skip_special_tokens=True)
+            with self._tokenizer_lock:
+                chunk_text = tokenizer.decode(window, skip_special_tokens=True)
             chunks.append(chunk_text)
             # Stop if we've consumed all tokens
             if start + MAX_SEQ_LEN >= len(token_ids):
@@ -219,13 +226,14 @@ class PromptGuardClassifier:
         scores: list[float] = []
 
         for chunk in chunks:
-            inputs = tokenizer(
-                chunk,
-                return_tensors="pt",
-                truncation=True,
-                max_length=MAX_SEQ_LEN,
-                padding=True,
-            )
+            with self._tokenizer_lock:
+                inputs = tokenizer(
+                    chunk,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=MAX_SEQ_LEN,
+                    padding=True,
+                )
             with torch.no_grad():
                 outputs = model(**inputs)
 
