@@ -41,8 +41,8 @@ services:
     # ghcr.io/washingbearlabs/forage, tag 1.2.1 — contract 1.3.0 hardening.
     # Pinned ahead of the owner-gated `v1.2.1` cut; until then a pull fails
     # with `manifest unknown`. Cut from the replacement PR's merge commit in
-    # the same sitting or revert the replacement pin commit: this window remains
-    # outstanding. docs/releases.md has the pending-release record.
+    # the same sitting or restore a verified release per docs/releases.md.
+    # Never roll back to defective 1.2.0; publication remains outstanding.
     image: ghcr.io/washingbearlabs/forage:1.2.1
     restart: unless-stopped
     # Loopback only — see the DEPLOYMENT POSTURE note above.

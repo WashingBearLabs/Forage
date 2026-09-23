@@ -33,9 +33,12 @@ immutability; the full-semver tag pin remains the quickstart default.
 
 **Outstanding unpublished-tag window:** merging the completion PR makes `main`'s
 quickstart pull an unpublished tag until the owner runs US-003. Cut from that
-merge commit in the same sitting; if the gate is not run, use
-`git revert <replacement pin commit>` before leaving that window open. The
-replacement PR description records the exact commit.
+merge commit in the same sitting. If the cut cannot complete, explicitly
+restore the last verified release's pins, tests and version guidance in a
+corrective PR before leaving the window open. **Do not simply revert the
+replacement pin commit:** that would restore defective v1.2.0. The last
+verified release is v1.1.0 / contract 1.2.0, so such a rollback must also
+document the older contract. The replacement PR records its pin commit.
 The completion PR description must carry the same outstanding item; neither
 publication nor post-release verification is complete.
 

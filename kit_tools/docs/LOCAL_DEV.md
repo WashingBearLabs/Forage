@@ -233,7 +233,8 @@ working tree.** Both pin `ghcr.io/washingbearlabs/forage:1.2.1` and
 `ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`; the companion is published,
 but the service pin awaits the owner-gated `v1.2.1` cut and returns `manifest unknown`
 until then. This unpublished-tag window is outstanding: cut in the replacement
-PR's merge sitting or revert its pin commit (`docs/releases.md`).
+PR's merge sitting or restore a verified release per `docs/releases.md`,
+never defective v1.2.0.
 To run the image you just built, use the `docker run` form
 above. Second, the image has no `HEALTHCHECK` instruction; both compose fragments declare a liveness probe.
 Its `curl -fsS -o /dev/null` discards `/health`'s body: a Docker-healthy container

@@ -160,7 +160,8 @@ Controls and deliberate omissions in both fragments:
 **Pins:** both fragments pin `forage:1.2.1` and `forage-searxng:0.1.1-rc`.
 The current release target is **v1.2.1 / contract 1.3.0**, not yet published.
 The service pin fails with `manifest unknown` until the owner cut; cut from the
-replacement PR's merge commit in the same sitting or revert its pin commit.
+replacement PR's merge commit in the same sitting or restore a verified release
+per `docs/releases.md`, never defective v1.2.0.
 That window is outstanding, with the exact commit recorded in the replacement PR.
 The companion is published and stays a pre-release because no non-pre-release
 `searxng-v*` tag exists.

@@ -535,7 +535,8 @@ deploy stage to revert. Re-pin the previous tag in the consumer's compose file
 (`image: ghcr.io/washingbearlabs/forage:<previous>`) and `docker compose -f <file> up -d`.
 `kit_tools/docs/DEPLOYMENT.md` has the operator view, including the pull/pin/verify
 sequence. The compose fragments pin `1.2.1` ahead of `v1.2.1`: cut from the
-replacement PR's merge commit in the same sitting or `git revert <replacement pin commit>`.
+replacement PR's merge commit in the same sitting or restore a verified release
+per `docs/releases.md`, never defective v1.2.0.
 Until then the unpublished-tag window on `main` is outstanding and must be
 named in the replacement PR description, with the exact pin commit.
 

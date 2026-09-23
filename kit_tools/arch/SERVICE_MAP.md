@@ -397,8 +397,9 @@ binding, service names, volume literal, absent limiter, required secret) are ass
 **Pin sequencing:** both fragments pin `ghcr.io/washingbearlabs/forage:1.2.1` and
 `ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`. The companion is published;
 the service pin returns `manifest unknown` until the owner-gated `v1.2.1` cut.
-Cut from the replacement PR's merge commit in the same sitting or revert its
-pin commit: the unpublished-tag window is outstanding, not closed.
+Cut from the replacement PR's merge commit in the same sitting or restore a
+verified release per `docs/releases.md`, never defective v1.2.0.
+The unpublished-tag window is outstanding, not closed.
 `docs/releases.md` and the replacement PR record the recovery.
 The companion stays a pre-release because no non-pre-release `searxng-v*` tag exists.
 

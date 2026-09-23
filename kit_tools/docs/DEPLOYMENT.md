@@ -147,7 +147,8 @@ pin `ghcr.io/washingbearlabs/forage:1.2.1` and
 `ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`.** The companion is published;
 the service is pinned ahead of the `v1.2.1` cut and returns `manifest unknown`
 until it lands. The owner must cut from the replacement PR's merge commit in the
-same sitting or `git revert <replacement pin commit>`; this window remains an
+same sitting or restore a verified release per `docs/releases.md`, never
+defective v1.2.0; this window remains an
 outstanding item, not a completed release. The exact pin commit belongs in the
 replacement PR description.
 

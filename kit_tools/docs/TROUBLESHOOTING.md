@@ -876,9 +876,9 @@ an older image than expected.
 `ghcr.io/washingbearlabs/forage:1.2.1` and `forage-searxng:0.1.1-rc`; the companion
 is published, but the service pin is ahead of the owner-gated `v1.2.1` cut.
 Until it lands, `manifest unknown` is an outstanding release-sequencing item:
-cut from the replacement PR's merge commit in the same sitting or
-`git revert <replacement pin commit>` (exact commit in the replacement PR
-description). A withdrawn or never-published tag also pulls nothing.
+cut from the replacement PR's merge commit in the same sitting or restore a
+verified release per `docs/releases.md`, never defective v1.2.0.
+A withdrawn or never-published tag also pulls nothing.
 
 **Fix:** after the cut, pin a full semver (`1.2.1`) or the `@sha256` digest from the Release body, never
 `latest`; then `docker compose -f <file> up -d`. Rollback is the same command with the
