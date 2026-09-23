@@ -149,7 +149,7 @@ the story implementer did not run it.
 | `tests/test_promptguard_policy.py` | 131 | Handler-side policy resolution, field-name guard, nullable bounded thresholds on both routes, default-before-ceiling classification and zero preservation, null/explicit/capped cache-key equivalence, resolved-keyword isolation, absent/contended classifier floors, trusted/VERIFIED exemptions, stamped hits (including old entries), unchanged `/extract` and policy-free 422s (recounted at hostname/config US-005) |
 | `tests/test_stage3_promptguard.py` | 164 | ML scan; mocked inference plus real pinned-config resolution |
 | `tests/test_ci_workflow.py` | 289 | Workflow shape, SHA pins/permissions, six-gate graph and both publish lanes; image/contract mapping, Release body/assets read-back against the anchor, reproducible exporters and four secret-grep patterns. Executes the actual POSIX awk docstring extractor against live and hostile inputs; whole-entry tense and uniqueness guards reject provisional publication-state clauses, with five permanent counterexamples for the frozen 1.3.0 announcement |
-| `tests/test_compose_fragments.py` | 79 | Compose fragments, parse-only shape guards and the pending `forage:1.2.1` pin; search/model bare-name passthroughs on both services, the full-only HMAC key, resource envelope and status-only liveness probe |
+| `tests/test_compose_fragments.py` | 79 | Compose fragments, parse-only shape guards and the published `forage:1.2.1` pin; search/model bare-name passthroughs on both services, the full-only HMAC key, resource envelope and status-only liveness probe |
 | `tests/test_contract_smoke.py` | 94 | `contract_smoke.py`: every `/health` clause, polling, the single-source ties to the golden schema, and — since US-004 — the in-image contract checks: the `docker run --rm --entrypoint cat` argv it builds, the anchor comparisons against the committed trust root, and the `info.version` ↔ live `contract_version` claim, all driven through an injected runner so the suite never starts a container. `search-release` US-004 adds the status-aware `--expect-status`/`--anchor` coverage: a healthy body passes under `healthy` and fails under the default, a degraded body fails under `healthy`, `wait_for_health` under `healthy` keeps polling past a 200 `degraded` body until a `healthy` one arrives (or returns the last body once the deadline passes), and the in-image anchor is compared against the `--anchor` file rather than a hard-coded path |
 | `tests/test_stage5_url_audit.py` | 30 | Outbound fetch + redirect-chain audit |
 | `tests/test_fakes.py` | 18 | Shared streaming doubles: raw/decoded reads, no implicit Content-Length, delayed chunks, client patch restoration, per-instance and aggregate decoder observations including raw-deflate retry, and complete `SearchMetricsSink` parity |
@@ -364,9 +364,12 @@ module owns the string they are compared against.
 - **Live SearXNG / live Valkey.** Every test mocks them. A real end-to-end smoke against
   running companions is a manual step, and `feature-forage-cache-fallback` carries an
   explicit manual-smoke half.
-- **Real PromptGuard weights.** `tests/test_stage3_promptguard.py` mocks transformers and
-  torch, so the suite passes with no model present — which is correct, and also why the
-  degraded path needs its own manual verification after a rebuild.
+- **Real PromptGuard weights.** The classifier tests mock model inference, so
+  the suite passes with no real weights present. The genuine pinned config is
+  now hash-checked and resolved by real offline AutoConfig; this catches the
+  label-metadata mismatch that defeated v1.2.0's synthetic fixtures. Both
+  degraded and weights-loaded healthy image smokes remain mandatory manual
+  evidence; a green weights-free suite alone cannot establish model readiness.
 - **A real Hugging Face download.** CI has no token and the socket guard is autouse, so
   every fetch test drives a `snapshot_download` double. What that *does* prove is
   everything downstream of the transport: the arguments the fetcher passes, the cache

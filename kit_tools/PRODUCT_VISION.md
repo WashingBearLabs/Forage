@@ -95,9 +95,9 @@ Link to feature specs / epics as they are created.
 - **Status:** Shipped
 
 #### T2.2 — Forage hardening
-- **Description:** `/retrieve` sanitization parity with `/search`; cache integrity (HMAC); hostname matching; search-result URL audit; PromptGuard 2 **86M** upgrade + **contiguity gating** against chunk-boundary evasion; config single-sourcing; and a **configurable resource envelope** (CPU/mem sizing + classifier latency target as documented operator config, not baked to any one host).
-- **Feature Spec(s):** `epic-forage-hardening` (Web Access family Epic 4, Forage half — eight feature specs, planned 2026-09-19)
-- **Status:** Planned
+- **Description:** `/retrieve` sanitization parity with `/search`; cache integrity (HMAC); hostname matching; search-result URL audit; model-selection and **contiguity gating** seams; config single-sourcing; and a **configurable resource envelope**. Only 22M is allowlisted: the 86M vendoring and benchmark owner gates remain unrun.
+- **Feature Spec(s):** `epic-forage-hardening` (Web Access family Epic 4, Forage half — eight archived specs; [handoff](specs/archive/feature-hardening-release.md))
+- **Status:** Shipped 2026-09-23 as v1.2.1 / contract 1.3.0; defective v1.2.0 withdrawn.
 
 #### T2.3 — Injection regression corpus (CI)
 - **Description:** A curated indirect-injection attack corpus + classifier/pipeline gates wired into Forage CI, so injection-defense efficacy is *measured on every change* rather than asserted.
@@ -140,7 +140,7 @@ Link to feature specs / epics as they are created.
 
 1. **Phase 1 (done):** T1.1 + T1.2 — extraction, packaging, contract, v1.0.0.
 2. **Phase 2 (done):** T2.1 — search-provider abstraction + reliable search, v1.1.0.
-3. **Phase 3:** T2.2 — hardening (incl. PG-86M + configurable resource envelope).
+3. **Phase 3 (done):** T2.2 — hardening, v1.2.1 (86M owner gates explicitly unrun).
 4. **Phase 4:** T2.3 — injection regression corpus in CI.
 5. **Later:** T3.x — more providers/adapters, provenance/datamarking hooks, image ingestion (post trust-review).
 

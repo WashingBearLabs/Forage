@@ -17,30 +17,25 @@ Every non-pre-release tag, newest first. The `contract:`, `anchor:`, `index dige
 into `kit_tools/specs/feature-search-release.md`'s Implementation Notes — that table is what
 the Poppy `epic-search-policy` session reads to pin a digest; nothing here pushes to Poppy.
 
-### v1.2.1 — (date filled by US-005)
-
-NOT YET PUBLISHED — filled by US-005
+### v1.2.1 — 2026-09-23
 
 - contract: 1.3.0
 - anchor: `74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72`
-- index digest: (filled at the cut)
-- tagged commit: (filled at the cut)
+- index digest: `sha256:a29329af38ee563dcc890c9b68749e4d7bc32e20c422640b2f5ffecaa8c89e7b`
+- tagged commit: `e8cf83c51e8786abf30d79ae0a3d6608c5f8df2c`
 
-Compose is pinned ahead of the replacement cut; the tag lands with `v1.2.1`.
+Compose pins the verified replacement `v1.2.1`.
 The recorded index digest is the **pinnable form**
 (`ghcr.io/washingbearlabs/forage@sha256:…`) for deployments that need
 immutability; the full-semver tag pin remains the quickstart default.
 
-**Outstanding unpublished-tag window:** merging the completion PR makes `main`'s
-quickstart pull an unpublished tag until the owner runs US-003. Cut from that
-merge commit in the same sitting. If the cut cannot complete, explicitly
-restore the last verified release's pins, tests and version guidance in a
-corrective PR before leaving the window open. **Do not simply revert the
-replacement pin commit:** that would restore defective v1.2.0. The last
-verified release is v1.1.0 / contract 1.2.0, so such a rollback must also
-document the older contract. The replacement PR records its pin commit.
-The completion PR description must carry the same outstanding item; neither
-publication nor post-release verification is complete.
+Published at 18:06:50Z through [run 35899600447](https://github.com/WashingBearLabs/Forage/actions/runs/35899600447).
+`latest`, `1.2` and `1.2.1` resolve to the recorded index; all four contract
+hashes agree. Actual-image runtime verification completed at 18:09:41Z:
+healthy/degraded boot, keyed/keyless Valkey posture, signed-cache hit, real
+search, runtime redaction and an anonymous pull after local-reference removal.
+The full [handoff record](../kit_tools/specs/archive/feature-hardening-release.md)
+records the accepted merge-to-publication windows and the withdrawn v1.2.0.
 
 This replacement repairs v1.2.0's rejection of the authentic default 22M
 configuration. Its generic `LABEL_0` / `LABEL_1` labels are accepted only for
@@ -52,7 +47,7 @@ The regression fixture is the real pinned config, hash-checked against the
 manifest. A read-only, network-disabled real-model probe also confirms loading
 and the score direction before publication.
 
-What ships (draft, pending the owner cut; hardening changes carried forward):
+What shipped (hardening changes carried forward):
 
 - Search scans both newline-preserving and whitespace-collapsed title/snippet
   forms, truncating after extraction; escaped injection-shaped markup is blocked
@@ -202,7 +197,7 @@ What shipped:
 
 ## Withdrawn tags
 
-### v1.2.0 — withdrawal scheduled after verified v1.2.1 replacement
+### v1.2.0 — withdrawn 2026-09-23
 
 **Do not deploy.** Published 2026-09-23 at commit
 `d747a2bd41da993914229c7f31622ab20148dc32`, index
@@ -213,10 +208,19 @@ the owner healthy-model smoke failed: the pinned 22M config omits label names,
 transformers supplies `LABEL_0` / `LABEL_1`, and the classifier rejected them
 with `model_labels_unexpected`. PromptGuard stayed unavailable.
 
-The owner authorized the public Release warning, a corrected v1.2.1, and
-deletion of the v1.2.0 git tag and GHCR package version **after** replacement
-verification. Those deletions are not yet recorded as complete. The pushed
-tag is never moved. The 86M owner gates remain unrun.
+After v1.2.1 verification, the owner-authorized withdrawal deleted the remote
+git tag and GHCR package version `1285701898`. Read-back confirmed no remote
+tag, package API 404, and `1.2.0` image not found; replacement aliases were
+unchanged. The old GitHub Release is now a draft, not a public release.
+The 86M owner gates remain unrun.
+
+**Withdrawal gotcha:** editing that Release after deleting its tag caused
+GitHub to recreate `v1.2.0` at the current `main` commit (`e8cf83c`), triggering
+run `35900738954`. The tag was deleted again and the run cancelled; its publish
+job executed **zero steps**, and no replacement `1.2.0` image was pushed.
+Final withdrawal read-back completed at 18:14:07Z. Do not edit a withdrawn
+Release after final tag deletion; finalize any draft/notice first, delete the
+tag last, and verify both the ref and registry absence.
 
 ### Layer-identity withdrawal policy
 
@@ -278,7 +282,7 @@ release gates into wishful thinking.
 A tag pushed onto a red tree still *runs* the gates. They fail, and `publish`
 never starts.
 
-**The contract 1.3.0 window is closed; publication is still pending.**
+**The contract 1.3.0 window is closed and v1.2.1 is published and verified.**
 `hardening-release` US-002 froze the six-model
 `tests/golden/contract_1_3_0.json` and `_EXPECTED_ONE_THREE_ZERO_DIFF`.
 The exact-additions sweep and the release-entry completeness/tense guards run
@@ -294,7 +298,7 @@ the behaviour that shipped before the key existed — and boot logs one WARNING,
 That is worked example 6 step 1 with the window named, and it belongs in this release's
 Release body as well as here (`contract/GOVERNANCE.md` ruling (g)).
 
-**Consumer note for the pending hardening release (spec 8 handoff).** From
+**Consumer note for the shipped hardening release (spec 8 handoff).** From
 `hardening-retrieve-parity`, a caller sending `promptguard_fail_closed: false` is
 exposed to an unscanned-but-marked response whenever the classification permit is
 contended for longer than `promptguard_wait_seconds`, signalled by `promptguard_state`
@@ -444,7 +448,7 @@ extracted locally from the tagged tree (`git show "$TAG":pipeline/contract.py`
 through the same `awk` program) so the Release carries it verbatim — or
 deleting the Release and re-running the job.
 
-### Cache-integrity upgrade note for the pending hardening release
+### Cache-integrity upgrade note for the shipped hardening release
 
 **Spec 8 Release-body handoff:** `/metrics.cache` gains `integrity_rejects`.
 `storage_oversize_skips` keeps its meaning but can now rise on Valkey as well
@@ -462,7 +466,7 @@ replicas sharing Valkey; lowering it can reject past larger writes as
 relationship. The constructor-level HMAC machinery lands in US-001;
 environment-key wiring and keyless-Valkey health reporting follow in US-002.
 
-### Domain-list upgrade note for the pending hardening release
+### Domain-list upgrade note for the shipped hardening release
 
 **Spec 8 Release-body handoff, the 1.3.0 window:** existing multi-label
 `blocked_domains` and `seed_blocklist` entries now cover subdomains; review apex

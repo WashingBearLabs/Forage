@@ -20,16 +20,16 @@ live in `MILESTONES.md` instead.
 
 ---
 
-## Forage Hardening (Epic)
-- [Epic Overview](../specs/epic-forage-hardening.md) — Web Access family Epic 4, Forage half; planned 2026-09-19; ships `v1.2.1` at contract 1.3.0
-- [Search sanitization](../specs/feature-hardening-search-sanitization.md) — newline-preserving structural scan, URL wire-form scan, search-result URL audit, contract window opens
-- [Retrieve parity](../specs/feature-hardening-retrieve-parity.md) — chunk budget + semaphore, off-loop extraction, corrupt cache entry = miss, operator fail-closed floor (depends on: search-sanitization)
-- [Hostname and config](../specs/feature-hardening-hostname-and-config.md) — dot-boundary hostname matching, `/search` `blocked_domains` + honoured threshold, `config.yaml` key registry (depends on: retrieve-parity)
-- [Cache integrity](../specs/feature-hardening-cache-integrity.md) — optional `FORAGE_CACHE_HMAC_KEY`, loud `cache_unauthenticated` when absent (depends on: hostname-and-config)
-- [Provider bounds](../specs/feature-hardening-provider-bounds.md) — streamed body caps, wall-clock timeouts, query cap, policy monotonicity, the orchestrator cleanup rotation (depends on: cache-integrity)
-- [Resource envelope](../specs/feature-hardening-resource-envelope.md) — `FORAGE_CPUS` / `FORAGE_MEM_LIMIT`, threads, latency target on `/metrics`, sizing table (depends on: provider-bounds)
-- [PromptGuard 86M](../specs/feature-hardening-promptguard-86m.md) — `FORAGE_MODEL_ID`, contiguity gating, benchmark harness, owner-run benchmark (depends on: resource-envelope)
-- [Release](../specs/feature-hardening-release.md) — validation-422 trim, contract 1.3.0 frozen, owner-gated `v1.2.1` cut (depends on: promptguard-86m)
+## Forage Hardening (Completed)
+- [Epic Overview](../specs/epic-forage-hardening.md) — Web Access family Epic 4, Forage half; shipped and verified 2026-09-23 as `v1.2.1` at contract 1.3.0; v1.2.0 withdrawn
+- [Search sanitization](../specs/archive/feature-hardening-search-sanitization.md) — newline-preserving structural scan, URL wire-form scan, search-result URL audit, contract window opens
+- [Retrieve parity](../specs/archive/feature-hardening-retrieve-parity.md) — chunk budget + semaphore, off-loop extraction, corrupt cache entry = miss, operator fail-closed floor (depends on: search-sanitization)
+- [Hostname and config](../specs/archive/feature-hardening-hostname-and-config.md) — dot-boundary hostname matching, `/search` `blocked_domains` + honoured threshold, `config.yaml` key registry (depends on: retrieve-parity)
+- [Cache integrity](../specs/archive/feature-hardening-cache-integrity.md) — optional `FORAGE_CACHE_HMAC_KEY`, loud `cache_unauthenticated` when absent (depends on: hostname-and-config)
+- [Provider bounds](../specs/archive/feature-hardening-provider-bounds.md) — streamed body caps, wall-clock timeouts, query cap, policy monotonicity, the orchestrator cleanup rotation (depends on: cache-integrity)
+- [Resource envelope](../specs/archive/feature-hardening-resource-envelope.md) — `FORAGE_CPUS` / `FORAGE_MEM_LIMIT`, threads, latency target on `/metrics`, sizing table (depends on: provider-bounds)
+- [PromptGuard selection](../specs/archive/feature-hardening-promptguard-86m.md) — model selection, contiguity gating and benchmark harness shipped; 86M vendoring/benchmark owner gates not run, only 22M allowlisted
+- [Release](../specs/archive/feature-hardening-release.md) — validation-422 trim, contract 1.3.0 frozen, verified `v1.2.1` cut and completed recovery
 
 ---
 
@@ -51,11 +51,10 @@ Cosmetic only, and it touches `sanitizer_revision`, so it needs its own change.
 
 ### Injection regression corpus in CI (T2.3)
 **Priority:** Medium · **Effort:** Large
-`epic-forage-injection-corpus` is still the 2026-09-14 stub; it measures the classifier and
-parity changes `epic-forage-hardening` makes, so plan it (`/kit-tools:plan-epic`) once that epic's
-spec 7 numbers exist. Shipped and moved out of this list: the search-provider abstraction
-(`v1.1.0`, 2026-09-18) and `/retrieve` hardening + the 86M model (now the planned
-`epic-forage-hardening`, below).
+`epic-forage-injection-corpus` is now plannable: `epic-forage-hardening` shipped
+as v1.2.1 on 2026-09-23. It measures the shipped classifier/parity changes.
+Do not assume 86M weights or benchmark numbers exist: those two owner gates
+remain explicitly unrun, and only 22M is allowlisted.
 
 ### Structured request logging / tracing
 **Priority:** Low · **Effort:** Small

@@ -84,15 +84,14 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
 
 ## Pre-deploy Checklist
 
-1. **Pick a tag.** The current release target is `v1.2.1` / contract `1.3.0`,
-   **not yet published**; the examples below work after the owner cut.
+1. **Pick a tag.** The current release is `v1.2.1` / contract `1.3.0`,
+   published and verified 2026-09-23.
    Pin its full semver (`1.2.1`) or the `@sha256:` digest recorded at the cut;
    never pin `latest`, and treat `sha-<short>` tags from `main` as unreleased.
-   For an immediate deployment, choose a verified published entry in
-   `docs/releases.md`, not this draft pin.
+   Choose a verified published entry in `docs/releases.md`.
    Neither v1.2.0 (default model rejected) nor v0.9.2-rc (cold parity failure)
    is suitable for deployment.
-   US-005 records `latest` / `1.2` / `1.2.1` digest equality only after verification.
+   The US-005 handoff records verified `latest` / `1.2` / `1.2.1` digest equality.
 2. **Confirm the tag published green.** The tag's workflow run must show `publish` green
    and, for a `v*` tag, a GitHub Release carrying `openapi.yaml`, `openapi.yaml.sha256`, and
    a `contract: X.Y.Z` line in its body. A red `publish` after a push means the tags exist
@@ -116,7 +115,7 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
    same two files. The anchor at `HEAD` is
    `74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72`.
 4. **Check contract compatibility.** The image tag and `contract_version` are independent
-   semvers — image `1.2.1` will serve contract `1.3.0` after the cut. Compare the consumer's expected MAJOR
+   semvers — image `1.2.1` serves contract `1.3.0`. Compare the consumer's expected MAJOR
    against `info.version` in the `openapi.yaml` you just extracted; a MAJOR mismatch means
    **do not deploy** (the consumer is expected to refuse activation, `CLAUDE.md`
    invariant 4). Compare contracts, never `sanitizer_revision`, which has deliberately
@@ -145,12 +144,9 @@ Both fragments are standalone (no `extends`), validated by CI's `lint` job with
 `docker compose config -q`, and share the fixed-name volume `forage-model-cache`. **They
 pin `ghcr.io/washingbearlabs/forage:1.2.1` and
 `ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`.** The companion is published;
-the service is pinned ahead of the `v1.2.1` cut and returns `manifest unknown`
-until it lands. The owner must cut from the replacement PR's merge commit in the
-same sitting or restore a verified release per `docs/releases.md`, never
-defective v1.2.0; this window remains an
-outstanding item, not a completed release. The exact pin commit belongs in the
-replacement PR description.
+the service was published and verified on 2026-09-23. The temporary
+unpublished-tag window is closed. Never roll back to withdrawn v1.2.0;
+`docs/releases.md` records the replacement's digest and runtime verification.
 
 | Fragment | Starts | Env it needs | Cache mode |
 |----------|--------|--------------|------------|
@@ -221,7 +217,7 @@ warning and every key falls back to its code default, while a malformed `extract
    configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` — see `docs/configuration.md` § Sizing the container).
    Once weights land, expect `promptguard_loaded: true`,
    `capabilities.search_sanitization: 1`, `contract_version` matching the image's own
-   contract (`"1.3.0"` for the pending `v1.2.1`), and
+   contract (`"1.3.0"` for `v1.2.1`), and
    `cache_backend` reading `valkey` (with `cache_connected: true`) under `full.yml` or
    `memory` under `minimal.yml`. A failed acquisition retries in the background at 30 s,
    doubling to a 600 s ceiling with +/-20% jitter, forever; it converges in place without a

@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # GOTCHAS.md
 
-> Last updated: 2026-09-22
-> Updated by: Copilot (hardening-release US-002)
+> Last updated: 2026-09-23
+> Updated by: Copilot (verified replacement release)
 
 ## Overview
 
@@ -15,6 +15,25 @@ live in, and losing them in the move was an identified risk.
 ---
 
 ## Active Gotchas
+
+### Real model configs can omit human-readable labels
+
+The verified default 22M config has no label maps: transformers supplies
+`LABEL_0`/`LABEL_1`. Synthetic BENIGN/INJECTION fixtures missed the v1.2.0
+startup failure. The repair recognizes generic labels only for the exact
+verified model/revision, with a manifest-hash-checked genuine config fixture.
+New pins require new semantic evidence, not a blanket acceptance of arbitrary
+binary labels. Run a real weights-loaded candidate smoke before publication;
+the weights-free CI smoke cannot establish readiness. See `docs/weights.md`.
+
+### Editing a withdrawn GitHub Release can recreate its deleted tag
+
+During v1.2.0 withdrawal, editing the Release after deleting the git tag
+recreated the tag at current `main` and triggered CI. Recovery removed the
+tag again and cancelled the run with zero publish steps executed. Finalize
+the Release draft/notice first, delete the tag last, and verify remote-ref
+and registry absence. Do not edit the old Release afterwards. The full
+incident and successful read-back are in `docs/releases.md`.
 
 ### Contiguity narrows overflow evasion but can also amplify false-positive blocks
 

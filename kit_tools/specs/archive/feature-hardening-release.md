@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: hardening-release
-status: active
+status: completed
 session_ready: true
 depends_on: [hardening-promptguard-86m]
 vision_ref: "T2.2 — Forage hardening"
@@ -12,7 +12,8 @@ epic_seq: 8
 epic_final: true
 execution_order: [US-001, US-002, US-004, US-003, US-005]
 created: 2026-09-19
-updated: 2026-09-19
+updated: 2026-09-23
+completed: 2026-09-23
 ---
 
 # Feature Spec: Validation-422 Tightening + Contract 1.3.0 Close-Out + v1.2.0 Release Cut
@@ -884,27 +885,27 @@ the story stops and reports, and nothing is asserted.
   facts (pattern set from the tagged tree, the success line from the log).
 
 **Acceptance Criteria:**
-- [ ] If the gate has not run: Implementation Notes carry `### US-003 — gate not run, <date>` naming
+- [x] If the gate has not run: Implementation Notes carry `### US-003 — gate not run, <date>` naming
       the missing prerequisites **and the open unpublished-tag window on `main`** (US-004's pin
       commit sha and the `git revert` instruction); nothing else changes.
-- [ ] Pre-flight recorded: six checks green on the tagged commit; `export_contract --check` clean;
+- [x] Pre-flight recorded: six checks green on the tagged commit; `export_contract --check` clean;
       `CONTRACT_VERSION` is `1.3.0`; US-004's two sweeps re-run and classified; the four anchors and
       the suite counts verified; the `awk` extraction recorded verbatim (first line `* ``1.3.0`` `, no
       `1.2.0` line); the cut time is outside 23:55–00:05 UTC.
-- [ ] `v1.2.0` is cut by the owner and no `searxng-v*` tag is pushed; `publish` is green; the
+- [x] `v1.2.0` is cut by the owner and no `searxng-v*` tag is pushed; `publish` is green; the
       multi-arch `1.2.0` image is on GHCR; run URL, tagged commit sha and OCI index digest recorded.
-- [ ] Four-way sha256 equality at `v1.2.0` verified and the four values recorded, the in-image leg
+- [x] Four-way sha256 equality at `v1.2.0` verified and the four values recorded, the in-image leg
       read through the `@sha256:<index digest>` ref (the ref recorded).
-- [ ] `gh release view v1.2.0 --json body --jq '.body' | tr -d '\r'` matches `^contract: 1\.3\.0$` and
+- [x] `gh release view v1.2.0 --json body --jq '.body' | tr -d '\r'` matches `^contract: 1\.3\.0$` and
       contains every line of the rehearsal extraction (`grep -F` per line); both Release assertions
       green; assets `openapi.yaml` and `openapi.yaml.sha256` present.
-- [ ] `docker buildx imagetools inspect` prints one identical index digest for `latest`, `1.2` and
+- [x] `docker buildx imagetools inspect` prints one identical index digest for `latest`, `1.2` and
       `1.2.0`; recorded.
-- [ ] `secret-grep` and the publish config grep are green; the tagged `ci.yml`'s one `grep -Eiq '`
+- [x] `secret-grep` and the publish config grep are green; the tagged `ci.yml`'s one `grep -Eiq '`
       line (found by value) carries exactly the tagged tree's `_REQUIRED_GREP_PATTERNS` alternatives;
       both success lines recorded; the rehearsal extraction's ruling letter equals the `### (`
       heading US-001 added to `contract/GOVERNANCE.md`.
-- [ ] If a replacement tag was cut, US-004's two by-value sweeps were re-run for the new value
+- [x] If a replacement tag was cut, US-004's two by-value sweeps were re-run for the new value
       before US-005 and the withdrawn tag is recorded under § "Withdrawn tags", not § "Released
       versions" (both recorded).
 
@@ -1016,9 +1017,9 @@ Implementation Notes carry `### US-005 — gate not run, <date>` naming the miss
   risk in the handoff (the quickstart pointed at an unpublished tag for that interval).
 
 **Acceptance Criteria:**
-- [ ] If US-003 has not run: Implementation Notes carry `### US-005 — gate not run, <date>`; nothing
+- [x] If US-003 has not run: Implementation Notes carry `### US-005 — gate not run, <date>`; nothing
       else changes.
-- [ ] Smoke runs (1) and (2) from the `v1.2.0` checkout exit 0 with `--anchor contract/openapi.yaml.sha256`
+- [x] Smoke runs (1) and (2) from the `v1.2.0` checkout exit 0 with `--anchor contract/openapi.yaml.sha256`
       of that checkout; run (3) is recorded as its own command block with `--env-file "$g"` written
       from placeholders, `--no-deps valkey forage`, the shared fixed-name volume (warm or cold, stated),
       `cache_unauthenticated` key-less and `healthy` + `capabilities.cache_hmac_key: 1` + a cache hit
@@ -1026,14 +1027,14 @@ Implementation Notes carry `### US-005 — gate not run, <date>` naming the miss
       the project-scoped Valkey volume; commands and exit codes recorded; every
       credential reached a container only through `--env-file`; no `docker compose config` /
       `docker inspect` / `docker ps --no-trunc` output in the record.
-- [ ] Credential-free pull after `docker image rm` recorded (both exit 0); the GHCR login state at the
+- [x] Credential-free pull after `docker image rm` recorded (both exit 0); the GHCR login state at the
       end of the story is recorded (restored with a scoped token, or logged out); key-less `/health`
       shows `contract_version: "1.3.0"` and `promptguard_model`; the placeholder leak check is four
       zeros and the validation-422 marker witness (`docker logs` count 0, trio plus placeholders
       only) is the fifth.
-- [ ] The whole-tree leak grep (with the `SEARXNG_SECRET=` and `VALKEY_URL` credential patterns) over
+- [x] The whole-tree leak grep (with the `SEARXNG_SECRET=` and `VALKEY_URL` credential patterns) over
       the record's diff returns nothing; both token files were mode 0600 and are recorded as deleted.
-- [ ] The handoff table with the four new posture rows is in the Implementation Notes;
+- [x] The handoff table with the four new posture rows is in the Implementation Notes;
       `docs/releases.md`'s `v1.2.0` block has its heading date, digest and tagged commit filled and
       its `NOT YET PUBLISHED` line removed, and `kit_tools/SYNOPSIS.md:36` its digest and tag claim; the by-value status grep over the roadmap, vision, synopsis, README and GOVERNANCE
       has zero unflipped hits for this epic (classified in Implementation Notes), MILESTONES' hardening
