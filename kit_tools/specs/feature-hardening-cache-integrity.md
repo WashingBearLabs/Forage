@@ -413,27 +413,27 @@ Valkey doubles gaining `getrange` (the seam list below).
   Valkey tests do and read `call_args.kwargs`).
 
 **Acceptance Criteria:**
-- [ ] `ContentCache(hmac_key=..., max_value_bytes=...)` accepts `bytes | None` / `int`, defaults to
+- [x] `ContentCache(hmac_key=..., max_value_bytes=...)` accepts `bytes | None` / `int`, defaults to
       `None` / `DEFAULT_CACHE_MAX_VALUE_BYTES`, and both reach the instance from the lifespan
       construction site (`retrieval_app.py:1288`, `settings.max_value_bytes`) as well as the
       convenience constructor and the parity fixture (defaults); the cache's bound and its
       `ValkeyStorage`'s bound are equal after construction through both paths; with `hmac_key=None` the stored
       value and every existing `tests/test_cache.py` test are unchanged apart from the named seam
       migration.
-- [ ] With a key, `put` stores `v1.<64 hex chars>.<json>` and the MAC verifies as HMAC-SHA256 over
+- [x] With a key, `put` stores `v1.<64 hex chars>.<json>` and the MAC verifies as HMAC-SHA256 over
       `b"v1\0" + cache_key + b"\0" + payload`; `get` returns a `RetrievedContent` equal to what was
       put, and `integrity_rejects` is still 0 after the round trip.
-- [ ] The four envelope shapes (unsigned; another key; flipped byte; relocated envelope) planted in
+- [x] The four envelope shapes (unsigned; another key; flipped byte; relocated envelope) planted in
       `FakeStorage` each yield `get → None`, exactly one `delete` on the storage, and
       `integrity_rejects` advancing by one, with the reasons `unsigned` / `bad_mac` / `bad_mac` /
       `bad_mac`; a keyless cache reading a value that starts with `v1.` yields `get → None`, one
       delete, one increment and the reason `unexpected_envelope`; a planted `b""` yields `get →
       None` with no delete and no increment on any storage.
-- [ ] Each of `b"\xff\xfe"`, `b"v1."`, `b"v1.abc"`, `b"v1." + b"g" * 64 + b".{}"` and `b"v2." +
+- [x] Each of `b"\xff\xfe"`, `b"v1."`, `b"v1.abc"`, `b"v1." + b"g" * 64 + b".{}"` and `b"v2." +
       b"0" * 64 + b".{}"` yields `malformed_envelope` with exactly one delete and one increment, a
       planted `max_value_bytes + 1`-byte value on `FakeStorage` yields `oversize`, and no exception
       escapes `ContentCache.get` (`_unwrap` operates on bytes end to end).
-- [ ] `ValkeyStorage.get` issues one `getrange(key, 0, max_value_bytes)` and no `get`; on the
+- [x] `ValkeyStorage.get` issues one `getrange(key, 0, max_value_bytes)` and no `get`; on the
       `_mock_valkey_client` seam a `max_value_bytes + 1`-byte return yields `None`, one client
       `delete`, `integrity_rejects` + 1 and the reason `oversize`; a `b""` return yields `None`,
       `storage_misses` + 1, `storage_hits` unchanged, no delete, no reject and no WARNING; a
@@ -441,16 +441,16 @@ Valkey doubles gaining `getrange` (the seam list below).
       `integrity_rejects` + 1 with reason `wrong_type`, `connected` still true and
       `operation_failures` unchanged; neither `storage_hits` nor `storage_misses` moves for
       `oversize` or `wrong_type`; both doubles' `getrange` stubs return `b""` for a miss.
-- [ ] `_ValkeyClient` declares six methods, and neither its own docstring nor either Valkey
+- [x] `_ValkeyClient` declares six methods, and neither its own docstring nor either Valkey
       double's docstring describes the surface as "five" (the corrected grep returns 0); the five
       inline `.get = AsyncMock` stubs in `tests/test_cache.py` are migrated to `getrange` as named;
       the `getrange` call site is positional.
-- [ ] `put` never stores a value longer than `cache.max_value_bytes` **UTF-8 bytes**: the skip
+- [x] `put` never stores a value longer than `cache.max_value_bytes` **UTF-8 bytes**: the skip
       deletes any existing entry under that key first (a previously cached small value is gone after
       an oversize `put` for the same key), advances `storage_oversize_skips`, leaves
       `integrity_rejects` untouched and stores nothing, and the request is served uncached — asserted with an ASCII payload and with a non-ASCII payload
       that is under the bound in characters and over it in bytes.
-- [ ] `cache.max_value_bytes` exists in `config.yaml`'s `cache:` block (default 4 MiB, range
+- [x] `cache.max_value_bytes` exists in `config.yaml`'s `cache:` block (default 4 MiB, range
       512 KiB – 8 MiB, `_bounded_int`), `cache_settings_from_config` boots and logs one
       `cache_bounds_inverted` WARNING (keys only) when it exceeds `cache.max_bytes` — a shipped-range
       `cache.max_bytes: 1048576` with the default `max_value_bytes` is a supported, warned start —
@@ -461,7 +461,7 @@ Valkey doubles gaining `getrange` (the seam list below).
       and same-across-replicas relationships, the lowering consequence, and the forward
       cross-reference to spec 6's sizing section (written here; spec 6 closes it — not gated on that
       section existing yet).
-- [ ] `ValkeyStorage.__init__` refuses a `VALKEY_URL` whose query carries `decode_responses`,
+- [x] `ValkeyStorage.__init__` refuses a `VALKEY_URL` whose query carries `decode_responses`,
       `encoding`, `encoding_errors` or `protocol`: a lifespan start with `?decode_responses=1`
       raises `cache.CacheConfigurationError` (`pytest.raises`) after one WARNING
       `valkey_url_option_forbidden` naming the option, and neither `str(exc)` nor `caplog.text`
@@ -472,13 +472,13 @@ Valkey doubles gaining `getrange` (the seam list below).
       (asserted on `call_args.kwargs`), `ValkeyStorage.get` measures and parses bytes even when a
       double returns `str`, `_select_cache_storage`'s docstring names where the check lives, and
       `docs/configuration.md`'s `VALKEY_URL` row carries the upgrade note.
-- [ ] Every rejection logs exactly one WARNING whose `getMessage()` contains
+- [x] Every rejection logs exactly one WARNING whose `getMessage()` contains
       `cache_integrity_reject`, one member of `CACHE_INTEGRITY_REASONS` and the `ret:` cache-key
       digest; the secret bytes, the raw value, the URL and the Valkey URL appear in no record
       (`caplog.text`); a Valkey miss logs nothing.
-- [ ] `repr(cache)` and `str(cache)` do not contain the key bytes (regression guard; no `__repr__`
+- [x] `repr(cache)` and `str(cache)` do not contain the key bytes (regression guard; no `__repr__`
       is added).
-- [ ] `CacheMetrics.integrity_rejects`, the `CacheMetricsResponse` field and the `/metrics` handler
+- [x] `CacheMetrics.integrity_rejects`, the `CacheMetricsResponse` field and the `/metrics` handler
       dict entry exist; the field-parity test passes; the `/metrics` body carries the key; the
       class docstring and the `storage_oversize_skips` description no longer say the counter is
       memory-only — `grep -c 'bound. Always 0 on Valkey' retrieval_app.py` returns 0 (1 today,
@@ -489,17 +489,17 @@ Valkey doubles gaining `getrange` (the seam list below).
       GOVERNANCE recorded ruling on the widened counter is written as its own `### (<letter>) `
       section with a `**Source:**` line, `_RULING_MARKERS` carries its marker, the four count words
       are incremented as found, and the new `_NUMBER_WORDS[len(_RULING_MARKERS)]` test passes.
-- [ ] 1.3.0 window (ruling 36): docstring line appended (covering `integrity_rejects` and the
+- [x] 1.3.0 window (ruling 36): docstring line appended (covering `integrity_rejects` and the
       widened `storage_oversize_skips`), contract regenerated, `tests/golden/contract_1_3_0.json`
       re-created via `_SCHEMA_MODELS`, the field appended to `_EXPECTED_ONE_THREE_ZERO_DIFF` (the
       description change is golden-only — R36 corrected), the
       four anchor-quoting pages refreshed, `uv run python -m scripts.export_contract --check` green,
       `tests/golden/contract_1_2_0.json` unchanged.
-- [ ] The `sanitizer_revision` rotation (`pipeline/contract.py`) is measured by revert-and-reproduce
+- [x] The `sanitizer_revision` rotation (`pipeline/contract.py`) is measured by revert-and-reproduce
       and recorded at the five protocol sites.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-002: The key at boot, loud when absent — the `/health` contract change
 
