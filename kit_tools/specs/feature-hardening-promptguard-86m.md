@@ -1382,6 +1382,74 @@ the tree changes; the story stops and reports.
 
 ## Implementation Notes
 
+### US-003 host-side benchmark, retry 2 — 2026-09-22 (Copilot)
+
+Starting commit `14d548d`, clean worktree. Added `scripts/bench_promptguard.py`,
+the complete `bench/config.yaml`, build-context/output ignores, the weights
+runbook subsection, sizing cross-reference and test mapping. The harness imports
+only public smoke-driver names, uses offline tokenizer loading and multipart
+`httpx.post`, and has injected GET/POST/command/clock seams. The health wait's
+returned body is checked independently for healthy + loaded before any sample.
+No service, classifier, dependency, Dockerfile, Compose or contract file changed.
+
+Restored the reviewed candidate `929e74e` without committing, then fixed its
+verifier blocker rather than relabelling it. That candidate sent the first budget
+request after the entire one-window loop; documenting "first-for-input" did not
+meet the process-cold requirement. The harness now **requires `--input 1w` or
+`--input budget`**, posts only that document and populates only its cold/warm
+latency fields. Each input runs against an owner-started fresh service. There is
+no combined mode, no inference probe before the cold POST and no automatic
+restart of an owner's container. Health polling never classifies text. The owner
+must give each process exclusive use with no earlier inference traffic; the
+harness does not claim to attest to other clients' activity.
+
+The fixed JSON carries raw successful millisecond samples in
+`samples_collected: {"1w": [...], "budget": [...]}` (first/cold sample then warm
+samples). The unselected input has an empty array and three null latency fields,
+never a warmed value called cold. Partial warm batches keep raw samples but null
+both percentiles. Optional memory failures warn and retain the latency row. A
+configuration failure creates no output and leaves any older output path untouched;
+the runbook requires fresh paths and checking the exit status.
+
+**US-004 handoff:** `docs/weights.md` supplies the owner-controlled two-container
+procedure and downstream table assembly, not just an implementation-note caveat.
+One fresh container plus `--input 1w`, record its JSON/OOM/exit/peak, remove it;
+a separately fresh container plus `--input budget`, record independently.
+The existing matrix columns get their `_1w` and `_budget` measurements from the
+corresponding files only after matching provenance/configuration. Memory, peak,
+OOM and exit cells carry labelled `1w` / `budget` pairs, never an average.
+Preserve both inputs' outcomes and record a no-JSON configuration failure by hand,
+retaining the other input's row. Four required model/CPU rows mean **eight**
+fresh containers/harness invocations; total requests remain 42 per successful
+pair at 20 warm runs. Window-count/FPR probes occur after timed and memory
+measurements. Story definitions/checkboxes and owner gates are unchanged.
+
+The live upload
+422 uses `error: content_too_large_to_classify` and a fixed sentence in `reason`,
+not the token in `reason`; both shapes are recognized as a tokenizer/config
+mismatch on the selected input's first request. Only public fixed reasons/codes
+can enter failure rows. The configuration/service-failure boundary still uses
+the first successful sample of each invocation.
+
+Validation: **115 new tests**, **327 related tests** total across
+`test_bench_promptguard`, `test_contract_smoke`, `test_dockerfile` and
+`test_contract_metrics`; all pass under the socket guard. Tests trace every
+GET/POST/command, assert the selected document is the first inference request
+for both modes, and exercise success/initial failure/partial failure on a second
+fresh fake service without overwriting the first artifact. Safe Ruff fixes/formatting
+were limited to the two new Python files. Repository Ruff lint and format checks,
+strict Pyright (zero errors), `git diff --check`, and offline module `--help` pass.
+The full suite was **not run**, as this invocation explicitly prohibits it;
+that acceptance gate remains for end-of-epic validation.
+
+All hashed sources and hash definition are byte-unchanged. Measured default,
+shipped and benchmark-config revision is the same
+`b641e6a51ef7cb45a5209a42321a5fff135f432264d256dd8eec9fe9e62698f5`.
+`Dockerfile` and `tests/test_dockerfile.py` have empty diffs; `.dockerignore` adds
+exactly `bench/`; both output ignore patterns are effective. No owner gate,
+weight download, benchmark against a real service, checkbox update, tag, release
+or publication occurred.
+
 ### US-001 landing checkpoints — 2026-09-22 (Copilot)
 
 Starting commit: `5ced1e94aedc088e34d4805e8394cefb76c2bd17`, clean worktree.

@@ -34,3 +34,7 @@ kit_tools/.*
 # committable in a public repo (cache-fallback US-004 verification blocker B3).
 .env
 compose/.env
+
+# Host-side benchmark output and local tokenizer snapshots
+bench/*.json
+bench/tokenizer-*/

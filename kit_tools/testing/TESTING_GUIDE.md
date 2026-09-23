@@ -135,6 +135,7 @@ the story implementer did not run it.
 
 | Module | Tests | Covers |
 |--------|------:|--------|
+| `tests/test_bench_promptguard.py` | 115 | Host-only `scripts/bench_promptguard.py`: seeded tokenizer-sized inputs checked against the real tiny tokenizer and classifier chunking; required single-input runs with first-POST ordering and separate fresh-service cold samples; null unselected fields; nearest-rank timing; healthy-and-loaded readiness; multipart fields; complete/partial fixed-key rows; configuration versus service failures and independent paired artifacts; cgroup and optional Docker memory; closed diagnostics and complete benchmark-config parity. Injected HTTP/command/clock seams, no Docker, network or weights. |
 | `tests/test_bounded_body.py` | 83 | Raw and decoded byte ceilings, bounded gzip/zlib/raw-deflate outputs (including ambiguous headers and chunk-independent replay), encoding-first dispatch, path-specific length prechecks, exactly-one-member EOF validation, no-progress guard and fixed exception messages. No real waits. |
 | `tests/test_model_fetcher.py` | 212 | `model_fetcher.py`: fail-closed manifest verification, exact-set + safetensors-only allowlist, symlink-resolving hashing, one-generation quarantine, the loadable safetensors fixture, the acquisition pipeline (revision pin, `$HF_HOME/hub` resolution, the mocked HF fetch, the `oras` mirror leg, token redaction), and US-005's warm start + retry loop — the counted-attempt proof that a warm load reaches no network, the normative 30 s→10 min jittered schedule, quarantine→re-fetch→loaded recovery on the real loader, single-flight, and clean cancellation |
 | `tests/test_vendor_weights.py` | 102 | `scripts/vendor_weights.py`: the symlink-dereferenced tarball (built, extracted, bytes compared), tar determinism, generation-time allowlist refusal, the manifest round-trip through the real verifier, credential hygiene on the `oras` path, and the private-package visibility check — all fixture-driven, no registry and no token |
@@ -304,6 +305,8 @@ test_mapping:
   ".github/workflows/ci.yml": "tests/test_ci_workflow.py"
   "Dockerfile": ["tests/test_dockerfile.py", "tests/test_contract_smoke.py"]
   "contract_smoke.py": "tests/test_contract_smoke.py"
+  "scripts/bench_promptguard.py": "tests/test_bench_promptguard.py"
+  "bench/config.yaml": "tests/test_bench_promptguard.py"
   "uv.lock": "tests/test_dependency_lock.py"
   "pyproject.toml": ["tests/test_dependency_lock.py", "tests/test_pyright_policy.py"]
   "typings/*": "tests/test_pyright_policy.py"

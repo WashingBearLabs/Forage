@@ -565,6 +565,11 @@ classification concurrency `1`, not the tuned first row below.
 | 2 / 2 GB | 2 | 2048m | 2 | 1 | 67108864 | measured in spec 7 (`feature-hardening-promptguard-86m` US-004) |
 | 4 / 4 GB | 4 | 4096m | 2 | 2 | 134217728 | measured in spec 7 (`feature-hardening-promptguard-86m` US-004) |
 
+See [Benchmarking the classifier](weights.md#benchmarking-the-classifier) for the
+host-side service harness: each input uses a separate fresh service for process-cold
+timing; measurements are **single-in-flight latency** and do not characterise
+behaviour at `classification_concurrency > 1`.
+
 The `4 / 4 GB` row's `cache.max_bytes` `134217728` sits **at**
 `_MAX_CACHE_MAX_BYTES` (`cache.py`, 128 MiB): the column does not keep doubling with
 the host, and the ceiling is not configurable. The search sanitization loop runs
