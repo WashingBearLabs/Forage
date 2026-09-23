@@ -25,6 +25,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL_ID = "meta-llama/Llama-Prompt-Guard-2-22M"
+# This verified snapshot omits label names. Meta's Prompt Guard 2 inference
+# uses the last binary logit for maliciousness; never assume that for a new pin.
+_PINNED_GENERIC_LABEL_INDICES = {
+    (DEFAULT_MODEL_ID, "11614a155199674a0a95e6602d6ab0417b790ed0"): 1,
+}
 MAX_SEQ_LEN = 512
 CHUNK_OVERLAP = 64
 MAX_PROMPTGUARD_CHUNKS = 64
@@ -171,11 +176,19 @@ class PromptGuardClassifier:
             label.upper() if isinstance(label, str) else None
             for label in (labels.get(0), labels.get(1))
         ]
-        if len(labels) != 2 or set(ordered_labels) != {"BENIGN", "INJECTION"}:
+        injection_index: int | None = None
+        if len(labels) == 2:
+            if set(ordered_labels) == {"BENIGN", "INJECTION"}:
+                injection_index = ordered_labels.index("INJECTION")
+            elif ordered_labels == ["LABEL_0", "LABEL_1"] and revision is not None:
+                injection_index = _PINNED_GENERIC_LABEL_INDICES.get(
+                    (model_id, revision)
+                )
+        if injection_index is None:
             logger.warning("model_labels_unexpected")
             return False
 
-        self._injection_label_index = ordered_labels.index("INJECTION")
+        self._injection_label_index = injection_index
         model.eval()
         self._model = model
         self._tokenizer = tokenizer

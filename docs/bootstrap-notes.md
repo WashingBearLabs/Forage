@@ -1824,6 +1824,13 @@ This is **not a change to sanitization at the shipped model/config**. The
 classifier now asserts exactly two indexed labels, BENIGN and INJECTION
 case-insensitively, and derives the injection index; absent, malformed or
 three-class labels leave it unloaded with `model_labels_unexpected`.
+**2026-09-23 correction:** the claim above was not true of the actual shipped
+22M config: it has no label maps, so transformers supplies generic labels and
+v1.2.0 refused it. The v1.2.1 repair admits only that exact model/revision's
+`LABEL_0`/`LABEL_1` pair, using index 1 (`docs/weights.md` records the evidence).
+Neither the model pin nor a hashed source changes, so this repair does not
+rotate the sanitizer revision. Cache policy fingerprints already separate
+loaded and unavailable classifiers. The historical rotation record is retained.
 Identity selection also reaches the resource-envelope advisory, not just the
 acquisition and hash. These modules are outside the hashed source tuples.
 The source-only contract rotation still invalidates all prior content-cache keys.

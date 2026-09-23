@@ -356,7 +356,11 @@ Two explicit load-time refusals have their own closed markers:
 `model_identity_mismatch` means the requested and manifest snapshot directories
 differ or the directory disappeared; `model_labels_unexpected` means `id2label`
 is missing, null, non-mapping, or not exactly two indexed labels, one BENIGN and
-one INJECTION (case-insensitive). Neither permits a guessed injection index.
+one INJECTION (case-insensitive), unless it is the exact pinned 22M
+`LABEL_0`/`LABEL_1` mapping documented in `docs/weights.md`.
+v1.2.0 incorrectly rejects that genuine default config; use its corrected
+replacement v1.2.1 after publication, not edited weights or a bypassed guard.
+Neither path permits a guessed injection index.
 Repair the pinned snapshot or model config through the vendoring procedure;
 do not bypass the checks. `/health.promptguard_model` remains the configured id,
 not evidence that the model loaded.
@@ -869,14 +873,14 @@ connected`, cache hits) is INFO and therefore invisible.
 an older image than expected.
 
 **Cause:** `compose/minimal.yml` and `compose/full.yml` pin
-`ghcr.io/washingbearlabs/forage:1.2.0` and `forage-searxng:0.1.1-rc`; the companion
-is published, but the service pin is ahead of the owner-gated `v1.2.0` cut.
+`ghcr.io/washingbearlabs/forage:1.2.1` and `forage-searxng:0.1.1-rc`; the companion
+is published, but the service pin is ahead of the owner-gated `v1.2.1` cut.
 Until it lands, `manifest unknown` is an outstanding release-sequencing item:
-cut from the completion PR's merge commit in the same sitting or
-`git revert <US-004 pin commit>` (exact commit in the release spec's gate-not-run
-record). A withdrawn (`v0.9.2-rc`) or never-published tag also pulls nothing.
+cut from the replacement PR's merge commit in the same sitting or restore a
+verified release per `docs/releases.md`, never defective v1.2.0.
+A withdrawn or never-published tag also pulls nothing.
 
-**Fix:** after the cut, pin a full semver (`1.2.0`) or the `@sha256` digest from the Release body, never
+**Fix:** after the cut, pin a full semver (`1.2.1`) or the `@sha256` digest from the Release body, never
 `latest`; then `docker compose -f <file> up -d`. Rollback is the same command with the
 previous tag; a rollback across a `sanitizer_revision` rotation flushes the content cache,
 which is expected.

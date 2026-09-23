@@ -1,4 +1,4 @@
-"""Minimal stubs for the four `transformers` symbols Forage calls.
+"""Minimal stubs for the `transformers` symbols Forage calls.
 
 `transformers` ships `py.typed`, but the auto-class factories are annotated as
 returning `Unknown`, which propagates through every use in
@@ -47,6 +47,19 @@ class PreTrainedTokenizerBase:
 class PreTrainedModel:
     def eval(self) -> PreTrainedModel: ...
     def __call__(self, **kwargs: torch.Tensor) -> SequenceClassifierOutput: ...
+
+class PretrainedConfig:
+    id2label: dict[int, str]
+    num_labels: int
+
+class AutoConfig:
+    @classmethod
+    def from_pretrained(
+        cls,
+        pretrained_model_name_or_path: str | PathLike[str],
+        *,
+        local_files_only: bool = ...,
+    ) -> PretrainedConfig: ...
 
 class AutoTokenizer:
     @classmethod

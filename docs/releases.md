@@ -17,7 +17,7 @@ Every non-pre-release tag, newest first. The `contract:`, `anchor:`, `index dige
 into `kit_tools/specs/feature-search-release.md`'s Implementation Notes — that table is what
 the Poppy `epic-search-policy` session reads to pin a digest; nothing here pushes to Poppy.
 
-### v1.2.0 — (date filled by US-005)
+### v1.2.1 — (date filled by US-005)
 
 NOT YET PUBLISHED — filled by US-005
 
@@ -26,20 +26,33 @@ NOT YET PUBLISHED — filled by US-005
 - index digest: (filled at the cut)
 - tagged commit: (filled at the cut)
 
-Compose is pinned ahead of the cut; the tag lands with `v1.2.0`.
+Compose is pinned ahead of the replacement cut; the tag lands with `v1.2.1`.
 The recorded index digest is the **pinnable form**
 (`ghcr.io/washingbearlabs/forage@sha256:…`) for deployments that need
 immutability; the full-semver tag pin remains the quickstart default.
 
 **Outstanding unpublished-tag window:** merging the completion PR makes `main`'s
 quickstart pull an unpublished tag until the owner runs US-003. Cut from that
-merge commit in the same sitting; if the gate is not run, use
-`git revert <US-004 pin commit>` before leaving that window open. The gate-not-run
-record in the release spec's Implementation Notes identifies the exact commit.
+merge commit in the same sitting. If the cut cannot complete, explicitly
+restore the last verified release's pins, tests and version guidance in a
+corrective PR before leaving the window open. **Do not simply revert the
+replacement pin commit:** that would restore defective v1.2.0. The last
+verified release is v1.1.0 / contract 1.2.0, so such a rollback must also
+document the older contract. The replacement PR records its pin commit.
 The completion PR description must carry the same outstanding item; neither
 publication nor post-release verification is complete.
 
-What shipped (draft, pending the owner cut):
+This replacement repairs v1.2.0's rejection of the authentic default 22M
+configuration. Its generic `LABEL_0` / `LABEL_1` labels are accepted only for
+the exact verified model/revision pair; index 1 is the maliciousness score.
+Unknown pins, reversed generic labels and non-binary configurations still
+fail closed. Named BENIGN/INJECTION label handling is unchanged. The model
+manifest, contract 1.3.0, frozen OpenAPI and sanitizer revision are unchanged.
+The regression fixture is the real pinned config, hash-checked against the
+manifest. A read-only, network-disabled real-model probe also confirms loading
+and the score direction before publication.
+
+What ships (draft, pending the owner cut; hardening changes carried forward):
 
 - Search scans both newline-preserving and whitespace-collapsed title/snippet
   forms, truncating after extraction; escaped injection-shaped markup is blocked
@@ -188,6 +201,24 @@ What shipped:
   with `--image`, the in-image contract against the committed anchor.
 
 ## Withdrawn tags
+
+### v1.2.0 — withdrawal scheduled after verified v1.2.1 replacement
+
+**Do not deploy.** Published 2026-09-23 at commit
+`d747a2bd41da993914229c7f31622ab20148dc32`, index
+`sha256:f96827955cd8b43c6b5a2c46d53637eded8b2030fda7f864f7f2f6ae62ea4858`
+([publish run](https://github.com/WashingBearLabs/Forage/actions/runs/35892927967)).
+The six CI gates, layer identity and contract publication checks passed, but
+the owner healthy-model smoke failed: the pinned 22M config omits label names,
+transformers supplies `LABEL_0` / `LABEL_1`, and the classifier rejected them
+with `model_labels_unexpected`. PromptGuard stayed unavailable.
+
+The owner authorized the public Release warning, a corrected v1.2.1, and
+deletion of the v1.2.0 git tag and GHCR package version **after** replacement
+verification. Those deletions are not yet recorded as complete. The pushed
+tag is never moved. The 86M owner gates remain unrun.
+
+### Layer-identity withdrawal policy
 
 A publish run that fails the layer-identity gate leaves its tag pointing at an image
 whose layers are NOT the ones `smoke` executed — the workflow's own doctrine calls that

@@ -24,6 +24,26 @@ Written by `feature-forage-model-bootstrap` US-003.
 
 ---
 
+## Label metadata and the verified default
+
+The pinned 22M config at `11614a155199674a0a95e6602d6ab0417b790ed0`
+omits `id2label` and `label2id`. Transformers supplies the binary defaults
+`LABEL_0` / `LABEL_1`, not BENIGN/INJECTION. The classifier recognizes those
+defaults **only for that exact model/revision pair** and uses index 1.
+This follows Meta's [Prompt Guard 2 inference implementation](https://github.com/meta-llama/PurpleLlama/blob/9a3d175adefaafe660ccdf6c92769fbcd923482e/LlamaFirewall/src/llamafirewall/scanners/promptguard_utils.py),
+which takes the last class probability as the attack score; an offline probe
+of our verified 22M weights confirms low benign and high injection scores.
+Named BENIGN/INJECTION configs still derive the index from their labels.
+Unknown pins and unexpected generic mappings remain unavailable, not guessed.
+
+When re-vendoring, verify the actual label semantics and update the pinned
+mapping deliberately. `tests/fixtures/promptguard_22m_config/config.json` is
+the genuine 870-byte metadata file, not weights; its regression checks the
+committed manifest hash and uses real offline `AutoConfig` resolution.
+Run a weights-loaded image smoke **before cutting any replacement release**;
+weights-free CI cannot establish loaded-model readiness. v1.2.0's post-cut
+failure is recorded in [`releases.md`](releases.md#withdrawn-tags).
+
 ## Benchmarking the classifier
 
 `scripts/bench_promptguard.py` runs **on the host against a running service**, not

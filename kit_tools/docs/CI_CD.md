@@ -347,7 +347,7 @@ verified against GHCR afterwards rather than assumed: `v1.0.0` (commit `f4c2b16`
 minted `latest`, `1.0` and `1.0.0` at index digest `sha256:d83639cc…`, and `v1.1.0` (commit
 `06b01b14`, 2026-09-18 UTC) moved `latest` and minted `1.1` and `1.1.0` at `sha256:e1b875cc…`.
 `docs/releases.md` § "Released versions" carries the full digests, anchors and tagged commits.
-The current release target, **v1.2.0 / contract 1.3.0**, is not yet published;
+The current release target, **v1.2.1 / contract 1.3.0**, is not yet published;
 US-003 owns the cut and US-005 records the new digest and alias equality.
 
 ---
@@ -514,13 +514,13 @@ gh cache delete <id>                # delete each index-publish-* entry
 
 The git tag **is** the version (`pyproject.toml`'s `version` is inert packaging metadata),
 and the image tag and `contract_version` are independent semvers — the pending
-image `v1.2.0` will serve contract `1.3.0`.
+image `v1.2.1` will serve contract `1.3.0`.
 
 ```bash
 git switch main && git pull
 # owner gate only: confirm authorization and all six gates for the merge commit
-git tag v1.2.0
-git push origin v1.2.0
+git tag v1.2.1
+git push origin v1.2.1
 # then watch the run; publish is the last job
 ```
 
@@ -534,11 +534,11 @@ not a release.
 deploy stage to revert. Re-pin the previous tag in the consumer's compose file
 (`image: ghcr.io/washingbearlabs/forage:<previous>`) and `docker compose -f <file> up -d`.
 `kit_tools/docs/DEPLOYMENT.md` has the operator view, including the pull/pin/verify
-sequence. The compose fragments pin `1.2.0` ahead of `v1.2.0`: cut from the
-completion PR's merge commit in the same sitting or `git revert <US-004 pin commit>`.
+sequence. The compose fragments pin `1.2.1` ahead of `v1.2.1`: cut from the
+replacement PR's merge commit in the same sitting or restore a verified release
+per `docs/releases.md`, never defective v1.2.0.
 Until then the unpublished-tag window on `main` is outstanding and must be
-named in the completion PR description, with the exact commit from the
-release spec's gate-not-run record.
+named in the replacement PR description, with the exact pin commit.
 
 ---
 

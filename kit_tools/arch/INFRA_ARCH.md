@@ -143,7 +143,7 @@ docker compose -f minimal.yml up -d && curl -s localhost:8020/health | jq
 
 | Service | In | Image (as pinned today) | Ports | Volumes | Limits / env |
 |---------|----|-------------------------|-------|---------|--------------|
-| `forage` | both | `ghcr.io/washingbearlabs/forage:1.2.0` (pending cut) | `127.0.0.1:8020:8020` | `forage-model-cache:/app/model-cache` | `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` (default `1024m`), `cpus: ${FORAGE_CPUS:-0}`, `restart: unless-stopped`; bare `HF_TOKEN`, `FORAGE_MODEL_ID`, `FORAGE_MODEL_REVISION`, `FORAGE_SEARCH_PROVIDERS` and `FORAGE_BRAVE_API_KEY` pass-through (each stays unset if unset; credentials belong in `compose/.env`, never inline); `SEARXNG_URL` not set (default `http://searxng:8080`) |
+| `forage` | both | `ghcr.io/washingbearlabs/forage:1.2.1` (pending cut) | `127.0.0.1:8020:8020` | `forage-model-cache:/app/model-cache` | `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` (default `1024m`), `cpus: ${FORAGE_CPUS:-0}`, `restart: unless-stopped`; bare `HF_TOKEN`, `FORAGE_MODEL_ID`, `FORAGE_MODEL_REVISION`, `FORAGE_SEARCH_PROVIDERS` and `FORAGE_BRAVE_API_KEY` pass-through (each stays unset if unset; credentials belong in `compose/.env`, never inline); `SEARXNG_URL` not set (default `http://searxng:8080`) |
 | `forage` extras | full only | same | same | same | literal `VALKEY_URL=redis://valkey:6379/4` (DB 4 matches `ContentCache`'s default), bare `FORAGE_CACHE_HMAC_KEY` for signing; unset means unsigned cached content and `cache_unauthenticated`. Minimal omits `VALKEY_URL` entirely so the cache runs in memory mode |
 | `searxng` | both | `ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc` | **none published** | none | `SEARXNG_SECRET: ${SEARXNG_SECRET:?...}` — unset is a hard start failure; service name `searxng` is load-bearing for Forage's default URL |
 | `valkey` | full only | `valkey/valkey:8@sha256:3fbd2e3e4b6e85e046c1e7c215e8f79087bc0357789184305806664e320996f3` (8.1.10) | none | `forage-valkey-data:/data` (project-scoped) | `valkey-server --save 60 1 --appendonly no`; no password |
@@ -157,11 +157,12 @@ Controls and deliberate omissions in both fragments:
   plus the memory limit; `pids_limit` is still absent.
 - **No TLS, no auth.** The `127.0.0.1` binding is the deployment-posture control.
 
-**Pins:** both fragments pin `forage:1.2.0` and `forage-searxng:0.1.1-rc`.
-The current release target is **v1.2.0 / contract 1.3.0**, not yet published.
+**Pins:** both fragments pin `forage:1.2.1` and `forage-searxng:0.1.1-rc`.
+The current release target is **v1.2.1 / contract 1.3.0**, not yet published.
 The service pin fails with `manifest unknown` until the owner cut; cut from the
-completion PR's merge commit in the same sitting or revert the US-004 pin commit.
-That window is outstanding, with the exact commit recorded in the release spec.
+replacement PR's merge commit in the same sitting or restore a verified release
+per `docs/releases.md`, never defective v1.2.0.
+That window is outstanding, with the exact commit recorded in the replacement PR.
 The companion is published and stays a pre-release because no non-pre-release
 `searxng-v*` tag exists.
 
@@ -197,7 +198,7 @@ the post-push layer-parity gate; deletion of its GHCR package version is recorde
 "Released versions" has the digests.
 
 The git tag **is** the version. `pyproject.toml`'s `version = "0.1.0"` is inert packaging
-metadata, and the image tag (`v1.2.0`, pending) and `contract_version` (`1.3.0`)
+metadata, and the image tag (`v1.2.1`, pending) and `contract_version` (`1.3.0`)
 are independent semvers. **arm64 is built under QEMU but never executed in CI** — run `contract_smoke.py`
 against your own arm64 container before trusting it.
 
