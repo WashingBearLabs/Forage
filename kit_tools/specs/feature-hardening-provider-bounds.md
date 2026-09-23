@@ -1014,36 +1014,36 @@ passes unchanged.
   against the re-created golden.
 
 **Acceptance Criteria:**
-- [ ] `apply_request_policy` keeps only a prefix of the configured paid providers; the extended
+- [x] `apply_request_policy` keeps only a prefix of the configured paid providers; the extended
       per-shape property loop and `test_a_second_paid_provider_cannot_be_reached_by_skipping_the_first`
       pass; every existing `tests/test_search_policy.py` case passes unchanged; the `:40-43` comment is
       accurate.
-- [ ] `test_a_later_paid_only_selection_on_an_all_paid_chain_is_the_policy_422` passes: 422
+- [x] `test_a_later_paid_only_selection_on_an_all_paid_chain_is_the_policy_422` passes: 422
       `search_unavailable`, reason `policy_excluded_all_providers`, no provider called.
-- [ ] The four docstring steps correspond to four `# step N —` marked blocks (steps 3 and 4 no longer
+- [x] The four docstring steps correspond to four `# step N —` marked blocks (steps 3 and 4 no longer
       share one comprehension), and a test asserts the docstring's numbered steps and the body's
       markers agree.
-- [ ] `SearchRequest.providers`' description states the prefix rule and the `provider_used` diagnosis
+- [x] `SearchRequest.providers`' description states the prefix rule and the `provider_used` diagnosis
       sentence; `API_GUIDE.md` matches; the 1.3.0 docstring line names the all-paid-chain consequence.
-- [ ] `contract/GOVERNANCE.md`'s "Recorded rulings" carries the all-paid-chain ruling under the next
+- [x] `contract/GOVERNANCE.md`'s "Recorded rulings" carries the all-paid-chain ruling under the next
       free letter, on ruling (a2)'s unreachability basis alone (the one-paid-name argument, the (a2)
       precedent cited, the T3.1 note, no row-6 citation), `_RULING_MARKERS` counts it, the three
       "five rulings" sites say "six", and `grep -rni 'five rulings' contract/ tests/` returns nothing.
-- [ ] Window mechanics (R36): docstring line appended in the `* ``1.3.0`` — …` format; `uv run
+- [x] Window mechanics (R36): docstring line appended in the `* ``1.3.0`` — …` format; `uv run
       python -m scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via
       `_SCHEMA_MODELS` (it moves — the `SearchRequest.providers` description); `_EXPECTED_ONE_THREE_ZERO_DIFF`
       reviewed and **nothing appended** (a description change adds no property or enum member — R36
       corrected; the gate is `test_contract_schema_matches_golden` against the re-created golden); the
       four anchor-quoting pages refreshed; `uv run python -m scripts.export_contract --check` green;
       `contract_1_2_0.json` untouched.
-- [ ] `policy_unknown_provider`'s unit is unchanged (`retrieval_app.py`'s increment site and
+- [x] `policy_unknown_provider`'s unit is unchanged (`retrieval_app.py`'s increment site and
       `MONITORING.md`'s row unedited); `SECURITY.md` carries the accepted-risk row for finding -054 in
       the honest wording above.
-- [ ] `sanitizer_revision` rotation measured (revert-and-reproduce on `pipeline/contract.py`) and
+- [x] `sanitizer_revision` rotation measured (revert-and-reproduce on `pipeline/contract.py`) and
       recorded at the five sites ruling 6 names.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-005: The `run_search_pipeline` cleanup — one rotation, wire output and sink pinned
 
