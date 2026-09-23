@@ -767,14 +767,14 @@ place of the two integers.
   sizing section (US-003) say so; the verified version (v2.40.3) is recorded in Implementation Notes.
 
 **Acceptance Criteria:**
-- [ ] Both fragments declare `cpus: ${FORAGE_CPUS:-0}` and `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` on
+- [x] Both fragments declare `cpus: ${FORAGE_CPUS:-0}` and `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` on
       the `forage` service and a `healthcheck` block with `curl -fsS -o /dev/null
       http://127.0.0.1:8020/health`, `interval: 30s`, `timeout: 5s`, `retries: 3`, `start_period: 30s`;
       no `config.yaml` volume line is added; no other key or value in either fragment changes
       (`git diff` shows only these keys and comment lines); `grep -rn envelope.yml compose/ docs/
       README.md kit_tools/docs/ kit_tools/arch/` returns nothing (R43: this spec's own text in
       `kit_tools/specs/` names the deleted branch, so the spec directory is excluded).
-- [ ] The secret-free render (`--env-file /dev/null`, scratch project directory, complete placeholder
+- [x] The secret-free render (`--env-file /dev/null`, scratch project directory, complete placeholder
       set, grep-filtered) shows no effective CPU limit (no `cpus` key, or `cpus: 0`) and a
       byte-normalised `mem_limit` of `1073741824` at the defaults and `cpus: 4` / `4294967296` with the
       variables set, for both fragments — no daemon needed; a started `busybox` container's
@@ -783,13 +783,13 @@ place of the two integers.
       daemon" with the CI render steps and the Compose Spec cited as the standing proof; Implementation
       Notes record only the filtered lines, the two inspect values (or the not-run line) and `docker
       compose version` — never an `environment:` block, any env value, or the raw render.
-- [ ] `TestTheDuplicationDoesNotDrift::test_the_shared_services_declare_the_same_envelope` and
+- [x] `TestTheDuplicationDoesNotDrift::test_the_shared_services_declare_the_same_envelope` and
       `TestResourceEnvelope` pass; the `lint` job has a second render step carrying `FORAGE_CPUS: "2"`,
       `FORAGE_MEM_LIMIT: 2048m` and the `SEARXNG_SECRET` placeholder in its own `env:`;
       `tests/test_ci_workflow.py` asserts the second step's names and values, the existing step's
       `env:` is unchanged, and the placeholder test iterates both steps, checking the two envelope
       names against their size-shape regexes and every other value for "placeholder".
-- [ ] `retrieval_app.py:355-361` and `:1446-1451` name the shipped probe and say liveness, not
+- [x] `retrieval_app.py:355-361` and `:1446-1451` name the shipped probe and say liveness, not
       health; `contract_smoke.py:9` and `tests/test_app.py:936` match; window mechanics (R36):
       docstring line appended in the `* ``1.3.0`` — …` format; `uv run python -m
       scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via `_SCHEMA_MODELS`
@@ -804,11 +804,11 @@ place of the two integers.
       `tests/golden/contract_1_0_0.json`, `_1_1_0.json` and `_1_2_0.json:201` are excluded because
       invariant 4 freezes them, and `retrieval_app.py:1307` / `model_fetcher.py:62` are comment-only
       corrections that rotate nothing).
-- [ ] `sanitizer_revision` rotation measured (revert-and-reproduce on `pipeline/contract.py`) and
+- [x] `sanitizer_revision` rotation measured (revert-and-reproduce on `pipeline/contract.py`) and
       recorded at the five sites ruling 6 names.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-003: Operator documentation — the sizing section and the by-value sweeps
 
