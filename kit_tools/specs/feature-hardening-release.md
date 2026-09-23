@@ -783,14 +783,14 @@ compose/full.yml` reports 1 each and `tests/test_compose_fragments.py` passes wi
   complete for every rotation this epic recorded (confirm against `docs/bootstrap-notes.md`).
 
 **Acceptance Criteria:**
-- [ ] Both by-value greps' hits are classified in Implementation Notes (history / rotation record /
+- [x] Both by-value greps' hits are classified in Implementation Notes (history / rotation record /
       contract provenance / image tag / compose comment block), with zero unclassified hits over the
       explicit path set in the Independent Test and the named exclusions recorded; every named contract and
       release site above is updated; `kit_tools/docs/API_GUIDE.md:449` carries a `1.3.0` line;
       `MONITORING.md` says three `capabilities` keys; `kit_tools/SYNOPSIS.md:30` reads `v1.2.0` /
       `1.3.0`; root `SECURITY.md`'s supported-versions table is unchanged and `:36` no longer says
       "Pre-1.0 (where the project is today)".
-- [ ] `grep -c 'forage:1.2.0' compose/minimal.yml compose/full.yml` reports 1 each; `_FORAGE_RELEASE_TAG`
+- [x] `grep -c 'forage:1.2.0' compose/minimal.yml compose/full.yml` reports 1 each; `_FORAGE_RELEASE_TAG`
       is `"1.2.0"`; `tests/test_compose_fragments.py` green; the pinned-ahead sentence, the
       pinnable-digest sentence, the `FORAGE_CACHE_HMAC_KEY` upgrade action and the 422
       compatibility-window sentence are in `docs/releases.md`'s draft; the consequence-and-remedy
@@ -799,18 +799,18 @@ compose/full.yml` reports 1 each and `tests/test_compose_fragments.py` passes wi
       `three patterns` hit over the explicit path set (case-insensitive, `.github` and
       `kit_tools/arch/SECURITY.md:233` included; 6 today) reads the `_REQUIRED_GREP_PATTERNS` count
       (confirmation of spec 4's work, edits only for leftovers).
-- [ ] If the cut will not happen in this sitting, the completion PR's description names the
+- [x] If the cut will not happen in this sitting, the completion PR's description names the
       unpublished-tag window on `main` as an outstanding item with the `git revert <pin commit>`
       instruction (recorded in Implementation Notes with the commit sha).
-- [ ] The four total-count sites and every touched per-module row in TESTING_GUIDE equal
+- [x] The four total-count sites and every touched per-module row in TESTING_GUIDE equal
       `uv run pytest --collect-only -q` (total and per module); the compose-fragments row reads
       `forage:1.2.0`.
-- [ ] `docs/releases.md` carries the `v1.2.0` block with the `NOT YET PUBLISHED` first line,
+- [x] `docs/releases.md` carries the `v1.2.0` block with the `NOT YET PUBLISHED` first line,
       `contract: 1.3.0`, the anchor and the three placeholders (heading date, index digest, tagged
       commit); DEPLOYMENT/CI_CD/INFRA_ARCH name `v1.2.0` as the current release; the GOTCHAS
       rotation table matches `docs/bootstrap-notes.md`.
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
 
 ### US-003: Cut + publish the v1.2.0 image (owner gate)
 
