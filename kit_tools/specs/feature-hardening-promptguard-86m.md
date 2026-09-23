@@ -376,14 +376,14 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
   agreement — fixed by `hardening-promptguard-86m` US-001" so the fix is on the record.
 
 **Acceptance Criteria:**
-- [ ] `load(*, model_id=...)` exists on `PromptGuardClassifier` and on `SupportsWeightLoad`; a test with
+- [x] `load(*, model_id=...)` exists on `PromptGuardClassifier` and on `SupportsWeightLoad`; a test with
       a stubbed auto-class asserts both `from_pretrained` calls receive the requested id
       (`tests/test_model_fetcher.py:790-791` extended); `WeightAcquisition(..., model_id=...)` stores
       the id and `attempt_once` forwards it to `acquire_and_load` (recording double, the
       `tests/test_app.py:1183` monkeypatch shape); `acquire_and_load(..., model_id=...)` threads the
       id and the resolved revision through `_verify_cached`, `_download_from_hub`, `_try_source` and
       `_load_verified` (asserted on a recording double).
-- [ ] `verify_weights(..., model_id=, revision=)` verifies the requested pair; a `FORAGE_MODEL_REVISION`
+- [x] `verify_weights(..., model_id=, revision=)` verifies the requested pair; a `FORAGE_MODEL_REVISION`
       that is not the pin yields `weights_revision_unpinned` (closed reason, no path in the log) from
       the top of `_acquire_and_load` — the one refusal site — and `_load_verified(...,
       manifest_path=)` derives both paths itself and asserts the manifest-derived
@@ -391,7 +391,7 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
       `_try_source` / `_fetch_from_mirror` return-shape change — their `-> str` annotations are
       untouched in `git diff`) — the two-directory test from the Independent Test passes and the
       unpinned directory's files are never opened.
-- [ ] The loaded-identity check lives in `_load_verified` (existence plus equality): a warm snapshot
+- [x] The loaded-identity check lives in `_load_verified` (existence plus equality): a warm snapshot
       of a different model under the requested id yields `model_identity_mismatch`, `load()` is never
       called (recording double), and a test asserts that specific message; a direct `_load_verified`
       call with a `revision` that is not the entry's yields the same (second test); the classifier's own
@@ -399,13 +399,13 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
       `except` (`model_cache_dir_missing`, tested); `kit_tools/arch/SECURITY.md`'s stage-3 paragraph
       carries the residual sentence "the classifier trusts the path the verifier handed it"
       (`grep -c 'trusts the path' kit_tools/arch/SECURITY.md` is 1).
-- [ ] `weights_manifest.json` is a per-model map; the 22M entry's `revision` and `files` are
+- [x] `weights_manifest.json` is a per-model map; the 22M entry's `revision` and `files` are
       byte-identical to today's; `_load_manifest` / `read_manifest_pin(model_id=...)` /
       `verify_weights(..., model_id=...)` select the entry; a missing entry yields `manifest_model_unknown`
       even with `FORAGE_MODEL_REVISION` set (test); `manifest_invalid` / `manifest_empty` semantics
       unchanged (tests); `tests/fakes.py::weights_manifest_document` builds the map and
       `tests/test_app.py:878-892` passes against it.
-- [ ] `resolve_revision(model_id)` is total in the four-step order above (a well-formed override is
+- [x] `resolve_revision(model_id)` is total in the four-step order above (a well-formed override is
       returned, never refused, by the resolver); a test asserts `DEFAULT_MODEL_REVISION == <the 22M
       manifest entry's revision>`; `resolve_revision` reads the manifest at most once per
       `(manifest_path, model_id)` through `_manifest_entry` under `lru_cache` — a test counts opens
@@ -415,23 +415,23 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
       raises for any id; with the manifest unreadable, the default model resolves to
       `DEFAULT_MODEL_REVISION` with one `manifest_pin_unavailable` WARNING and the hash value is the
       pre-story value (test).
-- [ ] `FORAGE_MODEL_REVISION` set to a non-40-hex value keeps `model_revision_invalid` + fall-back-to-pin
+- [x] `FORAGE_MODEL_REVISION` set to a non-40-hex value keeps `model_revision_invalid` + fall-back-to-pin
       (the two existing `TestRevisionPin` tests pass unchanged); set to a 40-hex value that is not the
       selected model's pin, the refusal `weights_revision_unpinned` fires before any `snapshot_path`
       is computed and `_download_from_hub` is never called (recording doubles) — both tests named;
       the top-of-function order (entry → `manifest_model_unknown` / `weights_pin_unusable` →
       `weights_revision_unpinned` → `_verify_cached`) is pinned: a warm cache plus an unreadable
       manifest yields `weights_pin_unusable` with `_verify_cached` uncalled (test).
-- [ ] `scripts/vendor_weights.py --model-id` writes the map form, preserves other entries, and
+- [x] `scripts/vendor_weights.py --model-id` writes the map form, preserves other entries, and
       `manifest_diff` scoped to that entry reports only the added model for a one-model → two-model
       diff (test); the seven diff tests at `tests/test_vendor_weights.py:559-616` pass against the
       keyed shape; a round-trip test parses the output with `_load_manifest`.
-- [ ] `ALLOWED_SUFFIXES == frozenset({".safetensors", ".json", ".txt", ".model"})` and `ALLOW_PATTERNS`
+- [x] `ALLOWED_SUFFIXES == frozenset({".safetensors", ".json", ".txt", ".model"})` and `ALLOW_PATTERNS`
       are asserted unchanged; `grep -c 'use_safetensors=True' promptguard/classifier.py` is **2** (the
       explanatory comment at `:90` and the call-site keyword at `:100` — executed 2026-09-19; the
       round-4 "1 hit" was un-executed, R43) and `grep -n '^ *use_safetensors=True,'
       promptguard/classifier.py` returns exactly the call site.
-- [ ] `grep -n '\bMODEL_ID\b' model_fetcher.py pipeline/sanitizer_revision.py scripts/vendor_weights.py
+- [x] `grep -n '\bMODEL_ID\b' model_fetcher.py pipeline/sanitizer_revision.py scripts/vendor_weights.py
       promptguard/classifier.py` returns nothing (pre-story 20 hits, recorded) and `grep -rnw MODEL_ID
       tests --include='*.py'` returns nothing (pre-story 47) — alias removed, the three prose sites
       rewritten; `derive_sanitizer_revision({})` equals the pre-story value at the default model
@@ -439,7 +439,7 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
       `_REVISION_SOURCES` files is empty); the loaded-identity check compares paths only and no
       `repo_dirname` copy exists outside `model_fetcher.py` (`grep -rn 'def repo_dirname' --include='*.py'
       . --exclude-dir=.venv` returns the one definition).
-- [ ] `docs/weights.md` and `ENV_REFERENCE.md:52` describe the per-model manifest, the per-model pin
+- [x] `docs/weights.md` and `ENV_REFERENCE.md:52` describe the per-model manifest, the per-model pin
       and the `weights_revision_unpinned` refusal (`grep -c 'per model' docs/weights.md` ≥ 1,
       `grep -c weights_revision_unpinned docs/weights.md kit_tools/docs/ENV_REFERENCE.md` ≥ 1 each);
       the scoped grep `grep -rln 'FORAGE_MODEL_REVISION' --include='*.md' docs kit_tools/docs
@@ -449,9 +449,9 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
       `manifest_model_unknown` and `weights_revision_unpinned` (`grep -c` ≥ 1 each) and `:270-271` is
       per-model; the SECURITY.md non-vulnerabilities row is present; the R40 start and end counts are
       in Implementation Notes.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
 
 ### US-006: `FORAGE_MODEL_ID` — allowlisted, refuse-boot, asserted at load, reported on `/health`
 
