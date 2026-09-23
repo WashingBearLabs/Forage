@@ -6,6 +6,8 @@ All tests use mocked models — no real model download required.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
 import threading
@@ -18,8 +20,9 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 import torch
-from transformers import AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer
 
+from model_fetcher import DEFAULT_MODEL_REVISION, MANIFEST_PATH
 from models import Stage2Verdict, Stage3Verdict, TrustTier
 from pipeline.extraction_limits import extraction_settings_from_config
 from pipeline.orchestrator import sanitize_and_structure
@@ -34,6 +37,7 @@ from pipeline.stage3_promptguard import (
 )
 from pipeline.stage4_structuring import SanitizationResult
 from promptguard.classifier import (
+    DEFAULT_MODEL_ID,
     MAX_SEQ_LEN,
     PromptGuardBudgetExceededError,
     PromptGuardClassifier,
@@ -282,6 +286,84 @@ class TestModelNotLoaded:
 
 class TestClassifierUnit:
     """Unit tests for PromptGuardClassifier with mocked torch/transformers."""
+
+    @pytest.mark.parametrize("logit_values", [[4.0, 0.0], [0.0, 4.0]])
+    def test_real_pinned_22m_config_loads_and_scores_class_one(
+        self, logit_values: list[float]
+    ) -> None:
+        fixture = Path(__file__).parent / "fixtures/promptguard_22m_config/config.json"
+        entry = json.loads(MANIFEST_PATH.read_text())["models"][DEFAULT_MODEL_ID]
+        config_pin = next(
+            file for file in entry["files"] if file["path"] == "config.json"
+        )
+        assert hashlib.sha256(fixture.read_bytes()).hexdigest() == config_pin["sha256"]
+        assert entry["revision"] == DEFAULT_MODEL_REVISION
+        config = AutoConfig.from_pretrained(fixture.parent, local_files_only=True)
+        assert config.num_labels == 2
+        assert config.id2label == {0: "LABEL_0", 1: "LABEL_1"}
+        classifier = PromptGuardClassifier()
+        logits = torch.tensor([logit_values])
+        with (
+            patch("transformers.AutoTokenizer.from_pretrained") as tokenizer,
+            patch(
+                "transformers.AutoModelForSequenceClassification.from_pretrained"
+            ) as model,
+        ):
+            tokenizer.return_value.encode.return_value = [1, 2]
+            tokenizer.return_value.return_value = {}
+            model.return_value.config = config
+            model.return_value.return_value = SimpleNamespace(logits=logits)
+            assert classifier.load(
+                model_id=DEFAULT_MODEL_ID,
+                revision=DEFAULT_MODEL_REVISION,
+                local_files_only=True,
+            )
+            assert classifier.loaded
+            score, _ = classifier.classify("some text")
+            assert score == pytest.approx(torch.softmax(logits, dim=-1)[0, 1].item())
+            model.return_value.eval.assert_called_once()
+
+    @pytest.mark.parametrize(
+        ("model_id", "revision", "labels"),
+        [
+            ("unknown/model", DEFAULT_MODEL_REVISION, {0: "LABEL_0", 1: "LABEL_1"}),
+            (DEFAULT_MODEL_ID, "0" * 40, {0: "LABEL_0", 1: "LABEL_1"}),
+            (DEFAULT_MODEL_ID, None, {0: "LABEL_0", 1: "LABEL_1"}),
+            (
+                "meta-llama/Llama-Prompt-Guard-2-86M",
+                DEFAULT_MODEL_REVISION,
+                {0: "LABEL_0", 1: "LABEL_1"},
+            ),
+            (DEFAULT_MODEL_ID, DEFAULT_MODEL_REVISION, {0: "LABEL_1", 1: "LABEL_0"}),
+            (DEFAULT_MODEL_ID, DEFAULT_MODEL_REVISION, {0: "OTHER", 1: "LABEL_1"}),
+            (
+                DEFAULT_MODEL_ID,
+                DEFAULT_MODEL_REVISION,
+                {0: "LABEL_0", 1: "LABEL_1", 2: "LABEL_2"},
+            ),
+        ],
+    )
+    def test_generic_labels_require_exact_identity_revision_and_mapping(
+        self,
+        model_id: str,
+        revision: str | None,
+        labels: dict[int, str],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        classifier = PromptGuardClassifier()
+        with (
+            patch("transformers.AutoTokenizer.from_pretrained"),
+            patch(
+                "transformers.AutoModelForSequenceClassification.from_pretrained"
+            ) as model,
+        ):
+            model.return_value.config.id2label = labels
+            assert not classifier.load(model_id=model_id, revision=revision)
+            assert not classifier.loaded
+            model.return_value.eval.assert_not_called()
+        assert [record.getMessage() for record in caplog.records] == [
+            "model_labels_unexpected"
+        ]
 
     @pytest.mark.parametrize(
         ("labels", "injection_index"),

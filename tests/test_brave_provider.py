@@ -95,7 +95,12 @@ _AUTH_HEADER_NAMES = ("X-Subscription-Token", "Authorization")
 # key or bearer token takes. Model identifiers, generated contract schema and
 # provenance documentation are not provider payloads.
 _TOKEN_SHAPE_RE = re.compile(r"[A-Za-z0-9_-]{24,}")
-_TOKEN_WALK_ALLOWLIST = {"tiny_model/", "contract/", "README.md"}
+_TOKEN_WALK_ALLOWLIST = {
+    "tiny_model/",
+    "contract/",
+    "README.md",
+    "promptguard_22m_config/config.json",
+}
 # These are schema keys in full response/counter pins, never payload values.
 _PIN_SCHEMA_KEYS = {
     "classification_wait_timeouts",
@@ -135,7 +140,12 @@ class TestFixtureCarriesNoSecret:
                 assert header not in text, f"{path} names an auth header: {header}"
 
     def test_token_walk_exceptions_are_pinned(self) -> None:
-        assert {"tiny_model/", "contract/", "README.md"} == _TOKEN_WALK_ALLOWLIST
+        assert {
+            "tiny_model/",
+            "contract/",
+            "README.md",
+            "promptguard_22m_config/config.json",
+        } == _TOKEN_WALK_ALLOWLIST
         assert {
             "classification_wait_timeouts",
             "effective_promptguard_threshold",

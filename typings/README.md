@@ -37,6 +37,10 @@ provider read-budget adapter. Its conditional `AnyIOBackend` export loses its
 runtime `AsyncNetworkBackend` inheritance in strict analysis, and the inferred
 `Response.extensions` type includes an untyped empty-dict branch.
 
+The transformers stub also declares offline `AutoConfig.from_pretrained`
+and the two config attributes used by the pinned-22M regression. This exposes
+the real library's default labels rather than reproducing them in a mock.
+
 **`torch` deliberately has no stub here.** It ships real, complete types; the
 classifier consumes them directly (`torch.no_grad`, `torch.softmax`,
 `torch.Tensor`). Hand-writing a shadow of torch's type surface would be exactly

@@ -24,7 +24,8 @@ uv run pytest tests/test_search_pipeline_pins.py --regenerate-search-pins -q
 Commit regenerated pins with that change and explain what moved and why in the
 commit message. Without the flag tests only compare. New metrics outside the
 five-counter projection do not move these pins. The token guard walks all fixture
-directories by default, except exactly `tiny_model/`, `contract/` and this README.
+directories by default, except exactly `tiny_model/`, `contract/`, this README
+and the hash-anchored `promptguard_22m_config/config.json` metadata file.
 Four long schema key names in these dumps are recognized only in JSON key
 positions; their spelling as a payload value remains forbidden.
 
@@ -74,6 +75,17 @@ different things: one feeds it to the real `drift_report()` and asserts it is ca
 other asserts it differs from the live document in that one documented way and no other —
 without which a fixture that had rotted into some unrelated file would keep the first test
 green for the wrong reason.
+
+## `promptguard_22m_config/config.json`
+
+The genuine 870-byte configuration metadata for the pinned 22M revision
+`11614a155199674a0a95e6602d6ab0417b790ed0`, copied from the verified cache.
+No weights or credentials. `test_stage3_promptguard.py` asserts its SHA-256
+against the committed manifest before passing it to real offline `AutoConfig`.
+The absence of label maps is intentional: transformers supplies generic labels,
+the production shape that v1.2.0 incorrectly rejected. The exact-file token-walk
+exception covers long architecture/key names, not this directory or arbitrary
+payloads; any byte change fails the hash assertion.
 
 ## `tiny_model/`
 
