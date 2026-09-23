@@ -1382,6 +1382,42 @@ the tree changes; the story stops and reports.
 
 ## Implementation Notes
 
+### Feature validation — 2026-09-22 (Copilot)
+
+Validated `epic/forage-hardening` at clean `6c74928` in autonomous mode.
+The cumulative `main...HEAD` diff is 116 files, 31,629 insertions and
+2,652 deletions; the six prerequisite features are intentional epic scope.
+Three parallel quality/security/compliance reviewers each returned
+`clean` / `ready`, with no findings. One review round, zero fix loops:
+no runtime, test, contract, dependency or default changes were needed.
+
+The formerly deferred full-suite evidence is now established:
+`uv run pytest -q --tb=short` passes **4,080 tests, with 6 existing xfails
+and 13 non-failing warnings in 31.31s**, within the 300-second limit.
+The clean pre-epic baseline is `20ddb2a`, with no failing node IDs.
+Repository Ruff lint/format (148 files), strict Pyright (zero errors),
+`export_contract --check`, offline benchmark `--help` and whitespace
+checks all pass. Test-command discovery selected `pyproject.toml`; the
+testing guide agrees.
+
+Accepted the spec's **gates-unrun alternative**, not a claim that 86M
+shipped: US-005 vendoring and US-004 real-container measurements remain
+not run, the allowlist/manifest remain 22M-only, and contiguity ships off.
+The required separate fresh-service `--input 1w` / `--input budget`
+benchmark design is covered, not replaced with first-for-input timing.
+No credentials were inspected, weights downloaded, or owner gate run.
+
+Results are in `kit_tools/.validate_impl_{quality,security,compliance,tests}.json`
+and `kit_tools/AUDIT_FINDINGS.md` (new info-only test record
+`2026-09-22-017`; zero new criticals/warnings). Earlier epic advisories,
+including the six provider raw-read xfails and the IPv6-policy finding,
+are retained, not declared resolved by this feature pass. Audit/results
+follow the existing ignored-local-artifact policy; this note is the tracked
+handoff. Raw evidence is in session
+`97983323-8041-4eac-98a6-2b1c95ae967d/files/validation-*`.
+No pause marker, completion skill, archival, lifecycle-state update,
+commit, tag, push or publication was performed.
+
 ### US-003 host-side benchmark, retry 2 — 2026-09-22 (Copilot)
 
 Starting commit `14d548d`, clean worktree. Added `scripts/bench_promptguard.py`,
