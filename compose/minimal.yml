@@ -102,12 +102,33 @@ services:
       # canonical name docs/weights.md § "The model cache volume" pins, and
       # `/app/model-cache` is the image's own `HF_HOME`.
       - forage-model-cache:/app/model-cache
-    # The envelope the in-memory cache bounds were sized against: 512 MiB for
-    # the parent FastAPI + torch process, 384 MiB for the spawned extraction
-    # worker, ~128 MiB of headroom, of which the 32 MiB default cache bound
-    # spends a quarter. docs/configuration.md § "The `cache:` block" does the
-    # arithmetic. Raise it if you raise `cache.max_bytes`.
-    mem_limit: 1024m
+    # Resource envelope: FORAGE_CPUS unset or 0 = no CPU limit (today's
+    # behaviour; Compose omits the key). Below 1 vCPU is unsupported.
+    # Service-level `cpus` needs Docker Compose v2 (Compose Spec); verified
+    # on v2.40.3. FORAGE_MEM_LIMIT takes Docker's byte-unit syntax, default
+    # 1024m; FORAGE_MEM_LIMIT=abc fails at Compose, before Forage starts.
+    # See docs/configuration.md § "Sizing the container" for both variables
+    # and the CPU/memory rules before raising concurrency or cache bounds.
+    cpus: ${FORAGE_CPUS:-0}
+    mem_limit: ${FORAGE_MEM_LIMIT:-1024m}
+    # Liveness, not health: /health's body is health; this status-only probe
+    # discards it so Docker's State.Health.Log[].Output captures no body.
+    # One /health every 30 s calls cache.ping_if_due(), detecting recovery
+    # within one interval even with no traffic. A reconnect can take 2 s
+    # (_RECONNECT_TIMEOUT_S), inside the 5 s probe timeout.
+    # With the cache down, expect at most one reconnect WARNING per probe —
+    # one per probe on connection refused, about one per two on a connect
+    # timeout; reconnect_attempts / reconnect_failures climb without traffic.
+    # Plain docker compose reports unhealthy but never restarts for it:
+    # `restart:` reacts to exits. A healthy container may have the classifier
+    # unloaded — never gate traffic, `depends_on: service_healthy` or a
+    # consumer's activation on this probe.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8020/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   searxng:
     # ghcr.io/washingbearlabs/forage-searxng, tag 0.1.1-rc — upstream's SearXNG

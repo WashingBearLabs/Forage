@@ -469,6 +469,17 @@ consumer handoff are in `docs/bootstrap-notes.md`.
 
 ---
 
+The thirty-seventh rotation is `bf5a1f3e…` → `4913fdc1…` for
+`hardening-resource-envelope` US-002. Only `contract.py` moves among the nine
+hashed sources, recording the shipped Compose healthcheck's description
+correction in held 1.3.0. A read-only whole-file reversal against clean
+`2aa6356` reproduces `bf5a1f3e…` under default and shipped config; the other
+eight sources and hash definition are unchanged. This is not a sanitization
+or response-shape change. OpenAPI and the held golden are regenerated because
+the health model and route descriptions now name the status-only liveness
+probe; historical goldens remain untouched. Full measurements and the
+consumer handoff are in `docs/bootstrap-notes.md`.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:

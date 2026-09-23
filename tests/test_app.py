@@ -1403,9 +1403,10 @@ async def test_lifespan_startup_yields_immediately(
 ) -> None:
     """Startup must not wait on the fetch — uvicorn serves nothing until it returns.
 
-    The compose healthcheck is 10 s x 5 retries with no `start_period`, so a
-    startup that blocked for a ~270 MiB download would be restart-looped
-    before it ever finished. The acquisition parks for up to 10 s here; if
+    Our compose probe (`curl -fsS -o /dev/null`, 30 s interval, 5 s timeout,
+    3 retries, 30 s `start_period`) checks liveness, not health. Blocking for a
+    ~270 MiB download would report unhealthy, not trigger a Compose restart.
+    The acquisition parks for up to 10 s here; if
     startup were awaiting it, this test would take that long instead of
     milliseconds.
     """

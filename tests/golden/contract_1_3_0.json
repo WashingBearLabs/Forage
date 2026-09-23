@@ -268,7 +268,7 @@
     "type": "object"
   },
   "HealthResponse": {
-    "description": "Response body for ``GET /health``.\n\nHTTP status is always 200, even when ``status == \"degraded\"`` (family\ndecision 11) \u2014 the compose healthcheck is a bare ``curl -f`` that only\ninspects the HTTP status code, so consumers must read ``status`` and\n``degraded_reasons`` rather than the response's non-2xx-ness.",
+    "description": "Response body for ``GET /health``.\n\nHTTP status is always 200, even when ``status == \"degraded\"`` (family\ndecision 11). The compose healthcheck's ``curl -fsS -o /dev/null`` inspects\nonly the HTTP status and discards the body: liveness, not health. Consumers\nmust read ``status`` and ``degraded_reasons`` in the body; a Docker-healthy\ncontainer may still have its classifier unloaded.",
     "properties": {
       "cache_backend": {
         "description": "Which storage the content cache selected at start: 'valkey' when VALKEY_URL was set, 'memory' when it was fully unset. Added in contract 1.1.0.",

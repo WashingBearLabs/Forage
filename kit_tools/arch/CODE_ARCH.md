@@ -2,7 +2,7 @@
 # CODE_ARCH.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-resource-envelope US-004)
+> Updated by: Copilot (hardening-resource-envelope US-002)
 
 ---
 
@@ -356,6 +356,20 @@ under default, shipped and maximum-target config. The other seven sources and
 hash definition are unchanged; the settings module and targets are not inputs.
 The schema golden and closed search wire/counter pins are unchanged. Full
 measurements and the additive metrics handoff are in `docs/bootstrap-notes.md`.
+
+**Compose's healthcheck is status-only liveness, not classifier readiness.**
+Resource-envelope US-002 adds the same configurable CPU/memory envelope and
+body-discarding curl probe to both fragments. `/health` still answers 200 when
+degraded; the probe cannot gate consumer activation or trigger a plain Compose
+restart. Correcting the health model and route descriptions regenerates the
+OpenAPI document and held 1.3.0 golden without changing a response shape.
+
+This is the thirty-seventh rotation (`bf5a1f3e…` → `4913fdc1…`), not a
+sanitization change: only `contract.py`'s continuation moves in the nine
+hashed sources. Its read-only whole-file reversal against clean `2aa6356`
+reproduces `bf5a1f3e…` under default and shipped config; the other eight
+sources and hash definition are unchanged. The corrected code docstrings
+are outside the hash. Full values and handoff: `docs/bootstrap-notes.md`.
 
 **Provider bodies are self-decoded under bounds.** The shared
 `pipeline/bounded_body.py` reads raw bytes, bounds decoded output at 1 MiB

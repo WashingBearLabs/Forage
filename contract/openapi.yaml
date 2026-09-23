@@ -436,11 +436,13 @@ components:
 
         HTTP status is always 200, even when ``status == "degraded"`` (family
 
-        decision 11) — the compose healthcheck is a bare ``curl -f`` that only
+        decision 11). The compose healthcheck''s ``curl -fsS -o /dev/null`` inspects
 
-        inspects the HTTP status code, so consumers must read ``status`` and
+        only the HTTP status and discards the body: liveness, not health. Consumers
 
-        ``degraded_reasons`` rather than the response''s non-2xx-ness.'
+        must read ``status`` and ``degraded_reasons`` in the body; a Docker-healthy
+
+        container may still have its classifier unloaded.'
       properties:
         cache_backend:
           description: 'Which storage the content cache selected at start: ''valkey'' when
@@ -1643,13 +1645,15 @@ paths:
       description: 'Return service health status.
 
 
-        Always responds 200, even when degraded — the compose healthcheck
+        Always responds 200, even when degraded. The compose healthcheck''s
 
-        (bare ``curl -f``) only inspects the HTTP status, so a non-2xx here would
+        ``curl -fsS -o /dev/null`` inspects only the HTTP status and discards the
 
-        flap the container instead of surfacing the real problem. Callers must
+        body: liveness, not health. Plain Compose reports unhealthy probes but
 
-        check ``status``/``degraded_reasons`` in the body.'
+        does not restart on them. Callers must check ``status``/``degraded_reasons``
+
+        in the body; Docker-healthy does not imply that the classifier is loaded.'
       operationId: health_health_get
       responses:
         '200':

@@ -749,6 +749,14 @@ def _compose_validate_step(jobs: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _compose_envelope_step(jobs: dict[str, Any]) -> dict[str, Any]:
+    name = "Validate the compose fragments with the resource envelope set"
+    for step in _steps(jobs, _COMPOSE_VALIDATE_JOB):
+        if step.get("name") == name:
+            return step
+    raise AssertionError(f"No step in {_COMPOSE_VALIDATE_JOB!r} named {name!r}")
+
+
 class TestComposeFragmentValidation:
     """`compose/*.yml` must be machine-checked on every commit.
 
@@ -782,6 +790,28 @@ class TestComposeFragmentValidation:
                 "`config` is pure local parsing: it pulls nothing, starts "
                 "nothing, and costs seconds."
             )
+
+    def test_a_second_step_validates_the_resource_envelope(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        default = _compose_validate_step(jobs)
+        envelope = _compose_envelope_step(jobs)
+        steps = _steps(jobs, _COMPOSE_VALIDATE_JOB)
+        assert steps.index(envelope) == steps.index(default) + 1
+        assert default["env"] == {
+            "SEARXNG_SECRET": "compose-config-validation-placeholder",
+        }
+        assert envelope["env"] == {
+            "SEARXNG_SECRET": "compose-config-validation-placeholder",
+            "FORAGE_CPUS": "2",
+            "FORAGE_MEM_LIMIT": "2048m",
+        }
+        script = str(envelope.get("run", ""))
+        for fragment in _COMPOSE_FRAGMENTS:
+            assert f"-f {fragment} config -q" in script
+        assert "set -euo pipefail" in script
+        assert envelope.get("continue-on-error") is not True
+        assert envelope.get("if") is None
 
     def test_the_validation_runs_in_a_required_job(self, jobs: dict[str, Any]) -> None:
         assert _COMPOSE_VALIDATE_JOB in _PUBLISH_GATES, (
@@ -840,12 +870,22 @@ class TestComposeFragmentValidation:
         # secret-shaped in a workflow file, even a fake one: `secret-grep` and
         # `gitleaks` both read for shapes, and a plausible-looking literal
         # costs someone an investigation.
-        env_block: dict[str, Any] = _compose_validate_step(jobs).get("env") or {}
-        for name, value in env_block.items():
-            assert "placeholder" in str(value).lower(), (
-                f"The compose step's {name} value should say it is a "
-                f"placeholder; got {value!r}"
-            )
+        size_shapes = {
+            "FORAGE_CPUS": r"^\d+(\.\d+)?$",
+            "FORAGE_MEM_LIMIT": r"^\d+[kKmMgG]?[bB]?$",
+        }
+        for step in (_compose_validate_step(jobs), _compose_envelope_step(jobs)):
+            env_block: dict[str, Any] = step.get("env") or {}
+            for name, value in env_block.items():
+                if name in size_shapes:
+                    assert re.fullmatch(size_shapes[name], str(value)), (
+                        f"The compose step's {name} must be a size; got {value!r}"
+                    )
+                else:
+                    assert "placeholder" in str(value).lower(), (
+                        f"The compose step's {name} value should say it is a "
+                        f"placeholder; got {value!r}"
+                    )
 
     def test_the_placement_reasoning_is_recorded_in_the_job(self, raw: str) -> None:
         prose = _comment_prose(raw)

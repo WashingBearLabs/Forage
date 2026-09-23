@@ -503,9 +503,10 @@ class HealthResponse(BaseModel):
     """Response body for ``GET /health``.
 
     HTTP status is always 200, even when ``status == "degraded"`` (family
-    decision 11) — the compose healthcheck is a bare ``curl -f`` that only
-    inspects the HTTP status code, so consumers must read ``status`` and
-    ``degraded_reasons`` rather than the response's non-2xx-ness.
+    decision 11). The compose healthcheck's ``curl -fsS -o /dev/null`` inspects
+    only the HTTP status and discards the body: liveness, not health. Consumers
+    must read ``status`` and ``degraded_reasons`` in the body; a Docker-healthy
+    container may still have its classifier unloaded.
     """
 
     status: Literal["healthy", "degraded"]
@@ -1783,9 +1784,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # A task around a thread, never an `await` — and the difference is the
     # whole point. `snapshot_download` + `from_pretrained` is minutes of
     # blocking network and torch work for a ~270 MiB weight set; uvicorn
-    # serves nothing until lifespan startup returns, and the compose
-    # healthcheck (10 s x 5 retries, no `start_period`) would restart-loop the
-    # container before the first byte landed. So startup yields immediately,
+    # serves nothing until lifespan startup returns. Our compose liveness
+    # probe (`curl -fsS -o /dev/null`, 30 s interval, 5 s timeout, 3 retries,
+    # 30 s `start_period`) would report unhealthy during a blocking download;
+    # plain Compose does not restart on that status. So startup yields immediately,
     # `/health` answers honestly `degraded` with `promptguard_unavailable`
     # throughout, and `promptguard_loaded` flips to true in place when the
     # load finishes — no restart, no second request path.
@@ -1951,10 +1953,11 @@ _PIPELINE_422_DESCRIPTION = (
 async def health(request: Request) -> HealthResponse:
     """Return service health status.
 
-    Always responds 200, even when degraded — the compose healthcheck
-    (bare ``curl -f``) only inspects the HTTP status, so a non-2xx here would
-    flap the container instead of surfacing the real problem. Callers must
-    check ``status``/``degraded_reasons`` in the body.
+    Always responds 200, even when degraded. The compose healthcheck's
+    ``curl -fsS -o /dev/null`` inspects only the HTTP status and discards the
+    body: liveness, not health. Plain Compose reports unhealthy probes but
+    does not restart on them. Callers must check ``status``/``degraded_reasons``
+    in the body; Docker-healthy does not imply that the classifier is loaded.
     """
     # Ping (subject to backoff) so a zero-traffic window still detects recovery
     cache = getattr(request.app.state, "cache", None)

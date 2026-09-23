@@ -1431,6 +1431,125 @@ next.
   gates, not a known functional defect. No dependency change, branch switch,
   Poppy edit, push, tag or release occurred.
 
+### US-002 implementation — 2026-09-22
+
+- Both fragments now carry identical CPU/memory substitutions and a
+  body-discarding curl liveness probe (30 s interval, 5 s timeout, three
+  retries, 30 s start period). Parsed baseline comparisons confirm that no
+  other key or value changed; no config bind mount or third fragment was
+  added. Unrelated housekeeping comments and published image pins remain.
+  The comments distinguish liveness from body health and classifier readiness,
+  reject health-based activation/start ordering, explain that restart reacts
+  to exits, and state the cache reconnect cost and failure-mode-dependent
+  zero-traffic WARNING/counter baseline.
+- Added the second render step immediately after the original in required
+  `lint`, with its own envelope settings; the original environment block is
+  unchanged. CI guards pin both settings and step placement, both fragment
+  commands and failure propagation. The placeholder guard checks both steps:
+  envelope values must match size syntax, every other value must advertise
+  its placeholder status. `TestResourceEnvelope` pins values, the full probe,
+  mount-free config delivery and comment semantics; the duplication guard
+  compares both strings and the JSON-projected healthcheck.
+- **Secret-free Compose evidence:** `Docker Compose version
+  v2.40.3-desktop.1`. Each render ran against copied fragments in a scratch
+  project directory, with `--env-file /dev/null`, a scrubbed environment and
+  the complete prescribed placeholder set. Only the requested filtered lines
+  were emitted; no raw render or environment block was persisted.
+
+  `minimal`, defaults:
+
+  ```text
+      healthcheck:
+        test:
+        timeout: 5s
+        interval: 30s
+        retries: 3
+        start_period: 30s
+      mem_limit: "1073741824"
+  ```
+
+  `full`, defaults:
+
+  ```text
+      healthcheck:
+        test:
+        timeout: 5s
+        interval: 30s
+        retries: 3
+        start_period: 30s
+      mem_limit: "1073741824"
+  ```
+
+  `minimal`, configured:
+
+  ```text
+      cpus: 4
+      healthcheck:
+        test:
+        timeout: 5s
+        interval: 30s
+        retries: 3
+        start_period: 30s
+      mem_limit: "4294967296"
+  ```
+
+  `full`, configured:
+
+  ```text
+      cpus: 4
+      healthcheck:
+        test:
+        timeout: 5s
+        interval: 30s
+        retries: 3
+        start_period: 30s
+      mem_limit: "4294967296"
+  ```
+
+  The started, secret-free BusyBox probe was inspected while running:
+  `HostConfig.NanoCpus=0` at defaults and `4000000000` when configured.
+  Its isolated container and network were removed afterwards. Both CI render
+  branches and explicit zero also parse; invalid memory syntax is rejected
+  before startup. Service-level `cpus` requires Compose v2 (Compose Spec).
+- **R36:** corrected both rendered health descriptions plus the acquisition
+  comments, smoke docstring, startup-test docstring and prescribed API guide
+  sentence. App, fetcher, smoke and startup-test ASTs are unchanged after
+  stripping docstrings. Appended the held 1.3.0 continuation, ran the exporter,
+  and regenerated the live golden through `_SCHEMA_MODELS`. The golden
+  **really changes**, only at `HealthResponse.description`, to sha256
+  `f74a99b97e088982665e726a9e011e2955e53c4f3c39f1d05754b7a6dc7526eb`.
+  `_EXPECTED_ONE_THREE_ZERO_DIFF` was reviewed: **no entry added**, because
+  `_added_paths` records fields/enum members, not changed description values.
+  OpenAPI changes exactly the model and route descriptions; the generated
+  anchor is `c9cd19bad84decd7415ba912ae81c826447f2a19edc41b57c857d4a7b4d42ab2`.
+  All four anchor pages are refreshed and exporter `--check` passes.
+  Historical goldens, release anchors and response shapes remain unchanged;
+  no further version bump inside the unpublished window.
+- **Rotation 37:** clean starting commit
+  `2aa6356a23afdc41d3078a17efc52a9a842e50d6`. Only `pipeline/contract.py`
+  moves among the nine hashed sources; the hash definition is unchanged.
+  Default and shipped config both derive
+  `4913fdc1982cb48ba2db9c6972fcea10107408349970c45c9dc6b3ae5c1aa1fb`.
+  Substituting the entire baseline contract file through read-only
+  `Path.read_bytes` interception reproduces the before value exactly:
+  `bf5a1f3e55aad4e2748e66d3a2e9554b7950a38cadc89d4551cc1b6820f3e75d`.
+  Recorded at all five rotation sites; no text-sanitization behavior changed.
+  Consumer handoff is in `docs/bootstrap-notes.md`; US-003 owns the remaining
+  sizing/monitoring/operator sweep, not this story.
+- **Evidence / outstanding gates:** 1,449 related tests and 66 governance
+  checks passed, with three existing non-failing warnings. Strict Pyright,
+  changed-file Ruff lint/format, contract drift and whitespace checks pass.
+  Both exact-scope acceptance greps return zero hits; the first grep attempt
+  found one stale ignored pytest bytecode file, removed before repeating.
+  Full suite not run, as this invocation explicitly prohibits it.
+  Repository Ruff still fails on five inherited E501 findings in
+  `pipeline/bounded_body.py:53` and
+  `tests/test_search_providers.py:762,764,784,787`, and formatting names those
+  same two files. Both failures reproduce from the starting commit; those
+  files are byte-identical and untouched. Result remains partial / needs-work
+  for these gates, not a known story defect. No dependency change, branch
+  switch, Poppy edit, push, tag or release occurred.
+
 ## Refinement Notes
 
 ### Research Findings

@@ -238,6 +238,17 @@ jobs:
           docker compose -f compose/full.yml config -q
           echo "Both example compose fragments parse and interpolate."
 
+      - name: Validate the compose fragments with the resource envelope set
+        env:
+          SEARXNG_SECRET: compose-config-validation-placeholder
+          FORAGE_CPUS: "2"
+          FORAGE_MEM_LIMIT: 2048m
+        run: |
+          set -euo pipefail
+          docker compose -f compose/minimal.yml config -q
+          docker compose -f compose/full.yml config -q
+          echo "Both compose fragments accept the resource envelope."
+
   typecheck:
     name: typecheck
     runs-on: ubuntu-latest

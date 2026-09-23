@@ -59,9 +59,10 @@ Four properties are load-bearing:
    is `retrieval_app.lifespan`, through
    `asyncio.create_task(asyncio.to_thread(...))` — a task, not an `await`,
    because lifespan startup must *yield immediately*: uvicorn serves nothing
-   until it returns, and the compose healthcheck (10 s x 5 retries, no
-   `start_period`) would restart-loop the container while a ~270 MiB download
-   ran.
+   until it returns. Our compose liveness probe (`curl -fsS -o /dev/null`,
+   30 s interval, 5 s timeout, 3 retries, 30 s `start_period`) would report
+   unhealthy while a blocking ~270 MiB download ran; plain Compose does not
+   restart on that status. Health remains in the `/health` body.
 2. **The revision is pinned**, to :data:`DEFAULT_MODEL_REVISION` unless
    :data:`MODEL_REVISION_ENV_VAR` overrides it. An unpinned `main` turns any
    upstream commit into "corruption" on the next start.

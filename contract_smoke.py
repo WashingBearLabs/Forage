@@ -5,9 +5,10 @@ produced and handed on as an artifact — with no Hugging Face token, and then
 runs this module against it. What it asserts is Epic 1's wire contract for a
 weights-free image, the handshake Poppy depends on:
 
-* ``/health`` answers **HTTP 200** — always, even degraded, because the
-  container healthcheck is a bare ``curl -f`` and a non-2xx would flap the
-  container instead of surfacing the problem;
+* ``/health`` answers **HTTP 200** — always, even degraded. The compose probe
+  (``curl -fsS -o /dev/null``, 30 s interval, 5 s timeout, 3 retries, 30 s
+  ``start_period``) checks status only and discards the body: liveness, not
+  health. Plain Compose reports unhealthy probes but does not restart on them;
 * ``status`` is exactly ``"degraded"`` — never ``"healthy"``, never ``"ok"``,
   and never a crash;
 * ``promptguard_unavailable`` is in ``degraded_reasons``;

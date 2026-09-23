@@ -93,7 +93,8 @@ those eight — so Forage's revision moved:
 | `hardening-provider-bounds` US-003, provider counters and reason token | `c9bf6e0d…f2f76` |
 | `hardening-provider-bounds` US-004, paid-prefix policy record | `e3b9c138…73d91` |
 | `hardening-provider-bounds` US-005, provider-loop cleanup | `d9db7586…1b6e0` |
-| **Current (`hardening-resource-envelope` US-004, search latency telemetry)** | **`bf5a1f3e…3e75d`** |
+| `hardening-resource-envelope` US-004, search latency telemetry | `bf5a1f3e…3e75d` |
+| **Current (`hardening-resource-envelope` US-002, healthcheck descriptions)** | **`4913fdc1…aa1fb`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -1712,3 +1713,49 @@ semaphore wait. A served-empty request reaches it; a pre-loop 422 does not.
 `search_first_token_target_ms` is log-only. No `/search` response shape or
 existing pinned counter changes. **Not replayed to Poppy**; no push, tag or
 release occurred.
+
+### Compose liveness descriptions — thirty-seventh rotation (2026-09-22)
+
+`hardening-resource-envelope` US-002 parameterizes the two fragments' CPU
+and memory ceilings with unchanged defaults and adds a status-only liveness
+probe. The health model and route descriptions now name the shipped
+`curl -fsS -o /dev/null`, rather than a bare status check that allegedly
+restarted containers. Plain Compose reports unhealthy but never restarts
+because of that status; a Docker-healthy process may have no loaded classifier.
+
+Only `pipeline/contract.py` moves among the nine hashed sources: its held
+1.3.0 continuation records the description correction. The health docstrings
+and weight-acquisition comments in `retrieval_app.py`, `model_fetcher.py` and
+`contract_smoke.py` are not hash inputs. **No text-sanitization behavior or
+response shape changes.**
+
+Measured against clean pre-story
+`2aa6356a23afdc41d3078a17efc52a9a842e50d6` (`git status --short` empty).
+Live `derive_sanitizer_revision` used read-only `Path.read_bytes` substitution
+of the entire pre-story `contract.py`, never a working-tree revert. Both
+default `{}` and shipped `config.yaml`, with the default model pin, give:
+
+| State | Revision |
+|---|---|
+| Before / `contract.py`-reverted control | `bf5a1f3e55aad4e2748e66d3a2e9554b7950a38cadc89d4551cc1b6820f3e75d` |
+| After | `4913fdc1982cb48ba2db9c6972fcea10107408349970c45c9dc6b3ae5c1aa1fb` |
+
+The other eight hashed sources and hash definition are byte-identical to
+the baseline. This source-only rotation invalidates old content-cache keys.
+The generated OpenAPI anchor is
+`c9cd19bad84decd7415ba912ae81c826447f2a19edc41b57c857d4a7b4d42ab2`;
+all four anchor-quoting pages are refreshed. The held golden was regenerated
+through `_SCHEMA_MODELS`, sha256
+`f74a99b97e088982665e726a9e011e2955e53c4f3c39f1d05754b7a6dc7526eb`.
+Its only changed value is `HealthResponse.description`; the added-paths
+helper records no new fields or enum members, so
+`_EXPECTED_ONE_THREE_ZERO_DIFF` is unchanged. Historical goldens and the
+v1.1.0 release's anchor remain untouched.
+
+**Consumer handoff:** contract stays in the unpublished 1.3.0 window
+(GOVERNANCE worked example 3; R36), with no response-shape change or further
+bump. Re-vendor the regenerated document against its same-tag anchor at
+release. Read `/health`'s body for readiness; do not gate traffic or activation
+on Docker's liveness status. US-003 owns the sizing section and remaining
+operator-doc sweep, including zero-traffic reconnect WARNING/counter baselines.
+**Not replayed to Poppy**; no push, tag or release occurred.

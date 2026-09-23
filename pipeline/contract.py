@@ -211,6 +211,9 @@ MINOR when fields are only added.
   wait). Targets are configurable; defaults and search response bytes are
   unchanged. These additive metrics are pinned by ``tests/test_contract_metrics.py``,
   not the golden fixture.
+* ``1.3.0`` — ``hardening-resource-envelope`` US-002: healthcheck descriptions
+  corrected — no shape change. The shipped compose probe uses
+  ``curl -fsS -o /dev/null`` for status-only liveness, not body health.
 
 This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy
