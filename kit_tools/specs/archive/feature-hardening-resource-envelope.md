@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: hardening-resource-envelope
-status: active
+status: completed
 session_ready: true
 depends_on: [hardening-provider-bounds]
 vision_ref: "T2.2 — Forage hardening"
@@ -12,7 +12,8 @@ epic_seq: 6
 epic_final: false
 execution_order: [US-001, US-004, US-002, US-003]
 created: 2026-09-19
-updated: 2026-09-19
+updated: 2026-09-23
+completed: 2026-09-23
 ---
 
 # Feature Spec: Configurable Resource Envelope — Sized to the Host, Not the Deployment
