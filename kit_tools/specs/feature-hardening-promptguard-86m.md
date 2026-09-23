@@ -1760,6 +1760,48 @@ The full-suite gate remains explicitly **deferred to end-of-epic validation**;
 the result stays partial / needs-work for that unverified gate, not the now-fixed
 fake regression. Owner gates and acceptance checkboxes remain untouched.
 
+### US-005 — gate not run, 2026-09-22
+
+**Blocked on the owner gate; not complete.** Starting commit `51fa1b4`,
+clean tracked worktree. This non-interactive invocation has no owner-authorized
+vendoring session or supplied gate evidence. Missing from the handoff:
+
+- Confirmed owner acceptance of the 86M licence and approved access to its gated
+  Hugging Face repository, with the model-card licence/restriction comparison
+  and exact revision recorded before any weight download.
+- Owner-provisioned `HF_TOKEN`, `GHCR_USER`, `GHCR_TOKEN` (`write:packages`)
+  and `GITHUB_TOKEN` (`read:packages`) through the single temporary mode-0600
+  credential file, with an owner present to supply the values and confirm cleanup.
+- Confirmed egress to Hugging Face/GHCR/GitHub, `oras` availability, working-cache
+  capacity, and explicit authorization to publish the revision-keyed mirror tag.
+
+These prerequisites were not provisioned or verified here; this is not a claim
+that the host lacks the tools, network or credentials. No secret store or
+credential value was inspected, no credential file was created or sourced,
+and no mode/deletion evidence is claimed.
+
+The local `NOTICE` names `Llama 4 Community License Agreement` for the 22M.
+The 86M model card was not fetched: its identifier, any additional restrictions,
+licence outcome and revision remain **unverified**, not an assumed match.
+No download was attempted, so there is no observed 403 (`access pending`),
+429, partial snapshot or retry to record. There is no generated 86M entry,
+scoped manifest diff, file-count/byte-total measurement, mirror publication,
+fresh-pull verification or `weights_verified` transcript.
+
+The gate-not-run criterion requires a notes-only tracked change. Accordingly,
+the existing 22M manifest, `DEFAULT_MODEL_REVISION`, one-member
+`ALLOWED_MODEL_IDS`, `ALLOWED_SUFFIXES`, `NOTICE` and both configuration rows
+marked "Pending vendoring" remain unchanged. The two credential-recipe rewrites
+in `docs/weights.md` are deferred to the authorized vendoring run along with the
+manifest/allowlist/NOTICE/pin documentation commit; none of those changes is
+claimed complete. No runtime, contract, sanitizer-revision input or benchmark
+artifact changes. No weights, benchmark, push, tag, release or publication ran.
+US-004 remains gated behind US-005; neither gate's checkboxes were changed.
+
+Resume with the owner following US-005's licence-first procedure and failure
+paths, recording the real evidence before enabling 86M. This invocation stops
+at the sanctioned gates-unrun state, with result `partial` / `needs-work`.
+
 ## Refinement Notes
 
 ### Research Findings
