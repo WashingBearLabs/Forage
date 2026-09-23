@@ -9,6 +9,8 @@ mapping. US-003 adds the chain resolved from ``FORAGE_SEARCH_PROVIDERS``:
 name parsing, static-registry lookup, the refuse-boot error and its redaction
 rule, and ``run_search_pipeline``'s ``providers=`` seam.
 
+The SearXNG wall-clock regression uses one real 0.05-second budget.
+
 test_mapping:
   pipeline/search_providers/__init__.py: tests/test_search_providers.py
   pipeline/search_providers/base.py: tests/test_search_providers.py
@@ -18,7 +20,12 @@ test_mapping:
 from __future__ import annotations
 
 import ast
+import asyncio
+import gzip
+import json
 import logging
+import time
+import zlib
 from contextlib import contextmanager
 from dataclasses import fields
 from pathlib import Path
@@ -67,10 +74,17 @@ from pipeline.search_providers.searxng import (
     SearxngSettings,
     searxng_settings_from_config,
 )
-from tests.fakes import FakeSearchProvider, assert_frozen
+from tests.fakes import (
+    ChunkStream,
+    FakeSearchProvider,
+    assert_frozen,
+    client_patch,
+    make_response,
+    record_decompressors,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Callable, Generator
 
 from models import SearchRequest, Stage2Verdict
 
@@ -340,16 +354,19 @@ class TestSearxngSettingsFromConfig:
         assert provider.base_url == "http://configured-searxng:9999"
         assert provider.settings is settings
 
-    async def test_settings_are_stored_but_not_yet_read_by_search(self) -> None:
+    async def test_settings_control_timeout_and_body_bound(self) -> None:
         settings = SearxngSettings(timeout_seconds=30.0, max_response_bytes=1)
-        with _client_patch(response=_response(json_value={"results": []})) as (
+        with client_patch(
+            _SEARXNG_CLIENT, response=_response(content=b'{"results": []}')
+        ) as (
             client_cls,
             client,
         ):
             outcome = await SearxngProvider(settings=settings).search("q", 3)
-        assert isinstance(outcome, ProviderSearchResult)
-        assert client_cls.call_args.kwargs["timeout"] == 10.0
-        client.get.assert_awaited_once()
+        assert isinstance(outcome, ProviderFailure)
+        assert outcome.detail == "body_too_large"
+        assert client_cls.call_args.kwargs["timeout"] == 30.0
+        client.stream.assert_called_once()
 
 
 _SEARXNG_CLIENT = "pipeline.search_providers.searxng.httpx.AsyncClient"
@@ -364,54 +381,11 @@ _ORCHESTRATOR_CONFIG: dict[str, Any] = {
 
 def _response(
     *,
-    json_value: Any = None,
-    json_error: Exception | None = None,
     content: bytes = b"{}",
     status_code: int = 200,
-    status_error: Exception | None = None,
-) -> MagicMock:
-    """A SearXNG response double with a real ``content`` length.
-
-    ``content`` is set explicitly here rather than left to ``MagicMock``'s
-    zero-length default, because the body bound is read off ``len()`` before
-    ``json()`` runs and a test that means to overrun it has to be able to.
-    """
-    resp = MagicMock()
-    resp.status_code = status_code
-    resp.content = content
-    if status_error is not None:
-        resp.raise_for_status.side_effect = status_error
-    else:
-        resp.raise_for_status.return_value = None
-    if json_error is not None:
-        resp.json.side_effect = json_error
-    else:
-        resp.json.return_value = json_value
-    return resp
-
-
-@contextmanager
-def _client_patch(
-    *,
-    response: MagicMock | None = None,
-    get_error: Exception | None = None,
-) -> Generator[tuple[MagicMock, AsyncMock]]:
-    """Intercept the provider's per-call ``httpx.AsyncClient``.
-
-    The patch target is the provider module's ``httpx`` attribute, which is
-    the *shared* ``httpx`` module object — the same one
-    ``pipeline.orchestrator.httpx`` names — so this and the orchestrator
-    suite's older dotted path replace the same class.
-    """
-    client = AsyncMock()
-    if get_error is not None:
-        client.get.side_effect = get_error
-    else:
-        client.get.return_value = response
-    client.__aenter__ = AsyncMock(return_value=client)
-    client.__aexit__ = AsyncMock(return_value=False)
-    with patch(_SEARXNG_CLIENT, return_value=client) as client_cls:
-        yield client_cls, client
+) -> httpx.Response:
+    """Real status, headers and raw body bytes, bounded before JSON parsing."""
+    return make_response(status_code, content)
 
 
 class TestSearxngProviderShape:
@@ -452,23 +426,27 @@ class TestSearxngProviderRequest:
 
     @pytest.mark.asyncio()
     async def test_a_non_default_base_url_reaches_the_request(self) -> None:
-        with _client_patch(response=_response(json_value={"results": []})) as (
+        with client_patch(
+            _SEARXNG_CLIENT, response=_response(content=b'{"results": []}')
+        ) as (
             _cls,
             client,
         ):
             await SearxngProvider("http://custom-searxng:9999").search("q", 10)
 
-        assert client.get.call_args.args[0] == "http://custom-searxng:9999/search"
+        assert client.stream.call_args.args[1] == "http://custom-searxng:9999/search"
 
     @pytest.mark.asyncio()
     async def test_query_parameters_are_the_inline_call_s(self) -> None:
-        with _client_patch(response=_response(json_value={"results": []})) as (
+        with client_patch(
+            _SEARXNG_CLIENT, response=_response(content=b'{"results": []}')
+        ) as (
             _cls,
             client,
         ):
             await SearxngProvider().search("weather in boston", 10)
 
-        params = client.get.call_args.kwargs["params"]
+        params = client.stream.call_args.kwargs["params"]
         assert params == {
             "q": "weather in boston",
             "format": "json",
@@ -479,7 +457,9 @@ class TestSearxngProviderRequest:
     @pytest.mark.asyncio()
     async def test_the_client_is_constructed_hardened(self) -> None:
         """Contract point 2, read off the patched class (the Stage 5 idiom)."""
-        with _client_patch(response=_response(json_value={"results": []})) as (
+        with client_patch(
+            _SEARXNG_CLIENT, response=_response(content=b'{"results": []}')
+        ) as (
             client_cls,
             _client,
         ):
@@ -490,6 +470,8 @@ class TestSearxngProviderRequest:
         assert kwargs["trust_env"] is False
         assert kwargs.get("follow_redirects", False) is False
         assert kwargs.get("verify", True) is not False
+        assert kwargs["follow_redirects"] is False
+        assert kwargs["headers"] == {"Accept-Encoding": "identity"}
 
 
 class TestSearxngProviderSuccess:
@@ -505,7 +487,10 @@ class TestSearxngProviderSuccess:
             "publishedDate": "2026-09-01T00:00:00",
             "extra_field": {"kept": True},
         }
-        with _client_patch(response=_response(json_value={"results": [raw]})):
+        with client_patch(
+            _SEARXNG_CLIENT,
+            response=_response(content=json.dumps({"results": [raw]}).encode()),
+        ):
             outcome = await SearxngProvider().search("q", 10)
 
         assert isinstance(outcome, ProviderSearchResult)
@@ -522,7 +507,9 @@ class TestSearxngProviderSuccess:
         so this is the assertion that the default is the right one for the
         only provider that exists today.
         """
-        with _client_patch(response=_response(json_value={"results": []})):
+        with client_patch(
+            _SEARXNG_CLIENT, response=_response(content=b'{"results": []}')
+        ):
             outcome = await SearxngProvider().search("q", 10)
 
         assert isinstance(outcome, ProviderSearchResult)
@@ -530,8 +517,11 @@ class TestSearxngProviderSuccess:
 
     @pytest.mark.asyncio()
     async def test_date_is_none_when_searxng_publishes_no_date(self) -> None:
-        with _client_patch(
-            response=_response(json_value={"results": [{"title": "t"}]})
+        with client_patch(
+            _SEARXNG_CLIENT,
+            response=_response(
+                content=json.dumps({"results": [{"title": "t"}]}).encode()
+            ),
         ):
             outcome = await SearxngProvider().search("q", 10)
 
@@ -541,7 +531,10 @@ class TestSearxngProviderSuccess:
     @pytest.mark.asyncio()
     async def test_results_are_sliced_to_max_results(self) -> None:
         many = [{"title": f"r{i}"} for i in range(50)]
-        with _client_patch(response=_response(json_value={"results": many})):
+        with client_patch(
+            _SEARXNG_CLIENT,
+            response=_response(content=json.dumps({"results": many}).encode()),
+        ):
             outcome = await SearxngProvider().search("q", 7)
 
         assert isinstance(outcome, ProviderSearchResult)
@@ -549,7 +542,7 @@ class TestSearxngProviderSuccess:
 
     @pytest.mark.asyncio()
     async def test_a_missing_results_key_is_an_empty_success(self) -> None:
-        with _client_patch(response=_response(json_value={})):
+        with client_patch(_SEARXNG_CLIENT, response=_response(content=b"{}")):
             outcome = await SearxngProvider().search("q", 10)
 
         assert isinstance(outcome, ProviderSearchResult)
@@ -576,8 +569,13 @@ class TestSearxngProviderSuccess:
     async def test_unresponsive_engines_are_read_as_today(
         self, raw: list[Any], expected: list[str]
     ) -> None:
-        with _client_patch(
-            response=_response(json_value={"results": [], "unresponsive_engines": raw})
+        with client_patch(
+            _SEARXNG_CLIENT,
+            response=_response(
+                content=json.dumps(
+                    {"results": [], "unresponsive_engines": raw}
+                ).encode()
+            ),
         ):
             outcome = await SearxngProvider().search("q", 10)
 
@@ -585,100 +583,347 @@ class TestSearxngProviderSuccess:
         assert outcome.unresponsive_engines == expected
 
 
+@pytest.fixture(params=["searxng", "brave"])
+def bounded_provider(
+    request: pytest.FixtureRequest,
+) -> tuple[SearxngProvider | BraveApiProvider, str]:
+    if request.param == "searxng":
+        return SearxngProvider(
+            settings=SearxngSettings(max_response_bytes=1000)
+        ), _SEARXNG_CLIENT
+    return (
+        BraveApiProvider("sentinel", BraveSettings(max_response_bytes=1000)),
+        "pipeline.search_providers.brave.httpx.AsyncClient",
+    )
+
+
+class TestProviderBoundedBodies:
+    @pytest.mark.parametrize(
+        "shape", ["plain", "gzip-bomb", "final-chunk", "raw-filler"]
+    )
+    async def test_four_overflows_map_and_stop_before_another_chunk(
+        self,
+        bounded_provider: tuple[SearxngProvider | BraveApiProvider, str],
+        shape: str,
+    ) -> None:
+        provider, target = bounded_provider
+        cap = provider.settings.max_response_bytes
+        headers: dict[str, str] = {}
+        if shape == "plain":
+            chunks = [b"x" * cap, b"x"]
+        elif shape == "gzip-bomb":
+            raw = b"x" * (64 * cap)
+            compressed = gzip.compress(raw)
+            assert len(raw) >= 64 * len(compressed)
+            chunks = [compressed]
+            headers["content-encoding"] = "gzip"
+        elif shape == "final-chunk":
+            compressor = zlib.compressobj(wbits=zlib.MAX_WBITS | 16)
+            first = compressor.compress(b"x" * cap) + compressor.flush(
+                zlib.Z_SYNC_FLUSH
+            )
+            chunks = [first, compressor.compress(b"x") + compressor.flush()]
+            headers["content-encoding"] = "gzip"
+        else:
+            chunks = [b"\x00\x00\x00\xff\xff" * 200] * 4
+            headers["content-encoding"] = "deflate"
+        stream = ChunkStream([*chunks, b"unread"])
+        response = httpx.Response(200, headers=headers, stream=stream)
+        with (
+            client_patch(target, response=response),
+            record_decompressors() as recording,
+            patch(f"pipeline.search_providers.{provider.name}.json.loads") as loads_spy,
+        ):
+            outcome = await provider.search("q", 3)
+        assert isinstance(outcome, ProviderFailure)
+        assert (outcome.failure_class, outcome.detail) == (
+            "hard_error",
+            "body_too_large",
+        )
+        loads_spy.assert_not_called()
+        assert stream.chunks_yielded == chunks
+        assert recording.largest_output <= cap + 1
+        assert sum(map(len, stream.chunks_yielded)) <= 4 * cap
+
+    @pytest.mark.parametrize("encoding", ["gzip", "deflate", "raw"])
+    async def test_supported_compression_is_served(
+        self,
+        bounded_provider: tuple[SearxngProvider | BraveApiProvider, str],
+        encoding: str,
+    ) -> None:
+        provider, target = bounded_provider
+        raw = (
+            gzip.compress(b"{}")
+            if encoding == "gzip"
+            else zlib.compress(
+                b"{}", wbits=-zlib.MAX_WBITS if encoding == "raw" else zlib.MAX_WBITS
+            )
+        )
+        response = make_response(
+            content=raw,
+            headers={"content-encoding": "deflate" if encoding == "raw" else encoding},
+        )
+        with client_patch(target, response=response):
+            outcome = await provider.search("q", 3)
+        assert isinstance(outcome, ProviderSearchResult)
+
+    @pytest.mark.parametrize("encoding", ["br", "zstd", "HEADER-PRIVATE", "gzip, br"])
+    async def test_unsupported_encoding_precedes_length_and_read(
+        self,
+        bounded_provider: tuple[SearxngProvider | BraveApiProvider, str],
+        encoding: str,
+    ) -> None:
+        provider, target = bounded_provider
+        stream = ChunkStream([b"unread"])
+        response = httpx.Response(
+            200,
+            headers={"content-encoding": encoding, "content-length": "9" * 21},
+            stream=stream,
+        )
+        with client_patch(target, response=response):
+            outcome = await provider.search("q", 3)
+        assert isinstance(outcome, ProviderFailure)
+        assert (outcome.failure_class, outcome.detail) == (
+            "hard_error",
+            "unsupported_encoding",
+        )
+        assert not stream.chunks_yielded
+
+    @pytest.mark.parametrize(
+        "encoding,length",
+        [
+            ("identity", "1001"),
+            ("gzip", "4001"),
+            ("identity", "0" * 21),
+            ("gzip", "0" * 21),
+        ],
+    )
+    async def test_direct_construction_length_precheck(
+        self,
+        bounded_provider: tuple[SearxngProvider | BraveApiProvider, str],
+        encoding: str,
+        length: str,
+    ) -> None:
+        """Real peers hit h11 first: connect_error / transport_error, not this seam."""
+        provider, target = bounded_provider
+        stream = ChunkStream([b"unread"])
+        response = httpx.Response(
+            200,
+            headers={"content-encoding": encoding, "content-length": length},
+            stream=stream,
+        )
+        with client_patch(target, response=response):
+            outcome = await provider.search("q", 3)
+        assert isinstance(outcome, ProviderFailure)
+        assert outcome.detail == "body_too_large"
+        assert not stream.chunks_yielded
+
+    @pytest.mark.parametrize("announced", [False, True])
+    async def test_compressed_raw_length_uses_four_times_cap(
+        self,
+        bounded_provider: tuple[SearxngProvider | BraveApiProvider, str],
+        announced: bool,
+    ) -> None:
+        provider, target = bounded_provider
+        compressed = gzip.compress(b"{}")
+        raw = (
+            compressed[:3]
+            + b"\x10"
+            + compressed[4:10]
+            + b"x" * 1800
+            + b"\0"
+            + compressed[10:]
+        )
+        assert 1000 < len(raw) <= 4000
+        headers = {"content-encoding": "gzip"}
+        if announced:
+            headers["content-length"] = str(len(raw))
+        with client_patch(target, response=make_response(content=raw, headers=headers)):
+            outcome = await provider.search("q", 3)
+        assert isinstance(outcome, ProviderSearchResult)
+
+    @pytest.mark.parametrize(
+        "encoding,raw",
+        [
+            ("gzip", gzip.compress(b"{}")[:-1]),
+            ("deflate", b"corrupt"),
+            ("gzip", gzip.compress(b"{}") + gzip.compress(b"{}")),
+        ],
+    )
+    async def test_malformed_compression_is_not_bad_json(
+        self,
+        bounded_provider: tuple[SearxngProvider | BraveApiProvider, str],
+        encoding: str,
+        raw: bytes,
+    ) -> None:
+        provider, target = bounded_provider
+        with client_patch(
+            target,
+            response=make_response(content=raw, headers={"content-encoding": encoding}),
+        ):
+            outcome = await provider.search("q", 3)
+        assert isinstance(outcome, ProviderFailure)
+        assert (outcome.failure_class, outcome.detail) == (
+            "hard_error",
+            "malformed_body",
+        )
+
+    async def test_json_parse_is_outside_the_http_deadline(
+        self,
+        bounded_provider: tuple[SearxngProvider | BraveApiProvider, str],
+    ) -> None:
+        provider, target = bounded_provider
+        deadline = asyncio.timeout(1)
+
+        def parse_after_deadline_scope(body: bytes) -> object:
+            # A finished timeout cannot be rescheduled, unlike an active one.
+            with pytest.raises(RuntimeError, match="finished"):
+                deadline.reschedule(None)
+            return {}
+
+        with (
+            client_patch(target),
+            patch(
+                f"pipeline.search_providers.{provider.name}.asyncio.timeout",
+                return_value=deadline,
+            ),
+            patch(
+                f"pipeline.search_providers.{provider.name}.json.loads",
+                side_effect=parse_after_deadline_scope,
+            ),
+        ):
+            outcome = await provider.search("q", 3)
+        assert isinstance(outcome, ProviderSearchResult)
+
+
+async def test_searxng_wall_clock_budget_stops_a_trickling_body() -> None:
+    budget = 0.05
+    stream = ChunkStream([b"x"] * 10, delay=0.02)
+    response = httpx.Response(200, stream=stream)
+    provider = SearxngProvider(settings=SearxngSettings(timeout_seconds=budget))
+    with client_patch(_SEARXNG_CLIENT, response=response) as (_, client):
+        start = time.monotonic()
+        outcome = await provider.search("q", 3)
+        elapsed = time.monotonic() - start
+    assert elapsed > budget
+    assert isinstance(outcome, ProviderFailure)
+    assert (outcome.failure_class, outcome.detail) == ("timeout", "timeout")
+    client.__aexit__.assert_awaited_once()
+
+
 # Every failure mode the provider maps, as (scenario id, patch kwargs,
 # expected failure_class, expected detail). One table, so the closed-
 # vocabulary and never-raises assertions below read off the same cases the
 # per-mapping assertions do.
-_FAILURE_CASES: list[tuple[str, dict[str, Any], str, str]] = [
+_FAILURE_CASES: list[tuple[str, Callable[[], dict[str, Any]], str, str]] = [
     (
         "timeout",
-        {"get_error": httpx.TimeoutException("timed out")},
+        lambda: {"stream_error": httpx.TimeoutException("timed out")},
         "timeout",
         "timeout",
     ),
     (
         "rate-limited-429",
-        {
-            "response": _response(
-                status_code=429,
-                status_error=httpx.HTTPStatusError(
-                    "Too Many Requests",
-                    request=MagicMock(),
-                    response=_response(status_code=429),
-                ),
-            )
-        },
+        lambda: {"response": make_response(status_code=429)},
         "rate_limited",
         "http_429",
     ),
     (
         "server-error-500",
-        {
-            "response": _response(
-                status_code=500,
-                status_error=httpx.HTTPStatusError(
-                    "Server Error",
-                    request=MagicMock(),
-                    response=_response(status_code=500),
-                ),
-            )
-        },
+        lambda: {"response": make_response(status_code=500)},
         "hard_error",
         "http_500",
     ),
     (
         "transport-error",
-        {"get_error": httpx.ConnectError("Connection refused")},
+        lambda: {"stream_error": httpx.ConnectError("Connection refused")},
         "hard_error",
         "connect_error",
     ),
     (
         "body-too-large",
-        {"response": _response(content=b"x" * (1024 * 1024 + 1), json_value={})},
+        lambda: {"response": _response(content=b"x" * (1024 * 1024 + 1))},
         "hard_error",
         "body_too_large",
     ),
     (
         "non-json-body",
-        {"response": _response(json_error=ValueError("not json"))},
-        "hard_error",
-        "bad_json",
-    ),
-    (
-        "json-raises-something-unrelated",
-        {"response": _response(json_error=RuntimeError("decoder exploded"))},
+        lambda: {"response": _response(content=b"not json")},
         "hard_error",
         "bad_json",
     ),
     (
         "body-is-not-an-object",
-        {"response": _response(json_value=["not", "an", "object"])},
+        lambda: {
+            "response": _response(content=json.dumps(["not", "an", "object"]).encode())
+        },
         "hard_error",
         "bad_json",
     ),
     (
         "results-is-not-a-list",
-        {"response": _response(json_value={"results": {}})},
+        lambda: {"response": _response(content=json.dumps({"results": {}}).encode())},
         "hard_error",
         "malformed_body",
     ),
     (
         "results-element-is-not-an-object",
-        {"response": _response(json_value={"results": [{"title": "ok"}, "nope"]})},
+        lambda: {
+            "response": _response(
+                content=json.dumps({"results": [{"title": "ok"}, "nope"]}).encode()
+            )
+        },
         "hard_error",
         "malformed_body",
     ),
     (
         "unexpected-exception",
-        {"get_error": RuntimeError("something nobody predicted")},
+        lambda: {"stream_error": RuntimeError("something nobody predicted")},
         "hard_error",
         "unexpected",
     ),
     (
         "unresponsive-engines-wrong-shape",
-        {"response": _response(json_value={"results": [], "unresponsive_engines": 17})},
+        lambda: {
+            "response": _response(
+                content=json.dumps({"results": [], "unresponsive_engines": 17}).encode()
+            )
+        },
         "hard_error",
         "unexpected",
+    ),
+    (
+        "unsupported-encoding",
+        lambda: {"response": make_response(headers={"content-encoding": " br "})},
+        "hard_error",
+        "unsupported_encoding",
+    ),
+    (
+        "compressed-body-too-large",
+        lambda: {
+            "response": make_response(
+                content=gzip.compress(b"x" * (1_048_576 + 1)),
+                headers={"content-encoding": "gzip"},
+            )
+        },
+        "hard_error",
+        "body_too_large",
+    ),
+    (
+        "zlib-error",
+        lambda: {
+            "response": make_response(
+                content=b"corrupt", headers={"content-encoding": "deflate"}
+            )
+        },
+        "hard_error",
+        "malformed_body",
+    ),
+    (
+        "wall-clock-timeout",
+        lambda: {"stream_error": TimeoutError("private-budget-error")},
+        "timeout",
+        "timeout",
     ),
 ]
 
@@ -695,9 +940,12 @@ class TestSearxngProviderFailures:
         ],
     )
     async def test_each_failure_maps_to_its_class_and_detail(
-        self, patch_kwargs: dict[str, Any], failure_class: str, detail: str
+        self,
+        patch_kwargs: Callable[[], dict[str, Any]],
+        failure_class: str,
+        detail: str,
     ) -> None:
-        with _client_patch(**patch_kwargs):
+        with client_patch(_SEARXNG_CLIENT, **patch_kwargs()):
             outcome = await SearxngProvider().search("q", 10)
 
         assert isinstance(outcome, ProviderFailure)
@@ -714,9 +962,9 @@ class TestSearxngProviderFailures:
         ],
     )
     async def test_every_detail_is_in_the_closed_vocabulary(
-        self, patch_kwargs: dict[str, Any]
+        self, patch_kwargs: Callable[[], dict[str, Any]]
     ) -> None:
-        with _client_patch(**patch_kwargs):
+        with client_patch(_SEARXNG_CLIENT, **patch_kwargs()):
             outcome = await SearxngProvider().search("q", 10)
 
         assert isinstance(outcome, ProviderFailure)
@@ -757,11 +1005,16 @@ class TestSearxngProviderFailures:
         ],
     )
     async def test_no_log_record_carries_exception_text_or_the_base_url(
-        self, patch_kwargs: dict[str, Any], caplog: pytest.LogCaptureFixture
+        self,
+        patch_kwargs: Callable[[], dict[str, Any]],
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """CLAUDE.md invariant 6: SEARXNG_URL may carry a password."""
         base_url = "http://searx-user:hunter2@searxng.internal:8080"
-        with caplog.at_level(logging.WARNING), _client_patch(**patch_kwargs):
+        with (
+            caplog.at_level(logging.WARNING),
+            client_patch(_SEARXNG_CLIENT, **patch_kwargs()),
+        ):
             outcome = await SearxngProvider(base_url).search("secret query", 10)
 
         assert isinstance(outcome, ProviderFailure)
@@ -779,6 +1032,8 @@ class TestSearxngProviderFailures:
                 "timed out",
                 "decoder exploded",
                 "something nobody predicted",
+                " br ",
+                "private-budget-error",
             ):
                 assert forbidden not in rendered, (
                     f"log record leaked {forbidden!r}: {rendered}"
@@ -1009,7 +1264,9 @@ class TestOrchestratorFailureMapping:
     async def test_userinfo_never_reaches_the_searxng_unavailable_reason(self) -> None:
         """End to end through the real provider: host:port echoed, credential not."""
         with (
-            _client_patch(get_error=httpx.ConnectError("Connection refused")),
+            client_patch(
+                _SEARXNG_CLIENT, stream_error=httpx.ConnectError("Connection refused")
+            ),
             pytest.raises(PipelineError) as exc_info,
         ):
             await run_search_pipeline(
@@ -1047,7 +1304,9 @@ class TestOrchestratorFailureMapping:
         unhandled 500 from inside the error path.
         """
         with (
-            _client_patch(get_error=httpx.ConnectError("Connection refused")),
+            client_patch(
+                _SEARXNG_CLIENT, stream_error=httpx.ConnectError("Connection refused")
+            ),
             pytest.raises(PipelineError) as exc_info,
         ):
             await run_search_pipeline(
@@ -1464,7 +1723,9 @@ class TestSearchUnavailableIsChainShaped:
     async def test_the_default_chain_is_still_legacy_end_to_end(self) -> None:
         """`providers=None` substitutes a lone SearXNG chain, so nothing moved."""
         with (
-            _client_patch(get_error=httpx.ConnectError("Connection refused")),
+            client_patch(
+                _SEARXNG_CLIENT, stream_error=httpx.ConnectError("Connection refused")
+            ),
             pytest.raises(PipelineError) as exc_info,
         ):
             await run_search_pipeline(

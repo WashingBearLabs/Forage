@@ -18,6 +18,8 @@ string.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any, cast
@@ -25,6 +27,12 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from pipeline.bounded_body import (
+    BodyTooLarge,
+    MalformedBody,
+    UnsupportedEncoding,
+    read_bounded_body,
+)
 from pipeline.config_bounds import bounded_float
 from pipeline.search_providers.base import (
     FailureClass,
@@ -56,12 +64,7 @@ DEFAULT_SEARXNG_URL = "http://searxng:8080"
 # searxng/config/settings.yml.
 SEARXNG_ENGINES = "duckduckgo,brave,startpage,mojeek"
 
-# The body bound is checked against `len(resp.content)` *before* `resp.json()`
-# runs (contract point 2): an overrun is a typed failure, never a parse of a
-# megabyte of attacker-influenced JSON.
-_MAX_SEARXNG_RESPONSE_BYTES = 1024 * 1024
-
-_SEARXNG_TIMEOUT_SECONDS = 10.0
+DEFAULT_SEARXNG_TIMEOUT_SECONDS = 10.0
 
 # The closed `detail` vocabulary, minus the one open family: a status-derived
 # detail is `http_` followed by the integer status code (`http_429`,
@@ -73,6 +76,7 @@ _SEARXNG_FAILURE_DETAILS = frozenset(
         "timeout",
         "connect_error",
         "body_too_large",
+        "unsupported_encoding",
         "bad_json",
         "malformed_body",
         "unexpected",
@@ -100,8 +104,9 @@ class SearxngConfigurationError(ValueError):
 class SearxngSettings:
     """Validated SearXNG tunables for one process start."""
 
-    timeout_seconds: float = _SEARXNG_TIMEOUT_SECONDS
-    max_response_bytes: int = _MAX_SEARXNG_RESPONSE_BYTES
+    timeout_seconds: float = DEFAULT_SEARXNG_TIMEOUT_SECONDS
+    # Both raw input and Forage-decoded output are bounded before JSON parsing.
+    max_response_bytes: int = 1_048_576
 
 
 def searxng_settings_from_config(config: dict[str, Any]) -> SearxngSettings:
@@ -110,7 +115,7 @@ def searxng_settings_from_config(config: dict[str, Any]) -> SearxngSettings:
         timeout_seconds=bounded_float(
             config,
             "search_searxng_timeout_seconds",
-            _SEARXNG_TIMEOUT_SECONDS,
+            DEFAULT_SEARXNG_TIMEOUT_SECONDS,
             minimum=1.0,
             maximum=60.0,
             error=SearxngConfigurationError,
@@ -177,7 +182,6 @@ class SearxngProvider:
         settings: SearxngSettings | None = None,
     ) -> None:
         self.base_url = base_url
-        # US-003 switches search() from the module constants to these settings.
         self.settings = settings if settings is not None else SearxngSettings()
         # Typed `str | None` to match the protocol member exactly — a
         # protocol's mutable attributes are invariant, so a narrower `str`
@@ -191,33 +195,48 @@ class SearxngProvider:
         """Search SearXNG for *query*, returning at most *max_results* dicts."""
         try:
             async with httpx.AsyncClient(
-                timeout=_SEARXNG_TIMEOUT_SECONDS, trust_env=False
+                timeout=self.settings.timeout_seconds,
+                trust_env=False,
+                follow_redirects=False,
+                headers={"Accept-Encoding": "identity"},
             ) as client:
-                resp = await client.get(
-                    f"{self.base_url}/search",
-                    params={
-                        "q": query,
-                        "format": "json",
-                        "pageno": 1,
-                        "engines": SEARXNG_ENGINES,
-                    },
-                )
-                resp.raise_for_status()
-                if len(resp.content) > _MAX_SEARXNG_RESPONSE_BYTES:
-                    return self._failure("hard_error", "body_too_large")
+                async with asyncio.timeout(self.settings.timeout_seconds):
+                    async with client.stream(
+                        "GET",
+                        f"{self.base_url}/search",
+                        params={
+                            "q": query,
+                            "format": "json",
+                            "pageno": 1,
+                            "engines": SEARXNG_ENGINES,
+                        },
+                    ) as response:
+                        status = response.status_code
+                        if not 200 <= status < 300:
+                            failure_class: FailureClass = (
+                                "rate_limited"
+                                if status == _RATE_LIMITED_STATUS
+                                else "hard_error"
+                            )
+                            return self._failure(
+                                failure_class, f"{HTTP_STATUS_DETAIL_PREFIX}{status}"
+                            )
+                        body = await read_bounded_body(
+                            response, max_bytes=self.settings.max_response_bytes
+                        )
                 try:
-                    payload = cast("object", resp.json())
-                except Exception:
+                    payload = cast("object", json.loads(body))
+                except ValueError:
                     return self._failure("hard_error", "bad_json")
                 return self._build_result(payload, max_results)
-        except httpx.TimeoutException:
+        except (TimeoutError, httpx.TimeoutException):
             return self._failure("timeout", "timeout")
-        except httpx.HTTPStatusError as exc:
-            status = exc.response.status_code
-            failure_class: FailureClass = (
-                "rate_limited" if status == _RATE_LIMITED_STATUS else "hard_error"
-            )
-            return self._failure(failure_class, f"{HTTP_STATUS_DETAIL_PREFIX}{status}")
+        except BodyTooLarge:
+            return self._failure("hard_error", "body_too_large")
+        except UnsupportedEncoding:
+            return self._failure("hard_error", "unsupported_encoding")
+        except MalformedBody:
+            return self._failure("hard_error", "malformed_body")
         except httpx.HTTPError:
             return self._failure("hard_error", "connect_error")
         except Exception:

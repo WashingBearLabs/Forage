@@ -7,6 +7,7 @@ import asyncio
 import errno
 import inspect
 import io
+import json
 import logging
 import os
 import re
@@ -77,7 +78,7 @@ from pipeline.search_providers.base import (
     ProviderSearchResult,
 )
 from pipeline.search_providers.brave import BraveApiProvider
-from pipeline.search_providers.searxng import SearxngProvider
+from pipeline.search_providers.searxng import SearxngProvider, SearxngSettings
 from pipeline.stage1_extraction import ExtractionResult, extract_html
 from pipeline.stage1_pdf import PDFEncryptedError, PDFExtractionError, PDFNoTextError
 from pipeline.stage1_upload import (
@@ -93,7 +94,13 @@ from pipeline.stage3_promptguard import (
 )
 from pipeline.stage5_url_audit import FetchResult
 from promptguard.classifier import PromptGuardBudgetExceededError, PromptGuardClassifier
-from tests.fakes import FakeSearchProvider, FakeStorage, RecordingSearchMetrics
+from tests.fakes import (
+    FakeSearchProvider,
+    FakeStorage,
+    RecordingSearchMetrics,
+    make_response,
+    make_stream_cm,
+)
 from url_validator import matched_entry, normalize_domain_entries, validate_url
 
 
@@ -1092,27 +1099,25 @@ def _mock_searxng_response(
     results: list[dict[str, Any]],
     *,
     unresponsive_engines: list[Any] | None = None,
-) -> MagicMock:
-    """Build a mock httpx response from SearXNG."""
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.raise_for_status = MagicMock()
+) -> httpx.Response:
+    """Build a real, stream-backed httpx response from SearXNG."""
     data: dict[str, Any] = {"results": results}
     if unresponsive_engines is not None:
         data["unresponsive_engines"] = unresponsive_engines
-    mock_resp.json.return_value = data
-    return mock_resp
+    return make_response(content=json.dumps(data).encode())
 
 
 def _searxng_client_patch(
-    mock_response: MagicMock | None = None, *, side_effect: Exception | None = None
+    mock_response: httpx.Response | None = None, *, side_effect: Exception | None = None
 ) -> AbstractContextManager[MagicMock]:
     """Return a patch context for ``httpx.AsyncClient`` used by the search pipeline."""
-    mock_client = AsyncMock()
-    if side_effect is not None:
-        mock_client.get.side_effect = side_effect
-    else:
-        mock_client.get.return_value = mock_response
+    mock_client = MagicMock()
+    mock_client.stream = MagicMock(
+        return_value=make_stream_cm(
+            mock_response if mock_response is not None else make_response()
+        ),
+        side_effect=side_effect,
+    )
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
     ctx = patch(
@@ -1185,13 +1190,7 @@ async def test_search_searxng_unavailable_raises_pipeline_error() -> None:
 
 async def test_search_searxng_http_error_raises_pipeline_error() -> None:
     """SearXNG HTTP error (e.g. 500) raises PipelineError."""
-    mock_resp = MagicMock()
-    mock_resp.status_code = 500
-    mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
-        "Server Error",
-        request=MagicMock(),
-        response=mock_resp,
-    )
+    mock_resp = make_response(status_code=500)
 
     with _searxng_client_patch(mock_resp), pytest.raises(PipelineError) as exc_info:
         await run_search_pipeline(
@@ -1537,7 +1536,14 @@ async def _run_search_with(
     with _searxng_client_patch(mock_resp):
         return await run_search_pipeline(
             _make_search_request(num_results=10),
-            searxng_url="http://test-searxng:8080",
+            # Isolate the parser-input bound from the HTTP body bound: this
+            # helper deliberately supplies a one-MiB field plus JSON framing.
+            providers=[
+                SearxngProvider(
+                    "http://test-searxng:8080",
+                    SearxngSettings(max_response_bytes=2 * 1024 * 1024),
+                )
+            ],
             config=_SAMPLE_CONFIG,
         )
 
@@ -2701,19 +2707,20 @@ async def test_post_retrieve_fetched_pdf_runs_under_the_extraction_ceiling(
 
 async def test_post_search_endpoint_success(client: httpx.AsyncClient) -> None:
     """POST /search returns 200 with SearchResponse JSON on success."""
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = {
-        "results": [
+    mock_resp = make_response(
+        content=json.dumps(
             {
-                "title": "Test",
-                "url": "https://example.com",
-                "content": "Snippet.",
-                "engine": "google",
-            },
-        ],
-    }
+                "results": [
+                    {
+                        "title": "Test",
+                        "url": "https://example.com",
+                        "content": "Snippet.",
+                        "engine": "google",
+                    },
+                ],
+            }
+        ).encode()
+    )
 
     with _searxng_client_patch(mock_resp):
         resp = await client.post("/search", json={"query": "test"})
@@ -3074,7 +3081,7 @@ async def test_search_pins_the_vetted_engine_set() -> None:
         )
 
     mock_client = mock_client_cls.return_value
-    params = mock_client.get.call_args.kwargs["params"]
+    params = mock_client.stream.call_args.kwargs["params"]
     # The literal set IS the contract — it must stay in sync with the
     # enabled engines in searxng/config/settings.yml (see _SEARXNG_ENGINES).
     assert set(params["engines"].split(",")) == {
@@ -3354,12 +3361,13 @@ class TestChainTraversal:
         sentinel = "sentinel-brave-key-do-not-leak"
         searxng_url = "http://user:pass@unreachable:8080"
 
-        mock_client = AsyncMock()
-        mock_client.get.side_effect = httpx.ConnectError(
-            f"Connection refused to {searxng_url}"
-        )
+        mock_client = MagicMock()
         mock_client.stream = MagicMock(
-            side_effect=RuntimeError(f"boom token={sentinel}")
+            side_effect=[
+                httpx.ConnectError(f"Connection refused to {searxng_url}"),
+                RuntimeError(f"boom token={sentinel}"),
+                httpx.ConnectError(f"Connection refused to {searxng_url}"),
+            ]
         )
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -3457,7 +3465,7 @@ class TestFailureClassDiscrimination:
 
         assert result.provider_used == "brave"
         assert result.provider_errors == ["searxng: rate_limited"]
-        assert mocked_async_client.return_value.get.call_count == 1
+        assert mocked_async_client.return_value.stream.call_count == 1
         assert len(brave.calls) == 1
         messages = [r.getMessage() for r in caplog.records]
         assert any(
@@ -6498,7 +6506,7 @@ async def test_sanitize_and_structure_with_a_free_permit_classifies() -> None:
 # -- /search ----------------------------------------------------------------
 
 
-def _ten_result_response() -> MagicMock:
+def _ten_result_response() -> httpx.Response:
     """Ten clean, distinct provider results."""
     return _mock_searxng_response(
         [
@@ -6519,7 +6527,7 @@ async def _search_under(
     wait_seconds: float | None,
     metrics: Any = None,
     fail_closed: bool = False,
-    response: MagicMock | None = None,
+    response: httpx.Response | None = None,
 ) -> SearchResponse:
     """Drive ``run_search_pipeline`` over ten results under *semaphore*."""
     with _searxng_client_patch(response or _ten_result_response()):

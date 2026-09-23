@@ -111,6 +111,7 @@ from tests.fakes import (
     FakeSearchProvider,
     FakeStorage,
     hub_download_double,
+    make_response,
     weights_manifest_document,
 )
 
@@ -3667,8 +3668,8 @@ async def test_a_following_search_still_sees_the_real_provider(
         await client.post("/search", json={"query": "chain test"})
 
     with patch("pipeline.search_providers.searxng.httpx.AsyncClient") as client_cls:
-        inner = AsyncMock()
-        inner.get.side_effect = httpx.ConnectError("not available")
+        inner = MagicMock()
+        inner.stream.side_effect = httpx.ConnectError("not available")
         inner.__aenter__ = AsyncMock(return_value=inner)
         inner.__aexit__ = AsyncMock(return_value=False)
         client_cls.return_value = inner
@@ -4623,12 +4624,7 @@ async def test_a_hostile_providers_entry_leaks_nowhere(
 
 
 def _brave_stream_response() -> httpx.Response:
-    return httpx.Response(
-        status_code=200,
-        content=b"{}",
-        headers={"content-type": "application/json"},
-        request=httpx.Request("GET", "https://api.search.brave.com/res/v1/llm/context"),
-    )
+    return make_response(url="https://api.search.brave.com/res/v1/llm/context")
 
 
 def _brave_client_double() -> MagicMock:
