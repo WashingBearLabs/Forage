@@ -946,22 +946,22 @@ legitimately names — `scripts/export_contract.py:263-270` writes it on every e
 - Nothing here moves the document or a hashed file: no window block, no rotation.
 
 **Acceptance Criteria:**
-- [ ] `compose/full.yml` passes `FORAGE_CACHE_HMAC_KEY` through as a bare name with the comment and
+- [x] `compose/full.yml` passes `FORAGE_CACHE_HMAC_KEY` through as a bare name with the comment and
       its header recipe includes a `FORAGE_CACHE_HMAC_KEY=$(…)` line that generates the value (the
       test asserts the line is not an empty assignment); `compose/minimal.yml` does not
       carry the name; `tests/test_compose_fragments.py` asserts all three; no rendered config or
       env value is recorded anywhere (ruling 33).
-- [ ] `_REQUIRED_GREP_PATTERNS` and both `ci.yml` grep copies carry the name, the `ci.yml:532-539`
+- [x] `_REQUIRED_GREP_PATTERNS` and both `ci.yml` grep copies carry the name, the `ci.yml:532-539`
       comment names it and says four patterns (`grep -n 'three patterns' .github/workflows/ci.yml`
       returns nothing), and `tests/test_ci_workflow.py` passes.
-- [ ] Sentinel suite: the key value appears zero times in `/health`, `/metrics`, a `/retrieve` 422
+- [x] Sentinel suite: the key value appears zero times in `/health`, `/metrics`, a `/retrieve` 422
       body raised while the key is configured, every log record across the five drives, and
       `repr(app.state.cache)`; the fixture-tree walk finds the sentinel value nowhere under
       `tests/fixtures/` and the variable name nowhere under `tests/fixtures/` outside
       `tests/fixtures/contract/`.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ## Edge Cases
 
