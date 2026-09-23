@@ -97,7 +97,11 @@ from pipeline.search_providers.brave import (
     usable_brave_key,
 )
 from pipeline.search_providers.policy import apply_request_policy
-from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL, SearxngProvider
+from pipeline.search_providers.searxng import (
+    DEFAULT_SEARXNG_URL,
+    SearxngProvider,
+    searxng_settings_from_config,
+)
 from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES
 from promptguard.classifier import PromptGuardClassifier
 from url_validator import domain_list_bytes, normalize_domain_entries
@@ -408,6 +412,7 @@ KNOWN_CONFIG_KEYS: frozenset[str] = frozenset(
         "promptguard_wait_seconds",
         "policy_domain_entries_max_bytes",
         "search_brave_timeout_seconds",
+        "search_searxng_timeout_seconds",
         "search_brave_chunk_max_chars",
         "search_brave_query_max_chars",
         "extract_route_enabled",
@@ -1591,6 +1596,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ahead of the chain build below because `build_provider_chain` needs
     # the resolved settings to hand a registered `BraveApiProvider`.
     app.state.brave_settings = brave_settings_from_config(config)
+    app.state.searxng_settings = searxng_settings_from_config(config)
 
     # Resolve the ordered search-provider chain from the environment, once.
     # An unknown name raises `SearchProviderConfigurationError` straight out
@@ -1611,6 +1617,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         searxng_url=SEARXNG_URL,
         brave_api_key=brave_key,
         brave_settings=app.state.brave_settings,
+        searxng_settings=app.state.searxng_settings,
     )
     app.state.search_providers = search_providers
     app.state.search_key_capabilities = (

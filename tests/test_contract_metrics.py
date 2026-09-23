@@ -65,6 +65,7 @@ _CONFIG_READER_MODULES = (
     "cache.py",
     "pipeline/extraction_limits.py",
     "pipeline/search_providers/brave.py",
+    "pipeline/search_providers/searxng.py",
     "pipeline/orchestrator.py",
     "pipeline/sanitizer_revision.py",
     "pipeline/retrieve_limits.py",
@@ -655,6 +656,7 @@ def test_config_registry_covers_every_reader() -> None:
         ("pipeline/extraction_limits.py", "extraction_settings_from_config"),
         ("pipeline/retrieve_limits.py", "retrieve_settings_from_config"),
         ("pipeline/search_providers/brave.py", "brave_settings_from_config"),
+        ("pipeline/search_providers/searxng.py", "searxng_settings_from_config"),
         ("retrieval_app.py", "lifespan"),
         ("retrieval_app.py", "promptguard_threshold_from_config"),
     ):

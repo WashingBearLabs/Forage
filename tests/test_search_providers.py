@@ -28,6 +28,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import yaml
 
 import pipeline.search_providers
 from pipeline import orchestrator
@@ -61,7 +62,10 @@ from pipeline.search_providers.searxng import (
     HTTP_STATUS_DETAIL_PREFIX,
     SEARXNG_ENGINES,
     UNPARSEABLE_ENDPOINT,
+    SearxngConfigurationError,
     SearxngProvider,
+    SearxngSettings,
+    searxng_settings_from_config,
 )
 from tests.fakes import FakeSearchProvider, assert_frozen
 
@@ -268,6 +272,85 @@ def test_no_search_provider_module_imports_a_sanitization_stage_or_the_cache() -
 # ---------------------------------------------------------------------------
 # US-002: SearxngProvider — the extracted SearXNG backend
 # ---------------------------------------------------------------------------
+
+
+class TestSearxngSettingsFromConfig:
+    def test_defaults_are_frozen(self) -> None:
+        settings = searxng_settings_from_config({})
+        assert settings == SearxngSettings(
+            timeout_seconds=10.0, max_response_bytes=1_048_576
+        )
+        assert_frozen(settings, "timeout_seconds", 30.0)
+
+    @pytest.mark.parametrize("value", [1, 1.0, 30, 30.0, 60, 60.0])
+    def test_accepts_numbers_in_the_inclusive_range(self, value: float) -> None:
+        settings = searxng_settings_from_config(
+            {"search_searxng_timeout_seconds": value}
+        )
+        assert settings.timeout_seconds == value
+        assert isinstance(settings.timeout_seconds, float)
+
+    @pytest.mark.parametrize(
+        "value",
+        [0.5, 61.0, float("nan"), float("inf"), -float("inf"), 10**400, -(10**400)],
+    )
+    def test_out_of_range_values_raise_the_configuration_error(
+        self, value: object
+    ) -> None:
+        with pytest.raises(
+            SearxngConfigurationError,
+            match=r"^search_searxng_timeout_seconds must be between 1.0 and 60.0$",
+        ):
+            searxng_settings_from_config({"search_searxng_timeout_seconds": value})
+
+    @pytest.mark.parametrize("value", ["abc", "30", True, False, None, [], {}])
+    def test_wrong_types_raise_without_echoing_the_value(self, value: object) -> None:
+        with pytest.raises(
+            SearxngConfigurationError,
+            match=r"^search_searxng_timeout_seconds must be a number$",
+        ):
+            searxng_settings_from_config({"search_searxng_timeout_seconds": value})
+
+    def test_shipped_config_pins_the_default(self) -> None:
+        config_path = Path(__file__).resolve().parent.parent / "config.yaml"
+        shipped = yaml.safe_load(config_path.read_text())
+        assert shipped["search_searxng_timeout_seconds"] == 10.0
+        assert searxng_settings_from_config(shipped) == SearxngSettings()
+        assert "search_searxng_max_response_bytes" not in shipped
+        assert "search_brave_max_response_bytes" not in shipped
+
+    def test_direct_construction_keeps_defaults_or_the_supplied_settings(self) -> None:
+        assert SearxngProvider().settings == SearxngSettings()
+        settings = SearxngSettings(timeout_seconds=30.0, max_response_bytes=32)
+        assert SearxngProvider(settings=settings).settings is settings
+
+    @pytest.mark.parametrize("names", [["searxng"], ["brave"]])
+    def test_registry_and_all_skipped_fallback_both_use_settings(
+        self, names: list[str]
+    ) -> None:
+        settings = SearxngSettings(timeout_seconds=30.0, max_response_bytes=32)
+        chain = build_provider_chain(
+            names,
+            searxng_url="http://configured-searxng:9999",
+            searxng_settings=settings,
+        )
+        assert len(chain) == 1
+        provider = chain[0]
+        assert isinstance(provider, SearxngProvider)
+        assert provider.base_url == "http://configured-searxng:9999"
+        assert provider.settings is settings
+
+    async def test_settings_are_stored_but_not_yet_read_by_search(self) -> None:
+        settings = SearxngSettings(timeout_seconds=30.0, max_response_bytes=1)
+        with _client_patch(response=_response(json_value={"results": []})) as (
+            client_cls,
+            client,
+        ):
+            outcome = await SearxngProvider(settings=settings).search("q", 3)
+        assert isinstance(outcome, ProviderSearchResult)
+        assert client_cls.call_args.kwargs["timeout"] == 10.0
+        client.get.assert_awaited_once()
+
 
 _SEARXNG_CLIENT = "pipeline.search_providers.searxng.httpx.AsyncClient"
 

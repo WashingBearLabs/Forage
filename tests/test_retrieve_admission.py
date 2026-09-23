@@ -15,6 +15,7 @@ import gc
 import threading
 import weakref
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
@@ -440,7 +441,7 @@ async def test_total_fetch_deadline_stops_periodic_stream_and_unblocks_queue(
     monkeypatch: pytest.MonkeyPatch,
     redirects: bool,
 ) -> None:
-    """Real fetcher, fake transport: chunks cannot renew the absolute deadline."""
+    """Real fetcher, fake stream: chunks cannot renew the absolute deadline."""
     started = asyncio.Event()
     closed = asyncio.Event()
     chunks: list[float] = []
@@ -473,14 +474,21 @@ async def test_total_fetch_deadline_stops_periodic_stream_and_unblocks_queue(
             return httpx.Response(200, stream=SlowStream())
         return httpx.Response(200, content=_PAGE, headers={"content-type": "text/html"})
 
-    # Only transport and DNS are faked; use the production fetcher and its
+    # Only the streaming seam and DNS are faked; use the production fetcher and its
     # redirect/body handling without sockets or relaxed pytest-socket guards.
-    real_client = httpx.AsyncClient
+    @asynccontextmanager
+    async def stream(
+        _client: httpx.AsyncClient, method: str, url: str, **_kwargs: Any
+    ) -> AsyncGenerator[httpx.Response]:
+        request = httpx.Request(method, url)
+        response = await handler(request)
+        response.request = request
+        try:
+            yield response
+        finally:
+            await response.aclose()
 
-    def mock_client(**kwargs: Any) -> httpx.AsyncClient:
-        return real_client(transport=httpx.MockTransport(handler), **kwargs)
-
-    monkeypatch.setattr("pipeline.stage5_url_audit.httpx.AsyncClient", mock_client)
+    monkeypatch.setattr("pipeline.stage5_url_audit.httpx.AsyncClient.stream", stream)
     monkeypatch.setattr(
         "pipeline.stage5_url_audit.validate_url",
         _async_return(("93.184.216.34", "example.com")),

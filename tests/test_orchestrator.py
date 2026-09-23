@@ -93,7 +93,7 @@ from pipeline.stage3_promptguard import (
 )
 from pipeline.stage5_url_audit import FetchResult
 from promptguard.classifier import PromptGuardBudgetExceededError, PromptGuardClassifier
-from tests.fakes import FakeSearchProvider, FakeStorage
+from tests.fakes import FakeSearchProvider, FakeStorage, RecordingSearchMetrics
 from url_validator import matched_entry, normalize_domain_entries, validate_url
 
 
@@ -3831,13 +3831,7 @@ class TestFallbackTelemetry:
     ) -> None:
         """The orchestrator-side Protocol, driven directly (no FastAPI app)."""
 
-        class _RecordingMetrics:
-            def __init__(self) -> None:
-                self.fallback_fired = 0
-                self.paid_calls = 0
-                self.classification_wait_timeouts = 0
-
-        metrics = _RecordingMetrics()
+        metrics = RecordingSearchMetrics()
         searxng = FakeSearchProvider(
             name="searxng",
             paid=False,
@@ -3870,13 +3864,7 @@ class TestFallbackTelemetry:
     ) -> None:
         """A billed call is billed whether or not it serves the response."""
 
-        class _RecordingMetrics:
-            def __init__(self) -> None:
-                self.fallback_fired = 0
-                self.paid_calls = 0
-                self.classification_wait_timeouts = 0
-
-        metrics = _RecordingMetrics()
+        metrics = RecordingSearchMetrics()
         searxng = FakeSearchProvider(
             name="searxng",
             paid=False,
@@ -3908,13 +3896,7 @@ class TestFallbackTelemetry:
     async def test_a_single_searxng_provider_never_moves_the_metrics_sink(
         self,
     ) -> None:
-        class _RecordingMetrics:
-            def __init__(self) -> None:
-                self.fallback_fired = 0
-                self.paid_calls = 0
-                self.classification_wait_timeouts = 0
-
-        metrics = _RecordingMetrics()
+        metrics = RecordingSearchMetrics()
         provider = FakeSearchProvider(
             name="searxng",
             outcome=ProviderSearchResult(

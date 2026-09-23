@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import socket
 import time
+import zlib
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from cache import CacheMetrics
@@ -16,12 +22,164 @@ from model_fetcher import repo_dirname
 from pipeline.search_providers.base import ProviderFailure, ProviderSearchResult
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import AsyncGenerator, Callable, Generator, Mapping
 
     from models import RetrievedContent
 
 
 CACHE_HMAC_SENTINEL = "cache-hmac-test-only-" + "x" * 24
+
+
+class ChunkStream(httpx.AsyncByteStream):
+    """Yield and record raw chunks, optionally delaying before each one."""
+
+    def __init__(self, chunks: list[bytes], *, delay: float = 0.0) -> None:
+        self._chunks = chunks
+        self._delay = delay
+        self.chunks_yielded: list[bytes] = []
+
+    @property
+    def largest_chunk(self) -> int:
+        """Largest raw chunk actually yielded, not a decoded-output bound."""
+        return max((len(chunk) for chunk in self.chunks_yielded), default=0)
+
+    async def __aiter__(self) -> AsyncGenerator[bytes]:
+        for chunk in self._chunks:
+            if self._delay > 0:
+                await asyncio.sleep(self._delay)
+            self.chunks_yielded.append(chunk)
+            yield chunk
+
+
+def make_response(
+    status_code: int = 200,
+    content: bytes = b"{}",
+    headers: dict[str, str] | None = None,
+    *,
+    url: str = "https://example.invalid/search",
+    content_type: str = "application/json",
+) -> httpx.Response:
+    """Build a stream-backed response usable by ``aiter_raw`` or ``aiter_bytes``.
+
+    No ``content-length`` is synthesized: tests relying on it must set it.
+    ``aiter_bytes`` still decodes this shape, as the stage-5 fetcher expects.
+    Each response is single-use, like a real HTTP stream.
+    """
+    hdrs = {"content-type": content_type}
+    if headers:
+        hdrs.update(headers)
+    return httpx.Response(
+        status_code=status_code,
+        headers=hdrs,
+        stream=ChunkStream([content]),
+        request=httpx.Request("GET", url),
+    )
+
+
+def make_stream_cm(response: httpx.Response) -> MagicMock:
+    """An async context manager yielding the supplied response."""
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=response)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return cm
+
+
+@contextmanager
+def client_patch(
+    target: str,
+    *,
+    response: httpx.Response | None = None,
+    stream_error: Exception | None = None,
+) -> Generator[tuple[MagicMock, MagicMock]]:
+    """Intercept a per-call streaming client at the caller's patch target."""
+    client = MagicMock()
+    envelope = response if response is not None else make_response()
+    client.stream = MagicMock(
+        return_value=make_stream_cm(envelope), side_effect=stream_error
+    )
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    with patch(target, return_value=client) as client_cls:
+        yield client_cls, client
+
+
+class RecordingDecompressor:
+    """Proxy zlib while recording each output size and every attempted call."""
+
+    def __init__(self, wbits: int) -> None:
+        self._decoder = zlib.decompressobj(wbits)
+        self.output_sizes: list[int] = []
+        self.calls = 0
+
+    def decompress(self, data: bytes, max_length: int = 0) -> bytes:
+        self.calls += 1
+        out = self._decoder.decompress(data, max_length)
+        self.output_sizes.append(len(out))
+        return out
+
+    @property
+    def largest_output(self) -> int:
+        return max(self.output_sizes, default=0)
+
+    @property
+    def eof(self) -> bool:
+        return self._decoder.eof
+
+    @property
+    def unconsumed_tail(self) -> bytes:
+        return self._decoder.unconsumed_tail
+
+    @property
+    def unused_data(self) -> bytes:
+        return self._decoder.unused_data
+
+
+@dataclass
+class DecompressorRecording:
+    """Aggregate every decoder, including a raw-deflate retry's new instance."""
+
+    instances: list[RecordingDecompressor] = field(
+        default_factory=list[RecordingDecompressor]
+    )
+
+    @property
+    def largest_output(self) -> int:
+        return max((item.largest_output for item in self.instances), default=0)
+
+    @property
+    def calls(self) -> int:
+        return sum(item.calls for item in self.instances)
+
+
+@contextmanager
+def record_decompressors() -> Generator[DecompressorRecording]:
+    """Patch only the bounded reader's factory, never process-global zlib."""
+    recording = DecompressorRecording()
+
+    def factory(wbits: int) -> RecordingDecompressor:
+        decoder = RecordingDecompressor(wbits)
+        recording.instances.append(decoder)
+        return decoder
+
+    with patch("pipeline.bounded_body._decompressobj", new=factory):
+        yield recording
+
+
+@dataclass
+class RecordingSearchMetrics:
+    """The complete ``SearchMetricsSink`` counter surface, local to each test."""
+
+    fallback_fired: int = 0
+    paid_calls: int = 0
+    classification_wait_timeouts: int = 0
+
+    @property
+    def counters(self) -> dict[str, int]:
+        return {
+            "fallback_fired": self.fallback_fired,
+            "paid_calls": self.paid_calls,
+            "classification_wait_timeouts": self.classification_wait_timeouts,
+        }
 
 
 def assert_frozen(instance: object, field: str, value: object) -> None:

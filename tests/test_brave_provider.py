@@ -18,7 +18,7 @@ import json
 import logging
 import re
 import ssl
-from collections.abc import AsyncIterator, Callable, Generator
+from collections.abc import Callable, Generator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,7 +67,15 @@ from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL
 from pipeline.stage3_promptguard import PromptGuardResult
 from promptguard.classifier import PromptGuardClassifier
 from retrieval_app import SearchMetrics, app, lifespan
-from tests.fakes import FakeContentCache, FakeSearchProvider, FakeStorage
+from tests.fakes import (
+    ChunkStream,
+    FakeContentCache,
+    FakeSearchProvider,
+    FakeStorage,
+    client_patch,
+    make_response,
+    make_stream_cm,
+)
 
 # ---------------------------------------------------------------------------
 # Fixture provenance — the pre-flight gate stays satisfied
@@ -221,52 +229,7 @@ class TestResolveBraveKey:
         assert BRAVE_KEY_STRIP_CHARS == " \t\n"
 
 
-# ---------------------------------------------------------------------------
-# Streaming client doubles — copied from
-# tests/test_stage5_url_audit.py:43-82 for the streamed-envelope fixture path
-# ---------------------------------------------------------------------------
-
-
-def _make_response(
-    status_code: int = 200,
-    content: bytes = b"{}",
-    headers: dict[str, str] | None = None,
-) -> httpx.Response:
-    """Build a minimal httpx.Response."""
-    hdrs = {"content-type": "application/json"}
-    if headers:
-        hdrs.update(headers)
-    return httpx.Response(
-        status_code=status_code,
-        content=content,
-        headers=hdrs,
-        request=httpx.Request("GET", _BRAVE_LLM_CONTEXT_URL),
-    )
-
-
-def _make_stream_cm(response: httpx.Response) -> MagicMock:
-    """Async context manager mock that yields *response* on __aenter__."""
-    cm = MagicMock()
-    cm.__aenter__ = AsyncMock(return_value=response)
-    cm.__aexit__ = AsyncMock(return_value=False)
-    return cm
-
-
 _BRAVE_CLIENT = "pipeline.search_providers.brave.httpx.AsyncClient"
-
-
-@contextmanager
-def _client_patch(
-    *, response: httpx.Response | None = None
-) -> Generator[tuple[MagicMock, MagicMock]]:
-    """Intercept the provider's per-call ``httpx.AsyncClient``."""
-    client = MagicMock()
-    envelope = response if response is not None else _make_response()
-    client.stream = MagicMock(return_value=_make_stream_cm(envelope))
-    client.__aenter__ = AsyncMock(return_value=client)
-    client.__aexit__ = AsyncMock(return_value=False)
-    with patch(_BRAVE_CLIENT, return_value=client) as client_cls:
-        yield client_cls, client
 
 
 _INTEGRATION_CONFIG: dict[str, Any] = {
@@ -313,7 +276,9 @@ class TestParsesThePinnedSample:
     @pytest.mark.asyncio()
     async def test_search_returns_one_chunk_result_per_source(self) -> None:
         provider = BraveApiProvider("sentinel-key")
-        with _client_patch(response=_make_response(content=_load_sample_bytes())):
+        with client_patch(
+            _BRAVE_CLIENT, response=make_response(content=_load_sample_bytes())
+        ):
             outcome = await provider.search("history of the bicycle", 3)
 
         assert isinstance(outcome, ProviderSearchResult)
@@ -328,7 +293,9 @@ class TestParsesThePinnedSample:
     @pytest.mark.asyncio()
     async def test_fields_match_the_sample_values(self) -> None:
         provider = BraveApiProvider("sentinel-key")
-        with _client_patch(response=_make_response(content=_load_sample_bytes())):
+        with client_patch(
+            _BRAVE_CLIENT, response=make_response(content=_load_sample_bytes())
+        ):
             outcome = await provider.search("history of the bicycle", 3)
 
         assert isinstance(outcome, ProviderSearchResult)
@@ -349,7 +316,9 @@ class TestParsesThePinnedSample:
     @pytest.mark.asyncio()
     async def test_max_results_bounds_the_mapped_sources(self) -> None:
         provider = BraveApiProvider("sentinel-key")
-        with _client_patch(response=_make_response(content=_load_sample_bytes())):
+        with client_patch(
+            _BRAVE_CLIENT, response=make_response(content=_load_sample_bytes())
+        ):
             outcome = await provider.search("history of the bicycle", 1)
 
         assert isinstance(outcome, ProviderSearchResult)
@@ -368,9 +337,7 @@ class TestClientHardening:
         with patch(_BRAVE_CLIENT) as client_cls:
             client = MagicMock()
             client.stream = MagicMock(
-                return_value=_make_stream_cm(
-                    _make_response(content=_load_sample_bytes())
-                )
+                return_value=make_stream_cm(make_response(content=_load_sample_bytes()))
             )
             client.__aenter__ = AsyncMock(return_value=client)
             client.__aexit__ = AsyncMock(return_value=False)
@@ -388,7 +355,9 @@ class TestClientHardening:
     async def test_request_target_and_key_placement(self) -> None:
         sentinel_key = "sentinel-key-value-should-never-leak"
         provider = BraveApiProvider(sentinel_key)
-        with _client_patch(response=_make_response(content=_load_sample_bytes())) as (
+        with client_patch(
+            _BRAVE_CLIENT, response=make_response(content=_load_sample_bytes())
+        ) as (
             _client_cls,
             client,
         ):
@@ -455,7 +424,9 @@ class TestNoUnicodeEncodeErrorAcrossEnvironmentValues:
             # nothing further to drive — the refusal already happened.
             return
 
-        with _client_patch(response=_make_response(content=_load_sample_bytes())):
+        with client_patch(
+            _BRAVE_CLIENT, response=make_response(content=_load_sample_bytes())
+        ):
             outcome = await brave_providers[0].search("q", 3)
 
         assert isinstance(outcome, ProviderSearchResult | ProviderFailure)
@@ -470,7 +441,9 @@ class TestRunSearchPipelineIntegration:
     @pytest.mark.asyncio()
     async def test_wire_results_carry_chunk_kind_and_brave_api_engine(self) -> None:
         provider = BraveApiProvider("sentinel-key")
-        with _client_patch(response=_make_response(content=_load_sample_bytes())):
+        with client_patch(
+            _BRAVE_CLIENT, response=make_response(content=_load_sample_bytes())
+        ):
             response = await run_search_pipeline(
                 SearchRequest(
                     query="history of the bicycle",
@@ -493,7 +466,9 @@ class TestRunSearchPipelineIntegration:
         """Equality, not ``startswith`` — the same sanitization the provider fed in."""
         provider = BraveApiProvider("sentinel-key")
 
-        with _client_patch(response=_make_response(content=_load_sample_bytes())):
+        with client_patch(
+            _BRAVE_CLIENT, response=make_response(content=_load_sample_bytes())
+        ):
             direct_outcome = await provider.search("q", 5)
         assert isinstance(direct_outcome, ProviderSearchResult)
         raw_content = direct_outcome.results[0]["content"]
@@ -501,7 +476,9 @@ class TestRunSearchPipelineIntegration:
             raw_content, max_length=_MAX_SEARCH_SNIPPET_LENGTH
         )
 
-        with _client_patch(response=_make_response(content=_load_sample_bytes())):
+        with client_patch(
+            _BRAVE_CLIENT, response=make_response(content=_load_sample_bytes())
+        ):
             response = await run_search_pipeline(
                 SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
                 providers=[provider],
@@ -535,8 +512,8 @@ class TestRunSearchPipelineIntegration:
         sample["sources"][first_url]["age"] = age
 
         provider = BraveApiProvider("sentinel-key")
-        with _client_patch(
-            response=_make_response(content=json.dumps(sample).encode())
+        with client_patch(
+            _BRAVE_CLIENT, response=make_response(content=json.dumps(sample).encode())
         ):
             response = await run_search_pipeline(
                 SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
@@ -560,8 +537,8 @@ class TestRunSearchPipelineIntegration:
         ]
 
         provider = BraveApiProvider("sentinel-key")
-        with _client_patch(
-            response=_make_response(content=json.dumps(sample).encode())
+        with client_patch(
+            _BRAVE_CLIENT, response=make_response(content=json.dumps(sample).encode())
         ):
             response = await run_search_pipeline(
                 SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
@@ -579,6 +556,17 @@ class TestRunSearchPipelineIntegration:
 
 
 class TestBraveSettingsFromConfig:
+    def test_response_byte_cap_is_a_test_only_default(self) -> None:
+        assert BraveSettings().max_response_bytes == _BRAVE_MAX_RESPONSE_BYTES
+        assert BraveSettings().max_response_bytes == 1_048_576
+        assert BraveSettings(max_response_bytes=32).max_response_bytes == 32
+
+    async def test_response_byte_setting_is_not_yet_read_by_search(self) -> None:
+        provider = BraveApiProvider("sentinel-key", BraveSettings(max_response_bytes=1))
+        with client_patch(_BRAVE_CLIENT, response=make_response()):
+            outcome = await provider.search("q", 3)
+        assert isinstance(outcome, ProviderSearchResult)
+
     def test_defaults(self) -> None:
         settings = brave_settings_from_config({})
         assert settings == BraveSettings(
@@ -676,7 +664,9 @@ class TestCandidateBudget:
         self, num_results: int
     ) -> None:
         provider = _SpyingBraveProvider("sentinel-key")
-        with _client_patch(response=_make_response(content=_load_sample_bytes())) as (
+        with client_patch(
+            _BRAVE_CLIENT, response=make_response(content=_load_sample_bytes())
+        ) as (
             _client_cls,
             client,
         ):
@@ -700,7 +690,9 @@ class TestCandidateBudget:
     ) -> None:
         """The pinned sample carries three sources."""
         provider = BraveApiProvider("sentinel-key")
-        with _client_patch(response=_make_response(content=_load_sample_bytes())):
+        with client_patch(
+            _BRAVE_CLIENT, response=make_response(content=_load_sample_bytes())
+        ):
             outcome = await provider.search("q", max_results)
 
         assert isinstance(outcome, ProviderSearchResult)
@@ -712,17 +704,6 @@ class TestCandidateBudget:
 # ---------------------------------------------------------------------------
 
 
-class _ChunkStream(httpx.AsyncByteStream):
-    """Yield fixed byte chunks with no synthesized ``Content-Length`` header."""
-
-    def __init__(self, chunks: list[bytes]) -> None:
-        self._chunks = chunks
-
-    async def __aiter__(self) -> AsyncIterator[bytes]:
-        for chunk in self._chunks:
-            yield chunk
-
-
 class TestBodyBound:
     """The response body is bounded before any ``json.loads`` call."""
 
@@ -730,13 +711,13 @@ class TestBodyBound:
     async def test_content_length_over_cap_is_rejected_before_json_loads(
         self,
     ) -> None:
-        response = _make_response(
+        response = make_response(
             content=b"{}",
             headers={"content-length": str(_BRAVE_MAX_RESPONSE_BYTES + 1)},
         )
         provider = BraveApiProvider("sentinel-key")
         with (
-            _client_patch(response=response),
+            client_patch(_BRAVE_CLIENT, response=response),
             patch(
                 "pipeline.search_providers.brave.json.loads", wraps=json.loads
             ) as loads_spy,
@@ -755,7 +736,7 @@ class TestBodyBound:
         chunks = [b"X" * 400_000 for _ in range(3)]  # 1.2 MB total
         response = httpx.Response(
             200,
-            stream=_ChunkStream(chunks),
+            stream=ChunkStream(chunks),
             headers={"content-type": "application/json"},
             request=httpx.Request("GET", _BRAVE_LLM_CONTEXT_URL),
         )
@@ -765,7 +746,7 @@ class TestBodyBound:
 
         provider = BraveApiProvider("sentinel-key")
         with (
-            _client_patch(response=response),
+            client_patch(_BRAVE_CLIENT, response=response),
             patch(
                 "pipeline.search_providers.brave.json.loads", wraps=json.loads
             ) as loads_spy,
@@ -798,7 +779,7 @@ class TestBodyBound:
 
         provider = BraveApiProvider("sentinel-key")
         with (
-            _client_patch(response=response),
+            client_patch(_BRAVE_CLIENT, response=response),
             patch(
                 "pipeline.search_providers.brave.json.loads", wraps=json.loads
             ) as loads_spy,
@@ -822,8 +803,8 @@ class TestPayloadCaps:
         sample["grounding"]["generic"][0]["snippets"] = ["Y" * 50_000]
 
         provider = BraveApiProvider("sentinel-key")
-        with _client_patch(
-            response=_make_response(content=json.dumps(sample).encode())
+        with client_patch(
+            _BRAVE_CLIENT, response=make_response(content=json.dumps(sample).encode())
         ):
             outcome = await provider.search("q", 3)
 
@@ -837,7 +818,9 @@ class TestPayloadCaps:
         provider = BraveApiProvider("sentinel-key")
         long_query = "q" * 5_000
 
-        with _client_patch(response=_make_response(content=_load_sample_bytes())) as (
+        with client_patch(
+            _BRAVE_CLIENT, response=make_response(content=_load_sample_bytes())
+        ) as (
             _client_cls,
             client,
         ):
@@ -891,7 +874,9 @@ class TestEngineProvenanceStaysDistinct:
         )
 
         brave_provider = BraveApiProvider("sentinel-key")
-        with _client_patch(response=_make_response(content=_load_sample_bytes())):
+        with client_patch(
+            _BRAVE_CLIENT, response=make_response(content=_load_sample_bytes())
+        ):
             brave_response = await run_search_pipeline(
                 SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
                 providers=[brave_provider],
@@ -1000,16 +985,16 @@ async def _run_brave(
 ) -> SearchResponse:
     request = SearchRequest(query="q", num_results=5, promptguard_fail_closed=False)
     provider = BraveApiProvider("sentinel-key")
-    envelope = _make_response(
+    envelope = make_response(
         content=_brave_envelope(title=title, url=url, content=content)
     )
     if promptguard_result is None:
-        with _client_patch(response=envelope):
+        with client_patch(_BRAVE_CLIENT, response=envelope):
             return await run_search_pipeline(
                 request, providers=[provider], config=_INTEGRATION_CONFIG
             )
     with (
-        _client_patch(response=envelope),
+        client_patch(_BRAVE_CLIENT, response=envelope),
         patch(
             "pipeline.orchestrator.run_promptguard",
             new_callable=AsyncMock,
@@ -1185,14 +1170,15 @@ class TestNoPersistence:
 
         with (
             _borrowed_search_providers([provider]),
-            _client_patch(
-                response=_make_response(
+            client_patch(
+                _BRAVE_CLIENT,
+                response=make_response(
                     content=_brave_envelope(
                         title=_CLEAN_TITLE,
                         url=_CLEAN_URL_BRAVE,
                         content=sentinel,
                     )
-                )
+                ),
             ),
             caplog.at_level(logging.INFO),
         ):
@@ -1237,7 +1223,9 @@ class _FailureCase:
 
 def _status_patch(status_code: int) -> Callable[[], AbstractContextManager[Any]]:
     def _factory() -> AbstractContextManager[Any]:
-        return _client_patch(response=_make_response(status_code=status_code))
+        return client_patch(
+            _BRAVE_CLIENT, response=make_response(status_code=status_code)
+        )
 
     return _factory
 
@@ -1246,7 +1234,9 @@ def _body_patch(
     content: bytes, headers: dict[str, str] | None = None
 ) -> Callable[[], AbstractContextManager[Any]]:
     def _factory() -> AbstractContextManager[Any]:
-        return _client_patch(response=_make_response(content=content, headers=headers))
+        return client_patch(
+            _BRAVE_CLIENT, response=make_response(content=content, headers=headers)
+        )
 
     return _factory
 
@@ -1462,7 +1452,7 @@ class TestZeroSourceIsACleanSuccess:
         self, content: bytes
     ) -> None:
         provider = BraveApiProvider("sentinel-key")
-        with _client_patch(response=_make_response(content=content)):
+        with client_patch(_BRAVE_CLIENT, response=make_response(content=content)):
             outcome = await provider.search("q", 5)
 
         assert isinstance(outcome, ProviderSearchResult)
@@ -1477,7 +1467,7 @@ class TestZeroSourceIsACleanSuccess:
         empty_body = b'{"grounding": {"generic": []}}'
         with (
             _borrowed_search_providers([provider]),
-            _client_patch(response=_make_response(content=empty_body)),
+            client_patch(_BRAVE_CLIENT, response=make_response(content=empty_body)),
         ):
             resp = await client.post(
                 "/search",
@@ -1499,7 +1489,9 @@ class TestZeroSourceIsACleanSuccess:
         provider = BraveApiProvider("sentinel-key")
         with (
             _borrowed_search_providers([provider]),
-            _client_patch(response=_make_response(content=_load_sample_bytes())),
+            client_patch(
+                _BRAVE_CLIENT, response=make_response(content=_load_sample_bytes())
+            ),
         ):
             resp = await client.post(
                 "/search",

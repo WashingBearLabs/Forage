@@ -201,6 +201,8 @@ class BraveSettings:
     timeout_seconds: float = DEFAULT_BRAVE_TIMEOUT_SECONDS
     chunk_max_chars: int = DEFAULT_BRAVE_CHUNK_MAX_CHARS
     query_max_chars: int = DEFAULT_BRAVE_QUERY_MAX_CHARS
+    # Test seam only; search() keeps the module constant until US-003.
+    max_response_bytes: int = _BRAVE_MAX_RESPONSE_BYTES
 
 
 def _bounded_float(

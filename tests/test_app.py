@@ -78,7 +78,11 @@ from pipeline.search_providers.base import (
     SearchProvider,
 )
 from pipeline.search_providers.brave import BRAVE_API_KEY_ENV_VAR
-from pipeline.search_providers.searxng import DEFAULT_SEARXNG_URL
+from pipeline.search_providers.searxng import (
+    DEFAULT_SEARXNG_URL,
+    SearxngConfigurationError,
+    SearxngProvider,
+)
 from pipeline.stage1_extraction import ExtractionResult, extract_html
 from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES, FetchResult
 from promptguard.classifier import (
@@ -4665,6 +4669,43 @@ async def test_lifespan_wires_the_configured_brave_timeout_into_the_client(
 
     assert isinstance(outcome, ProviderSearchResult)
     assert client_cls.call_args.kwargs["timeout"] == 45.0
+
+
+async def test_lifespan_wires_the_configured_searxng_settings_into_the_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng")
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {"search_searxng_timeout_seconds": 30.0},
+    )
+    with _borrowed_search_providers(None):
+        async with _running_app():
+            chain = cast("list[SearchProvider]", app.state.search_providers)
+            assert len(chain) == 1
+            provider = chain[0]
+            assert isinstance(provider, SearxngProvider)
+            assert provider.settings is app.state.searxng_settings
+            assert provider.settings.timeout_seconds == 30.0
+
+
+@pytest.mark.parametrize("value", [0.5, 61.0, "abc", True])
+@pytest.mark.parametrize("providers", ["searxng", "brave"])
+async def test_invalid_searxng_settings_refuse_boot_regardless_of_chain(
+    monkeypatch: pytest.MonkeyPatch, value: object, providers: str
+) -> None:
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", providers)
+    monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "sentinel-key")
+    monkeypatch.setattr(
+        retrieval_app,
+        "_load_config",
+        lambda: {"search_searxng_timeout_seconds": value},
+    )
+    with pytest.raises(SearxngConfigurationError):
+        async with lifespan(FastAPI()):
+            pytest.fail("Invalid SearXNG settings must refuse boot")
 
 
 async def test_a_key_set_after_startup_does_not_change_the_resolved_chain(

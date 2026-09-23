@@ -19,11 +19,13 @@ string.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import urlsplit
 
 import httpx
 
+from pipeline.config_bounds import bounded_float
 from pipeline.search_providers.base import (
     FailureClass,
     ProviderFailure,
@@ -90,6 +92,32 @@ _RATE_LIMITED_STATUS = 429
 UNPARSEABLE_ENDPOINT = "unparseable-endpoint"
 
 
+class SearxngConfigurationError(ValueError):
+    """Raised when a SearXNG tunable in ``config.yaml`` exceeds its safe bounds."""
+
+
+@dataclass(frozen=True, slots=True)
+class SearxngSettings:
+    """Validated SearXNG tunables for one process start."""
+
+    timeout_seconds: float = _SEARXNG_TIMEOUT_SECONDS
+    max_response_bytes: int = _MAX_SEARXNG_RESPONSE_BYTES
+
+
+def searxng_settings_from_config(config: dict[str, Any]) -> SearxngSettings:
+    """Validate settings at boot even when SearXNG is absent from the chain."""
+    return SearxngSettings(
+        timeout_seconds=bounded_float(
+            config,
+            "search_searxng_timeout_seconds",
+            _SEARXNG_TIMEOUT_SECONDS,
+            minimum=1.0,
+            maximum=60.0,
+            error=SearxngConfigurationError,
+        ),
+    )
+
+
 def _compute_origin(base_url: str) -> str:
     """Reduce *base_url* to scheme, hostname and port, userinfo stripped.
 
@@ -143,8 +171,14 @@ class SearxngProvider:
     name = SEARXNG_PROVIDER_NAME
     paid = False
 
-    def __init__(self, base_url: str = DEFAULT_SEARXNG_URL) -> None:
+    def __init__(
+        self,
+        base_url: str = DEFAULT_SEARXNG_URL,
+        settings: SearxngSettings | None = None,
+    ) -> None:
         self.base_url = base_url
+        # US-003 switches search() from the module constants to these settings.
+        self.settings = settings if settings is not None else SearxngSettings()
         # Typed `str | None` to match the protocol member exactly — a
         # protocol's mutable attributes are invariant, so a narrower `str`
         # here would make this class stop satisfying `SearchProvider`. The

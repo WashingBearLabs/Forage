@@ -1737,6 +1737,15 @@ and the same for `kit_tools/arch/SERVICE_MAP.md` each return at least `1`; the f
   Full pytest remains explicitly deferred to end-of-epic validation by the
   implementer instruction; this is not a claim that its acceptance gate was run.
 
+### Provider-bounds US-001 reader-list handoff (2026-09-22)
+
+- Extended the implemented US-003 AST reader list, `_CONFIG_READER_MODULES` in
+  `tests/test_contract_metrics.py`, with `pipeline/search_providers/searxng.py`.
+  Its bounded-reader assertion now requires `searxng_settings_from_config`;
+  the shared-helper sweep resolves `search_searxng_timeout_seconds` through
+  `bounded_float` and checks it against `KNOWN_CONFIG_KEYS` and both config docs.
+  The archived story definition and completed acceptance checkboxes are unchanged.
+
 ### US-004 - boundary-text knob parity (2026-09-22)
 
 - Derived the route-specific and shared sets from `SearchRequest.model_fields`

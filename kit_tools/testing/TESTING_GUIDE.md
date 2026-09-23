@@ -144,6 +144,7 @@ the story implementer did not run it.
 | `tests/test_compose_fragments.py` | 62 | Compose fragments, parse-only shape guards (audit: row was missing), and (`search-release` US-004) the `forage:1.1.0` pin and the `FORAGE_SEARCH_PROVIDERS` / `FORAGE_BRAVE_API_KEY` bare-name passthrough on the `forage` service in both fragments |
 | `tests/test_contract_smoke.py` | 91 | `contract_smoke.py`: every `/health` clause, polling, the single-source ties to the golden schema, and — since US-004 — the in-image contract checks: the `docker run --rm --entrypoint cat` argv it builds, the anchor comparisons against the committed trust root, and the `info.version` ↔ live `contract_version` claim, all driven through an injected runner so the suite never starts a container. `search-release` US-004 adds the status-aware `--expect-status`/`--anchor` coverage: a healthy body passes under `healthy` and fails under the default, a degraded body fails under `healthy`, `wait_for_health` under `healthy` keeps polling past a 200 `degraded` body until a `healthy` one arrives (or returns the last body once the deadline passes), and the in-image anchor is compared against the `--anchor` file rather than a hard-coded path |
 | `tests/test_stage5_url_audit.py` | 28 | Outbound fetch + redirect-chain audit |
+| `tests/test_fakes.py` | 14 | Shared streaming doubles: raw/decoded reads, no implicit Content-Length, delayed chunks, client patch restoration, per-instance and aggregate decoder observations including raw-deflate retry, and complete `SearchMetricsSink` parity |
 | `tests/test_stage1_pdf.py` | 23 | PDF branch, subprocess isolation |
 | `tests/test_dockerfile.py` | 50 | `Dockerfile` text: no secret may enter the build, digest-pinned base, lock-driven install, and — since US-004 — that the frozen contract is COPYed to `/app/contract/` (with `.dockerignore` checked for a pattern that would silently empty it) and that the two reproducibility normalizations stay: no timestamped apt artefacts, no bytecode from the import check |
 | `tests/test_pyright_policy.py` | 12 | Type-checking policy: strict, one carve-out, no suppressions |
@@ -163,7 +164,7 @@ Support files:
 | File | Purpose |
 |------|---------|
 | `tests/conftest.py` | Puts the repo root on `sys.path`; installs the autouse socket guard |
-| `tests/fakes.py` | Shared fakes and builders: the fake cache, `assert_frozen`, the Hugging Face cache-layout helpers (`materialize_hub_snapshot`, `hub_download_double`, `weights_manifest_document`) that `test_model_fetcher.py` and `test_app.py` both build fixtures from, and `record_network_attempts` — which *counts* outbound attempts rather than only refusing them, because a library that swallows the guard's error makes "blocked" and "never tried" look identical |
+| `tests/fakes.py` | Shared fakes and builders: `FakeStorage`, `FakeContentCache`, `FakeSearchProvider`, `assert_frozen`, the Hugging Face cache-layout helpers (`materialize_hub_snapshot`, `hub_download_double`, `weights_manifest_document`), and `record_network_attempts`. Streaming doubles: `ChunkStream` (raw chunks only, optional per-chunk delay), stream-backed `make_response` (no implicit Content-Length), `make_stream_cm`, `client_patch(target, ...)`, `RecordingDecompressor` and `record_decompressors()` (aggregate every decoder instance, including raw-deflate retries). `RecordingSearchMetrics` owns every `SearchMetricsSink` counter and its `counters` projection; add future sink fields here, not in local copies. |
 | `tests/fixtures/tiny_model/` | A real, loadable 2-layer DeBERTa-v2 classifier (~96 KB, safetensors only) — the fixture that lets the *actual* loader be exercised rather than mocked |
 | `tests/fixtures/contract/unregenerated_openapi.yaml` | The contract drift check's committed failure case: `contract/openapi.yaml` with `Extract422ErrorResponse.sanitizer_revision` removed — what the file would look like if a response model had changed and nobody regenerated. Written by `scripts/export_contract.py` alongside the contract, so one command keeps both in step |
 | `tests/golden/contract_1_0_0.json` | Frozen contract fixture for `test_contract_schema.py`; `contract_1_1_0.json` and `contract_1_2_0.json` sit beside it, `1.2.0` being the current one (and, while it is still unpublished, the one regenerated in place — `contract/GOVERNANCE.md` ruling (c)). The fixture pins `model_json_schema()`, which moves for description and enum-rendering changes as well as wire ones — regenerate it for a documentation-only change, bump `CONTRACT_VERSION` (new file alongside the old) for a real one |
@@ -262,7 +263,8 @@ test_mapping:
   "pipeline/sanitizer_revision.py": ["tests/test_sanitizer_revision.py", "tests/test_governance_docs.py"]
   "model_fetcher.py": ["tests/test_model_fetcher.py", "tests/test_app.py"]
   "weights_manifest.json": "tests/test_model_fetcher.py"
-  "tests/fakes.py": ["tests/test_model_fetcher.py", "tests/test_app.py"]
+  "tests/fakes.py": ["tests/test_fakes.py", "tests/test_model_fetcher.py", "tests/test_app.py", "tests/test_brave_provider.py", "tests/test_stage5_url_audit.py", "tests/test_orchestrator.py"]
+  "pipeline/bounded_body.py": "tests/test_fakes.py"
   "pipeline/stage1_extraction.py": "tests/test_stage1_extraction.py"
   "pipeline/stage1_pdf.py": "tests/test_stage1_pdf.py"
   "pipeline/pdf_subprocess.py": "tests/test_stage1_pdf.py"

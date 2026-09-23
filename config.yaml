@@ -21,6 +21,8 @@ policy_domain_entries_max_bytes: 65536
 # not "brave" is in FORAGE_SEARCH_PROVIDERS, so an out-of-range value refuses
 # boot on every deployment.
 search_brave_timeout_seconds: 15.0
+# Validated at boot; the SearXNG read path adopts this timeout in US-003.
+search_searxng_timeout_seconds: 10.0
 search_brave_chunk_max_chars: 2000
 search_brave_query_max_chars: 400
 # Release gate: /extract remains invisible (404) until this is enabled and the

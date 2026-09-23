@@ -1381,6 +1381,49 @@ record.
 
 ## Implementation Notes
 
+### US-001 - settings and shared streaming doubles (2026-09-22, Copilot)
+
+- Added frozen `SearxngSettings`, the module-owned configuration error and a
+  `bounded_float` reader for the shipped 1-60 second timeout key. Lifespan
+  validates it unconditionally and passes it to both registry/fallback construction
+  sites. The config registry, canonical reference and environment table agree.
+  Settings are deliberately stored, not consumed by `search()` yet; both docs
+  explicitly distinguish this seam from the currently fixed per-operation timeout.
+- Brave's sole production change is `BraveSettings.max_response_bytes` plus its
+  temporary comment. Both provider `search()` methods are byte-identical to
+  pre-story `764fecd`; Brave's remaining production AST is identical as well.
+  No new byte-limit config key or module-local bounds helper was introduced.
+- Promoted the stream-backed response/client doubles, delayed raw chunk recorder,
+  per-instance decoder proxy, aggregate decoder context and complete metrics fake.
+  All pre-existing assertions in Brave, stage 5 and orchestrator tests are unchanged;
+  SearXNG's get-shaped doubles remain unchanged. Stage 5 retains only single-return
+  delegating wrappers. No migrated test required a synthesized Content-Length.
+- `pipeline/bounded_body.py` did not exist at this seam's start. Added only the
+  module-local `_decompressobj` alias so the recorder can patch its specified target
+  now, without patching global zlib or implementing US-003's reader early. The
+  raw-deflate regression drives the wrapped attempt and raw retry explicitly,
+  observes two instances and aggregates their calls/output bounds. US-003 still
+  owns the decoder and all production read-path changes.
+- Extended spec 3's implemented `_CONFIG_READER_MODULES` list and required-reader
+  assertion with SearXNG; recorded that handoff in the archived spec's Implementation
+  Notes only, leaving its story definitions and completed checkboxes untouched.
+- The final no-transport-double sweep found one post-planning occurrence in
+  `tests/test_retrieve_admission.py`, introduced by retrieve-parity validation
+  `fe211e3`. Migrated only its HTTP stream seam to a closing async context manager;
+  its real fetcher, delayed headers/chunks, cancellation cleanup, deadline, admission
+  and result assertions are unchanged. The repository-wide sweep now has zero hits.
+- All nine hashed sources, the derivation module, response models and contract
+  artifacts are unchanged. Default and shipped configuration both retain
+  `0866963aac3ae860f135061b1cfac397c3678333103a8139fc36fde27d2c1e80`;
+  no sanitizer rotation, contract export changes or golden edits are needed.
+- Validation: 1,098 related tests pass across the eight changed test modules,
+  including 14 shared-double regressions. Repository Ruff lint/format, strict
+  Pyright (zero errors), contract exporter `--check` and whitespace checks pass.
+  Three existing non-failing warnings remain unsuppressed (one upstream Torch
+  deprecation and two intentional socket-guard warnings). The full pytest suite
+  was explicitly prohibited by this invocation; its acceptance gate is unverified,
+  so the implementation result is `partial` / `needs-work`, not a functional failure.
+
 ## Refinement Notes
 
 ### Research Findings
