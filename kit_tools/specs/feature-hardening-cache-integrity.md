@@ -1355,6 +1355,31 @@ prohibits the full suite.** Partial / needs-work records that outstanding
 acceptance gate, not a known implementation defect. No acceptance checkbox,
 story definition or owner-controlled vision/release gate was changed.
 
+### Feature-level implementation validation (2026-09-22)
+
+- Reviewed `main...HEAD` at `b026bbb012e3eb498734e1e789a59657f12fcdf5`
+  on `epic/forage-hardening`: 80 changed files, including the three intentional
+  prerequisite specs. Autonomous mode applies to this invocation only;
+  stored guarded execution mode and epic/spec lifecycle state are unchanged.
+- Three parallel reviews completed in one round. **0 critical, 2 warning,
+  1 informational finding**; no fix/re-validation loops and no pause.
+  Security is ready with no actionable findings. Quality and compliance
+  are advisory `needs-work`, not a claim that every criterion is complete.
+- Open warnings: a model-readiness transition can bypass the shared inference
+  semaphore in the prerequisite sanitizer/search integration; `CODE_ARCH.md`
+  lacks US-002's thirty-second rotation and still calls its boot wiring future
+  work. The earlier US-002 note's claim that all five rotation sites were
+  updated is therefore corrected by this review. Evidence and recommendations
+  are recorded as `2026-09-22-004` and `2026-09-22-005` in `AUDIT_FINDINGS.md`.
+- **The deferred full-suite gate is now verified:** `uv run pytest -q
+  --tb=short` passed **3,255 tests** with 13 non-failing dependency/socket-guard
+  warnings in 20.80s. Ruff lint, all 141 files' formatting, strict Pyright,
+  generated-contract drift and whitespace gates pass. No baseline failures.
+- No runtime or contract change was made by validation. Owner-only vision
+  replacements and later resource/release gates remain pending by design.
+  `complete-implementation` was not invoked; the spec remains active and
+  unarchived as requested.
+
 ## Refinement Notes
 
 ### Research Findings
