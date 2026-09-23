@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document error handling patterns and conventions.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-cache-integrity US-003)
+> Updated by: Copilot (hardening-provider-bounds US-005)
 
 ## Overview
 
@@ -168,9 +168,13 @@ That legacy pair is selected by the **configured chain**, not by the failing pro
 `_legacy_searxng_codes` is true only for a chain of exactly one provider whose `name`
 is `searxng`, compared as a name and never with `isinstance` (ruling 28). Every other
 chain refuses with `search_unavailable` (contract `1.2.0`), whose reason is composed from
-two closed vocabularies — one `<provider_name>: <failure_class>` entry per failed
-provider, in chain order, joined by `"; "` — so no endpoint, credential or upstream text
-can reach the body through it.
+two guarded vocabularies — one `<provider_name>: <failure_class>` entry per failed
+provider, in chain order, joined by `"; "`. `_query_provider_chain` maps a class
+outside `FAILURE_CLASSES` to `hard_error`, a detail outside
+`[a-z0-9_]{1,32}` to `unexpected`, and a provider name outside that same token
+pattern to `unknown` before logging or composing an error. The name fallback
+hardens future operator-pluggable providers; today's registry has fixed names.
+No endpoint, credential or upstream exception text can reach the body through it.
 
 The route handlers add bookkeeping, not decisions: `/retrieve` calls
 `RetrieveMetrics.record_error(exc.error)` and re-raises; `/extract` records the verdict

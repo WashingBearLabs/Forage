@@ -53,6 +53,7 @@ from pipeline.pdf_subprocess import (
 )
 from pipeline.retrieve_limits import RetrieveSettings
 from pipeline.search_providers.base import (
+    FAILURE_CLASSES,
     ProviderFailure,
     ProviderSearchResult,
     SearchProvider,
@@ -1327,7 +1328,7 @@ def _search_unavailable_error(
 
     *provider_errors* is the chain-order list of ``"<provider.name>:
     <failure_class>"`` entries built while traversing — one per provider
-    tried, each composed from two closed vocabularies and nothing else, so no
+    tried, each composed from a guarded name token and closed failure class, so no
     endpoint, credential, header or exception text can reach a 422 body
     through this path, whatever a third-party API put in its response. The
     reason is those entries joined by ``"; "``.
@@ -1434,10 +1435,139 @@ class _NullSearchMetrics:
         self.provider_timeouts = 0
 
 
+@dataclass(frozen=True, slots=True)
+class _ServedChain:
+    serving_provider: SearchProvider
+    raw_results: list[dict[str, Any]]
+    serving_max_results: int
+    unresponsive_engines: list[str]
+    content_kind: contract.ContentKind
+    provider_errors: list[str]
+    fallback_fired: bool
+
+
+_UNRESPONSIVE_ENGINES_DETAIL = "unresponsive_engines"
+_PROVIDER_TOKEN_RE = re.compile(r"[a-z0-9_]{1,32}")
+
+
+def _provider_token(value: str, *, fallback: str) -> str:
+    return value if _PROVIDER_TOKEN_RE.fullmatch(value) else fallback
+
+
+def _log_provider_failure(provider: str, failure_class: str, detail: str) -> None:
+    logger.warning(
+        "search_provider_failed provider=%s failure_class=%s detail=%s",
+        provider,
+        failure_class,
+        detail,
+    )
+
+
+async def _query_provider_chain(
+    request: SearchRequest,
+    *,
+    chain: Sequence[SearchProvider],
+    configured_chain: Sequence[SearchProvider],
+    metrics: SearchMetricsSink,
+    request_id: str,
+) -> _ServedChain:
+    """Query in order, mutating the sink before each call and each exit.
+
+    The failure boundary validates class, detail and name before either logging
+    or composing an error. The name fallback hardens future operator-pluggable
+    providers; today's registry already supplies fixed, valid names.
+    """
+    if not chain:
+        raise ValueError(
+            "run_search_pipeline received an empty provider chain; a caller "
+            "with no provider to offer must not call the pipeline"
+        )
+    legacy_codes = _legacy_searxng_codes(configured_chain)
+    # The candidate budget is a request, not a trusted bound: the caller
+    # re-applies the serving provider's slice before scanning.
+    fetch_limit = min(request.num_results * 2, _MAX_SEARCH_RESULTS_SCANNED)
+    provider_errors: list[str] = []
+    fallback_fired = False
+    for index, provider in enumerate(chain):
+        if index > 0 and not fallback_fired:
+            fallback_fired = True
+            metrics.fallback_fired += 1
+        max_results = request.num_results if provider.paid else fetch_limit
+        if provider.paid:
+            metrics.paid_calls += 1
+        try:
+            call_outcome = await provider.search(request.query, max_results)
+        except Exception:
+            # Preserve the orchestrator-side floor for a defective provider:
+            # advance the chain without exposing exception text (ruling 27).
+            call_outcome = ProviderFailure(
+                provider_name=provider.name,
+                failure_class="hard_error",
+                detail="unexpected",
+            )
+
+        if call_outcome.compressed:
+            metrics.provider_compressed_body += 1
+        if (
+            isinstance(call_outcome, ProviderFailure)
+            and call_outcome.failure_class == "timeout"
+        ):
+            metrics.provider_timeouts += 1
+
+        name = _provider_token(provider.name, fallback="unknown")
+        if (
+            isinstance(call_outcome, ProviderSearchResult)
+            and not call_outcome.results
+            and call_outcome.unresponsive_engines
+        ):
+            # A configured chain of exactly one `searxng` (search epic ruling 28)
+            # serves this shape as before; otherwise an empty 200 with failed
+            # engines advances the chain. Judge raw results, not sanitization.
+            if legacy_codes:
+                _log_provider_failure(
+                    name, "rate_limited", _UNRESPONSIVE_ENGINES_DETAIL
+                )
+            else:
+                call_outcome = ProviderFailure(
+                    provider_name=name,
+                    failure_class="rate_limited",
+                    detail=_UNRESPONSIVE_ENGINES_DETAIL,
+                    compressed=call_outcome.compressed,
+                )
+
+        if isinstance(call_outcome, ProviderFailure):
+            failure = replace(
+                call_outcome,
+                provider_name=name,
+                failure_class=(
+                    call_outcome.failure_class
+                    if call_outcome.failure_class in FAILURE_CLASSES
+                    else "hard_error"
+                ),
+                detail=_provider_token(call_outcome.detail, fallback="unexpected"),
+            )
+            provider_errors.append(f"{name}: {failure.failure_class}")
+            _log_provider_failure(name, failure.failure_class, failure.detail)
+            if legacy_codes and index == len(chain) - 1:
+                raise _searxng_pipeline_error(provider, failure, request_id=request_id)
+            continue
+
+        return _ServedChain(
+            serving_provider=provider,
+            raw_results=call_outcome.results,
+            serving_max_results=max_results,
+            unresponsive_engines=call_outcome.unresponsive_engines,
+            content_kind=call_outcome.content_kind,
+            provider_errors=provider_errors,
+            fallback_fired=fallback_fired,
+        )
+
+    raise _search_unavailable_error(provider_errors, request_id=request_id)
+
+
 async def run_search_pipeline(
     request: SearchRequest,
     *,
-    searxng_url: str = _DEFAULT_SEARXNG_URL,
     providers: Sequence[SearchProvider] | None = None,
     configured_chain: Sequence[SearchProvider] | None = None,
     blocked_domains: Sequence[str] = (),
@@ -1470,9 +1600,9 @@ async def run_search_pipeline(
       ``"<name>: rate_limited"``): this is how SearXNG actually fails in
       production, a 200 that never raises. Sufficiency is judged on raw
       results before sanitization, so a poisoned or fail-closed result set
-      that sanitization later empties out is still a success. A chain of
-      exactly one ``searxng`` provider has nothing to fall back to, so that
-      one shape is served as-is there instead of advancing. Replace-not-merge:
+      that sanitization later empties out is still a success. A chain
+      configured as exactly one ``searxng`` provider has no fallback, so that
+      shape is served as-is there instead of advancing. Replace-not-merge:
       a served response's ``results`` and ``unresponsive_engines`` come only
       from the serving provider; nothing from a failed provider survives into
       it. An exhausted chain raises :class:`PipelineError` — today's
@@ -1482,9 +1612,8 @@ async def run_search_pipeline(
 
     *providers* is the chain the lifespan resolved from
     ``FORAGE_SEARCH_PROVIDERS``, tried in order. ``None`` means "no chain
-    supplied" and builds the default one-element SearXNG chain from
-    *searxng_url* — the test call sites that still pass ``searxng_url=`` take
-    this path. The check is ``is None`` and never a falsy one: an empty
+    supplied" and builds the default one-element SearXNG chain. The check
+    is ``is None`` and never a falsy one: an empty
     non-``None`` sequence is a caller programming error with no wire code,
     and a falsy check would silently serve the default chain instead of
     surfacing it.
@@ -1522,130 +1651,30 @@ async def run_search_pipeline(
 
     This function never reads the environment.
     """
-    if providers is not None and len(providers) == 0:
-        raise ValueError(
-            "run_search_pipeline received an empty provider chain; a caller "
-            "with no provider to offer must not call the pipeline"
-        )
-
     request_id = uuid.uuid4().hex
     effective_blocklist = [*config.get("seed_blocklist", []), *blocked_domains]
 
     # -- Call the search provider chain, free-first --
-    # Request extra results to compensate for any BLOCKED omissions. The
-    # candidate budget is a *request* to the provider, never a trusted bound:
-    # the slice below is re-applied to whatever comes back, so
-    # `_MAX_SEARCH_RESULTS_SCANNED` stays enforced on this side of the seam.
-    fetch_limit = min(request.num_results * 2, _MAX_SEARCH_RESULTS_SCANNED)
     chain: Sequence[SearchProvider] = (
-        [SearxngProvider(searxng_url)] if providers is None else providers
-    )
-    resolved_configured_chain: Sequence[SearchProvider] = (
-        chain if configured_chain is None else configured_chain
+        [SearxngProvider(_DEFAULT_SEARXNG_URL)] if providers is None else providers
     )
 
     metrics: SearchMetricsSink = (
         search_metrics if search_metrics is not None else _NullSearchMetrics()
     )
 
-    outcome: ProviderSearchResult | None = None
-    serving_provider: SearchProvider | None = None
-    serving_max_results: int | None = None
-    provider_errors: list[str] = []
-    last_failure: ProviderFailure | None = None
-    last_provider: SearchProvider | None = None
-    fallback_fired = False
-    for index, provider in enumerate(chain):
-        if index > 0 and not fallback_fired:
-            fallback_fired = True
-            metrics.fallback_fired += 1
-        max_results = request.num_results if provider.paid else fetch_limit
-        if provider.paid:
-            metrics.paid_calls += 1
-        try:
-            call_outcome = await provider.search(request.query, max_results)
-        except Exception:
-            # Ruling 27 already guarantees every provider's own mapping ends
-            # in this catch-all; this guard is a second, orchestrator-side
-            # floor so a defect in provider *n* can never become a 500 or
-            # skip the free floor at *n+1*.
-            call_outcome = ProviderFailure(
-                provider_name=provider.name,
-                failure_class="hard_error",
-                detail="unexpected",
-            )
-
-        if call_outcome.compressed:
-            metrics.provider_compressed_body += 1
-        if (
-            isinstance(call_outcome, ProviderFailure)
-            and call_outcome.failure_class == "timeout"
-        ):
-            metrics.provider_timeouts += 1
-
-        if (
-            isinstance(call_outcome, ProviderSearchResult)
-            and not call_outcome.results
-            and call_outcome.unresponsive_engines
-        ):
-            # Ruling 17's headline rule: a 200 with zero raw results and every
-            # engine listed as unresponsive is how SearXNG actually fails in
-            # production (kit_tools/docs/GOTCHAS.md "SearXNG :latest rots") —
-            # it never raises, so it is only visible here. A chain of exactly
-            # one `searxng` provider has nothing to fall back to, so this
-            # shape is not a trigger there: it is served exactly as before
-            # the provider seam existed.
-            if _legacy_searxng_codes(resolved_configured_chain):
-                logger.warning(
-                    "search_provider_failed provider=%s failure_class=%s detail=%s",
-                    provider.name,
-                    "rate_limited",
-                    "unresponsive_engines",
-                )
-                outcome = call_outcome
-                serving_provider = provider
-                serving_max_results = max_results
-                break
-            call_outcome = ProviderFailure(
-                provider_name=provider.name,
-                failure_class="rate_limited",
-                detail="unresponsive_engines",
-                compressed=call_outcome.compressed,
-            )
-
-        if isinstance(call_outcome, ProviderFailure):
-            provider_errors.append(f"{provider.name}: {call_outcome.failure_class}")
-            logger.warning(
-                "search_provider_failed provider=%s failure_class=%s detail=%s",
-                provider.name,
-                call_outcome.failure_class,
-                call_outcome.detail,
-            )
-            last_failure = call_outcome
-            last_provider = provider
-            continue
-
-        outcome = call_outcome
-        serving_provider = provider
-        serving_max_results = max_results
-        break
-
-    if outcome is None or serving_provider is None or serving_max_results is None:
-        if last_failure is None or last_provider is None:
-            raise ValueError(
-                "run_search_pipeline received an empty provider chain; a caller "
-                "with no provider to offer must not call the pipeline"
-            )
-        if _legacy_searxng_codes(resolved_configured_chain):
-            raise _searxng_pipeline_error(
-                last_provider, last_failure, request_id=request_id
-            )
-        raise _search_unavailable_error(provider_errors, request_id=request_id)
-
-    raw_results: list[dict[str, Any]] = outcome.results[:serving_max_results]
+    served = await _query_provider_chain(
+        request,
+        chain=chain,
+        configured_chain=chain if configured_chain is None else configured_chain,
+        metrics=metrics,
+        request_id=request_id,
+    )
+    serving_provider = served.serving_provider
+    raw_results = served.raw_results[: served.serving_max_results]
     unresponsive_engines: list[str] = [
         _normalize_search_text(name, max_length=_MAX_UNRESPONSIVE_ENGINE_LENGTH)
-        for name in outcome.unresponsive_engines[:_MAX_UNRESPONSIVE_ENGINES]
+        for name in served.unresponsive_engines[:_MAX_UNRESPONSIVE_ENGINES]
     ]
 
     # -- Sanitize complete results through Stages 1-3 --
@@ -1764,9 +1793,10 @@ async def run_search_pipeline(
             scan = scan_structural(field_text)
             if scan.verdict == Stage2Verdict.BLOCKED:
                 logger.info(
-                    "Omitting blocked search result (%s structural): %s",
+                    "search_result_omitted reason=%s domain=%s field=%s",
+                    contract.OMIT_STRUCTURAL_BLOCKED,
+                    domain,
                     field_name,
-                    url,
                 )
                 blocked = True
                 break
@@ -1823,17 +1853,18 @@ async def run_search_pipeline(
         if pg_result.verdict == Stage3Verdict.INJECTION_DETECTED:
             if pg_result.skip_reason == "model_unavailable":
                 logger.info(
-                    "Omitting search result — PromptGuard unavailable "
-                    "(fail-closed): %s",
-                    url,
+                    "search_result_omitted reason=%s domain=%s",
+                    contract.OMIT_PROMPTGUARD_UNAVAILABLE,
+                    domain,
                 )
                 omitted_by_reason[contract.OMIT_PROMPTGUARD_UNAVAILABLE] += 1
                 promptguard_unavailable = True
             else:
                 logger.info(
-                    "Omitting blocked search result (promptguard score=%.2f): %s",
+                    "search_result_omitted reason=%s domain=%s score=%.2f",
+                    contract.OMIT_INJECTION_DETECTED,
+                    domain,
                     pg_result.score,
-                    url,
                 )
                 omitted_by_reason[contract.OMIT_INJECTION_DETECTED] += 1
             continue
@@ -1855,7 +1886,7 @@ async def run_search_pipeline(
                 domain=domain,
                 snippet=snippet,
                 engine=engine or None,
-                content_kind=outcome.content_kind,
+                content_kind=served.content_kind,
                 date=result_date,
                 suspicious=suspicious,
             )
@@ -1898,8 +1929,8 @@ async def run_search_pipeline(
         request_id=request_id,
         query=request.query,
         provider_used=serving_provider.name,
-        fallback_fired=fallback_fired,
-        provider_errors=provider_errors,
+        fallback_fired=served.fallback_fired,
+        provider_errors=served.provider_errors,
         unresponsive_engines=unresponsive_engines,
         omitted_results=omitted_results,
         omitted_by_reason=dict(omitted_by_reason),

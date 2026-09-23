@@ -1639,6 +1639,82 @@ record.
   defect. No branch switch, dependency change, Poppy edit, push, tag or
   release occurred.
 
+### US-005 - pinned provider-loop cleanup (2026-09-22, Copilot)
+
+- Clean pre-story base: `2a275c50165d0538ed07d05a9bb3a9ea2dcbb36d`;
+  `git status --short` was empty. First commit **`8e449fc`** captures the
+  four synthetic full-response/counter runs and two exhaustion payloads,
+  real handler statuses and counters, plus guards/regeneration/docs.
+  Nothing under `pipeline/` changes in that commit; **152 related tests**
+  and strict Pyright passed against unchanged runtime code.
+- Nondeterminism sweep: all 13 `SearchResponse` fields and all nested
+  `SearchResult` fields are input-derived or fixed defaults except the
+  UUID `request_id`. Classification latency is log-only. The sole
+  exclusion is `{"request_id"}`, applied before writing. SearXNG success
+  retains `["bing"]` in `unresponsive_engines`; honest empty has neither
+  results nor failed engines and never advances to Brave. The omissions
+  case covers all five current reason tokens. Fallback and exhausted
+  cases exercise compression/timeout, paid and fallback counters.
+- Pins remain byte-identical after the refactor. Regeneration is opt-in
+  through `--regenerate-search-pins`; normal runs only compare. The exact
+  five-counter projection ignores future sink fields. The guide's
+  orchestrator mapping was already a three-item list, not the planned
+  scalar: added the pin module while preserving policy/admission coverage.
+- Necessary fixture-guard adjustment: four **schema keys** themselves
+  match the 24-character token regex: `classification_wait_timeouts`,
+  `provider_compressed_body`, `effective_promptguard_threshold` and
+  `effective_promptguard_fail_closed`. Exempt only those exact spellings
+  in JSON key positions, with the key set pinned and tests proving the
+  same strings as values, unknown keys, and sentinel values still fail.
+  Without this distinction the required complete wire/counter dumps
+  cannot pass the guard. The directory allow-list is exactly the required
+  `{"tiny_model/", "contract/", "README.md"}`; every other directory is
+  walked by default, including `search/` and `brave/`.
+- `_query_provider_chain` owns traversal and the four provider counters,
+  mutating the sink at the original points rather than returning deltas.
+  Frozen `_ServedChain` carries all seven required surfaces. One cached
+  configured-chain predicate, one failure WARNING statement and one
+  upfront empty-chain error remain; legacy exhaustion is raised at the
+  final failed call without a duplicate empty guard or impossible-state
+  default. Direct helper tests pin counter snapshots before three calls
+  and after success, exhaustion and cancellation.
+- Migrated **20** orchestrator-test pipeline calls and **2** provider-test
+  calls (actual AST count, not planning-time 19); deleted only the two
+  legacy-parameter tests (five parametrized cases). Factory code and all
+  factory callers are unchanged. An AST sweep of every test finds no
+  pipeline call with `searxng_url=`; the orchestrator source contains no
+  lowercase occurrence. All other pre-existing assertions are preserved.
+- The deliberate deltas are separately covered: three omission reasons
+  through an actual Brave streaming fallback body, sweeping each record
+  for the URL/path/query sentinels and requiring reason plus lower-cased
+  domain; malformed failure classes, detail tokens and names through
+  both served and exhausted chains, including length/newline boundaries,
+  plus a legacy-detail regression. Failure detail/name use full-match
+  `[a-z0-9_]{1,32}` and class uses `FAILURE_CLASSES`. ERROR_HANDLING names
+  the future operator-pluggable-provider `unknown` fallback; logging and
+  monitoring docs describe the new content-free records.
+- Thirty-fifth rotation: before
+  `e3b9c13866a53939ee542debe3bc4bbd9ca53dded740e40958dd984914d73d91`,
+  after `d9db75863ea8a464147da8b38c9fc6b8772cf75c485f58cab896e8130c81b6e0`.
+  Only `orchestrator.py` changes among the nine hashed sources. The live
+  derivation with a read-only whole-file reversal to the clean base
+  reproduces the before hash under both default and shipped config.
+  Recorded at all five ruling-6 sites, including `DECISIONS.md`, as well
+  as these notes. No text-sanitization algorithm, response schema,
+  contract version or generated artifact changes.
+- After safe fixes/formatting restricted to changed Python files, **1,558
+  related tests pass** across 13 pipeline/route/contract/fixture modules.
+  Repository Ruff lint, Ruff format check (145 files), strict Pyright
+  (zero errors), exporter `--check` and `git diff --check` pass. Ten
+  inherited non-failing warnings are one Torch deprecation and nine
+  expected socket-guard warnings, including the hermeticity canaries.
+  Full pytest is prohibited by this invocation, so that acceptance gate
+  remains deferred; result is `partial` / `needs-work` for that gate, not
+  a known implementation defect. The previously recorded governance
+  citation failure is outside the changed surface and was not rerun or
+  repaired. No branch switch, dependency change, Poppy edit, push, tag or
+  release occurred.
+
 ## Refinement Notes
 
 ### Research Findings

@@ -2,7 +2,7 @@
 # GOTCHAS.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-cache-integrity US-003)
+> Updated by: Copilot (hardening-provider-bounds US-005)
 
 ## Overview
 
@@ -565,6 +565,7 @@ were recorded at their implementation boundaries:
 | `hardening-cache-integrity` US-002 | `0866963a…c1e80` | Thirty-second, **not a text-sanitization change**. Only `contract.py` moves for `cache_unauthenticated` and the continuation naming that reason and `cache_hmac_key`. Read-only whole-file reversal against clean `1e467c1` reproduces `aa288bc5…` under default and shipped config; the other eight hashed sources are unchanged. One-read key resolution and Valkey-only signing are unhashed. Old keys are orphaned; full measurements in `docs/bootstrap-notes.md`. |
 | `hardening-provider-bounds` US-003 | `c9bf6e0d…f2f76` | Thirty-third, **not a text-sanitization change**. Only `orchestrator.py` (two counters before every exit and re-classification flag) and `contract.py` (counters and SearXNG-only reason token) move. Read-only whole-file reversals against clean `abf9df6`: `61d54562…` with orchestrator reverted, `e736bb76…` with contract reverted; both reproduce `0866963a…` under default and shipped config. Helper/providers remain unhashed; upstream byte/encoding/time acceptance tightens without changing text scanning. Full values: `docs/bootstrap-notes.md`. |
 | `hardening-provider-bounds` US-004 | `e3b9c138…73d91` | Thirty-fourth, **not a text-sanitization change**. Only `contract.py` moves for the paid-prefix description and the all-paid-chain policy 422. Read-only whole-file reversal against clean `0139ad6` reproduces `c9bf6e0d…` under default and shipped config; the other eight sources are unchanged. `policy.py` and `models.py` are unhashed. Production has only one paid name and collapses configured duplicates, so the changed multi-paid outcome is unreachable until T3.1 (GOVERNANCE ruling (k)). Full values: `docs/bootstrap-notes.md`. |
+| `hardening-provider-bounds` US-005 | `d9db7586…1b6e0` | Thirty-fifth, **not a text-sanitization change**. Only `orchestrator.py` moves for the extracted provider loop, retired pipeline-only URL keyword, reason/domain omission logs and guarded failure tokens. Read-only whole-file reversal against clean `2a275c5` reproduces `e3b9c138…` under default and shipped config; all other eight sources are unchanged. Four wire/counter and two exhaustion pins were committed first (`8e449fc`) and remain unchanged. Keep sink increments inside the helper: deferring them to its caller loses counts on a raise. Full values: `docs/bootstrap-notes.md`. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.

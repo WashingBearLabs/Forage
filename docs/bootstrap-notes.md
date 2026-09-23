@@ -91,7 +91,8 @@ those eight — so Forage's revision moved:
 | `hardening-cache-integrity` US-001, signed and bounded cache values | `aa288bc5…5b39c` |
 | `hardening-cache-integrity` US-002, boot signing and health | `0866963a…c1e80` |
 | `hardening-provider-bounds` US-003, provider counters and reason token | `c9bf6e0d…f2f76` |
-| **Current (`hardening-provider-bounds` US-004, paid-prefix policy record)** | **`e3b9c138…73d91`** |
+| `hardening-provider-bounds` US-004, paid-prefix policy record | `e3b9c138…73d91` |
+| **Current (`hardening-provider-bounds` US-005, provider-loop cleanup)** | **`d9db7586…1b6e0`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -1618,3 +1619,49 @@ provider, so diagnose its position in `FORAGE_SEARCH_PROVIDERS`.
 `policy_unknown_provider` still counts each ignored entry, without an
 entry-count/body bound; accepted risk 2026-09-16-054 is in the architecture
 SECURITY table. **Not replayed to Poppy**; no tag or release was published.
+
+### The thirty-fifth rotation: pinned provider-loop cleanup (`hardening-provider-bounds` US-005, 2026-09-22)
+
+Only `pipeline/orchestrator.py` moves among the nine hashed sources. The
+provider loop now lives in `_query_provider_chain`, returning the frozen
+`_ServedChain`; its sink increments remain before the same calls and exits,
+including exhaustion and cancellation. The configured-chain legacy predicate
+is evaluated once, failure logging has one owner, and the pipeline-only
+`searxng_url=` keyword is retired. `build_provider_chain` and its callers
+retain their keyword unchanged.
+
+This is **not a text-sanitization change**. The two deliberate deltas are
+content-omission INFO lines carrying reason and validated domain instead of
+result URLs, and runtime enforcement of failure tokens: unknown classes
+become `hard_error`, invalid detail tokens become `unexpected`, and invalid
+provider names become `unknown`. Name/detail tokens must fully match
+`[a-z0-9_]{1,32}`. Built-in providers already satisfy these rules.
+
+Measured against clean pre-story
+`2a275c50165d0538ed07d05a9bb3a9ea2dcbb36d` (`git status --short` was empty).
+The first story commit, `8e449fc`, contains only tests, synthetic fixtures
+and their documentation: no `pipeline/` changes. Live derivation with
+read-only `Path.read_bytes` substitution of the entire pre-story
+`orchestrator.py` reproduces the before value. Default `{}` and shipped
+`config.yaml`, with the default model pin, both produce:
+
+| State | Revision |
+|---|---|
+| Before / only `orchestrator.py` reverted (control) | `e3b9c13866a53939ee542debe3bc4bbd9ca53dded740e40958dd984914d73d91` |
+| After | `d9db75863ea8a464147da8b38c9fc6b8772cf75c485f58cab896e8130c81b6e0` |
+
+All other eight hashed sources are byte-identical to the base. No hash
+input was added or removed; old content-cache keys expire normally.
+Four full synthetic response dumps (only `request_id` excluded), their
+closed five-counter projections and two exhaustion payload/status/counter
+captures remain byte-identical to the pre-refactor commit. Latency is
+log-only, not another nondeterministic response field. No live Brave
+payload was persisted; the fixture uses the existing scrubbed sample.
+
+**Consumer handoff:** no response schema, in-vocabulary outcome or counter
+semantics changed; contract remains `1.3.0` and generated artifacts are
+unchanged. Direct Python callers replace the retired keyword with
+`providers=[SearxngProvider(url)]`. Log consumers use
+`search_result_omitted reason=... domain=...`; URLs, paths and query strings
+are no longer available in omission logs. **Not replayed to Poppy**; no
+tag, release or push occurred.

@@ -439,6 +439,20 @@ the multi-paid case unreachable (GOVERNANCE ruling (k)). T3.1 inherits the
 rule when it registers a second paid backend. Full measurements and the
 consumer handoff are in `docs/bootstrap-notes.md`.
 
+The thirty-fifth revision rotation is `e3b9c138…` → `d9db7586…` for
+`hardening-provider-bounds` US-005. Only `orchestrator.py` moves: traversal
+is extracted into `_query_provider_chain` with in-place sink increments
+and frozen `_ServedChain`, the pipeline-only legacy keyword is retired,
+omission logs lose result URLs, and failure name/class/detail tokens are
+guarded. First commit `8e449fc` pins four full synthetic wire/counter runs
+and two exhaustion payload/status/counter runs before any pipeline edit;
+all six captures remain unchanged. A read-only whole-file reversal against
+clean pre-story `2a275c5` reproduces `e3b9c138…` under default and shipped
+config, with the other eight hashed files unchanged. This is not a
+text-sanitization change; contract and generated artifacts are unchanged.
+Full measurements and the direct-caller/log-consumer handoff are in
+`docs/bootstrap-notes.md`.
+
 ---
 
 ## Session Scratchpad

@@ -1442,7 +1442,7 @@ class TestOrchestratorFailureMapping:
         ):
             await run_search_pipeline(
                 SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
-                searxng_url="http://user:pass@unreachable:8080",
+                providers=[SearxngProvider("http://user:pass@unreachable:8080")],
                 config=_ORCHESTRATOR_CONFIG,
             )
 
@@ -1453,41 +1453,6 @@ class TestOrchestratorFailureMapping:
         assert "user" not in reason
         # Ruling 13: exception text stays behind the seam.
         assert "Connection refused" not in reason
-
-    @pytest.mark.asyncio()
-    @pytest.mark.parametrize(
-        "searxng_url",
-        [
-            pytest.param("http://host:99999", id="port-out-of-range"),
-            pytest.param("http://host:notaport", id="port-not-a-number"),
-            pytest.param("http://[::1", id="unterminated-ipv6"),
-            pytest.param("searxng:8080", id="no-scheme"),
-        ],
-    )
-    async def test_a_malformed_searxng_url_still_yields_a_422(
-        self, searxng_url: str
-    ) -> None:
-        """A typo in SEARXNG_URL is a 422 the operator can read, never a 500.
-
-        ``retrieval_app.py`` handles ``PipelineError`` and nothing else, and
-        the provider is constructed outside any ``try``, so a ``ValueError``
-        out of ``urlsplit()`` or its lazy ``.port`` parse would surface as an
-        unhandled 500 from inside the error path.
-        """
-        with (
-            client_patch(
-                _SEARXNG_CLIENT, stream_error=httpx.ConnectError("Connection refused")
-            ),
-            pytest.raises(PipelineError) as exc_info,
-        ):
-            await run_search_pipeline(
-                SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
-                searxng_url=searxng_url,
-                config=_ORCHESTRATOR_CONFIG,
-            )
-
-        assert exc_info.value.error == "searxng_unavailable"
-        assert "connect_error" in exc_info.value.reason
 
 
 # ---------------------------------------------------------------------------
@@ -1732,7 +1697,7 @@ class TestBuildProviderChainBraveRegistration:
 
 
 class TestRunSearchPipelineProvidersArgument:
-    """`providers=` is the chain seam; `searxng_url=` is the legacy default."""
+    """`providers=` is the chain seam; None selects the default SearXNG chain."""
 
     async def test_an_empty_chain_is_a_caller_error(self) -> None:
         """`[]` raises rather than quietly serving the default chain.
@@ -1761,21 +1726,6 @@ class TestRunSearchPipelineProvidersArgument:
         assert [query for query, _ in first.calls] == ["q"]
         assert second.calls == []
         assert response.results == []
-
-    async def test_a_supplied_chain_makes_searxng_url_unused(self) -> None:
-        """No SearXNG client is opened when a chain is handed in."""
-        fake = FakeSearchProvider(name="fake")
-
-        with patch(_SEARXNG_CLIENT) as client_cls:
-            await run_search_pipeline(
-                SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
-                searxng_url="http://never-used:9999",
-                providers=[fake],
-                config=_ORCHESTRATOR_CONFIG,
-            )
-
-        client_cls.assert_not_called()
-        assert len(fake.calls) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1901,7 +1851,7 @@ class TestSearchUnavailableIsChainShaped:
         ):
             await run_search_pipeline(
                 SearchRequest(query="q", num_results=5, promptguard_fail_closed=False),
-                searxng_url="http://unreachable:8080",
+                providers=[SearxngProvider("http://unreachable:8080")],
                 config=_ORCHESTRATOR_CONFIG,
             )
 

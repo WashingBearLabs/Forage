@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document logging patterns, levels, and conventions.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-cache-integrity US-003)
+> Updated by: Copilot (hardening-provider-bounds US-005)
 
 ## Overview
 
@@ -68,6 +68,7 @@ Every module obtains its logger with `logger = logging.getLogger(__name__)` at m
 - A mirror reference before it has passed `redact_reference()` (`model_fetcher.py:957`, userinfo becomes `***@host`). Enforced by `::TestMirrorReferenceResolution::test_a_credential_bearing_reference_is_refused_and_redacted`.
 - `SEARXNG_SECRET`. Forage does not read it (it belongs to the SearXNG companion and arrives via the compose env file), so no Forage line can carry it; keep it that way.
 - Fetched page content, extracted text, upload bytes, search snippets, or query text. `/extract`'s single INFO line carries only `request_id`, `size`, `content_type`, `verdict`, `reason`, `duration` (`retrieval_app.py:1507`); quarantine returns and logs a content-free response.
+- Search-result URLs, including omitted Brave results. Content-omission INFO records carry `search_result_omitted reason=<token> domain=<validated-host>` (plus structural field or classifier score), never paths or query strings. URL rejection/block records remain host-free. The orchestrator no-leak test sweeps every record's rendered message.
 - Anything from `docker-entrypoint.sh`. It is `set -euo pipefail; exec "$@"` and prints nothing, by its own comment, because it is the one place a chatty launcher would echo `VALKEY_URL` into the container log.
 
 ---

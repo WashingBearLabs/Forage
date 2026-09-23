@@ -2,7 +2,7 @@
 # CODE_ARCH.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-cache-integrity US-003)
+> Updated by: Copilot (hardening-provider-bounds US-005)
 
 ---
 
@@ -319,6 +319,24 @@ algorithm or currently constructible production-chain outcome changes;
 GOVERNANCE ruling (k) records the one-paid-name/duplicate-collapse basis
 and T3.1's obligation when a second paid backend is registered. Full values
 are in `docs/bootstrap-notes.md`.
+
+**Search traversal has one owner.** `hardening-provider-bounds` US-005
+extracts `_query_provider_chain` and frozen `_ServedChain` in the hashed
+orchestrator. The helper owns fallback/paid/compression/timeout increments
+at their original call boundaries, one configured-chain legacy predicate,
+and guarded failure logging/composition. The driver only queries,
+re-slices/sanitizes and responds; `providers=None` keeps default SearXNG,
+but its legacy URL keyword is gone (the factory keyword remains).
+Content-omission logs carry reason and validated domain, never result URLs.
+
+This is the thirty-fifth rotation (`e3b9c138…` → `d9db7586…`): only
+`orchestrator.py` moves, and its read-only whole-file reversal against clean
+`2a275c5` reproduces the before value under default and shipped config.
+The other eight hashed sources and contract artifacts are unchanged.
+It is not a text-sanitization change. Commit `8e449fc` captured four full
+synthetic wire/counter runs and two exhaustion payload/status/counter runs
+before the refactor; all remain unchanged. Full values and the two deliberate
+log/failure-token deltas are in `docs/bootstrap-notes.md`.
 
 **Provider bodies are self-decoded under bounds.** The shared
 `pipeline/bounded_body.py` reads raw bytes, bounds decoded output at 1 MiB
