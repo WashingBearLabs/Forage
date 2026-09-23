@@ -586,7 +586,7 @@ has not changed, only the set of backends that can produce it. Memory-only
 field is an additive counter in the same held MINOR, not part of this
 description-only ruling.
 
-**Source:** `kit_tools/specs/feature-hardening-cache-integrity.md`, US-001,
+**Source:** `kit_tools/specs/archive/feature-hardening-cache-integrity.md`, US-001,
 round-4 widening ruling and round-5 counter ownership clarification.
 
 ### (k) The paid-prefix rule changes an outcome no production chain can reach
