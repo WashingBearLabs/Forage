@@ -305,7 +305,7 @@ pre-existing assertion intact.
   `_REVISION_SOURCES`.
 
 **Acceptance Criteria:**
-- [ ] `SearxngSettings`, `SearxngConfigurationError` and `searxng_settings_from_config` exist in
+- [x] `SearxngSettings`, `SearxngConfigurationError` and `searxng_settings_from_config` exist in
       `pipeline/search_providers/searxng.py`, reading their bounds through
       `pipeline/config_bounds.bounded_float` / `bounded_int` (`grep -n '_bounded_'
       pipeline/search_providers/searxng.py` returns nothing);
@@ -313,11 +313,11 @@ pre-existing assertion intact.
       wrong-typed with `SearxngConfigurationError`; `config.yaml` ships `search_searxng_timeout_seconds:
       10.0`; the key is in `KNOWN_CONFIG_KEYS` and has `docs/configuration.md` and `ENV_REFERENCE.md`
       top-level rows.
-- [ ] `SearxngProvider.__init__` accepts `settings=` (default `SearxngSettings()`);
+- [x] `SearxngProvider.__init__` accepts `settings=` (default `SearxngSettings()`);
       `build_provider_chain` takes `searxng_settings=` and both of its construction sites use it; the
       lifespan reads the builder unconditionally and the production chain's `SearxngProvider.settings`
       reflects a configured value; there is no module-level `app.state.searxng_settings` default.
-- [ ] `tests/fakes.py` exports the parameterised `ChunkStream` (with `largest_chunk`, `chunks_yielded`
+- [x] `tests/fakes.py` exports the parameterised `ChunkStream` (with `largest_chunk`, `chunks_yielded`
       and the per-chunk `delay` — a test asserts a two-chunk stream at `delay=0.05` takes ≥ 0.1 s), the
       stream-backed `make_response` (positional-compatible with today's `_make_response`; a test
       asserts `aiter_raw()` and `aiter_bytes()` both work on it and that no `content-length` is
@@ -333,10 +333,10 @@ pre-existing assertion intact.
       single delegating calls into `tests/fakes.py` with the stage-5 defaults; `_make_redirect` and
       `_stream_side_effect` call those wrappers; `tests/test_brave_provider.py` keeps no private copy
       of any of the four; `grep -rn MockTransport tests/` returns nothing.
-- [ ] `BraveSettings.max_response_bytes` exists (default `1_048_576`, no config key), is the default
+- [x] `BraveSettings.max_response_bytes` exists (default `1_048_576`, no config key), is the default
       of `_BRAVE_MAX_RESPONSE_BYTES`, and is not yet read by `search()` (a comment US-003 deletes).
-- [ ] `pipeline/search_providers/searxng.py` is in spec 3 US-003's AST code-parity reader list.
-- [ ] Behaviour preserved, in two checkable halves: `git diff --stat` lists no change for
+- [x] `pipeline/search_providers/searxng.py` is in spec 3 US-003's AST code-parity reader list.
+- [x] Behaviour preserved, in two checkable halves: `git diff --stat` lists no change for
       `pipeline/orchestrator.py`, `pipeline/contract.py`, `models.py` or `contract/`; and `git diff
       pipeline/search_providers/brave.py` touches only `BraveSettings` (the `max_response_bytes` field
       defaulting to `_BRAVE_MAX_RESPONSE_BYTES`) and, if the implementer moves it, the
@@ -346,16 +346,16 @@ pre-existing assertion intact.
       settings object is stored, not yet read — the comment says so); the `get`-shaped SearXNG doubles
       in `tests/test_orchestrator.py`, `tests/test_search_providers.py` and `tests/test_app.py` are
       unchanged.
-- [ ] Every pre-existing test in `tests/test_brave_provider.py` and `tests/test_stage5_url_audit.py`
+- [x] Every pre-existing test in `tests/test_brave_provider.py` and `tests/test_stage5_url_audit.py`
       keeps its subject and expected value; the only edits are the removal of the four private helper
       bodies (Brave) or their reduction to delegating wrappers (stage 5), the mechanical rename
       `_make_response(` → `make_response(` at the 26 Brave call sites with their argument lists
       unchanged, explicit `content-length` headers where a test relied on the synthesised one, and
       import lines; in `tests/test_orchestrator.py` the only edits are the three `_RecordingMetrics`
       class bodies replaced by `RecordingSearchMetrics`, their assertions unchanged.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-003: Streamed, self-decoded, wall-clock-bounded bodies on both providers, and the counter
 
