@@ -833,11 +833,11 @@ refusal, and the rotation consequence; the by-value sweep (ruling 39, criterion 
   rotates.
 
 **Acceptance Criteria:**
-- [ ] `docs/configuration.md` carries the runtime row and the credential subsection (generation
+- [x] `docs/configuration.md` carries the runtime row and the credential subsection (generation
       recipe, CSPRNG-not-passphrase, UTF-8-never-decoded, 32-byte floor, `/health` behaviour, boot
       refusal, stop-all-replicas rotation) and the split Valkey row in the backend-selection table;
       `kit_tools/docs/ENV_REFERENCE.md` carries the seven-column row.
-- [ ] `kit_tools/docs/MONITORING.md` names three capability keys, three degraded reasons (row, body
+- [x] `kit_tools/docs/MONITORING.md` names three capability keys, three degraded reasons (row, body
       shape, runbook), the `cache.integrity_rejects` counter row with the two-scenario guidance
       (upgrade: cold cache, no burst; key enable or rotation on a running fleet: a bounded burst),
       the `oversize` discriminator entry, the "the log line is the discriminator" sentence and the
@@ -845,10 +845,10 @@ refusal, and the rotation consequence; the by-value sweep (ruling 39, criterion 
       `storage_oversize_skips` row naming the threshold, the five startup markers, and the extended
       `cache.py` closed vocabulary (six reasons); the `cache_unauthenticated` wording states the
       consequence.
-- [ ] `kit_tools/docs/TROUBLESHOOTING.md` and `kit_tools/docs/API_GUIDE.md` no longer say two values /
+- [x] `kit_tools/docs/TROUBLESHOOTING.md` and `kit_tools/docs/API_GUIDE.md` no longer say two values /
       two keys; TROUBLESHOOTING has both new sections; TROUBLESHOOTING `:121` and DEPLOYMENT `:100`
       say four patterns and name the variable.
-- [ ] `kit_tools/arch/SECURITY.md` has the Secrets-inventory row, the four-pattern sentence, the
+- [x] `kit_tools/arch/SECURITY.md` has the Secrets-inventory row, the four-pattern sentence, the
       corrected conftest cleared-variable bullet, the three-reason enumeration, and the
       cache-poisoning entry with four residuals (key compromise included), the spec 6
       cross-reference and the disclosure trade-off; `kit_tools/arch/patterns/LOGGING.md` names the
@@ -861,7 +861,7 @@ refusal, and the rotation consequence; the by-value sweep (ruling 39, criterion 
       edited by the story — the replacement text for `:65` and `:173` is in Implementation Notes
       and the edit is held for the owner (owner gate); SECURITY.md's availability residual names log
       volume.
-- [ ] By-value sweep (ruling 39), run as one command at the story's start (record the count) and at
+- [x] By-value sweep (ruling 39), run as one command at the story's start (record the count) and at
       its end: `grep -rn -iE -e 'two keys' -e 'the two reasons' -e 'exactly two values' -e 'exactly
       one of .connect_failed' -e 'exactly three strings' -e 'three patterns' -e 'is exactly
       .promptguard_unavailable' -e 'Always 0 on Valkey' -e 'Only the in-memory storage can move' -e
@@ -881,7 +881,7 @@ refusal, and the rotation consequence; the by-value sweep (ruling 39, criterion 
       Implementation Notes with the reason it stays);
       `grep -rn FORAGE_CACHE_HMAC_KEY README.md kit_tools/docs/DEPLOYMENT.md` each return at least
       one line.
-- [ ] Full test suite passes (`uv run pytest`).
+- [x] Full test suite passes (`uv run pytest`).
 
 ### US-004: Distribution fan-out — compose on-switch, CI secret grep, leak sentinels
 
