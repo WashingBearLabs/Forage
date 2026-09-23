@@ -55,6 +55,15 @@ _CLEARED_ENV_VARS = (
 )
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--regenerate-search-pins",
+        action="store_true",
+        default=False,
+        help="Rewrite the synthetic search wire, counter and exhaustion fixtures.",
+    )
+
+
 @pytest.fixture(autouse=True)
 def forbid_network() -> None:
     """Block real network access for every test in the suite."""

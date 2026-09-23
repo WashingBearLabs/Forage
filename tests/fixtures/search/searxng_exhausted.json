@@ -1,0 +1,14 @@
+{
+  "counters": {
+    "classification_wait_timeouts": 0,
+    "fallback_fired": 0,
+    "paid_calls": 0,
+    "provider_compressed_body": 0,
+    "provider_timeouts": 1
+  },
+  "error": {
+    "error": "searxng_unavailable",
+    "reason": "SearXNG not reachable at http://test-searxng:8080: timeout"
+  },
+  "status": 422
+}

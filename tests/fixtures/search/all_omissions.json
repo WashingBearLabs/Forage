@@ -1,0 +1,40 @@
+{
+  "counters": {
+    "classification_wait_timeouts": 0,
+    "fallback_fired": 0,
+    "paid_calls": 0,
+    "provider_compressed_body": 0,
+    "provider_timeouts": 0
+  },
+  "response": {
+    "effective_promptguard_fail_closed": true,
+    "effective_promptguard_threshold": 0.85,
+    "fallback_fired": false,
+    "omitted_by_reason": {
+      "blocked_url": 1,
+      "injection_detected": 1,
+      "invalid_url": 1,
+      "promptguard_unavailable": 1,
+      "structural_blocked": 1
+    },
+    "omitted_results": 5,
+    "promptguard_unavailable": true,
+    "provider_errors": [],
+    "provider_used": "searxng",
+    "query": "synthetic search",
+    "results": [
+      {
+        "content_kind": "snippet",
+        "date": null,
+        "domain": "example.com",
+        "engine": "google",
+        "snippet": "Clean snippet here.",
+        "suspicious": false,
+        "title": "Example",
+        "url": "https://example.com/clean"
+      }
+    ],
+    "unresponsive_engines": [],
+    "unscanned_results": 0
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "counters": {
+    "classification_wait_timeouts": 0,
+    "fallback_fired": 1,
+    "paid_calls": 1,
+    "provider_compressed_body": 1,
+    "provider_timeouts": 1
+  },
+  "response": {
+    "effective_promptguard_fail_closed": true,
+    "effective_promptguard_threshold": 0.85,
+    "fallback_fired": true,
+    "omitted_by_reason": {},
+    "omitted_results": 0,
+    "promptguard_unavailable": false,
+    "provider_errors": [
+      "searxng: timeout"
+    ],
+    "provider_used": "brave",
+    "query": "synthetic search",
+    "results": [
+      {
+        "content_kind": "chunk",
+        "date": "2026-01-01",
+        "domain": "synthetic-1.example.invalid",
+        "engine": "brave-api",
+        "snippet": "synthetic chunk 1 of 35 for source 1 of 3 synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic chunk 2 of 35 for source 1 of 3 synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic chunk 3 of 35 for source 1 of 3 synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic t synthetic chunk 4 of 35 for source 1 of 3 synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthe synthetic chunk 5 of 35 for source 1 of 3 synthetic text synthetic text synthetic text synthetic text synthetic",
+        "suspicious": false,
+        "title": "Synthetic title for source 1 of 3",
+        "url": "https://synthetic-1.example.invalid/synthetic-page-1"
+      },
+      {
+        "content_kind": "chunk",
+        "date": "2026-01-02",
+        "domain": "synthetic-2.example.invalid",
+        "engine": "brave-api",
+        "snippet": "synthetic chunk 1 of 27 for source 2 of 3 synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text sy synthetic chunk 2 of 27 for source 2 of 3 synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthet synthetic chunk 3 of 27 for source 2 of 3 synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic tex synthetic chunk 4 of 27 for source 2 of 3 synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic synthetic chunk 5 of 27 for source 2 of 3 synthetic text synthetic text synthetic text synthetic text syntheti synthetic chunk 6 of 27 for source 2 of 3 synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text sy synthetic chunk 7 of 27 for source 2 of 3 synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text sy",
+        "suspicious": false,
+        "title": "Synthetic title for source 2 of 3",
+        "url": "https://synthetic-2.example.invalid/synthetic-page-2"
+      },
+      {
+        "content_kind": "chunk",
+        "date": "2026-01-03",
+        "domain": "synthetic-3.example.invalid",
+        "engine": "brave-api",
+        "snippet": "synthetic chunk 1 of 22 for source 3 of 3 synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic chunk 2 of 22 for source 3 of 3 synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic t synthetic chunk 3 of 22 for source 3 of 3 synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic t synthetic chunk 4 of 22 for source 3 of 3 synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synt synthetic chunk 5 of 22 for source 3 of 3 synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text syntheti synthetic chunk 6 of 22 for source 3 of 3 synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic text synthetic tex synthetic",
+        "suspicious": false,
+        "title": "Synthetic title for source 3 of 3",
+        "url": "https://synthetic-3.example.invalid/synthetic-page-3"
+      }
+    ],
+    "unresponsive_engines": [],
+    "unscanned_results": 0
+  }
+}

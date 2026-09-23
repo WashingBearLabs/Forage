@@ -1,0 +1,46 @@
+{
+  "counters": {
+    "classification_wait_timeouts": 0,
+    "fallback_fired": 0,
+    "paid_calls": 0,
+    "provider_compressed_body": 0,
+    "provider_timeouts": 0
+  },
+  "response": {
+    "effective_promptguard_fail_closed": true,
+    "effective_promptguard_threshold": 0.85,
+    "fallback_fired": false,
+    "omitted_by_reason": {},
+    "omitted_results": 0,
+    "promptguard_unavailable": false,
+    "provider_errors": [],
+    "provider_used": "searxng",
+    "query": "synthetic search",
+    "results": [
+      {
+        "content_kind": "snippet",
+        "date": "2026-01-01",
+        "domain": "example.com",
+        "engine": "google",
+        "snippet": "Clean snippet here.",
+        "suspicious": false,
+        "title": "Example",
+        "url": "https://example.com/article"
+      },
+      {
+        "content_kind": "snippet",
+        "date": null,
+        "domain": "example.org",
+        "engine": "google",
+        "snippet": "Clean snippet here.",
+        "suspicious": false,
+        "title": "Another result",
+        "url": "https://example.org/2"
+      }
+    ],
+    "unresponsive_engines": [
+      "bing"
+    ],
+    "unscanned_results": 0
+  }
+}

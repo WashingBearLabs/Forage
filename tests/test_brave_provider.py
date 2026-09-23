@@ -92,9 +92,24 @@ _SAMPLE_PATH = _BRAVE_FIXTURES_DIR / "llm_context_sample.json"
 
 _AUTH_HEADER_NAMES = ("X-Subscription-Token", "Authorization")
 # 24 or more letters, digits, `_` or `-` in a row — the shape a real Brave
-# key or bearer token takes. The pre-existing model fixtures live outside
-# `tests/fixtures/brave/`, so this walk never sees their long identifiers.
+# key or bearer token takes. Model identifiers, generated contract schema and
+# provenance documentation are not provider payloads.
 _TOKEN_SHAPE_RE = re.compile(r"[A-Za-z0-9_-]{24,}")
+_TOKEN_WALK_ALLOWLIST = {"tiny_model/", "contract/", "README.md"}
+# These are schema keys in full response/counter pins, never payload values.
+_PIN_SCHEMA_KEYS = {
+    "classification_wait_timeouts",
+    "effective_promptguard_threshold",
+    "effective_promptguard_fail_closed",
+    "provider_compressed_body",
+}
+_PIN_SCHEMA_KEY_RE = re.compile(
+    r'(?m)^\s*"(?:' + "|".join(sorted(_PIN_SCHEMA_KEYS)) + r')"\s*:'
+)
+
+
+def _fixture_tokens(text: str) -> list[str]:
+    return _TOKEN_SHAPE_RE.findall(_PIN_SCHEMA_KEY_RE.sub("", text))
 
 
 def _load_sample_bytes() -> bytes:
@@ -119,12 +134,35 @@ class TestFixtureCarriesNoSecret:
             for header in _AUTH_HEADER_NAMES:
                 assert header not in text, f"{path} names an auth header: {header}"
 
-    def test_no_token_shaped_literal_anywhere_in_brave_fixtures(self) -> None:
-        for path in sorted(_BRAVE_FIXTURES_DIR.rglob("*")):
+    def test_token_walk_exceptions_are_pinned(self) -> None:
+        assert {"tiny_model/", "contract/", "README.md"} == _TOKEN_WALK_ALLOWLIST
+        assert {
+            "classification_wait_timeouts",
+            "effective_promptguard_threshold",
+            "effective_promptguard_fail_closed",
+            "provider_compressed_body",
+        } == _PIN_SCHEMA_KEYS
+
+    @pytest.mark.parametrize("key", sorted(_PIN_SCHEMA_KEYS))
+    def test_schema_key_exception_never_exempts_a_value(self, key: str) -> None:
+        assert _fixture_tokens(json.dumps({key: 0}, indent=2)) == []
+        assert _fixture_tokens(json.dumps({"value": key}, indent=2)) == [key]
+        sentinel = "s" * 32
+        assert _fixture_tokens(json.dumps({key: sentinel}, indent=2)) == [sentinel]
+        assert _fixture_tokens(json.dumps({sentinel: 0}, indent=2)) == [sentinel]
+
+    def test_no_token_shaped_literal_anywhere_in_payload_fixtures(self) -> None:
+        for path in sorted(_FIXTURES_DIR.rglob("*")):
             if not path.is_file():
                 continue
+            relative = path.relative_to(_FIXTURES_DIR).as_posix()
+            if any(
+                relative.startswith(entry) if entry.endswith("/") else relative == entry
+                for entry in _TOKEN_WALK_ALLOWLIST
+            ):
+                continue
             text = path.read_text(errors="ignore")
-            matches = _TOKEN_SHAPE_RE.findall(text)
+            matches = _fixture_tokens(text)
             assert matches == [], (
                 f"{path} contains {len(matches)} token-shaped literal(s): {matches}"
             )

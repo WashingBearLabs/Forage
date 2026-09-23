@@ -3,6 +3,31 @@
 Committed fixtures for the test suite. Nothing here is shipped in the image —
 `.dockerignore` excludes `tests/` outright.
 
+## `search/` pipeline pins
+
+`test_search_pipeline_pins.py` captures four complete synthetic search responses
+and their five pinned counters, plus two exhaustion payloads and their actual
+handler status/counters. Captured before the provider-loop refactor at
+`2a275c50165d0538ed07d05a9bb3a9ea2dcbb36d`: clean SearXNG (with an unresponsive
+engine), fallback to Brave, every omission reason, honest served-empty, lone
+SearXNG exhaustion and mixed-chain exhaustion. Inputs are synthetic SearXNG
+dicts and the scrubbed `brave/llm_context_sample.json`, through streaming
+doubles; no live fetch or Brave-authored result text is persisted.
+`request_id` is removed **before writing**; all other response fields are pinned.
+
+Regenerate, never hand-edit, only for a deliberate wire or pinned-counter change:
+
+```bash
+uv run pytest tests/test_search_pipeline_pins.py --regenerate-search-pins -q
+```
+
+Commit regenerated pins with that change and explain what moved and why in the
+commit message. Without the flag tests only compare. New metrics outside the
+five-counter projection do not move these pins. The token guard walks all fixture
+directories by default, except exactly `tiny_model/`, `contract/` and this README.
+Four long schema key names in these dumps are recognized only in JSON key
+positions; their spelling as a payload value remains forbidden.
+
 ## `search/baseline_pre_blocked_domains.json`
 
 Captured on 2026-09-22 from commit
@@ -162,6 +187,7 @@ redistributing response text, and a shape fixture needs none of it).
   documentation page does not list (it documents an optional `description` instead).
 
 **Guard.** `tests/test_brave_provider.py` (US-001) walks `tests/fixtures/` and asserts no
-file carries an auth header name, and walks `tests/fixtures/brave/` for any token-shaped
-literal (24 or more letters, digits, `_` or `-` in a row). Re-capturing is a fixture
+file carries an auth header name, and walks all payload fixtures (the exact exclusions
+above) for any token-shaped literal (24 or more letters, digits, `_` or `-` in a row).
+Re-capturing is a fixture
 change: repeat the procedure above and update this note's date, byte size and counts.
