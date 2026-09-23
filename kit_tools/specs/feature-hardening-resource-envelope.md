@@ -552,13 +552,13 @@ first `/search` and then reflects it, and spec 5 US-005's wire pins are byte-ide
   `SearchTargetsConfigurationError`.
 
 **Acceptance Criteria:**
-- [ ] `search_promptguard_latency_target_ms` (default 1000, range 100–60000) and
+- [x] `search_promptguard_latency_target_ms` (default 1000, range 100–60000) and
       `search_first_token_target_ms` (default 5000, range 100–120000) ship in `config.yaml`, are
       bounded at boot by `search_targets_from_config` (`SearchTargetsConfigurationError` out of range —
       `5` refuses boot, pinned), reach `run_search_pipeline` from the `/search` handler via
       `app.state.search_targets`, and `grep -c '_LOCAL_PROMPTGUARD_TARGET_MS\|
       _TOOL_AUGMENTED_FIRST_TOKEN_TARGET_MS' pipeline/orchestrator.py` returns 0.
-- [ ] `/metrics` serves `search.promptguard_latency_target_exceeded` (incremented once per `/search`
+- [x] `/metrics` serves `search.promptguard_latency_target_exceeded` (incremented once per `/search`
       whose loop exceeds the target, strictly greater, never otherwise) and
       `search.sanitization_latency_max_ms` (updated on every `/search` that reaches the site after
       the duration is computed — a served-empty `/search` included, a pre-loop 422 excluded, both
@@ -569,21 +569,21 @@ first `/search` and then reflects it, and spec 5 US-005's wire pins are byte-ide
       states per-process, never-resets, read-with-the-count; `grep -rn 'promptguard_latency_max_ms'
       retrieval_app.py pipeline/ tests/ contract/ docs/ kit_tools/docs/ kit_tools/arch/` returns
       nothing; the no-overrun counter case runs from its own 5000 ms boot.
-- [ ] Window mechanics (R36): docstring lines appended in the `* ``1.3.0`` — …` format; `uv run
+- [x] Window mechanics (R36): docstring lines appended in the `* ``1.3.0`` — …` format; `uv run
       python -m scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via
       `_SCHEMA_MODELS`; `_EXPECTED_ONE_THREE_ZERO_DIFF` reviewed and **nothing appended** (`/metrics`
       models are outside `_SCHEMA_MODELS` — R36 corrected); the four anchor-quoting pages refreshed;
       `uv run python -m scripts.export_contract --check` green — with Implementation Notes recording
       that the golden is byte-identical and the diff list carries no `/metrics` entry, and why.
-- [ ] With no overrides, spec 5 US-005's wire pins (`tests/test_search_pipeline_pins.py`) pass
+- [x] With no overrides, spec 5 US-005's wire pins (`tests/test_search_pipeline_pins.py`) pass
       unchanged — correct as written because the pins compare a closed `_PINNED_COUNTERS` projection
       that excludes these two fields (spec 5 US-005, R13 corrected in round 5); the test this story
       moves is `tests/test_contract_schema.py::test_search_metrics_response_1_2_0_field_set_is_pinned_exactly`,
       never the pins.
-- [ ] `pipeline/search_targets.py` is in spec 3 US-003's AST code-parity reader list; `grep -n
+- [x] `pipeline/search_targets.py` is in spec 3 US-003's AST code-parity reader list; `grep -n
       '_bounded_' pipeline/search_targets.py` returns nothing; `kit_tools/testing/TESTING_GUIDE.md`'s
       `test_mapping` carries a row for `pipeline/search_targets.py` naming `tests/test_app.py`.
-- [ ] `docs/configuration.md` rows (the first-token row saying "log-only today"), `MONITORING.md` rows
+- [x] `docs/configuration.md` rows (the first-token row saying "log-only today"), `MONITORING.md` rows
       with the per-process semantics and the `num_results` comparability clause, the count-first
       runbook sentence and the `search.classification_wait_timeouts` sentence (the max is never read
       against `promptguard_wait_seconds`), `ENV_REFERENCE.md` rows and `KNOWN_CONFIG_KEYS` entries exist
@@ -592,13 +592,13 @@ first `/search` and then reflects it, and spec 5 US-005's wire pins are byte-ide
       `grep -rn '1000 ms' kit_tools/docs/ docs/` returns nothing and
       `grep -rn 'promptguard_wait_seconds × 1000\|promptguard_wait_seconds x 1000' kit_tools/docs/
       kit_tools/arch/ docs/` returns nothing.
-- [ ] `sanitizer_revision` rotation measured (revert `pipeline/orchestrator.py` and
+- [x] `sanitizer_revision` rotation measured (revert `pipeline/orchestrator.py` and
       `pipeline/contract.py` each in turn, with a both-reverted control) and recorded at the five sites
       ruling 6 names — `docs/bootstrap-notes.md`, `CLAUDE.md`, `kit_tools/arch/DECISIONS.md`,
       `kit_tools/docs/GOTCHAS.md` (a new row in the divergence table) and `kit_tools/arch/CODE_ARCH.md`.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-002: Compose envelope — `FORAGE_CPUS`, `FORAGE_MEM_LIMIT` and a liveness healthcheck
 
