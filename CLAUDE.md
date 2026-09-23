@@ -128,7 +128,7 @@ reason. Any new startup or cache code must preserve this.
 
 ```bash
 uv sync --extra dev     # environment (creates .venv)
-uv run pytest           # hermetic blocking CI gate; 4126 collected; PR #30 CI: 4120 passed, 6 xfailed (US-004)
+uv run pytest           # hermetic blocking CI gate; 4244 passed, no xfails (whole-epic release gate)
 uv run ruff check .     # must stay clean — blocking CI gate
 uv run ruff format .    # must stay clean — blocking CI gate
 uv run pyright          # strict, ZERO errors — blocking CI gate
@@ -532,7 +532,7 @@ The total handler and runtime location allowlist in `retrieval_app.py` are
 not hashed. No text-sanitization algorithm changes; old cache keys invalidate.
 Full measurements and the consumer migration are in `docs/bootstrap-notes.md`.
 The 36th–39th bootstrap headings were reconciled before the count preflight;
-the last heading ordinal and GOTCHAS table now agree on forty-one rotations.
+the last heading ordinal and GOTCHAS table now agree on forty-two rotations.
 
 The forty-first rotation is `bffeb7ba…` → `6884dc29…` for
 `hardening-release` US-002. Only `contract.py` moves among nine hashed sources:
@@ -545,6 +545,16 @@ golden is now frozen; cache counters stay mechanically pinned in the metrics
 tests. OpenAPI and its four quoted anchors are unchanged. Full measurements,
 the complete release entry and description sweep are in `docs/bootstrap-notes.md`
 and the release spec's Implementation Notes. Publication remains pending.
+
+The forty-second rotation is `6884dc29…` → `021378ef…` for the whole-epic
+release gate: `orchestrator.py` pins unavailable classifier readiness before
+skipping admission, and `url_validator.py` compares IPv6 policy literals by
+address value without changing wire spelling. Both files were reversed
+individually against `84c02af`, with a both-reverted control reproducing
+`6884dc29…` for default and shipped config. Policy enforcement changes,
+not text scanning or response shape. Raw-threshold UTF-8 hashing preserves
+ASCII inputs; provider transport sources remain outside the revision inputs.
+Full controls and the consumer handoff: `docs/bootstrap-notes.md`.
 
 ## Session Scratchpad
 

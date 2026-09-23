@@ -76,7 +76,7 @@ Design principles:
 │                            # pinned weights to the private GHCR mirror;
 │                            # export_contract.py regenerates contract/. Ships in no
 │                            # image — the Dockerfile COPY list names nothing here
-├── tests/                   # 38 test_*.py modules (+ conftest.py, fakes.py, __init__.py); flat, one module per subject
+├── tests/                   # 39 test_*.py modules (+ conftest.py, fakes.py, __init__.py); flat, one module per subject
 ├── docs/                    # configuration.md, weights.md, releases.md, searxng.md,
 │                            # bootstrap-notes.md, bootstrap-scan.txt
 └── kit_tools/               # this documentation framework + feature specs
@@ -88,6 +88,7 @@ Design principles:
 
 | Module | Lines | Responsibility |
 |--------|------:|----------------|
+| `pipeline/provider_transport.py` | 191 | HTTPX/httpcore HTTP/1.1 network-stream adapter: enforces the remaining raw entity budget before each read, observes framing through public h11 events, and preserves verified TLS and closed error mapping. Both providers share it. |
 | `pipeline/search_targets.py` | 42 | Frozen search latency targets, validated unconditionally at boot through shared `config_bounds.bounded_int`. Neither target is a deadline or sanitizer-revision input. `/search` reads `app.state.search_targets`; the first-token target is log-only. |
 | `pipeline/orchestrator.py` | 1128 | Drives the five stages end to end. Since `search-provider-abstraction` US-002 it reaches search backends through the `SearchProvider` seam rather than calling SearXNG itself: it sets the candidate budget, re-applies its own slice, bounds `unresponsive_engines`, and maps a `ProviderFailure`'s closed `detail` onto `searxng_error` / `searxng_unavailable`. `_DEFAULT_SEARXNG_URL` and `_SEARXNG_ENGINES` survive here as **assigned aliases** of `pipeline/search_providers/searxng.py`'s public constants (three test modules import the private names from here); the definitions live in the provider. Since `hardening-search-sanitization` US-001 the per-result sanitization loop keeps **two forms** of `title` and `snippet`: `_scan_forms_for_search_text` returns `(wire_form, scan_form)`, where the scan form is what Stages 2 and 3 see and the wire form is its whitespace collapse (`wire_form == " ".join(scan_form.split())`, so nothing reaches the wire unscanned). The scan form keeps line breaks, which is what lets Stage 2's line-anchored patterns fire anywhere in the field. Order: NFC → a **first** control strip on the raw provider value (the parser maps a raw NUL to U+FFFD, outside the strip's class) → a parser-input bound of `_SEARCH_PARSER_INPUT_MULTIPLIER * max_length` (4×, measured — truncation now follows extraction, so without it the parser would see the whole provider body per field) → `extract_html` on the `<div>`-wrapped text (one entity level) → `html.unescape` (the second level) → a **second** control strip for what those decodes produced → `normalize_text` → truncate once at the field's cap. `_sanitize_search_text` survives for the URL call site only. Since `hardening-search-sanitization`
 US-004, `SearchResult.engine` is also routed through `_normalize_search_text`
@@ -298,6 +299,14 @@ The cache envelope and byte/type bounds (`cache.py`) and wiring
 (`retrieval_app.py`) are not hashed; the rotation still orphans old cache keys.
 Nothing downstream may assume Poppy↔Forage revision parity.
 
+The thirty-second (`aa288bc5…` → `0866963a…`,
+`hardening-cache-integrity` US-002) moves only `contract.py` for
+`cache_unauthenticated` and the `cache_hmac_key` capability announcement.
+A read-only whole-file reversal against clean `1e467c1` reproduces
+`aa288bc5…` for default and shipped config; the other eight hashed sources
+are unchanged. Key resolution and Valkey signing wiring are unhashed.
+No text-sanitization change; full evidence is in `docs/bootstrap-notes.md`.
+
 The thirty-third rotation (`0866963a…` → `c9bf6e0d…`,
 `hardening-provider-bounds` US-003) moves exactly `orchestrator.py` and
 `contract.py`: provider compression/timeout counters before traversal exits,
@@ -435,6 +444,30 @@ invalidate. The six-model schema golden is frozen, with cache metrics pinned
 in the metrics tests; OpenAPI remains byte-identical. Full measurements and
 consumer handoff: `docs/bootstrap-notes.md`.
 
+The forty-second rotation is `6884dc29…` → `021378ef…`:
+the whole-epic release gate fixes readiness-transition admission in
+`orchestrator.py` and equivalent-IPv6 policy matching in `url_validator.py`.
+Both hashed files were reversed individually against `84c02af`; reverting
+both reproduces the former hash under default and shipped config.
+This changes policy enforcement, not text scanning or response shape.
+The UTF-8 raw-threshold serialization remains ASCII-compatible; provider
+transport sources are not hash inputs. Full controls: `docs/bootstrap-notes.md`.
+
+**Network reads enforce the raw ceiling before allocation.**
+`pipeline/provider_transport.py` connects both providers through HTTPX's public
+transport seam and httpcore's public network backend. A public h11 observer
+counts entity bytes, excluding headers and transfer framing, and the next
+network-stream `read(max_bytes)` is capped to the remaining 4× budget.
+HTTP/1.1-only, fresh GET connections preserve the existing no-proxy/no-redirect
+posture and TLS verification; Brave retains its explicitly supplied context.
+The observer matches httpcore's 100 KiB incomplete-header allowance. Body
+framing errors are deferred until after valid headers are exposed, preserving
+status/encoding decisions and compression telemetry regardless of fragmentation.
+Timeout/network errors map to closed HTTPX errors, then the existing provider
+tokens. An exhausted budget refuses incomplete framing without an overflow
+probe, including unknown-length responses at the ceiling. This bound is at
+the network-stream API, not kernel or encrypted-record prefetch.
+
 **Provider bodies are self-decoded under bounds.** The shared
 `pipeline/bounded_body.py` reads raw bytes, bounds decoded output at 1 MiB
 (plus one overflow-detection byte) and raw input at 4×, accepts identity,
@@ -498,15 +531,18 @@ comparison. Keyless caches retain bare JSON and reject unexpected v1 envelopes.
 `ValkeyStorage` pre-bounds the read atomically with `GETRANGE`, treating empty
 as miss and `WRONGTYPE` as integrity rejection rather than connection failure.
 Write-side byte limits apply to both backends and delete superseded entries
-before skipping. US-001 exposes constructor keys only; environment-key wiring
-and the keyless-Valkey health signal follow in US-002.
+before skipping. Startup resolves the runtime signing key, wires it only to
+Valkey-backed caches, and reports `cache_unauthenticated` for a reachable
+keyless Valkey. Memory-mode health is unchanged; an unused supplied key warns.
 
 **Startup is non-blocking, and one background task is the reason.** The lifespan does its
 synchronous wiring, starts weight acquisition as
 `asyncio.create_task(model_fetcher.WeightAcquisition(...).run())`, and yields — it never
 awaits the fetch. uvicorn serves nothing until lifespan startup returns, so an `await`
-there would hold the port closed for the length of a ~270 MiB download and a compose
-healthcheck would restart-loop the container. The handle lives on `app.state.model_task`
+there would hold the port closed for the length of a ~270 MiB download and a Compose
+healthcheck would report unhealthy. Plain Compose does not restart a container
+for unhealthy status; restart policies react to process exits.
+The handle lives on `app.state.model_task`
 and is cancelled at shutdown. `/health` reads `classifier.loaded` per request, so
 `promptguard_loaded` flips in place when the load lands; `/metrics`'
 `model.fetch_in_progress` is what tells "downloading" from "wedged" while it has not.

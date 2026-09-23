@@ -36,6 +36,8 @@ def derive_sanitizer_revision(config: dict[str, Any]) -> str:
 
     The configured value is hashed unchanged; the active, handler-resolved
     threshold reaches the content cache key through ``cache_policy_fingerprint``.
+    Raw threshold strings use UTF-8 with surrogate preservation, so values
+    accepted or defaulted at boot cannot fail revisioning; ASCII bytes stay equal.
     Contiguity is configuration-only: windows then threshold follow the max
     threshold as ASCII, including the disabled defaults.
 
@@ -74,7 +76,9 @@ def derive_sanitizer_revision(config: dict[str, Any]) -> str:
     model_id = resolve_model_id()[0]
     digest.update(f"{model_id}@{resolve_revision(model_id)}".encode())
     digest.update(f"idna@{idna.__version__}".encode())
-    digest.update(str(config.get("promptguard_threshold", 0.85)).encode("ascii"))
+    digest.update(
+        str(config.get("promptguard_threshold", 0.85)).encode("utf-8", "surrogatepass")
+    )
     digest.update(str(config.get("promptguard_contiguity_windows", 0)).encode("ascii"))
     digest.update(
         str(config.get("promptguard_contiguity_threshold", 0.5)).encode("ascii")

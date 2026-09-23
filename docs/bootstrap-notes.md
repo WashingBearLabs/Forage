@@ -1995,3 +1995,52 @@ lands in this close-out. `v1.1.0` shipped contract 1.2.0 on 2026-09-18;
 `v1.2.0` / contract 1.3.0 remains **pending**, not published by this story.
 **Not replayed to Poppy.** No image/model/benchmark, owner gate, push, tag or
 release action ran.
+
+### The forty-second rotation: whole-epic release-gate fixes (2026-09-23)
+
+Against immutable baseline `84c02af3e8b1ddf0fbfc8dfa14c448a9d9a3fe96`,
+exactly two of the nine hashed sources change: `pipeline/orchestrator.py`
+snapshots classifier readiness before deciding whether to acquire admission,
+and `url_validator.py` compares equivalent IPv6 policy literals by parsed
+address value, preserving their wire spelling. An unavailable classifier
+cannot warm between two checks and infer without a permit. Equivalent
+compressed, expanded and leading-zero IPv6 spellings no longer evade caller
+or operator denylists on fetch or search.
+
+Live derivation with read-only `Path.read_bytes` substitution of each whole
+baseline file measured the same results for default `{}` and shipped
+`config.yaml`, under the default pinned model:
+
+| State | Revision |
+|---|---|
+| Before / both sources reverted | `6884dc29b3dc3d7a0a1f2c1da638f767fb301b2baac68446541f6de2638bd7ec` |
+| After | `021378efee6ab43f22b887af2f0c0c40ef76183a39802120fbfd0ca7a3a33900` |
+| Only `orchestrator.py` reverted | `d2fbbd84f7437641ef488ba1638be0fc333c5388141ccc5ab56b974b6a18a819` |
+| Only `url_validator.py` reverted | `01467481ccef9c88e3943dd2a108aa8301902feff412f61a4e486f09c007786c` |
+
+All seven other hashed sources are byte-identical. No source was added to the
+hash. This is the ninth policy-enforcement rotation: text scanning is unchanged,
+but formerly bypassed policy is enforced and all prior cache keys invalidate.
+Raw threshold serialization uses UTF-8 with surrogate preservation; ASCII
+inputs remain identical, and accepted numeric Unicode or invalid strings
+defaulted at boot can no longer crash revisioning. The revision function is
+not itself a hashed source.
+
+The same gate adds `pipeline/provider_transport.py`, using public HTTPX,
+httpcore and h11 interfaces. Both providers limit each network-stream read
+before it occurs to the remaining raw entity budget (`4 * max_response_bytes`);
+HTTP framing is observed without content decoding. The six non-dividing-chunk
+regressions now exercise the genuine transport with a size-respecting network
+double, rather than a response iterator that bypasses the transport. The
+application-level decoder bounds remain defensive backstops. At an exhausted
+raw budget, an incomplete HTTP frame is refused without an overflow probe;
+this includes close-delimited responses unable to prove EOF at the ceiling.
+Provider code and this new transport remain unhashed, as before.
+
+**Consumer handoff:** these are fixes to the unpublished 1.3.0 implementation,
+not new fields, status codes, enum meanings or schema descriptions. The frozen
+OpenAPI/anchor and golden are unchanged. Expect equivalent-IP denylists to
+apply consistently, honest unavailable-model outcomes during warmup, and strict
+provider read-budget failures rather than one-chunk overshoot.
+**Not replayed to Poppy.** Publication is still pending the authorized release
+gate and is not established by these local fixes.

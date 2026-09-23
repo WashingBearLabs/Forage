@@ -1228,8 +1228,10 @@ legitimately names — `scripts/export_contract.py:263-270` writes it on every e
 - Thirty-second sanitizer rotation: `aa288bc5…5b39c` -> `0866963a…c1e80`.
   Only `pipeline/contract.py` moves among the nine hashed sources; read-only
   whole-file reversal against clean `1e467c1` reproduces the before value
-  under both default and shipped configuration. All five protocol sites
-  record it. This is not a text-sanitization change; old cache keys expire.
+  under both default and shipped configuration. Four protocol sites recorded
+  it at this point; the missing `CODE_ARCH.md` record and stale boot-wiring
+  prose were repaired at the 2026-09-23 whole-epic release gate.
+  This is not a text-sanitization change; old cache keys expire.
 - Validation: **979 related tests pass** in one process (app, cache,
   hermeticity, contract schema/errors/export/smoke/metrics, sanitizer revision
   and governance docs). Repository Ruff lint/format, strict Pyright, exporter

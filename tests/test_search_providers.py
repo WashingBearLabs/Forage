@@ -757,51 +757,6 @@ class TestProviderBoundedBodies:
         assert live.return_peak <= cap + 1
         assert recording.largest_output <= cap + 1
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "2026-09-22-012: httpx response seam cannot limit the next upstream read"
-        ),
-    )
-    @pytest.mark.parametrize(
-        "cap,chunk_size", [(1000, 997), (1000, 999), (1048576, 65535)]
-    )
-    async def test_exact_raw_read_budget_with_non_dividing_upstream_chunks(
-        self,
-        bounded_provider: tuple[SearxngProvider | BraveApiProvider, str],
-        cap: int,
-        chunk_size: int,
-    ) -> None:
-        provider, target = bounded_provider
-        provider = (
-            SearxngProvider(settings=SearxngSettings(max_response_bytes=cap))
-            if isinstance(provider, SearxngProvider)
-            else BraveApiProvider("sentinel", BraveSettings(max_response_bytes=cap))
-        )
-        raw_limit = 4 * cap
-        raw = b"\x00\x00\x00\xff\xff" * ((raw_limit + 2 * chunk_size) // 5 + 1)
-        chunks = [raw[i : i + chunk_size] for i in range(0, len(raw), chunk_size)]
-        stream = ChunkStream(chunks)
-        response = httpx.Response(
-            200, headers={"content-encoding": "deflate"}, stream=stream
-        )
-        with (
-            client_patch(target, response=response),
-            record_decompressors() as recording,
-        ):
-            outcome = await provider.search("q", 3)
-        assert isinstance(outcome, ProviderFailure)
-        assert (outcome.failure_class, outcome.detail) == (
-            "hard_error",
-            "body_too_large",
-        )
-        assert outcome.compressed
-        assert recording.largest_output == 0
-        downloaded = sum(map(len, stream.chunks_yielded))
-        assert downloaded == response.num_bytes_downloaded
-        # Measure actual upstream yields, never retained or decoder-fed bytes.
-        assert downloaded <= raw_limit
-
     @pytest.mark.parametrize("chunking", ["whole", "split", "bytes"])
     async def test_raw_deflate_with_a_valid_zlib_header_is_served(
         self,

@@ -364,11 +364,11 @@ def hostname_matches(host: str, entry: str, *, allow_suffix: bool) -> bool:
     name = entry.removeprefix(".")
     if host == name:
         return True
+    if ":" in host or ":" in name:
+        return ":" in host and ":" in name and IPv6Address(host) == IPv6Address(name)
     if (
         not allow_suffix
         or "." not in name
-        or ":" in host
-        or ":" in name
         or host.replace(".", "").isdigit()
         or name.replace(".", "").isdigit()
     ):

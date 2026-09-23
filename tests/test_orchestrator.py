@@ -23,7 +23,7 @@ from contextlib import AbstractContextManager, ExitStack
 from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
 from typing import Any, cast, get_args
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 from urllib.parse import urlsplit
 
 import httpx
@@ -231,6 +231,56 @@ async def test_retrieve_enforces_operator_first_and_all_500_caller_entries() -> 
         fetch.assert_not_called()
         dns.assert_not_called()
     assert config["seed_blocklist"] == seed
+
+
+@pytest.mark.parametrize("source", ["operator", "caller"])
+@pytest.mark.parametrize("route", ["retrieve", "search"])
+@pytest.mark.parametrize(
+    "host,entry",
+    [
+        ("2606:4700::1111", "2606:4700:0:0:0:0:0:1111"),
+        ("2606:4700:0:0:0:0:0:1111", "2606:4700::1111"),
+    ],
+)
+async def test_equivalent_ipv6_policy_is_enforced_end_to_end(
+    source: str, route: str, host: str, entry: str
+) -> None:
+    config = _SAMPLE_CONFIG | {
+        "seed_blocklist": [entry] if source == "operator" else []
+    }
+    blocked = [entry] if source == "caller" else []
+    url = f"https://[{host}]/"
+    with (
+        patch("pipeline.orchestrator.fetch_url") as fetch,
+        patch("url_validator.socket.getaddrinfo") as dns,
+    ):
+        if route == "retrieve":
+            with pytest.raises(PipelineError) as caught:
+                await run_retrieve_pipeline(
+                    RetrieveRequest(url=url, blocked_domains=blocked),
+                    cache=None,
+                    classifier=None,
+                    config=config,
+                    sanitizer_revision=_SAMPLE_REVISION,
+                    **_retrieve_kwargs(),
+                )
+            assert caught.value.error == "blocked_domain"
+        else:
+            with _searxng_client_patch(
+                _mock_searxng_response(
+                    [{"url": url, "title": "Garden", "content": "Flowers"}]
+                )
+            ):
+                result = await run_search_pipeline(
+                    SearchRequest(query="q", blocked_domains=blocked),
+                    blocked_domains=blocked,
+                    classifier=None,
+                    config=config,
+                )
+            assert result.results == []
+            assert result.omitted_by_reason == {contract.OMIT_BLOCKED_URL: 1}
+        fetch.assert_not_called()
+        dns.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -7064,6 +7114,52 @@ async def test_search_with_a_warming_classifier_never_acquires() -> None:
     assert response.unscanned_results == 10
     assert metrics.classification_wait_timeouts == 0
     assert semaphore.locked()
+
+
+@pytest.mark.parametrize("fail_closed", [False, True])
+@pytest.mark.parametrize("route", ["shared", "search"])
+async def test_readiness_transition_cannot_bypass_admission(
+    fail_closed: bool, route: str
+) -> None:
+    classifier = _loaded_classifier()
+    readiness = iter([False, True])
+    type(classifier).loaded = PropertyMock(side_effect=lambda: next(readiness, True))
+    semaphore = asyncio.Semaphore(0)
+    if route == "shared":
+        shared_result = await orchestrator.sanitize_and_structure(
+            extraction=_make_extraction(),
+            trust_tier=TrustTier.STANDARD,
+            classifier=classifier,
+            promptguard_threshold=0.85,
+            promptguard_fail_closed=fail_closed,
+            extract_mode="full",
+            content_type="text/html",
+            classification_semaphore=semaphore,
+            classification_wait_seconds=0.001,
+        )
+        assert shared_result.promptguard_state == (
+            "unavailable_blocked" if fail_closed else "unavailable_allowed"
+        )
+    else:
+        search_result = await _search_under(
+            classifier=classifier,
+            semaphore=semaphore,
+            wait_seconds=0.001,
+            fail_closed=fail_closed,
+            response=_mock_searxng_response(
+                [
+                    {
+                        "title": "Garden",
+                        "url": "https://example.com/",
+                        "content": "Flowers",
+                    }
+                ]
+            ),
+        )
+        assert search_result.promptguard_unavailable
+        assert len(search_result.results) == (0 if fail_closed else 1)
+    classifier.classify_windows.assert_not_called()
+    assert semaphore._value == 0
 
 
 @pytest.mark.usefixtures("_mock_retrieve_io")

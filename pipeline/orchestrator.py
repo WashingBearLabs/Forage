@@ -267,11 +267,16 @@ async def sanitize_and_structure(
         skipped=True,
         skip_reason="structural_block",
     )
+    # Pin unavailability: the loader may publish readiness before stage 3
+    # checks again, but a request that skipped admission must not infer.
+    admitted_classifier = (
+        classifier if classifier is not None and classifier.loaded else None
+    )
 
     async def classify() -> PromptGuardResult:
         return await run_promptguard(
             extraction.raw_text,
-            classifier,
+            admitted_classifier,
             threshold=promptguard_threshold,
             trust_tier=trust_tier,
             fail_closed=promptguard_fail_closed,
@@ -290,8 +295,7 @@ async def sanitize_and_structure(
         # acquired and no counter moves.
         if (
             classification_semaphore is not None
-            and classifier is not None
-            and classifier.loaded
+            and admitted_classifier is not None
             and trust_tier != TrustTier.TRUSTED
         ):
             async with _bounded_permit(
@@ -1849,14 +1853,13 @@ async def run_search_pipeline(
         # model is not None and not loaded, which is exactly when the other
         # two routes are contending for the same permit.
         pg_result: PromptGuardResult
-        if (
-            classification_semaphore is None
-            or classifier is None
-            or not classifier.loaded
-        ):
+        admitted_classifier = (
+            classifier if classifier is not None and classifier.loaded else None
+        )
+        if classification_semaphore is None or admitted_classifier is None:
             pg_result = await run_promptguard(
                 _search_result_promptguard_input(title, url, snippet),
-                classifier,
+                admitted_classifier,
                 threshold=promptguard_threshold,
                 contiguity_windows=promptguard_settings.contiguity_windows,
                 contiguity_threshold=promptguard_settings.contiguity_threshold,
@@ -1880,7 +1883,7 @@ async def run_search_pipeline(
                 if acquired:
                     pg_result = await run_promptguard(
                         _search_result_promptguard_input(title, url, snippet),
-                        classifier,
+                        admitted_classifier,
                         threshold=promptguard_threshold,
                         contiguity_windows=promptguard_settings.contiguity_windows,
                         contiguity_threshold=promptguard_settings.contiguity_threshold,

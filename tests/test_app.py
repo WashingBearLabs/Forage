@@ -2372,6 +2372,8 @@ def test_shipped_domain_budget_is_64_kib() -> None:
             ({"promptguard_threshold": value}, 0.85, True)
             for value in (
                 "abc",
+                "invalid-\u2603",
+                "invalid-\ud800",
                 -0.1,
                 1.7,
                 True,
@@ -2388,7 +2390,7 @@ def test_shipped_domain_budget_is_64_kib() -> None:
         ],
         *[
             ({"promptguard_threshold": value}, float(value), False)
-            for value in ("0.85", "0.5", 0, 1, 0.5)
+            for value in ("0.85", "0.5", "\uff10.\uff18\uff15", 0, 1, 0.5)
         ],
     ],
 )

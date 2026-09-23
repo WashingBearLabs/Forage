@@ -2039,6 +2039,39 @@ write to git is the named PR branch, using `--no-follow-tags`. Owner release
 US-003, post-release US-005 and both 86M owner gates remain pending; green
 bookkeeping CI is not authorization to run them.
 
+### Owner-authorized whole-epic release gate (2026-09-23)
+
+The owner authorized final validation/fixes, merge of existing PR #30,
+publication of v1.2.0 and post-release verification, conditional on passing
+the release gate. The paused orchestrator and supervisor were stopped after
+backing up the execution state; the main planning checkout remains untouched.
+The parent session is the sole writer. This does not authorize the separate
+86M licence, vendoring or benchmark gates, which remain explicitly unrun.
+
+The first whole-epic reviews reproduced admission warmup and equivalent-IPv6
+policy bypasses, the exact provider read-bound failure, Unicode threshold
+revisioning failures and documentation drift. The owner requested all fixes
+and explicitly declined weakening the raw ceiling to allow chunk overshoot.
+Repairs now have a full local result of **4244 passed, no xfails**, with
+Ruff lint/format, strict Pyright, contract-export and whitespace checks green.
+The six old xfails now pass through the real HTTPX/httpcore transport stack.
+The forty-second revision and all read-only reversal controls are recorded
+in `docs/bootstrap-notes.md` and the other four required sites; contract 1.3.0,
+its frozen golden and generated artifacts are unchanged.
+
+Round 2 independently closed all original findings. Quality and compliance
+then identified two new transport compatibility issues: h11's smaller default
+header allowance and eager malformed-body parsing ahead of status/encoding
+decisions. Both are repaired with 26 new regressions (12 reproduced red before
+the fix); the exact raw bound remains unchanged. Final quality, security and
+eight-spec compliance revalidation all returned **ready with no findings**.
+There were three review rounds and two fix cycles; the accepted Stage-5
+decoder residual remains open, and neither 86M gate is claimed as run.
+
+This is prepublication evidence, not publication evidence. Fresh CI on
+PR #30's updated head, the merge-commit cut and US-005 remain
+outstanding. The original same-sitting cut-or-revert requirement still holds.
+
 <!-- Populated during execution. US-001/US-002 record their rotations and the rehearsal extraction;
 US-004 records both classified sweeps; US-003 records the cut, the four-way sha256 table and the
 config-grep facts; US-005 records the three smoke runs, the credential-free pull, the leak check and

@@ -214,11 +214,22 @@ def test_sanitizer_revision_is_stable_at_the_committed_pin(
 
 @pytest.mark.parametrize("model_id", [DEFAULT_MODEL_ID, "acme/second-guard"])
 @pytest.mark.parametrize(("windows", "threshold"), [(0, 0.5), (2, 0.6)])
+@pytest.mark.parametrize(
+    "configured,encoded",
+    [
+        (0.85, b"0.85"),
+        ("\uff10.\uff18\uff15", b"\xef\xbc\x90.\xef\xbc\x98\xef\xbc\x95"),
+        ("invalid-\u2603", b"invalid-\xe2\x98\x83"),
+        ("invalid-\ud800", b"invalid-\xed\xa0\x80"),
+    ],
+)
 def test_the_hashed_model_identity_is_model_id_at_revision(
     monkeypatch: pytest.MonkeyPatch,
     model_id: str,
     windows: int,
     threshold: float,
+    configured: float | str,
+    encoded: bytes,
 ) -> None:
     """The exact composition, recomputed independently.
 
@@ -247,14 +258,14 @@ def test_the_hashed_model_identity_is_model_id_at_revision(
     revision = DEFAULT_MODEL_REVISION if model_id == DEFAULT_MODEL_ID else "unpinned"
     expected.update(f"{model_id}@{revision}".encode())
     expected.update(f"idna@{idna.__version__}".encode())
-    expected.update(b"0.85")
+    expected.update(encoded)
     expected.update(str(windows).encode("ascii"))
     expected.update(str(threshold).encode("ascii"))
 
     assert (
         sanitizer_revision.derive_sanitizer_revision(
             {
-                "promptguard_threshold": 0.85,
+                "promptguard_threshold": configured,
                 "promptguard_contiguity_windows": windows,
                 "promptguard_contiguity_threshold": threshold,
             }

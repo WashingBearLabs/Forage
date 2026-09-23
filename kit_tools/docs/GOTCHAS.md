@@ -569,7 +569,7 @@ the pass-list advice; the baked image still ships `limiter: false`.
 `derive_sanitizer_revision()` hashes nine source files — the eight under `pipeline/` plus
 repo-root `url_validator.py` — plus the model identity, the `idna` version
 (`idna@<version>`: UTS-46 tables decide which hosts are dropped) and the active
-threshold. Forage's revision has moved forty-one times. The twenty-sixth was
+threshold. Forage's revision has moved forty-two times. The twenty-sixth was
 reconciled from the preceding validation commit during US-001's pre-flight; the rest
 were recorded at their implementation boundaries:
 
@@ -617,14 +617,16 @@ were recorded at their implementation boundaries:
 | `hardening-promptguard-86m` US-007 | `b641e6a5…698f5` | Thirty-ninth: exactly stage 3, orchestrator and contract change in the nine hashed sources; two ASCII inputs join after the max threshold (contiguity windows, then threshold). Each file/input reversed read-only against clean `967748d`; all-reverted reproduces `85394a95…` for default/shipped config. Stage 4 is byte-unchanged. Run rule ships off but all old cache keys invalidate; enabling changes verdicts. The max rule and trusted/absent-model policy remain unchanged. Full values and both residuals: `docs/bootstrap-notes.md`. |
 | `hardening-release` US-001 | `bffeb7ba…47fe1` | Fortieth, **not a text-sanitization change**. Only `contract.py` announces redacted request-validation 422s, their 100-entry cap and one-minor-release placeholders (GOVERNANCE ruling (l)). Whole-file read-only reversal against clean `7a4819b` reproduces `b641e6a5…` under default and shipped config; the other eight sources and hash definition are unchanged. The total handler and location allowlist live in unhashed `retrieval_app.py`. Existing 36th–39th bootstrap heading forms and stale count prose were reconciled before the mandatory preflight. Full values: `docs/bootstrap-notes.md`. |
 | `hardening-release` US-002 | `6884dc29…bd7ec` | Forty-first, **no wire or sanitization behavior change**. Only `contract.py`'s final single 1.3.0 announcement and timeless 1.2.0 entry move; whole-file read-only reversal against clean `3ea0b32` reproduces `bffeb7ba…` under default and shipped config. The other eight sources and hash definition are unchanged. The six-model golden is frozen, cache metrics retain dedicated coverage, and OpenAPI/anchors are byte-identical. Publication remains pending. Full values: `docs/bootstrap-notes.md`. |
+| Whole-epic release gate | `021378ef…33900` | Forty-second: `orchestrator.py` pins unavailable classifier readiness before skipping admission; `url_validator.py` compares IPv6 policy identities by address value while preserving wire spelling. Both hashed files individually reversed against `84c02af`; both-reverted reproduces `6884dc29…` under default/shipped config. Policy enforcement changes, not text scanning or response shape. Raw-threshold UTF-8 hashing preserves ASCII inputs; provider transport sources stay unhashed. Full measurements: `docs/bootstrap-notes.md`. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Thirty-three of the forty-one rotations changed no sanitization policy or algorithm at shipped defaults; the
+**Thirty-three of the forty-two rotations changed no sanitization policy or algorithm at shipped defaults; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
 US-001, US-002, US-003 and its validation fix) and the twenty-seventh
-through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005) are the eight
+through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005),
+and the forty-second release-gate policy repair are the nine
 that did, and the seventeenth
 (US-004, contract `1.3.0`) does not join them** — hostname policy can now skip
 classification on an opted-in trusted suffix; search-sanitization US-001's

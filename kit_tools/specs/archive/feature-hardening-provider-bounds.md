@@ -1382,6 +1382,41 @@ record.
 
 ## Implementation Notes
 
+### Whole-epic release-gate correction (2026-09-23)
+
+The owner retained the exact `4 * max_response_bytes` raw-read guarantee and
+declined a one-chunk overshoot waiver. Both providers now use the public
+HTTPX/httpcore network backend adapter in `pipeline/provider_transport.py`.
+Each read is bounded before the upstream stream receives it; a public h11
+observer counts entity bytes without charging headers or chunk metadata.
+The six former strict xfails were migrated, not discarded: the actual
+HTTPX/httpcore stack now drives a network double honoring `read(max_bytes)`,
+and the original three non-dividing chunk sizes pass for both providers.
+The other 78 transport tests cover framing, encodings, TLS, deadlines,
+failure mapping and closure. Existing bounded-decoder regressions remain.
+
+An exhausted raw budget with incomplete HTTP framing refuses without an
+extra overflow-probing read, including close-delimited responses at the
+ceiling. Direct declarations pin the already-locked h11/httpcore dependencies;
+no private transport internals or type suppressions are used. The full local
+release-gate suite passes 4244 tests with no xfails. The new transport is not
+a sanitizer-revision source; the measured forty-second rotation belongs to
+the simultaneous classifier-admission and IPv6-policy repairs.
+
+The missing thirty-fourth rotation record is now present in `DECISIONS.md`;
+the original US-004 note below is corrected to name the actual fifth site.
+The unrelated Stage 5 fetch-decoder risk remains open and accepted; neither
+these provider changes nor the passing suite close it. Publication remains
+pending fresh CI and owner-authorized release execution. Final independent
+quality, security and whole-epic compliance revalidation all returned ready.
+
+Round-2 reviewers found two parser-compatibility regressions. Before fixing
+them, 12 of 26 new cases failed. The observer now matches httpcore's existing
+100 KiB incomplete-header allowance and defers malformed-body framing errors
+until valid response headers have been exposed. Coalescing cannot turn a
+429 or unsupported-encoding outcome into a transport error, nor erase the
+compression flag. All 26 cases and the unchanged six exact-cap cases pass.
+
 ### US-001 - settings and shared streaming doubles (2026-09-22, Copilot)
 
 - Added frozen `SearxngSettings`, the module-owned configuration error and a
@@ -1624,8 +1659,10 @@ record.
   read-only reproduces the before value under default and shipped config.
   The other eight hashed sources are byte-identical; policy/models are
   unhashed. No text-sanitization algorithm or currently constructible
-  production outcome changes. Recorded at all five sites: these notes,
-  `docs/bootstrap-notes.md`, `CLAUDE.md`, `CODE_ARCH.md` and `GOTCHAS.md`.
+  production outcome changes. Initially recorded at only four protocol sites:
+  `docs/bootstrap-notes.md`, `CLAUDE.md`, `CODE_ARCH.md` and `GOTCHAS.md`;
+  these Implementation Notes do not count as the fifth site. The missing
+  `DECISIONS.md` record was repaired at the 2026-09-23 whole-epic release gate.
 - After safe Ruff fixes/formatting restricted to changed Python files,
   the related run passed **1,129 tests** and failed only the inherited
   ruling-(j) citation test: the cache-integrity spec moved to `specs/archive/`,

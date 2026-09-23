@@ -69,8 +69,8 @@ listed below exists, and nothing is listed that doesn't.
       2026-09-11; new specs land here via `/kit-tools:plan-epic`)
 - [ ] Scan `docs/GOTCHAS.md`
 - [ ] Confirm the environment: `uv sync --extra dev && uv run pytest` (expect ALL green, zero
-      failures — the current count lives in `testing/TESTING_GUIDE.md`; 4126 collected at
-      `hardening-release` US-004; PR #30 full-suite CI: 4120 passed, 6 expected failures)
+      failures — the current count lives in `testing/TESTING_GUIDE.md`; 4244 collected
+      and passed locally at the whole-epic release gate, with no expected failures)
 
 **Flag anything that looks like:**
 - A new coupling back to Poppy → stop, it is forbidden

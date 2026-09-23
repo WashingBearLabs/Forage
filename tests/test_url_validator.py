@@ -65,6 +65,10 @@ from url_validator import (
         ("www.1.2.3.4", "1.2.3.4", True, False),
         ("2606:4700::1111", "2606:4700::1111", False, True),
         ("2606:4700::1111", "4700::1111", True, False),
+        ("2606:4700::1111", "2606:4700:0:0:0:0:0:1111", True, True),
+        ("2606:4700:0:0:0:0:0:1111", "2606:4700::1111", True, True),
+        ("2606:4700::1111", "2606:4700:0000::1111", False, True),
+        ("2606:4700::1111", "2606:4700::1112", True, False),
     ],
 )
 def test_domain_matching(host: str, entry: str, denylist: bool, expected: bool) -> None:
@@ -790,6 +794,23 @@ class TestHostnameRejection:
 
 class TestBlockedDomains:
     """Blocked domains must be rejected without making any HTTP request."""
+
+    @pytest.mark.parametrize(
+        "host",
+        ["2606:4700::1111", "2606:4700:0:0:0:0:0:1111", "2606:4700:0000::1111"],
+    )
+    @pytest.mark.parametrize(
+        "entry",
+        ["2606:4700::1111", "2606:4700:0:0:0:0:0:1111", "2606:4700:0000::1111"],
+    )
+    async def test_equivalent_ipv6_is_blocked_before_dns(
+        self, host: str, entry: str
+    ) -> None:
+        with (
+            _mock_getaddrinfo(side_effect=AssertionError("DNS must not run")),
+            pytest.raises(BlockedDomainError),
+        ):
+            await validate_url(f"https://[{host}]/", blocked_domains=[entry])
 
     @pytest.mark.asyncio
     async def test_blocked_domain_rejected(self) -> None:

@@ -34,6 +34,7 @@ from pipeline.bounded_body import (
     read_bounded_body,
 )
 from pipeline.config_bounds import bounded_float, bounded_int
+from pipeline.provider_transport import BoundedProviderTransport
 from pipeline.search_providers.base import (
     FailureClass,
     ProviderFailure,
@@ -207,6 +208,7 @@ class SearxngProvider:
         compressed = False
         try:
             async with httpx.AsyncClient(
+                transport=BoundedProviderTransport(self.settings.max_response_bytes),
                 timeout=self.settings.timeout_seconds,
                 trust_env=False,
                 follow_redirects=False,

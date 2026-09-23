@@ -47,6 +47,7 @@ from pipeline.bounded_body import (
     read_bounded_body,
 )
 from pipeline.contract import CONTENT_KIND_CHUNK
+from pipeline.provider_transport import BoundedProviderTransport
 from pipeline.search_providers.base import (
     FailureClass,
     ProviderFailure,
@@ -322,12 +323,16 @@ class BraveApiProvider:
         outbound_query = query[: self.settings.query_max_chars]
         compressed = False
         try:
+            tls_context = ssl.create_default_context()
             async with httpx.AsyncClient(
+                transport=BoundedProviderTransport(
+                    self.settings.max_response_bytes, ssl_context=tls_context
+                ),
                 timeout=self.settings.timeout_seconds,
                 follow_redirects=False,
                 headers={"Accept-Encoding": "identity"},
                 trust_env=False,
-                verify=ssl.create_default_context(),
+                verify=tls_context,
             ) as client:
                 async with asyncio.timeout(self.settings.timeout_seconds):
                     async with client.stream(
