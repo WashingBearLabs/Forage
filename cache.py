@@ -264,7 +264,7 @@ _MAX_CACHE_MAX_VALUE_BYTES = 8 * 2**20
 
 
 class CacheConfigurationError(ValueError):
-    """Raised when cache configuration violates safety constraints."""
+    """Raised when cache configuration or credentials violate safety constraints."""
 
 
 @dataclass(frozen=True, slots=True)

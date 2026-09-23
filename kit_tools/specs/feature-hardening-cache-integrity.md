@@ -1190,6 +1190,54 @@ legitimately names — `scripts/export_contract.py:263-270` writes it on every e
   explicitly prohibits it; no full-suite acceptance or owner gate is claimed.
   Environment-key wiring and its health signal remain US-002's work.
 
+### US-002 — boot key resolution and honest cache health (2026-09-22)
+
+- The lifespan reads `FORAGE_CACHE_HMAC_KEY` exactly once, strips only space,
+  tab and LF, and treats blank as absent. Non-printable/non-ASCII characters,
+  interior whitespace and controls (including CR) refuse boot before cache
+  construction; fewer than 32 UTF-8 bytes does likewise. Each refusal logs
+  exactly one value-free WARNING before `CacheConfigurationError`.
+  The resolver and operator recipe explicitly distinguish length from entropy.
+- Only the selected Valkey backend receives the resolved bytes; memory remains
+  unsigned and logs `cache_hmac_key_unused` once for a configured key. Keyless
+  Valkey logs `cache_hmac_key_missing` once, stays HTTP 200 and reports
+  `cache_unauthenticated` after `cache_unavailable` when both apply. The boot
+  boolean drives `cache_hmac_key: 1` independently of connectivity and the
+  break-glass override; lifespan-less health never re-reads the signing key.
+- Real-lifespan tests preserve the real `ContentCache`, with only the Valkey
+  client doubled. Coverage includes the six named selection starts, absence/
+  blank/valid matrix, malformed and 31/32-byte boundaries on both backends,
+  read-once behavior, exact boot warnings, non-leak sentinels in response
+  bodies/log records/object repr, and an actual signed put/get round trip.
+  A separate check covers disconnected signing and break-glass independence.
+  The helper restores the new state field via `monkeypatch` so keyed starts
+  cannot leak their capability into later tests.
+- Hermeticity clears the new variable and pins the exact set. The two contract
+  vocabulary gates, three-key capability description, healthy smoke docstring
+  and historical six-case test labels are updated; the separate four-case
+  health series remains intact. The environment reference and canonical
+  configuration page document startup and a CSPRNG recipe. Distribution
+  wiring and the remaining documentation fan-out stay in US-004/US-003.
+- The held 1.3.0 contract, anchor, drift twin and golden were regenerated.
+  US-001's continuation and counter paths remain; only
+  `HealthResponse.degraded_reasons[items][enum]=cache_unauthenticated` joins
+  the schema diff. The capability is a map key, not a schema path. All older
+  goldens are unchanged, and all four anchor pages quote
+  `71c627270f3e44fe5f07b729096255b63068ecb6dcc235b1e5dcf65cdba58bdc`.
+- Thirty-second sanitizer rotation: `aa288bc5…5b39c` -> `0866963a…c1e80`.
+  Only `pipeline/contract.py` moves among the nine hashed sources; read-only
+  whole-file reversal against clean `1e467c1` reproduces the before value
+  under both default and shipped configuration. All five protocol sites
+  record it. This is not a text-sanitization change; old cache keys expire.
+- Validation: **979 related tests pass** in one process (app, cache,
+  hermeticity, contract schema/errors/export/smoke/metrics, sanitizer revision
+  and governance docs). Repository Ruff lint/format, strict Pyright, exporter
+  `--check`, whitespace, exact read-site/case-label, old-golden and four-anchor
+  checks pass. Thirteen non-failing Torch/socket-guard warnings remain
+  unsuppressed. **Full `uv run pytest` is deferred by this invocation's
+  explicit restriction**; partial / needs-work records that outstanding gate,
+  not a known functional defect. No owner release gate is claimed.
+
 ## Refinement Notes
 
 ### Research Findings

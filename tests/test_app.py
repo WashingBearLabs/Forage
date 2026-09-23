@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import hashlib
+import hmac
 import inspect
 import json
 import logging
@@ -53,6 +55,7 @@ from models import (
 from pipeline import contract, orchestrator
 from pipeline.contract import (
     CONTRACT_VERSION,
+    DEGRADED_CACHE_UNAUTHENTICATED,
     DEGRADED_CACHE_UNAVAILABLE,
     DEGRADED_PROMPTGUARD_UNAVAILABLE,
     DIAG_STRUCTURAL_BLOCKED,
@@ -86,6 +89,7 @@ from promptguard.classifier import (
 )
 from retrieval_app import (
     _MAX_DOCUMENT_BYTES,
+    CACHE_HMAC_KEY_ENV_VAR,
     DocumentSizeLimitMiddleware,
     ExtractionAdmissionController,
     ExtractionMetrics,
@@ -110,6 +114,7 @@ def client() -> httpx.AsyncClient:
     # Ensure app.state has the expected attributes (normally set by lifespan)
     app.state.classifier = PromptGuardClassifier()
     app.state.cache = FakeContentCache()
+    app.state.cache_signing_active = False
     app.state.config = {"extract_route_enabled": True}
     app.state.retrieve_settings = retrieve_settings_from_config(app.state.config)
     app.state.promptguard_threshold_default = 0.85
@@ -2612,13 +2617,14 @@ async def test_the_module_level_fallback_publishes_settings_and_logs_nothing(
 # Backend selection from VALKEY_URL (`feature-forage-cache-fallback` US-002)
 # ---------------------------------------------------------------------------
 #
-# Five starts, one per configuration the operator can produce:
+# Six starts, one per configuration the operator can produce:
 #
 #   fully unset   -> in-memory, healthy, and no connection attempted at all
-#   valid         -> Valkey, healthy
-#   unreachable   -> Valkey, `degraded: cache_unavailable`
-#   unparseable   -> Valkey, `degraded: cache_unavailable`
-#   empty string  -> Valkey, `degraded: cache_unavailable`
+#   valid + key   -> Valkey, healthy
+#   valid, no key -> Valkey, `degraded: cache_unauthenticated`
+#   unreachable   -> Valkey, `cache_unavailable`, `cache_unauthenticated`
+#   unparseable   -> Valkey, `cache_unavailable`, `cache_unauthenticated`
+#   empty string  -> Valkey, `cache_unavailable`, `cache_unauthenticated`
 #
 # They run through the real `lifespan` *and the real `ContentCache`* — unlike
 # `_running_app` above, which patches the cache away. That is the whole point:
@@ -2630,6 +2636,7 @@ async def test_the_module_level_fallback_publishes_settings_and_logs_nothing(
 _UNREACHABLE_VALKEY_URL = "redis://:unreachable-secret@valkey-that-is-not-there:6379/4"
 _UNPARSEABLE_VALKEY_URL = "http://:unparseable-secret@wrong-scheme-host:6379/0"
 _WORKING_VALKEY_URL = "redis://:working-secret@valkey:6379/4"
+_CACHE_HMAC_SENTINEL = "cache-hmac-test-only-" + "x" * 24
 
 
 def _valkey_double() -> AsyncMock:
@@ -2684,6 +2691,7 @@ async def _started_with_valkey_url(
         monkeypatch.delenv("VALKEY_URL", raising=False)
     else:
         monkeypatch.setenv("VALKEY_URL", valkey_url)
+    monkeypatch.setattr(app.state, "cache_signing_active", False)
 
     async with lifespan(app):
         transport = httpx.ASGITransport(app=app)
@@ -2716,7 +2724,7 @@ def test_only_a_fully_unset_valkey_url_reads_as_absent(
 async def test_unset_valkey_url_runs_in_memory_healthy_and_never_connects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Case 1 of 5 — fully unset: in-memory, healthy, no connection attempted.
+    """Case 1 of 6 — fully unset: in-memory, healthy, no connection attempted.
 
     The "no connection attempted" half is the behavioural form of "no baked
     env default remains": with the old `retrieval_app.py` default in place
@@ -2741,7 +2749,8 @@ async def test_unset_valkey_url_runs_in_memory_healthy_and_never_connects(
 async def test_a_working_valkey_url_selects_valkey_and_stays_healthy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Case 2 of 5 — set and working: Valkey, healthy, one connection made."""
+    """Case 2 of 6 — working and keyed: Valkey, healthy, one connection made."""
+    monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, _CACHE_HMAC_SENTINEL)
     with patch("cache.aioredis") as aioredis:
         aioredis.from_url.return_value = _valkey_double()
         async with _started_with_valkey_url(
@@ -2757,6 +2766,275 @@ async def test_a_working_valkey_url_selects_valkey_and_stays_healthy(
             assert data["status"] == "healthy"
             assert data["degraded_reasons"] == []
             assert data["cache_connected"] is True
+
+
+async def test_a_keyless_working_valkey_url_reports_cache_unauthenticated(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Case 3 of 6 — a reachable but unsigned Valkey is degraded, not healthy."""
+    with patch("cache.aioredis") as aioredis:
+        aioredis.from_url.return_value = _valkey_double()
+        async with _started_with_valkey_url(
+            monkeypatch, valkey_url=_WORKING_VALKEY_URL
+        ) as client:
+            for _ in range(2):
+                response = await client.get("/health")
+                assert response.status_code == 200
+                data = response.json()
+                assert data["status"] == "degraded"
+                assert data["degraded_reasons"] == ["cache_unauthenticated"]
+                assert data["cache_connected"] is True
+                assert "cache_hmac_key" not in data["capabilities"]
+            cache = cast(ContentCache, app.state.cache)
+            assert cache._hmac_key is None
+            assert app.state.cache_signing_active is False
+    warnings = [r for r in caplog.records if "cache_hmac_key_" in r.getMessage()]
+    assert len(warnings) == 1
+    assert warnings[0].levelno == logging.WARNING
+    assert warnings[0].getMessage() == (
+        "cache_hmac_key_missing — FORAGE_CACHE_HMAC_KEY is unset; cached content "
+        "is served unsigned (/health reports cache_unauthenticated)"
+    )
+
+
+@pytest.mark.parametrize("valkey_url", [None, _WORKING_VALKEY_URL])
+@pytest.mark.parametrize("key", [None, "", " \t\n", _CACHE_HMAC_SENTINEL])
+async def test_cache_signing_boot_state_and_diagnostics_never_expose_the_key(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    valkey_url: str | None,
+    key: str | None,
+) -> None:
+    """Real cache, real lifespan; object repr must never become a key-bearing dump."""
+    if key is not None:
+        monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, key)
+    active = valkey_url is not None and key == _CACHE_HMAC_SENTINEL
+    with (
+        caplog.at_level(logging.DEBUG),
+        patch("cache.aioredis") as aioredis,
+    ):
+        aioredis.from_url.return_value = _valkey_double()
+        async with _started_with_valkey_url(
+            monkeypatch, valkey_url=valkey_url
+        ) as client:
+            cache = cast(ContentCache, app.state.cache)
+            assert cache._hmac_key == (
+                _CACHE_HMAC_SENTINEL.encode() if active else None
+            )
+            assert app.state.cache_signing_active is active
+            for _ in range(2):
+                health = await client.get("/health")
+                metrics = await client.get("/metrics")
+                assert health.status_code == metrics.status_code == 200
+                data = health.json()
+                assert data["capabilities"].get("cache_hmac_key") == (
+                    1 if active else None
+                )
+                assert ("cache_unauthenticated" in data["degraded_reasons"]) == (
+                    valkey_url is not None and not active
+                )
+                assert _CACHE_HMAC_SENTINEL not in health.text + metrics.text
+            assert _CACHE_HMAC_SENTINEL not in repr(cache)
+    warnings = [r for r in caplog.records if "cache_hmac_key_" in r.getMessage()]
+    expected_marker = (
+        "cache_hmac_key_missing"
+        if valkey_url is not None and not active
+        else "cache_hmac_key_unused"
+        if valkey_url is None and key == _CACHE_HMAC_SENTINEL
+        else None
+    )
+    assert len(warnings) == (0 if expected_marker is None else 1)
+    if expected_marker is not None:
+        assert warnings[0].levelno == logging.WARNING
+        assert warnings[0].name == "retrieval_app"
+        assert warnings[0].getMessage().startswith(expected_marker)
+        assert CACHE_HMAC_KEY_ENV_VAR in warnings[0].getMessage()
+    assert _CACHE_HMAC_SENTINEL not in caplog.text
+    assert all(_CACHE_HMAC_SENTINEL not in repr(vars(r)) for r in caplog.records)
+
+
+@pytest.mark.parametrize("valkey_url", [None, _WORKING_VALKEY_URL])
+@pytest.mark.parametrize(
+    ("key", "marker"),
+    [
+        ("short-test-key-20byte", "cache_hmac_key_too_short"),
+        ("x" * 31, "cache_hmac_key_too_short"),
+        ("x" * 16 + " " + "x" * 16, "cache_hmac_key_invalid"),
+        ("x" * 16 + "\t" + "x" * 16, "cache_hmac_key_invalid"),
+        ("x" * 16 + "\n" + "x" * 16, "cache_hmac_key_invalid"),
+        ("x" * 32 + "\r", "cache_hmac_key_invalid"),
+        ("\r", "cache_hmac_key_invalid"),
+        ("x" * 32 + "\x1f", "cache_hmac_key_invalid"),
+        ("x" * 32 + "\x7f", "cache_hmac_key_invalid"),
+        ("x" * 32 + "\x85", "cache_hmac_key_invalid"),
+        ("x" * 32 + "\u00e9", "cache_hmac_key_invalid"),
+        ("x" * 32 + "\udcff", "cache_hmac_key_invalid"),
+    ],
+)
+async def test_invalid_cache_hmac_keys_warn_once_then_refuse_boot_without_leaking(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    valkey_url: str | None,
+    key: str,
+    marker: str,
+) -> None:
+    """Validation is unconditional, including a memory backend that cannot sign."""
+    monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, key)
+    with (
+        caplog.at_level(logging.DEBUG),
+        patch("retrieval_app.ContentCache") as cache_factory,
+        pytest.raises(CacheConfigurationError) as caught,
+    ):
+        async with _started_with_valkey_url(monkeypatch, valkey_url=valkey_url):
+            pytest.fail("invalid credentials must refuse startup")
+    cache_factory.assert_not_called()
+    assert CACHE_HMAC_KEY_ENV_VAR in str(caught.value)
+    assert key not in str(caught.value)
+    warnings = [r for r in caplog.records if "cache_hmac_key_" in r.getMessage()]
+    assert len(warnings) == 1
+    assert warnings[0].levelno == logging.WARNING
+    assert warnings[0].name == "retrieval_app"
+    assert warnings[0].getMessage().startswith(marker)
+    assert CACHE_HMAC_KEY_ENV_VAR in warnings[0].getMessage()
+    assert key not in caplog.text
+    assert all(key not in repr(vars(r)) for r in caplog.records)
+
+
+@pytest.mark.parametrize("key", ["x" * 32, _CACHE_HMAC_SENTINEL])
+async def test_cache_signing_resolves_once_and_keeps_the_stripped_boot_key(
+    monkeypatch: pytest.MonkeyPatch, key: str
+) -> None:
+    """The length boundary is accepted, not mistaken for an entropy guarantee."""
+    monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, f" \t\n{key}\n\t ")
+    with (
+        patch("cache.aioredis") as aioredis,
+        patch(
+            "retrieval_app._resolve_cache_hmac_key",
+            wraps=retrieval_app._resolve_cache_hmac_key,
+        ) as resolve,
+    ):
+        aioredis.from_url.return_value = _valkey_double()
+        async with _started_with_valkey_url(
+            monkeypatch, valkey_url=_WORKING_VALKEY_URL
+        ) as client:
+            cache = cast(ContentCache, app.state.cache)
+            assert cache._hmac_key == key.encode()
+            for changed in ("too-short", ""):
+                monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, changed)
+                data = (await client.get("/health")).json()
+                assert data["capabilities"]["cache_hmac_key"] == 1
+                assert data["degraded_reasons"] == []
+                assert cache._hmac_key == key.encode()
+            resolve.assert_called_once_with()
+
+
+def test_cache_hmac_environment_has_one_read_site_and_one_boot_resolution() -> None:
+    assert CACHE_HMAC_KEY_ENV_VAR == "FORAGE_CACHE_HMAC_KEY"
+    source = inspect.getsource(retrieval_app)
+    read = "os.environ.get(CACHE_HMAC_KEY_ENV_VAR)"
+    assert source.count(read) == 1
+    assert read in inspect.getsource(retrieval_app._resolve_cache_hmac_key)
+    assert source.count("_resolve_cache_hmac_key()") == 2
+    assert inspect.getsource(lifespan).count("_resolve_cache_hmac_key()") == 1
+
+
+async def test_boot_key_signs_a_real_cache_round_trip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, _CACHE_HMAC_SENTINEL)
+    valkey = _valkey_double()
+    content = RetrievedContent(
+        request_id="signed-at-boot",
+        source_url="https://example.com/",
+        final_url="https://example.com/",
+        body="A calm page.",
+        word_count=3,
+        content_type="html",
+        trust_score=0.7,
+        trust_tier=TrustTier.STANDARD,
+        stage2_verdict=Stage2Verdict.CLEAN,
+        stage3_verdict=Stage3Verdict.SAFE,
+        domain="example.com",
+    )
+    with patch("cache.aioredis") as aioredis:
+        aioredis.from_url.return_value = valkey
+        async with _started_with_valkey_url(
+            monkeypatch, valkey_url=_WORKING_VALKEY_URL
+        ):
+            cache = cast(ContentCache, app.state.cache)
+            assert await cache.put(content.source_url, content)
+            stored_key, envelope = valkey.set.call_args.args
+            assert isinstance(stored_key, str)
+            assert isinstance(envelope, str)
+            tag, mac, payload = envelope.encode().split(b".", 2)
+            assert tag == b"v1"
+            assert (
+                mac
+                == hmac.new(
+                    _CACHE_HMAC_SENTINEL.encode(),
+                    b"v1\0" + stored_key.encode() + b"\0" + payload,
+                    hashlib.sha256,
+                )
+                .hexdigest()
+                .encode()
+            )
+            valkey.getrange.return_value = envelope.encode()
+            returned = await cache.get(content.source_url)
+            assert returned is not None
+            assert returned.body == content.body
+            assert returned.cache_hit is True
+            assert app.state.cache_metrics.integrity_rejects == 0
+
+
+@pytest.mark.parametrize("keyed", [False, True])
+async def test_cache_health_signing_is_independent_of_connectivity_and_break_glass(
+    monkeypatch: pytest.MonkeyPatch, keyed: bool
+) -> None:
+    if keyed:
+        monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, _CACHE_HMAC_SENTINEL)
+    monkeypatch.setenv("FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION", "1")
+    valkey = _valkey_double()
+    valkey.ping.side_effect = ConnectionError("unavailable")
+    with patch("cache.aioredis") as aioredis:
+        aioredis.from_url.return_value = valkey
+        async with _started_with_valkey_url(
+            monkeypatch, valkey_url=_WORKING_VALKEY_URL, promptguard_loaded=False
+        ) as client:
+            monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, _CACHE_HMAC_SENTINEL)
+            response = await client.get("/health")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "degraded"
+            assert data["capabilities"].get("cache_hmac_key") == (1 if keyed else None)
+            assert data["capabilities"]["search_sanitization"] == 1
+            assert data["degraded_reasons"] == [
+                "promptguard_unavailable",
+                "cache_unavailable",
+            ] + ([] if keyed else ["cache_unauthenticated"])
+
+
+@pytest.mark.parametrize("key", [None, _CACHE_HMAC_SENTINEL, "invalid"])
+async def test_lifespanless_health_never_resolves_or_advertises_a_cache_key(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, key: str | None
+) -> None:
+    monkeypatch.delattr(app.state, "cache_backend", raising=False)
+    monkeypatch.delattr(app.state, "cache_signing_active")
+    monkeypatch.setattr(app.state, "cache", None)
+    if key is not None:
+        monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, key)
+    for backend in ("memory", "valkey"):
+        if backend == "valkey":
+            monkeypatch.setenv("VALKEY_URL", _WORKING_VALKEY_URL)
+        response = await client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["cache_backend"] == backend
+        assert "cache_hmac_key" not in data["capabilities"]
+        assert data["degraded_reasons"] == [
+            "promptguard_unavailable",
+            "cache_unavailable",
+        ] + (["cache_unauthenticated"] if backend == "valkey" else [])
 
 
 @pytest.mark.parametrize(
@@ -2833,7 +3111,7 @@ async def test_a_broken_valkey_url_degrades_and_never_falls_back_to_memory(
     monkeypatch: pytest.MonkeyPatch,
     valkey_url: str,
 ) -> None:
-    """Cases 3-5 of 5 — configured and failing: Valkey, `cache_unavailable`.
+    """Cases 4-6 of 6 — failing and unsigned: both cache degraded reasons.
 
     Unreachable, unparseable and empty are one behaviour on purpose. Each is a
     configuration the operator *wrote*, so each fails loudly rather than
@@ -2850,18 +3128,26 @@ async def test_a_broken_valkey_url_degrades_and_never_falls_back_to_memory(
 
         data = resp.json()
         assert data["status"] == "degraded"
-        assert data["degraded_reasons"] == ["cache_unavailable"]
+        assert data["degraded_reasons"] == [
+            "cache_unavailable",
+            "cache_unauthenticated",
+        ]
         assert data["cache_connected"] is False
 
 
 @pytest.mark.parametrize(
-    ("valkey_url", "secret"),
+    ("valkey_url", "secret", "keyed"),
     [
-        pytest.param(None, None, id="unset"),
-        pytest.param(_WORKING_VALKEY_URL, "working-secret", id="valid"),
-        pytest.param(_UNREACHABLE_VALKEY_URL, "unreachable-secret", id="unreachable"),
-        pytest.param(_UNPARSEABLE_VALKEY_URL, "unparseable-secret", id="unparseable"),
-        pytest.param("", None, id="empty-string"),
+        pytest.param(None, None, False, id="unset"),
+        pytest.param(_WORKING_VALKEY_URL, "working-secret", True, id="valid-keyed"),
+        pytest.param(_WORKING_VALKEY_URL, "working-secret", False, id="valid-keyless"),
+        pytest.param(
+            _UNREACHABLE_VALKEY_URL, "unreachable-secret", False, id="unreachable"
+        ),
+        pytest.param(
+            _UNPARSEABLE_VALKEY_URL, "unparseable-secret", False, id="unparseable"
+        ),
+        pytest.param("", None, False, id="empty-string"),
     ],
 )
 async def test_no_selection_path_logs_the_valkey_url(
@@ -2869,14 +3155,17 @@ async def test_no_selection_path_logs_the_valkey_url(
     caplog: pytest.LogCaptureFixture,
     valkey_url: str | None,
     secret: str | None,
+    keyed: bool,
 ) -> None:
-    """All five starts keep the closed log vocabulary — no URL, no password.
+    """All six starts keep the closed log vocabulary — no URL, no password.
 
     `cache.py`'s invariant, asserted here at the layer that now *chooses* the
     URL: selection reads the variable and hands it on, so a helpful "couldn't
     parse VALKEY_URL=…" anywhere along that path would leak a credential out
     of the one variable that routinely carries one.
     """
+    if keyed:
+        monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, _CACHE_HMAC_SENTINEL)
     with patch("cache.aioredis") as aioredis:
         aioredis.from_url.return_value = _valkey_double()
         with caplog.at_level(logging.DEBUG):
@@ -2896,6 +3185,7 @@ async def test_no_selection_path_logs_the_valkey_url(
     assert "redis://" not in caplog.text
     assert "wrong-scheme-host" not in caplog.text
     assert "valkey-that-is-not-there" not in caplog.text
+    assert _CACHE_HMAC_SENTINEL not in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -2942,7 +3232,7 @@ async def test_no_selection_path_logs_the_valkey_url(
             "degraded",
             "valkey",
             False,
-            [DEGRADED_CACHE_UNAVAILABLE],
+            [DEGRADED_CACHE_UNAVAILABLE, DEGRADED_CACHE_UNAUTHENTICATED],
             id="valkey-down-degraded",
         ),
     ],
@@ -2968,6 +3258,7 @@ async def test_health_names_the_backend_it_selected_for_this_start(
     """
     with ExitStack() as stack:
         if valkey_reachable:
+            monkeypatch.setenv(CACHE_HMAC_KEY_ENV_VAR, _CACHE_HMAC_SENTINEL)
             aioredis = stack.enter_context(patch("cache.aioredis"))
             aioredis.from_url.return_value = _valkey_double()
         async with _started_with_valkey_url(

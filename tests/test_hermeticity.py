@@ -135,6 +135,7 @@ def test_the_cleared_environment_is_the_expected_exact_set() -> None:
         "VALKEY_URL",
         "FORAGE_SEARCH_PROVIDERS",
         "FORAGE_BRAVE_API_KEY",
+        "FORAGE_CACHE_HMAC_KEY",
     }
 
 

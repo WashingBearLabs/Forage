@@ -308,6 +308,7 @@ def test_degraded_reasons_derive_from_one_source() -> None:
     assert {
         DEGRADED_PROMPTGUARD_UNAVAILABLE,
         DEGRADED_CACHE_UNAVAILABLE,
+        contract.DEGRADED_CACHE_UNAUTHENTICATED,
     } == contract.DEGRADED_REASONS
 
 
@@ -734,10 +735,14 @@ def test_degraded_reasons_and_dict_vocabularies_are_documented() -> None:
     assert health["degraded_reasons"]["items"]["enum"] == [
         DEGRADED_PROMPTGUARD_UNAVAILABLE,
         DEGRADED_CACHE_UNAVAILABLE,
+        contract.DEGRADED_CACHE_UNAUTHENTICATED,
     ]
     assert (
         retrieval_app.CAPABILITY_SEARCH_SANITIZATION
         in health["capabilities"]["description"]
+    )
+    assert (
+        retrieval_app.CAPABILITY_CACHE_HMAC_KEY in health["capabilities"]["description"]
     )
 
     omitted: dict[str, Any] = components["SearchResponse"]["properties"][

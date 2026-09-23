@@ -449,6 +449,7 @@ _ONE_THREE_ZERO_DIFFED_SCHEMAS = (
 # adds a field or enum member, until spec 8 US-002 freezes it.
 _EXPECTED_ONE_THREE_ZERO_DIFF: frozenset[str] = frozenset(
     {
+        "HealthResponse.degraded_reasons[items][enum]=cache_unauthenticated",
         "CacheMetricsResponse.integrity_rejects",
         "CacheMetricsResponse.corrupt_entries",
         "SearchRequest.blocked_domains",

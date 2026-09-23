@@ -403,6 +403,15 @@ eight hashed files are unchanged. HMAC/key binding and byte/type bounds in
 `cache.py`, and construction/metrics wiring in `retrieval_app.py`, are not
 hashed. This is not a change to text sanitization; the rotation invalidates
 old cache keys. Full measurements are in `docs/bootstrap-notes.md`.
+And a thirty-second to `0866963a…` for the boot signing verdict and health
+vocabulary (`hardening-cache-integrity` US-002): only `contract.py` moves,
+adding `cache_unauthenticated`, its constant and the 1.3.0 continuation for
+that reason and `cache_hmac_key`. A read-only whole-file reversal against
+clean `1e467c1` reproduces `aa288bc5…` under default and shipped config; all
+other eight hashed sources are unchanged. The one-read key resolver and
+Valkey-only signing wiring in `retrieval_app.py` are unhashed. This is not
+a text-sanitization change; the rotation invalidates old cache keys.
+Full measurements are in `docs/bootstrap-notes.md`.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.
 
 ---

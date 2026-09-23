@@ -538,11 +538,12 @@ were recorded at their implementation boundaries:
 | `hardening-hostname-and-config` US-002 | `de1cea65…6be91` | Twenty-ninth, **seventh policy-driven sanitization-behaviour change**: `/search` merges the operator seed list first, then canonical `blocked_domains=` entries, and omits matches after URL auditing but before content scans. The existing blocked outcome emits `blocked_url` and `host_class=policy_blocklist`; raw sufficiency prevents paid fallback. Only `orchestrator.py` and `contract.py` move; both individual read-only reversals were measured and both-reverted reproduces `c8a907cf…` under default and shipped config. The empty-seed/no-new-field baseline is unchanged. |
 | `hardening-hostname-and-config` US-005 | `e00049c4…7ed5c` | Thirtieth, **eighth policy-driven sanitization-behaviour change**, for tuned deployments: both fetch routes default from validated config before the ceiling, with a new caller threshold on search. `orchestrator.py` passes a required resolved float to classification and cache fingerprint; `contract.py` announces the additions/defaults. Only these two hashed files move; individual read-only reversals measured, both-reverted reproduces `de1cea65…` under default and shipped config. Shipped 0.85 behavior, text-scanning algorithms, raw configured hash input and `/extract`'s raw guard remain unchanged. |
 | `hardening-cache-integrity` US-001 | `aa288bc5…5b39c` | Thirty-first, **not a text-sanitization change**. Only `contract.py` moves, announcing `cache.integrity_rejects` and widened `storage_oversize_skips` producers. Read-only reversal against clean `b79504d` reproduces `e00049c4…` under default and shipped config; all eight other sources are unchanged. The HMAC/bounds and wiring are in unhashed root modules. Old keys are orphaned; full measurements in `docs/bootstrap-notes.md`. |
+| `hardening-cache-integrity` US-002 | `0866963a…c1e80` | Thirty-second, **not a text-sanitization change**. Only `contract.py` moves for `cache_unauthenticated` and the continuation naming that reason and `cache_hmac_key`. Read-only whole-file reversal against clean `1e467c1` reproduces `aa288bc5…` under default and shipped config; the other eight hashed sources are unchanged. One-read key resolution and Valkey-only signing are unhashed. Old keys are orphaned; full measurements in `docs/bootstrap-notes.md`. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Twenty-two of the thirty rotations changed no sanitization policy or algorithm; the
+**Twenty-four of the thirty-two rotations changed no sanitization policy or algorithm; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
 US-001, US-002, US-003 and its validation fix) and the twenty-seventh
 through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005) are the eight
@@ -559,7 +560,7 @@ policy without changing raw-result sufficiency or the text-scanning algorithm.
 US-005 shares configured threshold policy across both fetch routes, before the
 operator ceiling; its behavior change is for tuned deployments, not shipped 0.85.
 US-004 bounds and normalizes `SearchResult.engine` without routing it through that same scan.
-Among the other twenty-two, the fourth and fifth
+Among the other twenty-four, the fourth and fifth
 are different *kinds* of rotation and worth reading as such. The first three moved because
 the hash is over bytes and someone reformatted or retyped a hashed file. The fourth moved
 because an **input changed**: weights are a runtime, per-deployment thing now

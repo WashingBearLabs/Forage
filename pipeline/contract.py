@@ -187,6 +187,9 @@ MINOR when fields are only added.
   to ``/metrics``; ``cache.storage_oversize_skips`` now counts Forage's own
   write-side byte-bound refusals on both backends, not only memory (GOVERNANCE
   ruling (j)). The counter's meaning is unchanged; its producers are widened.
+* ``1.3.0`` — ``hardening-cache-integrity`` US-002 adds the ``/health``
+  degraded reason ``cache_unauthenticated`` for unsigned Valkey caches and the
+  capability ``cache_hmac_key`` for Valkey signing enabled at boot.
 
 This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy
@@ -203,6 +206,7 @@ contract. Neither replaces the other.
 DegradedReason = Literal[
     "promptguard_unavailable",
     "cache_unavailable",
+    "cache_unauthenticated",
 ]
 """Every reason ``/health`` may list in ``degraded_reasons``.
 
@@ -217,6 +221,7 @@ disagree.
 
 DEGRADED_PROMPTGUARD_UNAVAILABLE: DegradedReason = "promptguard_unavailable"
 DEGRADED_CACHE_UNAVAILABLE: DegradedReason = "cache_unavailable"
+DEGRADED_CACHE_UNAUTHENTICATED: DegradedReason = "cache_unauthenticated"
 
 DEGRADED_REASONS = frozenset(get_args(DegradedReason))
 

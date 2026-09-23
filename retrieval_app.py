@@ -28,6 +28,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 import model_fetcher
 from cache import (
+    CacheConfigurationError,
     CacheMetrics,
     CacheSettings,
     CacheStorage,
@@ -48,6 +49,7 @@ from pipeline import contract
 from pipeline.config_bounds import bounded_float, bounded_int
 from pipeline.contract import (
     CONTRACT_VERSION,
+    DEGRADED_CACHE_UNAUTHENTICATED,
     DEGRADED_CACHE_UNAVAILABLE,
     DEGRADED_PROMPTGUARD_UNAVAILABLE,
     POLICY_DOMAIN_LIST_TOO_LARGE,
@@ -115,6 +117,7 @@ SEARXNG_URL = os.environ.get("SEARXNG_URL", DEFAULT_SEARXNG_URL)
 # carries it on the wire (contract 1.1.0). Two literals, one source — a third
 # name cannot appear in one place and not the others.
 CacheBackend = Literal["valkey", "memory"]
+CACHE_HMAC_KEY_ENV_VAR = "FORAGE_CACHE_HMAC_KEY"
 
 # Break-glass capability override. ``FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION``
 # is the current name — deliberately self-describing, so nobody arms it thinking
@@ -239,6 +242,44 @@ def _resolve_brave_key() -> str | None:
     return None
 
 
+def _resolve_cache_hmac_key() -> bytes | None:
+    """Resolve the cache signing key once at boot, refusing unusable credentials.
+
+    Strip only space, tab and newline; a blank value is silently absent.
+    Printable ASCII without interior whitespace is a shape rule borrowed from
+    Brave's header-transport constraint, not an HMAC transport requirement.
+    Carriage returns, other controls and non-ASCII characters are refused.
+
+    The 32 UTF-8 byte floor checks length, not entropy: a same-length passphrase
+    is not an acceptable substitute for the CSPRNG recipe
+    ``head -c 32 /dev/urandom | base64`` in ``docs/configuration.md``.
+    Warnings precede refusal so operators can read the module logger's stderr
+    output in ``docker logs`` even when the container exits during startup.
+    Neither diagnostic includes the value.
+    """
+    raw = os.environ.get(CACHE_HMAC_KEY_ENV_VAR)
+    if raw is None:
+        return None
+    key = raw.strip(" \t\n")
+    if not key:
+        return None
+    if any(not "!" <= char <= "~" for char in key):
+        logger.warning(
+            "cache_hmac_key_invalid — %s must be printable ASCII without "
+            "interior whitespace or control characters",
+            CACHE_HMAC_KEY_ENV_VAR,
+        )
+        raise CacheConfigurationError(f"{CACHE_HMAC_KEY_ENV_VAR} is malformed")
+    encoded = key.encode("utf-8")
+    if len(encoded) < 32:
+        logger.warning(
+            "cache_hmac_key_too_short — %s must contain at least 32 UTF-8 bytes",
+            CACHE_HMAC_KEY_ENV_VAR,
+        )
+        raise CacheConfigurationError(f"{CACHE_HMAC_KEY_ENV_VAR} is too short")
+    return encoded
+
+
 def _configured_cache_backend() -> CacheBackend:
     """Name the backend this start selects, without building it.
 
@@ -298,6 +339,17 @@ def _resolved_cache_backend(state: State) -> CacheBackend:
     """
     backend: CacheBackend | None = getattr(state, "cache_backend", None)
     return backend if backend is not None else _configured_cache_backend()
+
+
+def _resolved_cache_signing_active(state: State) -> bool:
+    """Read the boot verdict, never the environment, defaulting to unsigned.
+
+    Without a lifespan, the backend fallback re-reads ``VALKEY_URL`` but this
+    verdict stays false: no cache was constructed to sign anything. Such a
+    Valkey-backed ``/health`` honestly reports ``cache_unauthenticated``.
+    """
+    active: bool = getattr(state, "cache_signing_active", False)
+    return active
 
 
 def _resolved_sanitizer_revision(state: State) -> str:
@@ -415,17 +467,19 @@ def _load_config() -> dict[str, Any]:
 
 # -- Response models --
 
-# The two capability keys ``/health`` can advertise, named once so the CI
+# The three capability keys ``/health`` can advertise, named once so the CI
 # contract smoke (``contract_smoke.py``) can import the sanitization one
 # instead of restating the wire string. The literals are still pinned by
 # ``tests/test_app.py``, which spells them out: the constants single-source
 # the *symbol*, those tests pin the *value*, and renaming a value without
-# meaning to fails them. The two are computed independently (see
+# meaning to fails them. The three are computed independently (see
 # ``HealthResponse.capabilities``): ``search_sanitization`` is a runtime
 # claim the break-glass override can force, ``brave_api_key`` an environment
-# fact no override touches.
+# fact no override touches, and ``cache_hmac_key`` the boot verdict that a
+# usable key is signing the Valkey backend, also untouched by the override.
 CAPABILITY_SEARCH_SANITIZATION = "search_sanitization"
 CAPABILITY_BRAVE_API_KEY = "brave_api_key"
+CAPABILITY_CACHE_HMAC_KEY = "cache_hmac_key"
 
 
 class HealthResponse(BaseModel):
@@ -452,15 +506,19 @@ class HealthResponse(BaseModel):
         description=(
             "Capabilities this deployment advertises, as a presence map: a "
             "key is present with the value 1 when the capability is "
-            "available and absent otherwise. Two keys are defined in "
-            "contract 1.2.0. 'search_sanitization' (contract 1.1.0) is a "
+            "available and absent otherwise. Three keys are defined in "
+            "contract 1.3.0. 'search_sanitization' (contract 1.1.0) is a "
             "runtime claim, present when PromptGuard is loaded — or when "
             "the break-glass override is armed; see docs/configuration.md, "
             "which only ever forces this key. 'brave_api_key' (contract "
             "1.2.0) is an environment fact, present when this start "
             "resolved a usable FORAGE_BRAVE_API_KEY, independently of "
             "whether 'brave' actually appears in search_providers and "
-            "untouched by the break-glass override. Deliberately a dict "
+            "untouched by the break-glass override. 'cache_hmac_key' (contract "
+            "1.3.0) is present only when this start resolved a usable "
+            "FORAGE_CACHE_HMAC_KEY and selected the Valkey backend, independently "
+            "of cache connectivity and untouched by the break-glass override. "
+            "Memory mode does not sign and never advertises it. Deliberately a dict "
             "rather than an enum: a consumer reads the keys it knows and "
             "ignores the rest, so a future capability is an additive-safe "
             "MINOR change."
@@ -1574,14 +1632,28 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # as the test-facing constructor convenience it always was.
     app.state.cache_settings = cache_settings_from_config(config)
     app.state.cache_metrics = CacheMetrics()
+    cache_hmac_key = _resolve_cache_hmac_key()
     storage, backend = _select_cache_storage(
         settings=app.state.cache_settings,
         metrics=app.state.cache_metrics,
     )
+    if backend == "memory" and cache_hmac_key is not None:
+        logger.warning(
+            "cache_hmac_key_unused — %s is set but the in-memory backend "
+            "is process-private; signing is not applicable",
+            CACHE_HMAC_KEY_ENV_VAR,
+        )
+    elif backend == "valkey" and cache_hmac_key is None:
+        logger.warning(
+            "cache_hmac_key_missing — %s is unset; cached content is served "
+            "unsigned (/health reports cache_unauthenticated)",
+            CACHE_HMAC_KEY_ENV_VAR,
+        )
     cache = ContentCache(
         storage=storage,
         metrics=app.state.cache_metrics,
         max_value_bytes=app.state.cache_settings.max_value_bytes,
+        hmac_key=cache_hmac_key if backend == "valkey" else None,
     )
     cache_ok = await cache.connect()
     app.state.cache = cache
@@ -1589,6 +1661,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # decided once per start, read per request, never recomputed from the
     # environment while the process runs.
     app.state.cache_backend = backend
+    app.state.cache_signing_active = cache_hmac_key is not None and backend == "valkey"
     if cache_ok:
         # `backend` is one of two literals, never the URL.
         logger.info("Content cache connected (%s)", backend)
@@ -1711,6 +1784,7 @@ app.state.classification_semaphore = asyncio.Semaphore(
     _initial_extraction_settings.classification_concurrency
 )
 app.state.cache_metrics = CacheMetrics()
+app.state.cache_signing_active = False
 app.add_middleware(DocumentSizeLimitMiddleware)
 app.add_middleware(ExtractionAdmissionMiddleware)
 
@@ -1772,6 +1846,8 @@ async def health(request: Request) -> HealthResponse:
     # Ping (subject to backoff) so a zero-traffic window still detects recovery
     cache = getattr(request.app.state, "cache", None)
     cache_connected = cache is not None and await cache.ping_if_due()
+    cache_backend = _resolved_cache_backend(request.app.state)
+    cache_signing_active = _resolved_cache_signing_active(request.app.state)
     sanitizer_revision = _resolved_sanitizer_revision(request.app.state)
 
     classifier_loaded = request.app.state.classifier.loaded
@@ -1780,6 +1856,8 @@ async def health(request: Request) -> HealthResponse:
         degraded_reasons.append(DEGRADED_PROMPTGUARD_UNAVAILABLE)
     if not cache_connected:
         degraded_reasons.append(DEGRADED_CACHE_UNAVAILABLE)
+    if cache_backend == "valkey" and not cache_signing_active:
+        degraded_reasons.append(DEGRADED_CACHE_UNAUTHENTICATED)
     capabilities = (
         {CAPABILITY_SEARCH_SANITIZATION: 1}
         if classifier_loaded or _break_glass_advertisement_enabled()
@@ -1790,6 +1868,8 @@ async def health(request: Request) -> HealthResponse:
     # the environment here.
     for key in _resolved_search_key_capabilities(request.app.state):
         capabilities[key] = 1
+    if cache_signing_active:
+        capabilities[CAPABILITY_CACHE_HMAC_KEY] = 1
 
     return HealthResponse(
         status="degraded" if degraded_reasons else "healthy",
@@ -1798,7 +1878,7 @@ async def health(request: Request) -> HealthResponse:
         capabilities=capabilities,
         sanitizer_revision=sanitizer_revision,
         contract_version=CONTRACT_VERSION,
-        cache_backend=_resolved_cache_backend(request.app.state),
+        cache_backend=cache_backend,
         search_providers=[
             provider.name for provider in _resolved_search_providers(request.app.state)
         ],

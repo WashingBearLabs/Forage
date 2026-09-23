@@ -88,7 +88,8 @@ those eight — so Forage's revision moved:
 | After request domain budgets and counters (`hardening-hostname-and-config` US-007) | `c8a907cf…546b8` |
 | After search domain policy (`hardening-hostname-and-config` US-002) | `de1cea65…6be91` |
 | After shared threshold resolution (`hardening-hostname-and-config` US-005) | `e00049c4…7ed5c` |
-| **Current (`hardening-cache-integrity` US-001, signed and bounded cache values)** | **`aa288bc5…5b39c`** |
+| `hardening-cache-integrity` US-001, signed and bounded cache values | `aa288bc5…5b39c` |
+| **Current (`hardening-cache-integrity` US-002, boot signing and health)** | **`0866963a…c1e80`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -1498,3 +1499,36 @@ without changing published fixtures. OpenAPI, its drift twin and anchor were
 regenerated: `de4343ff6df3a65b2c7bf63246be11405d482381d1e0d627d0a99f8b3d1fe763`.
 GOVERNANCE ruling (j) classifies the widened counter producers; the existing
 count-word guard now covers eleven rulings. **Not replayed to Poppy**.
+
+### The thirty-second rotation: boot signing and health (`hardening-cache-integrity` US-002, 2026-09-22)
+
+```
+before: aa288bc5bd107a99b94d2251a4a050da4fb47e7c4b7c9d181c5a07f790a5b39c
+after:  0866963aac3ae860f135061b1cfac397c3678333103a8139fc36fde27d2c1e80
+```
+
+Only `pipeline/contract.py` moves among the nine hashed sources: the new
+`cache_unauthenticated` literal/constant and the 1.3.0 continuation announcing
+it and the `cache_hmac_key` capability. This is **not a text-sanitization
+change**. Startup key resolution, credential validation, Valkey-only signing
+and health assembly live in unhashed `retrieval_app.py`; `cache.py` changes
+only its configuration-error docstring. No hash inputs were added or removed.
+
+The execution checkout was clean at base `1e467c1`. Measured with live
+`derive_sanitizer_revision` and a read-only `Path.read_bytes` substitution of
+`git show 1e467c1:pipeline/contract.py`: default `{}` and shipped `config.yaml`
+both yield the after value, and that whole-file reversal reproduces the before
+value exactly in both configurations. The other eight hashed files were
+compared byte-for-byte against the base and are unchanged. Old cache keys are
+orphaned and expire normally.
+
+The held 1.3.0 golden was re-created through `_SCHEMA_MODELS`; the diff sweep
+adds only `HealthResponse.degraded_reasons[items][enum]=cache_unauthenticated`.
+`cache_hmac_key` is a map key, not a schema path. US-001's counter additions
+and continuation remain; every older golden is unchanged. OpenAPI, drift
+twin and anchor were regenerated; the four anchor pages now quote
+`71c627270f3e44fe5f07b729096255b63068ecb6dcc235b1e5dcf65cdba58bdc`.
+**Consumer change:** a reachable keyless Valkey is now degraded, while HTTP
+200 and memory-mode health are unchanged. A Valkey-backed healthy-mode smoke
+needs the runtime signing key as well as weights and cache connectivity.
+**Not replayed to Poppy**; compare contract versions, not sanitizer revisions.

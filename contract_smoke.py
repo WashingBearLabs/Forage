@@ -42,9 +42,10 @@ started:
   written.
 * ``--expect-status healthy`` — a container started with weights (an
   ``--env-file`` carrying the token, say) **and** a reachable cache when
-  ``VALKEY_URL`` is set: ``/health`` reports ``degraded`` for
-  ``cache_unavailable`` just as it does for ``promptguard_unavailable``, so a
-  weights-loaded container with an unreachable Valkey never reaches
+  ``VALKEY_URL`` is set, with a usable ``FORAGE_CACHE_HMAC_KEY``:
+  ``/health`` reports ``degraded`` for ``cache_unavailable`` or
+  ``cache_unauthenticated`` just as it does for ``promptguard_unavailable``, so a
+  weights-loaded container with an unreachable or unsigned Valkey never reaches
   ``healthy``. The three PromptGuard-coupled checks
   invert: ``status`` is exactly ``"healthy"``, ``promptguard_unavailable`` is
   *absent* from ``degraded_reasons``, and ``capabilities`` *does* advertise

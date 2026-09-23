@@ -288,7 +288,7 @@
         "additionalProperties": {
           "type": "integer"
         },
-        "description": "Capabilities this deployment advertises, as a presence map: a key is present with the value 1 when the capability is available and absent otherwise. Two keys are defined in contract 1.2.0. 'search_sanitization' (contract 1.1.0) is a runtime claim, present when PromptGuard is loaded \u2014 or when the break-glass override is armed; see docs/configuration.md, which only ever forces this key. 'brave_api_key' (contract 1.2.0) is an environment fact, present when this start resolved a usable FORAGE_BRAVE_API_KEY, independently of whether 'brave' actually appears in search_providers and untouched by the break-glass override. Deliberately a dict rather than an enum: a consumer reads the keys it knows and ignores the rest, so a future capability is an additive-safe MINOR change.",
+        "description": "Capabilities this deployment advertises, as a presence map: a key is present with the value 1 when the capability is available and absent otherwise. Three keys are defined in contract 1.3.0. 'search_sanitization' (contract 1.1.0) is a runtime claim, present when PromptGuard is loaded \u2014 or when the break-glass override is armed; see docs/configuration.md, which only ever forces this key. 'brave_api_key' (contract 1.2.0) is an environment fact, present when this start resolved a usable FORAGE_BRAVE_API_KEY, independently of whether 'brave' actually appears in search_providers and untouched by the break-glass override. 'cache_hmac_key' (contract 1.3.0) is present only when this start resolved a usable FORAGE_CACHE_HMAC_KEY and selected the Valkey backend, independently of cache connectivity and untouched by the break-glass override. Memory mode does not sign and never advertises it. Deliberately a dict rather than an enum: a consumer reads the keys it knows and ignores the rest, so a future capability is an additive-safe MINOR change.",
         "title": "Capabilities",
         "type": "object"
       },
@@ -302,7 +302,8 @@
         "items": {
           "enum": [
             "promptguard_unavailable",
-            "cache_unavailable"
+            "cache_unavailable",
+            "cache_unauthenticated"
           ],
           "type": "string"
         },

@@ -102,6 +102,7 @@ instance is private-network-only and Forage is its only client.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `VALKEY_URL` | **unset** — the content cache runs in memory | Connection string for the Valkey/Redis content cache. Standard `redis://` URL, including the database index. Setting it selects the Valkey backend; leaving it unset selects the bounded in-memory one. **May carry a password — see credential handling below. Upgrade note:** remove query options `decode_responses`, `encoding`, `encoding_errors` and `protocol` before upgrading: their presence now refuses boot with `CacheConfigurationError` and one `valkey_url_option_forbidden` WARNING naming only the option. redis-py's URL options override keyword arguments, so these options cannot safely coexist with the atomic byte-bounded read. `socket_timeout` and `socket_connect_timeout` remain operator-overridable tuning; the independent 2 s connect deadline is unchanged. |
+| `FORAGE_CACHE_HMAC_KEY` | unset | Optional runtime-only cache signing secret, read once at boot. An unsigned Valkey reports `cache_unauthenticated`; memory mode needs no key and warns if one is set. Invalid or shorter-than-32-byte keys refuse boot. See "Cache signing key" below for validation and the CSPRNG recipe. |
 | `SEARXNG_URL` | `http://searxng:8080` | Base URL of the SearXNG instance backing `POST /search`. |
 | `FORAGE_SEARCH_PROVIDERS` | `searxng` | Ordered, comma-separated chain of search backends `POST /search` resolves at container start. Known names are `searxng` and `brave`; **any entry other than `searxng` sends the caller's query to that provider**, so add one only if you mean to. An unknown name refuses the boot (the resolved names are in the startup log); a set-but-blank value logs a WARNING and resolves to the default. Read once at start — restart to apply. |
 | `FORAGE_BRAVE_API_KEY` | unset | API key for Brave's paid LLM-Context search endpoint. **Carries a credential** — supply it the same way as `VALKEY_URL`, with `--env-file` or an explicit `environment:` entry until spec 5 US-004 adds the compose passthrough. With it set, a `brave` entry in `FORAGE_SEARCH_PROVIDERS` sends the caller's query text — whatever the calling agent put in it, truncated to `search_brave_query_max_chars` — to Brave's API under the operator's account and terms; the call needs direct HTTPS egress and ignores proxy variables by design. A key-less `brave` entry is skipped (WARNING `brave_skipped_missing_key`) rather than refusing the boot, and a chain where every entry was skipped this way falls back to SearXNG alone (a second WARNING, `search_chain_defaulted_to_searxng`, marks the substitution): **no key means SearXNG-only, fully supported.** Read once at start — restart to apply. |
@@ -185,10 +186,15 @@ start. There are two backends and one rule:
 | `VALKEY_URL` | Backend | `/health` `cache_backend` | `/health` `status` |
 |---|---|---|---|
 | **Fully unset** | Bounded in-memory (see the `cache:` block below) | `memory` | `healthy` — nothing is missing, this is a supported deployment |
-| Set and reachable | Valkey | `valkey` | `healthy` |
-| Set but unreachable | Valkey | `valkey` | `degraded`, `cache_unavailable` |
-| Set to an unparseable URL | Valkey | `valkey` | `degraded`, `cache_unavailable` — never a failed boot |
-| **Set to the empty string** | Valkey | `valkey` | `degraded`, `cache_unavailable` |
+| Set and reachable, usable signing key | Valkey | `valkey` | `healthy` |
+| Set and reachable, no signing key | Valkey | `valkey` | `degraded`, `cache_unauthenticated` |
+| Set but unreachable | Valkey | `valkey` | `degraded`, `cache_unavailable`, plus `cache_unauthenticated` without a key |
+| Set to an unparseable URL | Valkey | `valkey` | `degraded`, `cache_unavailable`, plus `cache_unauthenticated` without a key — never a failed boot from the malformed URL |
+| **Set to the empty string** | Valkey | `valkey` | `degraded`, `cache_unavailable`, plus `cache_unauthenticated` without a key |
+
+The table assumes PromptGuard is loaded; otherwise `promptguard_unavailable` also
+appears. A usable signing key is independent of connectivity and does not repair an
+unreachable Valkey.
 
 `cache_backend` reports the choice this container made, not the one its environment would
 make now: it is decided once, at start, and fixed for the life of the process. Changing
@@ -233,6 +239,39 @@ Consequences of memory mode, in one place:
 > epic's live checklist asserts `cache_backend == "valkey"` on the running container
 > rather than trusting the config. If you run more than one Forage replica, or want the
 > cache to survive a restart, set `VALKEY_URL`.
+
+### Cache signing key
+
+`FORAGE_CACHE_HMAC_KEY` is read once during startup. Leading/trailing spaces, tabs
+and LF newlines are stripped; blank means absent. Every remaining character must
+be printable ASCII without whitespace or controls (including CR), and the value
+must be at least **32 UTF-8 bytes**. This is a length floor, **not an entropy
+check**: a same-length passphrase is not an acceptable substitute. Generate 32
+random bytes with a CSPRNG and encode them as 44 printable characters:
+
+```bash
+# Append to a private, gitignored runtime env file; never a build argument.
+umask 077
+printf 'FORAGE_CACHE_HMAC_KEY=%s\n' "$(head -c 32 /dev/urandom | base64)" >> .env
+```
+
+Supply that file using `docker run --env-file .env` or an explicit compose
+`environment:` entry; the compose passthrough is a separate distribution change.
+An existing env file must already have private permissions. Treat the key like
+any credential: do not paste it into a command line or logs; Docker socket access
+can reveal container environment values. Restart to change it, and use the same
+key on every replica sharing the cache. A key change makes old signatures fail;
+the entries become misses and are deleted, not silently trusted.
+
+Startup refuses a malformed or too-short value with `CacheConfigurationError`,
+even in memory mode. Read **stderr / `docker logs`** for the preceding WARNING
+`cache_hmac_key_invalid` or `cache_hmac_key_too_short`; diagnostics name only the
+variable, never its value. A keyless Valkey logs `cache_hmac_key_missing` once and
+reports `cache_unauthenticated` on `/health` (still HTTP 200). Memory mode is
+process-private and never signs: a configured key logs `cache_hmac_key_unused`
+once, without adding a degraded reason. `/health.capabilities.cache_hmac_key`
+is `1` only for a usable key on Valkey, absent otherwise; it says signing is
+enabled, not that the cache is reachable or the key has adequate entropy.
 
 ### Credential handling for `VALKEY_URL`
 
@@ -805,7 +844,8 @@ curl -s localhost:8020/health | jq
 | Field | What it tells you |
 |-------|-------------------|
 | `status` | `healthy` or `degraded`. |
-| `degraded_reasons` | `promptguard_unavailable` (no weights — the ML scan is not running), `cache_unavailable` (a *configured* Valkey is unreachable or its URL is unusable — see "Cache backend selection"; memory mode never reports it). |
+| `degraded_reasons` | `promptguard_unavailable` (no weights — the ML scan is not running), `cache_unavailable` (a *configured* Valkey is unreachable or its URL is unusable), `cache_unauthenticated` (Valkey signing is not enabled). Both cache reasons can coexist; memory mode reports neither. |
+| `capabilities.cache_hmac_key` | Present as `1` only when a usable `FORAGE_CACHE_HMAC_KEY` was resolved at boot and the backend is Valkey. Independent of connectivity and the break-glass override; absent in memory mode. |
 | `promptguard_loaded` | Always honest, even with the break-glass override set. |
 | `cache_connected` | "The selected backend is operational." A live ping in Valkey mode, subject to reconnect backoff; always `true` in memory mode, where there is no connection to lose. It is **not** a statement that Valkey is present — read `cache_backend` for that. |
 | `cache_backend` | `valkey` or `memory` — which storage the content cache selected at start, decided once from `VALKEY_URL` and fixed for the life of the process. Added in contract `1.1.0`. This is the field that separates "healthily in memory mode" from "silently lost its Valkey"; `cache_connected` alone reports `true` for both. |
