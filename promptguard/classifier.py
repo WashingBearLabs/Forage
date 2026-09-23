@@ -1,6 +1,6 @@
-"""PromptGuard 2 22M classifier — model loading, inference, chunking.
+"""PromptGuard 2 classifier — model loading, inference, chunking.
 
-Wraps Meta's Prompt-Guard-2-22M (DeBERTa-v3-base sequence classifier)
+Wraps Meta's Prompt Guard 2 sequence classifiers (22M by default)
 for prompt-injection detection.  Runs on CPU only.
 """
 
@@ -9,8 +9,9 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pipeline.config_bounds import bounded_int
 
@@ -27,9 +28,6 @@ DEFAULT_MODEL_ID = "meta-llama/Llama-Prompt-Guard-2-22M"
 MAX_SEQ_LEN = 512
 CHUNK_OVERLAP = 64
 MAX_PROMPTGUARD_CHUNKS = 64
-# Prompt-Guard-2-22M has 2 output classes: BENIGN (0) and INJECTION (1).
-# (The older 86M model had 3 classes with INDIRECT at index 1.)
-_INJECTION_LABEL_INDEX = 1
 
 
 class PromptGuardThreadsConfigurationError(ValueError):
@@ -49,7 +47,7 @@ def promptguard_threads_from_config(config: dict[str, Any]) -> int:
 
 
 class PromptGuardClassifier:
-    """Wraps PromptGuard 2 22M for injection detection.
+    """Wraps PromptGuard 2 for injection detection.
 
     Call :meth:`load` once at startup, then :meth:`classify` per request.
     Degrades gracefully — if the model is unavailable, ``loaded`` stays
@@ -65,6 +63,9 @@ class PromptGuardClassifier:
         self._tokenizer_lock = threading.Lock()
         self._loaded: bool = False
         self._threads = 0
+        # Prompt Guard 2 is binary; the three-class model was Prompt Guard 1.
+        # load() verifies the labels and replaces this default from the config.
+        self._injection_label_index = 1
 
     def configure_threads(self, threads: int) -> None:
         """Retain the validated boot setting for every load attempt."""
@@ -98,11 +99,13 @@ class PromptGuardClassifier:
         blessed the exact file set; the defaults preserve the pre-US-001
         behaviour for any other caller.
         """
+        self._loaded = False
         model_id = DEFAULT_MODEL_ID if model_id is None else model_id
         if cache_dir is not None and not Path(cache_dir).is_dir():
             logger.warning("model_cache_dir_missing")
-            self._loaded = False
             return False
+        model: PreTrainedModel
+        tokenizer: PreTrainedTokenizerBase
         try:
             import torch
 
@@ -128,7 +131,7 @@ class PromptGuardClassifier:
             # import is not a dead name that a linter would strip.
             logger.debug("PromptGuard loading against torch %s", torch.__version__)
 
-            self._tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer = AutoTokenizer.from_pretrained(
                 model_id,
                 revision=revision,
                 cache_dir=cache_dir,
@@ -149,11 +152,6 @@ class PromptGuardClassifier:
                 cache_dir=cache_dir,
                 local_files_only=local_files_only,
             )
-            model.eval()
-            self._model = model
-            self._loaded = True
-            logger.info("PromptGuard 2 model loaded successfully")
-            return True
         except Exception:
             logger.warning(
                 "PromptGuard model not available — ML injection detection disabled",
@@ -161,6 +159,28 @@ class PromptGuardClassifier:
             )
             self._loaded = False
             return False
+
+        id2label: object = getattr(getattr(model, "config", None), "id2label", None)
+        labels: Mapping[object, object] = (
+            cast(Mapping[object, object], id2label)
+            if isinstance(id2label, Mapping)
+            else {}
+        )
+        ordered_labels = [
+            label.upper() if isinstance(label, str) else None
+            for label in (labels.get(0), labels.get(1))
+        ]
+        if len(labels) != 2 or set(ordered_labels) != {"BENIGN", "INJECTION"}:
+            logger.warning("model_labels_unexpected")
+            return False
+
+        self._injection_label_index = ordered_labels.index("INJECTION")
+        model.eval()
+        self._model = model
+        self._tokenizer = tokenizer
+        self._loaded = True
+        logger.info("PromptGuard 2 model loaded successfully")
+        return True
 
     # -----------------------------------------------------------------
     # Chunking
@@ -245,7 +265,7 @@ class PromptGuardClassifier:
 
             # Softmax over logits → probability of injection class
             probs = torch.softmax(outputs.logits, dim=-1)
-            injection_prob = float(probs[0, _INJECTION_LABEL_INDEX].item())
+            injection_prob = float(probs[0, self._injection_label_index].item())
             scores.append(injection_prob)
 
         if not scores:

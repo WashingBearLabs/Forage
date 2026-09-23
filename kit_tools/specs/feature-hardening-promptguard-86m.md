@@ -1461,6 +1461,72 @@ this invocation explicitly prohibits running it. No definition or acceptance
 checkbox was changed, no owner gate ran, and no dependency, response shape,
 generated contract or historical golden changed.
 
+### US-006 implementation — 2026-09-22 (Copilot)
+
+Starting commit `06a56b289fb49121a4d5e38c42d2c4544ced09a8`, clean tree.
+`resolve_model_id()` is a total `(id, allowed)` resolver with one environment
+read site; unset and stripped-blank mean 22M, and every refusal emits only
+`model_id_not_allowed`. The lifespan checks the boolean before constructing
+resources, raises `ModelConfigurationError` on refusal, and publishes the
+selection for health and acquisition. The allowlist still contains only
+`meta-llama/Llama-Prompt-Guard-2-22M`; the manifest-entry test iterates it without
+pinning its size, so the owner gate can add the second id and manifest together.
+
+The actual tree has one additional identity consumer versus the original hint:
+the resource-envelope memory advisory. It now receives the same selected id,
+and its synthetic larger-resident-set test selects through the allowlisted
+environment seam instead of replacing `retrieval_app.DEFAULT_MODEL_ID`.
+The ASGI lifespan regression records `acquire_and_load`, uses real verified
+acquisition with a tiny synthetic manifest, and proves both auto-class calls
+receive the selected id and pin. Default/blank/unloaded and post-boot environment
+mutation cases pin health's configuration echo; invalid ids, including the
+not-yet-vendored 86M, refuse boot without logging their values.
+
+The classifier binds model/tokenizer locally inside the load `try`, validates
+`id2label` afterwards, and only then calls `eval` and publishes the loaded
+instance. Exactly two indexed labels BENIGN/INJECTION are required; swapped
+and mixed-case labels drive the correct inference index. Missing, null,
+non-mapping, generic, duplicated, out-of-range and three-class labels produce
+the specific `model_labels_unexpected` WARNING and leave it unloaded.
+No third-party stub or suppression was needed.
+
+Window block complete: one `* ``1.3.0``` continuation, regenerated OpenAPI /
+anchor / drift fixture, manual held-golden update matched against every
+`_SCHEMA_MODELS` entry, and one added-path entry
+`HealthResponse.promptguard_model`. Historical goldens and the 1.2.0 pair are
+unchanged. All four anchor pages now quote
+`cefbd601b0c7223ef9f05b973325b62944385899c4571917ce4d3e3741f28a22`.
+The spec's smoke hint understates the current driver: it already validates the
+entire shared `HealthResponse`, not just membership, and rejects other contract
+versions. `contract_smoke.py` remains byte-identical, with no new model-specific
+assertion; its synthetic current-schema test body gains the new required field.
+Do not read this as new backward compatibility for an old-image smoke.
+
+Thirty-eighth rotation, measured under default and shipped config:
+`4913fdc1982cb48ba2db9c6972fcea10107408349970c45c9dc6b3ae5c1aa1fb`
+to `85394a954e32ec00bb499d08c01811dc4d00b363708e3f839311ae8fde33d0c0`.
+Only `contract.py` differs among all nine hashed sources; read-only whole-file
+substitution from the starting commit reproduces the old value exactly.
+Repeating with the previous default identity explicitly supplied does too.
+The other eight sources are byte-identical; the selected-id hash input changes
+only for a non-default model. Full measurements, default behavior rationale
+and consumer handoff are recorded at all five required sites.
+
+All fan-out greps pass: model-selection counts are 1/1/1/2 across the two
+Compose fragments/configuration/ENV_REFERENCE; health model counts are 1/2/2
+across API_GUIDE/MONITORING/SECURITY; each troubleshooting refusal-token count
+is 2. `model_fetcher.py` contains zero 86M-id literals. The security decision
+explicitly withholds publication, not inferability: the future per-rule
+contiguity counters offer a differential channel. Neither owner gate ran.
+
+Validation: **1436 related tests passed**, with 10 non-failing existing
+torch/socket warnings; repository-wide Ruff lint and formatting pass,
+strict Pyright has zero errors, and `export_contract --check` is clean.
+The full-suite criterion is **unverified**, because this invocation explicitly
+prohibits running it: result is partial / needs-work for that reason alone.
+No story definition/checkbox, weights manifest, vendoring default, NOTICE,
+dependency manifest, historical golden, branch, tag or release was changed.
+
 <!-- Populated during execution. US-001 and US-002 record the unchanged default revision value; US-006
 and US-007 record their rotations; US-005 records the licence check, the vendoring transcript, the
 scoped manifest diff and the allowlist edit; US-004 records the benchmark table, the matrix wall-clock

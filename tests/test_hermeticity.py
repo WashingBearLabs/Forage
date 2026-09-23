@@ -129,6 +129,7 @@ def test_the_cleared_environment_is_the_expected_exact_set() -> None:
     assert set(conftest._CLEARED_ENV_VARS) == {
         "HF_TOKEN",
         "HF_HOME",
+        "FORAGE_MODEL_ID",
         "FORAGE_MODEL_REVISION",
         "FORAGE_WEIGHTS_MIRROR",
         "FORAGE_MIRROR_TOKEN",

@@ -214,6 +214,9 @@ MINOR when fields are only added.
 * ``1.3.0`` — ``hardening-resource-envelope`` US-002: healthcheck descriptions
   corrected — no shape change. The shipped compose probe uses
   ``curl -fsS -o /dev/null`` for status-only liveness, not body health.
+* ``1.3.0`` — ``hardening-promptguard-86m`` US-006 adds
+  ``HealthResponse.promptguard_model``: the configured model id, reported
+  whether loaded or not. ``promptguard_loaded`` keeps its serving-state meaning.
 
 This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy

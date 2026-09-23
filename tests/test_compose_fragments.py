@@ -551,6 +551,20 @@ class TestSearchProviderPassthrough:
         )
 
 
+@pytest.mark.parametrize("variable", ["FORAGE_MODEL_ID", "FORAGE_MODEL_REVISION"])
+@pytest.mark.parametrize("name", _FRAGMENTS)
+def test_model_selection_is_a_bare_passthrough_only_on_forage(
+    fragments: dict[str, dict[str, Any]], name: str, variable: str
+) -> None:
+    services = _services(fragments[name])
+    environment = _environment(services[_FORAGE_SERVICE])
+    assert variable in environment
+    assert environment[variable] is None
+    for service_name, service in services.items():
+        if service_name != _FORAGE_SERVICE:
+            assert variable not in _environment(service)
+
+
 class TestMinimalIsGenuinelyValkeyFree:
     """Only a *fully unset* VALKEY_URL selects the in-memory backend."""
 

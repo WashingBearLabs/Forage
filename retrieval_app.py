@@ -373,6 +373,12 @@ def _resolved_sanitizer_revision(state: State) -> str:
     return derive_sanitizer_revision(config) if config is not None else "unknown"
 
 
+def _resolved_promptguard_model(state: State) -> str:
+    """Read the boot selection; lifespan-free transports use the default id."""
+    model_id: str = getattr(state, "promptguard_model", DEFAULT_MODEL_ID)
+    return model_id
+
+
 def _resolved_search_providers(state: State) -> list[SearchProvider]:
     """Return the chain this app resolved at start, or the default chain.
 
@@ -511,6 +517,15 @@ class HealthResponse(BaseModel):
 
     status: Literal["healthy", "degraded"]
     promptguard_loaded: bool
+    promptguard_model: str = Field(
+        description=(
+            "The model id selected at startup, whether loaded or not; "
+            "promptguard_loaded reports whether it serves. The identity is "
+            "contract-relevant and inferable from behaviour; contiguity settings "
+            "are tuning an attacker would otherwise have to guess and are not "
+            "published here."
+        )
+    )
     cache_connected: bool = Field(
         description=(
             "Whether the selected cache backend is operational. In Valkey mode "
@@ -1586,6 +1601,10 @@ def _sanitize_upload_metadata(
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Startup/shutdown lifecycle."""
+    model_id, model_allowed = model_fetcher.resolve_model_id()
+    if not model_allowed:
+        raise model_fetcher.ModelConfigurationError("model_id_not_allowed")
+    app.state.promptguard_model = model_id
     # Load config
     config = _load_config()
     _warn_unknown_config_keys(config)
@@ -1745,7 +1764,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings,
         app.state.cache_settings,
         backend,
-        model_id=DEFAULT_MODEL_ID,
+        model_id=model_id,
         memory_max=_cgroup_memory_snapshot()["cgroup_memory_max_bytes"],
     )
     if backend == "memory" and cache_hmac_key is not None:
@@ -1806,6 +1825,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.classifier = classifier
     acquisition = model_fetcher.WeightAcquisition(
         classifier,
+        model_id=model_id,
         metrics=app.state.model_metrics,
     )
     app.state.model_acquisition = acquisition
@@ -1990,6 +2010,7 @@ async def health(request: Request) -> HealthResponse:
     return HealthResponse(
         status="degraded" if degraded_reasons else "healthy",
         promptguard_loaded=classifier_loaded,
+        promptguard_model=_resolved_promptguard_model(request.app.state),
         cache_connected=cache_connected,
         capabilities=capabilities,
         sanitizer_revision=sanitizer_revision,

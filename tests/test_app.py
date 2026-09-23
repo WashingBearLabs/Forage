@@ -133,6 +133,7 @@ def client() -> httpx.AsyncClient:
     """Create an async test client for the retrieval app."""
     # Ensure app.state has the expected attributes (normally set by lifespan)
     app.state.classifier = PromptGuardClassifier()
+    app.state.promptguard_model = DEFAULT_MODEL_ID
     app.state.cache = FakeContentCache()
     app.state.cache_signing_active = False
     app.state.config = {"extract_route_enabled": True}
@@ -188,6 +189,7 @@ async def test_health_returns_200(client: httpx.AsyncClient) -> None:
     data = resp.json()
     assert data["status"] == "degraded"
     assert isinstance(data["promptguard_loaded"], bool)
+    assert data["promptguard_model"] == DEFAULT_MODEL_ID
     assert isinstance(data["cache_connected"], bool)
     assert "search_sanitization" not in data["capabilities"]
 
@@ -1328,6 +1330,8 @@ async def _first_attempt_failed(*, timeout: float = 15.0) -> None:
 @asynccontextmanager
 async def _fetchable_environment(
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    model_id: str = DEFAULT_MODEL_ID,
 ) -> AsyncGenerator[MagicMock, None]:
     """A cache root, a manifest and a token that let exactly one fetch succeed.
 
@@ -1350,7 +1354,7 @@ async def _fetchable_environment(
             json.dumps(
                 weights_manifest_document(
                     files,
-                    model_id=DEFAULT_MODEL_ID,
+                    model_id=model_id,
                     revision=DEFAULT_MODEL_REVISION,
                 )
             ),
@@ -1725,6 +1729,125 @@ async def test_the_lifespan_calls_the_fetcher_off_the_event_loop(
     assert threads and threads[0] != threading.get_ident()
 
 
+@pytest.mark.parametrize("model_id", [DEFAULT_MODEL_ID, "acme/second-guard"])
+async def test_lifespan_passes_selected_model_through_acquisition_and_both_loaders(
+    monkeypatch: pytest.MonkeyPatch, model_id: str
+) -> None:
+    monkeypatch.setattr(
+        model_fetcher, "ALLOWED_MODEL_IDS", frozenset({DEFAULT_MODEL_ID, model_id})
+    )
+    monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, model_id)
+    received: list[str | None] = []
+    original = model_fetcher.acquire_and_load
+
+    def _record(
+        classifier: PromptGuardClassifier,
+        *,
+        metrics: ModelMetrics | None = None,
+        model_id: str | None = None,
+        **_kwargs: object,
+    ) -> bool:
+        received.append(model_id)
+        return original(classifier, model_id=model_id, metrics=metrics)
+
+    monkeypatch.setattr(model_fetcher, "acquire_and_load", _record)
+    with (
+        patch("transformers.AutoTokenizer.from_pretrained") as tokenizer,
+        patch(
+            "transformers.AutoModelForSequenceClassification.from_pretrained"
+        ) as model,
+        patch("retrieval_app._warn_if_envelope_memory_rule_unmet") as envelope,
+    ):
+        model.return_value.config.id2label = {0: "BENIGN", 1: "INJECTION"}
+        async with (
+            _fetchable_environment(monkeypatch, model_id=model_id),
+            _running_app() as running,
+        ):
+            assert await _settled(app.state.model_task) is True
+            acquisition: model_fetcher.WeightAcquisition = app.state.model_acquisition
+            assert acquisition._model_id == model_id
+            assert received == [model_id]
+            assert tokenizer.call_args.args == (model_id,)
+            assert model.call_args.args == (model_id,)
+            assert envelope.call_args.kwargs["model_id"] == model_id
+            assert tokenizer.call_args.kwargs["local_files_only"] is True
+            assert model.call_args.kwargs["use_safetensors"] is True
+            assert model.call_args.kwargs["revision"] == DEFAULT_MODEL_REVISION
+            assert tokenizer.call_args.kwargs["revision"] == DEFAULT_MODEL_REVISION
+
+            monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, "secret-sentinel")
+            with patch(
+                "model_fetcher.resolve_model_id",
+                side_effect=AssertionError("health must read startup state"),
+            ):
+                for loaded in (True, False):
+                    app.state.classifier._loaded = loaded
+                    response = await running.get("/health")
+                    assert response.status_code == 200
+                    assert response.json()["promptguard_model"] == model_id
+                    assert response.json()["promptguard_loaded"] is loaded
+
+
+@pytest.mark.parametrize("configured", [None, "", " \t\n", DEFAULT_MODEL_ID])
+async def test_lifespan_default_model_is_reported_even_when_unloaded(
+    monkeypatch: pytest.MonkeyPatch, configured: str | None
+) -> None:
+    if configured is not None:
+        monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, configured)
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _acquisition_that_never_loads
+    )
+    async with _running_app() as running:
+        response = await running.get("/health")
+        assert response.status_code == 200
+        assert response.json()["promptguard_model"] == DEFAULT_MODEL_ID
+        assert response.json()["promptguard_loaded"] is False
+
+
+@pytest.mark.parametrize(
+    "configured",
+    ["evil/model", "meta-llama/Llama-Prompt-Guard-2-86M", "secret-sentinel\ninjected"],
+)
+async def test_lifespan_refuses_disallowed_model_without_echoing_the_value(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    configured: str,
+) -> None:
+    monkeypatch.setattr(
+        model_fetcher, "ALLOWED_MODEL_IDS", frozenset({DEFAULT_MODEL_ID})
+    )
+    monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, configured)
+    with (
+        patch("model_fetcher.WeightAcquisition") as acquisition,
+        pytest.raises(
+            model_fetcher.ModelConfigurationError, match=r"^model_id_not_allowed$"
+        ),
+    ):
+        async with lifespan(FastAPI()):
+            pytest.fail("disallowed model reached serving startup")
+    acquisition.assert_not_called()
+    assert [(record.levelname, record.getMessage()) for record in caplog.records] == [
+        ("WARNING", "model_id_not_allowed")
+    ]
+    assert configured not in caplog.text
+
+
+async def test_lifespan_free_health_never_resolves_model_selection(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delattr(app.state, "promptguard_model")
+    monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, "evil/model")
+    monkeypatch.setattr(app.state, "sanitizer_revision", "test-revision", raising=False)
+    with patch(
+        "model_fetcher.resolve_model_id",
+        side_effect=AssertionError("health must not resolve a model"),
+    ):
+        assert (await client.get("/health")).json()[
+            "promptguard_model"
+        ] == DEFAULT_MODEL_ID
+
+
 # `feature-forage-cache-fallback` US-001. The `cache:` bounds are validated at
 # startup whichever storage is selected, so these run through the real lifespan
 # for the same reason the weight-acquisition tests above do: the `client`
@@ -1817,8 +1940,11 @@ async def test_lifespan_threads_reach_the_loading_classifier(
     with (
         patch("torch.set_num_threads") as set_threads,
         patch("transformers.AutoTokenizer.from_pretrained") as tokenizer,
-        patch("transformers.AutoModelForSequenceClassification.from_pretrained"),
+        patch(
+            "transformers.AutoModelForSequenceClassification.from_pretrained"
+        ) as model,
     ):
+        model.return_value.config.id2label = {0: "BENIGN", 1: "INJECTION"}
 
         def before_tokenization(*_args: object, **_kwargs: object) -> MagicMock:
             if config.get("promptguard_threads", 0):
@@ -1901,7 +2027,10 @@ async def test_lifespan_memory_rule_counts_configured_terms_once(
     )
     monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
     model_id = "test-model-with-larger-resident-set" if delta_mib else DEFAULT_MODEL_ID
-    monkeypatch.setattr(retrieval_app, "DEFAULT_MODEL_ID", model_id)
+    monkeypatch.setattr(
+        model_fetcher, "ALLOWED_MODEL_IDS", frozenset({DEFAULT_MODEL_ID, model_id})
+    )
+    monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, model_id)
     monkeypatch.setattr(
         retrieval_app,
         "CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL",

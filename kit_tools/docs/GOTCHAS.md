@@ -2,7 +2,7 @@
 # GOTCHAS.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-resource-envelope US-003)
+> Updated by: Copilot (hardening-promptguard-86m US-006)
 
 ## Overview
 
@@ -158,6 +158,8 @@ weightless by design, not by accident. Forage reports `status: "degraded"` with
 `promptguard_unavailable` in `degraded_reasons` and `promptguard_loaded: false`, and the
 ML injection scan does not happen. Stage 2's deterministic regex pass still runs; stage 3
 does not.
+An unknown `FORAGE_MODEL_ID` is different: `ModelConfigurationError` refuses boot
+with `model_id_not_allowed`, rather than serving degraded; blank means the default.
 
 **The tell, since US-001, is one log line at start:** `weights_fetch_skipped — no
 HF_TOKEN in the environment`. If instead you see `weights_pin_unusable`, the token is not
@@ -543,7 +545,7 @@ the pass-list advice; the baked image still ships `limiter: false`.
 `derive_sanitizer_revision()` hashes nine source files — the eight under `pipeline/` plus
 repo-root `url_validator.py` — plus the model identity, the `idna` version
 (`idna@<version>`: UTS-46 tables decide which hosts are dropped) and the active
-threshold. Forage's revision has moved thirty-four times. The twenty-sixth was
+threshold. Forage's revision has moved thirty-eight times. The twenty-sixth was
 reconciled from the preceding validation commit during US-001's pre-flight; the rest
 were recorded at their implementation boundaries:
 
@@ -587,11 +589,12 @@ were recorded at their implementation boundaries:
 | `hardening-provider-bounds` US-005 | `d9db7586…1b6e0` | Thirty-fifth, **not a text-sanitization change**. Only `orchestrator.py` moves for the extracted provider loop, retired pipeline-only URL keyword, reason/domain omission logs and guarded failure tokens. Read-only whole-file reversal against clean `2a275c5` reproduces `e3b9c138…` under default and shipped config; all other eight sources are unchanged. Four wire/counter and two exhaustion pins were committed first (`8e449fc`) and remain unchanged. Keep sink increments inside the helper: deferring them to its caller loses counts on a raise. Full values: `docs/bootstrap-notes.md`. |
 | `hardening-resource-envelope` US-004 | `bf5a1f3e…3e75d` | Thirty-sixth, **not a text-sanitization change**. Only `orchestrator.py` (configurable observational targets, overrun count and whole-loop max) and `contract.py` (held 1.3.0 continuation) move. Read-only whole-file reversals against clean `7087c04`: `66b50985…` with orchestrator reverted, `3c699860…` with contract reverted, exactly `d9db7586…` with both, under default/shipped/maximum-target config. Other seven sources and hash definition unchanged; the new settings module and keys are not hash inputs. The max includes structural scan, PromptGuard and waits across all results, not one wait; compare at the same `num_results`, with exceeded count and requests. It never resets without a container restart. Full values: `docs/bootstrap-notes.md`. |
 | `hardening-resource-envelope` US-002 | `4913fdc1…aa1fb` | Thirty-seventh, **not a sanitization or response-shape change**. Only `contract.py` records the shipped Compose probe's health-description correction. Read-only whole-file reversal against clean `2aa6356` reproduces `bf5a1f3e…` under default and shipped config; other eight sources and hash definition unchanged. OpenAPI and the held golden really move (`HealthResponse.description`), but the added-paths set does not. Historical goldens retain the old description by design. The status-only probe is liveness, never classifier readiness; plain Compose does not restart unhealthy containers. Full values: `docs/bootstrap-notes.md`. |
+| `hardening-promptguard-86m` US-006 | `85394a95…3d0c0` | Thirty-eighth, **not a sanitization change at shipped defaults**. Only `contract.py` changes among nine hashed sources, announcing `/health.promptguard_model`. Whole-file read-only reversal against clean `06a56b2` reproduces `4913fdc1…` under default and shipped config. The selected-id hash input differs only for a non-default model; the allowlist still ships only 22M. The lifespan refuses unknown ids; loading checks binary labels and derives the injection index. Health reports configuration even while unloaded. Full values: `docs/bootstrap-notes.md`. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Twenty-six of the thirty-four rotations changed no sanitization policy or algorithm; the
+**Thirty of the thirty-eight rotations changed no sanitization policy or algorithm at shipped defaults; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
 US-001, US-002, US-003 and its validation fix) and the twenty-seventh
 through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005) are the eight
@@ -608,7 +611,7 @@ policy without changing raw-result sufficiency or the text-scanning algorithm.
 US-005 shares configured threshold policy across both fetch routes, before the
 operator ceiling; its behavior change is for tuned deployments, not shipped 0.85.
 US-004 bounds and normalizes `SearchResult.engine` without routing it through that same scan.
-Among the other twenty-six, the fourth and fifth
+Among the other thirty, the fourth and fifth
 are different *kinds* of rotation and worth reading as such. The first three moved because
 the hash is over bytes and someone reformatted or retyped a hashed file. The fourth moved
 because an **input changed**: weights are a runtime, per-deployment thing now

@@ -80,6 +80,10 @@ services:
       # itself `degraded` with `promptguard_unavailable` forever, honestly.
       # docs/weights.md § "Bring your own token" is the walk-through.
       - HF_TOKEN
+      # Model selection and its pin: bare names like HF_TOKEN, genuinely unset
+      # unless supplied in `.env` or your shell. Default: the vendored 22M pin.
+      - FORAGE_MODEL_ID
+      - FORAGE_MODEL_REVISION
       # The search-provider chain (docs/configuration.md). Both are bare names
       # for the same reason HF_TOKEN is: set them in `compose/.env` and they are
       # passed through; leave them out and they are genuinely unset, which is

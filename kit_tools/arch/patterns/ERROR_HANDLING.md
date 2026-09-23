@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document error handling patterns and conventions.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-provider-bounds US-005)
+> Updated by: Copilot (hardening-promptguard-86m US-006)
 
 ## Overview
 
@@ -55,7 +55,7 @@ Reference"; the consumer-facing one is `kit_tools/docs/API_GUIDE.md` "Error resp
 | Capacity / admission | `busy` | `/extract` 429 | `ExtractionAdmissionMiddleware` (queue depth 1, 50 MiB queued-bytes reservation) | not logged; counted in `/metrics.extraction.busy_rejections` |
 | Upload size, streaming | `content_too_large` | `/extract` 413 declared, **400 observed** (see Observed rough edges) | `DocumentSizeLimitMiddleware` via `_RequestBodyTooLargeError` | not logged |
 | Route disabled / not wired | none (bare `detail`) | `/extract` 404 / 503 | `ExtractionAdmissionMiddleware`; the handler repeats the 404 as `HTTPException` | not logged |
-| Boot-time configuration | none (no HTTP) | process refuses to serve | `ExtractionConfigurationError`, `CacheConfigurationError` raised out of `lifespan` | the exception leaves `lifespan`; uvicorn reports it |
+| Boot-time configuration | none (no HTTP) | process refuses to serve | Typed readers, including `ExtractionConfigurationError`, `CacheConfigurationError`, `SearchProviderConfigurationError` and `ModelConfigurationError`, raise out of `lifespan` | uvicorn reports it; unknown model selection also logs the closed WARNING `model_id_not_allowed` |
 | Internal | none | 500, Starlette default body | no `Exception` handler is registered; the recorded cases are `/health` failing response validation on an unlisted `degraded_reasons` value and an unmodeled `/metrics` counter (`extra="forbid"`) | not logged by the app |
 
 The WARNING lines that accompany non-error degradations: quarantine on `/retrieve`

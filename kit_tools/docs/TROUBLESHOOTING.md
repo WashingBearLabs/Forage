@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document debugging procedures and common fixes. How to diagnose problems.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-resource-envelope US-003)
+> Updated by: Copilot (hardening-promptguard-86m US-006)
 
 ---
 
@@ -116,10 +116,10 @@ is dropped. The handles below are the only strings you need.
 
 ```bash
 # Weights acquisition, per attempt (the ONE terminal line is weights_unavailable)
-docker logs <container> 2>&1 | grep -E 'weights_unavailable|weights_fetch_failed|weights_fetch_skipped|weights_mirror_skipped|weights_retry_scheduled|manifest_model_unknown|weights_revision_unpinned'
+docker logs <container> 2>&1 | grep -E 'weights_unavailable|weights_fetch_failed|weights_fetch_skipped|weights_mirror_skipped|weights_retry_scheduled|manifest_model_unknown|weights_revision_unpinned|model_id_not_allowed'
 
 # Verifier refusals, quarantines, unusable pin, load failure, crash
-docker logs <container> 2>&1 | grep -E 'weights_verification_failed|weights_quarantined|weights_pin_unusable|weights_load_failed|weights_acquisition_crashed'
+docker logs <container> 2>&1 | grep -E 'weights_verification_failed|weights_quarantined|weights_pin_unusable|weights_load_failed|weights_acquisition_crashed|model_identity_mismatch|model_labels_unexpected'
 
 # Cache: closed failure tokens (the URL, value and password never appear)
 docker logs <container> 2>&1 | grep -E 'Valkey connection failed for content cache|Content cache operation failed|Content cache not available at startup|cache_entry_corrupt|cache_integrity_reject|cache_hmac_key_|cache_bounds_inverted|valkey_url_option_forbidden'
@@ -229,7 +229,8 @@ added to a handler dict without being added to its `extra="forbid"` model.
 
 ## Startup Problems
 
-The lifespan order matters for reading these: load `config.yaml` → validate `extraction:`
+The lifespan order matters for reading these: resolve the allowlisted `FORAGE_MODEL_ID`
+(unknown value refuses boot) → load `config.yaml` → validate `extraction:`
 (bad value refuses boot) → derive `sanitizer_revision` → validate `cache:` (bad value
 refuses boot, whichever backend) → select and connect the cache (2 s deadline, no
 fallback) → start the weights task → serve. Only configuration validation can stop the
@@ -238,11 +239,15 @@ boot; everything else is reported through `/health` and `/metrics`.
 ### The container exits at start
 
 **Symptom:** `docker inspect` shows `exited`, no `/health` at all, a Python traceback in
-`docker logs` ending in `ExtractionConfigurationError` or `CacheConfigurationError`.
+`docker logs` ending in a typed configuration error, including
+`ExtractionConfigurationError`, `CacheConfigurationError` or `ModelConfigurationError`.
 
 **Cause:** a value in the mounted `config.yaml`'s `extraction:` or `cache:` block is
 outside its range (ranges in `docs/configuration.md`). A *missing* file is not this: it
 logs `config.yaml not found at /app/config.yaml` and runs on code defaults.
+`ModelConfigurationError` instead means `FORAGE_MODEL_ID` is outside the closed
+allowlist: unset it or select the vendored 22M id, then restart. A blank value
+also selects the default. The 86M remains refused until the owner vendoring gate.
 
 **Fix:** correct the mounted file and restart. This is the only dependency whose failure is
 a refused boot rather than a degraded service.
@@ -347,6 +352,14 @@ follow.
 
 **Cause:** torch or transformers failed to load a set that hashed correctly: an image
 problem or memory pressure during load (torch imports inside the acquisition thread).
+Two explicit load-time refusals have their own closed markers:
+`model_identity_mismatch` means the requested and manifest snapshot directories
+differ or the directory disappeared; `model_labels_unexpected` means `id2label`
+is missing, null, non-mapping, or not exactly two indexed labels, one BENIGN and
+one INJECTION (case-insensitive). Neither permits a guessed injection index.
+Repair the pinned snapshot or model config through the vendoring procedure;
+do not bypass the checks. `/health.promptguard_model` remains the configured id,
+not evidence that the model loaded.
 
 **Fix:** rebuild the image from `main`; check `mem_limit` (the compose fragments give
 1024m) and `docker inspect` for `OOMKilled`. `weights_acquisition_crashed` with a traceback
@@ -800,8 +813,10 @@ mode.
 **Symptom:** `docker inspect` shows a rising `RestartCount`; both compose fragments set
 `restart: unless-stopped`, so a refused boot becomes a loop.
 
-**Cause:** almost always configuration validation (`ExtractionConfigurationError` /
-`CacheConfigurationError`) or an OOM kill; nothing else refuses boot.
+**Cause:** usually configuration validation (`ExtractionConfigurationError`,
+`CacheConfigurationError`, `ModelConfigurationError`, or another typed subsystem
+reader such as `SearchProviderConfigurationError`) or an OOM kill. An unknown
+model selection logs `model_id_not_allowed` without its value before refusing boot.
 
 **Fix:**
 ```bash
@@ -893,7 +908,8 @@ Playbook". The three that touch runtime behaviour most often:
 - **`pytest_socket.SocketBlockedError`**: a test reached the real network. The autouse
   guard in `tests/conftest.py` is doing its job (`tests/test_hermeticity.py` is the canary);
   mock at the seam, never relax it. The same file clears `HF_TOKEN`, `HF_HOME`,
-  `FORAGE_MODEL_REVISION`, `FORAGE_WEIGHTS_MIRROR`, `FORAGE_MIRROR_TOKEN` and `VALKEY_URL`
+  `FORAGE_MODEL_ID`, `FORAGE_MODEL_REVISION`, `FORAGE_WEIGHTS_MIRROR`,
+  `FORAGE_MIRROR_TOKEN` and `VALKEY_URL`
   before every test, which is why shell exports never reach the suite.
 - **`tests/test_contract_schema.py::test_contract_schema_matches_golden` fails after a
   response change**: the wire shape moved without the governance steps. Bump

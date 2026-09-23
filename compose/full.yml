@@ -53,6 +53,10 @@ services:
       # not. Running without it is a supported degraded mode — see
       # docs/weights.md § "Bring your own token".
       - HF_TOKEN
+      # Model selection and its pin: bare names like HF_TOKEN, genuinely unset
+      # unless supplied in `.env` or your shell. Default: the vendored 22M pin.
+      - FORAGE_MODEL_ID
+      - FORAGE_MODEL_REVISION
       # The search-provider chain — bare names, like HF_TOKEN: passed through
       # when set in `compose/.env`, genuinely unset (the default `searxng`
       # chain) when not. FORAGE_BRAVE_API_KEY is a credential, so it belongs

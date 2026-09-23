@@ -11,7 +11,7 @@
 > **TEMPLATE_INTENT:** Complete local development setup guide. Get a new developer running quickly.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-resource-envelope US-003)
+> Updated by: Copilot (hardening-promptguard-86m US-006)
 
 ---
 
@@ -156,7 +156,7 @@ uv run pyright                                 # strict, zero errors, no baselin
 All four are blocking jobs in `.github/workflows/ci.yml` (`lint`, `typecheck`, `test`).
 The suite is **hermetic**: an autouse `pytest-socket` guard in `tests/conftest.py`
 (`disable_socket(allow_unix_socket=True)`) fails any test that reaches the real network,
-and a second autouse fixture clears `HF_TOKEN`, `HF_HOME`, `FORAGE_MODEL_REVISION`,
+and a second autouse fixture clears `HF_TOKEN`, `HF_HOME`, `FORAGE_MODEL_ID`, `FORAGE_MODEL_REVISION`,
 `FORAGE_WEIGHTS_MIRROR`, `FORAGE_MIRROR_TOKEN` and `VALKEY_URL` before every test so your
 shell exports cannot leak in. Mock at the seam; never relax the guard.
 

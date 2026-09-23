@@ -294,6 +294,73 @@ class TestModelNotLoaded:
 class TestClassifierUnit:
     """Unit tests for PromptGuardClassifier with mocked torch/transformers."""
 
+    @pytest.mark.parametrize(
+        ("labels", "injection_index"),
+        [
+            ({0: "BENIGN", 1: "INJECTION"}, 1),
+            ({0: "INJECTION", 1: "BENIGN"}, 0),
+            ({0: "injection", 1: "bEnIgN"}, 0),
+        ],
+    )
+    def test_load_derives_the_index_used_for_inference(
+        self, labels: dict[int, str], injection_index: int
+    ) -> None:
+        classifier = PromptGuardClassifier()
+        logits = torch.tensor([[4.0, 0.0]])
+        with (
+            patch("transformers.AutoTokenizer.from_pretrained") as tokenizer,
+            patch(
+                "transformers.AutoModelForSequenceClassification.from_pretrained"
+            ) as model,
+        ):
+            tokenizer.return_value.encode.return_value = [1, 2]
+            tokenizer.return_value.return_value = {}
+            model.return_value.config.id2label = labels
+            model.return_value.return_value = SimpleNamespace(logits=logits)
+            assert classifier.load() is True
+            assert classifier.loaded is True
+            assert classifier._injection_label_index == injection_index
+            score, flagged = classifier.classify("some text")
+            expected = torch.softmax(logits, dim=-1)[0, injection_index].item()
+            assert score == pytest.approx(expected)
+            assert flagged == ["some text"]
+            model.return_value.eval.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            SimpleNamespace(id2label={0: "LABEL_0", 1: "LABEL_1"}),
+            SimpleNamespace(id2label={0: "BENIGN", 1: "INJECTION", 2: "JAILBREAK"}),
+            SimpleNamespace(),
+            SimpleNamespace(id2label=None),
+            SimpleNamespace(id2label=["BENIGN", "INJECTION"]),
+            SimpleNamespace(id2label="BENIGN INJECTION"),
+            SimpleNamespace(id2label={0: "INJECTION", 1: "injection"}),
+            SimpleNamespace(id2label={0: "BENIGN", 1: None}),
+            SimpleNamespace(id2label={1: "BENIGN", 2: "INJECTION"}),
+            None,
+        ],
+    )
+    def test_unexpected_labels_refuse_before_eval_with_a_specific_warning(
+        self, config: object, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        classifier = PromptGuardClassifier()
+        with (
+            patch("transformers.AutoTokenizer.from_pretrained"),
+            patch(
+                "transformers.AutoModelForSequenceClassification.from_pretrained"
+            ) as model,
+        ):
+            model.return_value.config = config
+            assert classifier.load() is False
+            assert classifier.loaded is False
+            assert classifier._model is None
+            assert classifier._tokenizer is None
+            model.return_value.eval.assert_not_called()
+        assert [
+            (record.levelname, record.getMessage()) for record in caplog.records
+        ] == [("WARNING", "model_labels_unexpected")]
+
     def test_initial_state(self) -> None:
         c = PromptGuardClassifier()
         assert c.loaded is False
@@ -328,8 +395,11 @@ class TestClassifierUnit:
         with (
             patch("torch.set_num_threads") as set_threads,
             patch("transformers.AutoTokenizer.from_pretrained") as tokenizer,
-            patch("transformers.AutoModelForSequenceClassification.from_pretrained"),
+            patch(
+                "transformers.AutoModelForSequenceClassification.from_pretrained"
+            ) as model,
         ):
+            model.return_value.config.id2label = {0: "BENIGN", 1: "INJECTION"}
             if apply_fails:
                 set_threads.side_effect = RuntimeError("do-not-log-exception-text")
 

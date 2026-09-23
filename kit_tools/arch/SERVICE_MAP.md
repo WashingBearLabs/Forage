@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document dependencies and integrations. Shows what talks to what and failure impacts.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-resource-envelope US-003)
+> Updated by: Copilot (hardening-promptguard-86m US-006)
 
 ---
 
@@ -214,7 +214,7 @@ behaviour is described here from Forage's own docs and tests
   tag, `gh release download v<ver> --pattern 'openapi.yaml*'`, or
   `docker run --rm --entrypoint cat <image> /app/contract/openapi.yaml`); run
   `sha256sum -c openapi.yaml.sha256`; commit both; record the tag. The anchor is
-  currently `c9cd19bad84decd7415ba912ae81c826447f2a19edc41b57c857d4a7b4d42ab2`.
+  currently `cefbd601b0c7223ef9f05b973325b62944385899c4571917ce4d3e3741f28a22`.
 - Its client caches `sanitizer_revision` from `/health`, pins the ten `/extract` error
   codes, rejects an `/extract` 422 lacking `sanitizer_revision`, gates web search on
   `capabilities.search_sanitization`, and buckets unknown `omitted_by_reason` /

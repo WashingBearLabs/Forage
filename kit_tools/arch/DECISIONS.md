@@ -9,7 +9,7 @@
 > **TEMPLATE_INTENT:** Record architectural decisions and their rationale. Explains the 'why' behind technical choices.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-resource-envelope US-003)
+> Updated by: Copilot (hardening-promptguard-86m US-006)
 
 This file records significant architectural and technical decisions.
 
@@ -656,13 +656,24 @@ fetch thresholds from configured policy before capping (shipped 0.85 unchanged).
 | `c9bf6e0d…f2f76` | Thirty-third, **not a text-sanitization change**: `orchestrator.py` gains compression/timeout counters before every traversal exit and the re-classification flag; `contract.py` announces both counters and the SearXNG-only `unsupported_encoding` reason token. Whole-file read-only reversals against clean `abf9df6` give `61d54562…` (orchestrator reverted), `e736bb76…` (contract reverted), and exact pre-story `0866963a…` (both), under default and shipped config. Only those two hashed files move; helper/providers remain unhashed. Upstream byte/encoding/time acceptance tightens and may buy a paid call, but text scanning is unchanged (`hardening-provider-bounds` US-003; full values in `docs/bootstrap-notes.md`). |
 | `d9db7586…1b6e0` | Thirty-fifth, **not a text-sanitization change**: `orchestrator.py` alone extracts `_query_provider_chain` with its original sink timing, retires the pipeline-only URL keyword, closes failure name/class/detail tokens and removes result URLs from omission logs. Four full wire/counter and two exhaustion pins landed first in `8e449fc`, against unchanged code, and remain unchanged. Read-only whole-file reversal against clean `2a275c5` reproduces the pre-story `e3b9c138…` under default and shipped config; all other eight hashed sources and contract artifacts are unchanged (`hardening-provider-bounds` US-005; full values and the direct-caller/log-consumer handoff in `docs/bootstrap-notes.md`). |
 | `bf5a1f3e…3e75d` | Thirty-sixth, **not a text-sanitization change** (`hardening-resource-envelope` US-004): `orchestrator.py` takes configurable observational targets and records a strict-overrun count plus an unconditional whole-loop maximum; `contract.py` announces both additive metrics in held 1.3.0. Whole-file read-only reversals against clean `7087c04` yield `66b50985…` (orchestrator only), `3c699860…` (contract only) and exactly `d9db7586…` (both), under default, shipped and maximum-target config. Other seven sources and hash definition unchanged; the new settings module and target values are not hash inputs. Search wire/counter pins and the regenerated schema golden are unchanged; full values and consumer handoff in `docs/bootstrap-notes.md`. |
-| `4913fdc1…aa1fb` (current) | Thirty-seventh, **not a sanitization or response-shape change** (`hardening-resource-envelope` US-002): only `contract.py`'s held 1.3.0 continuation moves among nine hashed sources. Correcting the shipped status-only Compose probe's health descriptions regenerates OpenAPI and the held golden, whose sole change is `HealthResponse.description`; `_EXPECTED_ONE_THREE_ZERO_DIFF` gains no entry. Read-only whole-file reversal against clean `2aa6356` reproduces `bf5a1f3e…` under default and shipped config. Other eight sources and hash definition unchanged; historical goldens retained unchanged. Full values and consumer handoff in `docs/bootstrap-notes.md`. |
+| `4913fdc1…aa1fb` | Thirty-seventh, **not a sanitization or response-shape change** (`hardening-resource-envelope` US-002): only `contract.py`'s held 1.3.0 continuation moves among nine hashed sources. Correcting the shipped status-only Compose probe's health descriptions regenerates OpenAPI and the held golden, whose sole change is `HealthResponse.description`; `_EXPECTED_ONE_THREE_ZERO_DIFF` gains no entry. Read-only whole-file reversal against clean `2aa6356` reproduces `bf5a1f3e…` under default and shipped config. Other eight sources and hash definition unchanged; historical goldens retained unchanged. Full values and consumer handoff in `docs/bootstrap-notes.md`. |
+| `85394a95…3d0c0` (current) | Thirty-eighth, **not a sanitization change at shipped defaults** (`hardening-promptguard-86m` US-006): only `contract.py` changes among nine hashed sources for the additive health model id. Read-only whole-file reversal against clean `06a56b2` reproduces `4913fdc1…` under default and shipped config. The selected `model_id@revision` input remains identical for 22M; only a non-default selection changes that input. Old cache keys invalidate; full measurements and handoff in `docs/bootstrap-notes.md`. |
 
 **Rationale:**
 `pipeline/sanitizer_revision.py`: "two containers running the same code can be scanning with
 different weights — and a value that could not tell them apart would key a cache on a
 sanitization behaviour it does not actually describe." The fifth rotation is "the first one where
 the invalidation is the *objective* rather than the price."
+
+**Model-selection decision (2026-09-22, US-006 / R29):** publish the configured
+id unconditionally as `/health.promptguard_model`, read from startup state;
+`promptguard_loaded` remains the serving signal. Identity is contract-relevant
+and inferable from behaviour, whereas contiguity settings are tuning an
+attacker would otherwise have to guess and are not published. This is not a
+secrecy promise: US-007's per-rule `promptguard_contiguity_detections` lets a
+content/metrics prober infer the settings by bisection. The resolver is total
+for revision fallbacks; only the lifespan refuses an unknown id. Blank means
+22M, and the allowlist expands only alongside the owner-vendored manifest entry.
 
 **Consequences:**
 Any edit to a `_REVISION_SOURCES` file invalidates every cached sanitization; never do it as a

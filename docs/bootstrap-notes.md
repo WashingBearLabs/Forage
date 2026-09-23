@@ -1789,3 +1789,54 @@ previous verifier/loader disagreement, not the residual filesystem-mutation
 race after hashing. No default sanitization, API response, contract artifact or
 golden changed. No 86M weights, deployment selection or benchmark is enabled by
 this story. **Not replayed to Poppy**; no publish, push, tag or release occurred.
+
+### Allowlisted model selection — thirty-eighth rotation (2026-09-22)
+
+`hardening-promptguard-86m` US-006 adds `FORAGE_MODEL_ID`, a total
+`(model_id, allowed)` resolver and a lifespan-only `ModelConfigurationError`
+refusal. Unset/blank selects 22M; the closed allowlist still contains only
+`meta-llama/Llama-Prompt-Guard-2-22M`. The owner vendoring gate alone adds 86M
+together with its manifest entry. No weights or benchmark gate ran here.
+
+Measured from clean starting commit
+`06a56b289fb49121a4d5e38c42d2c4544ced09a8`. Among all nine hashed sources,
+only `pipeline/contract.py` changed, recording the additive
+`HealthResponse.promptguard_model` field in the held 1.3.0 window.
+Read-only `Path.read_bytes` substitution of that entire pre-story file,
+without a working-tree revert, gives under both `{}` and shipped `config.yaml`:
+
+| State | Revision |
+|---|---|
+| Before / whole `contract.py` reverted | `4913fdc1982cb48ba2db9c6972fcea10107408349970c45c9dc6b3ae5c1aa1fb` |
+| After | `85394a954e32ec00bb499d08c01811dc4d00b363708e3f839311ae8fde33d0c0` |
+
+The other eight hashed sources and their order are unchanged. The hash
+definition now resolves the selected model id and hashes
+`model_id@resolve_revision(model_id)`, but at the default that input is
+byte-identical. Repeating the whole-file reversal with the previous default
+identity explicitly supplied reproduces the same pre-story value.
+A synthetic allowlisted `acme/second-guard` (no manifest, revision `unpinned`)
+instead yields
+`5073d2960d25650a0af992a746104a8d5ee96a9a444f6cdd0ed006bf3769ceaf`.
+That is test evidence of model separation, not a shipped allowlist entry.
+
+This is **not a change to sanitization at the shipped model/config**. The
+classifier now asserts exactly two indexed labels, BENIGN and INJECTION
+case-insensitively, and derives the injection index; absent, malformed or
+three-class labels leave it unloaded with `model_labels_unexpected`.
+Identity selection also reaches the resource-envelope advisory, not just the
+acquisition and hash. These modules are outside the hashed source tuples.
+The source-only contract rotation still invalidates all prior content-cache keys.
+
+**Consumer handoff:** `/health.promptguard_model` is the startup-selected id,
+always present even while unloaded; `promptguard_loaded` alone says whether
+it serves. The identity is contract-relevant and inferable from behaviour;
+contiguity tuning is not published, not promised secret (future per-rule
+metrics provide a differential channel). Contract remains unpublished 1.3.0;
+re-vendor against the same-tag generated anchor
+`cefbd601b0c7223ef9f05b973325b62944385899c4571917ce4d3e3741f28a22`.
+The held golden and expected additions set gain only this field.
+Historical goldens and `contract_smoke.py` remain unchanged; the existing
+candidate-image smoke validates the whole current `HealthResponse`, so its
+synthetic test body gains the field without adding a model-specific assertion.
+**Not replayed to Poppy**; no publish, push, tag or release occurred.

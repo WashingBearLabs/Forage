@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document logs, metrics, alerts, and dashboards. How to observe the system.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-resource-envelope US-003)
+> Updated by: Copilot (hardening-promptguard-86m US-006)
 
 ---
 
@@ -59,9 +59,10 @@ Forage listens on `0.0.0.0:8020` inside the container; the compose fragments pub
 |-------|------|-----------------|---------|
 | `status` | string | `healthy`, `degraded` | `degraded` iff `degraded_reasons` is non-empty. |
 | `promptguard_loaded` | bool | `true`, `false` | Whether the PromptGuard classifier is loaded (`app.state.classifier.loaded`). Always honest; the break-glass override does not touch it. |
+| `promptguard_model` | string | `meta-llama/Llama-Prompt-Guard-2-22M` (current allowlist) | Configured id from startup state, whether loaded or not; never re-read from the environment per request. The 86M remains pending the vendoring gate. |
 | `cache_connected` | bool | `true`, `false` | Valkey mode: a live ping via `cache.ping_if_due()`, subject to reconnect backoff. Memory mode: always `true` (the backend is in-process). Not a statement that Valkey is present; read `cache_backend` for that. |
 | `capabilities` | dict | `{"search_sanitization": 1, "brave_api_key": 1, "cache_hmac_key": 1}`, any subset, or `{}` | Presence map, three keys as of contract 1.3.0. `search_sanitization` is present when the classifier is loaded **or** when break-glass is armed (`FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION=1`, alias `POPPY_RETRIEVAL_LEGACY_CAPABILITY=1`, exact string `1`) — break-glass lies only for this key. `brave_api_key` is present when this start resolved a usable `FORAGE_BRAVE_API_KEY` (`brave_key_present()`), independently of whether `brave` is in `search_providers`. `cache_hmac_key` is present only when this start resolved a usable `FORAGE_CACHE_HMAC_KEY` and selected Valkey, independently of connectivity; absent in memory mode. Both credential-presence keys are untouched by break-glass and disclose no value or entropy guarantee. |
-| `sanitizer_revision` | string | 64-hex sha256 | `derive_sanitizer_revision(config)`: hash of eight `pipeline/*.py` sources plus `MODEL_ID@revision` plus `promptguard_threshold`. The literal `unknown` appears only when no lifespan ran (test transports). |
+| `sanitizer_revision` | string | 64-hex sha256 | `derive_sanitizer_revision(config)`: hash of eight `pipeline/*.py` sources, root `url_validator.py`, selected `model_id@revision`, `idna@version` and `promptguard_threshold`. The literal `unknown` appears only when no lifespan ran (test transports). |
 | `contract_version` | string | `1.3.0` | `pipeline.contract.CONTRACT_VERSION`; identical to `/metrics.contract_version` and `/openapi.json` `info.version`. |
 | `cache_backend` | string | `valkey`, `memory` | Decided once at start: `VALKEY_URL` fully unset gives `memory`; set to anything else, including the empty string, gives `valkey`. |
 | `search_providers` | list | `["searxng"]`, `["searxng", "brave"]`, ... | The resolved provider chain's names, in traversal order, after key-gated skips (contract 1.2.0, `search-policy-and-health` US-002). Configuration echo fixed for the life of the process — not a liveness probe, and not a statement that any provider is reachable right now. The check is to compare it against `FORAGE_SEARCH_PROVIDERS`: a configured `brave` that is missing here was skipped at boot for want of a usable key, and the startup signal for that is the WARNING `brave_skipped_missing_key`; `/health` itself cannot tell "configured but skipped" from "never configured" — by design, key presence is published, never a second differential channel (ruling 15). |
@@ -77,6 +78,7 @@ Schema-style listing (field set and value domains as confirmed in `retrieval_app
 {
   "status":             "healthy" | "degraded",
   "promptguard_loaded": true | false,
+  "promptguard_model":  "<startup-selected model id>",
   "cache_connected":    true | false,
   "capabilities":       {"search_sanitization": 1, "brave_api_key": 1, "cache_hmac_key": 1} | {} | ...,
   "sanitizer_revision": "<64-hex sha256>",
@@ -378,6 +380,9 @@ Dropped (INFO): `Sidecar config loaded (<n> keys); contract_version=<v>`, `Conte
 | ERROR | `weights_acquisition_crashed` | `logger.exception` with traceback; `/health` stays degraded. |
 | ERROR | `weights_mirror_invalid` | `FORAGE_WEIGHTS_MIRROR` is malformed; the value is echoed redacted (`***@host/...`). |
 | ERROR | `model_revision_invalid` | `FORAGE_MODEL_REVISION` is not a 40-character sha; falls back to the committed pin. The value is not echoed. |
+| WARNING | `model_id_not_allowed` | `FORAGE_MODEL_ID` is outside the allowlist; lifespan refuses boot. No value is echoed. |
+| ERROR | `model_identity_mismatch` | Requested and manifest snapshot paths differ, or the verified directory disappeared; nothing loads. |
+| WARNING | `model_labels_unexpected` | Loaded config is not exactly binary BENIGN/INJECTION; classifier stays unavailable, never a guessed injection index. |
 | WARNING | `weights_fetch_skipped` | No `HF_TOKEN` in the environment; the gated repo cannot be reached. |
 | WARNING | `weights_mirror_skipped` | No `FORAGE_MIRROR_TOKEN`; the private mirror cannot be reached. |
 | WARNING | `weights_retry_scheduled` | `no verified weights yet; retry <n> in <s>s (base <s>s, jittered +/-20%)`. |

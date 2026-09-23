@@ -2,7 +2,7 @@
 # CODE_ARCH.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-resource-envelope US-002)
+> Updated by: Copilot (hardening-promptguard-86m US-006)
 
 ---
 
@@ -94,7 +94,7 @@ US-004, `SearchResult.engine` is also routed through `_normalize_search_text`
 (`_MAX_SEARCH_ENGINE_LENGTH = 64`) rather than passed through unexamined; it is not routed
 through the structural scan or PromptGuard, unlike `title`, `url` and `snippet`. The busiest
 file in the repo. |
-| `retrieval_app.py` | 1824 | FastAPI app + the five endpoints, startup wiring, `/health` body assembly, the legacy-capability break-glass warning. Since `forage-contract` it also carries the documentation surface: the five per-shape error **mirrors** (US-001) and the six `/metrics` response models (US-005), all `extra="forbid"`, none of which any emission site routes through — the emission sites are unchanged and parity tests hold the models to them. The `FastAPI(...)` call serves `title="Forage"`, `version=CONTRACT_VERSION` and the no-auth/private-network posture, so `/openapi.json` cannot disagree with `/health` about which contract this process implements. |
+| `retrieval_app.py` | 1824 | FastAPI app + the five endpoints, startup wiring, `/health` body assembly, the legacy-capability break-glass warning. Since `forage-contract` it also carries the documentation surface: the five per-shape error **mirrors** (US-001) and the six `/metrics` response models (US-005), all `extra="forbid"`, none of which any emission site routes through — the emission sites are unchanged and parity tests hold the models to them. The `FastAPI(...)` call serves `title="Forage"`, `version=CONTRACT_VERSION` and the no-auth/private-network posture, so `/openapi.json` cannot disagree with `/health` about which contract this process implements. Since `hardening-promptguard-86m` US-006 the lifespan alone refuses a disallowed `FORAGE_MODEL_ID`, passes the resolved id into `WeightAcquisition` and the memory advisory, and publishes `app.state.promptguard_model`; `/health` reads that id unconditionally without re-reading the environment. |
 | `cache.py` | 860 | Valkey content cache. **Never logs the connection URL** — it may carry a password; enforced by a closed log vocabulary and a dedicated regression test. |
 | `models.py` | 470 | Pydantic models for every request and response shape. |
 | `pipeline/stage4_structuring.py` | 308 | Assembles the response object and the composite trust score. |
@@ -107,7 +107,7 @@ file in the repo. |
 | `pipeline/extraction_limits.py` | 181 | Resource limits from `config.yaml`'s `extraction:` block. |
 | `pipeline/stage1_upload.py` | 172 | Upload path for `/extract` (gated by `extract_route_enabled`). |
 | `promptguard/classifier.py` | 211 | Loads and runs Llama Prompt Guard 2 (`use_safetensors=True` — the loader can never fall back to a pickle); absent weights → degraded, never silent. |
-| `model_fetcher.py` | 1995 | Per-model weight acquisition. `_manifest_entry(path, model_id)` memoises both entries and failures; `resolve_revision(model_id)` is total (shaped override, selected pin, default-only fallback, otherwise `unpinned`). `acquire_and_load` refuses an unusable/unknown entry or unpinned revision before any snapshot lookup, then verifies cache → **Hugging Face → GHCR mirror**. All legs verify the requested pair against `weights_manifest.json.models`, exact-set and safetensors-only, with symlink containment and one-generation quarantine. The mirror extracts with `filter="data"` into bounded staging, verifies there and installs by rename. `_load_verified` independently re-derives requested and manifest snapshot paths, requiring equality and existence before loading from `$HF_HOME/hub` offline. `WeightAcquisition(model_id=...)` forwards identity through its single-flight, 30 s→10 min jittered retry loop. Five runtime environment variables, no new model-selection environment surface in US-001. |
+| `model_fetcher.py` | 1995 | Per-model weight acquisition. `_manifest_entry(path, model_id)` memoises both entries and failures; `resolve_revision(model_id)` is total (shaped override, selected pin, default-only fallback, otherwise `unpinned`). `acquire_and_load` refuses an unusable/unknown entry or unpinned revision before any snapshot lookup, then verifies cache → **Hugging Face → GHCR mirror**. All legs verify the requested pair against `weights_manifest.json.models`, exact-set and safetensors-only, with symlink containment and one-generation quarantine. The mirror extracts with `filter="data"` into bounded staging, verifies there and installs by rename. `_load_verified` independently re-derives requested and manifest snapshot paths, requiring equality and existence before loading from `$HF_HOME/hub` offline. `WeightAcquisition(model_id=...)` forwards identity through its single-flight, 30 s→10 min jittered retry loop. Six runtime environment variables since US-006: `resolve_model_id()` returns `(id, allowed)` for `FORAGE_MODEL_ID`; only the lifespan raises `ModelConfigurationError`, keeping revision fallbacks total. The allowlist ships only 22M until the owner vendors a second entry. |
 | `pipeline/stage1_pdf.py` | 156 | PDF branch of stage 1. |
 | `pipeline/stage3_promptguard.py` | 151 | ML injection scan; skipped for trusted domains. |
 | `pipeline/contract.py` | 358 | The versioned response contract (`contract_version`, currently **1.3.0**), the 18-code error vocabulary, and the `ContentKind` Literal. |
@@ -370,6 +370,23 @@ hashed sources. Its read-only whole-file reversal against clean `2aa6356`
 reproduces `bf5a1f3e…` under default and shipped config; the other eight
 sources and hash definition are unchanged. The corrected code docstrings
 are outside the hash. Full values and handoff: `docs/bootstrap-notes.md`.
+
+**Model identity is startup state, label meaning is checked before publication.**
+`FORAGE_MODEL_ID` selects only an allowlisted id; unset and blank mean 22M.
+The configured id reaches acquisition, both classifier auto-classes, the memory
+advisory and the revision's `model_id@revision` input. `/health.promptguard_model`
+reports it even while unloaded, never inferring readiness from configuration.
+`load()` checks `id2label` after the import/load `try`: exactly two indexed
+BENIGN/INJECTION labels, case-insensitive, or `model_labels_unexpected` and no
+publication. The successful labels supply the instance's injection index.
+
+This is the thirty-eighth rotation (`4913fdc1…` → `85394a95…`), not a
+sanitization change at shipped defaults: only `contract.py` changes among the
+nine hashed sources. The selected-id hash input is unchanged for 22M.
+Read-only whole-file reversal against clean `06a56b2` reproduces `4913fdc1…`
+under default and shipped config; the other eight sources are unchanged.
+Contract stays in held 1.3.0 with one additive health field. Full measurements
+and consumer handoff: `docs/bootstrap-notes.md`. Neither 86M owner gate ran.
 
 **Provider bodies are self-decoded under bounds.** The shared
 `pipeline/bounded_body.py` reads raw bytes, bounds decoded output at 1 MiB

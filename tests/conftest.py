@@ -45,6 +45,7 @@ if str(_REPO_ROOT) not in sys.path:
 _CLEARED_ENV_VARS = (
     "HF_TOKEN",
     "HF_HOME",
+    "FORAGE_MODEL_ID",
     "FORAGE_MODEL_REVISION",
     "FORAGE_WEIGHTS_MIRROR",
     "FORAGE_MIRROR_TOKEN",

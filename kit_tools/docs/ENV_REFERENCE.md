@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document environment variables and secrets. What config exists and where to find it.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-resource-envelope US-003)
+> Updated by: Copilot (hardening-promptguard-86m US-006)
 
 ## Overview
 
@@ -50,6 +50,7 @@ Naming rule (`CLAUDE.md` invariant 1): the primary name of every Forage-specific
 |---|---|---|---|---|---|---|
 | `HF_HOME` | none | `/app/model-cache` (Dockerfile `ENV`, line 156; code `DEFAULT_CACHE_ROOT` restates it) | no | no | `resolve_cache_root()`, acquisition | Code default `/app/model-cache`; weights land in `$HF_HOME/hub/`, refused sets in `$HF_HOME/quarantine/`. Always set in the image; on a bare host the default path does not exist. |
 | `HF_TOKEN` | none | unset | no | **yes** | `_resolve_token()`, acquisition, cold fetch only | Hugging Face leg skipped (`weights_fetch_skipped`, outcome `skipped_no_token`). With no mirror token either and no warm volume: `degraded` with `promptguard_unavailable`, indefinitely and honestly. |
+| `FORAGE_MODEL_ID` | none | `meta-llama/Llama-Prompt-Guard-2-22M` | no | no | `resolve_model_id()` in `model_fetcher.py`; lifespan and revision hashing | Unset or stripped-blank uses 22M. Unknown values refuse boot with `ModelConfigurationError` / `model_id_not_allowed`, without echoing the value. Pending vendoring: the allowlist ships with the 22M; the 86M id is added by the vendoring gate. Selected once at startup for acquisition and `/health.promptguard_model`; both Compose fragments pass it and the revision through as bare names. |
 | `FORAGE_MODEL_REVISION` | none | The selected model's `weights_manifest.json` → `models[model_id].revision` (22M: `11614a155199674a0a95e6602d6ab0417b790ed0`, equal to `DEFAULT_MODEL_REVISION`) | no | no | `resolve_revision(model_id)`, acquisition | Uses the selected model's committed pin; a malformed value falls back to the pin with `model_revision_invalid`; a well-formed value that is not that pin refuses to verify (`weights_revision_unpinned`). The value is never echoed. |
 | `FORAGE_WEIGHTS_MIRROR` | none | `ghcr.io/washingbearlabs/forage-weights` (`DEFAULT_WEIGHTS_MIRROR`) | no | no | `resolve_mirror_repository()`, acquisition | Default private mirror. Must be lower-case `<registry>/<owner>/<name>`, optional `https://`; anything else logs `weights_mirror_invalid` and the mirror is treated as unconfigured. The tag is always the revision. |
 | `FORAGE_MIRROR_TOKEN` | none | unset | no | **yes** | `_resolve_mirror_token()`, acquisition; fed to `oras login --password-stdin` | Mirror leg skipped, the same shape as a missing `HF_TOKEN`. Third parties cannot read the mirror, so leave both unset. |
@@ -85,7 +86,7 @@ remain in a full-file bind-mounted `config.yaml`, with no env override for
 
 ### Tests
 
-No test-only variables exist. `tests/conftest.py` autouse-clears `HF_TOKEN`, `HF_HOME`, `FORAGE_MODEL_REVISION`, `FORAGE_WEIGHTS_MIRROR`, `FORAGE_MIRROR_TOKEN`, `VALKEY_URL`, `FORAGE_SEARCH_PROVIDERS`, `FORAGE_BRAVE_API_KEY`, and `FORAGE_CACHE_HMAC_KEY` before every test and blocks the network. CI's `smoke` job runs the built image with **no environment at all** and asserts the degraded `/health` contract, so a token-less start is a tested mode, not an accident.
+No test-only variables exist. `tests/conftest.py` autouse-clears `HF_TOKEN`, `HF_HOME`, `FORAGE_MODEL_ID`, `FORAGE_MODEL_REVISION`, `FORAGE_WEIGHTS_MIRROR`, `FORAGE_MIRROR_TOKEN`, `VALKEY_URL`, `FORAGE_SEARCH_PROVIDERS`, `FORAGE_BRAVE_API_KEY`, and `FORAGE_CACHE_HMAC_KEY` before every test and blocks the network. CI's `smoke` job runs the built image with **no environment at all** and asserts the degraded `/health` contract, so a token-less start is a tested mode, not an accident.
 
 ---
 

@@ -726,6 +726,57 @@ class TestExactSetVerification:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("configured", [None, "", " \t\n", DEFAULT_MODEL_ID])
+def test_model_id_defaults_and_blank_are_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    configured: str | None,
+) -> None:
+    if configured is not None:
+        monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, configured)
+    assert model_fetcher.resolve_model_id() == (DEFAULT_MODEL_ID, True)
+    assert not caplog.records
+
+
+@pytest.mark.parametrize("model_id", [DEFAULT_MODEL_ID, "acme/second-guard"])
+def test_model_id_resolves_only_allowlisted_trimmed_values(
+    monkeypatch: pytest.MonkeyPatch, model_id: str
+) -> None:
+    monkeypatch.setattr(
+        model_fetcher, "ALLOWED_MODEL_IDS", frozenset({DEFAULT_MODEL_ID, model_id})
+    )
+    monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, f" \t{model_id}\n")
+    assert model_fetcher.resolve_model_id() == (model_id, True)
+
+
+@pytest.mark.parametrize(
+    "configured",
+    ["evil/model", "meta-llama/Llama-Prompt-Guard-2-86M", "secret-sentinel\ninjected"],
+)
+def test_disallowed_model_id_is_a_total_closed_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    configured: str,
+) -> None:
+    monkeypatch.setattr(
+        model_fetcher, "ALLOWED_MODEL_IDS", frozenset({DEFAULT_MODEL_ID})
+    )
+    monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, configured)
+    assert model_fetcher.resolve_model_id() == (DEFAULT_MODEL_ID, False)
+    assert [(record.levelname, record.getMessage()) for record in caplog.records] == [
+        ("WARNING", "model_id_not_allowed")
+    ]
+    assert configured not in caplog.text
+
+
+def test_every_allowlisted_model_has_a_manifest_entry() -> None:
+    assert DEFAULT_MODEL_ID in model_fetcher.ALLOWED_MODEL_IDS
+    for model_id in model_fetcher.ALLOWED_MODEL_IDS:
+        pin = read_manifest_pin(_REPO_ROOT / "weights_manifest.json", model_id=model_id)
+        assert pin is not None
+        assert pin.model_id == model_id
+
+
 class TestFormatAllowlist:
     """The RCE closure: `torch.load` never gets a file to open."""
 
@@ -809,6 +860,10 @@ class TestFormatAllowlist:
             patch("transformers.AutoTokenizer") as tokenizer_class,
             patch("transformers.AutoModelForSequenceClassification") as model_class,
         ):
+            model_class.from_pretrained.return_value.config.id2label = {
+                0: "BENIGN",
+                1: "INJECTION",
+            }
             assert PromptGuardClassifier().load(model_id=model_id) is True
             model_call = cast(MagicMock, model_class.from_pretrained).call_args
             tokenizer_call = cast(MagicMock, tokenizer_class.from_pretrained).call_args
@@ -1078,7 +1133,7 @@ class TestSingleEntryPoint:
             os.environ.get(name, "") for name in _env_names_read()
         }
 
-    def test_the_module_reads_exactly_five_environment_variables(self) -> None:
+    def test_the_module_reads_exactly_six_environment_variables(self) -> None:
         """Every ``os.environ`` read in the module, from its own AST.
 
         The set is closed on purpose. A further read is a new configuration
@@ -1092,8 +1147,10 @@ class TestSingleEntryPoint:
         the staging bound, the pull timeout, the registry username or the TLS
         posture. Those are decisions, not configuration, and an operator who
         could move them could move the security properties with them.
+        US-006 adds the allowlisted model selection, never an arbitrary hub id.
         """
         assert _env_names_read() == {
+            model_fetcher.MODEL_ID_ENV_VAR,
             MODEL_REVISION_ENV_VAR,
             CACHE_ROOT_ENV_VAR,
             HF_TOKEN_ENV_VAR,

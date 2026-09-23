@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document authentication, authorization, and secrets management. Security architecture reference.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-resource-envelope US-003)
+> Updated by: Copilot (hardening-promptguard-86m US-006)
 
 ---
 
@@ -22,6 +22,12 @@ Two facts shape the whole threat model:
 
 1. **Outbound fetching is the job**, so server-side request forgery is the standing threat. Anyone who can reach port 8020 can make Forage fetch a URL of their choosing; the defences in `url_validator.py` and `pipeline/stage5_url_audit.py` decide which URLs are refused.
 2. **There is no authentication on any route.** Eight paths are reachable, all unauthenticated: `GET /health`, `GET /metrics`, `POST /search`, `POST /retrieve`, `POST /extract` (404 until `extract_route_enabled: true`), plus FastAPI's `/openapi.json`, `/docs` (an interactive client for an SSRF-capable service), and `/redoc` (`/docs/oauth2-redirect` also answers but is inert). Network placement is the operator's first control; everything below is defence in depth behind it. `GET /health` deliberately discloses the resolved search chain and paid-key presence, by design (`search_providers`, `capabilities.brave_api_key`; `search-policy-and-health` US-002) — never the key value itself, and never over a second channel that `/search` varies by (see "Documented non-vulnerabilities").
+
+`/health.promptguard_model` unconditionally publishes the startup-selected id,
+not readiness. The identity is contract-relevant and inferable from behaviour;
+contiguity settings are tuning an attacker would otherwise have to guess and
+are not published here. This is not a secrecy claim: the planned per-rule
+metrics offer a differential channel, recorded below.
 
 **Auth provider:** none, by design (see "Authentication and Authorization").
 **Secrets management:** runtime environment variables only; no secret store, no build-time secrets.
@@ -390,7 +396,7 @@ The image is deliberately single-stage so that `docker history` covers everythin
 - `.gitignore` excludes `.env` and `compose/.env` because they carry live tokens; the compose fragments use bare `- HF_TOKEN` pass-through so an unset variable stays unset.
 - `.gitleaksignore` holds exactly one entry, `ba73b078...:tests/test_stage2_structural.py:generic-api-key:170`: the synthetic `Token: abc123def456` literal in `test_short_base64_no_match`, which exists to prove that short base64-like strings do *not* trigger stage 2. Triaged 2026-09-08 at the public flip; the full-history scan record (gitleaks 8.30.1, 88 commits, one false positive) is `docs/bootstrap-scan.txt`.
 - GitHub's own secret scanning and push protection were enabled on the repository at the public flip.
-- `tests/conftest.py` clears the complete `_CLEARED_ENV_VARS` set before every test: `HF_TOKEN`, `HF_HOME`, `FORAGE_MODEL_REVISION`, `FORAGE_WEIGHTS_MIRROR`, `FORAGE_MIRROR_TOKEN`, `VALKEY_URL`, `FORAGE_SEARCH_PROVIDERS`, `FORAGE_BRAVE_API_KEY`, and `FORAGE_CACHE_HMAC_KEY`, so a developer's shell credentials cannot change which branch runs.
+- `tests/conftest.py` clears the complete `_CLEARED_ENV_VARS` set before every test: `HF_TOKEN`, `HF_HOME`, `FORAGE_MODEL_ID`, `FORAGE_MODEL_REVISION`, `FORAGE_WEIGHTS_MIRROR`, `FORAGE_MIRROR_TOKEN`, `VALKEY_URL`, `FORAGE_SEARCH_PROVIDERS`, `FORAGE_BRAVE_API_KEY`, and `FORAGE_CACHE_HMAC_KEY`, so a developer's shell credentials cannot change which branch runs.
 
 ### Adding a new secret
 
@@ -535,6 +541,7 @@ These are recorded in the repo with a source and a reason; they are decisions, n
 | Verifier/loader directory agreement — fixed by `hardening-promptguard-86m` US-001; a requested unpinned or missing snapshot is never loaded | `model_fetcher._load_verified`; `tests/test_model_fetcher.py::TestModelIdentity` |
 | The break-glass switch makes `capabilities` lie for a transition window | `docs/configuration.md` "Break-glass" |
 | A keyed deployment is identifiable from `/health` (`search_providers`, `capabilities.brave_api_key`) | `search-policy-and-health` US-002; rulings 12, 15 |
+| `/health.promptguard_model` publishes the configured identity, but not contiguity settings. Once US-007 adds `promptguard_contiguity_detections`, a caller who can post content and read `/metrics` can infer those settings by bisection; withholding them from health is not secrecy and no absence of a second differential channel is claimed. | `hardening-promptguard-86m` US-006 / US-007; decision R29 |
 | `/search`'s status varies with key presence for the same body in two reproduced cases — a Brave-only chain with `allow_paid_fallback: false` (keyed: 422 `policy_excluded_all_providers`; key-less: the `[searxng]` boot fallback answers 200) and a `searxng,brave` chain whose SearXNG answers 200 with unresponsive engines (keyed: 422 `search_unavailable`; key-less: the lone-`searxng` carve-out answers 200). Nothing is disclosed that `/health` and `provider_used` do not already publish; the "no oracle" rule is "same body, same upstream outcome, over the resolved chain `/health` reports" — no *second, differential* channel, not secrecy | `search-policy-and-health` US-003; rulings 15, 28 |
 | Operator spend: with `FORAGE_BRAVE_API_KEY` set and `brave` in the chain, every unauthenticated `POST /search` that reaches Brave is one billable call, and Forage enforces no spend or provider-fetch concurrency ceiling. On `[searxng, brave]` the **free peer's failures control paid calls**: an over-bound, undecodable, malformed or timed-out SearXNG body each buys one Brave call. A caller-induced URI-length failure at SearXNG can no longer buy a paid call under the common 8 KB request-line limit: `search_searxng_query_max_chars` caps its outbound query at 400 characters or fewer (US-002). Post-sanitization omissions never trigger paid fallback (search epic ruling 17); unknown request policy names are ignored, never themselves a 422. `SEARXNG_URL` defaults to plain HTTP, so an on-path party can force those calls. Network placement is the control; `/metrics` `search.paid_calls` and `search.provider_compressed_body` are the detection floor, and the budget breaker is the consumer's. | ruling 12; `hardening-provider-bounds` US-002 / US-003; `docs/configuration.md` |
 | A validation 422 echoes the offending value verbatim under `detail[].input` on every POST route (FastAPI's default `RequestValidationError` handler); those bytes are caller text, not sanitized output. Dropping `input`/`ctx` is a 422 wire change and goes through `contract/GOVERNANCE.md` | "Request models" above; `contract/GOVERNANCE.md` |

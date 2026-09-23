@@ -497,6 +497,13 @@ components:
         promptguard_loaded:
           title: Promptguard Loaded
           type: boolean
+        promptguard_model:
+          description: The model id selected at startup, whether loaded or not; promptguard_loaded
+            reports whether it serves. The identity is contract-relevant and inferable from
+            behaviour; contiguity settings are tuning an attacker would otherwise have to
+            guess and are not published here.
+          title: Promptguard Model
+          type: string
         sanitizer_revision:
           title: Sanitizer Revision
           type: string
@@ -520,6 +527,7 @@ components:
       required:
       - status
       - promptguard_loaded
+      - promptguard_model
       - cache_connected
       - capabilities
       - sanitizer_revision

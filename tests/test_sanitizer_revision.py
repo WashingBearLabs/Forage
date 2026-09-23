@@ -65,7 +65,9 @@ def test_unreadable_manifest_keeps_default_hash_and_warns_once(
 def test_an_unpinned_model_still_has_a_total_deterministic_revision(
     monkeypatch: pytest.MonkeyPatch, model_id: str
 ) -> None:
-    monkeypatch.setattr(sanitizer_revision, "DEFAULT_MODEL_ID", model_id)
+    monkeypatch.setattr(
+        sanitizer_revision, "resolve_model_id", lambda: (model_id, True)
+    )
     assert model_fetcher.resolve_revision(model_id) == "unpinned"
     first = sanitizer_revision.derive_sanitizer_revision({})
     assert len(first) == 64
@@ -117,9 +119,15 @@ def test_sanitizer_revision_changes_for_promptguard_artifact(
 ) -> None:
     """The PromptGuard model artifact identity is part of the revision."""
     config = {"promptguard_threshold": 0.85}
+    monkeypatch.setenv(MODEL_REVISION_ENV_VAR, DEFAULT_MODEL_REVISION)
     original_revision = sanitizer_revision.derive_sanitizer_revision(config)
 
-    monkeypatch.setattr(sanitizer_revision, "DEFAULT_MODEL_ID", "test/model-revision")
+    monkeypatch.setattr(
+        model_fetcher,
+        "ALLOWED_MODEL_IDS",
+        frozenset({DEFAULT_MODEL_ID, "test/model-revision"}),
+    )
+    monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, "test/model-revision")
 
     assert sanitizer_revision.derive_sanitizer_revision(config) != original_revision
 
@@ -156,8 +164,10 @@ def test_sanitizer_revision_is_stable_at_the_committed_pin(
     assert sanitizer_revision.derive_sanitizer_revision(config) == unset
 
 
+@pytest.mark.parametrize("model_id", [DEFAULT_MODEL_ID, "acme/second-guard"])
 def test_the_hashed_model_identity_is_model_id_at_revision(
     monkeypatch: pytest.MonkeyPatch,
+    model_id: str,
 ) -> None:
     """The exact composition, recomputed independently.
 
@@ -173,13 +183,18 @@ def test_the_hashed_model_identity_is_model_id_at_revision(
     see is an order a cache key could not rely on.
     """
     monkeypatch.delenv(MODEL_REVISION_ENV_VAR, raising=False)
+    monkeypatch.setattr(
+        model_fetcher, "ALLOWED_MODEL_IDS", frozenset({DEFAULT_MODEL_ID, model_id})
+    )
+    monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, model_id)
     expected = hashlib.sha256()
     pipeline_dir = Path(sanitizer_revision.__file__).parent
     for source_name in sanitizer_revision._REVISION_SOURCES:
         expected.update((pipeline_dir / source_name).read_bytes())
     for root_source_name in sanitizer_revision._ROOT_REVISION_SOURCES:
         expected.update((pipeline_dir.parent / root_source_name).read_bytes())
-    expected.update(f"{DEFAULT_MODEL_ID}@{DEFAULT_MODEL_REVISION}".encode())
+    revision = DEFAULT_MODEL_REVISION if model_id == DEFAULT_MODEL_ID else "unpinned"
+    expected.update(f"{model_id}@{revision}".encode())
     expected.update(f"idna@{idna.__version__}".encode())
     expected.update(b"0.85")
 
@@ -187,6 +202,23 @@ def test_the_hashed_model_identity_is_model_id_at_revision(
         sanitizer_revision.derive_sanitizer_revision({"promptguard_threshold": 0.85})
         == expected.hexdigest()
     )
+
+
+@pytest.mark.parametrize("configured", ["", " \t\n", DEFAULT_MODEL_ID, "evil/model"])
+def test_default_model_hash_is_unchanged_by_explicit_blank_or_refused_selection(
+    monkeypatch: pytest.MonkeyPatch, configured: str
+) -> None:
+    unset = sanitizer_revision.derive_sanitizer_revision({})
+    monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, configured)
+    assert sanitizer_revision.derive_sanitizer_revision({}) == unset
+
+
+@pytest.mark.parametrize("model_id", sorted(model_fetcher.ALLOWED_MODEL_IDS))
+def test_every_allowlisted_model_has_a_total_revision(
+    monkeypatch: pytest.MonkeyPatch, model_id: str
+) -> None:
+    monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, model_id)
+    assert len(sanitizer_revision.derive_sanitizer_revision({})) == 64
 
 
 def test_the_root_sources_resolve_against_the_repo_root() -> None:

@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document logging patterns, levels, and conventions.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-provider-bounds US-005)
+> Updated by: Copilot (hardening-promptguard-86m US-006)
 
 ## Overview
 
@@ -139,6 +139,8 @@ any path appears in the unpinned-revision or identity-mismatch record.
 | ERROR | `weights_pin_unusable` | `weights_manifest.json` pins nothing verifiable; no fetch attempted |
 | ERROR | `weights_verification_failed` with `manifest_model_unknown` / `weights_revision_unpinned` | No entry for the selected id / requested revision is not that entry's pin; no snapshot lookup or source attempted |
 | ERROR | `model_identity_mismatch` | At the load site, manifest and requested snapshot directories differ or the directory vanished; `load()` uncalled |
+| WARNING | `model_id_not_allowed` | Unknown `FORAGE_MODEL_ID`; lifespan raises `ModelConfigurationError`, never echoing the value |
+| WARNING | `model_labels_unexpected` (`promptguard.classifier`) | Config lacks exactly two indexed BENIGN/INJECTION labels; no classifier is published |
 | WARNING | `manifest_pin_unavailable — reason=<code>` | Default model retains its fallback revision for hashing; one warning per memoised path/model, no manifest reread per request |
 | WARNING | `model_cache_dir_missing` (`promptguard.classifier`) | Supplied hub-cache directory does not exist; neither auto-class is called |
 | ERROR | `weights_load_failed` | Verified set did not load into the classifier |

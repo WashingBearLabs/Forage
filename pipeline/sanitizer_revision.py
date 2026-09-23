@@ -8,8 +8,7 @@ from typing import Any
 
 import idna
 
-from model_fetcher import resolve_revision
-from promptguard.classifier import DEFAULT_MODEL_ID
+from model_fetcher import resolve_model_id, resolve_revision
 
 _REVISION_SOURCES = (
     "contract.py",
@@ -38,7 +37,7 @@ def derive_sanitizer_revision(config: dict[str, Any]) -> str:
     The configured value is hashed unchanged; the active, handler-resolved
     threshold reaches the content cache key through ``cache_policy_fingerprint``.
 
-    Model identity is ``DEFAULT_MODEL_ID@revision``, not ``DEFAULT_MODEL_ID`` alone
+    Model identity is ``resolved_model_id@revision``, not the model id alone
     (``feature-forage-model-bootstrap`` US-001). Weights arrive at runtime now,
     pinned by commit sha and overridable with ``FORAGE_MODEL_REVISION``, so two
     containers running the same code can be scanning with different weights —
@@ -70,7 +69,8 @@ def derive_sanitizer_revision(config: dict[str, Any]) -> str:
         digest.update((pipeline_dir / source_name).read_bytes())
     for root_source_name in _ROOT_REVISION_SOURCES:
         digest.update((pipeline_dir.parent / root_source_name).read_bytes())
-    digest.update(f"{DEFAULT_MODEL_ID}@{resolve_revision(DEFAULT_MODEL_ID)}".encode())
+    model_id = resolve_model_id()[0]
+    digest.update(f"{model_id}@{resolve_revision(model_id)}".encode())
     digest.update(f"idna@{idna.__version__}".encode())
     digest.update(str(config.get("promptguard_threshold", 0.85)).encode("ascii"))
     return digest.hexdigest()

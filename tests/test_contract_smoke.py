@@ -52,7 +52,7 @@ from pipeline.contract import (
     DEGRADED_CACHE_UNAVAILABLE,
     DEGRADED_PROMPTGUARD_UNAVAILABLE,
 )
-from promptguard.classifier import PromptGuardClassifier
+from promptguard.classifier import DEFAULT_MODEL_ID, PromptGuardClassifier
 from retrieval_app import CAPABILITY_SEARCH_SANITIZATION, HealthResponse
 from scripts.export_contract import ANCHOR_PATH, CONTRACT_PATH, render_anchor
 
@@ -69,6 +69,7 @@ def _health_body(**overrides: object) -> str:
     payload: dict[str, object] = {
         "status": "degraded",
         "promptguard_loaded": False,
+        "promptguard_model": DEFAULT_MODEL_ID,
         "cache_connected": False,
         "capabilities": {},
         "sanitizer_revision": _REVISION,

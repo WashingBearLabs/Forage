@@ -493,6 +493,20 @@ failures, are memoised; replacing the manifest requires a process restart.
 `DEFAULT_MODEL_ID` replaces the old constant everywhere. Measurements and the
 direct-caller handoff are in `docs/bootstrap-notes.md`; no 86M owner gate ran.
 
+The thirty-eighth rotation is `4913fdc1…` → `85394a95…` for
+`hardening-promptguard-86m` US-006. Only `contract.py` moves among the nine
+hashed sources, announcing `/health.promptguard_model` in held 1.3.0.
+A read-only whole-file reversal against clean `06a56b2` reproduces `4913fdc1…`
+under default and shipped config; the other eight sources are unchanged.
+The hash now resolves `FORAGE_MODEL_ID` but default identity bytes are unchanged.
+The lifespan refuses unknown ids with `ModelConfigurationError`; the allowlist
+still ships only 22M, and blank means default. Acquisition and the memory advisory
+receive the selection, health reads startup state, and loading derives the
+injection index only from exactly two BENIGN/INJECTION labels. This is not a
+sanitization change at shipped defaults, but old cache keys are invalidated.
+Full measurements and consumer handoff are in `docs/bootstrap-notes.md`;
+no 86M owner gate ran.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:

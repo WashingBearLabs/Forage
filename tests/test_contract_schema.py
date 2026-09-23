@@ -50,6 +50,18 @@ def _current_schemas() -> dict[str, object]:
     return {name: model.model_json_schema() for name, model in _SCHEMA_MODELS.items()}
 
 
+def test_health_model_identity_is_required_without_a_secrecy_claim() -> None:
+    field = HealthResponse.model_fields["promptguard_model"]
+    assert field.is_required()
+    assert field.annotation is str
+    description = field.description
+    assert description is not None
+    assert "whether loaded or not" in description
+    assert "contract-relevant and inferable from behaviour" in description
+    assert "not published" in description
+    assert "not inferable" not in description
+
+
 def test_contract_schema_matches_golden() -> None:
     """Any unrecorded wire-shape change must be recorded here in the same commit.
 
@@ -451,6 +463,7 @@ _ONE_THREE_ZERO_DIFFED_SCHEMAS = (
 # adds a field or enum member, until spec 8 US-002 freezes it.
 _EXPECTED_ONE_THREE_ZERO_DIFF: frozenset[str] = frozenset(
     {
+        "HealthResponse.promptguard_model",
         "HealthResponse.degraded_reasons[items][enum]=cache_unauthenticated",
         "CacheMetricsResponse.integrity_rejects",
         "CacheMetricsResponse.corrupt_entries",

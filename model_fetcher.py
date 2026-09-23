@@ -178,14 +178,17 @@ XET_DIRNAME: Final = "xet"
 # revision + manifest + mirror tag move in one commit.
 DEFAULT_MODEL_REVISION: Final = "11614a155199674a0a95e6602d6ab0417b790ed0"
 
-# The five environment variables this module reads. Named constants rather
+# The six environment variables this module reads. Named constants rather
 # than inline literals so `tests/test_model_fetcher.py` can assert the whole
 # set from the AST — the manifest path, notably, is *not* among them.
+MODEL_ID_ENV_VAR: Final = "FORAGE_MODEL_ID"
 MODEL_REVISION_ENV_VAR: Final = "FORAGE_MODEL_REVISION"
 CACHE_ROOT_ENV_VAR: Final = "HF_HOME"
 HF_TOKEN_ENV_VAR: Final = "HF_TOKEN"
 MIRROR_ENV_VAR: Final = "FORAGE_WEIGHTS_MIRROR"
 MIRROR_TOKEN_ENV_VAR: Final = "FORAGE_MIRROR_TOKEN"
+
+ALLOWED_MODEL_IDS: frozenset[str] = frozenset({DEFAULT_MODEL_ID})
 
 # Where the weights live when nothing says otherwise — the Dockerfile's
 # `ENV HF_HOME=/app/model-cache`, restated so a bare `python -c` run outside
@@ -926,6 +929,19 @@ def _refuse(
 # ---------------------------------------------------------------------------
 # Acquisition: the pinned revision, the environment, the token
 # ---------------------------------------------------------------------------
+
+
+class ModelConfigurationError(ValueError):
+    """Raised at boot when the configured model is not allowlisted."""
+
+
+def resolve_model_id() -> tuple[str, bool]:
+    """Resolve the selected model, leaving refusal to the lifespan alone."""
+    configured = os.environ.get(MODEL_ID_ENV_VAR, "").strip() or DEFAULT_MODEL_ID
+    if configured in ALLOWED_MODEL_IDS:
+        return configured, True
+    logger.warning("model_id_not_allowed")
+    return DEFAULT_MODEL_ID, False
 
 
 def resolve_revision(
