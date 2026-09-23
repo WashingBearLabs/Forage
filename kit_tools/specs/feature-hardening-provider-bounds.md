@@ -1715,6 +1715,37 @@ record.
   repaired. No branch switch, dependency change, Poppy edit, push, tag or
   release occurred.
 
+### Feature validation - autonomous (2026-09-22, Copilot)
+
+- Reviewed the assembled `main...HEAD` branch at `94a7041`, with the four
+  completed prerequisite specs treated as intentional epic scope. Quality,
+  security and compliance reviews ran independently in parallel, then all
+  three revalidated at `d939d68`: two rounds and one critical-fix loop.
+- The initial full suite had 3,574 passes and one failure: ruling (j)'s
+  source still pointed to the cache-integrity spec's pre-archive path.
+  The clean pre-epic baseline does not exempt that inherited epic failure.
+  Autonomous fix **`d939d68`** changes only the citation, preserving the
+  ruling and its existence assertion; 66 focused governance tests pass.
+- Final deterministic gates: **3,575 passed, 13 non-failing warnings in
+  21.11s**; Ruff lint, formatting of 145 Python files, strict Pyright
+  (zero errors/warnings), exporter `--check` and whitespace checks pass.
+  The story-level full-suite deferral is now closed. Published goldens,
+  the OpenAPI anchor and `d9db7586...1b6e0` sanitizer revision are unchanged.
+- Outcome: **needs-work (advisory)**, zero remaining critical findings,
+  four unique warnings and one informational gate record in
+  `kit_tools/AUDIT_FINDINGS.md`. The warnings are the peak-memory claim
+  (`-008`), inherited model-warmup admission race (`-004`), inherited
+  equivalent-IPv6 denylist bypass (`-009`, medium security severity), and
+  missing US-004 rotation entry in `DECISIONS.md` (`-010`). Overlapping
+  quality/compliance memory reports are one finding. These are not fixed
+  or silently accepted by a green test run: in particular, bounded
+  individual decoder returns do not prove the stated peak-held-memory
+  ceiling, and the existing deflate-replay refinement does not cover the
+  independently measured duplicate gzip buffers.
+- This invocation fixes critical findings only; warning findings remain
+  advisory under the validation workflow. No pause marker, completion
+  action, spec archival, release, push or lifecycle-state change occurred.
+
 ## Refinement Notes
 
 ### Research Findings

@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import hashlib
 import os
 import socket
+import sys
 import time
 import zlib
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -23,6 +26,7 @@ from pipeline.search_providers.base import ProviderFailure, ProviderSearchResult
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator, Mapping
+    from types import FrameType
 
     from models import RetrievedContent
 
@@ -163,6 +167,85 @@ def record_decompressors() -> Generator[DecompressorRecording]:
 
     with patch("pipeline.bounded_body._decompressobj", new=factory):
         yield recording
+
+
+@dataclass
+class DecodedBufferRecording:
+    """Simultaneously live decoded payload, not largest decoder return or RSS."""
+
+    accumulation_peak: int = 0
+    return_peak: int = 0
+    returns: int = 0
+
+
+@contextmanager
+def record_decoded_buffers() -> Generator[DecodedBufferRecording]:
+    """Trace the reader's payload owners, outputs and exception-held frames.
+
+    CPython exposes BytesIO's backing bytes via gc.get_referents. Inspecting
+    those (without retaining them) neither copies nor exports a buffer view:
+    getbuffer() would itself force copy-on-write at getvalue(). Count populated
+    payload lengths, as with len(bytearray), not allocator slack/zlib state.
+    Deduplicate by buffer identity, including the bytes returned to the caller.
+    """
+    from pipeline import bounded_body
+
+    recording = DecodedBufferRecording()
+
+    def trace(frame: FrameType, event: str, arg: Any) -> Any:
+        if frame.f_code.co_filename != bounded_body.__file__:
+            return None
+        buffers: dict[int, int] = {}
+        visited: set[int] = set()
+
+        def add(value: object) -> None:
+            if isinstance(value, BytesIO):
+                if not value.closed:
+                    for backing in gc.get_referents(value):
+                        if isinstance(backing, bytes):
+                            buffers[id(backing)] = value.tell()
+            elif isinstance(value, bytes | bytearray):
+                buffers[id(value)] = len(value)
+
+        def visit(current: FrameType | None) -> None:
+            if current is None or id(current) in visited:
+                return
+            visited.add(id(current))
+            if current.f_code.co_filename == bounded_body.__file__:
+                state = current.f_locals
+                for name in ("body", "output", "result"):
+                    add(state.get(name))
+                for name in ("self", "decoder"):
+                    decoder = state.get(name)
+                    if isinstance(decoder, bounded_body._BoundedDecoder):
+                        add(getattr(decoder, "body", None))
+                # The discarded wrapped decoder can still be held by a caught
+                # exception while raw replay is in progress.
+                error = state.get("error")
+                if isinstance(error, BaseException):
+                    traceback = error.__traceback__
+                    while traceback is not None:
+                        visit(traceback.tb_frame)
+                        traceback = traceback.tb_next
+            visit(current.f_back)
+
+        visit(frame)
+        if event == "return" and isinstance(arg, bytes):
+            add(arg)
+            recording.return_peak = max(recording.return_peak, sum(buffers.values()))
+            recording.returns += 1
+        else:
+            recording.accumulation_peak = max(
+                recording.accumulation_peak, sum(buffers.values())
+            )
+        return trace
+
+    previous = sys.gettrace()
+    sys.settrace(trace)
+    try:
+        yield recording
+    finally:
+        sys.settrace(previous)
 
 
 @dataclass

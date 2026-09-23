@@ -17,8 +17,53 @@ from tests.fakes import (
     ChunkStream,
     RecordingDecompressor,
     make_response,
+    record_decoded_buffers,
     record_decompressors,
 )
+
+
+@pytest.mark.parametrize("encoding", ["identity", "gzip", "deflate", "raw"])
+@pytest.mark.parametrize("chunking", ["whole", "split"])
+@pytest.mark.parametrize("extra", [-1, 0, 1])
+async def test_simultaneously_live_decoded_buffers_include_accumulation_and_return(
+    encoding: str, chunking: str, extra: int
+) -> None:
+    cap = 1_048_576
+    expected = b"x" * (cap + extra)
+    raw = (
+        expected
+        if encoding == "identity"
+        else gzip.compress(expected)
+        if encoding == "gzip"
+        else zlib.compress(
+            expected, wbits=-zlib.MAX_WBITS if encoding == "raw" else zlib.MAX_WBITS
+        )
+    )
+    cut = len(raw) // 3
+    chunks = [raw] if chunking == "whole" else [raw[:cut], raw[cut:-1], raw[-1:]]
+    response = httpx.Response(
+        200,
+        headers={"content-encoding": "deflate" if encoding == "raw" else encoding},
+        stream=ChunkStream(chunks),
+    )
+    with record_decoded_buffers() as live, record_decompressors() as recording:
+        if extra == 1:
+            with pytest.raises(BodyTooLarge):
+                await read_bounded_body(response, max_bytes=cap)
+        else:
+            result = await read_bounded_body(response, max_bytes=cap)
+            assert isinstance(result, bytes)
+            assert result == expected
+    # These are simultaneous payloads across frames/owners, not a per-call max.
+    assert live.accumulation_peak <= cap + 1
+    assert live.return_peak <= cap + 1
+    if extra <= 0:
+        assert live.accumulation_peak >= len(expected)
+        assert live.return_peak == len(expected)
+        assert live.returns == 1
+    else:
+        assert live.returns == 0
+    assert recording.largest_output <= cap + 1
 
 
 @pytest.mark.parametrize("encoding", [None, "identity", " GZip ", "deflate", "raw"])
@@ -238,7 +283,7 @@ async def test_raw_deflate_retry_discards_speculative_wrapped_output(
     response = httpx.Response(
         200, headers={"content-encoding": "deflate"}, stream=stream
     )
-    with record_decompressors() as recording:
+    with record_decompressors() as recording, record_decoded_buffers() as live:
         if overflow:
             with pytest.raises(BodyTooLarge):
                 await read_bounded_body(response, max_bytes=cap)
@@ -246,6 +291,8 @@ async def test_raw_deflate_retry_discards_speculative_wrapped_output(
             assert await read_bounded_body(response, max_bytes=cap) == expected
     assert len(recording.instances) == 2
     assert recording.largest_output <= cap + 1
+    assert live.accumulation_peak <= cap + 1
+    assert live.return_peak == (0 if overflow else len(expected))
     assert stream.chunks_yielded == chunks
     assert sum(map(len, stream.chunks_yielded)) <= 4 * cap
 
@@ -272,10 +319,12 @@ async def test_raw_deflate_retries_when_wrapped_eof_is_missing(
     response = httpx.Response(
         200, headers={"content-encoding": "deflate"}, stream=stream
     )
-    with record_decompressors() as recording:
+    with record_decompressors() as recording, record_decoded_buffers() as live:
         assert await read_bounded_body(response, max_bytes=length + 10) == expected
     assert len(recording.instances) == 2
     assert recording.largest_output <= length + 11
+    assert live.accumulation_peak <= length + 11
+    assert live.return_peak == len(expected)
     assert response.num_bytes_downloaded == len(raw) <= 4 * (length + 10)
 
 
