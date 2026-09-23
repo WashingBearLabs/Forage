@@ -126,11 +126,14 @@ _TABLE_ROW_RE = re.compile(r"^\|\s*(\d)\s*\|")
 
 def test_threshold_boundary_descriptions_have_no_stale_route_exceptions() -> None:
     stale = re.compile(
-        r"not applied (here|there|on this route)|no per-request threshold", re.I
+        r"not applied (here|there|on this route)|no per-request threshold"
+        r"|ceiling is /retrieve-only|/search still classifies at 0\.85",
+        re.I,
     )
     for name in (
         "models.py",
         "retrieval_app.py",
+        "config.yaml",
         "kit_tools/docs/API_GUIDE.md",
         "docs/configuration.md",
         "README.md",
