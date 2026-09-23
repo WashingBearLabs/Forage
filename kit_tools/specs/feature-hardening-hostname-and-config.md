@@ -1225,10 +1225,10 @@ and the same for `kit_tools/arch/SERVICE_MAP.md` each return at least `1`; the f
 - Doc-only story; nothing rotates, no code.
 
 **Acceptance Criteria:**
-- [ ] `docs/searxng.md` and `kit_tools/arch/SERVICE_MAP.md` each name
+- [x] `docs/searxng.md` and `kit_tools/arch/SERVICE_MAP.md` each name
       `test_enabled_engines_match_the_orchestrator` as the engine-list sync mechanism (occurrence
       count ≥ 1 by `grep -o … | wc -l`); `SERVICE_MAP.md:106`'s sentence is extended, not duplicated.
-- [ ] Full test suite passes (`uv run pytest`).
+- [x] Full test suite passes (`uv run pytest`).
 
 ## Edge Cases
 
