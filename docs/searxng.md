@@ -205,11 +205,13 @@ vetted (observed live 2026-08-19: `aol`, `karmasearch videos`), and
 `SearxngProvider` (`pipeline/search_providers/searxng.py`) names its engines on every
 query precisely so a new default cannot change what a Forage search fans out to.
 
-The *named-enabled* set and `SEARXNG_ENGINES` in `pipeline/search_providers/searxng.py`
-(the definition; `pipeline/orchestrator.py` keeps `_SEARXNG_ENGINES` as an assigned alias,
-which is the name `tests/test_searxng_docker.py` reads) are a contract with two ends, and
-that test asserts they are the same set — the parity is over the entries this file declares, not over
-everything the merged config enables. An engine Forage asks for that is
+The *named-enabled* set in `searxng/config/settings.yml` and `SEARXNG_ENGINES` in
+`pipeline/search_providers/searxng.py` are kept in step by
+`tests/test_searxng_docker.py::test_enabled_engines_match_the_orchestrator`
+(which reads the constant through `pipeline/orchestrator.py`'s `_SEARXNG_ENGINES`
+assigned alias). This parity test is the sync mechanism; Forage does not read
+the SearXNG config at runtime. The parity is over the entries the file declares,
+not over everything the merged config enables. An engine Forage asks for that is
 disabled here is a request answered with nothing, and it surfaces as thin
 results rather than as an error.
 
