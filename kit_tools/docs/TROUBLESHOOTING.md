@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document debugging procedures and common fixes. How to diagnose problems.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-promptguard-86m US-006)
+> Updated by: Copilot (hardening-release US-002)
 
 ---
 
@@ -542,7 +542,7 @@ different `sanitizer_revision` than before the deploy.
 
 **Cause:** expected, not a bug. `sanitizer_revision` hashes eight `pipeline/*.py` files, the
 model identity and `promptguard_threshold`, and it is part of the content-cache key
-fingerprint, so a rotation invalidates every existing entry on purpose. Forty rotations
+fingerprint, so a rotation invalidates every existing entry on purpose. Forty-one rotations
 are recorded in `docs/bootstrap-notes.md` (`e6b2b56d` → ... → `41ac98ca`); that file, not
 this count, is the record. Any consumer cache keyed on the revision must flush too.
 
@@ -794,7 +794,7 @@ git show v1.0.0:contract/openapi.yaml.sha256 | diff - openapi.yaml.sha256 && sha
 **Symptom:** someone concludes the two deployments are "out of sync" because the revisions
 differ.
 
-**Cause:** wrong measure. Forage's revision has deliberately diverged from Poppy's forty times
+**Cause:** wrong measure. Forage's revision has deliberately diverged from Poppy's forty-one times
 (recorded in `docs/bootstrap-notes.md`); it hashes source bytes, model identity and the
 threshold, not the wire shape.
 

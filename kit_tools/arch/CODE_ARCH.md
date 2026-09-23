@@ -2,7 +2,7 @@
 # CODE_ARCH.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-promptguard-86m US-007)
+> Updated by: Copilot (hardening-release US-002)
 
 ---
 
@@ -424,6 +424,16 @@ whole-file reversal against clean `7a4819b` reproduces `b641e6a5…` under
 default and shipped config; all other sources and hash inputs are unchanged.
 The handler is unhashed. No text-sanitization change, but old cache keys
 invalidate. Full measurements: `docs/bootstrap-notes.md`.
+
+The forty-first rotation is `bffeb7ba…` → `6884dc29…`:
+`hardening-release` US-002 closes the 1.3.0 announcement and removes publication
+state from the 1.2.0 entry. Only `contract.py` changes among nine hashed sources;
+its whole-file read-only reversal against clean `3ea0b32` reproduces the former
+under default and shipped config. All other sources and hash inputs are
+unchanged; no wire or sanitization behavior changes, but old cache keys
+invalidate. The six-model schema golden is frozen, with cache metrics pinned
+in the metrics tests; OpenAPI remains byte-identical. Full measurements and
+consumer handoff: `docs/bootstrap-notes.md`.
 
 **Provider bodies are self-decoded under bounds.** The shared
 `pipeline/bounded_body.py` reads raw bytes, bounds decoded output at 1 MiB

@@ -532,7 +532,19 @@ The total handler and runtime location allowlist in `retrieval_app.py` are
 not hashed. No text-sanitization algorithm changes; old cache keys invalidate.
 Full measurements and the consumer migration are in `docs/bootstrap-notes.md`.
 The 36th–39th bootstrap headings were reconciled before the count preflight;
-the last heading ordinal and GOTCHAS table now agree on forty rotations.
+the last heading ordinal and GOTCHAS table now agree on forty-one rotations.
+
+The forty-first rotation is `bffeb7ba…` → `6884dc29…` for
+`hardening-release` US-002. Only `contract.py` moves among nine hashed sources:
+one final 1.3.0 bullet replaces the provisional entries, and the 1.2.0 entry
+loses publication state. Whole-file read-only reversal against clean `3ea0b32`
+reproduces `bffeb7ba…` under default and shipped config; the other eight
+sources and hash definition are unchanged. This changes no wire behavior or
+sanitization algorithm, but old cache keys invalidate. The six-model 1.3.0
+golden is now frozen; cache counters stay mechanically pinned in the metrics
+tests. OpenAPI and its four quoted anchors are unchanged. Full measurements,
+the complete release entry and description sweep are in `docs/bootstrap-notes.md`
+and the release spec's Implementation Notes. Publication remains pending.
 
 ## Session Scratchpad
 

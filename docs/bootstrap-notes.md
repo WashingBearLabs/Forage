@@ -1943,3 +1943,55 @@ returned; the request is still parsed in full. The two closed WARNINGs are
 per request, with count and matched route token only. Pipeline refusals and
 the private-IP echo are unchanged. **Not replayed to Poppy**; no model
 acquisition, benchmark, owner gate, push, tag or release occurred.
+
+### The forty-first rotation: contract 1.3.0 close-out (`hardening-release` US-002, 2026-09-23)
+
+The clean baseline is `3ea0b327177b4b9f3cf8bb18f0d01bccc9acb5b0`.
+The last pre-story rotation heading's ordinal was **fortieth**, independently
+matching GOTCHAS's 41 data rows minus its `At split` origin. The case-insensitive
+`(forty|40) (times|rotations)` sweep found six current-count sentences in
+GOTCHAS (two), TROUBLESHOOTING (two), DEPLOYMENT and SERVICE_MAP, plus the
+CLAUDE count summary. All now say forty-one; this is the thirty-third rotation
+that changes no sanitization policy or algorithm at shipped defaults.
+
+Only `pipeline/contract.py` changes among the nine hashed sources: its final
+single 1.3.0 announcement and timeless 1.2.0 entry replace the provisional
+record. Live `derive_sanitizer_revision`, with read-only `Path.read_bytes`
+substitution of the whole baseline contract file, measured identically for
+default `{}` and shipped `config.yaml`, under the default model identity:
+
+| State | Revision |
+|---|---|
+| Before / whole `contract.py`-reverted control | `bffeb7bac1b319c566253ff7512ca61fad12df75ecbdb4d8284c9aeeb0d47fe1` |
+| After | `6884dc29b3dc3d7a0a1f2c1da638f767fb301b2baac68446541f6de2638bd7ec` |
+
+The other eight sources and `sanitizer_revision.py` are byte-identical to
+baseline. No response model, constant, handler, policy or sanitization algorithm
+changes; source-byte hashing nevertheless invalidates old cache keys.
+
+The last recreation of `tests/golden/contract_1_3_0.json` uses
+`_current_schemas()`, `indent=2, sort_keys=True` and a trailing newline; its
+sha256 is `79dd2564be91a3c2f2bd5fd91aa28c2387ab315e49a4c8f82d0e77ec42e4c7ef`.
+It restores the six-model producer required by the close-out: cache metrics
+are pinned with all five section models in `test_contract_metrics`, not a
+seventh top-level golden schema. The two cache additions are retained there;
+the schema sweep's ten property/enum additions all occur literally in the
+announcement. The 1.2.0 test pair and every historical golden are unchanged.
+GOVERNANCE ruling (c) now records the **freeze**, independently of publication.
+
+Export regeneration changes no OpenAPI, anchor or drift-twin bytes:
+`74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72`
+still equals all four quoted anchors. Spec 4 had already corrected the live
+capability description to three keys / contract 1.3.0. The window's 49 changed
+description paths are fully classified in the release spec's US-002 notes.
+The real workflow awk extractor emits one 112-line entry, sha256
+`7bdf3582aced1b2ce15c568defea6b38ff320592368f041474cd6f78dd41e928`,
+recorded verbatim there. Whole-bullet tense and uniqueness guards prevent
+publication claims or duplicate bullets from truncating future announcements.
+
+**Consumer handoff:** use that complete announcement for re-vendoring, including
+the validation-422 placeholder window under ruling (l); no new wire behavior
+lands in this close-out. `v1.1.0` shipped contract 1.2.0 on 2026-09-18;
+`v1.2.0` / contract 1.3.0 remains **pending**, not published by this story.
+**Not replayed to Poppy.** No image/model/benchmark, owner gate, push, tag or
+release action ran.

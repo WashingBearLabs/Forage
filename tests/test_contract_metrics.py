@@ -70,6 +70,7 @@ from tests.fakes import (
     client_patch,
     make_response,
 )
+from tests.test_ci_workflow import _slice_entry
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CONFIGURATION_DOC = _REPO_ROOT / "docs" / "configuration.md"
@@ -115,6 +116,74 @@ _SECTION_MODELS = {
     "cache": CacheMetricsResponse,
     "model": ModelMetricsResponse,
 }
+
+# Field sets from v1.1.0's published contract 1.2.0, without editing old goldens.
+_ONE_TWO_ZERO_SECTION_FIELDS = {
+    "extraction": {
+        "requests",
+        "active",
+        "queued",
+        "queued_bytes",
+        "verdicts",
+        "semaphore_saturation",
+        "busy_rejections",
+        "cgroup_memory_current_bytes",
+        "cgroup_memory_max_bytes",
+        "oom_proximity_ratio",
+    },
+    "search": {
+        "requests",
+        "errors",
+        "omitted_by_reason",
+        "unscanned_results",
+        "fallback_fired",
+        "paid_calls",
+        "policy_unknown_provider",
+    },
+    "retrieve": {
+        "requests",
+        "errors",
+        "cache_hits",
+        "cache_misses",
+        "blocked_by_reason",
+        "promptguard_state",
+    },
+    "cache": {
+        "reconnect_attempts",
+        "reconnect_successes",
+        "reconnect_failures",
+        "operation_failures",
+        "storage_hits",
+        "storage_misses",
+        "storage_evictions",
+        "storage_oversize_skips",
+    },
+    "model": {
+        "fetch_in_progress",
+        "fetch_failures",
+        "verify_failures",
+        "quarantines",
+        "retries_scheduled",
+    },
+}
+
+
+def test_every_1_3_0_metric_addition_is_named_in_the_contract_entry() -> None:
+    entry = _slice_entry((_REPO_ROOT / "pipeline" / "contract.py").read_text(), "1.3.0")
+    assert set(_ONE_TWO_ZERO_SECTION_FIELDS) == set(_SECTION_MODELS)
+    for section, model in _SECTION_MODELS.items():
+        previous = _ONE_TWO_ZERO_SECTION_FIELDS[section]
+        assert previous <= set(model.model_fields), section
+        assert all(
+            f"``{section}.{name}``" in entry
+            for name in set(model.model_fields) ^ previous
+        ), section
+    assert {field.name for field in dataclasses.fields(CacheMetrics)} == set(
+        CacheMetricsResponse.model_fields
+    )
+    # This existing counter changed producers, not field presence.
+    assert "``cache.storage_oversize_skips``" in entry
+
 
 # Flat in `extraction`, not nested under a `memory` object. The splat that puts
 # them there is `retrieval_app.metrics`'s `**_cgroup_memory_snapshot()`.

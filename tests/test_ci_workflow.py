@@ -2348,6 +2348,64 @@ def _slice_entry(text: str, version: str) -> str:
 class TestReleaseContractMapping:
     """US-003: the Release says which contract it serves, and the job proves it."""
 
+    def test_docstring_entry_tense_has_no_publication_state(self) -> None:
+        source = (_REPO_ROOT / _CONTRACT_SOURCE_FILE).read_text(encoding="utf-8")
+        bullets = list(re.finditer(r"^\* ``(\d+\.\d+\.\d+)`` ", source, re.M))
+        assert bullets
+        for bullet in bullets:
+            entry = _slice_entry(source[bullet.start() :], bullet.group(1))
+            assert not (
+                re.search(r"\bheld\b.*\b(until|pending)\b", entry, re.S)
+                or re.search(r"\buntil\b.*\bpublish(es|ed)\b", entry, re.S)
+                or "published by" in entry
+            ), (
+                "docstring entries carry no publication state — it lives in "
+                "docs/releases.md and GOVERNANCE § Two semvers; rephrase, "
+                f"do not delete the guard:\n{entry}"
+            )
+
+    def test_each_version_has_one_complete_docstring_entry(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        source = _REPO_ROOT / _CONTRACT_SOURCE_FILE
+        text = source.read_text(encoding="utf-8")
+        versions = re.findall(r"^\* ``(\d+\.\d+\.\d+)`` ", text, re.M)
+        assert versions
+        assert len(versions) == len(set(versions)), "one bullet per contract version"
+        for version in versions:
+            entry = _slice_entry(text, version)
+            assert entry.startswith(f"* ``{version}`` —")
+            assert all(
+                line.startswith("  ") and line.strip()
+                for line in entry.splitlines()[1:]
+            )
+            assert _run_entry_extractor(jobs, version, source) == entry
+
+    @pytest.mark.parametrize(
+        "clause",
+        [
+            "This version is **held**: ``tests/golden/contract_1_2_0.json`` is\n"
+            "  regenerated in place across ``search-provider-abstraction``"
+            " specs 2-4 and\n"
+            "  every ``search-fallback``/``search-policy-and-health``"
+            " story that moved\n"
+            "  this shape, until the ``v1.1.0`` image publishes it.",
+            "held in contract_1_3_0.json pending the cut",
+            "until v1.2.0 publishes the contract",
+            "until v1.2.0 published the contract",
+            "published by v1.2.0",
+        ],
+    )
+    def test_docstring_entry_tense_guard_rejects_publication_clauses(
+        self, clause: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source = tmp_path / _CONTRACT_SOURCE_FILE
+        source.parent.mkdir()
+        source.write_text(f"* ``1.2.0`` — {clause}\n", encoding="utf-8")
+        monkeypatch.setattr("tests.test_ci_workflow._REPO_ROOT", tmp_path)
+        with pytest.raises(AssertionError, match="carry no publication state"):
+            self.test_docstring_entry_tense_has_no_publication_state()
+
     @pytest.mark.parametrize("name", _CONTRACT_STEPS)
     def test_the_step_exists(self, jobs: dict[str, Any], name: str) -> None:
         _step_named(jobs, "publish", name)  # raises with the step list if absent

@@ -59,14 +59,13 @@ publishing a frozen, sha256-anchored contract for the first time, and a contract
 **US-004**, whose job it is to land the in-image `COPY` and the Release assets first; a
 `v1.0.0` tagged before them would ship a contract-less release that nothing can re-cut.)
 
-The mapping has moved twice since. `search-provider-abstraction` US-004 bumped
-`CONTRACT_VERSION` to `1.2.0` in the tree; `v1.1.0`, cut by that epic's release spec,
-is the image that serves it — the mapping closed the way the first one did, the
-release spec landing the artifacts and then cutting the tag. It has moved again, and
-is currently **pending**: `hardening-search-sanitization` US-004 bumps
-`CONTRACT_VERSION` to `1.3.0` in the tree, opening this epic's contract window, and no
-published image serves it yet. A process built from this tree reports `1.3.0` on
-`/health` while no published image advertises it — expected, not drift to chase.
+`v1.1.0` shipped on **2026-09-18**, serving contract `1.2.0`.
+The next mapping is **pending**: image `v1.2.0` will serve contract `1.3.0`,
+whose window opened in `hardening-search-sanitization` US-004 and is frozen by
+`hardening-release` US-002. No published image serves `1.3.0` yet.
+`hardening-release` US-003 owns the release cut; US-005 records the publication
+date here after verification. A process built from this tree reports `1.3.0`
+on `/health` — expected, not drift to chase.
 
 A human line in a release note claiming "this image serves contract 1.1.0" would be the
 last unmechanized integrity claim in the release path, so it is not a human line. The
@@ -263,12 +262,13 @@ Retention is about *published* contracts: a version nobody can pull is not yet a
 consumer could have been written against. `1.2.0` went through exactly this window across
 `search-provider-abstraction` specs 2-4, with `contract_1_2_0.json` rewritten by each
 story that moved the shape, exactly as a documentation-only change rewrites the current
-fixture under ruling (a) — and froze the moment `v1.1.0` published it. `1.3.0` is in that
-same unpublished window now, opened by `hardening-search-sanitization` US-004:
-`contract_1_3_0.json` is rewritten in place by every later story in that epic that moves
-the shape, until spec 8 US-002 freezes it ahead of the release cut. This is not a seventh
-worked example and adds no row to the table below (`test_there_are_exactly_six`); it is a
-qualification of *when* this ruling starts applying to a given file.
+fixture under ruling (a) — and froze the moment `v1.1.0` published it.
+**`contract_1_3_0.json` is now frozen**, ahead of the release cut, by
+`hardening-release` US-002. Its window opened in `hardening-search-sanitization`
+US-004 and allowed in-place regeneration only through that close-out. Later
+shape or description changes require a new version and a new golden, never an
+edit to this one. This is not a seventh worked example and adds no row to the
+table below (`test_there_are_exactly_six`); it qualifies *when* retention starts.
 
 **Source:** `kit_tools/specs/archive/feature-forage-contract.md`, US-003 *Implementation Hints*
 ruling (c); the fixture semantics are recorded in US-001 *Implementation Notes* and

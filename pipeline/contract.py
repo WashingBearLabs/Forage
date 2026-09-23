@@ -59,178 +59,120 @@ MINOR when fields are only added.
   no field changed meaning. The ``/search``/``/retrieve`` boundary text
   written into both routes' descriptions and the
   ``SearchRequest``/``RetrieveRequest`` model docstrings
-  (``search-policy-and-health`` US-003) landed inside this same unpublished
-  window and is not a separate PATCH: there is no vendored 1.2.0 copy yet to
-  re-vendor, so the description edits are subsumed by this unreleased
-  MINOR. This version is now frozen at 1.2.0 bytes; ``tests/golden/contract_1_2_0.json``
-  stays exactly as it shipped.
-* ``1.3.0`` — opens ``hardening-search-sanitization``'s contract window: every
-  later story in this epic that moves the wire appends a continuation line
-  here instead of bumping again. Three additive changes land with the
-  version itself. ``SearchResponse.omitted_by_reason`` gains a fifth key,
-  ``blocked_url`` (``OMIT_BLOCKED_URL``) — declared before it has a raiser,
-  the same shape ``1.2.0``'s ``chunk`` used, so the later story that actually
-  raises it (US-003) is not a further contract change. ``SearchResult.engine``
-  moves from an unexamined ``isinstance`` pass-through to a bounded,
-  normalised field: it is run through the same normalisation as ``title``
-  and ``snippet`` (NFC, C0/C1 control deletion, whitespace-run collapse),
-  truncated to 64 characters (``_MAX_SEARCH_ENGINE_LENGTH``), and a
-  non-string or an empty-after-normalisation value now serves as ``None``
-  where an unexamined ``""`` shipped before — four emitted-value moves on a
-  field that was never structurally scanned or part of the PromptGuard input
-  and still is not (``contract/GOVERNANCE.md`` ruling (e)). And ``title`` /
-  ``snippet`` carry a served-text change that shipped ahead of this version,
-  in ``hardening-search-sanitization`` US-001: both are now truncated
-  *after* Stage 1 extraction instead of before, so an over-cap multi-line
-  field ships a different byte count (fewer for a padded field, more for a
-  markup-dense one) and payload-shaped escaped markup (``&lt;system&gt;``)
-  is blocked as ``structural_blocked`` rather than served stripped. All
-  three are additive or a narrowing of an already-unscanned,
-  already-unbounded field — a consumer comparing MAJOR keeps working
-  untouched, and nothing removed or changed the meaning of an existing
-  field. Continuing in ``hardening-search-sanitization`` US-003:
-  ``SearchResult.domain`` is now the canonicalised ASCII host, so it is the
-  UTS-46-encoded (punycode) form for an internationalised name where the raw
-  Unicode host shipped before; ``url`` is unchanged and still carries the
-  provider's spelling. The same story narrows what ``/retrieve`` and
-  ``/extract`` accept: an IPv6 literal that *embeds* a private IPv4 (6to4,
-  Teredo, NAT64 and IPv4-compatible forms) and any name under the
-  ``.localhost`` suffix are refused ``private_ip`` where they were fetched
-  before — an expedited MINOR with no compatibility window, argued in
-  ``contract/GOVERNANCE.md`` ruling (f). Continuing in
-  ``hardening-retrieve-parity`` US-001: ``/retrieve`` 422 ``content_too_large``
-  gains the reason ``promptguard_budget``: with
-  ``retrieve.max_promptguard_chunks`` set, a fetched page over it is refused
-  rather than classified in full — a security tightening shipped by GOVERNANCE
-  worked example 6 step 1: the key defaults to ``0`` (today's behaviour) for
-  one minor release, the boot WARNING ``retrieve_budget_unset`` names the
-  coming default 256, and ``0`` remains a legal opt-out after the flip
-  (``contract/GOVERNANCE.md`` ruling (g)). Continuing in
-  ``hardening-retrieve-parity`` US-006: ``/metrics`` gains
-  ``retrieve.classification_wait_timeouts`` and
-  ``search.classification_wait_timeouts`` — both additive counters, pinned
-  against the handler by ``tests/test_contract_metrics.py`` rather than by
-  the golden fixture — and ``SearchResult.suspicious``'s *description* is
-  corrected, not its type or its default: the flag was already set for
-  results PromptGuard never scanned, and the text now says so along with
-  the consumer rule on ``promptguard_unavailable: true``. What is new
-  behind that unchanged shape is that a single ``/search`` response may now
-  mix scanned and unscanned results, because the classification wait is one
-  budget per request rather than a state of the process. No field was
-  removed and none changed meaning. Continuing in
-  ``hardening-retrieve-parity`` US-002: ``/retrieve`` gains the 422 code
-  ``busy`` with the reason ``admission_queue_full``
-  (``RETRIEVE_ADMISSION_QUEUE_FULL``) — a capacity refusal from the new
-  ``/retrieve`` admission controller when its queue is full in depth or in
-  reserved bytes, recorded under ``contract/GOVERNANCE.md`` ruling (b) as a
-  new 422 code with ``retrieve.admission_queue_depth`` and
-  ``retrieve.max_queued_fetch_bytes`` as the operator's two knobs
-  (``retrieve.fetch_concurrency`` is pinned at one, not a knob). The status
-  is 422, not ``/extract``'s 429: the handler picks 429 for ``busy`` on
-  ``/extract`` only, so no route gains a status. Because ``/retrieve`` and
-  ``/search`` share ``Pipeline422ErrorResponse``, the ``/search`` 422
-  ``error`` enum widens by the same member, though ``busy`` never arrives
-  there. ``/metrics`` gains ``retrieve.semaphore_saturation`` and
-  ``retrieve.busy_rejections``, both additive counters. Continuing in
-  ``hardening-retrieve-parity`` US-003: ``/retrieve`` 422 gains
-  ``extraction_failed`` (fetched-PDF worker and spool failures) with reasons
-  ``pdf_encrypted`` | ``pdf_no_text`` | ``pdf_extraction_error`` |
-  ``pdf_spool_error`` — reasons named after ``/extract``'s codes for the same
-  failures, not ``RetrieveErrorCode`` members; a fetched PDF over
-  ``extraction.max_promptguard_chunks`` is ``content_too_large`` /
-  ``promptguard_budget``. MINOR under ``contract/GOVERNANCE.md`` ruling (b): a
-  new 422 code for failures that answered 500 before, now parsed in
-  ``/extract``'s rlimited worker. As with ``busy``, the ``/search`` 422
-  ``error`` enum widens by the same member through the shared model, though
-  ``extraction_failed`` never arrives there. Continuing in
-  ``hardening-retrieve-parity`` US-004: ``/metrics`` gains
-  ``cache.corrupt_entries``, an additive counter of stored values that fail
-  ``RetrievedContent`` JSON or schema validation and become cache misses
-  instead of 500s. Pinned by ``tests/test_contract_metrics.py`` rather than
-  the golden fixture; parse success is not authenticity. Continuing in
-  ``hardening-retrieve-parity`` US-005: ``RetrievedContent`` gains
-  ``effective_promptguard_fail_closed`` and ``effective_promptguard_threshold``;
-  ``SearchResponse`` gains ``effective_promptguard_fail_closed``; ``/extract``
-  is permanently fail-closed and carries neither. These defaulted fields report
-  the policy applied, not whether content was scanned: the operator's opt-in
-  floor bounds the fail-closed flag on both fetch routes and the ceiling bounds
-  ``/retrieve``'s threshold only, without overriding the caller's trusted-tier
-  skip or VERIFIED fail-open exemption. Every 200 response is stamped after
-  the pipeline, including cache hits; 422 bodies are unchanged.
-* ``1.3.0`` — ``hardening-hostname-and-config`` US-001 documents the three
-  ``RetrieveRequest`` domain lists: multi-label denylists cover subdomains;
-  allowlists opt in with a leading dot, with trusted classification-skip and
-  verified degrade-open cautions. Canonical private-name rejection now precedes
-  the caller denylist, swapping ``blocked_domain`` to ``private_ip`` for a host
-  that matches both (GOVERNANCE ruling (h)); response shapes are unchanged.
-* ``1.3.0`` — ``hardening-hostname-and-config`` US-007 adds ``/metrics``
-  ``retrieve.policy_invalid_domain_entry``, ``retrieve.policy_suffix_trusted_skip``,
-  ``search.policy_invalid_domain_entry`` and ``search.policy_suffix_trusted_skip``;
-  ``/retrieve``'s ``content_too_large`` gains reason ``policy_domain_list_too_large``
-  for an over-budget caller denylist. Allowlists instead drop their over-budget
-  remainder; the counters report drops and wildcard trusted/verified resolutions.
-* ``1.3.0`` — ``hardening-hostname-and-config`` US-002 adds optional
-  ``SearchRequest.blocked_domains``, merged after the operator's ``seed_blocklist``:
-  either list omits matching search results as ``blocked_url`` before content
-  scanning, without triggering fallback. Invalid caller entries are counted;
-  an oversized denylist is refused whole as ``search_unavailable`` with reason
-  ``policy_domain_list_too_large``, a non-retryable request-policy refusal.
-* ``1.3.0`` — ``hardening-hostname-and-config`` US-005 adds
-  ``promptguard_threshold`` to ``SearchRequest``; ``null`` means the server's
-  configured threshold on both fetch routes; the operator ceiling also applies
-  on ``/search``, which gains ``SearchResponse.effective_promptguard_threshold``.
-  This version is **held**:
-  ``tests/golden/contract_1_3_0.json`` is
-  re-created in place by every later story in this epic that moves the
-  wire, until spec 8 US-002 freezes it ahead of the release cut.
-* ``1.3.0`` — ``hardening-cache-integrity`` US-001 adds ``cache.integrity_rejects``
-  to ``/metrics``; ``cache.storage_oversize_skips`` now counts Forage's own
-  write-side byte-bound refusals on both backends, not only memory (GOVERNANCE
-  ruling (j)). The counter's meaning is unchanged; its producers are widened.
-* ``1.3.0`` — ``hardening-cache-integrity`` US-002 adds the ``/health``
-  degraded reason ``cache_unauthenticated`` for unsigned Valkey caches and the
-  capability ``cache_hmac_key`` for Valkey signing enabled at boot.
-* ``1.3.0`` — ``hardening-provider-bounds`` US-003 adds
-  ``search.provider_compressed_body`` and ``search.provider_timeouts`` to
-  ``/metrics``. On a configured ``[searxng]``-only chain,
-  ``searxng_unavailable`` reasons may end in ``unsupported_encoding``;
-  Brave's detail remains internal, with only its failure class wire-visible.
-* ``1.3.0`` — ``hardening-provider-bounds`` US-004 describes the paid-prefix
-  rule in ``SearchRequest.providers`` and diagnosis through ``provider_used``:
-  on an all-paid configured chain a later-paid-only selection is now the
-  policy 422, ``search_unavailable`` / ``policy_excluded_all_providers``.
-  No production chain can reach that changed outcome yet: only one paid
-  backend is registered and configured duplicates are collapsed (GOVERNANCE
-  ruling (k), on ruling (a2)'s unreachability basis). Response shapes and
-  ``search.policy_unknown_provider``'s per-entry counting are unchanged.
-* ``1.3.0`` — ``hardening-resource-envelope`` US-004 adds
-  ``search.promptguard_latency_target_exceeded`` and
-  ``search.sanitization_latency_max_ms`` to ``/metrics``: a once-per-request
-  overrun counter and a per-process, never-reset high-water mark of the
-  per-result sanitization loop (structural scan, PromptGuard and any semaphore
-  wait). Targets are configurable; defaults and search response bytes are
-  unchanged. These additive metrics are pinned by ``tests/test_contract_metrics.py``,
-  not the golden fixture.
-* ``1.3.0`` — ``hardening-resource-envelope`` US-002: healthcheck descriptions
-  corrected — no shape change. The shipped compose probe uses
-  ``curl -fsS -o /dev/null`` for status-only liveness, not body health.
-* ``1.3.0`` — ``hardening-promptguard-86m`` US-006 adds
-  ``HealthResponse.promptguard_model``: the configured model id, reported
-  whether loaded or not. ``promptguard_loaded`` keeps its serving-state meaning.
-* ``1.3.0`` — ``hardening-promptguard-86m`` US-007 adds
-  ``promptguard_contiguity_detections`` to each ``/metrics`` section
-  ``retrieve``, ``search`` and ``extraction`` (additive counters, pinned by
-  ``tests/test_contract_metrics.py``). Request ``promptguard_threshold``
-  descriptions clarify max-rule-only scope; the opt-in server-side contiguity
-  rule can block independently. Description-only under GOVERNANCE row 3,
-  inside the held window; no request property or bound changes.
-* ``1.3.0`` — the request-validation 422 body no longer echoes the request:
+  (``search-policy-and-health`` US-003): the description edits landed inside
+  the same unreleased window and are subsumed by this MINOR.
+* ``1.3.0`` — ``SearchResponse.omitted_by_reason`` gains ``blocked_url``
+  (``OMIT_BLOCKED_URL``) for the search-time URL audit and domain policy.
+  ``SearchResult.engine`` is NFC-normalised, stripped of C0/C1 controls,
+  whitespace-collapsed and truncated to 64 characters; non-string or empty
+  values become ``None``. It remains outside structural and PromptGuard
+  scanning (GOVERNANCE ruling (e)). ``title`` and ``snippet`` are truncated
+  after Stage 1 extraction, not before: padded and markup-dense inputs can
+  serve different byte counts, and payload-shaped escaped markup is blocked
+  as ``structural_blocked`` rather than served stripped. Both newline-preserving
+  and whitespace-collapsed text forms are scanned. ``SearchResult.domain`` is
+  the canonicalised ASCII host (UTS-46 punycode for internationalised names);
+  ``url`` retains the provider's spelling. On ``/retrieve`` and ``/extract``,
+  IPv6 literals embedding private IPv4 (6to4, Teredo, NAT64 and IPv4-compatible)
+  and names under ``.localhost`` are refused ``private_ip`` rather than
+  fetched (expedited MINOR without a compatibility window, ruling (f)).
+  ``Pipeline422ErrorResponse.error`` gains ``busy`` and ``extraction_failed``
+  (ruling (b)): both arrive only on ``/retrieve``, though the shared model
+  also widens ``/search``'s enum. Admission refusal is 422 ``busy`` /
+  ``admission_queue_full``, not ``/extract``'s 429; queue depth and reserved
+  bytes are bounded by ``retrieve.admission_queue_depth`` and
+  ``retrieve.max_queued_fetch_bytes``, with ``retrieve.fetch_concurrency``
+  fixed at one. Fetched PDFs run in ``/extract``'s rlimited worker; failures
+  formerly answered 500 now use ``extraction_failed`` with ``pdf_encrypted``,
+  ``pdf_no_text``, ``pdf_extraction_error`` or ``pdf_spool_error`` reasons.
+  A PDF over ``extraction.max_promptguard_chunks`` is ``content_too_large`` /
+  ``promptguard_budget``. That reason also refuses pages over the opt-in
+  ``retrieve.max_promptguard_chunks`` budget: ``0`` preserves the unbounded
+  default for this minor release, ``retrieve_budget_unset`` warns of the next
+  MINOR's default 256, and ``0`` remains an opt-out afterwards (ruling (g)).
+  ``RetrievedContent.effective_promptguard_fail_closed``,
+  ``RetrievedContent.effective_promptguard_threshold``,
+  ``SearchResponse.effective_promptguard_fail_closed`` and
+  ``SearchResponse.effective_promptguard_threshold`` are defaulted fields
+  stamped on every 200, including cache hits. They report policy, not scanning;
+  the operator floor bounds fail-closed on both fetch routes and the ceiling
+  bounds both thresholds, without overriding trusted-tier classification skip
+  or VERIFIED unavailable fail-open. ``/extract`` remains fail-closed and
+  carries neither field. ``SearchRequest.promptguard_threshold`` is optional;
+  both it and ``RetrieveRequest.promptguard_threshold`` accept null or omission
+  for the validated configured default (shipped 0.85), before the operator
+  ceiling (ruling (i)). Route/model boundary descriptions name the shared
+  threshold, fail-closed and blocked-domain policy. Threshold descriptions
+  apply to the max-score rule only: the opt-in server-side contiguity rule
+  can block independently and ships disabled.
+  The three ``RetrieveRequest`` domain-list descriptions specify directional
+  matching: multi-label denylists cover subdomains, while bare allowlist
+  entries match exactly and a leading dot opts into apex and subdomains.
+  IP literals and single-label denylists match exactly. Leading-dot
+  ``trusted_domains`` skips classification across the suffix;
+  ``verified_domains`` degrades open when unavailable, even under the floor
+  or a classification wait timeout; neither should name a multi-tenant apex.
+  Canonical private-name rejection precedes caller denylists: a host matching
+  both becomes ``private_ip`` rather than ``blocked_domain`` (ruling (h)).
+  Optional ``SearchRequest.blocked_domains`` merges after the operator's
+  ``seed_blocklist``; either omits matching results as ``blocked_url`` before
+  content scanning without paid fallback. An over-budget denylist is refused
+  whole with ``policy_domain_list_too_large``: ``content_too_large`` on
+  ``/retrieve``, ``search_unavailable`` on ``/search``, non-retryable policy
+  refusals. Allowlists instead drop their over-budget remainder.
+  ``SearchResult.suspicious``'s corrected description includes unscanned
+  results: on ``promptguard_unavailable: true``, consumers treat suspicious
+  results as unscanned, not scanned-and-flagged. A single response can mix
+  scanned and unscanned results because classification wait is one budget
+  per request. ``SearchRequest.providers`` documents the paid-prefix rule
+  and ``provider_used`` diagnosis: later-paid-only selection on an all-paid
+  chain yields ``search_unavailable`` / ``policy_excluded_all_providers``.
+  With one registered paid backend and duplicate collapse this changed
+  outcome is not production-reachable (ruling (k), on (a2)'s basis);
+  ``search.policy_unknown_provider`` counting is unchanged.
+  ``HealthResponse.degraded_reasons`` gains ``cache_unauthenticated`` for
+  unsigned Valkey; ``capabilities`` gains ``cache_hmac_key`` when Valkey
+  signing is enabled at boot, independent of connectivity and absent in
+  memory mode. ``HealthResponse.promptguard_model`` reports the configured
+  model id whether loaded or not; ``promptguard_loaded`` still reports serving
+  state. Both healthcheck descriptions now call the shipped Compose
+  ``curl -fsS -o /dev/null`` probe status-only liveness, not body health;
+  Docker-healthy does not imply loaded weights and Compose does not restart
+  on an unhealthy probe.
+  ``/metrics`` adds ``retrieve.classification_wait_timeouts``,
+  ``search.classification_wait_timeouts``, ``retrieve.semaphore_saturation``,
+  ``retrieve.busy_rejections``, ``retrieve.policy_invalid_domain_entry``,
+  ``retrieve.policy_suffix_trusted_skip``, ``search.policy_invalid_domain_entry``
+  and ``search.policy_suffix_trusted_skip`` (the last stays zero on standard-tier
+  search). Domain counters report invalid/over-budget allowlist drops and
+  wildcard trusted/verified resolutions. ``cache.corrupt_entries`` counts
+  stored JSON/schema failures treated as misses rather than 500s; parse
+  success is not authenticity. ``cache.integrity_rejects`` counts rejected
+  signatures, envelopes, byte bounds and Valkey types before parsing.
+  ``cache.storage_oversize_skips`` now counts Forage's write-side byte-bound
+  refusals on both backends, not just memory (same meaning, wider producers,
+  ruling (j)). ``search.provider_compressed_body`` and
+  ``search.provider_timeouts`` count bounded upstream interactions; on a
+  configured ``[searxng]``-only chain, ``searxng_unavailable`` reasons may
+  end in ``unsupported_encoding``. Brave details stay internal, with only
+  failure class wire-visible. ``search.promptguard_latency_target_exceeded``
+  counts requests over the configurable target once per request;
+  ``search.sanitization_latency_max_ms`` is the process-lifetime high-water
+  mark of the whole result loop (structural scan, PromptGuard and semaphore
+  wait), not a single wait. ``retrieve.promptguard_contiguity_detections``,
+  ``search.promptguard_contiguity_detections`` and
+  ``extraction.promptguard_contiguity_detections`` count contiguity blocks,
+  including both-rule verdicts. These metrics are pinned by
+  ``tests/test_contract_metrics.py``, not the schema golden.
+  The request-validation 422 body no longer echoes the request:
   ``loc``, ``msg``, ``type`` per entry, at most ``_MAX_VALIDATION_ERRORS``
-  entries, and for this contract version ``input``, ``ctx`` and ``url``
+  (100) entries, and for this contract version ``input``, ``ctx`` and ``url``
   present with the fixed value ``"[redacted]"`` — an expedited MINOR under
   Example 6 step 1: the shipped description documented pydantic's extra keys;
   consumers reading ``detail[].input`` must stop — the three keys are dropped
   at the next MINOR (GOVERNANCE ruling (l)).
+  Every addition above is additive except the request-validation 422 trim
+  (ruling (l)); a consumer comparing MAJOR keeps working untouched.
 
 This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy

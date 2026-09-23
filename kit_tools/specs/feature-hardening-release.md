@@ -1296,6 +1296,410 @@ are the signals, and `promptguard_fail_closed_floor: true` is the operator contr
 skip and VERIFIED exemption. Carry that sentence into US-004's release draft; no release
 or owner gate was run here.
 
+### US-002 — final contract record and golden freeze (2026-09-23 UTC)
+
+**Baseline and reconciliation.** Started clean at
+`3ea0b327177b4b9f3cf8bb18f0d01bccc9acb5b0`. Read the known risks and
+`git log -p -- pipeline/contract.py`; the window opened at
+`d920820f7931737933e6f6ee1cf71c49c1c94db5`. Reconciled the draft against
+every continuation, not just its original checklist:
+
+- Spec 1: `blocked_url`, bounded/normalised `engine`, post-extraction
+  title/snippet truncation and both scan forms, canonical ASCII `domain`,
+  embedded-private IPv4 and `.localhost` fetch refusals (rulings (e)/(f)).
+- Spec 2: chunk-budget reason/window, classification waits and mixed
+  scanned/unscanned search results, admission `busy`, worker
+  `extraction_failed` and four PDF reasons, cache corruption misses, effective
+  fail-closed/threshold fields. Retained `SearchResponse`'s fail-closed field,
+  the two admission counters and both wait counters missing from the draft.
+- Spec 3: directional domain matching and private-name precedence, byte-cap
+  policy refusals, both policy counters on both routes, search denylist and
+  threshold, null/config default and ceiling on both routes. The earlier
+  retrieve-only ceiling clause is superseded, not retained as a false claim.
+- Spec 4: integrity rejects, widened oversize-skip producers, unsigned-cache
+  degradation and the boot signing capability.
+- Spec 5: both compressed-body and timeout counters, SearXNG-only
+  `unsupported_encoding`, and the production-unreachable all-paid prefix
+  refusal. Retained the latter two items omitted by the draft.
+- Spec 6: configurable loop target and high-water mark, both rendered
+  liveness descriptions. The real field is `sanitization_latency_max_ms`,
+  **not** the draft's `promptguard_latency_max_ms`.
+- Spec 7: configured model identity, three contiguity counters and max-rule-only
+  threshold descriptions. No model acquisition or benchmark is claimed here.
+- US-001: the redacted validation trio, 100-entry cap, fixed placeholders for
+  this minor release and their next-MINOR removal, under the existing (l).
+
+The result is one 112-line `1.3.0` bullet with the required final additive
+sentence. Publication state is removed, including the live `1.2.0` "no vendored"
+and "now frozen" clauses. GOV's mapping retains the `v1.0.0` / `US-004`
+worked example, states `v1.1.0` shipped 2026-09-18 serving 1.2.0, and names
+`v1.2.0` / 1.3.0 as pending. Ruling (c) freezes the golden now.
+
+**Guard-first evidence and baseline deviation.** Before any contract edit,
+the new whole-bullet tense test failed on the live 1.3.0 "held ... until" clause
+(`1 failed, 282 deselected in 0.67s`). The stale 1.2.0 "held ... publishes"
+sentence was **already removed by d920820**, so it cannot honestly be reported
+as present in this story's starting tree. The second red run read the original
+unmodified `6b9ed32:pipeline/contract.py` bytes via a temporary read-only
+`Path.read_text` substitution for that one path and ran
+`pytest.main(["-q", "tests/test_ci_workflow.py", "-k", "docstring_entry_tense"])`.
+No checkout/source file was restored or mutated. The real historical red output
+is recorded verbatim below, with trailing whitespace stripped for the diff
+check. Only afterwards was the live contract rewritten.
+The test walks every bullet occurrence (including repeated versions), calls
+the existing `_slice_entry`, and applies all three specified whole-entry
+checks. A separate test now requires one complete bullet per version and
+compares every version with the actual workflow awk. Five permanent
+counterexamples retain the real period-containing stale clause and exercise
+each publication pattern. All are selected by the story's `-k` expression.
+
+**Golden and metrics scope.** Spec 1's "The golden gate" already provided
+`_EXPECTED_ONE_THREE_ZERO_DIFF`, `_ONE_THREE_ZERO_DIFFED_SCHEMAS`,
+`_diff_against_1_2_0` and the completeness test. Spec 4 had subsequently
+added a seventh top-level `CacheMetricsResponse` entry and an exception to the
+top-level pin, contrary to this close-out's explicit six-model rule. Restored
+the six-model producer and removed that exception; moved the cache baseline
+into the metrics module's five-section baseline, verified directly against
+`v1.1.0:contract/openapi.yaml`. Nothing loses coverage: metrics model/handler/
+document parity and dataclass parity remain, the original eight cache fields
+must remain, and every one of the seventeen new metric fields must occur as
+a literal section-qualified token in the sliced announcement. The unchanged
+`cache.storage_oversize_skips` field's widened producers are named separately.
+
+The schema expectation has exactly ten golden-visible additions: two health
+paths (`promptguard_model`, `cache_unauthenticated`), two search request fields,
+four effective-policy response fields, and the two shared 422 enum members.
+The presence half pins each in the literal `contract_1_3_0.json` and in the
+announcement; the completeness half requires the exact delta and both
+six-model structural pins. The two original 1.2.0 test functions were compared
+as source slices and are **byte-identical**; all older goldens are byte-identical.
+The final hand-invoked producer was:
+
+```python
+path.write_text(json.dumps(_current_schemas(), indent=2, sort_keys=True) + "\n")
+```
+
+The frozen golden sha256 is
+`79dd2564be91a3c2f2bd5fd91aa28c2387ab315e49a4c8f82d0e77ec42e4c7ef`;
+the only golden diff is removal of the relocated cache schema.
+`uv run python -m scripts.export_contract` regenerated the document, anchor
+and drift twin with **zero byte diff**. Spec 4 already changed the capability
+description to "Three keys ... contract 1.3.0", so no current-value source edit
+or extra expectation path was necessary. All four quoting pages (API_GUIDE,
+CI_CD, DEPLOYMENT, SERVICE_MAP) still equal the committed
+`74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72`.
+
+**Python 1.2.0 sweep, classified by value.** The exact explicit source-path
+sweep with `--include='*.py'` found **16 pre-story hits**, not the planning
+snapshot's 20. Classification below covers all 16; the final tree has 13:
+
+| Baseline site | Classification and action |
+|---|---|
+| `retrieval_app.py:554` / `HealthResponse.capabilities` | Brave capability provenance, retained; the current-version sentence is already 1.3.0. |
+| `retrieval_app.py:584` / `HealthResponse.search_providers` | Added-in provenance, retained. |
+| `models.py:393,420` / `SearchRequest.providers,allow_paid_fallback` | Honoured-from provenance, both retained. |
+| `models.py:444,466,474` / `SearchResult.domain,content_kind,date` | Added-in provenance, all retained. |
+| `pipeline/search_providers/brave.py:5`, `policy.py:1` | Contract provenance, both retained. |
+| `pipeline/contract.py:33` | Historical 1.2.0 bullet, retained with timeless description history. |
+| `pipeline/contract.py:63,65` | Stale "no vendored" and publication-state clauses, removed. |
+| `pipeline/contract.py:72` | Provisional 1.2.0 `chunk` analogy, replaced by the final `blocked_url` announcement; no shipped addition dropped. |
+| `pipeline/contract.py:304,315,474` | `ContentKind`, pre-producer `chunk`, `search_unavailable` provenance, all retained. |
+
+No hits in `model_fetcher.py`, `cache.py`, `url_validator.py`, `promptguard/`,
+`scripts/` or `contract_smoke.py`. The old request/route docstring divergence
+clauses were already replaced by the shared policy descriptions; they were
+not silently re-versioned here. `grep -c 'no vendored' pipeline/contract.py`
+now prints 0. **Zero unclassified source hits.**
+
+**Description sweep.** Executed
+`git diff d920820..HEAD -- contract/openapi.yaml` before the final regenerate
+and compared it again afterwards (the file is unchanged). Its 34 diff hunks
+contain **49 changed description paths**, including descriptions on newly
+added fields. Every path is classified below as **named** in the final entry;
+none is deliberately omitted and none is unclassified. `S/` abbreviates
+`components/schemas/`; `P/` abbreviates `paths/`; every row ends in
+`/description`. This path-level accounting covers reflowed hunks without
+mistaking YAML line wrapping for another contract change.
+
+| # | Description path (suffix `/description`) | Named window item |
+|---|---|---|
+| 1 | `S/CacheMetricsResponse` | Wider oversize-skip producers |
+| 2 | `S/CacheMetricsResponse/properties/corrupt_entries` | Corrupt cache misses |
+| 3 | `S/CacheMetricsResponse/properties/integrity_rejects` | Pre-parse integrity/type/byte rejects |
+| 4 | `S/CacheMetricsResponse/properties/storage_oversize_skips` | Both-backend write bounds |
+| 5 | `S/ExtractionMetricsResponse/properties/promptguard_contiguity_detections` | Upload contiguity counter |
+| 6 | `S/HTTPValidationError` | Redacted validation response |
+| 7 | `S/HTTPValidationError/properties/detail` | Named 100-entry cap |
+| 8 | `S/HealthResponse` | Status-only liveness description |
+| 9 | `S/HealthResponse/properties/capabilities` | Boot Valkey signing capability; three keys |
+| 10 | `S/HealthResponse/properties/promptguard_model` | Configured model identity, not load state |
+| 11 | `S/Pipeline422ErrorResponse/properties/error` | Retrieve-only busy and PDF refusal codes/reasons |
+| 12 | `S/RetrieveMetricsResponse/properties/busy_rejections` | Admission refusal counter |
+| 13 | `S/RetrieveMetricsResponse/properties/classification_wait_timeouts` | Retrieve wait timeout counter |
+| 14 | `S/RetrieveMetricsResponse/properties/policy_invalid_domain_entry` | Domain-entry drops |
+| 15 | `S/RetrieveMetricsResponse/properties/policy_suffix_trusted_skip` | Wildcard trusted/verified resolutions |
+| 16 | `S/RetrieveMetricsResponse/properties/promptguard_contiguity_detections` | Retrieve contiguity counter |
+| 17 | `S/RetrieveMetricsResponse/properties/semaphore_saturation` | Admission saturation counter |
+| 18 | `S/RetrieveRequest` | Shared route policy boundary |
+| 19 | `S/RetrieveRequest/properties/blocked_domains` | Multi-label suffix denylist and apex caution |
+| 20 | `S/RetrieveRequest/properties/promptguard_fail_closed` | Operator floor and trust-tier exemptions |
+| 21 | `S/RetrieveRequest/properties/promptguard_threshold` | Null/config default, ceiling, max-rule-only scope |
+| 22 | `S/RetrieveRequest/properties/trusted_domains` | Leading-dot skip and multi-tenant caution |
+| 23 | `S/RetrieveRequest/properties/verified_domains` | Leading-dot unavailable exemption and caution |
+| 24 | `S/RetrievedContent/properties/effective_promptguard_fail_closed` | Effective policy, not evidence of scanning |
+| 25 | `S/RetrievedContent/properties/effective_promptguard_threshold` | Effective threshold and trust-tier exemptions |
+| 26 | `S/SearchMetricsResponse/properties/classification_wait_timeouts` | Per-request wait budget |
+| 27 | `S/SearchMetricsResponse/properties/policy_invalid_domain_entry` | Invalid denylist entries |
+| 28 | `S/SearchMetricsResponse/properties/policy_suffix_trusted_skip` | Reserved zero on standard-tier search |
+| 29 | `S/SearchMetricsResponse/properties/promptguard_contiguity_detections` | Search contiguity counter |
+| 30 | `S/SearchMetricsResponse/properties/promptguard_latency_target_exceeded` | Once-per-request target overrun |
+| 31 | `S/SearchMetricsResponse/properties/provider_compressed_body` | Non-identity upstream responses |
+| 32 | `S/SearchMetricsResponse/properties/provider_timeouts` | Bounded interaction timeouts |
+| 33 | `S/SearchMetricsResponse/properties/sanitization_latency_max_ms` | Whole-loop process-lifetime high-water mark |
+| 34 | `S/SearchRequest` | Shared route policy boundary |
+| 35 | `S/SearchRequest/properties/blocked_domains` | Operator-first denylist, byte-cap policy refusal |
+| 36 | `S/SearchRequest/properties/promptguard_fail_closed` | Operator floor |
+| 37 | `S/SearchRequest/properties/promptguard_threshold` | Optional/null threshold and independent contiguity |
+| 38 | `S/SearchRequest/properties/providers` | Paid prefix and unreachable all-paid refusal |
+| 39 | `S/SearchResponse/properties/effective_promptguard_fail_closed` | Effective fail-closed policy |
+| 40 | `S/SearchResponse/properties/effective_promptguard_threshold` | Effective threshold |
+| 41 | `S/SearchResult/properties/domain` | Canonical ASCII host and unchanged URL spelling |
+| 42 | `S/SearchResult/properties/suspicious` | Unscanned-result caution and mixed responses |
+| 43 | `S/ValidationErrorDetail` | Trio, cap, placeholders and next-MINOR drop |
+| 44 | `P//extract/post/responses/422` | Validation arm/window, unchanged document refusal |
+| 45 | `P//health/get` | Liveness, not readiness; no Compose restart |
+| 46 | `P//retrieve/post` | Shared route policy boundary |
+| 47 | `P//retrieve/post/responses/422` | Validation arm/window, unchanged pipeline refusal |
+| 48 | `P//search/post` | Shared route policy boundary |
+| 49 | `P//search/post/responses/422` | Validation arm/window, unchanged pipeline refusal |
+
+The opening commit itself already included the engine bound and
+`omitted_by_reason` description, so they are named in the record and pinned
+by golden equality even though `d920820..HEAD` does not show them as new hunks.
+
+**Forty-first rotation.** Before editing, the last exact bootstrap heading was
+fortieth; GOTCHAS had 41 data rows minus `At split` = 40. The required
+case-insensitive digit/word count sweep found six live prose sites (GOTCHAS
+two, TROUBLESHOOTING two, DEPLOYMENT, SERVICE_MAP) plus CLAUDE's summary.
+All were moved to forty-one, with the no-sanitization subtotal 32 → 33.
+`contract.py` is the only changed hashed source. Default and shipped config
+both measure `bffeb7bac1b319c566253ff7512ca61fad12df75ecbdb4d8284c9aeeb0d47fe1`
+before and `6884dc29b3dc3d7a0a1f2c1da638f767fb301b2baac68446541f6de2638bd7ec`
+after; read-only whole-file reversal reproduces the former exactly. The other
+eight sources and hash definition are byte-identical. Recorded at bootstrap,
+CLAUDE, DECISIONS, GOTCHAS and CODE_ARCH; SERVICE_MAP's current value follows
+the measurement. No runtime behavior changes, but old cache keys invalidate.
+
+**Verification.** The combined six-module scoped run passed **648 tests**:
+`test_contract_schema`, `test_contract_metrics`, `test_ci_workflow`,
+`test_governance_docs`, `test_contract_export`, `test_sanitizer_revision`.
+The final repeat passed all 648 in 3.60 s; the exact
+`-k 'extractor or docstring_entry or tense'` selector passed 11 tests.
+Repository-wide Ruff lint/format, strict Pyright, export `--check` and
+`git diff --check` pass. A read-only audit confirmed all 49 description paths
+appear exactly once in the classification table, the recorded extractor is
+byte-exact, the five section baselines and two cache additions retain coverage, and the
+contract's executable AST is unchanged.
+Only changed Python files received safe fixes/formatting. The full suite is
+**not run**, as explicitly prohibited by the implementer instructions;
+full-suite acceptance remains for the authorized verifier. No story
+definitions or acceptance checkboxes changed. No image build, model
+acquisition, benchmark, owner gate, push, tag, release or publication ran.
+
+#### US-002 historical tense guard — verbatim red run
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ TestReleaseContractMapping.test_docstring_entry_tense_has_no_publication_state _
+
+self = <tests.test_ci_workflow.TestReleaseContractMapping object at 0x10e63d880>
+
+    def test_docstring_entry_tense_has_no_publication_state(self) -> None:
+        source = (_REPO_ROOT / _CONTRACT_SOURCE_FILE).read_text(encoding="utf-8")
+        bullets = list(re.finditer(r"^\* ``(\d+\.\d+\.\d+)`` ", source, re.M))
+        assert bullets
+        for bullet in bullets:
+            entry = _slice_entry(source[bullet.start() :], bullet.group(1))
+>           assert not (
+                re.search(r"\bheld\b.*\b(until|pending)\b", entry, re.S)
+                or re.search(r"\buntil\b.*\bpublish(es|ed)\b", entry, re.S)
+                or "published by" in entry
+            ), (
+                "docstring entries carry no publication state — it lives in "
+                "docs/releases.md and GOVERNANCE § Two semvers; rephrase, "
+                f"do not delete the guard:\n{entry}"
+            )
+E           AssertionError: docstring entries carry no publication state — it lives in docs/releases.md and GOVERNANCE § Two semvers; rephrase, do not delete the guard:
+E             * ``1.2.0`` — ``/search``'s ``SearchResult`` gained ``content_kind``
+E               (``"snippet"`` | ``"chunk"``, defaulted), ``date`` (a strict
+E               ``YYYY-MM-DD`` calendar date or ``None``, defaulted) and ``domain`` (the
+E               lower-cased hostname of ``url``, required); ``SearchResponse`` gained
+E               ``provider_used`` (required — the serving provider's name),
+E               ``fallback_fired`` (defaulted) and ``provider_errors`` (defaulted);
+E               ``SearchRequest`` gained ``providers`` and ``allow_paid_fallback`` (both
+E               defaulted — a restrict-only per-request policy over the configured
+E               chain); ``HealthResponse`` gained ``search_providers`` (the resolved
+E               chain's names, in traversal order) and its ``capabilities`` description
+E               now names ``brave_api_key`` alongside ``search_sanitization``; and
+E               ``search_unavailable`` joined the ``/search`` 422 vocabulary, naming an
+E               exhausted provider chain — a new enum *member*, MINOR under
+E               ``contract/GOVERNANCE.md`` ruling (b) and carrying that ruling's
+E               announcement obligation. ``/metrics``'s ``search`` section gained three
+E               counters — ``fallback_fired``, ``paid_calls`` and
+E               ``policy_unknown_provider`` — pinned against the handler by
+E               ``tests/test_contract_metrics.py`` rather than by the golden fixture.
+E               Two ``/search`` refusal ``reason`` *texts* also narrowed in
+E               ``search-provider-abstraction`` US-002 and ride this bump:
+E               ``searxng_error`` now reads ``SearXNG returned HTTP error (http_<status>)``
+E               and ``searxng_unavailable`` now reads ``SearXNG not reachable at
+E               <scheme://host:port>: <detail>`` — no exception text, no userinfo — neither
+E               changing a code, a status, or the body shape. Every addition above is
+E               additive — a new field, a new enum member, or a new counter — so a
+E               consumer comparing MAJOR keeps working untouched; nothing was removed and
+E               no field changed meaning. The ``/search``/``/retrieve`` boundary text
+E               written into both routes' descriptions and the
+E               ``SearchRequest``/``RetrieveRequest`` model docstrings
+E               (``search-policy-and-health`` US-003) landed inside this same unpublished
+E               window and is not a separate PATCH: there is no vendored 1.2.0 copy yet to
+E               re-vendor, so the description edits are subsumed by this unreleased
+E               MINOR. This version is **held**: ``tests/golden/contract_1_2_0.json`` is
+E               regenerated in place across ``search-provider-abstraction`` specs 2-4 and
+E               every ``search-fallback``/``search-policy-and-health`` story that moved
+E               this shape, until the ``v1.1.0`` image publishes it.
+E
+E           assert not (<re.Match object; span=(2223, 2440), match='held**: ``tests/golden/contract_1_2_0.json`` is\n>)
+E            +  where <re.Match object; span=(2223, 2440), match='held**: ``tests/golden/contract_1_2_0.json`` is\n> = <function search at 0x104f05940>('\\bheld\\b.*\\b(until|pending)\\b', '* ``1.2.0`` — ``/search``\'s ``SearchResult`` gained ``content_kind``\n  (``"snippet"`` | ``"chunk"``, defaulted), ``...rch-fallback``/``search-policy-and-health`` story that moved\n  this shape, until the ``v1.1.0`` image publishes it.\n', re.DOTALL)
+E            +    where <function search at 0x104f05940> = re.search
+E            +    and   re.DOTALL = re.S
+
+tests/test_ci_workflow.py:2357: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_ci_workflow.py::TestReleaseContractMapping::test_docstring_entry_tense_has_no_publication_state
+1 failed, 282 deselected in 0.59s
+```
+
+#### US-002 release extractor — verbatim final output
+
+The workflow's own awk, through `_run_entry_extractor`, emits the following
+112 lines (sha256 `7bdf3582aced1b2ce15c568defea6b38ff320592368f041474cd6f78dd41e928`).
+No 1.2.0 line is included.
+
+```text
+* ``1.3.0`` — ``SearchResponse.omitted_by_reason`` gains ``blocked_url``
+  (``OMIT_BLOCKED_URL``) for the search-time URL audit and domain policy.
+  ``SearchResult.engine`` is NFC-normalised, stripped of C0/C1 controls,
+  whitespace-collapsed and truncated to 64 characters; non-string or empty
+  values become ``None``. It remains outside structural and PromptGuard
+  scanning (GOVERNANCE ruling (e)). ``title`` and ``snippet`` are truncated
+  after Stage 1 extraction, not before: padded and markup-dense inputs can
+  serve different byte counts, and payload-shaped escaped markup is blocked
+  as ``structural_blocked`` rather than served stripped. Both newline-preserving
+  and whitespace-collapsed text forms are scanned. ``SearchResult.domain`` is
+  the canonicalised ASCII host (UTS-46 punycode for internationalised names);
+  ``url`` retains the provider's spelling. On ``/retrieve`` and ``/extract``,
+  IPv6 literals embedding private IPv4 (6to4, Teredo, NAT64 and IPv4-compatible)
+  and names under ``.localhost`` are refused ``private_ip`` rather than
+  fetched (expedited MINOR without a compatibility window, ruling (f)).
+  ``Pipeline422ErrorResponse.error`` gains ``busy`` and ``extraction_failed``
+  (ruling (b)): both arrive only on ``/retrieve``, though the shared model
+  also widens ``/search``'s enum. Admission refusal is 422 ``busy`` /
+  ``admission_queue_full``, not ``/extract``'s 429; queue depth and reserved
+  bytes are bounded by ``retrieve.admission_queue_depth`` and
+  ``retrieve.max_queued_fetch_bytes``, with ``retrieve.fetch_concurrency``
+  fixed at one. Fetched PDFs run in ``/extract``'s rlimited worker; failures
+  formerly answered 500 now use ``extraction_failed`` with ``pdf_encrypted``,
+  ``pdf_no_text``, ``pdf_extraction_error`` or ``pdf_spool_error`` reasons.
+  A PDF over ``extraction.max_promptguard_chunks`` is ``content_too_large`` /
+  ``promptguard_budget``. That reason also refuses pages over the opt-in
+  ``retrieve.max_promptguard_chunks`` budget: ``0`` preserves the unbounded
+  default for this minor release, ``retrieve_budget_unset`` warns of the next
+  MINOR's default 256, and ``0`` remains an opt-out afterwards (ruling (g)).
+  ``RetrievedContent.effective_promptguard_fail_closed``,
+  ``RetrievedContent.effective_promptguard_threshold``,
+  ``SearchResponse.effective_promptguard_fail_closed`` and
+  ``SearchResponse.effective_promptguard_threshold`` are defaulted fields
+  stamped on every 200, including cache hits. They report policy, not scanning;
+  the operator floor bounds fail-closed on both fetch routes and the ceiling
+  bounds both thresholds, without overriding trusted-tier classification skip
+  or VERIFIED unavailable fail-open. ``/extract`` remains fail-closed and
+  carries neither field. ``SearchRequest.promptguard_threshold`` is optional;
+  both it and ``RetrieveRequest.promptguard_threshold`` accept null or omission
+  for the validated configured default (shipped 0.85), before the operator
+  ceiling (ruling (i)). Route/model boundary descriptions name the shared
+  threshold, fail-closed and blocked-domain policy. Threshold descriptions
+  apply to the max-score rule only: the opt-in server-side contiguity rule
+  can block independently and ships disabled.
+  The three ``RetrieveRequest`` domain-list descriptions specify directional
+  matching: multi-label denylists cover subdomains, while bare allowlist
+  entries match exactly and a leading dot opts into apex and subdomains.
+  IP literals and single-label denylists match exactly. Leading-dot
+  ``trusted_domains`` skips classification across the suffix;
+  ``verified_domains`` degrades open when unavailable, even under the floor
+  or a classification wait timeout; neither should name a multi-tenant apex.
+  Canonical private-name rejection precedes caller denylists: a host matching
+  both becomes ``private_ip`` rather than ``blocked_domain`` (ruling (h)).
+  Optional ``SearchRequest.blocked_domains`` merges after the operator's
+  ``seed_blocklist``; either omits matching results as ``blocked_url`` before
+  content scanning without paid fallback. An over-budget denylist is refused
+  whole with ``policy_domain_list_too_large``: ``content_too_large`` on
+  ``/retrieve``, ``search_unavailable`` on ``/search``, non-retryable policy
+  refusals. Allowlists instead drop their over-budget remainder.
+  ``SearchResult.suspicious``'s corrected description includes unscanned
+  results: on ``promptguard_unavailable: true``, consumers treat suspicious
+  results as unscanned, not scanned-and-flagged. A single response can mix
+  scanned and unscanned results because classification wait is one budget
+  per request. ``SearchRequest.providers`` documents the paid-prefix rule
+  and ``provider_used`` diagnosis: later-paid-only selection on an all-paid
+  chain yields ``search_unavailable`` / ``policy_excluded_all_providers``.
+  With one registered paid backend and duplicate collapse this changed
+  outcome is not production-reachable (ruling (k), on (a2)'s basis);
+  ``search.policy_unknown_provider`` counting is unchanged.
+  ``HealthResponse.degraded_reasons`` gains ``cache_unauthenticated`` for
+  unsigned Valkey; ``capabilities`` gains ``cache_hmac_key`` when Valkey
+  signing is enabled at boot, independent of connectivity and absent in
+  memory mode. ``HealthResponse.promptguard_model`` reports the configured
+  model id whether loaded or not; ``promptguard_loaded`` still reports serving
+  state. Both healthcheck descriptions now call the shipped Compose
+  ``curl -fsS -o /dev/null`` probe status-only liveness, not body health;
+  Docker-healthy does not imply loaded weights and Compose does not restart
+  on an unhealthy probe.
+  ``/metrics`` adds ``retrieve.classification_wait_timeouts``,
+  ``search.classification_wait_timeouts``, ``retrieve.semaphore_saturation``,
+  ``retrieve.busy_rejections``, ``retrieve.policy_invalid_domain_entry``,
+  ``retrieve.policy_suffix_trusted_skip``, ``search.policy_invalid_domain_entry``
+  and ``search.policy_suffix_trusted_skip`` (the last stays zero on standard-tier
+  search). Domain counters report invalid/over-budget allowlist drops and
+  wildcard trusted/verified resolutions. ``cache.corrupt_entries`` counts
+  stored JSON/schema failures treated as misses rather than 500s; parse
+  success is not authenticity. ``cache.integrity_rejects`` counts rejected
+  signatures, envelopes, byte bounds and Valkey types before parsing.
+  ``cache.storage_oversize_skips`` now counts Forage's write-side byte-bound
+  refusals on both backends, not just memory (same meaning, wider producers,
+  ruling (j)). ``search.provider_compressed_body`` and
+  ``search.provider_timeouts`` count bounded upstream interactions; on a
+  configured ``[searxng]``-only chain, ``searxng_unavailable`` reasons may
+  end in ``unsupported_encoding``. Brave details stay internal, with only
+  failure class wire-visible. ``search.promptguard_latency_target_exceeded``
+  counts requests over the configurable target once per request;
+  ``search.sanitization_latency_max_ms`` is the process-lifetime high-water
+  mark of the whole result loop (structural scan, PromptGuard and semaphore
+  wait), not a single wait. ``retrieve.promptguard_contiguity_detections``,
+  ``search.promptguard_contiguity_detections`` and
+  ``extraction.promptguard_contiguity_detections`` count contiguity blocks,
+  including both-rule verdicts. These metrics are pinned by
+  ``tests/test_contract_metrics.py``, not the schema golden.
+  The request-validation 422 body no longer echoes the request:
+  ``loc``, ``msg``, ``type`` per entry, at most ``_MAX_VALIDATION_ERRORS``
+  (100) entries, and for this contract version ``input``, ``ctx`` and ``url``
+  present with the fixed value ``"[redacted]"`` — an expedited MINOR under
+  Example 6 step 1: the shipped description documented pydantic's extra keys;
+  consumers reading ``detail[].input`` must stop — the three keys are dropped
+  at the next MINOR (GOVERNANCE ruling (l)).
+  Every addition above is additive except the request-validation 422 trim
+  (ruling (l)); a consumer comparing MAJOR keeps working untouched.
+```
+
 <!-- Populated during execution. US-001/US-002 record their rotations and the rehearsal extraction;
 US-004 records both classified sweeps; US-003 records the cut, the four-way sha256 table and the
 config-grep facts; US-005 records the three smoke runs, the credential-free pull, the leak check and
