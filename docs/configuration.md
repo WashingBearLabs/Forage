@@ -102,7 +102,7 @@ instance is private-network-only and Forage is its only client.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `VALKEY_URL` | **unset** — the content cache runs in memory | Connection string for the Valkey/Redis content cache. Standard `redis://` URL, including the database index. Setting it selects the Valkey backend; leaving it unset selects the bounded in-memory one. **May carry a password — see credential handling below. Upgrade note:** remove query options `decode_responses`, `encoding`, `encoding_errors` and `protocol` before upgrading: their presence now refuses boot with `CacheConfigurationError` and one `valkey_url_option_forbidden` WARNING naming only the option. redis-py's URL options override keyword arguments, so these options cannot safely coexist with the atomic byte-bounded read. `socket_timeout` and `socket_connect_timeout` remain operator-overridable tuning; the independent 2 s connect deadline is unchanged. |
-| `FORAGE_CACHE_HMAC_KEY` | unset | Optional runtime-only cache signing secret, read once at boot. An unsigned Valkey reports `cache_unauthenticated`; memory mode needs no key and warns if one is set. Invalid or shorter-than-32-byte keys refuse boot. See "Cache signing key" below for validation and the CSPRNG recipe. |
+| `FORAGE_CACHE_HMAC_KEY` | unset | Optional runtime-only cache signing secret, read once at boot. An unsigned Valkey reports `cache_unauthenticated`; memory mode needs no key and warns if one is set. Invalid or shorter-than-32-byte keys refuse boot. See [credential handling](#credential-handling-for-forage_cache_hmac_key) for validation, the CSPRNG recipe and stop-all rotation. |
 | `SEARXNG_URL` | `http://searxng:8080` | Base URL of the SearXNG instance backing `POST /search`. |
 | `FORAGE_SEARCH_PROVIDERS` | `searxng` | Ordered, comma-separated chain of search backends `POST /search` resolves at container start. Known names are `searxng` and `brave`; **any entry other than `searxng` sends the caller's query to that provider**, so add one only if you mean to. An unknown name refuses the boot (the resolved names are in the startup log); a set-but-blank value logs a WARNING and resolves to the default. Read once at start — restart to apply. |
 | `FORAGE_BRAVE_API_KEY` | unset | API key for Brave's paid LLM-Context search endpoint. **Carries a credential** — supply it the same way as `VALKEY_URL`, with `--env-file` or an explicit `environment:` entry until spec 5 US-004 adds the compose passthrough. With it set, a `brave` entry in `FORAGE_SEARCH_PROVIDERS` sends the caller's query text — whatever the calling agent put in it, truncated to `search_brave_query_max_chars` — to Brave's API under the operator's account and terms; the call needs direct HTTPS egress and ignores proxy variables by design. A key-less `brave` entry is skipped (WARNING `brave_skipped_missing_key`) rather than refusing the boot, and a chain where every entry was skipped this way falls back to SearXNG alone (a second WARNING, `search_chain_defaulted_to_searxng`, marks the substitution): **no key means SearXNG-only, fully supported.** Read once at start — restart to apply. |
@@ -121,9 +121,9 @@ chain an unreachable SearXNG surfaces per request as a `/search` 422
 (`searxng_unavailable`), never as a `degraded_reasons` value — `/health` never probes
 SearXNG. Provider *status* is instead
 the `search_providers` field on `/health`: the resolved chain's names, a configuration
-echo rather than a liveness probe. A missing PromptGuard (`promptguard_unavailable`) or a
-configured-but-unreachable Valkey (`cache_unavailable`, see the table below) is what
-degrades the service.
+echo rather than a liveness probe. A missing PromptGuard (`promptguard_unavailable`),
+a configured-but-unreachable Valkey (`cache_unavailable`), or Valkey without signing
+(`cache_unauthenticated`, see the table below) degrades the service.
 
 ### The spool directory (`TMPDIR`)
 
@@ -186,8 +186,8 @@ start. There are two backends and one rule:
 | `VALKEY_URL` | Backend | `/health` `cache_backend` | `/health` `status` |
 |---|---|---|---|
 | **Fully unset** | Bounded in-memory (see the `cache:` block below) | `memory` | `healthy` — nothing is missing, this is a supported deployment |
-| Set and reachable, usable signing key | Valkey | `valkey` | `healthy` |
-| Set and reachable, no signing key | Valkey | `valkey` | `degraded`, `cache_unauthenticated` |
+| Reachable, usable signing key | Valkey | `valkey` | `healthy` |
+| Reachable, no signing key | Valkey | `valkey` | `degraded`, `cache_unauthenticated` |
 | Set but unreachable | Valkey | `valkey` | `degraded`, `cache_unavailable`, plus `cache_unauthenticated` without a key |
 | Set to an unparseable URL | Valkey | `valkey` | `degraded`, `cache_unavailable`, plus `cache_unauthenticated` without a key — never a failed boot from the malformed URL |
 | **Set to the empty string** | Valkey | `valkey` | `degraded`, `cache_unavailable`, plus `cache_unauthenticated` without a key |
@@ -220,8 +220,8 @@ Consequences of memory mode, in one place:
 
 - The cache lives in the one uvicorn worker's process. Nothing is shared with another
   container and nothing survives a restart.
-- It is bounded — `cache.max_entries` and `cache.max_bytes` below — and evicts rather
-  than grows.
+- It is bounded by `cache.max_entries` and `cache.max_bytes` and evicts rather than
+  grows; `cache.max_value_bytes` also bounds each value on either backend.
 - `cache_connected` in `/health` means "the selected backend is operational", so it is
   always `true` in memory mode. It is not a statement that Valkey is present —
   `cache_backend` is the field that answers that one.
@@ -240,38 +240,75 @@ Consequences of memory mode, in one place:
 > rather than trusting the config. If you run more than one Forage replica, or want the
 > cache to survive a restart, set `VALKEY_URL`.
 
-### Cache signing key
+### Credential handling for `FORAGE_CACHE_HMAC_KEY`
 
 `FORAGE_CACHE_HMAC_KEY` is read once during startup. Leading/trailing spaces, tabs
 and LF newlines are stripped; blank means absent. Every remaining character must
 be printable ASCII without whitespace or controls (including CR), and the value
 must be at least **32 UTF-8 bytes**. This is a length floor, **not an entropy
-check**: a same-length passphrase is not an acceptable substitute. Generate 32
-random bytes with a CSPRNG and encode them as 44 printable characters:
+check**: a same-length passphrase passes the boot check but is not an acceptable
+substitute. The value **must come from a CSPRNG**. Generate 32 random bytes and encode
+them as 44 printable characters; Forage uses those characters as **UTF-8 bytes,
+never base64-decoded**:
 
 ```bash
-# Append to a private, gitignored runtime env file; never a build argument.
+# From the repository root; first enable only, not a rotation command.
+set +x
 umask 077
-printf 'FORAGE_CACHE_HMAC_KEY=%s\n' "$(head -c 32 /dev/urandom | base64)" >> .env
+touch compose/.env
+chmod 600 compose/.env
+printf 'FORAGE_CACHE_HMAC_KEY=%s\n' "$(head -c 32 /dev/urandom | base64)" >> compose/.env
 ```
 
-Supply that file using `docker run --env-file .env` or an explicit compose
-`environment:` entry; the compose passthrough is a separate distribution change.
-An existing env file must already have private permissions. Treat the key like
-any credential: do not paste it into a command line or logs; Docker socket access
-can reveal container environment values. Restart to change it, and use the same
-key on every replica sharing the cache. A key change makes old signatures fail;
-the entries become misses and are deleted, not silently trusted.
+The command writes directly into the gitignored runtime file without printing the key.
+Keep exactly one assignment for this variable. `compose/full.yml` passes it to Forage
+only; `compose/minimal.yml` deliberately does not. For a direct container use
+`docker run --env-file compose/.env ...`. Runtime environment only, **never a build
+argument**; no secret store is read at boot. Never paste the value into a command line,
+print the env file, enable shell tracing around the recipe, or log the value.
+Docker socket access can reveal container environment values even with an env file.
 
 Startup refuses a malformed or too-short value with `CacheConfigurationError`,
 even in memory mode. Read **stderr / `docker logs`** for the preceding WARNING
 `cache_hmac_key_invalid` or `cache_hmac_key_too_short`; diagnostics name only the
 variable, never its value. A keyless Valkey logs `cache_hmac_key_missing` once and
-reports `cache_unauthenticated` on `/health` (still HTTP 200). Memory mode is
+reports `status: degraded` with `cache_unauthenticated` on `/health` (still HTTP 200),
+even when Valkey is reachable. Cached `/retrieve` content cannot be proven to be
+Forage's own and is served without re-sanitization: on shared Valkey this is an
+**open cache-poisoning path** until a key is set. Memory mode is
 process-private and never signs: a configured key logs `cache_hmac_key_unused`
 once, without adding a degraded reason. `/health.capabilities.cache_hmac_key`
 is `1` only for a usable key on Valkey, absent otherwise; it says signing is
 enabled, not that the cache is reachable or the key has adequate entropy.
+
+**Rotate safely: stop every replica, change the key, start.** Generate a fresh CSPRNG
+value with the recipe above, replacing the old assignment while every replica is
+stopped, and distribute the same private env-file value to every replica sharing
+Valkey before starting any. Use this stop-all procedure for first enable on an existing
+fleet too. Do not use a rolling restart: replicas with different keys delete each
+other's entries for as long as both run; a mixed keyed/keyless fleet does the same.
+The key is read once at boot. Rotation invalidates every old signature; reads delete
+those entries and refetch. There is no key id or narrower revocation.
+
+**Read `cache.integrity_rejects` with the logs, not alone.** Upgrading to the 1.3.0
+image changes `sanitizer_revision` and `cache_policy_fingerprint`, hence every cache
+key: old bare JSON is orphaned, not rejected. Expect a cold cache, near-zero `unsigned`,
+and no first-enable burst on that upgrade. Enabling or rotating just the key on an
+existing 1.3.0 fleet does not change cache keys: expect a working-set-bounded burst of
+`unsigned` on enable or `bad_mac` on rotation. A bound reduction can likewise produce
+`oversize` against old larger writes; keep `cache.max_value_bytes` equal across replicas.
+Forage's new over-bound writes increment `storage_oversize_skips`, not integrity rejects.
+
+With a key set and no migration/rotation in flight, sustained `unsigned`, `bad_mac`
+or `wrong_type` rejects are a security event: rotate safely, audit Valkey ACLs and
+network placement, and identify foreign writers. The `cache_integrity_reject` reason
+and `ret:<sha256>` digest are the discriminator; the digest is an opaque,
+credential-free correlation handle, **not URL concealment** (a guessed URL is
+confirmable). A flat counter is not evidence of an unpoisoned cache if the key may
+be compromised: a forged envelope under the real key verifies and counts nothing.
+See the [incident runbook](../kit_tools/docs/MONITORING.md#reading-cacheintegrity_rejects)
+for all six reasons and the four residual risks in
+[`kit_tools/arch/SECURITY.md`](../kit_tools/arch/SECURITY.md#cache-poisoning-and-signed-values).
 
 ### Credential handling for `VALKEY_URL`
 
@@ -366,7 +403,8 @@ classifier is not loaded.
 - **It fires a loud warning on every boot**, naming whichever variable actually armed
   it, so an operator reading the log knows which one to unset.
 - **Only `capabilities.search_sanitization` lies.** `status`, `degraded_reasons`,
-  `promptguard_loaded`, `search_providers`, and `capabilities.brave_api_key` all stay
+  `promptguard_loaded`, `search_providers`, `capabilities.brave_api_key`, and
+  `capabilities.cache_hmac_key` all stay
   honest — a Forage running with the override still reports itself `degraded` with
   `promptguard_unavailable`.
 
@@ -549,7 +587,7 @@ Those emit `config_invalid_value`, not `config_unknown_key`.
 | `search_brave_timeout_seconds` | float | `15.0` | `15.0` | Per-request timeout for the Brave LLM-Context HTTP call. This is `/search`'s worst-case latency on a Brave-only chain until spec 3's fallback exists. Out of range (1.0 to 60.0) or wrong-typed refuses boot. A caller's `/search` timeout must exceed the sum of the configured chain's per-provider timeouts — 10 s + this value for `searxng,brave` — so lower this value rather than raising the caller's. |
 | `search_brave_chunk_max_chars` | integer | `2000` | `2000` | Cap on each Brave result's extracted-chunk text before it reaches sanitization. Out of range (200 to 2000) or wrong-typed refuses boot. |
 | `search_brave_query_max_chars` | integer | `400` | `400` | Cap on the outbound query text sent to Brave. Out of range (50 to 400) or wrong-typed refuses boot. |
-| `cache` | mapping | `{}` (all defaults) | both keys at their defaults | Bounds for the bounded in-memory content-cache storage — see below. |
+| `cache` | mapping | `{}` (all defaults) | all three keys at their defaults | Bounds for individual values on both backends and total in-memory content-cache storage — see below. |
 | `extraction` | mapping | `{}` (all defaults) | all keys set to their maxima | Resource limits for untrusted document extraction — see below. |
 | `retrieve` | mapping | `{}` (all defaults) | all four keys at their defaults | Fetch-route admission and classification limits — see the `retrieve:` block below. |
 | `promptguard_fail_closed_floor` | boolean | `false` | `false` | Operator fail-closed floor on both fetch routes; see "Top-level PromptGuard policy keys" below. |

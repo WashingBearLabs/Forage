@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document authentication, authorization, and secrets management. Security architecture reference.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-005)
+> Updated by: Copilot (hardening-cache-integrity US-003)
 
 ---
 
@@ -36,6 +36,7 @@ The security architecture at a glance:
 | Prompt-injection signalling and quarantine | `pipeline/stage1_extraction.py`, `pipeline/stage1_pdf.py`, `pipeline/stage2_structural.py`, `pipeline/stage3_promptguard.py`, `pipeline/stage4_structuring.py` | `tests/test_stage1_extraction.py`, `tests/test_stage1_pdf.py`, `tests/test_stage2_structural.py`, `tests/test_stage3_promptguard.py`, `tests/test_orchestrator.py` |
 | Input bounds and process isolation | `models.py`, `pipeline/extraction_limits.py`, `pipeline/stage1_upload.py`, `pipeline/pdf_subprocess.py`, `retrieval_app.py` | `tests/test_app.py`, `tests/test_contract_errors.py`, `tests/test_models.py` |
 | Secrets hygiene | `Dockerfile` (zero `ARG`), `cache.py`, `model_fetcher.py`, `docker-entrypoint.sh` | `tests/test_dockerfile.py`, `tests/test_cache.py`, CI `secret-grep` |
+| Cache-value integrity and authenticity, when keyed | `cache.py` key-bound HMAC envelope and atomic byte-bounded read; `retrieval_app.py` boot signing verdict | `tests/test_cache.py`, `tests/test_app.py` |
 | Supply-chain integrity | `uv.lock`, `Dockerfile`, `weights_manifest.json`, `contract/openapi.yaml.sha256`, `.github/workflows/ci.yml` | `tests/test_dependency_lock.py`, `tests/test_model_fetcher.py`, `tests/test_contract_export.py`, `tests/test_ci_workflow.py` |
 | Honest degradation | `retrieval_app.py` `/health` | `tests/test_app.py`, CI `smoke` (`contract_smoke.py`) |
 
@@ -283,11 +284,53 @@ Resource exhaustion by a caller who is allowed to call is a documented non-vulne
 
 ---
 
+## Cache Poisoning and Signed Values
+
+A `/retrieve` cache hit is served **without re-sanitization**. A cache key is computable
+from public code, the requested URL and policy; it is not an access-control secret.
+Without `FORAGE_CACHE_HMAC_KEY`, anyone able to write the shared Valkey can plant
+parseable, fabricated "already sanitized" content. Schema validation is not proof of
+origin. `/health` reports this open poisoning path as `cache_unauthenticated`, even
+when Valkey is reachable; process-private memory mode needs no key.
+
+With an **uncompromised, CSPRNG-generated** key, integrity and authenticity of cached
+values are assured: `ContentCache` verifies `v1.<hex-mac>.<json>` before parsing,
+using HMAC-SHA256 over `b"v1\0" + cache_key.encode() + b"\0" + payload` and a
+constant-time comparison. Copying a valid envelope to a different cache key does
+not verify. Valkey reads use one atomic `GETRANGE key 0 max_value_bytes`, never a
+racy size-probe-plus-read. Empty replies are misses; oversized, wrong-type,
+unsigned, malformed or unverifiable values are deleted and counted, not served.
+Forage's own write-side bound prevents new over-bound values from entering the cache.
+
+**Four residual risks remain:**
+
+| Residual | Consequence and control |
+|---|---|
+| **Availability, including log volume** | A cache writer can still delete or overwrite entries, forcing misses, outbound fetches and classifier inference. Every integrity rejection emits one **un-rate-limited WARNING**: a writer able to `SET` can drive one attacker-chosen rejection line per request for as long as they keep writing (closed reason and digest, not arbitrary logged payload). Aggregate cache-read work and reject-log volume remain **unbounded** here; existing fetch/worker admission is not an end-to-end request bound. Spec 6, [`feature-hardening-resource-envelope`](../specs/feature-hardening-resource-envelope.md), supplies the concurrency and latency controls intended to bound both. That is future work, not a shipped guarantee; log rate limiting remains an open question. |
+| **Confidentiality** | HMAC does not encrypt. A Valkey reader can see cached content and metadata; the digest is confirmable against a guessed URL. Restrict Valkey ACLs, network placement, transport and persistence access. |
+| **Replay** | A captured valid envelope restored under the same cache key pins one Forage-authored snapshot. Its signed `retrieved_at` and read-time TTL check bound replay to the effective `cache_ttl_hours` (news domains are additionally capped). Do not raise that window casually on shared Valkey: resetting Valkey's expiry does not reset the signed timestamp. |
+| **Key compromise** | A leaked or weak key lets an adversary forge envelopes that verify for any computable cache key with **zero `integrity_rejects`**. A flat counter cannot detect this. Stop every replica, rotate to a fresh CSPRNG value, then start the fleet with the same key; every prior signature is invalidated. Envelopes carry no key id, so there is no narrower revocation; key-id/scoped revocation remains an open question. |
+
+Length is not entropy: a passphrase of 32 bytes passes the boot floor but does not
+meet this security assumption. Follow the
+[generation and stop-all rotation recipe](../../docs/configuration.md#credential-handling-for-forage_cache_hmac_key).
+The [incident runbook](../docs/MONITORING.md#reading-cacheintegrity_rejects) distinguishes
+an upgrade's cold cache from a key-only migration's rejection burst and bound-reduction
+`oversize` from stronger foreign-writer signals. None of those counters can establish
+integrity after key compromise.
+
+The posture is deliberately advertised on **unauthenticated `/health`**, through
+`cache_unauthenticated` and `capabilities.cache_hmac_key`. Honest health outranks
+obscurity: anyone able to write the cache can already observe the same fact through
+whether unsigned content is accepted. The endpoint discloses presence, never the key.
+
+---
+
 ## Secrets Management
 
 ### Model
 
-Twelve-factor, runtime environment only. There is no Vault or OpenBao client, no secret store, and no configuration database (`README.md`; the comment in `retrieval_app.py` where `VALKEY_URL` is read). `docker-entrypoint.sh` is `set -euo pipefail` followed by `exec "$@"` and prints nothing, deliberately, so a `VALKEY_URL` password can never reach container logs at start. Rotation is "change the variable and restart". `docs/configuration.md` "Credential handling" is the operator reference: use an env file or a secret store, never inline `-e` (shell history, `ps`); remember that `docker inspect` exposes the environment to anyone with socket access. Variable-by-variable detail is in `kit_tools/docs/ENV_REFERENCE.md`.
+Twelve-factor, runtime environment only. There is no Vault or OpenBao client, no secret store, and no configuration database (`README.md`; the comment in `retrieval_app.py` where `VALKEY_URL` is read). `docker-entrypoint.sh` is `set -euo pipefail` followed by `exec "$@"` and prints nothing, deliberately, so a `VALKEY_URL` password can never reach container logs at start. Runtime changes require a restart; **cache-signing-key rotation requires stopping every replica before changing the key**, then starting them with the same new value. `docs/configuration.md` "Credential handling" is the operator reference: use an env file or a secret store, never inline `-e` (shell history, `ps`); remember that `docker inspect` exposes the environment to anyone with socket access. Variable-by-variable detail is in `kit_tools/docs/ENV_REFERENCE.md`.
 
 ### Secrets inventory
 
@@ -296,6 +339,7 @@ Twelve-factor, runtime environment only. There is no Vault or OpenBao client, no
 | `HF_TOKEN` | Gated Hugging Face download of the PromptGuard weights | No; absent is the supported degraded mode | Read at runtime by `model_fetcher.py`; never a build argument |
 | `FORAGE_MIRROR_TOKEN` | Read-only credential for the private OCI weights mirror | No | Passed to `oras` on stdin, never argv, log, or disk |
 | `VALKEY_URL` | Content-cache connection string; may embed a password (`redis://:PASSWORD@host:6379/4`) | No; fully unset means the in-memory cache | Read once at start; never logged (closed vocabulary below) |
+| `FORAGE_CACHE_HMAC_KEY` | Key-bound HMAC authentication for Valkey content-cache values | No; absent on Valkey means `degraded: cache_unauthenticated`; memory needs no key | **CSPRNG-generated**, never a passphrase; at least 32 UTF-8 bytes, never base64-decoded. Read once by `retrieval_app._resolve_cache_hmac_key()` at startup. Runtime only, never logged or built into an image. Invalid/short keys refuse boot; rotate with the stop-all procedure. |
 | `FORAGE_BRAVE_API_KEY` | API key for Brave's paid LLM-Context search endpoint | No; absent means a `brave` entry in `FORAGE_SEARCH_PROVIDERS` is skipped and the chain falls back to SearXNG | Read once at start by the lifespan (`retrieval_app._resolve_brave_key()`); travels only in the `X-Subscription-Token` header, never a URL or query string; never logged (`pipeline/search_providers/brave.py`'s closed vocabulary) |
 | `SEARXNG_SECRET` | The companion SearXNG's own secret | Yes for the companion; `${SEARXNG_SECRET:?...}` in compose, no baked default | Never read by Forage itself |
 
@@ -306,20 +350,20 @@ Related but not a secret: `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION` (alias `PO
 `Dockerfile` declares **zero** `ARG` instructions. A build ARG is not a secret: `docker history --no-trunc` reads it back out of any registry the image reaches. Two mechanical guards keep it that way:
 
 1. `tests/test_dockerfile.py::TestNoSecretEntersTheBuild`: `test_the_build_takes_no_arguments_at_all` (the absolute), `test_no_arg_declares_a_secret_name`, `test_no_env_declares_a_secret_name`, `test_no_instruction_assigns_a_secret_valued_variable`, `test_no_hf_token_in_any_instruction`, `test_no_model_bake_step`, `test_no_token_shaped_literal_anywhere`. The absolute is asserted because it is the part that survives review: once "no ARG" stops being true, the next one only has to look as harmless as the last.
-2. CI's `secret-grep` job runs `docker history --no-trunc` on the exact built artifact (scope: layer metadata, not file contents) and greps for three patterns: `HF_TOKEN`, `hf_[A-Za-z0-9]{20,}` and `FORAGE_BRAVE_API_KEY` (the variable name only; no bare `BRAVE_API_KEY`, no key-shape regex); the `publish` job re-greps the *published* image config for the same three patterns after push. The two copies are deliberately duplicated in `ci.yml` and pinned by one constant, `tests/test_ci_workflow.py::_REQUIRED_GREP_PATTERNS`, which both `::TestSecretGrepJob::test_secret_grep_pattern_set_is_defined_in_the_workflow` and `::TestPublishJob::test_publish_greps_the_published_config_for_secrets` iterate.
+2. CI's `secret-grep` job runs `docker history --no-trunc` on the exact built artifact (scope: layer metadata, not file contents) and greps for four patterns: `HF_TOKEN`, `hf_[A-Za-z0-9]{20,}`, `FORAGE_BRAVE_API_KEY` and `FORAGE_CACHE_HMAC_KEY` (the latter two are variable names only, no key-shape regex); the `publish` job re-greps the *published* image config for the same four patterns after push. The two copies are deliberately duplicated in `ci.yml` and pinned by one constant, `tests/test_ci_workflow.py::_REQUIRED_GREP_PATTERNS`, which both `::TestSecretGrepJob::test_secret_grep_pattern_set_is_defined_in_the_workflow` and `::TestPublishJob::test_publish_greps_the_published_config_for_secrets` iterate.
 
 The image is deliberately single-stage so that `docker history` covers everything (`tests/test_dockerfile.py::TestBaseImagePin::test_single_from_instruction`). Poppy's in-tree `services/retrieval/Dockerfile` still carries `ARG HF_TOKEN`; never push an image built from that file.
 
 ### Closed log vocabularies (CLAUDE.md invariant 6)
 
-`cache._closed_vocabulary_reason` maps every Valkey failure to one of `connect_failed`, `operation_failed`, or `timeout` and never emits `str(exc)` or the URL. `tests/test_cache.py::TestReconnect::test_connect_failure_never_logs_url_or_secret` drives both the cache path and a real lifespan with `redis://:hunter2-startup-password@...` and asserts the password appears nowhere; `tests/test_app.py::test_no_selection_path_logs_the_valkey_url` covers five start modes. `model_fetcher.py` uses the same pattern (`http_401`, `timeout`, `io_failed`, `fetch_failed`, `pull_failed`, `oras_missing`). Any new startup or cache code must preserve this; `kit_tools/arch/patterns/LOGGING.md` carries the general convention.
+`cache._closed_vocabulary_reason` maps Valkey connection/operation failures to `connect_failed`, `operation_failed`, or `timeout` and never emits `str(exc)` or the URL. Integrity rejections use the separate six-token `CACHE_INTEGRITY_REASONS` vocabulary and a `ret:<sha256>` digest; corrupt parses use `cache_entry_corrupt`. `tests/test_cache.py::TestReconnect::test_connect_failure_never_logs_url_or_secret` drives both the cache path and a real lifespan with a synthetic credentialed URL and asserts the password appears nowhere; `tests/test_app.py::test_no_selection_path_logs_the_valkey_url` covers backend selection. The HMAC sentinel drives also assert the signing key is absent from every log record, response and cache repr. `model_fetcher.py` uses the same pattern (`http_401`, `timeout`, `io_failed`, `fetch_failed`, `pull_failed`, `oras_missing`). Any new startup or cache code must preserve this; `kit_tools/arch/patterns/LOGGING.md` carries the general convention.
 
 ### Repository hygiene
 
 - `.gitignore` excludes `.env` and `compose/.env` because they carry live tokens; the compose fragments use bare `- HF_TOKEN` pass-through so an unset variable stays unset.
 - `.gitleaksignore` holds exactly one entry, `ba73b078...:tests/test_stage2_structural.py:generic-api-key:170`: the synthetic `Token: abc123def456` literal in `test_short_base64_no_match`, which exists to prove that short base64-like strings do *not* trigger stage 2. Triaged 2026-09-08 at the public flip; the full-history scan record (gitleaks 8.30.1, 88 commits, one false positive) is `docs/bootstrap-scan.txt`.
 - GitHub's own secret scanning and push protection were enabled on the repository at the public flip.
-- `tests/conftest.py` clears `HF_TOKEN`, `HF_HOME`, `FORAGE_MODEL_REVISION`, `FORAGE_WEIGHTS_MIRROR`, `FORAGE_MIRROR_TOKEN`, and `VALKEY_URL` before every test, so a developer's shell credentials cannot change which branch runs.
+- `tests/conftest.py` clears the complete `_CLEARED_ENV_VARS` set before every test: `HF_TOKEN`, `HF_HOME`, `FORAGE_MODEL_REVISION`, `FORAGE_WEIGHTS_MIRROR`, `FORAGE_MIRROR_TOKEN`, `VALKEY_URL`, `FORAGE_SEARCH_PROVIDERS`, `FORAGE_BRAVE_API_KEY`, and `FORAGE_CACHE_HMAC_KEY`, so a developer's shell credentials cannot change which branch runs.
 
 ### Adding a new secret
 
@@ -327,6 +371,12 @@ The image is deliberately single-stage so that `docker history` covers everythin
 2. Give every failure path a fixed reason string; add a test in the style of `test_connect_failure_never_logs_url_or_secret` that asserts the value never reaches a log record.
 3. Add the variable to `tests/conftest.py`'s cleared list, to `docs/configuration.md`, and to `kit_tools/docs/ENV_REFERENCE.md`.
 4. If it must reach a subprocess, pass it on stdin as `FORAGE_MIRROR_TOKEN` is, never on argv.
+
+`FORAGE_CACHE_HMAC_KEY` follows all four steps: (1) the one boot resolver reads only
+the runtime environment; (2) value-free refusal markers and the app/cache sentinel
+tests cover failures, responses and logs; (3) the exact hermetic cleared set and both
+operator references include it; (4) it is not passed to any subprocess at all.
+Distribution guards also pin both CI grep copies and the full-compose-only passthrough.
 
 ---
 
@@ -364,7 +414,7 @@ The `sanitizer_revision` (`pipeline/sanitizer_revision.py`, a sha256 over eight 
 
 ## Honest Degradation (CLAUDE.md invariant 5)
 
-`/health` always returns HTTP 200; the truth is in the body. `status` is `healthy` or `degraded`; `degraded_reasons` is a typed `Literal` list drawn from `promptguard_unavailable` and `cache_unavailable` (an unlisted reason fails response validation); `promptguard_loaded`, `cache_connected`, `cache_backend` (`memory` or `valkey`), `capabilities`, `search_providers`, `sanitizer_revision`, and `contract_version` complete the picture. `promptguard_loaded: false` means the ML scan **did not run**, and a consumer must treat standard-tier content as unscanned (`kit_tools/docs/GOTCHAS.md` "PromptGuard model absent"). An empty or unreachable `VALKEY_URL` is configured-and-missing, reported as `degraded`, never a silent fallback to memory.
+`/health` always returns HTTP 200; the truth is in the body. `status` is `healthy` or `degraded`; `degraded_reasons` is a typed `Literal` list drawn from `promptguard_unavailable`, `cache_unavailable` and `cache_unauthenticated` (an unlisted reason fails response validation); `promptguard_loaded`, `cache_connected`, `cache_backend` (`memory` or `valkey`), `capabilities`, `search_providers`, `sanitizer_revision`, and `contract_version` complete the picture. `promptguard_loaded: false` means the ML scan **did not run**, and a consumer must treat standard-tier content as unscanned (`kit_tools/docs/GOTCHAS.md` "PromptGuard model absent"). An empty or unreachable `VALKEY_URL` is configured-and-missing, reported as `degraded`, never a silent fallback to memory. An unsigned Valkey also reports `cache_unauthenticated`; both cache reasons may coexist, and memory mode reports neither.
 
 This is a security property because of the incident it answers: an earlier version reported `healthy` regardless of the model, a fail-closed consumer silently dropped every standard-tier search result (reading it as "no matches"), and nobody noticed for nine days in production. Do not regress it in the name of a cleaner status code. CI enforces it mechanically: the `smoke` job runs the image with no token and `contract_smoke.py` asserts `status: degraded`, `promptguard_unavailable` in `degraded_reasons`, and no `search_sanitization` capability. `tests/test_app.py::test_health_degraded_reports_promptguard_unavailable`, `::test_a_broken_valkey_url_degrades_and_never_falls_back_to_memory`, `::test_health_break_glass_override_unset_withholds_advertisement`, `tests/test_ci_workflow.py::TestSmokeJob`. Operational guidance for reading `/health` and `/metrics` is in `kit_tools/docs/MONITORING.md`.
 

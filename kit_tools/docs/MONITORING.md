@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document logs, metrics, alerts, and dashboards. How to observe the system.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-003)
+> Updated by: Copilot (hardening-cache-integrity US-003)
 
 ---
 
@@ -60,14 +60,14 @@ Forage listens on `0.0.0.0:8020` inside the container; the compose fragments pub
 | `status` | string | `healthy`, `degraded` | `degraded` iff `degraded_reasons` is non-empty. |
 | `promptguard_loaded` | bool | `true`, `false` | Whether the PromptGuard classifier is loaded (`app.state.classifier.loaded`). Always honest; the break-glass override does not touch it. |
 | `cache_connected` | bool | `true`, `false` | Valkey mode: a live ping via `cache.ping_if_due()`, subject to reconnect backoff. Memory mode: always `true` (the backend is in-process). Not a statement that Valkey is present; read `cache_backend` for that. |
-| `capabilities` | dict | `{"search_sanitization": 1, "brave_api_key": 1}`, any subset, or `{}` | Presence map, two keys as of contract 1.2.0. `search_sanitization` is present when the classifier is loaded **or** when break-glass is armed (`FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION=1`, alias `POPPY_RETRIEVAL_LEGACY_CAPABILITY=1`, exact string `1`) — break-glass lies only for this key. `brave_api_key` is present when this start resolved a usable `FORAGE_BRAVE_API_KEY` (`brave_key_present()`), independently of whether `brave` is in `search_providers` and untouched by break-glass. |
+| `capabilities` | dict | `{"search_sanitization": 1, "brave_api_key": 1, "cache_hmac_key": 1}`, any subset, or `{}` | Presence map, three keys as of contract 1.3.0. `search_sanitization` is present when the classifier is loaded **or** when break-glass is armed (`FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION=1`, alias `POPPY_RETRIEVAL_LEGACY_CAPABILITY=1`, exact string `1`) — break-glass lies only for this key. `brave_api_key` is present when this start resolved a usable `FORAGE_BRAVE_API_KEY` (`brave_key_present()`), independently of whether `brave` is in `search_providers`. `cache_hmac_key` is present only when this start resolved a usable `FORAGE_CACHE_HMAC_KEY` and selected Valkey, independently of connectivity; absent in memory mode. Both credential-presence keys are untouched by break-glass and disclose no value or entropy guarantee. |
 | `sanitizer_revision` | string | 64-hex sha256 | `derive_sanitizer_revision(config)`: hash of eight `pipeline/*.py` sources plus `MODEL_ID@revision` plus `promptguard_threshold`. The literal `unknown` appears only when no lifespan ran (test transports). |
 | `contract_version` | string | `1.3.0` | `pipeline.contract.CONTRACT_VERSION`; identical to `/metrics.contract_version` and `/openapi.json` `info.version`. |
 | `cache_backend` | string | `valkey`, `memory` | Decided once at start: `VALKEY_URL` fully unset gives `memory`; set to anything else, including the empty string, gives `valkey`. |
 | `search_providers` | list | `["searxng"]`, `["searxng", "brave"]`, ... | The resolved provider chain's names, in traversal order, after key-gated skips (contract 1.2.0, `search-policy-and-health` US-002). Configuration echo fixed for the life of the process — not a liveness probe, and not a statement that any provider is reachable right now. The check is to compare it against `FORAGE_SEARCH_PROVIDERS`: a configured `brave` that is missing here was skipped at boot for want of a usable key, and the startup signal for that is the WARNING `brave_skipped_missing_key`; `/health` itself cannot tell "configured but skipped" from "never configured" — by design, key presence is published, never a second differential channel (ruling 15). |
-| `degraded_reasons` | list | `promptguard_unavailable`, `cache_unavailable` | Closed vocabulary (`pipeline/contract.py` `DegradedReason`). Ordered `promptguard_unavailable` first. Empty iff `status` is `healthy`. |
+| `degraded_reasons` | list | `promptguard_unavailable`, `cache_unavailable`, `cache_unauthenticated` | Closed vocabulary (`pipeline/contract.py` `DegradedReason`), in the order shown with inapplicable reasons omitted. Empty iff `status` is `healthy`. Both cache reasons may coexist; neither appears in memory mode. |
 
-The two reasons are the complete set. `promptguard_unavailable` means the classifier is not loaded (no token, download in flight, verification refused, or load failed). `cache_unavailable` means `VALKEY_URL` is configured (set, even empty or unparseable) and the ping fails; it never appears in memory mode. The response is validated against `DegradedReason` on the way out, so a reason added to the handler without being added to the Literal fails loudly (500) rather than reaching a consumer unannounced.
+These three reasons are the complete set. `promptguard_unavailable` means the classifier is not loaded (no token, download in flight, verification refused, or load failed). `cache_unavailable` means the configured Valkey is unavailable (set, even empty or unparseable). `cache_unauthenticated` means Valkey signing was not enabled at boot: cached `/retrieve` content cannot be proven to be Forage's own and is served without re-sanitization. On shared Valkey treat it as an **open cache-poisoning path** until a key is set, not merely a configuration signal. The response is validated against `DegradedReason` on the way out, so a reason added to the handler without being added to the Literal fails loudly (500) rather than reaching a consumer unannounced.
 
 ### Body shape
 
@@ -78,12 +78,12 @@ Schema-style listing (field set and value domains as confirmed in `retrieval_app
   "status":             "healthy" | "degraded",
   "promptguard_loaded": true | false,
   "cache_connected":    true | false,
-  "capabilities":       {"search_sanitization": 1, "brave_api_key": 1} | {} | ...,
+  "capabilities":       {"search_sanitization": 1, "brave_api_key": 1, "cache_hmac_key": 1} | {} | ...,
   "sanitizer_revision": "<64-hex sha256>",
   "contract_version":   "1.3.0",
   "cache_backend":      "valkey" | "memory",
   "search_providers":   ["searxng"] | ["searxng", "brave"] | ...,
-  "degraded_reasons":   [] | ["promptguard_unavailable"] | ["cache_unavailable"] | ["promptguard_unavailable", "cache_unavailable"]
+  "degraded_reasons":   [] | ["promptguard_unavailable"] | ["cache_unavailable"] | ["cache_unauthenticated"] | ["promptguard_unavailable", "cache_unavailable"] | ["promptguard_unavailable", "cache_unauthenticated"] | ["cache_unavailable", "cache_unauthenticated"] | ["promptguard_unavailable", "cache_unavailable", "cache_unauthenticated"]
 }
 ```
 
@@ -96,7 +96,7 @@ A consumer or deploy script should gate in this order:
 1. **Contract.** Compare the MAJOR of `contract_version` against the vendored contract and refuse activation on mismatch (`CLAUDE.md` invariant 4, `contract/GOVERNANCE.md`). Compare contracts, never `sanitizer_revision` — Poppy and Forage revisions have diverged deliberately six times.
 2. **Sanitization readiness.** Gate on `promptguard_loaded: true` (or on `capabilities.search_sanitization` if the consumer's own capability gate is what you are exercising, remembering break-glass can force that key on).
 3. **Downloading versus wedged.** `/health` alone cannot distinguish "still downloading" from "retrying forever". Read `/metrics` `model.fetch_in_progress` and `model.retries_scheduled` (see "Reading `promptguard_loaded: false`" under Metrics). `fetch_in_progress` lives under `/metrics`, not `/health`. Poppy's deploy readiness wait reads `model.fetch_in_progress`; its exact behaviour lives in the other repo and is out of scope here.
-4. **Cache.** Treat `cache_unavailable` as a performance signal, not an outage: `/retrieve` keeps working uncached.
+4. **Cache.** Treat `cache_unavailable` as a performance signal, not an outage: `/retrieve` keeps working uncached. Treat `cache_unauthenticated` separately as an open cache-poisoning path on shared Valkey: cached content has no proof of origin and is not re-sanitized. Follow the [signing-key recipe](../../docs/configuration.md#credential-handling-for-forage_cache_hmac_key); neither reachability nor `cache_connected: true` supplies authenticity.
 
 ### What `/health` does not tell you
 
@@ -193,9 +193,9 @@ not request outcomes.
 | `reconnect_attempts` / `reconnect_successes` / `reconnect_failures` | counters | `ValkeyStorage._ensure_client`, gated by backoff (1 s doubling to a 30 s cap, 2 s connect+ping deadline). Also driven by `/health`'s `ping_if_due()`, so polling `/health` itself exercises these. | `reconnect_failures` climbing: Valkey unreachable; `attempts` climbing with `successes` climbing: flapping. |
 | `operation_failures` | counter | `ValkeyStorage._mark_disconnected` after a `getrange` / `set` / `delete` failed (except a `WRONGTYPE` read). | Valkey dropping mid-run; `/retrieve` continues uncached. |
 | `storage_hits` / `storage_misses` | counters | Key lookups, both backends. | — |
-| `storage_evictions` | counter | `InMemoryStorage` only; always 0 on Valkey. | Memory-mode cache bounds being hit. |
+| `storage_evictions` | counter | Memory-only eviction; Forage does not evict Valkey's entries for total-capacity pressure. | Memory-mode cache bounds being hit. |
 | `storage_oversize_skips` | counter | Forage refuses its own write at `cache.max_value_bytes` on either backend, or `cache.max_bytes` in memory. The previous entry is deleted first. | A response was served uncached, not an integrity failure. |
-| `integrity_rejects` | counter | A read fails envelope verification or the byte/type bound; deletion is attempted. | One counter, six reasons: `unsigned`, `bad_mac`, `malformed_envelope`, `oversize`, `unexpected_envelope`, `wrong_type`. Key enabling/rotation and bound reductions cannot be separated from tampering by the counter alone. The `cache_integrity_reject` WARNING's reason token and `ret:<sha256>` key digest are the discriminator. The digest is one-way but confirmable against a guessed URL. |
+| `integrity_rejects` | counter | A read fails envelope verification or the byte/type bound; deletion is attempted. | `/metrics.cache.integrity_rejects` combines six reasons: `unsigned`, `bad_mac`, `malformed_envelope`, `oversize`, `unexpected_envelope`, `wrong_type`. The counter alone cannot distinguish key enabling/rotation, bound reductions and tampering. The log line is the discriminator; see the incident guidance below. |
 | `corrupt_entries` | counter | `ContentCache` cannot parse stored bytes as `RetrievedContent`; the value is treated as a miss and deletion is attempted. Both backends. | Schema drift or invalid values from another writer. Not an authenticity or tampering counter: parseable values are still served. Correlate the WARNING `cache_entry_corrupt` by its `ret:<sha256>` key digest. |
 
 A corrupt value is a `storage_hits` increment but a `retrieve.cache_misses` outcome.
@@ -204,6 +204,52 @@ move; the request still proceeds as a miss.
 Empty `GETRANGE` replies are ordinary storage misses with no WARNING. Oversize
 and wrong-type Valkey reads move neither storage hit nor miss counters; envelope
 rejects at the policy layer leave the storage's count as it was.
+
+#### Reading `cache.integrity_rejects`
+
+Separate these deployment events before diagnosing a rising counter:
+
+1. **Upgrading to the 1.3.0 image.** Cache-integrity US-001 and US-002 changed
+   `pipeline/contract.py`, a `_REVISION_SOURCES` member. That rotates
+   `sanitizer_revision`, changes `cache_policy_fingerprint`, and changes **every cache
+   key**. Legacy bare-JSON entries remain under keys the new code never requests;
+   they are orphaned, not rejected. Expect a cold cache and near-zero `unsigned`,
+   **no first-enable burst** on this path. With signing enabled, an `unsigned` or
+   `bad_mac` rejection under a new key indicates a foreign writer, not the upgrade.
+2. **Enabling or rotating `FORAGE_CACHE_HMAC_KEY` on an existing 1.3.0 fleet, with
+   no code change.** Cache keys do not change. Expect a one-time burst bounded by
+   the working set: `unsigned` on first enable, `bad_mac` on rotation. **Stop every
+   replica, change the key, start** is what bounds that burst. Different-key replicas
+   delete each other's entries indefinitely; a mixed keyed/keyless fleet does too.
+   Use the [operator recipe](../../docs/configuration.md#credential-handling-for-forage_cache_hmac_key),
+   not a rolling restart.
+
+The **`cache_integrity_reject` log line is the discriminator**: correlate its
+`reason=<token>` with `key=ret:<sha256>`. The digest is an opaque, credential-free
+correlation handle, not a claim to conceal the URL; it is confirmable against a
+guessed URL and the public cache policy.
+
+| Reason | Interpretation |
+|---|---|
+| `unsigned` | Unsigned bytes (including bare JSON) where a signed envelope is required. Across many keys immediately after a key-only enable: migration. Under new upgrade keys or after migration ends: a foreign writer (including an incorrectly keyless replica). |
+| `bad_mac` | A signature does not verify for this cache key and signing key: old signatures during rotation, different-key replicas, changed bytes, or a relocated envelope. On fresh keys outside rotation: tampering. |
+| `malformed_envelope` | Invalid envelope format, version or bytes; not an ordinary empty read. Investigate the writer and format. |
+| `unexpected_envelope` | A keyless reader found a signed envelope. Check for a mixed keyed/keyless fleet or a key removed without the stop-all procedure. |
+| `wrong_type` | Someone planted a non-string Valkey value. The reply proves connectivity, so it is not a disconnect. |
+| `oversize` | A value exceeds `cache.max_value_bytes`. Lowering the bound produces a burst bounded by the working set of old larger values. A sustained rate points to a replica with a mismatched bound or a foreign writer; keep the bound equal across replicas. This is the weakest of the six reasons as tamper evidence. |
+
+With a key set, no key enable/rotation in flight, and matching replica configuration,
+**sustained `unsigned`, `bad_mac` or `wrong_type` rejects mean a foreign writer and
+are a security event**, not a cache-health blip. Rotate to a fresh CSPRNG-generated
+key with the stop-all procedure; audit Valkey ACLs and network placement and stop the
+writer. A new Forage-authored page over the bound is a write-time
+`storage_oversize_skips` increment, **never an integrity reject**; it cannot explain
+this read-side signal.
+
+**A flat `integrity_rejects` is not evidence of an unpoisoned cache when key compromise
+is suspected.** An attacker holding the real key can forge envelopes that verify
+and count nothing. See [the four residual risks](../arch/SECURITY.md#cache-poisoning-and-signed-values),
+including unbounded reject-log volume until the resource-envelope controls land.
 
 ### `model`
 
@@ -264,6 +310,10 @@ All are `logging.getLogger(__name__)`: `retrieval_app`, `cache`, `model_fetcher`
 | WARNING | `config_invalid_value — key=<list> dropped=<n> entries=<entries>` (domain-list form names dropped entries) | Invalid `seed_blocklist` or `news_domains` entries dropped at boot; one WARNING per affected list, none for valid, empty or missing lists. Non-string YAML members use `[non-string]`; a non-list container publishes `[]` with `dropped=1 entries=[invalid-container]`, never its contents. Misplaced credential/URL-shaped string entries are redacted. Request counters are not incremented. |
 | WARNING | `break_glass_advertisement_active — <var>=1 is forcing /health to advertise search_sanitization regardless of classifier state; ...` | Break-glass armed. `capabilities` will lie; `status` and `promptguard_loaded` stay honest. |
 | WARNING | `Content cache not available at startup` | `VALKEY_URL` set and the 2 s connect+ping deadline failed. |
+| WARNING | `cache_hmac_key_missing` | Valkey selected without a usable `FORAGE_CACHE_HMAC_KEY`; startup continues, `/health` reports `cache_unauthenticated`, and cached content lacks proof of origin. |
+| WARNING | `cache_hmac_key_unused` | A usable key was configured in memory mode; startup continues without signing or a cache degraded reason. |
+| WARNING | `cache_hmac_key_too_short` | Fewer than 32 UTF-8 bytes after stripping leading/trailing space, tab and LF; `CacheConfigurationError` refuses startup, no `/health`. The variable name, never its value, is logged. |
+| WARNING | `cache_hmac_key_invalid` | Non-printable/non-ASCII, interior whitespace or controls (including CR); `CacheConfigurationError` refuses startup, no `/health`. Value never logged. |
 | WARNING | `cache_bounds_inverted — cache.max_value_bytes exceeds cache.max_bytes; the in-memory storage applies cache.max_bytes` | Supported start; the memory total is the tighter bound. No values are logged. |
 | WARNING | `valkey_url_option_forbidden — option=<key>` | Boot refuses a reply-shaping query key (`decode_responses`, `encoding`, `encoding_errors`, `protocol`). No URL, host, password or option value is logged. |
 | WARNING | `PromptGuard model not available — ML injection detection disabled` (with traceback, `exc_info=True`) | The verified weight set failed to load (torch/transformers); followed by ERROR `weights_load_failed`. |
@@ -272,13 +322,14 @@ Dropped (INFO): `Sidecar config loaded (<n> keys); contract_version=<v>`, `Conte
 
 ### Closed vocabularies
 
-**`cache.py`** — `_closed_vocabulary_reason()` yields exactly one of `connect_failed`, `operation_failed`, `timeout` (the last when the exception is a `TimeoutError`). The parse guard logs `cache_entry_corrupt` directly, not through that exception mapper:
+**`cache.py`** — `_closed_vocabulary_reason()` maps connection/operation failures to `connect_failed`, `operation_failed` or `timeout` (the last when the exception is a `TimeoutError`). The parse guard and integrity checks have separate closed vocabularies, not that exception mapper:
 
 | Level | Line | Reason values |
 |-------|------|---------------|
 | WARNING | `Valkey connection failed for content cache (<reason>)` | `connect_failed`, `timeout` — from `_attempt_connect`. |
 | WARNING | `Content cache operation failed (<reason>)` | `operation_failed`, `timeout` — from `_mark_disconnected`. |
 | WARNING | `Content cache entry rejected (cache_entry_corrupt) key=ret:<sha256>` | Fixed token and one-way key digest only, never the value, URL or exception text. |
+| WARNING | `cache_integrity_reject — reason=<token> key=ret:<sha256>` | `unsigned`, `bad_mac`, `malformed_envelope`, `oversize`, `unexpected_envelope`, `wrong_type`. One un-rate-limited WARNING per rejection, never raw bytes or credentials. |
 
 **`pipeline/orchestrator.py`** — the classification-wait timeout has its own closed token, deliberately distinct from stage 3's "PromptGuard unavailable" lines, because the classifier in this case is *loaded and busy* rather than missing and those lines would send an operator to the model loader.
 
@@ -352,7 +403,7 @@ docker logs <container> 2>&1 | grep -E 'weights_unavailable|weights_fetch_failed
 docker logs <container> 2>&1 | grep -E 'weights_verification_failed|weights_quarantined|weights_pin_unusable'
 
 # Cache trouble (closed vocabulary; the URL never appears)
-docker logs <container> 2>&1 | grep -E 'Valkey connection failed|Content cache (operation failed|not available)|cache_entry_corrupt'
+docker logs <container> 2>&1 | grep -E 'Valkey connection failed|Content cache (operation failed|not available)|cache_entry_corrupt|cache_integrity_reject|cache_hmac_key_|cache_bounds_inverted|valkey_url_option_forbidden'
 
 # Quarantines and fail-closed decisions
 docker logs <container> 2>&1 | grep -E 'Content quarantined|PromptGuard unavailable'
@@ -380,6 +431,8 @@ These are **suggested watch points**, not configured alerts. No thresholds are d
 | Download refused by the verifier | same as above | `model.verify_failures` and `model.quarantines` rising; `fetch_failures` unchanged for `refused_verification` | ERROR `weights_verification_failed — reasons: file_extra|hash_mismatch|...`, then `weights_quarantined` |
 | Verified set will not load | same as above | — | WARNING `PromptGuard model not available` with traceback, then ERROR `weights_load_failed`; check `mem_limit` (torch OOM) |
 | Cache flapping or down | `cache_unavailable` appearing and disappearing; `cache_connected` toggling (Valkey mode only) | `cache.reconnect_attempts` / `reconnect_failures` climbing; `cache.operation_failures` rising on mid-run drops | WARNING `Valkey connection failed for content cache (connect_failed|timeout)`; `Content cache operation failed (operation_failed|timeout)` |
+| Cache signing absent | `cache_unauthenticated`, even if `cache_connected: true` | No counter can prove authenticity without signing | `cache_hmac_key_missing`; set a CSPRNG key using the stop-all recipe |
+| Cache integrity rejects | May remain `healthy` when keyed and connected; `/health` is not a tampering detector | `cache.integrity_rejects` rising; distinguish deployment events and reasons using the incident runbook above | `cache_integrity_reject` reason and key digest; sustained `unsigned`, `bad_mac`, `wrong_type` outside migration/rotation are a security event |
 | Quarantine rate | — | `retrieve.blocked_by_reason.*` rising; `retrieve.promptguard_state.unavailable_blocked` rising on a degraded container (consumer sees content-free responses — the nine-day shape) | WARNING `Content quarantined for <url>`; `PromptGuard unavailable — fail-closed for <tier> tier` |
 | Search results silently thinning | — | `search.omitted_by_reason.promptguard_unavailable` rising (fail-closed) or `search.unscanned_results` rising (fail-open) | same `PromptGuard unavailable` WARNING per result |
 | Classification permit contention | — | `retrieve.classification_wait_timeouts` or `search.classification_wait_timeouts` rising while `/health` reports `promptguard_loaded: true` | WARNING `classification_wait_timeout route=<retrieve\|search>` |
@@ -389,7 +442,7 @@ These are **suggested watch points**, not configured alerts. No thresholds are d
 | SearXNG failures | **no signal** — `/health` does not probe SearXNG; `search_providers` is configuration echo, not liveness, so it reads the same whether or not SearXNG is currently reachable | `search.errors.searxng_unavailable` / `searxng_error` rising; per-request 422 only. On a `searxng`-only chain (the default), `search.fallback_fired` and `search.paid_calls` never move — there is no second provider to advance to — so they are not a signal here either. | `search_provider_failed` WARNING per failed call (nothing else first-party; the 422 `reason` echoes the scheme, host and port of `SEARXNG_URL` — userinfo stripped — plus a closed `detail` token, never exception text) |
 | Paid provider absorbing spend | — | `search.paid_calls` rate over a window climbing past Brave's ~1,000-query/month included credit (~33/day) | `search_provider_failed` WARNINGs naming the free provider precede a rising `paid_calls`; remedy is removing the paid provider from `FORAGE_SEARCH_PROVIDERS` and restarting (chain resolves once, at boot) |
 | Break-glass left armed | `capabilities.search_sanitization` present while `promptguard_loaded: false` | — | WARNING `break_glass_advertisement_active` at startup |
-| Boot failure | no answer on 8020 | — | traceback from `ExtractionConfigurationError` or the cache-settings validator; `docker inspect` shows the exit |
+| Boot failure | no answer on 8020 | — | traceback from `ExtractionConfigurationError` or `CacheConfigurationError`; for refused signing keys grep `cache_hmac_key_too_short` / `cache_hmac_key_invalid`; `docker inspect` shows the exit |
 
 For symptom-to-remedy detail (the empty-string `VALKEY_URL` trap, the SearXNG limiter 429, the 400-not-413 `/extract` behaviour, re-vendoring weights) see `kit_tools/docs/TROUBLESHOOTING.md`; for the per-dependency blast radius see `kit_tools/arch/SERVICE_MAP.md`.
 
@@ -421,6 +474,11 @@ It polls `/health` until it answers 200 with the expected `status` (default budg
 Exit 0 prints a `Contract smoke PASSED` line naming the mode it checked (under the default, `Contract smoke PASSED: degraded, honest, and on-contract.`); exit 1 prints one `::error::<violation>` line per failure.
 
 **Two modes.** `--expect-status` takes `healthy` or `degraded` (default `degraded`, what CI runs). Under `healthy` the three PromptGuard-coupled checks invert — `status == "healthy"`, `promptguard_unavailable` absent from `degraded_reasons`, `search_sanitization` present in `capabilities` — and every other check (contract version, sanitizer revision, `/metrics`, in-image contract and anchor) is identical. The wait is status-aware: it polls until `/health` answers 200 *and* the body's `status` equals the expected one, or the deadline passes (returning the last response, which then fails on `status`). `/health` answers 200 the moment uvicorn binds while PromptGuard loads in the background, so under `healthy` it waits through the load rather than failing on the first 200; raise `--timeout-seconds` for a cold weights fetch. Match the flag to the container: `--expect-status degraded` for a container started with no HF token and no weights (CI's weights-free image), `--expect-status healthy` for a container started with weights (e.g. `--env-file` carrying `HF_TOKEN`). `--anchor` defaults to the committed `contract/openapi.yaml.sha256`; to verify a release image from another checkout, pass a file holding the committed anchor at the tag (what `git show v1.1.0:contract/openapi.yaml.sha256` prints, or a clean checkout of it) — never from the Release assets and never from the image: both are mutable copies, and a tampered document-plus-anchor pair verifies against itself.
+
+For the healthy smoke at contract 1.3.0, a Valkey deployment must additionally
+have an operational cache and a usable `FORAGE_CACHE_HMAC_KEY` in the container's
+runtime env file. Loaded weights plus a reachable unsigned cache still reports
+`degraded`; memory mode requires no signing key.
 
 ### `searxng_smoke.py`
 

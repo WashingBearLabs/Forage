@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document debugging procedures and common fixes. How to diagnose problems.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-003)
+> Updated by: Copilot (hardening-cache-integrity US-003)
 
 ---
 
@@ -84,11 +84,11 @@ curl -s localhost:8020/health | jq
 | Field | Healthy reading | What a bad reading means |
 |---|---|---|
 | `status` | `"healthy"` | `"degraded"` iff `degraded_reasons` is non-empty |
-| `degraded_reasons` | `[]` | Exactly two values exist: `promptguard_unavailable` (classifier not loaded) and `cache_unavailable` (`VALKEY_URL` configured and the ping fails; never in memory mode) |
+| `degraded_reasons` | `[]` | Three values: `promptguard_unavailable` (classifier not loaded), `cache_unavailable` (configured Valkey unavailable), `cache_unauthenticated` (Valkey without signing; cached content lacks proof of origin and is served without re-sanitization). Both cache reasons can coexist; neither appears in memory mode |
 | `promptguard_loaded` | `true` | `false`: no weights yet. Always honest, even with break-glass armed |
 | `cache_connected` | `true` | `false` only with `cache_backend: "valkey"`; memory mode is always `true` |
 | `cache_backend` | what you configured | `"memory"` in production means the env file was not mounted; `"valkey"` when you meant memory means `VALKEY_URL` is set (even to `""`) |
-| `capabilities` | `{"search_sanitization": 1}` | `{}` until weights load. The one field break-glass can make lie |
+| `capabilities` | Presence map with up to three keys | `search_sanitization` when weights load (the only key break-glass can force), `brave_api_key` when a usable paid key was resolved, `cache_hmac_key` when a usable signing key was resolved on Valkey, even if disconnected. Missing keys are omitted, never zero; memory omits `cache_hmac_key` |
 | `contract_version` | `"1.3.0"` | Consumers compare MAJOR (see Consumer-Side Problems) |
 | `sanitizer_revision` | 64-hex sha256 | `"unknown"` only when no lifespan ran (test transports) |
 
@@ -122,7 +122,7 @@ docker logs <container> 2>&1 | grep -E 'weights_unavailable|weights_fetch_failed
 docker logs <container> 2>&1 | grep -E 'weights_verification_failed|weights_quarantined|weights_pin_unusable|weights_load_failed|weights_acquisition_crashed'
 
 # Cache: closed failure tokens (the URL, value and password never appear)
-docker logs <container> 2>&1 | grep -E 'Valkey connection failed for content cache|Content cache operation failed|Content cache not available at startup|cache_entry_corrupt'
+docker logs <container> 2>&1 | grep -E 'Valkey connection failed for content cache|Content cache operation failed|Content cache not available at startup|cache_entry_corrupt|cache_integrity_reject|cache_hmac_key_|cache_bounds_inverted|valkey_url_option_forbidden'
 
 # Per-request noise on a degraded container, and quarantines
 docker logs <container> 2>&1 | grep -E 'PromptGuard unavailable|Content quarantined'
@@ -149,8 +149,8 @@ error; it is a quarantine (see Request Problems).
 | Container state | `docker inspect --format '{{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} restarts={{.RestartCount}}' <container>` | Crash loops, OOM kills, refused boots |
 | Image identity | `docker inspect --format '{{.Config.Image}}' <container>` | The tag or digest actually running |
 | In-image contract | `docker run --rm --entrypoint cat <image> /app/contract/openapi.yaml.sha256` | Compare with `git show <tag>:contract/openapi.yaml.sha256` |
-| Secret-free check | `docker history --no-trunc <image> \| grep -Ei 'HF_TOKEN\|hf_[A-Za-z0-9]{20,}\|FORAGE_BRAVE_API_KEY'` | Must print nothing (CLAUDE.md invariant 2); the same three patterns CI's `secret-grep` job greps |
-| Contract smoke | `uv run python contract_smoke.py --base-url http://127.0.0.1:8020 [--expect-status {healthy,degraded}] [--image <ref>]` | Asserts the `/health` contract for the container you started: `--expect-status degraded` (the default, CI's) for a token-less, weights-free container; `--expect-status healthy` for one started with weights. The wait is status-aware, so raise `--timeout-seconds` for a cold weights fetch |
+| Secret-free check | `docker history --no-trunc <image> \| grep -Ei 'HF_TOKEN\|hf_[A-Za-z0-9]{20,}\|FORAGE_BRAVE_API_KEY\|FORAGE_CACHE_HMAC_KEY'` | Must print nothing (CLAUDE.md invariant 2); the same four patterns CI's `secret-grep` job greps, including the name-only `FORAGE_CACHE_HMAC_KEY` pattern |
+| Contract smoke | `uv run python contract_smoke.py --base-url http://127.0.0.1:8020 [--expect-status {healthy,degraded}] [--image <ref>]` | Asserts the `/health` contract for the container you started: `--expect-status degraded` (the default, CI's) for a token-less, weights-free container; `--expect-status healthy` requires weights and an operational cache, plus a usable `FORAGE_CACHE_HMAC_KEY` in the runtime env file for Valkey at contract 1.3.0. The wait is status-aware, so raise `--timeout-seconds` for a cold weights fetch |
 | SearXNG companion smoke | `uv run python searxng_smoke.py --image forage-searxng:ci [--live] [--keep]` | Secret, JSON envelope, budget, limiter phases |
 | Contract drift | `uv run python -m scripts.export_contract --check` | Exit 1 if `contract/openapi.yaml` no longer matches the app |
 | Reach a target from the container's network | `docker exec <container> curl -sI https://example.com/` | `curl` ships in the image; separates "Forage refused" from "network cannot reach" |
@@ -409,14 +409,16 @@ closed operation-failure WARNING first: deletion itself may be failing.
 
 **Fix:** identify and stop the external writer or correct its schema; restrict access
 to the cache. A following successful fetch repopulates the key. This counter measures
-parse failures, not tampering: parse success is not authenticity. Spec 4's HMAC
-`integrity_rejects` will be the stronger signal; it is not available yet.
+parse failures, not tampering: parse success is not authenticity. Signing now verifies
+before parsing; `/metrics.cache.integrity_rejects` and the `cache_integrity_reject`
+reason/digest are the stronger signal with a key set. A compromised key can still
+forge values with no counter movement; see [Monitoring](MONITORING.md#reading-cacheintegrity_rejects).
 
 ---
 
 ### `cache_unavailable`: Valkey configured but unreachable
 
-**Symptom:** `status: "degraded"`, `degraded_reasons: ["cache_unavailable"]`,
+**Symptom:** `status: "degraded"`, `cache_unavailable` in `degraded_reasons`,
 `cache_backend: "valkey"`, `cache_connected: false`. `/metrics.cache.reconnect_attempts`
 and `reconnect_failures` climb. Log: `Valkey connection failed for content cache
 (connect_failed)` (or `(timeout)`) and, at boot, `Content cache not available at startup`.
@@ -427,9 +429,60 @@ or mis-spelled. The connect deadline is 2 s; there is **no fallback to memory**.
 **Fix:** fix the URL or the network. Recovery is automatic and in place: reconnects follow a
 1 s doubling to 30 s backoff, driven by traffic and by `/health` polls (`ping_if_due`), so
 even a zero-traffic container notices when Valkey returns; `reconnect_successes` +1 and
-`status` flips back. Changing `VALKEY_URL` itself needs a restart. `/retrieve` keeps working
+that reason clears (`healthy` only if no other reason remains). Changing `VALKEY_URL`
+itself needs a restart. `/retrieve` keeps working
 throughout, served uncached. The URL and its password never appear in any log line;
 `tests/test_cache.py` asserts it.
+
+---
+
+### `cache_unauthenticated`: Valkey configured without a signing key
+
+**Symptom:** `/health` remains HTTP 200 with `status: "degraded"`,
+`cache_backend: "valkey"` and `cache_unauthenticated` in `degraded_reasons`, even
+with `cache_connected: true`. `capabilities.cache_hmac_key` is absent and startup
+logs `cache_hmac_key_missing`. An unreachable cache adds `cache_unavailable`;
+loading PromptGuard or reconnecting Valkey does not clear the signing reason.
+
+**Cause:** no usable `FORAGE_CACHE_HMAC_KEY` was configured at boot. Cached
+`/retrieve` content cannot be proven to be Forage's own and is served without
+re-sanitization. On shared Valkey this is an **open cache-poisoning path**, not a
+harmless performance signal.
+
+**Fix:** follow the [CSPRNG recipe](../../docs/configuration.md#credential-handling-for-forage_cache_hmac_key)
+into `compose/.env`; `compose/full.yml` passes the key to Forage. Stop every
+replica, set the same key everywhere, then start. Do not roll through a mixed
+keyed/keyless fleet: the replicas delete each other's entries. Memory mode needs
+no key; `cache_hmac_key_unused` there is a warning about an unnecessary secret,
+not a degraded reason. Read [the integrity runbook](MONITORING.md#reading-cacheintegrity_rejects)
+for a rising counter: an image upgrade produces a cold cache, not an unsigned
+migration burst; a key-only enable on the same code can produce a bounded burst.
+
+---
+
+### The container exits at start: `FORAGE_CACHE_HMAC_KEY` refused
+
+**Symptom:** uvicorn exits during startup with `CacheConfigurationError`; no
+`/health` endpoint becomes available. Check stderr or the stopped container's log:
+
+```bash
+docker logs <container> 2>&1 | grep -E 'cache_hmac_key_too_short|cache_hmac_key_invalid'
+```
+
+**Cause:** `cache_hmac_key_too_short` means fewer than **32 UTF-8 bytes** after
+stripping leading/trailing space, tab and LF. `cache_hmac_key_invalid` means a
+remaining character is not printable ASCII without whitespace or controls.
+Interior spaces/tabs/LF, CR (even trailing), non-ASCII and other controls refuse
+boot. Blank after the permitted strip means absent, not a refusal; on Valkey it
+takes the degraded path above. Validation also runs in memory mode.
+
+**Fix:** replace the assignment with a fresh CSPRNG-generated value using the
+[private env-file recipe](../../docs/configuration.md#credential-handling-for-forage_cache_hmac_key),
+with all replicas stopped, then start them with the same key. A passphrase of
+the right length may pass validation but is not acceptable. The printable
+base64 text is used as UTF-8 bytes, **never decoded** by Forage. The diagnostic
+names the variable, never its value; do not print the key or paste it into a
+command line to debug it.
 
 ---
 

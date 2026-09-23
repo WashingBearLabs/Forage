@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document dependencies and integrations. Shows what talks to what and failure impacts.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-006)
+> Updated by: Copilot (hardening-cache-integrity US-003)
 
 ---
 
@@ -105,7 +105,7 @@ next start is a warm start (zero network, about 9 s on 1 vCPU / 1 GB).
 | **Configuration** | `SEARXNG_URL` — default `http://searxng:8080`, read **once at import** in `retrieval_app.py` (changing it needs a restart). Forage reads no other SearXNG variable. The companion container reads `SEARXNG_SECRET` (**secret, required**; unset means the container exits 1), `SEARXNG_VALKEY_URL` (optional) and `SEARXNG_LIMITER` (optional, off by design — a working limiter 429s Forage's client and caps API formats at 4 requests/hour). Canonical reference: `docs/configuration.md`, `docs/searxng.md`. |
 | **Companion image** | `ghcr.io/washingbearlabs/forage-searxng` — `searxng/Dockerfile` (digest-pinned upstream) plus `searxng/config/settings.yml` (`formats: [html, json]`, port 8080, `limiter: false`, four engines with 5 s timeout each) and `searxng/config/limiter.toml`. Engine parity with `SEARXNG_ENGINES` is asserted by `tests/test_searxng_docker.py::test_enabled_engines_match_the_orchestrator` (which reads it through `pipeline/orchestrator.py`'s `_SEARXNG_ENGINES` alias). Own tag lane `searxng-v*`. |
 | **Timeouts / retries** | 10 s total httpx timeout; **zero retries**. SearXNG-side `outgoing.request_timeout: 10`, per-engine 5 s. |
-| **Health signal** | **None.** `/health` never probes SearXNG; `DegradedReason` in `pipeline/contract.py` is exactly `promptguard_unavailable` and `cache_unavailable`. SearXNG absence surfaces only per request. |
+| **Health signal** | **None.** `/health` never probes SearXNG; `DegradedReason` in `pipeline/contract.py` contains `promptguard_unavailable`, `cache_unavailable` and `cache_unauthenticated`. SearXNG absence surfaces only per request. |
 | **Failure impact** | `/search` returns **422** `{error, reason, request_id}` with `searxng_error` (non-2xx: `"SearXNG returned HTTP error (http_<code>)"`; a 429 here means the limiter was turned on) or `searxng_unavailable` (connect refused, DNS, timeout, oversized or unparseable body: `"SearXNG not reachable at <scheme>://<host>:<port>: <detail>"` — the reason echoes scheme, host and port, never userinfo and never exception text; `detail` is a closed token). `/retrieve` and `/extract` are unaffected. `/metrics.search.errors` is keyed by code. |
 | **Rate limits** | None on the shipped image; not built for direct exposure (no published ports in compose). |
 
@@ -129,12 +129,12 @@ next start is a warm start (zero network, about 9 s on 1 vCPU / 1 GB).
 | Attribute | Value |
 |-----------|-------|
 | **Purpose** | Caches `RetrievedContent` for `POST /retrieve` only. `/search` and `/extract` are never cached. |
-| **Client / protocol** | `redis.asyncio` (`redis>=5.0.0`) via `from_url(url, socket_connect_timeout=2.0, socket_timeout=2.0)`; only `ping`, `get`, `set(ex=)`, `delete`, `aclose` are used (`cache.py::ValkeyStorage`). |
-| **Configuration** | `VALKEY_URL` — **secret** (may carry a password; use an env file, never inline `-e`); unset by default; standard `redis://[:password@]host:port/db`. `config.yaml` `cache.max_entries` 256 (1-4096) and `cache.max_bytes` 33554432 = 32 MiB (1 MiB-128 MiB) bound the in-memory backend and are validated at boot **regardless of backend** (a typo raises `CacheConfigurationError` and the boot fails). |
+| **Client / protocol** | `redis.asyncio` (`redis>=5.0.0`) via `from_url(url, decode_responses=False, socket_connect_timeout=2.0, socket_timeout=2.0)`; only `ping`, `getrange`, `set(ex=)`, `delete`, `aclose` are used (`cache.py::ValkeyStorage`). The single positional `getrange(key, 0, max_value_bytes)` atomically reads at most bound + 1 bytes. URL query keys `decode_responses`, `encoding`, `encoding_errors` and `protocol` refuse boot because they override client keywords; socket timeouts remain tunable. |
+| **Configuration** | `VALKEY_URL` — **secret** (may carry a password; use an env file, never inline `-e`); unset by default; standard `redis://[:password@]host:port/db`. `FORAGE_CACHE_HMAC_KEY` is the optional, CSPRNG-generated runtime signing secret; use one key across all replicas, stop all before rotation. `config.yaml` `cache.max_entries` 256 (1-4096) and `cache.max_bytes` 33554432 = 32 MiB (1 MiB-128 MiB) bound memory storage; `cache.max_value_bytes` 4194304 = 4 MiB (512 KiB-8 MiB) bounds each value on both backends. All are validated at boot **regardless of backend**; invalid values raise `CacheConfigurationError`, unknown names warn and are ignored. |
 | **Timeouts / retries** | Connect deadline 2 s. On failure: reconnect backoff 1 s doubling to a 30 s cap (`_RECONNECT_*` in `cache.py`), single-flight lock, callers during backoff get an immediate miss. `get` returns `None`, `set` returns `False`; a cache outage **never raises** and never fails a `/retrieve`. |
-| **Health signal** | `/health.cache_connected` (live `ping_if_due()` in valkey mode; always `true` in memory mode), `/health.cache_backend` `valkey` or `memory`, and `cache_unavailable` in `degraded_reasons`. `/metrics.cache`: `reconnect_attempts`, `reconnect_successes`, `reconnect_failures`, `operation_failures`, `storage_hits`, `storage_misses`, `storage_evictions`, `storage_oversize_skips`. |
-| **Failure impact** | `/retrieve` keeps working uncached (HTTP 200, `cache_hit: false`); `/health` goes `degraded` with `cache_unavailable`. Logs use a closed vocabulary (`connect_failed`, `operation_failed`, `timeout`) and never contain the URL (`tests/test_cache.py`, `CLAUDE.md` invariant 6). |
-| **Compose wiring** | `compose/full.yml` only: service `valkey` = `valkey/valkey:8@sha256:3fbd2e3e…` (8.1.10), `valkey-server --save 60 1 --appendonly no`, volume `forage-valkey-data:/data`, no ports, no password; Forage gets the literal `VALKEY_URL=redis://valkey:6379/4`. |
+| **Health signal** | `/health.cache_connected` (`ping_if_due()` in Valkey mode; always `true` in memory mode), `/health.cache_backend` `valkey` or `memory`, and `cache_unavailable` / `cache_unauthenticated` in `degraded_reasons`. Both reasons may coexist; memory reports neither. `capabilities.cache_hmac_key: 1` means a usable key was resolved for Valkey at boot, independently of connectivity. `/metrics.cache`: `reconnect_attempts`, `reconnect_successes`, `reconnect_failures`, `operation_failures`, `storage_hits`, `storage_misses`, `storage_evictions`, `storage_oversize_skips`, `corrupt_entries`, `integrity_rejects`. |
+| **Failure impact** | During an outage `/retrieve` works uncached; `/health` goes `degraded` with `cache_unavailable`. Without signing, cached content lacks proof of origin and is served without re-sanitization: an open poisoning path on shared Valkey, reported as `cache_unauthenticated`. Logs use closed connection/operation, parse and six-reason integrity vocabularies, never the URL or key value (see `patterns/LOGGING.md`). |
+| **Compose wiring** | `compose/full.yml` only: service `valkey` = `valkey/valkey:8@sha256:3fbd2e3e…` (8.1.10), `valkey-server --save 60 1 --appendonly no`, volume `forage-valkey-data:/data`, no ports, no password; Forage gets the literal `VALKEY_URL=redis://valkey:6379/4` and the bare `FORAGE_CACHE_HMAC_KEY` runtime passthrough from the private env file. |
 
 Backend selection happens once per start (`_select_cache_storage` in `retrieval_app.py`)
 and **never falls back** from a configured Valkey to memory — a typo must not silently
@@ -143,10 +143,15 @@ become an unshared cache:
 | `VALKEY_URL` | Storage | `/health.cache_backend` | `/health` |
 |---|---|---|---|
 | fully unset | `InMemoryStorage` (bounded LRU, per-process, non-persistent) | `memory` | `healthy`, `cache_connected: true`, no connection attempted |
-| set and reachable | `ValkeyStorage` | `valkey` | `healthy` |
+| reachable, usable signing key | `ValkeyStorage` | `valkey` | `healthy` |
+| reachable, no signing key | `ValkeyStorage` | `valkey` | `degraded`, `cache_unauthenticated` |
 | set and unreachable | `ValkeyStorage` | `valkey` | `degraded`, `cache_unavailable` |
 | set but unparseable | `ValkeyStorage` | `valkey` | `degraded`, `cache_unavailable` (never a failed boot) |
 | set to `""` | `ValkeyStorage` | `valkey` | `degraded`, `cache_unavailable` — empty string is **not** memory mode |
+
+The table assumes PromptGuard is loaded; otherwise add `promptguard_unavailable`.
+The last three rows also add `cache_unauthenticated` if no signing key is configured.
+Reachability alone does not authenticate cached content.
 
 ### Hugging Face Hub and the GHCR weights mirror (PromptGuard, stage 3)
 
@@ -254,8 +259,10 @@ so a revision rotation, a threshold change, or the model finishing its load all
 invalidate existing entries without any flush command (`cache_policy_fingerprint` in
 `cache.py`).
 
-**Values:** `RetrievedContent.model_dump_json()` as UTF-8 bytes (exact byte accounting
-for the in-memory bounds; no live-reference mutation). A hit is returned as
+**Values:** `RetrievedContent.model_dump_json()` as UTF-8 bytes, wrapped as
+`v1.<hex-mac>.<json>` when signing is enabled on Valkey. The HMAC covers the version,
+cache key and exact payload, so a relocated envelope fails verification before parsing.
+Memory and keyless Valkey store bare JSON; the latter lacks authenticity. A hit is returned as
 `model_copy(cache_hit=True, cached_at=retrieved_at)` with a fresh `request_id`.
 
 **TTL rules:** Valkey `EX = effective_ttl_hours * 3600`, where effective TTL is the
@@ -271,10 +278,13 @@ subdomain. IP literals and single-label denylist entries are equality-only;
 single-label allowlists are invalid.
 
 **Refusals:** never stores `untrusted` or `blocked` tiers (`_NO_CACHE_TIERS`) or any
-`injection_detected` result; the memory backend skips single entries larger than
-`cache.max_bytes` (`storage_oversize_skips`). Memory bounds: `max_entries` 256,
-`max_bytes` 32 MiB, evicting expired entries first then LRU; sized for the 1 GiB
-`mem_limit` in the compose fragments.
+`injection_detected` result. Both backends skip writes over `cache.max_value_bytes`
+(4 MiB, including the signed prefix) after deleting any superseded entry;
+`storage_oversize_skips` also counts memory's own `cache.max_bytes` refusal.
+Memory bounds: `cache.max_entries` 256 and `cache.max_bytes` 32 MiB, evicting
+expired entries first then LRU; sized for the 1 GiB `mem_limit` in compose.
+Keep `cache.max_value_bytes` equal across replicas; lowering it can reject old,
+larger Forage-authored values as `oversize`, not proof of tampering.
 
 **Two counter layers:** `/metrics.retrieve.cache_hits` / `cache_misses` count request
 outcomes; `/metrics.cache.storage_*` count storage operations.
@@ -333,12 +343,13 @@ behaviour and status code do not change. Symptom-first remedies are in
 | **SearXNG** unreachable or erroring, including the 200-empty-plus-`unresponsive_engines` shape (`search-fallback` US-002) | Terminal for `/search` only when the configured chain is exactly `[searxng]`: `/search`: **422** `searxng_unavailable` (refused, DNS, 10 s timeout, bad JSON) or `searxng_error` (non-2xx; a 429 means the limiter is on) on that default lone-`searxng` chain; any other configured chain advances to the next provider and refuses with `search_unavailable` only once exhausted, reason `<provider_name>: <failure_class>`. `/retrieve`, `/extract`: unaffected. | **None.** Still `healthy` — SearXNG is not probed (see the documented discrepancy above). | `search.requests`, `search.errors.searxng_unavailable` / `search.errors.searxng_error` / `search.errors.search_unavailable` | Stateless: the next `/search` succeeds as soon as SearXNG answers. No reconnect logic. A changed `SEARXNG_URL` needs a Forage restart (read at import). |
 | **A configured non-SearXNG provider** failing (any chain that is not exactly one `searxng`) | `/search`: **422** `search_unavailable`, reason `<provider_name>: <failure_class>` — the closed pair, never an endpoint or upstream text. `/retrieve`, `/extract`: unaffected. | **None.** Provider status is not a `/health` field in this spec. | `search.requests`, `search.errors.search_unavailable` | Stateless, per request; no in-request retries (ruling 18). Which provider failed is in the 422 `reason`, not the counter key. |
 | **Brave** rejecting, rate-limiting, timing out, or otherwise failing (configured as `chain[0]`) | `/search`: **422** `search_unavailable`, reason `brave: auth` / `brave: rate_limited` / `brave: timeout` / `brave: hard_error` — never the key, the endpoint, or upstream text. `/retrieve`, `/extract`: unaffected. | **None.** Not a `/health` field until spec 4. | `search.requests`, `search.errors.search_unavailable` | Stateless, per request; no in-request retries (ruling 18) and no spend ceiling (ruling 12). `FORAGE_BRAVE_API_KEY` is read once at process start, so a rotated or revoked key needs a container restart. |
-| **Valkey** unreachable at boot or dropped mid-run (`VALKEY_URL` set) | `/retrieve`: **200**, served uncached (`cache_hit: false`), never an error. `/search`, `/extract`: unaffected. | `status: degraded`, `degraded_reasons: ["cache_unavailable"]`, `cache_connected: false`, `cache_backend: valkey` | `cache.reconnect_attempts`, `cache.reconnect_failures`, `cache.operation_failures` (mid-run), `retrieve.cache_misses`; WARNING `Valkey connection failed for content cache (connect_failed|timeout)` / `Content cache operation failed (…)` | Automatic, in place: reconnect with 1 s doubling to 30 s backoff, driven by traffic and by `/health` polls (`ping_if_due`), so recovery is detected even in zero-traffic windows; `cache.reconnect_successes` increments and `/health` returns to `healthy`. Changing `VALKEY_URL` needs a restart; `""` is not memory mode — unset it fully. |
+| **Valkey** unreachable at boot or dropped mid-run (`VALKEY_URL` set) | `/retrieve`: served uncached (`cache_hit: false`), no cache-outage error. `/search`, `/extract`: unaffected. | `status: degraded`, `cache_unavailable` in `degraded_reasons`, `cache_connected: false`, `cache_backend: valkey`; unsigned Valkey also adds `cache_unauthenticated` | `cache.reconnect_attempts`, `cache.reconnect_failures`, `cache.operation_failures` (mid-run), `retrieve.cache_misses`; closed connection/operation WARNING | Automatic reconnect with 1 s doubling to 30 s backoff, driven by traffic and `/health` polls (`ping_if_due`); `cache.reconnect_successes` increments and `cache_unavailable` clears. `healthy` requires no other degraded reason, including missing signing. Changing `VALKEY_URL` needs a restart; `""` is not memory mode — unset it fully. |
+| **Valkey signing key absent** | Cached `/retrieve` content is served without proof of origin or re-sanitization: an open poisoning path on shared Valkey. | `cache_unauthenticated`, no `capabilities.cache_hmac_key`, even when connected | `cache_hmac_key_missing` once at startup; a flat `integrity_rejects` cannot establish authenticity | Stop every replica, set the same CSPRNG-generated `FORAGE_CACHE_HMAC_KEY` everywhere, start. See the credential recipe; never mix keys or keyed/keyless replicas. |
 | **`VALKEY_URL` unset** (memory mode, `compose/minimal.yml`) | Not a failure: `/retrieve` cached per process, entries lost on restart and never shared across containers. | `cache_backend: memory`, `cache_connected: true` always; this mode **cannot** report `cache_unavailable`. | `cache.storage_evictions`, `cache.storage_oversize_skips` under pressure | Not applicable. Set `VALKEY_URL` and restart to switch backends. |
 | **PromptGuard weights unavailable** (no `HF_TOKEN`, token lacks gated-repo access, HF Hub down, mirror down, verification refused, load failed) | `/retrieve`: **200** but `standard`/`untrusted` content with the default `promptguard_fail_closed=true` is quarantined — content-free body, `injection_detected: true`, `injection_spans: ["promptguard_unavailable"]`, `promptguard_state: unavailable_blocked`, penalty -0.5; `trusted` domains unaffected (`skipped_trusted`); `verified` or `fail_closed=false` returns content with `unavailable_allowed`, -0.1. `/search`: results withheld via `omitted_by_reason.promptguard_unavailable` (fail-closed) or returned with `unscanned_results > 0`, `suspicious: true`, `promptguard_unavailable: true` (fail-open). `/extract`: **every** upload quarantined (`unavailable_blocked`) — uploads are always untrusted and fail-closed. | `status: degraded`, `degraded_reasons: ["promptguard_unavailable"]`, `promptguard_loaded: false`, `capabilities` (a presence map that may also carry `brave_api_key`, independently) omitting `search_sanitization` — unless break-glass is armed, in which case only `capabilities.search_sanitization` lies | `model.fetch_failures` (per reached-and-failed leg, or once when no leg was attempted), `model.verify_failures` + `model.quarantines` (refused set), `model.fetch_in_progress` (downloading now), `model.retries_scheduled` (waiting out backoff); `retrieve.promptguard_state.unavailable_blocked` / `unavailable_allowed`, `retrieve.blocked_by_reason.promptguard_unavailable`, `search.omitted_by_reason.promptguard_unavailable`, `search.unscanned_results` | The retry loop runs forever (30 s to 10 min, jittered); once a leg succeeds, `promptguard_loaded` flips in place, `capabilities` gains `search_sanitization`, and every existing cache entry is invalidated because `classifier_loaded` is in the key fingerprint. Remedy for the token-less case is a Hugging Face read token with the Meta license accepted, via env file — never the break-glass variable. |
 | **Target web site** slow, down, oversize, or resolving privately | `/retrieve`: **422** `fetch_timeout` (30 s), `fetch_error` (transport, TLS, more than 5 redirects), `content_too_large` (over 10 MiB), `private_ip`, `invalid_url` (DNS failure, bad scheme), `blocked_domain`. `/search`, `/extract`: unaffected (`/search` result URLs are canonicalised and audited — literal private, embedded-private and blocklisted hosts are dropped under `blocked_url` — but never fetched, and never resolved). | **None.** | `retrieve.requests`, `retrieve.errors.<code>` | Stateless, per request; no retries, nothing to recover. |
 | **GHCR** down | Running containers: no effect unless the weights-mirror fallback is in use (`weights_fetch_failed source=mirror reason=pull_failed|timeout`, then retried). New image pulls and the `publish` job fail. | Only via the weights row above, and only when `FORAGE_MIRROR_TOKEN` is set. | `model.fetch_failures`, `model.retries_scheduled` (mirror leg only) | Weights: the retry loop. Publishing: re-run the workflow; an interrupted push leaves orphan blobs and is safe to re-run (`docs/releases.md`). |
-| **`/app/config.yaml`** missing or invalid | Missing file: WARNING and code defaults, service runs. Invalid `cache:` or `extraction:` value: **the container exits at start** (`CacheConfigurationError` / `ExtractionConfigurationError`). | Boot never completes; no `/health` at all. | None — the process is not up. | Fix the mounted file and restart. This is the only dependency whose failure is a refused boot rather than a degraded one. |
+| **`/app/config.yaml`** missing or invalid | Missing file: WARNING and code defaults, service runs. Invalid `cache:` or `extraction:` value: **the container exits at start** (`CacheConfigurationError` / `ExtractionConfigurationError`). | Invalid bounds: boot never completes; no `/health`. | None — the process is not up. | Fix the mounted file and restart. Invalid signing keys or forbidden Valkey URL query options also refuse boot; see the startup diagnostics in Troubleshooting. |
 
 ---
 

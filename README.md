@@ -116,12 +116,16 @@ content cache and is genuinely optional — which mode you are in is `cache_back
 |---|---|---|
 | How you select it | leave `VALKEY_URL` **fully unset** | set `VALKEY_URL` |
 | `/health` `cache_backend` | `"memory"` | `"valkey"` |
-| `/health` when the cache is fine | `healthy` | `healthy` |
+| `/health` with an operational cache and signing enabled | `healthy` (no key needed) | `healthy` with a usable `FORAGE_CACHE_HMAC_KEY` |
+| `/health` with an operational cache but no signing key | `healthy` (process-private) | `degraded`, `cache_unauthenticated` |
 | `/health` when it is not | n/a — nothing to lose | `degraded`, `cache_unavailable` |
 | Survives a container restart | **no** | yes |
 | Shared between replicas | **no** — one uvicorn worker's process, per-container | yes |
-| Bounded by | `cache.max_entries` / `cache.max_bytes` (256 entries / 32 MiB) | your Valkey |
+| Bounded by | `cache.max_entries` (256), `cache.max_bytes` (32 MiB), `cache.max_value_bytes` (4 MiB per value) | your Valkey's total capacity; `cache.max_value_bytes` (4 MiB) per read/write |
 | Example | [`compose/minimal.yml`](compose/minimal.yml) | [`compose/full.yml`](compose/full.yml) |
+
+Health rows assume PromptGuard is loaded; otherwise `promptguard_unavailable` also
+appears. An unreachable, unsigned Valkey reports both cache reasons.
 
 Two things are easy to get wrong. **Only a *fully unset* `VALKEY_URL` means memory
 mode** — an empty string, or a `VALKEY_URL=${VALKEY_URL}` that rendered nothing, is a
@@ -129,9 +133,13 @@ Valkey you asked for and did not get, and Forage reports `degraded: cache_unavai
 rather than silently substituting a per-process cache. And the cache serves `POST
 /retrieve` only; `/search` has never been cached, in either mode.
 
-A multi-replica or restart-sensitive deployment should set `VALKEY_URL`.
+A multi-replica or restart-sensitive deployment should set `VALKEY_URL` and
+`FORAGE_CACHE_HMAC_KEY` (one CSPRNG-generated signing key shared by every replica).
+Without signing, cached `/retrieve` content is served without proof that Forage wrote
+it or re-sanitization; shared Valkey remains an open cache-poisoning path.
 [`docs/configuration.md`](docs/configuration.md) § "Cache backend selection" has the full
-five-case table.
+six-case table and the credential recipe. Rotation is **stop every replica, change the
+key, start**, never a mixed-key rolling restart.
 
 Local development:
 
@@ -149,8 +157,11 @@ runtime API, and no config database.
 
 - `VALKEY_URL` (**unset by default** — the content cache runs in memory) — content-cache
   connection string. Only a fully unset value selects memory mode; an empty or broken one
-  is a configured Valkey that reports `cache_unavailable`. Supply it through an env file
-  or your secret store, not an inline `-e` flag (shell history).
+  is a configured Valkey that reports `cache_unavailable`; pair `VALKEY_URL` with
+  `FORAGE_CACHE_HMAC_KEY` to authenticate cached values. Supply both through an env file
+  or your secret store, not inline `-e` flags (shell history). The signing key is
+  runtime-only, at least 32 UTF-8 bytes from a CSPRNG, never a passphrase or build argument;
+  see [credential handling](docs/configuration.md#credential-handling-for-forage_cache_hmac_key).
 - `SEARXNG_URL` (default `http://searxng:8080`) — SearXNG base URL for `/search`.
 - `FORAGE_SEARCH_PROVIDERS` (default `searxng`) — ordered, comma-separated chain of search
   backends `POST /search` resolves once at container start; no `config.yaml` key.

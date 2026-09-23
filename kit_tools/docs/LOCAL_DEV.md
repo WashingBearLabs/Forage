@@ -10,8 +10,8 @@
 
 > **TEMPLATE_INTENT:** Complete local development setup guide. Get a new developer running quickly.
 
-> Last updated: 2026-09-13
-> Updated by: Claude (seed-project)
+> Last updated: 2026-09-22
+> Updated by: Copilot (hardening-cache-integrity US-003)
 
 ---
 
@@ -124,12 +124,14 @@ The variables you will actually touch locally:
 |----------|---------|---------|
 | `HF_TOKEN` | unset (a supported, degraded mode) | Hugging Face read token for the gated PromptGuard repo. Read only on a cold weights acquisition, never logged. Runtime only — never a build argument. |
 | `VALKEY_URL` | **unset** — bounded in-memory content cache | A standard `redis://` URL selects the Valkey backend. Only a *fully unset* value means memory mode; an empty string is "configured and broken" and reports `degraded: cache_unavailable`. May carry a password — supply it from an env file, never inline `-e`. |
+| `FORAGE_CACHE_HMAC_KEY` | unset | Optional runtime signing secret for Valkey; without it Valkey is `degraded: cache_unauthenticated`, even if reachable. Memory needs no key. Generate with the [CSPRNG env-file recipe](../../docs/configuration.md#credential-handling-for-forage_cache_hmac_key), never use a passphrase or inline value; stop all replicas before enabling or rotating. |
 | `SEARXNG_URL` | `http://searxng:8080` | Base URL of the SearXNG instance behind `POST /search`. The default assumes a compose network with a service literally named `searxng`. |
 | `HF_HOME` | `/app/model-cache` (image `ENV`; the same default is `model_fetcher.DEFAULT_CACHE_ROOT`) | Weights cache root. Mount the `forage-model-cache` volume here or the weights are re-fetched on every container recreate. |
 
 `config.yaml` keys worth knowing: `promptguard_threshold` (`0.85`), `extract_route_enabled`
 (`false` — `POST /extract` returns 404 until you flip it and restart),
-`cache.max_entries` / `cache.max_bytes` (256 entries / 32 MiB, the in-memory bounds) and
+`cache.max_entries` and `cache.max_bytes` (256 entries / 32 MiB, the in-memory bounds),
+`cache.max_value_bytes` (4 MiB per value, both backends; range 512 KiB-8 MiB), and
 the `extraction.*` limits, which are validated at boot and refuse to start on a bad value.
 Override it in the container with `-v "$PWD/config.yaml:/app/config.yaml:ro"`.
 
@@ -264,9 +266,13 @@ Everything else — engines, pin bumps, the tag lane — is
 [`docs/searxng.md`](../../docs/searxng.md).
 
 **Valkey** backs the content cache, wired by `VALKEY_URL`. Leave it fully unset and the
-cache runs in a bounded in-memory store (`cache.max_entries` / `cache.max_bytes`); set it
+cache runs in a bounded in-memory store (`cache.max_entries` and `cache.max_bytes`); set it
 and the Valkey backend is chosen at start regardless of reachability, with an unreachable
 server reported as `degraded: cache_unavailable` and reconnected on a 1 s → 30 s backoff.
+Both backends also enforce `cache.max_value_bytes` per value; keep it equal across
+replicas, and expect `oversize` rejects against old larger values if you lower it.
+Valkey without `FORAGE_CACHE_HMAC_KEY` additionally reports `cache_unauthenticated`;
+connectivity is not authenticity, and cached content is served without re-sanitization.
 `compose/full.yml` runs `valkey/valkey:8` with the literal `VALKEY_URL=redis://valkey:6379/4`
 (DB index 4 is the `ContentCache` default). Which mode you are in is `cache_backend`
 (`memory` or `valkey`) on `/health`; the selection rules are in
@@ -303,7 +309,9 @@ docker rm -f forage-smoke
 `contract_smoke.py` asserts the `/health` contract in one of two modes:
 `--expect-status degraded` (the default, and what CI runs) for a *token-less, weights-free*
 container like the one above, and `--expect-status healthy` for a container started with
-weights (e.g. `--env-file` carrying `HF_TOKEN`). The wait is status-aware — under `healthy`
+weights and an operational cache (e.g. `--env-file` carrying `HF_TOKEN`, plus
+`FORAGE_CACHE_HMAC_KEY` if Valkey is selected at contract 1.3.0).
+The wait is status-aware — under `healthy`
 it keeps polling through the background PromptGuard load — so raise `--timeout-seconds` for a
 cold weights fetch.
 

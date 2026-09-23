@@ -2,7 +2,7 @@
 # GOTCHAS.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-005)
+> Updated by: Copilot (hardening-cache-integrity US-003)
 
 ## Overview
 
@@ -711,7 +711,7 @@ guards keep it deleted, and both run on every PR:
 | Guard | Scope | Where |
 |---|---|---|
 | `tests/test_dockerfile.py` (20 tests) | the Dockerfile's **text** — no secret-shaped ARG/ENV/RUN assignment, no `from_pretrained`, no token-shaped literal | the `test` lane, and every local `uv run pytest` |
-| the `secret-grep` CI job | the **built image's** `docker history --no-trunc`, for `HF_TOKEN`, `hf_[A-Za-z0-9]{20,}` and `FORAGE_BRAVE_API_KEY` | `.github/workflows/ci.yml`, on the artifact `build-amd64` produced |
+| the `secret-grep` CI job | the **built image's** `docker history --no-trunc`, for four patterns: `HF_TOKEN`, `hf_[A-Za-z0-9]{20,}`, `FORAGE_BRAVE_API_KEY` and `FORAGE_CACHE_HMAC_KEY` | `.github/workflows/ci.yml`, on the artifact `build-amd64` produced |
 
 Both were mutation-verified: re-adding `ARG HF_TOKEN` fails three of the source guards,
 and a deliberately-leaking canary image built with a synthetic token matched both Hugging

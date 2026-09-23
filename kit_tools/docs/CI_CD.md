@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document build pipelines, deployment triggers, and automation. How code gets to production.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-004)
+> Updated by: Copilot (hardening-cache-integrity US-003)
 
 ---
 
@@ -214,10 +214,11 @@ See `kit_tools/testing/TESTING_GUIDE.md` for the suite's layout and current coun
 
 Runs with **no checkout** — it downloads the artifact into an empty working directory,
 `docker load`s it, asserts the loaded ID equals the recorded ID, then runs
-`docker history --no-trunc forage:ci` and greps the output for three patterns: the literal
+`docker history --no-trunc forage:ci` and greps the output for four patterns: the literal
 `HF_TOKEN` (the variable name the deleted bake path used), `hf_[A-Za-z0-9]{20,}` (the
-shape of a Hugging Face token), and the literal `FORAGE_BRAVE_API_KEY` (the Brave search
-credential's variable name — the name only, no key-shape regex). The set is pinned by
+shape of a Hugging Face token), `FORAGE_BRAVE_API_KEY` (Brave search), and
+`FORAGE_CACHE_HMAC_KEY` (cache signing). The latter two match credential variable
+names only, never key-shape regexes. The set is pinned by
 `tests/test_ci_workflow.py::_REQUIRED_GREP_PATTERNS`. Scope is layer *metadata* —
 build-arg, `ENV` and `RUN` lines — which is exactly where a build ARG lands and exactly
 what `docker history` reads back out of any registry. It is not a filesystem scanner.
@@ -258,7 +259,10 @@ which inverts the three PromptGuard-coupled checks — `status: healthy`, no
 `promptguard_unavailable`, `search_sanitization` present — and should raise
 `--timeout-seconds` for a cold weights fetch. The rule is which flag matches which
 container: `degraded` for one started with no token or weights, `healthy` for one started
-with them. When verifying a release image from a checkout other than its tag, `--anchor`
+with them and an operational cache. At contract 1.3.0 a Valkey-backed container also
+needs `FORAGE_CACHE_HMAC_KEY` in the runtime env file; unsigned Valkey remains
+`degraded: cache_unauthenticated` even with weights and connectivity.
+When verifying a release image from a checkout other than its tag, `--anchor`
 takes the file `git show vX.Y.Z:contract/openapi.yaml.sha256` prints — never a Release
 asset or the image's own copy.
 
@@ -307,8 +311,8 @@ Steps, in order:
    reference; the `linux/amd64` config's `rootfs.diff_ids` must equal `gated-layers.json`
    layer for layer, and the comparison is asserted non-vacuous. This is what makes the push
    a *release of the image the gates ran* rather than a rebuild that resembles it.
-7. **Published-config secret grep.** The same three patterns as `secret-grep` (`HF_TOKEN`,
-   `hf_[A-Za-z0-9]{20,}`, `FORAGE_BRAVE_API_KEY`), run over the published image config
+7. **Published-config secret grep.** The same four patterns as `secret-grep` (`HF_TOKEN`,
+   `hf_[A-Za-z0-9]{20,}`, `FORAGE_BRAVE_API_KEY`, `FORAGE_CACHE_HMAC_KEY`), run over the published image config
    JSON for all platforms.
 8. **On `v*` tags only — Release.** `CONTRACT_VERSION` is grepped out of the *tagged tree's*
    `pipeline/contract.py` (currently `1.3.0`; a non-semver read fails the step), and the
@@ -549,7 +553,7 @@ Every cause below is one the workflow's own comments, `docs/releases.md`, or
 | `test` | `tests/test_sanitizer_revision.py` red (the named first step) | a hashed source or the model identity changed | if deliberate, update the pinned revision and record before/after in `docs/bootstrap-notes.md`; otherwise revert |
 | `test` | `tests/test_dockerfile.py` red | an `ARG`, a secret-shaped `ENV`, a lost digest pin, a second `FROM`, a missing `COPY` source | revert; the build takes no arguments, ever |
 | `test` | `tests/test_ci_workflow.py` red | unpinned action, widened permissions, `pull_request_target`, changed `needs:`/`if:` | restore the guarded property; the test names it |
-| `secret-grep` | `HF_TOKEN`, `hf_…` or `FORAGE_BRAVE_API_KEY` in `docker history` | a credential reached a build-arg, `ENV` or `RUN` line | remove it; secrets are runtime-only (`docs/configuration.md`) |
+| `secret-grep` | `HF_TOKEN`, `hf_…`, `FORAGE_BRAVE_API_KEY` or `FORAGE_CACHE_HMAC_KEY` in `docker history` | a credential reached a build-arg, `ENV` or `RUN` line | remove it; secrets are runtime-only (`docs/configuration.md`) |
 | `secret-grep` / `smoke` | loaded image ID differs from `image-id.txt` | artifact/identity mismatch | not a flake — investigate the artifact hand-off before re-running |
 | `smoke` | `/health` never reaches 200 within 120 s | the container did not bind (config error, import failure) | read the container log the job dumps on failure |
 | `smoke` | in-image contract sha256 or `info.version` mismatch | contract not re-exported, or `contract/` not copied | `uv run python -m scripts.export_contract`; check the `Dockerfile`'s `COPY contract/` line |

@@ -2,7 +2,7 @@
 # CODE_ARCH.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-005)
+> Updated by: Copilot (hardening-cache-integrity US-003)
 
 ---
 
@@ -384,7 +384,7 @@ asserts back out of it.
 
 **Health is a body, not a status code.** `/health` always returns 200. `status` is
 `healthy` or `degraded`, with machine-readable `degraded_reasons`
-(`promptguard_unavailable`, `cache_unavailable`). Never "fix" a degraded report by
+(`promptguard_unavailable`, `cache_unavailable`, `cache_unauthenticated`). Never "fix" a degraded report by
 loosening the check — a silent version of this failure once ran unnoticed for nine days
 in production.
 

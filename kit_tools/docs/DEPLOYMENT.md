@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document deployment procedures and rollback processes. How to ship safely.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-004)
+> Updated by: Copilot (hardening-cache-integrity US-003)
 
 ---
 
@@ -97,8 +97,8 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
    but are untrusted ("a red publish is not a release", `docs/releases.md`).
 3. **Pull and verify the image yourself.** The in-image contract is read back and checked
    against the anchor committed *at the same tag*, never against another copy
-   (`contract/GOVERNANCE.md`, Consumers). The history grep uses the same three patterns as
-   CI's `secret-grep` job.
+   (`contract/GOVERNANCE.md`, Consumers). The history grep uses the same four patterns as
+   CI's `secret-grep` job, including the name-only `FORAGE_CACHE_HMAC_KEY` pattern.
 
    ```bash
    TAG=1.1.0
@@ -107,7 +107,7 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
    docker run --rm --entrypoint cat ghcr.io/washingbearlabs/forage:$TAG /app/contract/openapi.yaml.sha256 > openapi.yaml.sha256
    git show v$TAG:contract/openapi.yaml.sha256 | cmp - openapi.yaml.sha256   # anchor from the same tag
    sha256sum -c openapi.yaml.sha256                                          # macOS: shasum -a 256 -c
-   docker history --no-trunc ghcr.io/washingbearlabs/forage:$TAG | grep -Ei 'HF_TOKEN|hf_[A-Za-z0-9]{20,}|FORAGE_BRAVE_API_KEY'   # must print nothing
+   docker history --no-trunc ghcr.io/washingbearlabs/forage:$TAG | grep -Ei 'HF_TOKEN|hf_[A-Za-z0-9]{20,}|FORAGE_BRAVE_API_KEY|FORAGE_CACHE_HMAC_KEY'   # must print nothing
    ```
 
    `gh release download v$TAG --pattern 'openapi.yaml*'` is the alternative route to the
@@ -125,6 +125,11 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
 6. **Confirm `compose/.env`** holds `HF_TOKEN` and `SEARXNG_SECRET`, plus
    `FORAGE_SEARCH_PROVIDERS` and `FORAGE_BRAVE_API_KEY` only if you enable the Brave
    fallback (it is gitignored), and that no variable is being passed inline with `-e`.
+   For a contract-1.3.0 Valkey deployment, supply `FORAGE_CACHE_HMAC_KEY` alongside
+   `VALKEY_URL`; full compose supplies the URL and passes the key from this file.
+   Follow the [CSPRNG recipe](../../docs/configuration.md#credential-handling-for-forage_cache_hmac_key).
+   For first enable or rotation on an existing fleet: **stop every replica, change
+   the key, start**; mixed keys or keyed/keyless replicas delete each other's entries.
 7. **Confirm placement.** The `127.0.0.1:8020:8020` binding stays unless you have put your
    own access control in front; SearXNG and Valkey publish no ports at all.
 
@@ -145,7 +150,7 @@ before bringing them up.
 | Fragment | Starts | Env it needs | Cache mode |
 |----------|--------|--------------|------------|
 | `compose/minimal.yml` (project `forage-minimal`) | `forage` + `searxng` | `HF_TOKEN`, `FORAGE_SEARCH_PROVIDERS`, `FORAGE_BRAVE_API_KEY` (bare pass-through, genuinely unset if absent), `SEARXNG_SECRET` (required-or-fail) | in-memory; `VALKEY_URL` is deliberately absent |
-| `compose/full.yml` (project `forage-full`) | `forage` + `searxng` + `valkey` (`valkey/valkey:8` digest-pinned, 8.1.10) | the same | `VALKEY_URL=redis://valkey:6379/4` as a literal; Valkey persists to `forage-valkey-data` (`--save 60 1`, no password, no ports) |
+| `compose/full.yml` (project `forage-full`) | `forage` + `searxng` + `valkey` (`valkey/valkey:8` digest-pinned, 8.1.10) | the same, plus `FORAGE_CACHE_HMAC_KEY` (bare passthrough, Forage only) for signed caching at contract 1.3.0 | `VALKEY_URL=redis://valkey:6379/4` as a literal; Valkey persists to `forage-valkey-data` (`--save 60 1`, no password, no ports). Without the key, a 1.3.0 service is `degraded: cache_unauthenticated` even when reachable |
 
 Common to both: `forage` publishes only `127.0.0.1:8020:8020`, runs with
 `restart: unless-stopped` and `mem_limit: 1024m`, mounts `forage-model-cache:/app/model-cache`,
@@ -188,12 +193,18 @@ warning and every key falls back to its code default, while a malformed `extract
    `status: "degraded"` with `degraded_reasons: ["promptguard_unavailable"]` while the
    ~270 MiB weight set downloads (measured 19 s cold, 9 s warm on the 1 vCPU / 1 GB
    reference host). Once weights land, expect `promptguard_loaded: true`,
-   `capabilities: {"search_sanitization": 1}`, `contract_version` matching the image's own
+   `capabilities.search_sanitization: 1`, `contract_version` matching the image's own
    contract (`"1.1.0"` for `v1.0.0`, `"1.2.0"` for `v1.1.0`), and
    `cache_backend` reading `valkey` (with `cache_connected: true`) under `full.yml` or
    `memory` under `minimal.yml`. A failed acquisition retries in the background at 30 s,
    doubling to a 600 s ceiling with +/-20% jitter, forever; it converges in place without a
    restart once the token or network is fixed.
+
+   At contract 1.3.0, full compose additionally needs a usable
+   `FORAGE_CACHE_HMAC_KEY`: expect `capabilities.cache_hmac_key: 1` and no
+   `cache_unauthenticated`. Without it that reason persists after weights load and
+   Valkey connects. Memory mode needs no signing key. Credential presence may also
+   add `brave_api_key`; the capability map is not limited to sanitization.
 
    ```bash
    curl -s http://127.0.0.1:8020/health | jq
@@ -218,7 +229,10 @@ warning and every key falls back to its code default, while a malformed `extract
    `--anchor` names (default: the checkout's committed `contract/openapi.yaml.sha256`).
    Pick `--expect-status` by how the container was started: `degraded` (the default, what
    CI uses) for one with no token or weights, `healthy` for one started with them (an
-   `--env-file` carrying `HF_TOKEN`, or the mirror), which inverts the status,
+   `--env-file` carrying `HF_TOKEN`, or the mirror), **and an operational cache**.
+   At contract 1.3.0 a Valkey-backed container also needs a usable
+   `FORAGE_CACHE_HMAC_KEY` in that runtime env file; reachable-but-unsigned Valkey
+   cannot become healthy. The healthy mode inverts the status,
    `promptguard_unavailable` and `search_sanitization` checks — raise `--timeout-seconds`
    for a cold weights fetch. Take the anchor from the committed file at the tag
    (`git show` or a clean checkout), never from the Release assets or the image. Exit `0`
@@ -236,7 +250,9 @@ warning and every key falls back to its code default, while a malformed `extract
      --expect-status degraded --anchor anchor-v$TAG.sha256 \
      --timeout-seconds 120 --poll-interval-seconds 2 \
      --image ghcr.io/washingbearlabs/forage:$TAG
-   # container started with weights: healthy, with room for a cold fetch
+   # Weights and operational cache; for Valkey at contract 1.3.0, the container's
+   # runtime --env-file must also carry FORAGE_CACHE_HMAC_KEY (not a CLI argument).
+   # Healthy, with room for a cold fetch:
    uv run python contract_smoke.py --base-url http://127.0.0.1:8020 \
      --expect-status healthy --anchor anchor-v$TAG.sha256 \
      --timeout-seconds 600 --poll-interval-seconds 2 \
@@ -334,11 +350,14 @@ both keep it that way (`CLAUDE.md` invariant 2). Forage reads no secret store at
 container environment is the only channel.
 
 The credential-bearing variables Forage itself reads are `HF_TOKEN`, `FORAGE_MIRROR_TOKEN`,
-`FORAGE_BRAVE_API_KEY`, and `VALKEY_URL` (which may embed a password); the companion additionally needs
+`FORAGE_BRAVE_API_KEY`, `VALKEY_URL` (which may embed a password), and
+`FORAGE_CACHE_HMAC_KEY` (the CSPRNG-generated cache-signing key); the companion additionally needs
 `SEARXNG_SECRET`. Provide them through `compose/.env`, `--env-file`, or your secret store,
 never as an inline `-e` flag (shell history, `ps`). Remember that `docker inspect` shows a
 container's full environment to anyone who can reach the Docker socket, and that rotating
-`VALKEY_URL` means a restart because it is read once. None of these values ever reach a
+`VALKEY_URL` means a restart because it is read once. For the signing key, stop
+**all** replicas first, replace the key everywhere, then start; never roll different
+keys across the shared cache. None of these values ever reach a
 log line: `cache.py` and `model_fetcher.py` log closed reason vocabularies, and the
 entrypoint prints nothing. The vendoring credentials (`GHCR_USER`, `GHCR_TOKEN`,
 `GITHUB_TOKEN`) are human-only and never given to CI. Details: `kit_tools/arch/SECURITY.md`

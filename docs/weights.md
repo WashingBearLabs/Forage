@@ -337,8 +337,11 @@ log lines each attempt emits are documented in `docs/configuration.md` § "Weigh
 acquisition".
 
 Done looks like: `promptguard_loaded: true`, `promptguard_unavailable` gone from
-`degraded_reasons`, and — cache connected — `status: "healthy"`. From a clean machine to
-that state is this section's acceptance test.
+`degraded_reasons`, and — cache operational, with signing enabled if using Valkey
+at contract 1.3.0 — `status: "healthy"`. Reachable Valkey without
+`FORAGE_CACHE_HMAC_KEY` still reports `cache_unauthenticated`; memory needs no key.
+See the [credential recipe](configuration.md#credential-handling-for-forage_cache_hmac_key).
+From a clean machine to that state is this section's acceptance test.
 
 ### Running without the token — supported, honest, loud
 

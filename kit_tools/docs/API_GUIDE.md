@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document API endpoints, CLI commands, or library interface. The external contract.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-hostname-and-config US-004)
+> Updated by: Copilot (hardening-cache-integrity US-003)
 
 ---
 
@@ -102,11 +102,11 @@ Fields to read (all present; `degraded_reasons` defaults to `[]`):
 | Field | Type | What it tells you |
 |---|---|---|
 | `status` | `"healthy"` or `"degraded"` | `degraded` whenever any reason below is present |
-| `degraded_reasons` | list of `promptguard_unavailable`, `cache_unavailable` | The closed reason vocabulary; an unlisted member cannot appear (response validation would 500) |
+| `degraded_reasons` | list of `promptguard_unavailable`, `cache_unavailable`, `cache_unauthenticated` | The closed reason vocabulary, in that order with inapplicable reasons omitted; an unlisted member cannot appear (response validation would 500). Unsigned Valkey content lacks proof of origin and is served without re-sanitization; both cache reasons may coexist, neither appears in memory mode |
 | `promptguard_loaded` | bool | Whether the Prompt Guard model is loaded. Flips to `true` in place when weights land; no restart needed |
 | `cache_connected` | bool | Live ping in `valkey` mode; always `true` in `memory` mode |
 | `cache_backend` | `"valkey"` or `"memory"` | Which storage was selected at start (added in 1.1.0). `memory` means `VALKEY_URL` was fully unset |
-| `capabilities` | dict of str to int | Presence map, two keys as of 1.2.0: `search_sanitization` present when the model is loaded (or break-glass advertising is armed), `brave_api_key` present when this start resolved a usable `FORAGE_BRAVE_API_KEY` — independently of the sanitization key and untouched by break-glass |
+| `capabilities` | dict of str to int | Presence map, three keys as of 1.3.0: `search_sanitization` present when the model is loaded (or break-glass advertising is armed), `brave_api_key` when this start resolved a usable `FORAGE_BRAVE_API_KEY`, and `cache_hmac_key` only when this start resolved a usable `FORAGE_CACHE_HMAC_KEY` on Valkey (even if disconnected; absent in memory mode). Credential-presence keys are independent of sanitization and untouched by break-glass; values are `1` or the key is omitted |
 | `search_providers` | list of str | The resolved provider chain's names, in traversal order, after key-gated skips (added in 1.2.0). Configuration echo, not a liveness probe |
 | `contract_version` | str | `1.3.0`; the compatibility signal |
 | `sanitizer_revision` | str | Hash of pipeline behaviour; a cache-key input, not a compatibility signal |

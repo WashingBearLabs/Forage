@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document error handling patterns and conventions.
 
-> Last updated: 2026-09-16
-> Updated by: Claude (seed-project)
+> Last updated: 2026-09-22
+> Updated by: Copilot (hardening-cache-integrity US-003)
 
 ## Overview
 
@@ -262,6 +262,8 @@ health semantics are in `kit_tools/docs/MONITORING.md` "Health Checks".
 |------------------------------|--------------------|--------------------|
 | PromptGuard weights (no token, download pending, verification refused) | No substitute classifier. Fail-closed default: standard and untrusted content is quarantined (`unavailable_blocked`), search results are omitted (`promptguard_unavailable`). Fail-open callers get `unavailable_allowed` with a -0.1 penalty. Background loop keeps retrying. | `/health` `status: degraded`, `degraded_reasons` contains `promptguard_unavailable`, `promptguard_loaded: false`; `/metrics.model` (`fetch_in_progress`, `retries_scheduled`, `fetch_failures`, `verify_failures`, `quarantines`); `promptguard_state` per response; WARNING `weights_*` lines |
 | Valkey configured but unreachable | No fallback to memory. Every cache operation is a miss; requests proceed uncached; reconnect on backoff. | `/health` `degraded_reasons` contains `cache_unavailable`, `cache_connected: false`; `/metrics.cache.reconnect_*`; WARNING with a closed-vocabulary reason |
+| Valkey signing key absent | Cached `/retrieve` content is served without proof of origin or re-sanitization; an open cache-poisoning path on shared Valkey. Memory mode needs no key. | `/health` `degraded_reasons` contains `cache_unauthenticated`, even if connected; `cache_hmac_key_missing` at boot. Stop all replicas, set the same CSPRNG key, start; see `docs/configuration.md` |
+| Cache signing key malformed or too short | Boot refused, including in memory mode; no silent fallback to unsigned storage. | `CacheConfigurationError` after `cache_hmac_key_invalid` or `cache_hmac_key_too_short`; no `/health`, no value logged |
 | `VALKEY_URL` fully unset | Bounded in-memory LRU. This is selection, not fallback; memory mode cannot degrade. | `/health` `cache_backend: "memory"`, `cache_connected: true` |
 | SearXNG unreachable or erroring | The next provider in the configured chain serves; `/search` is a 422 only when the chain is exhausted. | `/search` 422 `searxng_unavailable` or `searxng_error` on the default lone-`searxng` chain, `search_unavailable` on any other; not a `/health` field |
 | Target site slow, oversized, private, or over-redirecting | No fallback. | `/retrieve` 422 with `fetch_timeout`, `content_too_large`, `private_ip`, `blocked_domain`, `invalid_url`, or `fetch_error` |

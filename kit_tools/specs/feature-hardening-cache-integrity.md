@@ -1271,6 +1271,90 @@ legitimately names — `scripts/export_contract.py:263-270` writes it on every e
   US-003 retains the broader documentation fan-out; release pins and owner
   release gates are untouched.
 
+### US-003 — operator recipe and documentation fan-out (2026-09-22)
+
+- The canonical credential subsection now generates a CSPRNG key directly into
+  private `compose/.env` without printing it, states the UTF-8/no-base64-decode
+  rule and boot refusal, and requires **stop every replica, change the key,
+  start** for enable/rotation on an existing fleet. Both mixed-key and mixed
+  keyed/keyless fleets are called out as indefinite mutual deletion, not a
+  normal rollout. Full compose's already-landed passthrough is documented;
+  the published image pins and all release gates remain unchanged.
+- Health/capability, bounds, counters, closed log vocabulary, startup refusal
+  and four-pattern CI prose now agree across the named operator/architecture
+  pages. The earlier stories already supplied both runtime rows,
+  `cache.max_value_bytes`, its four sizing relationships and both widened
+  metrics producers; this story retained and completed them, not duplicated
+  them. Logging's mapper/connect/disconnect citations were measured against
+  `cache.py:362-370`, `490-513` and `563-571`.
+- Monitoring separates a 1.3.0 image upgrade (new revision/fingerprint and
+  cache keys, cold cache, no unsigned first-enable burst) from a key-only
+  enable/rotation on the same code (working-set-bounded unsigned/bad-MAC
+  burst). It names all six discriminators, bound-reduction/mismatched-bound
+  oversize, and the compromised-key blind spot. The digest is a credential-free
+  correlation handle, not URL concealment.
+- Security records all four residuals, including unbounded reject-log volume
+  until spec 6's concurrency/latency controls land, and explicitly follows
+  [Adding a new secret](../arch/SECURITY.md#adding-a-new-secret) steps 1-4:
+  one runtime read; closed failures plus leak tests; hermetic clear and both
+  references; no subprocess transmission. Spec 6's existing sizing text
+  includes the promised `cache.max_value_bytes` term; this remains a forward
+  reference, not a claim that the resource envelope has shipped.
+- Two directly related pages outside the hinted edit list also needed
+  correction: `docs/weights.md` still equated connected cache plus loaded
+  weights with healthy, and `arch/patterns/ERROR_HANDLING.md`'s degradation
+  matrix omitted unsigned Valkey and refused signing keys. Only those
+  cache-integrity statements and the touched page's metadata were changed.
+
+**By-value sweep (ruling 39).** The exact criterion command below ran as one
+command before editing and after the fan-out. Start: **21 matching lines**,
+not the pre-prerequisite round-5 estimate of 22. End: **1 matching line**,
+with **zero stale live claims**. The retained exception is
+`contract/GOVERNANCE.md:580`, ruling (j)'s historical quotation
+`description that promised "Always 0 on Valkey"`. It records the superseded
+description and explicitly says both backends now produce the counter; it is
+not a current-vocabulary claim. Preserved under the criterion's explicit
+historical/out-of-vocabulary exception rather than rewriting the recorded
+ruling to game the grep. `storage_evictions` remains memory-only; its rewording
+does not change that fact. The required variable-presence grep returns lines
+in both README and Deployment.
+
+```bash
+grep -rn -iE -e 'two keys' -e 'the two reasons' -e 'exactly two values' -e 'exactly one of .connect_failed' -e 'exactly three strings' -e 'three patterns' -e 'is exactly .promptguard_unavailable' -e 'Always 0 on Valkey' -e 'Only the in-memory storage can move' -e 'in-memory storage refused' -e 'InMemoryStorage. only' -e 'Set and reachable' -e 'when the cache is fine' -e 'Bounds for .InMemoryStorage' -e 'max_entries. / .cache.max_bytes' -e 'ping., .get., .set' docs kit_tools/docs kit_tools/arch README.md .github/workflows/ci.yml contract/GOVERNANCE.md CLAUDE.md
+grep -rn FORAGE_CACHE_HMAC_KEY README.md kit_tools/docs/DEPLOYMENT.md
+```
+
+**Owner gate — proposed exact vision replacements, not applied.**
+`kit_tools/PRODUCT_VISION.md` is byte-identical. The owner must apply these
+two lines; the Key-less floor row at line 63 remains unchanged.
+
+Replace the full line 65, the Fails loud success-criterion row, with:
+
+```markdown
+| Fails loud, never silent | `/health` reports every degraded state (weights absent, cache unreachable or unsigned) and provider status (resolved chain, key presence); a missing paid key is a supported mode, never a degraded state | Each degraded condition has a distinct, documented `/health` signal; provider status is reported without ever exposing a key |
+```
+
+Replace the full line 173, the operator-keys assumption, with:
+
+```markdown
+- The operator brings their own keys (HF token; optional paid search key; optional cache-signing key for Valkey); a key-less deployment on the memory-backed default path is a first-class supported mode, while key-less Valkey is `degraded` with the named reason `cache_unauthenticated`.
+```
+
+**Validation:** 11 targeted documentation tests pass: the four anchor-quoting
+pages, config-key registry parity, unknown-key warning reference, served-path
+posture, unauthenticated-docs posture, and the three README/compose references.
+All 20 added relative links/anchors resolve, the credential recipe passes
+`bash -n` without generating a key, both six-reason/five-marker doc sets are
+present, and `git diff --check` passes. The configured formatter/linter is
+Ruff for Python; no Markdown formatter/linter is configured and no Python
+file changed, so no fixer or type checker was applied to unrelated files.
+Runtime, config, tests, fixtures, contract artifacts, all nine hashed sources
+and the vision are untouched; **no sanitizer rotation**.
+**Full `uv run pytest` remains unverified because this invocation expressly
+prohibits the full suite.** Partial / needs-work records that outstanding
+acceptance gate, not a known implementation defect. No acceptance checkbox,
+story definition or owner-controlled vision/release gate was changed.
+
 ## Refinement Notes
 
 ### Research Findings
