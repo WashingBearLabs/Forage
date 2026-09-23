@@ -624,28 +624,28 @@ sentinel appears zero times in `/health`, `/metrics`, `caplog.text` and `repr(ap
   five protocol sites.
 
 **Acceptance Criteria:**
-- [ ] `retrieval_app.py` contains exactly one `os.environ.get(CACHE_HMAC_KEY_ENV_VAR)` call, inside
+- [x] `retrieval_app.py` contains exactly one `os.environ.get(CACHE_HMAC_KEY_ENV_VAR)` call, inside
       `_resolve_cache_hmac_key()`, and the lifespan calls it once (`grep -c
       "_resolve_cache_hmac_key()" retrieval_app.py` returns 2); blank → absent silently.
-- [ ] A value that is not printable ASCII, contains interior whitespace or control characters, or
+- [x] A value that is not printable ASCII, contains interior whitespace or control characters, or
       is fewer than 32 UTF-8 bytes → the lifespan raises `cache.CacheConfigurationError`
       (`pytest.raises` holds), `str(exc)` names
       `FORAGE_CACHE_HMAC_KEY` and does not contain the value, and exactly one WARNING carrying
       `cache_hmac_key_too_short` or `cache_hmac_key_invalid` is emitted; the refusal docstring
       states that the floor is length, not entropy, and names the CSPRNG recipe.
-- [ ] `cache_unauthenticated` is a member of `pipeline/contract.py`'s `DegradedReason`, both
+- [x] `cache_unauthenticated` is a member of `pipeline/contract.py`'s `DegradedReason`, both
       exact-set tests in `tests/test_contract_errors.py` (`:282`, `:643`) include it and the `:643`
       capability-description assertion still holds, and it appears in
       `degraded_reasons` iff the backend is Valkey and signing is not active; `/health` still
       returns HTTP 200 in that state.
-- [ ] `capabilities["cache_hmac_key"] == 1` iff a usable key was resolved **and** the backend is
+- [x] `capabilities["cache_hmac_key"] == 1` iff a usable key was resolved **and** the backend is
       Valkey; the key is absent from the map otherwise; the in-memory backend produces neither the
       reason nor the capability and logs `cache_hmac_key_unused` once when a key is set; `/health`
       on a lifespan-less transport does not raise.
-- [ ] The `capabilities` Field description and the `:341-351` block comment name three keys;
+- [x] The `capabilities` Field description and the `:341-351` block comment name three keys;
       `grep -n "Two keys are defined" retrieval_app.py` returns nothing; `cache_hmac_key` appears in
       `contract/openapi.yaml` after export.
-- [ ] `test_a_working_valkey_url_selects_valkey_and_stays_healthy` starts with the sentinel key and
+- [x] `test_a_working_valkey_url_selects_valkey_and_stays_healthy` starts with the sentinel key and
       a new sibling asserts the keyless Valkey start is `degraded` with `cache_unauthenticated`;
       `test_a_broken_valkey_url_degrades_and_never_falls_back_to_memory` expects
       `["cache_unavailable", "cache_unauthenticated"]`;
@@ -654,22 +654,22 @@ sentinel appears zero times in `/health`, `/metrics`, `caplog.text` and `repr(ap
       starts` docstring are renumbered to six (`grep -nE 'Cases? [0-9-]+ of 5|[Ff]ive starts'
       tests/test_app.py` returns nothing; 5 today) and the `of 4` series at `:1510` / `:1540` is
       untouched; `SECURITY.md:293`'s citation still resolves.
-- [ ] `_CLEARED_ENV_VARS` contains `FORAGE_CACHE_HMAC_KEY` and the exact-set test in
+- [x] `_CLEARED_ENV_VARS` contains `FORAGE_CACHE_HMAC_KEY` and the exact-set test in
       `tests/test_hermeticity.py` is updated in this story.
-- [ ] Sentinel: the key value appears zero times in `/health`, `/metrics`, every log record and
+- [x] Sentinel: the key value appears zero times in `/health`, `/metrics`, every log record and
       `repr(app.state.cache)` across the four starts.
-- [ ] `contract_smoke.py`'s healthy-mode docstring names `cache_unauthenticated`.
-- [ ] 1.3.0 window (ruling 36): docstring line appended, contract regenerated,
+- [x] `contract_smoke.py`'s healthy-mode docstring names `cache_unauthenticated`.
+- [x] 1.3.0 window (ruling 36): docstring line appended, contract regenerated,
       `tests/golden/contract_1_3_0.json` re-created with US-001's line intact,
       `cache_unauthenticated` appended to `_EXPECTED_ONE_THREE_ZERO_DIFF` as a new enum member
       (`cache_hmac_key` is a dict key, not a schema path — R36 corrected), the four anchor-quoting
       pages refreshed,
       `--check` green, `contract_1_2_0.json` unchanged.
-- [ ] The `sanitizer_revision` rotation (`pipeline/contract.py`) is measured by revert-and-reproduce
+- [x] The `sanitizer_revision` rotation (`pipeline/contract.py`) is measured by revert-and-reproduce
       and recorded at the five protocol sites.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-003: Operator recipe and the documentation fan-out
 
