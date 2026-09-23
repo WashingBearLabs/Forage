@@ -634,11 +634,11 @@ passes with `_EXPECTED_ONE_THREE_ZERO_DIFF` equal to the golden-visible subset o
   `contract/openapi.yaml.sha256`; refresh them if this final regenerate moved the document.
 
 **Acceptance Criteria:**
-- [ ] The `1.3.0` docstring entry is a single well-formed bullet naming exactly the reconciled window
+- [x] The `1.3.0` docstring entry is a single well-formed bullet naming exactly the reconciled window
       list, with the additive sentence and **no** publication-state clause; `_run_entry_extractor`
       prints it verbatim (recorded in Implementation Notes) with no `1.2.0` line; `uv run pytest
       tests/test_ci_workflow.py -k 'extractor or docstring_entry or tense'` green.
-- [ ] The `1.2.0` entry's "held … until" sentence and its "no vendored 1.2.0 copy yet" clause are
+- [x] The `1.2.0` entry's "held … until" sentence and its "no vendored 1.2.0 copy yet" clause are
       removed (`grep -c 'no vendored' pipeline/contract.py` is 0); a `TestReleaseContractMapping` test
       walking every entry with `_slice_entry` applies the three whole-bullet patterns with the named
       failure message, and its recorded red run against the pre-story `1.2.0` entry is in
@@ -647,18 +647,18 @@ passes with `_EXPECTED_ONE_THREE_ZERO_DIFF` equal to the golden-visible subset o
       to `_EXPECTED_ONE_THREE_ZERO_DIFF`; GOVERNANCE § "Two semvers" records `v1.1.0` shipped and `v1.2.0` pending, keeps
       `v1.0.0` in the table, the `US-004` reference and `1.3.0`
       (`test_the_independence_is_stated_with_its_worked_example` green).
-- [ ] `tests/test_contract_schema.py` carries the 1.2.0 → 1.3.0 pair (spec 1's completeness half
+- [x] `tests/test_contract_schema.py` carries the 1.2.0 → 1.3.0 pair (spec 1's completeness half
       confirmed, the presence half added) with `_EXPECTED_ONE_THREE_ZERO_DIFF` equal to the
       golden-visible subset of the window list and the two structural pins; the 1.2.0 pair is
       byte-unchanged and green; `tests/test_contract_metrics.py` asserts every moved counter name is in
       the sliced `1.3.0` entry; the `contract/openapi.yaml` diff since the window opened has every
       description hunk classified in Implementation Notes with zero unclassified.
-- [ ] `tests/golden/contract_1_3_0.json` re-created by hand from `_SCHEMA_MODELS` for the last time;
+- [x] `tests/golden/contract_1_3_0.json` re-created by hand from `_SCHEMA_MODELS` for the last time;
       `uv run python -m scripts.export_contract --check` clean; the four anchors equal the committed
       sha256; the rotation recorded at the five sites with the count sentences moved by artifact (as
       US-001).
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
 
 ### US-004: Pre-release bookkeeping — both fan-outs by value, pins, counts, release-notes draft
 
