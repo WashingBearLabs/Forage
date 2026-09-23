@@ -525,6 +525,14 @@ single-label allowlists are rejected. All entries use the same UTS-46 host
 canonicaliser (case and one trailing dot normalised). Config lists are unbudgeted,
 normalised at boot, and invalid entries produce one `config_invalid_value` WARNING
 per list naming the dropped entries; misplaced credential/URL-shaped entries are redacted.
+Non-string YAML members (including `null`, booleans, numbers and nested collections)
+are dropped with the fixed `[non-string]` token, never their values; valid members
+remain canonicalised in order. A non-list container (including a scalar string,
+`null` or a mapping) publishes `[]` and warns once with
+`dropped=1 entries=[invalid-container]`, without iterating or logging its contents.
+Missing lists and empty lists are quiet. These fallbacks affect only `seed_blocklist`
+and `news_domains`; malformed whole documents and other subsystem blocks retain
+their existing startup refusal behavior. The loaded raw configuration is not mutated.
 
 Request lists are normalised once in the `/retrieve` and `/search` handlers before pipeline entry.
 `blocked_domains` is measured before **any** caller entry is canonicalised, then

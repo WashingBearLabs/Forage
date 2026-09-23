@@ -1774,6 +1774,36 @@ and the same for `kit_tools/arch/SERVICE_MAP.md` each return at least `1`; the f
   pytest gate remains deferred as explicitly required by the implementer
   instructions, not claimed as passed.
 
+### Validation fix — 2026-09-22-001 (2026-09-22, Copilot)
+
+- Reproduced the lifespan crash for a YAML `null` member and the scalar-string
+  container bug (`Evil.COM` became single-character denylist entries) with failing
+  regressions before applying the fix. Both domain lists now check container and
+  member types at the lifespan boundary, before the existing string-only normaliser.
+- Non-string members are dropped using only the fixed `[non-string]` log token;
+  valid entries retain canonical order and the denylist/allowlist distinction.
+  Non-list containers publish `[]` and report `dropped=1 entries=[invalid-container]`,
+  never iterating or stringifying their contents. Each affected list still emits
+  exactly one WARNING; existing credential/URL redaction is unchanged. Missing and
+  empty lists remain quiet, and the loaded raw configuration is not mutated.
+- Added 37 parametrized regression cases for both lists, mixed/all-invalid members,
+  malformed scalar/mapping/set containers, safe logging, missing/empty lists, and
+  unchanged non-mapping whole-document refusal. Existing cache/extraction/retrieve
+  block-refusal regressions pass. No public type/signature, hostname rule, request
+  validation or other subsystem fallback changed.
+- Updated the configuration reference, monitoring/logging descriptions and gotcha.
+  All nine hashed sanitizer sources, the derivation module, contract artifacts,
+  goldens, response models and dependency lock are byte-identical to `3290146`.
+  Default and shipped config still derive
+  `e00049c4ea9d02893c2f3c4f567a6a75f5a4fdfdb145bbf6d6fc701ec7c7ed5c`;
+  lifespan is not hashed, so no rotation or contract regeneration is needed.
+- Validation: 783 focused tests pass across app, URL validator, metrics/docs,
+  sanitizer revision, contract export and type-policy modules. Repository Ruff
+  lint/format checks and strict Pyright pass (zero errors). Three existing
+  non-failing warnings remain unsuppressed (one Torch deprecation and two
+  unavailable-cache socket-guard warnings). Full-suite validation and the review
+  loop remain with the parent validator; this does not complete or archive the spec.
+
 ## Refinement Notes
 
 ### Research Findings

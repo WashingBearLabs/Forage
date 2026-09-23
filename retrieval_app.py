@@ -1419,10 +1419,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _warn_unknown_config_keys(config)
     published_config = config.copy()
     for key, denylist in (("seed_blocklist", True), ("news_domains", False)):
-        entries: list[str] = config.get(key, [])
+        raw_entries: object = config.get(key, [])
+        entries: list[object] = []
         normalized: list[str] = []
         dropped: list[str] = []
+        if isinstance(raw_entries, list):
+            entries = cast(list[object], raw_entries)
+        else:
+            # Do not iterate a scalar/mapping or echo arbitrary YAML values.
+            dropped.append("[invalid-container]")
         for entry in entries:
+            if not isinstance(entry, str):
+                dropped.append("[non-string]")
+                continue
             values, count = normalize_domain_entries(
                 [entry], denylist=denylist, budget_bytes=None
             )

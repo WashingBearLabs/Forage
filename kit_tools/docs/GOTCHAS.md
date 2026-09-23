@@ -70,6 +70,17 @@ rejects the entry and the handler counts it. The regression sends escaped JSON
 through the actual ASGI route. Do not "fix" it with lossy replacement before the
 matcher or by logging the bad entry.
 
+### YAML domain lists need type checks before string normalisation
+
+`seed_blocklist: [null, true, 123]` must warn and drop those members, not crash
+in `.strip()`. A scalar `seed_blocklist: evil.com` must not become a list of
+single-character hostnames. The lifespan checks both list containers and string
+members before calling the string-only normaliser. Non-string members log only
+`[non-string]`; non-list containers publish `[]` and warn once with
+`dropped=1 entries=[invalid-container]`. The same boundary applies to `news_domains`.
+Never stringify arbitrary YAML values into these logs or broaden this fallback to
+non-mapping whole documents or other subsystem blocks: their refusal behavior is unchanged.
+
 ### YAML integers can overflow a float before validation
 
 `pipeline/config_bounds.bounded_float` must compare the original numeric value with

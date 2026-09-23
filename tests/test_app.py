@@ -14,6 +14,7 @@ import threading
 import time
 from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import ExitStack, asynccontextmanager, contextmanager
+from copy import deepcopy
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, cast
@@ -1791,6 +1792,25 @@ async def test_known_bad_config_values_still_refuse_boot(
 
 
 @pytest.mark.parametrize(
+    "document_yaml", ["[secret-value]", '"secret-value"', "true", "123"]
+)
+async def test_domain_list_fallback_does_not_accept_non_mapping_config_documents(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    document_yaml: str,
+) -> None:
+    raw = yaml.safe_load(document_yaml)
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: raw)
+    with pytest.raises(AttributeError):
+        async with lifespan(FastAPI()):
+            pytest.fail("non-mapping configuration started")
+    assert not any(
+        "config_invalid_value" in record.getMessage() for record in caplog.records
+    )
+    assert "secret-value" not in caplog.text
+
+
+@pytest.mark.parametrize(
     ("config", "expected", "warn"),
     [
         ({}, 65536, False),
@@ -2061,6 +2081,137 @@ async def test_lifespan_normalizes_domain_lists_and_names_drops(
     ):
         assert record.levelno == logging.WARNING
         assert f"key={key} dropped=1 entries={entry}" in record.getMessage()
+
+
+@pytest.mark.parametrize(
+    "member_yaml",
+    [
+        "null",
+        "true",
+        "false",
+        "123",
+        "1.5",
+        "2026-09-22",
+        "!!binary c2VjcmV0",
+        "[secret-value]",
+        "{password: secret-value}",
+        "!!set {secret-value: null}",
+    ],
+)
+@pytest.mark.parametrize("mixed", [False, True])
+async def test_lifespan_domain_lists_drop_non_string_yaml_members(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    member_yaml: str,
+    mixed: bool,
+) -> None:
+    _park_the_retry(monkeypatch)
+    entries_yaml = (
+        f'[" Evil.COM. ", "bad..entry", {member_yaml}, '
+        '"https://user:secret-value@example.com/path", ".Example.ORG"]'
+        if mixed
+        else f"[{member_yaml}]"
+    )
+    raw: dict[str, Any] = yaml.safe_load(
+        f"seed_blocklist: {entries_yaml}\nnews_domains: {entries_yaml}\n"
+    )
+    original = deepcopy(raw)
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: raw)
+    monkeypatch.setattr(app, "state", type(app.state)())
+    with caplog.at_level(logging.DEBUG):
+        async with _running_app() as client:
+            assert (await client.get("/health")).status_code == 200
+            assert app.state.config["seed_blocklist"] == (
+                ["evil.com", "example.org"] if mixed else []
+            )
+            assert app.state.config["news_domains"] == (
+                ["evil.com", ".example.org"] if mixed else []
+            )
+            assert app.state.config is not raw
+            for key in ("seed_blocklist", "news_domains"):
+                assert app.state.config[key] is not raw[key]
+    assert raw == original
+    dropped = 3 if mixed else 1
+    entries = "bad..entry,[non-string],[redacted]" if mixed else "[non-string]"
+    assert [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if "config_invalid_value" in record.getMessage()
+    ] == [
+        (
+            logging.WARNING,
+            f"config_invalid_value — key={key} dropped={dropped} entries={entries}",
+        )
+        for key in ("seed_blocklist", "news_domains")
+    ]
+    assert "secret" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "container_yaml",
+    [
+        "null",
+        "true",
+        "false",
+        "123",
+        "1.5",
+        '""',
+        '"Evil.COM"',
+        '"https://user:secret-value@example.com/path"',
+        "{}",
+        "{password: secret-value}",
+        "!!set {secret-value: null}",
+    ],
+)
+async def test_lifespan_domain_lists_reject_non_list_yaml_containers(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    container_yaml: str,
+) -> None:
+    _park_the_retry(monkeypatch)
+    raw: dict[str, Any] = yaml.safe_load(
+        f"seed_blocklist: {container_yaml}\nnews_domains: {container_yaml}\n"
+    )
+    original = deepcopy(raw)
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: raw)
+    monkeypatch.setattr(app, "state", type(app.state)())
+    with caplog.at_level(logging.DEBUG):
+        async with _running_app() as client:
+            assert (await client.get("/health")).status_code == 200
+            assert app.state.config["seed_blocklist"] == []
+            assert app.state.config["news_domains"] == []
+            assert app.state.config is not raw
+    assert raw == original
+    assert [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if "config_invalid_value" in record.getMessage()
+    ] == [
+        (
+            logging.WARNING,
+            f"config_invalid_value — key={key} dropped=1 entries=[invalid-container]",
+        )
+        for key in ("seed_blocklist", "news_domains")
+    ]
+    assert "secret" not in caplog.text
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+async def test_lifespan_missing_or_empty_domain_lists_are_quiet(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    explicit: bool,
+) -> None:
+    _park_the_retry(monkeypatch)
+    raw: dict[str, Any] = {"seed_blocklist": [], "news_domains": []} if explicit else {}
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: raw)
+    monkeypatch.setattr(app, "state", type(app.state)())
+    async with _running_app():
+        assert app.state.config["seed_blocklist"] == []
+        assert app.state.config["news_domains"] == []
+    assert not any(
+        "config_invalid_value" in record.getMessage() for record in caplog.records
+    )
 
 
 @pytest.mark.parametrize("shipped", [True, False])
