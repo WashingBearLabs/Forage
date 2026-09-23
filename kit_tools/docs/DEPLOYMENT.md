@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document deployment procedures and rollback processes. How to ship safely.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-resource-envelope US-002)
+> Updated by: Copilot (hardening-resource-envelope US-003)
 
 ---
 
@@ -153,11 +153,32 @@ before bringing them up.
 | `compose/full.yml` (project `forage-full`) | `forage` + `searxng` + `valkey` (`valkey/valkey:8` digest-pinned, 8.1.10) | the same, plus `FORAGE_CACHE_HMAC_KEY` (bare passthrough, Forage only) for signed caching at contract 1.3.0 | `VALKEY_URL=redis://valkey:6379/4` as a literal; Valkey persists to `forage-valkey-data` (`--save 60 1`, no password, no ports). Without the key, a 1.3.0 service is `degraded: cache_unauthenticated` even when reachable |
 
 Common to both: `forage` publishes only `127.0.0.1:8020:8020`, runs with
-`restart: unless-stopped` and `mem_limit: 1024m`, mounts `forage-model-cache:/app/model-cache`,
+`restart: unless-stopped`, `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` (default `1024m`)
+and `cpus: ${FORAGE_CPUS:-0}` (`0` omits the CPU cap), mounts `forage-model-cache:/app/model-cache`,
 and leaves `SEARXNG_URL` unset so the built-in default `http://searxng:8080` resolves to the
-companion by service name (the name `searxng` is load-bearing). There is no `depends_on` and
-no `healthcheck:` block: Forage starts without SearXNG and reports `/search` failures
+companion by service name (the name `searxng` is load-bearing). There is no `depends_on`:
+Forage starts without SearXNG and reports `/search` failures
 honestly as `searxng_unavailable`.
+
+Size the host and deliver runtime knobs using
+[`docs/configuration.md` § Sizing the container](../../docs/configuration.md#sizing-the-container).
+The fragments require Docker Compose v2 (Compose Spec; verified v2.40.3);
+they do not mount `config.yaml`, so tuning requires the documented full-file bind mount.
+
+Both fragments ship `curl -fsS -o /dev/null http://127.0.0.1:8020/health`,
+every 30 s, timeout 5 s, three retries and start period 30 s. This is **liveness
+only**, not classifier readiness: `/health` always returns 200 and the body is
+discarded. Never gate traffic, `depends_on: service_healthy`, or a consumer's
+activation on it; read `/health`'s `promptguard_loaded` / `degraded_reasons` plus
+`/metrics` `search.unscanned_results`. Plain Compose does not restart unhealthy
+containers; `restart:` reacts to process exits.
+The probe calls `/health`, which pings the cache when due, detecting
+`cache_connected` recovery within one probe interval even without traffic.
+A reconnect can take 2 s of the 5 s probe timeout. With Valkey down, at most one
+reconnect WARNING and one `reconnect_failures` increment occur per probe for as
+long as it stays down: one per probe on connection refused, about one per two
+on connect timeout. That is the down-Valkey heartbeat, not flapping unless
+`reconnect_successes` climbs too.
 
 ```bash
 cd /path/to/Forage/compose
@@ -191,8 +212,9 @@ warning and every key falls back to its code default, while a malformed `extract
 1. **Read the `/health` body.** It always returns HTTP 200; the truth is in the body
    (`CLAUDE.md` invariant 5). On the first boot against an empty volume, expect
    `status: "degraded"` with `degraded_reasons: ["promptguard_unavailable"]` while the
-   ~270 MiB weight set downloads (measured 19 s cold, 9 s warm on the 1 vCPU / 1 GB
-   reference host). Once weights land, expect `promptguard_loaded: true`,
+   ~270 MiB weight set downloads (measured 19 s cold, 9 s warm on the reference envelope (1 vCPU / 1 GB),
+   configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` — see `docs/configuration.md` § Sizing the container).
+   Once weights land, expect `promptguard_loaded: true`,
    `capabilities.search_sanitization: 1`, `contract_version` matching the image's own
    contract (`"1.1.0"` for `v1.0.0`, `"1.2.0"` for `v1.1.0`), and
    `cache_backend` reading `valkey` (with `cache_connected: true`) under `full.yml` or
@@ -372,8 +394,8 @@ guarantee under your traffic.
 
 | Resource | Reference figure | Source |
 |----------|------------------|--------|
-| Host | 1 vCPU / 1 GB; 19 s cold boot, 9 s warm | `docs/configuration.md` |
-| Container memory | `mem_limit: 1024m` = 512 MiB parent (FastAPI + torch + PromptGuard) + 384 MiB pypdf extraction child + ~128 MiB headroom, of which 32 MiB is the in-memory content cache | `compose/*.yml` |
+| Host | Reference envelope (1 vCPU / 1 GB), configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT`; 19 s cold weights boot, 9 s warm, not classify latency | `docs/configuration.md` § Sizing the container |
+| Container memory | `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` (default `1024m`): 512 MiB parent + 384 MiB pypdf child + ~128 MiB headroom (32 MiB cache, 64 MiB provisional classifier working set, 32 MiB margin) at reference defaults | `compose/*.yml`; `docs/configuration.md` § Sizing the container |
 | Weights volume | ~270 MiB (`model.safetensors` is 283,347,432 bytes); a mirror pull needs roughly 2.2x the manifest bytes free during the fetch | `docs/weights.md` |
 | Image | ~348 MB, single stage, CPU-only torch | `Dockerfile`, CI notes |
 | Concurrency | one uvicorn worker; `/extract` concurrency pinned at 1 with queue depth 1 (excess is a 429 `busy`); `/retrieve` fetches time out at 30 s and cap bodies at 10 MiB | `config.yaml`, `pipeline/stage5_url_audit.py` |
@@ -391,10 +413,8 @@ replica, aggregate them yourself.
   grep for. The entrypoint prints nothing by design.
 - **Metrics:** `GET /metrics`, JSON only; there is no Prometheus exporter, OpenTelemetry,
   or hosted APM in the repository. Poll it with your own tooling.
-- **Alerts:** none are defined in this repository. The image ships no `HEALTHCHECK` and the
-  compose fragments declare no `healthcheck:`; if you add one, a bare
-  `curl -f http://127.0.0.1:8020/health` proves only that the process answers, because
-  `/health` is always 200 and the body is where degradation shows.
+- **Alerts:** none are defined in this repository. The image ships no `HEALTHCHECK`; both compose fragments declare a status-only liveness probe.
+  `/health` is always 200; the body, not Docker's health column, is where degradation shows.
 
 `kit_tools/docs/MONITORING.md` has the field-by-field reference and the alert-worthy
 signals; `kit_tools/docs/TROUBLESHOOTING.md` maps each symptom to its remedy.

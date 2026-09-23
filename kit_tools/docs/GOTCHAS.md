@@ -2,7 +2,7 @@
 # GOTCHAS.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-resource-envelope US-002)
+> Updated by: Copilot (hardening-resource-envelope US-003)
 
 ## Overview
 
@@ -15,6 +15,25 @@ live in, and losing them in the move was an identified risk.
 ---
 
 ## Active Gotchas
+
+### Torch and the fast tokenizer see the host's cores, not the cgroup quota
+
+The 2026-09-12 cutover ran behind a 1-CPU quota on a 28-core host. Leaving
+`promptguard_threads: 0` lets both libraries size themselves to the host, not the
+quota. A positive `config.yaml` value pins torch's intra-op threads and disables
+the fast tokenizer's parallel pool; there is no env override or CPU auto-detection.
+Keep threads × classification concurrency within a non-zero `FORAGE_CPUS`.
+See [`Sizing the container`](../../docs/configuration.md#sizing-the-container);
+mount the complete config, since a short replacement silently resets these knobs.
+
+### A healthy container is not a classifying container
+
+Both Compose fragments ship a status-only `/health` probe that discards the body.
+HTTP 200 is liveness even when weights are absent or Valkey is down. Never gate
+traffic, `depends_on: service_healthy`, or consumer activation on Docker's healthy
+state; read `promptguard_loaded`, `degraded_reasons` and `search.unscanned_results`.
+Plain Compose does not restart an unhealthy process. The probe also drives a
+zero-traffic reconnect WARNING/failure-counter baseline while Valkey is down.
 
 ### A successful zlib header read does not identify the deflate format
 

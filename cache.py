@@ -247,11 +247,12 @@ class CacheMetrics:
 
 MEBIBYTE = 1024 * 1024
 
-# Sized to the container's real headroom: ``mem_limit: 1024m`` already reserves
+# Sized to the reference envelope: default ``mem_limit: 1024m`` reserves
 # 512 MiB for the parent FastAPI + torch + PromptGuard process and 384 MiB for
 # the spawned extraction child, leaving ~128 MiB. The 32 MiB default spends a
-# quarter of that, and the ceiling below refuses a value that would spend all
-# of it.
+# quarter of that; 64 MiB is provisional classifier working set, 32 MiB margin.
+# The 128 MiB cache ceiling is inclusive and requires a larger memory envelope.
+# See docs/configuration.md, "Sizing the container" (FORAGE_MEM_LIMIT).
 DEFAULT_CACHE_MAX_ENTRIES = 256
 DEFAULT_CACHE_MAX_BYTES = 32 * MEBIBYTE
 DEFAULT_CACHE_MAX_VALUE_BYTES = 4 * 2**20

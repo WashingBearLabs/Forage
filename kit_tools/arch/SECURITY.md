@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document authentication, authorization, and secrets management. Security architecture reference.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-provider-bounds US-002)
+> Updated by: Copilot (hardening-resource-envelope US-003)
 
 ---
 
@@ -239,7 +239,18 @@ is pinned by a regression test, not silently repaired.
 
 ### Upload ceilings
 
-`pipeline/extraction_limits.py` defines hard ceilings that `config.yaml` may lower but never raise: `MAX_INPUT_BYTES` 50 MiB, `MAX_PDF_PAGES` 500, `MAX_CHILD_CPU_SECONDS` 20, `MAX_CHILD_ADDRESS_SPACE_BYTES` 384 MiB (Linux `RLIMIT_AS`), `MAX_EXTRACTION_WALL_SECONDS` 90, `MAX_EXTRACTED_OUTPUT_BYTES` 2 MiB, and a character ceiling of `(512 - 64) * 64 * 4 = 114688` derived from the PromptGuard chunk budget. `extraction_settings_from_config` rejects booleans-as-integers and out-of-range values with `ExtractionConfigurationError`.
+`pipeline/extraction_limits.py` defines hard ceilings: `MAX_INPUT_BYTES` 50 MiB,
+`MAX_PDF_PAGES` 500, `MAX_CHILD_CPU_SECONDS` 20, `MAX_EXTRACTION_WALL_SECONDS` 90,
+`MAX_EXTRACTED_OUTPUT_BYTES` 2 MiB, and a character ceiling of
+`(512 - 64) * 64 * 4 = 114688` derived from the PromptGuard chunk budget.
+These remain ceilings, unlike three keys that may exceed shipped values:
+`classification_concurrency` (1–8 under the memory rule and boot
+`envelope_memory_rule_unmet` WARNING), `child_address_space_bytes` (128–512 MiB),
+and `admission_queue_depth` (0–4). Despite its name, `MAX_CHILD_ADDRESS_SPACE_BYTES`
+is the **384 MiB shipped default**, not the maximum: raising the key widens the
+untrusted-PDF child's Linux `RLIMIT_AS`. `extraction_settings_from_config` rejects
+booleans-as-integers and out-of-range values with `ExtractionConfigurationError`.
+See [`docs/configuration.md` § Sizing the container](../../docs/configuration.md#sizing-the-container).
 
 ### The upload path
 
@@ -260,13 +271,19 @@ candidate, not the distinct pre-existing queued-waiter handoff residual below.
 | Route | Limit | Over capacity |
 |---|---|---|
 | `POST /extract` | `extraction_concurrency=1`, `admission_queue_depth=1` (configurable 0 to 4), `max_queued_upload_bytes` 50 MiB (`ExtractionAdmissionController`) | `429 {"error": "busy"}` |
-| PromptGuard inference, all routes | `classification_semaphore = asyncio.Semaphore(classification_concurrency=1)` | `/retrieve` and `/search` wait at most `promptguard_wait_seconds`, then take the classifier-unavailable outcome; `/extract` queues with **no wait timeout** |
+| PromptGuard inference, all routes | Shared `asyncio.Semaphore`, `classification_concurrency=1` shipped, configurable 1–8 under the memory rule; below-rule boot WARNING is advisory, not OOM protection | `/retrieve` and `/search` wait at most `promptguard_wait_seconds`, then take the classifier-unavailable outcome; `/extract` queues with **no wait timeout** |
 | `POST /retrieve` | a second `ExtractionAdmissionController` over fetch and stage 1 (`hardening-retrieve-parity` US-002): `retrieve.fetch_concurrency` (pinned 1), `retrieve.admission_queue_depth` (default 4, 0 to 16), `retrieve.max_queued_fetch_bytes` (default 30 MiB, one 10 MB reservation per queued request), a wait bounded by construction with no timer. A queued request holds no body; the body is released with the slot, before the classification wait. It bounds the *rate* through stage 1, not the population of classification waiters past it (no `--limit-concurrency`; each waiter holds at most ≈ 459 KB of extracted text) | `422 {"error": "busy", "reason": "admission_queue_full"}`, counted under `retrieve.busy_rejections`. PDF parsing inside the slot runs in the `/extract` worker under `/extract`'s rlimits (`child_cpu_seconds`, `child_address_space_bytes`, `wall_clock_seconds`, `max_pages`; `hardening-retrieve-parity` US-003); a worker failure is 422 `extraction_failed`, never a 500 |
 | `POST /search`, `GET /health`, `GET /metrics` | none | not applicable |
 
 "All routes" in that middle row was aspirational until `hardening-retrieve-parity` US-006; it is literally true now. All three classifying routes take the same permit around **stage 3 only** — `/extract` moved its acquisition inward from the outer `async with` that used to wrap stages 2, 3 and 4 — through one `_bounded_permit` context manager in `pipeline/orchestrator.py`, whose release runs only when the permit was actually acquired, so a timed-out wait can never strand it.
 
 **Security Considerations — a saturated semaphore is a route around the classifier.** When the permit is held and the wait expires, a `/retrieve` or `/search` request that set `promptguard_fail_closed: false` is served **unscanned**: the body is marked (`promptguard_state: unavailable_allowed` on `/retrieve`; `suspicious: true` with `promptguard_unavailable: true` and a non-zero `unscanned_results` on `/search`), but no ML classification ran. That outcome is load-triggerable on an unauthenticated service — an in-network caller who can saturate the single classification permit can steer another caller's fail-open request past Stage 3 — and it is counted, not silent: `retrieve.classification_wait_timeouts` and `search.classification_wait_timeouts` on `/metrics`, plus one WARNING per event carrying the closed token `classification_wait_timeout route=<retrieve|search>` and nothing caller-derived.
+
+**Under-sizing is a security decision:** a classification wait that outlives
+`promptguard_wait_seconds` is `unavailable_blocked` for fail-closed requests and
+`unavailable_allowed` (served unscanned and marked) for fail-open ones. An envelope
+that cannot keep the loop under the target chooses between availability and scanning
+for its fail-open callers; see `docs/configuration.md` § Sizing the container.
 
 Three things bound the exposure. **The policy posture:** the request default is `promptguard_fail_closed: true`, so STANDARD/UNTRUSTED fail-open outcomes require an explicit opt-out and an operator floor of `false` (the shipped default). Setting `promptguard_fail_closed_floor: true` closes that flag-controlled route, but not the caller's `trusted_tier` skip or VERIFIED fail-open exemption. **The cache is not poisonable through it:** a fail-open wait-timeout body is never written to the content cache. `cache_policy_fingerprint`'s `classifier_loaded` input assumes an unscanned body implies `classifier_loaded=False`, which a wait timeout breaks, so `run_retrieve_pipeline` refuses to store a body that is `unavailable_allowed` while the classifier is loaded — otherwise a saturation event lasting `promptguard_wait_seconds` would pin an attacker-chosen unscanned body for a whole `cache_ttl_hours` and replay it to every later request. The absent-classifier fail-open body still caches under its `classifier_loaded=False` key exactly as before. **Nothing is acquired that would not classify anyway:** with the classifier absent or still warming, or with the domain in `trusted_domains`, no route touches the permit and no counter moves.
 
@@ -521,7 +538,7 @@ filtered to a strict `YYYY-MM-DD` calendar date or `None`, so neither can carry 
 The exploration found no source that either accepts or rejects these. They are listed so that a decision can be recorded, not because one has been made.
 
 - **Exception text on the wire.** `/retrieve` `fetch_error` is now the **only** reason that interpolates `str(exc)` into the response body (`pipeline/orchestrator.py`, the fetch catch-all). Whether upstream error text can carry anything sensitive is neither documented nor tested there. Redaction would be a wire change under `contract/GOVERNANCE.md`. `/search`'s `searxng_unavailable` was the other case and is closed: `search-provider-abstraction` US-002 replaced `str(exc)` with the provider's closed `detail` token and replaced the raw `SEARXNG_URL` echo with `SearxngProvider.origin` — scheme, host and port, userinfo stripped — so a credential in `SEARXNG_URL` can no longer reach a 422 body on an unauthenticated route. The host:port echo stays deliberately (GOVERNANCE ruling (d) treats it as a documented caveat; it is what makes a misconfigured deployment diagnosable from the response alone).
-- **Container hardening beyond non-root.** The compose fragments set `mem_limit: 1024m` and nothing else: no `read_only` rootfs, no `cap_drop`, no `no-new-privileges`, no seccomp profile, no `pids_limit`, no CPU quota. Unknown whether that is a deliberate omission.
+- **Container hardening beyond non-root.** The compose fragments set `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` and `cpus: ${FORAGE_CPUS:-0}` (no CPU quota unless the operator sets one) and nothing else: no `read_only` rootfs, no `cap_drop`, no `no-new-privileges`, no seccomp profile, no `pids_limit`. Unknown whether that is a deliberate omission.
 - **TLS to companions.** Whether the Valkey and SearXNG links must be TLS-protected on the private network is not stated; `VALKEY_URL` examples are plain `redis://`.
 - **Dependency vulnerability scanning.** None found (see "Supply Chain Integrity").
 - **Fuzzing.** None found (see "Security Testing").

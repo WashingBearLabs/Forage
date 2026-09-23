@@ -11,7 +11,7 @@
 > **TEMPLATE_INTENT:** Complete local development setup guide. Get a new developer running quickly.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-cache-integrity US-003)
+> Updated by: Copilot (hardening-resource-envelope US-003)
 
 ---
 
@@ -206,7 +206,8 @@ While the download converges, watch `/metrics` (`model.fetch_in_progress`, then
 `model.retries_scheduled`), not `docker logs` — the success narrative is logged at INFO
 and nothing configures logging (see Troubleshooting). `promptguard_loaded` flips to
 `true` in place. A warm start from the volume needs no network (about 9 s warm, 19 s cold
-on the 1 vCPU / 1 GB reference envelope). Volume layout and the full walk-through:
+on the reference envelope (1 vCPU / 1 GB), configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` —
+see `docs/configuration.md` § Sizing the container). Volume layout and the full walk-through:
 [`docs/weights.md`](../../docs/weights.md).
 
 #### Compose fragments
@@ -232,9 +233,10 @@ working tree.** Both pin `ghcr.io/washingbearlabs/forage:1.1.0` and
 `ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`; both pins resolve (`v1.1.0` published
 2026-09-18 — the `manifest unknown` a `docker compose up` returned before then was
 sequencing, not breakage). To run the image you just built, use the `docker run` form
-above. Second,
-neither fragment declares a `healthcheck:` and the `Dockerfile` has no `HEALTHCHECK` — the
-"10 s x 5 retries" check that source comments mention belongs to Poppy's compose, not this repo.
+above. Second, the image has no `HEALTHCHECK` instruction; both compose fragments declare a liveness probe.
+Its `curl -fsS -o /dev/null` discards `/health`'s body: a Docker-healthy container
+need not be classifying. Read `promptguard_loaded` and `degraded_reasons`;
+never use this probe to gate traffic, start ordering or consumer activation.
 
 #### Bare host (inferred — not a documented workflow)
 

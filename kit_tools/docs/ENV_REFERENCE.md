@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document environment variables and secrets. What config exists and where to find it.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-resource-envelope US-004)
+> Updated by: Copilot (hardening-resource-envelope US-003)
 
 ## Overview
 
@@ -53,6 +53,20 @@ Naming rule (`CLAUDE.md` invariant 1): the primary name of every Forage-specific
 | `FORAGE_MODEL_REVISION` | none | `11614a155199674a0a95e6602d6ab0417b790ed0` (`DEFAULT_MODEL_REVISION`, equal to `weights_manifest.json`) | no | no | `resolve_revision()`, acquisition | Committed pin used. Anything but a 40-hex sha logs `model_revision_invalid` and the pin is used; the value is never echoed. |
 | `FORAGE_WEIGHTS_MIRROR` | none | `ghcr.io/washingbearlabs/forage-weights` (`DEFAULT_WEIGHTS_MIRROR`) | no | no | `resolve_mirror_repository()`, acquisition | Default private mirror. Must be lower-case `<registry>/<owner>/<name>`, optional `https://`; anything else logs `weights_mirror_invalid` and the mirror is treated as unconfigured. The tag is always the revision. |
 | `FORAGE_MIRROR_TOKEN` | none | unset | no | **yes** | `_resolve_mirror_token()`, acquisition; fed to `oras login --password-stdin` | Mirror leg skipped, the same shape as a missing `HF_TOKEN`. Third parties cannot read the mirror, so leave both unset. |
+
+### Container envelope (never read by Forage; Compose substitution only)
+
+| Variable | Default | Required | Secret | Effect |
+|---|---|---|---|---|
+| `FORAGE_CPUS` | `0` | no | no | Both fragments substitute service-level `cpus`; unset or `0` makes Compose omit the cap, exposing every host core. Non-zero quotas require explicit thread sizing in `config.yaml`. Below 1 vCPU is unsupported. |
+| `FORAGE_MEM_LIMIT` | `1024m` | no | no | Both fragments substitute `mem_limit` using Docker byte-unit syntax. Invalid syntax fails before startup; verify the applied ceiling with `/metrics` `extraction.cgroup_memory_max_bytes`. |
+
+Use Docker Compose v2 (Compose Spec; verified v2.40.3). Set these in `compose/.env`
+or the Compose process's environment, not the service's runtime environment;
+they do not belong in `tests/conftest.py`'s `_CLEARED_ENV_VARS`. Runtime tunables
+remain in a full-file bind-mounted `config.yaml`, with no env override for
+`promptguard_threads`. See
+[`docs/configuration.md` § Sizing the container](../../docs/configuration.md#sizing-the-container).
 
 ### Companion SearXNG container (never read by Forage)
 

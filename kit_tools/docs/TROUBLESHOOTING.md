@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document debugging procedures and common fixes. How to diagnose problems.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-cache-integrity US-003)
+> Updated by: Copilot (hardening-resource-envelope US-003)
 
 ---
 
@@ -283,7 +283,8 @@ Problems, "Content unscanned").
 **Fix:** a Hugging Face account with the Meta license accepted on
 `meta-llama/Llama-Prompt-Guard-2-22M` and a fine-grained read token, supplied as `HF_TOKEN`
 through the env file (`docker run --env-file`, or `compose/.env`). The retry loop converges
-**in place**, no restart; expect about 270 MiB and 19 s cold on 1 vCPU / 1 GB. The
+**in place**, no restart; expect about 270 MiB and 19 s cold on the reference envelope (1 vCPU / 1 GB),
+configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` — see `docs/configuration.md` § Sizing the container. The
 token-less container keeps logging the ERROR at the 10-minute ceiling forever; that is
 deliberate. Never "fix" this with `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION`: it makes
 only `capabilities` lie and logs `break_glass_advertisement_active` every boot.
@@ -654,7 +655,11 @@ relies on parent supervision), 90 s wall clock and 500 pages, and any breach is
 UTF-8, never by `mime_hint`.
 
 **Fix:** check `/metrics.extraction.verdicts` for the distribution. The shipped
-`extraction.*` limits are already the maxima; `config.yaml` can only tighten them.
+`extraction.*` limits are already the maxima except three raisable keys:
+`classification_concurrency` (1–8 under the memory rule and boot WARNING),
+`child_address_space_bytes` (128–512 MiB, widens the untrusted-PDF sandbox), and
+`admission_queue_depth` (0–4). See `docs/configuration.md` § Sizing the container
+before raising a bound.
 
 ---
 
@@ -806,15 +811,19 @@ Fix the mounted `config.yaml` or raise memory, then recreate.
 `extraction_failed` clustering on large PDFs. `/metrics.extraction.oom_proximity_ratio`
 approaches 1.
 
-**Cause:** the budget behind the compose `mem_limit: 1024m` is roughly 512 MiB for the
+**Cause:** the reference budget behind `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` (default `1024m`) is 512 MiB for the
 parent (torch and the 22M-parameter model), 384 MiB for the pypdf child's address space,
-and about 128 MiB headroom including the 32 MiB in-memory cache. `oom_proximity_ratio` is
+and about 128 MiB headroom: 32 MiB in-memory cache, 64 MiB provisional classifier
+working set and 32 MiB margin. See `docs/configuration.md` § Sizing the container
+for the model-dependent rule and Valkey branch. `oom_proximity_ratio` is
 `cgroup memory.current / memory.max` and is `null` off Linux or when the limit is `max`;
 the explorer's suggested alert line is above 0.9.
 
-**Fix:** do not lower `mem_limit` below the fragments' value; on a shared host, give the
-container the whole budget. Tightening `extraction.child_address_space_bytes` in
-`config.yaml` trades extraction capacity for headroom.
+**Fix:** size `FORAGE_MEM_LIMIT` to the configured rule, then verify
+`extraction.cgroup_memory_max_bytes`. Boot warns `envelope_memory_rule_unmet` when
+the readable limit is too small; it does not refuse to run. Tightening
+`extraction.child_address_space_bytes` in `config.yaml` trades extraction capacity
+for headroom; increasing concurrency, model size or cache requires more memory.
 
 ---
 
@@ -851,15 +860,19 @@ which is expected.
 
 ---
 
-### Adding a container healthcheck
+### The shipped healthcheck and what it means
 
-**Symptom:** an orchestrator wants liveness and none ships: neither the `Dockerfile` nor the
-compose fragments declare one (the "10 s x 5 retries" in code comments is Poppy's compose).
+**Symptom:** Docker says healthy while Forage reports degraded or serves marked,
+unscanned results. The image has no `HEALTHCHECK`; both compose fragments declare a liveness healthcheck.
+The status-only `curl -fsS -o /dev/null` probe has a 30 s interval, 5 s timeout,
+three retries and a 30 s start period.
 
-**Fix:** if you add one, `curl -f http://127.0.0.1:8020/health` proves only that the process
-answers. The truth is in the body, and `status: "degraded"` is a 200 by contract; gate
-readiness on `promptguard_loaded` or `capabilities.search_sanitization` as Poppy's deploy
-wait does.
+**Fix:** treat this as liveness only. Never gate traffic, `depends_on:
+service_healthy`, or consumer activation on Docker's health state. Read `/health`
+`promptguard_loaded` / `degraded_reasons` and `/metrics` `search.unscanned_results`.
+Plain Compose does not restart unhealthy containers. The probe also drives cache
+recovery polls; with Valkey down, reconnect failures and WARNINGs have a baseline
+of one per probe on refusal or about one per two on timeout. See `MONITORING.md`.
 
 ---
 

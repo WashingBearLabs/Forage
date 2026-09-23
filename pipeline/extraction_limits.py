@@ -53,9 +53,10 @@ def max_extracted_characters(max_chunks: int) -> int:
 class ExtractionSettings:
     """Validated limits for one sidecar process.
 
-    The 1 GiB container reserves at least 512 MiB for the long-lived FastAPI,
-    torch, and PromptGuard process. The spawned pypdf child is capped at
-    384 MiB, so parser working memory cannot consume the parent's reservation.
+    The reference 1 GiB envelope reserves 512 MiB for the parent with the
+    22M model resident. The pypdf child's default is 384 MiB, configurable
+    from 128 to 512 MiB. See docs/configuration.md, "Sizing the container",
+    for the model, classification, configured child and cache reservations.
     """
 
     route_enabled: bool = False

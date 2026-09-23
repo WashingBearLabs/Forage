@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document logs, metrics, alerts, and dashboards. How to observe the system.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-resource-envelope US-004)
+> Updated by: Copilot (hardening-resource-envelope US-003)
 
 ---
 
@@ -25,7 +25,7 @@ Everything an operator has is reachable with `curl`, `docker logs`, and two scri
 - Container stdout/stderr via `docker logs` — WARNING and ERROR lines only, with grep-able markers (this page, "Logging").
 - `contract_smoke.py` and `searxng_smoke.py` — post-deploy probes (this page, "Post-Deploy Probes").
 
-What does **not** exist, so nobody goes looking: no Prometheus exporter, no OpenTelemetry, no StatsD, no Sentry, no Datadog, no dashboards, no alert rules, no log shipping, no request tracing, no status page, and no `HEALTHCHECK` in the `Dockerfile` or in `compose/minimal.yml` / `compose/full.yml`. A grep of source, config, and docs for any of those integrations finds nothing. Whatever monitoring exists is the operator's own tooling polling `/health` and `/metrics`.
+What does **not** exist, so nobody goes looking: no Prometheus exporter, no OpenTelemetry, no StatsD, no Sentry, no Datadog, no dashboards, no alert rules, no log shipping, no request tracing and no status page. There is no image-level `HEALTHCHECK`; both compose fragments declare a status-only liveness healthcheck. Body-aware monitoring is the operator's own tooling polling `/health` and `/metrics`.
 
 Related pages: `kit_tools/arch/SERVICE_MAP.md` (failure impact matrix per dependency), `kit_tools/arch/INFRA_ARCH.md`, `kit_tools/arch/SECURITY.md` (security-relevant logging), `kit_tools/docs/TROUBLESHOOTING.md` (symptom to remedy), `kit_tools/docs/DEPLOYMENT.md`, `kit_tools/arch/patterns/LOGGING.md` (logging conventions), and the canonical `docs/configuration.md` health-field reference.
 
@@ -106,7 +106,7 @@ A consumer or deploy script should gate in this order:
 
 ### Startup budget
 
-Measured boot on 1 vCPU / 1 GB (`docs/configuration.md`): 19 s cold (weights download) and 9 s warm (verified set already on the `HF_HOME` volume, zero network). Startup never blocks on weights: the lifespan yields immediately and `/health` answers `degraded` while `WeightAcquisition` runs as a background task. CI's smoke job and `contract_smoke.py` allow 120 s for `/health` to answer 200.
+Measured weights boot on the reference envelope (1 vCPU / 1 GB), configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` — see `docs/configuration.md` § Sizing the container: 19 s cold (weights download) and 9 s warm (verified set already on the `HF_HOME` volume, zero network). These are not classify latencies. Startup never blocks on weights: the lifespan yields immediately and `/health` answers `degraded` while `WeightAcquisition` runs as a background task. CI's smoke job and `contract_smoke.py` allow 120 s for `/health` to answer 200.
 
 ---
 
@@ -156,8 +156,11 @@ Backed by `retrieval_app.SearchMetrics`.
 
 **Latency runbook.** A rising exceeded-over-requests ratio with a max under 2×
 the target: raise the target; above it: raise `FORAGE_CPUS` /
-`promptguard_threads` (see [§ Sizing the container](../../docs/configuration.md#sizing-the-container),
-the forward reference US-003 closes). Compare at the same `num_results`, and
+`promptguard_threads` (see [§ Sizing the container](../../docs/configuration.md#sizing-the-container)).
+Confirm `FORAGE_MEM_LIMIT` landed via `/metrics`
+`extraction.cgroup_memory_max_bytes`; confirm CPU quota with
+`docker inspect -f '{{.HostConfig.NanoCpus}}' <container>` (no in-service CPU signal).
+Compare at the same `num_results`, and
 remember that a process-lifetime max is not a percentile or a rolling-window peak.
 Under spec 2 US-006 the signal that fail-open requests are being served unscanned is
 `search.classification_wait_timeouts` rising; the max is whole-loop wall time —
@@ -212,7 +215,7 @@ not request outcomes.
 
 | Counter | Kind | Increments when | A rising value means |
 |---------|------|-----------------|----------------------|
-| `reconnect_attempts` / `reconnect_successes` / `reconnect_failures` | counters | `ValkeyStorage._ensure_client`, gated by backoff (1 s doubling to a 30 s cap, 2 s connect+ping deadline). Also driven by `/health`'s `ping_if_due()`, so polling `/health` itself exercises these. | `reconnect_failures` climbing: Valkey unreachable; `attempts` climbing with `successes` climbing: flapping. |
+| `reconnect_attempts` / `reconnect_successes` / `reconnect_failures` | counters | `ValkeyStorage._ensure_client`, gated by backoff (1 s doubling to a 30 s cap, 2 s connect+ping deadline). The compose healthcheck polls `/health` every 30 s and drives `ping_if_due()`, even without traffic. | With Valkey down these counters have a non-zero, steadily climbing attempt/failure baseline: at most one attempt per probe, one per probe on connection refused, about one per two on connect timeout. The **rate**, not the cumulative value, is diagnostic; `successes` climbing too indicates flapping. |
 | `operation_failures` | counter | `ValkeyStorage._mark_disconnected` after a `getrange` / `set` / `delete` failed (except a `WRONGTYPE` read). | Valkey dropping mid-run; `/retrieve` continues uncached. |
 | `storage_hits` / `storage_misses` | counters | Key lookups, both backends. | — |
 | `storage_evictions` | counter | Memory-only eviction; Forage does not evict Valkey's entries for total-capacity pressure. | Memory-mode cache bounds being hit. |
@@ -454,7 +457,7 @@ These are **suggested watch points**, not configured alerts. No thresholds are d
 | Weights never arrive | `promptguard_loaded: false` and `promptguard_unavailable` past the cold-start budget (19 s cold measured; CI allows 120 s) | `model.fetch_failures` rising with `model.retries_scheduled` climbing and `fetch_in_progress: false` | ERROR `weights_unavailable ... Attempts: huggingface=<code>, mirror=<code>`, preceded by `weights_fetch_failed` (token lacks access: `http_401` / `http_403`; revision gone: `http_404`) or `weights_fetch_skipped` (no token) |
 | Download refused by the verifier | same as above | `model.verify_failures` and `model.quarantines` rising; `fetch_failures` unchanged for `refused_verification` | ERROR `weights_verification_failed — reasons: file_extra|hash_mismatch|...`, then `weights_quarantined` |
 | Verified set will not load | same as above | — | WARNING `PromptGuard model not available` with traceback, then ERROR `weights_load_failed`; check `mem_limit` (torch OOM) |
-| Cache flapping or down | `cache_unavailable` appearing and disappearing; `cache_connected` toggling (Valkey mode only) | `cache.reconnect_attempts` / `reconnect_failures` climbing; `cache.operation_failures` rising on mid-run drops | WARNING `Valkey connection failed for content cache (connect_failed|timeout)`; `Content cache operation failed (operation_failed|timeout)` |
+| Cache flapping or down | `cache_unavailable` steady when down, appearing/disappearing when flapping; `cache_connected` toggles only on recovery/drop (Valkey mode) | `cache.reconnect_failures` climbing at the probe-driven rate (one per probe when refused, about one per two on timeout) is the down-Valkey heartbeat; `reconnect_successes` climbing too is flapping. `operation_failures` rises on mid-run drops. | WARNING `Valkey connection failed for content cache (connect_failed|timeout)`; `Content cache operation failed (operation_failed|timeout)` |
 | Cache signing absent | `cache_unauthenticated`, even if `cache_connected: true` | No counter can prove authenticity without signing | `cache_hmac_key_missing`; set a CSPRNG key using the stop-all recipe |
 | Cache integrity rejects | May remain `healthy` when keyed and connected; `/health` is not a tampering detector | `cache.integrity_rejects` rising; distinguish deployment events and reasons using the incident runbook above | `cache_integrity_reject` reason and key digest; sustained `unsigned`, `bad_mac`, `wrong_type` outside migration/rotation are a security event |
 | Quarantine rate | — | `retrieve.blocked_by_reason.*` rising; `retrieve.promptguard_state.unavailable_blocked` rising on a degraded container (consumer sees content-free responses — the nine-day shape) | WARNING `Content quarantined for <url>`; `PromptGuard unavailable — fail-closed for <tier> tier` |
@@ -537,15 +540,31 @@ docker logs -f <container>
 
 `compose/minimal.yml` and `compose/full.yml` set `restart: unless-stopped` on the `forage` service, so a boot failure shows up as a climbing restart count and a repeating traceback rather than a stopped container.
 
-**There is no `HEALTHCHECK`.** The `Dockerfile` installs `curl` with a comment saying it is "for the container healthcheck", but declares no `HEALTHCHECK` instruction, and neither compose fragment declares a `healthcheck:` block. The "bare `curl -f`, 10 s × 5 retries" check referenced in code comments is **Poppy's** compose, not this repo's. If you want Docker to track liveness, one suggestion (not shipped, not tested here) is:
+**The image has no `HEALTHCHECK` instruction; both compose fragments declare this shipped probe:**
 
 ```yaml
-# Suggestion only — not present in compose/*.yml
 healthcheck:
-  test: ["CMD", "curl", "-f", "http://127.0.0.1:8020/health"]
+  test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8020/health"]
+  interval: 30s
+  timeout: 5s
+  retries: 3
+  start_period: 30s
 ```
 
-Keep in mind what that proves: `/health` always returns 200, so a `curl -f` probe only says the process is serving. It will never turn a container "unhealthy" for missing weights or a dead Valkey — the body is where the truth lives, and reading the body is your tooling's job.
+This is **liveness only**: `/health` always returns 200 and the probe discards the
+body, so Docker's health log captures no response content. Never gate traffic,
+`depends_on: service_healthy`, or a consumer's activation on it. A Docker-healthy
+container can have no classifier; read `/health`'s `promptguard_loaded` /
+`degraded_reasons` and `/metrics` `search.unscanned_results` instead. Plain Compose
+does not restart an unhealthy container: `restart:` reacts to process exits.
+
+The probe calls `/health`, which pings the cache when due, so `cache_connected`
+recovery is detected within one probe interval even with no traffic. A reconnect
+can take 2 s of the 5 s probe timeout. With Valkey down, expect at most one reconnect
+WARNING and one `reconnect_failures` increment per probe for as long as it stays
+down: one per probe when refused, about one per two when timing out. This
+down-Valkey heartbeat is a baseline, not new application traffic or flapping;
+flapping also raises `reconnect_successes`.
 
 ---
 

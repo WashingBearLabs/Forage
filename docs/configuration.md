@@ -475,7 +475,8 @@ pulled with `oras` (shipped in the image), extracted into a staging directory un
 `HF_HOME`, checked against `weights_manifest.json` **there**, and only then moved into the
 cache the loader reads. Unverified bytes never enter it. The staging directory is removed
 on every path, successful or not, along with `huggingface_hub`'s own `$HF_HOME/xet/`
-chunk cache — on a 1 GB container those are the space the next fetch needs.
+chunk cache — on the reference 1 GB container those are the space the next fetch needs
+(see [Sizing the container](#sizing-the-container)).
 
 #### When neither source answers
 
@@ -494,8 +495,10 @@ could not be used, and anything else means the source was reached and did not de
 Once the volume holds a verified set at the pinned revision, start-up **verifies it and
 loads it, and that is all** — no download, no `oras`, and no request to Hugging Face at
 any point, so a warm start works on a container with no egress whatsoever. Measured on
-the reference envelope (1 vCPU / 1 GB): **19 s cold, 9 s warm** — the warm figure taken
-with `--network none`.
+the reference envelope (1 vCPU / 1 GB), configurable via `FORAGE_CPUS` /
+`FORAGE_MEM_LIMIT`: **19 s cold, 9 s warm** — the warm figure taken with `--network none`.
+These are weights-boot latencies, not classify latencies; see
+[Sizing the container](#sizing-the-container) for the separate classify benchmark.
 
 The three environment variables above are the whole surface, and two of them only matter
 on a cold boot: `FORAGE_MODEL_REVISION` decides which set counts as "the" set (change it
@@ -545,6 +548,168 @@ Check it with `curl -s localhost:8020/health | jq .promptguard_loaded`, and trea
 standard-tier content as unscanned while it reads `false`.
 
 ---
+
+## Sizing the container
+
+The host envelope is an operator choice, not a fixed box. These are starting
+recommendations for the 22M model, not measured throughput guarantees. The reference
+envelope (1 vCPU / 1 GB) is configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT`;
+the fragments' unchanged defaults are **no CPU limit**, `1024m`, threads `0` and
+classification concurrency `1`, not the tuned first row below.
+
+| Host envelope | FORAGE_CPUS | FORAGE_MEM_LIMIT | promptguard_threads | classification_concurrency | cache.max_bytes | classify latency (`num_results=1`; measurement pending) |
+|---|---|---|---|---|---|---|
+| 1 vCPU / 1 GB (reference envelope) | 1 | 1024m | 1 | 1 | 33554432 | measured in spec 7 (`feature-hardening-promptguard-86m` US-004) |
+| 2 / 2 GB | 2 | 2048m | 2 | 1 | 67108864 | measured in spec 7 (`feature-hardening-promptguard-86m` US-004) |
+| 4 / 4 GB | 4 | 4096m | 2 | 2 | 134217728 | measured in spec 7 (`feature-hardening-promptguard-86m` US-004) |
+
+The `4 / 4 GB` row's `cache.max_bytes` `134217728` sits **at**
+`_MAX_CACHE_MAX_BYTES` (`cache.py`, 128 MiB): the column does not keep doubling with
+the host, and the ceiling is not configurable. The search sanitization loop runs
+once per served result; figures are comparable only at the same `num_results`
+(1–20). Spec 7 must record the result count alongside any measured figure.
+
+### Memory rule
+
+`FORAGE_MEM_LIMIT ≥ PARENT_RESERVATION_BYTES + CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[selected model] + classification_concurrency × CLASSIFIER_WORKING_SET + extraction_concurrency × extraction.child_address_space_bytes + (cache.max_bytes if the in-memory backend is selected, else cache.max_value_bytes)`.
+
+These five terms count each reservation once. `PARENT_RESERVATION_BYTES` is the
+named 512 MiB reservation in `pipeline/extraction_limits.py`: the parent with the
+22M classifier resident and **no classification in flight**. The model's additional
+resident memory is shared, not multiplied by concurrency:
+
+| Selected model | Resident delta over 22M (`CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL`) | Per-classification working set |
+|---|---|---|
+| `meta-llama/Llama-Prompt-Guard-2-22M` | 0 MiB (baseline) | provisional 64 MiB |
+| 86M (not yet selectable) | measured in spec 7 (`feature-hardening-promptguard-86m` US-004) | measured in spec 7 (`feature-hardening-promptguard-86m` US-004) |
+
+`CLASSIFIER_WORKING_SET` is currently
+`PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES = 64 MiB`. It has **no measurement behind
+it**: the residual `1024 − 512 − 384 − 32 = 96 MiB` leaves 64 MiB after reserving a
+32 MiB margin. Spec 7 US-004 replaces it with the measured RSS delta between
+classification concurrency 1 and 2, and measures idle RSS per model to fill the
+resident-delta column; US-006 routes the selected model into the rule.
+
+The child term uses the **configured** `extraction.child_address_space_bytes`
+(384 MiB shipped, 128–512 MiB allowed), never a fixed 384 MiB or a classifier
+estimate. The cache term is `cache.max_bytes` under the in-memory backend, or
+`cache.max_value_bytes` for **one in-flight read** under Valkey. `full.yml`'s Valkey
+moves the cache's storage memory into its own container and leaves one read's worth
+here. Concurrent reads and decoding copies need extra headroom: cache reads have
+no concurrency bound. Enabling `/extract` also requires budgeting simultaneous
+upload and fetched-PDF workers, as explained under the `retrieve:` block; the
+advisory boot rule is not a measured peak-RSS guarantee.
+
+The worked reference row on `minimal.yml` is
+`512 + 0 + 64 + 384 + 32 = 992 MiB` under `1024m`, a **32 MiB margin**.
+On `full.yml` it is `512 + 0 + 64 + 384 + 4 = 964 MiB`, a 60 MiB margin.
+Thus the old ~128 MiB headroom holds the 32 MiB cache, the 64 MiB provisional
+classifier working set and a 32 MiB margin; it is not all classifier working set.
+Boot warns `envelope_memory_rule_unmet` when the cgroup limit is readable and strictly
+below the rule; above it the failure is an OOM kill `/health` cannot report.
+Here "above it" means allocations above the container limit, not a guarantee that
+meeting the advisory rule prevents OOM. Equality and unreadable/unlimited cgroup
+limits do not warn. If spec 7's measurement exceeds the available budget (a working
+set above 96 MiB at the other reference defaults), **the shipped default does not
+move**: the reference row's recommended `FORAGE_MEM_LIMIT` rises and 1 GiB hosts
+get the WARNING.
+
+**Under-sizing is a security decision.** Under spec 2 US-006, a classification wait
+that outlives `promptguard_wait_seconds` is `unavailable_blocked` for fail-closed
+requests and `unavailable_allowed` (served unscanned and marked) for fail-open ones;
+an envelope that cannot keep the loop under the target is choosing between
+availability and scanning for its fail-open callers. The latency targets are
+observational, not deadlines; the wait budget is what selects that outcome.
+
+### CPU rule and verification
+
+**When `FORAGE_CPUS` is set to a non-zero value**, keep
+`promptguard_threads × classification_concurrency ≤ FORAGE_CPUS`; with `FORAGE_CPUS`
+unset or `0` the container sees every host core and the rule does not apply — size
+`promptguard_threads` to the cores you actually intend Forage to use, since torch
+cannot see a cgroup quota. With no variable set the fragment imposes no CPU limit
+(Compose omits the key). Below 1 vCPU is unsupported.
+
+Use **Docker Compose v2 (Compose Spec; verified v2.40.3)** for service-level `cpus`.
+Set `FORAGE_CPUS` and `FORAGE_MEM_LIMIT` in `compose/.env` or the Compose invocation's
+environment; they are substitution-only variables, **never read by Forage**.
+`FORAGE_MEM_LIMIT` uses Docker byte-unit syntax; invalid syntax fails before boot.
+Confirm `FORAGE_MEM_LIMIT` landed via `/metrics`
+`extraction.cgroup_memory_max_bytes` (`retrieval_app._cgroup_memory_snapshot`;
+`null` where cgroup v2 is unavailable).
+Confirm the CPU quota with
+`docker inspect -f '{{.HostConfig.NanoCpus}}' <container>` — there is no in-service
+CPU-quota signal; auto-detection is deferred.
+
+### Delivering `config.yaml` through the fragments
+
+The fragments do **not** mount `config.yaml`: `Dockerfile` bakes it at
+`/app/config.yaml`, and Forage's only shipped volume is `forage-model-cache`.
+The table's three config columns (`promptguard_threads`,
+`extraction.classification_concurrency`, `cache.max_bytes`) and the two latency
+keys therefore need a bind mount. Start with the repo's **complete** `config.yaml`
+copied alongside your fragment, or copy the running image's file (from `compose/`):
+
+```bash
+docker compose -f minimal.yml cp forage:/app/config.yaml ./config.yaml
+# Use -f full.yml instead for that deployment.
+```
+
+Add the config line to the existing service's volumes, retaining the model volume:
+
+```yaml
+services:
+  forage:
+    volumes:
+      - forage-model-cache:/app/model-cache
+      - ./config.yaml:/app/config.yaml:ro
+```
+
+Edit keys **in that full copied file**, not by replacing it with this excerpt:
+
+```yaml
+# Excerpt only: these values show the tuned reference row, not a complete file.
+promptguard_threshold: 0.85
+extract_route_enabled: false
+seed_blocklist: []
+promptguard_fail_closed_floor: false
+promptguard_threshold_ceiling: 1.0
+promptguard_threads: 1
+search_promptguard_latency_target_ms: 1000
+search_first_token_target_ms: 5000
+extraction:
+  classification_concurrency: 1
+  child_address_space_bytes: 402653184
+cache:
+  max_bytes: 33554432
+```
+
+**Replace, never merge.** `_load_config` replaces the baked file; it does not merge
+missing keys back in. A two-line file silently drops `user_agents` and `news_domains`
+to their empty code defaults **and resets every omitted security-relevant key to
+its code default**: `promptguard_threshold`, `extract_route_enabled`, `seed_blocklist`,
+`promptguard_fail_closed_floor`, `promptguard_threshold_ceiling`, and the four
+envelope keys — `promptguard_threads` (back to `0`: torch sizes to the host's cores
+under a CPU quota, the 2026-09-12 incident), `extraction.classification_concurrency`
+(back to `1`), `search_promptguard_latency_target_ms` (1000) and
+`search_first_token_target_ms` (5000). Sandbox limits and classification budgets
+also revert. An envelope reset to defaults on a tuned host pushes fail-open requests
+toward `unavailable_allowed` under spec 2 US-006.
+
+An operator who hardened one copy and later mounts a shorter one silently loses
+the hardening, and **nothing but this warning protects the operator's own
+baseline**. The shipped-equals-code-default test over
+`SECURITY_RELEVANT_CONFIG_KEYS` proves only that a short file cannot loosen those
+keys relative to the **shipped** file, not relative to your tuned file. As the
+reference below says, **the shipped file is not always the code default**:
+`user_agents` and `news_domains` deliberately differ.
+
+The host path must already exist as a **file**: a missing short-syntax bind source
+mounts a *directory*, and the container will not boot. Recreate the service after
+editing (`docker compose -f minimal.yml up -d --force-recreate`, or `full.yml`).
+For envelope tuning, pulling the updated fragments changes nothing until a variable
+or key is set; the status-only liveness probe is the separately shipped visible
+addition, not a readiness or classifier check.
 
 ## `config.yaml`
 
@@ -646,15 +811,17 @@ selection" above). They are validated at startup regardless of which storage
 is active, so an invalid known value refuses boot rather than silently widening a
 memory bound. A misspelled key instead warns and is ignored.
 
-The budget is the container's real headroom: `mem_limit: 1024m` already reserves 512 MiB
+The reference budget uses `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` (default `1024m`): 512 MiB
 for the parent FastAPI + torch + PromptGuard process and 384 MiB for the spawned
-extraction worker, leaving roughly 128 MiB. The 32 MiB default spends a quarter of it.
+extraction worker leave roughly 128 MiB. The 32 MiB cache spends a quarter of it;
+64 MiB is the provisional classifier working set and 32 MiB is margin. See
+[Sizing the container](#sizing-the-container) before changing any operand.
 
 | Key | Default | Allowed range | Purpose |
 |-----|---------|---------------|---------|
 | `max_entries` | `256` | 1 – 4096 | Maximum cached responses held in memory. Beyond it, entries are evicted — already-expired ones first, then least-recently-used. |
 | `max_bytes` | `33554432` (32 MiB) | 1 MiB – 128 MiB | Maximum total serialised bytes held in memory, accounted exactly (values are stored as the same JSON bytes Valkey would hold). A single response larger than this bound is never cached: it is served uncached and counted in `/metrics` as `cache.storage_oversize_skips`. |
-| `max_value_bytes` | `4194304` (4 MiB) | 512 KiB – 8 MiB | Per-value UTF-8 byte bound on both backends, including a signed envelope's **68-byte** prefix. The default leaves headroom above `MAX_EXTRACTED_OUTPUT_BYTES` (2 MiB) for JSON escaping and metadata; unusually inflated serialization can still be served uncached. Over-bound writes delete the superseded entry and increment `cache.storage_oversize_skips`, never `integrity_rejects`. Valkey reads use one atomic `GETRANGE key 0 max_value_bytes` (at most bound + 1 bytes). If `cache.max_value_bytes > cache.max_bytes`, boot **warns**, not refuses: `cache_bounds_inverted` says memory storage applies `cache.max_bytes`. Peak cache-read allocation scales as `max_value_bytes × in-flight /retrieve requests` (plus decoding/verification copies); cache reads sit under **no concurrency bound**. See the sizing section planned in [`feature-hardening-resource-envelope`](../kit_tools/specs/feature-hardening-resource-envelope.md), which includes `+ cache.max_value_bytes` for one in-flight Valkey read. **Every replica sharing Valkey must use the same bound**, just as signed writers must use the same key: the cache block is not a cache-key input. Lowering the bound causes a bounded burst of `oversize` rejects against Forage's own larger past writes, a tuning consequence rather than proof of tampering. |
+| `max_value_bytes` | `4194304` (4 MiB) | 512 KiB – 8 MiB | Per-value UTF-8 byte bound on both backends, including a signed envelope's **68-byte** prefix. The default leaves headroom above `MAX_EXTRACTED_OUTPUT_BYTES` (2 MiB) for JSON escaping and metadata; unusually inflated serialization can still be served uncached. Over-bound writes delete the superseded entry and increment `cache.storage_oversize_skips`, never `integrity_rejects`. Valkey reads use one atomic `GETRANGE key 0 max_value_bytes` (at most bound + 1 bytes). If `cache.max_value_bytes > cache.max_bytes`, boot **warns**, not refuses: `cache_bounds_inverted` says memory storage applies `cache.max_bytes`. Peak cache-read allocation scales as `max_value_bytes × in-flight /retrieve requests` (plus decoding/verification copies); cache reads sit under **no concurrency bound**. See [Sizing the container](#sizing-the-container), which includes `+ cache.max_value_bytes` for one in-flight Valkey read. **Every replica sharing Valkey must use the same bound**, just as signed writers must use the same key: the cache block is not a cache-key input. Lowering the bound causes a bounded burst of `oversize` rejects against Forage's own larger past writes, a tuning consequence rather than proof of tampering. |
 
 The cache serves `POST /retrieve` only — `/search` has never been cached. Memory
 storage is per-process (one uvicorn worker, nothing persisted across a restart);
@@ -688,50 +855,25 @@ and `admission_queue_depth` (0–4).
 | `max_input_bytes` | `52428800` (50 MiB) | 1 MiB – 50 MiB | Hard ceiling on an uploaded document. Enforced by streaming byte count, not by `Content-Length`. |
 | `max_pages` | `500` | 1 – 500 | Maximum PDF pages parsed before the extraction is abandoned. |
 | `child_cpu_seconds` | `20` | 1 – 20 | CPU-time rlimit on the spawned pypdf worker process. |
-| `child_address_space_bytes` | `402653184` (384 MiB) | 128 MiB – 512 MiB | Address-space rlimit on that worker. The 1 GiB container reserves ≥512 MiB for the parent FastAPI + torch + PromptGuard process, so parser working memory cannot eat the parent's reservation. |
+| `child_address_space_bytes` | `402653184` (384 MiB) | 128 MiB – 512 MiB | Address-space rlimit on that worker, raisable above shipped. The reference parent reservation is 512 MiB; see [Sizing the container](#sizing-the-container) for the full rule before widening this sandbox. |
 | `wall_clock_seconds` | `90` | 1 – 90 | Total wall-clock budget for one extraction, worker included. |
 | `max_promptguard_chunks` | `64` | 1 – 64 | PromptGuard chunk budget for one document. Derives the classifiable character ceiling: `(512 − 64) × chunks × 4` = 114,688 characters at the default. Fetched PDFs run under `extraction.max_promptguard_chunks`; fetched HTML under `retrieve.max_promptguard_chunks` — a fetched PDF over this ceiling is refused 422 `content_too_large` / `promptguard_budget` (`hardening-retrieve-parity` US-003). |
 | `extraction_concurrency` | `1` | 1 – 1 | Concurrent extractions. Pinned at 1 — the memory reservation above assumes exactly one worker. |
-| `classification_concurrency` | `1` | 1 – 8 | Bounds the shared classification semaphore on `/extract`, `/retrieve` and `/search` (the fetch routes since `hardening-retrieve-parity` US-006). Memory rule: container limit ≥ `PARENT_RESERVATION_BYTES + CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[model_id] + classification_concurrency × PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES + extraction_concurrency × child_address_space_bytes + cache_term_bytes`; see the advisory rule below and § Sizing the container (US-003). Exceeding available memory can cause an OOM kill, which `/health` cannot report; boot warns `envelope_memory_rule_unmet` when the cgroup limit is readable and below the rule. This is not a sanitizer-revision input, but latency can exhaust `promptguard_wait_seconds` and make a fail-open request serve unscanned content. |
+| `classification_concurrency` | `1` | 1 – 8 | Bounds the shared classification semaphore on `/extract`, `/retrieve` and `/search` (the fetch routes since `hardening-retrieve-parity` US-006). Memory rule: container limit ≥ `PARENT_RESERVATION_BYTES + CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[model_id] + classification_concurrency × PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES + extraction_concurrency × child_address_space_bytes + cache_term_bytes`; see [Sizing the container](#sizing-the-container). Exceeding available memory can cause an OOM kill, which `/health` cannot report; boot warns `envelope_memory_rule_unmet` when the cgroup limit is readable and below the rule. This is not a sanitizer-revision input, but latency can exhaust `promptguard_wait_seconds` and make a fail-open request serve unscanned content. |
 | `admission_queue_depth` | `1` | 0 – 4 | Requests allowed to wait for the extraction slot. `0` means reject immediately with `busy` (HTTP 429) whenever the slot is taken. |
 | `max_queued_upload_bytes` | `52428800` (50 MiB) | 0 – 50 MiB | Total bytes of queued uploads held in flight. `0` disables queuing of upload bodies. |
 
 #### Advisory memory rule
 
 The boot check reads cgroup v2 `memory.max`, not an environment-variable string.
-`FORAGE_MEM_LIMIT` denotes the intended container ceiling; Compose parameterisation
-lands in US-002. Missing/unlimited cgroup values are supported and produce no warning.
+`FORAGE_MEM_LIMIT` denotes the intended container ceiling in both fragments.
+See [Sizing the container](#sizing-the-container) for the rule and worked rows.
+Missing/unlimited cgroup values are supported and produce no warning.
 A limit **strictly below** the sum warns once and still boots; equality is silent.
 This is an advisory reservation, not a measured peak-RSS guarantee.
-
-- `PARENT_RESERVATION_BYTES = 512 MiB`: the parent with the default 22M model resident
-  and **no classification in flight**.
-- `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[model_id]`: additional shared resident
-  memory above the 22M baseline. The only currently allowed model,
-  `meta-llama/Llama-Prompt-Guard-2-22M`, has delta `0`. Weights are counted once,
-  not once per classification.
-- `classification_concurrency × PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES`: starts
-  at the first classification. The coefficient is **provisional 64 MiB, not measured**:
-  the reference envelope leaves `1024 − 512 − 384 − 32 = 96 MiB`; choosing 64 MiB
-  retains a 32 MiB margin. Spec 7 US-004 replaces it with the `docker stats` RSS
-  delta between concurrency 1 and 2 for the 22M and 86M, and measures the idle
-  86M-minus-22M resident delta. US-006 then routes the selected model into the rule.
-- `extraction_concurrency × extraction.child_address_space_bytes`: uses the
-  **configured** child address-space limit, 384 MiB shipped, not a classifier figure.
-- `cache_term_bytes`: `cache.max_bytes` for backend `memory`; `cache.max_value_bytes`
-  for backend `valkey`, reserving one bounded in-flight read, not the separate
-  Valkey container's storage. Concurrent reads and decoding copies need additional
-  headroom (see the cache table); simultaneous PDF workers on both routes still
-  require the combined-slot budget described below.
-
-At shipped defaults, memory mode needs `512 + 0 + 64 + 384 + 32 = 992 MiB`
-(32 MiB margin under 1 GiB); Valkey needs `512 + 0 + 64 + 384 + 4 = 964 MiB`
-(60 MiB margin). The WARNING includes `memory_max`, `required`,
+The WARNING includes `memory_max`, `required`,
 `classification_concurrency`, `extraction_concurrency`, `child_address_space_bytes`,
 `model_id`, `parent_bytes`, `cache_backend` and `cache_term_bytes`.
-If spec 7 measures a coefficient above 96 MiB, the shipped 1024m ceiling stays put:
-the sizing table will state the measured minimum and 1 GiB boots will warn, never
-silently claim adequate memory. See § Sizing the container (US-003).
 
 <a id="retrieve--fetch-route-limits"></a>
 
@@ -741,7 +883,7 @@ The `/retrieve` counterpart to `extraction:`, read by
 `pipeline/retrieve_limits.py` at boot: an out-of-range value refuses startup rather than
 surfacing as a strange refusal on the first request.
 
-Unlike `extraction:`, which is bounded *at* its defaults on every key but two because its
+Unlike `extraction:`, which is bounded *at* its defaults on every key but three because its
 memory reservation assumes exactly one worker, three of these four keys are **raisable**.
 They bound queued and classified text, which the 10 MB fetch cap already bounds per body.
 `fetch_concurrency` is the exception and is pinned at `1` for the same worker reason
@@ -750,7 +892,8 @@ the same `child_address_space_bytes` rlimit, so N fetch slots would put N × 384
 worker address space in a 1 GiB container. The constraint is worker address space, not
 fetched-body size — which means an HTML-only deployment, whose fetch path spawns no worker
 at all, is throttled to single flight by a bound sized for PDFs. That is accepted; sizing
-the envelope belongs to the resource-envelope spec.
+the envelope is covered in [Sizing the container](#sizing-the-container), without
+widening these worker counts.
 
 **Admission.** Since `hardening-retrieve-parity` US-002 the fetch and stage 1 run under a
 second admission controller — the same class `/extract` uses, with its own counters. A
@@ -805,7 +948,7 @@ file — the procedure the resource-envelope spec documents.
 | Key | Default | Allowed range | Purpose |
 |-----|---------|---------------|---------|
 | `max_promptguard_chunks` | `0` | 0 – 1024 | PromptGuard chunk budget for one **fetched page**. `0` means **no pre-check** and no `max_chunks` handed to the classifier — today's behaviour — and boot logs one WARNING `retrieve_budget_unset coming_default=256`. Non-zero derives the classifiable character ceiling `(512 − 64) × chunks × 4` (458,752 at the coming default of 256); a page over it is refused 422 `content_too_large` with reason `promptguard_budget`. Ships at `0` for one minor release; the next MINOR flips the default to `256`, and `0` stays a legal opt-out (`contract/GOVERNANCE.md` ruling (g)). |
-| `fetch_concurrency` | `1` | 1 – 1 | Admission slots: concurrent `/retrieve` fetch-and-stage-1 work. Pinned at 1 — see above; not an operator knob until the resource-envelope spec. |
+| `fetch_concurrency` | `1` | 1 – 1 | Admission slots: concurrent `/retrieve` fetch-and-stage-1 work. Fixed at one for the PDF worker budget above; widening remains deferred. |
 | `admission_queue_depth` | `4` | 0 – 16 | Requests allowed to wait for the fetch slot, holding no body while they wait. Beyond it a request is refused 422 `busy` / `admission_queue_full` (`retrieve.busy_rejections`). `0` means refuse immediately whenever the slot is taken. Worst-case queue latency is `admission_queue_depth / fetch_concurrency × 30 s` — 120 s at the defaults. |
 | `max_queued_fetch_bytes` | `31457280` (30 MiB) | 10 MiB – 160 MiB | Bytes reserved for queued requests, one 10 MB fetch-cap reservation each — three at the default. A request whose reservation would exceed it is refused 422 `busy` / `admission_queue_full` (`retrieve.busy_rejections`). Deliberately **not** `admission_queue_depth × 10 MB`, so at the shipped defaults the byte bound binds before the depth bound and both are exercisable. |
 

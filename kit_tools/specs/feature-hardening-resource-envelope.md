@@ -1550,6 +1550,110 @@ next.
   for these gates, not a known story defect. No dependency change, branch
   switch, Poppy edit, push, tag or release occurred.
 
+### US-003 implementation — 2026-09-22
+
+- Added the top-level Sizing the container section immediately before the
+  `config.yaml` reference. It carries the three requested envelopes, explicit
+  `num_results=1` placeholder header (no invented timings), separate per-model
+  resident-delta/working-set table, five-term memory rule, provisional coefficient
+  derivation, 992/964 MiB reference sums, fixed cache ceiling, CPU precondition,
+  Compose minimum and verification commands. Existing extraction-rule prose now
+  points to the canonical section instead of duplicating the five terms.
+- The full-file bind-mount recipe retains the weights volume and explains
+  replace-not-merge, all policy/envelope resets, missing-source directories and
+  the distinction between shipped-baseline protection and the operator's own
+  hardening. The pending spec-7 measurements and owner gates remain pending.
+  Envelope defaults and executable behavior are unchanged.
+- Added `SECURITY_RELEVANT_CONFIG_KEYS` and the explicit non-security set beside
+  the registry tests, with a membership criterion and exhaustive disjoint
+  partition. The default pin runs the real lifespan with empty config on an
+  isolated app, stubs weights acquisition and the spool seam, and compares
+  shipped dotted values to actual settings/defaults. It includes all required
+  keys plus classification-wait/domain-policy bounds and the other PDF sandbox
+  limits. Queue depths, cache capacity, provider throughput bounds and bare
+  blocks are explicitly classified out. A future key must be classified.
+- Updated both liveness runbooks, zero-traffic reconnect counter interpretation,
+  Compose-only env table, security sandbox wording, two active gotchas and the
+  dated config-not-env decision. Existing US-004/US-002 revision rows are retained.
+  The security omissions bullet preserves all five deferred controls verbatim.
+
+**R39 by-value sweep ledger.** Locations below refer to clean starting commit
+`746611f`, so edits and line wrapping cannot change which hit was disposed of.
+The scan was `git grep` over tracked `*.md` / `*.py`, excluding specs, seed cache
+and goldens, plus the prescribed `config.yaml` comments. The exact recursive
+greps were then repeated on the edited tree. Test docstrings are excluded by R43;
+result JSON is outside the include set.
+
+| Value | Baseline hit | Disposition |
+|---|---|---|
+| `1 vCPU / 1 GB` | `docs/configuration.md:497` | qualified — reference envelope, both variables and sizing cross-reference; weights boot is not classify latency |
+| same | `docs/weights.md:433` | qualified — reference envelope, both variables and sizing cross-reference |
+| same | `kit_tools/docs/LOCAL_DEV.md:209` | qualified — reference envelope, both variables and sizing cross-reference |
+| same | `kit_tools/docs/MONITORING.md:109` | qualified — reference envelope and knobs; weights-boot timing |
+| same | `kit_tools/docs/DEPLOYMENT.md:194` | qualified — post-deploy weights reference and knobs |
+| same | `kit_tools/docs/DEPLOYMENT.md:375` | qualified — resource row and sizing link |
+| same | `kit_tools/docs/TROUBLESHOOTING.md:286` | qualified — reference envelope and knobs |
+| same | `kit_tools/arch/INFRA_ARCH.md:223` | qualified — weights-boot reference and knobs |
+| same | `kit_tools/arch/INFRA_ARCH.md:258` | qualified — resource envelope and sizing link |
+| same | `kit_tools/arch/SERVICE_MAP.md:93` | qualified — warm-start reference and knobs |
+| same | `kit_tools/arch/SERVICE_MAP.md:163` | qualified — acquisition reference and knobs |
+| same | `kit_tools/arch/SERVICE_MAP.md:320` | qualified — weights latency reference and knobs |
+| same | `tests/test_model_fetcher.py:3458` | correct-as-is — explicitly excluded historical measurement docstring, untouched |
+| `mem_limit: 1024m` | `cache.py:250` | qualified — explicitly default; corrected headroom and inclusive cache ceiling |
+| same | `docs/configuration.md:649` | rewritten — `${FORAGE_MEM_LIMIT:-1024m}`, default, decomposition and sizing link |
+| same | `kit_tools/docs/TROUBLESHOOTING.md:809` | rewritten — substitution, default and sizing remedy |
+| same | `kit_tools/docs/DEPLOYMENT.md:156` | rewritten — substitution, default and CPU knob |
+| same | `kit_tools/docs/DEPLOYMENT.md:376` | rewritten — substitution and corrected headroom |
+| same | `kit_tools/arch/SERVICE_MAP.md:392` | rewritten — substitution and CPU knob |
+| same | `kit_tools/arch/INFRA_ARCH.md:146` | rewritten — service table substitutions |
+| same | `kit_tools/arch/INFRA_ARCH.md:265` | rewritten — memory cap, adjacent CPU-cap row |
+| same | `kit_tools/arch/SECURITY.md:524` | rewritten — exact required restatement, all five omissions retained |
+| same (planning hits) | `compose/minimal.yml`, `compose/full.yml` | correct-as-is — US-002 already replaced both; no literal hits or edits here |
+| `384 MiB` | `cache.py:251` | rewritten surrounding arithmetic — child reservation, 32 cache / 64 provisional / 32 margin |
+| same | `config.yaml:45` | rewritten — corrected reference headroom and sizing pointer |
+| same | `config.yaml:59` | qualified — combined-route workers remain a real additional budget; advisory rule counts one slot |
+| same | `config.yaml:86` | qualified — reference envelope and sizing pointer |
+| same | `pipeline/extraction_limits.py:58` | rewritten docstring — shipped child default, raisable 128–512 MiB, sizing pointer |
+| same | `pipeline/retrieve_limits.py:36` | correct-as-is — worker address-space multiplication, not classifier memory; untouched |
+| same | `docs/configuration.md:172` | correct-as-is — spool space is outside the child's rlimit; untouched |
+| same | `docs/configuration.md:650` | rewritten surrounding arithmetic — correct child/cache/working-set/margin terms |
+| same | `docs/configuration.md:691` | qualified — default child bound is raisable; sizing pointer replaces fixed-box implication |
+| same | `docs/configuration.md:720` | rewritten location — configured-child explanation moved into the canonical top-level rule |
+| same | `docs/configuration.md:749` | correct-as-is — PDF-worker multiplication; nearby sizing reference updated |
+| same | `kit_tools/arch/DECISIONS.md:104` | correct-as-is historical default; following paragraph now names all three raisable keys |
+| same | `kit_tools/arch/INFRA_ARCH.md:267` | correct-as-is — reference child row; surrounding envelope made configurable |
+| same | `kit_tools/arch/SECURITY.md:242` | rewritten — removed child default from true-ceiling list; raisable sandbox explained |
+| same | `kit_tools/arch/patterns/ERROR_HANDLING.md:254` | correct-as-is — default PDF-child rlimit, not classifier memory; untouched |
+| same | `kit_tools/docs/API_GUIDE.md:358` | correct-as-is — default upload child bound; untouched |
+| same | `kit_tools/docs/DEPLOYMENT.md:376` | rewritten surrounding arithmetic — corrected reference headroom and sizing pointer |
+| same | `kit_tools/docs/ENV_REFERENCE.md:146` | correct-as-is — table already pairs 384 MiB default with 128–512 MiB range |
+| same | `kit_tools/docs/TROUBLESHOOTING.md:196` | correct-as-is — default child failure bounds; untouched |
+| same | `kit_tools/docs/TROUBLESHOOTING.md:650` | correct-as-is — default child bounds; remedy below now names all three raisable keys |
+| same | `kit_tools/docs/TROUBLESHOOTING.md:810` | rewritten surrounding arithmetic — correct child/cache/working-set/margin terms |
+
+**Verification:** all 875 related tests passed after changed-file safe Ruff
+fixes/formatting, including the new pin/partition, documentation registry,
+governance, app, cache, Compose, hermeticity and revision tests (13 non-failing
+warnings: torch deprecation and deliberate socket denial). Strict Pyright is
+zero errors. All exact-scope Independent Test greps have the prescribed outcomes:
+six sizing files, four CPU-variable files, only same-line Compose-qualified
+image-level healthcheck absences, one single-key-scoped tightening claim, no
+fixed-latency claims, and only the extraction row with the pinned-at-one phrase.
+The one surviving literal memory-limit hit is explicitly a default in `cache.py`.
+The changed source ASTs, ignoring docstrings, and parsed config values equal
+the starting commit. All nine hashed sources are byte-identical; default and
+shipped revision remain
+`4913fdc1982cb48ba2db9c6972fcea10107408349970c45c9dc6b3ae5c1aa1fb`.
+No rotation, response shape, generated artifact or historical golden changed.
+
+**Outstanding gates:** the full suite is not run because this invocation
+explicitly prohibits it. Repository-wide Ruff still reports the inherited five
+E501 findings (`pipeline/bounded_body.py:53`,
+`tests/test_search_providers.py:762,764,784,787`) and format-check names those
+same two files; neither is edited. These prevent an all-gates-ready verdict,
+not completion of a deferred owner benchmark. No branch switch, dependency
+change, Poppy edit, push, tag or release occurred.
+
 ## Refinement Notes
 
 ### Research Findings

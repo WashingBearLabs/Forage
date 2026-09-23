@@ -9,7 +9,7 @@
 > **TEMPLATE_INTENT:** Record architectural decisions and their rationale. Explains the 'why' behind technical choices.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-resource-envelope US-002)
+> Updated by: Copilot (hardening-resource-envelope US-003)
 
 This file records significant architectural and technical decisions.
 
@@ -104,7 +104,10 @@ Not recorded; the source gives only the chosen design and its reason.
 `RLIMIT_CPU` (20 s), `RLIMIT_AS` (384 MiB, Linux only) and an `ITIMER_REAL` wall clock (90 s).
 Results cross a length-framed JSON pipe carrying one of a closed set of status codes; every
 abnormal outcome ends in SIGKILL plus reap. The ceilings in `pipeline/extraction_limits.py` are
-hard maxima `config.yaml` can only tighten. The route is a release gate: `extract_route_enabled:
+hard maxima apart from three raisable keys: `classification_concurrency` (1–8 under the
+memory rule and boot WARNING), `child_address_space_bytes` (128–512 MiB, widens the
+untrusted-PDF child's sandbox) and `admission_queue_depth` (0–4); see the corrected
+2026-09-19 sizing decision below. The route is a release gate: `extract_route_enabled:
 false` by default answers 404 (invisible, not merely refused); admission is bounded (concurrency 1,
 queue depth 1, `429 busy`); uploads always run as `UNTRUSTED` with fail-closed PromptGuard.
 
@@ -859,6 +862,59 @@ the freeze was image `v1.0.0` serving contract `1.1.0`, cut 2026-09-12.
 contract in commit `5985437`, distribution in `f4c2b16` (both 2026-09-11);
 `kit_tools/docs/GOTCHAS.md` "An over-sized upload gets 400" and "Adding a `/metrics` counter";
 `.github/pull_request_template.md`.
+
+---
+
+### 2026-09-19: Sized to the host, not the deployment
+
+**Status:** Accepted (`hardening-resource-envelope`, R16 corrected through round 5).
+
+**Context:** The Epic-2 cutover finding of 2026-09-12 was a
+`search_promptguard_local_latency_target_exceeded` on a 28-core host under a 1-CPU
+quota. Torch and the fast tokenizer saw host cores, not the quota. The owner
+declined an arbitrary size bump: make the envelope configurable instead.
+
+**Options considered:** fixed larger defaults; runtime environment overrides for
+every knob; CPU quota auto-detection; or existing `config.yaml` readers with
+Compose-layer container limits. The last is chosen; CPU auto-detection is deferred.
+
+**Decision and rationale:** runtime tunables stay in `config.yaml`, following
+`search_brave_*` and `promptguard_threshold`. The vision's "overridable by env"
+is met at the Compose layer with `FORAGE_CPUS` / `FORAGE_MEM_LIMIT`, plus the
+documented full-file bind mount for runtime settings — **no `FORAGE_*` env override
+for `promptguard_threads`**. Unset/zero CPU means Compose omits the cap; memory
+remains `1024m`, threads `0`, classification concurrency `1`, and observational
+targets 1000/5000 milliseconds. The only new default-visible Compose behavior is
+the status-only liveness probe, never an activation or readiness gate.
+
+R16's corrected memory rule counts the named parent reservation, selected model's
+shared resident delta, per-classification provisional working set, **configured**
+PDF child address space and backend-specific cache term exactly once. The three
+raisable extraction keys are `classification_concurrency` (1–8),
+`child_address_space_bytes` (128–512 MiB, widening the sandbox) and
+`admission_queue_depth` (0–4). The boot memory WARNING is advisory; an OOM kill
+cannot report itself through `/health`. The 64 MiB working set is explicitly
+unmeasured; spec 7 supplies measurements without silently increasing the shipped
+memory default. The cache ceiling remains 128 MiB even on larger hosts.
+
+**Consequences:** under-sizing can turn a bounded classification wait into a
+marked fail-open unscanned response, not just slower scanning. `_load_config`
+replaces rather than merges, so a short mount can silently undo an operator's
+hardening. The explicit security-key partition/default test proves only the
+shipped baseline. Effective-value logging was considered and declined: INFO does
+not render, and WARNING for normal values is noise. The operator warning is the
+only protection for their own stricter baseline.
+
+US-004's `bf5a1f3e…` and US-002's `4913fdc1…` measured revision rotations are
+retained in the rotation table above; neither changes text sanitization.
+US-003 only changes prose, comments and baseline guards, not hashed sources or
+the held contract. See
+[`docs/configuration.md` § Sizing the container](../../docs/configuration.md#sizing-the-container)
+for the worked rules, delivery recipe and unmeasured latency columns.
+
+**Source:** `feature-hardening-resource-envelope` US-001/US-004/US-002/US-003,
+R16 (corrected), Epic-2 cutover finding and the vision's configurable-sizing
+constraint; `docs/bootstrap-notes.md` for the measured rotations.
 
 ---
 

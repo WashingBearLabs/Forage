@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document dependencies and integrations. Shows what talks to what and failure impacts.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-resource-envelope US-002)
+> Updated by: Copilot (hardening-resource-envelope US-003)
 
 ---
 
@@ -71,7 +71,7 @@ Forage is the only internal service. Its pipeline stages (`pipeline/stage1_*` th
 | **Image** | `ghcr.io/washingbearlabs/forage` (`linux/amd64`, `linux/arm64`; arm64 is built but never executed in CI). Base `python:3.12-slim`, digest-pinned in `Dockerfile`; no build `ARG` at all (`CLAUDE.md` invariant 2). |
 | **Runtime** | Python 3.12, FastAPI + uvicorn, one worker (`CMD` has no `--workers`); uv-managed lockfile; CPU-only torch/transformers loaded lazily by `promptguard/classifier.py`. |
 | **Port** | `8020` in-container (`EXPOSE 8020`, uvicorn `--host 0.0.0.0`); published as `127.0.0.1:8020` by both compose fragments. |
-| **Health Check** | `GET /health` — **always HTTP 200; the truth is in the body** (`status`, `degraded_reasons`, `promptguard_loaded`, `cache_connected`, `cache_backend`, `capabilities`, `search_providers`, `sanitizer_revision`, `contract_version`). No `HEALTHCHECK` in `Dockerfile` and no `healthcheck:` in `compose/*.yml`; the "10 s x 5 `curl -f`" check referenced in code comments is Poppy's compose. |
+| **Health Check** | `GET /health` — **always HTTP 200; the truth is in the body** (`status`, `degraded_reasons`, `promptguard_loaded`, `cache_connected`, `cache_backend`, `capabilities`, `search_providers`, `sanitizer_revision`, `contract_version`). No image-level `HEALTHCHECK`; both compose fragments declare `curl -fsS -o /dev/null` liveness (30 s interval, 5 s timeout, three retries, 30 s start period). It must not gate traffic, `depends_on: service_healthy` or activation. |
 | **Contract** | `contract_version` **1.3.0** (`pipeline/contract.py`), frozen as `contract/openapi.yaml` with a committed `openapi.yaml.sha256` anchor. Image tag and contract version are independent semvers — `v1.1.0` serves `1.2.0`; no published image serves `1.3.0` yet. |
 | **Auth** | None on any route, including `/docs`, `/redoc`, `/openapi.json`. Network placement is the control (`docs/configuration.md`, `SECURITY.md`). |
 
@@ -90,7 +90,8 @@ If the Forage container is down, the consumer loses `/retrieve`, `/search` and `
 outright. Nothing durable is lost: the in-memory cache and the in-process `/metrics`
 counters reset on every restart by design, Valkey data survives in `forage-valkey-data`
 (`--save 60 1`), and verified weights survive in the `forage-model-cache` volume so the
-next start is a warm start (zero network, about 9 s on 1 vCPU / 1 GB).
+next start is a warm start (zero network, about 9 s on the reference envelope (1 vCPU / 1 GB),
+configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` — see `docs/configuration.md` § Sizing the container).
 
 ---
 
@@ -160,7 +161,7 @@ Reachability alone does not authenticate cached content.
 | **Purpose** | Runtime acquisition of `meta-llama/Llama-Prompt-Guard-2-22M` (gated repo, Llama 4 Community License) at the pinned revision `11614a155199674a0a95e6602d6ab0417b790ed0` (`DEFAULT_MODEL_REVISION` in `model_fetcher.py`). `weights_manifest.json` pins five files with sha256 and size (`config.json`, `model.safetensors` 283,347,432 B, `special_tokens_map.json`, `tokenizer.json`, `tokenizer_config.json`; about 270 MiB). No weights are ever in the image. |
 | **Client / protocol** | Primary leg: `huggingface_hub.snapshot_download(MODEL_ID, revision, cache_dir=$HF_HOME/hub, allow_patterns=[*.json, *.model, *.safetensors, *.txt], token=HF_TOKEN)`. Fallback leg (tried only after the HF leg fails): `oras pull <FORAGE_WEIGHTS_MIRROR>:<revision>` (oras 1.3.4, sha256-pinned per arch in `Dockerfile`; `ORAS_TIMEOUT_S` 1800; token on stdin; artifact type `application/vnd.washingbearlabs.forage-weights.v1+tar`; staged under `$HF_HOME/staging/`, capped at 2x manifest bytes + 10%). Both legs end in exact-set sha256 verification; a refused set is moved to `$HF_HOME/quarantine/` (one generation kept) and never loaded. Loader uses `use_safetensors=True`, `local_files_only=True`. |
 | **Configuration** | `HF_TOKEN` (**secret**, optional; read token, only ever passed to `snapshot_download`). `HF_HOME` (image sets `/app/model-cache`; mount the `forage-model-cache` volume here or every recreate re-downloads). `FORAGE_MODEL_REVISION` (default = committed pin; must be 40 hex chars, else ERROR `model_revision_invalid` and fallback to the pin). `FORAGE_WEIGHTS_MIRROR` (default `ghcr.io/washingbearlabs/forage-weights`, **private** — useless to third parties; `http://`, userinfo, `:tag` or `@digest` are refused). `FORAGE_MIRROR_TOKEN` (**secret**, optional read-only registry token). Walk-through: `docs/weights.md`. |
-| **Timeouts / retries** | Acquisition runs in an `asyncio` task started by the lifespan and **never blocks startup**. `WeightAcquisition.run()` retries **forever** until loaded: 30 s initial backoff doubling to 600 s, plus or minus 20% jitter (`RETRY_*` constants in `model_fetcher.py`, not env-configurable), single-flight (a second caller is refused, not queued). Each armed retry logs WARNING `weights_retry_scheduled`; each failed round logs ERROR `weights_unavailable — … Attempts: huggingface=<code>, mirror=<code>`. Warm start with a verified set does zero network (measured 9 s warm / 19 s cold on 1 vCPU / 1 GB). |
+| **Timeouts / retries** | Acquisition runs in an `asyncio` task started by the lifespan and **never blocks startup**. `WeightAcquisition.run()` retries **forever** until loaded: 30 s initial backoff doubling to 600 s, plus or minus 20% jitter (`RETRY_*` constants in `model_fetcher.py`, not env-configurable), single-flight (a second caller is refused, not queued). Each armed retry logs WARNING `weights_retry_scheduled`; each failed round logs ERROR `weights_unavailable — … Attempts: huggingface=<code>, mirror=<code>`. Warm start with a verified set does zero network (measured 9 s warm / 19 s cold on the reference envelope (1 vCPU / 1 GB), configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` — see `docs/configuration.md` § Sizing the container). |
 | **Health signal** | `/health.promptguard_loaded` (always honest), `degraded_reasons: ["promptguard_unavailable"]`; `capabilities` (a presence map that may also carry `brave_api_key`, independently) omits `search_sanitization` here, carrying it (`{"search_sanitization": 1, ...}`) once loaded. `/metrics.model`: `fetch_failures`, `verify_failures`, `quarantines`, `fetch_in_progress`, `retries_scheduled` — the only way to tell "downloading" (`fetch_in_progress: true`) from "waiting out backoff" (`retries_scheduled > 0`) from "first attempt unfinished" (both zero). |
 | **Failure impact** | Stage 3 fails closed (`pipeline/stage3_promptguard.py`). `trusted` tier: skipped anyway (`promptguard_state: skipped_trusted`). `standard`/`untrusted` with `promptguard_fail_closed=true` (the default): verdict `injection_detected`, penalty -0.5, `promptguard_state: unavailable_blocked`, body replaced by the content-free quarantine text — still **HTTP 200**. `verified` tier or `fail_closed=false`: `unavailable_allowed`, penalty -0.1, content returned. `/search` (always `standard`): results withheld with `omitted_by_reason.promptguard_unavailable` when fail-closed, or returned with `unscanned_results > 0` and `promptguard_unavailable: true` when fail-open. `/extract` uploads are always `untrusted` and fail-closed, so every upload is quarantined while the model is absent. |
 | **Break glass** | `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION=1` (legacy alias `POPPY_RETRIEVAL_LEGACY_CAPABILITY=1`; exactly `1`) forces `capabilities.search_sanitization` on with a per-boot WARNING; `status` and `promptguard_loaded` stay honest. Never the fix for a missing token. |
@@ -317,7 +318,8 @@ No cron, no worker processes. The one long-running task is in-process:
 `true` in place with no restart.
 
 **Duration:** about 9 s warm (verified set on the volume, zero network) or 19 s cold on
-1 vCPU / 1 GB; the CI smoke budget for `/health` to answer is 120 s.
+the reference envelope (1 vCPU / 1 GB), configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` —
+see `docs/configuration.md` § Sizing the container; the CI smoke budget for `/health` to answer is 120 s.
 
 **Failure handling:** never raises (`weights_acquisition_crashed` is logged and the loop
 continues); single-flight, so a second caller is refused rather than queued; a token-less
@@ -389,7 +391,7 @@ binding, service names, volume literal, absent limiter, required secret) are ass
 | **Forage env** | `HF_TOKEN`, `FORAGE_SEARCH_PROVIDERS` and `FORAGE_BRAVE_API_KEY` bare pass-through (genuinely unset if absent — unset is the default `searxng` chain). `VALKEY_URL` deliberately absent (memory mode). `SEARXNG_URL` absent (default `http://searxng:8080` — the compose service name `searxng` is load-bearing). | Same, plus the literal `VALKEY_URL=redis://valkey:6379/4`. `SEARXNG_VALKEY_URL` is intentionally **not** wired (limiter stays off). |
 | **Volumes** | `forage-model-cache:/app/model-cache` (explicit `name:`, shared across fragments) | Same, plus `forage-valkey-data:/data` (project-scoped) |
 | **Secrets** | `compose/.env` (gitignored): `HF_TOKEN` (optional), `FORAGE_BRAVE_API_KEY` (optional), `SEARXNG_SECRET` (required-or-fail via `${SEARXNG_SECRET:?…}`) | Same |
-| **Limits** | `forage` `mem_limit: 1024m`, `restart: unless-stopped` | Same |
+| **Limits** | `forage` `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` (default `1024m`), `cpus: ${FORAGE_CPUS:-0}` (unset/0 omits the cap), `restart: unless-stopped` | Same |
 | **Image pins** | `forage:1.1.0`, `forage-searxng:0.1.1-rc` | Same |
 
 **Pin sequencing:** both fragments pin `ghcr.io/washingbearlabs/forage:1.1.0` and

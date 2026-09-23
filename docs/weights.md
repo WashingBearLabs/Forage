@@ -430,7 +430,8 @@ Three things follow from that layout:
 - **Keeping the volume buys a network-free start.** A start that finds a verified set at
   the pinned revision verifies it and loads it and does nothing else — no download, no
   `oras`, and no hub request of any kind, so it works on a container with no egress at
-  all. Measured on the reference envelope (1 vCPU / 1 GB): **9 s warm under
+  all. Measured on the reference envelope (1 vCPU / 1 GB), configurable via
+  `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` — see `docs/configuration.md` § Sizing the container: **9 s warm under
   `--network none`, against 19 s cold.** Changing `FORAGE_MODEL_REVISION` makes the next
   start cold again, which is the point of the pin.
 

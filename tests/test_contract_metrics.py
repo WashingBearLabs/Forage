@@ -33,7 +33,7 @@ from collections.abc import AsyncIterator, Iterator
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -46,7 +46,7 @@ from starlette.routing import Route
 
 import retrieval_app
 from cache import CacheMetrics
-from model_fetcher import ModelMetrics
+from model_fetcher import ModelMetrics, WeightAcquisition
 from models import SearchRequest
 from pipeline.contract import CONTRACT_VERSION
 from pipeline.extraction_limits import extraction_settings_from_config
@@ -54,6 +54,7 @@ from pipeline.orchestrator import run_search_pipeline
 from pipeline.search_providers.base import ProviderFailure, ProviderSearchResult
 from pipeline.search_providers.brave import BraveApiProvider, BraveSettings
 from pipeline.search_providers.searxng import SearxngProvider, SearxngSettings
+from promptguard.classifier import promptguard_threads_from_config
 from retrieval_app import (
     CacheMetricsResponse,
     ExtractionMetricsResponse,
@@ -682,6 +683,112 @@ def test_config_registry_covers_the_shipped_yaml() -> None:
             assert leaves, f"Shipped block {block} is empty"
             keys.update(f"{block}.{leaf}" for leaf in leaves)
     assert keys <= retrieval_app.KNOWN_CONFIG_KEYS
+
+
+# Security-relevant: decides whether/how content is scanned, served or sandboxed.
+# Include thresholds, policy, route gates, envelope keys and PDF sandbox limits.
+# Not: pure resource/throughput bounds, cosmetic lists or bare block names.
+# Names are the dotted KNOWN_CONFIG_KEYS vocabulary, including block leaves.
+SECURITY_RELEVANT_CONFIG_KEYS = frozenset(
+    {
+        "promptguard_threshold",
+        "extract_route_enabled",
+        "seed_blocklist",
+        "promptguard_fail_closed_floor",
+        "promptguard_threshold_ceiling",
+        "promptguard_wait_seconds",
+        "policy_domain_entries_max_bytes",
+        "promptguard_threads",
+        "extraction.classification_concurrency",
+        "search_promptguard_latency_target_ms",
+        "search_first_token_target_ms",
+        "extraction.child_address_space_bytes",
+        "extraction.child_cpu_seconds",
+        "extraction.wall_clock_seconds",
+        "extraction.max_input_bytes",
+        "extraction.max_pages",
+        "extraction.max_promptguard_chunks",
+        "retrieve.max_promptguard_chunks",
+    }
+)
+_NOT_SECURITY_RELEVANT_CONFIG_KEYS = frozenset(
+    {
+        "user_agents",
+        "news_domains",
+        "search_brave_timeout_seconds",
+        "search_searxng_timeout_seconds",
+        "search_searxng_query_max_chars",
+        "search_brave_chunk_max_chars",
+        "search_brave_query_max_chars",
+        "cache",
+        "cache.max_entries",
+        "cache.max_bytes",
+        "cache.max_value_bytes",
+        "extraction",
+        "extraction.extraction_concurrency",
+        "extraction.admission_queue_depth",
+        "extraction.max_queued_upload_bytes",
+        "retrieve",
+        "retrieve.fetch_concurrency",
+        "retrieve.admission_queue_depth",
+        "retrieve.max_queued_fetch_bytes",
+    }
+)
+
+
+def test_config_security_classification_partitions_the_registry() -> None:
+    overlap = SECURITY_RELEVANT_CONFIG_KEYS & _NOT_SECURITY_RELEVANT_CONFIG_KEYS
+    classified = SECURITY_RELEVANT_CONFIG_KEYS | _NOT_SECURITY_RELEVANT_CONFIG_KEYS
+    assert not overlap, f"Multiply classified config keys: {sorted(overlap)}"
+    assert classified == retrieval_app.KNOWN_CONFIG_KEYS, (
+        f"Unclassified: {sorted(retrieval_app.KNOWN_CONFIG_KEYS - classified)}; "
+        f"unregistered: {sorted(classified - retrieval_app.KNOWN_CONFIG_KEYS)}"
+    )
+
+
+async def test_shipped_security_relevant_config_equals_code_defaults(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Pin the shipped baseline, not an operator's later hardened replacement."""
+    shipped: dict[str, Any] = yaml.safe_load((_REPO_ROOT / "config.yaml").read_text())
+    empty_config: dict[str, Any] = {}
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: empty_config)
+    monkeypatch.setattr(retrieval_app, "spool_dir", lambda: tmp_path)
+    monkeypatch.setattr(WeightAcquisition, "run", AsyncMock(return_value=False))
+    isolated_app = FastAPI()
+    async with retrieval_app.lifespan(isolated_app):
+        state = isolated_app.state
+        extraction = dataclasses.asdict(state.extraction_settings)
+        retrieve = dataclasses.asdict(state.retrieve_settings)
+        targets = dataclasses.asdict(state.search_targets)
+        defaults: dict[str, Any] = {
+            "seed_blocklist": state.config["seed_blocklist"],
+            "promptguard_threshold": state.promptguard_threshold_default,
+            "policy_domain_entries_max_bytes": state.policy_domain_entries_max_bytes,
+            "extract_route_enabled": extraction.pop("route_enabled"),
+            "promptguard_threads": promptguard_threads_from_config({}),
+            **{f"extraction.{key}": value for key, value in extraction.items()},
+            **{
+                key if key.startswith("promptguard_") else f"retrieve.{key}": value
+                for key, value in retrieve.items()
+            },
+            **{f"search_{key}": value for key, value in targets.items()},
+        }
+    assert defaults.keys() >= SECURITY_RELEVANT_CONFIG_KEYS, (
+        "Missing default readers: "
+        f"{sorted(SECURITY_RELEVANT_CONFIG_KEYS - defaults.keys())}"
+    )
+    for key in sorted(SECURITY_RELEVANT_CONFIG_KEYS):
+        block, separator, leaf = key.partition(".")
+        assert block in shipped, f"Missing shipped key: {key}"
+        if separator:
+            assert leaf in shipped[block], f"Missing shipped key: {key}"
+            actual = shipped[block][leaf]
+        else:
+            actual = shipped[key]
+        assert actual == defaults[key], (
+            f"{key}: shipped {actual!r} != code default {defaults[key]!r}"
+        )
 
 
 def _literal_key(node: ast.AST) -> str | None:

@@ -2,7 +2,7 @@
 # TESTING_GUIDE.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-resource-envelope US-004)
+> Updated by: Copilot (hardening-resource-envelope US-003)
 
 ## Quick Start
 
@@ -166,7 +166,7 @@ the story implementer did not run it.
 | `tests/test_sanitizer_revision.py` | 9 | Revision hashing over `_REVISION_SOURCES` and the `MODEL_ID@revision` model identity |
 | `tests/test_dependency_lock.py` | 3 | `uv.lock` stays CPU-only (no `nvidia-*` wheels) |
 | `tests/test_contract_errors.py` | 25 | The documented error surface: the eighteen-code vocabulary swept from every raise site in the repo, pinned against Poppy's inlined allowlist; per-emission-site parity (each mirror model reproduces the live body byte-for-byte, driven through the real routes); the `responses=` declaration map; and the FastAPI 422-suppression behaviour the union declarations rest on |
-| `tests/test_contract_metrics.py` | 20 | The typed `/metrics` body and the served app metadata: parity between the handler's dict and the bytes the typed route sends (compared *outside* the model, so a reorder at any depth is caught), the flat cgroup keys in both wire and schema, the `extra="forbid"` failure mode and the permissive-model counterfactual it avoids, the dataclass-counter ↔ model field ties, `info.version == CONTRACT_VERSION`, and the mechanical check that every path FastAPI serves — `/docs`, `/redoc` and `/openapi.json` included — is acknowledged in `docs/configuration.md`'s posture section |
+| `tests/test_contract_metrics.py` | 65 | Typed `/metrics` body and served app metadata: handler/wire parity, flat cgroup keys, `extra="forbid"`, counter/model ties, `info.version`, documented endpoints, latency counters and config registry/reader coverage. Resource-envelope US-003 adds the explicit dotted security/non-security registry partition and shipped-equals-code-default pin, reading actual empty-config lifespan/settings values rather than duplicating defaults. This protects the shipped baseline only, never an operator's stricter replacement. |
 | `tests/test_contract_export.py` | 18 | The frozen `contract/openapi.yaml`: that the committed bytes are what the app generates, that the committed `.sha256` anchor is the sha256 of those bytes in `sha256sum -c` form, that the render is byte-stable across processes and `PYTHONHASHSEED` values (measured in subprocesses, not asserted), that the canonical form round-trips and carries no YAML anchors, and that `/extract` is documented while `extract_route_enabled` is `false`. The drift check's own failure case is committed as `tests/fixtures/contract/unregenerated_openapi.yaml` and fed to the same checker |
 | `tests/test_governance_docs.py` | 43 | The three governance documents US-003 adds — `contract/GOVERNANCE.md`, `SECURITY.md`, `.github/pull_request_template.md` — held to the code they describe: the stated contract version against `CONTRACT_VERSION`, the regeneration command against `scripts.export_contract.REGEN_COMMAND`, the hashed-source count against `_REVISION_SOURCES`, the PR template's required-checks sentence against the jobs `publish` hangs off, the six worked examples parsed out of the table and checked for exactly one classification each (two are deliberately two-valued), the five recorded rulings present with a citation that resolves, and every relative link in all three files |
 | `tests/test_contract_schema.py` | 14 | Golden schema, frozen 1.2.0 coverage and held 1.3.0 exact-additions sweep, including the three effective-policy fields |
@@ -308,6 +308,7 @@ test_mapping:
   "pyproject.toml": ["tests/test_dependency_lock.py", "tests/test_pyright_policy.py"]
   "typings/*": "tests/test_pyright_policy.py"
   "docs/configuration.md": "tests/test_contract_metrics.py"
+  "config.yaml": ["tests/test_contract_metrics.py", "tests/test_app.py"]
   "contract/openapi.yaml": ["tests/test_contract_export.py", "tests/test_contract_smoke.py"]
   "contract/openapi.yaml.sha256": ["tests/test_contract_export.py", "tests/test_contract_smoke.py"]
   "scripts/export_contract.py": ["tests/test_contract_export.py", "tests/test_governance_docs.py"]

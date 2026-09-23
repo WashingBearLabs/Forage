@@ -41,9 +41,10 @@ search_first_token_target_ms: 5000
 extract_route_enabled: false
 cache:
   # Bounds for cache values on both backends and total in-memory storage.
-  # The 1 GiB container
-  # already reserves 512 MiB for the parent process and 384 MiB for the
-  # extraction child, leaving ~128 MiB — 32 MiB spends a quarter of it.
+  # The reference 1 GiB envelope reserves 512 MiB for the parent and 384 MiB
+  # for the child. Of ~128 MiB left, 32 MiB is cache, 64 MiB provisional
+  # classifier working set, 32 MiB margin; larger models add a resident delta.
+  # See docs/configuration.md, "Sizing the container" before changing bounds.
   max_entries: 256
   max_bytes: 33554432
   max_value_bytes: 4194304
@@ -59,9 +60,9 @@ extraction:
   # 2 x 384 MiB + 512 MiB = 1 280 MiB, against the 1 GiB container this same
   # file describes above. What prevents two workers running at once today is
   # `extract_route_enabled: false` — nobody can upload while a fetched PDF
-  # parses. Sizing that envelope (and deciding whether boot should refuse a
-  # sum that exceeds it) belongs to the resource-envelope spec, not to this
-  # comment.
+  # parses. See docs/configuration.md, "Sizing the container": the advisory
+  # boot rule counts one extraction slot, not both routes' combined workers.
+  # Enabling uploads requires budgeting both plus classification and cache.
   child_address_space_bytes: 402653184
   wall_clock_seconds: 90
   # Derived character ceiling = (512 - 64) * 64 * 4 = 114688.
@@ -83,7 +84,8 @@ retrieve:
   # Pinned at exactly 1, for the reason `extraction.extraction_concurrency` is:
   # a fetched PDF spawns the same bounded worker under the same
   # `child_address_space_bytes` rlimit, so N fetch slots would put
-  # N x 384 MiB of worker address space in a 1 GiB container.
+  # N x 384 MiB of worker address space in the reference 1 GiB envelope.
+  # See docs/configuration.md, "Sizing the container".
   fetch_concurrency: 1
   # Requests allowed to wait for the single fetch slot, and the total queued
   # body bytes they may represent. The byte bound is deliberately NOT

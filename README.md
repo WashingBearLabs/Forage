@@ -87,6 +87,10 @@ docker compose -f minimal.yml up -d
 curl -s localhost:8020/health | jq
 ```
 
+Set `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` to size your deployment; see
+[`docs/configuration.md` § Sizing the container](docs/configuration.md#sizing-the-container)
+for the CPU/memory rules and delivery of the runtime tuning keys.
+
 [`compose/full.yml`](compose/full.yml) is the same thing with a Valkey under the content
 cache. Both publish Forage's port to `127.0.0.1` only and publish nothing else at all —
 **Forage ships no authentication**, so that binding is your first control, not Forage's
