@@ -65,6 +65,7 @@ from pipeline.search_providers.brave import (
     BraveSettings,
 )
 from pipeline.search_providers.searxng import (
+    DEFAULT_SEARXNG_QUERY_MAX_CHARS,
     DEFAULT_SEARXNG_URL,
     HTTP_STATUS_DETAIL_PREFIX,
     SEARXNG_ENGINES,
@@ -293,9 +294,10 @@ class TestSearxngSettingsFromConfig:
     def test_defaults_are_frozen(self) -> None:
         settings = searxng_settings_from_config({})
         assert settings == SearxngSettings(
-            timeout_seconds=10.0, max_response_bytes=1_048_576
+            timeout_seconds=10.0, max_response_bytes=1_048_576, query_max_chars=400
         )
         assert_frozen(settings, "timeout_seconds", 30.0)
+        assert_frozen(settings, "query_max_chars", 50)
 
     @pytest.mark.parametrize("value", [1, 1.0, 30, 30.0, 60, 60.0])
     def test_accepts_numbers_in_the_inclusive_range(self, value: float) -> None:
@@ -326,10 +328,42 @@ class TestSearxngSettingsFromConfig:
         ):
             searxng_settings_from_config({"search_searxng_timeout_seconds": value})
 
+    @pytest.mark.parametrize("value", [50, 237, 400])
+    def test_query_cap_accepts_integers_in_the_inclusive_range(
+        self, value: int
+    ) -> None:
+        settings = searxng_settings_from_config(
+            {"search_searxng_query_max_chars": value}
+        )
+        assert settings.query_max_chars == value
+
+    @pytest.mark.parametrize("value", [0, 49, 401, 10**400, -(10**400)])
+    def test_out_of_range_query_caps_raise_the_configuration_error(
+        self, value: int
+    ) -> None:
+        with pytest.raises(
+            SearxngConfigurationError,
+            match=r"^search_searxng_query_max_chars must be between 50 and 400$",
+        ):
+            searxng_settings_from_config({"search_searxng_query_max_chars": value})
+
+    @pytest.mark.parametrize(
+        "value", ["abc", "400", 400.0, True, False, None, [], {}, float("nan")]
+    )
+    def test_wrong_query_cap_types_raise_without_echoing_the_value(
+        self, value: object
+    ) -> None:
+        with pytest.raises(
+            SearxngConfigurationError,
+            match=r"^search_searxng_query_max_chars must be an integer$",
+        ):
+            searxng_settings_from_config({"search_searxng_query_max_chars": value})
+
     def test_shipped_config_pins_the_default(self) -> None:
         config_path = Path(__file__).resolve().parent.parent / "config.yaml"
         shipped = yaml.safe_load(config_path.read_text())
         assert shipped["search_searxng_timeout_seconds"] == 10.0
+        assert shipped["search_searxng_query_max_chars"] == 400
         assert searxng_settings_from_config(shipped) == SearxngSettings()
         assert "search_searxng_max_response_bytes" not in shipped
         assert "search_brave_max_response_bytes" not in shipped
@@ -473,6 +507,65 @@ class TestSearxngProviderRequest:
         assert kwargs.get("verify", True) is not False
         assert kwargs["follow_redirects"] is False
         assert kwargs["headers"] == {"Accept-Encoding": "identity"}
+
+
+class TestSearxngOutboundQueryCap:
+    @pytest.mark.parametrize("cap", [None, 50, 237, 400])
+    @pytest.mark.parametrize(
+        "query",
+        [
+            pytest.param("q" * 5_000, id="long"),
+            pytest.param("weather in boston", id="short"),
+            pytest.param("q" * 400, id="ascii-at-default-cap"),
+            pytest.param("\u732b" * 400, id="cjk-at-default-cap"),
+            pytest.param("\U0001f431" * 400, id="four-byte-at-default-cap"),
+        ],
+    )
+    async def test_built_chain_caps_only_the_outbound_copy(
+        self, cap: int | None, query: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        config = {} if cap is None else {"search_searxng_query_max_chars": cap}
+        settings = searxng_settings_from_config(config)
+        chain = build_provider_chain(
+            ["searxng"],
+            searxng_url="http://configured-searxng:9999",
+            searxng_settings=settings,
+        )
+        request = SearchRequest(query=query, promptguard_fail_closed=False)
+        payload = {
+            "results": [
+                {
+                    "title": "Example",
+                    "url": "https://example.com",
+                    "content": "A useful search result.",
+                    "engine": "duckduckgo",
+                }
+            ]
+        }
+        with (
+            client_patch(
+                _SEARXNG_CLIENT,
+                response=_response(content=json.dumps(payload).encode()),
+            ) as (_, client),
+            caplog.at_level(logging.DEBUG, logger=searxng.__name__),
+        ):
+            response = await run_search_pipeline(
+                request, providers=chain, config=_ORCHESTRATOR_CONFIG
+            )
+
+        expected_cap = DEFAULT_SEARXNG_QUERY_MAX_CHARS if cap is None else cap
+        client.stream.assert_called_once()
+        sent_query = client.stream.call_args.kwargs["params"]["q"]
+        assert sent_query == query[:expected_cap]
+        assert len(sent_query) == min(len(query), expected_cap)
+        assert request.model_dump()["query"] == query
+        assert response.model_dump()["query"] == query
+        assert response.results
+        assert response.provider_used == "searxng"
+        assert response.fallback_fired is False
+        assert not [
+            record for record in caplog.records if record.name == searxng.__name__
+        ]
 
 
 class TestSearxngProviderSuccess:

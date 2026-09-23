@@ -4696,13 +4696,17 @@ async def test_lifespan_wires_the_configured_brave_timeout_into_the_client(
 
 async def test_lifespan_wires_the_configured_searxng_settings_into_the_chain(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     _park_the_retry(monkeypatch)
     monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", "searxng")
     monkeypatch.setattr(
         retrieval_app,
         "_load_config",
-        lambda: {"search_searxng_timeout_seconds": 30.0},
+        lambda: {
+            "search_searxng_timeout_seconds": 30.0,
+            "search_searxng_query_max_chars": 75,
+        },
     )
     with _borrowed_search_providers(None):
         async with _running_app():
@@ -4712,21 +4716,37 @@ async def test_lifespan_wires_the_configured_searxng_settings_into_the_chain(
             assert isinstance(provider, SearxngProvider)
             assert provider.settings is app.state.searxng_settings
             assert provider.settings.timeout_seconds == 30.0
+            assert provider.settings.query_max_chars == 75
+    assert "config_unknown_key" not in caplog.text
 
 
-@pytest.mark.parametrize("value", [0.5, 61.0, "abc", True])
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("search_searxng_timeout_seconds", 0.5),
+        ("search_searxng_timeout_seconds", 61.0),
+        ("search_searxng_timeout_seconds", "abc"),
+        ("search_searxng_timeout_seconds", True),
+        ("search_searxng_query_max_chars", 49),
+        ("search_searxng_query_max_chars", 401),
+        ("search_searxng_query_max_chars", "400"),
+        ("search_searxng_query_max_chars", 400.0),
+        ("search_searxng_query_max_chars", True),
+        ("search_searxng_query_max_chars", None),
+    ],
+)
 @pytest.mark.parametrize("providers", ["searxng", "brave"])
 async def test_invalid_searxng_settings_refuse_boot_regardless_of_chain(
-    monkeypatch: pytest.MonkeyPatch, value: object, providers: str
+    monkeypatch: pytest.MonkeyPatch, key: str, value: object, providers: str
 ) -> None:
     monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", providers)
     monkeypatch.setenv(BRAVE_API_KEY_ENV_VAR, "sentinel-key")
     monkeypatch.setattr(
         retrieval_app,
         "_load_config",
-        lambda: {"search_searxng_timeout_seconds": value},
+        lambda: {key: value},
     )
-    with pytest.raises(SearxngConfigurationError):
+    with pytest.raises(SearxngConfigurationError, match=key):
         async with lifespan(FastAPI()):
             pytest.fail("Invalid SearXNG settings must refuse boot")
 

@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document environment variables and secrets. What config exists and where to find it.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-cache-integrity US-003)
+> Updated by: Copilot (hardening-provider-bounds US-002)
 
 ## Overview
 
@@ -101,6 +101,7 @@ and invalid operator domain entries; see the canonical reference for their fallb
 | `search_brave_timeout_seconds` | `15.0` | `15.0` | float, 1.0 to 60.0 (wrong-typed or out-of-range refuses boot) | Wall-clock budget for connect, headers and body together, not parse or sanitization. An N-provider chain can spend the sum of its budgets. Raise it for a slow Brave instance; raise `search_searxng_timeout_seconds` for a slow SearXNG. Defaults are unchanged but now bound the whole interaction, not each socket operation. | `pipeline/search_providers/brave.py`'s `brave_settings_from_config()`, start |
 | `search_brave_chunk_max_chars` | `2000` | `2000` | integer, 200 to 2000 (wrong-typed or out-of-range refuses boot) | Cap on each Brave result's extracted-chunk text before it reaches sanitization | `pipeline/search_providers/brave.py`'s `brave_settings_from_config()`, start |
 | `search_searxng_timeout_seconds` | `10.0` | `10.0` | float, 1.0 to 60.0 (wrong-typed or out-of-range refuses boot with `SearxngConfigurationError`) | Wall-clock budget for connect, headers and body together; the chain may spend the sum of its budgets. Raise `search_searxng_timeout_seconds` for a slow instance: the unchanged default is tighter than per-socket-operation timing, and a formerly working four-engine fan-out can now time out and buy a paid call. No fan-out latency distribution has been measured; watch `search.provider_timeouts`. | `pipeline/search_providers/searxng.py`'s `searxng_settings_from_config()`, start, even without SearXNG in the chain |
+| `search_searxng_query_max_chars` | `400` | `400` | integer, 50 to 400 (wrong-typed or out-of-range refuses boot with `SearxngConfigurationError`) | Cap on the outbound query only: results reflect the first N characters; the echoed `query` is the caller's. Truncation is deliberately unobservable (no flag, counter or log); diagnose by comparing query length with the cap. Restart to apply changes. | `pipeline/search_providers/searxng.py`'s `searxng_settings_from_config()`, start, even without SearXNG in the chain |
 | `search_brave_query_max_chars` | `400` | `400` | integer, 50 to 400 (wrong-typed or out-of-range refuses boot) | Cap on the outbound query text sent to Brave | `pipeline/search_providers/brave.py`'s `brave_settings_from_config()`, start |
 
 Domain lists use canonical UTS-46 names: denylist `evil.com` covers `www.evil.com`,

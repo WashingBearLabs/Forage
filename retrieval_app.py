@@ -413,6 +413,7 @@ KNOWN_CONFIG_KEYS: frozenset[str] = frozenset(
         "policy_domain_entries_max_bytes",
         "search_brave_timeout_seconds",
         "search_searxng_timeout_seconds",
+        "search_searxng_query_max_chars",
         "search_brave_chunk_max_chars",
         "search_brave_query_max_chars",
         "extract_route_enabled",

@@ -1545,6 +1545,38 @@ record.
   final revision `c9bf6e0d...f2f76` unchanged. The five rotation records remain
   accurate. No release, push, tag or Poppy change was made.
 
+### US-002 - outbound SearXNG query cap (2026-09-22, Copilot)
+
+- Added `SearxngSettings.query_max_chars`, default 400, using the existing
+  shared `bounded_int` reader with inclusive 50-400 bounds and
+  `SearxngConfigurationError`. The key is shipped, registered and documented
+  in both operator tables. Existing lifespan and chain construction already
+  pass the settings through; no new wiring or provider dependency was needed.
+- Only the outbound `q` is sliced. Tests drive `build_provider_chain` through
+  `run_search_pipeline` with the default and configured caps 50, 237 and 400:
+  5,000-character input, short input, exact-bound ASCII, CJK and four-byte
+  Unicode retain the original request/response query and serve results.
+  Successful truncation emits no provider log; no flag or counter was added.
+  Boot tests cover invalid values on both SearXNG and Brave-only chains.
+- Operator docs explain the invisible truncation and diagnosis by comparing
+  caller query length with the cap. The spend row records the closed
+  caller-induced URI-length path under the common 8 KB request-line limit.
+  An in-memory httpx encoding check measured 400 CJK characters as 3,600 query
+  bytes (3,694-byte request line), and 400 four-byte characters as 4,800 query
+  bytes (4,894-byte request line), including the fixed SearXNG parameters.
+- All nine hashed sources and the derivation module are byte-identical to
+  pre-story `4b5bd60`. Default, pre-story shipped and current shipped config
+  each produce `c9bf6e0d87beaa5bf32e05e38dd5fdb092fac0e764e46c409220f81a336f2f76`.
+  `pipeline/orchestrator.py`, `pipeline/contract.py`, `models.py` and all
+  contract artifacts are unchanged; exporter `--check` passes.
+- After scoped safe Ruff fixes/formatting, **718 tests passed** across
+  `test_search_providers.py`, `test_app.py` and `test_contract_metrics.py`.
+  Repository Ruff lint/format checks and strict Pyright pass with zero errors.
+  The three inherited non-failing Torch/socket-guard warnings remain
+  unsuppressed. Full pytest is explicitly prohibited for this implementer
+  invocation, so the full-suite acceptance gate remains deferred and the
+  result is `partial` / `needs-work` for that validation only.
+
 ## Refinement Notes
 
 ### Research Findings

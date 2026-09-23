@@ -33,7 +33,7 @@ from pipeline.bounded_body import (
     UnsupportedEncoding,
     read_bounded_body,
 )
-from pipeline.config_bounds import bounded_float
+from pipeline.config_bounds import bounded_float, bounded_int
 from pipeline.search_providers.base import (
     FailureClass,
     ProviderFailure,
@@ -65,6 +65,7 @@ DEFAULT_SEARXNG_URL = "http://searxng:8080"
 SEARXNG_ENGINES = "duckduckgo,brave,startpage,mojeek"
 
 DEFAULT_SEARXNG_TIMEOUT_SECONDS = 10.0
+DEFAULT_SEARXNG_QUERY_MAX_CHARS = 400
 
 # The closed `detail` vocabulary, minus the one open family: a status-derived
 # detail is `http_` followed by the integer status code (`http_429`,
@@ -107,6 +108,7 @@ class SearxngSettings:
     timeout_seconds: float = DEFAULT_SEARXNG_TIMEOUT_SECONDS
     # Both raw input and Forage-decoded output are bounded before JSON parsing.
     max_response_bytes: int = 1_048_576
+    query_max_chars: int = DEFAULT_SEARXNG_QUERY_MAX_CHARS
 
 
 def searxng_settings_from_config(config: dict[str, Any]) -> SearxngSettings:
@@ -118,6 +120,14 @@ def searxng_settings_from_config(config: dict[str, Any]) -> SearxngSettings:
             DEFAULT_SEARXNG_TIMEOUT_SECONDS,
             minimum=1.0,
             maximum=60.0,
+            error=SearxngConfigurationError,
+        ),
+        query_max_chars=bounded_int(
+            config,
+            "search_searxng_query_max_chars",
+            DEFAULT_SEARXNG_QUERY_MAX_CHARS,
+            minimum=50,
+            maximum=400,
             error=SearxngConfigurationError,
         ),
     )
@@ -192,7 +202,8 @@ class SearxngProvider:
     async def search(
         self, query: str, max_results: int
     ) -> ProviderSearchResult | ProviderFailure:
-        """Search SearXNG for *query*, returning at most *max_results* dicts."""
+        """Search with a capped outbound copy, leaving the caller's query intact."""
+        outbound_query = query[: self.settings.query_max_chars]
         compressed = False
         try:
             async with httpx.AsyncClient(
@@ -206,7 +217,7 @@ class SearxngProvider:
                         "GET",
                         f"{self.base_url}/search",
                         params={
-                            "q": query,
+                            "q": outbound_query,
                             "format": "json",
                             "pageno": 1,
                             "engines": SEARXNG_ENGINES,
