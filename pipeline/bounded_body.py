@@ -34,8 +34,41 @@ UnsupportedEncoding = UnsupportedEncodingError
 MalformedBody = MalformedBodyError
 
 
+class _BoundedDecoder:
+    def __init__(self, wbits: int, max_bytes: int) -> None:
+        self.decoder = _decompressobj(wbits)
+        self.max_bytes = max_bytes
+        self.body = bytearray()
+
+    def feed(self, data: bytes | bytearray) -> None:
+        if self.decoder.eof:
+            raise MalformedBody()
+        while data:
+            try:
+                # Zero means unlimited to zlib: the extra byte keeps an exact-cap
+                # body bounded and lets us detect its first overflow byte.
+                output = self.decoder.decompress(
+                    data, max_length=self.max_bytes - len(self.body) + 1
+                )
+            except zlib.error:
+                raise MalformedBody() from None
+            self.body.extend(output)
+            if len(self.body) > self.max_bytes:
+                raise BodyTooLarge()
+            if self.decoder.unused_data:
+                raise MalformedBody()
+            tail = self.decoder.unconsumed_tail
+            if not output and len(tail) == len(data):
+                raise MalformedBody()
+            data = tail
+
+    def finish(self) -> None:
+        if not self.decoder.eof or self.decoder.unconsumed_tail:
+            raise MalformedBody()
+
+
 async def read_bounded_body(response: httpx.Response, *, max_bytes: int) -> bytes:
-    """Read identity, gzip or deflate bytes with bounded decompressor output."""
+    """Bound decoded output and raw input, including deflate's replay history."""
     encoding = response.headers.get("content-encoding", "identity").strip().lower()
     if encoding not in {"identity", "gzip", "deflate"}:
         raise UnsupportedEncoding()
@@ -51,12 +84,17 @@ async def read_bounded_body(response: httpx.Response, *, max_bytes: int) -> byte
         raise BodyTooLarge()
 
     decoder = (
-        _decompressobj(zlib.MAX_WBITS | 16 if encoding == "gzip" else zlib.MAX_WBITS)
+        _BoundedDecoder(
+            zlib.MAX_WBITS | 16 if encoding == "gzip" else zlib.MAX_WBITS, max_bytes
+        )
         if compressed
         else None
     )
-    first = True
-    prefix = b""
+    # Raw deflate can share a valid zlib header and fail the wrapped interpretation
+    # only after emitting output. Keep a raw-budget-bounded replay until it is
+    # validated, rather than letting transport chunk boundaries choose the format.
+    replay = bytearray() if encoding == "deflate" else None
+    wrapped_overflow = False
     raw_total = 0
     body = bytearray()
     async for chunk in response.aiter_raw():
@@ -68,45 +106,53 @@ async def read_bounded_body(response: httpx.Response, *, max_bytes: int) -> byte
                 raise BodyTooLarge()
             body.extend(chunk)
             continue
-        if decoder.eof:
-            raise MalformedBody()
-
-        data = chunk
-        if first and encoding == "deflate":
-            # zlib needs both header bytes to distinguish wrapped from raw
-            # deflate; a transport boundary after one byte must not disable retry.
-            data = prefix + data
-            if len(data) < 2:
-                prefix = data
-                continue
-            prefix = b""
-        while data:
+        if replay is not None:
+            replay.extend(chunk)
+        try:
+            decoder.feed(chunk)
+        except (MalformedBody, BodyTooLarge) as error:
+            if replay is None:
+                if wrapped_overflow:
+                    raise BodyTooLarge() from None
+                raise
+            # Even overflow can belong to the wrong interpretation. Retry once,
+            # under the same output cap, without keeping its speculative output.
+            wrapped_overflow = isinstance(error, BodyTooLarge)
+            decoder.body.clear()
+            decoder = _BoundedDecoder(-zlib.MAX_WBITS, max_bytes)
             try:
-                # Zero means unlimited to zlib: the extra byte keeps an exact-cap
-                # body bounded and lets us detect its first overflow byte.
-                output = decoder.decompress(data, max_length=max_bytes - len(body) + 1)
-            except zlib.error:
-                if first and encoding == "deflate":
-                    decoder = _decompressobj(-zlib.MAX_WBITS)
-                    first = False
-                    continue
-                raise MalformedBody() from None
-            first = False
-            body.extend(output)
-            if len(body) > max_bytes:
-                raise BodyTooLarge()
-            if decoder.unused_data:
-                raise MalformedBody()
-            tail = decoder.unconsumed_tail
-            if not output and len(tail) == len(data):
-                raise MalformedBody()
-            data = tail
+                decoder.feed(replay)
+            except MalformedBody:
+                if wrapped_overflow:
+                    raise BodyTooLarge() from None
+                raise
+            replay = None
 
         # An incomplete stream has spent its entire raw budget. Do not wait for
         # another chunk from a zero-output trickler just to discover an overrun.
-        if raw_total == raw_limit and not decoder.eof:
-            raise BodyTooLarge()
+        if raw_total == raw_limit and not decoder.decoder.eof:
+            if replay is not None:
+                decoder.body.clear()
+                decoder = _BoundedDecoder(-zlib.MAX_WBITS, max_bytes)
+                try:
+                    decoder.feed(replay)
+                except MalformedBody:
+                    raise BodyTooLarge() from None
+                replay = None
+            if not decoder.decoder.eof:
+                raise BodyTooLarge()
 
-    if decoder is not None and (not decoder.eof or decoder.unconsumed_tail):
-        raise MalformedBody()
+    if decoder is not None:
+        try:
+            decoder.finish()
+        except MalformedBody:
+            if replay is None:
+                if wrapped_overflow:
+                    raise BodyTooLarge() from None
+                raise
+            decoder.body.clear()
+            decoder = _BoundedDecoder(-zlib.MAX_WBITS, max_bytes)
+            decoder.feed(replay)
+            decoder.finish()
+        return bytes(decoder.body)
     return bytes(body)

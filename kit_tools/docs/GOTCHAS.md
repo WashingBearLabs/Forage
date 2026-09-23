@@ -16,6 +16,23 @@ live in, and losing them in the move was an identified risk.
 
 ## Active Gotchas
 
+### A successful zlib header read does not identify the deflate format
+
+Raw deflate can begin with a valid zlib header. The valid raw body
+`780100feff20010200fdff7b7d` decodes to ` {}`, but the wrapped decoder accepts its
+first two bytes before rejecting later input. Larger valid raw bodies can even
+produce speculative wrapped output before rejection. Retrying only the first
+transport chunk, or only until output appears, makes acceptance chunk-dependent.
+
+`pipeline/bounded_body.py` retains deflate input within the existing **4× raw
+budget** until the wrapped interpretation is validated or retried as raw. A retry
+discards speculative output and uses the same `remaining + 1` decoded-output
+bound, including when the wrong interpretation overflowed. It also handles a
+missing wrapped EOF at stream end. This replay history is additional bounded
+memory on the deflate path, not an unbounded decoder allocation; identity and
+gzip need no replay history. Exactly one complete member is still required.
+The helper and both-provider regressions cover whole, split and bytewise delivery.
+
 ### A cache read bound depends on binary replies, not a client keyword alone
 
 redis-py's URL query options override `from_url` keyword arguments. Therefore

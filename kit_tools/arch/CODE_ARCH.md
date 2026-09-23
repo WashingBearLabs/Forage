@@ -314,7 +314,11 @@ acceptance/timing, not the text-sanitization algorithm. Full measurements:
 (plus one overflow-detection byte) and raw input at 4×, accepts identity,
 gzip and wrapped/raw deflate, and rejects unknown encodings or incomplete,
 concatenated or trailing compressed data with fixed tokens. It never flushes
-the decoder. Both providers request identity and bound their HTTP interaction
+the decoder. Deflate retains a replay history within that same 4× raw budget:
+a valid raw stream can mimic a zlib header and even emit speculative wrapped
+output before rejection. One retry discards that output and remains bounded;
+format selection no longer depends on transport chunking. Identity and gzip
+need no replay history. Both providers request identity and bound their HTTP interaction
 with `asyncio.timeout`, retaining httpx's per-operation guard; JSON parsing is
 outside the deadline. This helper is not a revision source and does not yet
 cover stage 5. Internal outcomes carry a header-derived compression flag;

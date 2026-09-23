@@ -81,6 +81,22 @@ async def test_overflow_stops_reading_with_bounded_outputs(shape: str) -> None:
         assert len(recording.instances) == 2
 
 
+async def test_wrapped_deflate_filler_stops_at_the_raw_budget() -> None:
+    cap = 1000
+    # An incomplete stored block also consumes bytes without producing output.
+    raw = b"\x78\x9c" + b"\x00\x00\x00\xff\xff" * 799 + b"\x00\x00\x00"
+    assert len(raw) == 4 * cap
+    stream = ChunkStream([raw[:2], raw[2:], b"unread"])
+    response = httpx.Response(
+        200, headers={"content-encoding": "deflate"}, stream=stream
+    )
+    with record_decompressors() as recording, pytest.raises(BodyTooLarge):
+        await read_bounded_body(response, max_bytes=cap)
+    assert stream.chunks_yielded == [raw[:2], raw[2:]]
+    assert recording.largest_output == 0
+    assert sum(map(len, stream.chunks_yielded)) == 4 * cap
+
+
 @pytest.mark.parametrize("encoding", ["br", "zstd", "unknown-secret", "gzip, br", ""])
 async def test_encoding_dispatch_precedes_length_and_read(encoding: str) -> None:
     stream = ChunkStream([b"unread"])
@@ -168,7 +184,7 @@ async def test_exactly_one_complete_member_is_required(
         await read_bounded_body(response, max_bytes=100)
 
 
-async def test_corruption_after_first_deflate_chunk_does_not_retry_raw() -> None:
+async def test_corruption_after_deflate_header_fails_both_formats() -> None:
     raw = zlib.compress(b"{}")
     response = httpx.Response(
         200,
@@ -177,7 +193,119 @@ async def test_corruption_after_first_deflate_chunk_does_not_retry_raw() -> None
     )
     with record_decompressors() as recording, pytest.raises(MalformedBody):
         await read_bounded_body(response, max_bytes=100)
-    assert len(recording.instances) == 1
+    assert len(recording.instances) == 2
+
+
+@pytest.mark.parametrize("split", [*range(1, 14), None])
+async def test_raw_deflate_with_a_valid_zlib_header(split: int | None) -> None:
+    raw = bytes.fromhex("780100feff20010200fdff7b7d")
+    chunks = (
+        [raw[:split], raw[split:]]
+        if split is not None
+        else [raw[index : index + 1] for index in range(len(raw))]
+    )
+    stream = ChunkStream(chunks)
+    response = httpx.Response(
+        200, headers={"content-encoding": "deflate"}, stream=stream
+    )
+    with record_decompressors() as recording:
+        assert await read_bounded_body(response, max_bytes=4) == b" {}"
+    assert len(recording.instances) == 2
+    assert recording.largest_output <= 5
+    assert sum(map(len, stream.chunks_yielded)) == len(raw) <= 16
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 7, 256, 4096])
+@pytest.mark.parametrize("overflow", [False, True])
+async def test_raw_deflate_retry_discards_speculative_wrapped_output(
+    chunk_size: int, overflow: bool
+) -> None:
+    # The wrapped interpretation emits bytes before rejecting this stored block.
+    length = 2561
+    raw = (
+        b"\x78"
+        + length.to_bytes(2, "little")
+        + (65535 - length).to_bytes(2, "little")
+        + b" " * length
+        + bytes.fromhex("010200fdff7b7d")
+    )
+    expected = b" " * length + b"{}"
+    cap = len(expected) - int(overflow)
+    chunks = [
+        raw[index : index + chunk_size] for index in range(0, len(raw), chunk_size)
+    ]
+    stream = ChunkStream([*chunks, b"unread"] if overflow else chunks)
+    response = httpx.Response(
+        200, headers={"content-encoding": "deflate"}, stream=stream
+    )
+    with record_decompressors() as recording:
+        if overflow:
+            with pytest.raises(BodyTooLarge):
+                await read_bounded_body(response, max_bytes=cap)
+        else:
+            assert await read_bounded_body(response, max_bytes=cap) == expected
+    assert len(recording.instances) == 2
+    assert recording.largest_output <= cap + 1
+    assert stream.chunks_yielded == chunks
+    assert sum(map(len, stream.chunks_yielded)) <= 4 * cap
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 4096])
+async def test_raw_deflate_retries_when_wrapped_eof_is_missing(
+    chunk_size: int,
+) -> None:
+    length = 2561
+    expected = b" " * (length - 2) + b"{}"
+    raw = (
+        b"\x78"
+        + length.to_bytes(2, "little")
+        + (65535 - length).to_bytes(2, "little")
+        + expected
+        + b"\x03\x00"
+    )
+    probe = zlib.decompressobj()
+    probe.decompress(raw, length + 10)
+    assert not probe.eof
+    stream = ChunkStream(
+        [raw[index : index + chunk_size] for index in range(0, len(raw), chunk_size)]
+    )
+    response = httpx.Response(
+        200, headers={"content-encoding": "deflate"}, stream=stream
+    )
+    with record_decompressors() as recording:
+        assert await read_bounded_body(response, max_bytes=length + 10) == expected
+    assert len(recording.instances) == 2
+    assert recording.largest_output <= length + 11
+    assert response.num_bytes_downloaded == len(raw) <= 4 * (length + 10)
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 4096])
+@pytest.mark.parametrize("shape", ["truncated", "trailing", "second-member"])
+async def test_raw_deflate_retry_still_requires_exactly_one_member(
+    chunk_size: int, shape: str
+) -> None:
+    raw = bytes.fromhex("780100feff20010200fdff7b7d")
+    raw = (
+        raw[:-1]
+        if shape == "truncated"
+        else raw + b"trailing"
+        if shape == "trailing"
+        else raw + zlib.compress(b"{}", wbits=-zlib.MAX_WBITS)
+    )
+    response = httpx.Response(
+        200,
+        headers={"content-encoding": "deflate"},
+        stream=ChunkStream(
+            [
+                raw[index : index + chunk_size]
+                for index in range(0, len(raw), chunk_size)
+            ]
+        ),
+    )
+    with record_decompressors() as recording, pytest.raises(MalformedBody):
+        await read_bounded_body(response, max_bytes=100)
+    assert len(recording.instances) == 2
+    assert recording.largest_output <= 101
 
 
 @pytest.mark.parametrize("wbits", [zlib.MAX_WBITS, -zlib.MAX_WBITS])

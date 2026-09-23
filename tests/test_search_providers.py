@@ -599,6 +599,43 @@ def bounded_provider(
 
 
 class TestProviderBoundedBodies:
+    @pytest.mark.parametrize("chunking", ["whole", "split", "bytes"])
+    async def test_raw_deflate_with_a_valid_zlib_header_is_served(
+        self,
+        bounded_provider: tuple[SearxngProvider | BraveApiProvider, str],
+        chunking: str,
+    ) -> None:
+        provider, target = bounded_provider
+        raw = bytes.fromhex("780100feff20010200fdff7b7d")
+        chunks = (
+            [raw]
+            if chunking == "whole"
+            else [raw[:2], raw[2:]]
+            if chunking == "split"
+            else [raw[index : index + 1] for index in range(len(raw))]
+        )
+        stream = ChunkStream(chunks)
+        response = httpx.Response(
+            200, headers={"content-encoding": "deflate"}, stream=stream
+        )
+        with (
+            client_patch(target, response=response),
+            record_decompressors() as recording,
+            patch(
+                f"pipeline.search_providers.{provider.name}.json.loads",
+                wraps=json.loads,
+            ) as loads_spy,
+        ):
+            outcome = await provider.search("q", 3)
+        assert isinstance(outcome, ProviderSearchResult)
+        assert outcome.results == []
+        assert outcome.compressed
+        loads_spy.assert_called_once_with(b" {}")
+        assert len(recording.instances) == 2
+        assert recording.largest_output <= provider.settings.max_response_bytes + 1
+        assert sum(map(len, stream.chunks_yielded)) == len(raw)
+        assert response.num_bytes_downloaded <= 4 * provider.settings.max_response_bytes
+
     async def test_status_mapping_precedes_any_body_read(
         self,
         bounded_provider: tuple[SearxngProvider | BraveApiProvider, str],

@@ -1496,6 +1496,55 @@ record.
   passed. Real httpx teardown under cancellation remains accepted untested as
   specified; both fake-client timeout regressions assert client exit.
 
+### US-003 - retry: chunk-independent deflate selection (2026-09-22, Copilot)
+
+- Restored the preserved implementation in its original dependency order as
+  `6d596ea` (helper/Brave), `f4c9dff` (SearXNG/doubles) and `9aedcfd`
+  (flags/counters/window/docs), without changing story definitions or checkboxes.
+  First reproduced the verifier's six failures: the helper and both providers
+  accepted `780100feff20010200fdff7b7d` whole but rejected it split after byte two
+  or bytewise.
+- Replaced first-chunk/two-byte format commitment with one bounded raw replay.
+  A raw stream can share a valid zlib header and can produce tentative wrapped
+  output before the wrapped interpretation errors, exceeds the decoded cap, or
+  ends without EOF. The retry discards that output, keeps every decoder call at
+  `remaining + 1`, and still requires exactly one complete member without a flush.
+  Invalid input remains a fixed-token failure; a wrapped zero-output filler
+  stops at its raw budget without waiting for another chunk.
+- Necessary refinement of the original first-chunk memory assumption: deflate
+  retains replay input up to the existing `4 * max_bytes` raw ceiling in addition
+  to bounded decoded output and the currently delivered transport chunk. No
+  unbounded allocation or new ceiling is introduced; bytes replayed are not
+  counted as new transport input. Identity/gzip do not retain replay history.
+  GOTCHAS and CODE_ARCH document this tradeoff rather than claiming header-only
+  detection is reliable.
+- Helper regressions cover every split of the verifier's 13-byte fixture plus
+  bytewise delivery, delayed rejection after speculative output, decoded overflow
+  on retry, missing wrapped EOF, raw-budget exhaustion, truncation, trailing bytes
+  and extra members. The shared provider parametrization pins both SearXNG and
+  Brave returning the decoded JSON for whole, two-byte-split and bytewise input,
+  including compression flags, exact parser input, raw byte counts and aggregate
+  bounded decoder outputs. The old corruption test still refuses the same body;
+  its decoder-count assertion now correctly expects both format attempts.
+- Final related run: **1,854 passed, one inherited governance-doc failure** across
+  fifteen modules. Ruling (j) references the now-archived cache-integrity spec;
+  `contract/GOVERNANCE.md` and its test remain byte-identical to `abf9df6`, and
+  the archived file exists. Left that unrelated defect unchanged. Three inherited
+  non-failing warnings remain unsuppressed. Repository Ruff check, Ruff format
+  check, strict Pyright (zero errors), exporter `--check` and whitespace checks
+  pass after scoped safe fixes/formatting. Full-suite execution is explicitly
+  deferred to the authorized end-of-epic gate; result remains `partial` /
+  `needs-work` for outstanding validation, not the resolved deflate defect.
+- Re-ran export and re-created the held golden through `_SCHEMA_MODELS`:
+  byte-identical, sha256 `d827f19c7224bf2d6cd055170f8972c0b48f27bff27d5534915cae505129c0ad`.
+  `_EXPECTED_ONE_THREE_ZERO_DIFF` still needs no entry. OpenAPI/anchor and all
+  four quoting pages retain `ec61da286abc37aadc5bf783cfcf9ab4444f1ef85424ad0dd319f502e24750ea`.
+  Reproduced all four revision measurements above under default and shipped
+  configuration: only orchestrator/contract move from `abf9df6`, both-reverted
+  still returns `0866963a...c1e80`, and the corrected unhashed decoder leaves the
+  final revision `c9bf6e0d...f2f76` unchanged. The five rotation records remain
+  accurate. No release, push, tag or Poppy change was made.
+
 ## Refinement Notes
 
 ### Research Findings
