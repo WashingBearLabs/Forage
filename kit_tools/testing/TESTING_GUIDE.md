@@ -2,7 +2,7 @@
 # TESTING_GUIDE.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-provider-bounds US-005)
+> Updated by: Copilot (hardening-resource-envelope US-004)
 
 ## Quick Start
 
@@ -290,6 +290,7 @@ test_mapping:
   "pipeline/extraction_limits.py": ["tests/test_stage1_extraction.py", "tests/test_app.py"]
   "pipeline/config_bounds.py": ["tests/test_stage1_extraction.py", "tests/test_app.py"]
   "pipeline/retrieve_limits.py": ["tests/test_app.py", "tests/test_promptguard_policy.py"]
+  "pipeline/search_targets.py": "tests/test_app.py"
   "pipeline/search_providers/__init__.py": "tests/test_search_providers.py"
   "pipeline/search_providers/base.py": "tests/test_search_providers.py"
   "pipeline/search_providers/searxng.py": "tests/test_search_providers.py"

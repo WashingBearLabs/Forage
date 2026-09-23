@@ -2,7 +2,7 @@
 # CODE_ARCH.md
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-provider-bounds US-005)
+> Updated by: Copilot (hardening-resource-envelope US-004)
 
 ---
 
@@ -88,6 +88,7 @@ Design principles:
 
 | Module | Lines | Responsibility |
 |--------|------:|----------------|
+| `pipeline/search_targets.py` | 42 | Frozen search latency targets, validated unconditionally at boot through shared `config_bounds.bounded_int`. Neither target is a deadline or sanitizer-revision input. `/search` reads `app.state.search_targets`; the first-token target is log-only. |
 | `pipeline/orchestrator.py` | 1128 | Drives the five stages end to end. Since `search-provider-abstraction` US-002 it reaches search backends through the `SearchProvider` seam rather than calling SearXNG itself: it sets the candidate budget, re-applies its own slice, bounds `unresponsive_engines`, and maps a `ProviderFailure`'s closed `detail` onto `searxng_error` / `searxng_unavailable`. `_DEFAULT_SEARXNG_URL` and `_SEARXNG_ENGINES` survive here as **assigned aliases** of `pipeline/search_providers/searxng.py`'s public constants (three test modules import the private names from here); the definitions live in the provider. Since `hardening-search-sanitization` US-001 the per-result sanitization loop keeps **two forms** of `title` and `snippet`: `_scan_forms_for_search_text` returns `(wire_form, scan_form)`, where the scan form is what Stages 2 and 3 see and the wire form is its whitespace collapse (`wire_form == " ".join(scan_form.split())`, so nothing reaches the wire unscanned). The scan form keeps line breaks, which is what lets Stage 2's line-anchored patterns fire anywhere in the field. Order: NFC → a **first** control strip on the raw provider value (the parser maps a raw NUL to U+FFFD, outside the strip's class) → a parser-input bound of `_SEARCH_PARSER_INPUT_MULTIPLIER * max_length` (4×, measured — truncation now follows extraction, so without it the parser would see the whole provider body per field) → `extract_html` on the `<div>`-wrapped text (one entity level) → `html.unescape` (the second level) → a **second** control strip for what those decodes produced → `normalize_text` → truncate once at the field's cap. `_sanitize_search_text` survives for the URL call site only. Since `hardening-search-sanitization`
 US-004, `SearchResult.engine` is also routed through `_normalize_search_text`
 (`_MAX_SEARCH_ENGINE_LENGTH = 64`) rather than passed through unexamined; it is not routed
@@ -337,6 +338,24 @@ It is not a text-sanitization change. Commit `8e449fc` captured four full
 synthetic wire/counter runs and two exhaustion payload/status/counter runs
 before the refactor; all remain unchanged. Full values and the two deliberate
 log/failure-token deltas are in `docs/bootstrap-notes.md`.
+
+**Search latency targets observe, never impose a deadline.** Resource-envelope
+US-004 adds the frozen, module-owned `SearchTargets`, validated unconditionally
+at boot and published for `/search` on app state, with a lifespan-free default.
+The first-token target only feeds log payloads. The existing timer surrounds
+the per-result sanitization loop (structural scan, PromptGuard and any semaphore
+wait); the driver unconditionally updates its high-water mark before INFO and
+increments the overrun count once only for a strictly greater duration.
+Both metrics append to the model/class/protocol/null-sink/handler/fake surfaces.
+
+This is the thirty-sixth rotation (`d9db7586…` → `bf5a1f3e…`), not a
+text-sanitization change: `orchestrator.py` and `contract.py` move. Read-only
+whole-file reversals against clean `7087c04` give `66b50985…` (orchestrator
+reverted), `3c699860…` (contract reverted), and exactly `d9db7586…` (both),
+under default, shipped and maximum-target config. The other seven sources and
+hash definition are unchanged; the settings module and targets are not inputs.
+The schema golden and closed search wire/counter pins are unchanged. Full
+measurements and the additive metrics handoff are in `docs/bootstrap-notes.md`.
 
 **Provider bodies are self-decoded under bounds.** The shared
 `pipeline/bounded_body.py` reads raw bytes, bounds decoded output at 1 MiB

@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document API endpoints, CLI commands, or library interface. The external contract.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-cache-integrity US-003)
+> Updated by: Copilot (hardening-resource-envelope US-004)
 
 ---
 
@@ -511,7 +511,7 @@ in-tree copy and says nothing about wire compatibility. The image tag (for examp
 CI verifies two of the three on every release: the `smoke` job reads the in-image copy
 back out of the candidate image, and the `publish` job downloads the Release assets back
 from the API; both are checked against the anchor committed at the tag (currently
-`87bd958cb471614f5ecab22418eab6562a07e1a4c30d85ae45d5dce3ae2b3495`).
+`9860c4d988295f39ee9e31ac65414dd1ce2c89c1031cd45c778b7fa8142923e4`).
 
 **Vendoring procedure** (`contract/GOVERNANCE.md` "Consumers"):
 

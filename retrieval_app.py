@@ -105,6 +105,7 @@ from pipeline.search_providers.searxng import (
     SearxngProvider,
     searxng_settings_from_config,
 )
+from pipeline.search_targets import SearchTargets, search_targets_from_config
 from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES
 from promptguard.classifier import (
     MODEL_ID,
@@ -419,6 +420,8 @@ KNOWN_CONFIG_KEYS: frozenset[str] = frozenset(
         "promptguard_threshold_ceiling",
         "promptguard_wait_seconds",
         "policy_domain_entries_max_bytes",
+        "search_promptguard_latency_target_ms",
+        "search_first_token_target_ms",
         "search_brave_timeout_seconds",
         "search_searxng_timeout_seconds",
         "search_searxng_query_max_chars",
@@ -718,6 +721,29 @@ class SearchMetricsResponse(BaseModel):
             "or the whole-interaction budget. A rise after upgrading on a previously "
             "working slow SearXNG is the budget tightening; raise "
             "search_searxng_timeout_seconds."
+        )
+    )
+    promptguard_latency_target_exceeded: int = Field(
+        description=(
+            "Search requests whose duration strictly exceeds "
+            "search_promptguard_latency_target_ms, counted once per request. "
+            "Measures the per-result sanitization loop: structural scan, "
+            "PromptGuard and any semaphore wait. The loop runs once per served "
+            "result, so the duration scales with num_results (1-20); compare "
+            "readings only at the same num_results."
+        )
+    )
+    sanitization_latency_max_ms: int = Field(
+        description=(
+            "Per-process high-water mark in milliseconds, truncated from the "
+            "rounded duration of the per-result sanitization loop: structural "
+            "scan, PromptGuard and any semaphore wait. Updated even below "
+            "search_promptguard_latency_target_ms, including served-empty searches, "
+            "but not pre-loop refusals. The loop runs once per served result, "
+            "so the duration scales with num_results (1-20); compare readings "
+            "only at the same num_results. Never resets; restarting the container "
+            "is the only way to clear it. Only meaningful read together with "
+            "search.promptguard_latency_target_exceeded and search.requests."
         )
     )
 
@@ -1124,7 +1150,7 @@ _PROMPTGUARD_STATES = frozenset(get_args(PromptGuardState))
 
 
 class SearchMetrics:
-    """In-process counters exported by the internal ``/metrics`` endpoint."""
+    """In-process measurements exported by the internal ``/metrics`` endpoint."""
 
     def __init__(self) -> None:
         self.requests = 0
@@ -1140,6 +1166,8 @@ class SearchMetrics:
         self.classification_wait_timeouts = 0
         self.provider_compressed_body = 0
         self.provider_timeouts = 0
+        self.promptguard_latency_target_exceeded = 0
+        self.sanitization_latency_max_ms = 0
 
     def record_error(self, error: str) -> None:
         """Record one content-free search error, keyed by ``PipelineError.error``."""
@@ -1615,6 +1643,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.extraction_settings = settings
     retrieve_settings = retrieve_settings_from_config(config)
     app.state.retrieve_settings = retrieve_settings
+    app.state.search_targets = search_targets_from_config(config)
     # The spool directory is checked once here so a planted symlink, a foreign
     # owner or a group/other bit refuses the boot, under the same closed
     # vocabulary as every other `retrieve:` refusal — the token, never the
@@ -1834,6 +1863,8 @@ app.state.extraction_settings = _initial_extraction_settings
 # WARNING belongs to the lifespan, so a lifespan-free test does not emit a
 # boot warning nobody configured.
 app.state.retrieve_settings = retrieve_settings_from_config({})
+# The search handler also supports transports that never fire lifespan events.
+app.state.search_targets = SearchTargets()
 app.state.promptguard_threshold_default = 0.85
 app.state.policy_domain_entries_max_bytes = _DEFAULT_POLICY_DOMAIN_ENTRIES_MAX_BYTES
 app.state.extraction_metrics = ExtractionMetrics()
@@ -2010,6 +2041,10 @@ async def metrics(request: Request) -> dict[str, Any]:
             ),
             "provider_compressed_body": search_metrics.provider_compressed_body,
             "provider_timeouts": search_metrics.provider_timeouts,
+            "promptguard_latency_target_exceeded": (
+                search_metrics.promptguard_latency_target_exceeded
+            ),
+            "sanitization_latency_max_ms": search_metrics.sanitization_latency_max_ms,
         },
         "retrieve": {
             "requests": retrieve_metrics.requests,
@@ -2377,6 +2412,7 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
     """
     search_metrics: SearchMetrics = request.app.state.search_metrics
     search_metrics.requests += 1
+    search_targets: SearchTargets = request.app.state.search_targets
     policy = _promptguard_policy_updates(
         body,
         request.app.state.retrieve_settings,
@@ -2421,6 +2457,8 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
             classification_wait_seconds=(
                 request.app.state.retrieve_settings.promptguard_wait_seconds
             ),
+            promptguard_latency_target_ms=search_targets.promptguard_latency_target_ms,
+            first_token_target_ms=search_targets.first_token_target_ms,
         )
     except PipelineError as exc:
         search_metrics.record_error(exc.error)

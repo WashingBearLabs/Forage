@@ -401,6 +401,8 @@ def test_search_metrics_response_1_3_0_field_set_is_pinned_exactly() -> None:
         "policy_suffix_trusted_skip",
         "provider_compressed_body",
         "provider_timeouts",
+        "promptguard_latency_target_exceeded",
+        "sanitization_latency_max_ms",
     }
 
 

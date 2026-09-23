@@ -87,6 +87,11 @@ from pipeline.search_providers.searxng import (
     SearxngConfigurationError,
     SearxngProvider,
 )
+from pipeline.search_targets import (
+    SearchTargets,
+    SearchTargetsConfigurationError,
+    search_targets_from_config,
+)
 from pipeline.stage1_extraction import ExtractionResult, extract_html
 from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES, FetchResult
 from promptguard.classifier import (
@@ -115,6 +120,7 @@ from tests.fakes import (
     FakeContentCache,
     FakeSearchProvider,
     FakeStorage,
+    assert_frozen,
     client_patch,
     hub_download_double,
     make_response,
@@ -131,6 +137,7 @@ def client() -> httpx.AsyncClient:
     app.state.cache_signing_active = False
     app.state.config = {"extract_route_enabled": True}
     app.state.retrieve_settings = retrieve_settings_from_config(app.state.config)
+    app.state.search_targets = SearchTargets()
     app.state.promptguard_threshold_default = 0.85
     app.state.policy_domain_entries_max_bytes = 65536
     settings = extraction_settings_from_config(app.state.config)
@@ -536,6 +543,8 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "classification_wait_timeouts": 0,
         "provider_compressed_body": 0,
         "provider_timeouts": 0,
+        "promptguard_latency_target_exceeded": 0,
+        "sanitization_latency_max_ms": 0,
     }
     assert body["retrieve"] == {
         "requests": 0,
@@ -2635,6 +2644,287 @@ async def test_lifespan_refuses_an_out_of_range_cache_bound(
     with pytest.raises(CacheConfigurationError):
         async with lifespan(probe_app):
             pass
+
+
+# ---------------------------------------------------------------------------
+# Search latency targets (`hardening-resource-envelope` US-004)
+# ---------------------------------------------------------------------------
+
+
+def test_search_targets_defaults_and_shipped_values_are_frozen() -> None:
+    shipped = yaml.safe_load(
+        (Path(__file__).resolve().parent.parent / "config.yaml").read_text()
+    )
+    defaults = search_targets_from_config({})
+    assert defaults == SearchTargets(1_000, 5_000)
+    assert search_targets_from_config(shipped) == defaults
+    assert_frozen(defaults, "promptguard_latency_target_ms", 100)
+    assert_frozen(defaults, "first_token_target_ms", 100)
+
+
+@pytest.mark.parametrize(
+    ("key", "field", "maximum"),
+    [
+        (
+            "search_promptguard_latency_target_ms",
+            "promptguard_latency_target_ms",
+            60_000,
+        ),
+        ("search_first_token_target_ms", "first_token_target_ms", 120_000),
+    ],
+)
+def test_search_targets_accept_inclusive_bounds(
+    key: str, field: str, maximum: int
+) -> None:
+    for value in (100, maximum):
+        assert getattr(search_targets_from_config({key: value}), field) == value
+
+
+@pytest.mark.parametrize(
+    ("key", "maximum"),
+    [
+        ("search_promptguard_latency_target_ms", 60_000),
+        ("search_first_token_target_ms", 120_000),
+    ],
+)
+@pytest.mark.parametrize("value", [5, 99, True, False, "1000", 1000.0, None])
+def test_search_targets_reject_invalid_values(
+    key: str, maximum: int, value: object
+) -> None:
+    for invalid in (value, maximum + 1):
+        with pytest.raises(SearchTargetsConfigurationError, match=key):
+            search_targets_from_config({key: invalid})
+
+
+@pytest.mark.parametrize(
+    "key", ["search_promptguard_latency_target_ms", "search_first_token_target_ms"]
+)
+@pytest.mark.parametrize("providers", ["searxng", "brave"])
+async def test_lifespan_refuses_out_of_range_search_targets(
+    monkeypatch: pytest.MonkeyPatch, key: str, providers: str
+) -> None:
+    monkeypatch.setenv("FORAGE_SEARCH_PROVIDERS", providers)
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: {key: 5})
+    with pytest.raises(SearchTargetsConfigurationError, match=key):
+        async with lifespan(FastAPI()):
+            pytest.fail("Invalid latency targets must refuse boot")
+
+
+@pytest.mark.parametrize("target", [None, 100, 5_000])
+async def test_lifespan_search_targets_reach_logs_and_latency_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    target: int | None,
+) -> None:
+    config = (
+        {}
+        if target is None
+        else {
+            "search_promptguard_latency_target_ms": target,
+            "search_first_token_target_ms": 12_345,
+        }
+    )
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _acquisition_that_never_loads
+    )
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    monkeypatch.setattr(app.state, "search_targets", SearchTargets())
+    delay = 0.15 if target == 100 else 0.0
+
+    def classify(_text: str, **_kwargs: object) -> tuple[float, list[str]]:
+        time.sleep(delay)
+        return 0.0, []
+
+    classifier = MagicMock(spec=PromptGuardClassifier, loaded=True)
+    classifier.classify.side_effect = classify
+    monkeypatch.setattr(retrieval_app, "PromptGuardClassifier", lambda: classifier)
+    provider = FakeSearchProvider(
+        name="searxng",
+        outcome=ProviderSearchResult(
+            "searxng",
+            [
+                {
+                    "title": "Gardening",
+                    "url": "https://example.com",
+                    "content": "Flowers",
+                }
+            ],
+            [],
+        ),
+    )
+    caplog.set_level(logging.INFO, logger="pipeline.orchestrator")
+    with _borrowed_search_providers(None):
+        async with _running_app() as running:
+            assert app.state.search_targets == search_targets_from_config(config)
+            app.state.search_providers = [provider]
+            before = (await running.get("/metrics")).json()["search"]
+            assert before["sanitization_latency_max_ms"] == 0
+            assert before["promptguard_latency_target_exceeded"] == 0
+            response = await running.post(
+                "/search", json={"query": "q", "num_results": 1}
+            )
+            assert response.status_code == 200
+            assert len(response.json()["results"]) == 1
+            assert classifier.classify.call_count == 1
+            measured = [
+                record
+                for record in caplog.records
+                if record.getMessage() == "search_promptguard_complete"
+            ][-1]
+            duration = measured.__dict__["duration_ms"]
+            assert measured.__dict__["local_target_ms"] == (target or 1_000)
+            assert measured.__dict__["tool_augmented_first_token_target_ms"] == (
+                5_000 if target is None else 12_345
+            )
+            first = (await running.get("/metrics")).json()["search"]
+            assert first["requests"] == 1
+            assert first["sanitization_latency_max_ms"] == int(duration)
+            assert first["promptguard_latency_target_exceeded"] == int(target == 100)
+            if target == 100:
+                assert duration >= 150
+                warning = [
+                    record
+                    for record in caplog.records
+                    if record.getMessage()
+                    == "search_promptguard_local_latency_target_exceeded"
+                ][-1]
+                assert warning.__dict__["duration_ms"] == duration
+                assert warning.__dict__["local_target_ms"] == 100
+                assert (
+                    warning.__dict__["tool_augmented_first_token_target_ms"] == 12_345
+                )
+                delay = 0.0
+                response = await running.post(
+                    "/search", json={"query": "q", "num_results": 1}
+                )
+                assert response.status_code == 200
+                second_duration = [
+                    record.__dict__["duration_ms"]
+                    for record in caplog.records
+                    if record.getMessage() == "search_promptguard_complete"
+                ][-1]
+                assert second_duration < duration
+                second = (await running.get("/metrics")).json()["search"]
+                assert (
+                    second["sanitization_latency_max_ms"]
+                    == first["sanitization_latency_max_ms"]
+                )
+
+
+@pytest.mark.parametrize(
+    ("duration_ms", "expected_max", "exceeded"),
+    [
+        (0.0, 0, 0),
+        (99.999, 100, 0),
+        (100.0, 100, 0),
+        (100.01, 100, 1),
+        (150.99, 150, 1),
+        (150.999, 151, 1),
+    ],
+)
+async def test_search_latency_strict_boundary_rounding_and_once_per_request(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    duration_ms: float,
+    expected_max: int,
+    exceeded: int,
+) -> None:
+    monkeypatch.setattr(
+        app.state,
+        "search_targets",
+        search_targets_from_config(
+            {
+                "search_promptguard_latency_target_ms": 100,
+                "search_first_token_target_ms": 100,
+            }
+        ),
+    )
+    provider = FakeSearchProvider(
+        name="searxng",
+        outcome=ProviderSearchResult(
+            "searxng",
+            [
+                {"title": "Clean", "url": f"https://example.com/{i}", "content": "Text"}
+                for i in range(3)
+            ],
+            [],
+        ),
+    )
+    with (
+        _borrowed_search_providers([provider]),
+        patch.object(orchestrator, "time") as clock,
+    ):
+        clock.perf_counter.side_effect = [0.0, duration_ms / 1_000]
+        response = await client.post(
+            "/search",
+            json={"query": "q", "num_results": 3, "promptguard_fail_closed": False},
+        )
+        assert response.status_code == 200
+        assert len(response.json()["results"]) == 3
+        assert clock.perf_counter.call_count == 2
+    search = (await client.get("/metrics")).json()["search"]
+    assert search["promptguard_latency_target_exceeded"] == exceeded
+    assert search["sanitization_latency_max_ms"] == expected_max
+
+
+async def test_search_first_token_target_is_log_only(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(app.state, "search_targets", SearchTargets(5_000, 100))
+    caplog.set_level(logging.INFO, logger="pipeline.orchestrator")
+    with (
+        _borrowed_search_providers([FakeSearchProvider(name="searxng")]),
+        patch.object(orchestrator, "time") as clock,
+    ):
+        clock.perf_counter.side_effect = [0.0, 0.250]
+        response = await client.post("/search", json={"query": "q"})
+    assert response.status_code == 200
+    search = (await client.get("/metrics")).json()["search"]
+    assert search["sanitization_latency_max_ms"] == 250
+    assert search["promptguard_latency_target_exceeded"] == 0
+    record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "search_promptguard_complete"
+    )
+    assert record.__dict__["tool_augmented_first_token_target_ms"] == 100
+    assert "search_promptguard_local_latency_target_exceeded" not in caplog.text
+
+
+async def test_served_empty_search_measures_but_pre_loop_refusal_does_not(
+    client: httpx.AsyncClient,
+) -> None:
+    with (
+        _borrowed_search_providers([FakeSearchProvider(name="searxng")]),
+        patch.object(orchestrator, "time") as clock,
+    ):
+        clock.perf_counter.side_effect = [0.0, 0.012345]
+        response = await client.post("/search", json={"query": "q"})
+        assert response.status_code == 200
+        assert response.json()["results"] == []
+        assert clock.perf_counter.call_count == 2
+    first = (await client.get("/metrics")).json()["search"]
+    assert first["sanitization_latency_max_ms"] == 12
+    assert first["promptguard_latency_target_exceeded"] == 0
+
+    failure = FakeSearchProvider(
+        name="brave", paid=True, outcome=ProviderFailure("brave", "timeout", "timeout")
+    )
+    with (
+        _borrowed_search_providers([failure]),
+        patch.object(orchestrator, "time") as clock,
+    ):
+        response = await client.post("/search", json={"query": "q"})
+        assert response.status_code == 422
+        assert response.json()["error"] == "search_unavailable"
+        clock.perf_counter.assert_not_called()
+    second = (await client.get("/metrics")).json()["search"]
+    assert second["requests"] == 2
+    assert second["sanitization_latency_max_ms"] == first["sanitization_latency_max_ms"]
+    assert second["promptguard_latency_target_exceeded"] == 0
 
 
 # ---------------------------------------------------------------------------

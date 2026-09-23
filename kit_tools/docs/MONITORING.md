@@ -10,7 +10,7 @@
 > **TEMPLATE_INTENT:** Document logs, metrics, alerts, and dashboards. How to observe the system.
 
 > Last updated: 2026-09-22
-> Updated by: Copilot (hardening-provider-bounds US-005)
+> Updated by: Copilot (hardening-resource-envelope US-004)
 
 ---
 
@@ -148,9 +148,24 @@ Backed by `retrieval_app.SearchMetrics`.
 | `omitted_by_reason` | map | Results dropped before return, keyed by `contract.OMISSION_REASONS`: `invalid_url`, `structural_blocked`, `injection_detected`, `promptguard_unavailable`, and — added in contract `1.3.0` — `blocked_url`; anything else lands in `other`. `blocked_url` is reachable from the lexical URL audit, caller `blocked_domains`, and operator `seed_blocklist`. | `promptguard_unavailable` rising: fail-closed omissions on a degraded container — the consumer sees thin or empty results. `structural_blocked` rising after `hardening-search-sanitization` US-001 is **expected** — see the caveat below. A rising `blocked_url` count has three possible causes: the URL audit, `blocked_domains`, or `seed_blocklist`. Aggregate the content-free `search_url_blocked` INFO line by `provider` plus `host_class`: `private_literal`, `embedded_private`, and `blocklisted_name` are suspicious-host signals warranting investigation; `policy_blocklist` is expected operator/caller policy, not a suspicious-host signal. The latter intentionally does not distinguish which policy list matched. |
 | `unscanned_results` | counter | `+= response.unscanned_results` — fail-open results returned without an ML scan. | Unsanitized results are reaching the consumer. |
 | `fallback_fired` | counter | Once per `/search` request whose provider chain advances past the first provider (`search-fallback` US-003; the per-process count of the per-response `fallback_fired` bool) — including a request that ends in a 422. | Free search is failing often enough that the chain is advancing; correlate with `search_provider_failed` WARNINGs and the `errors` map to see which provider is unreliable. |
+| `promptguard_latency_target_exceeded` | counter | Once per `/search` whose duration strictly exceeds `search_promptguard_latency_target_ms` (default 1000). Measures the per-result sanitization loop: structural scan, PromptGuard and any semaphore wait; pre-loop refusals never count. The loop runs once per served result and scales with `num_results` (1–20); compare only at the same `num_results`. | Read its ratio over `search.requests` first, then the max below; a count is not a latency magnitude. |
+| `sanitization_latency_max_ms` | high-water mark (ms) | `max(previous, int(rounded_duration_ms))` after every completed per-result sanitization loop: structural scan, PromptGuard and any semaphore wait, including served-empty requests and below-target durations, excluding pre-loop refusals. The loop runs once per served result and scales with `num_results` (1–20); compare only at the same `num_results`. | Per-process, never resets; restarting the container is the only way to clear it. Only meaningful read with `search.promptguard_latency_target_exceeded` and `search.requests`, against `search_promptguard_latency_target_ms`. One old outlier can hold it high indefinitely. |
 | `paid_calls` | counter | Once per call to a `paid=True` configured provider, incremented before the call so a call that times out is still counted — whether or not it served the response. | Spend. `paid_calls` rising **faster** than `fallback_fired` means a paid provider is first in the configured chain — `FORAGE_SEARCH_PROVIDERS` names it ahead of every free provider, or names no free provider — so it is called without the chain advancing. A per-request `providers` / `allow_paid_fallback` policy cannot cause this: it only removes paid providers, never adds or reorders one. Rising together at 1:1 means a standard free-first chain is falling back to the paid provider every time it advances. |
 | `classification_wait_timeouts` | counter | Once per `/search` request whose per-request PromptGuard wait budget expired (`hardening-retrieve-parity` US-006) — **once per request**, however many of its results went on unscanned. Never moves when the classifier is absent or still warming: that path does not touch the permit. | Permit contention, not a missing model. Read it with `/health` `promptguard_loaded` — `true` plus this counter rising is a busy classifier, `false` is the degraded-model shape instead. Fail-closed requests show up as `omitted_by_reason.promptguard_unavailable`; fail-open ones as `unscanned_results`. |
 | `policy_unknown_provider` | counter | Once per ignored entry in a request's `providers` list: one for every entry past the first eight, plus one for every entry among the first eight that, after `strip()` and lower-casing, names no provider in the configured chain (duplicates each count). The `/search` handler adds the ignored count `apply_request_policy` returns, before any provider is called; the offending name itself is never stored (`search-policy-and-health` US-010). | A consumer is sending `providers` entries this deployment ignores (ignored, not rejected). To find which, compare the consumer's `providers` names against `/health` `search_providers`, the resolved chain. If a missing name is `brave`, check `/health` `capabilities`: no `brave_api_key` entry means the key is absent or invalid — a key problem, not a name problem; `brave_api_key: 1` with no `brave` in `search_providers` means keyed but not chained — `FORAGE_SEARCH_PROVIDERS` leaves it out. Any other missing name is a bad name on the consumer's side. Entries past the eighth also count, whatever they name, so a consumer whose names all appear in `search_providers` but who sends more than eight entries still moves the counter. |
+
+**Latency runbook.** A rising exceeded-over-requests ratio with a max under 2×
+the target: raise the target; above it: raise `FORAGE_CPUS` /
+`promptguard_threads` (see [§ Sizing the container](../../docs/configuration.md#sizing-the-container),
+the forward reference US-003 closes). Compare at the same `num_results`, and
+remember that a process-lifetime max is not a percentile or a rolling-window peak.
+Under spec 2 US-006 the signal that fail-open requests are being served unscanned is
+`search.classification_wait_timeouts` rising; the max is whole-loop wall time —
+structural scan, PromptGuard and semaphore wait, summed over every served result —
+so it is not comparable to `promptguard_wait_seconds`' classification-wait budget
+and is never read against it. That budget is shared across the request's waits,
+not renewed for each result. `search_first_token_target_ms` is log-only today;
+no counter compares it.
 
 Provider response counters (also in the `search` section):
 
@@ -383,7 +398,7 @@ These are WARNING, so they are visible, and they arrive once per `/retrieve` or 
 | `pipeline.stage3_promptguard` | `PromptGuard unavailable — fail-closed for <tier> tier` | `standard` / `untrusted` tier with `fail_closed=True`; the content is quarantined as a precaution. |
 | `pipeline.stage3_promptguard` | `PromptGuard unavailable — <lenient fallback|fail-open> for <tier> tier` | `verified` tier, or fail-open configuration. |
 | `pipeline.orchestrator` | `Content quarantined for <url> — returning content-free response` | Any injection verdict, degraded or not. Carries the requested URL. |
-| `pipeline.orchestrator` | `search_promptguard_local_latency_target_exceeded` | PromptGuard time on a `/search` exceeded the 1000 ms local target; the `extra` dict is not rendered, so this is the whole line. |
+| `pipeline.orchestrator` | `search_promptguard_local_latency_target_exceeded` | The `/search` per-result sanitization loop exceeded `search_promptguard_latency_target_ms` (default 1000); the `extra` dict is not rendered, so this is the whole line. Read the exceeded count and sanitization high-water mark on `/metrics` for frequency and magnitude. |
 | `promptguard.classifier` | `classify() called but model not loaded — returning safe fallback` | Classifier invoked while unloaded. |
 
 ### What is never logged
@@ -451,7 +466,7 @@ These are **suggested watch points**, not configured alerts. No thresholds are d
 | SearXNG failures | **no signal** — `/health` does not probe SearXNG; `search_providers` is configuration echo, not liveness, so it reads the same whether or not SearXNG is currently reachable | `search.errors.searxng_unavailable` / `searxng_error` rising, plus `search.provider_timeouts` for slow calls and `search.provider_compressed_body` for compression, whatever the outcome. On a `searxng`-only chain, `search.fallback_fired` and `search.paid_calls` never move. | `search_provider_failed` WARNING per failed call; the 422 `reason` echoes the scheme, host and port of `SEARXNG_URL` — userinfo stripped — plus a closed `detail` token, never exception text. `unsupported_encoding` identifies a reply this build cannot decode. |
 | Paid provider absorbing spend | — | `search.paid_calls` rate over a window climbing past Brave's ~1,000-query/month included credit (~33/day) | `search_provider_failed` WARNINGs naming the free provider precede a rising `paid_calls`; remedy is removing the paid provider from `FORAGE_SEARCH_PROVIDERS` and restarting (chain resolves once, at boot) |
 | Break-glass left armed | `capabilities.search_sanitization` present while `promptguard_loaded: false` | — | WARNING `break_glass_advertisement_active` at startup |
-| Boot failure | no answer on 8020 | — | traceback from `ExtractionConfigurationError`, `CacheConfigurationError` or `PromptGuardThreadsConfigurationError`; for refused signing keys grep `cache_hmac_key_too_short` / `cache_hmac_key_invalid`; `docker inspect` shows the exit |
+| Boot failure | no answer on 8020 | — | traceback from `ExtractionConfigurationError`, `CacheConfigurationError`, `PromptGuardThreadsConfigurationError` or `SearchTargetsConfigurationError`; for refused signing keys grep `cache_hmac_key_too_short` / `cache_hmac_key_invalid`; `docker inspect` shows the exit |
 
 For symptom-to-remedy detail (the empty-string `VALKEY_URL` trap, the SearXNG limiter 429, the 400-not-413 `/extract` behaviour, re-vendoring weights) see `kit_tools/docs/TROUBLESHOOTING.md`; for the per-dependency blast radius see `kit_tools/arch/SERVICE_MAP.md`.
 
@@ -542,11 +557,14 @@ None exist. There are no alert rules, no paging integration, no dashboards, no S
 
 ## Adding New Monitoring
 
-### Adding a counter to `/metrics`
+### Adding a counter or gauge to `/metrics`
 
 1. Add the field to the in-process counter object (`retrieval_app.SearchMetrics` is a **plain class**, not a dataclass) and increment it at the seam. A search pipeline counter also belongs on `pipeline.orchestrator.SearchMetricsSink` and `_NullSearchMetrics`, and on the test-side `RecordingSearchMetrics` fake.
 2. Add the same field to the `/metrics` handler dict and matching `*MetricsResponse` model in `retrieval_app.py`, appended in the same order. The models are `extra="forbid"`; an emitted counter absent from the model makes `/metrics` return 500. Update the literal search pins in `tests/test_app.py` and `tests/test_contract_schema.py`; `tests/test_contract_metrics.py` guards model/class/wire parity and descriptions.
 3. A response-shape change is a contract change (`CLAUDE.md` invariant 4). Read `contract/GOVERNANCE.md` to classify it (an additive field is the MINOR case), then run `uv run python -m scripts.export_contract` — `tests/test_contract_export.py` is red until you do. Never hand-edit `contract/openapi.yaml` or its `.sha256`.
+
+A field may instead be a **high-water mark**, updated with `max(...)` at the seam:
+per-process, never reset, and read with its companion exceeded count and request count.
 
 ### Adding a degraded reason to `/health`
 

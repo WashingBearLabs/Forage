@@ -203,6 +203,14 @@ MINOR when fields are only added.
   backend is registered and configured duplicates are collapsed (GOVERNANCE
   ruling (k), on ruling (a2)'s unreachability basis). Response shapes and
   ``search.policy_unknown_provider``'s per-entry counting are unchanged.
+* ``1.3.0`` — ``hardening-resource-envelope`` US-004 adds
+  ``search.promptguard_latency_target_exceeded`` and
+  ``search.sanitization_latency_max_ms`` to ``/metrics``: a once-per-request
+  overrun counter and a per-process, never-reset high-water mark of the
+  per-result sanitization loop (structural scan, PromptGuard and any semaphore
+  wait). Targets are configurable; defaults and search response bytes are
+  unchanged. These additive metrics are pinned by ``tests/test_contract_metrics.py``,
+  not the golden fixture.
 
 This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy

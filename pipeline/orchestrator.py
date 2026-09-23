@@ -898,8 +898,6 @@ _MAX_SEARCH_ENGINE_LENGTH = 64
 # route where 8x is a ~6 s one. Any change re-derives from the three-shape
 # table in `kit_tools/specs/feature-hardening-search-sanitization.md`.
 _SEARCH_PARSER_INPUT_MULTIPLIER = 4
-_LOCAL_PROMPTGUARD_TARGET_MS = 1_000
-_TOOL_AUGMENTED_FIRST_TOKEN_TARGET_MS = 5_000
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
 
@@ -1403,7 +1401,7 @@ _NULL_RETRIEVE_METRICS: RetrieveMetricsSink = _NullRetrieveMetrics()
 
 
 class SearchMetricsSink(Protocol):
-    """The ``/metrics`` search counters ``run_search_pipeline`` increments directly.
+    """The ``/metrics`` search measurements ``run_search_pipeline`` updates directly.
 
     ``retrieval_app.SearchMetrics`` satisfies this structurally — neither
     module imports the other. Declaring it here, on the consumer side, is the
@@ -1415,6 +1413,8 @@ class SearchMetricsSink(Protocol):
     classification_wait_timeouts: int
     provider_compressed_body: int
     provider_timeouts: int
+    promptguard_latency_target_exceeded: int
+    sanitization_latency_max_ms: int
 
 
 class _NullSearchMetrics:
@@ -1433,6 +1433,8 @@ class _NullSearchMetrics:
         self.classification_wait_timeouts = 0
         self.provider_compressed_body = 0
         self.provider_timeouts = 0
+        self.promptguard_latency_target_exceeded = 0
+        self.sanitization_latency_max_ms = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1577,6 +1579,8 @@ async def run_search_pipeline(
     promptguard_threshold: float = 0.85,
     classification_semaphore: asyncio.Semaphore | None = None,
     classification_wait_seconds: float | None = None,
+    promptguard_latency_target_ms: int = 1_000,
+    first_token_target_ms: int = 5_000,
 ) -> SearchResponse:
     """Run a web search through a search provider chain with sanitized results.
 
@@ -1897,6 +1901,9 @@ async def run_search_pipeline(
         (time.perf_counter() - promptguard_started) * 1000,
         2,
     )
+    metrics.sanitization_latency_max_ms = max(
+        metrics.sanitization_latency_max_ms, int(promptguard_duration_ms)
+    )
     logger.info(
         "search_promptguard_complete",
         extra={
@@ -1906,21 +1913,18 @@ async def run_search_pipeline(
             "omitted_by_reason": dict(omitted_by_reason),
             "unscanned_results": unscanned_results,
             "duration_ms": promptguard_duration_ms,
-            "local_target_ms": _LOCAL_PROMPTGUARD_TARGET_MS,
-            "tool_augmented_first_token_target_ms": (
-                _TOOL_AUGMENTED_FIRST_TOKEN_TARGET_MS
-            ),
+            "local_target_ms": promptguard_latency_target_ms,
+            "tool_augmented_first_token_target_ms": first_token_target_ms,
         },
     )
-    if promptguard_duration_ms > _LOCAL_PROMPTGUARD_TARGET_MS:
+    if promptguard_duration_ms > promptguard_latency_target_ms:
+        metrics.promptguard_latency_target_exceeded += 1
         logger.warning(
             "search_promptguard_local_latency_target_exceeded",
             extra={
                 "duration_ms": promptguard_duration_ms,
-                "local_target_ms": _LOCAL_PROMPTGUARD_TARGET_MS,
-                "tool_augmented_first_token_target_ms": (
-                    _TOOL_AUGMENTED_FIRST_TOKEN_TARGET_MS
-                ),
+                "local_target_ms": promptguard_latency_target_ms,
+                "tool_augmented_first_token_target_ms": first_token_target_ms,
             },
         )
 

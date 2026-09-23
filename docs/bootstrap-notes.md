@@ -92,7 +92,8 @@ those eight — so Forage's revision moved:
 | `hardening-cache-integrity` US-002, boot signing and health | `0866963a…c1e80` |
 | `hardening-provider-bounds` US-003, provider counters and reason token | `c9bf6e0d…f2f76` |
 | `hardening-provider-bounds` US-004, paid-prefix policy record | `e3b9c138…73d91` |
-| **Current (`hardening-provider-bounds` US-005, provider-loop cleanup)** | **`d9db7586…1b6e0`** |
+| `hardening-provider-bounds` US-005, provider-loop cleanup | `d9db7586…1b6e0` |
+| **Current (`hardening-resource-envelope` US-004, search latency telemetry)** | **`bf5a1f3e…3e75d`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -1665,3 +1666,49 @@ unchanged. Direct Python callers replace the retired keyword with
 `search_result_omitted reason=... domain=...`; URLs, paths and query strings
 are no longer available in omission logs. **Not replayed to Poppy**; no
 tag, release or push occurred.
+
+### Search latency targets and telemetry — thirty-sixth rotation (2026-09-22)
+
+`hardening-resource-envelope` US-004 moves exactly two of the nine hashed
+sources. `orchestrator.py` replaces the two fixed log targets with defaulted
+keyword parameters and publishes a once-per-request strict-overrun count plus
+an unconditional high-water mark after the existing per-result sanitization
+timer. `contract.py` records both additive `/metrics` fields in the held 1.3.0
+window. This is **not a text-sanitization change**: no scanning, timeout or
+classification policy changes, and the closed response/counter pins remain
+unchanged. The targets are observations, not deadlines.
+
+Measured against clean pre-story
+`7087c04d4b288555bf382df1853beede6542e0e5` (`git status --short` was empty).
+Live `derive_sanitizer_revision` used read-only `Path.read_bytes` substitution
+of entire pre-story files; no working-tree reverts were needed. Default `{}`,
+shipped `config.yaml` and both latency targets at their maximum values produce
+the same values, with the default model pin:
+
+| State | Revision |
+|---|---|
+| Before / both-reverted control | `d9db75863ea8a464147da8b38c9fc6b8772cf75c485f58cab896e8130c81b6e0` |
+| After | `bf5a1f3e55aad4e2748e66d3a2e9554b7950a38cadc89d4551cc1b6820f3e75d` |
+| Only `orchestrator.py` reverted | `66b5098504ec86a7492eebad8d87ccf5b9e19f898bfb6981c6da9ff1d5e4c074` |
+| Only `contract.py` reverted | `3c6998608786777a0c6c91130fa7c0da35226c9f16961373b371e6f2cf664186` |
+
+The other seven hashed sources and the hash definition are unchanged.
+`pipeline/search_targets.py` is deliberately not hashed; neither target is a
+hash input. The source rotation invalidates old content-cache keys normally.
+The generated OpenAPI anchor is
+`9860c4d988295f39ee9e31ac65414dd1ce2c89c1031cd45c778b7fa8142923e4`.
+The held golden was regenerated through `_SCHEMA_MODELS`, byte-identically
+(sha256 `69eb2dd5b480274282763a1616d13d9805964b98514efcaef57dfe2f54d551cf`).
+`SearchMetricsResponse` is outside that set, so
+`_EXPECTED_ONE_THREE_ZERO_DIFF` needs no addition; metrics order, shape and
+descriptions are pinned by their own contract tests.
+
+**Consumer handoff:** `/metrics.search` appends
+`promptguard_latency_target_exceeded` and `sanitization_latency_max_ms`, both
+integers. Read the exceeded-over-requests ratio first, then the per-process,
+never-reset maximum, comparing only at the same `num_results`. The timer covers
+the entire per-result sanitization loop, not just model inference or one
+semaphore wait. A served-empty request reaches it; a pre-loop 422 does not.
+`search_first_token_target_ms` is log-only. No `/search` response shape or
+existing pinned counter changes. **Not replayed to Poppy**; no push, tag or
+release occurred.

@@ -207,6 +207,8 @@ def test_recording_search_metrics_covers_the_protocol_and_is_instance_local() ->
         "classification_wait_timeouts": 3,
         "provider_compressed_body": 0,
         "provider_timeouts": 0,
+        "promptguard_latency_target_exceeded": 0,
+        "sanitization_latency_max_ms": 0,
     }
     assert all(type(value) is int for value in metrics.counters.values())
     assert all(value == 0 for value in RecordingSearchMetrics().counters.values())

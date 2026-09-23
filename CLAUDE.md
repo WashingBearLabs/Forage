@@ -453,6 +453,20 @@ text-sanitization change; contract and generated artifacts are unchanged.
 Full measurements and the direct-caller/log-consumer handoff are in
 `docs/bootstrap-notes.md`.
 
+The thirty-sixth rotation is `d9db7586…` → `bf5a1f3e…` for
+`hardening-resource-envelope` US-004. Only `orchestrator.py` (configurable
+observational targets, the once-per-request overrun counter and whole-loop
+high-water mark) and `contract.py` (held 1.3.0 metrics continuation) move.
+Read-only whole-file reversals against clean `7087c04` yield `66b50985…`
+with only the orchestrator reverted, `3c699860…` with only the contract
+reverted and exactly `d9db7586…` with both reverted, under default, shipped
+and maximum-target configuration. The other seven hashed sources and hash
+definition are unchanged; `search_targets.py` and its knobs are not inputs.
+This is not a text-sanitization change; search wire/counter pins are unchanged.
+The max measures structural scan, PromptGuard and semaphore wait across the
+whole result loop, never one wait. Full values and the additive `/metrics`
+consumer handoff are in `docs/bootstrap-notes.md`.
+
 ---
 
 ## Session Scratchpad

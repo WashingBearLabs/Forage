@@ -31,6 +31,9 @@ search_brave_query_max_chars: 400
 search_searxng_timeout_seconds: 10.0
 # Outbound copy only: results reflect the prefix, but the response echoes the caller.
 search_searxng_query_max_chars: 400
+# Observational targets, not request deadlines; first-token is log-only today.
+search_promptguard_latency_target_ms: 1000
+search_first_token_target_ms: 5000
 # Release gate: /extract remains invisible (404) until this is enabled and the
 # service is restarted. Forage ships no authentication, so once the gate is
 # open the route is reachable by anything that can reach port 8020 — network

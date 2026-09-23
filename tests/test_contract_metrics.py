@@ -82,6 +82,7 @@ _CONFIG_READER_MODULES = (
     "pipeline/orchestrator.py",
     "pipeline/sanitizer_revision.py",
     "pipeline/retrieve_limits.py",
+    "pipeline/search_targets.py",
     "pipeline/config_bounds.py",
     "promptguard/classifier.py",
 )
@@ -255,16 +256,25 @@ async def test_domain_policy_counters_match_classes_models_and_wire(
             assert payload[section][name] == 7
 
 
-async def test_provider_counters_are_appended_and_emitted(
+async def test_provider_and_latency_metrics_are_appended_and_emitted(
     client: httpx.AsyncClient,
 ) -> None:
     counters = app.state.search_metrics
     counters.provider_compressed_body = 3
     counters.provider_timeouts = 2
+    counters.promptguard_latency_target_exceeded = 1
+    counters.sanitization_latency_max_ms = 1250
     payload = (await client.get("/metrics")).json()["search"]
-    assert list(payload)[-2:] == ["provider_compressed_body", "provider_timeouts"]
+    assert list(payload)[-4:] == [
+        "provider_compressed_body",
+        "provider_timeouts",
+        "promptguard_latency_target_exceeded",
+        "sanitization_latency_max_ms",
+    ]
     assert payload["provider_compressed_body"] == 3
     assert payload["provider_timeouts"] == 2
+    assert payload["promptguard_latency_target_exceeded"] == 1
+    assert payload["sanitization_latency_max_ms"] == 1250
 
 
 @pytest.mark.parametrize("name", ["searxng", "brave"])
@@ -383,6 +393,30 @@ async def test_compressed_zero_results_counts_before_either_reclassification_exi
 def test_provider_compression_defaults_are_false() -> None:
     assert not ProviderSearchResult("searxng", [], []).compressed
     assert not ProviderFailure("searxng", "timeout", "timeout").compressed
+
+
+def test_search_latency_descriptions_pin_the_window_and_comparability() -> None:
+    fields = SearchMetricsResponse.model_fields
+    for name in ("promptguard_latency_target_exceeded", "sanitization_latency_max_ms"):
+        description = fields[name].description
+        assert description is not None
+        for required in (
+            "search_promptguard_latency_target_ms",
+            "per-result sanitization loop: structural scan, "
+            "PromptGuard and any semaphore wait",
+            "num_results (1-20)",
+            "only at the same num_results",
+        ):
+            assert required in description
+    maximum = fields["sanitization_latency_max_ms"].description
+    assert maximum is not None
+    for required in (
+        "Per-process",
+        "Never resets",
+        "restarting the container",
+        "search.promptguard_latency_target_exceeded and search.requests",
+    ):
+        assert required in maximum
 
 
 async def test_cgroup_keys_stay_flat_in_the_extraction_section(
@@ -799,6 +833,7 @@ def test_config_registry_covers_every_reader() -> None:
         ("cache.py", "cache_settings_from_config"),
         ("pipeline/extraction_limits.py", "extraction_settings_from_config"),
         ("pipeline/retrieve_limits.py", "retrieve_settings_from_config"),
+        ("pipeline/search_targets.py", "search_targets_from_config"),
         ("pipeline/search_providers/brave.py", "brave_settings_from_config"),
         ("pipeline/search_providers/searxng.py", "searxng_settings_from_config"),
         ("promptguard/classifier.py", "promptguard_threads_from_config"),

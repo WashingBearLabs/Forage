@@ -6627,7 +6627,7 @@ async def test_five_cancelled_classification_waits_preserve_exact_permit(
     semaphore = asyncio.Semaphore(1)
     classifier = _loaded_classifier()
     metrics = _NullRetrieveMetrics()
-    search_metrics = _SearchCounters()
+    search_metrics = RecordingSearchMetrics()
 
     async def run() -> object:
         if route == "search":
@@ -6799,20 +6799,11 @@ async def _search_under(
         )
 
 
-class _SearchCounters:
-    """A ``SearchMetricsSink`` a test can read back."""
-
-    def __init__(self) -> None:
-        self.fallback_fired = 0
-        self.paid_calls = 0
-        self.classification_wait_timeouts = 0
-
-
 async def test_search_with_a_free_permit_classifies_every_result() -> None:
     """The default path with a semaphore supplied: nothing changes but the gate."""
     classifier = _loaded_classifier()
     semaphore = asyncio.Semaphore(1)
-    metrics = _SearchCounters()
+    metrics = RecordingSearchMetrics()
 
     response = await _search_under(
         classifier=classifier,
@@ -6835,7 +6826,7 @@ async def test_search_spends_one_wait_budget_per_request_fail_open(
     classifier = _loaded_classifier()
     semaphore = asyncio.Semaphore(1)
     await semaphore.acquire()
-    metrics = _SearchCounters()
+    metrics = RecordingSearchMetrics()
 
     with caplog.at_level(logging.WARNING, logger="pipeline.orchestrator"):
         response = await _search_under(
@@ -6867,7 +6858,7 @@ async def test_search_wait_timeout_fail_closed_omits_every_remaining_result() ->
     """The existing fail-closed branch, reached by contention instead of absence."""
     semaphore = asyncio.Semaphore(1)
     await semaphore.acquire()
-    metrics = _SearchCounters()
+    metrics = RecordingSearchMetrics()
 
     response = await _search_under(
         classifier=_loaded_classifier(),
@@ -6895,7 +6886,7 @@ async def test_search_budget_expiry_is_unconditional_for_the_rest_of_the_loop() 
     classifier = _loaded_classifier()
     semaphore = asyncio.Semaphore(1)
     await semaphore.acquire()
-    metrics = _SearchCounters()
+    metrics = RecordingSearchMetrics()
 
     order: list[str] = []
     real_unavailable = orchestrator.unavailable_result
@@ -6936,7 +6927,7 @@ async def test_search_classifies_the_first_results_then_marks_the_rest(
 ) -> None:
     """Partial classification: the state this story makes reachable."""
     semaphore = asyncio.Semaphore(1)
-    metrics = _SearchCounters()
+    metrics = RecordingSearchMetrics()
     classifier = MagicMock(spec=PromptGuardClassifier)
     classifier.loaded = True
     calls = {"n": 0}
@@ -6975,7 +6966,7 @@ async def test_search_with_no_classifier_never_touches_the_semaphore() -> None:
     """``classifier is None`` is the unchanged path on `/search` too."""
     semaphore = asyncio.Semaphore(1)
     await semaphore.acquire()
-    metrics = _SearchCounters()
+    metrics = RecordingSearchMetrics()
 
     response = await _search_under(
         classifier=None,
@@ -6994,7 +6985,7 @@ async def test_search_with_a_warming_classifier_never_acquires() -> None:
     """The guard is ``is not None and loaded``: a warming model does not queue."""
     semaphore = asyncio.Semaphore(1)
     await semaphore.acquire()
-    metrics = _SearchCounters()
+    metrics = RecordingSearchMetrics()
     warming = MagicMock(spec=PromptGuardClassifier)
     warming.loaded = False
 
@@ -7035,7 +7026,7 @@ async def test_a_retrieve_and_a_search_classification_serialise() -> None:
                 classifier=classifier,
                 semaphore=semaphore,
                 wait_seconds=None,
-                metrics=_SearchCounters(),
+                metrics=RecordingSearchMetrics(),
             )
         )
         await _until_waiting(semaphore)

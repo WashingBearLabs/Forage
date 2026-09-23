@@ -250,13 +250,15 @@ def record_decoded_buffers() -> Generator[DecodedBufferRecording]:
 
 @dataclass
 class RecordingSearchMetrics:
-    """The complete ``SearchMetricsSink`` counter surface, local to each test."""
+    """The complete ``SearchMetricsSink`` surface, local to each test."""
 
     fallback_fired: int = 0
     paid_calls: int = 0
     classification_wait_timeouts: int = 0
     provider_compressed_body: int = 0
     provider_timeouts: int = 0
+    promptguard_latency_target_exceeded: int = 0
+    sanitization_latency_max_ms: int = 0
 
     @property
     def counters(self) -> dict[str, int]:
@@ -266,6 +268,10 @@ class RecordingSearchMetrics:
             "classification_wait_timeouts": self.classification_wait_timeouts,
             "provider_compressed_body": self.provider_compressed_body,
             "provider_timeouts": self.provider_timeouts,
+            "promptguard_latency_target_exceeded": (
+                self.promptguard_latency_target_exceeded
+            ),
+            "sanitization_latency_max_ms": self.sanitization_latency_max_ms,
         }
 
 

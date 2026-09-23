@@ -1100,6 +1100,14 @@ components:
             `/health` `search_providers` to tell a bad name from a missing key.
           title: Policy Unknown Provider
           type: integer
+        promptguard_latency_target_exceeded:
+          description: 'Search requests whose duration strictly exceeds search_promptguard_latency_target_ms,
+            counted once per request. Measures the per-result sanitization loop: structural
+            scan, PromptGuard and any semaphore wait. The loop runs once per served result,
+            so the duration scales with num_results (1-20); compare readings only at the same
+            num_results.'
+          title: Promptguard Latency Target Exceeded
+          type: integer
         provider_compressed_body:
           description: 'Non-identity Content-Encoding responses seen from any provider, whatever
             the outcome: served, refused as body_too_large or unsupported_encoding, malformed,
@@ -1115,6 +1123,17 @@ components:
         requests:
           description: Search requests that reached the handler.
           title: Requests
+          type: integer
+        sanitization_latency_max_ms:
+          description: 'Per-process high-water mark in milliseconds, truncated from the rounded
+            duration of the per-result sanitization loop: structural scan, PromptGuard and
+            any semaphore wait. Updated even below search_promptguard_latency_target_ms, including
+            served-empty searches, but not pre-loop refusals. The loop runs once per served
+            result, so the duration scales with num_results (1-20); compare readings only
+            at the same num_results. Never resets; restarting the container is the only way
+            to clear it. Only meaningful read together with search.promptguard_latency_target_exceeded
+            and search.requests.'
+          title: Sanitization Latency Max Ms
           type: integer
         unscanned_results:
           description: Results returned without an ML injection scan (degraded mode).
@@ -1133,6 +1152,8 @@ components:
       - classification_wait_timeouts
       - provider_compressed_body
       - provider_timeouts
+      - promptguard_latency_target_exceeded
+      - sanitization_latency_max_ms
       title: SearchMetricsResponse
       type: object
     SearchRequest:

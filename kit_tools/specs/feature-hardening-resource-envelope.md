@@ -1364,6 +1364,73 @@ next.
   Result remains partial / needs-work for these outstanding gates, not a failing
   sizing regression.
 
+### US-004 implementation — 2026-09-22
+
+- Added frozen `SearchTargets` and the module-owned configuration error. Both
+  integer ranges use `pipeline.config_bounds.bounded_int`, are validated at every
+  boot and are shipped at the previous 1000/5000 defaults. Lifespan publishes
+  `app.state.search_targets`; the module-level fallback supports lifespan-free
+  transports. The handler passes both targets to the pipeline; first-token stays
+  log-only, never a deadline or counter comparison.
+- Added the strict-overrun count and whole-loop high-water mark at their two
+  specified sites, including the Protocol, null sink, plain class, response model,
+  handler dict, shared fake and literal pins. The existing Protocol already had
+  no field count. Found one older `_SearchCounters` test double that predated the
+  shared fake; migrated its nine uses to `RecordingSearchMetrics` rather than
+  growing another incomplete sink. Extended the provider-tail order guard to
+  preserve its two fields immediately before the two newly appended metrics.
+- Regressions exercise both inclusive ranges, bad types and out-of-range values,
+  `5` refusing real boot on both configured provider choices, a 150 ms classifier
+  at target 100, a faster second request preserving the maximum, and separate
+  default/5000 boots for no-overrun counts. Deterministic clock cases pin equality
+  versus strict overrun, rounding before integer truncation, once-per-request
+  counting over three results, first-token's log-only behavior, served-empty
+  measurement and an exhausted-provider 422 touching neither timing site.
+  Descriptions pin the whole-loop window, `num_results` comparability and
+  per-process/never-reset/read-with-count semantics.
+- **R36:** appended the `* ``1.3.0`` — …` continuation and ran the exporter.
+  Regenerated the held golden via `_SCHEMA_MODELS`; it is byte-identical, sha256
+  `69eb2dd5b480274282763a1616d13d9805964b98514efcaef57dfe2f54d551cf`.
+  **Nothing appended to `_EXPECTED_ONE_THREE_ZERO_DIFF`**: the search metrics
+  model is outside `_SCHEMA_MODELS`. The metrics-specific class/model/wire/order
+  and description tests own these additions. All four anchor pages now quote
+  `9860c4d988295f39ee9e31ac65414dd1ce2c89c1031cd45c778b7fa8142923e4`;
+  exporter `--check` passes. Older goldens and every search pin remain untouched.
+- **Rotation 36:** clean starting commit
+  `7087c04d4b288555bf382df1853beede6542e0e5`, with empty `git status --short`.
+  Only `orchestrator.py` and `contract.py` change among nine hashed sources.
+  The live derivation, with whole-file read-only reversals, gives
+  `bf5a1f3e55aad4e2748e66d3a2e9554b7950a38cadc89d4551cc1b6820f3e75d`;
+  orchestrator-only reversal gives
+  `66b5098504ec86a7492eebad8d87ccf5b9e19f898bfb6981c6da9ff1d5e4c074`;
+  contract-only reversal gives
+  `3c6998608786777a0c6c91130fa7c0da35226c9f16961373b371e6f2cf664186`;
+  both-reverted reproduces
+  `d9db75863ea8a464147da8b38c9fc6b8772cf75c485f58cab896e8130c81b6e0`.
+  All four values agree under default, shipped and maximum-target config.
+  Recorded at all five required sites; no text-sanitization behavior or hash
+  input changes. The consumer handoff is in `docs/bootstrap-notes.md`.
+- **R39 / registry:** both operator references, known-key registry, AST reader
+  module/caller list and test mapping are updated. Monitoring covers the
+  count-first sizing rule, never-reset max, classification-wait-timeout signal,
+  boot error and counter-or-gauge extension checklist. US-003 still owns the
+  forward-referenced Sizing the container section. Required exact-scope greps
+  returned zero hits for the old constants, `_bounded_` in the new module, the
+  fixed-latency prose, wait-budget multiplication and the wrongly named max.
+- **Evidence:** after changed-file safe Ruff fixes/formatting, all **1,803 related
+  tests passed**, including the unchanged wire pins, golden, exporter, governance,
+  metrics and admission/classification regressions. Three existing non-failing
+  warnings remain (Torch deprecation and two hermetic socket-denial cases).
+  Strict Pyright reports zero errors; changed-file Ruff, exporter `--check` and
+  `git diff --check` pass. Full suite not run, as this invocation forbids it.
+  Repository Ruff still reports five inherited E501 findings in
+  `pipeline/bounded_body.py:53` and
+  `tests/test_search_providers.py:762,764,784,787`; formatting names those same
+  two files. Both failures were reproduced from the starting commit's bytes;
+  neither file was edited. Result is partial / needs-work for these outstanding
+  gates, not a known functional defect. No dependency change, branch switch,
+  Poppy edit, push, tag or release occurred.
+
 ## Refinement Notes
 
 ### Research Findings
