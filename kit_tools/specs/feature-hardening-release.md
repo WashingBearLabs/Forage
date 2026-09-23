@@ -1878,20 +1878,22 @@ authorization/evidence for US-003 or US-005 is available in this task.
 Merging these pins into `main` starts an unpublished-tag window: the
 quickstart fails until `v1.2.0` publishes. The owner must cut from the
 completion PR's merge commit in that same sitting; otherwise revert the
-US-004 pin commit. The exact SHA is recorded below after committing, so
-the rollback command names a real commit rather than an invented one.
+US-004 pin commit, **`e12182f02ae977336b44e19040305a38d3e519c9`**:
+`git revert e12182f02ae977336b44e19040305a38d3e519c9`.
+That commit contains both pins, their test and the coordinated documentation;
+this follow-up only records its now-known identity, without amending it.
 
 **PR-description criterion blocked.** `gh pr view` found no PR for
 `epic/forage-hardening-US-004-attempt-1`; the open-PR list contains only
 the unrelated injection-corpus plan. A targeted all-state hardening lookup
 finds only the already merged/closed planning PRs, no completion PR.
 No unrelated PR was edited and no branch was pushed to create one.
-Before merge, copy this **outstanding item**, with the exact SHA below,
-into the completion PR description:
+Before merge, copy this **outstanding item** into the completion PR description:
 
 > **Outstanding: unpublished-tag window on main.** Compose pins the not-yet-
 > published `v1.2.0` image. Run owner-gated US-003 from this PR's merge commit
-> in the same sitting; if the cut is not run, `git revert <US-004 pin commit>`.
+> in the same sitting; if the cut is not run,
+> `git revert e12182f02ae977336b44e19040305a38d3e519c9`.
 > The release and US-005 post-release verification are not complete.
 
 No credentials were inspected; no model acquisition, image build,
