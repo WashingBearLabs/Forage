@@ -119,6 +119,11 @@ Validated at start by `cache.cache_settings_from_config()` **regardless of backe
 |---|---|---|---|---|
 | `cache.max_entries` | `256` | `256` | 1 to 4096 | Entries held by `InMemoryStorage` (expired-first, then LRU eviction) |
 | `cache.max_bytes` | `33554432` (32 MiB) | `33554432` | 1 MiB to 128 MiB | Serialised bytes held in memory; a single larger response is served uncached and counted in `cache.storage_oversize_skips` |
+| `cache.max_value_bytes` | `4194304` (4 MiB) | `4194304` | 512 KiB to 8 MiB | Per-value UTF-8 bytes, including envelope, on both backends; one atomic bounded Valkey read. Above `cache.max_bytes` warns but boots. Keep equal across replicas; lowering it can reject old writes. See the canonical configuration reference for aggregate memory sizing. |
+
+`VALKEY_URL` query keys `decode_responses`, `encoding`, `encoding_errors` and
+`protocol` are forbidden at construction, with one key-only WARNING before boot
+refusal. Remove them before upgrading; socket timeout options remain tunable.
 
 ### `extraction:` block
 

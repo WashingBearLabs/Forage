@@ -87,7 +87,8 @@ those eight — so Forage's revision moved:
 | After directional hostname policy (`hardening-hostname-and-config` US-001) | `328d386c…93286` |
 | After request domain budgets and counters (`hardening-hostname-and-config` US-007) | `c8a907cf…546b8` |
 | After search domain policy (`hardening-hostname-and-config` US-002) | `de1cea65…6be91` |
-| **Current (`hardening-hostname-and-config` US-005, shared threshold)** | **`e00049c4…7ed5c`** |
+| After shared threshold resolution (`hardening-hostname-and-config` US-005) | `e00049c4…7ed5c` |
+| **Current (`hardening-cache-integrity` US-001, signed and bounded cache values)** | **`aa288bc5…5b39c`** |
 
 The second rotation is **format-only**: installing the `ruff format --check` CI gate meant
 burning the six-file backlog to zero, and one of those six —
@@ -1468,3 +1469,32 @@ Contract stays in the held 1.3.0 window; its regenerated OpenAPI anchor is
 The current golden was re-created through `_SCHEMA_MODELS`; older goldens are
 unchanged. GOVERNANCE ruling (i) classifies the change; `docs/releases.md`
 carries the two-direction consumer upgrade note. **Not replayed to Poppy**.
+
+### The thirty-first rotation: cache integrity (`hardening-cache-integrity` US-001, 2026-09-22)
+
+```
+before: e00049c4ea9d02893c2f3c4f567a6a75f5a4fdfdb145bbf6d6fc701ec7c7ed5c
+after:  aa288bc5bd107a99b94d2251a4a050da4fb47e7c4b7c9d181c5a07f790a5b39c
+```
+
+Only `pipeline/contract.py` moves among the nine hashed sources: one 1.3.0
+continuation announces `cache.integrity_rejects` and the widened producers of
+`storage_oversize_skips`. This is **not a text-sanitization change**.
+The HMAC envelope, key binding, byte-bound reads/writes and URL query refusal
+live in unhashed `cache.py`; construction and metrics wiring in unhashed
+`retrieval_app.py`. No hash inputs were added or removed.
+
+Measured with live `derive_sanitizer_revision` and a read-only `Path.read_bytes`
+substitution of `git show b79504d129615292f235b23b7bc426ff8b1f06fb:pipeline/contract.py`.
+Both default and shipped configuration produce the after value, and reverting
+that one file in memory reproduces the before value exactly in both modes.
+The other eight source files were compared byte-for-byte with the clean base.
+The rotation orphans pre-upgrade cache entries; they expire normally.
+
+The held 1.3.0 golden now includes `CacheMetricsResponse` (absent from older
+goldens), with an explicit eight-field 1.2.0 metrics baseline for the diff sweep.
+It records both `corrupt_entries` (the earlier addition) and `integrity_rejects`
+without changing published fixtures. OpenAPI, its drift twin and anchor were
+regenerated: `de4343ff6df3a65b2c7bf63246be11405d482381d1e0d627d0a99f8b3d1fe763`.
+GOVERNANCE ruling (j) classifies the widened counter producers; the existing
+count-word guard now covers eleven rulings. **Not replayed to Poppy**.

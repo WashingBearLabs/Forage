@@ -42,7 +42,7 @@ Every module obtains its logger with `logger = logging.getLogger(__name__)` at m
 | Logger | Defined at | Levels used | What it emits |
 |--------|------------|-------------|---------------|
 | `retrieval_app` | `retrieval_app.py` | INFO, WARNING | Startup lines; `config.yaml not found at %s`; `config_unknown_key — key=%s` (WARNING, one per unknown dotted key, never its value, tokens in the message not `extra=`); `config_invalid_value — key=%s dropped=%d entries=%s` (operator domain-list drops); `config_invalid_value — key=promptguard_threshold. /extract reads the raw value through its own guard` (WARNING, never the invalid value); `promptguard_threshold_resolved — value=%s` (once per boot, INFO, validated numeric default only); `break_glass_advertisement_active — %s=1 is forcing /health ...`; `document extraction completed` (INFO, content-free `extra=` dict) |
-| `cache` | `cache.py:38` | WARNING | Closed-vocabulary connection, operation and corrupt-entry lines (see below) |
+| `cache` | `cache.py:38` | WARNING | Closed-vocabulary connection, operation, corrupt-entry and integrity lines; `cache_bounds_inverted` and `valkey_url_option_forbidden` startup diagnostics (see below) |
 | `model_fetcher` | `model_fetcher.py:141` | INFO, WARNING, ERROR, exception | All `weights_*` markers and `model_revision_invalid` |
 | `promptguard.classifier` | `promptguard/classifier.py:21` | DEBUG, INFO, WARNING | Model loaded; `PromptGuard model not available — ML injection detection disabled` (WARNING with `exc_info=True`, so a traceback follows); `classify() called but model not loaded — returning safe fallback` |
 | `pipeline.orchestrator` | `pipeline/orchestrator.py:80` | INFO, WARNING | `Cache hit for %s`; search-result omission lines; `search_promptguard_complete`; quarantine WARNING; `search_promptguard_local_latency_target_exceeded` (WARNING, `extra=` only); `search_provider_failed provider=%s failure_class=%s detail=%s` (WARNING, one per failed provider during chain traversal — the closed tokens ride in the message as `key=value`, and the line pairs with the provider's own WARNING: cause at the provider, effect on the chain) |
@@ -87,6 +87,15 @@ The cache parse guard logs the fixed literal `cache_entry_corrupt` directly.
 | WARNING | `Valkey connection failed for content cache (%s)` | `connect_failed`, `timeout` | `_attempt_connect`, `cache.py:419-422` |
 | WARNING | `Content cache operation failed (%s)` | `operation_failed`, `timeout` | `_mark_disconnected`, `cache.py:482-485` |
 | WARNING | `Content cache entry rejected (%s) key=%s` | `cache_entry_corrupt` and the one-way `ret:<sha256>` key digest only | `ContentCache._parse_entry` |
+| WARNING | `cache_integrity_reject — reason=%s key=%s` | `CACHE_INTEGRITY_REASONS`: `unsigned`, `bad_mac`, `malformed_envelope`, `oversize`, `unexpected_envelope`, `wrong_type`; only the `ret:<sha256>` digest beside the token | `ContentCache.get`, `ValkeyStorage.get` |
+| WARNING | `cache_bounds_inverted — cache.max_value_bytes exceeds cache.max_bytes; the in-memory storage applies cache.max_bytes` | Fixed key names, never values; boot continues | `cache_settings_from_config` |
+| WARNING | `valkey_url_option_forbidden — option=%s` | Only `decode_responses`, `encoding`, `encoding_errors`, `protocol`; no URL or option value; boot refuses | `ValkeyStorage.__init__` |
+
+Integrity rejects emit one marker per rejected read, not per failed check.
+The key digest is one-way but confirmable against a guessed URL. Ordinary misses
+and Forage's write-side oversize skips emit no integrity WARNING; the latter
+increment `storage_oversize_skips`. `TestSignedValues` and
+`TestBoundedValkeyReads` assert the closed records without secrets or raw values.
 
 The corrupt-entry line never carries the raw value, URL, exception text or traceback.
 `tests/test_cache.py::TestCorruptCacheEntries` asserts the exact record and absence of

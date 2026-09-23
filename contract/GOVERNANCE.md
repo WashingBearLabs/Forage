@@ -173,7 +173,7 @@ An urgent fix does not get to skip the rules; it gets a faster lane through them
 
 ## Recorded rulings
 
-Ten rulings this epic already made, kept here so the next change re-reads them instead of
+Eleven rulings this epic already made, kept here so the next change re-reads them instead of
 re-litigating them. Each cites its source.
 
 ### (a) The documentation pass does not bump the contract
@@ -550,7 +550,7 @@ work after JSON parsing, not request-body admission.
 
 ### (i) Shared configurable thresholds are MINOR, with an operator upgrade note
 
-**Source:** `kit_tools/specs/feature-hardening-hostname-and-config.md`, US-005,
+**Source:** `kit_tools/specs/archive/feature-hardening-hostname-and-config.md`, US-005,
 epic rulings R10 and R36.
 
 **Ruling:** `SearchRequest.promptguard_threshold` and
@@ -569,3 +569,22 @@ re-keys. Caller overrides remain bounded. `/extract`'s raw-value coercion and
 guard are unchanged, including YAML `true` becoming 1.0; the boot warning names
 that exception rather than implying service-wide rejection. Its closure remains
 an open question, not an unannounced change in this MINOR.
+
+### (j) Cache oversize skips gain a backend, not a new meaning
+
+**Ruling:** widening `cache.storage_oversize_skips` from memory-only to both
+backends is additive behaviour, not a redefinition. It still counts values
+Forage itself refused to store as over a per-entry byte bound.
+`ContentCache.put` now produces it at `cache.max_value_bytes` on either backend;
+`InMemoryStorage.set` still produces it at `cache.max_bytes`. Correcting the
+description that promised "Always 0 on Valkey" is documentation-only within
+the unpublished 1.3.0 window and carries no additional bump.
+
+**Example 4 was considered:** it does not apply because the counter's meaning
+has not changed, only the set of backends that can produce it. Memory-only
+`storage_evictions` is unchanged. The separate new `cache.integrity_rejects`
+field is an additive counter in the same held MINOR, not part of this
+description-only ruling.
+
+**Source:** `kit_tools/specs/feature-hardening-cache-integrity.md`, US-001,
+round-4 widening ruling and round-5 counter ownership clarification.

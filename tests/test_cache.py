@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import logging
+import random
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -15,12 +17,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import yaml
+from redis.exceptions import ResponseError
 
 import cache as cache_module
 from cache import (
     _TRACKING_PARAMS,
+    CACHE_INTEGRITY_REASONS,
     DEFAULT_CACHE_MAX_BYTES,
     DEFAULT_CACHE_MAX_ENTRIES,
+    DEFAULT_CACHE_MAX_VALUE_BYTES,
     MEBIBYTE,
     CacheConfigurationError,
     CacheMetrics,
@@ -37,6 +42,7 @@ from cache import (
     normalize_url,
 )
 from models import RetrievedContent, Stage2Verdict, Stage3Verdict
+from pipeline.extraction_limits import MAX_EXTRACTED_OUTPUT_BYTES
 from tests.fakes import FakeStorage, ManualClock, assert_frozen
 from url_validator import normalize_domain_entries
 
@@ -126,17 +132,22 @@ def _make_content(
 
 
 def _mock_valkey_client() -> AsyncMock:
-    """The five-command Valkey surface ``ValkeyStorage`` actually issues."""
+    """The six-command Valkey surface, with GETRANGE's empty-string miss."""
     client = AsyncMock()
     client.ping = AsyncMock(return_value=True)
-    client.get = AsyncMock(return_value=None)
+    client.getrange = AsyncMock(return_value=b"")
     client.set = AsyncMock(return_value=True)
     client.delete = AsyncMock(return_value=1)
     client.aclose = AsyncMock()
     return client
 
 
-def _connected_valkey_storage(client: AsyncMock) -> ValkeyStorage:
+def _connected_valkey_storage(
+    client: AsyncMock,
+    *,
+    metrics: CacheMetrics | None = None,
+    max_value_bytes: int = DEFAULT_CACHE_MAX_VALUE_BYTES,
+) -> ValkeyStorage:
     """A ``ValkeyStorage`` already holding *client*, skipping the connect dance.
 
     The seam the Valkey-specific tests below reach through. Policy tests do not
@@ -144,7 +155,11 @@ def _connected_valkey_storage(client: AsyncMock) -> ValkeyStorage:
     *Valkey's own* (an operation raising mid-flight, a dropped connection) have
     no meaning on any other storage and are asserted here.
     """
-    storage = ValkeyStorage(valkey_url="redis://localhost:6379/4")
+    storage = ValkeyStorage(
+        valkey_url="redis://localhost:6379/4",
+        metrics=metrics,
+        max_value_bytes=max_value_bytes,
+    )
     storage._client = client
     return storage
 
@@ -385,7 +400,7 @@ class TestContentCacheGetPut:
     @pytest.mark.asyncio()
     async def test_get_error_returns_none(self) -> None:
         mock_redis = _mock_valkey_client()
-        mock_redis.get.side_effect = ConnectionError("down")
+        mock_redis.getrange.side_effect = ConnectionError("down")
         cache = ContentCache(storage=_connected_valkey_storage(mock_redis))
         assert await cache.get("https://example.com") is None
 
@@ -495,6 +510,376 @@ class TestContentCacheGetPut:
 
 
 # ---------------------------------------------------------------------------
+# Signed values
+# ---------------------------------------------------------------------------
+
+
+class TestSignedValues:
+    @pytest.mark.parametrize("body_char", ["a", "\\"])
+    async def test_default_full_page_budget_and_json_escape_inflation(
+        self, body_char: str
+    ) -> None:
+        storage = FakeStorage()
+        metrics = CacheMetrics()
+        cache = ContentCache(storage=storage, metrics=metrics, hmac_key=b"x" * 32)
+        content = _make_content(body=body_char * MAX_EXTRACTED_OUTPUT_BYTES)
+        stored = await cache.put("https://example.com", content, extract_mode="full")
+        assert stored == (body_char == "a")
+        assert metrics.storage_oversize_skips == (body_char == "\\")
+        assert metrics.integrity_rejects == 0
+
+    async def test_verified_invalid_json_still_reaches_the_parse_guard(self) -> None:
+        storage = FakeStorage()
+        metrics = CacheMetrics()
+        secret = b"x" * 32
+        cache = ContentCache(storage=storage, metrics=metrics, hmac_key=secret)
+        key = cache_key("https://example.com")
+        payload = b"not-json"
+        mac = (
+            hmac.new(secret, b"v1\0" + key.encode() + b"\0" + payload, hashlib.sha256)
+            .hexdigest()
+            .encode()
+        )
+        storage.entries[key] = (b"v1." + mac + b"." + payload, time.monotonic() + 3600)
+        assert await cache.get("https://example.com") is None
+        assert storage.delete_calls == metrics.corrupt_entries == 1
+        assert metrics.integrity_rejects == 0
+
+    @pytest.mark.parametrize("hmac_key", [None, b"x" * 32])
+    async def test_round_trip_preserves_payload_and_binds_mac_to_variant(
+        self, hmac_key: bytes | None
+    ) -> None:
+        storage = FakeStorage()
+        metrics = CacheMetrics()
+        cache = ContentCache(storage=storage, metrics=metrics, hmac_key=hmac_key)
+        content = _make_content(body="Hello 世界. JSON preserves these bytes.")
+        url = "https://example.com/page"
+        key = cache_key(url, extract_mode="full", policy_fingerprint="policy")
+        assert await cache.put(
+            url, content, extract_mode="full", policy_fingerprint="policy"
+        )
+        raw = storage.entries[key][0]
+        payload = content.model_dump_json().encode()
+        if hmac_key is None:
+            assert raw == payload
+        else:
+            version, mac, stored_payload = raw.split(b".", 2)
+            assert version == b"v1"
+            assert stored_payload == payload
+            assert (
+                mac
+                == hmac.new(
+                    hmac_key, b"v1\0" + key.encode() + b"\0" + payload, hashlib.sha256
+                )
+                .hexdigest()
+                .encode()
+            )
+        result = await cache.get(url, extract_mode="full", policy_fingerprint="policy")
+        assert result == content.model_copy(
+            update={"cache_hit": True, "cached_at": content.retrieved_at}
+        )
+        assert metrics.integrity_rejects == metrics.corrupt_entries == 0
+
+    @pytest.mark.parametrize(
+        ("shape", "reason"),
+        [
+            ("unsigned", "unsigned"),
+            ("another-key", "bad_mac"),
+            ("flipped-byte", "bad_mac"),
+            ("relocated-url", "bad_mac"),
+            ("relocated-mode", "bad_mac"),
+            ("relocated-policy", "bad_mac"),
+            ("keyless-reader", "unexpected_envelope"),
+        ],
+    )
+    async def test_planted_envelopes_are_rejected_before_parsing(
+        self, shape: str, reason: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        secret = b"cache-key-sentinel-not-a-real-secret"
+        url = "https://user:URL-SENTINEL@example.com/page"
+        key = cache_key(url)
+        metrics = CacheMetrics()
+        storage = FakeStorage(metrics=metrics)
+        cache = ContentCache(
+            storage=storage,
+            metrics=metrics,
+            hmac_key=None if shape == "keyless-reader" else secret,
+        )
+        writer = ContentCache(
+            storage=storage,
+            hmac_key=b"different-test-key" if shape == "another-key" else secret,
+        )
+        writer_url = "https://other.example.com" if shape == "relocated-url" else url
+        mode = "full" if shape == "relocated-mode" else "summary"
+        policy = "another-policy" if shape == "relocated-policy" else None
+        await writer.put(
+            writer_url,
+            _make_content(body="RAW-PAYLOAD-SENTINEL"),
+            extract_mode=mode,
+            policy_fingerprint=policy,
+        )
+        raw = storage.entries[
+            cache_key(writer_url, extract_mode=mode, policy_fingerprint=policy)
+        ][0]
+        if shape == "unsigned":
+            raw = raw.split(b".", 2)[2]
+        elif shape == "flipped-byte":
+            raw = raw[:-1] + bytes([raw[-1] ^ 1])
+        storage.entries[key] = (raw, time.monotonic() + 3600)
+        with patch.object(RetrievedContent, "model_validate_json") as parse:
+            assert await cache.get(url) is None
+            parse.assert_not_called()
+        assert storage.delete_calls == 1
+        assert key not in storage.entries
+        assert metrics.integrity_rejects == 1
+        assert metrics.storage_hits == 1
+        assert metrics.storage_misses == metrics.corrupt_entries == 0
+        assert reason in CACHE_INTEGRITY_REASONS
+        assert caplog.record_tuples == [
+            (
+                "cache",
+                logging.WARNING,
+                f"cache_integrity_reject — reason={reason} key={key}",
+            )
+        ]
+        for sentinel in (secret.decode(), "RAW-PAYLOAD-SENTINEL", "URL-SENTINEL", url):
+            assert sentinel not in caplog.text
+        assert raw.decode(errors="replace") not in caplog.text
+        assert all(record.exc_info is None for record in caplog.records)
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            b"\xff\xfe",
+            b"v1.",
+            b"v1.abc",
+            b"v1." + b"g" * 64 + b".{}",
+            b"v2." + b"0" * 64 + b".{}",
+            b"v1." + b"A" * 64 + b".{}",
+            b"v1." + b"0" * 63 + b".{}",
+            b"v1." + b"\xff" * 64 + b".{}",
+        ],
+    )
+    async def test_malformed_envelopes_never_raise(
+        self, raw: bytes, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        metrics = CacheMetrics()
+        storage = FakeStorage(metrics=metrics)
+        cache = ContentCache(storage=storage, metrics=metrics, hmac_key=b"x" * 32)
+        key = cache_key("https://example.com")
+        storage.entries[key] = (raw, time.monotonic() + 3600)
+        assert await cache.get("https://example.com") is None
+        assert storage.delete_calls == metrics.integrity_rejects == 1
+        assert key not in storage.entries
+        assert metrics.storage_hits == 1
+        assert metrics.storage_misses == metrics.corrupt_entries == 0
+        assert caplog.record_tuples == [
+            (
+                "cache",
+                logging.WARNING,
+                f"cache_integrity_reject — reason=malformed_envelope key={key}",
+            )
+        ]
+
+    @pytest.mark.parametrize("hmac_key", [None, b"x" * 32])
+    @pytest.mark.parametrize("raw", [b"", b"x" * 4097])
+    async def test_empty_and_unbounded_fake_reads(
+        self, hmac_key: bytes | None, raw: bytes, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The parity harness's memory side never produces an oversized value."""
+        metrics = CacheMetrics()
+        storage = FakeStorage(metrics=metrics)
+        cache = ContentCache(
+            storage=storage, metrics=metrics, hmac_key=hmac_key, max_value_bytes=4096
+        )
+        key = cache_key("https://example.com")
+        storage.entries[key] = (raw, time.monotonic() + 3600)
+        assert await cache.get("https://example.com") is None
+        assert storage.delete_calls == metrics.integrity_rejects == bool(raw)
+        assert metrics.storage_hits == 1
+        assert metrics.corrupt_entries == metrics.storage_misses == 0
+        assert len(caplog.records) == bool(raw)
+        if raw:
+            assert caplog.records[0].getMessage() == (
+                f"cache_integrity_reject — reason=oversize key={key}"
+            )
+            assert key not in storage.entries
+
+    @pytest.mark.parametrize("hmac_key", [None, b"x" * 32])
+    def test_unwrap_handles_arbitrary_bytes(self, hmac_key: bytes | None) -> None:
+        cache = ContentCache(
+            storage=FakeStorage(), hmac_key=hmac_key, max_value_bytes=4096
+        )
+        random_bytes = random.Random(42)
+        for length in [*range(256), 4096, 4097]:
+            for prefix in (b"", b"v1.", b"v1." + b"0" * 64 + b"."):
+                payload, reason = cache._unwrap(
+                    prefix + random_bytes.randbytes(length),
+                    cache_key("https://example.com"),
+                )
+                assert (payload is None) == (reason is not None)
+                assert reason is None or reason in CACHE_INTEGRITY_REASONS
+
+    @pytest.mark.parametrize("hmac_key", [None, b"x" * 32])
+    @pytest.mark.parametrize("body", ["a" * 4097, "界" * 1800])
+    @pytest.mark.parametrize("previous", [False, True])
+    async def test_oversize_writes_delete_then_skip_in_utf8_bytes(
+        self,
+        hmac_key: bytes | None,
+        body: str,
+        previous: bool,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        metrics = CacheMetrics()
+        storage = FakeStorage()
+        cache = ContentCache(
+            storage=storage, metrics=metrics, hmac_key=hmac_key, max_value_bytes=4096
+        )
+        url = "https://example.com"
+        if previous:
+            assert await cache.put(url, _make_content())
+        content = _make_content(body=body)
+        if body.startswith("界"):
+            assert len(content.model_dump_json()) + 68 < 4096
+        assert len(content.model_dump_json().encode()) > 4096
+        assert not await cache.put(url, content)
+        assert storage.entries == {}
+        assert storage.delete_calls == 1
+        assert storage.set_calls == int(previous)
+        assert metrics.storage_oversize_skips == 1
+        assert metrics.integrity_rejects == 0
+        assert caplog.records == []
+
+    @pytest.mark.parametrize("hmac_key", [None, b"x" * 32])
+    async def test_exact_write_bound_includes_envelope(
+        self, hmac_key: bytes | None
+    ) -> None:
+        storage = FakeStorage()
+        content = _make_content()
+        bound = len(content.model_dump_json().encode()) + (
+            len(b"v1." + b"0" * 64 + b".") if hmac_key is not None else 0
+        )
+        cache = ContentCache(storage=storage, hmac_key=hmac_key, max_value_bytes=bound)
+        assert await cache.put("https://example.com", content)
+        assert len(storage.entries[cache_key("https://example.com")][0]) == bound
+        assert await cache.get("https://example.com") is not None
+
+    def test_repr_and_str_do_not_disclose_the_key(self) -> None:
+        """Guard a future dataclass conversion; object.__repr__ needs no override."""
+        secret = b"cache-key-sentinel-not-a-real-secret"
+        cache = ContentCache(storage=FakeStorage(), hmac_key=secret)
+        assert secret.decode() not in repr(cache)
+        assert secret.decode() not in str(cache)
+        assert ContentCache.__repr__ is object.__repr__
+
+    def test_convenience_constructor_forwards_the_same_bound(self) -> None:
+        cache = ContentCache(
+            valkey_url="redis://localhost:6379/4", max_value_bytes=512 * 2**10
+        )
+        assert isinstance(cache.storage, ValkeyStorage)
+        assert cache.storage._max_value_bytes == cache._max_value_bytes == 512 * 2**10
+        assert cache._hmac_key is None
+        default = ContentCache()
+        assert default._max_value_bytes == DEFAULT_CACHE_MAX_VALUE_BYTES
+
+
+class TestBoundedValkeyReads:
+    @pytest.mark.parametrize(
+        "outcome", ["oversize", "wrong_type", "miss", "hit", "str"]
+    )
+    async def test_atomic_bounded_read_and_counter_ownership(
+        self, outcome: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        client = _mock_valkey_client()
+        metrics = CacheMetrics()
+        storage = _connected_valkey_storage(
+            client, metrics=metrics, max_value_bytes=4096
+        )
+        key = cache_key("https://example.com")
+        if outcome == "wrong_type":
+            client.getrange.side_effect = ResponseError("WRONGTYPE SECRET-SENTINEL")
+        else:
+            client.getrange.return_value = {
+                "oversize": b"x" * 4097,
+                "miss": b"",
+                "hit": b"x" * 4096,
+                "str": "界" * 1400,
+            }[outcome]
+        result = await storage.get(key)
+        reject = outcome in {"oversize", "wrong_type", "str"}
+        assert result == (b"x" * 4096 if outcome == "hit" else None)
+        client.getrange.assert_awaited_once_with(key, 0, 4096)
+        client.get.assert_not_called()
+        assert client.delete.await_count == int(reject)
+        assert metrics.integrity_rejects == int(reject)
+        assert metrics.storage_misses == int(outcome == "miss")
+        assert metrics.storage_hits == int(outcome == "hit")
+        assert metrics.operation_failures == 0
+        assert storage.connected
+        if reject:
+            client.delete.assert_awaited_once_with(key)
+            reason = "wrong_type" if outcome == "wrong_type" else "oversize"
+            assert caplog.record_tuples == [
+                (
+                    "cache",
+                    logging.WARNING,
+                    f"cache_integrity_reject — reason={reason} key={key}",
+                )
+            ]
+        else:
+            assert caplog.records == []
+        assert "SECRET-SENTINEL" not in caplog.text
+
+    async def test_text_double_is_encoded_before_parsing(self) -> None:
+        client = _mock_valkey_client()
+        original = _make_content(body="你好")
+        client.getrange.return_value = original.model_dump_json()
+        cache = ContentCache(storage=_connected_valkey_storage(client))
+        result = await cache.get("https://example.com")
+        assert result is not None
+        assert result.body == original.body
+
+    async def test_other_response_errors_still_disconnect(self) -> None:
+        client = _mock_valkey_client()
+        client.getrange.side_effect = ResponseError("ERR some-server-failure")
+        metrics = CacheMetrics()
+        storage = _connected_valkey_storage(client, metrics=metrics)
+        assert await storage.get(cache_key("https://example.com")) is None
+        assert not storage.connected
+        assert metrics.operation_failures == 1
+        assert metrics.integrity_rejects == 0
+        client.delete.assert_not_called()
+
+    async def test_failed_reject_delete_keeps_the_integrity_count_and_disconnects(
+        self,
+    ) -> None:
+        client = _mock_valkey_client()
+        client.getrange.return_value = b"x" * 4097
+        client.delete.side_effect = ConnectionError("down")
+        metrics = CacheMetrics()
+        storage = _connected_valkey_storage(
+            client, metrics=metrics, max_value_bytes=4096
+        )
+        assert await storage.get(cache_key("https://example.com")) is None
+        assert not storage.connected
+        assert metrics.integrity_rejects == metrics.operation_failures == 1
+        assert metrics.storage_hits == metrics.storage_misses == 0
+
+    async def test_connect_pins_binary_replies(self) -> None:
+        with patch("cache.aioredis") as redis:
+            redis.from_url.return_value = _mock_valkey_client()
+            storage = ValkeyStorage(valkey_url="redis://localhost:6379/4")
+            assert await storage.connect()
+        assert redis.from_url.call_args.kwargs["decode_responses"] is False
+
+    def test_real_lazy_client_has_binary_replies_without_opening_a_socket(self) -> None:
+        client = cache_module.aioredis.from_url(
+            "redis://localhost:6379/4", decode_responses=False
+        )
+        assert client.connection_pool.connection_kwargs["decode_responses"] is False
+
+
+# ---------------------------------------------------------------------------
 # Corrupt entries
 # ---------------------------------------------------------------------------
 
@@ -509,7 +894,6 @@ class TestCorruptCacheEntries:
                 _make_content().model_dump(mode="json")
                 | {"retrieved_at": {"secret": "CORRUPT-VALUE-SENTINEL"}}
             ).encode(),
-            b"",
             b"\xffCORRUPT-VALUE-SENTINEL",
             b"null",
             b"[]",
@@ -522,7 +906,6 @@ class TestCorruptCacheEntries:
             "invalid-json",
             "wrong-schema",
             "wrong-retrieved-at",
-            "empty",
             "invalid-utf8",
             "null",
             "array",
@@ -580,7 +963,7 @@ class TestCorruptCacheEntries:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         client = _mock_valkey_client()
-        client.get.return_value = b'{"not": "CORRUPT-VALUE-SENTINEL"}'
+        client.getrange.return_value = b'{"not": "CORRUPT-VALUE-SENTINEL"}'
         client.delete.side_effect = ConnectionError("DELETE-CREDENTIAL-SENTINEL")
         metrics = CacheMetrics()
         storage = ValkeyStorage(metrics=metrics)
@@ -781,7 +1164,7 @@ class TestReconnect:
     async def test_operation_failure_marks_cache_disconnected(self) -> None:
         """A drop that begins *after* a successful connect clears the client."""
         mock_redis = AsyncMock()
-        mock_redis.get = AsyncMock(side_effect=ConnectionError("dropped"))
+        mock_redis.getrange = AsyncMock(side_effect=ConnectionError("dropped"))
         metrics = CacheMetrics()
         storage = ValkeyStorage(metrics=metrics)
         storage._client = mock_redis
@@ -799,7 +1182,7 @@ class TestReconnect:
         with patch("cache.aioredis") as mock_mod:
             mock_client = AsyncMock()
             mock_client.ping = AsyncMock(return_value=True)
-            mock_client.get = AsyncMock(return_value=None)
+            mock_client.getrange = AsyncMock(return_value=b"")
             mock_mod.from_url.return_value = mock_client
 
             c = ContentCache()
@@ -855,7 +1238,9 @@ class TestReconnect:
         with patch("cache.aioredis") as mock_mod:
             mock_client = AsyncMock()
             mock_client.ping = AsyncMock(return_value=True)
-            mock_client.get = AsyncMock(return_value=stale.model_dump_json().encode())
+            mock_client.getrange = AsyncMock(
+                return_value=stale.model_dump_json().encode()
+            )
             mock_client.delete = AsyncMock(return_value=1)
             mock_mod.from_url.return_value = mock_client
 
@@ -922,7 +1307,7 @@ class TestReconnect:
         with patch("cache.aioredis") as mock_mod:
             mock_client = AsyncMock()
             mock_client.ping = AsyncMock(side_effect=slow_ping)
-            mock_client.get = AsyncMock(return_value=None)
+            mock_client.getrange = AsyncMock(return_value=b"")
             mock_mod.from_url.return_value = mock_client
 
             c = ContentCache()
@@ -1014,6 +1399,7 @@ class TestCacheSettings:
         assert settings.max_bytes == 32 * MEBIBYTE
         assert DEFAULT_CACHE_MAX_ENTRIES == 256
         assert DEFAULT_CACHE_MAX_BYTES == 32 * MEBIBYTE
+        assert settings.max_value_bytes == DEFAULT_CACHE_MAX_VALUE_BYTES == 4 * MEBIBYTE
 
     def test_values_from_the_cache_block_are_used(self) -> None:
         settings = cache_settings_from_config(
@@ -1040,6 +1426,8 @@ class TestCacheSettings:
             {"max_entries": 4097},
             {"max_bytes": 1024},
             {"max_bytes": 129 * MEBIBYTE},
+            {"max_value_bytes": 512 * 2**10 - 1},
+            {"max_value_bytes": 8 * MEBIBYTE + 1},
         ],
     )
     def test_out_of_range_values_are_refused(self, block: dict[str, int]) -> None:
@@ -1047,11 +1435,12 @@ class TestCacheSettings:
         with pytest.raises(CacheConfigurationError):
             cache_settings_from_config({"cache": block})
 
+    @pytest.mark.parametrize("key", ["max_entries", "max_bytes", "max_value_bytes"])
     @pytest.mark.parametrize("value", [True, 1.5, "256", None])
-    def test_non_integer_values_are_refused(self, value: object) -> None:
+    def test_non_integer_values_are_refused(self, key: str, value: object) -> None:
         """``True`` is an ``int`` in Python and is refused anyway."""
         with pytest.raises(CacheConfigurationError):
-            cache_settings_from_config({"cache": {"max_entries": value}})
+            cache_settings_from_config({"cache": {key: value}})
 
     def test_a_non_mapping_cache_block_is_refused(self) -> None:
         with pytest.raises(CacheConfigurationError):
@@ -1065,6 +1454,29 @@ class TestCacheSettings:
         settings = cache_settings_from_config(shipped)
         assert settings.max_entries == DEFAULT_CACHE_MAX_ENTRIES
         assert settings.max_bytes == DEFAULT_CACHE_MAX_BYTES
+        assert settings.max_value_bytes == DEFAULT_CACHE_MAX_VALUE_BYTES
+        assert shipped["cache"]["max_value_bytes"] == DEFAULT_CACHE_MAX_VALUE_BYTES
+
+    @pytest.mark.parametrize("bound", [512 * 2**10, 8 * MEBIBYTE])
+    def test_value_bound_endpoints_are_accepted(self, bound: int) -> None:
+        settings = cache_settings_from_config({"cache": {"max_value_bytes": bound}})
+        assert settings.max_value_bytes == bound
+
+    def test_inverted_bounds_warn_without_refusing_the_old_supported_range(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        settings = cache_settings_from_config({"cache": {"max_bytes": MEBIBYTE}})
+        assert settings.max_bytes == MEBIBYTE
+        assert settings.max_value_bytes == DEFAULT_CACHE_MAX_VALUE_BYTES
+        assert caplog.record_tuples == [
+            (
+                "cache",
+                logging.WARNING,
+                "cache_bounds_inverted — cache.max_value_bytes exceeds "
+                "cache.max_bytes; "
+                "the in-memory storage applies cache.max_bytes",
+            )
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -1131,6 +1543,22 @@ def harness(request: pytest.FixtureRequest) -> _ParityHarness:
 
 class TestPolicyParityAcrossStorages:
     """Five security behaviours plus storage TTL expiry, over both storages."""
+
+    async def test_signed_values_and_write_bounds_are_backend_independent(
+        self, harness: _ParityHarness
+    ) -> None:
+        cache = ContentCache(
+            storage=harness.storage,
+            metrics=harness.metrics,
+            hmac_key=b"x" * 32,
+            max_value_bytes=4096,
+        )
+        assert await cache.put(_PARITY_URL, _make_content())
+        assert await cache.get(_PARITY_URL) is not None
+        assert not await cache.put(_PARITY_URL, _make_content(body="x" * 4097))
+        assert await harness.stored(_PARITY_URL) is None
+        assert harness.metrics.storage_oversize_skips == 1
+        assert harness.metrics.integrity_rejects == 0
 
     # -- 1. trust-tier refusal ----------------------------------------------
 

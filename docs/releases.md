@@ -288,6 +288,24 @@ extracted locally from the tagged tree (`git show "$TAG":pipeline/contract.py`
 through the same `awk` program) so the Release carries it verbatim — or
 deleting the Release and re-running the job.
 
+### Cache-integrity upgrade note for the pending hardening release
+
+**Spec 8 Release-body handoff:** `/metrics.cache` gains `integrity_rejects`.
+`storage_oversize_skips` keeps its meaning but can now rise on Valkey as well
+as memory, at the new `cache.max_value_bytes` bound (4 MiB by default).
+No published contract golden is changed; these additions ride the held 1.3.0
+window. The revision rotation orphans old cache keys.
+
+Remove `decode_responses`, `encoding`, `encoding_errors` and `protocol` from
+`VALKEY_URL` query options before upgrading: their presence now refuses boot
+with a key-only diagnostic, because they can break byte-bounded reads.
+Socket timeout tuning remains allowed. Use the same byte bound across all
+replicas sharing Valkey; lowering it can reject past larger writes as
+`oversize`, which is not by itself tampering. See
+[`configuration.md`](configuration.md#the-cache-block) for the memory-sizing
+relationship. The constructor-level HMAC machinery lands in US-001;
+environment-key wiring and keyless-Valkey health reporting follow in US-002.
+
 ### Domain-list upgrade note for the pending hardening release
 
 **Spec 8 Release-body handoff, the 1.3.0 window:** existing multi-label

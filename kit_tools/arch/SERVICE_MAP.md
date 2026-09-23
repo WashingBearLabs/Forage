@@ -208,7 +208,7 @@ behaviour is described here from Forage's own docs and tests
   tag, `gh release download v<ver> --pattern 'openapi.yaml*'`, or
   `docker run --rm --entrypoint cat <image> /app/contract/openapi.yaml`); run
   `sha256sum -c openapi.yaml.sha256`; commit both; record the tag. The anchor is
-  currently `014e873a2e7fae9b87b781e5e7b8bd5446d1e2259ad7ddcf52089d4840480194`.
+  currently `de4343ff6df3a65b2c7bf63246be11405d482381d1e0d627d0a99f8b3d1fe763`.
 - Its client caches `sanitizer_revision` from `/health`, pins the ten `/extract` error
   codes, rejects an `/extract` 422 lacking `sanitizer_revision`, gates web search on
   `capabilities.search_sanitization`, and buckets unknown `omitted_by_reason` /

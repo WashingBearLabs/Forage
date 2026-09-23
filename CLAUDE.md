@@ -86,7 +86,7 @@ consuming repo.
 
 **The bump policy is written down: [`contract/GOVERNANCE.md`](contract/GOVERNANCE.md).**
 Read it before touching `pipeline/contract.py` or the response models in `models.py`. It
-classifies any change, answers the six standing examples, and records the ten rulings
+classifies any change, answers the six standing examples, and records the eleven rulings
 this epic already made — including the one that is not obvious from the code: the
 `/extract` 413 is documented but unreachable (FastAPI turns it into a 400), documenting it
 carried no bump, and *correcting* it is a MAJOR. `.github/pull_request_template.md` is the
@@ -394,6 +394,15 @@ same. `/extract`'s raw-value guard and the raw configured hash input stay intact
 the active float reaches the cache through `cache_policy_fingerprint`.
 `docs/bootstrap-notes.md` carries
 the before/after and the reasoning for each.
+And a thirty-first to `aa288bc5…` for signed and bounded cache values
+(`hardening-cache-integrity` US-001): only `contract.py` moves in the hash,
+announcing `cache.integrity_rejects` and widened `storage_oversize_skips`
+producers in the held 1.3.0 window. A read-only whole-file revert against
+`b79504d` reproduces `e00049c4…` under default and shipped config; the other
+eight hashed files are unchanged. HMAC/key binding and byte/type bounds in
+`cache.py`, and construction/metrics wiring in `retrieval_app.py`, are not
+hashed. This is not a change to text sanitization; the rotation invalidates
+old cache keys. Full measurements are in `docs/bootstrap-notes.md`.
 **Do not assume Poppy↔Forage revision parity** — compare contracts, not revisions.
 
 ---

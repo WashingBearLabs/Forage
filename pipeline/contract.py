@@ -183,6 +183,10 @@ MINOR when fields are only added.
   ``tests/golden/contract_1_3_0.json`` is
   re-created in place by every later story in this epic that moves the
   wire, until spec 8 US-002 freezes it ahead of the release cut.
+* ``1.3.0`` — ``hardening-cache-integrity`` US-001 adds ``cache.integrity_rejects``
+  to ``/metrics``; ``cache.storage_oversize_skips`` now counts Forage's own
+  write-side byte-bound refusals on both backends, not only memory (GOVERNANCE
+  ruling (j)). The counter's meaning is unchanged; its producers are widened.
 
 This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy

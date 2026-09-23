@@ -16,6 +16,24 @@ live in, and losing them in the move was an identified risk.
 
 ## Active Gotchas
 
+### A cache read bound depends on binary replies, not a client keyword alone
+
+redis-py's URL query options override `from_url` keyword arguments. Therefore
+`decode_responses=False` alone does not pin byte mode. `ValkeyStorage` refuses
+the query keys `decode_responses`, `encoding`, `encoding_errors` and `protocol`
+before connecting, logging only the option name. Socket timeout options remain
+operator tunable. A malformed URL still follows the guarded connect's degraded
+path; lifespan-less `/health` never constructs storage and remains non-raising.
+
+`GETRANGE key 0 max_value_bytes` is atomic and returns at most bound + 1 bytes.
+Empty means miss, not corrupt or unsigned; `WRONGTYPE` means reject, not
+disconnected. The signed prefix is **68 bytes**, not the spec hint's 67.
+Measure serialized UTF-8 bytes, and delete a superseded entry before an
+oversize write skip. The 4 MiB default leaves headroom above the 2 MiB extraction
+budget, but JSON escaping can still inflate a pathological value past it;
+that is a write skip, never an integrity signal. Keep the same bound across
+replicas; lowering it rejects old larger writes without proving tampering.
+
 ### Concurrent requests cannot own overlapping global mock contexts
 
 `unittest.mock.patch` changes a module attribute process-wide, not per task.
@@ -519,6 +537,7 @@ were recorded at their implementation boundaries:
 | `hardening-hostname-and-config` US-007 | `c8a907cf…546b8` | Twenty-eighth, **sixth policy-driven sanitization-behaviour change**: over-budget allowlist tails can no longer grant trust, and denylists are refused whole; in-budget matching/text scanning remain unchanged. `orchestrator.py` removes the entry pass, merges operator-first and counts wildcard resolutions; `contract.py` announces counters/reason; already-hashed `url_validator.py` removes its pass and safely sizes surrogate escapes before rejecting them. All three individual reversals were measured; all-reverted reproduces `328d386c…` under default and shipped config. |
 | `hardening-hostname-and-config` US-002 | `de1cea65…6be91` | Twenty-ninth, **seventh policy-driven sanitization-behaviour change**: `/search` merges the operator seed list first, then canonical `blocked_domains=` entries, and omits matches after URL auditing but before content scans. The existing blocked outcome emits `blocked_url` and `host_class=policy_blocklist`; raw sufficiency prevents paid fallback. Only `orchestrator.py` and `contract.py` move; both individual read-only reversals were measured and both-reverted reproduces `c8a907cf…` under default and shipped config. The empty-seed/no-new-field baseline is unchanged. |
 | `hardening-hostname-and-config` US-005 | `e00049c4…7ed5c` | Thirtieth, **eighth policy-driven sanitization-behaviour change**, for tuned deployments: both fetch routes default from validated config before the ceiling, with a new caller threshold on search. `orchestrator.py` passes a required resolved float to classification and cache fingerprint; `contract.py` announces the additions/defaults. Only these two hashed files move; individual read-only reversals measured, both-reverted reproduces `de1cea65…` under default and shipped config. Shipped 0.85 behavior, text-scanning algorithms, raw configured hash input and `/extract`'s raw guard remain unchanged. |
+| `hardening-cache-integrity` US-001 | `aa288bc5…5b39c` | Thirty-first, **not a text-sanitization change**. Only `contract.py` moves, announcing `cache.integrity_rejects` and widened `storage_oversize_skips` producers. Read-only reversal against clean `b79504d` reproduces `e00049c4…` under default and shipped config; all eight other sources are unchanged. The HMAC/bounds and wiring are in unhashed root modules. Old keys are orphaned; full measurements in `docs/bootstrap-notes.md`. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.

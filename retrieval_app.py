@@ -273,11 +273,14 @@ def _select_cache_storage(
     vocabulary. Nothing here inspects, splits or logs it — the value may carry
     a password, and a parse attempt at this layer would be a second place for
     one to escape into a log line.
+    The query-key safety check lives in ``cache.py`` beside the guarded connect.
     """
     url = _configured_valkey_url()
     if url is None:
         return InMemoryStorage(settings=settings, metrics=metrics), "memory"
-    return ValkeyStorage(url, metrics=metrics), "valkey"
+    return ValkeyStorage(
+        url, metrics=metrics, max_value_bytes=settings.max_value_bytes
+    ), "valkey"
 
 
 def _resolved_cache_backend(state: State) -> CacheBackend:
@@ -340,7 +343,7 @@ def _resolved_search_key_capabilities(state: State) -> tuple[str, ...]:
     return capabilities if capabilities is not None else ()
 
 
-# Later hardening specs append cache.max_value_bytes, search_searxng_*,
+# Later hardening specs append search_searxng_*,
 # resource-envelope and contiguity keys here alongside their readers and docs.
 KNOWN_CONFIG_KEYS: frozenset[str] = frozenset(
     {
@@ -359,6 +362,7 @@ KNOWN_CONFIG_KEYS: frozenset[str] = frozenset(
         "cache",
         "cache.max_entries",
         "cache.max_bytes",
+        "cache.max_value_bytes",
         "extraction",
         "extraction.max_input_bytes",
         "extraction.max_pages",
@@ -711,8 +715,8 @@ class CacheMetricsResponse(BaseModel):
     ``storage_*`` counters here count *storage operations* underneath the
     cache's policy layer, so a zero-TTL purge or a policy-stale entry moves
     one and not the other. Only the in-memory storage can move
-    ``storage_evictions``/``storage_oversize_skips`` — Valkey does its own
-    eviction and has no byte bound of ours.
+    ``storage_evictions``; ``storage_oversize_skips`` counts Forage's own
+    write-side refusals on both backends.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -737,8 +741,8 @@ class CacheMetricsResponse(BaseModel):
     )
     storage_oversize_skips: int = Field(
         description=(
-            "Entries the in-memory storage refused as over its per-entry byte "
-            "bound. Always 0 on Valkey."
+            "Values Forage refused to store over cache.max_value_bytes on either "
+            "backend, or over the memory backend's cache.max_bytes bound."
         )
     )
     corrupt_entries: int = Field(
@@ -746,6 +750,15 @@ class CacheMetricsResponse(BaseModel):
             "Stored values that failed RetrievedContent JSON or schema validation "
             "and were treated as misses, with deletion attempted. Counts parse "
             "failures, not tampering; parse success does not prove authenticity."
+        )
+    )
+    integrity_rejects: int = Field(
+        description=(
+            "Stored values rejected before parsing for an invalid or unexpected "
+            "signature envelope, an oversized value, or a wrong Valkey type. "
+            "Deletion is attempted and the read becomes a miss. Key changes and "
+            "lowered byte bounds can also move this counter; inspect the closed "
+            "reason token and cache-key digest in cache_integrity_reject logs."
         )
     )
 
@@ -1565,7 +1578,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings=app.state.cache_settings,
         metrics=app.state.cache_metrics,
     )
-    cache = ContentCache(storage=storage, metrics=app.state.cache_metrics)
+    cache = ContentCache(
+        storage=storage,
+        metrics=app.state.cache_metrics,
+        max_value_bytes=app.state.cache_settings.max_value_bytes,
+    )
     cache_ok = await cache.connect()
     app.state.cache = cache
     # Published for `/health` on the `sanitizer_revision` precedent above:
@@ -1858,6 +1875,7 @@ async def metrics(request: Request) -> dict[str, Any]:
             "storage_evictions": cache_metrics.storage_evictions,
             "storage_oversize_skips": cache_metrics.storage_oversize_skips,
             "corrupt_entries": cache_metrics.corrupt_entries,
+            "integrity_rejects": cache_metrics.integrity_rejects,
         },
         # Weight acquisition (feature-forage-model-bootstrap); the states these
         # five counters separate are documented on

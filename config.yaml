@@ -29,11 +29,13 @@ search_brave_query_max_chars: 400
 # placement is the only control (docs/configuration.md, "Deployment posture").
 extract_route_enabled: false
 cache:
-  # Bounds for the bounded in-memory cache storage. The 1 GiB container
+  # Bounds for cache values on both backends and total in-memory storage.
+  # The 1 GiB container
   # already reserves 512 MiB for the parent process and 384 MiB for the
   # extraction child, leaving ~128 MiB — 32 MiB spends a quarter of it.
   max_entries: 256
   max_bytes: 33554432
+  max_value_bytes: 4194304
 extraction:
   # Hard bounds enforced in code: 50 MiB input, 500 pages, 20 s CPU, 90 s wall.
   max_input_bytes: 52428800

@@ -288,6 +288,13 @@ and both-reverted reproduces `de1cea65…` under default and shipped config.
 Shipped 0.85 behavior, text-scanning algorithms and `/extract`'s raw guard are
 unchanged. The configured raw value still feeds the revision; the active float
 feeds `cache_policy_fingerprint`. Full measurements: `docs/bootstrap-notes.md`.
+The thirty-first (`e00049c4…` → `aa288bc5…`) is **not a text-sanitization
+change** (`hardening-cache-integrity` US-001). Only `contract.py` moves,
+announcing `cache.integrity_rejects` and widened `storage_oversize_skips`
+producers; a read-only revert against clean `b79504d` reproduces `e00049c4…`
+under default and shipped config. The other eight hashed sources are unchanged.
+The cache envelope and byte/type bounds (`cache.py`) and wiring
+(`retrieval_app.py`) are not hashed; the rotation still orphans old cache keys.
 Nothing downstream may assume Poppy↔Forage revision parity.
 
 **Domain lists cross boundaries as canonical strings.** `url_validator.py` owns the
@@ -326,7 +333,19 @@ catches `ValueError` from `RetrievedContent.model_validate_json`, increments
 `corrupt_entries`, logs one WARNING with `cache_entry_corrupt` and the key digest,
 and attempts deletion before returning `None`. Storage owns operation failures as
 before; even a failed deletion leaves this request on the miss path. Values that
-parse still pass through the existing freshness checks and are not authenticated.
+parse still pass through the existing freshness checks; parsing itself never
+establishes authenticity.
+
+**Authentication precedes parsing when a key is supplied.** `ContentCache` writes
+`v1.<HMAC-SHA256>.<json>` over `b"v1\0" + cache_key + b"\0" + payload`, so a
+copied envelope cannot authenticate under another URL/mode/policy key.
+`_unwrap` bounds and verifies bytes before JSON parsing, using constant-time
+comparison. Keyless caches retain bare JSON and reject unexpected v1 envelopes.
+`ValkeyStorage` pre-bounds the read atomically with `GETRANGE`, treating empty
+as miss and `WRONGTYPE` as integrity rejection rather than connection failure.
+Write-side byte limits apply to both backends and delete superseded entries
+before skipping. US-001 exposes constructor keys only; environment-key wiring
+and the keyless-Valkey health signal follow in US-002.
 
 **Startup is non-blocking, and one background task is the reason.** The lifespan does its
 synchronous wiring, starts weight acquisition as

@@ -86,15 +86,23 @@ components:
 
         one and not the other. Only the in-memory storage can move
 
-        ``storage_evictions``/``storage_oversize_skips`` — Valkey does its own
+        ``storage_evictions``; ``storage_oversize_skips`` counts Forage''s own
 
-        eviction and has no byte bound of ours.'
+        write-side refusals on both backends.'
       properties:
         corrupt_entries:
           description: Stored values that failed RetrievedContent JSON or schema validation
             and were treated as misses, with deletion attempted. Counts parse failures, not
             tampering; parse success does not prove authenticity.
           title: Corrupt Entries
+          type: integer
+        integrity_rejects:
+          description: Stored values rejected before parsing for an invalid or unexpected
+            signature envelope, an oversized value, or a wrong Valkey type. Deletion is attempted
+            and the read becomes a miss. Key changes and lowered byte bounds can also move
+            this counter; inspect the closed reason token and cache-key digest in cache_integrity_reject
+            logs.
+          title: Integrity Rejects
           type: integer
         operation_failures:
           description: Cache operations that failed against the backend.
@@ -126,8 +134,8 @@ components:
           title: Storage Misses
           type: integer
         storage_oversize_skips:
-          description: Entries the in-memory storage refused as over its per-entry byte bound.
-            Always 0 on Valkey.
+          description: Values Forage refused to store over cache.max_value_bytes on either
+            backend, or over the memory backend's cache.max_bytes bound.
           title: Storage Oversize Skips
           type: integer
       required:
@@ -140,6 +148,7 @@ components:
       - storage_evictions
       - storage_oversize_skips
       - corrupt_entries
+      - integrity_rejects
       title: CacheMetricsResponse
       type: object
     DetailResponse:

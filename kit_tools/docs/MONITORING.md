@@ -185,20 +185,25 @@ Backed by `retrieval_app.RetrieveMetrics`.
 
 ### `cache`
 
-Backed by `cache.CacheMetrics` — storage operations and policy-layer parse failures,
+Backed by `cache.CacheMetrics` — storage operations, integrity rejects and parse failures,
 not request outcomes.
 
 | Counter | Kind | Increments when | A rising value means |
 |---------|------|-----------------|----------------------|
 | `reconnect_attempts` / `reconnect_successes` / `reconnect_failures` | counters | `ValkeyStorage._ensure_client`, gated by backoff (1 s doubling to a 30 s cap, 2 s connect+ping deadline). Also driven by `/health`'s `ping_if_due()`, so polling `/health` itself exercises these. | `reconnect_failures` climbing: Valkey unreachable; `attempts` climbing with `successes` climbing: flapping. |
-| `operation_failures` | counter | `ValkeyStorage._mark_disconnected` after a `get` / `set` / `delete` raised. | Valkey dropping mid-run; `/retrieve` continues uncached. |
+| `operation_failures` | counter | `ValkeyStorage._mark_disconnected` after a `getrange` / `set` / `delete` failed (except a `WRONGTYPE` read). | Valkey dropping mid-run; `/retrieve` continues uncached. |
 | `storage_hits` / `storage_misses` | counters | Key lookups, both backends. | — |
-| `storage_evictions` / `storage_oversize_skips` | counters | `InMemoryStorage` only; always 0 on Valkey. | Memory-mode cache bounds being hit. |
+| `storage_evictions` | counter | `InMemoryStorage` only; always 0 on Valkey. | Memory-mode cache bounds being hit. |
+| `storage_oversize_skips` | counter | Forage refuses its own write at `cache.max_value_bytes` on either backend, or `cache.max_bytes` in memory. The previous entry is deleted first. | A response was served uncached, not an integrity failure. |
+| `integrity_rejects` | counter | A read fails envelope verification or the byte/type bound; deletion is attempted. | One counter, six reasons: `unsigned`, `bad_mac`, `malformed_envelope`, `oversize`, `unexpected_envelope`, `wrong_type`. Key enabling/rotation and bound reductions cannot be separated from tampering by the counter alone. The `cache_integrity_reject` WARNING's reason token and `ret:<sha256>` key digest are the discriminator. The digest is one-way but confirmable against a guessed URL. |
 | `corrupt_entries` | counter | `ContentCache` cannot parse stored bytes as `RetrievedContent`; the value is treated as a miss and deletion is attempted. Both backends. | Schema drift or invalid values from another writer. Not an authenticity or tampering counter: parseable values are still served. Correlate the WARNING `cache_entry_corrupt` by its `ret:<sha256>` key digest. |
 
 A corrupt value is a `storage_hits` increment but a `retrieve.cache_misses` outcome.
 If deletion fails, the ordinary `operation_failures` counter and closed WARNING also
 move; the request still proceeds as a miss.
+Empty `GETRANGE` replies are ordinary storage misses with no WARNING. Oversize
+and wrong-type Valkey reads move neither storage hit nor miss counters; envelope
+rejects at the policy layer leave the storage's count as it was.
 
 ### `model`
 
@@ -259,6 +264,8 @@ All are `logging.getLogger(__name__)`: `retrieval_app`, `cache`, `model_fetcher`
 | WARNING | `config_invalid_value — key=<list> dropped=<n> entries=<entries>` (domain-list form names dropped entries) | Invalid `seed_blocklist` or `news_domains` entries dropped at boot; one WARNING per affected list, none for valid, empty or missing lists. Non-string YAML members use `[non-string]`; a non-list container publishes `[]` with `dropped=1 entries=[invalid-container]`, never its contents. Misplaced credential/URL-shaped string entries are redacted. Request counters are not incremented. |
 | WARNING | `break_glass_advertisement_active — <var>=1 is forcing /health to advertise search_sanitization regardless of classifier state; ...` | Break-glass armed. `capabilities` will lie; `status` and `promptguard_loaded` stay honest. |
 | WARNING | `Content cache not available at startup` | `VALKEY_URL` set and the 2 s connect+ping deadline failed. |
+| WARNING | `cache_bounds_inverted — cache.max_value_bytes exceeds cache.max_bytes; the in-memory storage applies cache.max_bytes` | Supported start; the memory total is the tighter bound. No values are logged. |
+| WARNING | `valkey_url_option_forbidden — option=<key>` | Boot refuses a reply-shaping query key (`decode_responses`, `encoding`, `encoding_errors`, `protocol`). No URL, host, password or option value is logged. |
 | WARNING | `PromptGuard model not available — ML injection detection disabled` (with traceback, `exc_info=True`) | The verified weight set failed to load (torch/transformers); followed by ERROR `weights_load_failed`. |
 
 Dropped (INFO): `Sidecar config loaded (<n> keys); contract_version=<v>`, `Content cache connected (valkey|memory)`, `PromptGuard 2 model loaded successfully`, `promptguard_threshold_resolved — value=<validated-default>` (once per boot, before the operator ceiling). Invalid threshold defaults instead emit one WARNING `config_invalid_value — key=promptguard_threshold. /extract reads the raw value through its own guard`, never the value; only the fetch routes fall back to 0.85. A boot that fails outright (bad `extraction:` or `cache:` value in `config.yaml`) exits the container with a traceback in `docker logs`.

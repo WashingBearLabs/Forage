@@ -101,7 +101,7 @@ instance is private-network-only and Forage is its only client.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `VALKEY_URL` | **unset** — the content cache runs in memory | Connection string for the Valkey/Redis content cache. Standard `redis://` URL, including the database index. Setting it selects the Valkey backend; leaving it unset selects the bounded in-memory one. **May carry a password — see credential handling below.** |
+| `VALKEY_URL` | **unset** — the content cache runs in memory | Connection string for the Valkey/Redis content cache. Standard `redis://` URL, including the database index. Setting it selects the Valkey backend; leaving it unset selects the bounded in-memory one. **May carry a password — see credential handling below. Upgrade note:** remove query options `decode_responses`, `encoding`, `encoding_errors` and `protocol` before upgrading: their presence now refuses boot with `CacheConfigurationError` and one `valkey_url_option_forbidden` WARNING naming only the option. redis-py's URL options override keyword arguments, so these options cannot safely coexist with the atomic byte-bounded read. `socket_timeout` and `socket_connect_timeout` remain operator-overridable tuning; the independent 2 s connect deadline is unchanged. |
 | `SEARXNG_URL` | `http://searxng:8080` | Base URL of the SearXNG instance backing `POST /search`. |
 | `FORAGE_SEARCH_PROVIDERS` | `searxng` | Ordered, comma-separated chain of search backends `POST /search` resolves at container start. Known names are `searxng` and `brave`; **any entry other than `searxng` sends the caller's query to that provider**, so add one only if you mean to. An unknown name refuses the boot (the resolved names are in the startup log); a set-but-blank value logs a WARNING and resolves to the default. Read once at start — restart to apply. |
 | `FORAGE_BRAVE_API_KEY` | unset | API key for Brave's paid LLM-Context search endpoint. **Carries a credential** — supply it the same way as `VALKEY_URL`, with `--env-file` or an explicit `environment:` entry until spec 5 US-004 adds the compose passthrough. With it set, a `brave` entry in `FORAGE_SEARCH_PROVIDERS` sends the caller's query text — whatever the calling agent put in it, truncated to `search_brave_query_max_chars` — to Brave's API under the operator's account and terms; the call needs direct HTTPS egress and ignores proxy variables by design. A key-less `brave` entry is skipped (WARNING `brave_skipped_missing_key`) rather than refusing the boot, and a chain where every entry was skipped this way falls back to SearXNG alone (a second WARNING, `search_chain_defaulted_to_searxng`, marks the substitution): **no key means SearXNG-only, fully supported.** Read once at start — restart to apply. |
@@ -558,9 +558,9 @@ placement and enforce body-size limits at the caller-facing proxy as appropriate
 
 ### The `cache:` block
 
-Bounds for `InMemoryStorage`, the bounded in-process content-cache storage that sits
-under the cache's policy layer — the backend an unset `VALKEY_URL` selects (see "Cache
-backend selection" above). They are validated at startup regardless of which storage
+Bounds for individual cache values on both backends and for `InMemoryStorage`, the
+bounded in-process storage selected by an unset `VALKEY_URL` (see "Cache backend
+selection" above). They are validated at startup regardless of which storage
 is active, so an invalid known value refuses boot rather than silently widening a
 memory bound. A misspelled key instead warns and is ignored.
 
@@ -572,16 +572,23 @@ extraction worker, leaving roughly 128 MiB. The 32 MiB default spends a quarter 
 |-----|---------|---------------|---------|
 | `max_entries` | `256` | 1 – 4096 | Maximum cached responses held in memory. Beyond it, entries are evicted — already-expired ones first, then least-recently-used. |
 | `max_bytes` | `33554432` (32 MiB) | 1 MiB – 128 MiB | Maximum total serialised bytes held in memory, accounted exactly (values are stored as the same JSON bytes Valkey would hold). A single response larger than this bound is never cached: it is served uncached and counted in `/metrics` as `cache.storage_oversize_skips`. |
+| `max_value_bytes` | `4194304` (4 MiB) | 512 KiB – 8 MiB | Per-value UTF-8 byte bound on both backends, including a signed envelope's **68-byte** prefix. The default leaves headroom above `MAX_EXTRACTED_OUTPUT_BYTES` (2 MiB) for JSON escaping and metadata; unusually inflated serialization can still be served uncached. Over-bound writes delete the superseded entry and increment `cache.storage_oversize_skips`, never `integrity_rejects`. Valkey reads use one atomic `GETRANGE key 0 max_value_bytes` (at most bound + 1 bytes). If `cache.max_value_bytes > cache.max_bytes`, boot **warns**, not refuses: `cache_bounds_inverted` says memory storage applies `cache.max_bytes`. Peak cache-read allocation scales as `max_value_bytes × in-flight /retrieve requests` (plus decoding/verification copies); cache reads sit under **no concurrency bound**. See the sizing section planned in [`feature-hardening-resource-envelope`](../kit_tools/specs/feature-hardening-resource-envelope.md), which includes `+ cache.max_value_bytes` for one in-flight Valkey read. **Every replica sharing Valkey must use the same bound**, just as signed writers must use the same key: the cache block is not a cache-key input. Lowering the bound causes a bounded burst of `oversize` rejects against Forage's own larger past writes, a tuning consequence rather than proof of tampering. |
 
-The cache serves `POST /retrieve` only — `/search` has never been cached — and it is
-per-process by design (one uvicorn worker, nothing shared, nothing persisted across a
-restart).
+The cache serves `POST /retrieve` only — `/search` has never been cached. Memory
+storage is per-process (one uvicorn worker, nothing persisted across a restart);
+Valkey can be shared.
 
 Two layers of counter appear in `/metrics` and are not duplicates of each other:
 `retrieve.cache_hits` / `cache_misses` count **request** outcomes, while
 `cache.storage_hits` / `storage_misses` / `storage_evictions` /
-`storage_oversize_skips` count **storage operations** underneath the policy layer. Only
-the in-memory storage can move the last two.
+`storage_oversize_skips` count cache/storage operations. `storage_evictions` stays
+memory-only; `storage_oversize_skips` counts Forage's own write-side refusals at
+`cache.max_value_bytes` on either backend and at `cache.max_bytes` in memory.
+`cache.integrity_rejects` counts rejected reads, with six log reasons: `unsigned`,
+`bad_mac`, `malformed_envelope`, `oversize`, `unexpected_envelope`, `wrong_type`.
+Empty reads are ordinary misses, never tampering signals. Valkey's oversize and
+wrong-type rejects move neither storage hits nor misses; later envelope rejects
+leave the storage's existing count alone.
 
 ### The `extraction:` block
 

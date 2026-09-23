@@ -7,8 +7,8 @@ news-domain shortening, rejection of tz-naive timestamps, zero-TTL purge, and
 :class:`CacheStorage` — :class:`ValkeyStorage` (DB 4, with the reconnect and
 backoff machinery) or :class:`InMemoryStorage` (bounded, per-process). The
 policy therefore has exactly one implementation and runs identically over every
-storage; a storage that inspected a value or refused a key would be a second,
-drifting copy of it.
+storage. Valkey bounds reads and refuses non-string types without inspecting
+content; authentication and freshness remain the policy layer's job.
 
 Stores serialised ``RetrievedContent`` objects with TTL-based expiry keyed by
 SHA-256 of the normalised URL, extraction mode, and the trust/PromptGuard
@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import logging
 import time
@@ -29,9 +30,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol, cast
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qs, urlencode, urlparse, urlsplit, urlunparse
 
 import redis.asyncio as aioredis
+from redis.exceptions import ResponseError
 
 from models import RetrievedContent, TrustTier
 from url_validator import (
@@ -236,10 +238,11 @@ class CacheMetrics:
     storage_evictions: int = 0
     storage_oversize_skips: int = 0
     corrupt_entries: int = 0
+    integrity_rejects: int = 0
 
 
 # ---------------------------------------------------------------------------
-# In-memory storage configuration
+# Cache storage configuration
 # ---------------------------------------------------------------------------
 
 MEBIBYTE = 1024 * 1024
@@ -251,22 +254,26 @@ MEBIBYTE = 1024 * 1024
 # of it.
 DEFAULT_CACHE_MAX_ENTRIES = 256
 DEFAULT_CACHE_MAX_BYTES = 32 * MEBIBYTE
+DEFAULT_CACHE_MAX_VALUE_BYTES = 4 * 2**20
 
 _MAX_CACHE_MAX_ENTRIES = 4096
 _MIN_CACHE_MAX_BYTES = MEBIBYTE
 _MAX_CACHE_MAX_BYTES = 128 * MEBIBYTE
+_MIN_CACHE_MAX_VALUE_BYTES = 512 * 2**10
+_MAX_CACHE_MAX_VALUE_BYTES = 8 * 2**20
 
 
 class CacheConfigurationError(ValueError):
-    """Raised when in-memory cache configuration exceeds safe bounds."""
+    """Raised when cache configuration violates safety constraints."""
 
 
 @dataclass(frozen=True, slots=True)
 class CacheSettings:
-    """Validated bounds for one :class:`InMemoryStorage`."""
+    """Validated bounds for one cache storage."""
 
     max_entries: int = DEFAULT_CACHE_MAX_ENTRIES
     max_bytes: int = DEFAULT_CACHE_MAX_BYTES
+    max_value_bytes: int = DEFAULT_CACHE_MAX_VALUE_BYTES
 
 
 def _bounded_int(
@@ -293,7 +300,7 @@ def _bounded_int(
 
 
 def cache_settings_from_config(config: dict[str, Any]) -> CacheSettings:
-    """Build bounded in-memory cache settings from the sidecar configuration.
+    """Build bounded cache settings from the sidecar configuration.
 
     Validated at startup whichever storage is active, so a typo in the
     ``cache:`` block fails the boot loudly rather than silently widening a
@@ -304,7 +311,7 @@ def cache_settings_from_config(config: dict[str, Any]) -> CacheSettings:
         raise CacheConfigurationError("cache must be a mapping")
     cache_config = cast(dict[str, Any], raw_cache_config)
 
-    return CacheSettings(
+    settings = CacheSettings(
         max_entries=_bounded_int(
             cache_config,
             "max_entries",
@@ -319,7 +326,37 @@ def cache_settings_from_config(config: dict[str, Any]) -> CacheSettings:
             minimum=_MIN_CACHE_MAX_BYTES,
             maximum=_MAX_CACHE_MAX_BYTES,
         ),
+        max_value_bytes=_bounded_int(
+            cache_config,
+            "max_value_bytes",
+            DEFAULT_CACHE_MAX_VALUE_BYTES,
+            minimum=_MIN_CACHE_MAX_VALUE_BYTES,
+            maximum=_MAX_CACHE_MAX_VALUE_BYTES,
+        ),
     )
+    if settings.max_value_bytes > settings.max_bytes:
+        logger.warning(
+            "cache_bounds_inverted — cache.max_value_bytes exceeds cache.max_bytes; "
+            "the in-memory storage applies cache.max_bytes"
+        )
+    return settings
+
+
+CACHE_INTEGRITY_REASONS = frozenset(
+    {
+        "unsigned",
+        "bad_mac",
+        "malformed_envelope",
+        "oversize",
+        "unexpected_envelope",
+        "wrong_type",
+    }
+)
+
+
+def _record_integrity_reject(metrics: CacheMetrics, reason: str, key: str) -> None:
+    metrics.integrity_rejects += 1
+    logger.warning("cache_integrity_reject — reason=%s key=%s", reason, key)
 
 
 def _closed_vocabulary_reason(exc: BaseException, *, default: str) -> str:
@@ -342,9 +379,9 @@ class CacheStorage(Protocol):
     """Raw, policy-free key/value storage under :class:`ContentCache`.
 
     A storage moves opaque bytes under a TTL and reports whether it is
-    operational. It never inspects a value, never derives a key, and never
-    refuses one: every security behaviour the cache has lives one layer up, in
-    ``ContentCache``, so that swapping storages cannot swap policy.
+    operational. Backend byte/type bounds may refuse a read, but never inspect
+    its content or derive a key. Content policy and authentication live in
+    ``ContentCache``, so swapping storages cannot swap that policy.
 
     ``connect()`` and ``close()`` are here because the service lifespan calls
     them (``retrieval_app.py``'s startup and shutdown); ``ping_if_due()`` is
@@ -383,7 +420,7 @@ class CacheStorage(Protocol):
 
 
 class _ValkeyClient(Protocol):
-    """The five Valkey operations this cache actually issues.
+    """The six Valkey operations in the cache's client surface.
 
     ``redis.asyncio.Redis`` declares its commands through ``**kwargs`` typed as
     ``Any``, so under strict type checking every call site here decayed to an
@@ -395,9 +432,15 @@ class _ValkeyClient(Protocol):
 
     async def ping(self) -> bool: ...
     async def get(self, name: str) -> bytes | None: ...
+    async def getrange(self, name: str, start: int, end: int) -> bytes: ...
     async def set(self, name: str, value: str, *, ex: int) -> bool | None: ...
     async def delete(self, name: str) -> int: ...
     async def aclose(self) -> None: ...
+
+
+def _valkey_reply_bytes(raw: bytes | str) -> bytes:
+    """Keep the read bound byte-based even for a text-returning client double."""
+    return raw if isinstance(raw, bytes) else raw.encode("utf-8")
 
 
 class ValkeyStorage:
@@ -415,8 +458,22 @@ class ValkeyStorage:
         valkey_url: str = "redis://poppy-valkey:6379/4",
         *,
         metrics: CacheMetrics | None = None,
+        max_value_bytes: int = DEFAULT_CACHE_MAX_VALUE_BYTES,
     ) -> None:
+        try:
+            query = urlsplit(valkey_url).query
+        except ValueError:
+            # Malformed URLs still reach the guarded connect's closed diagnostic.
+            query = ""
+        options = parse_qs(query, keep_blank_values=True)
+        for option in ("decode_responses", "encoding", "encoding_errors", "protocol"):
+            if option in options:
+                logger.warning("valkey_url_option_forbidden — option=%s", option)
+                raise CacheConfigurationError(
+                    f"VALKEY_URL forbids the {option} query option"
+                )
         self._url = valkey_url
+        self._max_value_bytes = max_value_bytes
         self._client: _ValkeyClient | None = None
         self._metrics = metrics if metrics is not None else CacheMetrics()
         self._reconnect_lock = asyncio.Lock()
@@ -438,6 +495,7 @@ class ValkeyStorage:
                     "_ValkeyClient",
                     aioredis.from_url(
                         self._url,
+                        decode_responses=False,
                         socket_connect_timeout=_RECONNECT_TIMEOUT_S,
                         socket_timeout=_RECONNECT_TIMEOUT_S,
                     ),
@@ -527,15 +585,28 @@ class ValkeyStorage:
         if client is None:
             return None
         try:
-            raw = await client.get(key)
+            raw = await client.getrange(key, 0, self._max_value_bytes)
+        except ResponseError as exc:
+            if str(exc).startswith("WRONGTYPE"):
+                await self.delete(key)
+                _record_integrity_reject(self._metrics, "wrong_type", key)
+            else:
+                self._mark_disconnected(exc)
+            return None
         except Exception as exc:
             self._mark_disconnected(exc)
             return None
-        if raw is None:
+        payload = _valkey_reply_bytes(raw)
+        # GETRANGE cannot express nil, and Forage never writes an empty value.
+        if not payload:
             self._metrics.storage_misses += 1
-        else:
-            self._metrics.storage_hits += 1
-        return raw
+            return None
+        if len(payload) > self._max_value_bytes:
+            await self.delete(key)
+            _record_integrity_reject(self._metrics, "oversize", key)
+            return None
+        self._metrics.storage_hits += 1
+        return payload
 
     async def set(self, key: str, value: str, *, ttl_seconds: int) -> bool:
         """Write *value* under *key* with a Valkey ``EX`` expiry."""
@@ -730,12 +801,12 @@ class InMemoryStorage:
 class ContentCache:
     """Policy layer for ``RetrievedContent`` caching over a swappable storage.
 
-    Everything security-relevant about the cache is here and only here: which
+    Content policy and authentication live here: which
     trust tiers may be cached, how a stored entry is revalidated against the
     *caller's* current freshness policy, what a tz-naive timestamp means, what
-    a zero TTL means, and what goes into a key. The storage underneath is a
-    dumb byte mover, which is what lets a Valkey-backed and a memory-backed
-    deployment be the same service rather than two implementations of it.
+    a zero TTL means, what goes into a key, and whether a value is authentic.
+    Storage moves opaque bytes with backend bounds, letting Valkey and memory
+    deployments be the same service rather than two implementations of it.
     """
 
     def __init__(
@@ -744,12 +815,20 @@ class ContentCache:
         *,
         metrics: CacheMetrics | None = None,
         storage: CacheStorage | None = None,
+        hmac_key: bytes | None = None,
+        max_value_bytes: int = DEFAULT_CACHE_MAX_VALUE_BYTES,
     ) -> None:
         self._metrics = metrics if metrics is not None else CacheMetrics()
+        self._hmac_key = hmac_key
+        self._max_value_bytes = max_value_bytes
         self._storage: CacheStorage = (
             storage
             if storage is not None
-            else ValkeyStorage(valkey_url, metrics=self._metrics)
+            else ValkeyStorage(
+                valkey_url,
+                metrics=self._metrics,
+                max_value_bytes=self._max_value_bytes,
+            )
         )
 
     # -- lifecycle -----------------------------------------------------------
@@ -807,10 +886,16 @@ class ContentCache:
             return None
 
         raw = await self._storage.get(key)
-        if raw is None:
+        if raw is None or raw == b"":
             return None
 
-        content = await self._parse_entry(key, raw)
+        payload, reason = self._unwrap(raw, key)
+        if reason is not None:
+            await self._storage.delete(key)
+            _record_integrity_reject(self._metrics, reason, key)
+            return None
+        assert payload is not None
+        content = await self._parse_entry(key, payload)
         if content is None:
             return None
         retrieved_at = content.retrieved_at
@@ -833,6 +918,36 @@ class ContentCache:
                 "cached_at": retrieved_at,
             },
         )
+
+    def _unwrap(self, raw: bytes, key: str) -> tuple[bytes | None, str | None]:
+        """Bound and authenticate bytes before allowing the JSON parse guard."""
+        if len(raw) > self._max_value_bytes:
+            return None, "oversize"
+        if self._hmac_key is None:
+            if raw.startswith(b"v1."):
+                return None, "unexpected_envelope"
+            return raw, None
+        if not raw.startswith(b"v1."):
+            tag = raw.partition(b".")[0]
+            if tag.startswith(b"v") and tag[1:].isdigit():
+                return None, "malformed_envelope"
+            try:
+                raw.decode("utf-8")
+            except UnicodeDecodeError:
+                return None, "malformed_envelope"
+            return None, "unsigned"
+        parts = raw.split(b".", 2)
+        if len(parts) != 3:
+            return None, "malformed_envelope"
+        _, mac, payload = parts
+        if len(mac) != 64 or any(byte not in b"0123456789abcdef" for byte in mac):
+            return None, "malformed_envelope"
+        expected = hmac.new(
+            self._hmac_key, b"v1\0" + key.encode() + b"\0" + payload, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(mac, expected.encode()):
+            return None, "bad_mac"
+        return payload, None
 
     async def _parse_entry(self, key: str, raw: bytes) -> RetrievedContent | None:
         """Parse stored content, treating invalid JSON or schema as a miss."""
@@ -896,8 +1011,23 @@ class ContentCache:
             news_domains=news_domains,
         )
 
+        json_text = content.model_dump_json()
+        payload = json_text.encode()
+        value = json_text
+        size = len(payload)
+        if self._hmac_key is not None:
+            mac = hmac.new(
+                self._hmac_key, b"v1\0" + key.encode() + b"\0" + payload, hashlib.sha256
+            ).hexdigest()
+            value = f"v1.{mac}." + json_text
+            size += len(b"v1." + mac.encode() + b".")
+        if size > self._max_value_bytes:
+            await self._storage.delete(key)
+            self._metrics.storage_oversize_skips += 1
+            return False
+
         return await self._storage.set(
             key,
-            content.model_dump_json(),
+            value,
             ttl_seconds=effective_ttl_hours * 3600,
         )

@@ -11,6 +11,7 @@ import pytest
 from models import ExtractedContent, RetrievedContent, SearchRequest, SearchResponse
 from pipeline.contract import CONTRACT_VERSION, PIPELINE_422_ERROR_CODES
 from retrieval_app import (
+    CacheMetricsResponse,
     HealthResponse,
     Pipeline422ErrorResponse,
     RetrieveMetricsResponse,
@@ -31,6 +32,8 @@ _GOLDEN_1_2_0_PATH = _GOLDEN_DIR / "contract_1_2_0.json"
 # an invisible one, and `Pipeline422ErrorResponse`, whose `error` enum is the
 # rendered form of the /search and /retrieve vocabulary — adding a code moves
 # this fixture, which is how `search_unavailable` became a classified change.
+# CacheMetricsResponse joins in the held 1.3.0 window; its published 1.2.0
+# field baseline is recorded below, without modifying the historical goldens.
 _SCHEMA_MODELS = {
     "HealthResponse": HealthResponse,
     "SearchRequest": SearchRequest,
@@ -38,6 +41,7 @@ _SCHEMA_MODELS = {
     "RetrievedContent": RetrievedContent,
     "ExtractedContent": ExtractedContent,
     "Pipeline422ErrorResponse": Pipeline422ErrorResponse,
+    "CacheMetricsResponse": CacheMetricsResponse,
 }
 
 
@@ -445,6 +449,8 @@ _ONE_THREE_ZERO_DIFFED_SCHEMAS = (
 # adds a field or enum member, until spec 8 US-002 freezes it.
 _EXPECTED_ONE_THREE_ZERO_DIFF: frozenset[str] = frozenset(
     {
+        "CacheMetricsResponse.integrity_rejects",
+        "CacheMetricsResponse.corrupt_entries",
         "SearchRequest.blocked_domains",
         "SearchRequest.promptguard_threshold",
         "SearchResponse.effective_promptguard_threshold",
@@ -461,6 +467,23 @@ _EXPECTED_ONE_THREE_ZERO_DIFF: frozenset[str] = frozenset(
     }
 )
 
+# Cache metrics were not part of the historical golden producer. Pin their
+# eight 1.2.0 fields (verified against v1.1.0's OpenAPI at 06b01b1) here rather
+# than rewriting a published fixture; the held
+# 1.3.0 golden now covers their descriptions and both later counter additions.
+_ONE_TWO_ZERO_CACHE_FIELDS = frozenset(
+    {
+        "reconnect_attempts",
+        "reconnect_successes",
+        "reconnect_failures",
+        "operation_failures",
+        "storage_hits",
+        "storage_misses",
+        "storage_evictions",
+        "storage_oversize_skips",
+    }
+)
+
 
 def _diff_against_1_2_0(current: dict[str, Any]) -> set[str]:
     """Every addition in ``current`` over the frozen 1.2.0 golden, across schemas."""
@@ -468,11 +491,16 @@ def _diff_against_1_2_0(current: dict[str, Any]) -> set[str]:
     added: set[str] = set()
     for name in _ONE_THREE_ZERO_DIFFED_SCHEMAS:
         added |= _added_paths(previous[name], current[name], name)
+    added |= _added_paths(
+        {"properties": dict.fromkeys(_ONE_TWO_ZERO_CACHE_FIELDS)},
+        current["CacheMetricsResponse"],
+        "CacheMetricsResponse",
+    )
     return added
 
 
 def test_the_1_2_0_to_1_3_0_diff_has_no_unlisted_additions() -> None:
-    """Completeness sweep: the diff is exactly the (currently empty) expected set.
+    """Completeness sweep: the diff is exactly the recorded additions.
 
     Mirrors the 1.2.0 sweep's own guard line: every schema the frozen 1.2.0
     golden carries is diffed, and none is missing.
@@ -480,4 +508,8 @@ def test_the_1_2_0_to_1_3_0_diff_has_no_unlisted_additions() -> None:
     previous = json.loads(_GOLDEN_1_2_0_PATH.read_text())
     current = json.loads(_GOLDEN_PATH.read_text())
     assert set(_ONE_THREE_ZERO_DIFFED_SCHEMAS) == set(previous)
+    assert set(current) == set(previous) | {"CacheMetricsResponse"}
+    assert (
+        set(current["CacheMetricsResponse"]["properties"]) >= _ONE_TWO_ZERO_CACHE_FIELDS
+    )
     assert _diff_against_1_2_0(current) == _EXPECTED_ONE_THREE_ZERO_DIFF

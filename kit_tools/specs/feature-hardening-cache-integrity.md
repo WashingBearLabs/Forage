@@ -1142,6 +1142,54 @@ legitimately names — `scripts/export_contract.py:263-270` writes it on every e
 
 ## Implementation Notes
 
+### US-001 — signed, key-bound and byte-bounded cache values (2026-09-22)
+
+- `ContentCache` signs exact JSON bytes with the version/key/payload HMAC and
+  verifies before parsing; keyless JSON remains supported. Writes enforce
+  UTF-8 byte size and delete superseded entries before skipping. Both backends
+  share the policy; `InMemoryStorage` was not changed.
+- Valkey reads are one positional `getrange(key, 0, bound)`. Empty replies are
+  misses; oversize and `WRONGTYPE` replies delete/count/log without moving
+  storage hit/miss counters. Other operation failures still disconnect.
+  Query reply-shaping options refuse construction with a key-only diagnostic;
+  socket timeout tuning and malformed-URL degradation remain supported.
+- All five `.get = AsyncMock` stubs in `test_cache.py` migrated, including the
+  reconnect return/side-effect seams; the app helper migrated too. Ping-only
+  inline clients need no edit. FakeStorage drives planted and arbitrary bytes;
+  real-memory parity, real-lifespan wiring, lazy redis client configuration,
+  byte boundaries and actual `/retrieve` uncached responses are covered.
+- **Measured spec corrections:** the prefix is 68 bytes, not 67. The code
+  measures it rather than trusting either number. A 2 MiB body dominated by
+  JSON escapes can exceed 4 MiB after serialization and metadata, so the
+  stated default cannot guarantee caching every full page. A regression covers
+  ordinary and inflated 2 MiB bodies; inflated values are served uncached
+  without an integrity increment. The specified default/range are unchanged,
+  and operator docs state the real relationship.
+- **Golden producer accommodation:** `_SCHEMA_MODELS` did not include cache
+  metrics at all. Added `CacheMetricsResponse` to the held golden, with an
+  explicit eight-field 1.2.0 baseline verified against the published OpenAPI
+  at `06b01b145d592787b32eb0425061fa8c1914d31f`. The diff sweep now records
+  both this counter and the previously unpinned `corrupt_entries`; every
+  historical golden is byte-identical. OpenAPI, anchor and drift twin were
+  generated and all four anchor pages refreshed.
+- GOVERNANCE ruling (j) records the producer widening; eleven rulings are
+  now counted and the actual headings are checked against `_RULING_MARKERS`.
+  Corrected ruling (i)'s source link to the prerequisite spec's archive
+  location after the governance gate exposed that stale reference.
+- Thirty-first sanitizer rotation: `e00049c4…7ed5c` -> `aa288bc5…5b39c`.
+  Only `pipeline/contract.py` moves among the nine hashed sources. Read-only
+  whole-file reversal against clean `b79504d` reproduces the prior value under
+  both default and shipped config. All five protocol sites record it.
+  This changes no text-sanitization algorithm and orphans old cache keys.
+- Validation: **1,164 related tests pass** in one process (cache, app,
+  contract metrics/schema/export/errors, governance, sanitizer revision and
+  orchestrator). Repository Ruff lint/format, strict Pyright, exporter check,
+  whitespace, protocol/migration and historical-artifact checks pass.
+  Six non-failing upstream/socket-guard warnings remain unsuppressed.
+  **Full `uv run pytest` is deferred**, as this implementer invocation
+  explicitly prohibits it; no full-suite acceptance or owner gate is claimed.
+  Environment-key wiring and its health signal remain US-002's work.
+
 ## Refinement Notes
 
 ### Research Findings

@@ -90,7 +90,7 @@ _SIX_EXAMPLES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("An urgent security tightening", ("MINOR",)),
 )
 
-# The ten rulings this epic recorded, by the heading marker each section
+# The eleven rulings this epic recorded, by the heading marker each section
 # carries. (a2) is US-001's verification finding and is listed separately from
 # (a) precisely because it is a different ruling about a different thing.
 _RULING_MARKERS = (
@@ -104,6 +104,7 @@ _RULING_MARKERS = (
     "### (g) ",
     "### (h) ",
     "### (i) ",
+    "### (j) ",
 )
 
 # Counts these documents state in words. Both are read back out of the code —
@@ -118,6 +119,7 @@ _NUMBER_WORDS = {
     8: "eight",
     9: "nine",
     10: "ten",
+    11: "eleven",
 }
 
 _MARKDOWN_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
@@ -402,7 +404,7 @@ class TestTheSixWorkedExamples:
 
 
 class TestTheRecordedRulings:
-    """The nine rulings, each with a source a reader can go and check."""
+    """The eleven rulings, each with a source a reader can go and check."""
 
     def test_ruling_count_matches_the_governance_and_invariant_text(
         self, governance: str
@@ -410,6 +412,30 @@ class TestTheRecordedRulings:
         count = _NUMBER_WORDS[len(_RULING_MARKERS)]
         assert f"{count.capitalize()} rulings this epic" in governance
         assert f"records the {count} rulings" in (_REPO_ROOT / "CLAUDE.md").read_text()
+
+    def test_governance_rulings_sentence_and_registered_headings_match(
+        self, governance: str
+    ) -> None:
+        headings = re.findall(r"^### \([a-z]\d?\) ", governance, re.MULTILINE)
+        assert tuple(headings) == _RULING_MARKERS
+        sentence = re.search(r"(\w+) rulings this epic already made", governance)
+        assert sentence is not None
+        assert sentence.group(1).lower() == _NUMBER_WORDS[len(_RULING_MARKERS)]
+
+    def test_cache_oversize_ruling_preserves_the_counter_meaning(
+        self, governance: str
+    ) -> None:
+        body = _section(governance, "### (j)")
+        for phrase in (
+            "Example 4",
+            "documentation-only",
+            "cache.max_value_bytes",
+            "cache.max_bytes",
+            "1.3.0",
+            "backends",
+            "meaning",
+        ):
+            assert phrase in body
 
     def test_directional_matching_ruling_records_the_security_exception(
         self, governance: str

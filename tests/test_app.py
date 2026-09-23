@@ -538,6 +538,7 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "storage_evictions",
         "storage_oversize_skips",
         "corrupt_entries",
+        "integrity_rejects",
     }
 
 
@@ -614,6 +615,53 @@ async def test_retrieve_repopulates_a_corrupt_cache_entry(
     assert response_metrics.json()["cache"]["corrupt_entries"] == 1
     assert response_metrics.json()["retrieve"]["cache_misses"] == 2
     assert response_metrics.json()["retrieve"]["cache_hits"] == 1
+
+
+async def test_retrieve_serves_oversize_cache_values_uncached(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    metrics = CacheMetrics()
+    storage = InMemoryStorage(metrics=metrics)
+    monkeypatch.setattr(
+        app.state,
+        "cache",
+        ContentCache(
+            storage=storage, metrics=metrics, hmac_key=b"x" * 32, max_value_bytes=4096
+        ),
+    )
+    monkeypatch.setattr(app.state, "cache_metrics", metrics)
+    url = "https://example.com/article"
+    text = "A safe article with useful information. " * 200
+    fetched = FetchResult(
+        final_url=url,
+        content_type="text/html",
+        response_body=f"<html><body><p>{text}</p></body></html>".encode(),
+        status_code=200,
+    )
+    with (
+        patch(
+            "pipeline.orchestrator.validate_url",
+            return_value=("93.184.216.34", "example.com"),
+        ),
+        patch("pipeline.orchestrator.fetch_url", return_value=fetched) as fetch,
+    ):
+        for _ in range(2):
+            response = await client.post(
+                "/retrieve",
+                json={
+                    "url": url,
+                    "trusted_domains": ["example.com"],
+                    "extract_mode": "full",
+                },
+            )
+            assert response.status_code == 200
+            assert not response.json()["cache_hit"]
+            assert response.json()["body"] == text.strip()
+        assert fetch.call_count == 2
+    assert storage.entry_count == 0
+    body = (await client.get("/metrics")).json()["cache"]
+    assert body["storage_oversize_skips"] == 2
+    assert body["integrity_rejects"] == 0
 
 
 async def test_metrics_exposes_the_model_acquisition_counters(
@@ -2588,7 +2636,7 @@ def _valkey_double() -> AsyncMock:
     """A Valkey client that answers every command this cache issues."""
     client = AsyncMock()
     client.ping = AsyncMock(return_value=True)
-    client.get = AsyncMock(return_value=None)
+    client.getrange = AsyncMock(return_value=b"")
     client.set = AsyncMock(return_value=True)
     client.delete = AsyncMock(return_value=1)
     client.aclose = AsyncMock(return_value=None)
@@ -2709,6 +2757,68 @@ async def test_a_working_valkey_url_selects_valkey_and_stays_healthy(
             assert data["status"] == "healthy"
             assert data["degraded_reasons"] == []
             assert data["cache_connected"] is True
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        "decode_responses=1",
+        "encoding=latin1",
+        "encoding_errors=replace",
+        "protocol=3",
+        "decode_responses=",
+        "decode_responses",
+    ],
+)
+async def test_lifespan_refuses_reply_shaping_valkey_options_without_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    option: str,
+) -> None:
+    url = f"redis://:OPTION-PASSWORD@option-host:6379/4?{option}"
+    with (
+        caplog.at_level(logging.WARNING, logger="cache"),
+        pytest.raises(CacheConfigurationError) as caught,
+    ):
+        async with _started_with_valkey_url(monkeypatch, valkey_url=url):
+            pytest.fail("reply-shaping URL unexpectedly started")
+    name = option.split("=", 1)[0]
+    assert str(caught.value) == f"VALKEY_URL forbids the {name} query option"
+    records = [record for record in caplog.records if record.name == "cache"]
+    assert [(record.levelno, record.getMessage()) for record in records] == [
+        (logging.WARNING, f"valkey_url_option_forbidden — option={name}")
+    ]
+    for value in (url, "option-host", "OPTION-PASSWORD"):
+        assert value not in str(caught.value)
+        assert value not in caplog.text
+
+
+@pytest.mark.parametrize("backend", ["memory", "valkey"])
+async def test_lifespan_forwards_value_bound_to_cache_and_storage(
+    monkeypatch: pytest.MonkeyPatch, backend: str
+) -> None:
+    bound = 512 * 2**10
+    monkeypatch.setattr(
+        retrieval_app, "_load_config", lambda: {"cache": {"max_value_bytes": bound}}
+    )
+    with patch("cache.aioredis") as redis:
+        redis.from_url.return_value = _valkey_double()
+        async with _started_with_valkey_url(
+            monkeypatch,
+            valkey_url=f"{_WORKING_VALKEY_URL}?socket_timeout=90"
+            if backend == "valkey"
+            else None,
+        ) as client:
+            cache = cast(ContentCache, app.state.cache)
+            assert cache._max_value_bytes == bound
+            assert cache._hmac_key is None
+            if backend == "valkey":
+                assert isinstance(cache.storage, ValkeyStorage)
+                assert cache.storage._max_value_bytes == bound
+                assert redis.from_url.call_args.kwargs["decode_responses"] is False
+            else:
+                assert isinstance(cache.storage, InMemoryStorage)
+            assert (await client.get("/health")).json()["cache_connected"]
 
 
 @pytest.mark.parametrize(

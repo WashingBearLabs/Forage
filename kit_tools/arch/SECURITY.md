@@ -376,10 +376,18 @@ This is a security property because of the incident it answers: an earlier versi
 `RetrievedContent` JSON or schema validation, counts them in `cache.corrupt_entries`,
 and treats them as misses. The WARNING carries only `cache_entry_corrupt` and the
 `ret:<sha256>` key digest, never the stored value or exception text. **Parse success is
-not authenticity**: a value that validates is served as written (subject to freshness
-checks) until spec 4's HMAC lands. `corrupt_entries` counts values that fail to parse,
-not values that were tampered with. This story makes the poisoning path quieter (a miss
-instead of a 500), which is why the HMAC integrity story follows it.
+not authenticity**. Since cache-integrity US-001, a `ContentCache` supplied
+`hmac_key` verifies the HMAC-SHA256 envelope over version, cache key and exact
+payload bytes before parsing. Copied, unsigned or mutated entries cannot pass
+as authenticated values. Bare JSON remains supported without a key; runtime
+environment-key wiring and the keyless-Valkey health signal belong to US-002.
+`corrupt_entries` still counts parsing failures, not tampering.
+`integrity_rejects` counts six closed reasons, including atomic Valkey read
+bound/type failures; key rotation and lowering byte bounds can also move it.
+The WARNING carries only the reason and key digest, never key material, URL or
+payload. It is not rate-limited; request/log volume remains an availability
+residual. HMAC does not stop deletion, replay under the same key, or a writer
+that has obtained the secret. Cache reads currently sit outside admission.
 
 Forage has no audit log in the authentication sense; there is no identity to record. What it does log is constrained: the root logger runs at WARNING, so `logger.info` output is invisible in the container (`kit_tools/docs/GOTCHAS.md`), and the failure paths that could touch a credential use the closed vocabularies above. For observing security behaviour prefer `GET /metrics`, which exposes `retrieve.blocked_by_reason`, `retrieve.promptguard_state`, `retrieve.classification_wait_timeouts`, `search.omitted_by_reason`, `search.unscanned_results`, `search.classification_wait_timeouts`, `extraction.busy_rejections`, `extraction.verdicts`, and `model.fetch_failures`, `model.verify_failures`, and `model.quarantines` as typed counters (`kit_tools/arch/CODE_ARCH.md`; `kit_tools/docs/MONITORING.md`). Logging conventions are in `kit_tools/arch/patterns/LOGGING.md`; which error reasons are content-free is in `kit_tools/arch/patterns/ERROR_HANDLING.md`.
 
