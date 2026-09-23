@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document API endpoints, CLI commands, or library interface. The external contract.
 
-> Last updated: 2026-09-22
-> Updated by: Copilot (hardening-promptguard-86m US-006)
+> Last updated: 2026-09-23
+> Updated by: Copilot (hardening-release US-004)
 
 ---
 
@@ -495,7 +495,13 @@ added `SearchResult.content_kind` and `SearchResult.date`, the `search_unavailab
 error code, and — additively, still `1.2.0` — `SearchResult.domain` and
 `SearchResponse.provider_used` / `fallback_fired` / `provider_errors`; `1.3.0` declared
 `blocked_url` in `omitted_by_reason` and bounded `SearchResult.engine` to 64 characters,
-NFC-normalised. Do not
+NFC-normalised. The complete frozen `1.3.0` record also covers retrieve
+admission/PDF refusals, directional domain policy, effective fail-closed and
+threshold fields, signed-cache health and counters, `promptguard_model`,
+classification/contiguity and provider/latency metrics, and redacted validation
+422s (`input`/`ctx`/`url` stay `"[redacted]"` until the next MINOR).
+See `pipeline/contract.py` for the exact additions and `docs/releases.md` for
+upgrade actions; schema freeze does not mean the image is published. Do not
 compare `sanitizer_revision`: it has deliberately diverged between Forage and Poppy's
 in-tree copy and says nothing about wire compatibility. The image tag (for example
 `v1.0.0`) is a third, independent version.

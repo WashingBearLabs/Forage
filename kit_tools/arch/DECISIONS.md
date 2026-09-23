@@ -8,8 +8,8 @@
 
 > **TEMPLATE_INTENT:** Record architectural decisions and their rationale. Explains the 'why' behind technical choices.
 
-> Last updated: 2026-09-22
-> Updated by: Copilot (hardening-release US-002)
+> Last updated: 2026-09-23
+> Updated by: Copilot (hardening-release US-004)
 
 This file records significant architectural and technical decisions.
 
@@ -240,7 +240,7 @@ purpose, so it is a hashed `sanitizer_revision` source.
 X.*.*, and is expected to refuse to activate on a major mismatch rather than guess."
 
 **Consequences:**
-Two independent semvers — image tag (`v1.1.0`) and contract (now `1.3.0` in the tree,
+Two independent semvers — image tag (pending `v1.2.0`) and contract (now `1.3.0` in the tree,
 unpublished; `1.2.0` is the latest published, by the `v1.1.0` image on 2026-09-18) move for
 different reasons;
 `pyproject.toml`'s version is inert. A withdrawn image tag never withdraws a contract version.

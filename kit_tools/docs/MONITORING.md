@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document logs, metrics, alerts, and dashboards. How to observe the system.
 
-> Last updated: 2026-09-22
-> Updated by: Copilot (hardening-promptguard-86m US-006)
+> Last updated: 2026-09-23
+> Updated by: Copilot (hardening-release US-004)
 
 ---
 
@@ -525,7 +525,7 @@ It polls `/health` until it answers 200 with the expected `status` (default budg
 
 Exit 0 prints a `Contract smoke PASSED` line naming the mode it checked (under the default, `Contract smoke PASSED: degraded, honest, and on-contract.`); exit 1 prints one `::error::<violation>` line per failure.
 
-**Two modes.** `--expect-status` takes `healthy` or `degraded` (default `degraded`, what CI runs). Under `healthy` the three PromptGuard-coupled checks invert — `status == "healthy"`, `promptguard_unavailable` absent from `degraded_reasons`, `search_sanitization` present in `capabilities` — and every other check (contract version, sanitizer revision, `/metrics`, in-image contract and anchor) is identical. The wait is status-aware: it polls until `/health` answers 200 *and* the body's `status` equals the expected one, or the deadline passes (returning the last response, which then fails on `status`). `/health` answers 200 the moment uvicorn binds while PromptGuard loads in the background, so under `healthy` it waits through the load rather than failing on the first 200; raise `--timeout-seconds` for a cold weights fetch. Match the flag to the container: `--expect-status degraded` for a container started with no HF token and no weights (CI's weights-free image), `--expect-status healthy` for a container started with weights (e.g. `--env-file` carrying `HF_TOKEN`). `--anchor` defaults to the committed `contract/openapi.yaml.sha256`; to verify a release image from another checkout, pass a file holding the committed anchor at the tag (what `git show v1.1.0:contract/openapi.yaml.sha256` prints, or a clean checkout of it) — never from the Release assets and never from the image: both are mutable copies, and a tampered document-plus-anchor pair verifies against itself.
+**Two modes.** `--expect-status` takes `healthy` or `degraded` (default `degraded`, what CI runs). Under `healthy` the three PromptGuard-coupled checks invert — `status == "healthy"`, `promptguard_unavailable` absent from `degraded_reasons`, `search_sanitization` present in `capabilities` — and every other check (contract version, sanitizer revision, `/metrics`, in-image contract and anchor) is identical. The wait is status-aware: it polls until `/health` answers 200 *and* the body's `status` equals the expected one, or the deadline passes (returning the last response, which then fails on `status`). `/health` answers 200 the moment uvicorn binds while PromptGuard loads in the background, so under `healthy` it waits through the load rather than failing on the first 200; raise `--timeout-seconds` for a cold weights fetch. Match the flag to the container: `--expect-status degraded` for a container started with no HF token and no weights (CI's weights-free image), `--expect-status healthy` for a container started with weights (e.g. `--env-file` carrying `HF_TOKEN`). `--anchor` defaults to the committed `contract/openapi.yaml.sha256`; to verify a release image from another checkout, pass a file holding the committed anchor at the tag (what `git show v1.2.0:contract/openapi.yaml.sha256` prints after the cut, or a clean checkout of it) — never from the Release assets and never from the image: both are mutable copies, and a tampered document-plus-anchor pair verifies against itself.
 
 For the healthy smoke at contract 1.3.0, a Valkey deployment must additionally
 have an operational cache and a usable `FORAGE_CACHE_HMAC_KEY` in the container's

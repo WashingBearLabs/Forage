@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document build pipelines, deployment triggers, and automation. How code gets to production.
 
-> Last updated: 2026-09-22
-> Updated by: Copilot (hardening-promptguard-86m US-006)
+> Last updated: 2026-09-23
+> Updated by: Copilot (hardening-release US-004)
 
 ---
 
@@ -347,6 +347,8 @@ verified against GHCR afterwards rather than assumed: `v1.0.0` (commit `f4c2b16`
 minted `latest`, `1.0` and `1.0.0` at index digest `sha256:d83639cc…`, and `v1.1.0` (commit
 `06b01b14`, 2026-09-18 UTC) moved `latest` and minted `1.1` and `1.1.0` at `sha256:e1b875cc…`.
 `docs/releases.md` § "Released versions" carries the full digests, anchors and tagged commits.
+The current release target, **v1.2.0 / contract 1.3.0**, is not yet published;
+US-003 owns the cut and US-005 records the new digest and alias equality.
 
 ---
 
@@ -511,14 +513,14 @@ gh cache delete <id>                # delete each index-publish-* entry
 ## Cutting a Release and Rolling Back
 
 The git tag **is** the version (`pyproject.toml`'s `version` is inert packaging metadata),
-and the image tag and `contract_version` are independent semvers — image `v1.1.0` serves
-contract `1.2.0` (`v1.0.0` served `1.1.0`).
+and the image tag and `contract_version` are independent semvers — the pending
+image `v1.2.0` will serve contract `1.3.0`.
 
 ```bash
 git switch main && git pull
-# confirm the six gates are green for the commit you are about to tag
-git tag v1.0.1
-git push origin v1.0.1
+# owner gate only: confirm authorization and all six gates for the merge commit
+git tag v1.2.0
+git push origin v1.2.0
 # then watch the run; publish is the last job
 ```
 
@@ -532,8 +534,11 @@ not a release.
 deploy stage to revert. Re-pin the previous tag in the consumer's compose file
 (`image: ghcr.io/washingbearlabs/forage:<previous>`) and `docker compose -f <file> up -d`.
 `kit_tools/docs/DEPLOYMENT.md` has the operator view, including the pull/pin/verify
-sequence and the note that the compose fragments in this repo pin `1.1.0`, published by
-`v1.1.0`.
+sequence. The compose fragments pin `1.2.0` ahead of `v1.2.0`: cut from the
+completion PR's merge commit in the same sitting or `git revert <US-004 pin commit>`.
+Until then the unpublished-tag window on `main` is outstanding and must be
+named in the completion PR description, with the exact commit from the
+release spec's gate-not-run record.
 
 ---
 

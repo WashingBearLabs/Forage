@@ -63,8 +63,8 @@ raise it for a container fetching weights cold.
 **``--anchor``** names the committed anchor the in-image copy is verified
 against — by default this checkout's ``contract/openapi.yaml.sha256``. To verify
 a release image from any checkout, pass the anchor committed at that tag
-(``git show v1.1.0:contract/openapi.yaml.sha256 > anchor.sha256``, or a clean
-checkout of the tag). Take it from the git history only —
+(``git show v1.2.0:contract/openapi.yaml.sha256 > anchor.sha256`` after the cut,
+or a clean checkout of the tag). Take it from the git history only —
 never from the Release assets and never from the image. Both are mutable
 copies, and a tampered document-plus-anchor pair verifies against itself.
 
@@ -94,9 +94,9 @@ Run it by hand against a container, or anything else serving the contract::
     uv run python contract_smoke.py --base-url http://127.0.0.1:8020 \
         --image forage:ci --expect-status degraded
 
-    # a weights-loaded container, verified against the anchor at its tag
+    # after the v1.2.0 cut: a weights-loaded container and its tagged anchor
     anchor="$(mktemp)"
-    git show v1.1.0:contract/openapi.yaml.sha256 > "$anchor"
+    git show v1.2.0:contract/openapi.yaml.sha256 > "$anchor"
     uv run python contract_smoke.py --base-url http://127.0.0.1:8020 \
         --image <ref> --expect-status healthy --anchor "$anchor" \
         --timeout-seconds 600

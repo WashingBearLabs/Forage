@@ -10,8 +10,8 @@
 
 > **TEMPLATE_INTENT:** Complete local development setup guide. Get a new developer running quickly.
 
-> Last updated: 2026-09-22
-> Updated by: Copilot (hardening-promptguard-86m US-006)
+> Last updated: 2026-09-23
+> Updated by: Copilot (hardening-release US-004)
 
 ---
 
@@ -229,10 +229,12 @@ curl -s localhost:8020/health | jq
 ```
 
 Two caveats. First, **the fragments pull published images; they do not build your
-working tree.** Both pin `ghcr.io/washingbearlabs/forage:1.1.0` and
-`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`; both pins resolve (`v1.1.0` published
-2026-09-18 — the `manifest unknown` a `docker compose up` returned before then was
-sequencing, not breakage). To run the image you just built, use the `docker run` form
+working tree.** Both pin `ghcr.io/washingbearlabs/forage:1.2.0` and
+`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`; the companion is published,
+but the service pin awaits the owner-gated `v1.2.0` cut and returns `manifest unknown`
+until then. This unpublished-tag window is outstanding: cut in the completion
+PR's merge sitting or revert the US-004 pin commit (`docs/releases.md`).
+To run the image you just built, use the `docker run` form
 above. Second, the image has no `HEALTHCHECK` instruction; both compose fragments declare a liveness probe.
 Its `curl -fsS -o /dev/null` discards `/health`'s body: a Docker-healthy container
 need not be classifying. Read `promptguard_loaded` and `degraded_reasons`;

@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # SYNOPSIS.md
 
-> Last updated: 2026-09-17
-> Updated by: Claude (forage-contract US-004)
+> Last updated: 2026-09-23
+> Updated by: Copilot (hardening-release US-004)
 
 ---
 
@@ -27,13 +27,13 @@ preserved). See `docs/bootstrap-notes.md` for the pin record.
 
 | Aspect | Status |
 |--------|--------|
-| Maturity | `v1.1.0` published (2026-09-18, `search-release` US-002) — the search-provider abstraction, Brave fallback and per-request policy shipped, advertising contract `1.2.0`; `v1.0.0` (2026-09-11) remains the first non-pre-release cut |
+| Maturity | `v1.2.0` / contract `1.3.0` prepared, **NOT YET PUBLISHED** (`hardening-release` US-003 owner gate pending); the schema golden is frozen. `v1.0.0` (2026-09-12) remains the first non-pre-release cut |
 | Repo visibility | **Public** since the US-008 flip (2026-09-10), repository and both packages; `main` is PR-only, with six required status checks (audit-measured 2026-09-11 — this row said "Private" for a month after the flip) |
-| Tests | 2105 collected, all green (`uv run pytest`), hermetic via `pytest-socket` — **enforced in CI** since US-002, with a committed hermeticity canary |
+| Tests | 4126 collected (`uv run pytest --collect-only -q`, 2026-09-23); full-suite execution pending, not inferred from collection or scoped passes. Hermetic via `pytest-socket`, **enforced in CI**, with a committed hermeticity canary |
 | Lint | `uv run ruff check .` and `ruff format --check .` both clean — **enforced in CI** |
 | Types | `uv run pyright` (strict) is **clean — 0 errors**, no baseline; **enforced in CI** |
 | CI | `.github/workflows/ci.yml` — ten jobs in two lanes: `lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke`, `publish` for the service image, and `searxng-build`/`-smoke`/`-publish` for the companion |
-| Published image | `ghcr.io/washingbearlabs/forage` — `latest`, `1.1` and `1.1.0` resolve to one digest (`sha256:e1b875cc…`, `search-release` US-002); `1.0`/`1.0.0` still resolve to the earlier cut. `docs/releases.md` § "Released versions" has both entries |
+| Published image | `ghcr.io/washingbearlabs/forage` — target `1.2.0`, **NOT YET PUBLISHED**. Index digest and `latest` / `1.2` / `1.2.0` equality are filled by US-005 only after the owner cut and registry read-back; `docs/releases.md` retains the verified older releases and the marked draft |
 | Deployment | Poppy's in-tree copy is still the deployed source of truth (coexistence rule) |
 
 **Coexistence rule:** until Poppy pins a published Forage image, any fix to the extracted
@@ -102,7 +102,7 @@ path and yields a `promptguard_unavailable` degraded runtime.
 | `searxng/config/` | SearXNG `settings.yml` + `limiter.toml` |
 | `contract/` | The frozen wire contract: generated `openapi.yaml` + its committed `.sha256` anchor, and `GOVERNANCE.md` — the semver rules, the thirteen recorded rulings and the consumer vendoring procedure. Regenerate the two generated files with `uv run python -m scripts.export_contract`; never hand-edit. The whole directory ships in the image at `/app/contract/` and the two generated files ship as `v*` Release assets (US-004) |
 | `scripts/` | Operator-only, run by hand from a checkout; in no image |
-| `tests/` | 29 `test_*.py` modules, one per subject, plus `conftest.py`, `fakes.py`, `__init__.py`, `golden/` and `fixtures/` |
+| `tests/` | 38 `test_*.py` modules, one per subject, plus `conftest.py`, `fakes.py`, `__init__.py`, `golden/` and `fixtures/` |
 | `docs/` | `configuration.md` (full env/config reference), `releases.md`, `weights.md`, `searxng.md`, `bootstrap-notes.md`, `bootstrap-scan.txt` (audit 2026-09-11: three were missing from this row) |
 | `.github/` | `workflows/ci.yml` and `pull_request_template.md` (the bump checklist + standing invariants) |
 | `kit_tools/` | This documentation framework + the feature specs |

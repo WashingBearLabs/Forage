@@ -1700,6 +1700,206 @@ No 1.2.0 line is included.
   (ruling (l)); a consumer comparing MAJOR keeps working untouched.
 ```
 
+### US-004 — pre-release bookkeeping (2026-09-23 UTC)
+
+Implemented against clean `2cd2e1b` without changing runtime behavior or running
+an owner gate. The current image **target** is `v1.2.0`, serving frozen
+contract `1.3.0`; no wording promotes that target to a published release.
+The draft's heading date, index digest and tagged commit remain explicit
+placeholders beneath `NOT YET PUBLISHED — filled by US-005`.
+
+#### Both by-value fan-outs — exhaustive final classification
+
+Ran the two literal-value greps independently over exactly:
+
+```text
+README.md CLAUDE.md contract/ docs/ compose/ contract_smoke.py
+kit_tools/docs kit_tools/arch kit_tools/testing kit_tools/roadmap
+kit_tools/SYNOPSIS.md kit_tools/AGENT_README.md kit_tools/PRODUCT_VISION.md
+```
+
+Commands: `grep -rn --exclude=openapi.yaml --exclude=openapi.yaml.sha256
+'1\.2\.0' <paths>` and the same command with `'1\.1\.0'`.
+Excluded by name: `kit_tools/specs/` (including archives and this record),
+`kit_tools/.seed_cache/`, `kit_tools/EXECUTION_LOG.md`,
+`kit_tools/SESSION_SCRATCH.md`, `kit_tools/.validate_epic_*`,
+`tests/golden/`, `contract/openapi.yaml` and
+`contract/openapi.yaml.sha256`. The generated pair is checked by
+`uv run python -m scripts.export_contract --check`, never hand-edited or
+classified by grep. The explicit path set also excludes machine-written
+execution/result trees. Root `SECURITY.md` and `.github/` were separately
+checked for the support-policy and pattern-count criteria.
+
+The tables enumerate **matching lines**, just as `grep -rn` does (a line
+containing several instances is one hit). Line numbers identify the final
+US-004 tree outside this excluded spec. Keys: **H** = (a) historical release
+or completed-feature record; **R** = (a) rotation record; **P** = (b) contract
+provenance, retained baseline or worked compatibility example; **I** = (c)
+image tag/target/example; **C** = (d) rewritten Compose pin comment.
+No current-contract statement remains at either retiring value.
+
+**`1.2.0`: 115 matching lines, 115 classified, zero unclassified.**
+
+| Path | Classification and final line numbers |
+|---|---|
+| `README.md` | I: 74, 247 |
+| `CLAUDE.md` | R: 204, 229, 539 |
+| `contract/GOVERNANCE.md` | H: 62, 262; I: 63; P: 488, 562 |
+| `docs/releases.md` | I: 20, 29; H: 148 |
+| `docs/bootstrap-notes.md` | R: 70, 75, 340, 364, 382, 517, 531, 538, 724, 732, 1501, 1958, 1979; I: 1577, 1995; H: 1994 |
+| `docs/configuration.md` | P: 1138 |
+| `compose/minimal.yml` | C: 52, 53, 65; I: 68 |
+| `compose/full.yml` | C: 41, 42; I: 46 |
+| `contract_smoke.py` | I: 66, 97, 99 |
+| `kit_tools/docs/GOTCHAS.md` | R: 587, 592, 619, 672, 673 |
+| `kit_tools/docs/TROUBLESHOOTING.md` | P: 207, 759; I: 872, 873, 879 |
+| `kit_tools/docs/LOCAL_DEV.md` | I: 232, 234 |
+| `kit_tools/docs/DEPLOYMENT.md` | I: 87, 89, 94, 105, 118, 145, 147, 203, 222, 246, 271 |
+| `kit_tools/docs/CI_CD.md` | I: 350, 517, 522, 523, 537 |
+| `kit_tools/docs/API_GUIDE.md` | P: 111, 286, 287, 290, 291, 309, 473, 493, 495 |
+| `kit_tools/docs/MONITORING.md` | P: 68, 150; I: 528 |
+| `kit_tools/arch/patterns/ERROR_HANDLING.md` | P: 170 |
+| `kit_tools/arch/INFRA_ARCH.md` | I: 146, 160, 161, 200 |
+| `kit_tools/arch/CODE_ARCH.md` | R: 183, 193, 430 |
+| `kit_tools/arch/SERVICE_MAP.md` | I: 75, 195, 395, 397, 399 |
+| `kit_tools/arch/SECURITY.md` | P: 615, 616, 624 |
+| `kit_tools/arch/DECISIONS.md` | P: 228; I: 243; H: 244; R: 632, 637, 663 |
+| `kit_tools/testing/TESTING_GUIDE.md` | I: 148; P: 164 |
+| `kit_tools/roadmap/BACKLOG.md` | I: 24, 32 |
+| `kit_tools/roadmap/MILESTONES.md` | I: 7, 52, 57, 86; H: 29; P: 56 |
+| `kit_tools/SYNOPSIS.md` | I: 30, 36 |
+| `kit_tools/PRODUCT_VISION.md` | H: 94 |
+
+**`1.1.0`: 57 matching lines, 57 classified, zero unclassified.**
+
+| Path | Classification and final line numbers |
+|---|---|
+| `README.md` | P: 284 |
+| `CLAUDE.md` | R: 192, 195 |
+| `contract/GOVERNANCE.md` | P: 53, 70, 128, 182, 249, 253, 433; H: 56, 58, 62, 265 |
+| `docs/releases.md` | H: 146, 173, 236 |
+| `docs/bootstrap-notes.md` | R: 66, 67, 175, 194, 259, 364, 1753; H: 1994 |
+| `docs/configuration.md` | P: 1137 |
+| `kit_tools/docs/GOTCHAS.md` | R: 583, 584, 653, 665 |
+| `kit_tools/docs/TROUBLESHOOTING.md` | P: 759 |
+| `kit_tools/docs/DEPLOYMENT.md` | P: 267 |
+| `kit_tools/docs/CI_CD.md` | H: 347, 348 |
+| `kit_tools/docs/API_GUIDE.md` | P: 109, 493 |
+| `kit_tools/arch/INFRA_ARCH.md` | H: 193, 195 |
+| `kit_tools/arch/CODE_ARCH.md` | R: 174, 178 |
+| `kit_tools/arch/SERVICE_MAP.md` | H: 124 |
+| `kit_tools/arch/DECISIONS.md` | P: 228, 768; H: 244, 872; R: 628, 629 |
+| `kit_tools/roadmap/BACKLOG.md` | H: 57 |
+| `kit_tools/roadmap/MILESTONES.md` | H: 13, 25, 26, 76, 77, 86 |
+| `kit_tools/PRODUCT_VISION.md` | H: 94, 132, 142 |
+
+The GOV first-release worked example is historical, not a current-version
+claim. DECISIONS' latest-*published* mapping is also intentionally retained:
+the owner has not cut the new image. Roadmap/vision completion statuses are
+not advanced; that is US-005's handoff.
+
+README, CLAUDE invariant 4, GOVERNANCE's current-version/mapping paragraphs,
+CODE_ARCH, API_GUIDE's current-value row, SERVICE_MAP, TROUBLESHOOTING and
+MONITORING already named current contract `1.3.0` from prior stories.
+Confirmed them rather than manufacturing a new change. API_GUIDE's existing
+1.3.0 history now summarizes the complete frozen record; MONITORING already
+says **three** capability keys, including `cache_hmac_key`. Every active
+release example now targets `v1.2.0` with the publication caveat; the
+additional stale `forage:1.0.0` plain-Docker example was advanced too.
+Both previously published `docs/releases.md` blocks and root SECURITY's
+supported-versions table are byte-identical to the baseline. Only the
+support paragraph and README's false pre-1.0 claim change era.
+
+#### Pins, signing posture, counts and unchanged artifacts
+
+`grep -c 'forage:1.2.0' compose/minimal.yml compose/full.yml` returns **1, 1**;
+`_FORAGE_RELEASE_TAG` is `1.2.0`. Anchored line greps confirm both
+`FORAGE_CPUS`/`FORAGE_MEM_LIMIT` interpolations (**2, 2**) and both bare model
+variables (**2, 2**). The bare HMAC key is intentionally **0, 1**:
+minimal is Valkey-free; full alone needs it. No envelope/default/model/key
+wiring was altered. The Compose signing prose retains the existing
+health-necessity statement and adds the consequence/remedy sentence.
+Its existing test now also checks both that comment and README's quickstart
+for unsigned cached content, `cache_unauthenticated` and setting the key.
+
+The draft mirrors the final contract announcement, distinguishes the
+unrun 86M owner gates from shipped selection/disabled contiguity support,
+states the validation-422 next-MINOR removal and retrieve-budget window,
+and preserves the prior whole-interaction timeout/compression upgrade note.
+Its external-Valkey upgrade action requires a high-entropy, per-deployment
+key and links the canonical generation/stop-all-replicas rotation procedure.
+The recorded index digest is explicitly the immutable pinnable form;
+the tag remains the quickstart default.
+
+`_REQUIRED_GREP_PATTERNS` has **4** entries (measured from the test's AST).
+The case-insensitive `three patterns` grep over `.github kit_tools/docs
+kit_tools/arch kit_tools/testing docs README.md SECURITY.md` returns **zero**.
+All six originally named sites already say four, including workflow `:552`
+and architecture SECURITY `:435`; spec 4 left no prose to repair.
+
+`uv run pytest --collect-only -q` collects **4126**. Independently,
+`uv run pytest --collect-only -qq tests/test_*.py` selects every module and
+reports each module's count; all **38** TESTING_GUIDE rows match, sum to
+4126, and the four total-count sites agree. There are **41** top-level
+test Python files including the three support modules. Newly restored
+table rows are retrieve admission and search policy. The release-specific
+rows are errors **53**, governance **69**, schema **17**, Compose **79**,
+workflow **289**, export **177**, smoke **94** and metrics **69**.
+Descriptions name the 422 non-reflection tests, exact 1.3.0 additions sweep,
+and whole-entry tense guard. Collection is not advertised as a suite pass.
+
+The four current anchor homes (API_GUIDE, CI_CD, DEPLOYMENT, SERVICE_MAP)
+and the draft quote
+`74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72`.
+All generated artifacts and historical goldens, including frozen 1.3.0,
+are byte-identical to `2cd2e1b`. All nine hashed sources, hash definition,
+config, lock and weights manifest are unchanged. Default and shipped
+config still derive
+`6884dc29b3dc3d7a0a1f2c1da638f767fb301b2baac68446541f6de2638bd7ec`.
+There is **no rotation** to append to CLAUDE/bootstrap. GOTCHAS already has
+the split value plus **41** rotations, all present in bootstrap, ending at
+that same value; its count/table needed no edit.
+
+#### Verification and outstanding release handoff
+
+The final six complete affected modules pass **725 tests**: Compose,
+contract smoke, governance, workflow, schema and export. The first scoped
+run caught removal of the existing literal health-prose guard; restored
+that claim and strengthened the same test with the signing consequence,
+then reran all six modules green. Safe Ruff fixes/formatting were limited
+to the two changed Python files. Repository-wide Ruff lint and format
+checks, strict Pyright (**0 errors**), export `--check` and `git diff --check`
+pass. No full-suite run was performed: the story-implementer instruction
+explicitly prohibits it. The full-suite acceptance gate remains
+**unverified**, not satisfied by these 725 passes.
+
+**Gate not run — outstanding, not a closed decision.** No owner
+authorization/evidence for US-003 or US-005 is available in this task.
+Merging these pins into `main` starts an unpublished-tag window: the
+quickstart fails until `v1.2.0` publishes. The owner must cut from the
+completion PR's merge commit in that same sitting; otherwise revert the
+US-004 pin commit. The exact SHA is recorded below after committing, so
+the rollback command names a real commit rather than an invented one.
+
+**PR-description criterion blocked.** `gh pr view` found no PR for
+`epic/forage-hardening-US-004-attempt-1`; the open-PR list contains only
+the unrelated injection-corpus plan. A targeted all-state hardening lookup
+finds only the already merged/closed planning PRs, no completion PR.
+No unrelated PR was edited and no branch was pushed to create one.
+Before merge, copy this **outstanding item**, with the exact SHA below,
+into the completion PR description:
+
+> **Outstanding: unpublished-tag window on main.** Compose pins the not-yet-
+> published `v1.2.0` image. Run owner-gated US-003 from this PR's merge commit
+> in the same sitting; if the cut is not run, `git revert <US-004 pin commit>`.
+> The release and US-005 post-release verification are not complete.
+
+No credentials were inspected; no model acquisition, image build,
+benchmark, owner gate, push, tag, release or publication was performed.
+Story definitions and acceptance checkboxes are unchanged. Result remains
+**partial / needs-work** solely for the unavailable completion-PR
+description and the explicitly deferred full-suite gate.
+
 <!-- Populated during execution. US-001/US-002 record their rotations and the rehearsal extraction;
 US-004 records both classified sweeps; US-003 records the cut, the four-way sha256 table and the
 config-grep facts; US-005 records the three smoke runs, the credential-free pull, the leak check and

@@ -73,9 +73,9 @@ _FRAGMENTS = sorted(_FRAGMENT_PATHS)
 _SEARXNG_SERVICE = "searxng"
 _FORAGE_SERVICE = "forage"
 
-# The forage release the fragments pin (search-release US-004). One edit here
+# The forage release the fragments pin (hardening-release US-004). One edit here
 # at the next release, together with the two `image:` lines it checks.
-_FORAGE_RELEASE_TAG = "1.1.0"
+_FORAGE_RELEASE_TAG = "1.2.0"
 
 # Passed through to the forage service as bare names, like HF_TOKEN: set in
 # `compose/.env` they reach the container, left out they are genuinely unset
@@ -88,10 +88,9 @@ _SEARCH_PASSTHROUGH_NAMES = ("FORAGE_SEARCH_PROVIDERS", "FORAGE_BRAVE_API_KEY")
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 
 # `<repo>:<tag>` where the tag is an explicit semver-shaped version, optionally
-# followed by a digest. Deliberately refuses `latest` (does not exist for
-# either image yet, and is a moving pointer when it does), a bare repository,
-# and the `sha-<short>` tags every main push produces — a real tag, but not one
-# an example should teach anyone to pull.
+# followed by a digest. Deliberately refuses the moving `latest` pointer,
+# a bare repository, and the `sha-<short>` tags every main push produces —
+# a real tag, but not one an example should teach anyone to pull.
 _PINNED_IMAGE_RE = re.compile(
     r"^(?P<repo>[a-z0-9][a-z0-9._/-]*)"
     r":(?P<tag>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)"
@@ -653,6 +652,16 @@ class TestFullWiresValkeyLiterally:
         assert "set it in `compose/.env`, never inline" in prose
         assert "valkey-backed health needs this key" in prose
         assert "cache_unauthenticated" in prose
+        quickstart = (
+            _README_PATH.read_text()
+            .split("## Quickstart\n", 1)[1]
+            .split("### The two cache modes", 1)[0]
+        )
+        for text in (prose, " ".join(quickstart.lower().split())):
+            text = text.replace("`", "")
+            assert "set forage_cache_hmac_key in compose/.env" in text
+            assert "serves cached content unsigned" in text
+            assert "/health reports cache_unauthenticated" in text
 
     def test_valkey_url_is_set_on_forage(
         self, fragments: dict[str, dict[str, Any]]

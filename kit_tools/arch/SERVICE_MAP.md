@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document dependencies and integrations. Shows what talks to what and failure impacts.
 
-> Last updated: 2026-09-22
-> Updated by: Copilot (hardening-release US-002)
+> Last updated: 2026-09-23
+> Updated by: Copilot (hardening-release US-004)
 
 ---
 
@@ -72,7 +72,7 @@ Forage is the only internal service. Its pipeline stages (`pipeline/stage1_*` th
 | **Runtime** | Python 3.12, FastAPI + uvicorn, one worker (`CMD` has no `--workers`); uv-managed lockfile; CPU-only torch/transformers loaded lazily by `promptguard/classifier.py`. |
 | **Port** | `8020` in-container (`EXPOSE 8020`, uvicorn `--host 0.0.0.0`); published as `127.0.0.1:8020` by both compose fragments. |
 | **Health Check** | `GET /health` — **always HTTP 200; the truth is in the body** (`status`, `degraded_reasons`, `promptguard_loaded`, `cache_connected`, `cache_backend`, `capabilities`, `search_providers`, `sanitizer_revision`, `contract_version`). No image-level `HEALTHCHECK`; both compose fragments declare `curl -fsS -o /dev/null` liveness (30 s interval, 5 s timeout, three retries, 30 s start period). It must not gate traffic, `depends_on: service_healthy` or activation. |
-| **Contract** | `contract_version` **1.3.0** (`pipeline/contract.py`), frozen as `contract/openapi.yaml` with a committed `openapi.yaml.sha256` anchor. Image tag and contract version are independent semvers — `v1.1.0` serves `1.2.0`; no published image serves `1.3.0` yet. |
+| **Contract** | `contract_version` **1.3.0** (`pipeline/contract.py`), frozen as `contract/openapi.yaml` with a committed `openapi.yaml.sha256` anchor. Image tag and contract version are independent semvers — pending `v1.2.0` will serve `1.3.0`; no published image serves it yet. |
 | **Auth** | None on any route, including `/docs`, `/redoc`, `/openapi.json`. Network placement is the control (`docs/configuration.md`, `SECURITY.md`). |
 
 **Depends on:**
@@ -192,7 +192,7 @@ Operator-side vendoring of a new revision to the mirror is `scripts/vendor_weigh
 | **Runtime use** | Only the weights-mirror fallback (`oras pull`), and only when `FORAGE_MIRROR_TOKEN` is set. A GHCR outage does not affect a running container beyond that leg (`pull_failed` / `timeout` outcomes). |
 | **Publish gates** | `.github/workflows/ci.yml` `publish` job needs `lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke`; the pushed amd64 image is verified layer-for-layer against the smoke-tested artifact; on `v*` tags a Release is created carrying `contract/openapi.yaml` and `openapi.yaml.sha256`, read back and checked against the committed anchor. |
 | **Tag scheme** | `v1.2.3` publishes `1.2.3`, `1.2`, `latest`; any tag containing `-` (e.g. `v0.9.3-rc`) publishes the exact tag only; push to `main` publishes `sha-<short>`. The git tag is the version; `pyproject.toml`'s `version` is inert. Reference: `docs/releases.md`. |
-| **Current state** | Two non-pre-release tags published, both verified against GHCR: `v1.0.0` (2026-09-12 UTC, commit `f4c2b16`) minted `latest`, `1.0` and `1.0.0` at index digest `sha256:d83639cc…`; `v1.1.0` (2026-09-18 UTC, commit `06b01b14`) moved `latest` and minted `1.1` and `1.1.0` at `sha256:e1b875cc…`, serving contract `1.2.0` (`docs/releases.md` § "Released versions" has the full digests). `compose/*.yml` pin `forage:1.1.0` and `forage-searxng:0.1.1-rc`, and both pins resolve. `v0.9.2-rc` was withdrawn after failing the parity gate (package-version deletion recorded as pending). |
+| **Current state** | `v1.2.0` / contract `1.3.0` is the pending release target, **not yet published**. `compose/*.yml` pin `forage:1.2.0` ahead of the cut and the published `forage-searxng:0.1.1-rc`. `docs/releases.md` retains the two verified non-pre-release entries and marks the draft; US-005 supplies the new digest and alias equality after verification. `v0.9.2-rc` was withdrawn after failing the parity gate (package-version deletion recorded as pending). |
 
 ---
 
@@ -388,18 +388,19 @@ binding, service names, volume literal, absent limiter, required secret) are ass
 |---|---|---|
 | **Starts** | `forage` + `searxng` | `forage` + `searxng` + `valkey` |
 | **Published ports** | `forage`: `127.0.0.1:8020:8020` only. `searxng`: none. | Same, plus `valkey`: none. |
-| **Forage env** | `HF_TOKEN`, `FORAGE_SEARCH_PROVIDERS` and `FORAGE_BRAVE_API_KEY` bare pass-through (genuinely unset if absent — unset is the default `searxng` chain). `VALKEY_URL` deliberately absent (memory mode). `SEARXNG_URL` absent (default `http://searxng:8080` — the compose service name `searxng` is load-bearing). | Same, plus the literal `VALKEY_URL=redis://valkey:6379/4`. `SEARXNG_VALKEY_URL` is intentionally **not** wired (limiter stays off). |
+| **Forage env** | `HF_TOKEN`, `FORAGE_MODEL_ID`, `FORAGE_MODEL_REVISION`, `FORAGE_SEARCH_PROVIDERS` and `FORAGE_BRAVE_API_KEY` bare pass-through (genuinely unset if absent — unset is the default `searxng` chain and vendored 22M pin). `VALKEY_URL` deliberately absent (memory mode). `SEARXNG_URL` absent (default `http://searxng:8080` — the compose service name `searxng` is load-bearing). | Same, plus the literal `VALKEY_URL=redis://valkey:6379/4` and bare `FORAGE_CACHE_HMAC_KEY` for signing; without it cached content is unsigned and health reports `cache_unauthenticated`. `SEARXNG_VALKEY_URL` is intentionally **not** wired (limiter stays off). |
 | **Volumes** | `forage-model-cache:/app/model-cache` (explicit `name:`, shared across fragments) | Same, plus `forage-valkey-data:/data` (project-scoped) |
-| **Secrets** | `compose/.env` (gitignored): `HF_TOKEN` (optional), `FORAGE_BRAVE_API_KEY` (optional), `SEARXNG_SECRET` (required-or-fail via `${SEARXNG_SECRET:?…}`) | Same |
+| **Secrets** | `compose/.env` (gitignored): `HF_TOKEN` (optional), `FORAGE_BRAVE_API_KEY` (optional), `SEARXNG_SECRET` (required-or-fail via `${SEARXNG_SECRET:?…}`) | Same, plus `FORAGE_CACHE_HMAC_KEY` for signed caching |
 | **Limits** | `forage` `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` (default `1024m`), `cpus: ${FORAGE_CPUS:-0}` (unset/0 omits the cap), `restart: unless-stopped` | Same |
-| **Image pins** | `forage:1.1.0`, `forage-searxng:0.1.1-rc` | Same |
+| **Image pins** | `forage:1.2.0` (pending cut), `forage-searxng:0.1.1-rc` | Same |
 
-**Pin sequencing:** both fragments pin `ghcr.io/washingbearlabs/forage:1.1.0` and
-`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`. The service pin resolves: `v1.1.0`
-published on 2026-09-18 (`search-release` US-002), so the `manifest unknown` a
-`docker compose up` returned before that date was sequencing, not breakage — the failure any
-pin to a not-yet-published tag produces. The searxng pin stays a pre-release because
-no non-pre-release `searxng-v*` tag exists.
+**Pin sequencing:** both fragments pin `ghcr.io/washingbearlabs/forage:1.2.0` and
+`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`. The companion is published;
+the service pin returns `manifest unknown` until the owner-gated `v1.2.0` cut.
+Cut from the completion PR's merge commit in the same sitting or revert the
+US-004 pin commit: the unpublished-tag window is outstanding, not closed.
+`docs/releases.md` and the release spec's gate-not-run record carry the handoff.
+The companion stays a pre-release because no non-pre-release `searxng-v*` tag exists.
 
 **Egress from the `forage` container:** `searxng:8080` and `valkey:6379` on the compose
 network; `huggingface.co` (HF leg, only with `HF_TOKEN`); `ghcr.io` (mirror leg, only

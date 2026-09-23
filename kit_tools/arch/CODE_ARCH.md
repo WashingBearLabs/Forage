@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # CODE_ARCH.md
 
-> Last updated: 2026-09-22
-> Updated by: Copilot (hardening-release US-002)
+> Last updated: 2026-09-23
+> Updated by: Copilot (hardening-release US-004)
 
 ---
 
@@ -76,7 +76,7 @@ Design principles:
 │                            # pinned weights to the private GHCR mirror;
 │                            # export_contract.py regenerates contract/. Ships in no
 │                            # image — the Dockerfile COPY list names nothing here
-├── tests/                   # 32 test_*.py modules (+ conftest.py, fakes.py, __init__.py); flat, one module per subject
+├── tests/                   # 38 test_*.py modules (+ conftest.py, fakes.py, __init__.py); flat, one module per subject
 ├── docs/                    # configuration.md, weights.md, releases.md, searxng.md,
 │                            # bootstrap-notes.md, bootstrap-scan.txt
 └── kit_tools/               # this documentation framework + feature specs

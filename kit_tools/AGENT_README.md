@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.1 -->
 # AGENT_README.md
 
-> Last updated: 2026-09-17
-> Updated by: Claude (seed-project)
+> Last updated: 2026-09-23
+> Updated by: Copilot (hardening-release US-004)
 
 Navigation guide for AI assistants working in Forage. Forage is a ~5,100-line single
 service, so this documentation set is deliberately smaller than a monorepo's — every file
@@ -69,8 +69,8 @@ listed below exists, and nothing is listed that doesn't.
       2026-09-11; new specs land here via `/kit-tools:plan-epic`)
 - [ ] Scan `docs/GOTCHAS.md`
 - [ ] Confirm the environment: `uv sync --extra dev && uv run pytest` (expect ALL green, zero
-      failures — the current count lives in `testing/TESTING_GUIDE.md`; 2105 as of
-      `search-release` US-003)
+      failures — the current count lives in `testing/TESTING_GUIDE.md`; 4126 collected at
+      `hardening-release` US-004, full-suite execution still pending)
 
 **Flag anything that looks like:**
 - A new coupling back to Poppy → stop, it is forbidden
@@ -266,8 +266,8 @@ is real content for it.
 Every `kit_tools/` doc carries, right under its title:
 
 ```markdown
-> Last updated: 2026-09-17
-> Updated by: [Human/Claude]
+> Last updated: 2026-09-23
+> Updated by: Copilot (hardening-release US-004)
 ```
 
 The canonical field is exactly `Last updated: YYYY-MM-DD`. The `update_doc_timestamps.py`

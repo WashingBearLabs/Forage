@@ -71,6 +71,10 @@ should refuse to activate on a mismatch rather than guess.
 Two containers, one token. [`compose/minimal.yml`](compose/minimal.yml) is the whole
 deployment:
 
+The Forage pin targets **v1.2.0 / contract 1.3.0**, not yet published; the
+quickstart works once the owner's release cut lands. Until then, the
+unpublished-tag window is outstanding (see [`docs/releases.md`](docs/releases.md)).
+
 ```bash
 git clone https://github.com/WashingBearLabs/Forage && cd Forage/compose
 
@@ -95,6 +99,9 @@ for the CPU/memory rules and delivery of the runtime tuning keys.
 cache. Both publish Forage's port to `127.0.0.1` only and publish nothing else at all —
 **Forage ships no authentication**, so that binding is your first control, not Forage's
 own SSRF defenses. Read the posture note above before widening it.
+For `full.yml`, set `FORAGE_CACHE_HMAC_KEY` in `compose/.env`: without it the
+external Valkey serves cached content unsigned and `/health` reports
+`cache_unauthenticated`.
 
 Or run the image directly (private network only):
 
@@ -237,7 +244,8 @@ weights, the Llama terms come with it.
 
 ## Status
 
-Forage is **pre-1.0 and freshly extracted**. The code and its full history were split
+Forage is **post-1.0**, with **v1.2.0 / contract 1.3.0 prepared but not yet
+published**. The code and its full history were split
 out of the [Poppy](https://github.com/WashingBearLabs) monorepo (`services/retrieval/`,
 `config/searxng/`, `tests/retrieval/`) on 2026-09-07; see
 [`docs/bootstrap-notes.md`](docs/bootstrap-notes.md) for the pin record and the split
