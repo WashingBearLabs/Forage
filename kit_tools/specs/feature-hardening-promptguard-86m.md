@@ -575,39 +575,39 @@ id unset the hash input is byte-identical to explicitly setting the 22M id; at t
   and the `promptguard_model` description says "not published", never "not inferable".
 
 **Acceptance Criteria:**
-- [ ] `FORAGE_MODEL_ID` unset → `/health.promptguard_model == "meta-llama/Llama-Prompt-Guard-2-22M"`; the
+- [x] `FORAGE_MODEL_ID` unset → `/health.promptguard_model == "meta-llama/Llama-Prompt-Guard-2-22M"`; the
       model-identity hash input is byte-identical to explicitly setting the 22M id (relative assertion
       in `tests/test_sanitizer_revision.py`); a second allowlisted id (monkeypatched) → a different
       `derive_sanitizer_revision({})` (asserted).
-- [ ] A value outside the allowlist — including the 86M id at the shipped allowlist — makes the
+- [x] A value outside the allowlist — including the 86M id at the shipped allowlist — makes the
       lifespan raise `ModelConfigurationError`; the log carries `model_id_not_allowed`; a sentinel value
       appears 0 times in captured logs; `derive_sanitizer_revision` never raises for any allowlisted
       id (test); `ALLOWED_MODEL_IDS` contains exactly the 22M id at the end of this story.
-- [ ] An app-startup test with `FORAGE_MODEL_ID=<second id>` asserts the lifespan's
+- [x] An app-startup test with `FORAGE_MODEL_ID=<second id>` asserts the lifespan's
       `WeightAcquisition` carries the resolved id and `acquire_and_load` received it (the
       `tests/test_app.py:1183` monkeypatch shape), and a recording `SupportsWeightLoad` double shows
       both `from_pretrained` calls saw it (through the ASGI lifespan); `resolve_model_id()` returns
       `tuple[str, bool]` as specified (tests for unset, blank, allowlisted, disallowed).
-- [ ] `load()` derives the injection index from `model.config.id2label` (exactly two labels: one
+- [x] `load()` derives the injection index from `model.config.id2label` (exactly two labels: one
       `INJECTION` and one `BENIGN`, case-insensitive) and refuses `{LABEL_0, LABEL_1}` and a
       three-label config and a missing / `None` / non-mapping `id2label` — `loaded` stays `False`,
       WARNING `model_labels_unexpected`, the specific message asserted (three negative tests); the
       check and the success return sit after the `try` block, not inside it.
-- [ ] `test_every_allowlisted_model_has_a_manifest_entry` exists and passes against the committed
+- [x] `test_every_allowlisted_model_has_a_manifest_entry` exists and passes against the committed
       `weights_manifest.json` for every `ALLOWED_MODEL_IDS` member.
-- [ ] `/health.promptguard_model` reports the configured id unconditionally, read from `app.state` and
+- [x] `/health.promptguard_model` reports the configured id unconditionally, read from `app.state` and
       never re-read in the handler (test); its description carries the publishable-identity clause
       ("not published", never "not inferable"); `kit_tools/arch/SECURITY.md`'s `/health` paragraph
       carries the same sentence and its non-vulnerabilities table carries the differential-channel
       row (`grep -c promptguard_model kit_tools/arch/SECURITY.md` ≥ 2); `FORAGE_MODEL_ID` set-but-blank
       behaves as unset (test).
-- [ ] Window block done: docstring line appended; regenerated; `tests/golden/contract_1_3_0.json`
+- [x] Window block done: docstring line appended; regenerated; `tests/golden/contract_1_3_0.json`
       re-created from `_SCHEMA_MODELS`; `HealthResponse.promptguard_model` appended to
       `_EXPECTED_ONE_THREE_ZERO_DIFF`; the 1.2.0 pair untouched and green; four anchor pages refreshed;
       `uv run python -m scripts.export_contract --check` clean; the rotation (`contract.py`) measured
       and recorded in `docs/bootstrap-notes.md`, `CLAUDE.md`, `kit_tools/arch/DECISIONS.md`,
       `kit_tools/docs/GOTCHAS.md`'s rotation table (`:410-434`) and `kit_tools/arch/CODE_ARCH.md`.
-- [ ] `_CLEARED_ENV_VARS` and the exact-set test include `FORAGE_MODEL_ID`; `grep -c FORAGE_MODEL_ID
+- [x] `_CLEARED_ENV_VARS` and the exact-set test include `FORAGE_MODEL_ID`; `grep -c FORAGE_MODEL_ID
       compose/minimal.yml compose/full.yml docs/configuration.md kit_tools/docs/ENV_REFERENCE.md` ≥ 1
       each; `grep -c promptguard_model kit_tools/docs/API_GUIDE.md kit_tools/docs/MONITORING.md` ≥ 1
       each; `docs/configuration.md`'s row states the 86M is added by the vendoring gate;
@@ -616,9 +616,9 @@ id unset the hash input is byte-identical to explicitly setting the 22M id; at t
       model_labels_unexpected` over `kit_tools/docs/TROUBLESHOOTING.md` is ≥ 1 (three separate
       counts — `grep -c` with an alternation counts lines, not tokens; salty, round 3); the GOTCHAS
       sentence is present.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
 
 ### US-002: Per-window scores — the `classify_windows` seam on the classifier (behaviour-preserving)
 
