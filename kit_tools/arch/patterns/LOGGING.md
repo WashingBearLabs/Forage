@@ -122,7 +122,13 @@ for interpreting the six integrity reasons. Length validation cannot establish e
 
 ### `model_fetcher.py`
 
-Every line starts with a snake_case marker followed by ` — ` and a fixed clause; variable parts are closed codes, a revision sha, a byte count, a duration, or a redacted reference.
+Lines use snake_case markers; identity refusals are bare closed tokens. Variable
+parts are closed codes, a revision sha, a byte count, a duration, or a redacted reference.
+
+`FORAGE_MODEL_REVISION` uses the selected model's committed pin; a malformed value
+falls back to the pin with `model_revision_invalid`; a well-formed value that is not
+that pin refuses to verify (`weights_revision_unpinned`). Neither the override nor
+any path appears in the unpinned-revision or identity-mismatch record.
 
 | Level | Marker | Meaning |
 |-------|--------|---------|
@@ -131,6 +137,10 @@ Every line starts with a snake_case marker followed by ` — ` and a fixed claus
 | ERROR | `weights_verification_failed` | Manifest verification refused the set; lists `REASON_*` codes |
 | ERROR | `weights_quarantined` / `weights_quarantine_failed` | Refused set moved to `$HF_HOME/quarantine/`, or could not be |
 | ERROR | `weights_pin_unusable` | `weights_manifest.json` pins nothing verifiable; no fetch attempted |
+| ERROR | `weights_verification_failed` with `manifest_model_unknown` / `weights_revision_unpinned` | No entry for the selected id / requested revision is not that entry's pin; no snapshot lookup or source attempted |
+| ERROR | `model_identity_mismatch` | At the load site, manifest and requested snapshot directories differ or the directory vanished; `load()` uncalled |
+| WARNING | `manifest_pin_unavailable — reason=<code>` | Default model retains its fallback revision for hashing; one warning per memoised path/model, no manifest reread per request |
+| WARNING | `model_cache_dir_missing` (`promptguard.classifier`) | Supplied hub-cache directory does not exist; neither auto-class is called |
 | ERROR | `weights_load_failed` | Verified set did not load into the classifier |
 | ERROR | `weights_mirror_invalid` / `model_revision_invalid` | Malformed `FORAGE_WEIGHTS_MIRROR` (redacted) / `FORAGE_MODEL_REVISION` (not echoed) |
 | ERROR+traceback | `weights_acquisition_crashed` | `logger.exception`; the acquisition thread never raises |
@@ -142,7 +152,7 @@ Closed codes that fill the `reason=` and `Attempts:` slots:
 
 - Hugging Face leg, `_fetch_reason()` (`model_fetcher.py:938`): `http_<status>`, `timeout`, `io_failed`, `fetch_failed`.
 - Mirror leg, `OUTCOME_*` (`model_fetcher.py:281-298`): `ok`, `skipped_no_token`, `misconfigured`, `oras_missing`, `insufficient_space`, `pull_failed`, `timeout`, `no_artifact`, `artifact_oversized`, `extract_failed`, `install_failed`, `refused_verification`.
-- Verification, `REASON_*` (`model_fetcher.py:260-274`): `manifest_missing`, `manifest_unreadable`, `manifest_empty`, `manifest_unparseable`, `manifest_invalid`, `manifest_disallowed_format`, `snapshot_missing`, `file_missing`, `file_extra`, `disallowed_format`, `size_mismatch`, `hash_mismatch`, `unreadable_file`, `symlink_escape`, `disallowed_entry`.
+- Verification, `REASON_*`: `manifest_missing`, `manifest_unreadable`, `manifest_empty`, `manifest_unparseable`, `manifest_invalid`, `manifest_disallowed_format`, `manifest_model_unknown`, `weights_revision_unpinned`, `snapshot_missing`, `file_missing`, `file_extra`, `disallowed_format`, `size_mismatch`, `hash_mismatch`, `unreadable_file`, `symlink_escape`, `disallowed_entry`.
 
 Pinned by, among others, `tests/test_model_fetcher.py::TestHuggingFaceFetch::test_an_http_status_survives_as_a_closed_reason_code` (`http_401` present, upstream prose absent), `::TestQuarantine::test_a_refusal_is_logged_loudly_with_its_reasons`, `::TestNoSourceProducedWeights::test_the_ending_names_every_source_in_order`, `::TestRevisionPin::test_an_invalid_override_is_reported_without_echoing_it`, and `::TestDegradedRecoveryRetry::test_every_retry_says_so_at_warning`.
 

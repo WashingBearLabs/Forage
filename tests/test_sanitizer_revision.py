@@ -8,9 +8,68 @@ from pathlib import Path
 import idna
 import pytest
 
+import model_fetcher
 from model_fetcher import DEFAULT_MODEL_REVISION, MODEL_REVISION_ENV_VAR
 from pipeline import sanitizer_revision
-from promptguard.classifier import MODEL_ID
+from promptguard.classifier import DEFAULT_MODEL_ID
+
+
+def test_manifest_entry_memo_opens_manifest_once_across_revision_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """conftest.clear_manifest_entry_cache resets the process-lifetime seam."""
+    reads: list[Path] = []
+    original = Path.read_text
+
+    def count_read(path: Path, *args: object, **kwargs: object) -> str:
+        if path == model_fetcher.MANIFEST_PATH:
+            reads.append(path)
+        return original(path, encoding="utf-8")
+
+    monkeypatch.setattr(Path, "read_text", count_read)
+    pin = model_fetcher.read_manifest_pin()
+    assert pin is not None
+    assert model_fetcher.resolve_revision(DEFAULT_MODEL_ID) == pin.revision
+    first = sanitizer_revision.derive_sanitizer_revision({})
+    assert sanitizer_revision.derive_sanitizer_revision({}) == first
+    assert reads == [model_fetcher.MANIFEST_PATH]
+    assert model_fetcher._manifest_entry.cache_info().misses == 1
+
+
+def test_unreadable_manifest_keeps_default_hash_and_warns_once(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    before = sanitizer_revision.derive_sanitizer_revision({})
+    model_fetcher._manifest_entry.cache_clear()
+    original = Path.read_text
+    reads = 0
+
+    def unreadable(path: Path, *args: object, **kwargs: object) -> str:
+        nonlocal reads
+        if path == model_fetcher.MANIFEST_PATH:
+            reads += 1
+            raise PermissionError("sensitive-path-must-not-be-logged")
+        return original(path, encoding="utf-8")
+
+    monkeypatch.setattr(Path, "read_text", unreadable)
+    assert model_fetcher.resolve_revision(DEFAULT_MODEL_ID) == DEFAULT_MODEL_REVISION
+    assert sanitizer_revision.derive_sanitizer_revision({}) == before
+    assert sanitizer_revision.derive_sanitizer_revision({}) == before
+    assert reads == 1
+    assert [record.getMessage() for record in caplog.records] == [
+        "manifest_pin_unavailable — reason=manifest_unreadable"
+    ]
+
+
+@pytest.mark.parametrize("model_id", ["acme/unvendored", "", "invalid/\ninjected"])
+def test_an_unpinned_model_still_has_a_total_deterministic_revision(
+    monkeypatch: pytest.MonkeyPatch, model_id: str
+) -> None:
+    monkeypatch.setattr(sanitizer_revision, "DEFAULT_MODEL_ID", model_id)
+    assert model_fetcher.resolve_revision(model_id) == "unpinned"
+    first = sanitizer_revision.derive_sanitizer_revision({})
+    assert len(first) == 64
+    assert sanitizer_revision.derive_sanitizer_revision({}) == first
 
 
 @pytest.mark.parametrize(
@@ -60,7 +119,7 @@ def test_sanitizer_revision_changes_for_promptguard_artifact(
     config = {"promptguard_threshold": 0.85}
     original_revision = sanitizer_revision.derive_sanitizer_revision(config)
 
-    monkeypatch.setattr(sanitizer_revision, "MODEL_ID", "test/model-revision")
+    monkeypatch.setattr(sanitizer_revision, "DEFAULT_MODEL_ID", "test/model-revision")
 
     assert sanitizer_revision.derive_sanitizer_revision(config) != original_revision
 
@@ -104,7 +163,7 @@ def test_the_hashed_model_identity_is_model_id_at_revision(
 
     Stronger than "the value moved when the revision moved", which a dozen
     wrong implementations also satisfy: this fails if the identity is hashed
-    as ``MODEL_ID`` alone, as the revision alone, or with the two run together
+    as ``DEFAULT_MODEL_ID`` alone, as the revision alone, or with the two run together
     without the separator that makes the pair unambiguous.
 
     Extended by ``hardening-search-sanitization`` US-003 to both new inputs,
@@ -120,7 +179,7 @@ def test_the_hashed_model_identity_is_model_id_at_revision(
         expected.update((pipeline_dir / source_name).read_bytes())
     for root_source_name in sanitizer_revision._ROOT_REVISION_SOURCES:
         expected.update((pipeline_dir.parent / root_source_name).read_bytes())
-    expected.update(f"{MODEL_ID}@{DEFAULT_MODEL_REVISION}".encode())
+    expected.update(f"{DEFAULT_MODEL_ID}@{DEFAULT_MODEL_REVISION}".encode())
     expected.update(f"idna@{idna.__version__}".encode())
     expected.update(b"0.85")
 
@@ -151,7 +210,7 @@ def test_sanitizer_revision_changes_for_the_idna_version(
     """UTS-46 tables decide which hosts are dropped, so the version is an input.
 
     A lock bump that moves the tables is a sanitization change with no source
-    byte to show for it — the same argument that put `MODEL_ID@revision` in
+    byte to show for it — the same argument that put `DEFAULT_MODEL_ID@revision` in
     the hash, applied to the table the canonicaliser reads.
     """
     config = {"promptguard_threshold": 0.85}

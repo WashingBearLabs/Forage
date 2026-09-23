@@ -322,12 +322,13 @@ Things that change across versions and are expected, not bugs:
   consumer refuses activation until it is updated; MINOR and PATCH move bytes the consumer
   may have vendored, so re-vendor the contract by the procedure there.
 - **The weights revision moves** only when a maintainer re-vendors (`docs/weights.md`,
-  "Re-vendoring": pick the upstream sha, update `model_fetcher.DEFAULT_MODEL_REVISION`,
-  run `uv run python -m scripts.vendor_weights`, commit the constant and
+  "Re-vendoring": pick the upstream sha, update `model_fetcher.DEFAULT_MODEL_REVISION`
+  for the default model, run `uv run python -m scripts.vendor_weights --model-id <id> --revision <sha>`, commit any constant change and
   `weights_manifest.json` together, record the rotation). For the operator that means the
   next start is cold again (a fresh ~270 MiB fetch into `hub/`). Drop any
   `FORAGE_MODEL_REVISION` override when upgrading: an override that does not match the
-  image's manifest fails verification loudly, by design.
+  selected model's manifest entry refuses before a snapshot lookup
+  (`weights_revision_unpinned`), by design.
 - **`VALKEY_URL` and `extract_route_enabled` are read once at start**, so changing either
   needs a container restart, not just an edit.
 

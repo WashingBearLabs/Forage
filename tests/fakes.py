@@ -413,15 +413,23 @@ def weights_manifest_document(
     *,
     model_id: str,
     revision: str,
+    models: Mapping[str, tuple[str, Mapping[str, bytes]]] | None = None,
 ) -> dict[str, Any]:
-    """The manifest that exactly describes *files* — nothing more, nothing less."""
+    """Build exact-set entries, with optional additional model/revision pairs."""
     return {
-        "model_id": model_id,
-        "revision": revision,
-        "files": [
-            {"path": name, "sha256": sha256_hex(payload), "size": len(payload)}
-            for name, payload in sorted(files.items())
-        ],
+        "models": {
+            identity: {
+                "revision": pin,
+                "files": [
+                    {"path": name, "sha256": sha256_hex(payload), "size": len(payload)}
+                    for name, payload in sorted(contents.items())
+                ],
+            }
+            for identity, (pin, contents) in {
+                **(models or {}),
+                model_id: (revision, files),
+            }.items()
+        }
     }
 
 

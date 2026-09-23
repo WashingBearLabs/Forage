@@ -24,31 +24,39 @@ Written by `feature-forage-model-bootstrap` US-003.
 
 ---
 
-## The three places the revision appears — and the rule about them
+## The three places the revision appears — per model
 
 | Where | What it is |
 |---|---|
-| `model_fetcher.DEFAULT_MODEL_REVISION` | the default the container fetches and loads |
-| `weights_manifest.json`'s `revision` | the pin the verifier walks and hashes against |
+| The resolved revision for the selected model | the revision acquisition, verification and loading all receive; `model_fetcher.DEFAULT_MODEL_REVISION` is the 22M-only last resort |
+| `weights_manifest.json`'s `models["<model id>"].revision` | that model's pin, paired with its own exact-set `files` allowlist |
 | `ghcr.io/washingbearlabs/forage-weights:<revision>` | the mirror tag US-004 falls back to |
 
 **They move together, in one commit.** That is the whole rule, and it is the one thing to
 carry away from this page.
 
-A revision bump that lands without the manifest makes every start fail verification and
-quarantine a good download. A manifest that lands without the mirror tag leaves the
+A revision override without the matching manifest is refused before even a warm-cache
+lookup: no download and no quarantine. A manifest that lands without the mirror tag leaves the
 fallback pointing at nothing, which is only discovered during an actual Hugging Face
 outage — the worst possible moment to find out. The tag cannot drift on its own because
-`scripts/vendor_weights.py` *derives* it from the constant rather than spelling it out
+`scripts/vendor_weights.py` *derives* it from the selected model's revision rather than spelling it out
 (`tests/test_vendor_weights.py::TestSingleSourceOfTruth`), and the constant-to-manifest
-leg is locked by `tests/test_model_fetcher.py::TestRevisionPin`. What no test can check is
+leg for the default model is locked by `tests/test_model_fetcher.py::TestRevisionPin`.
+The mirror stays revision-keyed: two models coexist in one repository because their
+revisions differ. What no test can check is
 whether you actually pushed the tag — hence [the fresh-pull
 check](#verify-a-fresh-pull-on-a-clean-machine).
 
-`FORAGE_MODEL_REVISION` overrides the default at run time, for a container that needs a
-different pin without a rebuild. It does **not** move the manifest, so an override without
-a matching manifest and mirror tag will fail verification — which is the correct, loud
-behaviour.
+`FORAGE_MODEL_REVISION` uses the selected model's committed pin; a malformed value
+falls back to the pin with `model_revision_invalid`; a well-formed value that is not
+that pin refuses to verify (`weights_revision_unpinned`). The resolver still returns
+a shaped override so the sanitizer hash records it honestly while acquisition stays
+degraded. A missing model entry is `manifest_model_unknown`, never another model's pin.
+Manifest reads, including failures, are memoised once per path/model for the service
+process lifetime: replacing the committed manifest requires a restart. If it cannot
+be read, the default model's hash keeps `DEFAULT_MODEL_REVISION` with one
+`manifest_pin_unavailable` WARNING; a non-default unpinned model hashes `unpinned`
+but never reaches a snapshot or a download.
 
 ---
 
@@ -57,6 +65,13 @@ behaviour.
 One gzipped tar of the snapshot directory `from_pretrained` resolves — flat, no directory
 prefix — pushed as an OCI artifact with type
 `application/vnd.washingbearlabs.forage-weights.v1+tar`.
+
+The committed document is `{"_comment": [...], "models": {"<model id>":
+{"revision": "<commit sha>", "files": [...]}}}`: one exact-set allowlist per model.
+The shipped entry is still the same five 22M files and revision. Verification selects
+only the requested pair; immediately before loading, `_load_verified` checks that the
+requested and manifest-derived snapshot directories agree and still exist.
+This parameterisation alone does not enable another deployment model or vendor weights.
 
 Two properties are deliberate and both are tested:
 
@@ -90,6 +105,14 @@ subprocess call three phases in.
 
 ### Run it
 
+`--model-id` selects the entry to vendor and defaults to `DEFAULT_MODEL_ID` (22M).
+The tool does **not** read `FORAGE_MODEL_ID`. `--revision` defaults to that entry's
+committed pin; for a new model it is required. Keep the same pair on every phased
+invocation. Generation reads the existing document, adds or replaces only that entry,
+and preserves all others; the printed diff scopes file changes to the selected entry
+and names other models only as `untouched`. An unreadable existing document is refused,
+not replaced by an empty one.
+
 ```bash
 export HF_TOKEN=hf_...
 export GHCR_USER=<your-github-login>
@@ -104,7 +127,7 @@ export GITHUB_TOKEN=ghp_...        # read:packages
 uv run python -m scripts.vendor_weights --dry-run --manifest /tmp/rehearsal-manifest.json
 
 # The real run.
-uv run python -m scripts.vendor_weights
+uv run python -m scripts.vendor_weights --model-id meta-llama/Llama-Prompt-Guard-2-22M
 ```
 
 **No credential is ever a command-line flag.** They arrive in the environment, and they
@@ -121,7 +144,7 @@ to stop, look and resume rather than repeat a 270 MiB download.
 | Step | What it does |
 |---|---|
 | `download` | `snapshot_download` at the pinned revision, with the service's own `allow_patterns` |
-| `manifest` | regenerates `weights_manifest.json` and prints the diff against the committed one |
+| `manifest` | replaces the selected model's entry in `weights_manifest.json`, preserves the others and prints the scoped diff |
 | `tar` | writes the deterministic, dereferenced tarball |
 | `selfcheck` | extracts that tarball and runs it through the **real** verifier |
 | `push` | `oras login` → `oras push <ref>` → `oras logout` |
@@ -137,7 +160,7 @@ did *not* move means upstream mutated a pin, and that deserves a stop, not a `gi
 ### Then commit — all three together
 
 ```bash
-git add weights_manifest.json          # plus model_fetcher.py if the revision moved
+git add weights_manifest.json          # plus model_fetcher.py if the default pin moved
 git commit -m "chore(weights): vendor <revision>"
 ```
 
@@ -179,13 +202,13 @@ a new upstream commit changes nothing here until someone decides it should. When
 decision is made:
 
 1. Pick the new commit sha from the model repository's history.
-2. Update `model_fetcher.DEFAULT_MODEL_REVISION`.
-3. Run the vendoring (`uv run python -m scripts.vendor_weights`) — it downloads the new
+2. For the default model only, update `model_fetcher.DEFAULT_MODEL_REVISION`.
+3. Run the vendoring (`uv run python -m scripts.vendor_weights --model-id <model-id> --revision <new-sha>`) — it downloads the new
    revision, regenerates the manifest, and pushes a **new tag**. Old tags are left alone,
    so a rollback is a revert of one commit plus a redeploy.
 4. Read the manifest diff.
-5. Commit the constant and the manifest **together**, and note the before/after
-   `sanitizer_revision` — the hashed model identity is `MODEL_ID@revision`, so a revision
+5. Commit the manifest and any default-constant change **together**, and note the before/after
+   `sanitizer_revision` — the hashed model identity is `model_id@revision`, so a revision
    bump rotates it and invalidates caches keyed on it. `docs/bootstrap-notes.md` records
    every rotation.
 
@@ -432,8 +455,9 @@ Three things follow from that layout:
   `oras`, and no hub request of any kind, so it works on a container with no egress at
   all. Measured on the reference envelope (1 vCPU / 1 GB), configurable via
   `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` — see `docs/configuration.md` § Sizing the container: **9 s warm under
-  `--network none`, against 19 s cold.** Changing `FORAGE_MODEL_REVISION` makes the next
-  start cold again, which is the point of the pin.
+  `--network none`, against 19 s cold.** Re-vendoring to a new committed revision
+  makes the next start cold if that snapshot is absent. Changing
+  `FORAGE_MODEL_REVISION` alone to a non-pin refuses before the cache lookup.
 
 ---
 

@@ -116,7 +116,7 @@ is dropped. The handles below are the only strings you need.
 
 ```bash
 # Weights acquisition, per attempt (the ONE terminal line is weights_unavailable)
-docker logs <container> 2>&1 | grep -E 'weights_unavailable|weights_fetch_failed|weights_fetch_skipped|weights_mirror_skipped|weights_retry_scheduled'
+docker logs <container> 2>&1 | grep -E 'weights_unavailable|weights_fetch_failed|weights_fetch_skipped|weights_mirror_skipped|weights_retry_scheduled|manifest_model_unknown|weights_revision_unpinned'
 
 # Verifier refusals, quarantines, unusable pin, load failure, crash
 docker logs <container> 2>&1 | grep -E 'weights_verification_failed|weights_quarantined|weights_pin_unusable|weights_load_failed|weights_acquisition_crashed'
@@ -128,7 +128,7 @@ docker logs <container> 2>&1 | grep -E 'Valkey connection failed for content cac
 docker logs <container> 2>&1 | grep -E 'PromptGuard unavailable|Content quarantined'
 
 # Configuration warnings
-docker logs <container> 2>&1 | grep -E 'break_glass_advertisement_active|config.yaml not found|model_revision_invalid|weights_mirror_invalid'
+docker logs <container> 2>&1 | grep -E 'break_glass_advertisement_active|config.yaml not found|model_revision_invalid|weights_mirror_invalid|manifest_model_unknown|weights_revision_unpinned'
 ```
 
 **4. Match the request's error code against the vocabulary table** below. Every coded
@@ -297,15 +297,17 @@ only `capabilities` lie and logs `break_glass_advertisement_active` every boot.
 (or `http_403`, `http_404`), then `weights_unavailable`.
 
 **Cause:** `401`/`403`: the token lacks gated-repo access or was revoked. `404`: the pinned
-revision no longer exists upstream, or `FORAGE_MODEL_REVISION` names one that never did.
+revision in the selected model's committed manifest entry no longer exists upstream.
 `timeout` / `io_failed` / `fetch_failed` are the Hub or the disk, not the token.
 
 **Fix:** confirm the Meta license approval and rotate the token (no restart needed; the
-next retry picks it up). For `404`, `FORAGE_MODEL_REVISION` must match the committed pin
-(`DEFAULT_MODEL_REVISION` in `model_fetcher.py`, currently `11614a15…`); a moved upstream
-means the re-vendoring procedure in `docs/weights.md`. `model_revision_invalid` in the log
-means the override was not a 40-character sha and the pin was used instead; the value is
-deliberately not echoed.
+next retry picks it up). For `404`, check the selected model's
+`weights_manifest.json` → `models[model_id].revision`; a moved upstream means the
+re-vendoring procedure in `docs/weights.md`. `FORAGE_MODEL_REVISION` uses the selected
+model's committed pin; a malformed value falls back to the pin with
+`model_revision_invalid`; a well-formed value that is not that pin refuses to verify
+(`weights_revision_unpinned`). That last refusal precedes all sources, so it cannot
+cause a Hub 404. The override value is deliberately not echoed.
 
 ---
 
@@ -317,17 +319,22 @@ reasons: file_extra` (or `hash_mismatch`, `size_mismatch`, `file_missing`,
 `disallowed_format`, `snapshot_missing`, `symlink_escape`, `disallowed_entry`, ...) then
 `weights_quarantined — refused weight set moved to <HF_HOME>/quarantine/...`.
 
-**Cause:** the downloaded set does not match `weights_manifest.json` exactly (five files,
-sha256 and size each, safetensors only). `file_extra` typically means a plain
+**Cause:** the downloaded set does not match its per-model entry in
+`weights_manifest.json` exactly (22M still has five files, sha256 and size each,
+safetensors only). `file_extra` typically means a plain
 `snapshot_download` without `ALLOW_PATTERNS` pulled README or `.gitattributes`.
 
-**Fix:** check `FORAGE_MODEL_REVISION` against the `revision` in `weights_manifest.json`;
-an override without a matching manifest fails verification loudly and correctly. Do not
+**Fix:** check `FORAGE_MODEL_REVISION` against `models["<selected model id>"].revision`
+in `weights_manifest.json`. `weights_revision_unpinned` refuses an override before
+any snapshot lookup, even with a warm cache; it neither fetches nor quarantines.
+`manifest_model_unknown` means that model has no entry; another entry is never used.
+Do not
 widen `ALLOWED_SUFFIXES`. If upstream mutated the pinned revision, re-vendor
 (`docs/weights.md` § "Re-vendoring", `uv run python -m scripts.vendor_weights`). Reasons
 starting `manifest_` (`manifest_empty`, `manifest_invalid`, ...) or the line
 `weights_pin_unusable` mean the *image's* manifest is wrong: no download can fix that,
-nothing is fetched or quarantined, rebuild from `main`.
+nothing is fetched or quarantined, rebuild from the corrected manifest and restart.
+Manifest entries and failures are memoised for the service process lifetime.
 
 ---
 

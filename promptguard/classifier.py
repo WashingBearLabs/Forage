@@ -9,13 +9,12 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pipeline.config_bounds import bounded_int
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     # Import-time only: torch and transformers are heavyweight and optional at
     # runtime (the classifier degrades to "unavailable" without them), so the
     # real imports stay inside load()/classify(). See typings/transformers for
@@ -24,7 +23,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-MODEL_ID = "meta-llama/Llama-Prompt-Guard-2-22M"
+DEFAULT_MODEL_ID = "meta-llama/Llama-Prompt-Guard-2-22M"
 MAX_SEQ_LEN = 512
 CHUNK_OVERLAP = 64
 MAX_PROMPTGUARD_CHUNKS = 64
@@ -79,6 +78,7 @@ class PromptGuardClassifier:
     def load(
         self,
         *,
+        model_id: str | None = None,
         revision: str | None = None,
         cache_dir: Path | str | None = None,
         local_files_only: bool = False,
@@ -89,14 +89,20 @@ class PromptGuardClassifier:
         dependencies are not available (torch / transformers missing,
         model not downloaded, etc.).
 
-        *revision* pins the commit sha to open, *cache_dir* is the **hub**
+        *model_id* defaults to :data:`DEFAULT_MODEL_ID`, *revision* pins the
+        commit sha to open, and *cache_dir* is the **hub**
         cache (``$HF_HOME/hub``) the weights were verified in, and
         *local_files_only* forbids the hub round-trip transformers otherwise
         makes even on a full cache hit. ``model_fetcher.acquire_and_load()``
-        supplies all three after :func:`model_fetcher.verify_weights` has
+        supplies the identity and cache after :func:`model_fetcher.verify_weights` has
         blessed the exact file set; the defaults preserve the pre-US-001
         behaviour for any other caller.
         """
+        model_id = DEFAULT_MODEL_ID if model_id is None else model_id
+        if cache_dir is not None and not Path(cache_dir).is_dir():
+            logger.warning("model_cache_dir_missing")
+            self._loaded = False
+            return False
         try:
             import torch
 
@@ -123,7 +129,7 @@ class PromptGuardClassifier:
             logger.debug("PromptGuard loading against torch %s", torch.__version__)
 
             self._tokenizer = AutoTokenizer.from_pretrained(
-                MODEL_ID,
+                model_id,
                 revision=revision,
                 cache_dir=cache_dir,
                 local_files_only=local_files_only,
@@ -137,7 +143,7 @@ class PromptGuardClassifier:
             # if verification were bypassed. Pinned by
             # tests/test_model_fetcher.py.
             model = AutoModelForSequenceClassification.from_pretrained(
-                MODEL_ID,
+                model_id,
                 use_safetensors=True,
                 revision=revision,
                 cache_dir=cache_dir,

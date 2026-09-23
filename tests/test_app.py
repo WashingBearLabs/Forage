@@ -96,8 +96,8 @@ from pipeline.stage1_extraction import ExtractionResult, extract_html
 from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES, FetchResult
 from promptguard.classifier import (
     CHUNK_OVERLAP,
+    DEFAULT_MODEL_ID,
     MAX_SEQ_LEN,
-    MODEL_ID,
     PromptGuardClassifier,
     PromptGuardThreadsConfigurationError,
 )
@@ -1350,7 +1350,7 @@ async def _fetchable_environment(
             json.dumps(
                 weights_manifest_document(
                     files,
-                    model_id=MODEL_ID,
+                    model_id=DEFAULT_MODEL_ID,
                     revision=DEFAULT_MODEL_REVISION,
                 )
             ),
@@ -1839,12 +1839,12 @@ async def test_lifespan_threads_reach_the_loading_classifier(
 
 def test_provisional_memory_rule_constants_and_default_margins() -> None:
     assert PARENT_RESERVATION_BYTES == 512 * MEBIBYTE
-    assert CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL == {MODEL_ID: 0}
+    assert CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL == {DEFAULT_MODEL_ID: 0}
     assert PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES == 64 * MEBIBYTE
     settings = extraction_settings_from_config({})
     shared = (
         PARENT_RESERVATION_BYTES
-        + CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[MODEL_ID]
+        + CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[DEFAULT_MODEL_ID]
         + settings.classification_concurrency * PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES
         + settings.extraction_concurrency * settings.child_address_space_bytes
     )
@@ -1900,12 +1900,12 @@ async def test_lifespan_memory_rule_counts_configured_terms_once(
         model_fetcher, "acquire_and_load", _acquisition_that_never_loads
     )
     monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
-    model_id = "test-model-with-larger-resident-set" if delta_mib else MODEL_ID
-    monkeypatch.setattr(retrieval_app, "MODEL_ID", model_id)
+    model_id = "test-model-with-larger-resident-set" if delta_mib else DEFAULT_MODEL_ID
+    monkeypatch.setattr(retrieval_app, "DEFAULT_MODEL_ID", model_id)
     monkeypatch.setattr(
         retrieval_app,
         "CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL",
-        {MODEL_ID: 0, model_id: delta_mib * MEBIBYTE},
+        {DEFAULT_MODEL_ID: 0, model_id: delta_mib * MEBIBYTE},
     )
     with patch.object(
         retrieval_app,
@@ -3340,7 +3340,7 @@ async def test_lifespan_memory_rule_counts_one_bounded_valkey_read(
             f"envelope_memory_rule_unmet — memory_max={1024 * MEBIBYTE} "
             f"required={required_mib * MEBIBYTE} "
             f"classification_concurrency={concurrency} extraction_concurrency=1 "
-            f"child_address_space_bytes={384 * MEBIBYTE} model_id={MODEL_ID} "
+            f"child_address_space_bytes={384 * MEBIBYTE} model_id={DEFAULT_MODEL_ID} "
             f"parent_bytes={512 * MEBIBYTE} cache_backend=valkey "
             f"cache_term_bytes={value_mib * MEBIBYTE}"
         )

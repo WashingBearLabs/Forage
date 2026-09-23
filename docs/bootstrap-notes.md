@@ -1759,3 +1759,33 @@ release. Read `/health`'s body for readiness; do not gate traffic or activation
 on Docker's liveness status. US-003 owns the sizing section and remaining
 operator-doc sweep, including zero-traffic reconnect WARNING/counter baselines.
 **Not replayed to Poppy**; no push, tag or release occurred.
+
+### No rotation: per-model weights and directory agreement (`hardening-promptguard-86m` US-001, 2026-09-22)
+
+Measured from clean starting commit `5ced1e94aedc088e34d4805e8394cefb76c2bd17`.
+Before, after, and a read-only control loading the starting versions of
+`promptguard/classifier.py`, `model_fetcher.py` and `pipeline/sanitizer_revision.py`
+into isolated module objects all return, under both default `{}` and shipped config:
+
+```
+4913fdc1982cb48ba2db9c6972fcea10107408349970c45c9dc6b3ae5c1aa1fb
+```
+
+All nine hashed sources are byte-identical to the starting commit; neither the
+hash-input order nor the default model identity changed. Repeating with the
+manifest unreadable also reproduces that value and one closed
+`manifest_pin_unavailable — reason=manifest_unreadable` WARNING. The default
+22M entry's revision and five file records match the old document exactly;
+their canonical JSON sha256 (sorted keys, compact separators) is
+`a246da002d7cd378312663e104bbb349863dee3c501ae9aa622894e38dc90f59`.
+
+**Consumer handoff:** the manifest is now `models[model_id] -> {revision, files}`;
+direct Python callers use `DEFAULT_MODEL_ID` and pass model/revision together.
+A shaped non-pin override now refuses before any snapshot lookup or source
+attempt (`weights_revision_unpinned`), and a missing model entry refuses
+`manifest_model_unknown`. `_load_verified` also requires manifest/requested path
+equality and directory existence before calling the classifier. This fixes the
+previous verifier/loader disagreement, not the residual filesystem-mutation
+race after hashing. No default sanitization, API response, contract artifact or
+golden changed. No 86M weights, deployment selection or benchmark is enabled by
+this story. **Not replayed to Poppy**; no publish, push, tag or release occurred.

@@ -1382,6 +1382,85 @@ the tree changes; the story stops and reports.
 
 ## Implementation Notes
 
+### US-001 landing checkpoints — 2026-09-22 (Copilot)
+
+Starting commit: `5ced1e94aedc088e34d4805e8394cefb76c2bd17`, clean worktree.
+Baseline and step 1 (per-model map, shared builders, manifest assertions and
+generator) each passed the 768 related tests in `test_model_fetcher`,
+`test_vendor_weights`, `test_sanitizer_revision` and `test_app`. Full-suite
+execution is prohibited by this invocation; these are related-suite midpoints.
+Starting R40 `grep -c '"revision"'`: model_fetcher tests **15**, vendor tests
+**6**, app tests **0**. Production anchored constant grep: **20** lines;
+test whole-word grep: **54** lines (seven more than the pre-spec 47, from the
+resource-envelope sizing wiring). Baseline default and shipped revision:
+`4913fdc1982cb48ba2db9c6972fcea10107408349970c45c9dc6b3ae5c1aa1fb`.
+
+Step 2 (model/revision parameters, both auto-class calls, vendor CLI and
+`WeightAcquisition` forwarding) passed **772** related tests. Two additional
+production importers now exist versus the spec's snapshot: `retrieval_app.py`
+and `pipeline/extraction_limits.py` use the default id in the memory advisory;
+both and their test consumers migrated, without changing the sizing rule.
+
+Step 3 (memoised per-model revision resolution, manifest-first refusal, requested
+pair verification and the direct loader identity guards) passed **862** related
+tests, including `test_stage3_promptguard`. The new tests exercise both default
+auto-class arguments and a synthetic model, warm/cold/hub/mirror paths, two
+snapshot directories, entry-local versus document-wide rejection, no path/hash/
+source calls on an unpinned revision, and the unreadable-manifest ordering.
+
+Step 4 is reached: docs, exact-scope greps and read-only revision controls complete.
+R40 ending counts are **20 / 8 / 0**, respectively (starting **15 / 6 / 0**).
+Both closing old-name greps return zero; safetensors has exactly two textual
+hits and one call-site keyword; `repo_dirname` has one definition; the classifier
+residual has one `trusts the path` occurrence; all six override-describing pages
+contain `weights_revision_unpinned`. `ALLOWED_SUFFIXES`, `ALLOW_PATTERNS` and
+`_walk_snapshot` are unchanged, with literal-value tests for both constants.
+
+Of `TestRevisionPin`'s original eight methods, five migrated:
+`test_the_default_is_the_committed_constant`,
+`test_the_environment_overrides_it` (now both model ids),
+`test_the_pin_is_locked_to_the_committed_manifest`,
+`test_the_manifest_pin_is_readable_without_verifying_anything`, and
+`test_a_real_manifest_yields_its_pin`. The commit-sha-shape test and the two
+required malformed-override tests survive unchanged. The existing warm/pinless
+acquisition assertion now expects `weights_pin_unusable`, the intentional
+manifest-first diagnostic change.
+
+Implementation details matching the current tree: `_manifest_entry` retains
+the parser's `(manifest, failures)` tuple so closed reasons are not lost.
+Ruff UP033 mechanically selects `functools.cache`, the unbounded
+`lru_cache(maxsize=None)` equivalent, retaining the required `cache_clear()` seam.
+The autouse `clear_manifest_entry_cache` fixture resets it. Vendoring's plan
+reader uses the mutable raw document rather than populating the runtime memo
+before generation; the self-check then verifies the generated entry. Its
+default revision comes from the selected entry, never the 22M fallback for a
+non-default model. Existing malformed documents are refused, not discarded.
+
+The scoped override inventory remains **13 files**. Rewritten override guidance:
+`docs/weights.md`, `docs/configuration.md`, `kit_tools/docs/ENV_REFERENCE.md`,
+`kit_tools/arch/SERVICE_MAP.md`, `kit_tools/arch/patterns/LOGGING.md`,
+`kit_tools/docs/TROUBLESHOOTING.md`. Also rewritten: `DEPLOYMENT.md`'s re-vendor
+command and mismatch diagnosis; `SECURITY.md`'s supply-chain description.
+Mention-only and unchanged: `LOCAL_DEV.md`'s cleared-environment list,
+`MONITORING.md`'s still-correct malformed-override log row. History unchanged:
+`DECISIONS.md`, the GOTCHAS rotation discussion (its only hit is outside the
+table), and all prior `docs/bootstrap-notes.md` records; a new no-rotation
+record was appended to the latter.
+
+Default/shipped before, after, and the read-only three-module reversal against
+`5ced1e9` all reproduce `4913fdc1…aa1fb`, including an unreadable-manifest run.
+All nine hashed source files are byte-identical; the eight-file pipeline diff
+is empty. Full measurements and the unchanged 22M payload digest are in
+`docs/bootstrap-notes.md` and the invariant summary is in `CLAUDE.md`.
+
+Validation: **1116 related tests passed**, strict Pyright zero errors, repository
+Ruff lint/format clean, contract-export tests and exact greps pass. The prior
+learning's inherited formatting failures are absent at this starting commit;
+no unrelated fix was needed. The full-suite criterion remains **unverified**:
+this invocation explicitly prohibits running it. No definition or acceptance
+checkbox was changed, no owner gate ran, and no dependency, response shape,
+generated contract or historical golden changed.
+
 <!-- Populated during execution. US-001 and US-002 record the unchanged default revision value; US-006
 and US-007 record their rotations; US-005 records the licence check, the vendoring transcript, the
 scoped manifest diff and the allowlist edit; US-004 records the benchmark table, the matrix wall-clock

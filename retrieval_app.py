@@ -108,7 +108,7 @@ from pipeline.search_providers.searxng import (
 from pipeline.search_targets import SearchTargets, search_targets_from_config
 from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES
 from promptguard.classifier import (
-    MODEL_ID,
+    DEFAULT_MODEL_ID,
     PromptGuardClassifier,
     promptguard_threads_from_config,
 )
@@ -1745,7 +1745,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings,
         app.state.cache_settings,
         backend,
-        model_id=MODEL_ID,
+        model_id=DEFAULT_MODEL_ID,
         memory_max=_cgroup_memory_snapshot()["cgroup_memory_max_bytes"],
     )
     if backend == "memory" and cache_hmac_key is not None:

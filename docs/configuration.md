@@ -110,7 +110,7 @@ instance is private-network-only and Forage is its only client.
 | `POPPY_RETRIEVAL_LEGACY_CAPABILITY` | unset | Deprecated alias of `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION`, kept so a pre-extraction deployment keeps working. Identical semantics. |
 | `HF_HOME` | `/app/model-cache` (set by the image) | Hugging Face cache directory the PromptGuard weights are fetched into and read from. Override only if you mount the weights elsewhere. Mount a volume here or the weights are re-fetched on every container recreate. |
 | `HF_TOKEN` | unset | Hugging Face access token for the **gated** `meta-llama/Llama-Prompt-Guard-2-22M` repository. Optional — see "Weights acquisition" below. **Carries a credential**; supply it the same way as `VALKEY_URL`. |
-| `FORAGE_MODEL_REVISION` | the committed pin (a 40-character commit sha) | Which upstream revision of the weights to fetch, verify and load. Only a full commit sha is accepted — a branch name is refused with an error and the committed pin is used instead. |
+| `FORAGE_MODEL_REVISION` | the selected model's committed pin (a 40-character commit sha) | Uses the selected model's committed pin; a malformed value falls back to the pin with `model_revision_invalid`; a well-formed value that is not that pin refuses to verify (`weights_revision_unpinned`). Each pin lives at `weights_manifest.json` → `models[model_id].revision`; acquisition refuses before any cache lookup or fetch. |
 | `FORAGE_WEIGHTS_MIRROR` | `ghcr.io/washingbearlabs/forage-weights` | The OCI **repository** holding the vendored weights, used when Hugging Face cannot supply them. A repository, never a tag: the tag is always `FORAGE_MODEL_REVISION`, so redirecting the mirror cannot also redirect which revision it serves. Validated to a lower-case `<registry>/<owner>/<name>`, optionally prefixed `https://` — anything else (an `http://` scheme, embedded credentials, a tag or digest) is refused with an error and the mirror is treated as unconfigured. |
 | `TMPDIR` | the platform default (`/tmp` in the image) | Parent of the process-private spool directory `forage-spool-<uid>` that `/extract` uploads and `/retrieve`'s fetched PDFs are written to for the PDF worker. **Must be sticky or not writable by other users**; tmpfs recommended. See "The spool directory" below. |
 | `FORAGE_MIRROR_TOKEN` | unset | Registry credential for `FORAGE_WEIGHTS_MIRROR`. Optional — without it the mirror is skipped exactly as a missing `HF_TOKEN` skips Hugging Face. **Carries a credential**; supply it the same way as `VALKEY_URL`. A **read-only** token, scoped as narrowly as your registry allows — see `docs/weights.md` § "The mirror read token". |
@@ -500,10 +500,11 @@ the reference envelope (1 vCPU / 1 GB), configurable via `FORAGE_CPUS` /
 These are weights-boot latencies, not classify latencies; see
 [Sizing the container](#sizing-the-container) for the separate classify benchmark.
 
-The three environment variables above are the whole surface, and two of them only matter
-on a cold boot: `FORAGE_MODEL_REVISION` decides which set counts as "the" set (change it
-and the next start is cold again), while `HF_TOKEN` and `FORAGE_MIRROR_TOKEN` are simply
-never read for their purpose when the cache already satisfies the pin.
+`FORAGE_MODEL_REVISION` must match the selected model's committed manifest entry,
+including on a warm boot; a different shaped revision refuses before a snapshot
+lookup. `HF_TOKEN` and `FORAGE_MIRROR_TOKEN` are never read for their purpose when
+the cache already satisfies that pin. A re-vendored manifest and its matching
+revision make the next start cold if that snapshot is not on the volume.
 
 > **If you do not mount a volume at `HF_HOME`, the cache lives in the container's writable
 > layer.** That works and is not an error — it just means every `docker run` is a cold

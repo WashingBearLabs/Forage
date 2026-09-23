@@ -75,3 +75,11 @@ def forbid_inherited_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     """Run every test against an environment with no inherited configuration."""
     for name in _CLEARED_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def clear_manifest_entry_cache() -> None:
+    """Each test owns the process-lifetime manifest memo it populates."""
+    import model_fetcher
+
+    model_fetcher._manifest_entry.cache_clear()

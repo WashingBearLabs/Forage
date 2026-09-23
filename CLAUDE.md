@@ -480,6 +480,19 @@ the health model and route descriptions now name the status-only liveness
 probe; historical goldens remain untouched. Full measurements and the
 consumer handoff are in `docs/bootstrap-notes.md`.
 
+`hardening-promptguard-86m` US-001 adds **no rotation**: default and shipped
+revision remain `4913fdc1982cb48ba2db9c6972fcea10107408349970c45c9dc6b3ae5c1aa1fb`.
+All nine hashed sources and the default model identity are unchanged; loading
+the three pre-story modules read-only from `5ced1e9` reproduces the value.
+The weights manifest is now per model (`models[model_id]`); the original 22M
+revision/files are unchanged. Acquisition refuses unknown entries and shaped
+non-pin revisions before any snapshot lookup, and `_load_verified` checks
+requested/manifest path equality plus existence before loading. The classifier
+does not independently verify identity. Runtime manifest entries, including
+failures, are memoised; replacing the manifest requires a process restart.
+`DEFAULT_MODEL_ID` replaces the old constant everywhere. Measurements and the
+direct-caller handoff are in `docs/bootstrap-notes.md`; no 86M owner gate ran.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:

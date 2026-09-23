@@ -175,6 +175,16 @@ A blocking hit yields verdict `blocked` and quarantine. Each suspicious hit cost
 
 `promptguard/classifier.py` loads `meta-llama/Llama-Prompt-Guard-2-22M` (a DeBERTa-v3 sequence classifier) on CPU with `use_safetensors=True`. Text is chunked at `MAX_SEQ_LEN = 512` tokens with `CHUNK_OVERLAP = 64`, up to `MAX_PROMPTGUARD_CHUNKS = 64`; over budget raises `PromptGuardBudgetExceededError` rather than silently classifying a prefix. `pipeline/stage3_promptguard.py` applies the handler-resolved threshold (`config.yaml` `promptguard_threshold`, shipped as 0.85; overridable per `/retrieve` or `/search` request within 0.0 to 1.0, then operator-capped): a score above threshold is `injection_detected` with `INJECTION_PENALTY = -0.5`.
 
+The acquisition path verifies the requested `(model_id, revision)` against that
+model's own exact-set manifest entry. `_load_verified` re-derives the manifest and
+requested snapshot paths and requires equality plus directory existence before
+calling `load()`. The classifier checks only that the supplied hub-cache directory
+exists: **the classifier trusts the path the verifier handed it**. This is one
+agreement check, not two independent observations, and it does not close a
+filesystem-mutation race after hashing. Model metadata such as `_name_or_path`
+is not identity evidence. Missing entries and unpinned revisions refuse before
+any snapshot lookup or source attempt.
+
 Two policy branches matter for security:
 
 - **Trusted-tier skip.** `trust_tier == "trusted"` skips inference entirely (`promptguard_state: skipped_trusted`). Marking a domain trusted means opting it out of the ML scan.
@@ -409,7 +419,20 @@ The base is `python:3.12-slim@sha256:78387bc3...` (digest, with the resolved tag
 
 ### Model weights
 
-Weights are a runtime input, never baked. `model_fetcher.py` pins `DEFAULT_MODEL_REVISION = "11614a155199674a0a95e6602d6ab0417b790ed0"` (override via `FORAGE_MODEL_REVISION`) and verifies downloads against `weights_manifest.json`, an **exact-set** allowlist of five files with sha256 and size. `ALLOWED_SUFFIXES` is `.safetensors`, `.json`, `.txt`, `.model`, so a pickle `.bin` can never be blessed or loaded, belt-and-braces with the loader's `use_safetensors=True`. Symlinks are resolved and containment-checked; a failed set is quarantined for one generation; a mirror tarball is extracted with `tarfile` `filter="data"` into a throwaway root and verified before install; `FORAGE_WEIGHTS_MIRROR` must be a bare lowercase `<registry>/<owner>/<name>` and TLS is non-negotiable. `tests/test_model_fetcher.py` (`TestManifestFailsClosed`, `TestExactSetVerification`, `TestFormatAllowlist`, `TestSymlinkResolution`, `TestQuarantine`, `TestMirrorExtractionIsSafe`, `TestWarmStartTouchesNoNetwork`) and `tests/test_vendor_weights.py`.
+Weights are a runtime input, never baked. `weights_manifest.json.models` holds one
+**exact-set** allowlist per model, with revision, path, sha256 and size. The default
+22M still pins the same five files at `11614a155199674a0a95e6602d6ab0417b790ed0`,
+equal to the 22M-only `DEFAULT_MODEL_REVISION` fallback. `FORAGE_MODEL_REVISION`
+cannot select an uncommitted pin: malformed values fall back loudly; shaped
+non-pins refuse before disk lookup (`weights_revision_unpinned`). Entry failures
+are isolated to that model, while a broken document refuses every model.
+`ALLOWED_SUFFIXES` is `.safetensors`, `.json`, `.txt`, `.model`, so a pickle `.bin`
+can never be blessed or loaded, alongside the loader's `use_safetensors=True`.
+Symlinks are resolved and containment-checked; a failed set is quarantined for one
+generation; a mirror tarball is extracted with `filter="data"` into a throwaway
+root and verified before install. `FORAGE_WEIGHTS_MIRROR` must be a bare lowercase
+`<registry>/<owner>/<name>` and TLS is non-negotiable. These controls are pinned by
+`tests/test_model_fetcher.py` and `tests/test_vendor_weights.py`.
 
 ### Contract anchor
 
@@ -509,6 +532,7 @@ These are recorded in the repo with a source and a reason; they are decisions, n
 | Accepted risk: `/retrieve` still counts decoded bytes from `aiter_bytes()` after httpx's uncapped decoder, on a caller-chosen URL. The 10 MB cap bounds accepted body bytes, not peak decoder output allocation. Adopt `pipeline/bounded_body.py` in a fetch-path story; the provider fix does not cover stage 5. | `pipeline/stage5_url_audit.py`; `kit_tools/roadmap/BACKLOG.md`, finding 2026-09-16-020 (open) |
 | Companion SearXNG runs `limiter: false` | `searxng/config/settings.yml`; `kit_tools/docs/GOTCHAS.md` |
 | Weights are not shipped; a token-less container is degraded indefinitely | root `SECURITY.md`; `README.md` |
+| Verifier/loader directory agreement — fixed by `hardening-promptguard-86m` US-001; a requested unpinned or missing snapshot is never loaded | `model_fetcher._load_verified`; `tests/test_model_fetcher.py::TestModelIdentity` |
 | The break-glass switch makes `capabilities` lie for a transition window | `docs/configuration.md` "Break-glass" |
 | A keyed deployment is identifiable from `/health` (`search_providers`, `capabilities.brave_api_key`) | `search-policy-and-health` US-002; rulings 12, 15 |
 | `/search`'s status varies with key presence for the same body in two reproduced cases — a Brave-only chain with `allow_paid_fallback: false` (keyed: 422 `policy_excluded_all_providers`; key-less: the `[searxng]` boot fallback answers 200) and a `searxng,brave` chain whose SearXNG answers 200 with unresponsive engines (keyed: 422 `search_unavailable`; key-less: the lone-`searxng` carve-out answers 200). Nothing is disclosed that `/health` and `provider_used` do not already publish; the "no oracle" rule is "same body, same upstream outcome, over the resolved chain `/health` reports" — no *second, differential* channel, not secrecy | `search-policy-and-health` US-003; rulings 15, 28 |
