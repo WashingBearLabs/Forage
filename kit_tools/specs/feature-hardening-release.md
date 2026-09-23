@@ -1985,6 +1985,60 @@ in **38** modules. This is not full-suite execution. The full-suite gate will
 be obtained from ordinary PR CI, whose two publish jobs exclude pull requests;
 no local full-suite command or owner release gate is authorized here.
 
+#### US-004 attempt 3 — regression gate obtained (2026-09-23)
+
+The [ordinary PR CI run 35830893486](https://github.com/WashingBearLabs/Forage/actions/runs/35830893486)
+at **`be4c94f0afccfbba00c81c3f23b1b9b39a0a5849`** is green.
+Its full, unfiltered `uv run pytest -q` step reports **4120 passed,
+6 xfailed, 13 warnings in 83.32 seconds**. This is actual full-suite
+execution, not collection or scoped-test evidence. CI uses Python 3.12.3;
+the local scoped run uses 3.12.12. All six service gates and both companion
+build/smoke jobs succeeded; both publishing jobs were **skipped**.
+The CI merge commit `8dd63f69bdd13dc48494cc91080a315fe5a0d993` has tree
+`8273958f6a969f9aebaefa68ac229042df0377c4`, exactly the tested branch tree.
+The previous deferred/full-suite-failed findings are superseded by this run.
+The six expected failures and warnings are inherited; no test was skipped,
+xfail-marked or suppressed to obtain green. Full-suite execution was kept
+in PR CI as requested, not run locally.
+
+Independently collected the explicit `tests/test_*.py` modules with
+`uv run pytest --collect-only -qq`, and the whole tree with
+`uv run pytest --collect-only -q`. Compared the first output's module counts
+with a node-ID count of the second and **every one of the 38 documented
+module rows**: all match, sum to **4126**, and agree with all four total sites.
+The portable assertion retains the URL module's **257** tests; Compose is
+**79** and the seven-module scoped run is **982**. Changed total-site prose
+now distinguishes the actual full-suite result from the collected total.
+The existing six xfails account for the difference, not a count discrepancy.
+
+A direct guard probe makes `IPv6Network.__str__` raise and the revised test
+still passes. Removing a range, adding a transition prefix, changing a prefix
+length or reversing the list each still fails. Thus portability does not
+weaken the six-entry policy pin. Runtime `url_validator.py` remains byte-identical.
+
+Re-ran the exact-scope fan-outs against their classification tables:
+**115** and **57** matching lines, each classified once, no gaps or duplicates.
+Line counts in the four total-site edits are preserved, so the tables above
+still identify the final files. Mechanically rechecked both pins and all
+passthroughs, the four secret-grep patterns and absence of stale count prose,
+all five anchor quotations, the split plus all **41** rotation rows,
+historical releases, root supported-versions table and unchanged runtime /
+generated / golden / revision inputs. Default and shipped revision remain
+`6884dc29b3dc3d7a0a1f2c1da638f767fb301b2baac68446541f6de2638bd7ec`.
+Repository Ruff lint/format, strict Pyright (zero errors), export `--check`
+and whitespace checks pass. Story definitions and checkboxes are untouched.
+
+This evidence-only follow-up does not alter the tested assertion or any
+runtime source. Final-head CI read-back is recorded on
+[draft completion PR #30](https://github.com/WashingBearLabs/Forage/pull/30)
+and in this attempt's result/evidence artifacts. The PR remains draft,
+unmerged, with its original outstanding-window and exact-revert requirement.
+No local image build, credentials inspection, model acquisition, benchmark,
+owner gate, tag push, release or publication was performed. The only remote
+write to git is the named PR branch, using `--no-follow-tags`. Owner release
+US-003, post-release US-005 and both 86M owner gates remain pending; green
+bookkeeping CI is not authorization to run them.
+
 <!-- Populated during execution. US-001/US-002 record their rotations and the rehearsal extraction;
 US-004 records both classified sweeps; US-003 records the cut, the four-way sha256 table and the
 config-grep facts; US-005 records the three smoke runs, the credential-free pull, the leak check and

@@ -99,8 +99,8 @@ once `conftest.py`, `fakes.py` and `__init__.py` are counted — plus `golden/` 
 `fixtures/`. **4126 tests collected** on 2026-09-23 (`hardening-release` US-004,
 `uv run pytest --collect-only -q`). Every per-module row below is remeasured
 from collection, not incremented from a previous story's count; their sum
-equals the total. Collection is not execution: the full-suite gate remains
-pending, and scoped passes must not be reported as a full-suite pass.
+equals the total. [PR #30 full-suite CI](https://github.com/WashingBearLabs/Forage/actions/runs/35830893486):
+**4120 passed, 6 xfailed**. Collection and scoped passes alone are not full-suite evidence.
 
 The bounded-body and both provider rows were re-measured on 2026-09-22 during
 `hardening-provider-bounds` US-003's retry. The helper includes ambiguous
@@ -109,8 +109,8 @@ exhaustion and exact-member checks across transport chunk boundaries.
 
 Provider-bounds US-005 re-counted the orchestrator/provider/pin rows below:
 353, 284, 145 and 7 tests respectively. Its 13-module related run passes
-1,558 tests; the six pre-refactor captures are unchanged. The whole suite
-remains deferred to the authorized end-of-epic gate.
+1,558 tests; the six pre-refactor captures are unchanged. At that story, the whole suite
+was deferred to the authorized end-of-epic gate.
 
 **US-005 retry validation (2026-09-22).** The explicit orchestrator-then-admission
 pair passes **347 tests**; the combined threshold/story selection across sixteen
@@ -121,7 +121,7 @@ for an entered event and a queued semaphore waiter, not a fixed number of
 `sleep(0)` turns. Gates open and outstanding tasks are cancelled/drained in
 `finally`, including deadline-test startup failures. Fixture teardown checks
 both patched functions' original identities. Ruff lint/format, strict Pyright
-and contract drift checks pass. The full suite remains an end-of-epic gate;
+and contract drift checks pass. That story left the full suite to the end-of-epic gate;
 the story implementer did not run it.
 
 | Module | Tests | Covers |
