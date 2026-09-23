@@ -372,7 +372,7 @@ unchanged.
   this story.
 
 **Acceptance Criteria:**
-- [ ] `promptguard_threads` (default 0, range 0–16) is read at boot through
+- [x] `promptguard_threads` (default 0, range 0–16) is read at boot through
       `promptguard_threads_from_config` via `pipeline/config_bounds.bounded_int` (`grep -n '_bounded_'
       promptguard/classifier.py` returns nothing), refuses boot out of range or wrong-typed with
       `PromptGuardThreadsConfigurationError`, ships in `config.yaml` as `promptguard_threads: 0`, and a positive
@@ -382,16 +382,16 @@ unchanged.
       `TOKENIZERS_PARALLELISM` unchanged from the sentinel the test seeded with `monkeypatch.setenv`;
       `_CLEARED_ENV_VARS` is unchanged; there is no `app.state.promptguard_threads`;
       `ENV_REFERENCE.md` states that Forage writes the variable when `promptguard_threads > 0`.
-- [ ] A `set_num_threads` failure leaves `load()` returning `True` and logs
+- [x] A `set_num_threads` failure leaves `load()` returning `True` and logs
       `promptguard_threads_apply_failed` at WARNING with the count and the exception type in the
       message; the blanket handler's "PromptGuard model not available" line is not emitted for it;
       pinned.
-- [ ] `classification_concurrency` accepts 1–8 via `_MAX_CLASSIFICATION_CONCURRENCY`; `8` builds
+- [x] `classification_concurrency` accepts 1–8 via `_MAX_CLASSIFICATION_CONCURRENCY`; `8` builds
       `asyncio.Semaphore(8)`; `9` refuses boot with `ExtractionConfigurationError`; the default stays
       1; `extraction_concurrency` stays 1–1.
-- [ ] Two concurrent `/retrieve` classifications overlap at concurrency 2 and serialise at 1 (fake
+- [x] Two concurrent `/retrieve` classifications overlap at concurrency 2 and serialise at 1 (fake
       classifier with timestamps; the `/retrieve` semaphore from spec 2 US-006).
-- [ ] `PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES` (64 MiB) exists, is named provisional in its comment
+- [x] `PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES` (64 MiB) exists, is named provisional in its comment
       and in the docs with its derivation and its no-measurement caveat; `PARENT_RESERVATION_BYTES`
       (512 MiB) is a named constant and `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` holds the 22M row
       at `0`; the rule has the five terms (the parent constant plus the selected model's delta row,
@@ -408,7 +408,7 @@ unchanged.
       and the monkeypatched-delta model case (1440 MiB, `parent_bytes` reflecting the row) each warn
       against 1 GiB; `/health` is 200 either way; pinned with a patched `_cgroup_memory_snapshot`;
       `MONITORING.md`'s startup table has both new WARNING rows.
-- [ ] The `classification_concurrency` rows in `docs/configuration.md`'s `extraction:` table and
+- [x] The `classification_concurrency` rows in `docs/configuration.md`'s `extraction:` table and
       `ENV_REFERENCE.md`'s `extraction:` table (the rows reading "Pinned … same reason" today —
       `:489` / `:118` at planning time) state the 1–8 range, the memory rule with its named coefficient,
       the OOM consequence, the boot WARNING, the routes it bounds and the one-sentence
@@ -417,12 +417,12 @@ unchanged.
       carve-out; the `extraction_concurrency` row (the one reading "Pinned at 1") is unchanged; the
       `promptguard_threads` rows exist in both files' top-level tables with the quota-agnostic wording;
       `promptguard_threads` is in `KNOWN_CONFIG_KEYS`.
-- [ ] `promptguard/classifier.py` is in spec 3 US-003's AST code-parity reader list.
-- [ ] `git diff --stat` shows no change under `pipeline/orchestrator.py`, `pipeline/contract.py`,
+- [x] `promptguard/classifier.py` is in spec 3 US-003's AST code-parity reader list.
+- [x] `git diff --stat` shows no change under `pipeline/orchestrator.py`, `pipeline/contract.py`,
       `models.py` or `contract/`.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-004: Search latency targets as config — the overrun counter and the sanitization high-water mark
 
