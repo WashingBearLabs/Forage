@@ -1,10 +1,10 @@
 <!-- Template Version: 2.0.1 -->
 # AGENT_README.md
 
-> Last updated: 2026-09-23
-> Updated by: Copilot (hardening-release US-004)
+> Last updated: 2026-09-24
+> Updated by: Copilot (hardening session close-out)
 
-Navigation guide for AI assistants working in Forage. Forage is a ~5,100-line single
+Navigation guide for AI assistants working in Forage. Forage is a single
 service, so this documentation set is deliberately smaller than a monorepo's — every file
 listed below exists, and nothing is listed that doesn't.
 
@@ -52,12 +52,18 @@ listed below exists, and nothing is listed that doesn't.
 22. **`../docs/configuration.md`** — the complete env + `config.yaml` reference
 23. **`../contract/GOVERNANCE.md`** — the contract bump policy and the thirteen rulings
 
-**For planned work:**
-24. **`specs/epic-forage-extraction-forage-side.md`** — the (completed) Forage-side epic;
-    the four feature specs it wrapped are in `specs/archive/`
+**For project status and planned work:**
+24. **`specs/epic-forage-hardening.md`** — completed at v1.2.1 on 2026-09-23;
+    all eight children are in `specs/archive/`. The verified release and consumer
+    handoff are in `specs/archive/feature-hardening-release.md`. The earlier
+    extraction and search epic wrappers also remain in `specs/`
 25. **`roadmap/MILESTONES.md`**, **`roadmap/BACKLOG.md`**
-26. **`PRODUCT_VISION.md`** — currently the unfilled template; run `/kit-tools:create-vision`
-    before planning the next epic
+26. **`PRODUCT_VISION.md`** — populated product tiers and shipped outcomes;
+    T2.2 hardening is shipped; T2.3 is planned and validated as
+    `specs/epic-forage-injection-corpus.md` + five `feature-corpus-*.md` specs,
+    whose code anchors predate hardening and must be re-verified against the
+    shipped tree before execution. The 86M vendoring and benchmark owner gates
+    remain explicitly unrun
 
 ---
 
@@ -65,10 +71,9 @@ listed below exists, and nothing is listed that doesn't.
 
 - [ ] Read `SYNOPSIS.md` for current state
 - [ ] Read `../CLAUDE.md` for the invariants
-- [ ] Check `specs/` for anything in flight: `epic-search-providers` shipped as `v1.1.0`
-      (2026-09-18, archived); `epic-forage-hardening` (eight specs, validated to needs-work
-      2026-09-19) is next to execute, then `epic-forage-injection-corpus` (five specs, planned
-      2026-09-19, `validate-epic` pending). New specs land here via `/kit-tools:plan-epic`.
+- [ ] Check `specs/` and the roadmap for anything in flight; hardening closed at
+      v1.2.1 on 2026-09-23; `epic-forage-injection-corpus` is next (re-anchor first).
+      Read the hardening archived handoff before consumer or corpus work
 - [ ] Scan `docs/GOTCHAS.md`
 - [ ] Confirm the environment: `uv sync --extra dev && uv run pytest` (expect ALL green, zero
       failures — the current count lives in `testing/TESTING_GUIDE.md`; 4253 collected

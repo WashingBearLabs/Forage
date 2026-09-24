@@ -2,6 +2,7 @@
 # SESSION_LOG.md
 
 > Running history of development sessions. Enables continuity across sessions.
+> Last updated: 2026-09-24
 
 ---
 
@@ -387,3 +388,116 @@ planned and validated); `epic-forage-injection-corpus` + `feature-corpus-*.md` (
   US-005/US-004 and spec 8 US-003/US-005), then the corpus epic (`depends_on: hardening-release`).
 - Push Poppy `b56a47fc` when the owner asks (not authorised from here).
 - Standing: never put a token on a command line; corpus payloads are data, never quoted.
+
+---
+
+## 2026-09-19 → 2026-09-20 — `validate-epic forage-injection-corpus` (recovered from orphaned scratchpad)
+
+> Recovered 2026-09-24 at session start. The scratchpad also held the 2026-09-21 hardening
+> "parked" note; that note is superseded (hardening shipped `v1.2.1` on 2026-09-23) and was
+> processed on the separate `docs/close-hardening-session` branch (`2a04506`), so it is not
+> repeated here.
+
+**Focus:** Validate the five-spec `epic-forage-injection-corpus` (PR #29).
+**Feature specs:** `epic-forage-injection-corpus` + all five `feature-corpus-*.md`.
+
+### Accomplished
+
+- Three validation rounds, 55 reviewer runs, closed at `needs-work` (commit `3ad55af`,
+  +778/-79 across the wrapper and five specs). Round 1 (30 reviewers): 19 critical / 98
+  warning. Round 2 (17): 14 / 84, all in the round-1 fixes. Round 3 (8): 11 reported, 7 of
+  them stale reads of mid-round fixes; the 4 genuinely open were fixed at close-out.
+- Reviewers ran on Sonnet 5 (1–5) + Opus 5 (second opinion) to limit session burn;
+  `8d06342` then kept the validator on Opus.
+- Wrapper ruling 14 corrected in flight (said 13 categories / 8 genres against the specs'
+  16 / 9).
+
+### Decisions
+
+- Owner: gitleaks claim corrected, no new CI job — the corpus lint is the only automated
+  gate (`ci.yml`'s `secret-grep` scans image layers, never repo files).
+- Owner: corpus + bypass catalog published in full (wrapper ruling 14b, `docs/corpus.md`
+  §"Reading the results").
+- Owner: organic regex hits stay in their genre and count toward headline FPR;
+  deliberately-authored `over_defence_probe` records carry the ≥2-per-regex coverage floor.
+- Closed at `needs-work` rather than chased to zero (same call as hardening, 2026-09-19);
+  residue recorded per spec under "Validation residue". Every anchor needs re-verification
+  post-hardening (ruling 5).
+- Lesson: an edit script that asserts after replacing but writes only at the end discards
+  earlier edits when a later assert fails — write per edit, or assert before replacing.
+
+### Open / Next
+
+- Re-anchor the corpus specs against the shipped hardening tree (`v1.2.1`, contract 1.3.0);
+  this branch is based on `20ddb2a` and predates all hardening changes on `main`.
+- Merge PR #29 after re-anchoring; then execute (`depends_on: hardening-release`, now met).
+
+---
+
+## 2026-09-24 — Close hardening handoff and release recovery
+
+**Focus:** Close the controlled Claude-to-Copilot handoff and hardening work
+completed on 2026-09-22/23. Scope is hardening only; separate corpus-planning
+notes and the planning checkout remain untouched.
+**Specs:** `specs/epic-forage-hardening.md` and its eight archived
+`specs/archive/feature-hardening-*.md` children, especially
+`specs/archive/feature-hardening-release.md` (5/5 stories, 39 acceptance criteria).
+
+### Accomplished
+
+- Resumed the interrupted epic through a backed-up, controlled handoff; honored
+  the owner-only release pause rather than treating it as another automated retry.
+- Closed the whole-epic review findings without weakening the exact provider
+  read ceiling. Final coverage includes transport-level bounds, classifier
+  warmup admission, equivalent IPv6 policy literals and Unicode revision inputs.
+- Merged #30, then diagnosed the real default-model failure after v1.2.0
+  publication. #31 restricts generic-label handling to the exact verified 22M
+  pin and adds a genuine, manifest-hash-checked config regression.
+- Published and verified v1.2.1 / contract 1.3.0 at `e8cf83c`, including real
+  healthy/degraded boot, keyed/keyless Valkey, a signed-cache hit, real search,
+  runtime redaction and anonymous pull. The final suite had 4253 passing tests,
+  no xfails; strict static, contract and protected CI gates passed.
+- Withdrew v1.2.0. GitHub recreated its tag when the withdrawal notice was
+  edited; removed it again and cancelled the triggered run before any publish
+  steps executed. The final absence checks and replacement digest are in
+  `../docs/releases.md` and the archived release handoff.
+- Merged #32, archived all eight specs, and reconciled 42/42 story records.
+  Two of those records are the sanctioned 86M gate-not-run alternatives,
+  not executed vendoring or benchmark measurements.
+- Backed up the execution's administrative artifacts, then removed its clean
+  worktree and merged branch without force. Registry census is empty.
+  Shared model weights and Docker authentication were preserved.
+
+### Documentation Updated
+
+- The merged handoff already updated the release/spec records, roadmap, vision,
+  synopsis, architecture/operator guides, testing guide and model-label/withdrawal
+  gotchas. Those completed records were reviewed, not re-dated or re-opened.
+- This close-out adds this log entry and refreshes `AGENT_README.md`'s stale
+  navigation: the vision is populated, hardening is shipped, and its release
+  evidence is archived.
+
+### Decisions
+
+- Keep unknown model pins and unexpected label mappings fail-closed; synthetic
+  model doubles do not replace a real weights-loaded candidate-image witness.
+- Finalize Release drafts/notices before deleting tags, then verify remote tag
+  and registry absence. The operational incident is retained, not hidden.
+- The owner reported no additional learnings. The hardening scratchpad was
+  processed from its verified backup; its live file was already removed with
+  the execution worktree. Preserve the unrelated planning scratchpad.
+- Retain the isolated handoff checkout for `docs/close-hardening-session` and
+  the detached withdrawn-release checkout as incident evidence; neither is a
+  registered execution. This close-out does not publish or merge anything.
+- This close-out is documentation-only; no additional code-quality review or
+  release operation is needed. Previously completed implementation reviews and
+  runtime evidence remain in the archived handoff.
+
+### Open / Next
+
+- Re-anchor the existing injection-corpus planning against the shipped hardening
+  tree before execution; that separate planning session is not closed here.
+- 86M vendoring and reference-envelope benchmarks remain unrun; only 22M is
+  allowlisted. No measurements or expanded model support are implied.
+- Accepted Stage-5 fetch-decoder residual `2026-09-16-020` remains open.
+- Poppy's consumer handoff/pinning remains separate; no Poppy files were changed.
