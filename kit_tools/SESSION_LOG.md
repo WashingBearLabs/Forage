@@ -2,6 +2,7 @@
 # SESSION_LOG.md
 
 > Running history of development sessions. Enables continuity across sessions.
+> Last updated: 2026-09-24
 
 ---
 
@@ -317,3 +318,186 @@ handoff table `epic-search-providers`' Poppy counterpart pins from.
   table in `feature-search-release.md` to pin the `v1.1.0` digest — nothing here pushes to Poppy.
 - `epic-forage-hardening` and `epic-forage-injection-corpus` remain on-hold stubs needing
   `/kit-tools:plan-epic`.
+
+## 2026-09-16 → 2026-09-19 — `epic-search-providers` supervised to `v1.1.0`; loose ends; `forage-hardening` planned and validated; `forage-injection-corpus` planned
+
+**Duration:** four days of supervised execution and planning (2026-09-16 → 2026-09-19), across
+several context windows
+**Focus:** Supervise `epic-search-providers` to `v1.1.0`, clear the loose ends, plan and validate
+`epic-forage-hardening`, plan `epic-forage-injection-corpus`.
+**Feature specs:** `epic-search-providers` (all five specs, archived — executed by the guarded
+orchestrator under supervision); `epic-forage-hardening` + `feature-hardening-*.md` (eight,
+planned and validated); `epic-forage-injection-corpus` + `feature-corpus-*.md` (five, planned).
+
+### Accomplished
+
+- **Supervision of the guarded run (09-16 → 09-18).** Three stories that kept timing out at the
+  M-size 900 s cap were split by the supervisor (spec 2 US-001 → US-010/US-011, spec 2 US-003 →
+  US-012/US-013, spec 4 US-001 → US-010/US-011); spec 4 US-010's exhausted attempt was salvaged
+  from the reflog (`8f7dd0f`) and finished as a follow-up story; the orchestrator's 24 h safety net
+  fired and the run was relaunched with `size: L` on specs 4–5. The Brave owner gate was met with
+  an envelope-only synthetic fixture (`9794cba`); PR #23 merged as `06b01b1`; `v1.1.0` was cut
+  and verified (four-way sha256 `11435a17…`); the orchestrator closed 25/25 stories in 36 attempts
+  / 93 sessions and opened PR #24 (merged `5bbc30b`); worktree, branch and registry torn down.
+- **Loose ends (09-19).** Rulings 8–34 and the `v1.1.0` handoff replayed into Poppy's
+  `EPIC3_SEARCH_RELIABILITY_SPLIT.md` (Poppy `b56a47fc`, **not pushed**). The 83 advisory audit
+  findings triaged: 42 fix-now landed as PR #25 (`c311464`; code+tests `effe060`, docs `a2b1614`;
+  2105 tests green), 20 folded into the hardening epic, 1 into the corpus epic, the rest deferred,
+  fixed or dismissed with statuses in `AUDIT_FINDINGS.md`.
+- **`epic-forage-hardening` planned (PR #27, `642c700`) and validated (PR #28, `20ddb2a`).**
+  Eight specs, 42 stories, one contract window 1.2.0 → 1.3.0; five validation rounds drove
+  criticals 51 → 32 → 28 → 21 → 15 (round 5 applied without re-review); 44 wrapper rulings; 46
+  known-risk bullets; summary written as `needs-work`, 48 trace events emitted.
+- **`epic-forage-injection-corpus` planned (PR #29, open).** Stub replaced by a wrapper (owner
+  decisions 1–4, rulings 5–16) and five specs / 21 stories: harness, attacks, benign, recording
+  (two owner gates), gates. Landscape research (16 sourced findings) folded in: licences read at
+  source (AgentDojo / LLMail-Inject / CyberSecEval in; BIPIA / WASP out), Prompt Guard 2's dropped
+  injection label → stage-2 / stage-3 catch reported separately, Prompt Overflow density and Zenity
+  repetition as sweep categories, cassette miss as a hard error.
+
+### Documentation Updated
+
+- [x] `kit_tools/specs/` — hardening wrapper + eight specs (validation close-out), corpus wrapper +
+      five specs; `kit_tools/.validate_epic_summary.json`
+- [x] `kit_tools/roadmap/BACKLOG.md`, `kit_tools/roadmap/MILESTONES.md`, `kit_tools/PRODUCT_VISION.md`
+      (T2.2 validated, T2.3 planned)
+- [x] `kit_tools/arch/DECISIONS.md` (recorded-score cassettes; weights never in CI)
+- [x] `kit_tools/AGENT_README.md` (in-flight epics), `kit_tools/SYNOPSIS.md` (status)
+- [x] `kit_tools/AUDIT_FINDINGS.md` (triage statuses, gitignored)
+- [x] Poppy: `kit_tools/specs/EPIC3_SEARCH_RELIABILITY_SPLIT.md` (rulings replay, unpushed)
+
+### Decisions
+
+- Recorded-score cassettes over weights in CI (see `arch/DECISIONS.md` 2026-09-19).
+- Hardening: one contract window per epic, opened in spec 1 US-004 and frozen in spec 8 US-002;
+  cache HMAC with an optional key that is loud when absent; fail-closed is an operator floor, off
+  by default; the model is configurable with 22M staying the default; benchmark and release cut are
+  owner gates.
+- Validation was closed at `needs-work` rather than chased to zero: the two precision reviewers
+  surfaced new spec-precision items every round; remaining warnings live in each spec's Known-risks
+  section.
+- Supervisor practice: split a story on repeated size-cap timeouts when the last attempt was
+  substantively right; check `git reflog` before assuming a failed attempt's work is gone; a
+  queued `pause` control is not self-clearing.
+- The corpus epic flips no security default (contiguity, 86M); it produces the decision table.
+
+### Open / Next
+
+- Merge PR #29 (owner), then `/kit-tools:validate-epic forage-injection-corpus`.
+- Execute `epic-forage-hardening` (`/kit-tools:execute-epic`, guarded; owner gates in spec 7
+  US-005/US-004 and spec 8 US-003/US-005), then the corpus epic (`depends_on: hardening-release`).
+- Push Poppy `b56a47fc` when the owner asks (not authorised from here).
+- Standing: never put a token on a command line; corpus payloads are data, never quoted.
+
+---
+
+## 2026-09-19 → 2026-09-20 — `validate-epic forage-injection-corpus` (recovered from orphaned scratchpad)
+
+> Recovered 2026-09-24 at session start. The scratchpad also held the 2026-09-21 hardening
+> "parked" note; that note is superseded (hardening shipped `v1.2.1` on 2026-09-23) and was
+> processed on the separate `docs/close-hardening-session` branch (`2a04506`), so it is not
+> repeated here.
+
+**Focus:** Validate the five-spec `epic-forage-injection-corpus` (PR #29).
+**Feature specs:** `epic-forage-injection-corpus` + all five `feature-corpus-*.md`.
+
+### Accomplished
+
+- Three validation rounds, 55 reviewer runs, closed at `needs-work` (commit `3ad55af`,
+  +778/-79 across the wrapper and five specs). Round 1 (30 reviewers): 19 critical / 98
+  warning. Round 2 (17): 14 / 84, all in the round-1 fixes. Round 3 (8): 11 reported, 7 of
+  them stale reads of mid-round fixes; the 4 genuinely open were fixed at close-out.
+- Reviewers ran on Sonnet 5 (1–5) + Opus 5 (second opinion) to limit session burn;
+  `8d06342` then kept the validator on Opus.
+- Wrapper ruling 14 corrected in flight (said 13 categories / 8 genres against the specs'
+  16 / 9).
+
+### Decisions
+
+- Owner: gitleaks claim corrected, no new CI job — the corpus lint is the only automated
+  gate (`ci.yml`'s `secret-grep` scans image layers, never repo files).
+- Owner: corpus + bypass catalog published in full (wrapper ruling 14b, `docs/corpus.md`
+  §"Reading the results").
+- Owner: organic regex hits stay in their genre and count toward headline FPR;
+  deliberately-authored `over_defence_probe` records carry the ≥2-per-regex coverage floor.
+- Closed at `needs-work` rather than chased to zero (same call as hardening, 2026-09-19);
+  residue recorded per spec under "Validation residue". Every anchor needs re-verification
+  post-hardening (ruling 5).
+- Lesson: an edit script that asserts after replacing but writes only at the end discards
+  earlier edits when a later assert fails — write per edit, or assert before replacing.
+
+### Open / Next
+
+- Re-anchor the corpus specs against the shipped hardening tree (`v1.2.1`, contract 1.3.0);
+  this branch is based on `20ddb2a` and predates all hardening changes on `main`.
+- Merge PR #29 after re-anchoring; then execute (`depends_on: hardening-release`, now met).
+
+---
+
+## 2026-09-24 — Close hardening handoff and release recovery
+
+**Focus:** Close the controlled Claude-to-Copilot handoff and hardening work
+completed on 2026-09-22/23. Scope is hardening only; separate corpus-planning
+notes and the planning checkout remain untouched.
+**Specs:** `specs/epic-forage-hardening.md` and its eight archived
+`specs/archive/feature-hardening-*.md` children, especially
+`specs/archive/feature-hardening-release.md` (5/5 stories, 39 acceptance criteria).
+
+### Accomplished
+
+- Resumed the interrupted epic through a backed-up, controlled handoff; honored
+  the owner-only release pause rather than treating it as another automated retry.
+- Closed the whole-epic review findings without weakening the exact provider
+  read ceiling. Final coverage includes transport-level bounds, classifier
+  warmup admission, equivalent IPv6 policy literals and Unicode revision inputs.
+- Merged #30, then diagnosed the real default-model failure after v1.2.0
+  publication. #31 restricts generic-label handling to the exact verified 22M
+  pin and adds a genuine, manifest-hash-checked config regression.
+- Published and verified v1.2.1 / contract 1.3.0 at `e8cf83c`, including real
+  healthy/degraded boot, keyed/keyless Valkey, a signed-cache hit, real search,
+  runtime redaction and anonymous pull. The final suite had 4253 passing tests,
+  no xfails; strict static, contract and protected CI gates passed.
+- Withdrew v1.2.0. GitHub recreated its tag when the withdrawal notice was
+  edited; removed it again and cancelled the triggered run before any publish
+  steps executed. The final absence checks and replacement digest are in
+  `../docs/releases.md` and the archived release handoff.
+- Merged #32, archived all eight specs, and reconciled 42/42 story records.
+  Two of those records are the sanctioned 86M gate-not-run alternatives,
+  not executed vendoring or benchmark measurements.
+- Backed up the execution's administrative artifacts, then removed its clean
+  worktree and merged branch without force. Registry census is empty.
+  Shared model weights and Docker authentication were preserved.
+
+### Documentation Updated
+
+- The merged handoff already updated the release/spec records, roadmap, vision,
+  synopsis, architecture/operator guides, testing guide and model-label/withdrawal
+  gotchas. Those completed records were reviewed, not re-dated or re-opened.
+- This close-out adds this log entry and refreshes `AGENT_README.md`'s stale
+  navigation: the vision is populated, hardening is shipped, and its release
+  evidence is archived.
+
+### Decisions
+
+- Keep unknown model pins and unexpected label mappings fail-closed; synthetic
+  model doubles do not replace a real weights-loaded candidate-image witness.
+- Finalize Release drafts/notices before deleting tags, then verify remote tag
+  and registry absence. The operational incident is retained, not hidden.
+- The owner reported no additional learnings. The hardening scratchpad was
+  processed from its verified backup; its live file was already removed with
+  the execution worktree. Preserve the unrelated planning scratchpad.
+- Retain the isolated handoff checkout for `docs/close-hardening-session` and
+  the detached withdrawn-release checkout as incident evidence; neither is a
+  registered execution. This close-out does not publish or merge anything.
+- This close-out is documentation-only; no additional code-quality review or
+  release operation is needed. Previously completed implementation reviews and
+  runtime evidence remain in the archived handoff.
+
+### Open / Next
+
+- Re-anchor the existing injection-corpus planning against the shipped hardening
+  tree before execution; that separate planning session is not closed here.
+- 86M vendoring and reference-envelope benchmarks remain unrun; only 22M is
+  allowlisted. No measurements or expanded model support are implied.
+- Accepted Stage-5 fetch-decoder residual `2026-09-16-020` remains open.
+- Poppy's consumer handoff/pinning remains separate; no Poppy files were changed.

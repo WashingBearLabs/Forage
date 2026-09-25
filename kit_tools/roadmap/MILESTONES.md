@@ -66,6 +66,12 @@ Poppy.
       example `docker-compose.yml` that makes the quickstart real.
 
 ---
+- [ ] **T2.3 Injection regression corpus** (`epic-forage-injection-corpus`, planned 2026-09-19,
+      five specs / 21 stories; P1, executes after `epic-forage-hardening`): attack + benign corpus,
+      hermetic route drivers, recorded-score cassettes (owner gates: 22M, 86M), generated baseline +
+      floors gate in the `test` job, CI step summary, contiguity / 86M decision table. No runtime
+      change; wrapper `../specs/epic-forage-injection-corpus.md`. Next:
+      `/kit-tools:validate-epic forage-injection-corpus`.
 
 ## Exit Criteria for `v1.0.0`
 
@@ -88,6 +94,8 @@ Poppy.
 Poppy pins the published images and deletes its in-tree copy (both specs execute in
 Poppy). Once that lands, the coexistence rule ends and this repo becomes the sole source
 of truth. Forage-side sequence after `v1.1.0`: `epic-forage-hardening` (`v1.2.1`, shipped
-2026-09-23), then `epic-forage-injection-corpus` (T2.3, plannable — it measures what the
-hardening epic builds), then the T3 items (additional providers, provenance hooks) and the
+2026-09-23), then `epic-forage-injection-corpus` (T2.3, planned and validated 2026-09-19 — five
+specs, 21 stories, two owner gates for the cassette recordings; it measures what the hardening
+epic builds and ships no runtime change, so it cuts no release of its own; anchors need
+re-verification against the shipped tree before execution), then the T3 items (additional providers, provenance hooks) and the
 deferred `forage/` package rename.

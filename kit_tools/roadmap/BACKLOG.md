@@ -49,12 +49,18 @@ Deliberately deferred at extraction — the flat layout keeps the Dockerfile,
 `sanitizer_revision`'s hashed source paths, and the whole suite working unchanged.
 Cosmetic only, and it touches `sanitizer_revision`, so it needs its own change.
 
-### Injection regression corpus in CI (T2.3)
+### Injection regression corpus in CI (T2.3) — planned
 **Priority:** Medium · **Effort:** Large
-`epic-forage-injection-corpus` is now plannable: `epic-forage-hardening` shipped
-as v1.2.1 on 2026-09-23. It measures the shipped classifier/parity changes.
-Do not assume 86M weights or benchmark numbers exist: those two owner gates
-remain explicitly unrun, and only 22M is allowlisted.
+`epic-forage-injection-corpus` was planned on 2026-09-19 (`/kit-tools:plan-epic`; five specs, 21
+stories — `feature-corpus-{harness,attacks,benign,recording,gates}.md`) and validated to
+`needs-work` the same week: a licence-clean attack corpus and benign counter-corpus driven
+hermetically through `POST /search`, `/retrieve` and `/extract`, with the real classifier measured
+once per model revision on a host and replayed in CI from committed per-window score cassettes; the
+gate is a generated baseline (exact match) plus measured floors. Ships no runtime change. Its
+dependency `epic-forage-hardening` shipped as v1.2.1 on 2026-09-23, so the specs' code anchors must
+be re-verified against the shipped tree before execution (wrapper ruling 5). Do not assume 86M
+weights or benchmark numbers exist: those two owner gates remain explicitly unrun, and only 22M is
+allowlisted.
 
 ### Structured request logging / tracing
 **Priority:** Low · **Effort:** Small
