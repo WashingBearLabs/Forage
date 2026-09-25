@@ -1,46 +1,81 @@
-"""PromptGuard 2 22M classifier — model loading, inference, chunking.
+"""PromptGuard 2 classifier — model loading, inference, chunking.
 
-Wraps Meta's Prompt-Guard-2-22M (DeBERTa-v3-base sequence classifier)
+Wraps Meta's Prompt Guard 2 sequence classifiers (22M by default)
 for prompt-injection detection.  Runs on CPU only.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+import os
+import threading
+from collections.abc import Mapping
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
+
+from pipeline.config_bounds import bounded_int
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     # Import-time only: torch and transformers are heavyweight and optional at
     # runtime (the classifier degrades to "unavailable" without them), so the
-    # real imports stay inside load()/classify(). See typings/transformers for
+    # real imports stay inside load()/classify_windows(). See typings/transformers for
     # the stub that makes the auto-class factories return something knowable.
     from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
 logger = logging.getLogger(__name__)
 
-MODEL_ID = "meta-llama/Llama-Prompt-Guard-2-22M"
+DEFAULT_MODEL_ID = "meta-llama/Llama-Prompt-Guard-2-22M"
+# This verified snapshot omits label names. Meta's Prompt Guard 2 inference
+# uses the last binary logit for maliciousness; never assume that for a new pin.
+_PINNED_GENERIC_LABEL_INDICES = {
+    (DEFAULT_MODEL_ID, "11614a155199674a0a95e6602d6ab0417b790ed0"): 1,
+}
 MAX_SEQ_LEN = 512
 CHUNK_OVERLAP = 64
 MAX_PROMPTGUARD_CHUNKS = 64
-# Prompt-Guard-2-22M has 2 output classes: BENIGN (0) and INJECTION (1).
-# (The older 86M model had 3 classes with INDIRECT at index 1.)
-_INJECTION_LABEL_INDEX = 1
+
+
+class PromptGuardThreadsConfigurationError(ValueError):
+    """Raised when the configured CPU thread count is invalid."""
+
+
+def promptguard_threads_from_config(config: dict[str, Any]) -> int:
+    """Read the boot thread count; zero leaves both libraries' defaults alone."""
+    return bounded_int(
+        config,
+        "promptguard_threads",
+        0,
+        minimum=0,
+        maximum=16,
+        error=PromptGuardThreadsConfigurationError,
+    )
 
 
 class PromptGuardClassifier:
-    """Wraps PromptGuard 2 22M for injection detection.
+    """Wraps PromptGuard 2 for injection detection.
 
     Call :meth:`load` once at startup, then :meth:`classify` per request.
     Degrades gracefully — if the model is unavailable, ``loaded`` stays
-    ``False`` and :meth:`classify` returns ``(0.0, [])``.
+    ``False`` and :meth:`classify` returns ``(0.0, [])``. Use
+    :meth:`classify_windows` for scores and texts in document order.
     """
 
     def __init__(self) -> None:
         self._model: PreTrainedModel | None = None
         self._tokenizer: PreTrainedTokenizerBase | None = None
+        # Fast tokenizers configure shared backend truncation/padding before
+        # encoding. Keep each complete tokenizer operation atomic across
+        # classification workers, but never hold this lock during inference.
+        self._tokenizer_lock = threading.Lock()
         self._loaded: bool = False
+        self._threads = 0
+        # Prompt Guard 2 is binary; the three-class model was Prompt Guard 1.
+        # load() verifies the labels and replaces this default from the config.
+        self._injection_label_index = 1
+
+    def configure_threads(self, threads: int) -> None:
+        """Retain the validated boot setting for every load attempt."""
+        self._threads = threads
 
     @property
     def loaded(self) -> bool:
@@ -50,6 +85,7 @@ class PromptGuardClassifier:
     def load(
         self,
         *,
+        model_id: str | None = None,
         revision: str | None = None,
         cache_dir: Path | str | None = None,
         local_files_only: bool = False,
@@ -60,16 +96,36 @@ class PromptGuardClassifier:
         dependencies are not available (torch / transformers missing,
         model not downloaded, etc.).
 
-        *revision* pins the commit sha to open, *cache_dir* is the **hub**
+        *model_id* defaults to :data:`DEFAULT_MODEL_ID`, *revision* pins the
+        commit sha to open, and *cache_dir* is the **hub**
         cache (``$HF_HOME/hub``) the weights were verified in, and
         *local_files_only* forbids the hub round-trip transformers otherwise
         makes even on a full cache hit. ``model_fetcher.acquire_and_load()``
-        supplies all three after :func:`model_fetcher.verify_weights` has
+        supplies the identity and cache after :func:`model_fetcher.verify_weights` has
         blessed the exact file set; the defaults preserve the pre-US-001
         behaviour for any other caller.
         """
+        self._loaded = False
+        model_id = DEFAULT_MODEL_ID if model_id is None else model_id
+        if cache_dir is not None and not Path(cache_dir).is_dir():
+            logger.warning("model_cache_dir_missing")
+            return False
+        model: PreTrainedModel
+        tokenizer: PreTrainedTokenizerBase
         try:
             import torch
+
+            if self._threads > 0:
+                try:
+                    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+                    torch.set_num_threads(self._threads)
+                except Exception as exc:
+                    logger.warning(
+                        "promptguard_threads_apply_failed — n=%d error=%s",
+                        self._threads,
+                        type(exc).__name__,
+                    )
+
             from transformers import (
                 AutoModelForSequenceClassification,
                 AutoTokenizer,
@@ -81,8 +137,8 @@ class PromptGuardClassifier:
             # import is not a dead name that a linter would strip.
             logger.debug("PromptGuard loading against torch %s", torch.__version__)
 
-            self._tokenizer = AutoTokenizer.from_pretrained(
-                MODEL_ID,
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_id,
                 revision=revision,
                 cache_dir=cache_dir,
                 local_files_only=local_files_only,
@@ -96,17 +152,12 @@ class PromptGuardClassifier:
             # if verification were bypassed. Pinned by
             # tests/test_model_fetcher.py.
             model = AutoModelForSequenceClassification.from_pretrained(
-                MODEL_ID,
+                model_id,
                 use_safetensors=True,
                 revision=revision,
                 cache_dir=cache_dir,
                 local_files_only=local_files_only,
             )
-            model.eval()
-            self._model = model
-            self._loaded = True
-            logger.info("PromptGuard 2 model loaded successfully")
-            return True
         except Exception:
             logger.warning(
                 "PromptGuard model not available — ML injection detection disabled",
@@ -114,6 +165,36 @@ class PromptGuardClassifier:
             )
             self._loaded = False
             return False
+
+        id2label: object = getattr(getattr(model, "config", None), "id2label", None)
+        labels: Mapping[object, object] = (
+            cast(Mapping[object, object], id2label)
+            if isinstance(id2label, Mapping)
+            else {}
+        )
+        ordered_labels = [
+            label.upper() if isinstance(label, str) else None
+            for label in (labels.get(0), labels.get(1))
+        ]
+        injection_index: int | None = None
+        if len(labels) == 2:
+            if set(ordered_labels) == {"BENIGN", "INJECTION"}:
+                injection_index = ordered_labels.index("INJECTION")
+            elif ordered_labels == ["LABEL_0", "LABEL_1"] and revision is not None:
+                injection_index = _PINNED_GENERIC_LABEL_INDICES.get(
+                    (model_id, revision)
+                )
+        if injection_index is None:
+            logger.warning("model_labels_unexpected")
+            return False
+
+        self._injection_label_index = injection_index
+        model.eval()
+        self._model = model
+        self._tokenizer = tokenizer
+        self._loaded = True
+        logger.info("PromptGuard 2 model loaded successfully")
+        return True
 
     # -----------------------------------------------------------------
     # Chunking
@@ -130,7 +211,8 @@ class PromptGuardClassifier:
         if tokenizer is None:
             return [text]
 
-        token_ids = tokenizer.encode(text, add_special_tokens=False)
+        with self._tokenizer_lock:
+            token_ids = tokenizer.encode(text, add_special_tokens=False)
 
         if len(token_ids) <= MAX_SEQ_LEN:
             return [text]
@@ -139,7 +221,8 @@ class PromptGuardClassifier:
         step = MAX_SEQ_LEN - CHUNK_OVERLAP
         for start in range(0, len(token_ids), step):
             window = token_ids[start : start + MAX_SEQ_LEN]
-            chunk_text = tokenizer.decode(window, skip_special_tokens=True)
+            with self._tokenizer_lock:
+                chunk_text = tokenizer.decode(window, skip_special_tokens=True)
             chunks.append(chunk_text)
             # Stop if we've consumed all tokens
             if start + MAX_SEQ_LEN >= len(token_ids):
@@ -165,13 +248,33 @@ class PromptGuardClassifier:
 
         If the model is not loaded, returns ``(0.0, [])``.
         """
+        scores, chunks = self.classify_windows(text, max_chunks=max_chunks)
+        if not scores:
+            return 0.0, []
+
+        max_score = max(scores)
+        flagged = [chunks[i] for i, s in enumerate(scores) if s == max_score]
+
+        return max_score, flagged
+
+    def classify_windows(
+        self,
+        text: str,
+        *,
+        max_chunks: int | None = None,
+    ) -> tuple[list[float], list[str]]:
+        """Return ``(scores, chunks)`` in document order, one score per chunk.
+
+        Enforce *max_chunks* before inference, never classify only a prefix.
+        If the model is not loaded, return ``([], [])`` with a warning.
+        """
         model = self._model
         tokenizer = self._tokenizer
         if not self._loaded or model is None or tokenizer is None:
             logger.warning(
                 "classify() called but model not loaded — returning safe fallback"
             )
-            return 0.0, []
+            return [], []
 
         import torch
 
@@ -183,28 +286,23 @@ class PromptGuardClassifier:
         scores: list[float] = []
 
         for chunk in chunks:
-            inputs = tokenizer(
-                chunk,
-                return_tensors="pt",
-                truncation=True,
-                max_length=MAX_SEQ_LEN,
-                padding=True,
-            )
+            with self._tokenizer_lock:
+                inputs = tokenizer(
+                    chunk,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=MAX_SEQ_LEN,
+                    padding=True,
+                )
             with torch.no_grad():
                 outputs = model(**inputs)
 
             # Softmax over logits → probability of injection class
             probs = torch.softmax(outputs.logits, dim=-1)
-            injection_prob = float(probs[0, _INJECTION_LABEL_INDEX].item())
+            injection_prob = float(probs[0, self._injection_label_index].item())
             scores.append(injection_prob)
 
-        if not scores:
-            return 0.0, []
-
-        max_score = max(scores)
-        flagged = [chunks[i] for i, s in enumerate(scores) if s == max_score]
-
-        return max_score, flagged
+        return scores, chunks
 
 
 class PromptGuardBudgetExceededError(ValueError):

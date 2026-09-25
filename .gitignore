@@ -16,6 +16,7 @@ kit_tools/specs/.execution-state.json
 kit_tools/specs/.execution-health.json
 kit_tools/specs/.execution-control.json
 kit_tools/specs/.orchestrator.lock
+kit_tools/specs/.orchestrator.log
 kit_tools/.pause_execution
 kit_tools/.execution-notifications
 kit_tools/.execution-events.jsonl
@@ -33,3 +34,7 @@ kit_tools/.*
 # committable in a public repo (cache-fallback US-004 verification blocker B3).
 .env
 compose/.env
+
+# Host-side benchmark output and local tokenizer snapshots
+bench/*.json
+bench/tokenizer-*/

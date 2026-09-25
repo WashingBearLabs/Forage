@@ -51,21 +51,29 @@ the numbering follows the sanitization order the contract reports.
 
 ### HTTP surface
 
+<!-- boundary-text:start -->
+
 | Endpoint | Purpose |
 |----------|---------|
 | `GET /health` | Always 200. Body carries `status` (`healthy`/`degraded`), `degraded_reasons`, `promptguard_loaded`, `cache_connected`, `cache_backend`, `search_providers`, `sanitizer_revision`, `contract_version`. **Check the body, not the status code.** |
 | `GET /metrics` | Extraction, search, retrieve, and cache counters. |
-| `POST /search` | Finds and returns provider-extracted content for a query across sources — snippets or chunks, per result `content_kind` — from the configured provider chain, every result sanitized, never cached. Honours `promptguard_fail_closed` (shared with `/retrieve`) and additionally `providers` and `allow_paid_fallback`; every result is scanned at the fixed 0.85 default at trust tier `standard` (`config.yaml`'s `promptguard_threshold` is not applied here). |
-| `POST /retrieve` | Fetches and sanitizes one caller-named URL through the full pipeline, cached by `sanitizer_revision`. Honours `promptguard_fail_closed` (shared with `/search`) and additionally `promptguard_threshold`, `trusted_domains`, `verified_domains`, `blocked_domains` and `cache_ttl_hours`. |
+| `POST /search` | Finds and returns provider-extracted content for a query across sources — snippets or chunks, per result `content_kind` — from the configured provider chain, every result sanitized, never cached. Only `/search` honours `allow_paid_fallback`, `num_results` and `providers`; every result is scanned at trust tier `standard`. Shared by both routes: `blocked_domains`, `promptguard_threshold` and `promptguard_fail_closed`. An omitted or null threshold uses the validated `config.yaml` default (shipped as 0.85); `promptguard_threshold_ceiling` bounds either choice on both routes. |
+| `POST /retrieve` | Fetches and sanitizes one caller-named URL through the full pipeline, cached by `sanitizer_revision`. Only `/retrieve` honours `cache_ttl_hours`, `extract_mode`, `trusted_domains` and `verified_domains`; the shared knobs are listed above. |
 | `POST /extract` | Extract from an uploaded document (gated behind `extract_route_enabled` in `config.yaml`). |
 
-The response contract is versioned (`contract_version`, currently **1.2.0**). Consumers
+<!-- boundary-text:end -->
+
+The response contract is versioned (`contract_version`, currently **1.3.0**). Consumers
 should refuse to activate on a mismatch rather than guess.
 
 ## Quickstart
 
 Two containers, one token. [`compose/minimal.yml`](compose/minimal.yml) is the whole
 deployment:
+
+The Forage pin is **v1.2.1 / contract 1.3.0**, published and verified on
+2026-09-23 (see [`docs/releases.md`](docs/releases.md)).
+v1.2.0 was withdrawn because its classifier rejected the verified default model.
 
 ```bash
 git clone https://github.com/WashingBearLabs/Forage && cd Forage/compose
@@ -83,10 +91,17 @@ docker compose -f minimal.yml up -d
 curl -s localhost:8020/health | jq
 ```
 
+Set `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` to size your deployment; see
+[`docs/configuration.md` § Sizing the container](docs/configuration.md#sizing-the-container)
+for the CPU/memory rules and delivery of the runtime tuning keys.
+
 [`compose/full.yml`](compose/full.yml) is the same thing with a Valkey under the content
 cache. Both publish Forage's port to `127.0.0.1` only and publish nothing else at all —
 **Forage ships no authentication**, so that binding is your first control, not Forage's
 own SSRF defenses. Read the posture note above before widening it.
+For `full.yml`, set `FORAGE_CACHE_HMAC_KEY` in `compose/.env`: without it the
+external Valkey serves cached content unsigned and `/health` reports
+`cache_unauthenticated`.
 
 Or run the image directly (private network only):
 
@@ -112,12 +127,16 @@ content cache and is genuinely optional — which mode you are in is `cache_back
 |---|---|---|
 | How you select it | leave `VALKEY_URL` **fully unset** | set `VALKEY_URL` |
 | `/health` `cache_backend` | `"memory"` | `"valkey"` |
-| `/health` when the cache is fine | `healthy` | `healthy` |
+| `/health` with an operational cache and signing enabled | `healthy` (no key needed) | `healthy` with a usable `FORAGE_CACHE_HMAC_KEY` |
+| `/health` with an operational cache but no signing key | `healthy` (process-private) | `degraded`, `cache_unauthenticated` |
 | `/health` when it is not | n/a — nothing to lose | `degraded`, `cache_unavailable` |
 | Survives a container restart | **no** | yes |
 | Shared between replicas | **no** — one uvicorn worker's process, per-container | yes |
-| Bounded by | `cache.max_entries` / `cache.max_bytes` (256 entries / 32 MiB) | your Valkey |
+| Bounded by | `cache.max_entries` (256), `cache.max_bytes` (32 MiB), `cache.max_value_bytes` (4 MiB per value) | your Valkey's total capacity; `cache.max_value_bytes` (4 MiB) per read/write |
 | Example | [`compose/minimal.yml`](compose/minimal.yml) | [`compose/full.yml`](compose/full.yml) |
+
+Health rows assume PromptGuard is loaded; otherwise `promptguard_unavailable` also
+appears. An unreachable, unsigned Valkey reports both cache reasons.
 
 Two things are easy to get wrong. **Only a *fully unset* `VALKEY_URL` means memory
 mode** — an empty string, or a `VALKEY_URL=${VALKEY_URL}` that rendered nothing, is a
@@ -125,9 +144,13 @@ Valkey you asked for and did not get, and Forage reports `degraded: cache_unavai
 rather than silently substituting a per-process cache. And the cache serves `POST
 /retrieve` only; `/search` has never been cached, in either mode.
 
-A multi-replica or restart-sensitive deployment should set `VALKEY_URL`.
+A multi-replica or restart-sensitive deployment should set `VALKEY_URL` and
+`FORAGE_CACHE_HMAC_KEY` (one CSPRNG-generated signing key shared by every replica).
+Without signing, cached `/retrieve` content is served without proof that Forage wrote
+it or re-sanitization; shared Valkey remains an open cache-poisoning path.
 [`docs/configuration.md`](docs/configuration.md) § "Cache backend selection" has the full
-five-case table.
+six-case table and the credential recipe. Rotation is **stop every replica, change the
+key, start**, never a mixed-key rolling restart.
 
 Local development:
 
@@ -145,8 +168,11 @@ runtime API, and no config database.
 
 - `VALKEY_URL` (**unset by default** — the content cache runs in memory) — content-cache
   connection string. Only a fully unset value selects memory mode; an empty or broken one
-  is a configured Valkey that reports `cache_unavailable`. Supply it through an env file
-  or your secret store, not an inline `-e` flag (shell history).
+  is a configured Valkey that reports `cache_unavailable`; pair `VALKEY_URL` with
+  `FORAGE_CACHE_HMAC_KEY` to authenticate cached values. Supply both through an env file
+  or your secret store, not inline `-e` flags (shell history). The signing key is
+  runtime-only, at least 32 UTF-8 bytes from a CSPRNG, never a passphrase or build argument;
+  see [credential handling](docs/configuration.md#credential-handling-for-forage_cache_hmac_key).
 - `SEARXNG_URL` (default `http://searxng:8080`) — SearXNG base URL for `/search`.
 - `FORAGE_SEARCH_PROVIDERS` (default `searxng`) — ordered, comma-separated chain of search
   backends `POST /search` resolves once at container start; no `config.yaml` key.
@@ -218,7 +244,8 @@ weights, the Llama terms come with it.
 
 ## Status
 
-Forage is **pre-1.0 and freshly extracted**. The code and its full history were split
+Forage is **post-1.0**, with **v1.2.1 / contract 1.3.0 published and verified
+2026-09-23**, replacing withdrawn v1.2.0. The code and its full history were split
 out of the [Poppy](https://github.com/WashingBearLabs) monorepo (`services/retrieval/`,
 `config/searxng/`, `tests/retrieval/`) on 2026-09-07; see
 [`docs/bootstrap-notes.md`](docs/bootstrap-notes.md) for the pin record and the split
@@ -255,7 +282,7 @@ no client-header trust) — behind its own hermetic cross-container smoke.
 went public at the 2026-09-10 US-008 flip**; anonymous pulls verified at the gate.
 
 The optional in-memory cache shipped with contract `1.1.0` (the current contract is
-`1.2.0`), and the **frozen OpenAPI
+`1.3.0`), and the **frozen OpenAPI
 contract** is in the tree: [`contract/openapi.yaml`](contract/openapi.yaml), generated and
 checked against a committed `openapi.yaml.sha256` anchor, with the versioning rules — what
 counts as MAJOR, MINOR, PATCH or no bump, and how to vendor a verified copy — in

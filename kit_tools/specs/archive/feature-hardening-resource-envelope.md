@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: hardening-resource-envelope
-status: active
+status: completed
 session_ready: true
 depends_on: [hardening-provider-bounds]
 vision_ref: "T2.2 — Forage hardening"
@@ -12,7 +12,8 @@ epic_seq: 6
 epic_final: false
 execution_order: [US-001, US-004, US-002, US-003]
 created: 2026-09-19
-updated: 2026-09-19
+updated: 2026-09-23
+completed: 2026-09-23
 ---
 
 # Feature Spec: Configurable Resource Envelope — Sized to the Host, Not the Deployment
@@ -372,7 +373,7 @@ unchanged.
   this story.
 
 **Acceptance Criteria:**
-- [ ] `promptguard_threads` (default 0, range 0–16) is read at boot through
+- [x] `promptguard_threads` (default 0, range 0–16) is read at boot through
       `promptguard_threads_from_config` via `pipeline/config_bounds.bounded_int` (`grep -n '_bounded_'
       promptguard/classifier.py` returns nothing), refuses boot out of range or wrong-typed with
       `PromptGuardThreadsConfigurationError`, ships in `config.yaml` as `promptguard_threads: 0`, and a positive
@@ -382,16 +383,16 @@ unchanged.
       `TOKENIZERS_PARALLELISM` unchanged from the sentinel the test seeded with `monkeypatch.setenv`;
       `_CLEARED_ENV_VARS` is unchanged; there is no `app.state.promptguard_threads`;
       `ENV_REFERENCE.md` states that Forage writes the variable when `promptguard_threads > 0`.
-- [ ] A `set_num_threads` failure leaves `load()` returning `True` and logs
+- [x] A `set_num_threads` failure leaves `load()` returning `True` and logs
       `promptguard_threads_apply_failed` at WARNING with the count and the exception type in the
       message; the blanket handler's "PromptGuard model not available" line is not emitted for it;
       pinned.
-- [ ] `classification_concurrency` accepts 1–8 via `_MAX_CLASSIFICATION_CONCURRENCY`; `8` builds
+- [x] `classification_concurrency` accepts 1–8 via `_MAX_CLASSIFICATION_CONCURRENCY`; `8` builds
       `asyncio.Semaphore(8)`; `9` refuses boot with `ExtractionConfigurationError`; the default stays
       1; `extraction_concurrency` stays 1–1.
-- [ ] Two concurrent `/retrieve` classifications overlap at concurrency 2 and serialise at 1 (fake
+- [x] Two concurrent `/retrieve` classifications overlap at concurrency 2 and serialise at 1 (fake
       classifier with timestamps; the `/retrieve` semaphore from spec 2 US-006).
-- [ ] `PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES` (64 MiB) exists, is named provisional in its comment
+- [x] `PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES` (64 MiB) exists, is named provisional in its comment
       and in the docs with its derivation and its no-measurement caveat; `PARENT_RESERVATION_BYTES`
       (512 MiB) is a named constant and `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` holds the 22M row
       at `0`; the rule has the five terms (the parent constant plus the selected model's delta row,
@@ -408,7 +409,7 @@ unchanged.
       and the monkeypatched-delta model case (1440 MiB, `parent_bytes` reflecting the row) each warn
       against 1 GiB; `/health` is 200 either way; pinned with a patched `_cgroup_memory_snapshot`;
       `MONITORING.md`'s startup table has both new WARNING rows.
-- [ ] The `classification_concurrency` rows in `docs/configuration.md`'s `extraction:` table and
+- [x] The `classification_concurrency` rows in `docs/configuration.md`'s `extraction:` table and
       `ENV_REFERENCE.md`'s `extraction:` table (the rows reading "Pinned … same reason" today —
       `:489` / `:118` at planning time) state the 1–8 range, the memory rule with its named coefficient,
       the OOM consequence, the boot WARNING, the routes it bounds and the one-sentence
@@ -417,12 +418,12 @@ unchanged.
       carve-out; the `extraction_concurrency` row (the one reading "Pinned at 1") is unchanged; the
       `promptguard_threads` rows exist in both files' top-level tables with the quota-agnostic wording;
       `promptguard_threads` is in `KNOWN_CONFIG_KEYS`.
-- [ ] `promptguard/classifier.py` is in spec 3 US-003's AST code-parity reader list.
-- [ ] `git diff --stat` shows no change under `pipeline/orchestrator.py`, `pipeline/contract.py`,
+- [x] `promptguard/classifier.py` is in spec 3 US-003's AST code-parity reader list.
+- [x] `git diff --stat` shows no change under `pipeline/orchestrator.py`, `pipeline/contract.py`,
       `models.py` or `contract/`.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-004: Search latency targets as config — the overrun counter and the sanitization high-water mark
 
@@ -552,13 +553,13 @@ first `/search` and then reflects it, and spec 5 US-005's wire pins are byte-ide
   `SearchTargetsConfigurationError`.
 
 **Acceptance Criteria:**
-- [ ] `search_promptguard_latency_target_ms` (default 1000, range 100–60000) and
+- [x] `search_promptguard_latency_target_ms` (default 1000, range 100–60000) and
       `search_first_token_target_ms` (default 5000, range 100–120000) ship in `config.yaml`, are
       bounded at boot by `search_targets_from_config` (`SearchTargetsConfigurationError` out of range —
       `5` refuses boot, pinned), reach `run_search_pipeline` from the `/search` handler via
       `app.state.search_targets`, and `grep -c '_LOCAL_PROMPTGUARD_TARGET_MS\|
       _TOOL_AUGMENTED_FIRST_TOKEN_TARGET_MS' pipeline/orchestrator.py` returns 0.
-- [ ] `/metrics` serves `search.promptguard_latency_target_exceeded` (incremented once per `/search`
+- [x] `/metrics` serves `search.promptguard_latency_target_exceeded` (incremented once per `/search`
       whose loop exceeds the target, strictly greater, never otherwise) and
       `search.sanitization_latency_max_ms` (updated on every `/search` that reaches the site after
       the duration is computed — a served-empty `/search` included, a pre-loop 422 excluded, both
@@ -569,21 +570,21 @@ first `/search` and then reflects it, and spec 5 US-005's wire pins are byte-ide
       states per-process, never-resets, read-with-the-count; `grep -rn 'promptguard_latency_max_ms'
       retrieval_app.py pipeline/ tests/ contract/ docs/ kit_tools/docs/ kit_tools/arch/` returns
       nothing; the no-overrun counter case runs from its own 5000 ms boot.
-- [ ] Window mechanics (R36): docstring lines appended in the `* ``1.3.0`` — …` format; `uv run
+- [x] Window mechanics (R36): docstring lines appended in the `* ``1.3.0`` — …` format; `uv run
       python -m scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via
       `_SCHEMA_MODELS`; `_EXPECTED_ONE_THREE_ZERO_DIFF` reviewed and **nothing appended** (`/metrics`
       models are outside `_SCHEMA_MODELS` — R36 corrected); the four anchor-quoting pages refreshed;
       `uv run python -m scripts.export_contract --check` green — with Implementation Notes recording
       that the golden is byte-identical and the diff list carries no `/metrics` entry, and why.
-- [ ] With no overrides, spec 5 US-005's wire pins (`tests/test_search_pipeline_pins.py`) pass
+- [x] With no overrides, spec 5 US-005's wire pins (`tests/test_search_pipeline_pins.py`) pass
       unchanged — correct as written because the pins compare a closed `_PINNED_COUNTERS` projection
       that excludes these two fields (spec 5 US-005, R13 corrected in round 5); the test this story
       moves is `tests/test_contract_schema.py::test_search_metrics_response_1_2_0_field_set_is_pinned_exactly`,
       never the pins.
-- [ ] `pipeline/search_targets.py` is in spec 3 US-003's AST code-parity reader list; `grep -n
+- [x] `pipeline/search_targets.py` is in spec 3 US-003's AST code-parity reader list; `grep -n
       '_bounded_' pipeline/search_targets.py` returns nothing; `kit_tools/testing/TESTING_GUIDE.md`'s
       `test_mapping` carries a row for `pipeline/search_targets.py` naming `tests/test_app.py`.
-- [ ] `docs/configuration.md` rows (the first-token row saying "log-only today"), `MONITORING.md` rows
+- [x] `docs/configuration.md` rows (the first-token row saying "log-only today"), `MONITORING.md` rows
       with the per-process semantics and the `num_results` comparability clause, the count-first
       runbook sentence and the `search.classification_wait_timeouts` sentence (the max is never read
       against `promptguard_wait_seconds`), `ENV_REFERENCE.md` rows and `KNOWN_CONFIG_KEYS` entries exist
@@ -592,13 +593,13 @@ first `/search` and then reflects it, and spec 5 US-005's wire pins are byte-ide
       `grep -rn '1000 ms' kit_tools/docs/ docs/` returns nothing and
       `grep -rn 'promptguard_wait_seconds × 1000\|promptguard_wait_seconds x 1000' kit_tools/docs/
       kit_tools/arch/ docs/` returns nothing.
-- [ ] `sanitizer_revision` rotation measured (revert `pipeline/orchestrator.py` and
+- [x] `sanitizer_revision` rotation measured (revert `pipeline/orchestrator.py` and
       `pipeline/contract.py` each in turn, with a both-reverted control) and recorded at the five sites
       ruling 6 names — `docs/bootstrap-notes.md`, `CLAUDE.md`, `kit_tools/arch/DECISIONS.md`,
       `kit_tools/docs/GOTCHAS.md` (a new row in the divergence table) and `kit_tools/arch/CODE_ARCH.md`.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-002: Compose envelope — `FORAGE_CPUS`, `FORAGE_MEM_LIMIT` and a liveness healthcheck
 
@@ -767,14 +768,14 @@ place of the two integers.
   sizing section (US-003) say so; the verified version (v2.40.3) is recorded in Implementation Notes.
 
 **Acceptance Criteria:**
-- [ ] Both fragments declare `cpus: ${FORAGE_CPUS:-0}` and `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` on
+- [x] Both fragments declare `cpus: ${FORAGE_CPUS:-0}` and `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` on
       the `forage` service and a `healthcheck` block with `curl -fsS -o /dev/null
       http://127.0.0.1:8020/health`, `interval: 30s`, `timeout: 5s`, `retries: 3`, `start_period: 30s`;
       no `config.yaml` volume line is added; no other key or value in either fragment changes
       (`git diff` shows only these keys and comment lines); `grep -rn envelope.yml compose/ docs/
       README.md kit_tools/docs/ kit_tools/arch/` returns nothing (R43: this spec's own text in
       `kit_tools/specs/` names the deleted branch, so the spec directory is excluded).
-- [ ] The secret-free render (`--env-file /dev/null`, scratch project directory, complete placeholder
+- [x] The secret-free render (`--env-file /dev/null`, scratch project directory, complete placeholder
       set, grep-filtered) shows no effective CPU limit (no `cpus` key, or `cpus: 0`) and a
       byte-normalised `mem_limit` of `1073741824` at the defaults and `cpus: 4` / `4294967296` with the
       variables set, for both fragments — no daemon needed; a started `busybox` container's
@@ -783,13 +784,13 @@ place of the two integers.
       daemon" with the CI render steps and the Compose Spec cited as the standing proof; Implementation
       Notes record only the filtered lines, the two inspect values (or the not-run line) and `docker
       compose version` — never an `environment:` block, any env value, or the raw render.
-- [ ] `TestTheDuplicationDoesNotDrift::test_the_shared_services_declare_the_same_envelope` and
+- [x] `TestTheDuplicationDoesNotDrift::test_the_shared_services_declare_the_same_envelope` and
       `TestResourceEnvelope` pass; the `lint` job has a second render step carrying `FORAGE_CPUS: "2"`,
       `FORAGE_MEM_LIMIT: 2048m` and the `SEARXNG_SECRET` placeholder in its own `env:`;
       `tests/test_ci_workflow.py` asserts the second step's names and values, the existing step's
       `env:` is unchanged, and the placeholder test iterates both steps, checking the two envelope
       names against their size-shape regexes and every other value for "placeholder".
-- [ ] `retrieval_app.py:355-361` and `:1446-1451` name the shipped probe and say liveness, not
+- [x] `retrieval_app.py:355-361` and `:1446-1451` name the shipped probe and say liveness, not
       health; `contract_smoke.py:9` and `tests/test_app.py:936` match; window mechanics (R36):
       docstring line appended in the `* ``1.3.0`` — …` format; `uv run python -m
       scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via `_SCHEMA_MODELS`
@@ -804,11 +805,11 @@ place of the two integers.
       `tests/golden/contract_1_0_0.json`, `_1_1_0.json` and `_1_2_0.json:201` are excluded because
       invariant 4 freezes them, and `retrieval_app.py:1307` / `model_fetcher.py:62` are comment-only
       corrections that rotate nothing).
-- [ ] `sanitizer_revision` rotation measured (revert-and-reproduce on `pipeline/contract.py`) and
+- [x] `sanitizer_revision` rotation measured (revert-and-reproduce on `pipeline/contract.py`) and
       recorded at the five sites ruling 6 names.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-003: Operator documentation — the sizing section and the by-value sweeps
 
@@ -1027,7 +1028,7 @@ next.
   section (a comment-only `.py` edit, so the gates run).
 
 **Acceptance Criteria:**
-- [ ] `docs/configuration.md` has the top-level `## Sizing the container` section before
+- [x] `docs/configuration.md` has the top-level `## Sizing the container` section before
       `## config.yaml`, with the three rows, the `num_results` in the classify column's header and the
       `4 / 4 GB` row's at-the-ceiling sentence, the five-term memory rule (the named parent constant
       plus the selected model's resident delta with its per-model column, the child term as the
@@ -1043,13 +1044,13 @@ next.
       the "nothing but this warning protects the operator's own baseline" sentence, the missing-path
       warning, and the classify-latency column deferring to spec 7 by name; the weights-acquisition
       paragraph distinguishes boot latency from classify latency.
-- [ ] The shipped-equals-code-default test exists and passes over `SECURITY_RELEVANT_CONFIG_KEYS`
+- [x] The shipped-equals-code-default test exists and passes over `SECURITY_RELEVANT_CONFIG_KEYS`
       (the three keys of today, spec 2's floor and ceiling, this spec's four envelope keys,
       `extraction.child_address_space_bytes`), and its partition assertion places every
       `KNOWN_CONFIG_KEYS` entry — as dotted registry names — in exactly one of the two explicit sets,
       with `extraction.admission_queue_depth` and the bare block names in the not-relevant set and the
       membership rule written beside the constant.
-- [ ] Every grep in the Independent Test — `Sizing the container` (six files), `FORAGE_CPUS` (four),
+- [x] Every grep in the Independent Test — `Sizing the container` (six files), `FORAGE_CPUS` (four),
       the healthcheck/CPU-quota claims, `only tighten` / `never raise` (five tracked hits at planning
       time, each either three-key or single-key-scoped afterwards), `1000 ms`, `Pinned at 1`,
       `liveness` — returns exactly what it states, each scoped as written (R43); the `1 vCPU / 1 GB`,
@@ -1058,7 +1059,7 @@ next.
       *is* the classifier's working set, and `grep -rn 'mem_limit: 1024m' --include='*.md'
       --include='*.py' --exclude-dir=specs --exclude-dir=.seed_cache --exclude-dir=golden .` returns
       only lines that also contain `FORAGE_MEM_LIMIT` or "default".
-- [ ] `INFRA_ARCH.md`'s Resource Envelope table has the CPU-cap row and the restated memory row;
+- [x] `INFRA_ARCH.md`'s Resource Envelope table has the CPU-cap row and the restated memory row;
       `ENV_REFERENCE.md` has the "Container envelope" section with both variables and
       `tests/test_hermeticity.py`'s exact-set test is unchanged; `README.md` names both variables after
       the Quickstart fence; `MONITORING.md` and `DEPLOYMENT.md` carry the liveness paragraph with the
@@ -1067,11 +1068,11 @@ next.
       `SECURITY.md`'s never-raise list no longer contains `MAX_CHILD_ADDRESS_SPACE_BYTES` and names the
       three raisable keys, and the file carries the admission-row caveat, the verbatim `:374`
       restatement and the under-sizing sentence.
-- [ ] `DECISIONS.md` has the dated decision entry with the config-not-env rationale; `GOTCHAS.md` has
+- [x] `DECISIONS.md` has the dated decision entry with the config-not-env rationale; `GOTCHAS.md` has
       both gotchas under "Active Gotchas"; the upgrade sentence exists; `grep -n 'Pinned at 1'
       docs/configuration.md` returns only the `extraction_concurrency` row (`:488` at planning time).
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ## Edge Cases
 
@@ -1313,6 +1314,432 @@ next.
 - Rotations: `docs/bootstrap-notes.md`, [DECISIONS.md](../arch/DECISIONS.md), [GOTCHAS.md](../docs/GOTCHAS.md), [CODE_ARCH.md](../arch/CODE_ARCH.md)
 
 ## Implementation Notes
+
+### US-001 implementation — 2026-09-22
+
+- Added the classifier-owned bounded thread reader and `configure_threads` seam.
+  Every load attempt applies positive counts before tokenizer construction; zero
+  touches neither torch nor the environment. A failed torch setter logs only the
+  count and exception type at WARNING and model loading continues. Acquisition
+  signatures, the environment-clearing fixture and app-state defaults are untouched.
+- Widened only classification concurrency to 1–8; extraction remains 1–1.
+  Boot-created semaphores are exercised at every accepted count; two real ASGI
+  `/retrieve` requests use timestamped, event-gated classifier doubles to prove
+  overlap at two and serialization at one, with both tasks drained before mocks exit.
+- The once-per-boot cgroup advisory follows actual backend selection. It counts the
+  named 512 MiB parent plus the selected model's resident delta, provisional 64 MiB
+  per classification, configured child limit per extraction slot and memory storage
+  or one bounded Valkey read. Regressions pin strict inequality, unreadable cgroups,
+  992/964 MiB defaults and their 32/60 MiB margins, concurrency four, enlarged cache,
+  enlarged child, a synthetic 448 MiB model delta and a raised Valkey value bound.
+  This remains an advisory, not a peak-RSS guarantee: the existing combined PDF-slot
+  and concurrent-cache-read caveats are retained in the configuration reference.
+- Registered both the key and its AST-swept reader. Updated both operator references
+  and startup/boot-failure monitoring rows; preserved the extraction-concurrency
+  rows. The two reference preambles name all three raisable extraction keys.
+  US-003 still owns the wider documentation sweep and the Sizing the container
+  section; US-002 owns the Compose variables.
+- **Spec 7 handoff:** US-004 must replace the provisional coefficient using the
+  concurrency 1→2 RSS measurement for both models, and fill the 86M resident-delta
+  row from idle loaded RSS (86M minus 22M), not the marginal classification delta.
+  Add a per-model sizing-table column; US-006 must pass the selected model id into
+  the boot rule. The table belongs to this spec's US-003, not US-002. If the measured
+  coefficient exceeds 96 MiB, keep the 1024m shipped ceiling and publish the measured
+  minimum: a 1 GiB deployment warns rather than refusing boot or silently resizing.
+  Matching handoff recorded in spec 7's Implementation Notes.
+- **Unchanged surface:** starting commit `8fdb50fce95ff4351c60bc8a65e296a3d0ce0ba0`.
+  All nine hashed sources and the hash definition, `models.py`, `contract/`,
+  `model_fetcher.py` and `tests/conftest.py` are byte-identical. Default, shipped
+  and maximum-performance-knob configurations all derive
+  `d9db75863ea8a464147da8b38c9fc6b8772cf75c485f58cab896e8130c81b6e0`;
+  no revision rotation or contract regeneration is needed.
+- **Evidence:** 65 focused checks passed, then 1,252 related tests passed (ten
+  existing non-failing Torch/socket-guard warnings). Strict Pyright reports zero
+  errors; changed-file Ruff lint and formatting, contract export `--check` and
+  whitespace checks pass. Full suite not run, as this implementer invocation
+  explicitly forbids it. Repository Ruff lint/format gates are blocked by
+  pre-existing files: `pipeline/bounded_body.py:53` and
+  `tests/test_search_providers.py:762,764,784,787` (five E501 findings, two
+  unformatted files). Reproduced directly from the starting commit with
+  `git show` piped to pinned Ruff; neither unrelated file was edited.
+  Result remains partial / needs-work for these outstanding gates, not a failing
+  sizing regression.
+
+### US-004 implementation — 2026-09-22
+
+- Added frozen `SearchTargets` and the module-owned configuration error. Both
+  integer ranges use `pipeline.config_bounds.bounded_int`, are validated at every
+  boot and are shipped at the previous 1000/5000 defaults. Lifespan publishes
+  `app.state.search_targets`; the module-level fallback supports lifespan-free
+  transports. The handler passes both targets to the pipeline; first-token stays
+  log-only, never a deadline or counter comparison.
+- Added the strict-overrun count and whole-loop high-water mark at their two
+  specified sites, including the Protocol, null sink, plain class, response model,
+  handler dict, shared fake and literal pins. The existing Protocol already had
+  no field count. Found one older `_SearchCounters` test double that predated the
+  shared fake; migrated its nine uses to `RecordingSearchMetrics` rather than
+  growing another incomplete sink. Extended the provider-tail order guard to
+  preserve its two fields immediately before the two newly appended metrics.
+- Regressions exercise both inclusive ranges, bad types and out-of-range values,
+  `5` refusing real boot on both configured provider choices, a 150 ms classifier
+  at target 100, a faster second request preserving the maximum, and separate
+  default/5000 boots for no-overrun counts. Deterministic clock cases pin equality
+  versus strict overrun, rounding before integer truncation, once-per-request
+  counting over three results, first-token's log-only behavior, served-empty
+  measurement and an exhausted-provider 422 touching neither timing site.
+  Descriptions pin the whole-loop window, `num_results` comparability and
+  per-process/never-reset/read-with-count semantics.
+- **R36:** appended the `* ``1.3.0`` — …` continuation and ran the exporter.
+  Regenerated the held golden via `_SCHEMA_MODELS`; it is byte-identical, sha256
+  `69eb2dd5b480274282763a1616d13d9805964b98514efcaef57dfe2f54d551cf`.
+  **Nothing appended to `_EXPECTED_ONE_THREE_ZERO_DIFF`**: the search metrics
+  model is outside `_SCHEMA_MODELS`. The metrics-specific class/model/wire/order
+  and description tests own these additions. All four anchor pages now quote
+  `9860c4d988295f39ee9e31ac65414dd1ce2c89c1031cd45c778b7fa8142923e4`;
+  exporter `--check` passes. Older goldens and every search pin remain untouched.
+- **Rotation 36:** clean starting commit
+  `7087c04d4b288555bf382df1853beede6542e0e5`, with empty `git status --short`.
+  Only `orchestrator.py` and `contract.py` change among nine hashed sources.
+  The live derivation, with whole-file read-only reversals, gives
+  `bf5a1f3e55aad4e2748e66d3a2e9554b7950a38cadc89d4551cc1b6820f3e75d`;
+  orchestrator-only reversal gives
+  `66b5098504ec86a7492eebad8d87ccf5b9e19f898bfb6981c6da9ff1d5e4c074`;
+  contract-only reversal gives
+  `3c6998608786777a0c6c91130fa7c0da35226c9f16961373b371e6f2cf664186`;
+  both-reverted reproduces
+  `d9db75863ea8a464147da8b38c9fc6b8772cf75c485f58cab896e8130c81b6e0`.
+  All four values agree under default, shipped and maximum-target config.
+  Recorded at all five required sites; no text-sanitization behavior or hash
+  input changes. The consumer handoff is in `docs/bootstrap-notes.md`.
+- **R39 / registry:** both operator references, known-key registry, AST reader
+  module/caller list and test mapping are updated. Monitoring covers the
+  count-first sizing rule, never-reset max, classification-wait-timeout signal,
+  boot error and counter-or-gauge extension checklist. US-003 still owns the
+  forward-referenced Sizing the container section. Required exact-scope greps
+  returned zero hits for the old constants, `_bounded_` in the new module, the
+  fixed-latency prose, wait-budget multiplication and the wrongly named max.
+- **Evidence:** after changed-file safe Ruff fixes/formatting, all **1,803 related
+  tests passed**, including the unchanged wire pins, golden, exporter, governance,
+  metrics and admission/classification regressions. Three existing non-failing
+  warnings remain (Torch deprecation and two hermetic socket-denial cases).
+  Strict Pyright reports zero errors; changed-file Ruff, exporter `--check` and
+  `git diff --check` pass. Full suite not run, as this invocation forbids it.
+  Repository Ruff still reports five inherited E501 findings in
+  `pipeline/bounded_body.py:53` and
+  `tests/test_search_providers.py:762,764,784,787`; formatting names those same
+  two files. Both failures were reproduced from the starting commit's bytes;
+  neither file was edited. Result is partial / needs-work for these outstanding
+  gates, not a known functional defect. No dependency change, branch switch,
+  Poppy edit, push, tag or release occurred.
+
+### US-002 implementation — 2026-09-22
+
+- Both fragments now carry identical CPU/memory substitutions and a
+  body-discarding curl liveness probe (30 s interval, 5 s timeout, three
+  retries, 30 s start period). Parsed baseline comparisons confirm that no
+  other key or value changed; no config bind mount or third fragment was
+  added. Unrelated housekeeping comments and published image pins remain.
+  The comments distinguish liveness from body health and classifier readiness,
+  reject health-based activation/start ordering, explain that restart reacts
+  to exits, and state the cache reconnect cost and failure-mode-dependent
+  zero-traffic WARNING/counter baseline.
+- Added the second render step immediately after the original in required
+  `lint`, with its own envelope settings; the original environment block is
+  unchanged. CI guards pin both settings and step placement, both fragment
+  commands and failure propagation. The placeholder guard checks both steps:
+  envelope values must match size syntax, every other value must advertise
+  its placeholder status. `TestResourceEnvelope` pins values, the full probe,
+  mount-free config delivery and comment semantics; the duplication guard
+  compares both strings and the JSON-projected healthcheck.
+- **Secret-free Compose evidence:** `Docker Compose version
+  v2.40.3-desktop.1`. Each render ran against copied fragments in a scratch
+  project directory, with `--env-file /dev/null`, a scrubbed environment and
+  the complete prescribed placeholder set. Only the requested filtered lines
+  were emitted; no raw render or environment block was persisted.
+
+  `minimal`, defaults:
+
+  ```text
+      healthcheck:
+        test:
+        timeout: 5s
+        interval: 30s
+        retries: 3
+        start_period: 30s
+      mem_limit: "1073741824"
+  ```
+
+  `full`, defaults:
+
+  ```text
+      healthcheck:
+        test:
+        timeout: 5s
+        interval: 30s
+        retries: 3
+        start_period: 30s
+      mem_limit: "1073741824"
+  ```
+
+  `minimal`, configured:
+
+  ```text
+      cpus: 4
+      healthcheck:
+        test:
+        timeout: 5s
+        interval: 30s
+        retries: 3
+        start_period: 30s
+      mem_limit: "4294967296"
+  ```
+
+  `full`, configured:
+
+  ```text
+      cpus: 4
+      healthcheck:
+        test:
+        timeout: 5s
+        interval: 30s
+        retries: 3
+        start_period: 30s
+      mem_limit: "4294967296"
+  ```
+
+  The started, secret-free BusyBox probe was inspected while running:
+  `HostConfig.NanoCpus=0` at defaults and `4000000000` when configured.
+  Its isolated container and network were removed afterwards. Both CI render
+  branches and explicit zero also parse; invalid memory syntax is rejected
+  before startup. Service-level `cpus` requires Compose v2 (Compose Spec).
+- **R36:** corrected both rendered health descriptions plus the acquisition
+  comments, smoke docstring, startup-test docstring and prescribed API guide
+  sentence. App, fetcher, smoke and startup-test ASTs are unchanged after
+  stripping docstrings. Appended the held 1.3.0 continuation, ran the exporter,
+  and regenerated the live golden through `_SCHEMA_MODELS`. The golden
+  **really changes**, only at `HealthResponse.description`, to sha256
+  `f74a99b97e088982665e726a9e011e2955e53c4f3c39f1d05754b7a6dc7526eb`.
+  `_EXPECTED_ONE_THREE_ZERO_DIFF` was reviewed: **no entry added**, because
+  `_added_paths` records fields/enum members, not changed description values.
+  OpenAPI changes exactly the model and route descriptions; the generated
+  anchor is `c9cd19bad84decd7415ba912ae81c826447f2a19edc41b57c857d4a7b4d42ab2`.
+  All four anchor pages are refreshed and exporter `--check` passes.
+  Historical goldens, release anchors and response shapes remain unchanged;
+  no further version bump inside the unpublished window.
+- **Rotation 37:** clean starting commit
+  `2aa6356a23afdc41d3078a17efc52a9a842e50d6`. Only `pipeline/contract.py`
+  moves among the nine hashed sources; the hash definition is unchanged.
+  Default and shipped config both derive
+  `4913fdc1982cb48ba2db9c6972fcea10107408349970c45c9dc6b3ae5c1aa1fb`.
+  Substituting the entire baseline contract file through read-only
+  `Path.read_bytes` interception reproduces the before value exactly:
+  `bf5a1f3e55aad4e2748e66d3a2e9554b7950a38cadc89d4551cc1b6820f3e75d`.
+  Recorded at all five rotation sites; no text-sanitization behavior changed.
+  Consumer handoff is in `docs/bootstrap-notes.md`; US-003 owns the remaining
+  sizing/monitoring/operator sweep, not this story.
+- **Evidence / outstanding gates:** 1,449 related tests and 66 governance
+  checks passed, with three existing non-failing warnings. Strict Pyright,
+  changed-file Ruff lint/format, contract drift and whitespace checks pass.
+  Both exact-scope acceptance greps return zero hits; the first grep attempt
+  found one stale ignored pytest bytecode file, removed before repeating.
+  Full suite not run, as this invocation explicitly prohibits it.
+  Repository Ruff still fails on five inherited E501 findings in
+  `pipeline/bounded_body.py:53` and
+  `tests/test_search_providers.py:762,764,784,787`, and formatting names those
+  same two files. Both failures reproduce from the starting commit; those
+  files are byte-identical and untouched. Result remains partial / needs-work
+  for these gates, not a known story defect. No dependency change, branch
+  switch, Poppy edit, push, tag or release occurred.
+
+### US-003 implementation — 2026-09-22
+
+- Added the top-level Sizing the container section immediately before the
+  `config.yaml` reference. It carries the three requested envelopes, explicit
+  `num_results=1` placeholder header (no invented timings), separate per-model
+  resident-delta/working-set table, five-term memory rule, provisional coefficient
+  derivation, 992/964 MiB reference sums, fixed cache ceiling, CPU precondition,
+  Compose minimum and verification commands. Existing extraction-rule prose now
+  points to the canonical section instead of duplicating the five terms.
+- The full-file bind-mount recipe retains the weights volume and explains
+  replace-not-merge, all policy/envelope resets, missing-source directories and
+  the distinction between shipped-baseline protection and the operator's own
+  hardening. The pending spec-7 measurements and owner gates remain pending.
+  Envelope defaults and executable behavior are unchanged.
+- Added `SECURITY_RELEVANT_CONFIG_KEYS` and the explicit non-security set beside
+  the registry tests, with a membership criterion and exhaustive disjoint
+  partition. The default pin runs the real lifespan with empty config on an
+  isolated app, stubs weights acquisition and the spool seam, and compares
+  shipped dotted values to actual settings/defaults. It includes all required
+  keys plus classification-wait/domain-policy bounds and the other PDF sandbox
+  limits. Queue depths, cache capacity, provider throughput bounds and bare
+  blocks are explicitly classified out. A future key must be classified.
+- Updated both liveness runbooks, zero-traffic reconnect counter interpretation,
+  Compose-only env table, security sandbox wording, two active gotchas and the
+  dated config-not-env decision. Existing US-004/US-002 revision rows are retained.
+  The security omissions bullet preserves all five deferred controls verbatim.
+
+**R39 by-value sweep ledger.** Locations below refer to clean starting commit
+`746611f`, so edits and line wrapping cannot change which hit was disposed of.
+The scan was `git grep` over tracked `*.md` / `*.py`, excluding specs, seed cache
+and goldens, plus the prescribed `config.yaml` comments. The exact recursive
+greps were then repeated on the edited tree. Test docstrings are excluded by R43;
+result JSON is outside the include set.
+
+| Value | Baseline hit | Disposition |
+|---|---|---|
+| `1 vCPU / 1 GB` | `docs/configuration.md:497` | qualified — reference envelope, both variables and sizing cross-reference; weights boot is not classify latency |
+| same | `docs/weights.md:433` | qualified — reference envelope, both variables and sizing cross-reference |
+| same | `kit_tools/docs/LOCAL_DEV.md:209` | qualified — reference envelope, both variables and sizing cross-reference |
+| same | `kit_tools/docs/MONITORING.md:109` | qualified — reference envelope and knobs; weights-boot timing |
+| same | `kit_tools/docs/DEPLOYMENT.md:194` | qualified — post-deploy weights reference and knobs |
+| same | `kit_tools/docs/DEPLOYMENT.md:375` | qualified — resource row and sizing link |
+| same | `kit_tools/docs/TROUBLESHOOTING.md:286` | qualified — reference envelope and knobs |
+| same | `kit_tools/arch/INFRA_ARCH.md:223` | qualified — weights-boot reference and knobs |
+| same | `kit_tools/arch/INFRA_ARCH.md:258` | qualified — resource envelope and sizing link |
+| same | `kit_tools/arch/SERVICE_MAP.md:93` | qualified — warm-start reference and knobs |
+| same | `kit_tools/arch/SERVICE_MAP.md:163` | qualified — acquisition reference and knobs |
+| same | `kit_tools/arch/SERVICE_MAP.md:320` | qualified — weights latency reference and knobs |
+| same | `tests/test_model_fetcher.py:3458` | correct-as-is — explicitly excluded historical measurement docstring, untouched |
+| `mem_limit: 1024m` | `cache.py:250` | qualified — explicitly default; corrected headroom and inclusive cache ceiling |
+| same | `docs/configuration.md:649` | rewritten — `${FORAGE_MEM_LIMIT:-1024m}`, default, decomposition and sizing link |
+| same | `kit_tools/docs/TROUBLESHOOTING.md:809` | rewritten — substitution, default and sizing remedy |
+| same | `kit_tools/docs/DEPLOYMENT.md:156` | rewritten — substitution, default and CPU knob |
+| same | `kit_tools/docs/DEPLOYMENT.md:376` | rewritten — substitution and corrected headroom |
+| same | `kit_tools/arch/SERVICE_MAP.md:392` | rewritten — substitution and CPU knob |
+| same | `kit_tools/arch/INFRA_ARCH.md:146` | rewritten — service table substitutions |
+| same | `kit_tools/arch/INFRA_ARCH.md:265` | rewritten — memory cap, adjacent CPU-cap row |
+| same | `kit_tools/arch/SECURITY.md:524` | rewritten — exact required restatement, all five omissions retained |
+| same (planning hits) | `compose/minimal.yml`, `compose/full.yml` | correct-as-is — US-002 already replaced both; no literal hits or edits here |
+| `384 MiB` | `cache.py:251` | rewritten surrounding arithmetic — child reservation, 32 cache / 64 provisional / 32 margin |
+| same | `config.yaml:45` | rewritten — corrected reference headroom and sizing pointer |
+| same | `config.yaml:59` | qualified — combined-route workers remain a real additional budget; advisory rule counts one slot |
+| same | `config.yaml:86` | qualified — reference envelope and sizing pointer |
+| same | `pipeline/extraction_limits.py:58` | rewritten docstring — shipped child default, raisable 128–512 MiB, sizing pointer |
+| same | `pipeline/retrieve_limits.py:36` | correct-as-is — worker address-space multiplication, not classifier memory; untouched |
+| same | `docs/configuration.md:172` | correct-as-is — spool space is outside the child's rlimit; untouched |
+| same | `docs/configuration.md:650` | rewritten surrounding arithmetic — correct child/cache/working-set/margin terms |
+| same | `docs/configuration.md:691` | qualified — default child bound is raisable; sizing pointer replaces fixed-box implication |
+| same | `docs/configuration.md:720` | rewritten location — configured-child explanation moved into the canonical top-level rule |
+| same | `docs/configuration.md:749` | correct-as-is — PDF-worker multiplication; nearby sizing reference updated |
+| same | `kit_tools/arch/DECISIONS.md:104` | correct-as-is historical default; following paragraph now names all three raisable keys |
+| same | `kit_tools/arch/INFRA_ARCH.md:267` | correct-as-is — reference child row; surrounding envelope made configurable |
+| same | `kit_tools/arch/SECURITY.md:242` | rewritten — removed child default from true-ceiling list; raisable sandbox explained |
+| same | `kit_tools/arch/patterns/ERROR_HANDLING.md:254` | correct-as-is — default PDF-child rlimit, not classifier memory; untouched |
+| same | `kit_tools/docs/API_GUIDE.md:358` | correct-as-is — default upload child bound; untouched |
+| same | `kit_tools/docs/DEPLOYMENT.md:376` | rewritten surrounding arithmetic — corrected reference headroom and sizing pointer |
+| same | `kit_tools/docs/ENV_REFERENCE.md:146` | correct-as-is — table already pairs 384 MiB default with 128–512 MiB range |
+| same | `kit_tools/docs/TROUBLESHOOTING.md:196` | correct-as-is — default child failure bounds; untouched |
+| same | `kit_tools/docs/TROUBLESHOOTING.md:650` | correct-as-is — default child bounds; remedy below now names all three raisable keys |
+| same | `kit_tools/docs/TROUBLESHOOTING.md:810` | rewritten surrounding arithmetic — correct child/cache/working-set/margin terms |
+
+**Verification:** all 875 related tests passed after changed-file safe Ruff
+fixes/formatting, including the new pin/partition, documentation registry,
+governance, app, cache, Compose, hermeticity and revision tests (13 non-failing
+warnings: torch deprecation and deliberate socket denial). Strict Pyright is
+zero errors. All exact-scope Independent Test greps have the prescribed outcomes:
+six sizing files, four CPU-variable files, only same-line Compose-qualified
+image-level healthcheck absences, one single-key-scoped tightening claim, no
+fixed-latency claims, and only the extraction row with the pinned-at-one phrase.
+The one surviving literal memory-limit hit is explicitly a default in `cache.py`.
+The changed source ASTs, ignoring docstrings, and parsed config values equal
+the starting commit. All nine hashed sources are byte-identical; default and
+shipped revision remain
+`4913fdc1982cb48ba2db9c6972fcea10107408349970c45c9dc6b3ae5c1aa1fb`.
+No rotation, response shape, generated artifact or historical golden changed.
+
+**Outstanding gates:** the full suite is not run because this invocation
+explicitly prohibits it. Repository-wide Ruff still reports the inherited five
+E501 findings (`pipeline/bounded_body.py:53`,
+`tests/test_search_providers.py:762,764,784,787`) and format-check names those
+same two files; neither is edited. These prevent an all-gates-ready verdict,
+not completion of a deferred owner benchmark. No branch switch, dependency
+change, Poppy edit, push, tag or release occurred.
+
+### Validation fixes — 2026-09-22
+
+- **2026-09-22-013 (required static gate):** applied pinned Ruff 0.16.6
+  formatting only to `pipeline/bounded_body.py` and
+  `tests/test_search_providers.py`, splitting the remaining overlong xfail
+  reason without changing its value. Captured the ASTs before formatting and
+  asserted equality afterwards against the starting commit. Their AST SHA-256s
+  remain, respectively,
+  `a7bf9572c534bf8d196bfd421e16157cdca66f88c979a6ed639a080a9e34caa7`
+  and `f74f85b1a745f6391dc7a506a9375626841f453572248524580cc20630d5e313`.
+  All six strict xfails retain their original semantics.
+- **2026-09-22-015 (HIGH shared-tokenizer truncation race):** a per-classifier
+  thread lock now covers every full tokenizer operation: initial encode,
+  each decode and per-chunk tensor construction, including backend
+  truncation/padding configuration. Model inference remains outside the lock.
+  Concurrent calls can no longer enable 512-token truncation between another
+  request's full-document configuration and encoding. This is independent of
+  the tokenizer's internal parallelism setting. The 1–8 permit range, shipped
+  one-permit default, thread configuration and wire behavior are unchanged.
+  `docs/configuration.md` documents the distinction.
+- **Regression evidence:** the socket-guarded test uses the committed tiny
+  tokenizer fixture through the installed real tokenizer, production classifier,
+  production sanitizer and two configured semaphore permits. Only model scores
+  are synthetic. Events gate the vulnerable configuration/encode boundary;
+  an observed acquire delegates to the real lock to release the gate on actual
+  contention, without scheduling sleeps. Both unlimited and 64-chunk cases
+  classify the 701-token target in 512/255-token model inputs, detect the tail
+  marker and return the same quarantined, `scanned` result as serial execution.
+  The benign competitor remains safe/scanned; no wait timeout or permit leak
+  occurs. A two-party barrier inside model calls proves parallel inference.
+  Bounded waits and final draining clean up workers on failure. A separate
+  unit test pins encode/decode/tensor lock coverage and exception release.
+  Replacing only the lock with an in-memory no-op negative control makes both
+  real-tokenizer cases fail at serial/concurrent output equality, reproducing
+  the missing tail coverage; no repository files were edited for that control.
+  Both positive cases also passed ten fresh-process repetitions. These are
+  coverage/concurrency tests, not production-model accuracy benchmarks.
+- **Verification:** the affected classifier, app, model-fetcher, bounded-body,
+  provider, orchestrator, policy/admission, wire-pin, revision and governance
+  modules passed: **1,859 passed, 6 xfailed**, with three existing non-failing
+  warnings. Repository-wide `uv run ruff check .`,
+  `uv run ruff format --check .` and `uv run pyright` all pass (zero typing
+  diagnostics). Full-suite revalidation remains with the parent validator.
+  All nine hashed sources are byte-identical to the starting commit; default
+  and shipped revision remain
+  `4913fdc1982cb48ba2db9c6972fcea10107408349970c45c9dc6b3ae5c1aa1fb`.
+  No contract, dependency, lifecycle state or acceptance criterion changed.
+
+### Validation recheck — 2026-09-22
+
+- Fresh autonomous validation at `ebde6b9` includes the six uncommitted
+  repair files already present on entry. One parallel quality/security/
+  compliance round; no new fix loop. All three reviewers confirm the
+  tokenizer and Ruff blockers resolved. No remaining criticals; the merged
+  reports contain one inherited warning and two informational findings.
+- The security reviewer independently reproduces the tokenizer fix with
+  three hermetic regressions and both no-op-lock negative controls: complete
+  tail coverage and quarantine are preserved with the lock, the missed-tail
+  safe/scanned outcome returns without it, and inference remains parallel.
+  This verifies scan coverage with synthetic scores, not model accuracy.
+- Full `uv run pytest -q --tb=short`: **3,741 passed, 6 xfailed, 13
+  non-failing warnings in 43.22s**, within the five-minute limit. Pinned Ruff
+  lint/format (146 files), strict Pyright (zero diagnostics), exporter
+  `--check` and whitespace gates pass. Both isolated placeholder-only Compose
+  renders pass at default and configured envelopes; no live `NanoCpus` probe
+  was repeated, and prior story evidence is not relabeled as fresh.
+- Current default/shipped sanitizer identity remains
+  `4913fdc1982cb48ba2db9c6972fcea10107408349970c45c9dc6b3ae5c1aa1fb`;
+  OpenAPI matches anchor
+  `c9cd19bad84decd7415ba912ae81c826447f2a19edc41b57c857d4a7b4d42ab2`.
+  Historical goldens remain byte-identical to `main`.
+- **Advisory outcome, not a clean release verdict:** the existing MEDIUM
+  IPv6 denylist-equivalence issue (`2026-09-22-009`) remains reproducible.
+  Architecture prose still incorrectly says a Compose healthcheck would
+  restart-loop a container (`014`, informational); `016` records passing
+  gates and retained xfails. Older prerequisite advisories remain tracked,
+  including the warmup admission race and raw-read-budget limitation.
+  The historical peak-copy report is not reaffirmed against the intervening
+  `BytesIO` repair without its own measurement.
+- Results are in `kit_tools/AUDIT_FINDINGS.md` and the four
+  `.validate_impl_*.json` reports; immutable diffs, prior reports and fresh
+  gate logs are in session `f8b30f1c-645b-4ea6-b5f2-63897f37873f/files`.
+  Existing fixes were preserved, not committed here. No pause marker,
+  completion skill, archival or execution-state change; spec-7 measurements
+  and owner gates remain deferred.
 
 ## Refinement Notes
 
@@ -1636,6 +2063,15 @@ only establishes what `0` means.
       and the sizing table's per-model column, and spec 7 US-006 routes the selected `FORAGE_MODEL_ID`
       into the rule — written here at close-out; spec 7's text must carry the same handoff (Known
       risks).
+- [ ] **The admission controller's handoff leaks a slot on a racing cancellation** (recorded by
+      `hardening-retrieve-parity` US-002; flagged for the epic wrapper). `release()` hands the slot
+      to a popped waiter without decrementing `_active`; a waiter cancelled while queued or after
+      its grant, racing a release, leaves `active == limit` with nobody holding a slot — at
+      `retrieve.fetch_concurrency: 1` that wedges `/retrieve` for the life of the process. Reachable
+      today only by task cancellation (server shutdown); no timer wraps `acquire()`. Fix direction:
+      make the handoff idempotent (`release()` always decrements, the woken waiter re-increments
+      under the lock). The envelope work that sizes the slot and adds `--limit-concurrency` is the
+      natural owner. Full description: `kit_tools/docs/GOTCHAS.md`.
 
 ## Known risks (validation close-out)
 

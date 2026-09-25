@@ -1,0 +1,23 @@
+{
+  "counters": {
+    "classification_wait_timeouts": 0,
+    "fallback_fired": 0,
+    "paid_calls": 0,
+    "provider_compressed_body": 0,
+    "provider_timeouts": 0
+  },
+  "response": {
+    "effective_promptguard_fail_closed": true,
+    "effective_promptguard_threshold": 0.85,
+    "fallback_fired": false,
+    "omitted_by_reason": {},
+    "omitted_results": 0,
+    "promptguard_unavailable": false,
+    "provider_errors": [],
+    "provider_used": "searxng",
+    "query": "synthetic search",
+    "results": [],
+    "unresponsive_engines": [],
+    "unscanned_results": 0
+  }
+}

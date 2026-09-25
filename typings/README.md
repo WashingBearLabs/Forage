@@ -32,6 +32,15 @@ delete it when the last caller goes away.
 | `huggingface_hub/__init__.pyi` | `snapshot_download`'s `user_agent` parameter is annotated as a bare `dict`, which makes its whole overload set partially unknown under strict mode — and the symbol itself unusable at `model_fetcher.py`'s call site. The stub declares the five keywords the fetcher passes and the one overload it uses. |
 | `huggingface_hub/constants.pyi` | Not a gap in upstream's types — a **consequence of the stub above**. A stub package shadows the real one entirely, so once `huggingface_hub/__init__.pyi` exists, every submodule this repo imports needs its own declaration or the import does not resolve at all. `model_fetcher._offline_hub()` assigns `constants.HF_HUB_OFFLINE`, so the stub declares that one name. This is the shape of tax a shadow stub charges, and it is worth knowing before adding the next one. |
 
+The `httpcore/__init__.pyi` stub covers the public interfaces used by the
+provider read-budget adapter. Its conditional `AnyIOBackend` export loses its
+runtime `AsyncNetworkBackend` inheritance in strict analysis, and the inferred
+`Response.extensions` type includes an untyped empty-dict branch.
+
+The transformers stub also declares offline `AutoConfig.from_pretrained`
+and the two config attributes used by the pinned-22M regression. This exposes
+the real library's default labels rather than reproducing them in a mock.
+
 **`torch` deliberately has no stub here.** It ships real, complete types; the
 classifier consumes them directly (`torch.no_grad`, `torch.softmax`,
 `torch.Tensor`). Hand-writing a shadow of torch's type surface would be exactly

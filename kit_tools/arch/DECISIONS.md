@@ -8,8 +8,8 @@
 
 > **TEMPLATE_INTENT:** Record architectural decisions and their rationale. Explains the 'why' behind technical choices.
 
-> Last updated: 2026-09-19
-> Updated by: Claude (close-session — cassette-replay decision)
+> Last updated: 2026-09-23
+> Updated by: Copilot (hardening-release US-004)
 
 This file records significant architectural and technical decisions.
 
@@ -62,9 +62,11 @@ the first URL could not.
 
 **Decision:**
 `pipeline/stage5_url_audit.py` opens `httpx.AsyncClient(follow_redirects=False)` and follows at
-most 5 redirects by hand. Each hop runs `url_validator.validate_url` (http/https only; `localhost`
-and `.local` refused; private, reserved and IPv4-mapped ranges refused for *every* resolved
-address; unparseable addresses treated as private; request blocklist merged with `seed_blocklist`),
+most 5 redirects by hand. Each hop runs `url_validator.validate_url` (http/https only; `localhost`,
+`.local` and `.localhost` refused; private and reserved ranges refused for *every* resolved
+address, as are the five unwrapped embedded-IPv4 classes — IPv4-mapped, 6to4, Teredo's client
+field, NAT64 inside `64:ff9b::/96` and IPv4-compatible inside `::/96`, the two masked unwraps
+prefix-guarded so public IPv6 stays fetchable; unparseable addresses treated as private; request blocklist merged with `seed_blocklist`),
 then pins the connection to the validated IP by rewriting the netloc and sending the original
 `Host` plus `sni_hostname`, so TLS verification stays on. Bodies stream under a 10 MiB cap with a
 Content-Length fast reject; timeout 30 s; `domain_changed_on_redirect` costs 0.1 trust score.
@@ -102,7 +104,10 @@ Not recorded; the source gives only the chosen design and its reason.
 `RLIMIT_CPU` (20 s), `RLIMIT_AS` (384 MiB, Linux only) and an `ITIMER_REAL` wall clock (90 s).
 Results cross a length-framed JSON pipe carrying one of a closed set of status codes; every
 abnormal outcome ends in SIGKILL plus reap. The ceilings in `pipeline/extraction_limits.py` are
-hard maxima `config.yaml` can only tighten. The route is a release gate: `extract_route_enabled:
+hard maxima apart from three raisable keys: `classification_concurrency` (1–8 under the
+memory rule and boot WARNING), `child_address_space_bytes` (128–512 MiB, widens the
+untrusted-PDF child's sandbox) and `admission_queue_depth` (0–4); see the corrected
+2026-09-19 sizing decision below. The route is a release gate: `extract_route_enabled:
 false` by default answers 404 (invisible, not merely refused); admission is bounded (concurrency 1,
 queue depth 1, `429 busy`); uploads always run as `UNTRUSTED` with fail-closed PromptGuard.
 
@@ -222,7 +227,9 @@ Not recorded; the source gives only the rule and the promise it serves.
 `pipeline/contract.py` carries a hand-bumped `CONTRACT_VERSION` (1.0.0 froze the Epic 1 surface;
 1.1.0 added the additive `/health.cache_backend`, a MINOR, on 2026-09-10; 1.2.0 added the additive
 `SearchResult.content_kind` and `SearchResult.date` plus the `search_unavailable` error code, a
-MINOR, on 2026-09-15), served as
+MINOR, on 2026-09-15; 1.3.0 opened `hardening-search-sanitization`'s contract window on
+2026-09-20, declaring `OMIT_BLOCKED_URL` and bounding `SearchResult.engine` to 64 characters,
+also a MINOR), served as
 `/health.contract_version` and `/openapi.json` `info.version`. Any change to a response shape
 means: classify, bump, add a new golden fixture under `tests/golden/` (older ones retained, never
 edited — ruling (c)), and note it for the consuming repo. `contract.py` lives under `pipeline/` on
@@ -233,8 +240,9 @@ purpose, so it is a hashed `sanitizer_revision` source.
 X.*.*, and is expected to refuse to activate on a major mismatch rather than guess."
 
 **Consequences:**
-Two independent semvers — image tag (`v1.1.0`) and contract (now `1.2.0`, first published by
-the `v1.1.0` image on 2026-09-18) move for different reasons;
+Two independent semvers — image tag (`v1.2.1`, verified 2026-09-23) and contract
+(`1.3.0`, first published by the defective `v1.2.0` on 2026-09-23) move for
+different reasons. See `docs/releases.md` for the completed recovery and withdrawal;
 `pyproject.toml`'s version is inert. A withdrawn image tag never withdraws a contract version.
 `.github/pull_request_template.md` carries the short-form checklist.
 
@@ -603,7 +611,12 @@ extractions — `cache_policy_fingerprint()` mixed in every caller knob but not 
 **Decision:**
 The hashed identity is `MODEL_ID@revision` (`feature-forage-model-bootstrap` US-001) and the
 revision is an input to `cache_policy_fingerprint()` (`feature-forage-cache-fallback` US-003), so
-a rotation flushes Forage's own cache. Rotations to date, none changing sanitization behaviour:
+a rotation flushes Forage's own cache. Of thirty rotations, twenty-two
+changed no sanitization policy or algorithm; the fifteenth, sixteenth, eighteenth,
+nineteenth and twenty-seventh through thirtieth change sanitization behaviour.
+The last four add opt-in suffix privilege, bound caller domain-list work,
+enforce both caller and operator domain policy on `/search`, and default both
+fetch thresholds from configured policy before capping (shipped 0.85 unchanged).
 
 | Value | Moved by |
 |---|---|
@@ -621,13 +634,51 @@ a rotation flushes Forage's own cache. Rotations to date, none changing sanitiza
 | `5249def6…` | `run_search_pipeline` gained fallback telemetry and per-result provenance in `orchestrator.py`: derives `SearchResult.domain`, populates `provider_used`/`fallback_fired`/`provider_errors`, and increments `paid_calls`/`fallback_fired` through a new `SearchMetricsSink` Protocol; `models.py` gained the matching wire fields but is not a `_REVISION_SOURCES` member, so `orchestrator.py` is the only hashed file that moved — measured, not sanitization behaviour (`search-fallback` US-003, 2026-09-16) |
 | `f0b93318…` | `run_search_pipeline` classifies a `ProviderSearchResult` with zero raw results and a non-empty `unresponsive_engines` list as a failure (SearXNG's real production shape, which answers 200 and never raises), advancing the chain exactly as a `ProviderFailure` does; sufficiency stays judged on raw results before sanitization; a configured `[searxng]`-only chain is carved out and still serves that shape as before — `orchestrator.py` is the only hashed file that moved (`search-fallback` US-002, 2026-09-16) |
 | `dc3ff92a…` | `contract.py` gained the `POLICY_EXCLUDED_ALL_PROVIDERS` literal for the per-request policy 422 (`retrieval_app.py`, where the raise site lives, is not a hashed file) — `contract.py` is the only hashed file that moved, measured against all eight `_REVISION_SOURCES` files (`search-policy-and-health` US-010, 2026-09-16) |
-| `41ac98ca…` (current) | `contract.py`'s `CONTRACT_VERSION` docstring gained the completed 1.2.0 change record — every field, counter and enum member specs 1-4 added, all additive, plus a note that the `/search`/`/retrieve` boundary text rides the same unpublished window (`retrieval_app.py` and `models.py`, where that boundary text lives, are not hashed files) — `contract.py` is the only hashed file that moved, measured by reverting it alone and reproducing `dc3ff92a…` (`search-policy-and-health` US-003, 2026-09-16) |
+| `41ac98ca…` | `contract.py`'s `CONTRACT_VERSION` docstring gained the completed 1.2.0 change record — every field, counter and enum member specs 1-4 added, all additive, plus a note that the `/search`/`/retrieve` boundary text rides the same unpublished window (`retrieval_app.py` and `models.py`, where that boundary text lives, are not hashed files) — `contract.py` is the only hashed file that moved, measured by reverting it alone and reproducing `dc3ff92a…` (`search-policy-and-health` US-003, 2026-09-16) |
+| `b0ca8d9a…` | **the first rotation that changes sanitization behaviour.** `orchestrator.py` gained `_scan_forms_for_search_text`: `/search` now scans `title` and `snippet` in a newline-preserving form and ships their whitespace collapse, so Stage 2's line-anchored BLOCK patterns fire on any line rather than at character 0 only. Two entity decode levels before the scan, two control strips (one before the parser, one after the decodes), truncation once on the scan form, and a `_SEARCH_PARSER_INPUT_MULTIPLIER * max_length` parser-input bound. `orchestrator.py` is the only hashed file that moved, measured by reverting it alone and reproducing `41ac98ca…` from a clean tree (`hardening-search-sanitization` US-001, 2026-09-20) |
+| `42485686…` | **the second rotation that changes sanitization behaviour.** `orchestrator.py`'s `_canonicalize_search_url` became `_SEARCH_URL_RULES`, an ordered registry of named pure rule functions run over the **raw** provider URL, first rejection wins, returning a frozen `SearchUrlOutcome` that carries the omission reason and a closed `SearchUrlRule` log token: presence/length (rejection, never truncation, at 2 048 characters), raw character class (controls, whitespace and RFC 3986 excluded characters rejected, never deleted), parse (`urlsplit` and the `parsed.port` read each in their own `try`), host code points (WHATWG forbidden set, IPv6 colons exempt, `%25` zone id its own token), then a structural scan of **both** `html.unescape(value)` and `unquote(html.unescape(value))`. `_sanitize_search_text` — which routed the URL through `extract_html`, and so ate tag-shaped text before the scan saw it — is deleted. `orchestrator.py` is the only hashed file that moved, measured by reverting it alone and reproducing `b0ca8d9a…` from a clean tree (`hardening-search-sanitization` US-002, 2026-09-20) |
+| `05dbbb5c…` | contract `1.3.0`: `contract.py` gained `OMIT_BLOCKED_URL` and the version bump, `orchestrator.py` gained `_MAX_SEARCH_ENGINE_LENGTH = 64` and routed `SearchResult.engine` through the same `_normalize_search_text` call `title`/`snippet` already use — both hashed files, measured (both-reverted control reproduces `42485686…`). Bounds and normalizes a field; does not scan one, so **not** a third rotation that changes sanitization behaviour (`hardening-search-sanitization` US-004, 2026-09-20) |
+| `840c78fa…` | the **search-time URL audit**: `orchestrator.py` gained rules (3a)–(3c) of `_SEARCH_URL_RULES`, the `SearchHostClass` vocabulary and `domain` from `CanonicalHost.host`; `contract.py` gained the `1.3.0` continuation line; **and two inputs joined the hash** — repo-root `url_validator.py` as `_ROOT_REVISION_SOURCES` (resolved against `pipeline_dir.parent`) and `idna@<version>` (UTS-46 tables are a sanitization input). All four measured alone; the control reverting both files *and* removing both inputs reproduces `05dbbb5c…`. **Changes sanitization behaviour** (`hardening-search-sanitization` US-003, 2026-09-20) |
+| `6f0fa2de…` | **the fourth rotation that changes sanitization behaviour.** The `/search` scan loop scans **both** forms of each text field rather than only the newline-preserving one: two of the twenty-four Stage 2 patterns carry no `re.DOTALL`, so a newline-split payload scanned clean on the form that was scanned and blocked on the form that was served. `orchestrator.py` alone; the revert reproduces `840c78fa…`. |
+| `e55b5f06…4d3c0` | **not** a rotation that changes sanitization behaviour. `run_retrieve_pipeline` gained five keyword-only dependencies — `settings: RetrieveSettings`, `retrieve_metrics: RetrieveMetricsSink`, `classification_semaphore`, `extraction_settings` (all required, as `run_extract_pipeline_from_file` takes its limits) and `admission: AdmissionSlot | None = None` (defaulted for exactly one story; US-002 removes the default) — plus the character pre-check that refuses an over-budget fetched page `content_too_large` / `promptguard_budget` and the `PromptGuardBudgetExceededError` backstop around `sanitize_and_structure`. `contract.py` gained `PROMPTGUARD_BUDGET` and the `1.3.0` continuation line. Both hashed files, each reverted in turn; the both-reverted control reproduces `6f0fa2de…`. The shipped default `retrieve.max_promptguard_chunks: 0` runs no pre-check and hands the classifier no `max_chunks`, so nothing served moves; `pipeline/retrieve_limits.py` and `pipeline/config_bounds.py` are not `_REVISION_SOURCES` members (`hardening-retrieve-parity` US-001, 2026-09-20) |
+| `d0433876…fc88e` | **not** a rotation that changes sanitization behaviour. `orchestrator.py` gained the `_bounded_permit` async context manager — the only place `asyncio.timeout` and `semaphore.acquire()` appear in the file, with the release in `finally` only when acquired — the two defaulted parameters `classification_semaphore` / `classification_wait_seconds` on both `sanitize_and_structure` and `run_search_pipeline`, `/search`'s one-deadline-per-request budget, the `/extract` file route's acquisition moving inward from the outer `async with` that wrapped stages 2-4, and step 8's refusal to cache an `unavailable_allowed` body while the classifier is loaded; `stage3_promptguard.py` gained the pure `unavailable_result(tier_value, *, fail_closed)` seam so the wait-timeout path and the absent-classifier path cannot drift; `contract.py` gained the `1.3.0` continuation line. Three hashed files, each reverted in turn; the all-reverted control reproduces `e55b5f06…4d3c0`. What moved is *when* stage 3 runs and what happens when the permit wait expires, not how any text is sanitized (`hardening-retrieve-parity` US-006, 2026-09-20) |
+| `f654be77…c92fb` | **not** a rotation that changes sanitization behaviour. `orchestrator.py` moved `extract_html`, `scan_structural` and `structure_sanitization_result` onto `asyncio.to_thread` (pure functions, byte-identical output on every route), made `run_retrieve_pipeline`'s `admission` a required `AdmissionSlot` held from after the cache read through stage 1, and deletes the fetched body before the classification wait; `contract.py` gained `busy` in `RetrieveErrorCode`, `RETRIEVE_ADMISSION_QUEUE_FULL` and the `1.3.0` continuation line. Each reverted alone, both-reverted control landing exactly on `d0433876…` (`hardening-retrieve-parity` US-002). |
+| `464b6ad5…fead2` | **not** a rotation that changes how text is sanitized, though it moves a served outcome at the shipped defaults. `orchestrator.py` routes a fetched PDF through `asyncio.to_thread(extract_pdf_bytes_in_subprocess, …)` inside the `/retrieve` admission slot — the spawned, rlimited worker `/extract` uses, under `extraction.max_promptguard_chunks` — retaining ownership through worker reaping and spool cleanup even under repeated task cancellation. Its outcomes map most-specific first to 422 `content_too_large` / `promptguard_budget` or `extraction_failed` with reasons `pdf_encrypted`, `pdf_no_text`, `pdf_extraction_error`, `pdf_spool_error`; `contract.py` gained `extraction_failed` in `RetrieveErrorCode`, the four `RETRIEVE_PDF_*` literals and the `1.3.0` continuation line. Each reverted alone, both-reverted control landing exactly on `f654be77…`. Supersedes the unaccepted `6fd320da…` candidate, which released admission while cancelled PDF work remained live. Served text for a PDF within bounds is byte-identical; a PDF over 114,688 characters or the worker's rlimits is now refused where it was served or answered 500 (`hardening-retrieve-parity` US-003, 2026-09-22) |
+| `664ee603…c04b` | **not** a sanitization-behaviour change. `contract.py` alone gained the 1.3.0 continuation line announcing `cache.corrupt_entries`; reverting its bytes reproduces `464b6ad5…fead2` exactly. The guarded parse in `cache.py` and metrics mirror/emission in `retrieval_app.py` are not hashed. Invalid cached JSON/schema becomes a counted, logged miss with deletion attempted rather than a 500, without authenticating parseable values (`hardening-retrieve-parity` US-004, 2026-09-22). |
+| `d98f7dbe…69359` | **not** a sanitization-behaviour change at shipped defaults. `contract.py` alone gained the 1.3.0 continuation line for the three effective-policy fields; its read-only whole-file revert reproduces `664ee603…c04b` under default and shipped config. `retrieval_app.py` resolves bounds by replacing the request before cache/pipeline reads, then stamps every 200; `models.py` defaults the fields for old entries. Neither file is hashed. The floor and ceiling ship off, `/search` keeps 0.85, `/extract` is unchanged, and trusted-tier / VERIFIED exemptions remain (`hardening-retrieve-parity` US-005, 2026-09-22). |
+| `5a470872…bf623` | Twenty-sixth, reconciled from the clean US-001 base: `fe211e3` changed `orchestrator.py` and `stage3_promptguard.py` for cancellation ownership, the absolute fetch deadline and timeout accounting, not the sanitization algorithm. The read-only pre-validation control reproduces `d98f7dbe…`. |
+| `328d386c…93286` | Twenty-seventh, **fifth sanitization-behaviour change**: multi-label denylists include subdomains, allowlists opt in with a leading dot, and canonical private names precede caller denylists. Three hashed files (`orchestrator.py`, `contract.py`, and already-hashed root `url_validator.py`), individually reverted and all-reverted to reproduce `5a470872…` under default and shipped config (`hardening-hostname-and-config` US-001). |
+| `c8a907cf…546b8` | Twenty-eighth, **sixth policy-driven sanitization-behaviour change**: caller lists normalise once under independent byte budgets; over-budget allowlists lose their tail's trust grants and denylists are refused whole. In-budget matching and text scanning are unchanged. `orchestrator.py` removes its entry pass, merges operator-first and counts wildcard trusted/verified resolutions; `contract.py` announces four counters and the reason; already-hashed `url_validator.py` removes its entry pass and sizes invalid surrogate escapes safely before rejecting them. Each read-only reversal was measured; all-reverted reproduces `328d386c…` under default and shipped config (`hardening-hostname-and-config` US-007; full values in `docs/bootstrap-notes.md`). |
+| `de1cea65…6be91` | Twenty-ninth, **seventh policy-driven sanitization-behaviour change**: `/search` honours caller `blocked_domains` and operator `seed_blocklist`, operator-first, after URL audit and before content scanning. Shared blocked outcomes emit `blocked_url` and `host_class=policy_blocklist`; omissions never trigger paid fallback. Two hashed files, `orchestrator.py` and `contract.py`, individually reverted read-only; both-reverted reproduces `c8a907cf…` under default and shipped config. Empty-seed/no-new-field baseline and text scanning are unchanged (`hardening-hostname-and-config` US-002; full values in `docs/bootstrap-notes.md`). |
+| `e00049c4…7ed5c` | Thirtieth, **eighth policy-driven sanitization-behaviour change**, for tuned deployments: both fetch routes resolve null/omitted threshold from validated config before the ceiling; search gains a caller threshold. `orchestrator.py` takes one required float for classification and cache fingerprint, never the nullable request field; `contract.py` announces the additions/defaults. Both hashed files individually reverted read-only; both-reverted reproduces `de1cea65…` under default and shipped config. Shipped 0.85 behavior, text-scanning algorithms, raw revision input and `/extract`'s raw guard are unchanged (`hardening-hostname-and-config` US-005; full values in `docs/bootstrap-notes.md`). |
+| `aa288bc5…5b39c` | Thirty-first, **not a text-sanitization change**: `contract.py` alone announces `cache.integrity_rejects` and widened `storage_oversize_skips` producers. A read-only reversal against clean `b79504d` reproduces `e00049c4…` under default and shipped config; all other eight hashed sources are unchanged. The envelope and bounds (`cache.py`) and wiring (`retrieval_app.py`) are unhashed. Rotation orphans old cache keys (`hardening-cache-integrity` US-001; full values in `docs/bootstrap-notes.md`). |
+| `0866963a…c1e80` | Thirty-second, **not a text-sanitization change**: only `contract.py` moves for `cache_unauthenticated` and the 1.3.0 continuation naming that reason and `cache_hmac_key`. Read-only whole-file reversal against clean `1e467c1` reproduces `aa288bc5…` under default and shipped config; the other eight hashed sources are unchanged. Key resolution and Valkey-only signing wiring are unhashed. Old keys are orphaned (`hardening-cache-integrity` US-002; full values in `docs/bootstrap-notes.md`). |
+| `c9bf6e0d…f2f76` | Thirty-third, **not a text-sanitization change**: `orchestrator.py` gains compression/timeout counters before every traversal exit and the re-classification flag; `contract.py` announces both counters and the SearXNG-only `unsupported_encoding` reason token. Whole-file read-only reversals against clean `abf9df6` give `61d54562…` (orchestrator reverted), `e736bb76…` (contract reverted), and exact pre-story `0866963a…` (both), under default and shipped config. Only those two hashed files move; helper/providers remain unhashed. Upstream byte/encoding/time acceptance tightens and may buy a paid call, but text scanning is unchanged (`hardening-provider-bounds` US-003; full values in `docs/bootstrap-notes.md`). |
+| `e3b9c138…73d91` | Thirty-fourth, **not a text-sanitization change**: only `contract.py` records the paid-prefix description and all-paid-chain policy 422. Read-only whole-file reversal against clean `0139ad6` reproduces `c9bf6e0d…` under default and shipped config; the other eight hashed sources are unchanged. No currently constructible production chain changes outcome; GOVERNANCE ruling (k) records the one-paid-name/duplicate-collapse basis (`hardening-provider-bounds` US-004; full values in `docs/bootstrap-notes.md`). |
+| `d9db7586…1b6e0` | Thirty-fifth, **not a text-sanitization change**: `orchestrator.py` alone extracts `_query_provider_chain` with its original sink timing, retires the pipeline-only URL keyword, closes failure name/class/detail tokens and removes result URLs from omission logs. Four full wire/counter and two exhaustion pins landed first in `8e449fc`, against unchanged code, and remain unchanged. Read-only whole-file reversal against clean `2a275c5` reproduces the pre-story `e3b9c138…` under default and shipped config; all other eight hashed sources and contract artifacts are unchanged (`hardening-provider-bounds` US-005; full values and the direct-caller/log-consumer handoff in `docs/bootstrap-notes.md`). |
+| `bf5a1f3e…3e75d` | Thirty-sixth, **not a text-sanitization change** (`hardening-resource-envelope` US-004): `orchestrator.py` takes configurable observational targets and records a strict-overrun count plus an unconditional whole-loop maximum; `contract.py` announces both additive metrics in held 1.3.0. Whole-file read-only reversals against clean `7087c04` yield `66b50985…` (orchestrator only), `3c699860…` (contract only) and exactly `d9db7586…` (both), under default, shipped and maximum-target config. Other seven sources and hash definition unchanged; the new settings module and target values are not hash inputs. Search wire/counter pins and the regenerated schema golden are unchanged; full values and consumer handoff in `docs/bootstrap-notes.md`. |
+| `4913fdc1…aa1fb` | Thirty-seventh, **not a sanitization or response-shape change** (`hardening-resource-envelope` US-002): only `contract.py`'s held 1.3.0 continuation moves among nine hashed sources. Correcting the shipped status-only Compose probe's health descriptions regenerates OpenAPI and the held golden, whose sole change is `HealthResponse.description`; `_EXPECTED_ONE_THREE_ZERO_DIFF` gains no entry. Read-only whole-file reversal against clean `2aa6356` reproduces `bf5a1f3e…` under default and shipped config. Other eight sources and hash definition unchanged; historical goldens retained unchanged. Full values and consumer handoff in `docs/bootstrap-notes.md`. |
+| `85394a95…3d0c0` | Thirty-eighth, **not a sanitization change at shipped defaults** (`hardening-promptguard-86m` US-006): only `contract.py` changes among nine hashed sources for the additive health model id. Read-only whole-file reversal against clean `06a56b2` reproduces `4913fdc1…` under default and shipped config. The selected `model_id@revision` input remains identical for 22M; only a non-default selection changes that input. Old cache keys invalidate; full measurements and handoff in `docs/bootstrap-notes.md`. |
+| `b641e6a5…698f5` | Thirty-ninth (`hardening-promptguard-86m` US-007): stage 3's opt-in contiguity rule, orchestrator wiring/counters and contract continuation move three hashed files; windows then threshold join as ASCII inputs after the max threshold. Every file/input was reversed read-only against clean `967748d`; all-reverted gives `85394a95…` for default and shipped config. Stage 4 and the other five sources are unchanged. Rule ships off, but all old cache keys invalidate. Enabled contiguity changes decisions; the max rule and trusted/absent-model policy remain unchanged. Full measurements: `docs/bootstrap-notes.md`. |
+| `bffeb7ba…47fe1` | Fortieth (`hardening-release` US-001): contract-only announcement of redacted request-validation 422s and the one-release placeholders. No text-sanitization change. Whole-file reversal against `7a4819b` reproduces `b641e6a5…`; full measurements and the ruling (l) decision are recorded below and in `docs/bootstrap-notes.md`. |
+| `6884dc29…bd7ec` | Forty-first (`hardening-release` US-002): only `contract.py` moves for the final single 1.3.0 announcement and timeless 1.2.0 entry. Read-only whole-file reversal against clean `3ea0b32` reproduces `bffeb7ba…` under default and shipped config; the other eight hashed sources and hash definition are unchanged. No wire or sanitization behavior changes; old cache keys still invalidate. The six-model golden is frozen, cache metrics stay under dedicated coverage, and OpenAPI/anchors are unchanged. Publication state stays in GOVERNANCE and releases docs, not hashed entries. Full measurements: `docs/bootstrap-notes.md`. |
+| `021378ef…33900` (current) | Forty-second (whole-epic release gate): `orchestrator.py` pins unavailable readiness before skipping admission; `url_validator.py` compares IPv6 policy identities numerically without changing wire spelling. Both hashed files individually reversed against `84c02af`; both-reverted reproduces `6884dc29…` under default and shipped config. Policy enforcement changes, not scanning or response shape. UTF-8 raw-threshold hashing remains ASCII-compatible; the provider network-read adapter is unhashed. Full controls: `docs/bootstrap-notes.md`. |
 
 **Rationale:**
 `pipeline/sanitizer_revision.py`: "two containers running the same code can be scanning with
 different weights — and a value that could not tell them apart would key a cache on a
 sanitization behaviour it does not actually describe." The fifth rotation is "the first one where
 the invalidation is the *objective* rather than the price."
+
+**Model-selection decision (2026-09-22, US-006 / R29):** publish the configured
+id unconditionally as `/health.promptguard_model`, read from startup state;
+`promptguard_loaded` remains the serving signal. Identity is contract-relevant
+and inferable from behaviour, whereas contiguity settings are tuning an
+attacker would otherwise have to guess and are not published. This is not a
+secrecy promise: US-007's per-rule `promptguard_contiguity_detections` lets a
+content/metrics prober infer the settings by bisection. The resolver is total
+for revision fallbacks; only the lifespan refuses an unknown id. Blank means
+22M, and the allowlist expands only alongside the owner-vendored manifest entry.
 
 **Consequences:**
 Any edit to a `_REVISION_SOURCES` file invalidates every cached sanitization; never do it as a
@@ -827,6 +878,95 @@ the freeze was image `v1.0.0` serving contract `1.1.0`, cut 2026-09-12.
 contract in commit `5985437`, distribution in `f4c2b16` (both 2026-09-11);
 `kit_tools/docs/GOTCHAS.md` "An over-sized upload gets 400" and "Adding a `/metrics` counter";
 `.github/pull_request_template.md`.
+
+---
+
+### 2026-09-19: Sized to the host, not the deployment
+
+**Status:** Accepted (`hardening-resource-envelope`, R16 corrected through round 5).
+
+**Context:** The Epic-2 cutover finding of 2026-09-12 was a
+`search_promptguard_local_latency_target_exceeded` on a 28-core host under a 1-CPU
+quota. Torch and the fast tokenizer saw host cores, not the quota. The owner
+declined an arbitrary size bump: make the envelope configurable instead.
+
+**Options considered:** fixed larger defaults; runtime environment overrides for
+every knob; CPU quota auto-detection; or existing `config.yaml` readers with
+Compose-layer container limits. The last is chosen; CPU auto-detection is deferred.
+
+**Decision and rationale:** runtime tunables stay in `config.yaml`, following
+`search_brave_*` and `promptguard_threshold`. The vision's "overridable by env"
+is met at the Compose layer with `FORAGE_CPUS` / `FORAGE_MEM_LIMIT`, plus the
+documented full-file bind mount for runtime settings — **no `FORAGE_*` env override
+for `promptguard_threads`**. Unset/zero CPU means Compose omits the cap; memory
+remains `1024m`, threads `0`, classification concurrency `1`, and observational
+targets 1000/5000 milliseconds. The only new default-visible Compose behavior is
+the status-only liveness probe, never an activation or readiness gate.
+
+R16's corrected memory rule counts the named parent reservation, selected model's
+shared resident delta, per-classification provisional working set, **configured**
+PDF child address space and backend-specific cache term exactly once. The three
+raisable extraction keys are `classification_concurrency` (1–8),
+`child_address_space_bytes` (128–512 MiB, widening the sandbox) and
+`admission_queue_depth` (0–4). The boot memory WARNING is advisory; an OOM kill
+cannot report itself through `/health`. The 64 MiB working set is explicitly
+unmeasured; spec 7 supplies measurements without silently increasing the shipped
+memory default. The cache ceiling remains 128 MiB even on larger hosts.
+
+**Consequences:** under-sizing can turn a bounded classification wait into a
+marked fail-open unscanned response, not just slower scanning. `_load_config`
+replaces rather than merges, so a short mount can silently undo an operator's
+hardening. The explicit security-key partition/default test proves only the
+shipped baseline. Effective-value logging was considered and declined: INFO does
+not render, and WARNING for normal values is noise. The operator warning is the
+only protection for their own stricter baseline.
+
+US-004's `bf5a1f3e…` and US-002's `4913fdc1…` measured revision rotations are
+retained in the rotation table above; neither changes text sanitization.
+US-003 only changes prose, comments and baseline guards, not hashed sources or
+the held contract. See
+[`docs/configuration.md` § Sizing the container](../../docs/configuration.md#sizing-the-container)
+for the worked rules, delivery recipe and unmeasured latency columns.
+
+**Source:** `feature-hardening-resource-envelope` US-001/US-004/US-002/US-003,
+R16 (corrected), Epic-2 cutover finding and the vision's configurable-sizing
+constraint; `docs/bootstrap-notes.md` for the measured rotations.
+
+---
+
+### 2026-09-23: Redact validation values now, retain placeholder keys for one MINOR
+
+**Status:** Accepted, `hardening-release` US-001; GOVERNANCE ruling (l).
+
+**Context:** the published validation-error description admitted pydantic's
+`input`, `ctx` and `url`, so an immediate key removal with only a release note
+would not be a real compatibility window.
+
+**Options considered:** immediate removal, a flag retaining raw values, MAJOR,
+or an expedited MINOR retaining key presence with fixed values.
+
+**Decision and rationale:** Example 6 step 1 keeps all three keys with
+`"[redacted]"` throughout contract 1.3.0; they disappear at the next MINOR.
+No declared property moves at either step; ruling (l) records the explicit
+description-admitted-key carve-out for step 3. Preserving actual values behind
+a flag would preserve the reflector. The total handler never logs/re-raises
+the validation exception; location strings come from owned route fields plus
+framework tokens. Malformed entries fail closed and rendering is inside the
+same guard. The cap is 100 response entries, not request-body admission.
+
+**Consequences:** consumers reading `detail[].input` must stop. Closed
+`validation_422_truncated` and `validation_422_loc_dropped` WARNINGs reveal
+only counts and a matched route token. Parse cost and log volume remain the
+accepted admitted-caller exhaustion risk; the pipeline DNS-oracle caveat stays.
+The fortieth revision rotation is `b641e6a5…` → `bffeb7ba…`: only
+`contract.py` moves among the nine hashed sources. Read-only whole-file reversal
+against clean `7a4819b` reproduces the former under default and shipped config.
+The other eight sources/hash definition are unchanged; no text-sanitization
+algorithm changes, but old cache keys invalidate.
+
+**Source:** `retrieval_app.py`, `contract/GOVERNANCE.md`, `docs/releases.md`,
+`tests/test_contract_errors.py`, `tests/test_models.py`;
+`docs/bootstrap-notes.md` for full measurements and the consumer handoff.
 
 ---
 

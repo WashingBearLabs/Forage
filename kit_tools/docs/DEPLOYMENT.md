@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document deployment procedures and rollback processes. How to ship safely.
 
-> Last updated: 2026-09-17
-> Updated by: Claude (seed-project)
+> Last updated: 2026-09-23
+> Updated by: Copilot (hardening-release US-004)
 
 ---
 
@@ -84,47 +84,53 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
 
 ## Pre-deploy Checklist
 
-1. **Pick a tag.** Pin a full semver (`1.1.0`) or the `@sha256:` digest from the Release
-   body; never pin `latest`, and treat `sha-<short>` tags from `main` as unreleased. Tags
-   present at the time of writing: `v0.9.0-rc`, `v0.9.1-rc`, `v0.9.3-rc`, `v1.0.0`
-   (2026-09-12, the first non-pre-release), `v1.1.0` (2026-09-18, contract `1.2.0`);
-   `v0.9.2-rc` was withdrawn after failing the cold parity gate and must not be deployed.
-   `latest`, `1.1` and `1.1.0` resolve to one digest on GHCR (`docs/releases.md` §
-   "Released versions").
+1. **Pick a tag.** The current release is `v1.2.1` / contract `1.3.0`,
+   published and verified 2026-09-23.
+   Pin its full semver (`1.2.1`) or the `@sha256:` digest recorded at the cut;
+   never pin `latest`, and treat `sha-<short>` tags from `main` as unreleased.
+   Choose a verified published entry in `docs/releases.md`.
+   Neither v1.2.0 (default model rejected) nor v0.9.2-rc (cold parity failure)
+   is suitable for deployment.
+   The US-005 handoff records verified `latest` / `1.2` / `1.2.1` digest equality.
 2. **Confirm the tag published green.** The tag's workflow run must show `publish` green
    and, for a `v*` tag, a GitHub Release carrying `openapi.yaml`, `openapi.yaml.sha256`, and
    a `contract: X.Y.Z` line in its body. A red `publish` after a push means the tags exist
    but are untrusted ("a red publish is not a release", `docs/releases.md`).
 3. **Pull and verify the image yourself.** The in-image contract is read back and checked
    against the anchor committed *at the same tag*, never against another copy
-   (`contract/GOVERNANCE.md`, Consumers). The history grep uses the same three patterns as
-   CI's `secret-grep` job.
+   (`contract/GOVERNANCE.md`, Consumers). The history grep uses the same four patterns as
+   CI's `secret-grep` job, including the name-only `FORAGE_CACHE_HMAC_KEY` pattern.
 
    ```bash
-   TAG=1.1.0
+   TAG=1.2.1
    docker pull ghcr.io/washingbearlabs/forage:$TAG
    docker run --rm --entrypoint cat ghcr.io/washingbearlabs/forage:$TAG /app/contract/openapi.yaml > openapi.yaml
    docker run --rm --entrypoint cat ghcr.io/washingbearlabs/forage:$TAG /app/contract/openapi.yaml.sha256 > openapi.yaml.sha256
    git show v$TAG:contract/openapi.yaml.sha256 | cmp - openapi.yaml.sha256   # anchor from the same tag
    sha256sum -c openapi.yaml.sha256                                          # macOS: shasum -a 256 -c
-   docker history --no-trunc ghcr.io/washingbearlabs/forage:$TAG | grep -Ei 'HF_TOKEN|hf_[A-Za-z0-9]{20,}|FORAGE_BRAVE_API_KEY'   # must print nothing
+   docker history --no-trunc ghcr.io/washingbearlabs/forage:$TAG | grep -Ei 'HF_TOKEN|hf_[A-Za-z0-9]{20,}|FORAGE_BRAVE_API_KEY|FORAGE_CACHE_HMAC_KEY'   # must print nothing
    ```
 
    `gh release download v$TAG --pattern 'openapi.yaml*'` is the alternative route to the
    same two files. The anchor at `HEAD` is
-   `11435a17aabe7c11faf71aee0fd066a3784d5e9de557c451153e7f47d0d5615f`.
+   `74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72`.
 4. **Check contract compatibility.** The image tag and `contract_version` are independent
-   semvers — image `1.1.0` serves contract `1.2.0` (`1.0.0` served `1.1.0`). Compare the consumer's expected MAJOR
+   semvers — image `1.2.1` serves contract `1.3.0`. Compare the consumer's expected MAJOR
    against `info.version` in the `openapi.yaml` you just extracted; a MAJOR mismatch means
    **do not deploy** (the consumer is expected to refuse activation, `CLAUDE.md`
    invariant 4). Compare contracts, never `sanitizer_revision`, which has deliberately
-   diverged from Poppy's fourteen times (`docs/bootstrap-notes.md` keeps the record).
+   diverged from Poppy's forty-two times (`docs/bootstrap-notes.md` keeps the record).
 5. **Confirm the weights source is reachable** from the host: an `HF_TOKEN` with gated-repo
    access, or mirror credentials. Weights are fetched at runtime, so a wrong token is a
    `degraded` boot, not a failed one.
 6. **Confirm `compose/.env`** holds `HF_TOKEN` and `SEARXNG_SECRET`, plus
    `FORAGE_SEARCH_PROVIDERS` and `FORAGE_BRAVE_API_KEY` only if you enable the Brave
    fallback (it is gitignored), and that no variable is being passed inline with `-e`.
+   For a contract-1.3.0 Valkey deployment, supply `FORAGE_CACHE_HMAC_KEY` alongside
+   `VALKEY_URL`; full compose supplies the URL and passes the key from this file.
+   Follow the [CSPRNG recipe](../../docs/configuration.md#credential-handling-for-forage_cache_hmac_key).
+   For first enable or rotation on an existing fleet: **stop every replica, change
+   the key, start**; mixed keys or keyed/keyless replicas delete each other's entries.
 7. **Confirm placement.** The `127.0.0.1:8020:8020` binding stays unless you have put your
    own access control in front; SearXNG and Valkey publish no ports at all.
 
@@ -136,23 +142,44 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
 
 Both fragments are standalone (no `extends`), validated by CI's `lint` job with
 `docker compose config -q`, and share the fixed-name volume `forage-model-cache`. **They
-pin `ghcr.io/washingbearlabs/forage:1.1.0` and
-`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`.** Both pins resolve — `v1.1.0`
-published on 2026-09-18; the `manifest unknown` a `docker compose up` returned before that
-date was sequencing, not breakage. Edit the `image:` lines to the tag you verified above
-before bringing them up.
+pin `ghcr.io/washingbearlabs/forage:1.2.1` and
+`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`.** The companion is published;
+the service was published and verified on 2026-09-23. The temporary
+unpublished-tag window is closed. Never roll back to withdrawn v1.2.0;
+`docs/releases.md` records the replacement's digest and runtime verification.
 
 | Fragment | Starts | Env it needs | Cache mode |
 |----------|--------|--------------|------------|
 | `compose/minimal.yml` (project `forage-minimal`) | `forage` + `searxng` | `HF_TOKEN`, `FORAGE_SEARCH_PROVIDERS`, `FORAGE_BRAVE_API_KEY` (bare pass-through, genuinely unset if absent), `SEARXNG_SECRET` (required-or-fail) | in-memory; `VALKEY_URL` is deliberately absent |
-| `compose/full.yml` (project `forage-full`) | `forage` + `searxng` + `valkey` (`valkey/valkey:8` digest-pinned, 8.1.10) | the same | `VALKEY_URL=redis://valkey:6379/4` as a literal; Valkey persists to `forage-valkey-data` (`--save 60 1`, no password, no ports) |
+| `compose/full.yml` (project `forage-full`) | `forage` + `searxng` + `valkey` (`valkey/valkey:8` digest-pinned, 8.1.10) | the same, plus `FORAGE_CACHE_HMAC_KEY` (bare passthrough, Forage only) for signed caching at contract 1.3.0 | `VALKEY_URL=redis://valkey:6379/4` as a literal; Valkey persists to `forage-valkey-data` (`--save 60 1`, no password, no ports). Without the key, a 1.3.0 service is `degraded: cache_unauthenticated` even when reachable |
 
 Common to both: `forage` publishes only `127.0.0.1:8020:8020`, runs with
-`restart: unless-stopped` and `mem_limit: 1024m`, mounts `forage-model-cache:/app/model-cache`,
+`restart: unless-stopped`, `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` (default `1024m`)
+and `cpus: ${FORAGE_CPUS:-0}` (`0` omits the CPU cap), mounts `forage-model-cache:/app/model-cache`,
 and leaves `SEARXNG_URL` unset so the built-in default `http://searxng:8080` resolves to the
-companion by service name (the name `searxng` is load-bearing). There is no `depends_on` and
-no `healthcheck:` block: Forage starts without SearXNG and reports `/search` failures
+companion by service name (the name `searxng` is load-bearing). There is no `depends_on`:
+Forage starts without SearXNG and reports `/search` failures
 honestly as `searxng_unavailable`.
+
+Size the host and deliver runtime knobs using
+[`docs/configuration.md` § Sizing the container](../../docs/configuration.md#sizing-the-container).
+The fragments require Docker Compose v2 (Compose Spec; verified v2.40.3);
+they do not mount `config.yaml`, so tuning requires the documented full-file bind mount.
+
+Both fragments ship `curl -fsS -o /dev/null http://127.0.0.1:8020/health`,
+every 30 s, timeout 5 s, three retries and start period 30 s. This is **liveness
+only**, not classifier readiness: `/health` always returns 200 and the body is
+discarded. Never gate traffic, `depends_on: service_healthy`, or a consumer's
+activation on it; read `/health`'s `promptguard_loaded` / `degraded_reasons` plus
+`/metrics` `search.unscanned_results`. Plain Compose does not restart unhealthy
+containers; `restart:` reacts to process exits.
+The probe calls `/health`, which pings the cache when due, detecting
+`cache_connected` recovery within one probe interval even without traffic.
+A reconnect can take 2 s of the 5 s probe timeout. With Valkey down, at most one
+reconnect WARNING and one `reconnect_failures` increment occur per probe for as
+long as it stays down: one per probe on connection refused, about one per two
+on connect timeout. That is the down-Valkey heartbeat, not flapping unless
+`reconnect_successes` climbs too.
 
 ```bash
 cd /path/to/Forage/compose
@@ -171,7 +198,7 @@ docker run --rm -p 127.0.0.1:8020:8020 \
   --env-file ./forage.env \
   -v forage-model-cache:/app/model-cache \
   -v "$PWD/config.yaml:/app/config.yaml:ro" \
-  ghcr.io/washingbearlabs/forage:1.0.0
+  ghcr.io/washingbearlabs/forage:1.2.1
 ```
 
 The env file carries `HF_TOKEN` and, if you run a Valkey, `VALKEY_URL`; only a *fully
@@ -186,14 +213,21 @@ warning and every key falls back to its code default, while a malformed `extract
 1. **Read the `/health` body.** It always returns HTTP 200; the truth is in the body
    (`CLAUDE.md` invariant 5). On the first boot against an empty volume, expect
    `status: "degraded"` with `degraded_reasons: ["promptguard_unavailable"]` while the
-   ~270 MiB weight set downloads (measured 19 s cold, 9 s warm on the 1 vCPU / 1 GB
-   reference host). Once weights land, expect `promptguard_loaded: true`,
-   `capabilities: {"search_sanitization": 1}`, `contract_version` matching the image's own
-   contract (`"1.1.0"` for `v1.0.0`, `"1.2.0"` for `v1.1.0`), and
+   ~270 MiB weight set downloads (measured 19 s cold, 9 s warm on the reference envelope (1 vCPU / 1 GB),
+   configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` — see `docs/configuration.md` § Sizing the container).
+   Once weights land, expect `promptguard_loaded: true`,
+   `capabilities.search_sanitization: 1`, `contract_version` matching the image's own
+   contract (`"1.3.0"` for `v1.2.1`), and
    `cache_backend` reading `valkey` (with `cache_connected: true`) under `full.yml` or
    `memory` under `minimal.yml`. A failed acquisition retries in the background at 30 s,
    doubling to a 600 s ceiling with +/-20% jitter, forever; it converges in place without a
    restart once the token or network is fixed.
+
+   At contract 1.3.0, full compose additionally needs a usable
+   `FORAGE_CACHE_HMAC_KEY`: expect `capabilities.cache_hmac_key: 1` and no
+   `cache_unauthenticated`. Without it that reason persists after weights load and
+   Valkey connects. Memory mode needs no signing key. Credential presence may also
+   add `brave_api_key`; the capability map is not limited to sanitization.
 
    ```bash
    curl -s http://127.0.0.1:8020/health | jq
@@ -207,7 +241,7 @@ warning and every key falls back to its code default, while a malformed `extract
 
    ```bash
    curl -s http://127.0.0.1:8020/metrics | jq .model
-   curl -s http://127.0.0.1:8020/openapi.json | jq -r .info.version   # 1.1.0 on v1.0.0; 1.2.0 from this tree
+   curl -s http://127.0.0.1:8020/openapi.json | jq -r .info.version   # 1.3.0 on v1.2.1 after the cut
    ```
 
 3. **Run the contract smoke** from a checkout at the deployed tag. It polls `/health` until
@@ -218,7 +252,10 @@ warning and every key falls back to its code default, while a malformed `extract
    `--anchor` names (default: the checkout's committed `contract/openapi.yaml.sha256`).
    Pick `--expect-status` by how the container was started: `degraded` (the default, what
    CI uses) for one with no token or weights, `healthy` for one started with them (an
-   `--env-file` carrying `HF_TOKEN`, or the mirror), which inverts the status,
+   `--env-file` carrying `HF_TOKEN`, or the mirror), **and an operational cache**.
+   At contract 1.3.0 a Valkey-backed container also needs a usable
+   `FORAGE_CACHE_HMAC_KEY` in that runtime env file; reachable-but-unsigned Valkey
+   cannot become healthy. The healthy mode inverts the status,
    `promptguard_unavailable` and `search_sanitization` checks — raise `--timeout-seconds`
    for a cold weights fetch. Take the anchor from the committed file at the tag
    (`git show` or a clean checkout), never from the Release assets or the image. Exit `0`
@@ -229,14 +266,16 @@ warning and every key falls back to its code default, while a malformed `extract
    tag has neither and asserts only the weights-free contract.
 
    ```bash
-   TAG=1.1.0
+   TAG=1.2.1
    git show v$TAG:contract/openapi.yaml.sha256 > anchor-v$TAG.sha256   # the committed anchor at the tag
    # container started with no token or weights
    uv run python contract_smoke.py --base-url http://127.0.0.1:8020 \
      --expect-status degraded --anchor anchor-v$TAG.sha256 \
      --timeout-seconds 120 --poll-interval-seconds 2 \
      --image ghcr.io/washingbearlabs/forage:$TAG
-   # container started with weights: healthy, with room for a cold fetch
+   # Weights and operational cache; for Valkey at contract 1.3.0, the container's
+   # runtime --env-file must also carry FORAGE_CACHE_HMAC_KEY (not a CLI argument).
+   # Healthy, with room for a cold fetch:
    uv run python contract_smoke.py --base-url http://127.0.0.1:8020 \
      --expect-status healthy --anchor anchor-v$TAG.sha256 \
      --timeout-seconds 600 --poll-interval-seconds 2 \
@@ -284,12 +323,13 @@ Things that change across versions and are expected, not bugs:
   consumer refuses activation until it is updated; MINOR and PATCH move bytes the consumer
   may have vendored, so re-vendor the contract by the procedure there.
 - **The weights revision moves** only when a maintainer re-vendors (`docs/weights.md`,
-  "Re-vendoring": pick the upstream sha, update `model_fetcher.DEFAULT_MODEL_REVISION`,
-  run `uv run python -m scripts.vendor_weights`, commit the constant and
+  "Re-vendoring": pick the upstream sha, update `model_fetcher.DEFAULT_MODEL_REVISION`
+  for the default model, run `uv run python -m scripts.vendor_weights --model-id <id> --revision <sha>`, commit any constant change and
   `weights_manifest.json` together, record the rotation). For the operator that means the
   next start is cold again (a fresh ~270 MiB fetch into `hub/`). Drop any
   `FORAGE_MODEL_REVISION` override when upgrading: an override that does not match the
-  image's manifest fails verification loudly, by design.
+  selected model's manifest entry refuses before a snapshot lookup
+  (`weights_revision_unpinned`), by design.
 - **`VALKEY_URL` and `extract_route_enabled` are read once at start**, so changing either
   needs a container restart, not just an edit.
 
@@ -334,11 +374,14 @@ both keep it that way (`CLAUDE.md` invariant 2). Forage reads no secret store at
 container environment is the only channel.
 
 The credential-bearing variables Forage itself reads are `HF_TOKEN`, `FORAGE_MIRROR_TOKEN`,
-`FORAGE_BRAVE_API_KEY`, and `VALKEY_URL` (which may embed a password); the companion additionally needs
+`FORAGE_BRAVE_API_KEY`, `VALKEY_URL` (which may embed a password), and
+`FORAGE_CACHE_HMAC_KEY` (the CSPRNG-generated cache-signing key); the companion additionally needs
 `SEARXNG_SECRET`. Provide them through `compose/.env`, `--env-file`, or your secret store,
 never as an inline `-e` flag (shell history, `ps`). Remember that `docker inspect` shows a
 container's full environment to anyone who can reach the Docker socket, and that rotating
-`VALKEY_URL` means a restart because it is read once. None of these values ever reach a
+`VALKEY_URL` means a restart because it is read once. For the signing key, stop
+**all** replicas first, replace the key everywhere, then start; never roll different
+keys across the shared cache. None of these values ever reach a
 log line: `cache.py` and `model_fetcher.py` log closed reason vocabularies, and the
 entrypoint prints nothing. The vendoring credentials (`GHCR_USER`, `GHCR_TOKEN`,
 `GITHUB_TOKEN`) are human-only and never given to CI. Details: `kit_tools/arch/SECURITY.md`
@@ -353,8 +396,8 @@ guarantee under your traffic.
 
 | Resource | Reference figure | Source |
 |----------|------------------|--------|
-| Host | 1 vCPU / 1 GB; 19 s cold boot, 9 s warm | `docs/configuration.md` |
-| Container memory | `mem_limit: 1024m` = 512 MiB parent (FastAPI + torch + PromptGuard) + 384 MiB pypdf extraction child + ~128 MiB headroom, of which 32 MiB is the in-memory content cache | `compose/*.yml` |
+| Host | Reference envelope (1 vCPU / 1 GB), configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT`; 19 s cold weights boot, 9 s warm, not classify latency | `docs/configuration.md` § Sizing the container |
+| Container memory | `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` (default `1024m`): 512 MiB parent + 384 MiB pypdf child + ~128 MiB headroom (32 MiB cache, 64 MiB provisional classifier working set, 32 MiB margin) at reference defaults | `compose/*.yml`; `docs/configuration.md` § Sizing the container |
 | Weights volume | ~270 MiB (`model.safetensors` is 283,347,432 bytes); a mirror pull needs roughly 2.2x the manifest bytes free during the fetch | `docs/weights.md` |
 | Image | ~348 MB, single stage, CPU-only torch | `Dockerfile`, CI notes |
 | Concurrency | one uvicorn worker; `/extract` concurrency pinned at 1 with queue depth 1 (excess is a 429 `busy`); `/retrieve` fetches time out at 30 s and cap bodies at 10 MiB | `config.yaml`, `pipeline/stage5_url_audit.py` |
@@ -372,10 +415,8 @@ replica, aggregate them yourself.
   grep for. The entrypoint prints nothing by design.
 - **Metrics:** `GET /metrics`, JSON only; there is no Prometheus exporter, OpenTelemetry,
   or hosted APM in the repository. Poll it with your own tooling.
-- **Alerts:** none are defined in this repository. The image ships no `HEALTHCHECK` and the
-  compose fragments declare no `healthcheck:`; if you add one, a bare
-  `curl -f http://127.0.0.1:8020/health` proves only that the process answers, because
-  `/health` is always 200 and the body is where degradation shows.
+- **Alerts:** none are defined in this repository. The image ships no `HEALTHCHECK`; both compose fragments declare a status-only liveness probe.
+  `/health` is always 200; the body, not Docker's health column, is where degradation shows.
 
 `kit_tools/docs/MONITORING.md` has the field-by-field reference and the alert-worthy
 signals; `kit_tools/docs/TROUBLESHOOTING.md` maps each symptom to its remedy.

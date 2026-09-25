@@ -1,0 +1,14 @@
+{
+  "counters": {
+    "classification_wait_timeouts": 0,
+    "fallback_fired": 1,
+    "paid_calls": 1,
+    "provider_compressed_body": 1,
+    "provider_timeouts": 1
+  },
+  "error": {
+    "error": "search_unavailable",
+    "reason": "searxng: timeout; brave: rate_limited"
+  },
+  "status": 422
+}

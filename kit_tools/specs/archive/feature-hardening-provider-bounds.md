@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: hardening-provider-bounds
-status: active
+status: completed
 session_ready: true
 depends_on: [hardening-cache-integrity]
 vision_ref: "T2.2 — Forage hardening"
@@ -12,7 +12,8 @@ epic_seq: 5
 epic_final: false
 execution_order: [US-001, US-003, US-002, US-004, US-005]
 created: 2026-09-19
-updated: 2026-09-19
+updated: 2026-09-23
+completed: 2026-09-23
 ---
 
 # Feature Spec: Provider Seam Bounds — Streamed Caps, Wall-Clock Budgets, Policy by Construction
@@ -305,7 +306,7 @@ pre-existing assertion intact.
   `_REVISION_SOURCES`.
 
 **Acceptance Criteria:**
-- [ ] `SearxngSettings`, `SearxngConfigurationError` and `searxng_settings_from_config` exist in
+- [x] `SearxngSettings`, `SearxngConfigurationError` and `searxng_settings_from_config` exist in
       `pipeline/search_providers/searxng.py`, reading their bounds through
       `pipeline/config_bounds.bounded_float` / `bounded_int` (`grep -n '_bounded_'
       pipeline/search_providers/searxng.py` returns nothing);
@@ -313,11 +314,11 @@ pre-existing assertion intact.
       wrong-typed with `SearxngConfigurationError`; `config.yaml` ships `search_searxng_timeout_seconds:
       10.0`; the key is in `KNOWN_CONFIG_KEYS` and has `docs/configuration.md` and `ENV_REFERENCE.md`
       top-level rows.
-- [ ] `SearxngProvider.__init__` accepts `settings=` (default `SearxngSettings()`);
+- [x] `SearxngProvider.__init__` accepts `settings=` (default `SearxngSettings()`);
       `build_provider_chain` takes `searxng_settings=` and both of its construction sites use it; the
       lifespan reads the builder unconditionally and the production chain's `SearxngProvider.settings`
       reflects a configured value; there is no module-level `app.state.searxng_settings` default.
-- [ ] `tests/fakes.py` exports the parameterised `ChunkStream` (with `largest_chunk`, `chunks_yielded`
+- [x] `tests/fakes.py` exports the parameterised `ChunkStream` (with `largest_chunk`, `chunks_yielded`
       and the per-chunk `delay` — a test asserts a two-chunk stream at `delay=0.05` takes ≥ 0.1 s), the
       stream-backed `make_response` (positional-compatible with today's `_make_response`; a test
       asserts `aiter_raw()` and `aiter_bytes()` both work on it and that no `content-length` is
@@ -333,10 +334,10 @@ pre-existing assertion intact.
       single delegating calls into `tests/fakes.py` with the stage-5 defaults; `_make_redirect` and
       `_stream_side_effect` call those wrappers; `tests/test_brave_provider.py` keeps no private copy
       of any of the four; `grep -rn MockTransport tests/` returns nothing.
-- [ ] `BraveSettings.max_response_bytes` exists (default `1_048_576`, no config key), is the default
+- [x] `BraveSettings.max_response_bytes` exists (default `1_048_576`, no config key), is the default
       of `_BRAVE_MAX_RESPONSE_BYTES`, and is not yet read by `search()` (a comment US-003 deletes).
-- [ ] `pipeline/search_providers/searxng.py` is in spec 3 US-003's AST code-parity reader list.
-- [ ] Behaviour preserved, in two checkable halves: `git diff --stat` lists no change for
+- [x] `pipeline/search_providers/searxng.py` is in spec 3 US-003's AST code-parity reader list.
+- [x] Behaviour preserved, in two checkable halves: `git diff --stat` lists no change for
       `pipeline/orchestrator.py`, `pipeline/contract.py`, `models.py` or `contract/`; and `git diff
       pipeline/search_providers/brave.py` touches only `BraveSettings` (the `max_response_bytes` field
       defaulting to `_BRAVE_MAX_RESPONSE_BYTES`) and, if the implementer moves it, the
@@ -346,16 +347,16 @@ pre-existing assertion intact.
       settings object is stored, not yet read — the comment says so); the `get`-shaped SearXNG doubles
       in `tests/test_orchestrator.py`, `tests/test_search_providers.py` and `tests/test_app.py` are
       unchanged.
-- [ ] Every pre-existing test in `tests/test_brave_provider.py` and `tests/test_stage5_url_audit.py`
+- [x] Every pre-existing test in `tests/test_brave_provider.py` and `tests/test_stage5_url_audit.py`
       keeps its subject and expected value; the only edits are the removal of the four private helper
       bodies (Brave) or their reduction to delegating wrappers (stage 5), the mechanical rename
       `_make_response(` → `make_response(` at the 26 Brave call sites with their argument lists
       unchanged, explicit `content-length` headers where a test relied on the synthesised one, and
       import lines; in `tests/test_orchestrator.py` the only edits are the three `_RecordingMetrics`
       class bodies replaced by `RecordingSearchMetrics`, their assertions unchanged.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-003: Streamed, self-decoded, wall-clock-bounded bodies on both providers, and the counter
 
@@ -751,7 +752,7 @@ class and detail unchanged).
   `searxng_unavailable` reason token on the `[searxng]`-only chain, with the Brave asymmetry.
 
 **Acceptance Criteria:**
-- [ ] Both providers read through `pipeline/bounded_body.py::read_bounded_body` over `aiter_raw()`,
+- [x] Both providers read through `pipeline/bounded_body.py::read_bounded_body` over `aiter_raw()`,
       each from its own `settings.max_response_bytes`; `grep -n 'aiter_bytes' pipeline/search_providers/
       pipeline/bounded_body.py` returns nothing; `grep -n 'flush(' pipeline/bounded_body.py` returns
       nothing; the four over-bound shapes of the Independent Test — plain, ≥ 64×-expansion gzip,
@@ -761,31 +762,31 @@ class and detail unchanged).
       instance), reading stopped at that
       point (`ChunkStream.chunks_yielded` shows no further chunk), and, for the filler, total raw bytes
       read ≤ `4 × max_response_bytes` and the outcome not `timeout`; pinned on both providers.
-- [ ] A truncated gzip stream, a corrupt deflate stream and a two-member gzip stream return
+- [x] A truncated gzip stream, a corrupt deflate stream and a two-member gzip stream return
       `ProviderFailure("hard_error", "malformed_body")` with `compressed` set, on both providers; `eof`
       unset at end of stream is `malformed_body`, never a served partial body; `eof` with non-empty
       `unused_data`, a raw chunk after `eof`, and a zero-output no-progress `decompress()` are each
       `malformed_body`; `str(exc)` of `BodyTooLarge`, `UnsupportedEncoding` and `MalformedBody` is the
       fixed token and never the header value; `tests/test_bounded_body.py` exists and
       `TESTING_GUIDE.md` carries its `test_mapping:` row and module row; pinned.
-- [ ] `gzip`, zlib-wrapped `deflate` and raw `deflate` bodies under the bound are served; `br`, `zstd`,
+- [x] `gzip`, zlib-wrapped `deflate` and raw `deflate` bodies under the bound are served; `br`, `zstd`,
       an unknown token and `gzip, br` return `ProviderFailure("hard_error", "unsupported_encoding")`
       before any body byte is read, whatever `Content-Length` says; both `AsyncClient` constructions
       pass `Accept-Encoding: identity` explicitly (asserted on the construction call — this is a new
       header); `docs/searxng.md`'s limiter section and `kit_tools/docs/GOTCHAS.md`'s limiter entry
       each name the header and its 429 → `rate_limited` consequence on a limiter-enabled instance;
       pinned on both.
-- [ ] A `Content-Length` longer than 20 characters, or above the raw ceiling of its path (`max_bytes`
+- [x] A `Content-Length` longer than 20 characters, or above the raw ceiling of its path (`max_bytes`
       identity, `4 × max_bytes` compressed), is `body_too_large` on both providers on the
       direct-construction path before any body byte; a gzip body announcing a length between
       `max_bytes` and `4 × max_bytes` gets the same outcome with and without the header; with the
       criterion text stating that a real peer surfaces as `connect_error` / `transport_error` through
       h11's own 20-digit bound; pinned.
-- [ ] Both providers return `ProviderFailure("timeout", "timeout")` for a trickling body after more
+- [x] Both providers return `ProviderFailure("timeout", "timeout")` for a trickling body after more
       than the budget has elapsed (lower bound only); the budget covers the HTTP interaction only (a
       slow parse after a fast body is never a timeout); the arm catches the builtin `TimeoutError`
       before the catch-all; the SearXNG client is constructed with `follow_redirects=False`; pinned.
-- [ ] `ProviderSearchResult.compressed` and `ProviderFailure.compressed` exist and are stamped from
+- [x] `ProviderSearchResult.compressed` and `ProviderFailure.compressed` exist and are stamped from
       the one header-read site before status mapping and before every exception arm; at the
       `run_search_pipeline` level with a recording sink, a served, an over-bound, an undecodable, a
       malformed, a compressed-429, a compressed-timeout-after-headers, a re-classified compressed
@@ -797,7 +798,7 @@ class and detail unchanged).
       block; a `br` response on a
       configured `[searxng]`-only chain is a 422 `searxng_unavailable` whose `reason` ends in
       `: unsupported_encoding` (`tests/test_app.py`, body pinned); pinned.
-- [ ] `search.provider_compressed_body` and `search.provider_timeouts` are on `/metrics`
+- [x] `search.provider_compressed_body` and `search.provider_timeouts` are on `/metrics`
       (`SearchMetricsSink` — its docstring no longer counts fields — `_NullSearchMetrics`,
       `SearchMetrics`, the handler dict, `SearchMetricsResponse` with the header-seen and the
       both-timeout-kinds descriptions); the two order guards in `tests/test_contract_metrics.py` pass
@@ -806,14 +807,14 @@ class and detail unchanged).
       carries both names in its literal set; `tests/fakes.py::RecordingSearchMetrics` and
       `tests/test_app.py:482-490`'s literal carry both keys; `MONITORING.md:433-439`'s runbook names
       the Protocol and `_NullSearchMetrics` sites.
-- [ ] Window mechanics (R36): docstring line appended in the `* ``1.3.0`` — …` format; `uv run
+- [x] Window mechanics (R36): docstring line appended in the `* ``1.3.0`` — …` format; `uv run
       python -m scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via
       `_SCHEMA_MODELS`; `_EXPECTED_ONE_THREE_ZERO_DIFF` reviewed and **nothing appended** (no property,
       no enum member — R36 corrected); the four anchor-quoting pages refreshed; `uv run python -m
       scripts.export_contract --check` green — with Implementation Notes recording that the golden is
       byte-identical and the diff list carries no entry, and why; the docstring line names both
       counters and the `unsupported_encoding` reason token on the `[searxng]`-only chain.
-- [ ] `FAILURE_CLASSES` (`base.py:21,32`) is unchanged; `_SEARXNG_FAILURE_DETAILS` and
+- [x] `FAILURE_CLASSES` (`base.py:21,32`) is unchanged; `_SEARXNG_FAILURE_DETAILS` and
       `_BRAVE_FAILURE_DETAILS` each gain exactly `unsupported_encoding`; the only other edits to
       `base.py` are the additive `compressed` field on the two dataclasses and two docstring
       corrections — `ProviderFailure`'s (`:64-72`) and the matching sentence in `FailureClass`'s
@@ -823,7 +824,7 @@ class and detail unchanged).
       `failure_class` alone) — with the dataclass fields otherwise untouched; `tests/test_brave_provider.py`'s
       closed-token test asserts thirteen tokens with a new `unsupported_encoding` `_FAILURE_CASES` row,
       and `grep -rn 'twelve' pipeline/ tests/` returns nothing.
-- [ ] The SearXNG doubles are stream-shaped and real: `grep -nE '(mock_client|client|inner|
+- [x] The SearXNG doubles are stream-shaped and real: `grep -nE '(mock_client|client|inner|
       return_value)\.get\.' tests/test_orchestrator.py tests/test_search_providers.py tests/test_app.py`
       returns nothing (**ten** sites at planning time, executed — `test_orchestrator.py:903,905,2122,
       2403,2505`, `test_search_providers.py:325,327,378,388`, `test_app.py:1830`; `grep -c` is the
@@ -843,7 +844,7 @@ class and detail unchanged).
       tests/test_search_providers.py` returns 0), and the no-leak sweep asserts no record
       carries the raw `Content-Encoding` value on either provider; every other pre-existing SearXNG
       assertion keeps its subject and expected value.
-- [ ] Docs: `grep -rn '10 s' kit_tools/arch/patterns/ERROR_HANDLING.md kit_tools/docs/API_GUIDE.md
+- [x] Docs: `grep -rn '10 s' kit_tools/arch/patterns/ERROR_HANDLING.md kit_tools/docs/API_GUIDE.md
       kit_tools/docs/TROUBLESHOOTING.md docs/configuration.md` returns only `TROUBLESHOOTING.md:702`
       (Poppy's healthcheck note); both timeout rows in `docs/configuration.md` contain "wall-clock
       budget" and the raise-it-for-a-slow-instance sentence; every page `grep -rn 'malformed_body'
@@ -858,14 +859,14 @@ class and detail unchanged).
       'provider_compressed_body' kit_tools/arch/SECURITY.md` hitting it; `kit_tools/roadmap/BACKLOG.md`
       carries the stage-5 item, `SECURITY.md`'s documented-non-vulnerabilities table the matching
       accepted-risk row, and `AUDIT_FINDINGS.md`'s `-020` entry the scope line.
-- [ ] `sanitizer_revision` rotation measured (revert `pipeline/orchestrator.py` and
+- [x] `sanitizer_revision` rotation measured (revert `pipeline/orchestrator.py` and
       `pipeline/contract.py` each in turn, with a both-reverted control reproducing the pre-story
       hash) and recorded at the five sites ruling 6 names — `docs/bootstrap-notes.md`, `CLAUDE.md`,
       `kit_tools/arch/DECISIONS.md`, `kit_tools/docs/GOTCHAS.md` (divergence table) and
       `kit_tools/arch/CODE_ARCH.md`.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-002: Outbound SearXNG query cap — `search_searxng_query_max_chars`
 
@@ -908,18 +909,18 @@ exactly `search_searxng_query_max_chars` characters, the request is accepted end
   in `_REVISION_SOURCES`).
 
 **Acceptance Criteria:**
-- [ ] `search_searxng_query_max_chars` exists in `config.yaml` (default 400), is bounded 50–400 at
+- [x] `search_searxng_query_max_chars` exists in `config.yaml` (default 400), is bounded 50–400 at
       boot (`SearxngConfigurationError` out of range), has `docs/configuration.md` and
       `ENV_REFERENCE.md` rows and a `KNOWN_CONFIG_KEYS` entry.
-- [ ] The outbound SearXNG `q` is truncated to the cap on the chain `build_provider_chain` builds
+- [x] The outbound SearXNG `q` is truncated to the cap on the chain `build_provider_chain` builds
       (asserted on `client.stream.call_args`); `SearchRequest.query` is unchanged on the wire;
       a query shorter than the cap is sent untouched; a 400-character multi-byte query is sent whole.
-- [ ] `SECURITY.md`'s operator-spend row names the SearXNG URI-length path as closed by this story.
-- [ ] `git diff --stat` shows no change under `pipeline/orchestrator.py`, `pipeline/contract.py`,
+- [x] `SECURITY.md`'s operator-spend row names the SearXNG URI-length path as closed by this story.
+- [x] `git diff --stat` shows no change under `pipeline/orchestrator.py`, `pipeline/contract.py`,
       `models.py` or `contract/`.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-004: Cost-monotonic policy by construction — the paid-prefix rule
 
@@ -1014,36 +1015,36 @@ passes unchanged.
   against the re-created golden.
 
 **Acceptance Criteria:**
-- [ ] `apply_request_policy` keeps only a prefix of the configured paid providers; the extended
+- [x] `apply_request_policy` keeps only a prefix of the configured paid providers; the extended
       per-shape property loop and `test_a_second_paid_provider_cannot_be_reached_by_skipping_the_first`
       pass; every existing `tests/test_search_policy.py` case passes unchanged; the `:40-43` comment is
       accurate.
-- [ ] `test_a_later_paid_only_selection_on_an_all_paid_chain_is_the_policy_422` passes: 422
+- [x] `test_a_later_paid_only_selection_on_an_all_paid_chain_is_the_policy_422` passes: 422
       `search_unavailable`, reason `policy_excluded_all_providers`, no provider called.
-- [ ] The four docstring steps correspond to four `# step N —` marked blocks (steps 3 and 4 no longer
+- [x] The four docstring steps correspond to four `# step N —` marked blocks (steps 3 and 4 no longer
       share one comprehension), and a test asserts the docstring's numbered steps and the body's
       markers agree.
-- [ ] `SearchRequest.providers`' description states the prefix rule and the `provider_used` diagnosis
+- [x] `SearchRequest.providers`' description states the prefix rule and the `provider_used` diagnosis
       sentence; `API_GUIDE.md` matches; the 1.3.0 docstring line names the all-paid-chain consequence.
-- [ ] `contract/GOVERNANCE.md`'s "Recorded rulings" carries the all-paid-chain ruling under the next
+- [x] `contract/GOVERNANCE.md`'s "Recorded rulings" carries the all-paid-chain ruling under the next
       free letter, on ruling (a2)'s unreachability basis alone (the one-paid-name argument, the (a2)
       precedent cited, the T3.1 note, no row-6 citation), `_RULING_MARKERS` counts it, the three
       "five rulings" sites say "six", and `grep -rni 'five rulings' contract/ tests/` returns nothing.
-- [ ] Window mechanics (R36): docstring line appended in the `* ``1.3.0`` — …` format; `uv run
+- [x] Window mechanics (R36): docstring line appended in the `* ``1.3.0`` — …` format; `uv run
       python -m scripts.export_contract` run; `tests/golden/contract_1_3_0.json` re-created via
       `_SCHEMA_MODELS` (it moves — the `SearchRequest.providers` description); `_EXPECTED_ONE_THREE_ZERO_DIFF`
       reviewed and **nothing appended** (a description change adds no property or enum member — R36
       corrected; the gate is `test_contract_schema_matches_golden` against the re-created golden); the
       four anchor-quoting pages refreshed; `uv run python -m scripts.export_contract --check` green;
       `contract_1_2_0.json` untouched.
-- [ ] `policy_unknown_provider`'s unit is unchanged (`retrieval_app.py`'s increment site and
+- [x] `policy_unknown_provider`'s unit is unchanged (`retrieval_app.py`'s increment site and
       `MONITORING.md`'s row unedited); `SECURITY.md` carries the accepted-risk row for finding -054 in
       the honest wording above.
-- [ ] `sanitizer_revision` rotation measured (revert-and-reproduce on `pipeline/contract.py`) and
+- [x] `sanitizer_revision` rotation measured (revert-and-reproduce on `pipeline/contract.py`) and
       recorded at the five sites ruling 6 names.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ### US-005: The `run_search_pipeline` cleanup — one rotation, wire output and sink pinned
 
@@ -1170,27 +1171,27 @@ record.
   sites).
 
 **Acceptance Criteria:**
-- [ ] `_query_provider_chain` exists at module level in `pipeline/orchestrator.py` and takes the
+- [x] `_query_provider_chain` exists at module level in `pipeline/orchestrator.py` and takes the
       metrics sink; `run_search_pipeline`'s body contains no `await provider.search(` and no
       `for ... in enumerate(chain)`; exactly one `search_provider_failed` WARNING statement remains;
       `_legacy_searxng_codes` is called once per request; one empty-chain `ValueError` site remains.
-- [ ] The sink is mutated inside `_query_provider_chain` at the same points as before: the four
+- [x] The sink is mutated inside `_query_provider_chain` at the same points as before: the four
       fixture runs produce identical `_PINNED_COUNTERS` projections before and after; the exhaustion
       captures show the increments already landed when the `PipelineError` is raised.
-- [ ] `_ServedChain` carries the serving provider, raw results, `max_results`, `unresponsive_engines`,
+- [x] `_ServedChain` carries the serving provider, raw results, `max_results`, `unresponsive_engines`,
       `content_kind`, `provider_errors` and `fallback_fired`, and one committed fixture run has a
       non-empty `unresponsive_engines` that survives the pin; `ERROR_HANDLING.md:166-172` names the
       `unknown` provider-name fallback.
-- [ ] `grep -n 'searxng_url' pipeline/orchestrator.py` returns nothing; no `run_search_pipeline(`
+- [x] `grep -n 'searxng_url' pipeline/orchestrator.py` returns nothing; no `run_search_pipeline(`
       call in `tests/` passes `searxng_url=`; `build_provider_chain`'s `searxng_url=` keyword and its
       callers are unchanged.
-- [ ] No omission log line contains a result URL: the extended no-leak test passes; the three
+- [x] No omission log line contains a result URL: the extended no-leak test passes; the three
       rewritten lines carry the reason token and `domain=`. **This is a deliberate delta**, pinned by
       that test.
-- [ ] A `ProviderFailure` with an out-of-vocabulary class, detail or provider name reaches the wire
+- [x] A `ProviderFailure` with an out-of-vocabulary class, detail or provider name reaches the wire
       as `"<name>: hard_error"` / `"unknown: …"` with `detail=unexpected` in the log, pinned by a
       test. **This is a deliberate delta** for inputs the pins do not contain.
-- [ ] Wire, sink and exhaustion output pinned: for inputs whose provider outcomes are in-vocabulary,
+- [x] Wire, sink and exhaustion output pinned: for inputs whose provider outcomes are in-vocabulary,
       the four committed captures (the served-empty run included) produce identical `model_dump()`
       (exclusion list `{"request_id"}`) and identical `_PINNED_COUNTERS` projections (the literal is
       pinned in the test), and the two exhaustion inputs raise a `PipelineError` with identical
@@ -1203,11 +1204,11 @@ record.
       pre-existing search tests in
       `tests/test_orchestrator.py`, `tests/test_search_providers.py` and `tests/test_app.py` pass with
       no assertion changed apart from the two removed legacy-parameter tests.
-- [ ] `sanitizer_revision` rotation measured (revert-and-reproduce on `pipeline/orchestrator.py`) and
+- [x] `sanitizer_revision` rotation measured (revert-and-reproduce on `pipeline/orchestrator.py`) and
       recorded at the five sites ruling 6 names.
-- [ ] Tests written/updated for new functionality.
-- [ ] Full test suite passes (`uv run pytest`).
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
+- [x] Tests written/updated for new functionality.
+- [x] Full test suite passes (`uv run pytest`).
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass.
 
 ## Edge Cases
 
@@ -1380,6 +1381,408 @@ record.
 - Rotations: `docs/bootstrap-notes.md`, [DECISIONS.md](../arch/DECISIONS.md), [GOTCHAS.md](../docs/GOTCHAS.md), [CODE_ARCH.md](../arch/CODE_ARCH.md)
 
 ## Implementation Notes
+
+### Whole-epic release-gate correction (2026-09-23)
+
+The owner retained the exact `4 * max_response_bytes` raw-read guarantee and
+declined a one-chunk overshoot waiver. Both providers now use the public
+HTTPX/httpcore network backend adapter in `pipeline/provider_transport.py`.
+Each read is bounded before the upstream stream receives it; a public h11
+observer counts entity bytes without charging headers or chunk metadata.
+The six former strict xfails were migrated, not discarded: the actual
+HTTPX/httpcore stack now drives a network double honoring `read(max_bytes)`,
+and the original three non-dividing chunk sizes pass for both providers.
+The other 78 transport tests cover framing, encodings, TLS, deadlines,
+failure mapping and closure. Existing bounded-decoder regressions remain.
+
+An exhausted raw budget with incomplete HTTP framing refuses without an
+extra overflow-probing read, including close-delimited responses at the
+ceiling. Direct declarations pin the already-locked h11/httpcore dependencies;
+no private transport internals or type suppressions are used. The full local
+release-gate suite passes 4244 tests with no xfails. The new transport is not
+a sanitizer-revision source; the measured forty-second rotation belongs to
+the simultaneous classifier-admission and IPv6-policy repairs.
+
+The missing thirty-fourth rotation record is now present in `DECISIONS.md`;
+the original US-004 note below is corrected to name the actual fifth site.
+The unrelated Stage 5 fetch-decoder risk remains open and accepted; neither
+these provider changes nor the passing suite close it. Publication remains
+pending fresh CI and owner-authorized release execution. Final independent
+quality, security and whole-epic compliance revalidation all returned ready.
+
+Round-2 reviewers found two parser-compatibility regressions. Before fixing
+them, 12 of 26 new cases failed. The observer now matches httpcore's existing
+100 KiB incomplete-header allowance and defers malformed-body framing errors
+until valid response headers have been exposed. Coalescing cannot turn a
+429 or unsupported-encoding outcome into a transport error, nor erase the
+compression flag. All 26 cases and the unchanged six exact-cap cases pass.
+
+### US-001 - settings and shared streaming doubles (2026-09-22, Copilot)
+
+- Added frozen `SearxngSettings`, the module-owned configuration error and a
+  `bounded_float` reader for the shipped 1-60 second timeout key. Lifespan
+  validates it unconditionally and passes it to both registry/fallback construction
+  sites. The config registry, canonical reference and environment table agree.
+  Settings are deliberately stored, not consumed by `search()` yet; both docs
+  explicitly distinguish this seam from the currently fixed per-operation timeout.
+- Brave's sole production change is `BraveSettings.max_response_bytes` plus its
+  temporary comment. Both provider `search()` methods are byte-identical to
+  pre-story `764fecd`; Brave's remaining production AST is identical as well.
+  No new byte-limit config key or module-local bounds helper was introduced.
+- Promoted the stream-backed response/client doubles, delayed raw chunk recorder,
+  per-instance decoder proxy, aggregate decoder context and complete metrics fake.
+  All pre-existing assertions in Brave, stage 5 and orchestrator tests are unchanged;
+  SearXNG's get-shaped doubles remain unchanged. Stage 5 retains only single-return
+  delegating wrappers. No migrated test required a synthesized Content-Length.
+- `pipeline/bounded_body.py` did not exist at this seam's start. Added only the
+  module-local `_decompressobj` alias so the recorder can patch its specified target
+  now, without patching global zlib or implementing US-003's reader early. The
+  raw-deflate regression drives the wrapped attempt and raw retry explicitly,
+  observes two instances and aggregates their calls/output bounds. US-003 still
+  owns the decoder and all production read-path changes.
+- Extended spec 3's implemented `_CONFIG_READER_MODULES` list and required-reader
+  assertion with SearXNG; recorded that handoff in the archived spec's Implementation
+  Notes only, leaving its story definitions and completed checkboxes untouched.
+- The final no-transport-double sweep found one post-planning occurrence in
+  `tests/test_retrieve_admission.py`, introduced by retrieve-parity validation
+  `fe211e3`. Migrated only its HTTP stream seam to a closing async context manager;
+  its real fetcher, delayed headers/chunks, cancellation cleanup, deadline, admission
+  and result assertions are unchanged. The repository-wide sweep now has zero hits.
+- All nine hashed sources, the derivation module, response models and contract
+  artifacts are unchanged. Default and shipped configuration both retain
+  `0866963aac3ae860f135061b1cfac397c3678333103a8139fc36fde27d2c1e80`;
+  no sanitizer rotation, contract export changes or golden edits are needed.
+- Validation: 1,098 related tests pass across the eight changed test modules,
+  including 14 shared-double regressions. Repository Ruff lint/format, strict
+  Pyright (zero errors), contract exporter `--check` and whitespace checks pass.
+  Three existing non-failing warnings remain unsuppressed (one upstream Torch
+  deprecation and two intentional socket-guard warnings). The full pytest suite
+  was explicitly prohibited by this invocation; its acceptance gate is unverified,
+  so the implementation result is `partial` / `needs-work`, not a functional failure.
+
+### US-003 - streamed bodies, wall-clock budgets and counters (2026-09-22, Copilot)
+
+- Landed the shared reader and Brave path first (`5ddc16f`), then SearXNG's
+  production/double migration together (`416ec57`); compression flags/counters
+  follow, with window/export mechanics last. Both providers now stream raw bytes,
+  bound decoded outputs through `remaining + 1`, and retain per-operation httpx
+  timeouts inside a whole-interaction deadline. No decoder flush or new dependency.
+- The required exception names are public aliases of classes with `Error` suffixes,
+  satisfying Ruff N818 without a suppression. Each message is its fixed token.
+  Raw deflate retries are recorded across both instances; a two-byte prefix handles
+  transport splits inside the format header. A stream still incomplete after
+  spending exactly its raw budget is refused immediately, without awaiting a
+  further filler chunk. Reading may hold the currently delivered transport chunk;
+  no transport can retract bytes already yielded.
+- SearXNG failure matrices now own fresh real responses via factories because raw
+  streams are single-use. Fifteen SearXNG cases and thirteen Brave tokens are pinned;
+  the artificial RuntimeError-from-response.json row is gone. An additional
+  buffer-backed Brave double in `test_app.py` was migrated as well. The parser-input
+  test's one-MiB field plus framing exceeded the newly honest HTTP bound: its helper
+  supplies a two-MiB test-only provider setting so the unchanged parser assertions
+  still test their original subject. Production caps remain one MiB.
+- Flags survive status failures, body refusals, invalid JSON, timeout and transport
+  errors after headers; before-header failures stay false. Both counters increment
+  once before the loop's re-classification/exit branches. The app regression pins
+  the exact three-field lone-SearXNG 422 envelope and new reason token. Dataclass
+  defaults, field sets, metrics order, model descriptions and all five sink sites
+  move together; `FAILURE_CLASSES` is unchanged.
+- Contract remains held at 1.3.0. Ran the exporter, re-created the golden through
+  `_SCHEMA_MODELS`, reviewed `_EXPECTED_ONE_THREE_ZERO_DIFF`, and ran `--check`.
+  The golden is byte-identical (sha256
+  `d827f19c7224bf2d6cd055170f8972c0b48f27bff27d5534915cae505129c0ad`);
+  **nothing appended** to the diff list: search metrics are outside the golden,
+  and a reason-string token is not a property or enum. All published goldens are
+  untouched. OpenAPI anchor:
+  `ec61da286abc37aadc5bf783cfcf9ab4444f1ef85424ad0dd319f502e24750ea`,
+  refreshed on all four anchor-quoting pages.
+- Measured only two changed hashed sources against clean `abf9df6`, under both
+  default and shipped config: before/both-reverted
+  `0866963aac3ae860f135061b1cfac397c3678333103a8139fc36fde27d2c1e80`;
+  after `c9bf6e0d87beaa5bf32e05e38dd5fdb092fac0e764e46c409220f81a336f2f76`;
+  orchestrator-only reversal
+  `61d5456277f013809998155e08b2fca3d18cd1f408245ef48d2bedf0ce157e01`;
+  contract-only reversal
+  `e736bb763376c7fe1e57f57f36c8057a96f8f76f3aefd2602c2e208a22d9f5af`.
+  All five rotation sites record this. `bounded_body.py` remains unhashed;
+  transport acceptance/timing changes, not the text-sanitization algorithm.
+- Operator docs now explain identity requests, the second SearXNG limiter rule,
+  sum-of-budgets latency and free-peer-driven paid calls. Spec 8 US-004 must fold
+  `docs/releases.md`'s **Unreleased** upgrade action into v1.2.0. Stage 5 remains
+  open: BACKLOG and the accepted-risk table name its uncapped decoder; the old
+  -020 heading had been replaced by later validation output, so its open scope
+  record was restored in the local ignored `AUDIT_FINDINGS.md`.
+- Mechanical sweeps: zero provider `aiter_bytes`, helper flush, SearXNG get-shaped
+  double/injected-response keywords, or stale twelve-token vocabulary references.
+  The broad `twelve` sweep still finds the unrelated pre-existing "twelve lines"
+  comment in `pipeline/config_bounds.py`; it was not edited to game the grep.
+  The scoped `10 s` doc sweep leaves only Poppy's historical healthcheck note.
+  The `20 s` substring also matches pre-existing **120 s** retrieve-admission
+  arithmetic; there is no twenty-second provider-chain claim. All enumerated
+  detail vocabularies include `unsupported_encoding`.
+- Validation: 1,639 related tests passed across sixteen modules; one existing
+  governance-doc test fails because ruling (j) still cites the now-archived
+  `kit_tools/specs/feature-hardening-cache-integrity.md`. Both the ruling and its
+  test are byte-identical to pre-story `abf9df6`; the archived file exists.
+  This unrelated defect is left unchanged. Ruff lint/format, strict Pyright,
+  exporter `--check` and whitespace checks pass. Three existing non-failing
+  warnings remain (Torch deprecation, two socket-guard warnings).
+  Full-suite execution was explicitly prohibited, so that acceptance gate is
+  unverified. Result is `partial` / `needs-work`, not a claim that the full gate
+  passed. Real httpx teardown under cancellation remains accepted untested as
+  specified; both fake-client timeout regressions assert client exit.
+
+### US-003 - retry: chunk-independent deflate selection (2026-09-22, Copilot)
+
+- Restored the preserved implementation in its original dependency order as
+  `6d596ea` (helper/Brave), `f4c9dff` (SearXNG/doubles) and `9aedcfd`
+  (flags/counters/window/docs), without changing story definitions or checkboxes.
+  First reproduced the verifier's six failures: the helper and both providers
+  accepted `780100feff20010200fdff7b7d` whole but rejected it split after byte two
+  or bytewise.
+- Replaced first-chunk/two-byte format commitment with one bounded raw replay.
+  A raw stream can share a valid zlib header and can produce tentative wrapped
+  output before the wrapped interpretation errors, exceeds the decoded cap, or
+  ends without EOF. The retry discards that output, keeps every decoder call at
+  `remaining + 1`, and still requires exactly one complete member without a flush.
+  Invalid input remains a fixed-token failure; a wrapped zero-output filler
+  stops at its raw budget without waiting for another chunk.
+- Necessary refinement of the original first-chunk memory assumption: deflate
+  retains replay input up to the existing `4 * max_bytes` raw ceiling in addition
+  to bounded decoded output and the currently delivered transport chunk. No
+  unbounded allocation or new ceiling is introduced; bytes replayed are not
+  counted as new transport input. Identity/gzip do not retain replay history.
+  GOTCHAS and CODE_ARCH document this tradeoff rather than claiming header-only
+  detection is reliable.
+- Helper regressions cover every split of the verifier's 13-byte fixture plus
+  bytewise delivery, delayed rejection after speculative output, decoded overflow
+  on retry, missing wrapped EOF, raw-budget exhaustion, truncation, trailing bytes
+  and extra members. The shared provider parametrization pins both SearXNG and
+  Brave returning the decoded JSON for whole, two-byte-split and bytewise input,
+  including compression flags, exact parser input, raw byte counts and aggregate
+  bounded decoder outputs. The old corruption test still refuses the same body;
+  its decoder-count assertion now correctly expects both format attempts.
+- Final related run: **1,854 passed, one inherited governance-doc failure** across
+  fifteen modules. Ruling (j) references the now-archived cache-integrity spec;
+  `contract/GOVERNANCE.md` and its test remain byte-identical to `abf9df6`, and
+  the archived file exists. Left that unrelated defect unchanged. Three inherited
+  non-failing warnings remain unsuppressed. Repository Ruff check, Ruff format
+  check, strict Pyright (zero errors), exporter `--check` and whitespace checks
+  pass after scoped safe fixes/formatting. Full-suite execution is explicitly
+  deferred to the authorized end-of-epic gate; result remains `partial` /
+  `needs-work` for outstanding validation, not the resolved deflate defect.
+- Re-ran export and re-created the held golden through `_SCHEMA_MODELS`:
+  byte-identical, sha256 `d827f19c7224bf2d6cd055170f8972c0b48f27bff27d5534915cae505129c0ad`.
+  `_EXPECTED_ONE_THREE_ZERO_DIFF` still needs no entry. OpenAPI/anchor and all
+  four quoting pages retain `ec61da286abc37aadc5bf783cfcf9ab4444f1ef85424ad0dd319f502e24750ea`.
+  Reproduced all four revision measurements above under default and shipped
+  configuration: only orchestrator/contract move from `abf9df6`, both-reverted
+  still returns `0866963a...c1e80`, and the corrected unhashed decoder leaves the
+  final revision `c9bf6e0d...f2f76` unchanged. The five rotation records remain
+  accurate. No release, push, tag or Poppy change was made.
+
+### US-002 - outbound SearXNG query cap (2026-09-22, Copilot)
+
+- Added `SearxngSettings.query_max_chars`, default 400, using the existing
+  shared `bounded_int` reader with inclusive 50-400 bounds and
+  `SearxngConfigurationError`. The key is shipped, registered and documented
+  in both operator tables. Existing lifespan and chain construction already
+  pass the settings through; no new wiring or provider dependency was needed.
+- Only the outbound `q` is sliced. Tests drive `build_provider_chain` through
+  `run_search_pipeline` with the default and configured caps 50, 237 and 400:
+  5,000-character input, short input, exact-bound ASCII, CJK and four-byte
+  Unicode retain the original request/response query and serve results.
+  Successful truncation emits no provider log; no flag or counter was added.
+  Boot tests cover invalid values on both SearXNG and Brave-only chains.
+- Operator docs explain the invisible truncation and diagnosis by comparing
+  caller query length with the cap. The spend row records the closed
+  caller-induced URI-length path under the common 8 KB request-line limit.
+  An in-memory httpx encoding check measured 400 CJK characters as 3,600 query
+  bytes (3,694-byte request line), and 400 four-byte characters as 4,800 query
+  bytes (4,894-byte request line), including the fixed SearXNG parameters.
+- All nine hashed sources and the derivation module are byte-identical to
+  pre-story `4b5bd60`. Default, pre-story shipped and current shipped config
+  each produce `c9bf6e0d87beaa5bf32e05e38dd5fdb092fac0e764e46c409220f81a336f2f76`.
+  `pipeline/orchestrator.py`, `pipeline/contract.py`, `models.py` and all
+  contract artifacts are unchanged; exporter `--check` passes.
+- After scoped safe Ruff fixes/formatting, **718 tests passed** across
+  `test_search_providers.py`, `test_app.py` and `test_contract_metrics.py`.
+  Repository Ruff lint/format checks and strict Pyright pass with zero errors.
+  The three inherited non-failing Torch/socket-guard warnings remain
+  unsuppressed. Full pytest is explicitly prohibited for this implementer
+  invocation, so the full-suite acceptance gate remains deferred and the
+  result is `partial` / `needs-work` for that validation only.
+
+### US-004 - paid-prefix request policy (2026-09-22, Copilot)
+
+- Split the policy into four marked blocks whose first-line text exactly
+  mirrors the numbered docstring steps, checked through `inspect.getsource`.
+  Steps 1/2 retain their code and per-entry counts; step 3 retains the
+  longest named paid prefix across intervening free providers; step 4
+  independently removes every paid provider when fallback is forbidden.
+  Empty `providers` remains unrestricted. No log or counter was added.
+- Extended the existing 30-shape harness with later-paid-only selections
+  and every subset of configured names, each crossed with both fallback
+  values. It asserts the exact longest prefix, free-provider order,
+  subsequence, unchanged inputs and no calls. Named regressions cover the
+  skipped first paid provider, a middle gap across free providers, and an
+  earlier name beyond the eighth entry. The all-paid HTTP regression
+  returns 422 `search_unavailable` / `policy_excluded_all_providers` with
+  no provider called, no paid call counted and no unknown-name increment.
+  Before implementation, all six new/extended regression checks failed
+  against the old policy; afterwards all 16 focused cases passed.
+- GOVERNANCE already had eleven rulings through (j), not planning-time
+  five through (d). The next free letter is **(k)**, and all three count
+  sites plus CLAUDE's count now say **twelve**, with the marker and
+  `_NUMBER_WORDS` updated. The only classification basis is ruling (a2)'s
+  unreachability reasoning: the registry has one paid name and configured
+  duplicates collapse. T3.1 inherits the rule when it registers a second
+  paid backend. `five rulings` has no matches in `contract/` or `tests/`.
+- The request description and API guide state the prefix rule, the all-paid
+  policy 422 and diagnosis through `provider_used`/`FORAGE_SEARCH_PROVIDERS`.
+  Finding 2026-09-16-054 is accepted in the architecture SECURITY table:
+  per-entry counts and full-body parse cost remain uncapped; network
+  placement is the control, and a body cap needs its own rejection ruling.
+  `retrieval_app.py` and `MONITORING.md` are byte-identical to the base.
+- Appended the `* ``1.3.0`` —` contract line, regenerated OpenAPI/anchor/drift
+  twin and re-created the held golden through `_SCHEMA_MODELS`. Both schema
+  comparisons differ **only** at `SearchRequest.providers.description`.
+  Nothing was appended to `_EXPECTED_ONE_THREE_ZERO_DIFF` (no property or
+  enum member added); its test file and every older golden are untouched.
+  The four current-anchor pages quote
+  `87bd958cb471614f5ecab22418eab6562a07e1a4c30d85ae45d5dce3ae2b3495`.
+- Thirty-fourth revision rotation, measured against clean pre-story
+  `0139ad62344bb9fec1e1c1d3d9ba0519de0314bc`: before
+  `c9bf6e0d87beaa5bf32e05e38dd5fdb092fac0e764e46c409220f81a336f2f76`,
+  after `e3b9c13866a53939ee542debe3bc4bbd9ca53dded740e40958dd984914d73d91`.
+  Live derivation with only `contract.py`'s whole-file bytes substituted
+  read-only reproduces the before value under default and shipped config.
+  The other eight hashed sources are byte-identical; policy/models are
+  unhashed. No text-sanitization algorithm or currently constructible
+  production outcome changes. Initially recorded at only four protocol sites:
+  `docs/bootstrap-notes.md`, `CLAUDE.md`, `CODE_ARCH.md` and `GOTCHAS.md`;
+  these Implementation Notes do not count as the fifth site. The missing
+  `DECISIONS.md` record was repaired at the 2026-09-23 whole-epic release gate.
+- After safe Ruff fixes/formatting restricted to changed Python files,
+  the related run passed **1,129 tests** and failed only the inherited
+  ruling-(j) citation test: the cache-integrity spec moved to `specs/archive/`,
+  but its source citation still names the old path. Reproduced against
+  pre-story GOVERNANCE with the unchanged check; left outside this story.
+  The additional sanitizer-revision module passed **12 tests**.
+  Repository Ruff lint/format, strict Pyright (zero errors), exporter
+  `--check` and `git diff --check` pass. Three inherited Torch/socket-guard
+  warnings remain unsuppressed. Full pytest is prohibited for this
+  invocation, so the result is `partial` / `needs-work` for the deferred
+  full-suite gate and inherited governance failure, not a known policy
+  defect. No branch switch, dependency change, Poppy edit, push, tag or
+  release occurred.
+
+### US-005 - pinned provider-loop cleanup (2026-09-22, Copilot)
+
+- Clean pre-story base: `2a275c50165d0538ed07d05a9bb3a9ea2dcbb36d`;
+  `git status --short` was empty. First commit **`8e449fc`** captures the
+  four synthetic full-response/counter runs and two exhaustion payloads,
+  real handler statuses and counters, plus guards/regeneration/docs.
+  Nothing under `pipeline/` changes in that commit; **152 related tests**
+  and strict Pyright passed against unchanged runtime code.
+- Nondeterminism sweep: all 13 `SearchResponse` fields and all nested
+  `SearchResult` fields are input-derived or fixed defaults except the
+  UUID `request_id`. Classification latency is log-only. The sole
+  exclusion is `{"request_id"}`, applied before writing. SearXNG success
+  retains `["bing"]` in `unresponsive_engines`; honest empty has neither
+  results nor failed engines and never advances to Brave. The omissions
+  case covers all five current reason tokens. Fallback and exhausted
+  cases exercise compression/timeout, paid and fallback counters.
+- Pins remain byte-identical after the refactor. Regeneration is opt-in
+  through `--regenerate-search-pins`; normal runs only compare. The exact
+  five-counter projection ignores future sink fields. The guide's
+  orchestrator mapping was already a three-item list, not the planned
+  scalar: added the pin module while preserving policy/admission coverage.
+- Necessary fixture-guard adjustment: four **schema keys** themselves
+  match the 24-character token regex: `classification_wait_timeouts`,
+  `provider_compressed_body`, `effective_promptguard_threshold` and
+  `effective_promptguard_fail_closed`. Exempt only those exact spellings
+  in JSON key positions, with the key set pinned and tests proving the
+  same strings as values, unknown keys, and sentinel values still fail.
+  Without this distinction the required complete wire/counter dumps
+  cannot pass the guard. The directory allow-list is exactly the required
+  `{"tiny_model/", "contract/", "README.md"}`; every other directory is
+  walked by default, including `search/` and `brave/`.
+- `_query_provider_chain` owns traversal and the four provider counters,
+  mutating the sink at the original points rather than returning deltas.
+  Frozen `_ServedChain` carries all seven required surfaces. One cached
+  configured-chain predicate, one failure WARNING statement and one
+  upfront empty-chain error remain; legacy exhaustion is raised at the
+  final failed call without a duplicate empty guard or impossible-state
+  default. Direct helper tests pin counter snapshots before three calls
+  and after success, exhaustion and cancellation.
+- Migrated **20** orchestrator-test pipeline calls and **2** provider-test
+  calls (actual AST count, not planning-time 19); deleted only the two
+  legacy-parameter tests (five parametrized cases). Factory code and all
+  factory callers are unchanged. An AST sweep of every test finds no
+  pipeline call with `searxng_url=`; the orchestrator source contains no
+  lowercase occurrence. All other pre-existing assertions are preserved.
+- The deliberate deltas are separately covered: three omission reasons
+  through an actual Brave streaming fallback body, sweeping each record
+  for the URL/path/query sentinels and requiring reason plus lower-cased
+  domain; malformed failure classes, detail tokens and names through
+  both served and exhausted chains, including length/newline boundaries,
+  plus a legacy-detail regression. Failure detail/name use full-match
+  `[a-z0-9_]{1,32}` and class uses `FAILURE_CLASSES`. ERROR_HANDLING names
+  the future operator-pluggable-provider `unknown` fallback; logging and
+  monitoring docs describe the new content-free records.
+- Thirty-fifth rotation: before
+  `e3b9c13866a53939ee542debe3bc4bbd9ca53dded740e40958dd984914d73d91`,
+  after `d9db75863ea8a464147da8b38c9fc6b8772cf75c485f58cab896e8130c81b6e0`.
+  Only `orchestrator.py` changes among the nine hashed sources. The live
+  derivation with a read-only whole-file reversal to the clean base
+  reproduces the before hash under both default and shipped config.
+  Recorded at all five ruling-6 sites, including `DECISIONS.md`, as well
+  as these notes. No text-sanitization algorithm, response schema,
+  contract version or generated artifact changes.
+- After safe fixes/formatting restricted to changed Python files, **1,558
+  related tests pass** across 13 pipeline/route/contract/fixture modules.
+  Repository Ruff lint, Ruff format check (145 files), strict Pyright
+  (zero errors), exporter `--check` and `git diff --check` pass. Ten
+  inherited non-failing warnings are one Torch deprecation and nine
+  expected socket-guard warnings, including the hermeticity canaries.
+  Full pytest is prohibited by this invocation, so that acceptance gate
+  remains deferred; result is `partial` / `needs-work` for that gate, not
+  a known implementation defect. The previously recorded governance
+  citation failure is outside the changed surface and was not rerun or
+  repaired. No branch switch, dependency change, Poppy edit, push, tag or
+  release occurred.
+
+### Feature validation - autonomous (2026-09-22, Copilot)
+
+- Reviewed the assembled `main...HEAD` branch at `94a7041`, with the four
+  completed prerequisite specs treated as intentional epic scope. Quality,
+  security and compliance reviews ran independently in parallel, then all
+  three revalidated at `d939d68`: two rounds and one critical-fix loop.
+- The initial full suite had 3,574 passes and one failure: ruling (j)'s
+  source still pointed to the cache-integrity spec's pre-archive path.
+  The clean pre-epic baseline does not exempt that inherited epic failure.
+  Autonomous fix **`d939d68`** changes only the citation, preserving the
+  ruling and its existence assertion; 66 focused governance tests pass.
+- Final deterministic gates: **3,575 passed, 13 non-failing warnings in
+  21.11s**; Ruff lint, formatting of 145 Python files, strict Pyright
+  (zero errors/warnings), exporter `--check` and whitespace checks pass.
+  The story-level full-suite deferral is now closed. Published goldens,
+  the OpenAPI anchor and `d9db7586...1b6e0` sanitizer revision are unchanged.
+- Outcome: **needs-work (advisory)**, zero remaining critical findings,
+  four unique warnings and one informational gate record in
+  `kit_tools/AUDIT_FINDINGS.md`. The warnings are the peak-memory claim
+  (`-008`), inherited model-warmup admission race (`-004`), inherited
+  equivalent-IPv6 denylist bypass (`-009`, medium security severity), and
+  missing US-004 rotation entry in `DECISIONS.md` (`-010`). Overlapping
+  quality/compliance memory reports are one finding. These are not fixed
+  or silently accepted by a green test run: in particular, bounded
+  individual decoder returns do not prove the stated peak-held-memory
+  ceiling, and the existing deflate-replay refinement does not cover the
+  independently measured duplicate gzip buffers.
+- This invocation fixes critical findings only; warning findings remain
+  advisory under the validation workflow. No pause marker, completion
+  action, spec archival, release, push or lifecycle-state change occurred.
 
 ## Refinement Notes
 

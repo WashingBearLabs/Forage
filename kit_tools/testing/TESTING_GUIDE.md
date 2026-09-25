@@ -1,8 +1,8 @@
 <!-- Template Version: 2.1.0 -->
 # TESTING_GUIDE.md
 
-> Last updated: 2026-09-17
-> Updated by: Claude (forage-contract US-004)
+> Last updated: 2026-09-23
+> Updated by: Copilot (hardening-release US-004)
 
 ## Quick Start
 
@@ -94,66 +94,91 @@ crash reads as a false regression.
 
 ## Test Structure
 
-**32 `test_*.py` modules** under `tests/`, flat, one per subject — 35 Python files in all
+**39 `test_*.py` modules** under `tests/`, flat, one per subject — 42 Python files in all
 once `conftest.py`, `fakes.py` and `__init__.py` are counted — plus `golden/` and
-`fixtures/`. (Both numbers measured 2026-09-19; state the convention with the count, or
-the next person reconciles two different ones by increment.) **2105 tests, all green** as
-of 2026-09-18 (`search-release` US-003, the `v1.1.0` tagged commit — `feature-forage-contract`
-US-001 added `test_contract_errors.py`'s 25, US-005 `test_contract_metrics.py`'s 20, US-002
-`test_contract_export.py`'s 18, US-003 `test_governance_docs.py`'s 41 plus 26 in
-`test_ci_workflow.py`, and US-004 another 78 spread across four existing modules — 36
-workflow-shape, 29 smoke, 11 Dockerfile, 2 governance; `search-provider-abstraction` US-001
-then added the new `test_search_providers.py` module and US-002 grew it to 103 for
-`SearxngProvider` and the orchestrator side of the seam; `search-release` US-004 grew three
-more — `test_ci_workflow.py` to 279 (the awk-extractor tests), `test_compose_fragments.py`
-to 62 (the two-variable passthrough tests) and `test_contract_smoke.py` to 91 (the
-status-aware `wait_for_health` and `--anchor` tests); the `test_search_providers.py` and
-`test_brave_provider.py` rows below were re-measured on 2026-09-19 (`pytest --collect-only`),
-the rest not since 2026-09-10).
+`fixtures/`. **4253 tests collected** on 2026-09-23 (patch release gate,
+`uv run pytest --collect-only -q`). Every per-module row below is remeasured
+from collection, not incremented from a previous story's count; their sum
+equals the total. The complete local run reports **4253 passed, no xfails**;
+fresh PR CI is still required. The former six strict raw-read xfails have
+moved to `test_provider_transport.py`, where both real provider stacks drive a
+network double that honors `read(max_bytes)`; all six now enforce the exact
+upstream byte bound. Collection and scoped passes alone are not full-suite evidence.
+
+The bounded-body and both provider rows were re-measured on 2026-09-22 during
+`hardening-provider-bounds` US-003's retry. The helper includes ambiguous
+wrapped/raw deflate, delayed rejection after output, EOF retry, raw-budget
+exhaustion and exact-member checks across transport chunk boundaries.
+
+Provider-bounds US-005 re-counted the orchestrator/provider/pin rows below:
+353, 284, 145 and 7 tests respectively. Its 13-module related run passes
+1,558 tests; the six pre-refactor captures are unchanged. At that story, the whole suite
+was deferred to the authorized end-of-epic gate.
+
+**US-005 retry validation (2026-09-22).** The explicit orchestrator-then-admission
+pair passes **347 tests**; the combined threshold/story selection across sixteen
+modules passes **1,196 tests in one process**. The inherited global-patch leak
+is repaired: `_mock_retrieve_io` owns URL/fetch mocks once per test, outside all
+concurrent `_retrieve_under` calls and their cleanup. Classification tests wait
+for an entered event and a queued semaphore waiter, not a fixed number of
+`sleep(0)` turns. Gates open and outstanding tasks are cancelled/drained in
+`finally`, including deadline-test startup failures. Fixture teardown checks
+both patched functions' original identities. Ruff lint/format, strict Pyright
+and contract drift checks pass. That story left the full suite to the end-of-epic gate;
+the story implementer did not run it.
 
 | Module | Tests | Covers |
 |--------|------:|--------|
-| `tests/test_model_fetcher.py` | 212 | `model_fetcher.py`: fail-closed manifest verification, exact-set + safetensors-only allowlist, symlink-resolving hashing, one-generation quarantine, the loadable safetensors fixture, the acquisition pipeline (revision pin, `$HF_HOME/hub` resolution, the mocked HF fetch, the `oras` mirror leg, token redaction), and US-005's warm start + retry loop — the counted-attempt proof that a warm load reaches no network, the normative 30 s→10 min jittered schedule, quarantine→re-fetch→loaded recovery on the real loader, single-flight, and clean cancellation |
-| `tests/test_vendor_weights.py` | 102 | `scripts/vendor_weights.py`: the symlink-dereferenced tarball (built, extracted, bytes compared), tar determinism, generation-time allowlist refusal, the manifest round-trip through the real verifier, credential hygiene on the `oras` path, and the private-package visibility check — all fixture-driven, no registry and no token |
+| `tests/test_bench_promptguard.py` | 115 | Host-only `scripts/bench_promptguard.py`: seeded tokenizer-sized inputs checked against the real tiny tokenizer and classifier chunking; required single-input runs with first-POST ordering and separate fresh-service cold samples; null unselected fields; nearest-rank timing; healthy-and-loaded readiness; multipart fields; complete/partial fixed-key rows; configuration versus service failures and independent paired artifacts; cgroup and optional Docker memory; closed diagnostics and complete benchmark-config parity. Injected HTTP/command/clock seams, no Docker, network or weights. |
+| `tests/test_bounded_body.py` | 107 | Raw and decoded byte ceilings, bounded gzip/zlib/raw-deflate outputs (including ambiguous headers and chunk-independent replay), encoding-first dispatch, path-specific length prechecks, exactly-one-member EOF validation, no-progress guard and fixed exception messages. No real waits. |
+| `tests/test_model_fetcher.py` | 251 | `model_fetcher.py`: fail-closed manifest verification, exact-set + safetensors-only allowlist, symlink-resolving hashing, one-generation quarantine, the loadable safetensors fixture, the acquisition pipeline (revision pin, `$HF_HOME/hub` resolution, the mocked HF fetch, the `oras` mirror leg, token redaction), and US-005's warm start + retry loop — the counted-attempt proof that a warm load reaches no network, the normative 30 s→10 min jittered schedule, quarantine→re-fetch→loaded recovery on the real loader, single-flight, and clean cancellation |
+| `tests/test_vendor_weights.py` | 110 | `scripts/vendor_weights.py`: the symlink-dereferenced tarball (built, extracted, bytes compared), tar determinism, generation-time allowlist refusal, the manifest round-trip through the real verifier, credential hygiene on the `oras` path, and the private-package visibility check — all fixture-driven, no registry and no token |
 | `tests/test_stage2_structural.py` | 78 | Deterministic regex injection scan |
-| `tests/test_orchestrator.py` | 63 | End-to-end pipeline drive, search + retrieve paths |
-| `tests/test_search_providers.py` | 161 | The `SearchProvider` seam and `SearxngProvider`: protocol shape, the closed failure vocabulary, the AST sweep that keeps provider code away from the sanitization stages and the cache, the extracted SearXNG call (request shape, hardened client kwargs, raw-dict pass-through, `publishedDate` → `date`, every failure mapping, credential-free logging, `origin` including its four malformed-URL fallbacks) and the orchestrator side (candidate budget, the re-applied slice as an exact count, the `unresponsive_engines` 16×64 bound, the chain-shaped `ProviderFailure` mapping — `searxng_error` / `searxng_unavailable` for a lone `searxng` chain, `search_unavailable` for every other — and the `content_kind` / `date` copy onto each wire result) |
-| `tests/test_brave_provider.py` | 128 | `BraveApiProvider` (`feature-brave-provider`, US-010 → US-013 plus US-002): fixture-provenance guards, the pinned-sample parse, hardened client kwargs, the `config.yaml` tunables and the unconditional lifespan boot-refusal, the `chain[0]` candidate budget (spy provider + outbound `count` param, `num_results` 1/5/20), the three payload bounds (`Content-Length` fast-reject, a no-header streamed overrun, a compressed body whose decoded length overruns — all asserted never to reach `json.loads`), the chunk and query caps, the `engine="brave"` (SearXNG) vs `engine="brave-api"` (Brave) provenance split in both directions; then US-002's lifespan registration (`brave_key_present`, the `brave_skipped_missing_key` skip, `_CLEARED_ENV_VARS` exact set), US-012's failure taxonomy — every status and transport outcome to its closed `ProviderFailure`, the Brave-only-chain 422 `search_unavailable` on the wire, and key-never-leaks across the log line, the 422 body and `/metrics` on each failure path — and US-013's sanitization parity (a Brave chunk through stages 1-3 exactly as a SearXNG snippet) and the no-cache-write pin (`ContentCache.get`/`put`/`delete` spied through `FakeStorage`) |
-| `tests/test_url_validator.py` | 59 | SSRF defense: RFC1918, DNS rebinding, schemes |
-| `tests/test_cache.py` | 116 | Valkey cache incl. the never-log-the-URL invariant |
+| `tests/test_orchestrator.py` | 369 | End-to-end pipeline drive, search + retrieve paths; readiness-transition admission and equivalent-IPv6 caller/operator policy regressions |
+| `tests/test_search_pipeline_pins.py` | 7 | Four synthetic pre-refactor full wire/counter pins (only `request_id` excluded), two exhaustion payload/status/counter pins and the closed projection/exclusion guard. Regenerate with `uv run pytest tests/test_search_pipeline_pins.py --regenerate-search-pins -q` only for a deliberate wire or pinned-counter change; commit together and explain what moved and why. Additional metrics outside the five pinned counters do not change these fixtures. |
+| `tests/test_search_providers.py` | 316 | The `SearchProvider` seam and `SearxngProvider`: protocol shape, the closed failure vocabulary, the AST sweep that keeps provider code away from the sanitization stages and the cache, the extracted SearXNG call (request shape, hardened client kwargs, raw-dict pass-through, `publishedDate` → `date`, every failure mapping, credential-free logging, `origin` including its four malformed-URL fallbacks) and the orchestrator side (candidate budget, the re-applied slice as an exact count, the `unresponsive_engines` 16×64 bound, the chain-shaped `ProviderFailure` mapping — `searxng_error` / `searxng_unavailable` for a lone `searxng` chain, `search_unavailable` for every other — and the `content_kind` / `date` copy onto each wire result); both-provider byte/encoding/status/timeout bounds and ambiguous raw-deflate replay; SearXNG query-cap bounds and chain-level outbound-only truncation, multibyte preservation and unchanged query echoes |
+| `tests/test_provider_transport.py` | 84 | Genuine HTTPX/httpcore/h11 over a hermetic network seam: six exact raw-read regressions, all supported encodings, bytewise/coalesced headers, preserved 100 KiB incomplete-header allowance, header-first status/encoding decisions with malformed coalesced bodies, content-length/chunked/close framing, exact-bound completion/refusal, TLS verification, timeout forwarding, whole-call cancellation, failure vocabulary, no credential reflection and stream closure. |
+| `tests/test_brave_provider.py` | 145 | `BraveApiProvider` (`feature-brave-provider`, US-010 → US-013 plus US-002): fixture-provenance guards, the pinned-sample parse, hardened client kwargs, the `config.yaml` tunables and the unconditional lifespan boot-refusal, the `chain[0]` candidate budget (spy provider + outbound `count` param, `num_results` 1/5/20), the three payload bounds (`Content-Length` fast-reject, a no-header streamed overrun, a compressed body whose decoded length overruns — all asserted never to reach `json.loads`), the chunk and query caps, the `engine="brave"` (SearXNG) vs `engine="brave-api"` (Brave) provenance split in both directions; then US-002's lifespan registration (`brave_key_present`, the `brave_skipped_missing_key` skip, `_CLEARED_ENV_VARS` exact set), US-012's failure taxonomy — every status and transport outcome to its closed `ProviderFailure`, the Brave-only-chain 422 `search_unavailable` on the wire, and key-never-leaks across the log line, the 422 body and `/metrics` on each failure path — and US-013's sanitization parity (a Brave chunk through stages 1-3 exactly as a SearXNG snippet) and the no-cache-write pin (`ContentCache.get`/`put`/`delete` spied through `FakeStorage`); supported compression, bounded output and whole-interaction timeout |
+| `tests/test_url_validator.py` | 270 | SSRF defense: RFC1918, DNS rebinding, schemes; exact IPv6 network-list values and policy equivalence across compressed, expanded and leading-zero spellings, with refusal before DNS |
+| `tests/test_cache.py` | 205 | Valkey cache incl. the never-log-the-URL invariant |
 | `tests/test_smart_extraction.py` | 45 | Summary mode / high-signal preservation |
-| `tests/test_stage1_extraction.py` | 41 | HTML extraction, `raw_text` vs `main_content` |
+| `tests/test_stage1_extraction.py` | 66 | HTML extraction, `raw_text` vs `main_content`, shared config bounds including non-finite numbers and oversized integers (measured at US-005 retry) |
 | `tests/test_stage4_structuring.py` | 39 | Response assembly + composite trust score |
-| `tests/test_models.py` | 31 | Pydantic request/response models |
-| `tests/test_app.py` | 60 | FastAPI endpoints, `/health` body, capability break-glass, the `/metrics` `model` counters, and the lifespan harness: startup yields immediately, `/health` latency during a fetch, the `promptguard_loaded` flip, and the retry task's cancellation at shutdown |
-| `tests/test_stage3_promptguard.py` | 30 | ML scan; transformers/torch mocked |
-| `tests/test_ci_workflow.py` | 279 | `ci.yml` shape: SHA pins, permissions, triggers, fork posture, job graph, test lane, image build + secret-grep gate, smoke job + artifact handoff, both publish lanes (tag policies evaluated, not matched), the cross-fire guards between them, and — since US-003 — the image↔contract mapping: the version is read from the tagged tree, the Release body is written from it, the published body is read back and asserted, and no version literal may appear in the job's shell. US-004 adds the Release assets (attached by the create call, downloaded back and verified against the committed anchor), the reproducible-export guards: one identical SOURCE_DATE_EPOCH script in all four building jobs, `rewrite-timestamp=true` on every exporter, and the longhand `type=docker` / `type=image,push=true` forms that can carry it, and (`search-release` US-004) the `CONTRACT_VERSION` docstring-entry extractor: the POSIX awk program sliced out of the publish job's read step is run through `subprocess` against the real `pipeline/contract.py` and against a hostile synthetic module (a backtick span, `$(id)`, a mid-line `*`, an indented bullet look-alike, an `EOF` line, a `version=forged` line and a mid-line `"""`), plus the static assertions that the read step uses no `python3`/`uv`/`scripts/`, the create step appends the entry from a notes file via `--notes-file`, and the read-back checks it with a fixed-string `grep -qF` |
-| `tests/test_compose_fragments.py` | 62 | Compose fragments, parse-only shape guards (audit: row was missing), and (`search-release` US-004) the `forage:1.1.0` pin and the `FORAGE_SEARCH_PROVIDERS` / `FORAGE_BRAVE_API_KEY` bare-name passthrough on the `forage` service in both fragments |
-| `tests/test_contract_smoke.py` | 91 | `contract_smoke.py`: every `/health` clause, polling, the single-source ties to the golden schema, and — since US-004 — the in-image contract checks: the `docker run --rm --entrypoint cat` argv it builds, the anchor comparisons against the committed trust root, and the `info.version` ↔ live `contract_version` claim, all driven through an injected runner so the suite never starts a container. `search-release` US-004 adds the status-aware `--expect-status`/`--anchor` coverage: a healthy body passes under `healthy` and fails under the default, a degraded body fails under `healthy`, `wait_for_health` under `healthy` keeps polling past a 200 `degraded` body until a `healthy` one arrives (or returns the last body once the deadline passes), and the in-image anchor is compared against the `--anchor` file rather than a hard-coded path |
-| `tests/test_stage5_url_audit.py` | 28 | Outbound fetch + redirect-chain audit |
-| `tests/test_stage1_pdf.py` | 23 | PDF branch, subprocess isolation |
+| `tests/test_models.py` | 80 | Pydantic request/response models |
+| `tests/test_app.py` | 489 | FastAPI endpoints, `/health`, capability break-glass, `/metrics`, provider policy, and lifespan wiring; closed-message policy bound refusals, threshold-default warning/fallback for invalid values (including booleans, non-finite and oversized numbers), numeric strings, Unicode/surrogate threshold boot safety, once-only INFO default publication, and the unchanged `/extract` boolean divergence; SearXNG query-cap boot wiring and unconditional refusal of invalid values |
+| `tests/test_promptguard_policy.py` | 131 | Handler-side policy resolution, field-name guard, nullable bounded thresholds on both routes, default-before-ceiling classification and zero preservation, null/explicit/capped cache-key equivalence, resolved-keyword isolation, absent/contended classifier floors, trusted/VERIFIED exemptions, stamped hits (including old entries), unchanged `/extract` and policy-free 422s (recounted at hostname/config US-005) |
+| `tests/test_stage3_promptguard.py` | 164 | ML scan; mocked inference plus real pinned-config resolution |
+| `tests/test_ci_workflow.py` | 289 | Workflow shape, SHA pins/permissions, six-gate graph and both publish lanes; image/contract mapping, Release body/assets read-back against the anchor, reproducible exporters and four secret-grep patterns. Executes the actual POSIX awk docstring extractor against live and hostile inputs; whole-entry tense and uniqueness guards reject provisional publication-state clauses, with five permanent counterexamples for the frozen 1.3.0 announcement |
+| `tests/test_compose_fragments.py` | 79 | Compose fragments, parse-only shape guards and the published `forage:1.2.1` pin; search/model bare-name passthroughs on both services, the full-only HMAC key, resource envelope and status-only liveness probe |
+| `tests/test_contract_smoke.py` | 94 | `contract_smoke.py`: every `/health` clause, polling, the single-source ties to the golden schema, and — since US-004 — the in-image contract checks: the `docker run --rm --entrypoint cat` argv it builds, the anchor comparisons against the committed trust root, and the `info.version` ↔ live `contract_version` claim, all driven through an injected runner so the suite never starts a container. `search-release` US-004 adds the status-aware `--expect-status`/`--anchor` coverage: a healthy body passes under `healthy` and fails under the default, a degraded body fails under `healthy`, `wait_for_health` under `healthy` keeps polling past a 200 `degraded` body until a `healthy` one arrives (or returns the last body once the deadline passes), and the in-image anchor is compared against the `--anchor` file rather than a hard-coded path |
+| `tests/test_stage5_url_audit.py` | 30 | Outbound fetch + redirect-chain audit |
+| `tests/test_fakes.py` | 18 | Shared streaming doubles: raw/decoded reads, no implicit Content-Length, delayed chunks, client patch restoration, per-instance and aggregate decoder observations including raw-deflate retry, and complete `SearchMetricsSink` parity |
+| `tests/test_stage1_pdf.py` | 54 | PDF branch, subprocess isolation |
 | `tests/test_dockerfile.py` | 50 | `Dockerfile` text: no secret may enter the build, digest-pinned base, lock-driven install, and — since US-004 — that the frozen contract is COPYed to `/app/contract/` (with `.dockerignore` checked for a pattern that would silently empty it) and that the two reproducibility normalizations stay: no timestamped apt artefacts, no bytecode from the import check |
 | `tests/test_pyright_policy.py` | 12 | Type-checking policy: strict, one carve-out, no suppressions |
 | `tests/test_searxng_smoke.py` | 61 | `searxng_smoke.py`: every evaluator branch, the Docker argv it builds, and the `--internal` wiring |
 | `tests/test_searxng_docker.py` | 28 | `searxng/Dockerfile` + baked config: the negatives (no wildcard pass list, no baked secret, no header trust) and engine parity with `SEARXNG_ENGINES` (read through `pipeline/orchestrator.py`'s `_SEARXNG_ENGINES` alias) |
 | `tests/test_hermeticity.py` | 10 | Executing canary for the autouse socket guard |
-| `tests/test_sanitizer_revision.py` | 9 | Revision hashing over `_REVISION_SOURCES` and the `MODEL_ID@revision` model identity |
+| `tests/test_sanitizer_revision.py` | 39 | Revision hashing over `_REVISION_SOURCES` and the `MODEL_ID@revision` model identity; exact ASCII-compatible UTF-8 bytes for numeric Unicode, invalid Unicode and lone-surrogate threshold strings |
 | `tests/test_dependency_lock.py` | 3 | `uv.lock` stays CPU-only (no `nvidia-*` wheels) |
-| `tests/test_contract_errors.py` | 25 | The documented error surface: the eighteen-code vocabulary swept from every raise site in the repo, pinned against Poppy's inlined allowlist; per-emission-site parity (each mirror model reproduces the live body byte-for-byte, driven through the real routes); the `responses=` declaration map; and the FastAPI 422-suppression behaviour the union declarations rest on |
-| `tests/test_contract_metrics.py` | 20 | The typed `/metrics` body and the served app metadata: parity between the handler's dict and the bytes the typed route sends (compared *outside* the model, so a reorder at any depth is caught), the flat cgroup keys in both wire and schema, the `extra="forbid"` failure mode and the permissive-model counterfactual it avoids, the dataclass-counter ↔ model field ties, `info.version == CONTRACT_VERSION`, and the mechanical check that every path FastAPI serves — `/docs`, `/redoc` and `/openapi.json` included — is acknowledged in `docs/configuration.md`'s posture section |
-| `tests/test_contract_export.py` | 18 | The frozen `contract/openapi.yaml`: that the committed bytes are what the app generates, that the committed `.sha256` anchor is the sha256 of those bytes in `sha256sum -c` form, that the render is byte-stable across processes and `PYTHONHASHSEED` values (measured in subprocesses, not asserted), that the canonical form round-trips and carries no YAML anchors, and that `/extract` is documented while `extract_route_enabled` is `false`. The drift check's own failure case is committed as `tests/fixtures/contract/unregenerated_openapi.yaml` and fed to the same checker |
-| `tests/test_governance_docs.py` | 43 | The three governance documents US-003 adds — `contract/GOVERNANCE.md`, `SECURITY.md`, `.github/pull_request_template.md` — held to the code they describe: the stated contract version against `CONTRACT_VERSION`, the regeneration command against `scripts.export_contract.REGEN_COMMAND`, the hashed-source count against `_REVISION_SOURCES`, the PR template's required-checks sentence against the jobs `publish` hangs off, the six worked examples parsed out of the table and checked for exactly one classification each (two are deliberately two-valued), the five recorded rulings present with a citation that resolves, and every relative link in all three files |
-| `tests/test_contract_schema.py` | 1 | Golden contract fixture vs `pipeline/contract.py` |
+| `tests/test_contract_errors.py` | 53 | Documented error vocabulary and raise-site coverage, mirror/wire parity and route unions; redacted validation 422s on all three routes, 100-entry cap, runtime location allowlist and every-field marker fuzz, total-handler malformed-entry guards, root-log non-reflection and guard-of-the-guard counterexamples |
+| `tests/test_contract_metrics.py` | 69 | Typed `/metrics` body and served app metadata: handler/wire parity, flat cgroup keys, `extra="forbid"`, counter/model ties, `info.version`, documented endpoints, latency counters and config registry/reader coverage. Resource-envelope US-003 adds the explicit dotted security/non-security registry partition and shipped-equals-code-default pin, reading actual empty-config lifespan/settings values rather than duplicating defaults. This protects the shipped baseline only, never an operator's stricter replacement. |
+| `tests/test_contract_export.py` | 177 | The frozen `contract/openapi.yaml`: that the committed bytes are what the app generates, that the committed `.sha256` anchor is the sha256 of those bytes in `sha256sum -c` form, that the render is byte-stable across processes and `PYTHONHASHSEED` values (measured in subprocesses, not asserted), that the canonical form round-trips and carries no YAML anchors, and that `/extract` is documented while `extract_route_enabled` is `false`. The drift check's own failure case is committed as `tests/fixtures/contract/unregenerated_openapi.yaml` and fed to the same checker |
+| `tests/test_governance_docs.py` | 69 | Governance, SECURITY and PR-template claims tied to code: current version, regeneration command, nine hashed sources, six required checks/examples, thirteen registered rulings and resolvable citations/links. Covers the validation-422 one-MINOR redaction window and second-MINOR removal ruling, directional policy/cache semantics, four current anchor quotations and the version-agnostic supported-versions policy |
+| `tests/test_contract_schema.py` | 17 | Six-model frozen golden; retained 1.2.0 pair and frozen 1.3.0 exact-additions/announcement sweep for ten golden-visible additions, including all four effective-policy fields; metrics remain under dedicated coverage |
+| `tests/test_retrieve_admission.py` | 15 | Retrieve admission queue/budget refusals, permit ownership across actual HTML-task cancellation, absolute fetch deadline, off-loop stages, body release before classification and continued service responsiveness |
+| `tests/test_search_policy.py` | 15 | Restrict-only request policy, known/unknown providers, free-provider retention and longest named paid-prefix behavior |
 
 Support files:
 
 | File | Purpose |
 |------|---------|
 | `tests/conftest.py` | Puts the repo root on `sys.path`; installs the autouse socket guard |
-| `tests/fakes.py` | Shared fakes and builders: the fake cache, `assert_frozen`, the Hugging Face cache-layout helpers (`materialize_hub_snapshot`, `hub_download_double`, `weights_manifest_document`) that `test_model_fetcher.py` and `test_app.py` both build fixtures from, and `record_network_attempts` — which *counts* outbound attempts rather than only refusing them, because a library that swallows the guard's error makes "blocked" and "never tried" look identical |
+| `tests/fixtures/search/` | Synthetic, scrubbed pipeline response/exhaustion pins with `request_id` removed before writing; regenerate via `--regenerate-search-pins` in the same commit as a deliberate wire/pinned-counter change, explaining why in its message. The older `baseline_pre_blocked_domains.json` is separately frozen, never regenerated. |
+| `tests/fakes.py` | Shared fakes and builders: `FakeStorage`, `FakeContentCache`, `FakeSearchProvider`, `assert_frozen`, the Hugging Face cache-layout helpers (`materialize_hub_snapshot`, `hub_download_double`, `weights_manifest_document`), and `record_network_attempts`. Streaming doubles: `ChunkStream` (raw chunks only, optional per-chunk delay), stream-backed `make_response` (no implicit Content-Length), `make_stream_cm`, `client_patch(target, ...)`, `RecordingDecompressor` and `record_decompressors()` (aggregate every decoder instance, including raw-deflate retries). `RecordingSearchMetrics` owns every `SearchMetricsSink` counter and its `counters` projection; add future sink fields here, not in local copies. |
 | `tests/fixtures/tiny_model/` | A real, loadable 2-layer DeBERTa-v2 classifier (~96 KB, safetensors only) — the fixture that lets the *actual* loader be exercised rather than mocked |
 | `tests/fixtures/contract/unregenerated_openapi.yaml` | The contract drift check's committed failure case: `contract/openapi.yaml` with `Extract422ErrorResponse.sanitizer_revision` removed — what the file would look like if a response model had changed and nobody regenerated. Written by `scripts/export_contract.py` alongside the contract, so one command keeps both in step |
-| `tests/golden/contract_1_0_0.json` | Frozen contract fixture for `test_contract_schema.py`; `contract_1_1_0.json` and `contract_1_2_0.json` sit beside it, `1.2.0` being the current one (and, while it is still unpublished, the one regenerated in place — `contract/GOVERNANCE.md` ruling (c)). The fixture pins `model_json_schema()`, which moves for description and enum-rendering changes as well as wire ones — regenerate it for a documentation-only change, bump `CONTRACT_VERSION` (new file alongside the old) for a real one |
+| `tests/golden/contract_1_3_0.json` | Current six-model fixture, **frozen** by `hardening-release` US-002 even though publication is pending; no in-place regeneration. The historical `contract_1_0_0.json`, `contract_1_1_0.json` and `contract_1_2_0.json` remain unchanged. Fixtures pin `model_json_schema()`, including descriptions and enum rendering; follow `contract/GOVERNANCE.md` for the next version and retain every older fixture |
 
 ### Testing the lifespan
 
@@ -240,16 +265,18 @@ Used by the KitTools orchestrator to pick the right tests for a changed file.
 
 ```yaml
 test_mapping:
-  "retrieval_app.py": ["tests/test_app.py", "tests/test_contract_smoke.py", "tests/test_contract_errors.py", "tests/test_contract_metrics.py", "tests/test_contract_export.py"]
-  "models.py": ["tests/test_models.py", "tests/test_contract_errors.py", "tests/test_contract_export.py"]
+  "retrieval_app.py": ["tests/test_app.py", "tests/test_promptguard_policy.py", "tests/test_contract_smoke.py", "tests/test_contract_errors.py", "tests/test_contract_metrics.py", "tests/test_contract_export.py"]
+  "models.py": ["tests/test_models.py", "tests/test_promptguard_policy.py", "tests/test_contract_errors.py", "tests/test_contract_export.py"]
   "cache.py": "tests/test_cache.py"
   "url_validator.py": "tests/test_url_validator.py"
-  "pipeline/orchestrator.py": "tests/test_orchestrator.py"
+  "pipeline/orchestrator.py": ["tests/test_orchestrator.py", "tests/test_search_pipeline_pins.py", "tests/test_promptguard_policy.py", "tests/test_retrieve_admission.py"]
   "pipeline/contract.py": ["tests/test_contract_schema.py", "tests/test_contract_errors.py", "tests/test_contract_export.py"]
   "pipeline/sanitizer_revision.py": ["tests/test_sanitizer_revision.py", "tests/test_governance_docs.py"]
   "model_fetcher.py": ["tests/test_model_fetcher.py", "tests/test_app.py"]
   "weights_manifest.json": "tests/test_model_fetcher.py"
-  "tests/fakes.py": ["tests/test_model_fetcher.py", "tests/test_app.py"]
+  "tests/fakes.py": ["tests/test_fakes.py", "tests/test_model_fetcher.py", "tests/test_app.py", "tests/test_brave_provider.py", "tests/test_stage5_url_audit.py", "tests/test_orchestrator.py"]
+  "pipeline/bounded_body.py": "tests/test_bounded_body.py"
+  "pipeline/provider_transport.py": "tests/test_provider_transport.py"
   "pipeline/stage1_extraction.py": "tests/test_stage1_extraction.py"
   "pipeline/stage1_pdf.py": "tests/test_stage1_pdf.py"
   "pipeline/pdf_subprocess.py": "tests/test_stage1_pdf.py"
@@ -259,7 +286,10 @@ test_mapping:
   "pipeline/stage4_structuring.py": "tests/test_stage4_structuring.py"
   "pipeline/stage5_url_audit.py": "tests/test_stage5_url_audit.py"
   "pipeline/smart_extraction.py": "tests/test_smart_extraction.py"
-  "pipeline/extraction_limits.py": "tests/test_stage1_extraction.py"
+  "pipeline/extraction_limits.py": ["tests/test_stage1_extraction.py", "tests/test_app.py"]
+  "pipeline/config_bounds.py": ["tests/test_stage1_extraction.py", "tests/test_app.py"]
+  "pipeline/retrieve_limits.py": ["tests/test_app.py", "tests/test_promptguard_policy.py"]
+  "pipeline/search_targets.py": "tests/test_app.py"
   "pipeline/search_providers/__init__.py": "tests/test_search_providers.py"
   "pipeline/search_providers/base.py": "tests/test_search_providers.py"
   "pipeline/search_providers/searxng.py": "tests/test_search_providers.py"
@@ -273,10 +303,13 @@ test_mapping:
   ".github/workflows/ci.yml": "tests/test_ci_workflow.py"
   "Dockerfile": ["tests/test_dockerfile.py", "tests/test_contract_smoke.py"]
   "contract_smoke.py": "tests/test_contract_smoke.py"
+  "scripts/bench_promptguard.py": "tests/test_bench_promptguard.py"
+  "bench/config.yaml": "tests/test_bench_promptguard.py"
   "uv.lock": "tests/test_dependency_lock.py"
   "pyproject.toml": ["tests/test_dependency_lock.py", "tests/test_pyright_policy.py"]
   "typings/*": "tests/test_pyright_policy.py"
   "docs/configuration.md": "tests/test_contract_metrics.py"
+  "config.yaml": ["tests/test_contract_metrics.py", "tests/test_app.py"]
   "contract/openapi.yaml": ["tests/test_contract_export.py", "tests/test_contract_smoke.py"]
   "contract/openapi.yaml.sha256": ["tests/test_contract_export.py", "tests/test_contract_smoke.py"]
   "scripts/export_contract.py": ["tests/test_contract_export.py", "tests/test_governance_docs.py"]
@@ -331,9 +364,12 @@ module owns the string they are compared against.
 - **Live SearXNG / live Valkey.** Every test mocks them. A real end-to-end smoke against
   running companions is a manual step, and `feature-forage-cache-fallback` carries an
   explicit manual-smoke half.
-- **Real PromptGuard weights.** `tests/test_stage3_promptguard.py` mocks transformers and
-  torch, so the suite passes with no model present — which is correct, and also why the
-  degraded path needs its own manual verification after a rebuild.
+- **Real PromptGuard weights.** The classifier tests mock model inference, so
+  the suite passes with no real weights present. The genuine pinned config is
+  now hash-checked and resolved by real offline AutoConfig; this catches the
+  label-metadata mismatch that defeated v1.2.0's synthetic fixtures. Both
+  degraded and weights-loaded healthy image smokes remain mandatory manual
+  evidence; a green weights-free suite alone cannot establish model readiness.
 - **A real Hugging Face download.** CI has no token and the socket guard is autouse, so
   every fetch test drives a `snapshot_download` double. What that *does* prove is
   everything downstream of the transport: the arguments the fetcher passes, the cache

@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: hardening-promptguard-86m
-status: active
+status: completed
 session_ready: true
 depends_on: [hardening-resource-envelope]
 vision_ref: "T2.2 — Forage hardening"
@@ -12,7 +12,8 @@ epic_seq: 7
 epic_final: false
 execution_order: [US-001, US-006, US-002, US-007, US-003, US-005, US-004]
 created: 2026-09-19
-updated: 2026-09-19
+updated: 2026-09-23
+completed: 2026-09-23
 ---
 
 # Feature Spec: PromptGuard 86M Opt-In + Contiguity Gating + Benchmark
@@ -376,14 +377,14 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
   agreement — fixed by `hardening-promptguard-86m` US-001" so the fix is on the record.
 
 **Acceptance Criteria:**
-- [ ] `load(*, model_id=...)` exists on `PromptGuardClassifier` and on `SupportsWeightLoad`; a test with
+- [x] `load(*, model_id=...)` exists on `PromptGuardClassifier` and on `SupportsWeightLoad`; a test with
       a stubbed auto-class asserts both `from_pretrained` calls receive the requested id
       (`tests/test_model_fetcher.py:790-791` extended); `WeightAcquisition(..., model_id=...)` stores
       the id and `attempt_once` forwards it to `acquire_and_load` (recording double, the
       `tests/test_app.py:1183` monkeypatch shape); `acquire_and_load(..., model_id=...)` threads the
       id and the resolved revision through `_verify_cached`, `_download_from_hub`, `_try_source` and
       `_load_verified` (asserted on a recording double).
-- [ ] `verify_weights(..., model_id=, revision=)` verifies the requested pair; a `FORAGE_MODEL_REVISION`
+- [x] `verify_weights(..., model_id=, revision=)` verifies the requested pair; a `FORAGE_MODEL_REVISION`
       that is not the pin yields `weights_revision_unpinned` (closed reason, no path in the log) from
       the top of `_acquire_and_load` — the one refusal site — and `_load_verified(...,
       manifest_path=)` derives both paths itself and asserts the manifest-derived
@@ -391,7 +392,7 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
       `_try_source` / `_fetch_from_mirror` return-shape change — their `-> str` annotations are
       untouched in `git diff`) — the two-directory test from the Independent Test passes and the
       unpinned directory's files are never opened.
-- [ ] The loaded-identity check lives in `_load_verified` (existence plus equality): a warm snapshot
+- [x] The loaded-identity check lives in `_load_verified` (existence plus equality): a warm snapshot
       of a different model under the requested id yields `model_identity_mismatch`, `load()` is never
       called (recording double), and a test asserts that specific message; a direct `_load_verified`
       call with a `revision` that is not the entry's yields the same (second test); the classifier's own
@@ -399,13 +400,13 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
       `except` (`model_cache_dir_missing`, tested); `kit_tools/arch/SECURITY.md`'s stage-3 paragraph
       carries the residual sentence "the classifier trusts the path the verifier handed it"
       (`grep -c 'trusts the path' kit_tools/arch/SECURITY.md` is 1).
-- [ ] `weights_manifest.json` is a per-model map; the 22M entry's `revision` and `files` are
+- [x] `weights_manifest.json` is a per-model map; the 22M entry's `revision` and `files` are
       byte-identical to today's; `_load_manifest` / `read_manifest_pin(model_id=...)` /
       `verify_weights(..., model_id=...)` select the entry; a missing entry yields `manifest_model_unknown`
       even with `FORAGE_MODEL_REVISION` set (test); `manifest_invalid` / `manifest_empty` semantics
       unchanged (tests); `tests/fakes.py::weights_manifest_document` builds the map and
       `tests/test_app.py:878-892` passes against it.
-- [ ] `resolve_revision(model_id)` is total in the four-step order above (a well-formed override is
+- [x] `resolve_revision(model_id)` is total in the four-step order above (a well-formed override is
       returned, never refused, by the resolver); a test asserts `DEFAULT_MODEL_REVISION == <the 22M
       manifest entry's revision>`; `resolve_revision` reads the manifest at most once per
       `(manifest_path, model_id)` through `_manifest_entry` under `lru_cache` — a test counts opens
@@ -415,23 +416,23 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
       raises for any id; with the manifest unreadable, the default model resolves to
       `DEFAULT_MODEL_REVISION` with one `manifest_pin_unavailable` WARNING and the hash value is the
       pre-story value (test).
-- [ ] `FORAGE_MODEL_REVISION` set to a non-40-hex value keeps `model_revision_invalid` + fall-back-to-pin
+- [x] `FORAGE_MODEL_REVISION` set to a non-40-hex value keeps `model_revision_invalid` + fall-back-to-pin
       (the two existing `TestRevisionPin` tests pass unchanged); set to a 40-hex value that is not the
       selected model's pin, the refusal `weights_revision_unpinned` fires before any `snapshot_path`
       is computed and `_download_from_hub` is never called (recording doubles) — both tests named;
       the top-of-function order (entry → `manifest_model_unknown` / `weights_pin_unusable` →
       `weights_revision_unpinned` → `_verify_cached`) is pinned: a warm cache plus an unreadable
       manifest yields `weights_pin_unusable` with `_verify_cached` uncalled (test).
-- [ ] `scripts/vendor_weights.py --model-id` writes the map form, preserves other entries, and
+- [x] `scripts/vendor_weights.py --model-id` writes the map form, preserves other entries, and
       `manifest_diff` scoped to that entry reports only the added model for a one-model → two-model
       diff (test); the seven diff tests at `tests/test_vendor_weights.py:559-616` pass against the
       keyed shape; a round-trip test parses the output with `_load_manifest`.
-- [ ] `ALLOWED_SUFFIXES == frozenset({".safetensors", ".json", ".txt", ".model"})` and `ALLOW_PATTERNS`
+- [x] `ALLOWED_SUFFIXES == frozenset({".safetensors", ".json", ".txt", ".model"})` and `ALLOW_PATTERNS`
       are asserted unchanged; `grep -c 'use_safetensors=True' promptguard/classifier.py` is **2** (the
       explanatory comment at `:90` and the call-site keyword at `:100` — executed 2026-09-19; the
       round-4 "1 hit" was un-executed, R43) and `grep -n '^ *use_safetensors=True,'
       promptguard/classifier.py` returns exactly the call site.
-- [ ] `grep -n '\bMODEL_ID\b' model_fetcher.py pipeline/sanitizer_revision.py scripts/vendor_weights.py
+- [x] `grep -n '\bMODEL_ID\b' model_fetcher.py pipeline/sanitizer_revision.py scripts/vendor_weights.py
       promptguard/classifier.py` returns nothing (pre-story 20 hits, recorded) and `grep -rnw MODEL_ID
       tests --include='*.py'` returns nothing (pre-story 47) — alias removed, the three prose sites
       rewritten; `derive_sanitizer_revision({})` equals the pre-story value at the default model
@@ -439,7 +440,7 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
       `_REVISION_SOURCES` files is empty); the loaded-identity check compares paths only and no
       `repo_dirname` copy exists outside `model_fetcher.py` (`grep -rn 'def repo_dirname' --include='*.py'
       . --exclude-dir=.venv` returns the one definition).
-- [ ] `docs/weights.md` and `ENV_REFERENCE.md:52` describe the per-model manifest, the per-model pin
+- [x] `docs/weights.md` and `ENV_REFERENCE.md:52` describe the per-model manifest, the per-model pin
       and the `weights_revision_unpinned` refusal (`grep -c 'per model' docs/weights.md` ≥ 1,
       `grep -c weights_revision_unpinned docs/weights.md kit_tools/docs/ENV_REFERENCE.md` ≥ 1 each);
       the scoped grep `grep -rln 'FORAGE_MODEL_REVISION' --include='*.md' docs kit_tools/docs
@@ -449,9 +450,9 @@ unpinned revision (recording doubles); `resolve_revision("acme/unvendored")` ret
       `manifest_model_unknown` and `weights_revision_unpinned` (`grep -c` ≥ 1 each) and `:270-271` is
       per-model; the SECURITY.md non-vulnerabilities row is present; the R40 start and end counts are
       in Implementation Notes.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
 
 ### US-006: `FORAGE_MODEL_ID` — allowlisted, refuse-boot, asserted at load, reported on `/health`
 
@@ -575,39 +576,39 @@ id unset the hash input is byte-identical to explicitly setting the 22M id; at t
   and the `promptguard_model` description says "not published", never "not inferable".
 
 **Acceptance Criteria:**
-- [ ] `FORAGE_MODEL_ID` unset → `/health.promptguard_model == "meta-llama/Llama-Prompt-Guard-2-22M"`; the
+- [x] `FORAGE_MODEL_ID` unset → `/health.promptguard_model == "meta-llama/Llama-Prompt-Guard-2-22M"`; the
       model-identity hash input is byte-identical to explicitly setting the 22M id (relative assertion
       in `tests/test_sanitizer_revision.py`); a second allowlisted id (monkeypatched) → a different
       `derive_sanitizer_revision({})` (asserted).
-- [ ] A value outside the allowlist — including the 86M id at the shipped allowlist — makes the
+- [x] A value outside the allowlist — including the 86M id at the shipped allowlist — makes the
       lifespan raise `ModelConfigurationError`; the log carries `model_id_not_allowed`; a sentinel value
       appears 0 times in captured logs; `derive_sanitizer_revision` never raises for any allowlisted
       id (test); `ALLOWED_MODEL_IDS` contains exactly the 22M id at the end of this story.
-- [ ] An app-startup test with `FORAGE_MODEL_ID=<second id>` asserts the lifespan's
+- [x] An app-startup test with `FORAGE_MODEL_ID=<second id>` asserts the lifespan's
       `WeightAcquisition` carries the resolved id and `acquire_and_load` received it (the
       `tests/test_app.py:1183` monkeypatch shape), and a recording `SupportsWeightLoad` double shows
       both `from_pretrained` calls saw it (through the ASGI lifespan); `resolve_model_id()` returns
       `tuple[str, bool]` as specified (tests for unset, blank, allowlisted, disallowed).
-- [ ] `load()` derives the injection index from `model.config.id2label` (exactly two labels: one
+- [x] `load()` derives the injection index from `model.config.id2label` (exactly two labels: one
       `INJECTION` and one `BENIGN`, case-insensitive) and refuses `{LABEL_0, LABEL_1}` and a
       three-label config and a missing / `None` / non-mapping `id2label` — `loaded` stays `False`,
       WARNING `model_labels_unexpected`, the specific message asserted (three negative tests); the
       check and the success return sit after the `try` block, not inside it.
-- [ ] `test_every_allowlisted_model_has_a_manifest_entry` exists and passes against the committed
+- [x] `test_every_allowlisted_model_has_a_manifest_entry` exists and passes against the committed
       `weights_manifest.json` for every `ALLOWED_MODEL_IDS` member.
-- [ ] `/health.promptguard_model` reports the configured id unconditionally, read from `app.state` and
+- [x] `/health.promptguard_model` reports the configured id unconditionally, read from `app.state` and
       never re-read in the handler (test); its description carries the publishable-identity clause
       ("not published", never "not inferable"); `kit_tools/arch/SECURITY.md`'s `/health` paragraph
       carries the same sentence and its non-vulnerabilities table carries the differential-channel
       row (`grep -c promptguard_model kit_tools/arch/SECURITY.md` ≥ 2); `FORAGE_MODEL_ID` set-but-blank
       behaves as unset (test).
-- [ ] Window block done: docstring line appended; regenerated; `tests/golden/contract_1_3_0.json`
+- [x] Window block done: docstring line appended; regenerated; `tests/golden/contract_1_3_0.json`
       re-created from `_SCHEMA_MODELS`; `HealthResponse.promptguard_model` appended to
       `_EXPECTED_ONE_THREE_ZERO_DIFF`; the 1.2.0 pair untouched and green; four anchor pages refreshed;
       `uv run python -m scripts.export_contract --check` clean; the rotation (`contract.py`) measured
       and recorded in `docs/bootstrap-notes.md`, `CLAUDE.md`, `kit_tools/arch/DECISIONS.md`,
       `kit_tools/docs/GOTCHAS.md`'s rotation table (`:410-434`) and `kit_tools/arch/CODE_ARCH.md`.
-- [ ] `_CLEARED_ENV_VARS` and the exact-set test include `FORAGE_MODEL_ID`; `grep -c FORAGE_MODEL_ID
+- [x] `_CLEARED_ENV_VARS` and the exact-set test include `FORAGE_MODEL_ID`; `grep -c FORAGE_MODEL_ID
       compose/minimal.yml compose/full.yml docs/configuration.md kit_tools/docs/ENV_REFERENCE.md` ≥ 1
       each; `grep -c promptguard_model kit_tools/docs/API_GUIDE.md kit_tools/docs/MONITORING.md` ≥ 1
       each; `docs/configuration.md`'s row states the 86M is added by the vendoring gate;
@@ -616,9 +617,9 @@ id unset the hash input is byte-identical to explicitly setting the 22M id; at t
       model_labels_unexpected` over `kit_tools/docs/TROUBLESHOOTING.md` is ≥ 1 (three separate
       counts — `grep -c` with an alternation counts lines, not tokens; salty, round 3); the GOTCHAS
       sentence is present.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
 
 ### US-002: Per-window scores — the `classify_windows` seam on the classifier (behaviour-preserving)
 
@@ -658,16 +659,16 @@ tests/test_orchestrator.py` passes with the doubles migrated; `git diff --stat` 
   `tests/test_stage3_promptguard.py:288`); stage 3 is its only removed production caller (US-007).
 
 **Acceptance Criteria:**
-- [ ] `classify_windows` exists and `classify` is implemented through it; every pre-existing stage-3
+- [x] `classify_windows` exists and `classify` is implemented through it; every pre-existing stage-3
       and orchestrator verdict/score assertion passes with the doubles updated; `:151` and `:164`
       assert on both attributes; `:172` is untouched (US-007 re-points it); stage 3 still calls
       `classify()` (`grep -c 'classifier.classify,' pipeline/stage3_promptguard.py` is 1).
-- [ ] `git diff --stat` against the eight `_REVISION_SOURCES` files is empty;
+- [x] `git diff --stat` against the eight `_REVISION_SOURCES` files is empty;
       `derive_sanitizer_revision({})` equals the pre-story value (recorded).
-- [ ] `kit_tools/arch/CODE_ARCH.md`'s `promptguard/` row names `classify_windows`.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
+- [x] `kit_tools/arch/CODE_ARCH.md`'s `promptguard/` row names `classify_windows`.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
 
 ### US-007: Contiguity gating in stage 3 — rule, config keys, routes, telemetry (shipped off)
 
@@ -792,42 +793,42 @@ tokens → 1 window (measured, round 2).
   epic measures the adversarial trip alongside the evasion before the default flips).
 
 **Acceptance Criteria:**
-- [ ] The six verdict cases in the Independent Test plus `[0.2, 0.6, 0.6]` (run at the end fires), a
+- [x] The six verdict cases in the Independent Test plus `[0.2, 0.6, 0.6]` (run at the end fires), a
       score exactly at `contiguity_threshold` counts (`>=`), a score exactly at `promptguard_threshold`
       does not fire the max rule (`>`), and an empty text (`SAFE`) are pinned by tests.
-- [ ] Both keys validated at boot (out-of-range refuses like
+- [x] Both keys validated at boot (out-of-range refuses like
       `tests/test_app.py::test_lifespan_refuses_an_out_of_range_cache_bound`; `windows: 1` refuses
       with `PromptGuardConfigurationError`, tested), defaults `0` / `0.5`,
       registered in `KNOWN_CONFIG_KEYS`, documented in `docs/configuration.md` with the enabling recipe
       and the absolute-threshold note.
-- [ ] All three routes apply the rule (one end-to-end test per route through the ASGI app with the
+- [x] All three routes apply the rule (one end-to-end test per route through the ASGI app with the
       mocked classifier); the `/search` firing case (double returning ≥ 2 window scores) is tested;
       both tokenisation shapes are pinned against `tests/fixtures/tiny_model` (prose → ≥ 2 windows,
       repeated runs → 1 window, rule inert); `tests/test_stage3_promptguard.py:172` is re-pointed to
       `classify_windows.assert_called_once()` here; `models.py`'s `promptguard_threshold` description
       and `docs/configuration.md` state the max-rule-only scope.
-- [ ] A `contiguity` or `both` verdict returns only the diagnostic label in `injection_spans` (the
+- [x] A `contiguity` or `both` verdict returns only the diagnostic label in `injection_spans` (the
       `tests/test_orchestrator.py:2038,2068` shape extended to a multi-chunk union);
       `stage4_structuring.py` is byte-unchanged.
-- [ ] The three counters exist on the named section models, are pinned by
+- [x] The three counters exist on the named section models, are pinned by
       `tests/test_contract_metrics.py`; the window block is done (docstring line, regenerate, golden
       re-created, **nothing appended** to `_EXPECTED_ONE_THREE_ZERO_DIFF` — stated in Implementation
       Notes — anchor pages, `--check` clean).
-- [ ] `derive_sanitizer_revision` includes both values after `promptguard_threshold`;
+- [x] `derive_sanitizer_revision` includes both values after `promptguard_threshold`;
       `tests/test_sanitizer_revision.py:95-116` recomputes them in the same order; a test pins
       `cache_policy_fingerprint()`'s inputs; the rotation is measured and recorded at the five sites (`docs/bootstrap-notes.md`,
       `CLAUDE.md`, `kit_tools/arch/DECISIONS.md`, `kit_tools/docs/GOTCHAS.md`'s rotation table,
       `kit_tools/arch/CODE_ARCH.md`).
-- [ ] SECURITY.md's stage-3 paragraph names both rules and both residual directions; GOTCHAS entry
+- [x] SECURITY.md's stage-3 paragraph names both rules and both residual directions; GOTCHAS entry
       present and states that `/metrics` is the aggregate signal and the WARNING the per-event one;
       `kit_tools/docs/MONITORING.md` carries the three counter rows, the `:64` hash-input sentence and
       the WARNING row (the two `grep -c` counts above); the corpus-epic handoff line in Implementation Notes names both shapes and says `/search`
       coverage is content-dependent; `kit_tools/arch/CODE_ARCH.md`'s stage-3 row names the rule; the
       config triple (`promptguard_settings_from_config`, `PromptGuardConfigurationError`, one lifespan
       call) exists and an out-of-range value refuses boot with that error.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
 
 ### US-003: Benchmark harness — host-side, against the running service
 
@@ -1017,7 +1018,7 @@ every key is a `KNOWN_CONFIG_KEYS` member.
   for the new module.
 
 **Acceptance Criteria:**
-- [ ] `scripts/bench_promptguard.py` reuses `contract_smoke.py`'s `http_get` and `wait_for_health` for
+- [x] `scripts/bench_promptguard.py` reuses `contract_smoke.py`'s `http_get` and `wait_for_health` for
       the `/health` reads, `run_command` and the dataclasses (imports, not copies), implements the
       multipart POST behind `post_fn` with `httpx.post(files=, data=)` (no hand-built boundary),
       waits for `healthy` through `wait_for_health(..., expect_status=STATUS_HEALTHY,
@@ -1031,7 +1032,7 @@ every key is a `KNOWN_CONFIG_KEYS` member.
       (parsed in the module — `grep -c '_json_object' scripts/bench_promptguard.py` is 0) into the
       JSON, and writes the fixed-key JSON including `"concurrency": 1`, `"outcome"`,
       `non_2xx_reason` and the three `budget_*` measurements.
-- [ ] Both inputs are generated from a seed and sized by tokenising with `--tokenizer-dir`
+- [x] Both inputs are generated from a seed and sized by tokenising with `--tokenizer-dir`
       (`tests/fixtures/tiny_model` in the unit tests; `grep -c CHARACTERS_PER_PROMPTGUARD_TOKEN
       scripts/bench_promptguard.py` is 0); the unit tests assert determinism, that the one-window
       document is exactly one window, that the budget document satisfies **both** `len(text) ≤
@@ -1039,7 +1040,7 @@ every key is a `KNOWN_CONFIG_KEYS` member.
       `max_promptguard_chunks` — by the harness's arithmetic and by
       `PromptGuardClassifier._chunk_text` — and that one more word breaches a bound; percentile
       maths is nearest-rank and pinned (`[1..20]` → 10 / 19; `--runs 4` → p95 `null`).
-- [ ] Failure paths are pinned by unit tests with injected fakes: health wait not ending at
+- [x] Failure paths are pinned by unit tests with injected fakes: health wait not ending at
       `healthy` + `promptguard_loaded: true` → `never_healthy`, exit 2 naming the timeout and the
       last status, no JSON; `promptguard_model ≠ --model-id` → `model_mismatch`, exit 2, no JSON;
       first-request non-2xx (the 404 case and the `content_too_large_to_classify` 422 case
@@ -1048,22 +1049,22 @@ every key is a `KNOWN_CONFIG_KEYS` member.
       samples so far and null percentiles, non-zero exit; `--container` omitted / `docker stats`
       failure → `container_mem_mib: null` + one WARNING and a complete run; no token or env value in
       any message.
-- [ ] `bench/config.yaml` is committed with the first-line warning, `extract_route_enabled: true`, the
+- [x] `bench/config.yaml` is committed with the first-line warning, `extract_route_enabled: true`, the
       contiguity keys, and a test that `yaml.safe_load`s it, runs the four `*_settings_from_config`
       validators over it, asserts only `KNOWN_CONFIG_KEYS` members, the same key set as `config.yaml`
       and `extract_route_enabled` as the only differing value; `bench/*.json` and
       `bench/tokenizer-*/` are gitignored.
-- [ ] `Dockerfile` and `tests/test_dockerfile.py` are unchanged (`git diff --stat` on the two is
+- [x] `Dockerfile` and `tests/test_dockerfile.py` are unchanged (`git diff --stat` on the two is
       empty); `.dockerignore` gains exactly the line `bench/` (`grep -c '^bench/$' .dockerignore` is 1;
       `git diff --stat .dockerignore` is one line); positively, `grep -c bench Dockerfile` is 0 (today
       0) and `grep -rl 'bench/config' compose/` is empty (today empty) — the benchmark config can
       never be deployed (security, rounds 2 and 3).
-- [ ] `docs/weights.md` carries the benchmark subsection with the throwaway/loopback warning;
+- [x] `docs/weights.md` carries the benchmark subsection with the throwaway/loopback warning;
       `docs/configuration.md`'s sizing table carries the cross-reference and the single-in-flight caveat;
       TESTING_GUIDE lists the module; the module docstring carries a `test_mapping:` block.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
 
 ### US-005: Vendor the 86M weights — licence, manifest entry, mirror, allowlist (owner gate)
 
@@ -1117,17 +1118,17 @@ no other change; the story stops and reports, and nothing is asserted.
   Llama" line unchanged).
 
 **Acceptance Criteria:**
-- [ ] If the gate has not run: Implementation Notes carry `### US-005 — gate not run, <date>` naming
+- [x] If the gate has not run: Implementation Notes carry `### US-005 — gate not run, <date>` naming
       the missing prerequisites, and nothing else in the tree changes (the verifier accepts this state).
-- [ ] The 86M licence check is recorded with both identifier strings and its outcome; on mismatch
+- [x] The 86M licence check is recorded with both identifier strings and its outcome; on mismatch
       nothing is vendored and the remaining criteria are void.
-- [ ] `weights_manifest.json` carries the 86M entry (revision + files with `path`/`sha256`/`size`);
+- [x] `weights_manifest.json` carries the 86M entry (revision + files with `path`/`sha256`/`size`);
       `ALLOWED_MODEL_IDS` names the 86M in the same commit; `ALLOWED_SUFFIXES` unchanged; a test with a
       synthetic snapshot matching the committed entry reaches `weights_verified` under
       `FORAGE_MODEL_ID=<86M>`; the scoped `manifest_diff` recorded shows the 22M entry untouched.
-- [ ] The mirror holds `forage-weights:<86M revision>`; `docs/weights.md` states both pins, that the
+- [x] The mirror holds `forage-weights:<86M revision>`; `docs/weights.md` states both pins, that the
       mirror tag is the revision, and carries the one-file credential recipe (no `export …=` of a value).
-- [ ] `NOTICE` names both model ids; the credential file was mode 0600 and is recorded as deleted;
+- [x] `NOTICE` names both model ids; the credential file was mode 0600 and is recorded as deleted;
       the secret grep is **token shapes only over the story's produced artifacts** (ruling R29 as
       corrected in round 4, R43 — the spec file and `kit_tools/` are excluded because the round-3
       form self-matched its own pattern text): `grep -nE 'hf_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}'
@@ -1232,26 +1233,26 @@ the tree changes; the story stops and reports.
   1 CPU exceeds 2× the 22M figure, say so and leave the open question open.
 
 **Acceptance Criteria:**
-- [ ] If the gate has not run: Implementation Notes carry `### US-004 — gate not run, <date>` naming
+- [x] If the gate has not run: Implementation Notes carry `### US-004 — gate not run, <date>` naming
       the missing prerequisites; nothing else in the tree changes.
-- [ ] Implementation Notes carry the populated table (four required rows, `promptguard_model` and
+- [x] Implementation Notes carry the populated table (four required rows, `promptguard_model` and
       `sanitizer_revision` from `/health` per row, the `memory.peak` column; `not measured — access
       pending` where US-005 recorded a 403), the OOM/exit-code line per run, the volume-size line,
       the matrix wall-clock, the tokenizer copy-out command per model (with `git status --porcelain
       bench/` empty afterwards), and every command as run with
       `--env-file "$f"`, `-p 127.0.0.1:8020:8020` and `docker rm -f` — no token value, no `docker
       inspect` / `docker ps --no-trunc` / `docker compose config` output.
-- [ ] `docs/configuration.md` sizing table's classifier column is filled for 1 and 4 vCPU with both
+- [x] `docs/configuration.md` sizing table's classifier column is filled for 1 and 4 vCPU with both
       models (2 vCPU marked `not measured` or filled), with the staleness line naming both manifest
       revisions and the commit; the opt-in recipe and its acquisition caveat appear once each
       (`grep -c 'FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-86M' docs/configuration.md` ≥ 1); the
       wait was `wait_for_health(..., expect_status=STATUS_HEALTHY, ...)` and the recipe carried no
       `VALKEY_URL` (both recorded).
-- [ ] The optional FPR smoke, if run, is recorded with its counts and the config used.
-- [ ] The per-model window-count line (three texts per model, measured in the container with the
+- [x] The optional FPR smoke, if run, is recorded with its counts and the config used.
+- [x] The per-model window-count line (three texts per model, measured in the container with the
       real tokenizer) is under the table and agrees with the harness's host-side counts for the two
       benchmark documents.
-- [ ] `grep -nE 'hf_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}' docs/configuration.md docs/weights.md
+- [x] `grep -nE 'hf_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}' docs/configuration.md docs/weights.md
       bench/config.yaml` returns nothing (token shapes only over the story's artifacts; the spec
       file and `kit_tools/` excluded — ruling R29 as corrected in round 4, R43; executed 2026-09-19:
       nothing); the token file is recorded as mode 0600 and deleted.
@@ -1382,10 +1383,510 @@ the tree changes; the story stops and reports.
 
 ## Implementation Notes
 
+### Feature validation — 2026-09-22 (Copilot)
+
+Validated `epic/forage-hardening` at clean `6c74928` in autonomous mode.
+The cumulative `main...HEAD` diff is 116 files, 31,629 insertions and
+2,652 deletions; the six prerequisite features are intentional epic scope.
+Three parallel quality/security/compliance reviewers each returned
+`clean` / `ready`, with no findings. One review round, zero fix loops:
+no runtime, test, contract, dependency or default changes were needed.
+
+The formerly deferred full-suite evidence is now established:
+`uv run pytest -q --tb=short` passes **4,080 tests, with 6 existing xfails
+and 13 non-failing warnings in 31.31s**, within the 300-second limit.
+The clean pre-epic baseline is `20ddb2a`, with no failing node IDs.
+Repository Ruff lint/format (148 files), strict Pyright (zero errors),
+`export_contract --check`, offline benchmark `--help` and whitespace
+checks all pass. Test-command discovery selected `pyproject.toml`; the
+testing guide agrees.
+
+Accepted the spec's **gates-unrun alternative**, not a claim that 86M
+shipped: US-005 vendoring and US-004 real-container measurements remain
+not run, the allowlist/manifest remain 22M-only, and contiguity ships off.
+The required separate fresh-service `--input 1w` / `--input budget`
+benchmark design is covered, not replaced with first-for-input timing.
+No credentials were inspected, weights downloaded, or owner gate run.
+
+Results are in `kit_tools/.validate_impl_{quality,security,compliance,tests}.json`
+and `kit_tools/AUDIT_FINDINGS.md` (new info-only test record
+`2026-09-22-017`; zero new criticals/warnings). Earlier epic advisories,
+including the six provider raw-read xfails and the IPv6-policy finding,
+are retained, not declared resolved by this feature pass. Audit/results
+follow the existing ignored-local-artifact policy; this note is the tracked
+handoff. Raw evidence is in session
+`97983323-8041-4eac-98a6-2b1c95ae967d/files/validation-*`.
+No pause marker, completion skill, archival, lifecycle-state update,
+commit, tag, push or publication was performed.
+
+### US-003 host-side benchmark, retry 2 — 2026-09-22 (Copilot)
+
+Starting commit `14d548d`, clean worktree. Added `scripts/bench_promptguard.py`,
+the complete `bench/config.yaml`, build-context/output ignores, the weights
+runbook subsection, sizing cross-reference and test mapping. The harness imports
+only public smoke-driver names, uses offline tokenizer loading and multipart
+`httpx.post`, and has injected GET/POST/command/clock seams. The health wait's
+returned body is checked independently for healthy + loaded before any sample.
+No service, classifier, dependency, Dockerfile, Compose or contract file changed.
+
+Restored the reviewed candidate `929e74e` without committing, then fixed its
+verifier blocker rather than relabelling it. That candidate sent the first budget
+request after the entire one-window loop; documenting "first-for-input" did not
+meet the process-cold requirement. The harness now **requires `--input 1w` or
+`--input budget`**, posts only that document and populates only its cold/warm
+latency fields. Each input runs against an owner-started fresh service. There is
+no combined mode, no inference probe before the cold POST and no automatic
+restart of an owner's container. Health polling never classifies text. The owner
+must give each process exclusive use with no earlier inference traffic; the
+harness does not claim to attest to other clients' activity.
+
+The fixed JSON carries raw successful millisecond samples in
+`samples_collected: {"1w": [...], "budget": [...]}` (first/cold sample then warm
+samples). The unselected input has an empty array and three null latency fields,
+never a warmed value called cold. Partial warm batches keep raw samples but null
+both percentiles. Optional memory failures warn and retain the latency row. A
+configuration failure creates no output and leaves any older output path untouched;
+the runbook requires fresh paths and checking the exit status.
+
+**US-004 handoff:** `docs/weights.md` supplies the owner-controlled two-container
+procedure and downstream table assembly, not just an implementation-note caveat.
+One fresh container plus `--input 1w`, record its JSON/OOM/exit/peak, remove it;
+a separately fresh container plus `--input budget`, record independently.
+The existing matrix columns get their `_1w` and `_budget` measurements from the
+corresponding files only after matching provenance/configuration. Memory, peak,
+OOM and exit cells carry labelled `1w` / `budget` pairs, never an average.
+Preserve both inputs' outcomes and record a no-JSON configuration failure by hand,
+retaining the other input's row. Four required model/CPU rows mean **eight**
+fresh containers/harness invocations; total requests remain 42 per successful
+pair at 20 warm runs. Window-count/FPR probes occur after timed and memory
+measurements. Story definitions/checkboxes and owner gates are unchanged.
+
+The live upload
+422 uses `error: content_too_large_to_classify` and a fixed sentence in `reason`,
+not the token in `reason`; both shapes are recognized as a tokenizer/config
+mismatch on the selected input's first request. Only public fixed reasons/codes
+can enter failure rows. The configuration/service-failure boundary still uses
+the first successful sample of each invocation.
+
+Validation: **115 new tests**, **327 related tests** total across
+`test_bench_promptguard`, `test_contract_smoke`, `test_dockerfile` and
+`test_contract_metrics`; all pass under the socket guard. Tests trace every
+GET/POST/command, assert the selected document is the first inference request
+for both modes, and exercise success/initial failure/partial failure on a second
+fresh fake service without overwriting the first artifact. Safe Ruff fixes/formatting
+were limited to the two new Python files. Repository Ruff lint and format checks,
+strict Pyright (zero errors), `git diff --check`, and offline module `--help` pass.
+The full suite was **not run**, as this invocation explicitly prohibits it;
+that acceptance gate remains for end-of-epic validation.
+
+All hashed sources and hash definition are byte-unchanged. Measured default,
+shipped and benchmark-config revision is the same
+`b641e6a51ef7cb45a5209a42321a5fff135f432264d256dd8eec9fe9e62698f5`.
+`Dockerfile` and `tests/test_dockerfile.py` have empty diffs; `.dockerignore` adds
+exactly `bench/`; both output ignore patterns are effective. No owner gate,
+weight download, benchmark against a real service, checkbox update, tag, release
+or publication occurred.
+
+### US-001 landing checkpoints — 2026-09-22 (Copilot)
+
+Starting commit: `5ced1e94aedc088e34d4805e8394cefb76c2bd17`, clean worktree.
+Baseline and step 1 (per-model map, shared builders, manifest assertions and
+generator) each passed the 768 related tests in `test_model_fetcher`,
+`test_vendor_weights`, `test_sanitizer_revision` and `test_app`. Full-suite
+execution is prohibited by this invocation; these are related-suite midpoints.
+Starting R40 `grep -c '"revision"'`: model_fetcher tests **15**, vendor tests
+**6**, app tests **0**. Production anchored constant grep: **20** lines;
+test whole-word grep: **54** lines (seven more than the pre-spec 47, from the
+resource-envelope sizing wiring). Baseline default and shipped revision:
+`4913fdc1982cb48ba2db9c6972fcea10107408349970c45c9dc6b3ae5c1aa1fb`.
+
+Step 2 (model/revision parameters, both auto-class calls, vendor CLI and
+`WeightAcquisition` forwarding) passed **772** related tests. Two additional
+production importers now exist versus the spec's snapshot: `retrieval_app.py`
+and `pipeline/extraction_limits.py` use the default id in the memory advisory;
+both and their test consumers migrated, without changing the sizing rule.
+
+Step 3 (memoised per-model revision resolution, manifest-first refusal, requested
+pair verification and the direct loader identity guards) passed **862** related
+tests, including `test_stage3_promptguard`. The new tests exercise both default
+auto-class arguments and a synthetic model, warm/cold/hub/mirror paths, two
+snapshot directories, entry-local versus document-wide rejection, no path/hash/
+source calls on an unpinned revision, and the unreadable-manifest ordering.
+
+Step 4 is reached: docs, exact-scope greps and read-only revision controls complete.
+R40 ending counts are **20 / 8 / 0**, respectively (starting **15 / 6 / 0**).
+Both closing old-name greps return zero; safetensors has exactly two textual
+hits and one call-site keyword; `repo_dirname` has one definition; the classifier
+residual has one `trusts the path` occurrence; all six override-describing pages
+contain `weights_revision_unpinned`. `ALLOWED_SUFFIXES`, `ALLOW_PATTERNS` and
+`_walk_snapshot` are unchanged, with literal-value tests for both constants.
+
+Of `TestRevisionPin`'s original eight methods, five migrated:
+`test_the_default_is_the_committed_constant`,
+`test_the_environment_overrides_it` (now both model ids),
+`test_the_pin_is_locked_to_the_committed_manifest`,
+`test_the_manifest_pin_is_readable_without_verifying_anything`, and
+`test_a_real_manifest_yields_its_pin`. The commit-sha-shape test and the two
+required malformed-override tests survive unchanged. The existing warm/pinless
+acquisition assertion now expects `weights_pin_unusable`, the intentional
+manifest-first diagnostic change.
+
+Implementation details matching the current tree: `_manifest_entry` retains
+the parser's `(manifest, failures)` tuple so closed reasons are not lost.
+Ruff UP033 mechanically selects `functools.cache`, the unbounded
+`lru_cache(maxsize=None)` equivalent, retaining the required `cache_clear()` seam.
+The autouse `clear_manifest_entry_cache` fixture resets it. Vendoring's plan
+reader uses the mutable raw document rather than populating the runtime memo
+before generation; the self-check then verifies the generated entry. Its
+default revision comes from the selected entry, never the 22M fallback for a
+non-default model. Existing malformed documents are refused, not discarded.
+
+The scoped override inventory remains **13 files**. Rewritten override guidance:
+`docs/weights.md`, `docs/configuration.md`, `kit_tools/docs/ENV_REFERENCE.md`,
+`kit_tools/arch/SERVICE_MAP.md`, `kit_tools/arch/patterns/LOGGING.md`,
+`kit_tools/docs/TROUBLESHOOTING.md`. Also rewritten: `DEPLOYMENT.md`'s re-vendor
+command and mismatch diagnosis; `SECURITY.md`'s supply-chain description.
+Mention-only and unchanged: `LOCAL_DEV.md`'s cleared-environment list,
+`MONITORING.md`'s still-correct malformed-override log row. History unchanged:
+`DECISIONS.md`, the GOTCHAS rotation discussion (its only hit is outside the
+table), and all prior `docs/bootstrap-notes.md` records; a new no-rotation
+record was appended to the latter.
+
+Default/shipped before, after, and the read-only three-module reversal against
+`5ced1e9` all reproduce `4913fdc1…aa1fb`, including an unreadable-manifest run.
+All nine hashed source files are byte-identical; the eight-file pipeline diff
+is empty. Full measurements and the unchanged 22M payload digest are in
+`docs/bootstrap-notes.md` and the invariant summary is in `CLAUDE.md`.
+
+Validation: **1116 related tests passed**, strict Pyright zero errors, repository
+Ruff lint/format clean, contract-export tests and exact greps pass. The prior
+learning's inherited formatting failures are absent at this starting commit;
+no unrelated fix was needed. The full-suite criterion remains **unverified**:
+this invocation explicitly prohibits running it. No definition or acceptance
+checkbox was changed, no owner gate ran, and no dependency, response shape,
+generated contract or historical golden changed.
+
+### US-006 implementation — 2026-09-22 (Copilot)
+
+Starting commit `06a56b289fb49121a4d5e38c42d2c4544ced09a8`, clean tree.
+`resolve_model_id()` is a total `(id, allowed)` resolver with one environment
+read site; unset and stripped-blank mean 22M, and every refusal emits only
+`model_id_not_allowed`. The lifespan checks the boolean before constructing
+resources, raises `ModelConfigurationError` on refusal, and publishes the
+selection for health and acquisition. The allowlist still contains only
+`meta-llama/Llama-Prompt-Guard-2-22M`; the manifest-entry test iterates it without
+pinning its size, so the owner gate can add the second id and manifest together.
+
+The actual tree has one additional identity consumer versus the original hint:
+the resource-envelope memory advisory. It now receives the same selected id,
+and its synthetic larger-resident-set test selects through the allowlisted
+environment seam instead of replacing `retrieval_app.DEFAULT_MODEL_ID`.
+The ASGI lifespan regression records `acquire_and_load`, uses real verified
+acquisition with a tiny synthetic manifest, and proves both auto-class calls
+receive the selected id and pin. Default/blank/unloaded and post-boot environment
+mutation cases pin health's configuration echo; invalid ids, including the
+not-yet-vendored 86M, refuse boot without logging their values.
+
+The classifier binds model/tokenizer locally inside the load `try`, validates
+`id2label` afterwards, and only then calls `eval` and publishes the loaded
+instance. Exactly two indexed labels BENIGN/INJECTION are required; swapped
+and mixed-case labels drive the correct inference index. Missing, null,
+non-mapping, generic, duplicated, out-of-range and three-class labels produce
+the specific `model_labels_unexpected` WARNING and leave it unloaded.
+No third-party stub or suppression was needed.
+
+Window block complete: one `* ``1.3.0``` continuation, regenerated OpenAPI /
+anchor / drift fixture, manual held-golden update matched against every
+`_SCHEMA_MODELS` entry, and one added-path entry
+`HealthResponse.promptguard_model`. Historical goldens and the 1.2.0 pair are
+unchanged. All four anchor pages now quote
+`cefbd601b0c7223ef9f05b973325b62944385899c4571917ce4d3e3741f28a22`.
+The spec's smoke hint understates the current driver: it already validates the
+entire shared `HealthResponse`, not just membership, and rejects other contract
+versions. `contract_smoke.py` remains byte-identical, with no new model-specific
+assertion; its synthetic current-schema test body gains the new required field.
+Do not read this as new backward compatibility for an old-image smoke.
+
+Thirty-eighth rotation, measured under default and shipped config:
+`4913fdc1982cb48ba2db9c6972fcea10107408349970c45c9dc6b3ae5c1aa1fb`
+to `85394a954e32ec00bb499d08c01811dc4d00b363708e3f839311ae8fde33d0c0`.
+Only `contract.py` differs among all nine hashed sources; read-only whole-file
+substitution from the starting commit reproduces the old value exactly.
+Repeating with the previous default identity explicitly supplied does too.
+The other eight sources are byte-identical; the selected-id hash input changes
+only for a non-default model. Full measurements, default behavior rationale
+and consumer handoff are recorded at all five required sites.
+
+All fan-out greps pass: model-selection counts are 1/1/1/2 across the two
+Compose fragments/configuration/ENV_REFERENCE; health model counts are 1/2/2
+across API_GUIDE/MONITORING/SECURITY; each troubleshooting refusal-token count
+is 2. `model_fetcher.py` contains zero 86M-id literals. The security decision
+explicitly withholds publication, not inferability: the future per-rule
+contiguity counters offer a differential channel. Neither owner gate ran.
+
+Validation: **1436 related tests passed**, with 10 non-failing existing
+torch/socket warnings; repository-wide Ruff lint and formatting pass,
+strict Pyright has zero errors, and `export_contract --check` is clean.
+The full-suite criterion is **unverified**, because this invocation explicitly
+prohibits running it: result is partial / needs-work for that reason alone.
+No story definition/checkbox, weights manifest, vendoring default, NOTICE,
+dependency manifest, historical golden, branch, tag or release was changed.
+
+### US-002 implementation — 2026-09-22 (Copilot)
+
+Starting commit `b8c0cbd128d0182c7780d873bb91fc08d91a61de`, clean tree.
+`classify_windows(text, *, max_chunks=None)` owns the unchanged chunking,
+budget check and inference loop, returning aligned score/text lists in document
+order. `classify()` delegates once and retains max pooling, every tied chunk
+(including duplicate texts), and `(0.0, [])` for no scores. The window seam
+returns `([], [])` when unavailable; the existing WARNING is byte-identical.
+Loading, tokenizer locks, chunking and thread settings are unchanged.
+
+The starting recursive `grep -c 'classify\.' tests/ --include='*.py'` count
+was **53**: stage3 **4**, orchestrator **34**, app **8**, policy **6**, admission
+**1**. Spec line numbers predate those additional policy/concurrency doubles.
+All inference doubles now use the shared `tests.fakes.make_mock_classifier`:
+window scores/side effects drive the real `classify` pooling implementation,
+including blocking, cancellation and budget-error doubles. A default double
+uses the input as its one chunk, as real inference does; stage 3 still suppresses
+flags on safe results. No pre-existing verdict/score assertion was weakened.
+Ending count is **39**: stage3 **4**, orchestrator **25**, app **4**, policy **5**,
+admission **0**, shared fakes **1** (the real-method wrapper).
+Both trusted-tier skip assertions cover both methods; the existing
+`test_standard_not_skipped` is AST-identical to baseline. Stage 3 retains its
+one `classifier.classify,` call; moving it remains US-007.
+
+Default and shipped revision before and after:
+`85394a954e32ec00bb499d08c01811dc4d00b363708e3f839311ae8fde33d0c0`.
+Byte comparisons against the starting commit cover all eight pipeline sources,
+the ninth root source and the hash definition; the hashed-source `git diff
+--stat` is empty. Configuration, model manifest, dependencies and generated
+contract artifacts are unchanged. `CODE_ARCH.md` names the new seam.
+
+Validation: the nine related modules passed **1,312** tests before the change
+and **1,347** afterwards (35 new cases), including real-loader, tokenizer
+concurrency, route/cancellation, policy and frozen search-pin coverage.
+New cases pin ordered window scores/texts, both label indices, all max ties,
+budget boundaries before inference, unloaded warning/fallback, empty text,
+empty chunks and exact-threshold behavior. Final post-format rerun passes;
+repository Ruff lint/format and strict Pyright pass with zero errors.
+The three existing torch/socket warnings remain non-failing.
+Full-suite success is **unverified** because this invocation explicitly
+prohibits running it; partial / needs-work records only that outstanding gate.
+No story definition/checkbox, response shape or owner-gate state changed;
+no weights were downloaded, no owner benchmark ran, and nothing was published.
+
 <!-- Populated during execution. US-001 and US-002 record the unchanged default revision value; US-006
 and US-007 record their rotations; US-005 records the licence check, the vendoring transcript, the
 scoped manifest diff and the allowlist edit; US-004 records the benchmark table, the matrix wall-clock
 and the sizing-table fill. -->
+
+### Resource-envelope US-001 handoff — 2026-09-22
+
+The boot advisory now uses `PARENT_RESERVATION_BYTES = 512 MiB` (22M resident,
+no classification running), `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` (22M row
+`0` only), and `PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES = 64 MiB`, all in
+`pipeline/extraction_limits.py`. US-004 must measure two distinct quantities:
+idle loaded RSS for each model (86M minus 22M fills the resident-delta row) and
+the concurrency 1→2 RSS delta (replaces the provisional classification coefficient).
+Shared weights belong in the parent, never the per-classification term.
+The sizing table is resource-envelope **US-003**, not US-002; add its per-model
+column. US-006 must route the selected `FORAGE_MODEL_ID` into
+`retrieval_app._warn_if_envelope_memory_rule_unmet`, which currently receives the
+fixed `MODEL_ID`. Keep the 1024m shipped ceiling even if the measured coefficient
+exceeds 96 MiB; state the measured minimum and let under-sized boots warn.
+Neither owner benchmark nor weight-vendoring gate has been performed here.
+Reuse `pipeline.config_bounds` for the forthcoming settings triple; this story's
+`PromptGuardThreadsConfigurationError` leaves `PromptGuardConfigurationError`
+unambiguous for that reader.
+
+### US-007 implementation — 2026-09-22 (Copilot)
+
+Starting commit `967748d6edb4f8f87c47d69cac73e297fbff7bd0`, clean tree.
+Stage 3 now calls `classify_windows` once, retaining its completed-thread
+cancellation ownership, budget propagation, trusted skip and unavailable-model
+policy. `score` stays the maximum; `rule` is `max_score`, `contiguity`, `both`
+or `None`. Strict `>` max pooling is unchanged. Every qualifying `>=` run is
+included, including trailing and disjoint runs; the union deduplicates window
+indices in document order rather than deleting distinct equal-text windows
+(preserving the previous max-tie behavior).
+
+The local frozen settings/error/builder triple validates once in lifespan,
+including while the rule is off: windows `0` or 2–8, threshold 0.0–1.0,
+no bool/string/non-finite acceptance and no float conversion before the
+out-of-range huge-integer check. Shipped values remain `0` / `0.5`.
+The immutable settings object follows the existing threshold seam through
+retrieve, both extract entry points, and both search permit branches, with
+scalar values passed to stage 3. No per-request contiguity field exists.
+
+Telemetry uses dedicated flat counters, not new keys in the closed
+`blocked_by_reason`/`omitted_by_reason` vocabularies. A shared structural
+`PromptGuardMetricsSink` lets retrieve and extraction count before stage 4
+without importing the app; search counts each omitted result. Exactly one
+WARNING carries the longest qualifying run and total windows, not text or
+scores. The INFO omission line additionally names the rule. ASGI tests start
+through the real lifespan, assert the builder runs once, drive all three
+routes and `/metrics`, and verify contiguity-only, both, max-only and disabled
+cases. Raising the caller max threshold to 1.0 does not suppress contiguity.
+Quarantine tests cover the multi-window union on both fetch/upload responses;
+`stage4_structuring.py` is byte-unchanged.
+
+The two maximum-length fixture-tokenizer shapes both measure **4,583
+characters**. This story's explicit seeds measure **1,040 tokens / 3 windows**
+for prose and **15 tokens / 1 window** for a repeated character. These differ
+from the spec author's unspecified example seeds (1,004 / 442 tokens), but
+pin the required content-dependent window facts: prose at least two,
+repeated runs exactly one, and the rule inert for the latter. The real
+production-tokenizer count remains **unmeasured**, reserved for US-004.
+**Handoff to `epic-forage-injection-corpus`:** require both fragments separated
+by a benign roughly 448-token window (residual evasion) and sustained mid-band
+comment/review text (adversarial false-positive page blocking/result omission,
+with 64-token overlap correlation). `/search` coverage is content-dependent.
+Measure both directions before any default flip.
+
+**Held 1.3.0 window:** three additive metric counters and max-rule-only request
+threshold descriptions (GOVERNANCE row 3, description-only, no property/bound
+move). Export regenerated; anchor
+`579c32ee93ec3b1c528ce6df4a8d6ba5b4eb285890ecd8119b74098f39e7a3a9`
+is updated on all four quoting pages. The golden is re-created from
+`_SCHEMA_MODELS` and moves only the SearchRequest threshold description.
+**Nothing is appended to `_EXPECTED_ONE_THREE_ZERO_DIFF`.** The newer
+`test_contract_schema.py` also pins exact search/retrieve counter sets;
+those two sets gain the counter, independently of the additions ledger.
+All three section mirrors/emission paths are pinned in `test_contract_metrics`.
+MONITORING's counter grep is exactly 3 and its WARNING grep is 1.
+Historical goldens remain unchanged.
+
+**Thirty-ninth revision rotation, default and shipped config:**
+`85394a954e32ec00bb499d08c01811dc4d00b363708e3f839311ae8fde33d0c0` →
+`b641e6a51ef7cb45a5209a42321a5fff135f432264d256dd8eec9fe9e62698f5`.
+Only `stage3_promptguard.py`, `orchestrator.py` and `contract.py` change among
+the nine hashed sources; windows then threshold are new ASCII inputs after
+the max threshold. Every source/input was reversed independently read-only
+against the starting commit, with all-reverted reproducing the old value
+exactly; `docs/bootstrap-notes.md` records the complete nine-row matrix and
+all five required rotation sites are current. The run rule ships off, but
+adding its defaults still invalidates all old content-cache keys.
+`cache_policy_fingerprint`'s exact seven inputs and both request models'
+absence of contiguity fields are pinned.
+
+Validation: **1,743 related tests pass**, with three existing non-failing
+torch/socket warnings. Repository Ruff lint/format, strict Pyright (zero
+errors), and `export_contract --check` pass. The full-suite criterion remains
+**unverified** because this invocation explicitly forbids the full suite:
+partial / needs-work records that remaining gate, not a functional defect.
+No story definition/checkbox, owner-gate state, weights/dependency manifest,
+classifier source, NOTICE, tag or release changed. Neither owner gate ran;
+no weights downloaded, no push or publication occurred.
+
+### US-007 retry — 2026-09-22 (Copilot)
+
+Restored the preceding implementation from `ca269ab` onto its unchanged
+pre-story baseline, then reproduced and fixed the verifier's shared-fake
+failure. `RecordingSearchMetrics.counters` now exposes
+`promptguard_contiguity_detections`; its exact dictionary regression increments
+that counter and checks the nonzero value, alongside protocol-field completeness
+and instance isolation. No production or contract bytes changed from that attempt.
+
+All **635 prescribed T0/T1 tests pass**, plus **951 related route, metrics,
+schema, policy, export, governance and search-pin tests**. The latter emit three
+existing non-failing torch/socket warnings. Repository Ruff lint/format, strict
+Pyright and contract drift checks pass. All nine default/shipped revision probes
+reproduce the preceding measurement; stage 4 and historical goldens are unchanged.
+The full-suite gate remains explicitly **deferred to end-of-epic validation**;
+the result stays partial / needs-work for that unverified gate, not the now-fixed
+fake regression. Owner gates and acceptance checkboxes remain untouched.
+
+### US-005 — gate not run, 2026-09-22
+
+**Blocked on the owner gate; not complete.** Starting commit `51fa1b4`,
+clean tracked worktree. This non-interactive invocation has no owner-authorized
+vendoring session or supplied gate evidence. Missing from the handoff:
+
+- Confirmed owner acceptance of the 86M licence and approved access to its gated
+  Hugging Face repository, with the model-card licence/restriction comparison
+  and exact revision recorded before any weight download.
+- Owner-provisioned `HF_TOKEN`, `GHCR_USER`, `GHCR_TOKEN` (`write:packages`)
+  and `GITHUB_TOKEN` (`read:packages`) through the single temporary mode-0600
+  credential file, with an owner present to supply the values and confirm cleanup.
+- Confirmed egress to Hugging Face/GHCR/GitHub, `oras` availability, working-cache
+  capacity, and explicit authorization to publish the revision-keyed mirror tag.
+
+These prerequisites were not provisioned or verified here; this is not a claim
+that the host lacks the tools, network or credentials. No secret store or
+credential value was inspected, no credential file was created or sourced,
+and no mode/deletion evidence is claimed.
+
+The local `NOTICE` names `Llama 4 Community License Agreement` for the 22M.
+The 86M model card was not fetched: its identifier, any additional restrictions,
+licence outcome and revision remain **unverified**, not an assumed match.
+No download was attempted, so there is no observed 403 (`access pending`),
+429, partial snapshot or retry to record. There is no generated 86M entry,
+scoped manifest diff, file-count/byte-total measurement, mirror publication,
+fresh-pull verification or `weights_verified` transcript.
+
+The gate-not-run criterion requires a notes-only tracked change. Accordingly,
+the existing 22M manifest, `DEFAULT_MODEL_REVISION`, one-member
+`ALLOWED_MODEL_IDS`, `ALLOWED_SUFFIXES`, `NOTICE` and both configuration rows
+marked "Pending vendoring" remain unchanged. The two credential-recipe rewrites
+in `docs/weights.md` are deferred to the authorized vendoring run along with the
+manifest/allowlist/NOTICE/pin documentation commit; none of those changes is
+claimed complete. No runtime, contract, sanitizer-revision input or benchmark
+artifact changes. No weights, benchmark, push, tag, release or publication ran.
+US-004 remains gated behind US-005; neither gate's checkboxes were changed.
+
+Resume with the owner following US-005's licence-first procedure and failure
+paths, recording the real evidence before enabling 86M. This invocation stops
+at the sanctioned gates-unrun state, with result `partial` / `needs-work`.
+
+### US-004 — gate not run, 2026-09-22
+
+**Blocked on the owner gate; not complete.** Starting commit `bb29d87`,
+clean tracked worktree. No owner-authorized benchmark session or measured
+reference-container evidence was supplied. Missing prerequisites/evidence:
+
+- Completed US-005 vendoring: its Implementation Notes record `gate not run`;
+  `weights_manifest.json` still contains only the 22M entry and
+  `ALLOWED_MODEL_IDS` remains the one-member default set. There is no committed
+  86M pin/manifest entry or supplied verified mirror evidence to benchmark.
+- An owner-provisioned `HF_TOKEN` for approved gated-repository access, passed
+  only through the temporary mode-0600 `--env-file` recipe, with cleanup recorded.
+- Owner-confirmed Docker availability and the reference envelope for both
+  models at `FORAGE_CPUS=1` and `4`, with CPU/memory/thread settings and image
+  commit recorded, plus sufficient model-cache capacity and acquisition access.
+
+These prerequisites were not provisioned or verified here; this is not a claim
+that the host lacks Docker, resources or credentials. No credential values were
+inspected, no credential file was created, and no file-mode/deletion evidence is
+claimed. No image build, container run, model acquisition, tokenizer copy-out,
+health query or benchmark was attempted. US-005 observed no 403, so `access
+pending` is not an observed outcome; neither is `never healthy within 900 s`.
+
+All four required model/CPU rows remain **unmeasured**, including their health
+provenance, cold/warm latencies, budget dimensions, after-warm-up memory,
+`memory.peak`, OOM and exit records. Matrix wall-clock, 86M cold-start time,
+added volume size and all three real-tokenizer window counts per model are
+unmeasured. Optional 2-CPU runs and contiguity FPR smoke were not run. No result
+is inferred from hermetic tests, and the 900 MiB peak / 2x warm-p50 questions
+remain open.
+
+The gate-not-run branch requires an Implementation Notes-only tracked change:
+the sizing table, pending-vendoring configuration references, opt-in/acquisition
+documentation, benchmark config, model defaults and contiguity settings remain
+unchanged. No runtime, manifest, contract or sanitizer-revision input changes;
+no push, tag, release or publication occurred. Story definitions and acceptance
+checkboxes are untouched; this record does not complete either owner gate.
+
+Resume only after the owner completes US-005. Follow `docs/weights.md`'s
+two-fresh-service procedure: four model/CPU rows require eight containers and
+eight independent `--input 1w` / `--input budget` artifacts, paired only after
+provenance/configuration agreement. Preserve both outcomes and labelled
+per-input memory/peak/OOM/exit records, even on failure. Leave `VALKEY_URL` unset;
+confirm healthy/loaded readiness within the harness's 900-second bound.
+Run window-count confirmation and optional FPR probes after timed requests and
+memory readings, never before either process-cold sample. Populate the table,
+sizing/staleness lines and acquisition caveats only from that owner run.
+This invocation reports `partial` / `needs-work`, not benchmark success.
 
 ## Refinement Notes
 

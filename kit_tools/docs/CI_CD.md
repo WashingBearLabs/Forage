@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document build pipelines, deployment triggers, and automation. How code gets to production.
 
-> Last updated: 2026-09-17
-> Updated by: Claude (seed-project)
+> Last updated: 2026-09-23
+> Updated by: Copilot (hardening-release US-004)
 
 ---
 
@@ -214,10 +214,11 @@ See `kit_tools/testing/TESTING_GUIDE.md` for the suite's layout and current coun
 
 Runs with **no checkout** — it downloads the artifact into an empty working directory,
 `docker load`s it, asserts the loaded ID equals the recorded ID, then runs
-`docker history --no-trunc forage:ci` and greps the output for three patterns: the literal
+`docker history --no-trunc forage:ci` and greps the output for four patterns: the literal
 `HF_TOKEN` (the variable name the deleted bake path used), `hf_[A-Za-z0-9]{20,}` (the
-shape of a Hugging Face token), and the literal `FORAGE_BRAVE_API_KEY` (the Brave search
-credential's variable name — the name only, no key-shape regex). The set is pinned by
+shape of a Hugging Face token), `FORAGE_BRAVE_API_KEY` (Brave search), and
+`FORAGE_CACHE_HMAC_KEY` (cache signing). The latter two match credential variable
+names only, never key-shape regexes. The set is pinned by
 `tests/test_ci_workflow.py::_REQUIRED_GREP_PATTERNS`. Scope is layer *metadata* —
 build-arg, `ENV` and `RUN` lines — which is exactly where a build ARG lands and exactly
 what `docker history` reads back out of any registry. It is not a filesystem scanner.
@@ -258,7 +259,10 @@ which inverts the three PromptGuard-coupled checks — `status: healthy`, no
 `promptguard_unavailable`, `search_sanitization` present — and should raise
 `--timeout-seconds` for a cold weights fetch. The rule is which flag matches which
 container: `degraded` for one started with no token or weights, `healthy` for one started
-with them. When verifying a release image from a checkout other than its tag, `--anchor`
+with them and an operational cache. At contract 1.3.0 a Valkey-backed container also
+needs `FORAGE_CACHE_HMAC_KEY` in the runtime env file; unsigned Valkey remains
+`degraded: cache_unauthenticated` even with weights and connectivity.
+When verifying a release image from a checkout other than its tag, `--anchor`
 takes the file `git show vX.Y.Z:contract/openapi.yaml.sha256` prints — never a Release
 asset or the image's own copy.
 
@@ -307,11 +311,11 @@ Steps, in order:
    reference; the `linux/amd64` config's `rootfs.diff_ids` must equal `gated-layers.json`
    layer for layer, and the comparison is asserted non-vacuous. This is what makes the push
    a *release of the image the gates ran* rather than a rebuild that resembles it.
-7. **Published-config secret grep.** The same three patterns as `secret-grep` (`HF_TOKEN`,
-   `hf_[A-Za-z0-9]{20,}`, `FORAGE_BRAVE_API_KEY`), run over the published image config
+7. **Published-config secret grep.** The same four patterns as `secret-grep` (`HF_TOKEN`,
+   `hf_[A-Za-z0-9]{20,}`, `FORAGE_BRAVE_API_KEY`, `FORAGE_CACHE_HMAC_KEY`), run over the published image config
    JSON for all platforms.
 8. **On `v*` tags only — Release.** `CONTRACT_VERSION` is grepped out of the *tagged tree's*
-   `pipeline/contract.py` (currently `1.2.0`; a non-semver read fails the step), and the
+   `pipeline/contract.py` (currently `1.3.0`; a non-semver read fails the step), and the
    same step copies that version's **per-version entry** — its bullet at column 0 in the
    `CONTRACT_VERSION` docstring plus the two-space-indented lines under it — into
    `${RUNNER_TEMP}/contract-entry.md` with a POSIX `awk` program; an empty file (a contract
@@ -343,6 +347,9 @@ verified against GHCR afterwards rather than assumed: `v1.0.0` (commit `f4c2b16`
 minted `latest`, `1.0` and `1.0.0` at index digest `sha256:d83639cc…`, and `v1.1.0` (commit
 `06b01b14`, 2026-09-18 UTC) moved `latest` and minted `1.1` and `1.1.0` at `sha256:e1b875cc…`.
 `docs/releases.md` § "Released versions" carries the full digests, anchors and tagged commits.
+The current release, **v1.2.1 / contract 1.3.0**, published and passed
+artifact/runtime verification 2026-09-23. The archived US-003/US-005 handoff
+records the digest, alias equality and v1.2.0 withdrawal.
 
 ---
 
@@ -441,7 +448,7 @@ of those bytes. The same file also verifies the checker can fail (a committed
 un-regenerated twin under `tests/fixtures/contract/`), that rendering is byte-stable across
 `PYTHONHASHSEED`s, and that `/extract` is in the document even though the route is off by default.
 
-The anchor (`11435a17aabe7c11faf71aee0fd066a3784d5e9de557c451153e7f47d0d5615f` at HEAD) is
+The anchor (`74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72` at HEAD) is
 the trust root every other copy is verified against: `smoke` hashes the in-image copy
 against it, `publish` hashes the Release assets against it, and consumers verify the copy
 they vendor against the anchor *at the same tag*, never against another copy. Whether a
@@ -507,14 +514,17 @@ gh cache delete <id>                # delete each index-publish-* entry
 ## Cutting a Release and Rolling Back
 
 The git tag **is** the version (`pyproject.toml`'s `version` is inert packaging metadata),
-and the image tag and `contract_version` are independent semvers — image `v1.1.0` serves
-contract `1.2.0` (`v1.0.0` served `1.1.0`).
+and the image tag and `contract_version` are independent semvers:
+image `v1.2.1` serves contract `1.3.0`.
+
+The recorded cut below is historical; never re-run it for an existing tag.
+For the next release, choose a new version and repeat all owner gates.
 
 ```bash
 git switch main && git pull
-# confirm the six gates are green for the commit you are about to tag
-git tag v1.0.1
-git push origin v1.0.1
+# owner gate only: confirm authorization and all six gates for the merge commit
+git tag v1.2.1
+git push origin v1.2.1
 # then watch the run; publish is the last job
 ```
 
@@ -528,8 +538,11 @@ not a release.
 deploy stage to revert. Re-pin the previous tag in the consumer's compose file
 (`image: ghcr.io/washingbearlabs/forage:<previous>`) and `docker compose -f <file> up -d`.
 `kit_tools/docs/DEPLOYMENT.md` has the operator view, including the pull/pin/verify
-sequence and the note that the compose fragments in this repo pin `1.1.0`, published by
-`v1.1.0`.
+sequence. The compose fragments pin published and verified `1.2.1`.
+Its merge-to-publication window is closed; never restore withdrawn v1.2.0.
+Finalize withdrawal notices before deleting a tag: editing the old Release
+after deletion recreated its tag at `main` during this recovery.
+`docs/releases.md` records the corrected state and cancelled workflow.
 
 ---
 
@@ -549,7 +562,7 @@ Every cause below is one the workflow's own comments, `docs/releases.md`, or
 | `test` | `tests/test_sanitizer_revision.py` red (the named first step) | a hashed source or the model identity changed | if deliberate, update the pinned revision and record before/after in `docs/bootstrap-notes.md`; otherwise revert |
 | `test` | `tests/test_dockerfile.py` red | an `ARG`, a secret-shaped `ENV`, a lost digest pin, a second `FROM`, a missing `COPY` source | revert; the build takes no arguments, ever |
 | `test` | `tests/test_ci_workflow.py` red | unpinned action, widened permissions, `pull_request_target`, changed `needs:`/`if:` | restore the guarded property; the test names it |
-| `secret-grep` | `HF_TOKEN`, `hf_…` or `FORAGE_BRAVE_API_KEY` in `docker history` | a credential reached a build-arg, `ENV` or `RUN` line | remove it; secrets are runtime-only (`docs/configuration.md`) |
+| `secret-grep` | `HF_TOKEN`, `hf_…`, `FORAGE_BRAVE_API_KEY` or `FORAGE_CACHE_HMAC_KEY` in `docker history` | a credential reached a build-arg, `ENV` or `RUN` line | remove it; secrets are runtime-only (`docs/configuration.md`) |
 | `secret-grep` / `smoke` | loaded image ID differs from `image-id.txt` | artifact/identity mismatch | not a flake — investigate the artifact hand-off before re-running |
 | `smoke` | `/health` never reaches 200 within 120 s | the container did not bind (config error, import failure) | read the container log the job dumps on failure |
 | `smoke` | in-image contract sha256 or `info.version` mismatch | contract not re-exported, or `contract/` not copied | `uv run python -m scripts.export_contract`; check the `Dockerfile`'s `COPY contract/` line |

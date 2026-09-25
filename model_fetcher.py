@@ -19,7 +19,8 @@ their own idea of "verified".
 1. **Fail-closed on the manifest itself.** A missing, empty, unparseable or
    schema-invalid `weights_manifest.json` is a verification FAILURE, never
    "nothing to verify". The one thing worse than an unverified weight set is
-   an unverified weight set that reports as verified.
+   an unverified weight set that reports as verified. Entries are keyed by
+   model id; an entry defect refuses that model, never substitutes another.
 2. **Exact set.** Every file the manifest names must be present with the
    pinned size and sha256, and the snapshot must contain *nothing else*. A
    missing file, an extra file and a hash mismatch are the same class of
@@ -51,7 +52,8 @@ the next fetch re-link the same corrupt bytes and quarantine them again,
 forever.
 
 **Acquisition** (US-001). :func:`acquire_and_load` is the pipeline the service
-starts at boot: verify what the cache already holds → fetch the pinned revision
+starts at boot: require the selected model's manifest pin → verify the cache →
+fetch the pinned revision
 from Hugging Face if it cannot satisfy the pin → verify the download → load.
 Four properties are load-bearing:
 
@@ -59,12 +61,14 @@ Four properties are load-bearing:
    is `retrieval_app.lifespan`, through
    `asyncio.create_task(asyncio.to_thread(...))` — a task, not an `await`,
    because lifespan startup must *yield immediately*: uvicorn serves nothing
-   until it returns, and the compose healthcheck (10 s x 5 retries, no
-   `start_period`) would restart-loop the container while a ~270 MiB download
-   ran.
-2. **The revision is pinned**, to :data:`DEFAULT_MODEL_REVISION` unless
-   :data:`MODEL_REVISION_ENV_VAR` overrides it. An unpinned `main` turns any
-   upstream commit into "corruption" on the next start.
+   until it returns. Our compose liveness probe (`curl -fsS -o /dev/null`,
+   30 s interval, 5 s timeout, 3 retries, 30 s `start_period`) would report
+   unhealthy while a blocking ~270 MiB download ran; plain Compose does not
+   restart on that status. Health remains in the `/health` body.
+2. **The revision is pinned per model.** A shaped override is returned by the
+   resolver but refused by acquisition unless it equals that entry's pin.
+   Malformed overrides fall back loudly. :data:`DEFAULT_MODEL_REVISION` is
+   only the default model's hash fallback when its manifest is unavailable.
 3. **The cache tree is `$HF_HOME/hub`**, never `$HF_HOME` and never a
    `local_dir`. Both the download and the load are handed that directory
    explicitly (:func:`hub_cache_dir`), so the bytes that land are the bytes
@@ -133,10 +137,11 @@ import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from functools import cache
 from pathlib import Path
 from typing import Any, Final, Protocol, cast
 
-from promptguard.classifier import MODEL_ID
+from promptguard.classifier import DEFAULT_MODEL_ID
 
 logger = logging.getLogger(__name__)
 
@@ -173,14 +178,17 @@ XET_DIRNAME: Final = "xet"
 # revision + manifest + mirror tag move in one commit.
 DEFAULT_MODEL_REVISION: Final = "11614a155199674a0a95e6602d6ab0417b790ed0"
 
-# The five environment variables this module reads. Named constants rather
+# The six environment variables this module reads. Named constants rather
 # than inline literals so `tests/test_model_fetcher.py` can assert the whole
 # set from the AST — the manifest path, notably, is *not* among them.
+MODEL_ID_ENV_VAR: Final = "FORAGE_MODEL_ID"
 MODEL_REVISION_ENV_VAR: Final = "FORAGE_MODEL_REVISION"
 CACHE_ROOT_ENV_VAR: Final = "HF_HOME"
 HF_TOKEN_ENV_VAR: Final = "HF_TOKEN"
 MIRROR_ENV_VAR: Final = "FORAGE_WEIGHTS_MIRROR"
 MIRROR_TOKEN_ENV_VAR: Final = "FORAGE_MIRROR_TOKEN"
+
+ALLOWED_MODEL_IDS: frozenset[str] = frozenset({DEFAULT_MODEL_ID})
 
 # Where the weights live when nothing says otherwise — the Dockerfile's
 # `ENV HF_HOME=/app/model-cache`, restated so a bare `python -c` run outside
@@ -262,6 +270,8 @@ REASON_MANIFEST_UNREADABLE: Final = "manifest_unreadable"
 REASON_MANIFEST_EMPTY: Final = "manifest_empty"
 REASON_MANIFEST_UNPARSEABLE: Final = "manifest_unparseable"
 REASON_MANIFEST_INVALID: Final = "manifest_invalid"
+REASON_MANIFEST_MODEL_UNKNOWN: Final = "manifest_model_unknown"
+REASON_WEIGHTS_REVISION_UNPINNED: Final = "weights_revision_unpinned"
 REASON_MANIFEST_DISALLOWED_FORMAT: Final = "manifest_disallowed_format"
 REASON_SNAPSHOT_MISSING: Final = "snapshot_missing"
 REASON_FILE_MISSING: Final = "file_missing"
@@ -311,6 +321,7 @@ _MANIFEST_REASONS: Final = frozenset(
         REASON_MANIFEST_EMPTY,
         REASON_MANIFEST_UNPARSEABLE,
         REASON_MANIFEST_INVALID,
+        REASON_MANIFEST_MODEL_UNKNOWN,
         REASON_MANIFEST_DISALLOWED_FORMAT,
     }
 )
@@ -565,8 +576,9 @@ def _is_safe_relative_path(path: str) -> bool:
 
 def _load_manifest(
     manifest_path: Path,
+    model_id: str = DEFAULT_MODEL_ID,
 ) -> tuple[WeightsManifest | None, tuple[VerificationFailure, ...]]:
-    """Read and validate the manifest. Every failure mode is a refusal."""
+    """Validate the document and the selected model only; never use another pin."""
     try:
         raw_text = manifest_path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -588,12 +600,21 @@ def _load_manifest(
         return None, (VerificationFailure(REASON_MANIFEST_INVALID, "root"),)
     document = cast("dict[str, Any]", parsed)
 
-    model_id = document.get("model_id")
-    revision = document.get("revision")
-    files = document.get("files")
-    if not isinstance(model_id, str) or _MODEL_ID_RE.match(model_id) is None:
+    models = document.get("models")
+    if not isinstance(models, dict):
+        return None, (VerificationFailure(REASON_MANIFEST_INVALID, "models"),)
+    models = cast("dict[str, Any]", models)
+    if any(_MODEL_ID_RE.fullmatch(key) is None for key in models):
         return None, (VerificationFailure(REASON_MANIFEST_INVALID, "model_id"),)
-    if not isinstance(revision, str) or _REVISION_RE.match(revision) is None:
+    if model_id not in models:
+        return None, (VerificationFailure(REASON_MANIFEST_MODEL_UNKNOWN),)
+    selected = models[model_id]
+    if not isinstance(selected, dict):
+        return None, (VerificationFailure(REASON_MANIFEST_INVALID, "model"),)
+    selected = cast("dict[str, Any]", selected)
+    revision = selected.get("revision")
+    files = selected.get("files")
+    if not isinstance(revision, str) or _REVISION_RE.fullmatch(revision) is None:
         return None, (VerificationFailure(REASON_MANIFEST_INVALID, "revision"),)
     if not isinstance(files, list):
         return None, (VerificationFailure(REASON_MANIFEST_INVALID, "files"),)
@@ -628,6 +649,22 @@ def _load_manifest(
         ),
         (),
     )
+
+
+@cache
+def _manifest_entry(
+    manifest_path: Path, model_id: str
+) -> tuple[WeightsManifest | None, tuple[VerificationFailure, ...]]:
+    """Read each immutable committed entry once, including failures."""
+    manifest, failures = _load_manifest(manifest_path, model_id)
+    if manifest is None and model_id == DEFAULT_MODEL_ID:
+        reason = failures[0].reason if failures else REASON_MANIFEST_INVALID
+        if reason == REASON_MANIFEST_MODEL_UNKNOWN:
+            reason = REASON_MANIFEST_MISSING
+        elif reason == REASON_MANIFEST_DISALLOWED_FORMAT:
+            reason = REASON_MANIFEST_INVALID
+        logger.warning("manifest_pin_unavailable — reason=%s", reason)
+    return manifest, failures
 
 
 # ---------------------------------------------------------------------------
@@ -766,6 +803,8 @@ def verify_weights(
     *,
     manifest_path: Path | str = MANIFEST_PATH,
     metrics: ModelMetrics | None = None,
+    model_id: str = DEFAULT_MODEL_ID,
+    revision: str | None = None,
 ) -> VerificationResult:
     """Verify the cached weight set against the committed manifest.
 
@@ -776,7 +815,9 @@ def verify_weights(
     for fixtures; production always takes the :data:`MANIFEST_PATH` default.
 
     *cache_root* is ``$HF_HOME`` — the directory holding ``hub/``, not
-    ``hub/`` itself.
+    ``hub/`` itself. *model_id* selects exactly one entry; *revision* defaults
+    to that model's resolved revision. A revision outside its committed pin is
+    refused before looking up a snapshot, without quarantining any model.
 
     On success the returned :class:`VerificationResult` has ``ok`` true and no
     failures. On failure it carries every reason found (not just the first),
@@ -787,12 +828,23 @@ def verify_weights(
     metrics = metrics if metrics is not None else ModelMetrics()
     root = Path(cache_root)
 
-    manifest, manifest_failures = _load_manifest(Path(manifest_path))
+    manifest, manifest_failures = _manifest_entry(Path(manifest_path), model_id)
     if manifest is None:
         return _refuse(manifest_failures, metrics, manifest=None)
 
+    revision = (
+        resolve_revision(model_id, manifest_path=manifest_path)
+        if revision is None
+        else revision
+    )
+    if revision != manifest.revision:
+        return _refuse(
+            (VerificationFailure(REASON_WEIGHTS_REVISION_UNPINNED),),
+            metrics,
+            manifest=manifest,
+        )
     repo_dir = root / HUB_DIRNAME / repo_dirname(manifest.model_id)
-    snapshot_dir = snapshot_path(root, manifest.model_id, manifest.revision)
+    snapshot_dir = snapshot_path(root, model_id, revision)
     if not snapshot_dir.is_dir():
         return _refuse(
             (VerificationFailure(REASON_SNAPSHOT_MISSING, manifest.revision),),
@@ -879,11 +931,28 @@ def _refuse(
 # ---------------------------------------------------------------------------
 
 
-def resolve_revision() -> str:
+class ModelConfigurationError(ValueError):
+    """Raised at boot when the configured model is not allowlisted."""
+
+
+def resolve_model_id() -> tuple[str, bool]:
+    """Resolve the selected model, leaving refusal to the lifespan alone."""
+    configured = os.environ.get(MODEL_ID_ENV_VAR, "").strip() or DEFAULT_MODEL_ID
+    if configured in ALLOWED_MODEL_IDS:
+        return configured, True
+    logger.warning("model_id_not_allowed")
+    return DEFAULT_MODEL_ID, False
+
+
+def resolve_revision(
+    model_id: str = DEFAULT_MODEL_ID, *, manifest_path: Path | str | None = None
+) -> str:
     """Return the revision to fetch, verify and load.
 
-    :data:`DEFAULT_MODEL_REVISION` unless :data:`MODEL_REVISION_ENV_VAR` names
-    another commit sha. The shape is validated because the value is
+    A shaped override, then the selected manifest pin, then the default model's
+    fallback pin or ``unpinned`` for any other model. This is total: acquisition
+    refuses unpinned overrides, but the revision hash records them honestly.
+    The override's shape is validated because the value is
     interpolated into a filesystem path and because a branch name is not a pin:
     a movable ``main`` turns the next upstream commit into "corruption" on the
     following start. An unusable override falls back to the committed pin
@@ -891,16 +960,20 @@ def resolve_revision() -> str:
     heading for a log line.
     """
     configured = os.environ.get(MODEL_REVISION_ENV_VAR, "").strip()
-    if not configured:
-        return DEFAULT_MODEL_REVISION
-    if _REVISION_RE.match(configured) is None:
+    if configured and _REVISION_RE.fullmatch(configured) is not None:
+        return configured
+    if configured:
         logger.error(
             "model_revision_invalid — %s must be a 40-character commit sha; "
             "falling back to the committed pin",
             MODEL_REVISION_ENV_VAR,
         )
-        return DEFAULT_MODEL_REVISION
-    return configured
+    manifest, _failures = _manifest_entry(
+        MANIFEST_PATH if manifest_path is None else Path(manifest_path), model_id
+    )
+    if manifest is not None:
+        return manifest.revision
+    return DEFAULT_MODEL_REVISION if model_id == DEFAULT_MODEL_ID else "unpinned"
 
 
 def resolve_cache_root() -> Path:
@@ -923,15 +996,17 @@ def _resolve_token() -> str | None:
 
 def read_manifest_pin(
     manifest_path: Path | str = MANIFEST_PATH,
+    *,
+    model_id: str = DEFAULT_MODEL_ID,
 ) -> WeightsManifest | None:
     """Return the committed pin, or ``None`` if the manifest cannot supply one.
 
-    A reader, not a verifier — it opens no weight file and logs nothing, so a
+    A memoised reader, not a verifier — it opens no weight file, so a
     caller can ask "could this manifest bless anything?" before spending a
     ~270 MiB download to find out. :func:`verify_weights` remains the single
     entry point for deciding whether a *weight set* is acceptable.
     """
-    manifest, _failures = _load_manifest(Path(manifest_path))
+    manifest, _failures = _manifest_entry(Path(manifest_path), model_id)
     return manifest
 
 
@@ -1069,6 +1144,7 @@ class SupportsWeightLoad(Protocol):
     def load(
         self,
         *,
+        model_id: str | None = None,
         revision: str | None = None,
         cache_dir: Path | str | None = None,
         local_files_only: bool = False,
@@ -1079,6 +1155,7 @@ class SupportsWeightLoad(Protocol):
 
 def _download_from_hub(
     *,
+    model_id: str,
     revision: str,
     cache_root: Path,
     token: str,
@@ -1105,7 +1182,7 @@ def _download_from_hub(
     started_at = time.monotonic()
     try:
         snapshot_download(
-            MODEL_ID,
+            model_id,
             revision=revision,
             cache_dir=hub_cache_dir(cache_root),
             allow_patterns=list(ALLOW_PATTERNS),
@@ -1410,7 +1487,11 @@ def _fetch_from_mirror(
         # The same verifier, against the staged copy, *before* anything is
         # installed: unverified bytes never enter the tree the loader scans.
         verified = verify_weights(
-            staged_root, manifest_path=manifest_path, metrics=metrics
+            staged_root,
+            manifest_path=manifest_path,
+            metrics=metrics,
+            model_id=manifest.model_id,
+            revision=revision,
         )
         if not verified.ok:
             return OUTCOME_REFUSED
@@ -1475,7 +1556,9 @@ def _load_verified(
     classifier: SupportsWeightLoad,
     *,
     cache_root: Path,
+    model_id: str,
     revision: str,
+    manifest_path: Path,
 ) -> bool:
     """Load the just-verified snapshot, from disk only.
 
@@ -1486,9 +1569,19 @@ def _load_verified(
     header-building telemetry call that flag does not cover — so a warm start
     makes **zero** network attempts rather than one swallowed one.
     """
+    manifest, _failures = _manifest_entry(manifest_path, model_id)
+    if manifest is None:
+        logger.error("model_identity_mismatch")
+        return False
+    verified_path = snapshot_path(cache_root, model_id, manifest.revision)
+    resolved_path = snapshot_path(cache_root, model_id, revision)
+    if verified_path != resolved_path or not resolved_path.is_dir():
+        logger.error("model_identity_mismatch")
+        return False
     started_at = time.monotonic()
     with _offline_hub():
         loaded = classifier.load(
+            model_id=model_id,
             revision=revision,
             cache_dir=hub_cache_dir(cache_root),
             local_files_only=True,
@@ -1511,6 +1604,7 @@ def _load_verified(
 def _verify_cached(
     *,
     cache_root: Path,
+    model_id: str,
     revision: str,
     manifest_path: Path,
     metrics: ModelMetrics,
@@ -1522,14 +1616,21 @@ def _verify_cached(
     ERROR on every first boot, which is exactly the cry-wolf that makes a real
     refusal unreadable.
     """
-    if not snapshot_path(cache_root, MODEL_ID, revision).is_dir():
+    if not snapshot_path(cache_root, model_id, revision).is_dir():
         return None
-    return verify_weights(cache_root, manifest_path=manifest_path, metrics=metrics)
+    return verify_weights(
+        cache_root,
+        manifest_path=manifest_path,
+        metrics=metrics,
+        model_id=model_id,
+        revision=revision,
+    )
 
 
 def acquire_and_load(
     classifier: SupportsWeightLoad,
     *,
+    model_id: str | None = None,
     cache_root: Path | str | None = None,
     revision: str | None = None,
     manifest_path: Path | str | None = None,
@@ -1537,7 +1638,8 @@ def acquire_and_load(
 ) -> bool:
     """Bring *classifier* to loaded, fetching the pinned weights if needed.
 
-    The boot pipeline, in order: verify what is cached (skipping the fetch
+    The boot pipeline, in order: validate the selected manifest entry and pin,
+    then verify what is cached (skipping the fetch
     entirely when it already satisfies the pin) → **Hugging Face** → **the
     GHCR mirror** → give up loudly. Each source is verified before it is
     loaded, and a source that fails hands over to the next. Returns whether
@@ -1553,17 +1655,19 @@ def acquire_and_load(
     exception would surface only as a stray "Task exception was never
     retrieved" at interpreter shutdown. Every failure is a logged ``False``.
 
-    *cache_root*, *revision* and *manifest_path* default to the environment and
-    the committed constants; they are parameters so a test can drive the whole
-    pipeline without one, not a configuration surface.
+    *model_id* defaults to :data:`DEFAULT_MODEL_ID`; *revision* resolves for
+    that model. *cache_root* and *manifest_path* default to the environment and
+    the committed path. Explicit parameters let fixtures drive the same path.
     """
     metrics = metrics if metrics is not None else ModelMetrics()
     root = Path(cache_root) if cache_root is not None else resolve_cache_root()
+    model_id = DEFAULT_MODEL_ID if model_id is None else model_id
     try:
         return _acquire_and_load(
             classifier,
             cache_root=root,
-            revision=revision if revision is not None else resolve_revision(),
+            model_id=model_id,
+            revision=revision,
             manifest_path=(
                 MANIFEST_PATH if manifest_path is None else Path(manifest_path)
             ),
@@ -1587,38 +1691,57 @@ def _acquire_and_load(
     classifier: SupportsWeightLoad,
     *,
     cache_root: Path,
-    revision: str,
+    model_id: str,
+    revision: str | None,
     manifest_path: Path,
     metrics: ModelMetrics,
 ) -> bool:
     """The acquisition pipeline proper. See :func:`acquire_and_load`."""
+    manifest, failures = _manifest_entry(manifest_path, model_id)
+    if manifest is None:
+        _refuse(failures, metrics, manifest=None)
+        if REASON_MANIFEST_MODEL_UNKNOWN not in {
+            failure.reason for failure in failures
+        }:
+            logger.error(
+                "weights_pin_unusable — %s pins no verifiable file set, so a "
+                "download could never be blessed; refusing to fetch",
+                manifest_path,
+            )
+        return False
+    revision = (
+        resolve_revision(model_id, manifest_path=manifest_path)
+        if revision is None
+        else revision
+    )
+    if revision != manifest.revision:
+        _refuse(
+            (VerificationFailure(REASON_WEIGHTS_REVISION_UNPINNED),),
+            metrics,
+            manifest=manifest,
+        )
+        return False
     cached = _verify_cached(
         cache_root=cache_root,
+        model_id=model_id,
         revision=revision,
         manifest_path=manifest_path,
         metrics=metrics,
     )
     if cached is not None:
         if cached.ok:
-            return _load_verified(classifier, cache_root=cache_root, revision=revision)
+            return _load_verified(
+                classifier,
+                cache_root=cache_root,
+                model_id=model_id,
+                revision=revision,
+                manifest_path=manifest_path,
+            )
         if cached.manifest_failure:
             # The refusal is ours, not the weight set's. Another download
             # cannot fix a manifest that blesses nothing, and neither can
             # another source — this is one cause and it gets one message.
             return False
-
-    manifest = read_manifest_pin(manifest_path)
-    if manifest is None:
-        # Checked before any source is tried, and before the token, for two
-        # reasons: a pin that blesses nothing could never accept ~270 MiB from
-        # anywhere, and "no HF_TOKEN" on top of it would send an operator
-        # looking for a credential they do not need.
-        logger.error(
-            "weights_pin_unusable — %s pins no verifiable file set, so a "
-            "download could never be blessed; refusing to fetch",
-            manifest_path,
-        )
-        return False
 
     attempts: list[str] = []
     attempted_any = False
@@ -1636,7 +1759,13 @@ def _acquire_and_load(
             # A verified set is on disk. A loader that then refuses it is a
             # different fault entirely (`weights_load_failed`, already logged)
             # and another source would not help.
-            return _load_verified(classifier, cache_root=cache_root, revision=revision)
+            return _load_verified(
+                classifier,
+                cache_root=cache_root,
+                model_id=model_id,
+                revision=revision,
+                manifest_path=manifest_path,
+            )
         if outcome in _SKIP_OUTCOMES:
             continue
         attempted_any = True
@@ -1699,6 +1828,7 @@ def _try_source(
         return OUTCOME_SKIPPED_NO_TOKEN
 
     outcome = _download_from_hub(
+        model_id=manifest.model_id,
         revision=revision,
         cache_root=cache_root,
         token=token,
@@ -1706,7 +1836,13 @@ def _try_source(
     )
     if outcome != OUTCOME_OK:
         return outcome
-    verified = verify_weights(cache_root, manifest_path=manifest_path, metrics=metrics)
+    verified = verify_weights(
+        cache_root,
+        manifest_path=manifest_path,
+        metrics=metrics,
+        model_id=manifest.model_id,
+        revision=revision,
+    )
     return OUTCOME_OK if verified.ok else OUTCOME_REFUSED
 
 
@@ -1774,12 +1910,14 @@ class WeightAcquisition:
         self,
         classifier: SupportsWeightLoad,
         *,
+        model_id: str | None = None,
         metrics: ModelMetrics | None = None,
         cache_root: Path | str | None = None,
         revision: str | None = None,
         manifest_path: Path | str | None = None,
     ) -> None:
         self._classifier = classifier
+        self._model_id = model_id
         self._metrics = metrics if metrics is not None else ModelMetrics()
         self._cache_root = cache_root
         self._revision = revision
@@ -1830,6 +1968,7 @@ class WeightAcquisition:
             return await asyncio.to_thread(
                 acquire_and_load,
                 self._classifier,
+                model_id=self._model_id,
                 cache_root=self._cache_root,
                 revision=self._revision,
                 manifest_path=self._manifest_path,

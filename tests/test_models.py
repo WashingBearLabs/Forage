@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, get_args, get_origin
 
 import pytest
 from pydantic import ValidationError
@@ -28,6 +29,13 @@ from pipeline.contract import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _contains_mapping(annotation: object) -> bool:
+    origin = get_origin(annotation) or annotation
+    return (isinstance(origin, type) and issubclass(origin, Mapping)) or any(
+        _contains_mapping(arg) for arg in get_args(annotation)
+    )
 
 
 def _search_result(**overrides: object) -> SearchResult:
@@ -185,13 +193,20 @@ class TestRetrievedContent:
 class TestRetrieveRequest:
     """Test the ``RetrieveRequest`` model."""
 
+    def test_validation_locations_have_no_caller_named_keys(self) -> None:
+        assert RetrieveRequest.model_config.get("extra") != "forbid"
+        assert not any(
+            _contains_mapping(field.annotation)
+            for field in RetrieveRequest.model_fields.values()
+        )
+
     def test_defaults(self) -> None:
         req = RetrieveRequest(url="https://example.com")
         assert req.extract_mode == "summary"
         assert req.trusted_domains == []
         assert req.verified_domains == []
         assert req.blocked_domains == []
-        assert req.promptguard_threshold == 0.85
+        assert req.promptguard_threshold is None
         assert req.cache_ttl_hours == 24
 
     def test_custom_domains(self) -> None:
@@ -260,9 +275,17 @@ class TestRetrieveRequest:
 class TestSearchRequest:
     """Test the ``SearchRequest`` model."""
 
+    def test_validation_locations_have_no_caller_named_keys(self) -> None:
+        assert SearchRequest.model_config.get("extra") != "forbid"
+        assert not any(
+            _contains_mapping(field.annotation)
+            for field in SearchRequest.model_fields.values()
+        )
+
     def test_defaults(self) -> None:
         req = SearchRequest(query="python pydantic")
         assert req.num_results == 5
+        assert req.promptguard_threshold is None
         assert req.promptguard_fail_closed is True
         assert req.providers == []
         assert req.allow_paid_fallback is True

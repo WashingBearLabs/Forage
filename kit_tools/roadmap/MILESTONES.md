@@ -1,14 +1,16 @@
 <!-- Template Version: 2.0.0 -->
 # Milestones
 
-> Last updated: 2026-09-19
-> Updated by: Claude (plan-epic forage-hardening)
+> Last updated: 2026-09-23
+> Updated by: Copilot (authorized replacement release)
 
-**Current target:** Forage `v1.2.0` — the hardened image (`epic-forage-hardening`, T2.2):
+**Current release:** Forage `v1.2.1` — the hardened image (`epic-forage-hardening`, T2.2):
 `/retrieve` parity, search-text and URL audit in attacker-controlled forms, signed cache
-entries, bounded providers, an operator-sizable envelope, and Prompt Guard 2 86M as an
-opt-in — at contract **1.3.0**.
-**Status:** Planned (2026-09-19; `/kit-tools:validate-epic forage-hardening` next)
+entries, bounded providers, an operator-sizable envelope, and model-selection tooling
+at contract **1.3.0**. The 86M owner gates remain unrun; only 22M is allowlisted.
+**Status:** Shipped and verified (2026-09-23). v1.2.0 was withdrawn after its
+default-model failure. [Handoff](../specs/archive/feature-hardening-release.md).
+Next plannable work: `epic-forage-injection-corpus` (T2.3).
 
 `v1.0.0` (extraction epic) and `v1.1.0` (search providers) are done below. The Poppy halves
 of both families (consuming the pinned image, the policy UI, the trust boundary) execute in
@@ -49,12 +51,14 @@ Poppy.
 
 ## Should Have (P1)
 
-- [ ] **v1.2.0 / T2.2 Forage hardening** (`epic-forage-hardening`, planned 2026-09-19, eight
+- [x] **v1.2.1 / T2.2 Forage hardening** (`epic-forage-hardening`, shipped 2026-09-23, eight
       specs) — search-text and URL scanning in wire form, `/retrieve` budgets and isolation,
       dot-boundary hostname matching, `FORAGE_CACHE_HMAC_KEY` cache integrity, provider body /
       timeout / query bounds, `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` envelope, `FORAGE_MODEL_ID`
-      with contiguity gating, contract `1.2.0` → `1.3.0`. Two human gates: the PromptGuard
-      benchmark run (spec 7 US-004) and the `v1.2.0` cut (spec 8 US-003). See
+      with contiguity gating, contract `1.2.0` → `1.3.0`. Four owner-executed stories:
+      86M vendoring (spec 7 US-005), benchmark (spec 7 US-004), the replacement
+      cut (spec 8 US-003), and verification/handoff (spec 8 US-005). The first
+      two have explicit gate-not-run records; release and verification completed. See
       `../specs/epic-forage-hardening.md`.
 - [x] **Optional cache** (`feature-forage-cache-fallback`) — bounded in-memory backend
       when `VALKEY_URL` is unset (healthy), while configured-but-unreachable stays
@@ -89,8 +93,9 @@ Poppy.
 
 Poppy pins the published images and deletes its in-tree copy (both specs execute in
 Poppy). Once that lands, the coexistence rule ends and this repo becomes the sole source
-of truth. Forage-side sequence after `v1.1.0`: `epic-forage-hardening` (`v1.2.0`, planned
-above), then `epic-forage-injection-corpus` (T2.3, planned 2026-09-19 — five specs, 21 stories, two
-owner gates for the cassette recordings; it measures what the hardening epic builds and ships no
-runtime change, so it cuts no release of its own), then the T3 items (additional providers, provenance hooks) and the
+of truth. Forage-side sequence after `v1.1.0`: `epic-forage-hardening` (`v1.2.1`, shipped
+2026-09-23), then `epic-forage-injection-corpus` (T2.3, planned and validated 2026-09-19 — five
+specs, 21 stories, two owner gates for the cassette recordings; it measures what the hardening
+epic builds and ships no runtime change, so it cuts no release of its own; anchors need
+re-verification against the shipped tree before execution), then the T3 items (additional providers, provenance hooks) and the
 deferred `forage/` package rename.

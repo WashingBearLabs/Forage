@@ -24,31 +24,226 @@ Written by `feature-forage-model-bootstrap` US-003.
 
 ---
 
-## The three places the revision appears — and the rule about them
+## Label metadata and the verified default
+
+The pinned 22M config at `11614a155199674a0a95e6602d6ab0417b790ed0`
+omits `id2label` and `label2id`. Transformers supplies the binary defaults
+`LABEL_0` / `LABEL_1`, not BENIGN/INJECTION. The classifier recognizes those
+defaults **only for that exact model/revision pair** and uses index 1.
+This follows Meta's [Prompt Guard 2 inference implementation](https://github.com/meta-llama/PurpleLlama/blob/9a3d175adefaafe660ccdf6c92769fbcd923482e/LlamaFirewall/src/llamafirewall/scanners/promptguard_utils.py),
+which takes the last class probability as the attack score; an offline probe
+of our verified 22M weights confirms low benign and high injection scores.
+Named BENIGN/INJECTION configs still derive the index from their labels.
+Unknown pins and unexpected generic mappings remain unavailable, not guessed.
+
+When re-vendoring, verify the actual label semantics and update the pinned
+mapping deliberately. `tests/fixtures/promptguard_22m_config/config.json` is
+the genuine 870-byte metadata file, not weights; its regression checks the
+committed manifest hash and uses real offline `AutoConfig` resolution.
+Run a weights-loaded image smoke **before cutting any replacement release**;
+weights-free CI cannot establish loaded-model readiness. v1.2.0's post-cut
+failure is recorded in [`releases.md`](releases.md#withdrawn-tags).
+
+## Benchmarking the classifier
+
+`scripts/bench_promptguard.py` runs **on the host against a running service**, not
+against a bare Python classifier. **`bench/config.yaml` enables the release-gated
+upload route on a throwaway, loopback-bound container; it must never be a deployment
+config.** It is the complete shipped config with only `extract_route_enabled`
+changed to `true`. Neither the harness nor `bench/` enters the image/build context,
+and neither Compose fragment mounts this file. Do not expose port 8020 publicly.
+
+The owner starts a **separate fresh benchmark container for each input** with the
+selected model's verified cache, mounts
+`-v "$PWD/bench/config.yaml:/app/config.yaml:ro"`, and binds
+`-p 127.0.0.1:8020:8020`. Use the same image commit, model manifest revision and
+recorded CPU/memory/thread settings for comparisons. Credentials belong only in a
+mode-0600 `--env-file`, never build arguments or inline token flags. Leave
+`VALKEY_URL` unset so an unrelated cache cannot prevent readiness. This tooling
+does not run the owner gates, vendor weights, enable 86M, or supply measurements.
+
+Copy the selected model's tokenizer snapshot from the verified shared volume to
+`bench/tokenizer-<label>/`, dereferencing the hub's blob symlinks. Use the snapshot
+at `hub/models--<org>--<model>/snapshots/<manifest revision>`, not another model or
+revision. Only tokenizer files are loaded on the host, offline with
+`local_files_only=True`; no host classifier is loaded. The required `--input`
+selects `1w` or `budget`; a single invocation never posts the other input. **Do not
+run both invocations against the same process.** Before each invocation, start a
+fresh service and send no earlier `/extract`, `/retrieve` or `/search` requests;
+`/health` reads and tokenizer copy-out do not run inference. Give the harness
+exclusive use of that process. The harness cannot attest to traffic sent by
+another client.
+
+For example, after building `forage:bench` from the recorded commit and preparing
+the verified tokenizer copy, prepare a mode-0600 credential file containing only
+`HF_TOKEN`, hold its path in `$f`, and delete it after the matrix. Do not paste its
+contents into commands or the record. The owner runs this from the checkout.
+The container is **created inside** the loop, never reused between inputs.
+Keep these output paths fresh.
+This is an owner-gate recipe, not a command run by this story:
+
+```bash
+uv run python -m scripts.bench_promptguard --help
+for input in 1w budget; do
+  container="bench-22m-1-$input"
+  docker run -d --name "$container" --cpus 1 --memory 1024m \
+    --env-file "$f" -e FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-22M \
+    -e FORAGE_CPUS=1 -v forage-model-cache:/app/model-cache \
+    -v "$PWD/bench/config.yaml:/app/config.yaml:ro" \
+    -p 127.0.0.1:8020:8020 forage:bench || break
+  bench_exit=0
+  uv run python -m scripts.bench_promptguard \
+    --input "$input" --tokenizer-dir bench/tokenizer-22m \
+    --model-id meta-llama/Llama-Prompt-Guard-2-22M \
+    --base-url http://127.0.0.1:8020 --container "$container" \
+    --label 22m-cpus1 --runs 20 --json "bench/22m-1-$input.json" \
+    || bench_exit=$?
+  printf '%s benchmark exit: %s\n' "$input" "$bench_exit"
+  docker inspect --format '{{.State.OOMKilled}} {{.State.ExitCode}}' "$container"
+  docker exec "$container" cat /sys/fs/cgroup/memory.peak \
+    || printf '%s memory.peak: n/a\n' "$input"
+  docker rm -f "$container" || break
+done
+```
+
+The snapshot must already exist before invocation. The harness waits up to
+`--health-timeout-seconds` (900 by default), polling every 5 seconds, and requires
+both `status: healthy` and `promptguard_loaded: true` in the returned `/health`
+body. Merely answering 200 is not readiness. `--model-id` defaults to 22M and must
+equal `/health.promptguard_model`. That field is **configuration, not proof of
+loaded weights**: each written row also carries the loaded flag, sanitizer
+revision and contract version. Matching the CLI id does not authenticate arbitrary
+local tokenizer files; copying the correct verified snapshot remains the owner's
+responsibility.
+
+Two deterministic, fixed-seed synthetic word sequences are sized with that
+tokenizer's `encode(..., add_special_tokens=False)`: one window, and the longest
+whole-word prefix under **both** the upload character ceiling and its real window
+budget. The budget comes from the committed benchmark config, not a guessed
+characters-per-token ratio. The row records actual `budget_tokens`,
+`budget_windows` and `budget_chars`; different tokenizers can produce different
+documents. Inputs contain no third-party text or host-local fixture URLs.
+
+Each invocation sends one process-cold request for the selected input
+(`cold_ms_1w` or `cold_ms_budget`), followed by `--runs` warm requests, sequentially:
+21 requests at the default 20 runs. Two fresh processes produce the pair (42
+requests total). **Both cold fields mean the first inference request after
+service-process start, never merely first-for-input.** Only health GETs precede
+that POST inside the harness; it sends no inference warm-up or probe. Startup,
+weight download and model loading duration are separate, and "cold" does not
+imply an empty OS disk cache. Latency is host wall-clock milliseconds, including
+multipart HTTP and the full `/extract` pipeline (`extract_mode=full`), with a 300-second
+`--timeout-seconds` default per POST. GETs use the shared smoke driver's fixed
+10-second request timeout. The table measures **single-in-flight latency**,
+`concurrency: 1`, and does not characterise behaviour at
+`classification_concurrency > 1` or throughput under load.
+
+Warm p50/p95 use nearest rank, excluding the first request. Positive run counts
+below five are accepted; p95 is then `null`. `samples_collected` is an object
+with `1w` and `budget` arrays of successful durations in milliseconds: first/cold
+sample first, then warm samples in request order. The unselected input's array
+stays empty and **all three of its latency fields are null**, not zero or values
+copied from another run; the fixed JSON key set is unchanged. The budget dimensions
+are generated and reported in either mode. Interrupted warm batches retain
+their raw samples but publish null percentiles. JSON is printed to stdout and also
+written to `--json` when given; stderr is diagnostics only. Outputs and tokenizer
+snapshots are gitignored.
+
+| Exit / result | Meaning |
+|---|---|
+| 0, `outcome: ok` | The selected input's loop completed. The other input is unmeasured; optional memory readings can still be null. |
+| 2, no row or new JSON file | Invalid arguments (including missing `--input`)/tokenizer/config, `never_healthy`, `model_mismatch`, missing health provenance, or first-request connection/timeout/non-2xx. A 404 names the missing `bench/config.yaml` mount. The selected input's first request refused with 422 `content_too_large_to_classify` is `tokenizer_mismatch`; recopy the correct snapshot and check the mount. |
+| 1, failure row | After a successful sample: `non_2xx`, `timeout`, or `container_gone` (lost HTTP transport, or an exited/dead container confirmed after timeout). Keep this row in the matrix; do not silently exclude it. `non_2xx_reason` retains only recognized, content-free 422 reasons, otherwise null. |
+| 1, stdout row plus `json_write_failed` | The requested file could not be written; the measurement remains on stdout. |
+
+The live upload error schema uses `error: content_too_large_to_classify` plus a
+fixed human-readable `reason`; the harness recognizes that shape and token-shaped
+reasons without printing arbitrary response bodies, command output or exceptions.
+Configuration failures do not overwrite an existing output file: use a fresh path
+per run and check the exit status rather than mistaking an older file for a new row.
+
+**Memory is after warm-up, not peak** (or after interruption on a failure row).
+`cgroup_mem_mib` and `oom_proximity_ratio` come from `/metrics.extraction`;
+null is valid outside a readable cgroup. Optional `--container` adds
+`docker stats --no-stream` as `container_mem_mib`, a cross-check with potentially
+different accounting. Omission, failure or unparseable stats logs one WARNING and
+leaves that field null, without invalidating latency. Missing/malformed metrics
+also warn rather than inventing zero. No value here claims peak RSS.
+The owner gate separately records `memory.peak` where available and the narrow
+`docker inspect --format '{{.State.OOMKilled}} {{.State.ExitCode}}' <container>`
+result, including for runs that never became healthy. Never paste full inspect
+output: it includes the runtime environment.
+
+### Assembling the owner matrix from the two fresh-service runs
+
+For each model/CPU row in US-004, retain **both** JSON files and the two containers'
+exit/OOM/peak records. Use `bench/<model>-<cpus>-1w.json` for the three `*_1w`
+latency columns and `bench/<model>-<cpus>-budget.json` for the three `*_budget`
+columns. Null fields for the other input are intentionally unmeasured; never
+replace a measured field with its counterpart's null or treat null as zero.
+Compare `label`, `model_id`, `promptguard_model`, `sanitizer_revision`,
+`contract_version`, `runs`, `concurrency` and the three budget dimensions before
+pairing, and require `promptguard_loaded: true` on both available rows. Record the
+same image commit, manifest revision, CPU/memory/thread settings and benchmark
+config for both processes. If provenance differs, do not combine them.
+
+The downstream table keeps its one row per model/CPU pair and its process-cold
+column meanings. In its memory-after-warm-up, `memory.peak`, OOMKilled and exit-code
+cells, record **labelled `1w` / `budget` pairs**, not a cross-run average or a claimed
+combined peak. Record each input's outcome, including partial rows. If one
+invocation exits 2 with no JSON (for example, a first budget request times out),
+keep the other input's measurements and enter the missing input's diagnostic by
+hand; do not discard the whole matrix row or reuse a stale file. A mid-loop
+failure similarly keeps its partial row and does not erase the other run.
+
+US-004 therefore needs **eight fresh containers and eight harness invocations**
+for its four required model/CPU rows (twelve for six rows if 2 CPUs are added),
+not one process per row. Total request count remains 42 per successful pair at
+20 warm runs; total wall-clock includes two readiness waits. Run window-count
+confirmation and optional FPR probes **after** the timed harness and memory/peak
+readings, never before a cold sample. No matrix measurements or gate completion
+are implied by this procedure.
+
+The commented contiguity setting in `bench/config.yaml` is for US-004's optional
+FPR smoke only; the committed reference keeps windows `0` and threshold `0.5`.
+Restore that reference after an experiment, record every override alongside the
+row, and rerun after any model-revision or envelope-default change.
+
+---
+
+## The three places the revision appears — per model
 
 | Where | What it is |
 |---|---|
-| `model_fetcher.DEFAULT_MODEL_REVISION` | the default the container fetches and loads |
-| `weights_manifest.json`'s `revision` | the pin the verifier walks and hashes against |
+| The resolved revision for the selected model | the revision acquisition, verification and loading all receive; `model_fetcher.DEFAULT_MODEL_REVISION` is the 22M-only last resort |
+| `weights_manifest.json`'s `models["<model id>"].revision` | that model's pin, paired with its own exact-set `files` allowlist |
 | `ghcr.io/washingbearlabs/forage-weights:<revision>` | the mirror tag US-004 falls back to |
 
 **They move together, in one commit.** That is the whole rule, and it is the one thing to
 carry away from this page.
 
-A revision bump that lands without the manifest makes every start fail verification and
-quarantine a good download. A manifest that lands without the mirror tag leaves the
+A revision override without the matching manifest is refused before even a warm-cache
+lookup: no download and no quarantine. A manifest that lands without the mirror tag leaves the
 fallback pointing at nothing, which is only discovered during an actual Hugging Face
 outage — the worst possible moment to find out. The tag cannot drift on its own because
-`scripts/vendor_weights.py` *derives* it from the constant rather than spelling it out
+`scripts/vendor_weights.py` *derives* it from the selected model's revision rather than spelling it out
 (`tests/test_vendor_weights.py::TestSingleSourceOfTruth`), and the constant-to-manifest
-leg is locked by `tests/test_model_fetcher.py::TestRevisionPin`. What no test can check is
+leg for the default model is locked by `tests/test_model_fetcher.py::TestRevisionPin`.
+The mirror stays revision-keyed: two models coexist in one repository because their
+revisions differ. What no test can check is
 whether you actually pushed the tag — hence [the fresh-pull
 check](#verify-a-fresh-pull-on-a-clean-machine).
 
-`FORAGE_MODEL_REVISION` overrides the default at run time, for a container that needs a
-different pin without a rebuild. It does **not** move the manifest, so an override without
-a matching manifest and mirror tag will fail verification — which is the correct, loud
-behaviour.
+`FORAGE_MODEL_REVISION` uses the selected model's committed pin; a malformed value
+falls back to the pin with `model_revision_invalid`; a well-formed value that is not
+that pin refuses to verify (`weights_revision_unpinned`). The resolver still returns
+a shaped override so the sanitizer hash records it honestly while acquisition stays
+degraded. A missing model entry is `manifest_model_unknown`, never another model's pin.
+Manifest reads, including failures, are memoised once per path/model for the service
+process lifetime: replacing the committed manifest requires a restart. If it cannot
+be read, the default model's hash keeps `DEFAULT_MODEL_REVISION` with one
+`manifest_pin_unavailable` WARNING; a non-default unpinned model hashes `unpinned`
+but never reaches a snapshot or a download.
 
 ---
 
@@ -57,6 +252,13 @@ behaviour.
 One gzipped tar of the snapshot directory `from_pretrained` resolves — flat, no directory
 prefix — pushed as an OCI artifact with type
 `application/vnd.washingbearlabs.forage-weights.v1+tar`.
+
+The committed document is `{"_comment": [...], "models": {"<model id>":
+{"revision": "<commit sha>", "files": [...]}}}`: one exact-set allowlist per model.
+The shipped entry is still the same five 22M files and revision. Verification selects
+only the requested pair; immediately before loading, `_load_verified` checks that the
+requested and manifest-derived snapshot directories agree and still exist.
+This parameterisation alone does not enable another deployment model or vendor weights.
 
 Two properties are deliberate and both are tested:
 
@@ -90,6 +292,14 @@ subprocess call three phases in.
 
 ### Run it
 
+`--model-id` selects the entry to vendor and defaults to `DEFAULT_MODEL_ID` (22M).
+The tool does **not** read `FORAGE_MODEL_ID`. `--revision` defaults to that entry's
+committed pin; for a new model it is required. Keep the same pair on every phased
+invocation. Generation reads the existing document, adds or replaces only that entry,
+and preserves all others; the printed diff scopes file changes to the selected entry
+and names other models only as `untouched`. An unreadable existing document is refused,
+not replaced by an empty one.
+
 ```bash
 export HF_TOKEN=hf_...
 export GHCR_USER=<your-github-login>
@@ -104,7 +314,7 @@ export GITHUB_TOKEN=ghp_...        # read:packages
 uv run python -m scripts.vendor_weights --dry-run --manifest /tmp/rehearsal-manifest.json
 
 # The real run.
-uv run python -m scripts.vendor_weights
+uv run python -m scripts.vendor_weights --model-id meta-llama/Llama-Prompt-Guard-2-22M
 ```
 
 **No credential is ever a command-line flag.** They arrive in the environment, and they
@@ -121,7 +331,7 @@ to stop, look and resume rather than repeat a 270 MiB download.
 | Step | What it does |
 |---|---|
 | `download` | `snapshot_download` at the pinned revision, with the service's own `allow_patterns` |
-| `manifest` | regenerates `weights_manifest.json` and prints the diff against the committed one |
+| `manifest` | replaces the selected model's entry in `weights_manifest.json`, preserves the others and prints the scoped diff |
 | `tar` | writes the deterministic, dereferenced tarball |
 | `selfcheck` | extracts that tarball and runs it through the **real** verifier |
 | `push` | `oras login` → `oras push <ref>` → `oras logout` |
@@ -137,7 +347,7 @@ did *not* move means upstream mutated a pin, and that deserves a stop, not a `gi
 ### Then commit — all three together
 
 ```bash
-git add weights_manifest.json          # plus model_fetcher.py if the revision moved
+git add weights_manifest.json          # plus model_fetcher.py if the default pin moved
 git commit -m "chore(weights): vendor <revision>"
 ```
 
@@ -179,13 +389,13 @@ a new upstream commit changes nothing here until someone decides it should. When
 decision is made:
 
 1. Pick the new commit sha from the model repository's history.
-2. Update `model_fetcher.DEFAULT_MODEL_REVISION`.
-3. Run the vendoring (`uv run python -m scripts.vendor_weights`) — it downloads the new
+2. For the default model only, update `model_fetcher.DEFAULT_MODEL_REVISION`.
+3. Run the vendoring (`uv run python -m scripts.vendor_weights --model-id <model-id> --revision <new-sha>`) — it downloads the new
    revision, regenerates the manifest, and pushes a **new tag**. Old tags are left alone,
    so a rollback is a revert of one commit plus a redeploy.
 4. Read the manifest diff.
-5. Commit the constant and the manifest **together**, and note the before/after
-   `sanitizer_revision` — the hashed model identity is `MODEL_ID@revision`, so a revision
+5. Commit the manifest and any default-constant change **together**, and note the before/after
+   `sanitizer_revision` — the hashed model identity is `model_id@revision`, so a revision
    bump rotates it and invalidates caches keyed on it. `docs/bootstrap-notes.md` records
    every rotation.
 
@@ -337,8 +547,11 @@ log lines each attempt emits are documented in `docs/configuration.md` § "Weigh
 acquisition".
 
 Done looks like: `promptguard_loaded: true`, `promptguard_unavailable` gone from
-`degraded_reasons`, and — cache connected — `status: "healthy"`. From a clean machine to
-that state is this section's acceptance test.
+`degraded_reasons`, and — cache operational, with signing enabled if using Valkey
+at contract 1.3.0 — `status: "healthy"`. Reachable Valkey without
+`FORAGE_CACHE_HMAC_KEY` still reports `cache_unauthenticated`; memory needs no key.
+See the [credential recipe](configuration.md#credential-handling-for-forage_cache_hmac_key).
+From a clean machine to that state is this section's acceptance test.
 
 ### Running without the token — supported, honest, loud
 
@@ -427,9 +640,11 @@ Three things follow from that layout:
 - **Keeping the volume buys a network-free start.** A start that finds a verified set at
   the pinned revision verifies it and loads it and does nothing else — no download, no
   `oras`, and no hub request of any kind, so it works on a container with no egress at
-  all. Measured on the reference envelope (1 vCPU / 1 GB): **9 s warm under
-  `--network none`, against 19 s cold.** Changing `FORAGE_MODEL_REVISION` makes the next
-  start cold again, which is the point of the pin.
+  all. Measured on the reference envelope (1 vCPU / 1 GB), configurable via
+  `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` — see `docs/configuration.md` § Sizing the container: **9 s warm under
+  `--network none`, against 19 s cold.** Re-vendoring to a new committed revision
+  makes the next start cold if that snapshot is absent. Changing
+  `FORAGE_MODEL_REVISION` alone to a non-pin refuses before the cache lookup.
 
 ---
 

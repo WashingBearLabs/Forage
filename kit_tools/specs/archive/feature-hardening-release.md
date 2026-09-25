@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: hardening-release
-status: active
+status: completed
 session_ready: true
 depends_on: [hardening-promptguard-86m]
 vision_ref: "T2.2 — Forage hardening"
@@ -12,7 +12,8 @@ epic_seq: 8
 epic_final: true
 execution_order: [US-001, US-002, US-004, US-003, US-005]
 created: 2026-09-19
-updated: 2026-09-19
+updated: 2026-09-23
+completed: 2026-09-23
 ---
 
 # Feature Spec: Validation-422 Tightening + Contract 1.3.0 Close-Out + v1.2.0 Release Cut
@@ -433,7 +434,7 @@ refreshed; `uv run pytest` is green in this story's own scope.
   last recorded, read from the table, not `41ac98ca…`; zero hits is a failure, not a pass.
 
 **Acceptance Criteria:**
-- [ ] A `RequestValidationError` handler is registered with `_MAX_VALIDATION_ERRORS = 100`,
+- [x] A `RequestValidationError` handler is registered with `_MAX_VALIDATION_ERRORS = 100`,
       `_VALIDATION_PLACEHOLDER = "[redacted]"` and `_VALIDATION_WINDOW_KEYS` as named constants,
       coerces and fails closed (non-mapping entries dropped, `msg`/`type` `str()`-coerced,
       non-`int`/`str` `loc` segments dropped and counted, one blanket `except Exception` returning
@@ -444,15 +445,15 @@ refreshed; `uv run pytest` is green in this story's own scope.
       placeholders equal to `"[redacted]"`, and `assert_mirrors(HTTPValidationError, response)`
       holding on all three routes after `_strip_window_keys` (the validation arm joins the module's
       parity convention on the trio).
-- [ ] The marker fuzz posts the marker one field at a time (type-valid-but-invalid for validated
+- [x] The marker fuzz posts the marker one field at a time (type-valid-but-invalid for validated
       fields; inside a wrong-typed container for `min_length`-only fields), asserts every field of both
       request models and the `/extract` `Form` params produced at least one `detail` entry in its own
       case, asserts every validated field produced `value_error` or `assertion_error` in its own case,
       asserts the marker appears 0 times in `response.text` (every `msg`, `loc` and `type`), and
       enumerates the covered fields in Implementation Notes.
-- [ ] A guard-of-the-guard (an interpolating validator monkeypatched onto a real request model) turns
+- [x] A guard-of-the-guard (an interpolating validator monkeypatched onto a real request model) turns
       the fuzz red.
-- [ ] `_ROUTE_LOC_ALLOWLIST` is a module-level map built from `SearchRequest.model_fields`,
+- [x] `_ROUTE_LOC_ALLOWLIST` is a module-level map built from `SearchRequest.model_fields`,
       `RetrieveRequest.model_fields` and the six `/extract` parameter names, keyed by the closed route
       token, read through `request.scope["route"].path` only (`grep -c endpoint_path
       retrieval_app.py` is 0) and no FastAPI internal; a test asserts the `/extract` entry equals
@@ -463,7 +464,7 @@ refreshed; `uv run pytest` is green in this story's own scope.
       mapping-typed field; handler tests in `tests/test_contract_errors.py` show a caller-shaped `loc`
       segment is dropped, and that with no `route` in scope every non-framework `str` segment is
       dropped with one `validation_422_loc_dropped` WARNING (deny by default).
-- [ ] A 50,000-item list yields at most 100 entries and one `validation_422_truncated` WARNING whose
+- [x] A 50,000-item list yields at most 100 entries and one `validation_422_truncated` WARNING whose
       route token is a member of `{"/search", "/retrieve", "/extract", "other"}` (`caplog`); no
       `retrieval_app` record contains the marker; a root-level `caplog` capture shows the marker in no
       record on any logger (root-level `caplog.at_level(logging.DEBUG)` with the canary, the
@@ -471,10 +472,10 @@ refreshed; `uv run pytest` is green in this story's own scope.
       a `loc` segment that is neither `int` nor `str`, and a non-serialisable `msg` each yield 422,
       not 500 (the never-raises guarantee; no uvicorn-logger assertion — it is vacuous under
       `ASGITransport`).
-- [ ] The middleware-raised 4xx paths still bypass the handler
+- [x] The middleware-raised 4xx paths still bypass the handler
       (`tests/test_orchestrator.py::test_post_retrieve_error_response`, the 413 and 404 tests pass untouched);
       `test_our_validation_mirror_matches_fastapis_own_definition` passes with its docstring re-grounded.
-- [ ] `contract/GOVERNANCE.md` gains the next-lettered ruling with **Ruling** and **Source** (an
+- [x] `contract/GOVERNANCE.md` gains the next-lettered ruling with **Ruling** and **Source** (an
       **expedited MINOR with a compatibility window** — the MINOR row's own category — argued from
       `openapi.yaml:1271-1278` **and answering § "Example 6 in full" step by step**: step 1 the
       `"[redacted]"` placeholders, step 2 the one-release window, step 3 the drop as a second MINOR
@@ -490,7 +491,7 @@ refreshed; `uv run pytest` is green in this story's own scope.
       dated heading reads the new count, `contract/GOVERNANCE.md:174` included with its scope clause
       naming both epics; `_NUMBER_WORDS` extends through twenty and pins the ruling count;
       `tests/test_governance_docs.py` green.
-- [ ] `kit_tools/arch/SECURITY.md`: `grep -c 'echoes the offending value verbatim' kit_tools/arch/SECURITY.md`
+- [x] `kit_tools/arch/SECURITY.md`: `grep -c 'echoes the offending value verbatim' kit_tools/arch/SECURITY.md`
       is 0; the rewritten `providers` paragraph names `apply_request_policy` as the bound, the new
       ruling (derived letter) as the closure and the surviving rationale for no schema bound, and its
       "Pinned by" sentence names `tests/test_models.py` and `tests/test_contract_errors.py`; the
@@ -500,14 +501,14 @@ refreshed; `uv run pytest` is green in this story's own scope.
       `validation_422_truncated` and `validation_422_loc_dropped` are each documented at the
       LOGGING.md, MONITORING.md and TROUBLESHOOTING.md sites (`grep -rn 'validation_422_'` over the
       explicit path set hits source, tests and each site for both tokens).
-- [ ] Contract regenerated: the docstring clause appended with the derived letter; `uv run python -m
+- [x] Contract regenerated: the docstring clause appended with the derived letter; `uv run python -m
       scripts.export_contract` run; the document differs only in the five validation-422 descriptions
       (`ValidationErrorDetail`, `HTTPValidationError`, its `detail` field, `_PIPELINE_422_DESCRIPTION`,
       the `/extract` inline literal) at the six `openapi.yaml` sites (anchored by text), with no
       property added, removed or retyped;
       golden unchanged (expected); `_EXPECTED_ONE_THREE_ZERO_DIFF` unchanged (expected); the four
       anchor-quoting pages equal `contract/openapi.yaml.sha256`; `--check` clean.
-- [ ] Rotation recorded: the measured before/after in `docs/bootstrap-notes.md`, `CLAUDE.md`,
+- [x] Rotation recorded: the measured before/after in `docs/bootstrap-notes.md`, `CLAUDE.md`,
       `kit_tools/arch/DECISIONS.md`, `kit_tools/docs/GOTCHAS.md`'s rotation table and
       `kit_tools/arch/CODE_ARCH.md`; the pre-story rotation count (the ordinal of the last
       bootstrap-notes rotation heading, cross-checked against GOTCHAS rows minus the origin row —
@@ -515,13 +516,13 @@ refreshed; `uv run pytest` is green in this story's own scope.
       `(times|rotations)` on the explicit path set (6 hits today) with every hit outside the dated
       ordinal lines rewritten (`kit_tools/docs/TROUBLESHOOTING.md:399` included); zero hits is a
       failure.
-- [ ] The marker fuzz, the guard-of-the-guard, the two `loc` handler tests (dropped segment; no
+- [x] The marker fuzz, the guard-of-the-guard, the two `loc` handler tests (dropped segment; no
       route in scope), the cap test, the two log-capture tests, the four never-raises tests, the
       `/extract`-signature test, the `/search`-token test and the placeholder-keys test are new
       tests in `tests/test_contract_errors.py`, and the two `loc` structural assertions are new in
       `tests/test_models.py`; no existing test in either module was deleted.
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
 
 ### US-002: Close the 1.3.0 contract record — final entry, coverage sweep, frozen golden
 
@@ -634,11 +635,11 @@ passes with `_EXPECTED_ONE_THREE_ZERO_DIFF` equal to the golden-visible subset o
   `contract/openapi.yaml.sha256`; refresh them if this final regenerate moved the document.
 
 **Acceptance Criteria:**
-- [ ] The `1.3.0` docstring entry is a single well-formed bullet naming exactly the reconciled window
+- [x] The `1.3.0` docstring entry is a single well-formed bullet naming exactly the reconciled window
       list, with the additive sentence and **no** publication-state clause; `_run_entry_extractor`
       prints it verbatim (recorded in Implementation Notes) with no `1.2.0` line; `uv run pytest
       tests/test_ci_workflow.py -k 'extractor or docstring_entry or tense'` green.
-- [ ] The `1.2.0` entry's "held … until" sentence and its "no vendored 1.2.0 copy yet" clause are
+- [x] The `1.2.0` entry's "held … until" sentence and its "no vendored 1.2.0 copy yet" clause are
       removed (`grep -c 'no vendored' pipeline/contract.py` is 0); a `TestReleaseContractMapping` test
       walking every entry with `_slice_entry` applies the three whole-bullet patterns with the named
       failure message, and its recorded red run against the pre-story `1.2.0` entry is in
@@ -647,18 +648,18 @@ passes with `_EXPECTED_ONE_THREE_ZERO_DIFF` equal to the golden-visible subset o
       to `_EXPECTED_ONE_THREE_ZERO_DIFF`; GOVERNANCE § "Two semvers" records `v1.1.0` shipped and `v1.2.0` pending, keeps
       `v1.0.0` in the table, the `US-004` reference and `1.3.0`
       (`test_the_independence_is_stated_with_its_worked_example` green).
-- [ ] `tests/test_contract_schema.py` carries the 1.2.0 → 1.3.0 pair (spec 1's completeness half
+- [x] `tests/test_contract_schema.py` carries the 1.2.0 → 1.3.0 pair (spec 1's completeness half
       confirmed, the presence half added) with `_EXPECTED_ONE_THREE_ZERO_DIFF` equal to the
       golden-visible subset of the window list and the two structural pins; the 1.2.0 pair is
       byte-unchanged and green; `tests/test_contract_metrics.py` asserts every moved counter name is in
       the sliced `1.3.0` entry; the `contract/openapi.yaml` diff since the window opened has every
       description hunk classified in Implementation Notes with zero unclassified.
-- [ ] `tests/golden/contract_1_3_0.json` re-created by hand from `_SCHEMA_MODELS` for the last time;
+- [x] `tests/golden/contract_1_3_0.json` re-created by hand from `_SCHEMA_MODELS` for the last time;
       `uv run python -m scripts.export_contract --check` clean; the four anchors equal the committed
       sha256; the rotation recorded at the five sites with the count sentences moved by artifact (as
       US-001).
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
 
 ### US-004: Pre-release bookkeeping — both fan-outs by value, pins, counts, release-notes draft
 
@@ -783,14 +784,14 @@ compose/full.yml` reports 1 each and `tests/test_compose_fragments.py` passes wi
   complete for every rotation this epic recorded (confirm against `docs/bootstrap-notes.md`).
 
 **Acceptance Criteria:**
-- [ ] Both by-value greps' hits are classified in Implementation Notes (history / rotation record /
+- [x] Both by-value greps' hits are classified in Implementation Notes (history / rotation record /
       contract provenance / image tag / compose comment block), with zero unclassified hits over the
       explicit path set in the Independent Test and the named exclusions recorded; every named contract and
       release site above is updated; `kit_tools/docs/API_GUIDE.md:449` carries a `1.3.0` line;
       `MONITORING.md` says three `capabilities` keys; `kit_tools/SYNOPSIS.md:30` reads `v1.2.0` /
       `1.3.0`; root `SECURITY.md`'s supported-versions table is unchanged and `:36` no longer says
       "Pre-1.0 (where the project is today)".
-- [ ] `grep -c 'forage:1.2.0' compose/minimal.yml compose/full.yml` reports 1 each; `_FORAGE_RELEASE_TAG`
+- [x] `grep -c 'forage:1.2.0' compose/minimal.yml compose/full.yml` reports 1 each; `_FORAGE_RELEASE_TAG`
       is `"1.2.0"`; `tests/test_compose_fragments.py` green; the pinned-ahead sentence, the
       pinnable-digest sentence, the `FORAGE_CACHE_HMAC_KEY` upgrade action and the 422
       compatibility-window sentence are in `docs/releases.md`'s draft; the consequence-and-remedy
@@ -799,18 +800,18 @@ compose/full.yml` reports 1 each and `tests/test_compose_fragments.py` passes wi
       `three patterns` hit over the explicit path set (case-insensitive, `.github` and
       `kit_tools/arch/SECURITY.md:233` included; 6 today) reads the `_REQUIRED_GREP_PATTERNS` count
       (confirmation of spec 4's work, edits only for leftovers).
-- [ ] If the cut will not happen in this sitting, the completion PR's description names the
+- [x] If the cut will not happen in this sitting, the completion PR's description names the
       unpublished-tag window on `main` as an outstanding item with the `git revert <pin commit>`
       instruction (recorded in Implementation Notes with the commit sha).
-- [ ] The four total-count sites and every touched per-module row in TESTING_GUIDE equal
+- [x] The four total-count sites and every touched per-module row in TESTING_GUIDE equal
       `uv run pytest --collect-only -q` (total and per module); the compose-fragments row reads
       `forage:1.2.0`.
-- [ ] `docs/releases.md` carries the `v1.2.0` block with the `NOT YET PUBLISHED` first line,
+- [x] `docs/releases.md` carries the `v1.2.0` block with the `NOT YET PUBLISHED` first line,
       `contract: 1.3.0`, the anchor and the three placeholders (heading date, index digest, tagged
       commit); DEPLOYMENT/CI_CD/INFRA_ARCH name `v1.2.0` as the current release; the GOTCHAS
       rotation table matches `docs/bootstrap-notes.md`.
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass
 
 ### US-003: Cut + publish the v1.2.0 image (owner gate)
 
@@ -884,27 +885,27 @@ the story stops and reports, and nothing is asserted.
   facts (pattern set from the tagged tree, the success line from the log).
 
 **Acceptance Criteria:**
-- [ ] If the gate has not run: Implementation Notes carry `### US-003 — gate not run, <date>` naming
+- [x] If the gate has not run: Implementation Notes carry `### US-003 — gate not run, <date>` naming
       the missing prerequisites **and the open unpublished-tag window on `main`** (US-004's pin
       commit sha and the `git revert` instruction); nothing else changes.
-- [ ] Pre-flight recorded: six checks green on the tagged commit; `export_contract --check` clean;
+- [x] Pre-flight recorded: six checks green on the tagged commit; `export_contract --check` clean;
       `CONTRACT_VERSION` is `1.3.0`; US-004's two sweeps re-run and classified; the four anchors and
       the suite counts verified; the `awk` extraction recorded verbatim (first line `* ``1.3.0`` `, no
       `1.2.0` line); the cut time is outside 23:55–00:05 UTC.
-- [ ] `v1.2.0` is cut by the owner and no `searxng-v*` tag is pushed; `publish` is green; the
+- [x] `v1.2.0` is cut by the owner and no `searxng-v*` tag is pushed; `publish` is green; the
       multi-arch `1.2.0` image is on GHCR; run URL, tagged commit sha and OCI index digest recorded.
-- [ ] Four-way sha256 equality at `v1.2.0` verified and the four values recorded, the in-image leg
+- [x] Four-way sha256 equality at `v1.2.0` verified and the four values recorded, the in-image leg
       read through the `@sha256:<index digest>` ref (the ref recorded).
-- [ ] `gh release view v1.2.0 --json body --jq '.body' | tr -d '\r'` matches `^contract: 1\.3\.0$` and
+- [x] `gh release view v1.2.0 --json body --jq '.body' | tr -d '\r'` matches `^contract: 1\.3\.0$` and
       contains every line of the rehearsal extraction (`grep -F` per line); both Release assertions
       green; assets `openapi.yaml` and `openapi.yaml.sha256` present.
-- [ ] `docker buildx imagetools inspect` prints one identical index digest for `latest`, `1.2` and
+- [x] `docker buildx imagetools inspect` prints one identical index digest for `latest`, `1.2` and
       `1.2.0`; recorded.
-- [ ] `secret-grep` and the publish config grep are green; the tagged `ci.yml`'s one `grep -Eiq '`
+- [x] `secret-grep` and the publish config grep are green; the tagged `ci.yml`'s one `grep -Eiq '`
       line (found by value) carries exactly the tagged tree's `_REQUIRED_GREP_PATTERNS` alternatives;
       both success lines recorded; the rehearsal extraction's ruling letter equals the `### (`
       heading US-001 added to `contract/GOVERNANCE.md`.
-- [ ] If a replacement tag was cut, US-004's two by-value sweeps were re-run for the new value
+- [x] If a replacement tag was cut, US-004's two by-value sweeps were re-run for the new value
       before US-005 and the withdrawn tag is recorded under § "Withdrawn tags", not § "Released
       versions" (both recorded).
 
@@ -1016,9 +1017,9 @@ Implementation Notes carry `### US-005 — gate not run, <date>` naming the miss
   risk in the handoff (the quickstart pointed at an unpublished tag for that interval).
 
 **Acceptance Criteria:**
-- [ ] If US-003 has not run: Implementation Notes carry `### US-005 — gate not run, <date>`; nothing
+- [x] If US-003 has not run: Implementation Notes carry `### US-005 — gate not run, <date>`; nothing
       else changes.
-- [ ] Smoke runs (1) and (2) from the `v1.2.0` checkout exit 0 with `--anchor contract/openapi.yaml.sha256`
+- [x] Smoke runs (1) and (2) from the `v1.2.0` checkout exit 0 with `--anchor contract/openapi.yaml.sha256`
       of that checkout; run (3) is recorded as its own command block with `--env-file "$g"` written
       from placeholders, `--no-deps valkey forage`, the shared fixed-name volume (warm or cold, stated),
       `cache_unauthenticated` key-less and `healthy` + `capabilities.cache_hmac_key: 1` + a cache hit
@@ -1026,14 +1027,14 @@ Implementation Notes carry `### US-005 — gate not run, <date>` naming the miss
       the project-scoped Valkey volume; commands and exit codes recorded; every
       credential reached a container only through `--env-file`; no `docker compose config` /
       `docker inspect` / `docker ps --no-trunc` output in the record.
-- [ ] Credential-free pull after `docker image rm` recorded (both exit 0); the GHCR login state at the
+- [x] Credential-free pull after `docker image rm` recorded (both exit 0); the GHCR login state at the
       end of the story is recorded (restored with a scoped token, or logged out); key-less `/health`
       shows `contract_version: "1.3.0"` and `promptguard_model`; the placeholder leak check is four
       zeros and the validation-422 marker witness (`docker logs` count 0, trio plus placeholders
       only) is the fifth.
-- [ ] The whole-tree leak grep (with the `SEARXNG_SECRET=` and `VALKEY_URL` credential patterns) over
+- [x] The whole-tree leak grep (with the `SEARXNG_SECRET=` and `VALKEY_URL` credential patterns) over
       the record's diff returns nothing; both token files were mode 0600 and are recorded as deleted.
-- [ ] The handoff table with the four new posture rows is in the Implementation Notes;
+- [x] The handoff table with the four new posture rows is in the Implementation Notes;
       `docs/releases.md`'s `v1.2.0` block has its heading date, digest and tagged commit filled and
       its `NOT YET PUBLISHED` line removed, and `kit_tools/SYNOPSIS.md:36` its digest and tag claim; the by-value status grep over the roadmap, vision, synopsis, README and GOVERNANCE
       has zero unflipped hits for this epic (classified in Implementation Notes), MILESTONES' hardening
@@ -1171,6 +1172,1089 @@ Implementation Notes carry `### US-005 — gate not run, <date>` naming the miss
   the rotation table)
 
 ## Implementation Notes
+
+### US-003 — v1.2.1 replacement cut and publish, 2026-09-23
+
+**Current completion record.** The owner authorized the original v1.2.0
+cut, then the v1.2.1 repair and withdrawal after the real-model failure
+recorded below. Per US-003's replacement rule, final US-003/US-005 checks
+refer to v1.2.1. Their two gate-not-run conditional branches are inapplicable,
+not claims that the executed gates were skipped. Earlier pending/failure
+notes below remain historical evidence.
+
+- Repair PR #31 merged at 17:51:04Z as
+  `e8cf83c51e8786abf30d79ae0a3d6608c5f8df2c`, tree
+  `b1a81e8a216ce0b18430a3089e35cd8635989007`.
+  PR CI `35897937946` and actual-main CI `35898440256` passed all six gates;
+  the main publish job also passed. The protected merge path was used.
+- Clean actual-main preflight: export check passed; 4253 tests collected over
+  39 modules exactly matched TESTING_GUIDE; both Compose image pins were
+  1.2.1; contract 1.3.0 and the committed anchor matched. The two by-value
+  sweeps retained historical contract 1.2.0 references, classified old-image
+  references as withdrawal/history or hostile extractor fixtures, and left
+  no unclassified current-version sites.
+- `git tag v1.2.1 e8cf83c51e8786abf30d79ae0a3d6608c5f8df2c` followed by
+  `git push origin v1.2.1`; cut preflight at 18:01:18Z, outside the UTC
+  midnight exclusion. No companion-image tag was cut.
+- [Tag run 35899600447](https://github.com/WashingBearLabs/Forage/actions/runs/35899600447)
+  passed, publishing at 18:06:50Z. Published amd64 matched all 19 gated
+  filesystem layers. Warm cache evidence: 15 CACHED lines in build-amd64,
+  30 in publish.
+- The tagged workflow's single published-config grep carries the same four
+  alternatives as its test constant: `HF_TOKEN`, `hf_[A-Za-z0-9]{20,}`,
+  `FORAGE_BRAVE_API_KEY`, `FORAGE_CACHE_HMAC_KEY`. Secret-grep passed and
+  publish logged `No forbidden pattern in the published image config.`
+- The Release has `contract: 1.3.0` and all 112 lines of the verbatim
+  US-002 rehearsal entry already recorded in this spec, unchanged at SHA-256
+  `7bdf3582aced1b2ce15c568defea6b38ff320592368f041474cd6f78dd41e928`.
+  The later repair preamble preserves that entry. Both contract assets were
+  downloaded and checked against the committed same-tag anchor.
+
+| Contract leg | SHA-256 |
+|---|---|
+| Committed anchor at v1.2.1 | `74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72` |
+| Git OpenAPI document | `74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72` |
+| Release document | `74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72` |
+| In-image document, read by the immutable ref below | `74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72` |
+
+### US-005 — v1.2.1 verification and consumer handoff, 2026-09-23
+
+Executed from the clean detached v1.2.1 checkout, against
+`ghcr.io/washingbearlabs/forage@sha256:a29329af38ee563dcc890c9b68749e4d7bc32e20c422640b2f5ffecaa8c89e7b`.
+The three registry tags `latest`, `1.2`, `1.2.1` resolve to that index
+(linux/amd64 and linux/arm64). Runtime verification was on native arm64 and
+completed at 18:09:41Z; it was repeated on the published artifact after the
+successful prepublication candidate rehearsal, not inferred from that rehearsal.
+
+| Witness | Result |
+|---|---|
+| No-env, no-volume image smoke | Exit 0; degraded, model unloaded, promptguard_unavailable |
+| Shared verified warm-cache image smoke | Exit 0; healthy, model loaded, memory cache, no degraded reasons |
+| Full Compose, keyless external Valkey | Model loaded, cache connected, degraded solely by cache_unauthenticated |
+| Full Compose, keyed external Valkey | Exit 0; healthy, capabilities.cache_hmac_key = 1 |
+| Real retrieve/cache round-trip | example.com returned 200 twice; second cache_hit = true |
+| Minimal Compose, keyless | Healthy, memory backend, no Brave-key capability or cache_unauthenticated |
+| Real search | 200, three results, SearXNG; startpage reported unresponsive, other results served |
+| Anonymous pull after removing local digest ref | Removal and pull exit 0; isolated empty Docker auth config, global auth unchanged |
+| Validation 422 runtime | Marker absent; each entry only loc/msg/type plus redacted input/ctx/url |
+| Paid calls | 0; provider chain remained searxng even with an ephemeral Brave marker |
+
+The two image smoke commands were `uv run python contract_smoke.py --base-url
+<loopback-url> --image <immutable-ref> --anchor contract/openapi.yaml.sha256
+--expect-status <degraded-or-healthy> --timeout-seconds 540`. The anchor came
+from the tagged checkout, never the downloaded asset. Containers used
+loopback-only ephemeral ports. Runtime credentials were freshly generated
+verification markers supplied only through mode-0600 environment files;
+no real HF token or paid key was obtained.
+
+The full-Compose run was its own command block, repeated keyless then keyed:
+
+```bash
+docker compose --project-name forage-121-release-full --env-file "$g" \
+  -f compose/full.yml -f <digest-and-loopback-port-override> \
+  up -d --no-deps valkey forage
+# Poll the health body; keyed smoke and retrieve/cache round-trip follow.
+docker compose --project-name forage-121-release-full --env-file "$g" \
+  -f compose/full.yml -f <digest-and-loopback-port-override> down
+docker volume rm forage-121-release-full_forage-valkey-data
+```
+
+All commands exited 0. The shared fixed-name model volume was warm and
+preserved. No `down -v` was used. Standalone containers, both Compose
+projects/networks, the disposable Valkey volume and every temporary env file
+were removed; the latter's absence was asserted. The five marker-leak counts
+were all **0**: Brave in health/metrics, HMAC in health/metrics, Brave in logs,
+HMAC in logs, and the validation marker in logs. No marker values appear here.
+The strict whole-record leak grep returned **zero hits** against pre-record
+commit `7579d8734bbbec47a6f64dae997eadf5ad7f2eca` before this record was pushed.
+
+| Handoff field | Verified value |
+|---|---|
+| Image tag | `v1.2.1` |
+| Pinnable image | `ghcr.io/washingbearlabs/forage@sha256:a29329af38ee563dcc890c9b68749e4d7bc32e20c422640b2f5ffecaa8c89e7b` |
+| Contract / anchor | `1.3.0` / `74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72` |
+| Tagged commit | `e8cf83c51e8786abf30d79ae0a3d6608c5f8df2c` |
+| Publish run | `https://github.com/WashingBearLabs/Forage/actions/runs/35899600447` |
+| Sanitizer revision | `021378efee6ab43f22b887af2f0c0c40ef76183a39802120fbfd0ca7a3a33900` |
+| Cache-integrity posture | Keyed Valkey healthy/signing enabled; keyless Valkey loudly unauthenticated; memory needs no key |
+| Model posture | Verified default 22M loaded; 86M unallowlisted/unvendored; spec 7 US-005 and US-004 retain gate-not-run records |
+| Benchmark pointer | `docs/weights.md` and archived spec 7; no benchmark measurements claimed |
+| Envelope defaults | Unset CPU limit means no cap; default memory limit 1024m |
+| Spend posture | No built-in budget cap; runtime verification made zero paid calls |
+| Supply-chain posture | No image signature, provenance attestation or SBOM; integrity through index digest and anchored four-way contract equality |
+| Consumer action | Re-vendor contract 1.3.0 against this tag's committed anchor and pin this image by digest; no Poppy files changed here |
+
+**Withdrawn predecessor and incident.** v1.2.0's default-model failure is
+recorded below. After replacement verification, GHCR version `1285701898`
+and its remote tag were deleted. Updating its Release notice after deletion
+unexpectedly recreated that tag at current main (`e8cf83c`) and triggered
+run `35900738954`. The tag was deleted again; that run was cancelled with
+**zero publish steps executed**. Final 18:14:07Z read-back found no old ref,
+package API 404, image tag not found, and all replacement aliases unchanged.
+The old Release is a draft. Do not edit it after final tag deletion.
+
+**Accepted release windows:** original main pin from 16:51:21Z to 17:08:19Z;
+replacement main pin from 17:51:04Z to 18:06:50Z. Both windows are closed.
+v1.2.0 is under Withdrawn tags, not Released versions. The by-value current
+status sweep over roadmap, vision, synopsis, README and GOVERNANCE is clean:
+T2.2 shipped, corpus planning unblocked, no unclassified pending hardening
+state. Eight specs are archived. Completion includes the two explicit
+86M gate-not-run alternatives, not fictional weights or benchmark evidence.
+Accepted Stage-5 fetch-decoder residual `2026-09-16-020` remains open.
+
+### Published-model failure and authorized replacement — 2026-09-23
+
+PR #30 merged as `d747a2bd41da993914229c7f31622ab20148dc32`.
+Actual-main CI `35891633312` and v1.2.0 tag CI `35892927967` passed;
+publication completed at 17:08:19Z, index
+`sha256:f96827955cd8b43c6b5a2c46d53637eded8b2030fda7f864f7f2f6ae62ea4858`.
+All three aliases agreed; the four contract hashes matched
+`74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72`;
+the Release carried all 112 announcement lines; anonymous pull after removal
+succeeded using an isolated empty auth config without changing global login.
+
+US-005 did **not** pass: no-env degraded smoke succeeded, but the healthy
+warm-cache smoke timed out after 540 seconds. Real verified weights loaded,
+then `model_labels_unexpected` refused them. The pinned config omits
+`id2label`/`label2id`; transformers resolves `LABEL_0`/`LABEL_1`.
+Spec 5's named-label-only assumption was false. No weights or manifest were
+modified to bypass it. Diagnostic containers and temporary env files were
+cleaned; the shared model volume and user's main checkout were preserved.
+
+The owner selected: "Warn now; fix and publish v1.2.1, then withdraw v1.2.0
+(delete its git tag and GHCR version)." The public warning is applied.
+The replacement is on `fix/promptguard-labels-v1.2.1`, isolated from the
+planning checkout. The published tag is never moved. Withdrawal remains
+pending replacement verification, not falsely recorded as complete.
+
+The repair accepts generic labels only for the exact verified 22M pin.
+Explicit named-label handling is unchanged; unknown/reversed/non-binary
+generic mappings still refuse. A genuine config fixture is hash-anchored to
+the manifest and passed through real offline AutoConfig. Its two scoring
+regressions failed before the fix and pass afterwards. A read-only,
+network-disabled probe of the actual cached model loads successfully and
+scores a benign input 0.001107 and an injection probe 0.997931.
+This is not an 86M benchmark or a claim that those owner gates ran.
+
+No response shape, contract version, model identity or hashed source changes.
+The config fixture's exact-file token-scan exception is needed for long public
+architecture/key names and guarded by its manifest hash; no payload directory
+is exempted. The replacement pin fan-out follows US-003's recovery rule.
+There is no `kit_tools/BUMP_VERSION.md`; the generic bump workflow cannot run.
+The existing `docs/releases.md` / US-003 tag procedure is authoritative:
+`pyproject.toml`'s version is inert packaging metadata and remains untouched.
+The old runner remains stopped and epic completion remains blocked on
+replacement publication, actual-image runtime verification and withdrawal.
+
+Prepublication rehearsal completed against a newly built, unmodified local
+candidate image `sha256:171c10d3cb42f4c9f14de836833bc935eee7e7a4f0e198c3bce212de69611038`
+at 17:42:02Z: no-env degraded, warm-cache healthy, full Compose keyless
+`cache_unauthenticated`, keyed healthy with signing enabled, two retrieves
+with the second a cache hit, and minimal Compose search (200, three results).
+All five marker counts were zero and the validation 422 had only the six
+specified keys. Temporary files, project resources and the disposable
+Valkey volume were removed; shared weights and global auth were preserved.
+This is candidate evidence, not yet the published v1.2.1 witness.
+
+### US-001
+
+letter: (l)
+
+**Retry preflight, 2026-09-23.** Retained the previous attempt's reservation,
+derived from the last GOVERNANCE heading `(k)` at baseline
+`7a4819b781a3f61e773ff56bbb12a6ed7257f929` (also this retry's clean starting
+commit). No intervening `(l)` ruling exists. The prior attempt stopped at
+35 exact-heading rotations versus 39 table-derived rotations and implemented
+nothing. As requested by its verifier, reconciled only the heading forms for
+the existing rotation-36 through rotation-39 records; their historical
+measurements and body text are unchanged. The mandatory derivation still
+uses the last exact `### The <ordinal> rotation:` heading, not heading count.
+No owner gate or release action is part of this story.
+
+**Implementation and measurements, 2026-09-23.** The preflight now agrees:
+last exact bootstrap heading `thirty-ninth`, GOTCHAS 40 data rows minus
+`At split` = 39. The required count-word sweep initially returned zero
+because six prose sites still said 14, 23 or 38. Those sites were explicitly
+reconciled to the artifact-derived 39, and the repeated
+`\b(thirty-nine|39) (times|rotations)\b` sweep returned six hits (GOTCHAS
+twice, TROUBLESHOOTING twice, DEPLOYMENT and SERVICE_MAP). All six now say
+forty; SERVICE_MAP's revision moved from the table's pre-story `b641e6a5…`
+to `bffeb7ba…`. This is a repair of stale prose, not a substitute derivation.
+
+Ruling (l) is present once, after (k), and answers Example 6 steps 1–4.
+The pre-story marker tuple had 12 entries (`_NUMBER_WORDS[12] == "twelve"`):
+the explicit-path sweep found four hits, all now thirteen. Four additional
+live prose sites still said five; those and CODE_ARCH's wrapped tree label
+now say thirteen too. DECISIONS' dated five-rulings ADR heading is retained.
+The introduction names five original contract rulings plus eight hardening
+rulings, and tests pin the count and unique marker/headings correspondence.
+`_NUMBER_WORDS` extends through forty because this retry's actual rotation
+artifact has outgrown the spec's twenty-entry minimum.
+
+The registered handler slices at `_MAX_VALIDATION_ERRORS = 100`, ignores
+non-mappings, string-coerces messages/types, guards `loc` against owned route
+fields plus framework strings and integer indexes, and catches construction
+and JSON rendering into the fixed empty-detail 422. Neither the exception nor
+its body/string/repr reaches a logger or is re-raised. The two WARNINGs carry
+only counts and a matched template closed to the three routes or `other`.
+The fallback does not turn failure into success. The three window keys are
+always fixed placeholders; the constants/helper are explicitly retired with
+the keys at the next MINOR in the release note. Pipeline refusals and both
+middleware paths are unchanged.
+
+**Per-field fuzz coverage (21 fields):**
+- `SearchRequest`: `query`, `num_results`, `promptguard_threshold`,
+  `promptguard_fail_closed`, `providers`, `blocked_domains`, `allow_paid_fallback`.
+- `RetrieveRequest`: `url`, `extract_mode`, `cache_ttl_hours`, `trusted_domains`,
+  `verified_domains`, `blocked_domains`, `promptguard_threshold`,
+  `promptguard_fail_closed`.
+- `/extract`: `file`, `filename`, `mime_hint`, `extract_mode`, `request_id`,
+  `timeout_s`, derived from the live signature minus `request`.
+
+Every case must place the marker in its own `exc.errors()[].input` and
+produce its own field error. All current request-model fields lack custom
+validators; the fuzz introspects decorator/Annotated metadata and requires a
+semantic `value_error` or `assertion_error` for any that appear. The
+counterexample temporarily patches the real `SearchRequest`'s compiled schema,
+validator and decorator metadata with an interpolating after-validator,
+rebuilds the real endpoint's route in a probe app (existing routes cache their
+compiled schema), and proves the same fuzz assertion fails. JSON fields use
+wrong-typed marker containers; string Form parameters receive an UploadFile
+whose filename carries the marker (content bytes alone are not in its repr),
+while the file, literal and numeric parameters receive marker form text.
+The structural model canaries disallow mapping annotations/extra-forbid.
+
+Named new guards include `test_validation_422_cap_and_closed_route` (50,000
+errors, exactly 100 items, one WARNING, `/search`), the explicit normal-search
+scope witness, signature/allowlist parity, fixed window placeholders,
+caller-location dropping and absent/unknown-route fail-closed tests, root
+DEBUG log capture with live httpx/WARNING canaries, four malformed-entry cases,
+and failures in error access, `str()` and actual JSON UTF-8 rendering. Both
+messages and log arguments are checked. Existing test functions were retained;
+the pipeline 422, ASGI-only 413, actual multipart 400 and disabled-route 404
+regressions pass unchanged.
+
+`contract.py` alone changed among all nine hashed sources. Before/reverted:
+`b641e6a51ef7cb45a5209a42321a5fff135f432264d256dd8eec9fe9e62698f5`;
+after: `bffeb7bac1b319c566253ff7512ca61fad12df75ecbdb4d8284c9aeeb0d47fe1`.
+Read-only whole-file substitution against the clean starting commit
+reproduces the former under default and shipped config; all other hashed
+sources/hash definition are unchanged. This is the fortieth rotation, not
+a text-sanitization change; recorded at all five required sites.
+
+Exporter regenerated the document, anchor and drift twin. Exactly six YAML
+description paths changed (five source descriptions); no property changes.
+Anchor `74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72`
+was copied into all four quoting pages, then `--check` passed. Re-created
+`contract_1_3_0.json` through `_SCHEMA_MODELS`: **golden unchanged, expected**
+(sha256 `2cfd8808eec3e533237fc45448be812e85c476c4153a7648ae140a58fffc2fe2`).
+Neither validation model is in that producer set; no golden-visible field
+moved and `_EXPECTED_ONE_THREE_ZERO_DIFF` is unchanged. Historical goldens
+and root SECURITY.md are byte-identical. Both DNS-oracle rows survive unchanged.
+The closing marker-home sweep finds both WARNING tokens in source, tests,
+LOGGING, MONITORING and TROUBLESHOOTING. All new ruling references use (l);
+the legitimate pre-existing engine ruling (e) references remain unchanged.
+
+**Verification:** the final combined story-scoped run passed **1,615 tests**
+across `test_contract_errors`, `test_models`, `test_governance_docs`,
+`test_contract_export`, `test_contract_schema`, `test_contract_metrics`,
+`test_app`, `test_orchestrator`, `test_ci_workflow` and
+`test_sanitizer_revision` (13.54 s; three existing dependency/socket-guard
+warnings). Repository-wide `uv run ruff check .`, `uv run ruff format --check .`
+and `uv run pyright` pass (zero errors); export `--check` and `git diff --check`
+pass. Only changed Python files received safe fixes/formatting. The full
+`uv run pytest` suite was **not run**, honoring the story implementer's explicit
+targeted-only instruction; its full-suite acceptance gate remains for the
+authorized verifier, not claimed green from these scoped results. No story
+definition or acceptance checkbox was modified. No image/model/benchmark,
+push, tag, release, publication or owner-gate action was performed.
+
+### Spec 2 US-005 consumer-note handoff (2026-09-22)
+
+The existing release deliverable `docs/releases.md` now carries the pending-hardening
+consumer note: callers sending `promptguard_fail_closed: false` may receive
+unscanned-but-marked content after contention exceeds `promptguard_wait_seconds`;
+`promptguard_state` / `suspicious` / `promptguard_unavailable` / `unscanned_results`
+are the signals, and `promptguard_fail_closed_floor: true` is the operator control
+(config.yaml-only until spec 6's bind-mount procedure). It preserves the trusted-tier
+skip and VERIFIED exemption. Carry that sentence into US-004's release draft; no release
+or owner gate was run here.
+
+### US-002 — final contract record and golden freeze (2026-09-23 UTC)
+
+**Baseline and reconciliation.** Started clean at
+`3ea0b327177b4b9f3cf8bb18f0d01bccc9acb5b0`. Read the known risks and
+`git log -p -- pipeline/contract.py`; the window opened at
+`d920820f7931737933e6f6ee1cf71c49c1c94db5`. Reconciled the draft against
+every continuation, not just its original checklist:
+
+- Spec 1: `blocked_url`, bounded/normalised `engine`, post-extraction
+  title/snippet truncation and both scan forms, canonical ASCII `domain`,
+  embedded-private IPv4 and `.localhost` fetch refusals (rulings (e)/(f)).
+- Spec 2: chunk-budget reason/window, classification waits and mixed
+  scanned/unscanned search results, admission `busy`, worker
+  `extraction_failed` and four PDF reasons, cache corruption misses, effective
+  fail-closed/threshold fields. Retained `SearchResponse`'s fail-closed field,
+  the two admission counters and both wait counters missing from the draft.
+- Spec 3: directional domain matching and private-name precedence, byte-cap
+  policy refusals, both policy counters on both routes, search denylist and
+  threshold, null/config default and ceiling on both routes. The earlier
+  retrieve-only ceiling clause is superseded, not retained as a false claim.
+- Spec 4: integrity rejects, widened oversize-skip producers, unsigned-cache
+  degradation and the boot signing capability.
+- Spec 5: both compressed-body and timeout counters, SearXNG-only
+  `unsupported_encoding`, and the production-unreachable all-paid prefix
+  refusal. Retained the latter two items omitted by the draft.
+- Spec 6: configurable loop target and high-water mark, both rendered
+  liveness descriptions. The real field is `sanitization_latency_max_ms`,
+  **not** the draft's `promptguard_latency_max_ms`.
+- Spec 7: configured model identity, three contiguity counters and max-rule-only
+  threshold descriptions. No model acquisition or benchmark is claimed here.
+- US-001: the redacted validation trio, 100-entry cap, fixed placeholders for
+  this minor release and their next-MINOR removal, under the existing (l).
+
+The result is one 112-line `1.3.0` bullet with the required final additive
+sentence. Publication state is removed, including the live `1.2.0` "no vendored"
+and "now frozen" clauses. GOV's mapping retains the `v1.0.0` / `US-004`
+worked example, states `v1.1.0` shipped 2026-09-18 serving 1.2.0, and names
+`v1.2.0` / 1.3.0 as pending. Ruling (c) freezes the golden now.
+
+**Guard-first evidence and baseline deviation.** Before any contract edit,
+the new whole-bullet tense test failed on the live 1.3.0 "held ... until" clause
+(`1 failed, 282 deselected in 0.67s`). The stale 1.2.0 "held ... publishes"
+sentence was **already removed by d920820**, so it cannot honestly be reported
+as present in this story's starting tree. The second red run read the original
+unmodified `6b9ed32:pipeline/contract.py` bytes via a temporary read-only
+`Path.read_text` substitution for that one path and ran
+`pytest.main(["-q", "tests/test_ci_workflow.py", "-k", "docstring_entry_tense"])`.
+No checkout/source file was restored or mutated. The real historical red output
+is recorded verbatim below, with trailing whitespace stripped for the diff
+check. Only afterwards was the live contract rewritten.
+The test walks every bullet occurrence (including repeated versions), calls
+the existing `_slice_entry`, and applies all three specified whole-entry
+checks. A separate test now requires one complete bullet per version and
+compares every version with the actual workflow awk. Five permanent
+counterexamples retain the real period-containing stale clause and exercise
+each publication pattern. All are selected by the story's `-k` expression.
+
+**Golden and metrics scope.** Spec 1's "The golden gate" already provided
+`_EXPECTED_ONE_THREE_ZERO_DIFF`, `_ONE_THREE_ZERO_DIFFED_SCHEMAS`,
+`_diff_against_1_2_0` and the completeness test. Spec 4 had subsequently
+added a seventh top-level `CacheMetricsResponse` entry and an exception to the
+top-level pin, contrary to this close-out's explicit six-model rule. Restored
+the six-model producer and removed that exception; moved the cache baseline
+into the metrics module's five-section baseline, verified directly against
+`v1.1.0:contract/openapi.yaml`. Nothing loses coverage: metrics model/handler/
+document parity and dataclass parity remain, the original eight cache fields
+must remain, and every one of the seventeen new metric fields must occur as
+a literal section-qualified token in the sliced announcement. The unchanged
+`cache.storage_oversize_skips` field's widened producers are named separately.
+
+The schema expectation has exactly ten golden-visible additions: two health
+paths (`promptguard_model`, `cache_unauthenticated`), two search request fields,
+four effective-policy response fields, and the two shared 422 enum members.
+The presence half pins each in the literal `contract_1_3_0.json` and in the
+announcement; the completeness half requires the exact delta and both
+six-model structural pins. The two original 1.2.0 test functions were compared
+as source slices and are **byte-identical**; all older goldens are byte-identical.
+The final hand-invoked producer was:
+
+```python
+path.write_text(json.dumps(_current_schemas(), indent=2, sort_keys=True) + "\n")
+```
+
+The frozen golden sha256 is
+`79dd2564be91a3c2f2bd5fd91aa28c2387ab315e49a4c8f82d0e77ec42e4c7ef`;
+the only golden diff is removal of the relocated cache schema.
+`uv run python -m scripts.export_contract` regenerated the document, anchor
+and drift twin with **zero byte diff**. Spec 4 already changed the capability
+description to "Three keys ... contract 1.3.0", so no current-value source edit
+or extra expectation path was necessary. All four quoting pages (API_GUIDE,
+CI_CD, DEPLOYMENT, SERVICE_MAP) still equal the committed
+`74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72`.
+
+**Python 1.2.0 sweep, classified by value.** The exact explicit source-path
+sweep with `--include='*.py'` found **16 pre-story hits**, not the planning
+snapshot's 20. Classification below covers all 16; the final tree has 13:
+
+| Baseline site | Classification and action |
+|---|---|
+| `retrieval_app.py:554` / `HealthResponse.capabilities` | Brave capability provenance, retained; the current-version sentence is already 1.3.0. |
+| `retrieval_app.py:584` / `HealthResponse.search_providers` | Added-in provenance, retained. |
+| `models.py:393,420` / `SearchRequest.providers,allow_paid_fallback` | Honoured-from provenance, both retained. |
+| `models.py:444,466,474` / `SearchResult.domain,content_kind,date` | Added-in provenance, all retained. |
+| `pipeline/search_providers/brave.py:5`, `policy.py:1` | Contract provenance, both retained. |
+| `pipeline/contract.py:33` | Historical 1.2.0 bullet, retained with timeless description history. |
+| `pipeline/contract.py:63,65` | Stale "no vendored" and publication-state clauses, removed. |
+| `pipeline/contract.py:72` | Provisional 1.2.0 `chunk` analogy, replaced by the final `blocked_url` announcement; no shipped addition dropped. |
+| `pipeline/contract.py:304,315,474` | `ContentKind`, pre-producer `chunk`, `search_unavailable` provenance, all retained. |
+
+No hits in `model_fetcher.py`, `cache.py`, `url_validator.py`, `promptguard/`,
+`scripts/` or `contract_smoke.py`. The old request/route docstring divergence
+clauses were already replaced by the shared policy descriptions; they were
+not silently re-versioned here. `grep -c 'no vendored' pipeline/contract.py`
+now prints 0. **Zero unclassified source hits.**
+
+**Description sweep.** Executed
+`git diff d920820..HEAD -- contract/openapi.yaml` before the final regenerate
+and compared it again afterwards (the file is unchanged). Its 34 diff hunks
+contain **49 changed description paths**, including descriptions on newly
+added fields. Every path is classified below as **named** in the final entry;
+none is deliberately omitted and none is unclassified. `S/` abbreviates
+`components/schemas/`; `P/` abbreviates `paths/`; every row ends in
+`/description`. This path-level accounting covers reflowed hunks without
+mistaking YAML line wrapping for another contract change.
+
+| # | Description path (suffix `/description`) | Named window item |
+|---|---|---|
+| 1 | `S/CacheMetricsResponse` | Wider oversize-skip producers |
+| 2 | `S/CacheMetricsResponse/properties/corrupt_entries` | Corrupt cache misses |
+| 3 | `S/CacheMetricsResponse/properties/integrity_rejects` | Pre-parse integrity/type/byte rejects |
+| 4 | `S/CacheMetricsResponse/properties/storage_oversize_skips` | Both-backend write bounds |
+| 5 | `S/ExtractionMetricsResponse/properties/promptguard_contiguity_detections` | Upload contiguity counter |
+| 6 | `S/HTTPValidationError` | Redacted validation response |
+| 7 | `S/HTTPValidationError/properties/detail` | Named 100-entry cap |
+| 8 | `S/HealthResponse` | Status-only liveness description |
+| 9 | `S/HealthResponse/properties/capabilities` | Boot Valkey signing capability; three keys |
+| 10 | `S/HealthResponse/properties/promptguard_model` | Configured model identity, not load state |
+| 11 | `S/Pipeline422ErrorResponse/properties/error` | Retrieve-only busy and PDF refusal codes/reasons |
+| 12 | `S/RetrieveMetricsResponse/properties/busy_rejections` | Admission refusal counter |
+| 13 | `S/RetrieveMetricsResponse/properties/classification_wait_timeouts` | Retrieve wait timeout counter |
+| 14 | `S/RetrieveMetricsResponse/properties/policy_invalid_domain_entry` | Domain-entry drops |
+| 15 | `S/RetrieveMetricsResponse/properties/policy_suffix_trusted_skip` | Wildcard trusted/verified resolutions |
+| 16 | `S/RetrieveMetricsResponse/properties/promptguard_contiguity_detections` | Retrieve contiguity counter |
+| 17 | `S/RetrieveMetricsResponse/properties/semaphore_saturation` | Admission saturation counter |
+| 18 | `S/RetrieveRequest` | Shared route policy boundary |
+| 19 | `S/RetrieveRequest/properties/blocked_domains` | Multi-label suffix denylist and apex caution |
+| 20 | `S/RetrieveRequest/properties/promptguard_fail_closed` | Operator floor and trust-tier exemptions |
+| 21 | `S/RetrieveRequest/properties/promptguard_threshold` | Null/config default, ceiling, max-rule-only scope |
+| 22 | `S/RetrieveRequest/properties/trusted_domains` | Leading-dot skip and multi-tenant caution |
+| 23 | `S/RetrieveRequest/properties/verified_domains` | Leading-dot unavailable exemption and caution |
+| 24 | `S/RetrievedContent/properties/effective_promptguard_fail_closed` | Effective policy, not evidence of scanning |
+| 25 | `S/RetrievedContent/properties/effective_promptguard_threshold` | Effective threshold and trust-tier exemptions |
+| 26 | `S/SearchMetricsResponse/properties/classification_wait_timeouts` | Per-request wait budget |
+| 27 | `S/SearchMetricsResponse/properties/policy_invalid_domain_entry` | Invalid denylist entries |
+| 28 | `S/SearchMetricsResponse/properties/policy_suffix_trusted_skip` | Reserved zero on standard-tier search |
+| 29 | `S/SearchMetricsResponse/properties/promptguard_contiguity_detections` | Search contiguity counter |
+| 30 | `S/SearchMetricsResponse/properties/promptguard_latency_target_exceeded` | Once-per-request target overrun |
+| 31 | `S/SearchMetricsResponse/properties/provider_compressed_body` | Non-identity upstream responses |
+| 32 | `S/SearchMetricsResponse/properties/provider_timeouts` | Bounded interaction timeouts |
+| 33 | `S/SearchMetricsResponse/properties/sanitization_latency_max_ms` | Whole-loop process-lifetime high-water mark |
+| 34 | `S/SearchRequest` | Shared route policy boundary |
+| 35 | `S/SearchRequest/properties/blocked_domains` | Operator-first denylist, byte-cap policy refusal |
+| 36 | `S/SearchRequest/properties/promptguard_fail_closed` | Operator floor |
+| 37 | `S/SearchRequest/properties/promptguard_threshold` | Optional/null threshold and independent contiguity |
+| 38 | `S/SearchRequest/properties/providers` | Paid prefix and unreachable all-paid refusal |
+| 39 | `S/SearchResponse/properties/effective_promptguard_fail_closed` | Effective fail-closed policy |
+| 40 | `S/SearchResponse/properties/effective_promptguard_threshold` | Effective threshold |
+| 41 | `S/SearchResult/properties/domain` | Canonical ASCII host and unchanged URL spelling |
+| 42 | `S/SearchResult/properties/suspicious` | Unscanned-result caution and mixed responses |
+| 43 | `S/ValidationErrorDetail` | Trio, cap, placeholders and next-MINOR drop |
+| 44 | `P//extract/post/responses/422` | Validation arm/window, unchanged document refusal |
+| 45 | `P//health/get` | Liveness, not readiness; no Compose restart |
+| 46 | `P//retrieve/post` | Shared route policy boundary |
+| 47 | `P//retrieve/post/responses/422` | Validation arm/window, unchanged pipeline refusal |
+| 48 | `P//search/post` | Shared route policy boundary |
+| 49 | `P//search/post/responses/422` | Validation arm/window, unchanged pipeline refusal |
+
+The opening commit itself already included the engine bound and
+`omitted_by_reason` description, so they are named in the record and pinned
+by golden equality even though `d920820..HEAD` does not show them as new hunks.
+
+**Forty-first rotation.** Before editing, the last exact bootstrap heading was
+fortieth; GOTCHAS had 41 data rows minus `At split` = 40. The required
+case-insensitive digit/word count sweep found six live prose sites (GOTCHAS
+two, TROUBLESHOOTING two, DEPLOYMENT, SERVICE_MAP) plus CLAUDE's summary.
+All were moved to forty-one, with the no-sanitization subtotal 32 → 33.
+`contract.py` is the only changed hashed source. Default and shipped config
+both measure `bffeb7bac1b319c566253ff7512ca61fad12df75ecbdb4d8284c9aeeb0d47fe1`
+before and `6884dc29b3dc3d7a0a1f2c1da638f767fb301b2baac68446541f6de2638bd7ec`
+after; read-only whole-file reversal reproduces the former exactly. The other
+eight sources and hash definition are byte-identical. Recorded at bootstrap,
+CLAUDE, DECISIONS, GOTCHAS and CODE_ARCH; SERVICE_MAP's current value follows
+the measurement. No runtime behavior changes, but old cache keys invalidate.
+
+**Verification.** The combined six-module scoped run passed **648 tests**:
+`test_contract_schema`, `test_contract_metrics`, `test_ci_workflow`,
+`test_governance_docs`, `test_contract_export`, `test_sanitizer_revision`.
+The final repeat passed all 648 in 3.60 s; the exact
+`-k 'extractor or docstring_entry or tense'` selector passed 11 tests.
+Repository-wide Ruff lint/format, strict Pyright, export `--check` and
+`git diff --check` pass. A read-only audit confirmed all 49 description paths
+appear exactly once in the classification table, the recorded extractor is
+byte-exact, the five section baselines and two cache additions retain coverage, and the
+contract's executable AST is unchanged.
+Only changed Python files received safe fixes/formatting. The full suite is
+**not run**, as explicitly prohibited by the implementer instructions;
+full-suite acceptance remains for the authorized verifier. No story
+definitions or acceptance checkboxes changed. No image build, model
+acquisition, benchmark, owner gate, push, tag, release or publication ran.
+
+#### US-002 historical tense guard — verbatim red run
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ TestReleaseContractMapping.test_docstring_entry_tense_has_no_publication_state _
+
+self = <tests.test_ci_workflow.TestReleaseContractMapping object at 0x10e63d880>
+
+    def test_docstring_entry_tense_has_no_publication_state(self) -> None:
+        source = (_REPO_ROOT / _CONTRACT_SOURCE_FILE).read_text(encoding="utf-8")
+        bullets = list(re.finditer(r"^\* ``(\d+\.\d+\.\d+)`` ", source, re.M))
+        assert bullets
+        for bullet in bullets:
+            entry = _slice_entry(source[bullet.start() :], bullet.group(1))
+>           assert not (
+                re.search(r"\bheld\b.*\b(until|pending)\b", entry, re.S)
+                or re.search(r"\buntil\b.*\bpublish(es|ed)\b", entry, re.S)
+                or "published by" in entry
+            ), (
+                "docstring entries carry no publication state — it lives in "
+                "docs/releases.md and GOVERNANCE § Two semvers; rephrase, "
+                f"do not delete the guard:\n{entry}"
+            )
+E           AssertionError: docstring entries carry no publication state — it lives in docs/releases.md and GOVERNANCE § Two semvers; rephrase, do not delete the guard:
+E             * ``1.2.0`` — ``/search``'s ``SearchResult`` gained ``content_kind``
+E               (``"snippet"`` | ``"chunk"``, defaulted), ``date`` (a strict
+E               ``YYYY-MM-DD`` calendar date or ``None``, defaulted) and ``domain`` (the
+E               lower-cased hostname of ``url``, required); ``SearchResponse`` gained
+E               ``provider_used`` (required — the serving provider's name),
+E               ``fallback_fired`` (defaulted) and ``provider_errors`` (defaulted);
+E               ``SearchRequest`` gained ``providers`` and ``allow_paid_fallback`` (both
+E               defaulted — a restrict-only per-request policy over the configured
+E               chain); ``HealthResponse`` gained ``search_providers`` (the resolved
+E               chain's names, in traversal order) and its ``capabilities`` description
+E               now names ``brave_api_key`` alongside ``search_sanitization``; and
+E               ``search_unavailable`` joined the ``/search`` 422 vocabulary, naming an
+E               exhausted provider chain — a new enum *member*, MINOR under
+E               ``contract/GOVERNANCE.md`` ruling (b) and carrying that ruling's
+E               announcement obligation. ``/metrics``'s ``search`` section gained three
+E               counters — ``fallback_fired``, ``paid_calls`` and
+E               ``policy_unknown_provider`` — pinned against the handler by
+E               ``tests/test_contract_metrics.py`` rather than by the golden fixture.
+E               Two ``/search`` refusal ``reason`` *texts* also narrowed in
+E               ``search-provider-abstraction`` US-002 and ride this bump:
+E               ``searxng_error`` now reads ``SearXNG returned HTTP error (http_<status>)``
+E               and ``searxng_unavailable`` now reads ``SearXNG not reachable at
+E               <scheme://host:port>: <detail>`` — no exception text, no userinfo — neither
+E               changing a code, a status, or the body shape. Every addition above is
+E               additive — a new field, a new enum member, or a new counter — so a
+E               consumer comparing MAJOR keeps working untouched; nothing was removed and
+E               no field changed meaning. The ``/search``/``/retrieve`` boundary text
+E               written into both routes' descriptions and the
+E               ``SearchRequest``/``RetrieveRequest`` model docstrings
+E               (``search-policy-and-health`` US-003) landed inside this same unpublished
+E               window and is not a separate PATCH: there is no vendored 1.2.0 copy yet to
+E               re-vendor, so the description edits are subsumed by this unreleased
+E               MINOR. This version is **held**: ``tests/golden/contract_1_2_0.json`` is
+E               regenerated in place across ``search-provider-abstraction`` specs 2-4 and
+E               every ``search-fallback``/``search-policy-and-health`` story that moved
+E               this shape, until the ``v1.1.0`` image publishes it.
+E
+E           assert not (<re.Match object; span=(2223, 2440), match='held**: ``tests/golden/contract_1_2_0.json`` is\n>)
+E            +  where <re.Match object; span=(2223, 2440), match='held**: ``tests/golden/contract_1_2_0.json`` is\n> = <function search at 0x104f05940>('\\bheld\\b.*\\b(until|pending)\\b', '* ``1.2.0`` — ``/search``\'s ``SearchResult`` gained ``content_kind``\n  (``"snippet"`` | ``"chunk"``, defaulted), ``...rch-fallback``/``search-policy-and-health`` story that moved\n  this shape, until the ``v1.1.0`` image publishes it.\n', re.DOTALL)
+E            +    where <function search at 0x104f05940> = re.search
+E            +    and   re.DOTALL = re.S
+
+tests/test_ci_workflow.py:2357: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_ci_workflow.py::TestReleaseContractMapping::test_docstring_entry_tense_has_no_publication_state
+1 failed, 282 deselected in 0.59s
+```
+
+#### US-002 release extractor — verbatim final output
+
+The workflow's own awk, through `_run_entry_extractor`, emits the following
+112 lines (sha256 `7bdf3582aced1b2ce15c568defea6b38ff320592368f041474cd6f78dd41e928`).
+No 1.2.0 line is included.
+
+```text
+* ``1.3.0`` — ``SearchResponse.omitted_by_reason`` gains ``blocked_url``
+  (``OMIT_BLOCKED_URL``) for the search-time URL audit and domain policy.
+  ``SearchResult.engine`` is NFC-normalised, stripped of C0/C1 controls,
+  whitespace-collapsed and truncated to 64 characters; non-string or empty
+  values become ``None``. It remains outside structural and PromptGuard
+  scanning (GOVERNANCE ruling (e)). ``title`` and ``snippet`` are truncated
+  after Stage 1 extraction, not before: padded and markup-dense inputs can
+  serve different byte counts, and payload-shaped escaped markup is blocked
+  as ``structural_blocked`` rather than served stripped. Both newline-preserving
+  and whitespace-collapsed text forms are scanned. ``SearchResult.domain`` is
+  the canonicalised ASCII host (UTS-46 punycode for internationalised names);
+  ``url`` retains the provider's spelling. On ``/retrieve`` and ``/extract``,
+  IPv6 literals embedding private IPv4 (6to4, Teredo, NAT64 and IPv4-compatible)
+  and names under ``.localhost`` are refused ``private_ip`` rather than
+  fetched (expedited MINOR without a compatibility window, ruling (f)).
+  ``Pipeline422ErrorResponse.error`` gains ``busy`` and ``extraction_failed``
+  (ruling (b)): both arrive only on ``/retrieve``, though the shared model
+  also widens ``/search``'s enum. Admission refusal is 422 ``busy`` /
+  ``admission_queue_full``, not ``/extract``'s 429; queue depth and reserved
+  bytes are bounded by ``retrieve.admission_queue_depth`` and
+  ``retrieve.max_queued_fetch_bytes``, with ``retrieve.fetch_concurrency``
+  fixed at one. Fetched PDFs run in ``/extract``'s rlimited worker; failures
+  formerly answered 500 now use ``extraction_failed`` with ``pdf_encrypted``,
+  ``pdf_no_text``, ``pdf_extraction_error`` or ``pdf_spool_error`` reasons.
+  A PDF over ``extraction.max_promptguard_chunks`` is ``content_too_large`` /
+  ``promptguard_budget``. That reason also refuses pages over the opt-in
+  ``retrieve.max_promptguard_chunks`` budget: ``0`` preserves the unbounded
+  default for this minor release, ``retrieve_budget_unset`` warns of the next
+  MINOR's default 256, and ``0`` remains an opt-out afterwards (ruling (g)).
+  ``RetrievedContent.effective_promptguard_fail_closed``,
+  ``RetrievedContent.effective_promptguard_threshold``,
+  ``SearchResponse.effective_promptguard_fail_closed`` and
+  ``SearchResponse.effective_promptguard_threshold`` are defaulted fields
+  stamped on every 200, including cache hits. They report policy, not scanning;
+  the operator floor bounds fail-closed on both fetch routes and the ceiling
+  bounds both thresholds, without overriding trusted-tier classification skip
+  or VERIFIED unavailable fail-open. ``/extract`` remains fail-closed and
+  carries neither field. ``SearchRequest.promptguard_threshold`` is optional;
+  both it and ``RetrieveRequest.promptguard_threshold`` accept null or omission
+  for the validated configured default (shipped 0.85), before the operator
+  ceiling (ruling (i)). Route/model boundary descriptions name the shared
+  threshold, fail-closed and blocked-domain policy. Threshold descriptions
+  apply to the max-score rule only: the opt-in server-side contiguity rule
+  can block independently and ships disabled.
+  The three ``RetrieveRequest`` domain-list descriptions specify directional
+  matching: multi-label denylists cover subdomains, while bare allowlist
+  entries match exactly and a leading dot opts into apex and subdomains.
+  IP literals and single-label denylists match exactly. Leading-dot
+  ``trusted_domains`` skips classification across the suffix;
+  ``verified_domains`` degrades open when unavailable, even under the floor
+  or a classification wait timeout; neither should name a multi-tenant apex.
+  Canonical private-name rejection precedes caller denylists: a host matching
+  both becomes ``private_ip`` rather than ``blocked_domain`` (ruling (h)).
+  Optional ``SearchRequest.blocked_domains`` merges after the operator's
+  ``seed_blocklist``; either omits matching results as ``blocked_url`` before
+  content scanning without paid fallback. An over-budget denylist is refused
+  whole with ``policy_domain_list_too_large``: ``content_too_large`` on
+  ``/retrieve``, ``search_unavailable`` on ``/search``, non-retryable policy
+  refusals. Allowlists instead drop their over-budget remainder.
+  ``SearchResult.suspicious``'s corrected description includes unscanned
+  results: on ``promptguard_unavailable: true``, consumers treat suspicious
+  results as unscanned, not scanned-and-flagged. A single response can mix
+  scanned and unscanned results because classification wait is one budget
+  per request. ``SearchRequest.providers`` documents the paid-prefix rule
+  and ``provider_used`` diagnosis: later-paid-only selection on an all-paid
+  chain yields ``search_unavailable`` / ``policy_excluded_all_providers``.
+  With one registered paid backend and duplicate collapse this changed
+  outcome is not production-reachable (ruling (k), on (a2)'s basis);
+  ``search.policy_unknown_provider`` counting is unchanged.
+  ``HealthResponse.degraded_reasons`` gains ``cache_unauthenticated`` for
+  unsigned Valkey; ``capabilities`` gains ``cache_hmac_key`` when Valkey
+  signing is enabled at boot, independent of connectivity and absent in
+  memory mode. ``HealthResponse.promptguard_model`` reports the configured
+  model id whether loaded or not; ``promptguard_loaded`` still reports serving
+  state. Both healthcheck descriptions now call the shipped Compose
+  ``curl -fsS -o /dev/null`` probe status-only liveness, not body health;
+  Docker-healthy does not imply loaded weights and Compose does not restart
+  on an unhealthy probe.
+  ``/metrics`` adds ``retrieve.classification_wait_timeouts``,
+  ``search.classification_wait_timeouts``, ``retrieve.semaphore_saturation``,
+  ``retrieve.busy_rejections``, ``retrieve.policy_invalid_domain_entry``,
+  ``retrieve.policy_suffix_trusted_skip``, ``search.policy_invalid_domain_entry``
+  and ``search.policy_suffix_trusted_skip`` (the last stays zero on standard-tier
+  search). Domain counters report invalid/over-budget allowlist drops and
+  wildcard trusted/verified resolutions. ``cache.corrupt_entries`` counts
+  stored JSON/schema failures treated as misses rather than 500s; parse
+  success is not authenticity. ``cache.integrity_rejects`` counts rejected
+  signatures, envelopes, byte bounds and Valkey types before parsing.
+  ``cache.storage_oversize_skips`` now counts Forage's write-side byte-bound
+  refusals on both backends, not just memory (same meaning, wider producers,
+  ruling (j)). ``search.provider_compressed_body`` and
+  ``search.provider_timeouts`` count bounded upstream interactions; on a
+  configured ``[searxng]``-only chain, ``searxng_unavailable`` reasons may
+  end in ``unsupported_encoding``. Brave details stay internal, with only
+  failure class wire-visible. ``search.promptguard_latency_target_exceeded``
+  counts requests over the configurable target once per request;
+  ``search.sanitization_latency_max_ms`` is the process-lifetime high-water
+  mark of the whole result loop (structural scan, PromptGuard and semaphore
+  wait), not a single wait. ``retrieve.promptguard_contiguity_detections``,
+  ``search.promptguard_contiguity_detections`` and
+  ``extraction.promptguard_contiguity_detections`` count contiguity blocks,
+  including both-rule verdicts. These metrics are pinned by
+  ``tests/test_contract_metrics.py``, not the schema golden.
+  The request-validation 422 body no longer echoes the request:
+  ``loc``, ``msg``, ``type`` per entry, at most ``_MAX_VALIDATION_ERRORS``
+  (100) entries, and for this contract version ``input``, ``ctx`` and ``url``
+  present with the fixed value ``"[redacted]"`` — an expedited MINOR under
+  Example 6 step 1: the shipped description documented pydantic's extra keys;
+  consumers reading ``detail[].input`` must stop — the three keys are dropped
+  at the next MINOR (GOVERNANCE ruling (l)).
+  Every addition above is additive except the request-validation 422 trim
+  (ruling (l)); a consumer comparing MAJOR keeps working untouched.
+```
+
+### US-004 — pre-release bookkeeping (2026-09-23 UTC)
+
+Implemented against clean `2cd2e1b` without changing runtime behavior or running
+an owner gate. The current image **target** is `v1.2.0`, serving frozen
+contract `1.3.0`; no wording promotes that target to a published release.
+The draft's heading date, index digest and tagged commit remain explicit
+placeholders beneath `NOT YET PUBLISHED — filled by US-005`.
+
+#### Both by-value fan-outs — exhaustive final classification
+
+Ran the two literal-value greps independently over exactly:
+
+```text
+README.md CLAUDE.md contract/ docs/ compose/ contract_smoke.py
+kit_tools/docs kit_tools/arch kit_tools/testing kit_tools/roadmap
+kit_tools/SYNOPSIS.md kit_tools/AGENT_README.md kit_tools/PRODUCT_VISION.md
+```
+
+Commands: `grep -rn --exclude=openapi.yaml --exclude=openapi.yaml.sha256
+'1\.2\.0' <paths>` and the same command with `'1\.1\.0'`.
+Excluded by name: `kit_tools/specs/` (including archives and this record),
+`kit_tools/.seed_cache/`, `kit_tools/EXECUTION_LOG.md`,
+`kit_tools/SESSION_SCRATCH.md`, `kit_tools/.validate_epic_*`,
+`tests/golden/`, `contract/openapi.yaml` and
+`contract/openapi.yaml.sha256`. The generated pair is checked by
+`uv run python -m scripts.export_contract --check`, never hand-edited or
+classified by grep. The explicit path set also excludes machine-written
+execution/result trees. Root `SECURITY.md` and `.github/` were separately
+checked for the support-policy and pattern-count criteria.
+
+The tables enumerate **matching lines**, just as `grep -rn` does (a line
+containing several instances is one hit). Line numbers identify the final
+US-004 tree outside this excluded spec. Keys: **H** = (a) historical release
+or completed-feature record; **R** = (a) rotation record; **P** = (b) contract
+provenance, retained baseline or worked compatibility example; **I** = (c)
+image tag/target/example; **C** = (d) rewritten Compose pin comment.
+No current-contract statement remains at either retiring value.
+
+**`1.2.0`: 115 matching lines, 115 classified, zero unclassified.**
+
+| Path | Classification and final line numbers |
+|---|---|
+| `README.md` | I: 74, 247 |
+| `CLAUDE.md` | R: 204, 229, 539 |
+| `contract/GOVERNANCE.md` | H: 62, 262; I: 63; P: 488, 562 |
+| `docs/releases.md` | I: 20, 29; H: 148 |
+| `docs/bootstrap-notes.md` | R: 70, 75, 340, 364, 382, 517, 531, 538, 724, 732, 1501, 1958, 1979; I: 1577, 1995; H: 1994 |
+| `docs/configuration.md` | P: 1138 |
+| `compose/minimal.yml` | C: 52, 53, 65; I: 68 |
+| `compose/full.yml` | C: 41, 42; I: 46 |
+| `contract_smoke.py` | I: 66, 97, 99 |
+| `kit_tools/docs/GOTCHAS.md` | R: 587, 592, 619, 672, 673 |
+| `kit_tools/docs/TROUBLESHOOTING.md` | P: 207, 759; I: 872, 873, 879 |
+| `kit_tools/docs/LOCAL_DEV.md` | I: 232, 234 |
+| `kit_tools/docs/DEPLOYMENT.md` | I: 87, 89, 94, 105, 118, 145, 147, 203, 222, 246, 271 |
+| `kit_tools/docs/CI_CD.md` | I: 350, 517, 522, 523, 537 |
+| `kit_tools/docs/API_GUIDE.md` | P: 111, 286, 287, 290, 291, 309, 473, 493, 495 |
+| `kit_tools/docs/MONITORING.md` | P: 68, 150; I: 528 |
+| `kit_tools/arch/patterns/ERROR_HANDLING.md` | P: 170 |
+| `kit_tools/arch/INFRA_ARCH.md` | I: 146, 160, 161, 200 |
+| `kit_tools/arch/CODE_ARCH.md` | R: 183, 193, 430 |
+| `kit_tools/arch/SERVICE_MAP.md` | I: 75, 195, 395, 397, 399 |
+| `kit_tools/arch/SECURITY.md` | P: 615, 616, 624 |
+| `kit_tools/arch/DECISIONS.md` | P: 228; I: 243; H: 244; R: 632, 637, 663 |
+| `kit_tools/testing/TESTING_GUIDE.md` | I: 148; P: 164 |
+| `kit_tools/roadmap/BACKLOG.md` | I: 24, 32 |
+| `kit_tools/roadmap/MILESTONES.md` | I: 7, 52, 57, 86; H: 29; P: 56 |
+| `kit_tools/SYNOPSIS.md` | I: 30, 36 |
+| `kit_tools/PRODUCT_VISION.md` | H: 94 |
+
+**`1.1.0`: 57 matching lines, 57 classified, zero unclassified.**
+
+| Path | Classification and final line numbers |
+|---|---|
+| `README.md` | P: 284 |
+| `CLAUDE.md` | R: 192, 195 |
+| `contract/GOVERNANCE.md` | P: 53, 70, 128, 182, 249, 253, 433; H: 56, 58, 62, 265 |
+| `docs/releases.md` | H: 146, 173, 236 |
+| `docs/bootstrap-notes.md` | R: 66, 67, 175, 194, 259, 364, 1753; H: 1994 |
+| `docs/configuration.md` | P: 1137 |
+| `kit_tools/docs/GOTCHAS.md` | R: 583, 584, 653, 665 |
+| `kit_tools/docs/TROUBLESHOOTING.md` | P: 759 |
+| `kit_tools/docs/DEPLOYMENT.md` | P: 267 |
+| `kit_tools/docs/CI_CD.md` | H: 347, 348 |
+| `kit_tools/docs/API_GUIDE.md` | P: 109, 493 |
+| `kit_tools/arch/INFRA_ARCH.md` | H: 193, 195 |
+| `kit_tools/arch/CODE_ARCH.md` | R: 174, 178 |
+| `kit_tools/arch/SERVICE_MAP.md` | H: 124 |
+| `kit_tools/arch/DECISIONS.md` | P: 228, 768; H: 244, 872; R: 628, 629 |
+| `kit_tools/roadmap/BACKLOG.md` | H: 57 |
+| `kit_tools/roadmap/MILESTONES.md` | H: 13, 25, 26, 76, 77, 86 |
+| `kit_tools/PRODUCT_VISION.md` | H: 94, 132, 142 |
+
+The GOV first-release worked example is historical, not a current-version
+claim. DECISIONS' latest-*published* mapping is also intentionally retained:
+the owner has not cut the new image. Roadmap/vision completion statuses are
+not advanced; that is US-005's handoff.
+
+README, CLAUDE invariant 4, GOVERNANCE's current-version/mapping paragraphs,
+CODE_ARCH, API_GUIDE's current-value row, SERVICE_MAP, TROUBLESHOOTING and
+MONITORING already named current contract `1.3.0` from prior stories.
+Confirmed them rather than manufacturing a new change. API_GUIDE's existing
+1.3.0 history now summarizes the complete frozen record; MONITORING already
+says **three** capability keys, including `cache_hmac_key`. Every active
+release example now targets `v1.2.0` with the publication caveat; the
+additional stale `forage:1.0.0` plain-Docker example was advanced too.
+Both previously published `docs/releases.md` blocks and root SECURITY's
+supported-versions table are byte-identical to the baseline. Only the
+support paragraph and README's false pre-1.0 claim change era.
+
+#### Pins, signing posture, counts and unchanged artifacts
+
+`grep -c 'forage:1.2.0' compose/minimal.yml compose/full.yml` returns **1, 1**;
+`_FORAGE_RELEASE_TAG` is `1.2.0`. Anchored line greps confirm both
+`FORAGE_CPUS`/`FORAGE_MEM_LIMIT` interpolations (**2, 2**) and both bare model
+variables (**2, 2**). The bare HMAC key is intentionally **0, 1**:
+minimal is Valkey-free; full alone needs it. No envelope/default/model/key
+wiring was altered. The Compose signing prose retains the existing
+health-necessity statement and adds the consequence/remedy sentence.
+Its existing test now also checks both that comment and README's quickstart
+for unsigned cached content, `cache_unauthenticated` and setting the key.
+
+The draft mirrors the final contract announcement, distinguishes the
+unrun 86M owner gates from shipped selection/disabled contiguity support,
+states the validation-422 next-MINOR removal and retrieve-budget window,
+and preserves the prior whole-interaction timeout/compression upgrade note.
+Its external-Valkey upgrade action requires a high-entropy, per-deployment
+key and links the canonical generation/stop-all-replicas rotation procedure.
+The recorded index digest is explicitly the immutable pinnable form;
+the tag remains the quickstart default.
+
+`_REQUIRED_GREP_PATTERNS` has **4** entries (measured from the test's AST).
+The case-insensitive `three patterns` grep over `.github kit_tools/docs
+kit_tools/arch kit_tools/testing docs README.md SECURITY.md` returns **zero**.
+All six originally named sites already say four, including workflow `:552`
+and architecture SECURITY `:435`; spec 4 left no prose to repair.
+
+`uv run pytest --collect-only -q` collects **4126**. Independently,
+`uv run pytest --collect-only -qq tests/test_*.py` selects every module and
+reports each module's count; all **38** TESTING_GUIDE rows match, sum to
+4126, and the four total-count sites agree. There are **41** top-level
+test Python files including the three support modules. Newly restored
+table rows are retrieve admission and search policy. The release-specific
+rows are errors **53**, governance **69**, schema **17**, Compose **79**,
+workflow **289**, export **177**, smoke **94** and metrics **69**.
+Descriptions name the 422 non-reflection tests, exact 1.3.0 additions sweep,
+and whole-entry tense guard. Collection is not advertised as a suite pass.
+
+The four current anchor homes (API_GUIDE, CI_CD, DEPLOYMENT, SERVICE_MAP)
+and the draft quote
+`74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72`.
+All generated artifacts and historical goldens, including frozen 1.3.0,
+are byte-identical to `2cd2e1b`. All nine hashed sources, hash definition,
+config, lock and weights manifest are unchanged. Default and shipped
+config still derive
+`6884dc29b3dc3d7a0a1f2c1da638f767fb301b2baac68446541f6de2638bd7ec`.
+There is **no rotation** to append to CLAUDE/bootstrap. GOTCHAS already has
+the split value plus **41** rotations, all present in bootstrap, ending at
+that same value; its count/table needed no edit.
+
+#### Verification and outstanding release handoff
+
+The final six complete affected modules pass **725 tests**: Compose,
+contract smoke, governance, workflow, schema and export. The first scoped
+run caught removal of the existing literal health-prose guard; restored
+that claim and strengthened the same test with the signing consequence,
+then reran all six modules green. Safe Ruff fixes/formatting were limited
+to the two changed Python files. Repository-wide Ruff lint and format
+checks, strict Pyright (**0 errors**), export `--check` and `git diff --check`
+pass. No full-suite run was performed: the story-implementer instruction
+explicitly prohibits it. The full-suite acceptance gate remains
+**unverified**, not satisfied by these 725 passes.
+
+**Gate not run — outstanding, not a closed decision.** No owner
+authorization/evidence for US-003 or US-005 is available in this task.
+Merging these pins into `main` starts an unpublished-tag window: the
+quickstart fails until `v1.2.0` publishes. The owner must cut from the
+completion PR's merge commit in that same sitting; otherwise revert the
+US-004 pin commit, **`e12182f02ae977336b44e19040305a38d3e519c9`**:
+`git revert e12182f02ae977336b44e19040305a38d3e519c9`.
+That commit contains both pins, their test and the coordinated documentation;
+this follow-up only records its now-known identity, without amending it.
+
+**PR-description criterion blocked.** `gh pr view` found no PR for
+`epic/forage-hardening-US-004-attempt-1`; the open-PR list contains only
+the unrelated injection-corpus plan. A targeted all-state hardening lookup
+finds only the already merged/closed planning PRs, no completion PR.
+No unrelated PR was edited and no branch was pushed to create one.
+Before merge, copy this **outstanding item** into the completion PR description:
+
+> **Outstanding: unpublished-tag window on main.** Compose pins the not-yet-
+> published `v1.2.0` image. Run owner-gated US-003 from this PR's merge commit
+> in the same sitting; if the cut is not run,
+> `git revert e12182f02ae977336b44e19040305a38d3e519c9`.
+> The release and US-005 post-release verification are not complete.
+
+No credentials were inspected; no model acquisition, image build,
+benchmark, owner gate, push, tag, release or publication was performed.
+Story definitions and acceptance checkboxes are unchanged. Result remains
+**partial / needs-work** solely for the unavailable completion-PR
+description and the explicitly deferred full-suite gate.
+
+#### US-004 retry — completion PR notice persisted (2026-09-23)
+
+Restored the verified implementation by fast-forwarding this retry branch
+from `2cd2e1b` through `e12182f02ae977336b44e19040305a38d3e519c9`
+and `8e934c49723f1553c77668ad2de40b66c4f33f67`. Neither commit was
+rewritten, so the pin rollback instruction above still names the original
+ancestor commit. No runtime, generated artifact or revision input changed.
+
+**The missing PR-description criterion is now satisfied.** Created the actual
+draft completion PR [#30](https://github.com/WashingBearLabs/Forage/pull/30),
+`epic/forage-hardening-US-004-attempt-2` into `main`. Its description explicitly
+names the **outstanding unpublished-tag window on main**, requires the owner
+to cut from this PR's merge commit in the same sitting that it merges, and
+gives the exact fallback command:
+
+```bash
+git revert e12182f02ae977336b44e19040305a38d3e519c9
+```
+
+Read the persisted description back with `gh pr view 30 --json ...`;
+verified its complete body against the submitted text, the outstanding notice,
+same-sitting merge-commit requirement, exact revert command, open/draft state
+and `main` base. This is remote PR evidence, not merely a repository-only
+notice. The attempt-1 blocked finding above is historical and superseded.
+The PR remains unmerged; creating it does not authorize a cut or close the
+window. Its description keeps US-003/US-005 and both 86M owner gates pending.
+
+Fresh retry evidence: all six complete affected modules pass **725 tests**,
+including all **79** Compose tests. Whole-tree `--collect-only -q` and separate
+per-module `--collect-only -qq tests/test_*.py` both report **4126 tests** in
+**38 modules**. Compared their actual outputs against every TESTING_GUIDE
+row and all four total-count sites; all agree, with **41** top-level test
+Python files. Rechecked both exact-scope classification tables: **115** and
+**57** matching lines, zero missing, extra or duplicate classifications.
+Both image pins, envelope/model passthroughs, full-only HMAC wiring, four
+secret-grep patterns, five anchor quotations, retained release entries and
+supported-versions table agree. GOTCHAS' split value plus all **41** rotation
+rows appear in bootstrap. An initial ad-hoc history comparison extended into
+intentionally changed tag-scheme prose; bounding it at `Withdrawn tags`
+confirmed the actual published entries are unchanged.
+
+Safe Ruff fix/format passes on the two restored Python files changed nothing.
+Repository Ruff lint/format, strict Pyright (**0 errors**), contract export
+`--check` and whitespace checks pass. Scoped and collection logs are retained
+in this retry session's `files/us004-retry-*.log`; the read-back PR evidence is
+`files/us004-completion-pr.json`.
+
+**Still unverified: the full-suite acceptance gate.** This invocation expressly
+prohibits a full-suite run, so neither the 725 scoped passes nor fresh collection
+is represented as `uv run pytest` success. The authorized regression/end-of-epic
+gate must independently run Compose, reconcile collection and execute the full
+suite on its final tree. PR CI and the owner release pre-flight are not asserted
+green here. The result remains **partial / needs-work** for that deferred gate,
+not for the now-resolved completion-PR description.
+
+Only the named non-release branch was pushed, with `--no-follow-tags`; the
+workflow's publish jobs exclude pull requests. No merge, credential inspection,
+local image build, model acquisition, benchmark, owner gate, tag push, release
+or publication was performed. Story definitions and checkboxes remain unchanged.
+
+#### US-004 attempt 3 — portable IPv6 policy assertion (2026-09-23)
+
+Fast-forwarded this attempt from `2cd2e1b` to preserved `b08c1d2`; the exact
+pin commit and draft completion PR #30 remain intact. Read back the PR's
+outstanding-window notice and its same-sitting cut or
+`git revert e12182f02ae977336b44e19040305a38d3e519c9` requirement.
+
+The previous [CI run](https://github.com/WashingBearLabs/Forage/actions/runs/35830193440)
+failed only `test_the_ipv6_list_is_unchanged_at_six_entries`: CI formatted the
+mapped prefix as `::ffff:0:0/96`, while the assertion required
+`::ffff:0.0.0.0/96` (also the local Python 3.12.12 spelling). Compare all six
+ordered `IPv6Network` values instead of their version-dependent strings.
+No range, prefix length, ordering or SSRF implementation changes; no runtime
+or sanitizer-revision input changes. The existing test remains one test.
+
+Safe Ruff fixes/formatting applied only to the changed test. The seven related
+modules (the previous six plus URL validation) pass **982 tests**, including
+**257** URL-validation and **79** Compose tests. Fresh whole-tree collection
+and separately selected explicit-module collection still report **4126** tests
+in **38** modules. This is not full-suite execution. The full-suite gate will
+be obtained from ordinary PR CI, whose two publish jobs exclude pull requests;
+no local full-suite command or owner release gate is authorized here.
+
+#### US-004 attempt 3 — regression gate obtained (2026-09-23)
+
+The [ordinary PR CI run 35830893486](https://github.com/WashingBearLabs/Forage/actions/runs/35830893486)
+at **`be4c94f0afccfbba00c81c3f23b1b9b39a0a5849`** is green.
+Its full, unfiltered `uv run pytest -q` step reports **4120 passed,
+6 xfailed, 13 warnings in 83.32 seconds**. This is actual full-suite
+execution, not collection or scoped-test evidence. CI uses Python 3.12.3;
+the local scoped run uses 3.12.12. All six service gates and both companion
+build/smoke jobs succeeded; both publishing jobs were **skipped**.
+The CI merge commit `8dd63f69bdd13dc48494cc91080a315fe5a0d993` has tree
+`8273958f6a969f9aebaefa68ac229042df0377c4`, exactly the tested branch tree.
+The previous deferred/full-suite-failed findings are superseded by this run.
+The six expected failures and warnings are inherited; no test was skipped,
+xfail-marked or suppressed to obtain green. Full-suite execution was kept
+in PR CI as requested, not run locally.
+
+Independently collected the explicit `tests/test_*.py` modules with
+`uv run pytest --collect-only -qq`, and the whole tree with
+`uv run pytest --collect-only -q`. Compared the first output's module counts
+with a node-ID count of the second and **every one of the 38 documented
+module rows**: all match, sum to **4126**, and agree with all four total sites.
+The portable assertion retains the URL module's **257** tests; Compose is
+**79** and the seven-module scoped run is **982**. Changed total-site prose
+now distinguishes the actual full-suite result from the collected total.
+The existing six xfails account for the difference, not a count discrepancy.
+
+A direct guard probe makes `IPv6Network.__str__` raise and the revised test
+still passes. Removing a range, adding a transition prefix, changing a prefix
+length or reversing the list each still fails. Thus portability does not
+weaken the six-entry policy pin. Runtime `url_validator.py` remains byte-identical.
+
+Re-ran the exact-scope fan-outs against their classification tables:
+**115** and **57** matching lines, each classified once, no gaps or duplicates.
+Line counts in the four total-site edits are preserved, so the tables above
+still identify the final files. Mechanically rechecked both pins and all
+passthroughs, the four secret-grep patterns and absence of stale count prose,
+all five anchor quotations, the split plus all **41** rotation rows,
+historical releases, root supported-versions table and unchanged runtime /
+generated / golden / revision inputs. Default and shipped revision remain
+`6884dc29b3dc3d7a0a1f2c1da638f767fb301b2baac68446541f6de2638bd7ec`.
+Repository Ruff lint/format, strict Pyright (zero errors), export `--check`
+and whitespace checks pass. Story definitions and checkboxes are untouched.
+
+This evidence-only follow-up does not alter the tested assertion or any
+runtime source. Final-head CI read-back is recorded on
+[draft completion PR #30](https://github.com/WashingBearLabs/Forage/pull/30)
+and in this attempt's result/evidence artifacts. The PR remains draft,
+unmerged, with its original outstanding-window and exact-revert requirement.
+No local image build, credentials inspection, model acquisition, benchmark,
+owner gate, tag push, release or publication was performed. The only remote
+write to git is the named PR branch, using `--no-follow-tags`. Owner release
+US-003, post-release US-005 and both 86M owner gates remain pending; green
+bookkeeping CI is not authorization to run them.
+
+### Owner-authorized whole-epic release gate (2026-09-23)
+
+The owner authorized final validation/fixes, merge of existing PR #30,
+publication of v1.2.0 and post-release verification, conditional on passing
+the release gate. The paused orchestrator and supervisor were stopped after
+backing up the execution state; the main planning checkout remains untouched.
+The parent session is the sole writer. This does not authorize the separate
+86M licence, vendoring or benchmark gates, which remain explicitly unrun.
+
+The first whole-epic reviews reproduced admission warmup and equivalent-IPv6
+policy bypasses, the exact provider read-bound failure, Unicode threshold
+revisioning failures and documentation drift. The owner requested all fixes
+and explicitly declined weakening the raw ceiling to allow chunk overshoot.
+Repairs now have a full local result of **4244 passed, no xfails**, with
+Ruff lint/format, strict Pyright, contract-export and whitespace checks green.
+The six old xfails now pass through the real HTTPX/httpcore transport stack.
+The forty-second revision and all read-only reversal controls are recorded
+in `docs/bootstrap-notes.md` and the other four required sites; contract 1.3.0,
+its frozen golden and generated artifacts are unchanged.
+
+Round 2 independently closed all original findings. Quality and compliance
+then identified two new transport compatibility issues: h11's smaller default
+header allowance and eager malformed-body parsing ahead of status/encoding
+decisions. Both are repaired with 26 new regressions (12 reproduced red before
+the fix); the exact raw bound remains unchanged. Final quality, security and
+eight-spec compliance revalidation all returned **ready with no findings**.
+There were three review rounds and two fix cycles; the accepted Stage-5
+decoder residual remains open, and neither 86M gate is claimed as run.
+
+This is prepublication evidence, not publication evidence. Fresh CI on
+PR #30's updated head, the merge-commit cut and US-005 remain
+outstanding. The original same-sitting cut-or-revert requirement still holds.
 
 <!-- Populated during execution. US-001/US-002 record their rotations and the rehearsal extraction;
 US-004 records both classified sweeps; US-003 records the cut, the four-way sha256 table and the

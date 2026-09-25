@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # SYNOPSIS.md
 
-> Last updated: 2026-09-19
-> Updated by: Claude (close-session — hardening validated, corpus planned)
+> Last updated: 2026-09-23
+> Updated by: Copilot (hardening-release US-004)
 
 ---
 
@@ -27,13 +27,13 @@ preserved). See `docs/bootstrap-notes.md` for the pin record.
 
 | Aspect | Status |
 |--------|--------|
-| Maturity | `v1.1.0` published (2026-09-18, `search-release` US-002) — the search-provider abstraction, Brave fallback and per-request policy shipped, advertising contract `1.2.0`; `v1.0.0` (2026-09-11) remains the first non-pre-release cut |
+| Maturity | `v1.2.1` / contract `1.3.0` published and verified 2026-09-23; hardening epic complete. Defective v1.2.0 is withdrawn. The schema golden is frozen; 86M vendoring/benchmark gates remain unrun |
 | Repo visibility | **Public** since the US-008 flip (2026-09-10), repository and both packages; `main` is PR-only, with six required status checks (audit-measured 2026-09-11 — this row said "Private" for a month after the flip) |
-| Tests | 2105 collected, all green (`uv run pytest`), hermetic via `pytest-socket` — **enforced in CI** since US-002, with a committed hermeticity canary |
+| Tests | 4253 collected and **4253 passed, no xfails** at the local patch release gate (2026-09-23); PR, main and tag CI green. Hermetic via `pytest-socket`, **enforced in CI**, with a committed hermeticity canary |
 | Lint | `uv run ruff check .` and `ruff format --check .` both clean — **enforced in CI** |
 | Types | `uv run pyright` (strict) is **clean — 0 errors**, no baseline; **enforced in CI** |
 | CI | `.github/workflows/ci.yml` — ten jobs in two lanes: `lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke`, `publish` for the service image, and `searxng-build`/`-smoke`/`-publish` for the companion |
-| Published image | `ghcr.io/washingbearlabs/forage` — `latest`, `1.1` and `1.1.0` resolve to one digest (`sha256:e1b875cc…`, `search-release` US-002); `1.0`/`1.0.0` still resolve to the earlier cut. `docs/releases.md` § "Released versions" has both entries |
+| Published image | `ghcr.io/washingbearlabs/forage` — `1.2.1`, index `sha256:a29329af38ee563dcc890c9b68749e4d7bc32e20c422640b2f5ffecaa8c89e7b`; `latest` / `1.2` / `1.2.1` equality verified. Tag commit `e8cf83c51e8786abf30d79ae0a3d6608c5f8df2c`; [handoff](specs/archive/feature-hardening-release.md). `docs/releases.md` records v1.2.0's withdrawal |
 | Deployment | Poppy's in-tree copy is still the deployed source of truth (coexistence rule) |
 | Planned next | `epic-forage-hardening` (eight specs, 42 stories, contract window 1.2.0 → 1.3.0, target `v1.2.0`; validated to `needs-work` 2026-09-19) executes next; `epic-forage-injection-corpus` (five specs, 21 stories, no runtime change; planned 2026-09-19, `validate-epic` pending) follows and measures it — wrappers in `specs/` |
 
@@ -55,6 +55,7 @@ record updated.
 | ML | transformers + torch (CPU) running Llama Prompt Guard 2 22M |
 | Cache | Valkey/Redis via `redis` (optional-in-memory fallback lands in `feature-forage-cache-fallback`) |
 | Search | SearXNG (companion service; config in `searxng/config/`) |
+| Host canonicalisation | **`idna`** (`>=3.7`, direct since `hardening-search-sanitization` US-003; `url_validator.canonicalize_host` is the one UTS-46 call site, and `idna@<version>` is a `sanitizer_revision` input) |
 | Tests | pytest + pytest-asyncio (`asyncio_mode = auto`) + pytest-socket |
 | Lint / types | ruff (E,F,I,N,UP,B,SIM,RUF; line-length 88) + pyright **strict** |
 | Container | Dockerfile at repo root; entrypoint is a 17-line `exec "$@"` — **no vault client** |
@@ -100,9 +101,9 @@ path and yields a `promptguard_unavailable` degraded runtime.
 | `pipeline/` | The five sanitization stages, the orchestrator, and the response contract |
 | `promptguard/` | The Llama Prompt Guard 2 classifier wrapper |
 | `searxng/config/` | SearXNG `settings.yml` + `limiter.toml` |
-| `contract/` | The frozen wire contract: generated `openapi.yaml` + its committed `.sha256` anchor, and `GOVERNANCE.md` — the semver rules, the five recorded rulings and the consumer vendoring procedure. Regenerate the two generated files with `uv run python -m scripts.export_contract`; never hand-edit. The whole directory ships in the image at `/app/contract/` and the two generated files ship as `v*` Release assets (US-004) |
+| `contract/` | The frozen wire contract: generated `openapi.yaml` + its committed `.sha256` anchor, and `GOVERNANCE.md` — the semver rules, the thirteen recorded rulings and the consumer vendoring procedure. Regenerate the two generated files with `uv run python -m scripts.export_contract`; never hand-edit. The whole directory ships in the image at `/app/contract/` and the two generated files ship as `v*` Release assets (US-004) |
 | `scripts/` | Operator-only, run by hand from a checkout; in no image |
-| `tests/` | 29 `test_*.py` modules, one per subject, plus `conftest.py`, `fakes.py`, `__init__.py`, `golden/` and `fixtures/` |
+| `tests/` | 38 `test_*.py` modules, one per subject, plus `conftest.py`, `fakes.py`, `__init__.py`, `golden/` and `fixtures/` |
 | `docs/` | `configuration.md` (full env/config reference), `releases.md`, `weights.md`, `searxng.md`, `bootstrap-notes.md`, `bootstrap-scan.txt` (audit 2026-09-11: three were missing from this row) |
 | `.github/` | `workflows/ci.yml` and `pull_request_template.md` (the bump checklist + standing invariants) |
 | `kit_tools/` | This documentation framework + the feature specs |

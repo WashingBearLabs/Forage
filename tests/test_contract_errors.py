@@ -15,26 +15,36 @@ assertions are deliberately strict: ``extra="forbid"`` on the models plus an
 exact serialized-bytes comparison here. If an emission site is edited and its
 mirror is not, this module goes red before ``contract/openapi.yaml`` can
 document something the service does not do.
+
+``hardening-release`` US-001 deliberately changes the validation arm: the
+trio's exact mirror sits beneath three fixed one-release placeholder keys.
+Its per-field liveness, non-reflection and never-raises guards live here too.
 """
 
 from __future__ import annotations
 
 import ast
 import asyncio
+import inspect
 import json
-from collections.abc import Iterator
+import logging
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
-from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, field_validator
+from starlette.routing import Route
 from starlette.types import Message, Receive, Scope, Send
 
 import pipeline.orchestrator
 import retrieval_app
+from models import RetrieveRequest, SearchRequest
 from pipeline import contract
 from pipeline.contract import (
     DEGRADED_CACHE_UNAVAILABLE,
@@ -42,6 +52,7 @@ from pipeline.contract import (
 )
 from pipeline.extraction_limits import extraction_settings_from_config
 from pipeline.orchestrator import DOCUMENT_FAILURE_CODES, PipelineError
+from pipeline.retrieve_limits import retrieve_settings_from_config
 from promptguard.classifier import PromptGuardClassifier
 from retrieval_app import (
     Admission413Response,
@@ -115,6 +126,9 @@ def _configure_app(config: dict[str, Any]) -> None:
     )
     app.state.search_metrics = SearchMetrics()
     app.state.retrieve_metrics = RetrieveMetrics()
+    app.state.retrieve_admission = ExtractionAdmissionController.from_retrieve_settings(
+        retrieve_settings_from_config(config), app.state.retrieve_metrics
+    )
     app.state.classification_semaphore = asyncio.Semaphore(
         settings.classification_concurrency
     )
@@ -155,6 +169,21 @@ def assert_mirrors(model: type[BaseModel], response: httpx.Response) -> None:
     assert dumped == payload
     assert list(dumped) == list(payload)
     assert mirrored.model_dump_json() == response.text
+
+
+def _strip_window_keys(payload: dict[str, Any]) -> dict[str, Any]:
+    for item in payload["detail"]:
+        for key in retrieval_app._VALIDATION_WINDOW_KEYS:
+            assert item.pop(key) == retrieval_app._VALIDATION_PLACEHOLDER
+    return payload
+
+
+def _assert_validation_mirror(response: httpx.Response) -> None:
+    assert response.status_code == 422
+    assert_mirrors(
+        HTTPValidationError,
+        httpx.Response(422, json=_strip_window_keys(response.json())),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -238,13 +267,32 @@ def test_error_vocabulary_is_the_documented_eighteen() -> None:
         | contract.SEARCH_ERROR_CODES
     )
     assert len(contract.EXTRACT_ERROR_CODES) == 10
-    assert len(contract.RETRIEVE_ERROR_CODES) == 6
+    assert len(contract.RETRIEVE_ERROR_CODES) == 8
     assert len(contract.SEARCH_ERROR_CODES) == 3
-    # `content_too_large` is the one code two surfaces share, and it is why
-    # 10 + 6 + 3 documents eighteen codes rather than nineteen.
+    # `content_too_large`, `extraction_failed` and `busy` are the three codes
+    # two surfaces share, and they are why 10 + 8 + 3 documents eighteen codes
+    # rather than twenty-one.
     assert {
-        "content_too_large"
+        "busy",
+        "content_too_large",
+        "extraction_failed",
     } == contract.EXTRACT_ERROR_CODES & contract.RETRIEVE_ERROR_CODES
+
+
+def test_retrieve_pdf_failure_reasons_are_not_retrieve_error_codes() -> None:
+    assert contract.RETRIEVE_PDF_ENCRYPTED == "pdf_encrypted"
+    assert contract.RETRIEVE_PDF_NO_TEXT == "pdf_no_text"
+    assert contract.RETRIEVE_PDF_EXTRACTION_ERROR == "pdf_extraction_error"
+    assert contract.RETRIEVE_PDF_SPOOL_ERROR == "pdf_spool_error"
+    assert {
+        "pdf_encrypted",
+        "pdf_no_text",
+        "pdf_extraction_error",
+        "pdf_spool_error",
+    } == contract.RETRIEVE_PDF_FAILURE_REASONS
+    assert contract.RETRIEVE_PDF_FAILURE_REASONS.isdisjoint(
+        contract.RETRIEVE_ERROR_CODES
+    )
 
 
 def test_every_raise_site_in_the_repo_is_in_the_vocabulary() -> None:
@@ -269,8 +317,9 @@ def test_extract_surface_matches_the_orchestrator_taxonomy() -> None:
         "invalid_mime_hint",
         "invalid_request_id",
     } == contract.EXTRACT_ERROR_CODES - DOCUMENT_FAILURE_CODES
-    # `busy` is the one /extract code the 422 handler never emits: it answers
-    # 429 instead.
+    # `busy` is the one /extract code the 422 handler never emits on /extract:
+    # there it answers 429. The same literal is a /retrieve code, answered 422
+    # there — the handler picks the status by route and code together.
     assert {"busy"} == contract.EXTRACT_ERROR_CODES - contract.EXTRACT_422_ERROR_CODES
 
 
@@ -284,6 +333,7 @@ def test_degraded_reasons_derive_from_one_source() -> None:
     assert {
         DEGRADED_PROMPTGUARD_UNAVAILABLE,
         DEGRADED_CACHE_UNAVAILABLE,
+        contract.DEGRADED_CACHE_UNAUTHENTICATED,
     } == contract.DEGRADED_REASONS
 
 
@@ -498,28 +548,441 @@ async def test_extract_503_body_is_mirrored() -> None:
 
 @pytest.mark.parametrize(
     ("route", "body"),
-    [("/retrieve", {}), ("/search", {})],
-    ids=["retrieve", "search"],
+    [
+        ("/retrieve", {}),
+        ("/search", {}),
+        ("/retrieve", {"url": 5}),
+        ("/search", {"query": 5, "providers": "x"}),
+    ],
+    ids=["retrieve-missing", "search-missing", "retrieve-type", "search-type"],
 )
 async def test_validation_arm_of_the_422_union_is_real(
     client: httpx.AsyncClient,
     route: str,
-    body: dict[str, str],
+    body: dict[str, object],
 ) -> None:
-    """A malformed request really does return FastAPI's default 422 body.
+    """The validation arm emits our trio plus fixed one-release placeholders.
 
     The union declared on each 422 is not hypothetical: the pipeline arm and
     this one are both reachable, which is why the schema documents both.
-    ``HTTPValidationError`` mirrors the stable trio and deliberately tolerates
-    the extra per-error keys pydantic adds (``input``, sometimes ``ctx``).
+    Stripping only the three window keys leaves a byte-exact trio mirror.
     """
     response = await client.post(route, json=body)
 
-    assert response.status_code == 422
-    mirrored = HTTPValidationError.model_validate(response.json())
-    assert mirrored.detail
-    assert mirrored.detail[0].type == "missing"
+    _assert_validation_mirror(response)
+    assert response.json()["detail"]
     assert "error" not in response.json()
+
+
+async def test_extract_validation_arm_is_mirrored(client: httpx.AsyncClient) -> None:
+    response = await client.post(
+        "/extract",
+        files={"file": ("document.txt", b"safe", "text/plain")},
+        data={"filename": "document.txt", "extract_mode": "bogus"},
+    )
+    _assert_validation_mirror(response)
+    assert response.json()["detail"][0]["type"] == "literal_error"
+
+
+_VALIDATION_MARKER = "caller_validation_marker_7b953cf1"
+_VALIDATION_ITEM_KEYS = {"loc", "msg", "type", "input", "ctx", "url"}
+_REQUEST_MODELS = {"/search": SearchRequest, "/retrieve": RetrieveRequest}
+_REQUEST_FIELD_CASES = {
+    "/search": {
+        "query",
+        "num_results",
+        "promptguard_threshold",
+        "promptguard_fail_closed",
+        "providers",
+        "blocked_domains",
+        "allow_paid_fallback",
+    },
+    "/retrieve": {
+        "url",
+        "extract_mode",
+        "cache_ttl_hours",
+        "trusted_domains",
+        "verified_domains",
+        "blocked_domains",
+        "promptguard_threshold",
+        "promptguard_fail_closed",
+    },
+}
+_EXTRACT_FIELDS = frozenset(inspect.signature(retrieval_app.extract).parameters) - {
+    "request"
+}
+
+
+def _validated_fields(model: type[BaseModel]) -> set[str]:
+    fields: set[str] = set()
+    for validator in model.__pydantic_decorators__.field_validators.values():
+        fields.update(validator.info.fields)
+    if "*" in fields or model.__pydantic_decorators__.model_validators:
+        fields.update(model.model_fields)
+    # Annotated validators must get semantic-invalid cases too, not type errors.
+    for name, field in model.model_fields.items():
+        if any(hasattr(item, "func") for item in field.metadata):
+            fields.add(name)
+    return fields
+
+
+def _assert_marker_refused(
+    response: httpx.Response, field: str, *, validated: bool
+) -> None:
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    own_errors = [entry for entry in detail if field in entry["loc"]]
+    assert own_errors, f"no live validation error for {field}"
+    if validated:
+        assert any(
+            entry["type"] in {"value_error", "assertion_error"} for entry in own_errors
+        ), f"{field}'s validator was not provoked"
+    assert _VALIDATION_MARKER not in response.text, "reflected caller marker"
+    for item in detail:
+        assert set(item) == _VALIDATION_ITEM_KEYS
+        for key in retrieval_app._VALIDATION_WINDOW_KEYS:
+            assert item[key] == "[redacted]"
+    _assert_validation_mirror(response)
+
+
+async def _post_marker_case(
+    client: httpx.AsyncClient,
+    route: str,
+    field: str,
+    *,
+    validated: bool = False,
+) -> httpx.Response:
+    captured: list[Any] = []
+    original_errors = RequestValidationError.errors
+
+    def errors(exc: RequestValidationError) -> Sequence[Any]:
+        result = original_errors(exc)
+        captured.extend(result)
+        return result
+
+    with patch.object(RequestValidationError, "errors", errors):
+        if route == "/extract":
+            data = {"filename": "document.txt"}
+            files = {"file": ("document.txt", b"safe", "text/plain")}
+            if field == "file":
+                files = {"unused": ("document.txt", b"safe", "text/plain")}
+                data["file"] = _VALIDATION_MARKER
+            elif field in {"extract_mode", "timeout_s"}:
+                data[field] = _VALIDATION_MARKER
+            else:
+                data.pop(field, None)
+                files[field] = (
+                    _VALIDATION_MARKER,
+                    _VALIDATION_MARKER.encode(),
+                    "text/plain",
+                )
+            response = await client.post(route, files=files, data=data)
+        else:
+            body: dict[str, object] = (
+                {"query": "safe"}
+                if route == "/search"
+                else {"url": "https://example.com"}
+            )
+            if validated:
+                annotation = _REQUEST_MODELS[route].model_fields[field].annotation
+                body[field] = (
+                    [_VALIDATION_MARKER]
+                    if annotation == list[str]
+                    else _VALIDATION_MARKER
+                )
+            else:
+                body[field] = {_VALIDATION_MARKER: 1}
+            response = await client.post(route, json=body)
+    assert any(
+        field in entry.get("loc", ()) and _VALIDATION_MARKER in repr(entry.get("input"))
+        for entry in captured
+    ), f"{route}.{field} did not carry the marker into validation input"
+    return response
+
+
+@pytest.mark.parametrize("route", _REQUEST_MODELS)
+async def test_validation_marker_fuzz_each_request_field(
+    client: httpx.AsyncClient, route: str
+) -> None:
+    model = _REQUEST_MODELS[route]
+    assert _REQUEST_FIELD_CASES[route] == set(model.model_fields)
+    validated = _validated_fields(model)
+    for field in sorted(_REQUEST_FIELD_CASES[route]):
+        response = await _post_marker_case(
+            client, route, field, validated=field in validated
+        )
+        _assert_marker_refused(response, field, validated=field in validated)
+
+
+@pytest.mark.parametrize("field", sorted(_EXTRACT_FIELDS))
+async def test_validation_marker_fuzz_each_extract_field(
+    client: httpx.AsyncClient, field: str
+) -> None:
+    response = await _post_marker_case(client, "/extract", field)
+    _assert_marker_refused(response, field, validated=False)
+
+
+async def test_validation_fuzz_catches_interpolating_validator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InterpolatingSearchRequest(SearchRequest):
+        @field_validator("query")
+        @classmethod
+        def reject_query(cls, value: str) -> str:
+            raise ValueError(f"invalid query: {value}")
+
+    # Rebuild a route against the real, temporarily patched request model;
+    # already-registered FastAPI routes retain their original compiled schema.
+    monkeypatch.setattr(
+        SearchRequest,
+        "__pydantic_core_schema__",
+        InterpolatingSearchRequest.__pydantic_core_schema__,
+    )
+    monkeypatch.setattr(
+        SearchRequest,
+        "__pydantic_validator__",
+        InterpolatingSearchRequest.__pydantic_validator__,
+    )
+    monkeypatch.setattr(
+        SearchRequest,
+        "__pydantic_decorators__",
+        InterpolatingSearchRequest.__pydantic_decorators__,
+    )
+    assert "query" in _validated_fields(SearchRequest)
+    probe = FastAPI()
+    probe.exception_handler(RequestValidationError)(
+        retrieval_app.request_validation_error_handler
+    )
+    probe.post("/search")(retrieval_app.search)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=probe), base_url="http://test"
+    ) as client:
+        response = await _post_marker_case(client, "/search", "query", validated=True)
+    with pytest.raises(AssertionError, match="reflected caller marker"):
+        _assert_marker_refused(response, "query", validated=True)
+
+
+def test_validation_location_allowlist_matches_owned_surfaces() -> None:
+    assert {
+        "/search": frozenset(SearchRequest.model_fields),
+        "/retrieve": frozenset(RetrieveRequest.model_fields),
+        "/extract": _EXTRACT_FIELDS,
+    } == retrieval_app._ROUTE_LOC_ALLOWLIST
+
+
+def _validation_request(route: str | None = "/search") -> Request:
+    scope: Scope = {"type": "http", "path": "/caller-path-must-not-be-logged"}
+    if route is not None:
+        scope["route"] = Route(route, endpoint=retrieval_app.search)
+    return Request(scope)
+
+
+async def _synthetic_validation(
+    errors: Sequence[Any], route: str | None = "/search"
+) -> httpx.Response:
+    response = await retrieval_app.request_validation_error_handler(
+        _validation_request(route),
+        RequestValidationError(errors, body={_VALIDATION_MARKER: 1}),
+    )
+    return httpx.Response(response.status_code, content=bytes(response.body))
+
+
+async def test_validation_window_keys_are_fixed_placeholders() -> None:
+    assert retrieval_app._VALIDATION_WINDOW_KEYS == ("input", "ctx", "url")
+    assert retrieval_app._VALIDATION_PLACEHOLDER == "[redacted]"
+    response = await _synthetic_validation(
+        [
+            {
+                "loc": ["body", "providers", 0],
+                "msg": "Input should be a valid string",
+                "type": "string_type",
+                "input": {_VALIDATION_MARKER: 1},
+                "ctx": {"error": ValueError(_VALIDATION_MARKER)},
+                "url": "https://example.com/" + _VALIDATION_MARKER,
+            },
+            {"loc": ["body", "providers"], "msg": "Field required", "type": "missing"},
+        ]
+    )
+    _assert_marker_refused(response, "providers", validated=False)
+
+
+async def test_validation_normal_search_resolves_owned_route(
+    client: httpx.AsyncClient,
+) -> None:
+    observed: list[str] = []
+    original = retrieval_app.request_validation_error_handler
+
+    async def witness(request: Request, exc: RequestValidationError) -> JSONResponse:
+        observed.append(request.scope["route"].path)
+        return await original(request, exc)
+
+    with (
+        patch.dict(app.exception_handlers, {RequestValidationError: witness}),
+        patch.object(app, "middleware_stack", None),
+    ):
+        response = await client.post(
+            "/search", json={"query": "safe", "providers": {_VALIDATION_MARKER: 1}}
+        )
+    assert observed == ["/search"]
+    _assert_marker_refused(response, "providers", validated=False)
+
+
+async def test_validation_location_drops_caller_segments(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+        response = await _synthetic_validation(
+            [
+                {
+                    "loc": ["body", "providers", 3, _VALIDATION_MARKER],
+                    "msg": "Invalid",
+                    "type": "value_error",
+                }
+            ]
+        )
+    assert response.json()["detail"][0]["loc"] == ["body", "providers", 3]
+    assert [r.getMessage() for r in caplog.records] == [
+        "validation_422_loc_dropped — dropped=1 route=/search"
+    ]
+    assert _VALIDATION_MARKER not in response.text
+    _assert_validation_mirror(response)
+
+
+@pytest.mark.parametrize("route", [None, "/unknown/" + _VALIDATION_MARKER])
+async def test_validation_location_without_owned_route_fails_closed(
+    route: str | None, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+        response = await _synthetic_validation(
+            [
+                {
+                    "loc": [
+                        "body",
+                        "query",
+                        "path",
+                        "header",
+                        "providers",
+                        3,
+                        _VALIDATION_MARKER,
+                    ]
+                }
+            ],
+            route,
+        )
+    assert response.json()["detail"][0]["loc"] == ["body", "query", "path", "header", 3]
+    assert [r.getMessage() for r in caplog.records] == [
+        "validation_422_loc_dropped — dropped=2 route=other"
+    ]
+    _assert_validation_mirror(response)
+
+
+async def test_validation_422_cap_and_closed_route(
+    client: httpx.AsyncClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    assert retrieval_app._MAX_VALIDATION_ERRORS == 100
+    with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+        response = await client.post(
+            "/search",
+            json={"query": "safe", "providers": [{_VALIDATION_MARKER: 1}] * 50_000},
+        )
+    assert response.status_code == 422
+    assert len(response.json()["detail"]) == 100
+    assert response.json()["detail"][-1]["loc"] == ["body", "providers", 99]
+    records = [r for r in caplog.records if r.name == "retrieval_app"]
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
+    assert (
+        records[0].getMessage()
+        == "validation_422_truncated — count=50000 route=/search"
+    )
+    assert records[0].args == (50_000, "/search")
+    assert isinstance(records[0].args, tuple)
+    assert records[0].args[-1] in {"/search", "/retrieve", "/extract", "other"}
+    assert all(_VALIDATION_MARKER not in r.getMessage() + repr(r.args) for r in records)
+    _assert_marker_refused(response, "providers", validated=False)
+
+
+async def test_validation_marker_never_reaches_any_logger(
+    client: httpx.AsyncClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.DEBUG):
+        for route, fields in _REQUEST_FIELD_CASES.items():
+            for field in fields:
+                await _post_marker_case(
+                    client,
+                    route,
+                    field,
+                    validated=field in _validated_fields(_REQUEST_MODELS[route]),
+                )
+        for field in _EXTRACT_FIELDS:
+            await _post_marker_case(client, "/extract", field)
+        await _synthetic_validation([{"loc": ["body", _VALIDATION_MARKER]}] * 101)
+    assert caplog.records, "log capture must be live"
+    assert any(r.name == "httpx" for r in caplog.records)
+    assert any("validation_422_truncated" in r.getMessage() for r in caplog.records)
+    assert any("validation_422_loc_dropped" in r.getMessage() for r in caplog.records)
+    for record in caplog.records:
+        assert _VALIDATION_MARKER not in record.getMessage()
+        assert _VALIDATION_MARKER not in repr(record.args)
+        assert record.exc_info is None
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected_loc"),
+    [
+        ({"msg": "Missing", "type": "missing"}, []),
+        (_VALIDATION_MARKER, None),
+        ({"loc": ["body", object(), "query"]}, ["body", "query"]),
+        ({"msg": object(), "type": object()}, []),
+    ],
+    ids=["missing-loc", "non-mapping", "non-scalar-loc", "non-json-message"],
+)
+async def test_validation_malformed_entries_never_raise(
+    entry: object, expected_loc: list[str] | None, caplog: pytest.LogCaptureFixture
+) -> None:
+    response = await _synthetic_validation([entry])
+    _assert_validation_mirror(response)
+    if expected_loc is None:
+        assert response.json() == {"detail": []}
+    else:
+        item = response.json()["detail"][0]
+        assert item["loc"] == expected_loc
+        assert isinstance(item["msg"], str)
+        assert isinstance(item["type"], str)
+    if expected_loc == ["body", "query"]:
+        assert [r.getMessage() for r in caplog.records] == [
+            "validation_422_loc_dropped — dropped=1 route=/search"
+        ]
+
+
+async def test_validation_coercion_and_render_failures_never_escape(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class BrokenString:
+        def __str__(self) -> str:
+            raise ValueError(_VALIDATION_MARKER)
+
+    for error in (
+        {"msg": BrokenString()},
+        {"type": BrokenString()},
+        {"msg": "\ud800"},
+        {"loc": None},
+    ):
+        response = await _synthetic_validation([error])
+        assert response.status_code == 422
+        assert response.json() == {"detail": []}
+    for record in caplog.records:
+        assert _VALIDATION_MARKER not in record.getMessage() + repr(record.args)
+        assert record.exc_info is None
+
+
+async def test_validation_error_access_failure_never_escapes() -> None:
+    with patch.object(
+        RequestValidationError, "errors", side_effect=ValueError(_VALIDATION_MARKER)
+    ):
+        response = await _synthetic_validation([])
+    assert response.status_code == 422
+    assert response.json() == {"detail": []}
 
 
 async def test_health_degraded_reasons_survive_response_validation(
@@ -568,6 +1031,68 @@ def test_declared_error_statuses_match_the_emission_map() -> None:
         "/search": ["200", "422"],
         "/extract": ["200", "400", "404", "413", "422", "429", "503"],
     }
+
+
+async def test_busy_status_is_chosen_by_route_at_runtime() -> None:
+    """The declaration above, observed: ``busy`` is 422 on /retrieve, 429 on /extract.
+
+    ``pipeline_error_handler`` picks 429 for ``busy`` on ``/extract`` only
+    (``hardening-retrieve-parity`` US-002). ``/retrieve``'s admission refusal
+    carries the same literal and must stay inside its declared ``["200",
+    "422"]`` — a 429 there would be a new status on the route, a MAJOR change.
+    Both refusals are driven for real: each route's controller is saturated
+    with a zero-depth queue, so neither is a patched pipeline.
+    """
+    _configure_app(
+        {
+            "extract_route_enabled": True,
+            "extraction": {"admission_queue_depth": 0},
+            "retrieve": {"admission_queue_depth": 0},
+        }
+    )
+    extract_controller: ExtractionAdmissionController = app.state.extraction_admission
+    retrieve_controller: ExtractionAdmissionController = app.state.retrieve_admission
+    assert await extract_controller.acquire() is True
+    assert await retrieve_controller.acquire() is True
+    fetch = AsyncMock()
+    try:
+        with (
+            patch(
+                "pipeline.orchestrator.validate_url",
+                new=AsyncMock(return_value=("93.184.216.34", "example.com")),
+            ),
+            patch("pipeline.orchestrator.fetch_url", new=fetch),
+        ):
+            async with _client() as client:
+                retrieve = await client.post(
+                    "/retrieve", json={"url": "https://example.com/"}
+                )
+                extract = await client.post(
+                    "/extract",
+                    files={"file": ("document.txt", b"safe", "text/plain")},
+                    data={"filename": "document.txt"},
+                )
+    finally:
+        await extract_controller.release()
+        await retrieve_controller.release()
+
+    assert retrieve.status_code == 422
+    assert retrieve.json()["error"] == "busy"
+    assert retrieve.json()["reason"] == contract.RETRIEVE_ADMISSION_QUEUE_FULL
+    assert set(retrieve.json()) == {"error", "reason", "request_id"}
+    assert_mirrors(Pipeline422ErrorResponse, retrieve)
+    fetch.assert_not_awaited()
+
+    assert extract.status_code == 429
+    assert extract.json()["error"] == "busy"
+    assert_mirrors(RateLimit429Response, extract)
+
+    for controller in (extract_controller, retrieve_controller):
+        assert (controller.active, controller.queued, controller.queued_bytes) == (
+            0,
+            0,
+            0,
+        )
 
 
 def test_each_declaration_points_at_its_mirror_model() -> None:
@@ -648,10 +1173,14 @@ def test_degraded_reasons_and_dict_vocabularies_are_documented() -> None:
     assert health["degraded_reasons"]["items"]["enum"] == [
         DEGRADED_PROMPTGUARD_UNAVAILABLE,
         DEGRADED_CACHE_UNAVAILABLE,
+        contract.DEGRADED_CACHE_UNAUTHENTICATED,
     ]
     assert (
         retrieval_app.CAPABILITY_SEARCH_SANITIZATION
         in health["capabilities"]["description"]
+    )
+    assert (
+        retrieval_app.CAPABILITY_CACHE_HMAC_KEY in health["capabilities"]["description"]
     )
 
     omitted: dict[str, Any] = components["SearchResponse"]["properties"][
@@ -714,12 +1243,10 @@ def test_declaring_422_suppresses_fastapis_automatic_one() -> None:
 
 
 def test_our_validation_mirror_matches_fastapis_own_definition() -> None:
-    """The mirrored ``HTTPValidationError`` documents FastAPI's real shape.
+    """The handler emits exactly this trio underneath the window keys.
 
-    Because every body-taking route declares its 422, FastAPI never injects
-    its own component and ours is the one the document carries. That makes
-    this comparison the only thing standing between a FastAPI change to the
-    validation body and a contract that quietly describes the old one.
+    The mirror pins our own body. Comparing FastAPI's definition is now a
+    compatibility check, not the source of truth for the emitted shape.
     """
     from fastapi.openapi.utils import validation_error_definition
 

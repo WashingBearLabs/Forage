@@ -30,16 +30,24 @@ for whether a key is usable at all: :func:`brave_key_present`.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 import ssl
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Final, cast
 
 import httpx
 
+from pipeline.bounded_body import (
+    BodyTooLarge,
+    MalformedBody,
+    UnsupportedEncoding,
+    read_bounded_body,
+)
 from pipeline.contract import CONTENT_KIND_CHUNK
+from pipeline.provider_transport import BoundedProviderTransport
 from pipeline.search_providers.base import (
     FailureClass,
     ProviderFailure,
@@ -144,12 +152,11 @@ _BRAVE_AUTH_HEADER: Final = "X-Subscription-Token"
 _ISO_CALENDAR_DATE_RE: Final = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 # The captured envelope was 30,344 bytes; this is at least ten times that,
-# checked against `Content-Length` before any read and against a running
-# total of decoded bytes while streaming, so a compressed body cannot expand
-# past it either.
+# decoded bytes bounded by Forage's own decompressor. We request identity,
+# serve decodable compressed replies, and refuse others as unsupported_encoding.
 _BRAVE_MAX_RESPONSE_BYTES: Final = 1_048_576
 
-# The closed `detail` vocabulary this provider ever emits. Twelve fixed
+# The closed `detail` vocabulary this provider ever emits. Thirteen fixed
 # tokens, never `str(exc)`, never a URL — `_failure` collapses anything else
 # to `unexpected` so no future caller can widen what reaches the wire.
 _BRAVE_FAILURE_DETAILS: Final = frozenset(
@@ -165,6 +172,7 @@ _BRAVE_FAILURE_DETAILS: Final = frozenset(
         "bad_json",
         "malformed_body",
         "body_too_large",
+        "unsupported_encoding",
         "unexpected",
     }
 )
@@ -201,6 +209,7 @@ class BraveSettings:
     timeout_seconds: float = DEFAULT_BRAVE_TIMEOUT_SECONDS
     chunk_max_chars: int = DEFAULT_BRAVE_CHUNK_MAX_CHARS
     query_max_chars: int = DEFAULT_BRAVE_QUERY_MAX_CHARS
+    max_response_bytes: int = _BRAVE_MAX_RESPONSE_BYTES
 
 
 def _bounded_float(
@@ -287,7 +296,7 @@ class BraveApiProvider:
 
     ``search()`` never raises: every exception and every non-2xx response is
     caught and mapped onto a :class:`ProviderFailure` from a closed,
-    twelve-token vocabulary (contract point 4).
+    thirteen-token vocabulary (contract point 4).
     """
 
     name = BRAVE_PROVIDER_NAME
@@ -312,50 +321,64 @@ class BraveApiProvider:
         ``SearchRequest.query`` itself carries no such limit on the wire.
         """
         outbound_query = query[: self.settings.query_max_chars]
+        compressed = False
         try:
+            tls_context = ssl.create_default_context()
             async with httpx.AsyncClient(
+                transport=BoundedProviderTransport(
+                    self.settings.max_response_bytes, ssl_context=tls_context
+                ),
                 timeout=self.settings.timeout_seconds,
                 follow_redirects=False,
+                headers={"Accept-Encoding": "identity"},
                 trust_env=False,
-                verify=ssl.create_default_context(),
+                verify=tls_context,
             ) as client:
-                async with client.stream(
-                    "GET",
-                    _BRAVE_LLM_CONTEXT_URL,
-                    params={"q": outbound_query, "count": max_results},
-                    headers={_BRAVE_AUTH_HEADER: self._api_key},
-                ) as response:
-                    if response.status_code != 200:
-                        return self._failure_for_status(response.status_code)
-
-                    content_length = response.headers.get("content-length")
-                    if (
-                        content_length is not None
-                        and content_length.isdigit()
-                        and int(content_length) > _BRAVE_MAX_RESPONSE_BYTES
-                    ):
-                        return self._failure("hard_error", "body_too_large")
-
-                    chunks: list[bytes] = []
-                    running = 0
-                    async for chunk in response.aiter_bytes():
-                        running += len(chunk)
-                        if running > _BRAVE_MAX_RESPONSE_BYTES:
-                            return self._failure("hard_error", "body_too_large")
-                        chunks.append(chunk)
-                    body = b"".join(chunks)
+                async with asyncio.timeout(self.settings.timeout_seconds):
+                    async with client.stream(
+                        "GET",
+                        _BRAVE_LLM_CONTEXT_URL,
+                        params={"q": outbound_query, "count": max_results},
+                        headers={_BRAVE_AUTH_HEADER: self._api_key},
+                    ) as response:
+                        compressed = (
+                            response.headers.get("content-encoding", "identity")
+                            .strip()
+                            .lower()
+                            != "identity"
+                        )
+                        if response.status_code != 200:
+                            return replace(
+                                self._failure_for_status(response.status_code),
+                                compressed=compressed,
+                            )
+                        body = await read_bounded_body(
+                            response, max_bytes=self.settings.max_response_bytes
+                        )
 
                 try:
                     payload = cast("object", json.loads(body))
                 except ValueError:
-                    return self._failure("hard_error", "bad_json")
-                return self._build_result(payload, max_results)
-        except httpx.TimeoutException:
-            return self._failure("timeout", "timeout")
+                    return self._failure(
+                        "hard_error", "bad_json", compressed=compressed
+                    )
+                return replace(
+                    self._build_result(payload, max_results), compressed=compressed
+                )
+        except (TimeoutError, httpx.TimeoutException):
+            return self._failure("timeout", "timeout", compressed=compressed)
+        except BodyTooLarge:
+            return self._failure("hard_error", "body_too_large", compressed=compressed)
+        except UnsupportedEncoding:
+            return self._failure(
+                "hard_error", "unsupported_encoding", compressed=compressed
+            )
+        except MalformedBody:
+            return self._failure("hard_error", "malformed_body", compressed=compressed)
         except httpx.HTTPError:
-            return self._failure("hard_error", "transport_error")
+            return self._failure("hard_error", "transport_error", compressed=compressed)
         except Exception:
-            return self._failure("hard_error", "unexpected")
+            return self._failure("hard_error", "unexpected", compressed=compressed)
 
     def _build_result(
         self, payload: object, max_results: int
@@ -483,11 +506,13 @@ class BraveApiProvider:
             return self._failure("hard_error", "http_4xx")
         return self._failure("hard_error", "unexpected")
 
-    def _failure(self, failure_class: FailureClass, detail: str) -> ProviderFailure:
+    def _failure(
+        self, failure_class: FailureClass, detail: str, *, compressed: bool = False
+    ) -> ProviderFailure:
         """Log the closed tokens and return the typed failure.
 
         The vocabulary is closed *by construction* rather than by review: a
-        ``detail`` that is not one of the twelve fixed tokens collapses to
+        ``detail`` that is not one of the thirteen fixed tokens collapses to
         ``unexpected`` here. The tokens go in the message itself, as ``%s``
         arguments (``kit_tools/arch/patterns/LOGGING.md`` ~138: ``extra=``
         renders nowhere an operator can see it) — never a URL, a header
@@ -501,4 +526,5 @@ class BraveApiProvider:
             provider_name=self.name,
             failure_class=failure_class,
             detail=detail,
+            compressed=compressed,
         )

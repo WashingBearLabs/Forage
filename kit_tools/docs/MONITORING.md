@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document logs, metrics, alerts, and dashboards. How to observe the system.
 
-> Last updated: 2026-09-17
-> Updated by: Claude (seed-project)
+> Last updated: 2026-09-23
+> Updated by: Copilot (hardening-release US-004)
 
 ---
 
@@ -25,7 +25,7 @@ Everything an operator has is reachable with `curl`, `docker logs`, and two scri
 - Container stdout/stderr via `docker logs` — WARNING and ERROR lines only, with grep-able markers (this page, "Logging").
 - `contract_smoke.py` and `searxng_smoke.py` — post-deploy probes (this page, "Post-Deploy Probes").
 
-What does **not** exist, so nobody goes looking: no Prometheus exporter, no OpenTelemetry, no StatsD, no Sentry, no Datadog, no dashboards, no alert rules, no log shipping, no request tracing, no status page, and no `HEALTHCHECK` in the `Dockerfile` or in `compose/minimal.yml` / `compose/full.yml`. A grep of source, config, and docs for any of those integrations finds nothing. Whatever monitoring exists is the operator's own tooling polling `/health` and `/metrics`.
+What does **not** exist, so nobody goes looking: no Prometheus exporter, no OpenTelemetry, no StatsD, no Sentry, no Datadog, no dashboards, no alert rules, no log shipping, no request tracing and no status page. There is no image-level `HEALTHCHECK`; both compose fragments declare a status-only liveness healthcheck. Body-aware monitoring is the operator's own tooling polling `/health` and `/metrics`.
 
 Related pages: `kit_tools/arch/SERVICE_MAP.md` (failure impact matrix per dependency), `kit_tools/arch/INFRA_ARCH.md`, `kit_tools/arch/SECURITY.md` (security-relevant logging), `kit_tools/docs/TROUBLESHOOTING.md` (symptom to remedy), `kit_tools/docs/DEPLOYMENT.md`, `kit_tools/arch/patterns/LOGGING.md` (logging conventions), and the canonical `docs/configuration.md` health-field reference.
 
@@ -59,15 +59,16 @@ Forage listens on `0.0.0.0:8020` inside the container; the compose fragments pub
 |-------|------|-----------------|---------|
 | `status` | string | `healthy`, `degraded` | `degraded` iff `degraded_reasons` is non-empty. |
 | `promptguard_loaded` | bool | `true`, `false` | Whether the PromptGuard classifier is loaded (`app.state.classifier.loaded`). Always honest; the break-glass override does not touch it. |
+| `promptguard_model` | string | `meta-llama/Llama-Prompt-Guard-2-22M` (current allowlist) | Configured id from startup state, whether loaded or not; never re-read from the environment per request. The 86M remains pending the vendoring gate. |
 | `cache_connected` | bool | `true`, `false` | Valkey mode: a live ping via `cache.ping_if_due()`, subject to reconnect backoff. Memory mode: always `true` (the backend is in-process). Not a statement that Valkey is present; read `cache_backend` for that. |
-| `capabilities` | dict | `{"search_sanitization": 1, "brave_api_key": 1}`, any subset, or `{}` | Presence map, two keys as of contract 1.2.0. `search_sanitization` is present when the classifier is loaded **or** when break-glass is armed (`FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION=1`, alias `POPPY_RETRIEVAL_LEGACY_CAPABILITY=1`, exact string `1`) — break-glass lies only for this key. `brave_api_key` is present when this start resolved a usable `FORAGE_BRAVE_API_KEY` (`brave_key_present()`), independently of whether `brave` is in `search_providers` and untouched by break-glass. |
-| `sanitizer_revision` | string | 64-hex sha256 | `derive_sanitizer_revision(config)`: hash of eight `pipeline/*.py` sources plus `MODEL_ID@revision` plus `promptguard_threshold`. The literal `unknown` appears only when no lifespan ran (test transports). |
-| `contract_version` | string | `1.2.0` | `pipeline.contract.CONTRACT_VERSION`; identical to `/metrics.contract_version` and `/openapi.json` `info.version`. |
+| `capabilities` | dict | `{"search_sanitization": 1, "brave_api_key": 1, "cache_hmac_key": 1}`, any subset, or `{}` | Presence map, three keys as of contract 1.3.0. `search_sanitization` is present when the classifier is loaded **or** when break-glass is armed (`FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION=1`, alias `POPPY_RETRIEVAL_LEGACY_CAPABILITY=1`, exact string `1`) — break-glass lies only for this key. `brave_api_key` is present when this start resolved a usable `FORAGE_BRAVE_API_KEY` (`brave_key_present()`), independently of whether `brave` is in `search_providers`. `cache_hmac_key` is present only when this start resolved a usable `FORAGE_CACHE_HMAC_KEY` and selected Valkey, independently of connectivity; absent in memory mode. Both credential-presence keys are untouched by break-glass and disclose no value or entropy guarantee. |
+| `sanitizer_revision` | string | 64-hex sha256 | `derive_sanitizer_revision(config)`: hash of eight `pipeline/*.py` sources, root `url_validator.py`, selected `model_id@revision`, `idna@version`, plus `promptguard_threshold` plus the two contiguity values (`promptguard_contiguity_windows` then `promptguard_contiguity_threshold`). Even disabled defaults enter the hash. The literal `unknown` appears only when no lifespan ran (test transports). |
+| `contract_version` | string | `1.3.0` | `pipeline.contract.CONTRACT_VERSION`; identical to `/metrics.contract_version` and `/openapi.json` `info.version`. |
 | `cache_backend` | string | `valkey`, `memory` | Decided once at start: `VALKEY_URL` fully unset gives `memory`; set to anything else, including the empty string, gives `valkey`. |
 | `search_providers` | list | `["searxng"]`, `["searxng", "brave"]`, ... | The resolved provider chain's names, in traversal order, after key-gated skips (contract 1.2.0, `search-policy-and-health` US-002). Configuration echo fixed for the life of the process — not a liveness probe, and not a statement that any provider is reachable right now. The check is to compare it against `FORAGE_SEARCH_PROVIDERS`: a configured `brave` that is missing here was skipped at boot for want of a usable key, and the startup signal for that is the WARNING `brave_skipped_missing_key`; `/health` itself cannot tell "configured but skipped" from "never configured" — by design, key presence is published, never a second differential channel (ruling 15). |
-| `degraded_reasons` | list | `promptguard_unavailable`, `cache_unavailable` | Closed vocabulary (`pipeline/contract.py` `DegradedReason`). Ordered `promptguard_unavailable` first. Empty iff `status` is `healthy`. |
+| `degraded_reasons` | list | `promptguard_unavailable`, `cache_unavailable`, `cache_unauthenticated` | Closed vocabulary (`pipeline/contract.py` `DegradedReason`), in the order shown with inapplicable reasons omitted. Empty iff `status` is `healthy`. Both cache reasons may coexist; neither appears in memory mode. |
 
-The two reasons are the complete set. `promptguard_unavailable` means the classifier is not loaded (no token, download in flight, verification refused, or load failed). `cache_unavailable` means `VALKEY_URL` is configured (set, even empty or unparseable) and the ping fails; it never appears in memory mode. The response is validated against `DegradedReason` on the way out, so a reason added to the handler without being added to the Literal fails loudly (500) rather than reaching a consumer unannounced.
+These three reasons are the complete set. `promptguard_unavailable` means the classifier is not loaded (no token, download in flight, verification refused, or load failed). `cache_unavailable` means the configured Valkey is unavailable (set, even empty or unparseable). `cache_unauthenticated` means Valkey signing was not enabled at boot: cached `/retrieve` content cannot be proven to be Forage's own and is served without re-sanitization. On shared Valkey treat it as an **open cache-poisoning path** until a key is set, not merely a configuration signal. The response is validated against `DegradedReason` on the way out, so a reason added to the handler without being added to the Literal fails loudly (500) rather than reaching a consumer unannounced.
 
 ### Body shape
 
@@ -77,13 +78,14 @@ Schema-style listing (field set and value domains as confirmed in `retrieval_app
 {
   "status":             "healthy" | "degraded",
   "promptguard_loaded": true | false,
+  "promptguard_model":  "<startup-selected model id>",
   "cache_connected":    true | false,
-  "capabilities":       {"search_sanitization": 1, "brave_api_key": 1} | {} | ...,
+  "capabilities":       {"search_sanitization": 1, "brave_api_key": 1, "cache_hmac_key": 1} | {} | ...,
   "sanitizer_revision": "<64-hex sha256>",
-  "contract_version":   "1.2.0",
+  "contract_version":   "1.3.0",
   "cache_backend":      "valkey" | "memory",
   "search_providers":   ["searxng"] | ["searxng", "brave"] | ...,
-  "degraded_reasons":   [] | ["promptguard_unavailable"] | ["cache_unavailable"] | ["promptguard_unavailable", "cache_unavailable"]
+  "degraded_reasons":   [] | ["promptguard_unavailable"] | ["cache_unavailable"] | ["cache_unauthenticated"] | ["promptguard_unavailable", "cache_unavailable"] | ["promptguard_unavailable", "cache_unauthenticated"] | ["cache_unavailable", "cache_unauthenticated"] | ["promptguard_unavailable", "cache_unavailable", "cache_unauthenticated"]
 }
 ```
 
@@ -96,7 +98,7 @@ A consumer or deploy script should gate in this order:
 1. **Contract.** Compare the MAJOR of `contract_version` against the vendored contract and refuse activation on mismatch (`CLAUDE.md` invariant 4, `contract/GOVERNANCE.md`). Compare contracts, never `sanitizer_revision` — Poppy and Forage revisions have diverged deliberately six times.
 2. **Sanitization readiness.** Gate on `promptguard_loaded: true` (or on `capabilities.search_sanitization` if the consumer's own capability gate is what you are exercising, remembering break-glass can force that key on).
 3. **Downloading versus wedged.** `/health` alone cannot distinguish "still downloading" from "retrying forever". Read `/metrics` `model.fetch_in_progress` and `model.retries_scheduled` (see "Reading `promptguard_loaded: false`" under Metrics). `fetch_in_progress` lives under `/metrics`, not `/health`. Poppy's deploy readiness wait reads `model.fetch_in_progress`; its exact behaviour lives in the other repo and is out of scope here.
-4. **Cache.** Treat `cache_unavailable` as a performance signal, not an outage: `/retrieve` keeps working uncached.
+4. **Cache.** Treat `cache_unavailable` as a performance signal, not an outage: `/retrieve` keeps working uncached. Treat `cache_unauthenticated` separately as an open cache-poisoning path on shared Valkey: cached content has no proof of origin and is not re-sanitized. Follow the [signing-key recipe](../../docs/configuration.md#credential-handling-for-forage_cache_hmac_key); neither reachability nor `cache_connected: true` supplies authenticity.
 
 ### What `/health` does not tell you
 
@@ -106,7 +108,7 @@ A consumer or deploy script should gate in this order:
 
 ### Startup budget
 
-Measured boot on 1 vCPU / 1 GB (`docs/configuration.md`): 19 s cold (weights download) and 9 s warm (verified set already on the `HF_HOME` volume, zero network). Startup never blocks on weights: the lifespan yields immediately and `/health` answers `degraded` while `WeightAcquisition` runs as a background task. CI's smoke job and `contract_smoke.py` allow 120 s for `/health` to answer 200.
+Measured weights boot on the reference envelope (1 vCPU / 1 GB), configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` — see `docs/configuration.md` § Sizing the container: 19 s cold (weights download) and 9 s warm (verified set already on the `HF_HOME` volume, zero network). These are not classify latencies. Startup never blocks on weights: the lifespan yields immediately and `/health` answers `degraded` while `WeightAcquisition` runs as a background task. CI's smoke job and `contract_smoke.py` allow 120 s for `/health` to answer 200.
 
 ---
 
@@ -131,6 +133,7 @@ Backed by `retrieval_app.ExtractionMetrics`, `ExtractionAdmissionController`, an
 | `queued` | gauge | Requests waiting for a slot now (`len(controller._waiters)`). | — |
 | `queued_bytes` | gauge | Reserved bytes = waiters × `max_input_bytes` (conservative). | — |
 | `verdicts` | map | Per outcome: `success`, `injection_detected`, or an `/extract` 422 error code. | Injection or failure mix on uploaded documents. |
+| `promptguard_contiguity_detections` | counter | Once per upload whose stage-3 rule is `contiguity` or `both`. | Aggregate opt-in run-rule blocks, including possible false positives; zero when disabled. |
 | `cgroup_memory_current_bytes` | gauge or null | `/sys/fs/cgroup/memory.current`; `null` on macOS or a plain host. | — |
 | `cgroup_memory_max_bytes` | gauge or null | `/sys/fs/cgroup/memory.max`; `null` when unreadable or the literal `max`. | — |
 | `oom_proximity_ratio` | ratio or null | `current / max`; flat inside `extraction`, not nested (wire contract). | Approaching 1.0 means the container is near its `mem_limit`. |
@@ -141,15 +144,50 @@ Backed by `retrieval_app.SearchMetrics`.
 
 | Counter | Kind | Increments when | A rising value means |
 |---------|------|-----------------|----------------------|
+| `policy_invalid_domain_entry` | counter (per entry) | Once per invalid caller `blocked_domains` entry dropped; the offending entry is never stored or logged. Unlike `/retrieve`, this route has no allowlist byte-budget drops. An over-budget denylist is a 422 `search_unavailable` / `policy_domain_list_too_large`, never a partial list or a drop count. | Malformed consumer denylist entries; check the consumer's raw list, not provider health. The two `/retrieve` causes are intentionally combined there, but only invalid entries apply here. |
+| `policy_suffix_trusted_skip` | counter (reserved) | Always zero: reserved for parity with `/retrieve`, which covers wildcard **trusted and verified** resolutions. `/search` has no trust tiers. | A non-zero value is an instrumentation defect, not a search classifier skip. |
 | `requests` | counter | Every `/search` that reached the handler. | Load. |
-| `errors` | map | `record_error(exc.error)`; three keys. `searxng_error` (SearXNG answered non-2xx) and `searxng_unavailable` (connection refused, DNS, 10 s timeout, bad JSON) are raised only when the configured chain is a lone `searxng`; `search_unavailable` (contract `1.2.0`) covers every other chain, with reason `<provider_name>: <failure_class>` — or, raised by the handler before any provider is called, the fixed literal `policy_excluded_all_providers` when a request's `providers` / `allow_paid_fallback` leaves a paid-only chain empty (`search-policy-and-health` US-010). | The companion is down or throttling. `searxng_error` with reason "SearXNG returned HTTP error (http_429)" means the SearXNG limiter was turned on. `search_unavailable` names its provider in the 422 `reason`, not in the counter key — read the logs or the response to tell which one failed; a `policy_excluded_all_providers` reason is a consumer's policy, not a provider failure. |
-| `omitted_by_reason` | map | Results dropped before return, keyed by `contract.OMISSION_REASONS`: `invalid_url`, `structural_blocked`, `injection_detected`, `promptguard_unavailable`; anything else lands in `other`. | `promptguard_unavailable` rising: fail-closed omissions on a degraded container — the consumer sees thin or empty results. |
+| `errors` | map | `record_error(exc.error)`; three keys. `searxng_error` (SearXNG answered non-2xx) and `searxng_unavailable` (connection refused, DNS, configured wall-clock timeout, bad JSON, byte-bound or encoding refusal) are raised only when the configured chain is a lone `searxng`; `search_unavailable` (contract `1.2.0`) covers every other chain, with reason `<provider_name>: <failure_class>`. The handler also raises `search_unavailable` before any provider call for `policy_excluded_all_providers` (request policy leaves a paid-only chain empty) or `policy_domain_list_too_large` (caller denylist exceeds the raw byte budget). | The companion is down or throttling. `searxng_error` with reason "SearXNG returned HTTP error (http_429)" means the SearXNG limiter was turned on. Read the 422 `reason`: `policy_excluded_all_providers` and `policy_domain_list_too_large` are permanent client errors, not provider failures and not retryable without changing the request or configured policy/budget. |
+| `omitted_by_reason` | map | Results dropped before return, keyed by `contract.OMISSION_REASONS`: `invalid_url`, `structural_blocked`, `injection_detected`, `promptguard_unavailable`, and — added in contract `1.3.0` — `blocked_url`; anything else lands in `other`. `blocked_url` is reachable from the lexical URL audit, caller `blocked_domains`, and operator `seed_blocklist`. | `promptguard_unavailable` rising: fail-closed omissions on a degraded container — the consumer sees thin or empty results. `structural_blocked` rising after `hardening-search-sanitization` US-001 is **expected** — see the caveat below. A rising `blocked_url` count has three possible causes: the URL audit, `blocked_domains`, or `seed_blocklist`. Aggregate the content-free `search_url_blocked` INFO line by `provider` plus `host_class`: `private_literal`, `embedded_private`, and `blocklisted_name` are suspicious-host signals warranting investigation; `policy_blocklist` is expected operator/caller policy, not a suspicious-host signal. The latter intentionally does not distinguish which policy list matched. |
 | `unscanned_results` | counter | `+= response.unscanned_results` — fail-open results returned without an ML scan. | Unsanitized results are reaching the consumer. |
+| `promptguard_contiguity_detections` | counter | Once per result whose stage-3 rule is `contiguity` or `both`, not per request. | Aggregate opt-in omissions; coverage is content-dependent because tokenization, not character length, decides window count. |
 | `fallback_fired` | counter | Once per `/search` request whose provider chain advances past the first provider (`search-fallback` US-003; the per-process count of the per-response `fallback_fired` bool) — including a request that ends in a 422. | Free search is failing often enough that the chain is advancing; correlate with `search_provider_failed` WARNINGs and the `errors` map to see which provider is unreliable. |
+| `promptguard_latency_target_exceeded` | counter | Once per `/search` whose duration strictly exceeds `search_promptguard_latency_target_ms` (default 1000). Measures the per-result sanitization loop: structural scan, PromptGuard and any semaphore wait; pre-loop refusals never count. The loop runs once per served result and scales with `num_results` (1–20); compare only at the same `num_results`. | Read its ratio over `search.requests` first, then the max below; a count is not a latency magnitude. |
+| `sanitization_latency_max_ms` | high-water mark (ms) | `max(previous, int(rounded_duration_ms))` after every completed per-result sanitization loop: structural scan, PromptGuard and any semaphore wait, including served-empty requests and below-target durations, excluding pre-loop refusals. The loop runs once per served result and scales with `num_results` (1–20); compare only at the same `num_results`. | Per-process, never resets; restarting the container is the only way to clear it. Only meaningful read with `search.promptguard_latency_target_exceeded` and `search.requests`, against `search_promptguard_latency_target_ms`. One old outlier can hold it high indefinitely. |
 | `paid_calls` | counter | Once per call to a `paid=True` configured provider, incremented before the call so a call that times out is still counted — whether or not it served the response. | Spend. `paid_calls` rising **faster** than `fallback_fired` means a paid provider is first in the configured chain — `FORAGE_SEARCH_PROVIDERS` names it ahead of every free provider, or names no free provider — so it is called without the chain advancing. A per-request `providers` / `allow_paid_fallback` policy cannot cause this: it only removes paid providers, never adds or reorders one. Rising together at 1:1 means a standard free-first chain is falling back to the paid provider every time it advances. |
+| `classification_wait_timeouts` | counter | Once per `/search` request whose per-request PromptGuard wait budget expired (`hardening-retrieve-parity` US-006) — **once per request**, however many of its results went on unscanned. Never moves when the classifier is absent or still warming: that path does not touch the permit. | Permit contention, not a missing model. Read it with `/health` `promptguard_loaded` — `true` plus this counter rising is a busy classifier, `false` is the degraded-model shape instead. Fail-closed requests show up as `omitted_by_reason.promptguard_unavailable`; fail-open ones as `unscanned_results`. |
 | `policy_unknown_provider` | counter | Once per ignored entry in a request's `providers` list: one for every entry past the first eight, plus one for every entry among the first eight that, after `strip()` and lower-casing, names no provider in the configured chain (duplicates each count). The `/search` handler adds the ignored count `apply_request_policy` returns, before any provider is called; the offending name itself is never stored (`search-policy-and-health` US-010). | A consumer is sending `providers` entries this deployment ignores (ignored, not rejected). To find which, compare the consumer's `providers` names against `/health` `search_providers`, the resolved chain. If a missing name is `brave`, check `/health` `capabilities`: no `brave_api_key` entry means the key is absent or invalid — a key problem, not a name problem; `brave_api_key: 1` with no `brave` in `search_providers` means keyed but not chained — `FORAGE_SEARCH_PROVIDERS` leaves it out. Any other missing name is a bad name on the consumer's side. Entries past the eighth also count, whatever they name, so a consumer whose names all appear in `search_providers` but who sends more than eight entries still moves the counter. |
 
-**Caveat — `fallback_fired` and `paid_calls` stay at zero on a `searxng`-only deployment.** `run_search_pipeline` increments both during traversal — `fallback_fired` only when the chain advances past its first provider, `paid_calls` only when it calls a `paid=True` provider — and a `searxng`-only deployment (the default, no paid key configured) has no second provider to advance to and no paid provider to call, so both stay at zero forever. `policy_unknown_provider` is not in this caveat: the handler increments it before traversal, so it moves on any deployment — on a `searxng`-only one, every `brave` entry a consumer sends is ignored and counted. A `searxng`-only deployment's first-party signal for free-search trouble is the `search_provider_failed` WARNING per failed call and `errors.searxng_unavailable` / `errors.searxng_error`, not a counter — see the `search` `errors` row above and the "SearXNG failures" row in Signals Worth Watching below.
+**Latency runbook.** A rising exceeded-over-requests ratio with a max under 2×
+the target: raise the target; above it: raise `FORAGE_CPUS` /
+`promptguard_threads` (see [§ Sizing the container](../../docs/configuration.md#sizing-the-container)).
+Confirm `FORAGE_MEM_LIMIT` landed via `/metrics`
+`extraction.cgroup_memory_max_bytes`; confirm CPU quota with
+`docker inspect -f '{{.HostConfig.NanoCpus}}' <container>` (no in-service CPU signal).
+Compare at the same `num_results`, and
+remember that a process-lifetime max is not a percentile or a rolling-window peak.
+Under spec 2 US-006 the signal that fail-open requests are being served unscanned is
+`search.classification_wait_timeouts` rising; the max is whole-loop wall time —
+structural scan, PromptGuard and semaphore wait, summed over every served result —
+so it is not comparable to `promptguard_wait_seconds`' classification-wait budget
+and is never read against it. That budget is shared across the request's waits,
+not renewed for each result. `search_first_token_target_ms` is log-only today;
+no counter compares it.
+
+Provider response counters (also in the `search` section):
+
+| Counter | Kind | Increments when | A rising value means |
+|---------|------|-----------------|----------------------|
+| `provider_compressed_body` | counter | Every non-identity `Content-Encoding` response from any provider, whatever its outcome: served, over-bound, undecodable, malformed, non-2xx, timeout or transport failure after headers. Counted before any provider-loop exit, including the lone-SearXNG served-empty carve-out. | Compression was seen; zero genuinely means none. Gzip and deflate are decoded under Forage's byte bound. `unsupported_encoding` is the grep token for "this build cannot decode it", not a JSON parse error. |
+| `provider_timeouts` | counter | Every provider call ending as `timeout`, whether the per-operation httpx timeout or the whole-interaction budget. | A post-upgrade rise on a previously working slow SearXNG is the budget tightening: raise `search_searxng_timeout_seconds`. Both timeout kinds deliberately share one counter. |
+
+**Caveat — a rising `structural_blocked` after `hardening-search-sanitization` US-001 is expected, and no counter separates it from a true block.** Before that story `/search` collapsed every newline in `title` and `snippet` *before* the Stage 2 scan, so the three line-anchored BLOCK patterns (`^assistant:` under `MULTILINE | IGNORECASE`, `^System:` and `^POPPY:` under `MULTILINE`, `pipeline/stage2_structural.py`) could only fire at a field's first character. They now fire on **any** line — the parity `/retrieve` has always had — and chat transcripts, Q&A pages, API docs and release notes routinely carry a line beginning `assistant:` or `System:`. Every such result is dropped whole into the same `structural_blocked` bucket, indistinguishable there from a genuine injection: `omitted_by_reason` carries no sub-reason and no counter can tell the two apart. Since provider-bounds US-005, the Stage-2 INFO line is `search_result_omitted reason=structural_blocked domain=<validated-host> field=<title|url|snippet>`. Aggregate by domain and field to locate a yield change, but neither this line nor the counter identifies the matched pattern or proves a false positive. Result URLs, paths and query strings are never logged. The other two content-omission lines carry the same reason/domain pair with `injection_detected` (plus score) or `promptguard_unavailable`; URL rejection/block logs remain host-free.
+
+**Caveat — the yield cost of `hardening-search-sanitization` US-002's URL rules is visible only in the logs, not in `/metrics`.** US-002 rejects two classes of URL that were served before it: one carrying an unencoded RFC 3986 excluded character (`|`, `{`, `}`, `^`, backtick — some engines return these unencoded in query strings) and one longer than 2 048 characters (served *shortened*, pointing at a different resource, before the story). Both land in the same `omitted_by_reason.invalid_url` bucket as every other URL rejection, so the counter cannot separate them. The signal is the **rejection log** — one content-free `search_url_rejected rule=<token> provider=<name>` record per rejection, INFO, where `<token>` is one of `missing`, `too_long`, `raw_chars`, `unparseable`, `invalid_port`, `parse`, `userinfo`, `host_code_point`, `zone_id` — aggregated by `provider` **plus** `rule`. `rule=raw_chars` or `rule=too_long` climbing on one provider is the yield cost; the other seven tokens are URLs that were already being rejected. Neither the URL nor its host is ever in the record (invariant 6), so there is nothing to correlate against but the pair. There is no `/metrics` counter for this and none is planned: a per-rule counter would be a wire change for a yield question.
+
+**Caveat — `blocked_url` and `invalid_url` short-circuit the content scan.** The URL rules run before Stage 2 sees a result's title and snippet, and the first reason wins, so a result dropped under `blocked_url` or `invalid_url` is never scanned: `structural_blocked` and `injection_detected` **undercount** by exactly the payloads that happened to ride a rejected or blocked URL. Read the three counters together rather than treating a falling `structural_blocked` as a quieter web. `hardening-search-sanitization` US-003 adds two tokens to the `search_url_rejected` vocabulary — `numeric_host` (a digit-run host that is not a canonical dotted quad) and `idna` (a host the UTS-46 encode refuses) — and a second, deliberately disjoint record, `search_url_blocked host_class=<token> provider=<name>`, INFO, with `<token>` one of `private_literal`, `embedded_private` or `blocklisted_name`. `hardening-hostname-and-config` US-002 adds `policy_blocklist` for caller `blocked_domains` or operator `seed_blocklist`, after the URL audit and before the content scan. The two vocabularies never share a token, so an aggregation on one never silently picks up the other, and neither record carries the URL or its host.
+
+**Caveat — `fallback_fired` and `paid_calls` stay at zero on a `searxng`-only deployment.** `run_search_pipeline` increments both during traversal — `fallback_fired` only when the chain advances past its first provider, `paid_calls` only when it calls a `paid=True` provider — and a `searxng`-only deployment (the default, no paid key configured) has no second provider to advance to and no paid provider to call, so both stay at zero forever. `policy_unknown_provider` is not in this caveat: the handler increments it before traversal, so it moves on any deployment — on a `searxng`-only one, every `brave` entry a consumer sends is ignored and counted. A `searxng`-only deployment's first-party signals for free-search trouble include the `search_provider_failed` WARNING, `errors.searxng_unavailable` / `errors.searxng_error`, and now `provider_timeouts`; `provider_compressed_body` also reveals compressed replies regardless of success.
 
 **Alert condition.** Watch `paid_calls`' rate over a rolling window (e.g. per day), sized against Brave's included query credit — roughly 1,000 queries/month per owner decision 2 (`kit_tools/specs/epic-search-providers.md`), i.e. an average budget of about 33/day before the $5/1,000 overage rate applies. A sustained rate above that budget means the paid provider is absorbing more of the traffic than the credit covers. **Remedy:** remove the paid provider's token from `FORAGE_SEARCH_PROVIDERS` and restart the container — the chain is resolved once, at boot, in the lifespan, so there is no live toggle.
 
@@ -159,22 +197,89 @@ Backed by `retrieval_app.RetrieveMetrics`.
 
 | Counter | Kind | Increments when | A rising value means |
 |---------|------|-----------------|----------------------|
+| `policy_invalid_domain_entry` | counter (per entry) | Once per dropped request-list entry, not per request: invalid entries in any of the three lists, or every entry in an allowlist's over-budget remainder. The offending entry is never stored or logged. Invalid and over-budget allowlist drops deliberately share this counter because both only narrow privilege; a denylist is never truncated — over budget it is refused whole, 422 `content_too_large` / `policy_domain_list_too_large`, with no drop count. | Check consumer spellings and raw UTF-8 bytes (including newline separators) against `policy_domain_entries_max_bytes`, separately per list. More than 64 entries alone is not a cause; there is no entry-count cap. |
+| `policy_suffix_trusted_skip` | counter (per resolution) | Once when an uncached retrieval resolves to **trusted or verified** via a leading-dot entry. Trusted skips classification; verified may degrade open when classification is unavailable, and is counted even if the model is available. A bare exact-entry match adds zero. Cached responses do not resolve tiers again. | Wildcard privilege is being used. Audit caller suffixes, especially multi-tenant apexes; this measures both tiers, not only actual skipped classifications. |
 | `requests` | counter | Every `/retrieve` that reached the handler. | Load. |
-| `errors` | map | Keyed by `RetrieveErrorCode`: `blocked_domain`, `content_too_large`, `fetch_error`, `fetch_timeout`, `invalid_url`, `private_ip`. | Which 422 the callers are hitting; `private_ip` and `invalid_url` are validator refusals, the rest are fetch outcomes. |
+| `semaphore_saturation` | counter | Watches the **`/retrieve` admission gate** (`retrieve.fetch_concurrency`), **not** the classification permit — that one is `classification_wait_timeouts` below. Moves when `acquire()` found every fetch slot busy, whether the request then queued or was refused; always ≥ `busy_rejections` (`hardening-retrieve-parity` US-002). | Fetch-and-extract contention. Look at `fetch_concurrency`, the queue bounds and the size of what `/retrieve` is pointed at — not at PromptGuard. |
+| `busy_rejections` | counter | The **`/retrieve` admission gate** refused a request 422 `busy` / `admission_queue_full`: the queue was at `retrieve.admission_queue_depth` or its byte reservation would have exceeded `retrieve.max_queued_fetch_bytes`. Also counted under `errors["busy"]`. | Callers are being turned away at the fetch gate. Raise `admission_queue_depth` or `max_queued_fetch_bytes`, or slow the caller; `fetch_concurrency` is pinned. |
+| `errors` | map | Keyed by `RetrieveErrorCode`: `blocked_domain`, `busy`, `content_too_large`, `extraction_failed`, `fetch_error`, `fetch_timeout`, `invalid_url`, `private_ip`. Keyed by code alone, never by reason: `extraction_failed` (`hardening-retrieve-parity` US-003) counts every fetched-PDF failure together — `pdf_encrypted`, `pdf_no_text`, `pdf_extraction_error` and the host fault `pdf_spool_error`. | Which 422 the callers are hitting; `private_ip` and `invalid_url` are validator refusals, `extraction_failed` is the PDF worker or its spool, the rest are fetch outcomes. `extraction_failed` rising is usually the input (encrypted or scanned PDFs); the one host fault inside it is visible only in the logs — see the `retrieve_spool_error` alert below. |
 | `cache_hits` / `cache_misses` | counters | Request outcome from `content.cache_hit` (the content-cache layer, distinct from `cache.storage_*` below). | Hit ratio of the content cache. |
 | `blocked_by_reason` | map | First injection span's diagnostic if it is in `contract.DIAGNOSTICS`: `structural_injection_detected`, `promptguard_injection_detected`, `promptguard_unavailable`; otherwise `other`. | Quarantine rate by cause. |
-| `promptguard_state` | map | Per-response `promptguard_state`: `scanned`, `skipped_trusted`, `structural_blocked`, `unavailable_blocked`, `unavailable_allowed`, `other`. | `unavailable_blocked` rising is the nine-day-silent-failure shape: the consumer receives content-free responses while everything "works". |
+| `promptguard_contiguity_detections` | counter | Once per uncached retrieval whose stage-3 rule is `contiguity` or `both`. | Aggregate opt-in run-rule blocks. The existing diagnostic remains unchanged; no new blocked-by-reason key. |
+| `promptguard_state` | map | Per-response `promptguard_state`: `scanned`, `skipped_trusted`, `structural_blocked`, `unavailable_blocked`, `unavailable_allowed`, `other`. | `unavailable_blocked` rising is the nine-day-silent-failure shape: the consumer receives content-free responses while everything "works". Since `hardening-retrieve-parity` US-006 the two `unavailable_*` states have a second cause — a classification wait that expired — so read them with `classification_wait_timeouts` below. |
+| `classification_wait_timeouts` | counter | Once per `/retrieve` request that waited `promptguard_wait_seconds` for the classification permit and gave up, taking the classifier-unavailable outcome under its own `promptguard_fail_closed` (`hardening-retrieve-parity` US-006). Never moves when the classifier is absent or still warming, or on a `trusted_domains` page: none of those touch the permit. | Permit contention, not a missing model. Zero with `unavailable_*` rising means the model is genuinely absent; non-zero means requests are queueing behind classification. |
+
+**Head-of-line blocking: which route holds the permit.** All three classifying routes share one permit (`extraction.classification_concurrency`, shipped at 1), and they do not hold it for comparable lengths of time. A `/retrieve` classifying a 256-chunk fetched page holds it for orders of magnitude longer than any `/search` snippet, and `/extract` holds it for one bounded document. So a spike in either `classification_wait_timeouts` counter under mixed traffic correlates with **large fetched pages**, not with search volume: check `retrieve.requests` and the size of what `/retrieve` is being pointed at before touching the search path. The sizing rule (`docs/configuration.md`) is that `promptguard_wait_seconds` must exceed `retrieve.max_promptguard_chunks` × the per-window classify latency; while that key is `0` — the shipped default — the hold is bounded only by the 10 MB fetch cap and timeouts are expected under modest concurrency.
+
+**`/extract` has no wait timeout and no counter of its own.** Its acquisition is untimed by design (it is the authenticated route and would rather wait than serve unscanned), so a hanging `/extract` under fetch load produces no counter movement anywhere — only latency. The coupling is one-directional: `/retrieve` and `/search` traffic can block `/extract` classification, never the reverse. `extract.route_enabled` ships `false`, so this is latent until the route is turned on.
 
 ### `cache`
 
-Backed by `cache.CacheMetrics` — the storage-operation layer, not request outcomes.
+Backed by `cache.CacheMetrics` — storage operations, integrity rejects and parse failures,
+not request outcomes.
 
 | Counter | Kind | Increments when | A rising value means |
 |---------|------|-----------------|----------------------|
-| `reconnect_attempts` / `reconnect_successes` / `reconnect_failures` | counters | `ValkeyStorage._ensure_client`, gated by backoff (1 s doubling to a 30 s cap, 2 s connect+ping deadline). Also driven by `/health`'s `ping_if_due()`, so polling `/health` itself exercises these. | `reconnect_failures` climbing: Valkey unreachable; `attempts` climbing with `successes` climbing: flapping. |
-| `operation_failures` | counter | `ValkeyStorage._mark_disconnected` after a `get` / `set` / `delete` raised. | Valkey dropping mid-run; `/retrieve` continues uncached. |
+| `reconnect_attempts` / `reconnect_successes` / `reconnect_failures` | counters | `ValkeyStorage._ensure_client`, gated by backoff (1 s doubling to a 30 s cap, 2 s connect+ping deadline). The compose healthcheck polls `/health` every 30 s and drives `ping_if_due()`, even without traffic. | With Valkey down these counters have a non-zero, steadily climbing attempt/failure baseline: at most one attempt per probe, one per probe on connection refused, about one per two on connect timeout. The **rate**, not the cumulative value, is diagnostic; `successes` climbing too indicates flapping. |
+| `operation_failures` | counter | `ValkeyStorage._mark_disconnected` after a `getrange` / `set` / `delete` failed (except a `WRONGTYPE` read). | Valkey dropping mid-run; `/retrieve` continues uncached. |
 | `storage_hits` / `storage_misses` | counters | Key lookups, both backends. | — |
-| `storage_evictions` / `storage_oversize_skips` | counters | `InMemoryStorage` only; always 0 on Valkey. | Memory-mode cache bounds being hit. |
+| `storage_evictions` | counter | Memory-only eviction; Forage does not evict Valkey's entries for total-capacity pressure. | Memory-mode cache bounds being hit. |
+| `storage_oversize_skips` | counter | Forage refuses its own write at `cache.max_value_bytes` on either backend, or `cache.max_bytes` in memory. The previous entry is deleted first. | A response was served uncached, not an integrity failure. |
+| `integrity_rejects` | counter | A read fails envelope verification or the byte/type bound; deletion is attempted. | `/metrics.cache.integrity_rejects` combines six reasons: `unsigned`, `bad_mac`, `malformed_envelope`, `oversize`, `unexpected_envelope`, `wrong_type`. The counter alone cannot distinguish key enabling/rotation, bound reductions and tampering. The log line is the discriminator; see the incident guidance below. |
+| `corrupt_entries` | counter | `ContentCache` cannot parse stored bytes as `RetrievedContent`; the value is treated as a miss and deletion is attempted. Both backends. | Schema drift or invalid values from another writer. Not an authenticity or tampering counter: parseable values are still served. Correlate the WARNING `cache_entry_corrupt` by its `ret:<sha256>` key digest. |
+
+A corrupt value is a `storage_hits` increment but a `retrieve.cache_misses` outcome.
+If deletion fails, the ordinary `operation_failures` counter and closed WARNING also
+move; the request still proceeds as a miss.
+Empty `GETRANGE` replies are ordinary storage misses with no WARNING. Oversize
+and wrong-type Valkey reads move neither storage hit nor miss counters; envelope
+rejects at the policy layer leave the storage's count as it was.
+
+#### Reading `cache.integrity_rejects`
+
+Separate these deployment events before diagnosing a rising counter:
+
+1. **Upgrading to the 1.3.0 image.** Cache-integrity US-001 and US-002 changed
+   `pipeline/contract.py`, a `_REVISION_SOURCES` member. That rotates
+   `sanitizer_revision`, changes `cache_policy_fingerprint`, and changes **every cache
+   key**. Legacy bare-JSON entries remain under keys the new code never requests;
+   they are orphaned, not rejected. Expect a cold cache and near-zero `unsigned`,
+   **no first-enable burst** on this path. With signing enabled, an `unsigned` or
+   `bad_mac` rejection under a new key indicates a foreign writer, not the upgrade.
+2. **Enabling or rotating `FORAGE_CACHE_HMAC_KEY` on an existing 1.3.0 fleet, with
+   no code change.** Cache keys do not change. Expect a one-time burst bounded by
+   the working set: `unsigned` on first enable, `bad_mac` on rotation. **Stop every
+   replica, change the key, start** is what bounds that burst. Different-key replicas
+   delete each other's entries indefinitely; a mixed keyed/keyless fleet does too.
+   Use the [operator recipe](../../docs/configuration.md#credential-handling-for-forage_cache_hmac_key),
+   not a rolling restart.
+
+The **`cache_integrity_reject` log line is the discriminator**: correlate its
+`reason=<token>` with `key=ret:<sha256>`. The digest is an opaque, credential-free
+correlation handle, not a claim to conceal the URL; it is confirmable against a
+guessed URL and the public cache policy.
+
+| Reason | Interpretation |
+|---|---|
+| `unsigned` | Unsigned bytes (including bare JSON) where a signed envelope is required. Across many keys immediately after a key-only enable: migration. Under new upgrade keys or after migration ends: a foreign writer (including an incorrectly keyless replica). |
+| `bad_mac` | A signature does not verify for this cache key and signing key: old signatures during rotation, different-key replicas, changed bytes, or a relocated envelope. On fresh keys outside rotation: tampering. |
+| `malformed_envelope` | Invalid envelope format, version or bytes; not an ordinary empty read. Investigate the writer and format. |
+| `unexpected_envelope` | A keyless reader found a signed envelope. Check for a mixed keyed/keyless fleet or a key removed without the stop-all procedure. |
+| `wrong_type` | Someone planted a non-string Valkey value. The reply proves connectivity, so it is not a disconnect. |
+| `oversize` | A value exceeds `cache.max_value_bytes`. Lowering the bound produces a burst bounded by the working set of old larger values. A sustained rate points to a replica with a mismatched bound or a foreign writer; keep the bound equal across replicas. This is the weakest of the six reasons as tamper evidence. |
+
+With a key set, no key enable/rotation in flight, and matching replica configuration,
+**sustained `unsigned`, `bad_mac` or `wrong_type` rejects mean a foreign writer and
+are a security event**, not a cache-health blip. Rotate to a fresh CSPRNG-generated
+key with the stop-all procedure; audit Valkey ACLs and network placement and stop the
+writer. A new Forage-authored page over the bound is a write-time
+`storage_oversize_skips` increment, **never an integrity reject**; it cannot explain
+this read-side signal.
+
+**A flat `integrity_rejects` is not evidence of an unpoisoned cache when key compromise
+is suspected.** An attacker holding the real key can forge envelopes that verify
+and count nothing. See [the four residual risks](../arch/SECURITY.md#cache-poisoning-and-signed-values),
+including unbounded reject-log volume until the resource-envelope controls land.
 
 ### `model`
 
@@ -231,20 +336,55 @@ All are `logging.getLogger(__name__)`: `retrieval_app`, `cache`, `model_fetcher`
 | Level | Line | When |
 |-------|------|------|
 | WARNING | `config.yaml not found at <path>` | `/app/config.yaml` missing; all code defaults apply. |
+| WARNING | `config_unknown_key — key=<dotted.name>` | Unknown `config.yaml` key ignored at boot; one line per key, never its value. Unknown blocks get one line without walking their children. Correct the spelling and restart. |
+| WARNING | `config_invalid_value — key=<list> dropped=<n> entries=<entries>` (domain-list form names dropped entries) | Invalid `seed_blocklist` or `news_domains` entries dropped at boot; one WARNING per affected list, none for valid, empty or missing lists. Non-string YAML members use `[non-string]`; a non-list container publishes `[]` with `dropped=1 entries=[invalid-container]`, never its contents. Misplaced credential/URL-shaped string entries are redacted. Request counters are not incremented. |
 | WARNING | `break_glass_advertisement_active — <var>=1 is forcing /health to advertise search_sanitization regardless of classifier state; ...` | Break-glass armed. `capabilities` will lie; `status` and `promptguard_loaded` stay honest. |
 | WARNING | `Content cache not available at startup` | `VALKEY_URL` set and the 2 s connect+ping deadline failed. |
+| WARNING | `cache_hmac_key_missing` | Valkey selected without a usable `FORAGE_CACHE_HMAC_KEY`; startup continues, `/health` reports `cache_unauthenticated`, and cached content lacks proof of origin. |
+| WARNING | `cache_hmac_key_unused` | A usable key was configured in memory mode; startup continues without signing or a cache degraded reason. |
+| WARNING | `cache_hmac_key_too_short` | Fewer than 32 UTF-8 bytes after stripping leading/trailing space, tab and LF; `CacheConfigurationError` refuses startup, no `/health`. The variable name, never its value, is logged. |
+| WARNING | `cache_hmac_key_invalid` | Non-printable/non-ASCII, interior whitespace or controls (including CR); `CacheConfigurationError` refuses startup, no `/health`. Value never logged. |
+| WARNING | `cache_bounds_inverted — cache.max_value_bytes exceeds cache.max_bytes; the in-memory storage applies cache.max_bytes` | Supported start; the memory total is the tighter bound. No values are logged. |
+| WARNING | `valkey_url_option_forbidden — option=<key>` | Boot refuses a reply-shaping query key (`decode_responses`, `encoding`, `encoding_errors`, `protocol`). No URL, host, password or option value is logged. |
 | WARNING | `PromptGuard model not available — ML injection detection disabled` (with traceback, `exc_info=True`) | The verified weight set failed to load (torch/transformers); followed by ERROR `weights_load_failed`. |
+| WARNING | `envelope_memory_rule_unmet — memory_max=<bytes> required=<bytes> classification_concurrency=<n> extraction_concurrency=<n> child_address_space_bytes=<bytes> model_id=<id> parent_bytes=<bytes> cache_backend=<memory-or-valkey> cache_term_bytes=<bytes>` | Once at boot when readable cgroup v2 `memory.max` is strictly below the advisory reservation. Boot proceeds; equality and unreadable/unlimited limits are silent. The parent includes the selected model's resident delta; the cache term is total memory storage or one bounded Valkey read. See `docs/configuration.md`'s advisory memory rule. |
+| WARNING | `promptguard_threads_apply_failed — n=<count> error=<exception-type>` | Applying a positive thread setting failed; model loading continues rather than reporting the classifier unavailable for a sizing failure. No exception text or environment value is logged. The tokenizer pool is disabled before torch's thread setter runs. |
 
-Dropped (INFO): `Sidecar config loaded (<n> keys); contract_version=<v>`, `Content cache connected (valkey|memory)`, `PromptGuard 2 model loaded successfully`. A boot that fails outright (bad `extraction:` or `cache:` value in `config.yaml`) exits the container with a traceback in `docker logs`.
+Dropped (INFO): `Sidecar config loaded (<n> keys); contract_version=<v>`, `Content cache connected (valkey|memory)`, `PromptGuard 2 model loaded successfully`, `promptguard_threshold_resolved — value=<validated-default>` (once per boot, before the operator ceiling). Invalid threshold defaults instead emit one WARNING `config_invalid_value — key=promptguard_threshold. /extract reads the raw value through its own guard`, never the value; only the fetch routes fall back to 0.85. A boot that fails outright (bad `extraction:` or `cache:` value in `config.yaml`) exits the container with a traceback in `docker logs`.
 
 ### Closed vocabularies
 
-**`cache.py`** — `_closed_vocabulary_reason()` yields exactly one of `connect_failed`, `operation_failed`, `timeout` (the last when the exception is a `TimeoutError`). Only two lines exist:
+**`retrieval_app.py` request-validation 422s** — each WARNING is at most once
+per request. `route` is the matched template checked against `/search`,
+`/retrieve`, `/extract`, with fallback `other`, never a caller-provided path.
+No input, exception text, message text or dropped location is logged.
+
+| Level | Line | Operator meaning |
+|-------|------|------------------|
+| WARNING | `validation_422_truncated — count=<n> route=<token>` | A caller sent more than `_MAX_VALIDATION_ERRORS` (100) validation failures; only the response was truncated. The request was still fully parsed. |
+| WARNING | `validation_422_loc_dropped — dropped=<n> route=<token>` | The emitted prefix contained location segments outside the owned field/framework allowlist or neither strings nor integers; those segments were dropped, not echoed. |
+
+This bounds response entries, not parse cost or log volume. Both remain under
+the accepted admitted-caller exhaustion risk (network placement is the control).
+The root-level log-capture and cap tests in `tests/test_contract_errors.py`
+enforce these closed vocabularies. GOVERNANCE ruling (l) records the
+one-release `"[redacted]"` placeholder window.
+
+**`cache.py`** — `_closed_vocabulary_reason()` maps connection/operation failures to `connect_failed`, `operation_failed` or `timeout` (the last when the exception is a `TimeoutError`). The parse guard and integrity checks have separate closed vocabularies, not that exception mapper:
 
 | Level | Line | Reason values |
 |-------|------|---------------|
 | WARNING | `Valkey connection failed for content cache (<reason>)` | `connect_failed`, `timeout` — from `_attempt_connect`. |
 | WARNING | `Content cache operation failed (<reason>)` | `operation_failed`, `timeout` — from `_mark_disconnected`. |
+| WARNING | `Content cache entry rejected (cache_entry_corrupt) key=ret:<sha256>` | Fixed token and one-way key digest only, never the value, URL or exception text. |
+| WARNING | `cache_integrity_reject — reason=<token> key=ret:<sha256>` | `unsigned`, `bad_mac`, `malformed_envelope`, `oversize`, `unexpected_envelope`, `wrong_type`. One un-rate-limited WARNING per rejection, never raw bytes or credentials. |
+
+**`pipeline/orchestrator.py`** — the classification-wait timeout has its own closed token, deliberately distinct from stage 3's "PromptGuard unavailable" lines, because the classifier in this case is *loaded and busy* rather than missing and those lines would send an operator to the model loader.
+
+| Level | Line | Values |
+|-------|------|--------|
+| WARNING | `classification_wait_timeout route=<route>` | `route=retrieve`, `route=search`. Nothing caller-derived: no URL, no query, no host. One per `/retrieve` request; one per `/search` request, not per result. |
+| WARNING | `promptguard_contiguity_verdict — run=<n> windows=<m>` | Stage 3's per-event signal: longest qualifying run and total windows only, never scores or text. Fires for `contiguity` and `both`; `/metrics` supplies the aggregate signal. Visible under default container logging. |
 
 **`model_fetcher.py`** — every line carries a grep-able marker prefix. Levels as emitted; INFO markers are listed because they exist in code, but they are dropped in the container.
 
@@ -260,6 +400,9 @@ Dropped (INFO): `Sidecar config loaded (<n> keys); contract_version=<v>`, `Conte
 | ERROR | `weights_acquisition_crashed` | `logger.exception` with traceback; `/health` stays degraded. |
 | ERROR | `weights_mirror_invalid` | `FORAGE_WEIGHTS_MIRROR` is malformed; the value is echoed redacted (`***@host/...`). |
 | ERROR | `model_revision_invalid` | `FORAGE_MODEL_REVISION` is not a 40-character sha; falls back to the committed pin. The value is not echoed. |
+| WARNING | `model_id_not_allowed` | `FORAGE_MODEL_ID` is outside the allowlist; lifespan refuses boot. No value is echoed. |
+| ERROR | `model_identity_mismatch` | Requested and manifest snapshot paths differ, or the verified directory disappeared; nothing loads. |
+| WARNING | `model_labels_unexpected` | Loaded config is neither binary BENIGN/INJECTION nor the exact pinned 22M generic-label mapping (`docs/weights.md`); classifier stays unavailable, never a guessed injection index. |
 | WARNING | `weights_fetch_skipped` | No `HF_TOKEN` in the environment; the gated repo cannot be reached. |
 | WARNING | `weights_mirror_skipped` | No `FORAGE_MIRROR_TOKEN`; the private mirror cannot be reached. |
 | WARNING | `weights_retry_scheduled` | `no verified weights yet; retry <n> in <s>s (base <s>s, jittered +/-20%)`. |
@@ -283,12 +426,12 @@ These are WARNING, so they are visible, and they arrive once per `/retrieve` or 
 | `pipeline.stage3_promptguard` | `PromptGuard unavailable — fail-closed for <tier> tier` | `standard` / `untrusted` tier with `fail_closed=True`; the content is quarantined as a precaution. |
 | `pipeline.stage3_promptguard` | `PromptGuard unavailable — <lenient fallback|fail-open> for <tier> tier` | `verified` tier, or fail-open configuration. |
 | `pipeline.orchestrator` | `Content quarantined for <url> — returning content-free response` | Any injection verdict, degraded or not. Carries the requested URL. |
-| `pipeline.orchestrator` | `search_promptguard_local_latency_target_exceeded` | PromptGuard time on a `/search` exceeded the 1000 ms local target; the `extra` dict is not rendered, so this is the whole line. |
+| `pipeline.orchestrator` | `search_promptguard_local_latency_target_exceeded` | The `/search` per-result sanitization loop exceeded `search_promptguard_latency_target_ms` (default 1000); the `extra` dict is not rendered, so this is the whole line. Read the exceeded count and sanitization high-water mark on `/metrics` for frequency and magnitude. |
 | `promptguard.classifier` | `classify() called but model not loaded — returning safe fallback` | Classifier invoked while unloaded. |
 
 ### What is never logged
 
-`VALKEY_URL`, its password or host, `HF_TOKEN`, `FORAGE_MIRROR_TOKEN`, `str(exc)` on cache failures, oras stdout/stderr, and `huggingface_hub` exception text. Mirror references pass through `redact_reference()` before logging. No document text and no query text is logged; the only content-derived value in a visible line is the requested URL in the quarantine WARNING (result URLs appear only at INFO). Convention (`kit_tools/docs/CONVENTIONS.md`, "Logging"): never log a credential-bearing value; closed reason vocabularies over prose; machine-readable codes in anything a consumer parses. See `kit_tools/arch/patterns/LOGGING.md` for the full conventions and `kit_tools/arch/SECURITY.md` for the security-relevant logging section.
+`VALKEY_URL`, its password or host, `HF_TOKEN`, `FORAGE_MIRROR_TOKEN`, `str(exc)` on cache failures, oras stdout/stderr, and `huggingface_hub` exception text. Mirror references pass through `redact_reference()` before logging. No document text and no query text is logged; visible request-derived values include the requested URL in the quarantine WARNING and the one-way key digest in the `cache_entry_corrupt` WARNING (result URLs appear only at INFO). Convention (`kit_tools/docs/CONVENTIONS.md`, "Logging"): never log a credential-bearing value; closed reason vocabularies over prose; machine-readable codes in anything a consumer parses. See `kit_tools/arch/patterns/LOGGING.md` for the full conventions and `kit_tools/arch/SECURITY.md` for the security-relevant logging section.
 
 ### Leakage assertions
 
@@ -312,7 +455,7 @@ docker logs <container> 2>&1 | grep -E 'weights_unavailable|weights_fetch_failed
 docker logs <container> 2>&1 | grep -E 'weights_verification_failed|weights_quarantined|weights_pin_unusable'
 
 # Cache trouble (closed vocabulary; the URL never appears)
-docker logs <container> 2>&1 | grep -E 'Valkey connection failed|Content cache (operation failed|not available)'
+docker logs <container> 2>&1 | grep -E 'Valkey connection failed|Content cache (operation failed|not available)|cache_entry_corrupt|cache_integrity_reject|cache_hmac_key_|cache_bounds_inverted|valkey_url_option_forbidden'
 
 # Quarantines and fail-closed decisions
 docker logs <container> 2>&1 | grep -E 'Content quarantined|PromptGuard unavailable'
@@ -339,14 +482,19 @@ These are **suggested watch points**, not configured alerts. No thresholds are d
 | Weights never arrive | `promptguard_loaded: false` and `promptguard_unavailable` past the cold-start budget (19 s cold measured; CI allows 120 s) | `model.fetch_failures` rising with `model.retries_scheduled` climbing and `fetch_in_progress: false` | ERROR `weights_unavailable ... Attempts: huggingface=<code>, mirror=<code>`, preceded by `weights_fetch_failed` (token lacks access: `http_401` / `http_403`; revision gone: `http_404`) or `weights_fetch_skipped` (no token) |
 | Download refused by the verifier | same as above | `model.verify_failures` and `model.quarantines` rising; `fetch_failures` unchanged for `refused_verification` | ERROR `weights_verification_failed — reasons: file_extra|hash_mismatch|...`, then `weights_quarantined` |
 | Verified set will not load | same as above | — | WARNING `PromptGuard model not available` with traceback, then ERROR `weights_load_failed`; check `mem_limit` (torch OOM) |
-| Cache flapping or down | `cache_unavailable` appearing and disappearing; `cache_connected` toggling (Valkey mode only) | `cache.reconnect_attempts` / `reconnect_failures` climbing; `cache.operation_failures` rising on mid-run drops | WARNING `Valkey connection failed for content cache (connect_failed|timeout)`; `Content cache operation failed (operation_failed|timeout)` |
+| Cache flapping or down | `cache_unavailable` steady when down, appearing/disappearing when flapping; `cache_connected` toggles only on recovery/drop (Valkey mode) | `cache.reconnect_failures` climbing at the probe-driven rate (one per probe when refused, about one per two on timeout) is the down-Valkey heartbeat; `reconnect_successes` climbing too is flapping. `operation_failures` rises on mid-run drops. | WARNING `Valkey connection failed for content cache (connect_failed|timeout)`; `Content cache operation failed (operation_failed|timeout)` |
+| Cache signing absent | `cache_unauthenticated`, even if `cache_connected: true` | No counter can prove authenticity without signing | `cache_hmac_key_missing`; set a CSPRNG key using the stop-all recipe |
+| Cache integrity rejects | May remain `healthy` when keyed and connected; `/health` is not a tampering detector | `cache.integrity_rejects` rising; distinguish deployment events and reasons using the incident runbook above | `cache_integrity_reject` reason and key digest; sustained `unsigned`, `bad_mac`, `wrong_type` outside migration/rotation are a security event |
 | Quarantine rate | — | `retrieve.blocked_by_reason.*` rising; `retrieve.promptguard_state.unavailable_blocked` rising on a degraded container (consumer sees content-free responses — the nine-day shape) | WARNING `Content quarantined for <url>`; `PromptGuard unavailable — fail-closed for <tier> tier` |
 | Search results silently thinning | — | `search.omitted_by_reason.promptguard_unavailable` rising (fail-closed) or `search.unscanned_results` rising (fail-open) | same `PromptGuard unavailable` WARNING per result |
+| Classification permit contention | — | `retrieve.classification_wait_timeouts` or `search.classification_wait_timeouts` rising while `/health` reports `promptguard_loaded: true` | WARNING `classification_wait_timeout route=<retrieve\|search>` |
+| Fetched-PDF spool failing (host fault) | — | `retrieve.errors.extraction_failed` rising — but that count cannot tell a spool failure from an encrypted-PDF caller, so it is not the signal | WARNING `retrieve_spool_error` — the closed token alone, nothing path- or content-derived. **Alert on any occurrence**: it is a host fault, not an input (ENOSPC, EACCES, a read-only or vanished `TMPDIR`, or a spool directory refused as a symlink, foreign-owned or group/other-accessible). Each one is a `/retrieve` 422 `extraction_failed` / `pdf_spool_error`. Check free space and permissions on `TMPDIR` and `<TMPDIR>/forage-spool-<uid>` (`docs/configuration.md`, "The spool directory"). A per-reason `/metrics` map is deferred |
+| Admission pressure on `/retrieve` | — | `retrieve.busy_rejections` rising (callers get 422 `busy` / `admission_queue_full`); `retrieve.semaphore_saturation` rising first | — |
 | Admission pressure on `/extract` | — | `extraction.busy_rejections` rising (callers get 429 `busy`); `semaphore_saturation` and `queued` rising first; `oom_proximity_ratio` approaching 1.0 (explorer suggested watching above 0.9) | — |
-| SearXNG failures | **no signal** — `/health` does not probe SearXNG; `search_providers` is configuration echo, not liveness, so it reads the same whether or not SearXNG is currently reachable | `search.errors.searxng_unavailable` / `searxng_error` rising; per-request 422 only. On a `searxng`-only chain (the default), `search.fallback_fired` and `search.paid_calls` never move — there is no second provider to advance to — so they are not a signal here either. | `search_provider_failed` WARNING per failed call (nothing else first-party; the 422 `reason` echoes the scheme, host and port of `SEARXNG_URL` — userinfo stripped — plus a closed `detail` token, never exception text) |
+| SearXNG failures | **no signal** — `/health` does not probe SearXNG; `search_providers` is configuration echo, not liveness, so it reads the same whether or not SearXNG is currently reachable | `search.errors.searxng_unavailable` / `searxng_error` rising, plus `search.provider_timeouts` for slow calls and `search.provider_compressed_body` for compression, whatever the outcome. On a `searxng`-only chain, `search.fallback_fired` and `search.paid_calls` never move. | `search_provider_failed` WARNING per failed call; the 422 `reason` echoes the scheme, host and port of `SEARXNG_URL` — userinfo stripped — plus a closed `detail` token, never exception text. `unsupported_encoding` identifies a reply this build cannot decode. |
 | Paid provider absorbing spend | — | `search.paid_calls` rate over a window climbing past Brave's ~1,000-query/month included credit (~33/day) | `search_provider_failed` WARNINGs naming the free provider precede a rising `paid_calls`; remedy is removing the paid provider from `FORAGE_SEARCH_PROVIDERS` and restarting (chain resolves once, at boot) |
 | Break-glass left armed | `capabilities.search_sanitization` present while `promptguard_loaded: false` | — | WARNING `break_glass_advertisement_active` at startup |
-| Boot failure | no answer on 8020 | — | traceback from `ExtractionConfigurationError` or the cache-settings validator; `docker inspect` shows the exit |
+| Boot failure | no answer on 8020 | — | traceback from `ExtractionConfigurationError`, `CacheConfigurationError`, `PromptGuardThreadsConfigurationError` or `SearchTargetsConfigurationError`; for refused signing keys grep `cache_hmac_key_too_short` / `cache_hmac_key_invalid`; `docker inspect` shows the exit |
 
 For symptom-to-remedy detail (the empty-string `VALKEY_URL` trap, the SearXNG limiter 429, the 400-not-413 `/extract` behaviour, re-vendoring weights) see `kit_tools/docs/TROUBLESHOOTING.md`; for the per-dependency blast radius see `kit_tools/arch/SERVICE_MAP.md`.
 
@@ -377,7 +525,12 @@ It polls `/health` until it answers 200 with the expected `status` (default budg
 
 Exit 0 prints a `Contract smoke PASSED` line naming the mode it checked (under the default, `Contract smoke PASSED: degraded, honest, and on-contract.`); exit 1 prints one `::error::<violation>` line per failure.
 
-**Two modes.** `--expect-status` takes `healthy` or `degraded` (default `degraded`, what CI runs). Under `healthy` the three PromptGuard-coupled checks invert — `status == "healthy"`, `promptguard_unavailable` absent from `degraded_reasons`, `search_sanitization` present in `capabilities` — and every other check (contract version, sanitizer revision, `/metrics`, in-image contract and anchor) is identical. The wait is status-aware: it polls until `/health` answers 200 *and* the body's `status` equals the expected one, or the deadline passes (returning the last response, which then fails on `status`). `/health` answers 200 the moment uvicorn binds while PromptGuard loads in the background, so under `healthy` it waits through the load rather than failing on the first 200; raise `--timeout-seconds` for a cold weights fetch. Match the flag to the container: `--expect-status degraded` for a container started with no HF token and no weights (CI's weights-free image), `--expect-status healthy` for a container started with weights (e.g. `--env-file` carrying `HF_TOKEN`). `--anchor` defaults to the committed `contract/openapi.yaml.sha256`; to verify a release image from another checkout, pass a file holding the committed anchor at the tag (what `git show v1.1.0:contract/openapi.yaml.sha256` prints, or a clean checkout of it) — never from the Release assets and never from the image: both are mutable copies, and a tampered document-plus-anchor pair verifies against itself.
+**Two modes.** `--expect-status` takes `healthy` or `degraded` (default `degraded`, what CI runs). Under `healthy` the three PromptGuard-coupled checks invert — `status == "healthy"`, `promptguard_unavailable` absent from `degraded_reasons`, `search_sanitization` present in `capabilities` — and every other check (contract version, sanitizer revision, `/metrics`, in-image contract and anchor) is identical. The wait is status-aware: it polls until `/health` answers 200 *and* the body's `status` equals the expected one, or the deadline passes (returning the last response, which then fails on `status`). `/health` answers 200 the moment uvicorn binds while PromptGuard loads in the background, so under `healthy` it waits through the load rather than failing on the first 200; raise `--timeout-seconds` for a cold weights fetch. Match the flag to the container: `--expect-status degraded` for a container started with no HF token and no weights (CI's weights-free image), `--expect-status healthy` for a container started with weights (e.g. `--env-file` carrying `HF_TOKEN`). `--anchor` defaults to the committed `contract/openapi.yaml.sha256`; to verify a release image from another checkout, pass a file holding the committed anchor at the tag (what `git show v1.2.1:contract/openapi.yaml.sha256` prints after the cut, or a clean checkout of it) — never from the Release assets and never from the image: both are mutable copies, and a tampered document-plus-anchor pair verifies against itself.
+
+For the healthy smoke at contract 1.3.0, a Valkey deployment must additionally
+have an operational cache and a usable `FORAGE_CACHE_HMAC_KEY` in the container's
+runtime env file. Loaded weights plus a reachable unsigned cache still reports
+`degraded`; memory mode requires no signing key.
 
 ### `searxng_smoke.py`
 
@@ -412,15 +565,31 @@ docker logs -f <container>
 
 `compose/minimal.yml` and `compose/full.yml` set `restart: unless-stopped` on the `forage` service, so a boot failure shows up as a climbing restart count and a repeating traceback rather than a stopped container.
 
-**There is no `HEALTHCHECK`.** The `Dockerfile` installs `curl` with a comment saying it is "for the container healthcheck", but declares no `HEALTHCHECK` instruction, and neither compose fragment declares a `healthcheck:` block. The "bare `curl -f`, 10 s × 5 retries" check referenced in code comments is **Poppy's** compose, not this repo's. If you want Docker to track liveness, one suggestion (not shipped, not tested here) is:
+**The image has no `HEALTHCHECK` instruction; both compose fragments declare this shipped probe:**
 
 ```yaml
-# Suggestion only — not present in compose/*.yml
 healthcheck:
-  test: ["CMD", "curl", "-f", "http://127.0.0.1:8020/health"]
+  test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8020/health"]
+  interval: 30s
+  timeout: 5s
+  retries: 3
+  start_period: 30s
 ```
 
-Keep in mind what that proves: `/health` always returns 200, so a `curl -f` probe only says the process is serving. It will never turn a container "unhealthy" for missing weights or a dead Valkey — the body is where the truth lives, and reading the body is your tooling's job.
+This is **liveness only**: `/health` always returns 200 and the probe discards the
+body, so Docker's health log captures no response content. Never gate traffic,
+`depends_on: service_healthy`, or a consumer's activation on it. A Docker-healthy
+container can have no classifier; read `/health`'s `promptguard_loaded` /
+`degraded_reasons` and `/metrics` `search.unscanned_results` instead. Plain Compose
+does not restart an unhealthy container: `restart:` reacts to process exits.
+
+The probe calls `/health`, which pings the cache when due, so `cache_connected`
+recovery is detected within one probe interval even with no traffic. A reconnect
+can take 2 s of the 5 s probe timeout. With Valkey down, expect at most one reconnect
+WARNING and one `reconnect_failures` increment per probe for as long as it stays
+down: one per probe when refused, about one per two when timing out. This
+down-Valkey heartbeat is a baseline, not new application traffic or flapping;
+flapping also raises `reconnect_successes`.
 
 ---
 
@@ -432,11 +601,14 @@ None exist. There are no alert rules, no paging integration, no dashboards, no S
 
 ## Adding New Monitoring
 
-### Adding a counter to `/metrics`
+### Adding a counter or gauge to `/metrics`
 
-1. Add the field to the in-process dataclass — `retrieval_app.ExtractionMetrics`, `SearchMetrics`, `RetrieveMetrics`, `cache.CacheMetrics`, or `model_fetcher.ModelMetrics` — and increment it at the seam.
-2. Add the same field to the matching `*MetricsResponse` model in `retrieval_app.py`. The models are `extra="forbid"`; a counter that exists in the dataclass but not in the model makes `/metrics` return 500.
+1. Add the field to the in-process counter object (`retrieval_app.SearchMetrics` is a **plain class**, not a dataclass) and increment it at the seam. A search pipeline counter also belongs on `pipeline.orchestrator.SearchMetricsSink` and `_NullSearchMetrics`, and on the test-side `RecordingSearchMetrics` fake.
+2. Add the same field to the `/metrics` handler dict and matching `*MetricsResponse` model in `retrieval_app.py`, appended in the same order. The models are `extra="forbid"`; an emitted counter absent from the model makes `/metrics` return 500. Update the literal search pins in `tests/test_app.py` and `tests/test_contract_schema.py`; `tests/test_contract_metrics.py` guards model/class/wire parity and descriptions.
 3. A response-shape change is a contract change (`CLAUDE.md` invariant 4). Read `contract/GOVERNANCE.md` to classify it (an additive field is the MINOR case), then run `uv run python -m scripts.export_contract` — `tests/test_contract_export.py` is red until you do. Never hand-edit `contract/openapi.yaml` or its `.sha256`.
+
+A field may instead be a **high-water mark**, updated with `max(...)` at the seam:
+per-process, never reset, and read with its companion exceeded count and request count.
 
 ### Adding a degraded reason to `/health`
 

@@ -251,6 +251,23 @@ execution readiness.
 - `epic-forage-hardening` and `epic-forage-injection-corpus` remain on-hold stubs needing
   `/kit-tools:plan-epic`.
 
+## 2026-09-22 - Cache-integrity implementation validation
+
+Validated `feature-hardening-cache-integrity.md` on `epic/forage-hardening`
+at `b026bbb` in autonomous mode. One parallel quality/security/compliance
+review round found zero critical issues, two advisory warnings and one
+test-evidence informational finding. Security was clean; the open warnings
+are a prerequisite model-warmup semaphore bypass and the missing US-002
+revision record/stale boot-wiring text in `CODE_ARCH.md`.
+
+The previously deferred full suite passed: 3,255 tests, 13 non-failing
+warnings; Ruff lint/format, strict Pyright and generated-contract checks
+also passed. Findings are retained in `AUDIT_FINDINGS.md` and the three
+review JSON artifacts, with a feature-spec validation note. No runtime
+fix, re-validation loop or pause was required by the critical-only gate.
+Stored guarded orchestration and owner gates are unchanged; the spec was
+not completed or archived.
+
 ---
 
 ## 2026-09-18 — `search-release` US-003: post-release verification + Poppy handoff

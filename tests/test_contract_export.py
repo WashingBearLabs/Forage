@@ -40,6 +40,7 @@ from typing import Any, cast
 import pytest
 import yaml
 
+from models import RetrieveRequest, SearchRequest
 from pipeline.contract import CONTRACT_VERSION
 from retrieval_app import app
 from scripts.export_contract import (
@@ -62,6 +63,120 @@ from scripts.export_contract import (
 _SERVED_PATHS = {"/health", "/metrics", "/retrieve", "/search", "/extract"}
 
 _MISSING = object()
+
+_IDENTITY_FIELDS = {"url", "query"}
+_ROUTE_SPECIFIC = (
+    SearchRequest.model_fields.keys() ^ RetrieveRequest.model_fields.keys()
+) - _IDENTITY_FIELDS
+_SHARED = (
+    SearchRequest.model_fields.keys() & RetrieveRequest.model_fields.keys()
+) - _IDENTITY_FIELDS
+_BOUNDARY_OPENAPI_PATHS = (
+    "paths./search.post.description",
+    "paths./retrieve.post.description",
+    "components.schemas.SearchRequest.description",
+    "components.schemas.RetrieveRequest.description",
+)
+_BOUNDARY_MARKDOWN_PATHS = (
+    "kit_tools/docs/API_GUIDE.md",
+    "docs/configuration.md",
+    "README.md",
+)
+_BOUNDARY_COPIES = (*_BOUNDARY_OPENAPI_PATHS, *_BOUNDARY_MARKDOWN_PATHS)
+_BOUNDARY_START = "<!-- boundary-text:start -->"
+_BOUNDARY_END = "<!-- boundary-text:end -->"
+_SHARED_LEAD_IN = "Shared by both routes:"
+
+
+def _markdown_boundary(text: str, name: str) -> str:
+    assert text.count(_BOUNDARY_START) == 1, f"{name}: expected one start fence"
+    assert text.count(_BOUNDARY_END) == 1, f"{name}: expected one end fence"
+    assert _BOUNDARY_START in text.splitlines(), (
+        f"{name}: start fence needs its own line"
+    )
+    assert _BOUNDARY_END in text.splitlines(), f"{name}: end fence needs its own line"
+    before, _, rest = text.partition(_BOUNDARY_START)
+    assert _BOUNDARY_END in rest, f"{name}: reversed boundary fences"
+    region, _, after = rest.partition(_BOUNDARY_END)
+    if name == "README.md":
+        # Fence the whole GFM table without letting unrelated endpoint rows count.
+        assert not before.rstrip().endswith("|"), "README.md: fence splits table"
+        assert not after.lstrip().startswith("|"), "README.md: fence splits table"
+        rows = region.strip().splitlines()
+        assert all(row.startswith("|") and row.endswith("|") for row in rows), (
+            "README.md: expected an uninterrupted table"
+        )
+        selected: list[str] = []
+        for cell in ("`POST /search`", "`POST /retrieve`"):
+            matches = [row for row in rows if row.split("|")[1].strip() == cell]
+            assert len(matches) == 1, f"README.md: expected one {cell} row"
+            selected.extend(matches)
+        return "\n".join(selected)
+    return region
+
+
+def _assert_boundary_knobs(text: str, name: str) -> None:
+    assert text.count(_SHARED_LEAD_IN) == 1, (
+        f"{name}: expected one shared-knobs sentence"
+    )
+    before, _, rest = text.partition(_SHARED_LEAD_IN)
+    shared_sentence, period, after = rest.partition(".")
+    assert period, f"{name}: shared-knobs sentence needs a full stop"
+    for knob in sorted(_ROUTE_SPECIFIC):
+        assert f"`{knob}`" in before + after, (
+            f"{name}: missing route-specific knob {knob}"
+        )
+        assert f"`{knob}`" not in shared_sentence, f"{name}: not a shared knob: {knob}"
+    for knob in sorted(_SHARED):
+        assert f"`{knob}`" in shared_sentence, f"{name}: missing shared knob {knob}"
+        assert f"`{knob}`" not in before + after, (
+            f"{name}: shared knob outside shared sentence: {knob}"
+        )
+
+
+@pytest.fixture(scope="module")
+def boundary_copies() -> dict[str, str]:
+    document = cast(
+        dict[str, Any], yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
+    )
+    copies: dict[str, str] = {}
+    for path in _BOUNDARY_OPENAPI_PATHS:
+        node: Any = document
+        for key in path.split("."):
+            node = node[key]
+        assert isinstance(node, str), path
+        copies[path] = node
+    for name in _BOUNDARY_MARKDOWN_PATHS:
+        copies[name] = _markdown_boundary(
+            (REPO_ROOT / name).read_text(encoding="utf-8"), name
+        )
+    return copies
+
+
+@pytest.mark.parametrize("tier", ["trusted", "verified"])
+def test_exported_domain_policy_cautions(tier: str) -> None:
+    document = yaml.safe_load(CONTRACT_PATH.read_text())
+    properties = document["components"]["schemas"]["RetrieveRequest"]["properties"]
+    description = properties[f"{tier}_domains"]["description"]
+    for text in (
+        "bare entries match exactly",
+        "a leading dot",
+        "apex and every subdomain",
+        "IP literal matches only itself",
+        "multi-tenant",
+        "registry-level",
+        ".co.uk",
+        ".github.io",
+        ".s3.amazonaws.com",
+        "policy_suffix_trusted_skip",
+    ):
+        assert text in description
+    if tier == "trusted":
+        assert "skips injection classification" in description
+    else:
+        assert "degrade open when the classifier is unavailable" in description
+        assert "promptguard_fail_closed_floor" in description
+        assert "wait timeout" in description
 
 
 @pytest.fixture
@@ -198,6 +313,92 @@ class TestTheCommittedArtifacts:
         assert "/search" in retrieve_description
         assert "through SearXNG" not in search_description
         assert "via SearXNG" not in search_description
+
+    @pytest.mark.parametrize("name", _BOUNDARY_COPIES)
+    def test_search_and_retrieve_boundary_knobs_match_request_models(
+        self, name: str, boundary_copies: dict[str, str]
+    ) -> None:
+        _assert_boundary_knobs(boundary_copies[name], name)
+
+
+class TestTheBoundaryGuardCatchesDrift:
+    @pytest.mark.parametrize("name", _BOUNDARY_COPIES)
+    @pytest.mark.parametrize("knob", sorted(_ROUTE_SPECIFIC | _SHARED))
+    def test_a_missing_knob_is_caught(
+        self, name: str, knob: str, boundary_copies: dict[str, str]
+    ) -> None:
+        changed = boundary_copies[name].replace(f"`{knob}`", "")
+        with pytest.raises(AssertionError, match=rf"(?m)missing .* knob {knob}$"):
+            _assert_boundary_knobs(changed, name)
+
+    @pytest.mark.parametrize("name", _BOUNDARY_COPIES)
+    @pytest.mark.parametrize("knob", sorted(_SHARED))
+    @pytest.mark.parametrize("move", [False, True], ids=["duplicated", "moved"])
+    def test_a_shared_knob_cannot_be_attributed_elsewhere(
+        self, name: str, knob: str, move: bool, boundary_copies: dict[str, str]
+    ) -> None:
+        changed = boundary_copies[name]
+        if move:
+            changed = changed.replace(f"`{knob}`", "")
+        changed += f" Only `/retrieve` honours `{knob}`."
+        with pytest.raises(AssertionError, match=rf"(?m)shared .*{knob}$"):
+            _assert_boundary_knobs(changed, name)
+
+    @pytest.mark.parametrize("name", _BOUNDARY_COPIES)
+    @pytest.mark.parametrize("count", [0, 2])
+    def test_exactly_one_shared_sentence_is_required(
+        self, name: str, count: int, boundary_copies: dict[str, str]
+    ) -> None:
+        changed = boundary_copies[name].replace(
+            _SHARED_LEAD_IN, _SHARED_LEAD_IN * count
+        )
+        with pytest.raises(AssertionError, match="expected one shared-knobs sentence"):
+            _assert_boundary_knobs(changed, name)
+
+    @pytest.mark.parametrize("name", _BOUNDARY_MARKDOWN_PATHS)
+    @pytest.mark.parametrize("fence", [_BOUNDARY_START, _BOUNDARY_END])
+    @pytest.mark.parametrize("count", [0, 2])
+    def test_missing_or_duplicate_fences_are_caught(
+        self, name: str, fence: str, count: int
+    ) -> None:
+        text = (REPO_ROOT / name).read_text(encoding="utf-8")
+        changed = text.replace(fence, "\n".join([fence] * count))
+        with pytest.raises(AssertionError, match=r"expected one .* fence"):
+            _markdown_boundary(changed, name)
+
+    @pytest.mark.parametrize("name", _BOUNDARY_MARKDOWN_PATHS)
+    def test_reversed_fences_are_caught(self, name: str) -> None:
+        text = (REPO_ROOT / name).read_text(encoding="utf-8")
+        before, _, rest = text.partition(_BOUNDARY_START)
+        region, _, after = rest.partition(_BOUNDARY_END)
+        changed = before + _BOUNDARY_END + region + _BOUNDARY_START + after
+        with pytest.raises(AssertionError, match="reversed boundary fences"):
+            _markdown_boundary(changed, name)
+
+    @pytest.mark.parametrize(
+        "endpoint", ["GET /health", "GET /metrics", "POST /extract"]
+    )
+    @pytest.mark.parametrize("knob", ["extract_mode", "blocked_domains"])
+    def test_unrelated_readme_rows_cannot_supply_missing_knobs(
+        self, endpoint: str, knob: str
+    ) -> None:
+        text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        changed = text.replace(f"`{knob}`", "").replace(
+            f"| `{endpoint}` |", f"| `{endpoint}` | `{knob}`"
+        )
+        with pytest.raises(AssertionError, match=rf"(?m)missing .* knob {knob}$"):
+            _assert_boundary_knobs(
+                _markdown_boundary(changed, "README.md"), "README.md"
+            )
+
+    @pytest.mark.parametrize("fence", [_BOUNDARY_START, _BOUNDARY_END])
+    def test_readme_fences_cannot_split_the_table(self, fence: str) -> None:
+        text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        changed = text.replace(fence + "\n", "").replace(
+            "| `POST /retrieve` |", fence + "\n| `POST /retrieve` |"
+        )
+        with pytest.raises(AssertionError, match="fence splits table"):
+            _markdown_boundary(changed, "README.md")
 
 
 class TestTheDriftCheckCatchesDrift:

@@ -12,7 +12,9 @@ test_mapping:
 
 from __future__ import annotations
 
+import inspect
 import itertools
+import re
 
 from models import SearchRequest
 from pipeline.search_providers.policy import apply_request_policy
@@ -37,10 +39,9 @@ _CHAIN_SHAPES: list[tuple[bool, ...]] = [
     for shape in itertools.product([False, True], repeat=length)
 ]
 
-# A representative sample of request-side policies: no restriction, a
-# restriction naming every provider, one naming none, one naming only the
-# paid providers, and one naming only the free providers — crossed with both
-# values of `allow_paid_fallback`.
+# Static selections cover no restriction and an unknown name. The per-shape
+# list adds paid-only, free-only, all names, later-paid-only and every subset
+# of configured names, crossed with both values of `allow_paid_fallback`.
 _REQUEST_PROVIDER_SELECTIONS: list[tuple[str, ...]] = [
     (),
     ("nonexistent",),
@@ -64,6 +65,12 @@ class TestApplyRequestPolicyIsCostMonotonic:
                 tuple(paid_names),
                 tuple(free_names),
                 tuple(chain_names),
+                tuple(paid_names[1:]),
+                *(
+                    selection
+                    for size in range(len(chain_names) + 1)
+                    for selection in itertools.combinations(chain_names, size)
+                ),
             ]
             for providers in selections:
                 for allow_paid_fallback in (True, False):
@@ -75,6 +82,9 @@ class TestApplyRequestPolicyIsCostMonotonic:
 
                     effective, ignored = apply_request_policy(chain, request)
                     effective_names = [provider.name for provider in effective]
+                    effective_paid = [
+                        provider.name for provider in effective if provider.paid
+                    ]
 
                     assert ignored >= 0
                     # A subsequence of the configured chain: never reordered,
@@ -85,8 +95,65 @@ class TestApplyRequestPolicyIsCostMonotonic:
                     assert [
                         name for name in effective_names if name in free_names
                     ] == free_names
+                    assert effective_paid == paid_names[: len(effective_paid)]
+                    expected_paid = (
+                        list(
+                            itertools.takewhile(
+                                lambda name, names=providers: name in names,
+                                paid_names,
+                            )
+                        )
+                        if providers
+                        else paid_names
+                    )
+                    assert effective_paid == (
+                        expected_paid if allow_paid_fallback else []
+                    )
                     if not allow_paid_fallback:
                         assert all(not provider.paid for provider in effective)
+                    assert [provider.name for provider in chain] == chain_names
+                    assert request.providers == list(providers)
+                    assert all(provider.calls == [] for provider in chain)
+
+    def test_a_second_paid_provider_cannot_be_reached_by_skipping_the_first(
+        self,
+    ) -> None:
+        chain = [
+            FakeSearchProvider(name="free"),
+            FakeSearchProvider(name="paida", paid=True),
+            FakeSearchProvider(name="paidb", paid=True),
+        ]
+
+        effective, ignored = apply_request_policy(
+            chain, SearchRequest(query="q", providers=["paidb"])
+        )
+
+        assert effective == [chain[0]]
+        assert ignored == 0
+
+    def test_a_missing_middle_paid_provider_closes_the_prefix_across_free_ones(
+        self,
+    ) -> None:
+        chain = _chain((True, False, True, False, True))
+
+        effective, ignored = apply_request_policy(
+            chain, SearchRequest(query="q", providers=[" P4 ", "P0"])
+        )
+
+        assert effective == [chain[0], chain[1], chain[3]]
+        assert ignored == 0
+
+    def test_an_earlier_paid_name_past_the_eighth_entry_cannot_open_the_prefix(
+        self,
+    ) -> None:
+        chain = _chain((True, True))
+
+        effective, ignored = apply_request_policy(
+            chain, SearchRequest(query="q", providers=["p1"] * 8 + ["p0"])
+        )
+
+        assert effective == []
+        assert ignored == 1
 
     def test_allow_paid_fallback_false_leaves_no_paid_provider(self) -> None:
         for shape in _CHAIN_SHAPES:
@@ -195,3 +262,16 @@ class TestApplyRequestPolicyNormalizesAndCounts:
         effective, _ = apply_request_policy(chain, request)
 
         assert effective == []
+
+
+def test_the_docstring_steps_match_the_four_marked_blocks() -> None:
+    docstring = inspect.getdoc(apply_request_policy)
+    assert docstring is not None
+    documented = re.findall(r"^\s*(\d+)\. (.+)$", docstring, re.MULTILINE)
+    marked = re.findall(
+        r"^\s*# step (\d+) — (.+)$",
+        inspect.getsource(apply_request_policy),
+        re.MULTILINE,
+    )
+    assert [number for number, _ in documented] == ["1", "2", "3", "4"]
+    assert marked == documented
