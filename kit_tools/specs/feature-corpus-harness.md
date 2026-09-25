@@ -187,15 +187,15 @@ offending value.
   Path = TESTS_CORPUS_ROOT)` so tests can point it at a temporary directory.
 
 **Acceptance Criteria:**
-- [ ] `scripts/corpus/records.py` defines `CorpusRecord` (frozen dataclass, `tests.fakes.assert_frozen`
+- [x] `scripts/corpus/records.py` defines `CorpusRecord` (frozen dataclass, `tests.fakes.assert_frozen`
       pins it), `load_corpus(root)`, `lint_corpus(records) -> list[CorpusLintError]`, and
       `CorpusLintError(record_id, rule)` whose message carries the id and rule only.
-- [ ] `scripts/corpus/vocab.py` holds the 16 attack categories, 9 benign genres, 3 surfaces, the
+- [x] `scripts/corpus/vocab.py` holds the 16 attack categories, 9 benign genres, 3 surfaces, the
       surface → payload-key map, the `params` key allowlist **per category and per genre** (see the
       note below), the permitted third-party licence ids, the RFC 2606 host rule, the secret-shape
       regexes, the size caps and the `MIN_RECORDS` floors — each as a typed constant with a one-line
       comment naming its ruling.
-- [ ] `scripts/corpus/vocab.py` also holds **`STAGE2_REGEX_NAMES`**: the closed, ordered tuple of
+- [x] `scripts/corpus/vocab.py` also holds **`STAGE2_REGEX_NAMES`**: the closed, ordered tuple of
       human names for the compiled patterns in `pipeline/stage2_structural.py` (24 at 403e9c5, by
       `_PATTERNS`), plus `STAGE2_REGEX_PROBES` mapping each name to the literal fixture substring
       that provokes it, and **`STAGE2_REGEX_NO_BENIGN`** — the three names exempt from spec 3's
@@ -208,7 +208,7 @@ offending value.
       of one genre's coverage test. `vocab.py` is spec 1's deliverable and the single source of every
       closed vocabulary — it belongs here, and spec 2's `notes` convention and spec 3's coverage test
       both read it.)*
-- [ ] Per-pattern identification is done by **running the patterns**, not by the public `category`
+- [x] Per-pattern identification is done by **running the patterns**, not by the public `category`
       field and not by probe literal: a helper `stage2_hits(text) -> frozenset[str]` returns
       `frozenset(name for name, (_, pattern) in zip(STAGE2_REGEX_NAMES, _PATTERNS) if
       pattern.search(text))`. It lives **tests-side** (`tests/corpus_stage2.py`), because
@@ -258,22 +258,22 @@ offending value.
       for any variable-width pattern — a base64 run, `disregard.*instructions`, the URL patterns — a
       real benign match never equals the probe, so the helper could not name the pattern for exactly
       the benign records spec 3's per-regex coverage test counts.)*
-- [ ] `tests/test_corpus_lint.py` parametrises every lint rule with a failing record and asserts the
+- [x] `tests/test_corpus_lint.py` parametrises every lint rule with a failing record and asserts the
       rule name in the error, the payload absent from the error text, and the seed corpus (US-003)
       lint-clean; the negative-control test covers every secret regex; the `MIN_RECORDS` test exists
       and skips with reason `"asserted from spec 5 US-002"`.
-- [ ] `tests/corpus/README.md` documents the record shape field by field, the outcome vocabulary
+- [x] `tests/corpus/README.md` documents the record shape field by field, the outcome vocabulary
       (ruling 9), the content rules (ruling 8), the add-a-record checklist, and states in its first
       paragraph that payload text is data never quoted elsewhere.
-- [ ] Records are stored only as `.jsonl` (non-renderable; finding 16) — a test asserts no `.html`
+- [x] Records are stored only as `.jsonl` (non-renderable; finding 16) — a test asserts no `.html`
       / `.htm` / `.md` file exists under `tests/corpus/attacks/` or `tests/corpus/benign/`.
-- [ ] `kit_tools/testing/TESTING_GUIDE.md` gains a mapping row for `tests/test_corpus_lint.py` and
+- [x] `kit_tools/testing/TESTING_GUIDE.md` gains a mapping row for `tests/test_corpus_lint.py` and
       a `tests/corpus/` fixtures row; the test count line is updated.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-002: Replay classifier, route drivers and the outcome model
 
