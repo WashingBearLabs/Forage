@@ -4,7 +4,7 @@ epic: forage-injection-corpus
 status: active
 vision_ref: "T2.3 — Injection regression corpus (CI)"
 created: 2026-09-14
-updated: 2026-09-19
+updated: 2026-09-24
 ---
 
 # Epic: Forage Injection Regression Corpus — Measure Injection Defence in CI
@@ -33,12 +33,12 @@ route, model and rule configuration against a generated baseline — including t
 `epic-forage-hardening` deferred to this epic: whether contiguity gating (ruling R17, shipped off)
 and the 86M model (owner decision 4, opt-in) earn their defaults.
 
-The epic ships **no runtime behaviour**: no `_REVISION_SOURCES` file, response model, handler,
+Outside spec 0 (ruling 6a), the epic ships **no runtime behaviour**: no `_REVISION_SOURCES` file, response model, handler,
 contract document or `config.yaml` default changes; `derive_sanitizer_revision()` and
 `contract/openapi.yaml.sha256` are byte-identical at the end of the epic (ruling 6). A bypass the
 corpus surfaces is recorded as an audit finding for a follow-up, never fixed here.
 
-## Owner decisions (2026-09-19, binding on all five specs)
+## Owner decisions (2026-09-19, binding on all specs)
 
 1. **Five specs, by concern** — harness, attack corpus, benign corpus, recording, gates — with the
    owner-gated recording in its own spec so the hermetic specs never block on a token.
@@ -64,6 +64,25 @@ corpus surfaces is recorded as an audit finding for a follow-up, never fixed her
    the decision table; a flip is a separate owner ruling and a hardening-style follow-up, because
    both rotate `sanitizer_revision`.
 
+## Owner decisions 17–18 (2026-09-24, validation rounds 4–5)
+
+17. **The 86M becomes selectable inside this epic, as spec 0.** Hardening spec 7 closed its 86M
+    vendoring (US-005) and benchmark (US-004) gates as `gate not run, 2026-09-22`, and the v1.2.1
+    label repair (`_PINNED_GENERIC_LABEL_INDICES`, one 22M entry) means vendored 86M weights would
+    still be refused at `load()`. Without a loadable 86M, spec 4 US-003 cannot record and spec 5's
+    decision table has no model half. `feature-corpus-86m-enablement.md` finishes both gates, adds
+    the label-semantics pin and resident-delta entry, allowlists the 86M and releases it (PATCH `v1.2.2`,
+    decision 18). Its
+    owner gates run on the owner's lab host (the Poppy host), not the development Mac — the work is
+    CPU-bound. The result is **one model per process**, chosen by `FORAGE_MODEL_ID`, 22M staying
+    the default; nothing here flips a default (decision 4 stands).
+18. **The 86M release is a PATCH, `v1.2.2`** (2026-09-24, round 5). `docs/releases.md`,
+    `contract/GOVERNANCE.md`, `config.yaml` and a boot WARNING promise two changes "at the next
+    MINOR" (the `retrieve.max_promptguard_chunks` default flip to 256; dropping the redacted 422
+    `input`/`ctx`/`url` fields). Spec 0 cannot make either under ruling 6a, so its release is a
+    PATCH: both windows stay open and neither promise is reinterpreted. The 86M is opt-in behind an
+    existing key with the default unchanged, which is what makes a PATCH defensible.
+
 ## Planning rulings (2026-09-19)
 
 5. **Sequenced after `epic-forage-hardening`.** Spec 1 `depends_on: [hardening-release]`. The
@@ -75,6 +94,18 @@ corpus surfaces is recorded as an audit finding for a follow-up, never fixed her
    `main` = `20ddb2a` (pre-hardening); implementers re-verify anchors against the post-hardening
    tree before relying on them, and each spec's Known-risks section names the anchors most likely
    to move.
+6a. **Spec 0 is the one runtime exception** (owner decision 17). It may change exactly:
+   `model_fetcher.py` (`ALLOWED_MODEL_IDS` only), `promptguard/classifier.py`
+   (`_PINNED_GENERIC_LABEL_INDICES` only), `pipeline/extraction_limits.py`
+   (`CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` only — without an 86M key the lifespan raises
+   `KeyError` at boot; added round 5), `weights_manifest.json`, `NOTICE`, docs and tests — none
+   of them a `_REVISION_SOURCES` member, so `derive_sanitizer_revision({})` at the default model is
+   unchanged. Specs 1–5's ruling-6 assertion diffs against spec 0's completion tag
+   (`forage-injection-corpus/corpus-86m-enablement-complete`), not against `main`. If spec 0 stops
+   in a recorded `gate not run` state (licence mismatch, HF access pending, inconclusive label
+   evidence), the tag still marks its end, specs 1–5 proceed **22M-only**, spec 4 US-003 records
+   `not recorded — 86M not enabled`, and spec 5's decision table carries the contiguity half only,
+   with the model half named as pending.
 6. **Zero runtime change, asserted.** Each spec's final story and the epic's completion criteria
    carry: `git diff --stat main -- pipeline/ promptguard/ models.py retrieval_app.py cache.py
    url_validator.py model_fetcher.py contract/ config.yaml weights_manifest.json Dockerfile` is
@@ -127,8 +158,10 @@ corpus surfaces is recorded as an audit finding for a follow-up, never fixed her
     has zero unrecorded texts; (e) record-count floors per category and genre hold (the corpus
     cannot silently shrink). An *improvement* also drifts — regenerate; the diff shows the direction.
 13. **Owner gates.** Spec 4 US-002 (record the 22M cassette) and US-003 (record the 86M cassette if
-    hardening spec 7 US-005 vendored it; otherwise `not recorded — access pending`). Tokens reach
-    the recorder only through the environment (`read -rs` into a variable, or `--env-file` by path),
+    spec 0 enabled it; otherwise `not recorded — 86M not enabled`, naming the spec 0 story that
+    stopped — ruling 6a; *amended 2026-09-24, round 4*). Both recordings may run on the owner's lab
+    host. Tokens reach the recorder only through the environment (`read -rs` into a variable, or
+    the one-file mode-0600 recipe by path),
     never argv or a log line; the recorder refuses to record an unloaded classifier (a fail-closed
     run measures nothing).
 14. **Corpus size floors (asserted by lint).** Attacks ≥ 200 records over the **16** categories with
@@ -168,13 +201,15 @@ corpus surfaces is recorded as an audit finding for a follow-up, never fixed her
 
 | Seq | Feature Spec | Stories | Status | Dependencies |
 |-----|-------------|---------|--------|--------------|
+| 0 | [`feature-corpus-86m-enablement.md`](feature-corpus-86m-enablement.md) — vendor the 86M, pin its label semantics, allowlist it, benchmark both models, release (owner gates, lab host; ruling 6a; releases `v1.2.2`) | 4 | Planned | `hardening-release` |
 | 1 | [`feature-corpus-harness.md`](feature-corpus-harness.md) — record schema, loader + lint, replay classifier, the three route drivers, the outcome model, seed records | 3 | Planned | `hardening-release` (the whole hardening epic) |
 | 2 | [`feature-corpus-attacks.md`](feature-corpus-attacks.md) — the attack corpus by category and surface; third-party ingestion | 5 | Planned | `corpus-harness` |
 | 3 | [`feature-corpus-benign.md`](feature-corpus-benign.md) — the benign counter-corpus by genre, over-defence prose, multilingual and long-form | 4 | Planned | `corpus-harness` |
-| 4 | [`feature-corpus-recording.md`](feature-corpus-recording.md) — cassette format, file-backed replay, the host-side recorder, the 22M and 86M recordings (owner gates) | 4 | Planned | `corpus-attacks`, `corpus-benign` |
+| 4 | [`feature-corpus-recording.md`](feature-corpus-recording.md) — cassette format, file-backed replay, the host-side recorder, the 22M and 86M recordings (owner gates) | 4 | Planned | `corpus-attacks`, `corpus-benign`; US-003 on `corpus-86m-enablement` |
 | 5 | [`feature-corpus-gates.md`](feature-corpus-gates.md) — report, baseline + floors gate, CI summary, decision table, docs and close-out | 5 | Planned | `corpus-recording` |
 
-Execution runs the specs in sequence. Human gates: spec 4 US-002 and US-003.
+Execution runs the specs in sequence, spec 0 first. Human gates: spec 0 US-001, US-002, US-003
+(lab host) and US-004 (release); spec 4 US-002 and US-003.
 
 ## Inputs this epic measures (the handoffs)
 
@@ -186,12 +221,14 @@ Execution runs the specs in sequence. Human gates: spec 4 US-002 and US-003.
 | Hardening spec 7 US-007 | Both stage-3 residual shapes: fragments separated by one benign window (`boundary_straddle`) and sustained mid-band text that can trip the contiguity rule (`sustained_midband`) |
 | Hardening spec 7 Out of Scope | The 86M-vs-22M and contiguity-on/off decision tables (spec 5 US-004) |
 | Hardening spec 7 Decisions | k-windows-anywhere and smoothed-window poolers evaluated offline |
-| Hardening spec 1 Assumptions | The existing fixture corpus's non-line-anchored patterns verdict identically on collapsed and newline-preserving forms (structural families, spec 2 US-001) |
+| Hardening spec 1 Assumptions | Planned as "non-line-anchored patterns verdict identically on collapsed and newline-preserving forms"; the shipped tree proved it **false** and `/search` now scans both forms, worse verdict wins (`_scan_forms_for_search_text`). Spec 2 US-001 records the newline-split shapes as a measurement of that fix, not a test of the assumption (*corrected 2026-09-24, round 4*) |
 | Stub (2026-09-14) | JSON-LD / Open Graph poisoning surfaced as snippets, answer-engine poisoning, classic overrides in page bodies |
 
 ## Completion Criteria
 
-- [ ] All five feature specs completed and archived; the two owner gates recorded in spec 4
+- [ ] Spec 0 completed and archived with the 86M released, **or** its recorded `gate not run` state
+      named (ruling 6a); `docs/releases.md` records the release if one was cut.
+- [ ] All five corpus feature specs completed and archived; the two owner gates recorded in spec 4
       Implementation Notes with the cassette file names and the model revisions.
 - [ ] `uv run pytest` green with the corpus gate in it; `uv run ruff check .`, `uv run ruff format
       --check .`, `uv run pyright` clean.
@@ -199,7 +236,8 @@ Execution runs the specs in sequence. Human gates: spec 4 US-002 and US-003.
       secret-shape lint is clean; `.gitleaksignore` is unchanged.
 - [ ] `tests/corpus/baseline.json` and `tests/corpus/floors.json` are committed and the gate is
       exact-match; the CI `test` job's step summary shows the per-category table on a PR.
-- [ ] Zero runtime change (ruling 6): the `git diff --stat` set is empty, `derive_sanitizer_revision`
+- [ ] Zero runtime change outside spec 0 (rulings 6, 6a): the `git diff --stat` set against spec 0's
+      completion tag is empty, `derive_sanitizer_revision`
       is unchanged, `scripts.export_contract --check` is green.
 - [ ] `docs/corpus.md` documents the record format, the outcome vocabulary, the add-a-record and
       re-record procedures, and the decision table; `kit_tools/arch/SECURITY.md`'s "Injection
@@ -220,5 +258,13 @@ Execution runs the specs in sequence. Human gates: spec 4 US-002 and US-003.
 - **Before/after numbers.** The baseline is recorded post-hardening. A one-off "before" run of the
   recorder and report at the pre-hardening commit (`20ddb2a`) is optional evidence for the
   hardening release notes; it is not a story.
+- **Validation rounds 4–7 (2026-09-24, post-hardening re-anchor).** Round 4 ran the full panel (30
+  reviewers) against the shipped `v1.2.1` tree: 1 critical (the 86M could not load under v1.2.1's
+  label pin) and 103 warnings, about 45 of them line drift. Owner decisions 17–18 and ruling 6a
+  added spec 0; fixers re-anchored every citation by symbol and corrected the behaviour mismatches
+  measured against the real pipeline. Rounds 5–7 re-ran only the affected reviewers (spec 0 in full
+  three times). Closed at `needs-work` with **no open critical**; each spec's
+  `### Validation round 4 — 2026-09-24` subsection records what was fixed per round and what is
+  carried.
 - **Poppy.** Poppy's half stubs Forage with corpus pages; `docs/corpus.md` "Consumers" states the
   record format is stable and vendorable one way. No Forage story serves Poppy.

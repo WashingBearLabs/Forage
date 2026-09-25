@@ -53,7 +53,9 @@ Cosmetic only, and it touches `sanitizer_revision`, so it needs its own change.
 **Priority:** Medium · **Effort:** Large
 `epic-forage-injection-corpus` was planned on 2026-09-19 (`/kit-tools:plan-epic`; five specs, 21
 stories — `feature-corpus-{harness,attacks,benign,recording,gates}.md`) and validated to
-`needs-work` the same week: a licence-clean attack corpus and benign counter-corpus driven
+`needs-work` the same week, then revalidated against the shipped tree on 2026-09-24, when spec 0
+(`feature-corpus-86m-enablement.md`: vendor, label-pin, allowlist, benchmark and release the 86M
+as `v1.2.2`) was added — six specs, 25 stories: a licence-clean attack corpus and benign counter-corpus driven
 hermetically through `POST /search`, `/retrieve` and `/extract`, with the real classifier measured
 once per model revision on a host and replayed in CI from committed per-window score cassettes; the
 gate is a generated baseline (exact match) plus measured floors. Ships no runtime change. Its

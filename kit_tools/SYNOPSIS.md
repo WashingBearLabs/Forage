@@ -35,7 +35,7 @@ preserved). See `docs/bootstrap-notes.md` for the pin record.
 | CI | `.github/workflows/ci.yml` — ten jobs in two lanes: `lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke`, `publish` for the service image, and `searxng-build`/`-smoke`/`-publish` for the companion |
 | Published image | `ghcr.io/washingbearlabs/forage` — `1.2.1`, index `sha256:a29329af38ee563dcc890c9b68749e4d7bc32e20c422640b2f5ffecaa8c89e7b`; `latest` / `1.2` / `1.2.1` equality verified. Tag commit `e8cf83c51e8786abf30d79ae0a3d6608c5f8df2c`; [handoff](specs/archive/feature-hardening-release.md). `docs/releases.md` records v1.2.0's withdrawal |
 | Deployment | Poppy's in-tree copy is still the deployed source of truth (coexistence rule) |
-| Planned next | `epic-forage-hardening` (eight specs, 42 stories, contract window 1.2.0 → 1.3.0, target `v1.2.0`; validated to `needs-work` 2026-09-19) executes next; `epic-forage-injection-corpus` (five specs, 21 stories, no runtime change; planned 2026-09-19, `validate-epic` pending) follows and measures it — wrappers in `specs/` |
+| Planned next | `epic-forage-injection-corpus` (six specs, 25 stories; revalidated against the shipped `v1.2.1` tree 2026-09-24, rounds 4–7, no open criticals). Spec 0 enables the 86M on the owner's lab host and releases PATCH `v1.2.2`; specs 1–5 build the corpus with no runtime change — wrapper in `specs/` |
 
 **Coexistence rule:** until Poppy pins a published Forage image, any fix to the extracted
 paths on either side must be replayed onto the other, and `docs/bootstrap-notes.md`'s pin
