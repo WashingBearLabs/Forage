@@ -495,8 +495,7 @@ recorded per regex in Implementation Notes.
 - [ ] Implementation Notes: per-regex outcome counts under `fallback=0.0` and the final benign totals
       (≥ 250; ≥ 15 per genre; ≥ 30 `over_defence_probe`; ≥ 6 languages; ≥ 20 with `windows_min ≥ 3`).
 - [ ] Zero runtime change (rulings 6, 6a) re-asserted at spec end: the `git diff --stat` set,
-      diffed against spec 0's completion tag `forage-injection-corpus/corpus-86m-enablement-complete`
-      (not `main`), is empty,
+      diffed against the epic branch's merge base with `main` (`git merge-base main HEAD`, ruling 6a), is empty,
       `derive_sanitizer_revision({})` unchanged, `scripts.export_contract --check` green.
 - [ ] Tests written/updated for new functionality
 - [ ] Full test suite passes (`uv run pytest`)

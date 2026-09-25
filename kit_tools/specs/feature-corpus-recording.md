@@ -396,8 +396,7 @@ reason that stopped it (ruling 6a).
 - [ ] If recorded: zero misses, `windows_min` list empty under both cassettes, `NOTICE` names the
       86M model, both cassettes' revisions equal their manifest pins.
 - [ ] Zero runtime change (rulings 6, 6a) re-asserted at spec end: the ruling-6 `git diff --stat`
-      set, taken against spec 0's completion tag `forage-injection-corpus/corpus-86m-enablement-complete`
-      (not `main`), is empty; `derive_sanitizer_revision({})` unchanged;
+      set, taken against the epic branch's merge base with `main` (`git merge-base main HEAD`, ruling 6a), is empty; `derive_sanitizer_revision({})` unchanged;
       `scripts.export_contract --check` green.
 - [ ] Full test suite passes (`uv run pytest`)
 

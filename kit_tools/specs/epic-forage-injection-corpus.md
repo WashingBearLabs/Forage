@@ -100,8 +100,12 @@ corpus surfaces is recorded as an audit finding for a follow-up, never fixed her
    (`CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` only — without an 86M key the lifespan raises
    `KeyError` at boot; added round 5), `weights_manifest.json`, `NOTICE`, docs and tests — none
    of them a `_REVISION_SOURCES` member, so `derive_sanitizer_revision({})` at the default model is
-   unchanged. Specs 1–5's ruling-6 assertion diffs against spec 0's completion tag
-   (`forage-injection-corpus/corpus-86m-enablement-complete`), not against `main`. If spec 0 stops
+   unchanged. **Spec 0 runs in parallel, on its own branch from `main`** (owner, 2026-09-25): it
+   lands on `main` through its own PR and the `v1.2.2` release, while specs 1–3 execute on
+   `epic/forage-injection-corpus`; the epic branch merges `main` before spec 4 (whose US-003 needs
+   the 86M). Specs 1–5's ruling-6 assertion therefore diffs against the epic branch's merge base
+   with `main` (`git diff --stat main...HEAD`, i.e. `"$(git merge-base main HEAD)"`), which
+   excludes spec 0's commits before and after that merge. If spec 0 stops
    in a recorded `gate not run` state (licence mismatch, HF access pending, inconclusive label
    evidence), the tag still marks its end, specs 1–5 proceed **22M-only**, spec 4 US-003 records
    `not recorded — 86M not enabled`, and spec 5's decision table carries the contiguity half only,
@@ -208,7 +212,9 @@ corpus surfaces is recorded as an audit finding for a follow-up, never fixed her
 | 4 | [`feature-corpus-recording.md`](feature-corpus-recording.md) — cassette format, file-backed replay, the host-side recorder, the 22M and 86M recordings (owner gates) | 4 | Planned | `corpus-attacks`, `corpus-benign`; US-003 on `corpus-86m-enablement` |
 | 5 | [`feature-corpus-gates.md`](feature-corpus-gates.md) — report, baseline + floors gate, CI summary, decision table, docs and close-out | 5 | Planned | `corpus-recording` |
 
-Execution runs the specs in sequence, spec 0 first. Human gates: spec 0 US-001, US-002, US-003
+Execution (owner, 2026-09-25): spec 0 runs in parallel on its own branch and lands on `main` via its
+PR and `v1.2.2`; specs 1–3 run guarded on `epic/forage-injection-corpus`; the epic branch then merges
+`main` and specs 4–5 run as a second leg. Human gates: spec 0 US-001, US-002, US-003
 (lab host) and US-004 (release); spec 4 US-002 and US-003.
 
 ## Inputs this epic measures (the handoffs)

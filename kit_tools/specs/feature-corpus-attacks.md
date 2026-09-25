@@ -554,8 +554,7 @@ with ≥ 5 in every category.
       Implementation Notes as a category × surface table (counts only).
 - [ ] Lint-clean; `tests/corpus/README.md` lists the languages present.
 - [ ] Zero runtime change (rulings 6, 6a) re-asserted at spec end: the ruling-6 `git diff --stat`
-      set, taken against spec 0's completion tag `forage-injection-corpus/corpus-86m-enablement-complete`
-      (not `main`), is empty; `derive_sanitizer_revision({})` unchanged from its value at that same
+      set, taken against the epic branch's merge base with `main` (`git merge-base main HEAD`, ruling 6a), is empty; `derive_sanitizer_revision({})` unchanged from its value at that same
       tag; `scripts.export_contract
       --check` green.
 - [ ] Tests written/updated for new functionality

@@ -3,7 +3,7 @@
 feature: corpus-harness
 status: active
 session_ready: true
-depends_on: [corpus-86m-enablement]
+depends_on: [hardening-release]
 vision_ref: "T2.3 — Injection regression corpus (CI)"
 type: epic-child
 size: L
@@ -59,8 +59,7 @@ proven on the records that motivated the epic.
 - The seed set pins the two audit bypasses (-016, -032) as `blocked` on `/search` and covers every
   stage-2 category, the metadata carriers and both stage-3 residual shapes, so specs 2–5 start from
   a working instrument.
-- Zero runtime change (rulings 6, 6a): the `git diff --stat` set, taken against spec 0's completion
-  tag `forage-injection-corpus/corpus-86m-enablement-complete`, is empty at the end of the spec.
+- Zero runtime change (rulings 6, 6a): the `git diff --stat` set, taken against the epic branch's merge base with `main` (`git merge-base main HEAD`, ruling 6a), is empty at the end of the spec.
 
 ## User Stories
 
@@ -703,7 +702,7 @@ lint-clean.
       that reads the pin from the record — no per-record test code.
 - [ ] `tests/corpus/README.md` lists the seed's pinned records with their audit ids (ids only).
 - [ ] Zero runtime change (rulings 6, 6a): `git diff --stat
-      forage-injection-corpus/corpus-86m-enablement-complete -- pipeline/ promptguard/ models.py
+      "$(git merge-base main HEAD)" -- pipeline/ promptguard/ models.py
       retrieval_app.py cache.py url_validator.py model_fetcher.py contract/ config.yaml
       weights_manifest.json Dockerfile` is empty (spec 0's completion tag, not `main` — spec 0 is
       the one spec allowed to touch `model_fetcher.py`, `promptguard/classifier.py` and
@@ -910,8 +909,9 @@ sentinel for `classifier=None`, and dropping `metrics` from the `CorpusContentCa
 
 ## Implementation Notes
 
-<!-- Populated during implementation. Record here at story start, **on spec 0's completion tag
-`forage-injection-corpus/corpus-86m-enablement-complete`** (ruling 6a): the
+<!-- Populated during implementation. Record here at story start, **on the epic branch's merge base with `main`** (ruling 6a; spec 0
+runs in parallel and does not change the default-model value, so re-check it once `main` is merged
+in before spec 4): the
 `derive_sanitizer_revision({})` value, measured with `FORAGE_MODEL_ID` / `FORAGE_MODEL_REVISION`
 unset (for reference, `021378efee6ab43f…` was measured at 403e9c5 on 2026-09-24; spec 0 changes no
 `_REVISION_SOURCES` member and not the default model's identity, so the tag should reproduce it — if
