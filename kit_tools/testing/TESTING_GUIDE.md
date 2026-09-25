@@ -94,12 +94,13 @@ crash reads as a false regression.
 
 ## Test Structure
 
-**39 `test_*.py` modules** under `tests/`, flat, one per subject — 42 Python files in all
-once `conftest.py`, `fakes.py` and `__init__.py` are counted — plus `golden/` and
-`fixtures/`. **4253 tests collected** on 2026-09-23 (patch release gate,
-`uv run pytest --collect-only -q`). Every per-module row below is remeasured
+**40 `test_*.py` modules** under `tests/`, flat, one per subject — 44 Python files in all
+once `conftest.py`, `fakes.py`, `corpus_stage2.py` and `__init__.py` are counted — plus
+`golden/`, `fixtures/` and `corpus/`. **4337 tests collected** on 2026-09-25
+(`corpus-harness` US-001, `uv run pytest --collect-only -q`). Every per-module row below is remeasured
 from collection, not incremented from a previous story's count; their sum
-equals the total. The complete local run reports **4253 passed, no xfails**;
+equals the total. The complete local run reports **4336 passed, 1 skipped, no xfails** (the skip is
+the corpus `MIN_RECORDS` floor test, asserted from spec 5 US-002);
 fresh PR CI is still required. The former six strict raw-read xfails have
 moved to `test_provider_transport.py`, where both real provider stacks drive a
 network double that honors `read(max_bytes)`; all six now enforce the exact
@@ -166,6 +167,7 @@ the story implementer did not run it.
 | `tests/test_contract_export.py` | 177 | The frozen `contract/openapi.yaml`: that the committed bytes are what the app generates, that the committed `.sha256` anchor is the sha256 of those bytes in `sha256sum -c` form, that the render is byte-stable across processes and `PYTHONHASHSEED` values (measured in subprocesses, not asserted), that the canonical form round-trips and carries no YAML anchors, and that `/extract` is documented while `extract_route_enabled` is `false`. The drift check's own failure case is committed as `tests/fixtures/contract/unregenerated_openapi.yaml` and fed to the same checker |
 | `tests/test_governance_docs.py` | 69 | Governance, SECURITY and PR-template claims tied to code: current version, regeneration command, nine hashed sources, six required checks/examples, thirteen registered rulings and resolvable citations/links. Covers the validation-422 one-MINOR redaction window and second-MINOR removal ruling, directional policy/cache semantics, four current anchor quotations and the version-agnostic supported-versions policy |
 | `tests/test_contract_schema.py` | 17 | Six-model frozen golden; retained 1.2.0 pair and frozen 1.3.0 exact-additions/announcement sweep for ten golden-visible additions, including all four effective-policy fields; metrics remain under dedicated coverage |
+| `tests/test_corpus_lint.py` | 84 | The injection-corpus record format (`scripts/corpus/`): every lint rule parametrised with a failing record whose error is `<id>: <rule>` and never echoes the payload; the secret-shape negative control for every regex; the two declared URL exceptions for both kinds; kind-keyed `params.variant`; loader order and an empty corpus; committed records lint-clean and stored only as `.jsonl`; `STAGE2_REGEX_NAMES` / probes / `STAGE2_REGEX_NO_BENIGN` pinned against the scanner via `tests/corpus_stage2.py`. The `MIN_RECORDS` floor test skips ("asserted from spec 5 US-002") |
 | `tests/test_retrieve_admission.py` | 15 | Retrieve admission queue/budget refusals, permit ownership across actual HTML-task cancellation, absolute fetch deadline, off-loop stages, body release before classification and continued service responsiveness |
 | `tests/test_search_policy.py` | 15 | Restrict-only request policy, known/unknown providers, free-provider retention and longest named paid-prefix behavior |
 
@@ -174,6 +176,8 @@ Support files:
 | File | Purpose |
 |------|---------|
 | `tests/conftest.py` | Puts the repo root on `sys.path`; installs the autouse socket guard |
+| `tests/corpus/` | Injection-corpus records: `attacks/<category>.jsonl`, `benign/<genre>.jsonl`, and a README documenting the record shape, outcome vocabulary and content rules. Payload text is data, never quoted elsewhere; linted by `tests/test_corpus_lint.py` |
+| `tests/corpus_stage2.py` | Tests-side stage-2 naming: `stage2_hits`, `stage2_forms`, `stage2_record_hits` (runs the private `_PATTERNS`), and the `name-variants` entry point |
 | `tests/fixtures/search/` | Synthetic, scrubbed pipeline response/exhaustion pins with `request_id` removed before writing; regenerate via `--regenerate-search-pins` in the same commit as a deliberate wire/pinned-counter change, explaining why in its message. The older `baseline_pre_blocked_domains.json` is separately frozen, never regenerated. |
 | `tests/fakes.py` | Shared fakes and builders: `FakeStorage`, `FakeContentCache`, `FakeSearchProvider`, `assert_frozen`, the Hugging Face cache-layout helpers (`materialize_hub_snapshot`, `hub_download_double`, `weights_manifest_document`), and `record_network_attempts`. Streaming doubles: `ChunkStream` (raw chunks only, optional per-chunk delay), stream-backed `make_response` (no implicit Content-Length), `make_stream_cm`, `client_patch(target, ...)`, `RecordingDecompressor` and `record_decompressors()` (aggregate every decoder instance, including raw-deflate retries). `RecordingSearchMetrics` owns every `SearchMetricsSink` counter and its `counters` projection; add future sink fields here, not in local copies. |
 | `tests/fixtures/tiny_model/` | A real, loadable 2-layer DeBERTa-v2 classifier (~96 KB, safetensors only) — the fixture that lets the *actual* loader be exercised rather than mocked |
@@ -304,6 +308,9 @@ test_mapping:
   "Dockerfile": ["tests/test_dockerfile.py", "tests/test_contract_smoke.py"]
   "contract_smoke.py": "tests/test_contract_smoke.py"
   "scripts/bench_promptguard.py": "tests/test_bench_promptguard.py"
+  "scripts/corpus/*": "tests/test_corpus_lint.py"
+  "tests/corpus_stage2.py": "tests/test_corpus_lint.py"
+  "tests/corpus/*": "tests/test_corpus_lint.py"
   "bench/config.yaml": "tests/test_bench_promptguard.py"
   "uv.lock": "tests/test_dependency_lock.py"
   "pyproject.toml": ["tests/test_dependency_lock.py", "tests/test_pyright_policy.py"]
