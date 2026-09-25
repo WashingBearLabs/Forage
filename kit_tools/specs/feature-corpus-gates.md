@@ -504,7 +504,7 @@ lists the `tests/test_corpus_*.py` files; `kit_tools/PRODUCT_VISION.md` marks T2
   0's enablement gates and an 86M cassette (ruling 6a); `kit_tools/SYNOPSIS.md` and `kit_tools/AGENT_README.md`
   one line each.
 - Final ruling-6 assertion (rulings 6, 6a): `git diff --stat
-  forage-injection-corpus/corpus-86m-enablement-complete -- pipeline/ promptguard/ models.py
+  "$(git merge-base main HEAD)" -- pipeline/ promptguard/ models.py
   retrieval_app.py cache.py url_validator.py model_fetcher.py contract/ config.yaml
   weights_manifest.json Dockerfile` empty on the epic branch — against **spec 0's completion tag,
   not `main`**, because spec 0 is the epic's one sanctioned runtime change (`model_fetcher.py`,
@@ -638,7 +638,7 @@ spec 0. **Fixed:**
   consistency test.
 - **Rulings 6 / 6a / decision 17** — the hashed set is named from the code (eight
   `_REVISION_SOURCES` + `url_validator.py`), not ruling 6's prose; the final assertion diffs against
-  `forage-injection-corpus/corpus-86m-enablement-complete`, not `main`, and records the `uv.lock` /
+  the epic branch's merge base with `main` (ruling 6a), and records the `uv.lock` /
   `pyproject.toml` diff (idna rotation). The decision table's model half, US-004's 86M rows, the
   reading guide and the BACKLOG follow-up (now split in two) are conditional on spec 0 enabling the
   86M. Header now "Spec 5 of 6".

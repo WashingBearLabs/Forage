@@ -385,8 +385,9 @@ scripts.export_contract --check` green, no `contract/openapi.yaml` diff since `v
 - **Scope (ruling 6a)**: runtime edits are limited to `model_fetcher.py` (`ALLOWED_MODEL_IDS` only),
   `promptguard/classifier.py` (`_PINNED_GENERIC_LABEL_INDICES` only), `pipeline/extraction_limits.py`
   (`CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` only), `weights_manifest.json`, `NOTICE`, docs and
-  tests; US-002's scope criterion asserts it. Specs 1–5's ruling-6 assertion diffs against this
-  spec's completion tag (`forage-injection-corpus/corpus-86m-enablement-complete`), not `main`.
+  tests; US-002's scope criterion asserts it. This spec runs on its own branch from `main`, in
+  parallel with specs 1–3, and reaches `main` through its PR and the `v1.2.2` release; specs 1–5's
+  ruling-6 assertion diffs against the epic branch's merge base with `main`, which excludes it.
 - **Lab-host isolation posture** (recorded in US-001 before the first credentialed step): the runs
   use a dedicated OS user or a separate Docker context, write-scoped credentials live only in the
   one-file recipe for the duration of US-001, and the owner records either that isolation or an
