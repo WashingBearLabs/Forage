@@ -354,10 +354,13 @@ def test_no_payload_text_is_printed(
     printed = captured.out + captured.err
     for record in records:
         assert record.marker is not None
-        assert record.marker not in printed, record.id
-    for fragment in (_TRIGGER, "secure-systems-252", "attacker.io", "Riverside"):
-        assert fragment not in printed
-    assert re.search(r"atk-\d{4}\.\.atk-\d{4}", printed)
+        echoed = record.marker in printed
+        assert not echoed, record.id
+    fragments = (_TRIGGER, "secure-systems-252", "attacker.io", "Riverside")
+    echoed_fragments = sum(fragment in printed for fragment in fragments)
+    assert echoed_fragments == 0
+    names_range = re.search(r"atk-\d{4}\.\.atk-\d{4}", printed) is not None
+    assert names_range
 
 
 def test_llmail_is_stratified_half_caught_half_missed(tmp_path: Path) -> None:
@@ -1538,7 +1541,8 @@ def test_url_field_probes_are_the_declared_set_and_carry_the_shape_in_the_url() 
         if not isinstance(variant, str):
             continue
         forms = corpus_stage2.stage2_forms(record)
-        assert len(forms) == 6, record.id
+        form_count = len(forms)
+        assert form_count == 6, record.id
         url_hits = corpus_stage2.stage2_hits(forms[2]) | corpus_stage2.stage2_hits(
             forms[3]
         )

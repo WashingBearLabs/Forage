@@ -320,7 +320,8 @@ def test_a_tag_consumed_record_carries_the_literal_and_stage_two_never_sees_it()
         name = _regex_name(record)
         assert _variant(record) == "plain", record.id
         assert record.pinned is None, record.id
-        assert name in stage2_hits(_raw_text(record)), record.id
+        raw_hits_name = name in stage2_hits(_raw_text(record))
+        assert raw_hits_name, record.id
         assert name not in stage2_record_hits(record), record.id
 
 
@@ -361,7 +362,8 @@ def test_the_break_inside_records_break_the_two_patterns_without_dotall() -> Non
         assert not pattern.flags & re.DOTALL, record.id
         dotall = re.compile(pattern.pattern, pattern.flags | re.DOTALL)
         match = dotall.search(_raw_text(record))
-        assert match is not None and "\n" in match.group(), record.id
+        spans_break = match is not None and "\n" in match.group()
+        assert spans_break, record.id
 
 
 def test_every_marker_survives_the_variant_it_sits_beside() -> None:
@@ -656,7 +658,8 @@ def test_the_jsonld_records_cover_all_four_carrier_keys() -> None:
 
 def test_every_hidden_markup_marker_is_distinct() -> None:
     markers = [normalise_for_leak_check(_marker(r)) for r in _hidden_records()]
-    assert len(set(markers)) == len(markers)
+    distinct = len(set(markers)) == len(markers)
+    assert distinct
 
 
 def test_only_the_carriers_measured_neutralised_for_every_phrasing_carry_pins() -> None:
@@ -845,16 +848,18 @@ def test_window_records_meet_their_character_budget() -> None:
         text = _stage2_form(record)
         windows = _windows_min(record)
         budget = _CHARS_PER_TOKEN * (_STEP_TOKENS * (windows - 1) + _OVERLAP_TOKENS)
-        assert len(text) >= budget, record.id
+        length = len(text)
+        assert length >= budget, record.id
         if record.category == "repetition_camouflage":
-            assert len(text) <= _ONE_WINDOW_MAX_CHARS, record.id
+            assert length <= _ONE_WINDOW_MAX_CHARS, record.id
         if record.category == "boundary_straddle":
             boundary = step_chars * _STRADDLE_STEPS[str(record.params["placement"])]
             folded = normalise_for_leak_check(text)
             needle = normalise_for_leak_check(_marker(record))
             first = folded.index(needle)
             second = folded.index(needle, first + 1)
-            assert first + len(needle) <= boundary <= second, record.id
+            first_end = first + len(needle)
+            assert first_end <= boundary <= second, record.id
 
 
 def test_the_marker_is_in_every_payload_fragment() -> None:
@@ -890,7 +895,8 @@ def test_filler_provenance_is_public_domain_with_its_ebook_number() -> None:
 
 def test_every_window_record_is_stage_two_clean_on_its_route_form() -> None:
     for record in _window_records():
-        assert scan_structural(_stage2_form(record)).flags == [], record.id
+        flagged = bool(scan_structural(_stage2_form(record)).flags)
+        assert not flagged, record.id
 
 
 def test_the_lint_rejects_a_stage_two_shaped_sweep_base() -> None:
@@ -907,7 +913,8 @@ def test_the_lint_rejects_a_stage_two_shaped_sweep_base() -> None:
     # The page form is the one stage 2 receives: an entity-encoded trigger is
     # clean in the raw HTML and BLOCK-shaped once `/retrieve` decodes it.
     encoded = f"<p>{html.escape('<system>')}</p>{page_record.payload['body_html']}"
-    assert stage2_hits(encoded) == frozenset()
+    encoded_clean = stage2_hits(encoded) == frozenset()
+    assert encoded_clean
     shaped = replace(page_record, payload={**page_record.payload, "body_html": encoded})
     assert [e.rule for e in lint_corpus([shaped])] == ["sweep_stage2_clean"]
 
@@ -1145,30 +1152,34 @@ def test_a_story_record_carries_no_structural_marker_and_no_square_bracket() -> 
     out brackets, the shape of the `[SYSTEM]` / `[admin]` triggers.
     """
     for record in _classifier_story_records():
-        assert stage2_hits(_raw_text(record)) == frozenset(), record.id
+        raw = _raw_text(record)
+        raw_clean = stage2_hits(raw) == frozenset()
+        assert raw_clean, record.id
         assert stage2_record_hits(record) == frozenset(), record.id
-        assert "[" not in _raw_text(record), record.id
-        assert "]" not in _raw_text(record), record.id
+        bracketed = "[" in raw or "]" in raw
+        assert not bracketed, record.id
 
 
 def test_every_story_marker_is_distinct_and_new_to_the_corpus() -> None:
     records = _classifier_story_records()
     markers = [record.marker for record in records]
-    assert len(set(markers)) == len(markers)
+    distinct = len(set(markers)) == len(markers)
+    assert distinct
     story_ids = {record.id for record in records}
     elsewhere = {
         record.marker for record in load_corpus() if record.id not in story_ids
     }
-    assert not elsewhere & set(markers)
+    reused = bool(elsewhere & set(markers))
+    assert not reused
 
 
 def test_every_url_a_story_payload_carries_is_reserved_including_prose_urls() -> None:
     """The lint reads `payload.url` and URL attributes; this reads the prose too."""
     for record in _classifier_story_records():
         hosts = _HOST.findall(_raw_text(record))
-        assert hosts or record.surface == "search", record.id
-        for host in hosts:
-            assert _is_reserved_host(host), record.id
+        assert bool(hosts) or record.surface == "search", record.id
+        all_reserved = all(_is_reserved_host(host) for host in hosts)
+        assert all_reserved, record.id
 
 
 def test_a_natural_language_note_names_its_context_and_its_ask() -> None:
@@ -1188,7 +1199,8 @@ def test_a_natural_language_note_names_its_context_and_its_ask() -> None:
             body = "\n".join(
                 value for key, value in record.payload.items() if key != "url"
             )
-            assert _HOST.search(body) is not None, record.id
+            names_host = _HOST.search(body) is not None
+            assert names_host, record.id
         if context in {"readme", "changelog"}:
             assert record.surface == "text", record.id
         if context == "forum_reply":
@@ -1236,8 +1248,10 @@ def test_the_two_search_siblings_of_the_hidden_markup_carriers_are_authored() ->
         marker = normalise_for_leak_check(record.marker)
         field = "title" if found.group(4) == "title_stuffing" else "content"
         other = "content" if field == "title" else "title"
-        assert marker in normalise_for_leak_check(record.payload[field]), record.id
-        assert marker not in normalise_for_leak_check(record.payload[other]), record.id
+        in_field = marker in normalise_for_leak_check(record.payload[field])
+        in_other = marker in normalise_for_leak_check(record.payload[other])
+        assert in_field, record.id
+        assert not in_other, record.id
         carriers.add(found.group(4))
     assert carriers == {"og_description", "title_stuffing"}
 

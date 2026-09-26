@@ -1171,7 +1171,8 @@ async def test_a_zwsp_marker_spanning_the_obfuscated_token_is_leaked() -> None:
     body = _wire_object(wire)
     # Stage 1 already stripped the zero-width space, so the authored marker is
     # not a substring of the wire — only normalising it too finds the leak.
-    assert marker not in body["body"]
+    verbatim = marker in body["body"]
+    assert not verbatim
     assert marker_on_wire(body, marker) is True
     result = await drive(record, classifier, config="default")
     assert result.outcome == "leaked", result.summary()
@@ -1269,6 +1270,8 @@ async def test_no_payload_reaches_a_repr_an_error_a_log_or_assertion_output(
     assert _SENTINEL not in result.summary()
     assert _SENTINEL not in repr(result.signals)
     assert record.id in repr(result)
+    assert _SENTINEL not in repr(record)
+    assert record.id in repr(record)
 
     # A failing assertion written the documented way: the message is the
     # summary, and pytest's own "where ... = RouteResult(...)" line is the repr.
@@ -1497,7 +1500,8 @@ def test_seed_files_are_named_by_category_or_genre() -> None:
         for path in paths:
             assert path.stem in names, path.name
             for line in path.read_text(encoding="utf-8").splitlines():
-                assert json.loads(line)["category"] == path.stem, path.name
+                category = json.loads(line)["category"]
+                assert category == path.stem, path.name
 
 
 def test_seed_expectation_table_covers_every_attack_category() -> None:
@@ -1576,8 +1580,10 @@ async def test_seed_the_two_audit_bypasses_are_blocked_on_search() -> None:
     role = results["atk-0008"]
     assert role.signals.omit_reason == contract.OMIT_STRUCTURAL_BLOCKED
     content = seed["atk-0008"].payload["content"]
-    assert "\n\nSystem:" in content
-    assert not content.startswith(("System:", "assistant:"))
+    after_break = "\n\nSystem:" in content
+    assert after_break
+    leads_with_role = content.startswith(("System:", "assistant:"))
+    assert not leads_with_role
     # -032: the pin is the outcome class; the reason is one of the two the
     # hardening epic's URL audit can give, and the record notes which.
     for record_id in ("atk-0009", "atk-0010", "atk-0011"):
@@ -1625,9 +1631,8 @@ def test_seed_double_entity_title_is_a_role_marker_after_two_decodes() -> None:
     title = record.payload["title"]
     once = html.unescape(title)
     twice = html.unescape(once)
-    assert stage2_hits(title) == frozenset()
-    assert stage2_hits(once) == frozenset()
-    assert stage2_hits(twice) == {"system_line"}
+    hits = [stage2_hits(title), stage2_hits(once), stage2_hits(twice)]
+    assert hits == [frozenset(), frozenset(), {"system_line"}]
     assert record.pinned == ("blocked",)
 
 
@@ -1636,10 +1641,12 @@ async def test_seed_nul_split_title_blocks_because_the_strip_rejoins_it() -> Non
     record = _seed_records()["atk-0025"]
     title = record.payload["title"]
     stripped = title.replace("\x00", "")
-    assert "\x00" in title
-    assert stage2_hits(title) == frozenset()
-    assert stage2_hits(stripped) == {"system_bracket"}
-    assert not stripped.startswith("[")
+    has_nul = "\x00" in title
+    assert has_nul
+    hits = [stage2_hits(title), stage2_hits(stripped)]
+    assert hits == [frozenset(), {"system_bracket"}]
+    leads_with_bracket = stripped.startswith("[")
+    assert not leads_with_bracket
     assert stage2_record_hits(record) == {"system_bracket"}
     result = (await _structural_only([record]))[record.id]
     assert result.outcome == "blocked", result.summary()
@@ -1695,15 +1702,24 @@ def test_seed_metadata_carriers_are_the_six_named_ones() -> None:
     for name in ("css_offscreen", "hidden_div", "title_stuffing"):
         assert carriers[name].pinned is None, name
     head = carriers["jsonld"].payload["head_html"]
-    assert "application/ld+json" in head and "SoftwareApplication" in head
-    assert '"offers"' in head
-    assert 'name="description"' in carriers["meta_description"].payload["head_html"]
-    assert "og:description" in carriers["og_description"].payload["head_html"]
-    assert "left:-9999px" in carriers["css_offscreen"].payload["body_html"]
-    assert "hidden" in carriers["hidden_div"].payload["body_html"]
+    jsonld = "application/ld+json" in head and "SoftwareApplication" in head
+    assert jsonld
+    offers = '"offers"' in head
+    assert offers
+    shapes = {
+        "meta_description": 'name="description"'
+        in carriers["meta_description"].payload["head_html"],
+        "og_description": "og:description"
+        in carriers["og_description"].payload["head_html"],
+        "css_offscreen": "left:-9999px"
+        in carriers["css_offscreen"].payload["body_html"],
+        "hidden_div": "hidden" in carriers["hidden_div"].payload["body_html"],
+    }
+    assert [name for name, present in shapes.items() if not present] == []
     title_stuffing = carriers["title_stuffing"]
     assert title_stuffing.marker is not None
-    assert title_stuffing.marker in title_stuffing.payload["title"]
+    in_title = title_stuffing.marker in title_stuffing.payload["title"]
+    assert in_title
 
 
 async def test_seed_stripped_carriers_are_neutralised_kept_ones_leak() -> None:
@@ -1743,12 +1759,14 @@ def test_seed_residual_shapes_meet_their_character_budget() -> None:
         windows_min = record.params["windows_min"]
         assert isinstance(windows_min, int) and windows_min >= 1
         budget = 4 * (448 * (windows_min - 1) + 64)
-        assert len(_page_text(record)) >= budget, record.id
+        length = len(_page_text(record))
+        assert length >= budget, record.id
     straddle = seed["atk-0020"]
     assert straddle.params["windows_min"] == 2
     assert straddle.params["placement"] == "split_448"
     text = _page_text(straddle)
-    assert len(text) >= 4 * 1_200
+    length = len(text)
+    assert length >= 4 * 1_200
     assert straddle.marker is not None
     needle = normalise_for_leak_check(straddle.marker)
     folded = normalise_for_leak_check(text)
@@ -1756,7 +1774,8 @@ def test_seed_residual_shapes_meet_their_character_budget() -> None:
     second = folded.index(needle, first + 1)
     # One half of the payload ends before the 448-token step, the other starts
     # after it.
-    assert first + len(needle) <= _TOKEN_STEP_CHARS <= second
+    first_end = first + len(needle)
+    assert first_end <= _TOKEN_STEP_CHARS <= second
     assert seed["atk-0023"].params["windows_min"] == 3
 
 
@@ -1785,7 +1804,8 @@ async def test_seed_git_sha_code_benign_is_flagged_by_base64_run() -> None:
     assert stage2_record_hits(record) == {"base64_run"}
     assert record.params["variant"] == "base64_run"
     assert record.pinned == ("flagged", "blocked")
-    assert _carries_a_commit_id(record.payload["url"])
+    commit_url = _carries_a_commit_id(record.payload["url"])
+    assert commit_url
     result = (await _structural_only([record]))[record.id]
     assert result.outcome == "flagged", result.summary()
     assert result.signals.suspicious is True

@@ -56,9 +56,14 @@ class CorpusLintError(Exception):
         return f"{self.record_id}: {self.rule}"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class CorpusRecord:
-    """One corpus record, as read. ``keys`` is the key order of the source line."""
+    """One corpus record, as read. ``keys`` is the key order of the source line.
+
+    ``repr`` names the id, kind, category and surface only, so pytest's own
+    ``where ... = CorpusRecord(...).attr`` line — printed for any failing
+    assertion that touches a record attribute — cannot echo a payload.
+    """
 
     id: str
     kind: str
@@ -73,6 +78,12 @@ class CorpusRecord:
     params: Mapping[str, ParamValue]
     notes: str
     keys: tuple[str, ...]
+
+    def __repr__(self) -> str:
+        return (
+            f"CorpusRecord({self.id} kind={self.kind} "
+            f"category={self.category} surface={self.surface})"
+        )
 
     def strings(self) -> Iterator[str]:
         """Every string the record carries — what the secret-shape rule scans."""
