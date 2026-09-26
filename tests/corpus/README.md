@@ -274,6 +274,56 @@ the book's `gutenberg.org/ebooks/<n>` page, `revision` the ebook number, and
 file. No excerpt is longer than 6 000 characters. The payload sentences themselves
 are owned.
 
+## Third-party samples (spec 2 US-004)
+
+Three permissively licensed sets are sampled by `scripts/corpus/ingest/`
+(`agentdojo.py`, `llmail_inject.py`, `cyberseceval.py`, with the shared
+`render.py` and `common.py`). Each sampler reads a local download, orders its
+rows under a fixed `--seed`, writes at most `--limit` records and appends them
+to the category files here, continuing the id sequence. It prints ids and
+counts only, never payload text; a secret-shaped row is skipped with a counted
+reason, and every record must pass the lint before it is written.
+
+| Source | Licence (where resolved) | Cap | Shape → surface |
+|--------|--------------------------|-----|-----------------|
+| AgentDojo | MIT, repository `LICENSE` | 40 | injection `GOAL` in the `important_instructions` tool-output template → article `page` / `search` snippet |
+| LLMail-Inject | MIT, dataset card | 60, half caught / half missed by the challenge defence | attacker e-mail → forum-post `page` |
+| CyberSecEval | MIT, `CybersecurityBenchmarks/LICENSE` (not the repository root) | 30, indirect cases only | submitted content → `text` upload |
+
+**Category rule (one for all three).** At ingest the re-rendered text is
+scanned with `scan_structural`; the first stage-2 category that fires is the
+record's category, with `variant = plain`; otherwise it is `natural_language`.
+None of the three sources is SEO/authority-framed, so no ingested row takes
+`authority_seo`. Ingested records are unpinned and `source.kind = third_party`.
+
+**Where inputs live.** Downloads go under `$FORAGE_CORPUS_INPUTS` (default
+`~/.cache/forage-corpus-inputs/`), outside the working tree, and are never
+committed — only the sampled, re-rendered, capped records reach
+`tests/corpus/`. The samplers refuse an `--input` that resolves (symlinks and
+`..` followed) inside the repository, and `.gitignore` carries
+`/corpus-inputs/` for the obvious mistake. `--input-sha256` refuses a file
+that changed under its pin. A gated fetch reads `HF_TOKEN` from the
+environment inside `huggingface_hub`; no sampler takes a token argument, and a
+failure prints a closed reason code (`input_inside_repo`, `io_failed`,
+`http_<status>`, …), never an exception message or URL.
+
+**Sourcing rule.** Resolve the licence at the directory of the files taken,
+not the repository root. Pin by commit SHA or dataset revision, never a
+branch (PIGuard's rename "due to licensing issues" is the precedent). Direct
+(user-turn) rows are excluded, or re-homed into a web surface with
+`framing = rehomed_direct`. Every non-public-domain source has an entry under
+"Third-party corpus samples" in `NOTICE`, which a test enforces.
+
+**Rejected on licence.** Ideas are not copyrightable: these taxonomies may be
+read, but no string from them enters the corpus.
+
+| Source | Why rejected |
+|--------|--------------|
+| BIPIA | Benchmark data CC-BY-SA 4.0 (share-alike); its LICENSE disclaims its own accuracy |
+| WASP | CC-BY-NC 4.0 (non-commercial) |
+| HackAPrompt | MIT, but direct-framed and unnecessary |
+| PIGuard / InjecGuard | Licence unverified after the rename |
+
 ## Content rules (ruling 8)
 
 - **Hosts:** every URL — `payload.url` and any `href` / `src` / `content=`

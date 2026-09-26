@@ -935,6 +935,48 @@ did **not** leak at HEAD, so the hint's contingent finding for them is not filed
   but the wire never carries it. Nothing is pinned.
 - No runtime change: `derive_sanitizer_revision({})` is still `021378ef…`.
 
+### US-004 — Third-party ingestion (2026-09-25)
+
+**Delivered.** `scripts/corpus/ingest/` — `agentdojo.py`, `llmail_inject.py`, `cyberseceval.py`,
+the shared `render.py` (URL rewrite, category rule, marker choice, the four renderers) and
+`common.py` (input guard, closed reason vocabulary, sampling/writing, the shared `argparse` CLI:
+`--input`, `--revision`, `--seed` (default `20260919`), `--limit`, `--out`, plus `--input-sha256`,
+which owns the Edge Cases "changed under its pin" refusal). 130 ingested records, `atk-0273` …
+`atk-0402`, all lint-clean and unpinned; `tests/test_corpus_ingest.py` (58 tests) is new. No
+runtime file changed; `derive_sanitizer_revision()` is untouched (no `_REVISION_SOURCES` file moved).
+
+**Decisions.**
+- LLMail-Inject shard format: **JSONL** (`data/raw_submissions_phase2.jsonl` is JSONL upstream),
+  so no `pyarrow` and no re-lock.
+- AgentDojo rows are read **statically** (`ast`, nothing upstream imported or run): every
+  injection task's `GOAL` across `default_suites/*/*/injection_tasks.py`, wrapped in the repo's own
+  `important_instructions` template (default user/model names, also read from the checkout) —
+  the tool-output string the benchmark injects. One row per distinct injected text (the 629
+  security cases are user-task × injection-task pairs over these). Even record numbers render as an
+  article `page`, odd ones as a `search` snippet.
+- LLMail-Inject stratum is the row's `objectives["defense.undetected"]`: `false` = caught,
+  `true` = missed; 30 + 30. Duplicate e-mails (subject + body) are collapsed before sampling.
+- CyberSecEval: only `injection_type == "indirect"` cases; direct cases are excluded (not
+  re-homed). Each case's `user_input` (question plus submitted content) renders as a `text` upload.
+- Category rule scans the URL-rewritten text (subject + body for e-mails). No source is
+  SEO/authority-framed, so no ingested row takes `authority_seo`.
+- `lang` is `en` for all three (every CyberSecEval indirect case is English; AgentDojo is English;
+  the LLMail-Inject challenge was run in English).
+- A second run into a corpus that already holds the source's records is refused
+  (`already_ingested`), so the host run cannot double-append.
+
+**Host runs** (inputs under `$FORAGE_CORPUS_INPUTS` = `~/.cache/forage-corpus-inputs/`; commands
+carry no environment; blob identity against the pinned commit verified through the GitHub API).
+
+| Source | Download command | Pinned revision | Seed | Limit | Rows read | Written | Skipped by reason |
+|--------|------------------|-----------------|------|-------|-----------|---------|-------------------|
+| AgentDojo | `git clone --filter=blob:none --sparse https://github.com/ethz-spylab/agentdojo "$FORAGE_CORPUS_INPUTS/agentdojo"`, then `git -C … sparse-checkout set src/agentdojo` and `git -C … checkout 089ed468cf3ed0322acc66b0211f26d9d90dbf60` | `089ed468cf3ed0322acc66b0211f26d9d90dbf60` (2026-06-02) | 20260919 | 40 | 54 `GOAL` tasks | 40 (`atk-0273`…`atk-0312`; 20 page, 20 search; all `natural_language`) | `duplicate` 8 |
+| LLMail-Inject | `uv run python -c "from huggingface_hub import hf_hub_download; hf_hub_download('microsoft/llmail-inject-challenge', 'data/raw_submissions_phase2.jsonl', repo_type='dataset', revision='1063bdf01ec8762b812d5e06ee768a06faa5a6f7', local_dir='<inputs>/llmail-inject')"` (sha256 `a9207e1d…c7ab18b6`, passed as `--input-sha256`) | `1063bdf01ec8762b812d5e06ee768a06faa5a6f7` | 20260919 | 60 | 90 916 | 60 (`atk-0313`…`atk-0372`; 30 caught, 30 missed; `natural_language` 57, `instruction_override` 1, `encoded_payload` 1, `prompt_boundary` 1) | `duplicate` 53 067, `malformed_row` 108, `empty` 1 |
+| CyberSecEval | `curl -fsSLo "$FORAGE_CORPUS_INPUTS/cyberseceval/prompt_injection.json" https://raw.githubusercontent.com/meta-llama/PurpleLlama/4be64c3a24442b51c76175e6ec67722cc3f5fe38/CybersecurityBenchmarks/datasets/prompt_injection/prompt_injection.json` and the same for `CybersecurityBenchmarks/LICENSE` (sha256 `069e4d5d…5b18a9a`) | `4be64c3a24442b51c76175e6ec67722cc3f5fe38` | 20260919 | 30 | 251 | 30 (`atk-0373`…`atk-0402`; all `text`; `natural_language` 25, `instruction_override` 3, `encoded_payload` 2) | `direct_excluded` 196 |
+
+No row was skipped as `secret_shape` or by a lint rule on the host runs: each quota filled before
+one was met. `LICENSE` is untouched; `NOTICE` gains "Third-party corpus samples".
+
 ## Refinement Notes
 
 ### Research Findings

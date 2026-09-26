@@ -34,3 +34,59 @@ containing the weights must carry those obligations forward.
 
 "Llama" and "Meta" are trademarks of Meta Platforms, Inc. Forage is not
 sponsored by, endorsed by, or affiliated with Meta Platforms, Inc.
+
+--------------------------------------------------------------------------
+Third-party corpus samples
+--------------------------------------------------------------------------
+
+The injection test corpus under tests/corpus/attacks/ carries capped,
+seed-fixed samples from three MIT-licensed datasets. Every sampled payload
+was re-rendered (as a search snippet, a page body or a text upload, with
+every host rewritten to an RFC 2606 reserved name) by
+scripts/corpus/ingest/. These records are test data only; none is shipped
+in the image. Each record's `source` object names its dataset, licence,
+revision and upstream row.
+
+Source: AgentDojo
+  Upstream: https://github.com/ethz-spylab/agentdojo
+  Licence: MIT (LICENSE at the repository root)
+  Copyright (c) 2024 Edoardo Debenedetti, Jie Zhang, Mislav Balunovic, Luca Beurer-Kellner, Marc Fischer, and Florian Tramèr
+  Revision: 089ed468cf3ed0322acc66b0211f26d9d90dbf60
+  Records: atk-0273..atk-0312
+
+Source: LLMail-Inject
+  Upstream: https://huggingface.co/datasets/microsoft/llmail-inject-challenge
+  Licence: MIT (dataset card `license: mit`)
+  Copyright: the dataset repository publishes no copyright line or
+    LICENSE file; its card declares `license: mit` (publisher: Microsoft)
+  Revision: 1063bdf01ec8762b812d5e06ee768a06faa5a6f7
+  Records: atk-0313..atk-0372
+
+Source: CyberSecEval
+  Upstream: https://github.com/meta-llama/PurpleLlama
+  Licence: MIT (CybersecurityBenchmarks/LICENSE — only files under that
+    directory were taken; the repository root carries a different licence)
+  Copyright (c) Meta Platforms, Inc. and affiliates.
+  Revision: 4be64c3a24442b51c76175e6ec67722cc3f5fe38
+  Records: atk-0373..atk-0402
+
+Each source is distributed under the MIT License:
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the
+    "Software"), to deal in the Software without restriction, including
+    without limitation the rights to use, copy, modify, merge, publish,
+    distribute, sublicense, and/or sell copies of the Software, and to
+    permit persons to whom the Software is furnished to do so, subject to
+    the following conditions:
+
+    The above copyright notice and this permission notice shall be included
+    in all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+    IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+    TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+    SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
