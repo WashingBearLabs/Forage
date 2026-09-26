@@ -489,19 +489,19 @@ recorded per regex in Implementation Notes.
   floors of their genre, not toward a `search` genre (there is none).
 
 **Acceptance Criteria:**
-- [ ] ≥ 40 `search` benign records; ≥ 24 regex-tagged; every `STAGE2_REGEX_NAMES` entry **except the
+- [x] ≥ 40 `search` benign records; ≥ 24 regex-tagged; every `STAGE2_REGEX_NAMES` entry **except the
       three in `STAGE2_REGEX_NO_BENIGN`** covered ≥ 2
       across the whole benign corpus (test); lint-clean.
-- [ ] Implementation Notes: per-regex outcome counts under `fallback=0.0` and the final benign totals
+- [x] Implementation Notes: per-regex outcome counts under `fallback=0.0` and the final benign totals
       (≥ 250; ≥ 15 per genre; ≥ 30 `over_defence_probe`; ≥ 6 languages; ≥ 20 with `windows_min ≥ 3`).
-- [ ] Zero runtime change (rulings 6, 6a) re-asserted at spec end: the `git diff --stat` set,
+- [x] Zero runtime change (rulings 6, 6a) re-asserted at spec end: the `git diff --stat` set,
       diffed against the epic branch's merge base with `main` (`git merge-base main HEAD`, ruling 6a), is empty,
       `derive_sanitizer_revision({})` unchanged, `scripts.export_contract --check` green.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ## Edge Cases
 
