@@ -191,18 +191,18 @@ SUSPICIOUS record `flagged` by expectation; measured at 403e9c5 that fails for t
 - Ids continue from the seed (`atk-0023` …); one file per category (append).
 
 **Acceptance Criteria:**
-- [ ] ≥ 72 new records across the nine categories, ≥ 8 per category, every record with
+- [x] ≥ 72 new records across the nine categories, ≥ 8 per category, every record with
       `params.variant` from the closed list and a `notes` line naming the targeted regex.
-- [ ] Surfaces per category as above; every URL under RFC 2606; lint-clean.
-- [ ] Pins exactly as specified; the generic pinned-outcome test passes with `fallback=0.0`.
-- [ ] Implementation Notes record, per category × variant, the count of `blocked` / `flagged` /
+- [x] Surfaces per category as above; every URL under RFC 2606; lint-clean.
+- [x] Pins exactly as specified; the generic pinned-outcome test passes with `fallback=0.0`.
+- [x] Implementation Notes record, per category × variant, the count of `blocked` / `flagged` /
       `neutralised` / `leaked` under `fallback=0.0` (numbers only).
-- [ ] `tests/corpus/README.md` gains the variant vocabulary with a one-line definition each.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] `tests/corpus/README.md` gains the variant vocabulary with a one-line definition each.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-002: Hidden-markup carriers — the eight in-the-wild placements
 
