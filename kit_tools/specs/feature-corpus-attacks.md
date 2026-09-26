@@ -352,26 +352,26 @@ the filler text's provenance records a public-domain source with `LicenseRef-Pub
   leak check works on any surviving piece).
 
 **Acceptance Criteria:**
-- [ ] Counts and parameters as in the Independent Test; `params` keys limited to the family's
+- [x] Counts and parameters as in the Independent Test; `params` keys limited to the family's
       allowlist (`placement`, `density`, `repeat`, `windows_min`).
-- [ ] Filler provenance recorded per record with a public-domain licence id and the ebook number;
+- [x] Filler provenance recorded per record with a public-domain licence id and the ebook number;
       no filler excerpt exceeds 6 000 characters; lint-clean.
-- [ ] Every sweep record (`density_thinned`, `repetition_camouflage`, `boundary_straddle`,
+- [x] Every sweep record (`density_thinned`, `repetition_camouflage`, `boundary_straddle`,
       `sustained_midband`) has a stage-2-clean base — a lint rule asserts
       `scan_structural(form).flags == []` for the whole record text (filler included) in the
       post-pipeline form of every route it targets, and a test feeds a stage-2-shaped base and asserts
       the lint rejects it.
-- [ ] Every sweep record yields a classifier score under replay (the cassette carries an entry for
+- [x] Every sweep record yields a classifier score under replay (the cassette carries an entry for
       each of its windows); a test asserts no sweep record produces `skip_reason ==
       "structural_block"`.
-- [ ] The regex-floor pins the report pairs with the repetition curve live in the stage-2 categories
+- [x] The regex-floor pins the report pairs with the repetition curve live in the stage-2 categories
       and are asserted there, not inside `repetition_camouflage`.
-- [ ] `tests/corpus/README.md` documents each family's parameters and the character-budget rule.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] `tests/corpus/README.md` documents each family's parameters and the character-budget rule.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-004: Third-party ingestion — pinned, capped, re-rendered, licence-resolved samplers
 
