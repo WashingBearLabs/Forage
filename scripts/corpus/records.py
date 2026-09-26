@@ -18,6 +18,8 @@ from typing import Final, cast
 from urllib.parse import urlsplit
 
 from pipeline.stage1_extraction import extract_html, normalize_text
+from pipeline.stage1_upload import extract_upload_text
+from pipeline.stage2_structural import scan_structural
 from scripts.corpus import vocab
 
 _ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"(atk|ben)-[0-9]{4}")
@@ -473,6 +475,31 @@ def rule_params_values(record: CorpusRecord) -> bool:
     return exception is None or exception in vocab.URL_EXCEPTIONS
 
 
+def _stage2_form(record: CorpusRecord) -> str | None:
+    """The whole text stage 2 receives for a ``page`` or ``text`` record."""
+    if record.surface == "page":
+        return extract_html(page_document(record), record.payload.get("url")).raw_text
+    if record.surface == "text":
+        text = record.payload.get("text", "")
+        try:
+            return extract_upload_text(text.encode("utf-8")).raw_text
+        except ValueError:  # an upload `/extract` refuses has no stage-2 form
+            return None
+    return None
+
+
+def rule_sweep_stage2_clean(record: CorpusRecord) -> bool:
+    """A window-family record is ``page`` / ``text`` and stage 2 flags nothing in it.
+
+    Stage 3 does not run on a structural block, and a suspicious span makes the
+    outcome a constant ``flagged``: either would flatten the sweep's curve.
+    """
+    if record.category not in vocab.WINDOW_FAMILIES:
+        return True
+    form = _stage2_form(record)
+    return form is not None and scan_structural(form).flags == []
+
+
 LINT_RULES: Final[Mapping[str, Callable[[CorpusRecord], bool]]] = {
     "key_order": rule_key_order,
     "id_prefix": rule_id_prefix,
@@ -489,6 +516,7 @@ LINT_RULES: Final[Mapping[str, Callable[[CorpusRecord], bool]]] = {
     "source": rule_source,
     "params_keys": rule_params_keys,
     "params_values": rule_params_values,
+    "sweep_stage2_clean": rule_sweep_stage2_clean,
 }
 """Every per-record rule by name. ``unique_ids`` is the one corpus-wide rule."""
 

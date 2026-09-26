@@ -229,6 +229,51 @@ other three keep their text (`css_offscreen`, `hidden_div`, the page title), so
 there the instruction-override phrasing is stage 2's to block and the other two are
 left for stage 3; they are unpinned and reported, not asserted.
 
+## Window-shaped families (spec 2 US-003)
+
+`boundary_straddle`, `density_thinned`, `repetition_camouflage` and
+`sustained_midband` (`vocab.WINDOW_FAMILIES`; this story's records are `atk-0215`
+… `atk-0272`, the seed's `atk-0020` … `atk-0023` sit alongside) are about where a
+payload sits across the classifier's windows: 512 tokens with 64 of overlap, so a
+448-token step (`promptguard/classifier.py`). They are parameter sweeps, so the
+report can say at what density and repetition each pooling rule stops catching.
+
+| Family | Parameters | What the sweep varies |
+|--------|------------|-----------------------|
+| `boundary_straddle` | `placement` (`split_448` / `split_896` / `split_1344`), `windows_min` (2 / 3 / 4) | The payload's two halves, each carrying the marker, sit either side of the named step boundary, so neither window sees the whole payload. `page` and `text` |
+| `density_thinned` | `density` (`1/1` / `1/2` / `1/4` / `1/8` payload sentences per window), `placement` (`head` / `tail` / `interleave`), `windows_min` (4, or 8 for `1/8`) | How thinly one payload sentence is spread through filler: 4, 2, 1 and 1 sentences over 4, 4, 4 and 8 windows, each at the head, tail or middle of its span. Two bases, `natural_language` and `authority_seo`, over the full 4 × 3 grid. `page` and `text` |
+| `repetition_camouflage` | `repeat` (`1` / `2` / `3` / `5`), `windows_min` (always 1) | How many times one payload sentence repeats inside a single window. Four bases × four levels: `cookie_banner` and `footer` repeat it as page boilerplate, the two `plain` bases (one `page`, one `text`) as prose. Stage 3 scores `raw_text`, which keeps the boilerplate `div`s, while `main_content`, what the response serves, drops them. So the classifier still scores the camouflaged bases, but their outcome is `neutralised`, not `leaked` |
+| `sustained_midband` | `windows_min` (≥ 3) | Nothing is swept. Long review and comment prose that reads as semi-instructional with no trigger string, so the report can measure how often contiguity trips on text that should be benign. Owned prose, `page` only, never pinned |
+
+`notes` on the density and repetition records starts `base: <name>;`. Every
+record's `marker` appears in each payload fragment: both straddle halves, every
+density sentence and every repetition, so the leak check sees any surviving piece.
+
+**Character-budget rule.** The real tokenizer is not available hermetically, so
+records are authored at a planning budget of 4 characters per token: a record
+declaring `windows_min: W` carries at least `4 × (448 × (W − 1) + 64)` characters in
+its stage-2 form, a straddle boundary `split_N` sits at character `4 × N`, and a
+one-window repetition record stays under `4 × 512 / 1.3` characters (30 %
+headroom for denser tokenisation). This is a planning budget, not a measured PG2
+ratio. Spec 4 verifies the recorded window count against the real tokenizer and
+re-authors any record that falls short.
+
+**Stage-2 clean.** Stage 3 never runs on a structural block, and a suspicious span
+makes the outcome a constant `flagged`. Either one would flatten the curve. The lint
+rule `sweep_stage2_clean` therefore requires `scan_structural(form).flags == []`
+over the whole record, filler included, in the form stage 2 receives:
+`extract_html(...).raw_text` for `page` and `extract_upload_text(...).raw_text`
+for `text`. Stage-2-shaped payloads keep their own pinned `["blocked"]` records in
+the regex-floor categories, and those records are the floor the report pairs with
+the repetition curve. No window-family record is pinned.
+
+**Filler.** Straddle, density and repetition filler is Project Gutenberg
+plain text: `source.kind: third_party`, `licence: LicenseRef-PublicDomain`, `url`
+the book's `gutenberg.org/ebooks/<n>` page, `revision` the ebook number, and
+`record_ref` listing each excerpt as `offset <o>, <n> chars` into the plain-text
+file. No excerpt is longer than 6 000 characters. The payload sentences themselves
+are owned.
+
 ## Content rules (ruling 8)
 
 - **Hosts:** every URL — `payload.url` and any `href` / `src` / `content=`

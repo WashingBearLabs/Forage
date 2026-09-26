@@ -144,6 +144,7 @@ _FAILING: dict[str, Callable[[], dict[str, Any]]] = {
     ),
     "params_keys": lambda: _attack(params={"colour": "red"}),
     "params_values": lambda: _attack(params={"variant": "rot13"}),
+    "sweep_stage2_clean": lambda: _attack(category="density_thinned", params={}),
 }
 
 

@@ -27,7 +27,9 @@ from typing import cast
 from urllib.parse import urlsplit
 
 from pipeline import contract, orchestrator
-from pipeline.stage2_structural import _PATTERNS
+from pipeline.stage1_extraction import extract_html
+from pipeline.stage1_upload import extract_upload_text
+from pipeline.stage2_structural import _PATTERNS, scan_structural
 from scripts.corpus import vocab
 from scripts.corpus.drivers import drive_all
 from scripts.corpus.records import (
@@ -35,6 +37,7 @@ from scripts.corpus.records import (
     lint_corpus,
     load_corpus,
     normalise_for_leak_check,
+    page_document,
 )
 from scripts.corpus.replay import ReplayClassifier
 from tests.corpus_stage2 import stage2_forms, stage2_hits, stage2_record_hits
@@ -694,3 +697,254 @@ def test_the_readme_defines_every_carrier_and_phrasing() -> None:
         rows = [line for line in lines if line.startswith(f"| `{name}` |")]
         assert len(rows) == 1, name
         assert len(rows[0].split("|")[2].strip()) > 20, name
+
+
+# ---------------------------------------------------------------------------
+# US-003: window-shaped families
+# ---------------------------------------------------------------------------
+
+_WINDOW_FIRST_ID = 215
+_WINDOW_LAST_ID = 272
+_WINDOW_STORY_IDS = tuple(
+    f"atk-{number:04d}" for number in range(_WINDOW_FIRST_ID, _WINDOW_LAST_ID + 1)
+)
+_WINDOW_FLOORS = {
+    "boundary_straddle": 10,
+    "density_thinned": 20,
+    "repetition_camouflage": 16,
+    "sustained_midband": 6,
+}
+# Each family's own `params` keys (the vocabulary's allowlist is shared).
+_WINDOW_PARAM_KEYS = {
+    "boundary_straddle": {"placement", "windows_min"},
+    "density_thinned": {"density", "placement", "windows_min"},
+    "repetition_camouflage": {"repeat", "windows_min"},
+    "sustained_midband": {"windows_min"},
+}
+_STRADDLE_STEPS = {"split_448": 1, "split_896": 2, "split_1344": 3}
+# density -> (windows_min, payload sentences): `d` sentences per window.
+_DENSITY_LEVELS = {"1/1": (4, 4), "1/2": (4, 2), "1/4": (4, 1), "1/8": (8, 1)}
+_DENSITY_PLACEMENTS = ("head", "tail", "interleave")
+_DENSITY_BASES = ("natural_language", "authority_seo")
+_REPEAT_LEVELS = (1, 2, 3, 5)
+_REPEAT_BASES = ("cookie_banner", "footer", "plain")
+
+# The planning budget (not a measured PG2 ratio): 4 characters per token, a
+# 448-token step, 64 tokens of overlap, and 30 % headroom inside one window.
+_CHARS_PER_TOKEN = 4
+_STEP_TOKENS = 448
+_OVERLAP_TOKENS = 64
+_WINDOW_TOKENS = 512
+_ONE_WINDOW_MAX_CHARS = int(_CHARS_PER_TOKEN * _WINDOW_TOKENS / 1.3)
+_MAX_EXCERPT_CHARS = 6_000
+_GUTENBERG_URL = "https://www.gutenberg.org/ebooks/{}"
+_EXCERPT_REF = re.compile(r"offset ([0-9]+), ([0-9]+) chars")
+_BASE_NOTE = re.compile(r"base: ([a-z_]+);")
+
+
+def _window_records() -> list[CorpusRecord]:
+    return [r for r in load_corpus() if r.category in vocab.WINDOW_FAMILIES]
+
+
+def _window_story_records() -> list[CorpusRecord]:
+    by_id = {record.id: record for record in _window_records()}
+    missing = [story_id for story_id in _WINDOW_STORY_IDS if story_id not in by_id]
+    assert not missing, f"story ids missing from the corpus: {missing}"
+    return [by_id[story_id] for story_id in _WINDOW_STORY_IDS]
+
+
+def _stage2_form(record: CorpusRecord) -> str:
+    if record.surface == "page":
+        return extract_html(page_document(record), record.payload["url"]).raw_text
+    return extract_upload_text(record.payload["text"].encode("utf-8")).raw_text
+
+
+def _windows_min(record: CorpusRecord) -> int:
+    value = record.params["windows_min"]
+    assert isinstance(value, int), record.id
+    return value
+
+
+def _base(record: CorpusRecord) -> str:
+    found = _BASE_NOTE.match(record.notes)
+    assert found is not None, record.id
+    return found.group(1)
+
+
+def _marker_count(record: CorpusRecord) -> int:
+    return normalise_for_leak_check(_stage2_form(record)).count(
+        normalise_for_leak_check(_marker(record))
+    )
+
+
+def test_window_family_counts_surfaces_and_params() -> None:
+    records = _window_records()
+    story = _window_story_records()
+    assert [str(error) for error in lint_corpus(records)] == []
+    for category, floor in _WINDOW_FLOORS.items():
+        assert sum(r.category == category for r in records) >= floor, category
+        assert sum(r.category == category for r in story) >= floor, category
+    for record in records:
+        assert record.surface in {"page", "text"}, record.id
+        assert set(record.params) == _WINDOW_PARAM_KEYS[record.category], record.id
+        assert record.pinned is None, record.id
+        windows = _windows_min(record)
+        if record.category == "boundary_straddle":
+            step = _STRADDLE_STEPS[str(record.params["placement"])]
+            assert windows == step + 1 >= 2, record.id
+        elif record.category == "density_thinned":
+            assert record.params["placement"] in _DENSITY_PLACEMENTS, record.id
+            density = str(record.params["density"])
+            assert density in _DENSITY_LEVELS, record.id
+            if density in {"1/4", "1/8"}:
+                assert windows >= 4, record.id
+        elif record.category == "repetition_camouflage":
+            assert record.params["repeat"] in _REPEAT_LEVELS, record.id
+            assert windows == 1, record.id
+        else:
+            assert record.surface == "page", record.id
+            assert windows >= 3, record.id
+    for surface in ("page", "text"):
+        assert any(
+            r.category == "boundary_straddle" and r.surface == surface for r in story
+        ), surface
+
+
+def test_the_density_and_repetition_sweeps_are_full_grids() -> None:
+    story = _window_story_records()
+    density = Counter(
+        (_base(r), r.params["density"], r.params["placement"])
+        for r in story
+        if r.category == "density_thinned"
+    )
+    assert set(density) == {
+        (base, level, placement)
+        for base in _DENSITY_BASES
+        for level in _DENSITY_LEVELS
+        for placement in _DENSITY_PLACEMENTS
+    }
+    assert set(density.values()) == {1}
+    repetition = [r for r in story if r.category == "repetition_camouflage"]
+    by_marker: dict[str, set[object]] = {}
+    for record in repetition:
+        by_marker.setdefault(_marker(record), set()).add(record.params["repeat"])
+    assert len(by_marker) == 4
+    assert all(levels == set(_REPEAT_LEVELS) for levels in by_marker.values())
+    # Half the bases are camouflaged as page boilerplate.
+    bases = Counter(_base(r) for r in repetition)
+    assert bases == {"cookie_banner": 4, "footer": 4, "plain": 8}
+    assert set(bases) == set(_REPEAT_BASES)
+
+
+def test_window_records_meet_their_character_budget() -> None:
+    """Planning budget only; spec 4 measures the real window count."""
+    step_chars = _CHARS_PER_TOKEN * _STEP_TOKENS
+    for record in _window_records():
+        text = _stage2_form(record)
+        windows = _windows_min(record)
+        budget = _CHARS_PER_TOKEN * (_STEP_TOKENS * (windows - 1) + _OVERLAP_TOKENS)
+        assert len(text) >= budget, record.id
+        if record.category == "repetition_camouflage":
+            assert len(text) <= _ONE_WINDOW_MAX_CHARS, record.id
+        if record.category == "boundary_straddle":
+            boundary = step_chars * _STRADDLE_STEPS[str(record.params["placement"])]
+            folded = normalise_for_leak_check(text)
+            needle = normalise_for_leak_check(_marker(record))
+            first = folded.index(needle)
+            second = folded.index(needle, first + 1)
+            assert first + len(needle) <= boundary <= second, record.id
+
+
+def test_the_marker_is_in_every_payload_fragment() -> None:
+    for record in _window_story_records():
+        count = _marker_count(record)
+        if record.category == "boundary_straddle":
+            assert count == 2, record.id
+        elif record.category == "density_thinned":
+            level = str(record.params["density"])
+            assert count == _DENSITY_LEVELS[level][1], record.id
+        elif record.category == "repetition_camouflage":
+            assert count == record.params["repeat"], record.id
+        else:
+            assert count >= 1, record.id
+
+
+def test_filler_provenance_is_public_domain_with_its_ebook_number() -> None:
+    for record in _window_story_records():
+        source = record.source
+        if record.category == "sustained_midband":
+            assert source["kind"] == "owned", record.id
+            continue
+        assert source["kind"] == "third_party", record.id
+        assert source["licence"] == "LicenseRef-PublicDomain", record.id
+        revision = source["revision"]
+        assert revision is not None and revision.isdigit(), record.id
+        assert source["url"] == _GUTENBERG_URL.format(revision), record.id
+        assert (source["name"] or "").startswith("Project Gutenberg: "), record.id
+        excerpts = _EXCERPT_REF.findall(source["record_ref"] or "")
+        assert excerpts, record.id
+        assert all(int(chars) <= _MAX_EXCERPT_CHARS for _, chars in excerpts), record.id
+
+
+def test_every_window_record_is_stage_two_clean_on_its_route_form() -> None:
+    for record in _window_records():
+        assert scan_structural(_stage2_form(record)).flags == [], record.id
+
+
+def test_the_lint_rejects_a_stage_two_shaped_sweep_base() -> None:
+    """Every stage-2 probe, spliced into a clean sweep record, fails the lint."""
+    story = _window_story_records()
+    text_record = next(r for r in story if r.surface == "text")
+    page_record = next(r for r in story if r.surface == "page")
+    assert lint_corpus([text_record, page_record]) == []
+    for name, probe in vocab.STAGE2_REGEX_PROBES.items():
+        text = f"{probe}\n{text_record.payload['text']}"
+        shaped = replace(text_record, payload={**text_record.payload, "text": text})
+        rules = {error.rule for error in lint_corpus([shaped])}
+        assert "sweep_stage2_clean" in rules, name
+    # The page form is the one stage 2 receives: an entity-encoded trigger is
+    # clean in the raw HTML and BLOCK-shaped once `/retrieve` decodes it.
+    encoded = f"<p>{html.escape('<system>')}</p>{page_record.payload['body_html']}"
+    assert stage2_hits(encoded) == frozenset()
+    shaped = replace(page_record, payload={**page_record.payload, "body_html": encoded})
+    assert [e.rule for e in lint_corpus([shaped])] == ["sweep_stage2_clean"]
+
+
+async def test_every_window_record_reaches_the_classifier_under_replay() -> None:
+    """No sweep record is structurally blocked; each one is scored.
+
+    Under ``fallback=0.0`` the replay answers one window; spec 4's cassette
+    carries the real per-window entries for the same texts.
+    """
+    records = _window_records()
+    results = await drive_all(records, _fallback(), configs=["default", "contiguity"])
+    assert len(results) == 2 * len(records)
+    for result in results:
+        signals = result.signals
+        assert signals.promptguard_state == "scanned", result.summary()
+        assert signals.promptguard_state != "structural_blocked", result.summary()
+        assert signals.structural_flags == (), result.summary()
+        assert signals.windows >= 1 and signals.score is not None, result.summary()
+
+
+def test_the_regex_floor_pins_live_in_the_stage_two_categories() -> None:
+    """The floor paired with the repetition curve: pinned `blocked` records in
+    the BLOCK families, none inside any window family."""
+    records = load_corpus()
+    for category in _BLOCK_FAMILIES:
+        assert any(
+            r.category == category and r.pinned == ("blocked",) for r in records
+        ), category
+    assert all(r.pinned is None for r in records if r.category in vocab.WINDOW_FAMILIES)
+
+
+def test_the_readme_documents_every_window_family_and_the_budget_rule() -> None:
+    readme = (vocab.TESTS_CORPUS_ROOT / "README.md").read_text(encoding="utf-8")
+    lines = readme.splitlines()
+    for family, keys in _WINDOW_PARAM_KEYS.items():
+        rows = [line for line in lines if line.startswith(f"| `{family}` |")]
+        assert len(rows) == 1, family
+        for key in keys:
+            assert f"`{key}`" in rows[0], (family, key)
+    assert "4 characters per token" in readme
+    assert "LicenseRef-PublicDomain" in readme

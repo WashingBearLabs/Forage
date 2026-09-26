@@ -134,6 +134,18 @@ THIRD_PARTY_LICENCES: Final[frozenset[str]] = frozenset(
 # BCP-47 tag shape the lint accepts for `lang` (ruling 14 counts languages).
 BCP47_PATTERN: Final[re.Pattern[str]] = re.compile(r"[a-z]{2,3}(-[A-Za-z0-9]{2,8})*")
 
+# The four window-shaped sweep families (spec 2 US-003). Every record in one is
+# stage-2-clean on the post-pipeline form of its route, so stage 3 always scores
+# it; `page` and `text` are their only surfaces.
+WINDOW_FAMILIES: Final[frozenset[str]] = frozenset(
+    {
+        "boundary_straddle",
+        "density_thinned",
+        "repetition_camouflage",
+        "sustained_midband",
+    }
+)
+
 # `params` values for `url_exception`: the declared non-RFC-2606 URL shapes
 # (ruling 8). `ipv6_zone` admits the link-local / documentation IPv6 literal the
 # audit -032 zone-id vector needs: neither a reserved name nor an RFC 1918 host.

@@ -906,6 +906,35 @@ did **not** leak at HEAD, so the hint's contingent finding for them is not filed
   repo-wide and are clean. The full `uv run pytest` is left to the orchestrator / verifier.
 - Ids are contiguous, `atk-0183` … `atk-0214`; US-003 onward continue at `atk-0215`.
 
+### US-003 — Window-shaped families (2026-09-25)
+
+- 58 records, `atk-0215` … `atk-0272`: 12 `boundary_straddle` (3 placements × `page`/`text` × 2
+  bases), 24 `density_thinned` (full 4 × 3 grid × `natural_language`/`authority_seo` bases), 16
+  `repetition_camouflage` (4 bases × `repeat` 1/2/3/5) and 6 `sustained_midband` (owned review
+  prose). The seed records `atk-0020` … `atk-0023` are kept alongside them.
+- `density` is read literally as payload sentences per window: `1/1`, `1/2` and `1/4` span 4
+  windows with 4, 2 and 1 sentences, and `1/8` spans 8 windows with 1. `windows_min` is 8 for
+  `1/8`, which meets the hint's "≥ 4".
+- Filler comes from Gutenberg ebooks 1342, 158 and 11. `record_ref` lists each excerpt as
+  `offset <o>, <n> chars` into the plain-text file, and every excerpt is ≤ 6 000 characters.
+  Paragraphs that would trip stage 2 on either form (joined, or split at sentence ends) were
+  skipped when the filler was chosen.
+- New lint rule `sweep_stage2_clean` (`scripts/corpus/records.py`) uses only public names. A
+  window-family record must be `page` or `text`, and `scan_structural(form).flags == []` must
+  hold on `extract_html(...).raw_text` or `extract_upload_text(...).raw_text`. Adding the rule
+  needed a failing case in `tests/test_corpus_lint.py`'s `_FAILING`. `vocab.WINDOW_FAMILIES`
+  names the four families.
+- Each family's own `params` keys are asserted in `tests/test_corpus_attacks.py`, not by
+  narrowing `vocab.PARAMS_ALLOWED`. Spec 1's `test_params_allowlist_covers_all_25_members`
+  requires every category's allowlist to contain `variant` and `url_exception`.
+- Measured at story start with `fallback=0.0` on both configs: all 62 window-family records
+  reach the classifier (`promptguard_state` is `scanned`, no structural flags). 54 come back
+  `leaked` and 8 `neutralised`. The 8 are the `cookie_banner` / `footer` repetition bases:
+  stage 3 classifies `raw_text`, which keeps those boilerplate `div`s, while the response
+  serves `main_content`, which drops them. So the classifier scores the camouflaged payload,
+  but the wire never carries it. Nothing is pinned.
+- No runtime change: `derive_sanitizer_revision({})` is still `021378ef…`.
+
 ## Refinement Notes
 
 ### Research Findings
