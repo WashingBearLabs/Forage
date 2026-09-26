@@ -240,13 +240,13 @@ offline fallback and made organic false positives unrepresentable.)*
 - Ids `ben-0011` … continue the seed.
 
 **Acceptance Criteria:**
-- [ ] `scripts/corpus/ingest/benign.py` with adapters for at least Wikinews, CPython docs, the Rust
+- [x] `scripts/corpus/ingest/benign.py` with adapters for at least Wikinews, CPython docs, the Rust
       book and a README/CHANGELOG source; hermetic tests for determinism, caps, URL rewriting,
       provenance fields, secret-shape refusal, no payload in output.
-- [ ] ≥ 15 records per core genre; provenance as in the Independent Test; every external record has
+- [x] ≥ 15 records per core genre; provenance as in the Independent Test; every external record has
       `source.url`, `licence`, `revision`; `NOTICE` gains one entry per source and the coverage test
       passes.
-- [ ] ≥ 2 **`over_defence_probe`** records per stage-2 regex across US-001 + US-004 (except the three
+- [x] ≥ 2 **`over_defence_probe`** records per stage-2 regex across US-001 + US-004 (except the three
       in `STAGE2_REGEX_NO_BENIGN`), each with `params.variant`; their `flagged` / `blocked` outcome
       under `fallback=0.0` asserted by a generic test over `params.variant`, and the variant
       confirmed by spec 1's tests-side `stage2_record_hits(record)` over the text stage 2 received
@@ -255,14 +255,14 @@ offline fallback and made organic false positives unrepresentable.)*
       first hit) — so a probe that trips two regexes, e.g. a realistic `data:` URI that also reads as
       an encoded payload, covers both. A test asserts the coverage floor is computed over
       `over_defence_probe` records only, so an organic hit in a headline genre can never satisfy it.
-- [ ] **The sampler triages before writing**: a test asserts every candidate is rendered and driven
+- [x] **The sampler triages before writing**: a test asserts every candidate is rendered and driven
       through spec 1's `drive()` with `ReplayClassifier(fallback=0.0)` before it is written, that a
       driven `flagged` / `blocked` outcome and a set `params.variant` always coincide in the
       committed files, and that a tripping candidate is written with `pinned` set, its id listed as
       needs-variant, and — after the tests-side `name-variants` step — `params.variant` set, its genre
       unchanged — never moved to `over_defence_probe`, never rejected. A second test asserts the
       reject path is never reached with `reason == "stage2"`.
-- [ ] **The rejection count has a home, and a denominator**: the sampler emits
+- [x] **The rejection count has a home, and a denominator**: the sampler emits
       `{genre: {examined: n, rejections: {reason: count}}}` to a committed sidecar,
       **`tests/corpus/benign/sampler_stats.json`** — `rejections` is not a record and cannot ride in
       the `.jsonl`, so it needs its own file; `examined` is every candidate drawn, so spec 5 can
@@ -274,18 +274,18 @@ offline fallback and made organic false positives unrepresentable.)*
       rendered report. *(Added 2026-09-19, validation round 2 — round 1 put the honesty mechanism in
       one prose paragraph with no criterion, no test and no consumer; three reviewers found it
       discharged to a spec that never mentioned it.)*
-- [ ] **The offline fallback is a criterion, not an aside**: for every genre, if a source cannot be
+- [x] **The offline fallback is a criterion, not an aside**: for every genre, if a source cannot be
       fetched, Implementation Notes carry `not ingested — <reason>` and the records are written
       `source.kind: synthetic`; the per-genre floors still hold; a test asserts a genre's records are
       either all-third_party-with-revision or carry a recorded synthetic reason — never a silent mix.
-- [ ] Rejected-sources table in `tests/corpus/README.md` gains the share-alike / no-grant entries.
-- [ ] Implementation Notes record per genre: source, revision, seed, limit, records written,
+- [x] Rejected-sources table in `tests/corpus/README.md` gains the share-alike / no-grant entries.
+- [x] Implementation Notes record per genre: source, revision, seed, limit, records written,
       synthetic count, **rejection count by reason** (numbers and names only).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-002: Security prose and over-defence probes
 
