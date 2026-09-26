@@ -537,9 +537,9 @@ with ≥ 5 in every category.
 - Every record's `marker` is a short phrase present verbatim; keep markers distinct across languages.
 
 **Acceptance Criteria:**
-- [ ] ≥ 24 owned `natural_language` and ≥ 16 owned `authority_seo` records; ≥ 6 languages; all
+- [x] ≥ 24 owned `natural_language` and ≥ 16 owned `authority_seo` records; ≥ 6 languages; all
       three surfaces represented in each category.
-- [ ] Every **owned** (`source.kind == "owned"`) `natural_language` / `authority_seo` record is
+- [x] Every **owned** (`source.kind == "owned"`) `natural_language` / `authority_seo` record is
       `leaked` under `fallback=0.0` — the generic test filters on `source.kind`, and a second
       assertion states why: US-004's ingested rows land in these same two categories, attacker-
       authored corpora are dense with BLOCK-category phrasing (LLMail-Inject alone is ~462 k real
@@ -547,21 +547,21 @@ with ≥ 5 in every category.
       assertion to owned records keeps the category's defining invariant testable instead of
       inviting it to be narrowed under time pressure later. *(Corrected 2026-09-19, validation
       round 1.)*
-- [ ] Ingested records are covered by their own assertion: every third-party row is either
+- [x] Ingested records are covered by their own assertion: every third-party row is either
       `leaked` **or** carries the structural category the mapping rule assigned it — no ingested row
       sits in `natural_language` / `authority_seo` while tripping stage 2.
-- [ ] Attack corpus totals after this story: ≥ 200 records, ≥ 5 per category, recorded in
+- [x] Attack corpus totals after this story: ≥ 200 records, ≥ 5 per category, recorded in
       Implementation Notes as a category × surface table (counts only).
-- [ ] Lint-clean; `tests/corpus/README.md` lists the languages present.
-- [ ] Zero runtime change (rulings 6, 6a) re-asserted at spec end: the ruling-6 `git diff --stat`
+- [x] Lint-clean; `tests/corpus/README.md` lists the languages present.
+- [x] Zero runtime change (rulings 6, 6a) re-asserted at spec end: the ruling-6 `git diff --stat`
       set, taken against the epic branch's merge base with `main` (`git merge-base main HEAD`, ruling 6a), is empty; `derive_sanitizer_revision({})` unchanged from its value at that same
       tag; `scripts.export_contract
       --check` green.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ## Edge Cases
 
