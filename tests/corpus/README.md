@@ -18,6 +18,11 @@ Records are stored **only** as `.jsonl` (finding 16): a renderable `.html` /
 `.htm` / `.md` under `attacks/` or `benign/` fails `tests/test_corpus_lint.py`.
 The code lives in `scripts/corpus/` — `vocab.py` holds every closed vocabulary,
 `records.py` the `CorpusRecord` type, `load_corpus()` and `lint_corpus()`.
+`replay.py` is the `ReplayClassifier` (a stage-3 stand-in that answers from recorded
+scores), `drivers.py` pushes a record through its route of the real app
+(`drive()` / `drive_all()`), and `outcomes.py` turns the wire response into a
+`RouteResult`. Drive a record and report it by id only:
+`assert result.outcome == "blocked", result.summary()`.
 Records are authored by hand (or by the spec 2 / spec 3 generators); there is
 no regeneration step. Check a change with:
 

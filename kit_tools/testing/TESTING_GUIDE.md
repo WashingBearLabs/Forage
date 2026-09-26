@@ -94,10 +94,10 @@ crash reads as a false regression.
 
 ## Test Structure
 
-**40 `test_*.py` modules** under `tests/`, flat, one per subject — 44 Python files in all
+**41 `test_*.py` modules** under `tests/`, flat, one per subject — 45 Python files in all
 once `conftest.py`, `fakes.py`, `corpus_stage2.py` and `__init__.py` are counted — plus
-`golden/`, `fixtures/` and `corpus/`. **4337 tests collected** on 2026-09-25
-(`corpus-harness` US-001, `uv run pytest --collect-only -q`). Every per-module row below is remeasured
+`golden/`, `fixtures/` and `corpus/`. **4458 tests collected** on 2026-09-25
+(`corpus-harness` US-002, `uv run pytest --collect-only -q`). Every per-module row below is remeasured
 from collection, not incremented from a previous story's count; their sum
 equals the total. The complete local run reports **4336 passed, 1 skipped, no xfails** (the skip is
 the corpus `MIN_RECORDS` floor test, asserted from spec 5 US-002);
@@ -168,6 +168,7 @@ the story implementer did not run it.
 | `tests/test_governance_docs.py` | 69 | Governance, SECURITY and PR-template claims tied to code: current version, regeneration command, nine hashed sources, six required checks/examples, thirteen registered rulings and resolvable citations/links. Covers the validation-422 one-MINOR redaction window and second-MINOR removal ruling, directional policy/cache semantics, four current anchor quotations and the version-agnostic supported-versions policy |
 | `tests/test_contract_schema.py` | 17 | Six-model frozen golden; retained 1.2.0 pair and frozen 1.3.0 exact-additions/announcement sweep for ten golden-visible additions, including all four effective-policy fields; metrics remain under dedicated coverage |
 | `tests/test_corpus_lint.py` | 84 | The injection-corpus record format (`scripts/corpus/`): every lint rule parametrised with a failing record whose error is `<id>: <rule>` and never echoes the payload; the secret-shape negative control for every regex; the two declared URL exceptions for both kinds; kind-keyed `params.variant`; loader order and an empty corpus; committed records lint-clean and stored only as `.jsonl`; `STAGE2_REGEX_NAMES` / probes / `STAGE2_REGEX_NO_BENIGN` pinned against the scanner via `tests/corpus_stage2.py`. The `MIN_RECORDS` floor test skips ("asserted from spec 5 US-002") |
+| `tests/test_corpus_harness.py` | 121 | The corpus harness (`scripts/corpus/replay.py`, `doubles.py`, `outcomes.py`, `drivers.py`): `ReplayClassifier` against the stage-3 seam (hash keying, `max_chunks` budget error, placeholder chunk labels, miss error, `classify` pooling checked against the real classifier's, test-only `fallback` and the AST guard that `scripts/` never passes one); `corpus_app` boot hermeticity (hostile `VALKEY_URL` / `FORAGE_MODEL_ID` / provider / HMAC / break-glass env, with a control that the same shell refuses the real lifespan; contiguity keys seen at boot; no weight load); all three routes through `httpx.ASGITransport` for `blocked` / `flagged` / `neutralised` / `leaked` / `clean` and the `classifier=None` unavailable path; the closed `BLOCKING_ERRORS` map (three re-measured rows, a synthetic table of harness errors, real 429 / 422 `busy` and disabled-route 404 drives) with messages naming ids only; `UnrecordedRecordError`; the leak check (JSON walker ignoring `injection_spans` and nothing else, blocked-but-leaked title, `normalize_text` agreement over every invisible, zwsp marker, a per-variant survival test over all ten `ATTACK_VARIANTS`); a sentinel that never reaches a repr, error, log, capture or failing assertion; the doubles pinned against `SearchProvider` and the `ContentCache` methods the service calls; a stage-2 drift guard between `tests/corpus_stage2.py` and the driven wire. No `run_promptguard` mock and no network |
 | `tests/test_retrieve_admission.py` | 15 | Retrieve admission queue/budget refusals, permit ownership across actual HTML-task cancellation, absolute fetch deadline, off-loop stages, body release before classification and continued service responsiveness |
 | `tests/test_search_policy.py` | 15 | Restrict-only request policy, known/unknown providers, free-provider retention and longest named paid-prefix behavior |
 
@@ -177,6 +178,7 @@ Support files:
 |------|---------|
 | `tests/conftest.py` | Puts the repo root on `sys.path`; installs the autouse socket guard |
 | `tests/corpus/` | Injection-corpus records: `attacks/<category>.jsonl`, `benign/<genre>.jsonl`, and a README documenting the record shape, outcome vocabulary and content rules. Payload text is data, never quoted elsewhere; linted by `tests/test_corpus_lint.py` |
+| `scripts/corpus/` | Corpus harness, host- and CI-side only (never in the image): `vocab.py` closed vocabularies, `records.py` record type / loader / lint, `replay.py` `ReplayClassifier` (the stage-3 stand-in, keyed by text hash), `doubles.py` corpus-owned `CorpusSearchProvider` / `CorpusContentCache`, `outcomes.py` outcome model, closed `BLOCKING_ERRORS` map and leak check, `drivers.py` `corpus_app` / `drive` / `drive_all`. Imports nothing from `tests` |
 | `tests/corpus_stage2.py` | Tests-side stage-2 naming: `stage2_hits`, `stage2_forms`, `stage2_record_hits` (runs the private `_PATTERNS`), and the `name-variants` entry point |
 | `tests/fixtures/search/` | Synthetic, scrubbed pipeline response/exhaustion pins with `request_id` removed before writing; regenerate via `--regenerate-search-pins` in the same commit as a deliberate wire/pinned-counter change, explaining why in its message. The older `baseline_pre_blocked_domains.json` is separately frozen, never regenerated. |
 | `tests/fakes.py` | Shared fakes and builders: `FakeStorage`, `FakeContentCache`, `FakeSearchProvider`, `assert_frozen`, the Hugging Face cache-layout helpers (`materialize_hub_snapshot`, `hub_download_double`, `weights_manifest_document`), and `record_network_attempts`. Streaming doubles: `ChunkStream` (raw chunks only, optional per-chunk delay), stream-backed `make_response` (no implicit Content-Length), `make_stream_cm`, `client_patch(target, ...)`, `RecordingDecompressor` and `record_decompressors()` (aggregate every decoder instance, including raw-deflate retries). `RecordingSearchMetrics` owns every `SearchMetricsSink` counter and its `counters` projection; add future sink fields here, not in local copies. |
@@ -308,9 +310,9 @@ test_mapping:
   "Dockerfile": ["tests/test_dockerfile.py", "tests/test_contract_smoke.py"]
   "contract_smoke.py": "tests/test_contract_smoke.py"
   "scripts/bench_promptguard.py": "tests/test_bench_promptguard.py"
-  "scripts/corpus/*": "tests/test_corpus_lint.py"
-  "tests/corpus_stage2.py": "tests/test_corpus_lint.py"
-  "tests/corpus/*": "tests/test_corpus_lint.py"
+  "scripts/corpus/*": ["tests/test_corpus_lint.py", "tests/test_corpus_harness.py"]
+  "tests/corpus_stage2.py": ["tests/test_corpus_lint.py", "tests/test_corpus_harness.py"]
+  "tests/corpus/*": ["tests/test_corpus_lint.py", "tests/test_corpus_harness.py"]
   "bench/config.yaml": "tests/test_bench_promptguard.py"
   "uv.lock": "tests/test_dependency_lock.py"
   "pyproject.toml": ["tests/test_dependency_lock.py", "tests/test_pyright_policy.py"]

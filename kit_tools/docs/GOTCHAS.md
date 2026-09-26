@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # GOTCHAS.md
 
-> Last updated: 2026-09-23
-> Updated by: Copilot (verified replacement release)
+> Last updated: 2026-09-25
+> Updated by: corpus-harness US-002
 
 ## Overview
 
@@ -15,6 +15,29 @@ live in, and losing them in the move was an identified risk.
 ---
 
 ## Active Gotchas
+
+### A corpus record is data — never quote it
+
+The injection corpus (`tests/corpus/`) holds hostile text on purpose, and the ways it
+escapes are all ordinary developer habits, not exploits: a failing `assert` that
+formats the payload into its message; pytest's own `where ... = <object>` line, which
+prints the `repr` of whatever the assertion touched; a log line or `print` in a
+helper; a commit message, issue or README that pastes an example; a docs build or an
+editor that *renders* an `.html` / `.md` fixture instead of showing it as text.
+A quoted payload that lands in an LLM-assisted workflow (a review bot, an agent
+reading a failed CI log) is a prompt injection delivered by the repo's own tests.
+
+The guards, each mechanical: records are stored **only** as `.jsonl` (a renderable
+extension under `tests/corpus/attacks/` or `benign/` fails the lint); the lint reports
+`<id>: <rule>` and never a value; `RouteResult.__repr__` prints ids and signals only;
+`UnrecordedRecordError` / `HarnessError` name ids, a route, a status and a closed token;
+and the way to write an outcome assertion is
+`assert result.outcome == "blocked", result.summary()`. Refer to a record by its `id`,
+always. `tests/test_corpus_harness.py` drives a record whose marker is a unique
+sentinel and asserts the sentinel is absent from the repr, both error types, the
+service's logs, captured output and a failing assertion's text. Nothing structural
+stops a *new* test from formatting a payload into a message — that rule rests on review
+and on that one targeted test.
 
 ### Real model configs can omit human-readable labels
 

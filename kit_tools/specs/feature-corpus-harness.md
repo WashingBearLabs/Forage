@@ -924,6 +924,95 @@ raw-NUL split-token record's measured outcome. Also record, once, that the revie
 assumptions held at 403e9c5 (stage 3 calls only `classify_windows`; the contiguity keys' defaults
 `0` / `0.5`; `PromptGuardResult.rule` exists and is not on the wire). -->
 
+### US-002 — 2026-09-25 (implementation, branch base `40d1883`)
+
+**Measured at story start** (merge base of the epic branch with `main` = `40d1883`; spec 0 has not
+merged):
+
+- `derive_sanitizer_revision({})`, `FORAGE_MODEL_ID` / `FORAGE_MODEL_REVISION` unset:
+  `021378efee6ab43f22b887af2f0c0c40ef76183a39802120fbfd0ca7a3a33900` — reproduces the 403e9c5
+  value. US-003's zero-runtime-change criterion compares against this.
+- Stage-3 seam: `classify_windows(self, text: str, *, max_chunks: int | None = None) ->
+  tuple[list[float], list[str]]` (`promptguard/classifier.py` :260; the budget raise :283).
+  `run_promptguard` calls **only** `classify_windows` (`asyncio.to_thread(classifier.classify_windows,
+  text, max_chunks=max_chunks)`); `classify()` delegates to it and pools with `max`.
+- Search-time stage-3 join: `f"Title: {title}\nURL: {url}\nSnippet: {snippet}"`
+  (`_search_result_promptguard_input`, `pipeline/orchestrator.py` :1285) — unchanged.
+- Re-grepped anchors (symbol : line at `40d1883`): `_load_config` :488, `_select_cache_storage`
+  :312, `_resolved_search_providers` :387, `ExtractionAdmissionMiddleware` :1507, `lifespan` :1642,
+  `retrieve` :2283, `extract` :2417, `search` :2534 (all `retrieval_app.py`);
+  `run_retrieve_pipeline` :346, `run_search_pipeline` :1604 (`pipeline/orchestrator.py`);
+  `RETRY_INITIAL_BACKOFF_S` :243, `acquire_and_load` :1630, `resolve_model_id` :938
+  (`model_fetcher.py`); `FetchResult` :56 (`stage5_url_audit.py`); `normalize_text` :113
+  (`stage1_extraction.py`); `apply_request_policy` :35 (`search_providers/policy.py`);
+  `finalize_quarantine` :179 (`stage4_structuring.py`); `promptguard_settings_from_config` :44
+  (`stage3_promptguard.py`); `_running_app` :1278, `_started_with_valkey_url` :3573
+  (`tests/test_app.py`).
+- `ContentCache` call surface — pinned by `tests/test_corpus_harness.py` from an AST walk of
+  `retrieval_app.py` and `pipeline/orchestrator.py`: `connect`, `close` (lifespan), `ping_if_due`
+  (`/health`), `get`, `put`, `delete` (`run_retrieve_pipeline`). **Nothing reads an attribute of the
+  cache object**, so `CorpusContentCache` does *not* carry the `metrics` attribute the spec
+  sketched (`ContentCache` itself keeps its metrics private); the call surface is those six
+  methods, with signatures compared to the real ones.
+- `BLOCKING_ERRORS`, each row re-measured by a mini drive through the real app: `/extract` empty /
+  whitespace-only / NUL text → 422 `unsupported_format` ✓; `/extract` 115 000 characters → 422
+  `content_too_large_to_classify` (character ceiling) ✓, and a 65-window replay → the same code
+  via `PromptGuardBudgetExceededError` ✓; `/retrieve` with `retrieve.max_promptguard_chunks`
+  lowered to 1 and a 2-window replay → 422 `content_too_large` / `promptguard_budget` ✓. All three
+  rows reproduce; none removed. Measured non-rows: `/retrieve` of a document with empty title and
+  body → 200, `body == ""`, `promptguard_state == "scanned"` (a document *with* a title serves the
+  title text as its body); real 429 `busy` on `/extract` and 422 `busy` on `/retrieve` (admission
+  controller refusing at queue depth 0) and 404 with the route disabled → each a `HarnessError`.
+- Ruling-15 boot mechanism: **`acquire_and_load` patched never to load, plus the post-entry swap**
+  (`app.state.classifier = classifier` after `lifespan` starts) — not the `PromptGuardClassifier`
+  factory patch, so `ReplayClassifier` carries no `configure_threads`. With `classifier=None` nothing
+  is installed and the lifespan's own unloaded classifier stays (the weight-less boot).
+- Reviewer-sampled assumptions held: stage 3 calls only `classify_windows`; the contiguity keys'
+  defaults are `0` / `0.5` (a test asserts `PromptGuardSettings(0, 0.5)` vs `(2, 0.5)` at boot);
+  `PromptGuardResult.rule` exists and is not on the wire (no response model has a `rule` field).
+
+**Decisions the spec left open** (each deliberate; spec 5 should read them):
+
+- `Signals` is a frozen `Mapping[str, object]` dataclass with **eleven** typed keys (`rule` is not
+  one — it is not on the wire; spec 5 reads it from `ReplayClassifier.calls`, which stores hash,
+  length and scores per answered call). Sequences are **tuples** (`window_scores`,
+  `structural_flags`) so the mapping is really frozen, where the spec sketched `list`s. `None` means
+  *not applicable to this route* (`suspicious` off `/search`; `injection_detected` and
+  `promptguard_state` on `/search`) — and, for `score`, that no window was replayed (structural block,
+  refusal, unavailable classifier), which is why `score` is not `0.0` there.
+- `RouteResult.route` holds the path (`"/search"`, `"/retrieve"`, `"/extract"`).
+  `classifier=None` reports `model_id == "unavailable"` (`NO_CLASSIFIER_MODEL_ID`).
+- `drive_all` returns results grouped by config in the order given, each group in record order; it
+  boots one lifespan per config. `exchange(client, record) -> WireExchange` is the public seam that
+  returns the raw wire, for tests that must see the body (the end-to-end `injection_spans` pin).
+- The leak walker collects dict **keys** as well as values; only a key named `injection_spans`
+  (its whole value, at any depth) is ignored.
+- `corpus_app` reads `config.yaml` itself instead of calling `retrieval_app._load_config`
+  (private, and pyright strict outside `tests/`); a test asserts the two agree.
+- A drive that finds the same record answered by more than one stage-3 call raises
+  `HarnessError(..., "multiple_classifications")`; a `/search` response that is neither one served
+  result nor one omission raises `unexpected_shape`.
+- "The gate's entry point passes `fallback=None`" has no entry point yet (spec 5). The test asserts
+  the constructor default is `None` and AST-scans every `scripts/**/*.py` for a `ReplayClassifier(...)`
+  call passing anything but a literal `None`, so spec 5's gate is covered the day it lands.
+
+**Findings for later specs:**
+
+- **A marker spanning a tag boundary can never be seen on the wire.** `extract_html` joins text with
+  `\n` and `normalize_text` preserves newlines, so `<p>… the <b>session</b> notes …</p>` reaches
+  the consumer as `the\nsession\nnotes` while the marker reads `the session notes`. The lint's
+  `marker_in_payload` rule already rejects such a record (US-001), which is what keeps it out of the
+  corpus; `test_a_marker_split_by_a_tag_is_a_lint_failure_not_a_missed_leak` pins both halves. Spec 2's
+  `split_tags` records must put the tag boundary outside the marker (the per-variant test's case does).
+- `/search` can drive `neutralised` end to end (an HTML comment or `<script>` in the snippet is
+  stripped); `/extract` cannot (a plain-text upload is served whole), so its `neutralised` case is
+  read from a synthetic wire body through the same pure `interpret_response`.
+- The service logged no record text through the `/search` drive the sentinel test makes (`caplog` at
+  DEBUG, plus captured stdout / stderr); the other two routes are not covered by that check.
+- The stage-2 drift guard (`stage2_record_hits` non-empty iff the driven result carries a stage-2
+  signal) landed here over ten synthetic records; US-003 should extend it over the seed corpus.
+- Not done here, by scope: the raw-NUL split-token record's measured outcome (US-003).
+
 ## Refinement Notes
 
 ### Research Findings
