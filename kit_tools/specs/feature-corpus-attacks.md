@@ -462,37 +462,37 @@ shape, and refuses an `--input` path resolving inside the repository root; `uv r
   counted reason.
 
 **Acceptance Criteria:**
-- [ ] `scripts/corpus/ingest/{agentdojo,llmail_inject,cyberseceval,render}.py` exist with the CLI
+- [x] `scripts/corpus/ingest/{agentdojo,llmail_inject,cyberseceval,render}.py` exist with the CLI
       shape above; `--help` exits 0 offline for each.
-- [ ] Hermetic sampler tests: determinism, cap, URL rewriting, licence / revision / framing fields,
+- [x] Hermetic sampler tests: determinism, cap, URL rewriting, licence / revision / framing fields,
       secret-shape refusal, no payload in output.
-- [ ] **Category assignment is tested**: a fixture row carrying a stage-2 trigger lands in the
+- [x] **Category assignment is tested**: a fixture row carrying a stage-2 trigger lands in the
       matching structural category with `variant = plain`; a clean row lands in `natural_language`;
       the same rule is exercised for all three samplers, not just AgentDojo.
-- [ ] **Raw downloads cannot be committed**: the samplers refuse an `--input` path that resolves
+- [x] **Raw downloads cannot be committed**: the samplers refuse an `--input` path that resolves
       inside the repository root after symlink resolution (test: a path under the repo is rejected
       by reason code, a symlink outside the repo pointing into it is rejected, a path outside is
       accepted); `.gitignore` carries `/corpus-inputs/`; `tests/corpus/README.md` states
       where inputs live and that they are never committed. *(Added 2026-09-19, validation round 3 —
       the rule existed only in Implementation Hints, so this story's checklist could pass green while
       a ~462k-row set the epic swore off vendoring sat staged for commit.)*
-- [ ] **No credential can reach the corpus or a log**: tokens are read from the environment by
+- [x] **No credential can reach the corpus or a log**: tokens are read from the environment by
       `huggingface_hub` only, never passed as an argument; a test asserts a simulated sampler failure
       message carries no `hf_`-shaped substring and no URL, following `model_fetcher.py`'s
       closed-vocabulary `_fetch_reason()` pattern (by name; ~:1013 at 403e9c5); the recorded
       download commands in Implementation Notes carry no environment assignment.
-- [ ] The host runs are done and recorded: Implementation Notes carry, per source, the download
+- [x] The host runs are done and recorded: Implementation Notes carry, per source, the download
       command, the pinned revision, seed, limit, rows read, records written, rows skipped by reason;
       if a source could not be fetched, `not ingested — <reason>` and the floors still hold on owned
       records.
-- [ ] `NOTICE` section present and complete; the NOTICE-coverage test passes; `LICENSE` untouched.
-- [ ] Rejected-sources table and the sourcing rule in `tests/corpus/README.md`.
-- [ ] Every ingested record lint-clean; ids continue the sequence.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] `NOTICE` section present and complete; the NOTICE-coverage test passes; `LICENSE` untouched.
+- [x] Rejected-sources table and the sourcing rule in `tests/corpus/README.md`.
+- [x] Every ingested record lint-clean; ids continue the sequence.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-005: Natural-language and authority/SEO poisoning — owned and multilingual
 
