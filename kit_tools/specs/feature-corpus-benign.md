@@ -766,6 +766,53 @@ Corpus size after this story: 199 benign records (93 `over_defence_probe`, 28
 `security_prose`), 1 094 838 bytes of JSONL under `tests/corpus/` — about 405 KB of
 headroom for US-003's 1.5 MB directory-size lint.
 
+### US-003 (2026-09-25)
+
+**Offline fallback taken for both genres** (attempt 2, after attempt 1 timed out):
+`multilingual` and `long_form` are each `not ingested — host download pre-step not run
+in this execution session` (other-language Wikinews editions, Python documentation
+translations, Project Gutenberg were not fetched). The reason is recorded as
+`not_ingested` in `tests/corpus/benign/sampler_stats.json`; new records are
+`source.kind: synthetic`, `name: forage-synthetic`. `NOTICE` gains no entry (no
+third-party record written).
+
+| Genre | Written | Synthetic | Owned seed | Rejections |
+|-------|---------|-----------|------------|------------|
+| multilingual | 32 (ben-0200..0231) | 32 | ben-0007, ben-0008 | none (examined 0) |
+| long_form | 20 (ben-0232..0251) | 20 | ben-0009 | none (examined 0) |
+
+**Language × surface** (`multilingual`, all 34 records incl. seeds):
+
+| lang | page | search | text | total |
+|------|------|--------|------|-------|
+| de | 2 | 1 | 1 | 4 |
+| fr | 2 | 1 | 1 | 4 |
+| es | 1 | 2 | 1 | 4 |
+| pt | 2 | 1 | 1 | 4 |
+| it | 1 | 2 | 1 | 4 |
+| ja | 1 | 1 | 2 | 4 |
+| zh | 1 | 2 | 1 | 4 |
+| ru | 2 | 1 | 1 | 4 |
+| ko | 0 | 1 | 1 | 2 |
+
+Eight non-English languages at ≥ 4 each (floor: 6). CJK records are short prose, well
+under any excerpt cap, so the 30 % CJK over-provision rule did not bind.
+
+**`windows_min` histogram** (`long_form`, all 21 records; authoring estimate
+`ceil((chars / 4.5 − 512) / 448) + 1` over the visible text, capped at 8 — not a
+measurement; spec 4 US-002 checks it): 3 → 1 (seed ben-0009), 4 → 9, 5 → 6, 6 → 3,
+7 → 2. New records are 6 641–13 205 characters of joined paragraph text, 10 `page` / 10 `text` (no
+`search`: its content is capped at 300 characters).
+
+**Outcomes under `fallback=0.0`** (`drive_structural_only`): all 55 records in both
+genres drive `clean`; no pins, no variants. One authoring draft (a build-tool docs page
+saying "adds a new task") tripped `new_directive` and was re-worded before commit —
+an authoring artefact, not an organic hit, so not recorded as a false positive.
+
+**Size.** JSONL under `tests/corpus/attacks/` + `benign/` is 1 314 651 bytes after this
+story; `tests/test_corpus_lint.py::test_record_jsonl_stays_under_the_size_cap` asserts
+≤ 1 500 000.
+
 ## Refinement Notes
 
 ### Research Findings

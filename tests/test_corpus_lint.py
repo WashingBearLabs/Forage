@@ -402,6 +402,18 @@ def test_records_are_stored_only_as_jsonl() -> None:
         assert renderable == []
 
 
+CORPUS_SIZE_CAP_BYTES = 1_500_000
+
+
+def test_record_jsonl_stays_under_the_size_cap() -> None:
+    total = sum(
+        path.stat().st_size
+        for subdir in ("attacks", "benign")
+        for path in (vocab.TESTS_CORPUS_ROOT / subdir).rglob("*.jsonl")
+    )
+    assert total <= CORPUS_SIZE_CAP_BYTES, total
+
+
 @pytest.mark.skip(reason="asserted from spec 5 US-002")
 def test_min_records_floors_hold() -> None:
     records = load_corpus()

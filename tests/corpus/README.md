@@ -411,6 +411,29 @@ says `intended: <regex>` when it was written to trip one; a record that misses
 carries no variant, drives `clean` and is listed by id in the spec's
 Implementation Notes as a miss.
 
+## Multilingual and long-form (spec 3 US-003)
+
+`multilingual` holds benign text in eight non-English languages (de, fr, es, pt,
+it, ja, zh, ru at four records or more each, plus ko) spread across all three
+surfaces, so the 22M model's false-positive rate is measured on the axis its
+model card reports as weakest. `long_form` holds pages of 6 000–20 000
+characters with `params.windows_min` of 3 or more, the records on which the
+contiguity rule's accident rate is first measured; they carry no pins.
+
+`windows_min` is an **authoring estimate, not a measurement**: windows are
+token-based (512-token windows, 64-token overlap, through the real tokenizer),
+and the estimate is `ceil((chars / 4.5 - 512) / 448) + 1`. Spec 4 checks it
+against the recorded window count; a record that falls short is re-authored.
+
+Both genres took the offline fallback in US-003 (`not_ingested` in
+`benign/sampler_stats.json`; records are `source.kind: synthetic`): the
+permissive sources — other-language Wikinews editions (CC-BY-2.5), the Python
+documentation translations (PSF-2.0) and Project Gutenberg public-domain books —
+can be ingested later through the benign sampler. `NOTICE` gains no entry.
+
+**Size cap.** The JSONL under `attacks/` and `benign/` together stays at or
+below 1.5 MB; a lint test asserts it, so a long record is budgeted, not free.
+
 ## Natural-language and authority/SEO poisoning (spec 2 US-005)
 
 `natural_language` and `authority_seo` are the two categories only stage 3 can

@@ -1394,3 +1394,54 @@ def test_the_readme_reports_over_defence_separately_and_lists_arxiv_rejections()
         "arXiv papers not under CC BY 4.0 / CC0",
     ):
         assert needle in readme, needle
+
+
+# ---------------------------------------------------------------------------
+# Multilingual and long-form (spec 3 US-003)
+# ---------------------------------------------------------------------------
+
+
+def _visible_chars(record: CorpusRecord) -> int:
+    if record.surface == "page":
+        return len(extract_html(str(record.payload["body_html"])).raw_text.strip())
+    if record.surface == "text":
+        return len(str(record.payload["text"]))
+    return len(str(record.payload["content"]))
+
+
+def _windows(record: CorpusRecord) -> int:
+    value = record.params.get("windows_min")
+    return value if isinstance(value, int) else 0
+
+
+def _declared_provenance_holds(genre: str, members: Sequence[CorpusRecord]) -> None:
+    external = [r for r in members if r.source.get("kind") == "third_party"]
+    for record in external:
+        assert record.source.get("url"), record.id
+        assert record.source.get("licence") in vocab.THIRD_PARTY_LICENCES
+        assert record.source.get("revision"), record.id
+    if any(r.source.get("kind") == "synthetic" for r in members):
+        reason = _benign_stats().get(genre, {}).get("not_ingested")
+        assert isinstance(reason, str) and reason, genre
+
+
+def test_multilingual_meets_the_language_floor_with_declared_provenance() -> None:
+    members = [r for r in _benign_records() if r.category == "multilingual"]
+    assert len(members) >= 30
+    langs = Counter(r.lang for r in members if not r.lang.startswith("en"))
+    assert len([lang for lang, count in langs.items() if count >= 4]) >= 6, langs
+    assert {r.surface for r in members} == {"page", "search", "text"}
+    _declared_provenance_holds("multilingual", members)
+
+
+def test_long_form_meets_the_window_budget_with_declared_provenance() -> None:
+    members = [r for r in _benign_records() if r.category == "long_form"]
+    windowed = [r for r in members if _windows(r) >= 3]
+    assert len(windowed) >= 20
+    for record in members:
+        assert 3 <= _windows(record) <= 8, record.id
+        assert record.pinned is None, record.id
+    for record in windowed:
+        if record.source.get("kind") != "owned":
+            assert 6_000 <= _visible_chars(record) <= 20_000, record.id
+    _declared_provenance_holds("long_form", members)

@@ -19,6 +19,16 @@
     "not_ingested": "host download pre-step not run in this execution session",
     "rejections": {}
   },
+  "long_form": {
+    "examined": 0,
+    "not_ingested": "host download pre-step not run in this execution session",
+    "rejections": {}
+  },
+  "multilingual": {
+    "examined": 0,
+    "not_ingested": "host download pre-step not run in this execution session",
+    "rejections": {}
+  },
   "news": {
     "examined": 0,
     "not_ingested": "host download pre-step not run in this execution session",
