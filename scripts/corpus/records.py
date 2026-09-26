@@ -34,6 +34,10 @@ _PRIVATE_NETWORKS: Final[tuple[ipaddress.IPv4Network, ...]] = (
     ipaddress.IPv4Network("172.16.0.0/12"),
     ipaddress.IPv4Network("192.168.0.0/16"),
 )
+_IPV6_ZONE_NETWORKS: Final[tuple[ipaddress.IPv6Network, ...]] = (
+    ipaddress.IPv6Network("fe80::/10"),
+    ipaddress.IPv6Network("2001:db8::/32"),
+)
 
 ParamValue = str | int | float | bool | None
 
@@ -358,6 +362,17 @@ def _is_private_ip(host: str) -> bool:
     )
 
 
+def _is_ipv6_zone_host(host: str) -> bool:
+    """A link-local or documentation IPv6 literal, with or without a zone id."""
+    try:
+        address = ipaddress.ip_address(host.partition("%")[0])
+    except ValueError:
+        return False
+    return isinstance(address, ipaddress.IPv6Address) and any(
+        address in network for network in _IPV6_ZONE_NETWORKS
+    )
+
+
 def _is_reserved_host(host: str) -> bool:
     host = host.rstrip(".").lower()
     if any(
@@ -379,6 +394,8 @@ def _url_allowed(url: str, exception: ParamValue) -> bool:
         return False
     if _is_private_ip(host):
         return exception == "private_ip"
+    if _is_ipv6_zone_host(host):
+        return exception == "ipv6_zone"
     return _is_reserved_host(host)
 
 

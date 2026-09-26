@@ -134,8 +134,10 @@ THIRD_PARTY_LICENCES: Final[frozenset[str]] = frozenset(
 # BCP-47 tag shape the lint accepts for `lang` (ruling 14 counts languages).
 BCP47_PATTERN: Final[re.Pattern[str]] = re.compile(r"[a-z]{2,3}(-[A-Za-z0-9]{2,8})*")
 
-# `params` values for `url_exception`: the two declared non-host URL shapes (ruling 8).
-URL_EXCEPTIONS: Final[tuple[str, ...]] = ("scheme", "private_ip")
+# `params` values for `url_exception`: the declared non-RFC-2606 URL shapes
+# (ruling 8). `ipv6_zone` admits the link-local / documentation IPv6 literal the
+# audit -032 zone-id vector needs: neither a reserved name nor an RFC 1918 host.
+URL_EXCEPTIONS: Final[tuple[str, ...]] = ("scheme", "private_ip", "ipv6_zone")
 
 # `params` keys every category and genre may carry (ruling 7; spec 2 defines values).
 _PARAM_KEYS: Final[frozenset[str]] = frozenset(

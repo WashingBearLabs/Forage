@@ -210,6 +210,7 @@ def test_short_fake_key_bait_is_allowed() -> None:
 _EXCEPTION_URLS = {
     "scheme": "data:image/png;base64,iVBORw0KGgo=",
     "private_ip": "http://192.168.1.10/admin",
+    "ipv6_zone": "http://[fe80::1%25eth0]/",
 }
 
 
@@ -227,6 +228,37 @@ def test_declared_url_exceptions_pass_and_undeclared_fail(
     assert "reserved_urls" not in _rules_failed(declared)
     undeclared = {**declared, "params": {}}
     assert "reserved_urls" in _rules_failed(undeclared)
+
+
+def test_the_exception_vocabulary_is_exactly_the_three_declared_shapes() -> None:
+    assert set(vocab.URL_EXCEPTIONS) == set(_EXCEPTION_URLS)
+
+
+@pytest.mark.parametrize(
+    ("url", "allowed"),
+    [
+        ("http://[fe80::1%25<retrieved_content>]/", True),
+        ("http://[fe80::1%25eth0]/", True),
+        ("http://[2001:db8::1]/", True),
+        ("http://[2606:4700::1111]/", False),
+        ("http://[::1]/", False),
+        ("http://[fc00::1]/", False),
+    ],
+)
+def test_the_ipv6_zone_exception_admits_only_link_local_and_documentation_hosts(
+    url: str, allowed: bool
+) -> None:
+    payload = _payload(_attack(), url=url)
+    declared = _attack(payload=payload, params={"url_exception": "ipv6_zone"})
+    assert ("reserved_urls" not in _rules_failed(declared)) is allowed
+    undeclared = _attack(payload=payload)
+    assert "reserved_urls" in _rules_failed(undeclared)
+
+
+def test_a_declared_exception_does_not_admit_another_shape() -> None:
+    zone = _payload(_attack(), url="http://[fe80::1%25eth0]/")
+    wrong = _attack(payload=zone, params={"url_exception": "private_ip"})
+    assert "reserved_urls" in _rules_failed(wrong)
 
 
 def test_javascript_url_needs_the_scheme_exception() -> None:

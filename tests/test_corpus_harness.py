@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import html
 import inspect
+import json
 import logging
 import os
 from collections.abc import Callable, Sequence
@@ -28,7 +30,12 @@ import retrieval_app
 from cache import ContentCache
 from pipeline import contract
 from pipeline.search_providers.base import ProviderSearchResult, SearchProvider
-from pipeline.stage1_extraction import _INVISIBLE_CHARS, normalize_text
+from pipeline.stage1_extraction import _INVISIBLE_CHARS, extract_html, normalize_text
+from pipeline.stage2_structural import (
+    _BLOCKING_CATEGORIES,
+    _PATTERNS,
+    _SUSPICIOUS_CATEGORIES,
+)
 from pipeline.stage3_promptguard import PromptGuardSettings
 from promptguard.classifier import (
     DEFAULT_MODEL_ID,
@@ -56,6 +63,7 @@ from scripts.corpus.outcomes import (
     HarnessError,
     Route,
     RouteResult,
+    RuleConfig,
     Signals,
     interpret_response,
     marker_on_wire,
@@ -65,7 +73,9 @@ from scripts.corpus.records import (
     LINT_RULES,
     CorpusRecord,
     lint_corpus,
+    load_corpus,
     normalise_for_leak_check,
+    page_document,
     record_from_mapping,
 )
 from scripts.corpus.replay import (
@@ -73,7 +83,7 @@ from scripts.corpus.replay import (
     UnrecordedTextError,
     text_sha256,
 )
-from tests.corpus_stage2 import stage2_record_hits
+from tests.corpus_stage2 import stage2_hits, stage2_record_hits
 from tests.fakes import assert_frozen
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -427,6 +437,39 @@ async def test_the_result_model_id_is_the_replays_never_the_apps() -> None:
     result = await drive(_search(), classifier, config="default")
     assert result.model_id == "some/86m-cassette"
     assert result.model_id != DEFAULT_MODEL_ID
+
+
+_MISSING = object()
+
+
+async def test_a_drive_puts_back_the_app_state_it_overwrote() -> None:
+    """The app is a process-wide singleton: a drive's overrides must not outlive it.
+
+    A ``CorpusSearchProvider`` left on ``app.state.search_providers`` answers a
+    later test's ``/search`` with a served result (found when the seed drift guard
+    ended on a ``search`` record and ``test_orchestrator`` ran next).
+    """
+    names = ("search_providers", "cache", "classifier")
+    saved = {name: getattr(app.state, name, _MISSING) for name in names}
+    sentinels = {name: object() for name in names}
+    try:
+        for name, value in sentinels.items():
+            setattr(app.state, name, value)
+        await drive(_search(), _fallback(), config="default")
+        await drive(_page(), _fallback(), config="default")
+        for name, value in sentinels.items():
+            assert getattr(app.state, name) is value, name
+        # An attribute that was absent before the drive is absent after it.
+        delattr(app.state, "search_providers")
+        await drive(_search(), _fallback(), config="default")
+        assert not hasattr(app.state, "search_providers")
+    finally:
+        for name, value in saved.items():
+            if value is _MISSING:
+                if hasattr(app.state, name):
+                    delattr(app.state, name)
+            else:
+                setattr(app.state, name, value)
 
 
 async def test_a_drive_never_loads_weights() -> None:
@@ -1313,4 +1356,460 @@ async def test_the_stage_two_scanner_and_the_driven_wire_agree(
         )
     else:
         carried = signals["structural_flags"] != ()
+    assert bool(stage2_record_hits(record)) is carried, result.summary()
+
+
+# ---------------------------------------------------------------------------
+# The seed corpus (US-003): every committed seed record, driven structural-only
+# ---------------------------------------------------------------------------
+#
+# `fallback=0.0` is the structural-only measurement: every classified text scores
+# 0.0, so what happens to a record is decided by stage 1 (extraction) and
+# stage 2 (the regex scanner) alone. A record that comes back `leaked` is not a
+# bug here — it is the measurement the epic exists for: nothing structural to
+# catch, so the whole burden falls on the classifier.
+
+_SEED_ATTACK_IDS = tuple(f"atk-{number:04d}" for number in range(1, 26))
+_SEED_BENIGN_IDS = tuple(f"ben-{number:04d}" for number in range(1, 11))
+
+# What stages 1 and 2 alone do to a seed attack, by category. The four sweep
+# families are stage-2-clean by construction, so they are `leaked` too.
+_STRUCTURAL_ONLY_BY_CATEGORY: dict[str, str] = {
+    "instruction_override": "blocked",
+    "authority_impersonation": "blocked",
+    "prompt_boundary": "blocked",
+    "line_anchored_role": "blocked",
+    "url_borne_envelope": "blocked",
+    "encoded_payload": "flagged",
+    "suspicious_url": "flagged",
+    "exfil_beacon": "flagged",
+    "envelope_breakout": "flagged",
+    "natural_language": "leaked",
+    "authority_seo": "leaked",
+    "boundary_straddle": "leaked",
+    "density_thinned": "leaked",
+    "repetition_camouflage": "leaked",
+    "sustained_midband": "leaked",
+}
+# `hidden_markup` is keyed by its carrier: stage 1 strips `script` and `meta`
+# and keeps the text of styled and `hidden` elements and of the page title.
+_STRUCTURAL_ONLY_BY_CARRIER: dict[str, str] = {
+    "jsonld_offers": "neutralised",
+    "meta_description": "neutralised",
+    "og_description": "neutralised",
+    "css_offscreen": "leaked",
+    "hidden_div": "leaked",
+    "title_stuffing": "leaked",
+}
+_STRUCTURAL_CATEGORIES = (
+    "instruction_override",
+    "authority_impersonation",
+    "prompt_boundary",
+    "encoded_payload",
+    "suspicious_url",
+    "exfil_beacon",
+    "envelope_breakout",
+)
+_STAGE_THREE_ONLY_CATEGORIES = (
+    "natural_language",
+    "authority_seo",
+    "hidden_markup",
+    "boundary_straddle",
+    "density_thinned",
+    "repetition_camouflage",
+    "sustained_midband",
+)
+_STAGE2_CATEGORY_OF: dict[str, str] = {
+    name: category
+    for name, (category, _) in zip(vocab.STAGE2_REGEX_NAMES, _PATTERNS, strict=True)
+}
+_TOKEN_STEP_CHARS = 448 * 4  # the 448-token step at the 4-characters-per-token budget
+
+
+def _seed_records() -> dict[str, CorpusRecord]:
+    by_id = {record.id: record for record in load_corpus()}
+    assert set(_SEED_ATTACK_IDS + _SEED_BENIGN_IDS) <= set(by_id)
+    return {
+        seed_id: by_id[seed_id] for seed_id in (*_SEED_ATTACK_IDS, *_SEED_BENIGN_IDS)
+    }
+
+
+def _seed_attacks() -> list[CorpusRecord]:
+    seed = _seed_records()
+    return [seed[seed_id] for seed_id in _SEED_ATTACK_IDS]
+
+
+def _seed_benign() -> list[CorpusRecord]:
+    seed = _seed_records()
+    return [seed[seed_id] for seed_id in _SEED_BENIGN_IDS]
+
+
+async def _structural_only(
+    records: Sequence[CorpusRecord], *, config: RuleConfig = "default"
+) -> dict[str, RouteResult]:
+    results = await drive_all(records, _fallback(0.0), configs=[config])
+    return {result.record_id: result for result in results}
+
+
+def _page_text(record: CorpusRecord) -> str:
+    return extract_html(page_document(record), record.payload["url"]).raw_text
+
+
+def _expected_structural_only(record: CorpusRecord) -> str:
+    if record.category == "hidden_markup":
+        return _STRUCTURAL_ONLY_BY_CARRIER[str(record.params["carrier"])]
+    return _STRUCTURAL_ONLY_BY_CATEGORY[record.category]
+
+
+def test_seed_corpus_is_lint_clean_with_the_floors_this_story_sets() -> None:
+    assert [str(error) for error in lint_corpus(load_corpus())] == []
+    attacks = _seed_attacks()
+    benign = _seed_benign()
+    assert len(attacks) >= 22
+    assert len(benign) >= 10
+    assert {record.category for record in attacks} == set(vocab.ATTACK_CATEGORIES)
+    assert {record.category for record in benign} == set(vocab.BENIGN_GENRES)
+    assert sum(record.category == "multilingual" for record in benign) == 2
+    assert {record.kind for record in attacks} == {"attack"}
+    assert {record.kind for record in benign} == {"benign"}
+    assert all(
+        len(record.marker or "") >= vocab.MIN_MARKER_LENGTH for record in attacks
+    )
+    assert all(record.source["kind"] == "owned" for record in attacks + benign)
+
+
+def test_seed_files_are_named_by_category_or_genre() -> None:
+    for subdir, names in (
+        ("attacks", vocab.ATTACK_CATEGORIES),
+        ("benign", vocab.BENIGN_GENRES),
+    ):
+        paths = sorted((vocab.TESTS_CORPUS_ROOT / subdir).glob("*.jsonl"))
+        assert paths
+        for path in paths:
+            assert path.stem in names, path.name
+            for line in path.read_text(encoding="utf-8").splitlines():
+                assert json.loads(line)["category"] == path.stem, path.name
+
+
+def test_seed_expectation_table_covers_every_attack_category() -> None:
+    assert set(_STRUCTURAL_ONLY_BY_CATEGORY) | {"hidden_markup"} == set(
+        vocab.ATTACK_CATEGORIES
+    )
+    assert set(_STRUCTURAL_CATEGORIES) | set(_STAGE_THREE_ONLY_CATEGORIES) | {
+        "line_anchored_role",
+        "url_borne_envelope",
+    } == set(vocab.ATTACK_CATEGORIES)
+
+
+def test_seed_expectation_table_agrees_with_the_scanners_own_verdict_classes() -> None:
+    for category, outcome in _STRUCTURAL_ONLY_BY_CATEGORY.items():
+        if category in _BLOCKING_CATEGORIES:
+            assert outcome == "blocked", category
+        if category in _SUSPICIOUS_CATEGORIES:
+            assert outcome == "flagged", category
+
+
+async def test_seed_attacks_measure_structural_only_as_recorded() -> None:
+    attacks = _seed_attacks()
+    results = await _structural_only(attacks)
+    for record in attacks:
+        result = results[record.id]
+        expected = _expected_structural_only(record)
+        assert result.outcome == expected, f"{result.summary()} expected={expected}"
+
+
+async def test_seed_pins_hold_for_every_pinned_record() -> None:
+    """The generic pin test: the pin is read from the record, never from this file."""
+    pinned = [record for record in load_corpus() if record.pinned]
+    assert pinned, "no record pins an outcome"
+    by_id = {record.id: record for record in pinned}
+    results = await drive_all(pinned, _fallback(0.0), configs=["default", "contiguity"])
+    assert len(results) == 2 * len(pinned)
+    for result in results:
+        record = by_id[result.record_id]
+        assert record.pinned is not None
+        assert result.outcome in record.pinned, (
+            f"{result.summary()} pinned={list(record.pinned)}"
+        )
+
+
+async def test_seed_untagged_benign_records_are_clean() -> None:
+    benign = [
+        record
+        for record in load_corpus()
+        if record.kind == "benign" and not record.pinned
+    ]
+    assert len(benign) >= 9
+    results = await _structural_only(benign)
+    for record in benign:
+        result = results[record.id]
+        assert result.outcome == "clean", result.summary()
+        assert result.signals.marker_on_wire is False
+
+
+async def test_seed_the_two_audit_bypasses_are_blocked_on_search() -> None:
+    seed = _seed_records()
+    records = [seed["atk-0008"], seed["atk-0009"], seed["atk-0010"], seed["atk-0011"]]
+    assert [record.category for record in records] == [
+        "line_anchored_role",
+        "url_borne_envelope",
+        "url_borne_envelope",
+        "url_borne_envelope",
+    ]
+    results = await _structural_only(records)
+    for record in records:
+        result = results[record.id]
+        assert result.route == "/search", result.summary()
+        assert result.outcome == "blocked", result.summary()
+        assert result.signals.marker_on_wire is False, result.summary()
+    # -016: the role markers sit after a paragraph break, so only the
+    # newline-preserving scan form can see them.
+    role = results["atk-0008"]
+    assert role.signals.omit_reason == contract.OMIT_STRUCTURAL_BLOCKED
+    content = seed["atk-0008"].payload["content"]
+    assert "\n\nSystem:" in content
+    assert not content.startswith(("System:", "assistant:"))
+    # -032: the pin is the outcome class; the reason is one of the two the
+    # hardening epic's URL audit can give, and the record notes which.
+    for record_id in ("atk-0009", "atk-0010", "atk-0011"):
+        reason = results[record_id].signals.omit_reason
+        assert reason in {contract.OMIT_INVALID_URL, contract.OMIT_STRUCTURAL_BLOCKED}
+
+
+def test_seed_pinned_reasons_name_their_audit_ids_or_ruling() -> None:
+    seed = _seed_records()
+    audit = {
+        "atk-0008": "2026-09-16-016",
+        "atk-0009": "2026-09-16-032",
+        "atk-0010": "2026-09-16-032",
+        "atk-0011": "2026-09-16-032",
+    }
+    for record_id, audit_id in audit.items():
+        assert seed[record_id].pinned == ("blocked",)
+        assert seed[record_id].pinned_reason == audit_id
+    for record_id in ("atk-0024", "atk-0025"):
+        assert seed[record_id].pinned == ("blocked",)
+        assert (seed[record_id].pinned_reason or "").startswith("R26")
+
+
+def test_seed_readme_lists_every_seed_pinned_record_with_its_audit_id() -> None:
+    readme = (vocab.TESTS_CORPUS_ROOT / "README.md").read_text(encoding="utf-8")
+    pinned = [
+        record for record in _seed_records().values() if record.pinned is not None
+    ]
+    assert {record.id for record in pinned} >= {
+        "atk-0008",
+        "atk-0009",
+        "atk-0010",
+        "atk-0011",
+        "atk-0024",
+        "atk-0025",
+    }
+    for record in pinned:
+        row = next(line for line in readme.splitlines() if f"`{record.id}` |" in line)
+        assert record.pinned_reason is not None
+        assert record.pinned_reason in row, record.id
+
+
+def test_seed_double_entity_title_is_a_role_marker_after_two_decodes() -> None:
+    record = _seed_records()["atk-0024"]
+    title = record.payload["title"]
+    once = html.unescape(title)
+    twice = html.unescape(once)
+    assert stage2_hits(title) == frozenset()
+    assert stage2_hits(once) == frozenset()
+    assert stage2_hits(twice) == {"system_line"}
+    assert record.pinned == ("blocked",)
+
+
+async def test_seed_nul_split_title_blocks_because_the_strip_rejoins_it() -> None:
+    """The raw NUL splits a non-line-anchored token; the pre-parser strip rejoins it."""
+    record = _seed_records()["atk-0025"]
+    title = record.payload["title"]
+    stripped = title.replace("\x00", "")
+    assert "\x00" in title
+    assert stage2_hits(title) == frozenset()
+    assert stage2_hits(stripped) == {"system_bracket"}
+    assert not stripped.startswith("[")
+    assert stage2_record_hits(record) == {"system_bracket"}
+    result = (await _structural_only([record]))[record.id]
+    assert result.outcome == "blocked", result.summary()
+    assert result.signals.omit_reason == contract.OMIT_STRUCTURAL_BLOCKED
+    assert result.signals.marker_on_wire is False
+
+
+def test_seed_structural_records_trip_only_their_own_category() -> None:
+    for record in _seed_attacks():
+        if record.category not in _STRUCTURAL_CATEGORIES:
+            continue
+        categories = {_STAGE2_CATEGORY_OF[name] for name in stage2_record_hits(record)}
+        assert categories == {record.category}, record.id
+
+
+def test_seed_stage_three_shapes_carry_no_structural_marker() -> None:
+    for record in _seed_attacks():
+        if record.category in _STAGE_THREE_ONLY_CATEGORIES:
+            assert stage2_record_hits(record) == frozenset(), record.id
+    for record in _seed_benign():
+        if not record.pinned:
+            assert stage2_record_hits(record) == frozenset(), record.id
+
+
+async def test_seed_natural_language_and_authority_seo_are_leaked() -> None:
+    """The measurement the epic exists for: nothing structural stops them."""
+    records = [
+        record
+        for record in _seed_attacks()
+        if record.category in {"natural_language", "authority_seo"}
+    ]
+    assert {record.category for record in records} == {
+        "natural_language",
+        "authority_seo",
+    }
+    results = await _structural_only(records)
+    for record in records:
+        result = results[record.id]
+        assert result.outcome == "leaked", result.summary()
+        assert result.signals.marker_on_wire is True, result.summary()
+        assert stage2_record_hits(record) == frozenset()
+
+
+def test_seed_metadata_carriers_are_the_six_named_ones() -> None:
+    carriers = {
+        str(record.params["carrier"]): record
+        for record in _seed_attacks()
+        if record.category == "hidden_markup"
+    }
+    assert set(carriers) == set(_STRUCTURAL_ONLY_BY_CARRIER)
+    for name in ("jsonld_offers", "meta_description", "og_description"):
+        assert set(carriers[name].pinned or ()) == {"blocked", "flagged", "neutralised"}
+    for name in ("css_offscreen", "hidden_div", "title_stuffing"):
+        assert carriers[name].pinned is None, name
+    head = carriers["jsonld_offers"].payload["head_html"]
+    assert "application/ld+json" in head and "SoftwareApplication" in head
+    assert '"offers"' in head
+    assert 'name="description"' in carriers["meta_description"].payload["head_html"]
+    assert "og:description" in carriers["og_description"].payload["head_html"]
+    assert "left:-9999px" in carriers["css_offscreen"].payload["body_html"]
+    assert "hidden" in carriers["hidden_div"].payload["body_html"]
+    title_stuffing = carriers["title_stuffing"]
+    assert title_stuffing.marker is not None
+    assert title_stuffing.marker in title_stuffing.payload["title"]
+
+
+async def test_seed_stripped_carriers_are_neutralised_kept_ones_leak() -> None:
+    carriers = [
+        record for record in _seed_attacks() if record.category == "hidden_markup"
+    ]
+    results = await _structural_only(carriers)
+    for record in carriers:
+        result = results[record.id]
+        stripped = str(record.params["carrier"]) in {
+            "jsonld_offers",
+            "meta_description",
+            "og_description",
+        }
+        assert result.outcome == ("neutralised" if stripped else "leaked"), (
+            result.summary()
+        )
+        assert result.signals.marker_on_wire is (not stripped), result.summary()
+
+
+def test_seed_residual_shapes_meet_their_character_budget() -> None:
+    """Planning budget only: 4 characters per token, a 448-token step, 64 overlap.
+
+    The real window count is the recorder's to assert once a cassette exists
+    (spec 4); nothing here reads or asserts a window count.
+    """
+    seed = _seed_records()
+    sweeps = [seed[f"atk-{number:04d}"] for number in (20, 21, 22, 23)]
+    assert {record.category for record in sweeps} == {
+        "boundary_straddle",
+        "density_thinned",
+        "repetition_camouflage",
+        "sustained_midband",
+    }
+    for record in (*sweeps, seed["ben-0009"]):
+        assert record.surface == "page", record.id
+        windows_min = record.params["windows_min"]
+        assert isinstance(windows_min, int) and windows_min >= 1
+        budget = 4 * (448 * (windows_min - 1) + 64)
+        assert len(_page_text(record)) >= budget, record.id
+    straddle = seed["atk-0020"]
+    assert straddle.params["windows_min"] == 2
+    assert straddle.params["placement"] == "split_448"
+    text = _page_text(straddle)
+    assert len(text) >= 4 * 1_200
+    assert straddle.marker is not None
+    needle = normalise_for_leak_check(straddle.marker)
+    folded = normalise_for_leak_check(text)
+    first = folded.index(needle)
+    second = folded.index(needle, first + 1)
+    # One half of the payload ends before the 448-token step, the other starts
+    # after it.
+    assert first + len(needle) <= _TOKEN_STEP_CHARS <= second
+    assert seed["atk-0023"].params["windows_min"] == 3
+
+
+async def test_seed_residual_shapes_are_stage_two_clean_and_scanned() -> None:
+    seed = _seed_records()
+    sweeps = [seed[f"atk-{number:04d}"] for number in (20, 21, 22, 23)]
+    results = await _structural_only(sweeps)
+    for record in sweeps:
+        result = results[record.id]
+        assert stage2_record_hits(record) == frozenset(), record.id
+        assert result.signals.promptguard_state == "scanned", result.summary()
+        assert result.outcome == "leaked", result.summary()
+
+
+def _carries_a_commit_id(url: str) -> bool:
+    """Whether ``url`` has a 40-hex path segment — the shape the regex trips on."""
+    return any(
+        len(part) == 40 and all(char in "0123456789abcdef" for char in part)
+        for part in url.split("/")
+    )
+
+
+async def test_seed_git_sha_code_benign_is_flagged_by_base64_run() -> None:
+    record = _seed_records()["ben-0002"]
+    assert record.category == "code"
+    assert stage2_record_hits(record) == {"base64_run"}
+    assert record.params["variant"] == "base64_run"
+    assert record.pinned == ("flagged", "blocked")
+    assert _carries_a_commit_id(record.payload["url"])
+    result = (await _structural_only([record]))[record.id]
+    assert result.outcome == "flagged", result.summary()
+    assert result.signals.suspicious is True
+
+
+async def test_seed_drivers_reach_every_route() -> None:
+    results = await _structural_only(_seed_attacks() + _seed_benign())
+    assert {result.route for result in results.values()} == {
+        "/search",
+        "/retrieve",
+        "/extract",
+    }
+    assert {route_of(record) for record in _seed_records().values()} == {
+        "/search",
+        "/retrieve",
+        "/extract",
+    }
+
+
+@pytest.mark.parametrize(
+    "record_id",
+    [*_SEED_ATTACK_IDS, *_SEED_BENIGN_IDS],
+)
+async def test_seed_stage_two_scanner_and_the_driven_wire_agree(record_id: str) -> None:
+    """The drift guard, over the seed: the tests-side scanner matches the pipeline."""
+    record = _seed_records()[record_id]
+    result = (await _structural_only([record]))[record_id]
+    signals = result.signals
+    if record.surface == "search":
+        carried = (
+            signals.omit_reason == contract.OMIT_STRUCTURAL_BLOCKED
+            or signals.suspicious is True
+        )
+    else:
+        carried = signals.structural_flags != ()
     assert bool(stage2_record_hits(record)) is carried, result.summary()

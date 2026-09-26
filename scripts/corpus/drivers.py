@@ -80,6 +80,14 @@ _SEARCH_BODY: Final[dict[str, object]] = {
 }
 _FETCHED_ADDRESS: Final = "93.184.215.14"
 
+# The `app.state` attributes a drive overwrites: the lifespan sets them and the
+# drivers replace them per request. The app is a module-level singleton, so a
+# value left behind reaches whatever runs next in the process — `search_providers`
+# is `None` at import, and a leftover `CorpusSearchProvider` answers a later
+# test's `/search` with a served result.
+_DRIVEN_STATE: Final[tuple[str, ...]] = ("search_providers", "cache", "classifier")
+_ABSENT: Final = object()
+
 
 class UnrecordedRecordError(Exception):
     """A drive needed scores the cassette does not have.
@@ -162,6 +170,8 @@ async def corpus_app(
     * With ``classifier=None`` nothing is installed and the lifespan's own
       unloaded classifier stays — exactly the weight-less boot, so stage 3
       takes its unavailable path.
+    * ``app.state.search_providers``, ``cache`` and ``classifier`` are put back
+      as they were on the way out, so nothing a drive installs outlives it.
 
     A ``contiguity`` config the lifespan refuses raises out of this manager.
     """
@@ -172,6 +182,28 @@ async def corpus_app(
     environment = {
         name: value for name, value in os.environ.items() if name not in _SCRUBBED_ENV
     }
+    state_before = {name: getattr(app.state, name, _ABSENT) for name in _DRIVEN_STATE}
+    try:
+        async with _booted(
+            classifier=classifier, booted_config=booted_config, environment=environment
+        ) as client:
+            yield client
+    finally:
+        for name, value in state_before.items():
+            if value is _ABSENT:
+                if hasattr(app.state, name):
+                    delattr(app.state, name)
+            else:
+                setattr(app.state, name, value)
+
+
+@asynccontextmanager
+async def _booted(
+    *,
+    classifier: ReplayClassifier | None,
+    booted_config: dict[str, Any],
+    environment: dict[str, str],
+) -> AsyncGenerator[httpx.AsyncClient, None]:
     with ExitStack() as stack:
         stack.enter_context(patch.dict(os.environ, environment, clear=True))
         stack.enter_context(

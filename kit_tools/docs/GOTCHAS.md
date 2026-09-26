@@ -39,6 +39,19 @@ service's logs, captured output and a failing assertion's text. Nothing structur
 stops a *new* test from formatting a payload into a message — that rule rests on review
 and on that one targeted test.
 
+### A corpus drive must put `app.state` back — the app is a process singleton
+
+`retrieval_app.app` is one object for the whole test process, and its `state` outlives
+any single lifespan: `search_providers` is `None` at import, and the lifespan and the
+drivers overwrite `search_providers`, `cache` and `classifier`. A drive that leaves a
+`CorpusSearchProvider` behind makes a *later, unrelated* test's `/search` return a
+served result — `tests/test_orchestrator.py::test_post_search_endpoint_searxng_error`
+turned red only when the last drive before it happened to be a `search` record, so the
+leak passed for a whole story. `scripts/corpus/drivers.py::corpus_app` now restores all
+three on exit (and deletes an attribute that was absent before), and
+`test_a_drive_puts_back_the_app_state_it_overwrote` pins it. Any new driver, recorder or
+gate entry point must go through `corpus_app` rather than setting `app.state` itself.
+
 ### Real model configs can omit human-readable labels
 
 The verified default 22M config has no label maps: transformers supplies
