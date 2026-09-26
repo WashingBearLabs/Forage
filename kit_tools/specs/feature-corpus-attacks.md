@@ -242,18 +242,18 @@ recorded per carrier in Implementation Notes.
   authored under `authority_seo` in US-005, not here.
 
 **Acceptance Criteria:**
-- [ ] ≥ 32 `hidden_markup` records, ≥ 4 per carrier, all `page`, every carrier value from the closed
+- [x] ≥ 32 `hidden_markup` records, ≥ 4 per carrier, all `page`, every carrier value from the closed
       list, every record's `notes` naming the phrasing shape.
-- [ ] Pins set only on carriers measured `neutralised` for every phrasing at story start; the
+- [x] Pins set only on carriers measured `neutralised` for every phrasing at story start; the
       measurement table (carrier × phrasing → outcome counts) is in Implementation Notes.
-- [ ] A leaked carrier at story start is listed by record id in Implementation Notes under
+- [x] A leaked carrier at story start is listed by record id in Implementation Notes under
       "for AUDIT_FINDINGS (spec 5 US-005)".
-- [ ] Lint-clean; `tests/corpus/README.md` gains the carrier vocabulary.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Lint-clean; `tests/corpus/README.md` gains the carrier vocabulary.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-003: Window-shaped families — straddle, density sweep, repetition sweep, sustained mid-band
 
