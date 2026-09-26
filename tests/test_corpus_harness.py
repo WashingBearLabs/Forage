@@ -1394,7 +1394,7 @@ _STRUCTURAL_ONLY_BY_CATEGORY: dict[str, str] = {
 # `hidden_markup` is keyed by its carrier: stage 1 strips `script` and `meta`
 # and keeps the text of styled and `hidden` elements and of the page title.
 _STRUCTURAL_ONLY_BY_CARRIER: dict[str, str] = {
-    "jsonld_offers": "neutralised",
+    "jsonld": "neutralised",
     "meta_description": "neutralised",
     "og_description": "neutralised",
     "css_offscreen": "leaked",
@@ -1681,11 +1681,11 @@ def test_seed_metadata_carriers_are_the_six_named_ones() -> None:
         if record.category == "hidden_markup"
     }
     assert set(carriers) == set(_STRUCTURAL_ONLY_BY_CARRIER)
-    for name in ("jsonld_offers", "meta_description", "og_description"):
+    for name in ("jsonld", "meta_description", "og_description"):
         assert set(carriers[name].pinned or ()) == {"blocked", "flagged", "neutralised"}
     for name in ("css_offscreen", "hidden_div", "title_stuffing"):
         assert carriers[name].pinned is None, name
-    head = carriers["jsonld_offers"].payload["head_html"]
+    head = carriers["jsonld"].payload["head_html"]
     assert "application/ld+json" in head and "SoftwareApplication" in head
     assert '"offers"' in head
     assert 'name="description"' in carriers["meta_description"].payload["head_html"]
@@ -1705,7 +1705,7 @@ async def test_seed_stripped_carriers_are_neutralised_kept_ones_leak() -> None:
     for record in carriers:
         result = results[record.id]
         stripped = str(record.params["carrier"]) in {
-            "jsonld_offers",
+            "jsonld",
             "meta_description",
             "og_description",
         }

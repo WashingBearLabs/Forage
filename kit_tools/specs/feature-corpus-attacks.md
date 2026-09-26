@@ -809,6 +809,103 @@ should cover. Findings, not fixes (ruling 6); ids only:
   `_FIRST_ID` / `_LAST_ID` range in `tests/test_corpus_attacks.py` is what identifies this story's records,
   so later stories append without editing it.
 
+### US-002 — Hidden-markup carriers, the eight in-the-wild placements (2026-09-25)
+
+**Delivered.** 32 owned records, `atk-0183` … `atk-0214`, four per carrier, appended to
+`tests/corpus/attacks/hidden_markup.jsonl` beside the six seed records (`atk-0014` … `atk-0019`):
+38 `hidden_markup` records, all `page`, all `en`. `params.carrier` is now a closed list,
+`vocab.ATTACK_CARRIERS` (eight names), enforced inside the existing `rule_params_values` lint rule — no
+new rule name, so the every-rule-has-a-failing-case test is unchanged and gained a separate
+carrier-vocabulary test. Every record's `notes` starts `phrasing: <shape>`; the `instruction_override`
+shape continues `; regex: <name>`. `tests/corpus/README.md` gains the carrier vocabulary, the three
+phrasing shapes and the pin rule. No runtime change (ruling 6): the ruling-6 file set has an empty
+`git diff --stat` against `git merge-base main HEAD`, and `derive_sanitizer_revision({})` is still
+`021378efee6ab43f22b887af2f0c0c40ef76183a39802120fbfd0ca7a3a33900`.
+
+**Seed reconciliation.** corpus-harness named the JSON-LD carrier `jsonld_offers`; this spec's closed
+list says `jsonld`, and that story's notes deferred the reconciliation to here. `atk-0014`'s
+`params.carrier` is now `jsonld` and the harness test's four references follow. The six seed records
+also gained the `phrasing: natural_language` head on `notes`, so every `hidden_markup` record names
+its phrasing. Their ids, payloads, markers and pins are unchanged.
+
+**Phrasings per carrier (new records).** Two `instruction_override` (always `ignore_previous` plus a
+second pattern from `disregard_instructions`, `new_directive`, `system_bracket`,
+`instructions_banner` — all `instruction_override`-category patterns), one `authority_seo`, one
+`natural_language`. The JSON-LD records between them use all four keys (`offers` from the seed,
+`description` of a `SoftwareApplication` and of an `Organization`, `publisher`,
+`applicationCategory`); `css_offscreen` uses both `left:-9999px` and `font-size:0`; `hidden_div`
+uses `hidden` (once with `aria-hidden`) and `display:none`; one `html_comment` record sits in the head.
+A test asserts each label is true: the `instruction_override` payload trips exactly its named pattern
+in the raw payload, the other two shapes trip none.
+
+**Measurement at story start** (`fallback=0.0`, `/retrieve`, default and contiguity configs — identical
+for all 38). Cell = blocked / flagged / neutralised / leaked; the seed's six count under
+`natural_language`.
+
+| carrier | instruction_override | authority_seo | natural_language | all | pinned |
+|---|---|---|---|---|---|
+| jsonld | 0/0/2/0 | 0/0/1/0 | 0/0/2/0 | 0/0/5/0 | 5 |
+| meta_description | 0/0/2/0 | 0/0/1/0 | 0/0/2/0 | 0/0/5/0 | 5 |
+| og_description | 0/0/2/0 | 0/0/1/0 | 0/0/2/0 | 0/0/5/0 | 5 |
+| css_offscreen | 2/0/0/0 | 0/0/0/1 | 0/0/0/2 | 2/0/0/3 | 0 |
+| hidden_div | 2/0/0/0 | 0/0/0/1 | 0/0/0/2 | 2/0/0/3 | 0 |
+| html_comment | 0/0/2/0 | 0/0/1/0 | 0/0/1/0 | 0/0/4/0 | 4 |
+| alt_text | 0/0/2/0 | 0/0/1/0 | 0/0/1/0 | 0/0/4/0 | 4 |
+| title_stuffing | 2/0/0/0 | 0/0/0/1 | 0/0/0/2 | 2/0/0/3 | 0 |
+| **all eight** | 6/0/10/0 | 0/0/5/3 | 0/0/8/6 | 6/0/23/9 | 23 |
+
+**Pins.** Five carriers were `neutralised` for every phrasing and carry
+`["blocked", "flagged", "neutralised"]`: `jsonld`, `meta_description`, `og_description`,
+`html_comment`, `alt_text` (23 records). **The hypothesis named four; the measurement gave five** —
+`alt_text` was not on the expected list and came back `neutralised` for all four phrasings, so the
+rule ("pin only carriers measured `neutralised` for every phrasing") pins it. Checked directly rather
+than trusted to the harness: `extract_html` on each `alt_text` record leaves the marker out of
+`raw_text`, `main_content`, the title, author and date — `get_text` collects text nodes and an
+attribute value is never one. `html_comment` behaves the same way (comments are extracted from the
+tree before `get_text`). The three carriers that keep their text (`css_offscreen`, `hidden_div`,
+`title_stuffing`) are unpinned and recorded above, per the spec.
+
+**for AUDIT_FINDINGS (spec 5 US-005)** — leaked carriers at story start, ids only. These are the
+expected reach limit of a stage 1 that keeps styled, hidden and title text, not a stage-1 defect; the
+`authority_seo` and `natural_language` phrasings carry nothing for stage 2, so only stage 3 can
+catch them:
+- `css_offscreen`: `atk-0017`, `atk-0197`, `atk-0198`
+- `hidden_div`: `atk-0018`, `atk-0201`, `atk-0202`
+- `title_stuffing`: `atk-0019`, `atk-0213`, `atk-0214`
+
+The `instruction_override` phrasings of those same three carriers are `blocked` by stage 2
+(`atk-0195`, `atk-0196`, `atk-0199`, `atk-0200`, `atk-0211`, `atk-0212`). `html_comment` and `alt_text`
+did **not** leak at HEAD, so the hint's contingent finding for them is not filed.
+
+**Decisions and gotchas.**
+- `alt_text` and `html_comment` are `neutralised` because nothing ever puts them in text, not because
+  a rule removed a payload; if stage 1 ever starts reading `alt`, the pins turn red on the first
+  `leaked` record. That is the regression the pin exists to catch.
+- Stage 1 computes JSON-LD `author` and `datePublished`, but nothing downstream reads them: a probe
+  (not committed) with the payload in an `Article` author name measured `neutralised`. So they are
+  not a carrier, no record was authored for them, and an earlier draft comment in the tests that
+  said they "reach the wire" was wrong and was removed.
+- `title_stuffing` is `page`-only here; a page `<title>` reaches stage 2 on `/retrieve`, which is why
+  its `instruction_override` records are `blocked` and the seed's plain one is `leaked`. The
+  `search` siblings for `title_stuffing` and `og_description` stay in US-005.
+- The placement test asserts each marker sits inside the construct its carrier names (a JSON-LD string
+  under a carrier key of a typed object, the meta `content`, an off-screen or hidden element's text, a
+  comment, an `<img alt>`, a stuffed title with a word repeated three times) and has a negative
+  control that moves every record to each other carrier and expects rejection.
+- Mutation-checked seventeen ways against the final tests, each turning the named test red (exit
+  code 1 required — an earlier run used `|` in `-k`, which collects nothing and reads as red; rerun
+  with `or`): drop / narrow / add a pin, mislabel a carrier, a carrier outside the closed list, the
+  old seed name, mislabel a phrasing both ways, name the wrong regex, drop the phrasing from `notes`,
+  move a marker out of the alt attribute and out of the comment, move a payload to a JSON-LD
+  `author` key, rename a JSON-LD carrier key so the four-key coverage is lost, un-stuff a title,
+  let a stripped carrier's marker into the body, and delete the carrier check from the lint rule.
+  The corpus file was restored byte-identical each time.
+- Ran only the related tests (`tests/test_corpus_attacks.py`, `test_corpus_lint.py`,
+  `test_corpus_harness.py`, `test_governance_docs.py`: 369 passed, 1 skipped, the deliberate
+  `MIN_RECORDS` floor skip); ruff check, ruff format --check and pyright (0 errors) were run
+  repo-wide and are clean. The full `uv run pytest` is left to the orchestrator / verifier.
+- Ids are contiguous, `atk-0183` … `atk-0214`; US-003 onward continue at `atk-0215`.
+
 ## Refinement Notes
 
 ### Research Findings

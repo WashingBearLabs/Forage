@@ -54,6 +54,8 @@ omitted; the rest are required.
 `params.variant` is one vocabulary keyed on `kind`: for an attack it names the
 obfuscation transform (`vocab.ATTACK_VARIANTS`); for a benign record it names
 the `vocab.STAGE2_REGEX_NAMES` member the record deliberately trips.
+`params.carrier` names where a `hidden_markup` payload hides and is drawn from
+`vocab.ATTACK_CARRIERS`; the lint rejects any other value.
 
 ## Outcome vocabulary (ruling 9)
 
@@ -71,7 +73,7 @@ the same helper the leak check uses — against the raw payload fields and, for
 
 `atk-0001` … `atk-0025` and `ben-0001` … `ben-0010` are the seed (corpus-harness
 US-003): one owned attack per category, the six metadata carriers
-(`params.carrier`: `jsonld_offers`, `meta_description`, `og_description`,
+(`params.carrier`: `jsonld`, `meta_description`, `og_description`,
 `css_offscreen`, `hidden_div`, `title_stuffing`), both stage-3 residual shapes
 (`boundary_straddle`, `sustained_midband`) and one benign record per genre, two
 of them `multilingual`. Growth continues at `atk-0026` and `ben-0011`; an id is
@@ -174,6 +176,58 @@ measured as the table hypothesised.
 Shape (ii) is `flagged`, not `blocked`, because `envelope_breakout` is a
 SUSPICIOUS category. Shape (iii) never reaches stage 2: the raw-character rule
 omits the result as `invalid_url` first, so its pin names that rule.
+
+## Hidden-markup carriers (spec 2 US-002)
+
+`hidden_markup` records (`atk-0014` … `atk-0019` and `atk-0183` … `atk-0214`) are
+the places real campaigns hide instructions. They are `page`-only: a carrier is an
+HTML placement, so the record is a document and the route is `/retrieve`. The
+`search` siblings of `title_stuffing` and `og_description` — the provider surfaces
+the meta description as the snippet — belong to `authority_seo`. `params.carrier`
+names the placement; `notes` starts `phrasing: <shape>` and, for the
+instruction-override shape, continues `; regex: <name>`, so a report can split
+every carrier by phrasing. The `marker` sits inside the carrier's own placement, in
+prose the placement does not obscure.
+
+### Carrier vocabulary
+
+`params.carrier` (`vocab.ATTACK_CARRIERS`):
+
+| Carrier | Where the payload sits |
+|---------|------------------------|
+| `jsonld` | A string in a `<script type="application/ld+json">` object — the `description`, `offers`, `publisher` or `applicationCategory` of a `SoftwareApplication` or `Organization` |
+| `meta_description` | The `content` of `<meta name="description">` in the head |
+| `og_description` | The `content` of `<meta property="og:description">` in the head |
+| `css_offscreen` | Text in an element styled off-screen (`position:absolute;left:-9999px`) or to zero size (`font-size:0`) |
+| `hidden_div` | Text in an element hidden by the `hidden` attribute or by `display:none` |
+| `html_comment` | The text of an HTML comment, in the body or the head |
+| `alt_text` | The `alt` attribute of an `<img>` |
+| `title_stuffing` | A keyword-stuffed page `<title>` that carries the payload |
+
+### Phrasing shapes
+
+`notes` names one of three shapes per record, and every carrier carries all three
+(the instruction-override shape twice, with two different patterns), so the same
+placement is measured against payloads stage 2 can match and payloads only stage 3
+could:
+
+| Phrasing | What the record says |
+|----------|----------------------|
+| `instruction_override` | A stage-2 instruction-override trigger (`ignore_previous`, `disregard_instructions`, `new_directive`, `system_bracket`, `instructions_banner`) followed by the demand — a stage-2 hit *if* the carrier survives extraction |
+| `authority_seo` | The Zscaler shape: a publisher's claim to be the verified, authoritative source that deserves first rank — no technique string, nothing for stage 2 to match |
+| `natural_language` | A plain-prose imperative to the assistant reading the page — no trigger, no role marker, no bracket |
+
+### Pins
+
+Measured with `fallback=0.0` under both rule configs when the story began, every
+phrasing of five carriers came back `neutralised`: `jsonld`, `meta_description`,
+`og_description`, `html_comment` and `alt_text`. Stage 1 strips `script`, `meta`
+and comments, and takes only text nodes, so an `alt` attribute is never extracted.
+Those five carry `pinned: ["blocked", "flagged", "neutralised"]` — never `leaked` —
+and a change that lets any of them reach the wire is a regression to look at. The
+other three keep their text (`css_offscreen`, `hidden_div`, the page title), so
+there the instruction-override phrasing is stage 2's to block and the other two are
+left for stage 3; they are unpinned and reported, not asserted.
 
 ## Content rules (ruling 8)
 

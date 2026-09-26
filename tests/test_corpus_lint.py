@@ -305,6 +305,16 @@ def test_variant_vocabulary_is_selected_by_kind() -> None:
     assert "params_values" in _rules_failed(_attack(params={"variant": "rot13"}))
 
 
+def test_carrier_vocabulary_is_the_eight_placements_and_is_closed() -> None:
+    assert len(vocab.ATTACK_CARRIERS) == len(set(vocab.ATTACK_CARRIERS)) == 8
+    for carrier in vocab.ATTACK_CARRIERS:
+        obj = _attack(category="hidden_markup", params={"carrier": carrier})
+        assert "params_values" not in _rules_failed(obj), carrier
+    for carrier in ("jsonld_offers", "meta", "Alt_Text", ""):
+        obj = _attack(category="hidden_markup", params={"carrier": carrier})
+        assert "params_values" in _rules_failed(obj), carrier
+
+
 def test_params_allowlist_covers_all_25_members() -> None:
     members = set(vocab.ATTACK_CATEGORIES) | set(vocab.BENIGN_GENRES)
     assert len(vocab.ATTACK_CATEGORIES) == 16

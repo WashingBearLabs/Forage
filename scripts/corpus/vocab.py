@@ -282,6 +282,19 @@ ATTACK_VARIANTS: Final[tuple[str, ...]] = (
     "title_field",
 )
 
+# `params.carrier` for `hidden_markup`: where in the page the payload hides — the
+# eight in-the-wild placements (spec 2 US-002; landscape finding 11).
+ATTACK_CARRIERS: Final[tuple[str, ...]] = (
+    "jsonld",
+    "meta_description",
+    "og_description",
+    "css_offscreen",
+    "hidden_div",
+    "html_comment",
+    "alt_text",
+    "title_stuffing",
+)
+
 # `params.variant` vocabulary selected by kind: benign names the stage-2
 # regex a record deliberately trips (spec 3 US-001).
 VARIANTS_BY_KIND: Final[Mapping[str, tuple[str, ...]]] = {

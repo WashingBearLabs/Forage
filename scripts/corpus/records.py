@@ -460,11 +460,14 @@ def rule_params_keys(record: CorpusRecord) -> bool:
 
 
 def rule_params_values(record: CorpusRecord) -> bool:
-    """``variant`` is in its kind's vocabulary; ``url_exception`` is a known value."""
+    """``variant``, ``carrier`` and ``url_exception`` each take a known value."""
     variant = record.params.get("variant")
     if variant is not None and variant not in vocab.VARIANTS_BY_KIND.get(
         record.kind, ()
     ):
+        return False
+    carrier = record.params.get("carrier")
+    if carrier is not None and carrier not in vocab.ATTACK_CARRIERS:
         return False
     exception = record.params.get("url_exception")
     return exception is None or exception in vocab.URL_EXCEPTIONS
