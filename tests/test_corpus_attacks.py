@@ -1268,9 +1268,13 @@ async def test_every_owned_natural_language_and_authority_seo_record_is_leaked()
 
 
 def test_every_third_party_row_is_ingested_or_window_filler() -> None:
-    """A new sampler must be named, so the ingested-row assertion cannot miss it."""
+    """A new sampler must be named, so the ingested-row assertion cannot miss it.
+
+    Attack records only: the benign counter-corpus has its own third-party
+    sources (spec 3), checked in ``tests/test_corpus_ingest.py``.
+    """
     for record in load_corpus():
-        if record.source["kind"] != "third_party":
+        if record.kind != "attack" or record.source["kind"] != "third_party":
             continue
         assert (
             record.source["name"] in _INGESTED_SOURCES

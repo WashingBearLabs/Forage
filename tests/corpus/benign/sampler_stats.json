@@ -23,5 +23,15 @@
     "examined": 0,
     "not_ingested": "host download pre-step not run in this execution session",
     "rejections": {}
+  },
+  "over_defence_probe": {
+    "examined": 40,
+    "rejections": {}
+  },
+  "security_prose": {
+    "examined": 16,
+    "rejections": {
+      "licence": 2
+    }
   }
 }

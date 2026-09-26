@@ -1,4 +1,4 @@
-"""Benign sampler (spec 3 US-001): real, permissively licensed text → a surface.
+"""Benign sampler (spec 3 US-001, US-002): real, permissively licensed text → a surface.
 
 One CLI with a ``--source`` switch and one adapter per source. Each adapter
 reads a local download (outside the repository, as spec 2's samplers do),
@@ -14,6 +14,14 @@ only); ``python -m tests.corpus_stage2 name-variants <file>`` then names the
 regex. A candidate is rejected only for reasons unrelated to stage 2
 (``REJECTION_REASONS``); the per-genre ``examined`` count and rejections go to
 ``sampler_stats.json`` beside the records. Output is ids and counts only.
+
+Two sources are not core-genre web text (US-002). ``notinject`` re-homes
+NotInject's benign user queries (``framing = rehomed_direct``) into
+``over_defence_probe`` pages, snippets and uploads, stratified across the
+dataset's four slices; ``arxiv`` takes the abstract and one section of a paper
+whose arXiv licence is CC-BY-4.0 (any other licence is a ``licence`` rejection)
+into ``security_prose``. Both ride the same triage, and their output goes
+through the same ``name-variants`` step.
 """
 
 from __future__ import annotations
@@ -79,6 +87,9 @@ class Candidate:
     url: str
     licence: str | None = None
     revision: str | None = None
+    source_name: str | None = None
+    stratum: str | None = None
+    lang: str = "en"
 
 
 # (input path, --revision) -> candidates in input order.
@@ -96,6 +107,9 @@ class BenignSource:
     genre: str
     surface: str
     reader: Reader
+    framing: str = "indirect"
+    surfaces: tuple[str, ...] = ()
+    min_chars: int = MIN_CHARS
 
 
 @dataclass(slots=True)
@@ -246,6 +260,158 @@ def read_readmes(path: Path, revision: str) -> list[Candidate]:
     return candidates
 
 
+NOTINJECT_URL: Final[str] = "https://huggingface.co/datasets/leolee99/NotInject"
+NOTINJECT_SLICES: Final[tuple[str, ...]] = (
+    "Common Queries",
+    "Technique Queries",
+    "Virtual Creation",
+    "Multilingual",
+)
+# Stop words that separate the Latin-script languages a NotInject query may be in.
+_LATIN_STOPWORDS: Final[dict[str, frozenset[str]]] = {
+    "es": frozenset(
+        ["el", "la", "los", "las", "que", "una", "por", "para", "con", "del", "un"]
+    ),
+    "fr": frozenset(
+        ["le", "les", "des", "une", "est", "pour", "avec", "dans", "que", "qui", "du"]
+    ),
+    "de": frozenset(
+        ["der", "die", "das", "und", "ist", "nicht", "mit", "ein", "eine", "für", "den"]
+    ),
+    "pt": frozenset(["não", "uma", "para", "com", "os", "as", "dos", "você", "em"]),
+    "it": frozenset(["il", "che", "per", "una", "con", "sono", "di", "della", "gli"]),
+}
+_WORD: Final[re.Pattern[str]] = re.compile(r"[^\W\d_]+")
+
+
+def lang_of(text: str) -> str:
+    """A BCP-47 language for ``text`` by script, then by stop words for Latin.
+
+    Kana is Japanese, Hangul Korean, other Han Chinese, and a Cyrillic majority
+    Russian; Latin script needs two stop-word hits in one language, else ``en``.
+    """
+    counts: Counter[str] = Counter()
+    for ch in text:
+        if not ch.isalpha():
+            continue
+        code = ord(ch)
+        if 0x3040 <= code <= 0x30FF:
+            counts["ja"] += 1
+        elif 0xAC00 <= code <= 0xD7AF or 0x1100 <= code <= 0x11FF:
+            counts["ko"] += 1
+        elif 0x4E00 <= code <= 0x9FFF:
+            counts["zh"] += 1
+        elif 0x0400 <= code <= 0x04FF:
+            counts["ru"] += 1
+        else:
+            counts["latin"] += 1
+    for script in ("ja", "ko", "zh"):
+        if counts[script]:
+            return script
+    if counts["ru"] > counts["latin"]:
+        return "ru"
+    words = {word.casefold() for word in _WORD.findall(text)}
+    votes = {lang: len(words & stop) for lang, stop in _LATIN_STOPWORDS.items()}
+    best = max(votes, key=lambda lang: votes[lang])
+    return best if votes[best] >= 2 else "en"
+
+
+def read_notinject(path: Path, revision: str) -> list[Candidate]:
+    """NotInject rows as JSONL: ``{"subset", "index", "category", "prompt"}``.
+
+    The dataset ships as three parquet files (``NotInject_one`` / ``two`` /
+    ``three``, 113 rows each). Convert them once on the host, outside the
+    repository — one JSON line per row, ``json.dumps(row, ensure_ascii=False,
+    sort_keys=True)``, subsets in that order and rows in file order — and pin
+    the result with ``--input-sha256``. A row's ``category`` is its slice.
+    """
+    del revision
+    candidates: list[Candidate] = []
+    for line in _read_text(path).splitlines():
+        if not line.strip():
+            continue
+        obj = cast(dict[str, object], json.loads(line))
+        subset, index = obj.get("subset"), obj.get("index")
+        category, prompt = obj.get("category"), obj.get("prompt")
+        if not (isinstance(subset, str) and isinstance(index, int)):
+            raise common.IngestError("input_malformed")
+        if not (isinstance(category, str) and isinstance(prompt, str)):
+            raise common.IngestError("input_malformed")
+        if category not in NOTINJECT_SLICES:
+            raise common.IngestError("input_malformed")
+        lang = lang_of(prompt) if category == "Multilingual" else "en"
+        candidates.append(
+            Candidate(
+                ref=f"NotInject_{subset} row {index} ({category})",
+                title=f"question {subset} {index}",
+                text=prompt,
+                url=NOTINJECT_URL,
+                stratum=category,
+                lang=lang,
+            )
+        )
+    return candidates
+
+
+ARXIV_LICENCES: Final[dict[str, str]] = {
+    "creativecommons.org/licenses/by/4.0/": "CC-BY-4.0",
+    "creativecommons.org/publicdomain/zero/1.0/": "CC0-1.0",
+}
+
+
+def arxiv_licence(stated: str) -> str:
+    """The SPDX id for an arXiv licence link; anything else stays as stated."""
+    key = stated.strip().removeprefix("https://").removeprefix("http://")
+    return ARXIV_LICENCES.get(key, stated.strip() or "missing")
+
+
+def read_arxiv(path: Path, revision: str) -> list[Candidate]:
+    """One paper per JSONL line: the abstract and one section, plus provenance.
+
+    Fields: ``arxiv_id``, ``version`` (``v1``), ``title``, ``licence`` (the link
+    the abstract page states), ``abstract``, ``section_heading``,
+    ``section_text`` and ``authors``. Fetched by hand on the host; the sampler
+    only reads, and refuses any licence but CC-BY-4.0 / CC0.
+    """
+    del revision
+    candidates: list[Candidate] = []
+    for line in _read_text(path).splitlines():
+        if not line.strip():
+            continue
+        obj = cast(dict[str, object], json.loads(line))
+        fields = {
+            key: obj.get(key)
+            for key in (
+                "arxiv_id",
+                "version",
+                "title",
+                "licence",
+                "abstract",
+                "section_heading",
+                "section_text",
+            )
+        }
+        if not all(isinstance(value, str) for value in fields.values()):
+            raise common.IngestError("input_malformed")
+        text = cast(dict[str, str], fields)
+        paper = f"{text['arxiv_id']}{text['version']}"
+        candidates.append(
+            Candidate(
+                ref=f"arXiv:{paper}",
+                title=text["title"],
+                text=(
+                    f"{text['abstract']}\n\n{text['section_heading']}\n\n"
+                    f"{text['section_text']}"
+                ),
+                url=f"https://arxiv.org/abs/{paper}",
+                licence=arxiv_licence(text["licence"]),
+                revision=text["version"],
+                source_name=f"arXiv:{text['arxiv_id']}",
+            )
+        )
+    return candidates
+
+
 SOURCES: Final[dict[str, BenignSource]] = {
     "wikinews": BenignSource("wikinews", "CC-BY-2.5", "news", "page", read_wikinews),
     "cpython_docs": BenignSource(
@@ -255,6 +421,17 @@ SOURCES: Final[dict[str, BenignSource]] = {
     "readme_changelog": BenignSource(
         "readme_changelog", "MIT", "code", "search", read_readmes
     ),
+    "notinject": BenignSource(
+        "NotInject",
+        "MIT",
+        "over_defence_probe",
+        "page",
+        read_notinject,
+        framing="rehomed_direct",
+        surfaces=("page", "search", "text"),
+        min_chars=8,
+    ),
+    "arxiv": BenignSource("arXiv", "CC-BY-4.0", "security_prose", "page", read_arxiv),
 }
 
 
@@ -303,46 +480,65 @@ def _search_content(text: str) -> str:
     return cut[:space] if space > 0 else cut
 
 
-def render_payload(source: BenignSource, title: str, text: str) -> dict[str, str]:
-    """The surface form of an excerpt (``render.py`` holds the page template)."""
+def render_payload(
+    source: BenignSource, surface: str, title: str, text: str
+) -> dict[str, str]:
+    """The surface form of an excerpt (``render.py`` holds the page template).
+
+    A ``rehomed_direct`` source is a user query, so it is placed as a question
+    would sit on the web rather than as an article excerpt.
+    """
     url = reserved_url(source.genre, title)
-    if source.surface == "page":
+    if source.framing == "rehomed_direct":
+        if surface == "page":
+            return render.question_page(url, text)
+        if surface == "search":
+            return render.question_search(url, _search_content(text))
+        return render.text_upload("question.txt", text)
+    if surface == "page":
         return render.benign_page(url, title, text)
-    if source.surface == "search":
+    if surface == "search":
         return render.benign_search(url, title, _search_content(text))
     return render.text_upload(f"{source.name}.txt", text)
 
 
 def _mapping(
-    source: BenignSource, candidate: Candidate, record_id: str, revision: str
+    source: BenignSource,
+    candidate: Candidate,
+    record_id: str,
+    revision: str,
+    surface: str,
 ) -> dict[str, object]:
     title = render.rewrite_urls(candidate.title).strip()
     text = excerpt(render.rewrite_urls(candidate.text))
+    shape = "re-homed" if source.framing == "rehomed_direct" else "excerpt rendered"
     return {
         "id": record_id,
         "kind": "benign",
         "category": source.genre,
-        "surface": source.surface,
-        "payload": render_payload(source, title, text),
+        "surface": surface,
+        "payload": render_payload(source, surface, title, text),
         "marker": None,
         "pinned": None,
         "pinned_reason": None,
         "source": {
             "kind": "third_party",
-            "name": source.name,
+            "name": candidate.source_name or source.name,
             "url": candidate.url,
             "licence": candidate.licence or source.licence,
             "revision": candidate.revision or revision,
             "record_ref": candidate.ref,
-            "framing": "indirect",
+            "framing": source.framing,
         },
-        "lang": "en",
+        "lang": candidate.lang,
         "params": {},
-        "notes": f"{source.name} excerpt rendered as {source.surface}",
+        "notes": f"{source.name} {shape} as {surface}",
     }
 
 
-def screen(candidate: Candidate, seen: set[str]) -> str | None:
+def screen(
+    candidate: Candidate, seen: set[str], min_chars: int = MIN_CHARS
+) -> str | None:
     """The rejection reason for ``candidate`` before rendering, or ``None``."""
     if candidate.licence is not None and (
         candidate.licence not in vocab.THIRD_PARTY_LICENCES
@@ -353,7 +549,7 @@ def screen(candidate: Candidate, seen: set[str]) -> str | None:
     if render.has_secret_shape(f"{candidate.title}\n{candidate.text}"):
         return "secret_shape"
     text = candidate.text.strip()
-    if len(text) < MIN_CHARS or not candidate.title.strip():
+    if len(text) < min_chars or not candidate.title.strip():
         return "too_short"
     if _alpha_share(text) < MIN_ALPHA_SHARE:
         return "non_prose"
@@ -422,6 +618,31 @@ def write_stats(out: Path, genre: str, report: BenignReport) -> None:
     )
 
 
+def _in_sample_order(candidates: Sequence[Candidate], seed: int) -> list[Candidate]:
+    """Seed order within each stratum, interleaved one per stratum in turn.
+
+    Candidates without a stratum form one, so the order is the plain seeded
+    shuffle; with strata, any ``limit`` draws from every slice in rotation.
+    """
+    by_ref = {c.ref: c for c in candidates}
+    strata: dict[str, list[Candidate]] = {}
+    for candidate in by_ref.values():
+        strata.setdefault(candidate.stratum or "", []).append(candidate)
+    queues = [
+        [
+            by_ref[row.ref]
+            for row in common.shuffled(
+                [common.Row(ref=c.ref, text=c.text) for c in members], seed
+            )
+        ]
+        for _, members in sorted(strata.items())
+    ]
+    ordered: list[Candidate] = []
+    for rank in range(max(map(len, queues), default=0)):
+        ordered.extend(queue[rank] for queue in queues if rank < len(queue))
+    return ordered
+
+
 def sample(
     source: BenignSource,
     candidates: Sequence[Candidate],
@@ -435,11 +656,12 @@ def sample(
     """Screen, render and triage candidates in seed order; append to ``out``."""
     out.mkdir(parents=True, exist_ok=True)
     highest, names = _existing(out)
-    if source.name in names:
+    ordered = _in_sample_order(candidates, seed)
+    if source.name in names or any(
+        (c.source_name or source.name) in names for c in ordered
+    ):
         raise common.IngestError("already_ingested")
-    by_ref = {c.ref: c for c in candidates}
-    rows = [common.Row(ref=c.ref, text=c.text) for c in by_ref.values()]
-    ordered = [by_ref[row.ref] for row in common.shuffled(rows, seed)]
+    surfaces = source.surfaces or (source.surface,)
     report = BenignReport()
     seen: set[str] = set()
     written: list[dict[str, object]] = []
@@ -447,9 +669,10 @@ def sample(
         if len(written) >= limit:
             break
         report.examined += 1
-        reason = screen(candidate, seen)
+        reason = screen(candidate, seen, source.min_chars)
         record_id = f"ben-{highest + len(written) + 1:04d}"
-        mapping = _mapping(source, candidate, record_id, revision)
+        surface = surfaces[len(written) % len(surfaces)]
+        mapping = _mapping(source, candidate, record_id, revision, surface)
         if reason is None:
             record = record_from_mapping(mapping)
             if not all(rule(record) for rule in LINT_RULES.values()):

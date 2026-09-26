@@ -689,6 +689,83 @@ forbids any `fallback=` in `scripts/`; the sampler's specified triage
 one file is exempted for the literal `0.0` only. `NOTICE` gains no entry: no
 third-party benign record was written.
 
+### US-002 (2026-09-25)
+
+**Both external sources were reachable and ingested** (no `not ingested` for this story).
+Inputs were prepared on the host outside the repository and pinned with
+`--input-sha256`; both samplers ran with the default seed `20260919`.
+
+| Genre | Source | Revision | Input sha256 | Limit | Examined | Written | Rejections |
+|-------|--------|----------|--------------|-------|----------|---------|------------|
+| over_defence_probe | NotInject (MIT) | `847ae76cf8fea5ed325429e569ae8cfef022d2e0` | `2539c93f28f5adcc6fe250efa37fcb92a0ead822600ba6dcde419e6a13910ef6` (JSONL converted from the three parquet files) | 40 | 40 | 40 (ben-0123..0162) | none |
+| security_prose | arXiv, CC-BY-4.0 papers | per paper: id + version (`v1` / `v2`) | `535c5497406ba18fcb173ea2dacd27c779a8ea625a9a5dd9884bbb614477ba62` | 14 | 16 | 14 (ben-0163..0176) | licence=2 |
+
+NotInject upstream files (sha256, at the revision above): subset one
+`5b1d3a8ec341205305efd8c6d2cabeb5ba0f594dd8726b08ee7fde1a46ddc6ec`, two
+`a5a8c1b3b851b0b5acc3b6caf8bfee26d7da631b2967dd31ca90358df8883feb`, three
+`d5c685b123570c092a0f374ba6bdf324b2026d905a2751a243eb2bb360d411a8`; dataset card
+`ffaf685021522a526f94af2047e5099ec6b7439a462c67e0ecaca0d631a0d43f`. NotInject has three subsets (one / two / three trigger words) and
+four slices (`Common Queries` 126, `Technique Queries` 87, `Multilingual` 84,
+`Virtual Creation` 42); the sampler stratifies on the **slice** (10 each at
+`--limit 40`), rotates page / search / text (14 / 13 / 13), and `lang` is en 30,
+zh 9, es 1. The two arXiv rejections are the two non-CC candidates the input
+carried on purpose (arXiv non-exclusive licence; CC BY-NC-ND): the licence
+refusal ran on real data, not only on a fixture. arXiv papers (14): abstract + the
+first section with ≥ 1 500 characters of prose; one `NOTICE` entry each.
+
+**Census (informational, not committed):** all 339 NotInject rows were driven
+structural-only on one surface each and **all 339 are `clean`**. A single trigger
+word is not a stage-2 phrase, so this slice measures the classifier (spec 4), not
+the regexes; the structural over-defence list below contains no NotInject id.
+
+**Outcomes under `fallback=0.0`** (`drive()`, `ReplayClassifier(fallback=0.0)`,
+`default` config; measured, not asserted):
+
+| Set | Records | clean | flagged | blocked |
+|-----|---------|-------|---------|---------|
+| US-002 records | 77 | 56 | 3 | 18 |
+| — NotInject | 40 | 40 | 0 | 0 |
+| — arXiv | 14 | 12 | 0 | 2 |
+| — owned `security_prose` | 13 | 3 | 3 | 7 |
+| — owned `over_defence_probe` | 10 | 1 | 0 | 9 |
+| genre `security_prose` (all) | 28 | 16 | 3 | 9 |
+| genre `over_defence_probe` (all, incl. US-001 probes) | 93 | 42 | 14 | 37 |
+
+**Structural over-defence list — US-002 records `blocked` by stage 2 (ids only):**
+ben-0167, ben-0171 (arXiv, organic hits); ben-0177, ben-0178, ben-0180, ben-0181,
+ben-0183, ben-0186, ben-0187 (owned `security_prose`); ben-0190, ben-0191, ben-0192,
+ben-0194, ben-0195, ben-0196, ben-0197, ben-0198, ben-0199 (owned
+`over_defence_probe`). `flagged` (SUSPICIOUS category): ben-0179, ben-0188, ben-0189.
+Two of fourteen real CC-BY papers block on their own introduction, both
+`ignore_previous`; the other twelve are clean.
+
+**Misses (no `params.variant`, drive `clean`, not counted toward any floor):**
+`ben-0193` — the recipe-step probe, intended regex `ignore_previous` (the pattern
+allows only "all" between its verb and "previous", as the spec predicted). It is
+the only miss: every other owned record with an `intended:` note trips it, and three
+owned `security_prose` records (ben-0182, ben-0184, ben-0185) were written with no
+trigger string and drive clean. A test pins the miss list to exactly `ben-0193`.
+
+**Path.** Every US-002 record — NotInject, arXiv and owned — was driven with
+`fallback=0.0`, `flagged` / `blocked` ones written with `pinned: ["flagged",
+"blocked"]` and listed as needs-variant, then named by `python -m tests.corpus_stage2
+name-variants`; the observed first hit is the only `params.variant`. It differs from the
+intended regex on two owned records: ben-0177 (intended `system_bracket`, first hit
+`ignore_previous`) and ben-0181 (intended `system_line`, first hit `assistant_line`);
+the intended regex is still in each record's hit set. US-001's coincidence test covers
+all of it.
+
+**Not done:** no CC-BY / MIT defence README or docs source was ingested (arXiv covers
+the external half; owned pages cover the rest) — the `readme_changelog` adapter can
+take one later as a `security_prose` source. `NOTICE` gains NotInject (among the MIT
+sources) and a CC-BY-4.0 section with one entry per paper (title, authors as the paper
+states them, version, record id). The rejected table gains the non-CC-BY arXiv row
+(OWASP CC-BY-SA was already there from US-001).
+
+Corpus size after this story: 199 benign records (93 `over_defence_probe`, 28
+`security_prose`), 1 094 838 bytes of JSONL under `tests/corpus/` — about 405 KB of
+headroom for US-003's 1.5 MB directory-size lint.
+
 ## Refinement Notes
 
 ### Research Findings

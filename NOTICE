@@ -40,9 +40,11 @@ Third-party corpus samples
 --------------------------------------------------------------------------
 
 The injection test corpus under tests/corpus/attacks/ carries capped,
-seed-fixed samples from three MIT-licensed datasets. Every sampled payload
-was re-rendered (as a search snippet, a page body or a text upload, with
-every host rewritten to an RFC 2606 reserved name) by
+seed-fixed samples from three MIT-licensed datasets. The benign counter-corpus
+under tests/corpus/benign/ carries a fourth MIT-licensed dataset, NotInject,
+and excerpts of CC-BY-4.0 arXiv papers (the next section after the MIT text).
+Every sampled payload was re-rendered (as a search snippet, a page body or a
+text upload, with every host rewritten to an RFC 2606 reserved name) by
 scripts/corpus/ingest/. These records are test data only; none is shipped
 in the image. Each record's `source` object names its dataset, licence,
 revision and upstream row.
@@ -70,6 +72,15 @@ Source: CyberSecEval
   Revision: 4be64c3a24442b51c76175e6ec67722cc3f5fe38
   Records: atk-0373..atk-0402
 
+Source: NotInject
+  Upstream: https://huggingface.co/datasets/leolee99/NotInject
+  Licence: MIT (dataset card `license: mit`)
+  Copyright: the dataset repository publishes no copyright line or
+    LICENSE file; its card declares `license: mit` (publisher: leolee99;
+    the InjecGuard work it accompanies is by Hao Li and Xiaogeng Liu)
+  Revision: 847ae76cf8fea5ed325429e569ae8cfef022d2e0
+  Records: ben-0123..ben-0162
+
 Each source is distributed under the MIT License:
 
     Permission is hereby granted, free of charge, to any person obtaining a
@@ -90,3 +101,140 @@ Each source is distributed under the MIT License:
     CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
     TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
     SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+--------------------------------------------------------------------------
+Third-party benign corpus text - CC-BY-4.0 arXiv papers
+--------------------------------------------------------------------------
+
+The `security_prose` genre under tests/corpus/benign/ carries excerpts of
+papers on prompt injection whose arXiv abstract page states the licence
+Creative Commons Attribution 4.0 International (CC BY 4.0):
+
+    https://creativecommons.org/licenses/by/4.0/
+
+Each record is the paper's abstract and one section, taken from the arXiv HTML
+version pinned below. Changes were made: the text was excerpted, reflowed as a
+web page, and every host it names was rewritten to an RFC 2606 reserved name
+by scripts/corpus/ingest/. Nothing here implies that the authors endorse this
+project. The authors are named as the paper states them.
+
+Source: arXiv:2606.20746
+  Title: Amplify, Don't Create: Temporal Accumulation for Slow-Burn Prompt Injection
+  Authors: J Alex Corll
+  Upstream: https://arxiv.org/abs/2606.20746v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0163
+
+Source: arXiv:2608.08795
+  Title: Toward Metacognitive One-Shot Indirect Prompt Injection: Strategy Abstraction Via Outcome-Conditioned Reflection
+  Authors: Sihan Hou, Xinmeng Hou, Zhijun Zhang, Zehao Wang, Xuhong Ren,
+    Sibo Qin, Kuntharrgyal Khysru, Qing Guo
+  Upstream: https://arxiv.org/abs/2608.08795v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0164
+
+Source: arXiv:2609.15017
+  Title: PIDS-Bench: Evaluating Prompt-Injection Detectors Under Over-Defense, Obfuscation, and Distribution Shift
+  Authors: Yusuf Khalid Shire, Sang-Chul Kim
+  Upstream: https://arxiv.org/abs/2609.15017v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0165
+
+Source: arXiv:2609.08371
+  Title: Authority Is Not a String: A Capability-Scoped Harness for Prompt-Injection-Resistant Coding Agents
+  Authors: Dimitrios Stamatios Bouras, Yihan Dai, Sergey Mechtaev
+  Upstream: https://arxiv.org/abs/2609.08371v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0166
+
+Source: arXiv:2608.28411
+  Title: LongPIBench: A Long-Context Benchmark for Prompt Injection
+  Authors: Yupei Liu, Yuqi Jia, Neil Zhenqiang Gong, Jinyuan Jia
+  Upstream: https://arxiv.org/abs/2608.28411v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0167
+
+Source: arXiv:2606.19660
+  Title: A Layered Security Framework Against Prompt Injection in RAG-Based Chatbots
+  Authors: Gulshan Saleem, Nisar Ahmed, Muhammad Imran Zaman, Ali Hassan,
+    Umar Mujahid
+  Upstream: https://arxiv.org/abs/2606.19660v2
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v2
+  Records: ben-0168
+
+Source: arXiv:2608.02657
+  Title: Your Agentic LLMs Secretly Encode Indirect Prompt-Injection Exposure in Hidden States
+  Authors: Jianshuo Dong, Yiming Liu, Maosen Zhang, Nan Deng, Peng Xu,
+    Xiaoping Zhang, Tianwei Zhang, Jie Zhang, Han Qiu
+  Upstream: https://arxiv.org/abs/2608.02657v2
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v2
+  Records: ben-0169
+
+Source: arXiv:2608.14876
+  Title: Workspace Topology as an Attack Vector in Agentic Coding Assistants
+  Authors: Alexandre G. R. Day, Pradeep Yadlapalli, Sriram Venkatapathy,
+    Thomas Paniagua, Nick Raines, Sahil Wadhwa, Himanshu Kumar, Andy Luo,
+    Sudeep Panyam, Rikhiya Ghosh, Pranab Mohanty, Giri Iyengar
+  Upstream: https://arxiv.org/abs/2608.14876v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0170
+
+Source: arXiv:2608.07808
+  Title: The Anatomy of a Prompt Injection: A Component Model for Structured Analysis
+  Authors: Jeremy McHugh
+  Upstream: https://arxiv.org/abs/2608.07808v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0171
+
+Source: arXiv:2609.10707
+  Title: Architecting the Secure AI-SOC: A Neurosymbolic Framework for Pipeline Integrity and Threat Mitigation
+  Authors: Anna Gazani, Spyridon Kounoupidis, Panagiotis Katsaros, Nikolaos
+    Kekatos, Grigorios Tsoumakas, Georgios Koutidis
+  Upstream: https://arxiv.org/abs/2609.10707v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0172
+
+Source: arXiv:2608.30362
+  Title: Will the User Ever Know? Covert Indirect Prompt Injection Attacks on Tool-Using LLM Agents
+  Authors: Yunseok Lee, Yunji Kim, Woojin Lee
+  Upstream: https://arxiv.org/abs/2608.30362v2
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v2
+  Records: ben-0173
+
+Source: arXiv:2606.30783
+  Title: Security--Fidelity Tradeoffs: The Hidden Cost of Prompt Injection Defense
+  Authors: Mitchell Hermon, Rahul Gupta, Weitong Ruan, Ekraam Sabir, Haohan
+    Wang
+  Upstream: https://arxiv.org/abs/2606.30783v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0174
+
+Source: arXiv:2608.05495
+  Title: PromptShield Home: Ambient Multimodal Prompt Injection Defense for Smart-Home Agents
+  Authors: He Zhang, Feilong Li, Dingning Long, Yilin Cui, Peijun Zhang,
+    Yuewen Zhang, Qianyao Xu, Xinyi Fu
+  Upstream: https://arxiv.org/abs/2608.05495v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0175
+
+Source: arXiv:2607.22024
+  Title: Agent Security Needs Redefinition through a Holistic Framework
+  Authors: Vincent Siu, Jingxuan He, Kyle Montgomery, Zhun Wang, Chenguang
+    Wang, Dawn Song
+  Upstream: https://arxiv.org/abs/2607.22024v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0176

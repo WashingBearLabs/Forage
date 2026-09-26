@@ -327,6 +327,7 @@ read, but no string from them enters the corpus.
 | Stack Exchange | CC-BY-SA (share-alike) |
 | MDN prose | CC-BY-SA (share-alike) |
 | OWASP | CC-BY-SA (share-alike) |
+| arXiv papers not under CC BY 4.0 / CC0 | The arXiv non-exclusive licence, CC BY-NC-*, CC BY-SA: the abstract page states the licence per paper and the `arxiv` sampler refuses anything else as a `licence` rejection |
 | Reddit | No licence grant |
 | Hacker News | No licence grant |
 
@@ -334,7 +335,7 @@ read, but no string from them enters the corpus.
 
 `scripts/corpus/ingest/benign.py` is one sampler with a `--source` switch
 (`wikinews` → `news` page, `cpython_docs` → `docs` page, `rust_book` → `code`
-text, `readme_changelog` → `code` search; a README directory is named
+text, `readme_changelog` → `code` search; `notinject` and `arxiv` are spec 3 US-002's; a README directory is named
 `<owner>__<repo>@<sha>` and its licence is read from that directory). Same CLI,
 input guard, `--input-sha256` pin and ids-and-counts-only output as the spec 2
 samplers; `--out` defaults to `benign/`.
@@ -363,6 +364,52 @@ whose records are not all `third_party` carries `not_ingested: <reason>` there
 count toward the at-least-two-per-regex coverage floor (the three
 `vocab.STAGE2_REGEX_NO_BENIGN` names excepted). The matching string is visible
 text on its surface.
+
+## Security prose and over-defence probes (spec 3 US-002)
+
+Two genres hold the text most likely to be wrongly blocked, and each is
+measured on its own line. **`over_defence_probe` is reported separately: it is
+never pooled into the headline false-positive rate** (spec 5 reports it as its
+own number), because its records are written or chosen to be near-misses. The
+US-001 regex probes, the NotInject queries and the owned probes below are all
+counted there and nowhere else. `security_prose` is likewise its own genre.
+
+| Genre | What it holds |
+|-------|---------------|
+| `security_prose` | Writing *about* prompt injection: excerpts of CC-BY-4.0 arXiv papers (`--source arxiv`), and owned docs pages, changelog, FAQ, glossary, tutorial and search snippets, some quoting a trigger phrase the way a defence page does |
+| `over_defence_probe` | The US-001 regex probes, NotInject's benign queries re-homed as web text (`--source notinject`), and owned look-alikes: support-forum transcripts with line-start speaker labels, a recipe step, a legal notice, an invoice reminder |
+
+**arXiv.** The sampler reads a JSONL the operator prepared on the host, one
+paper per line: the abstract and one section (the first with at least 1 500
+characters of prose that is not a bibliography, acknowledgement or appendix),
+the licence link the arXiv abstract page states, and the author list. It takes
+a paper only when that link is CC BY 4.0 or CC0 and pins it by arXiv id and
+version (`source.name` is `arXiv:<id>`, `source.revision` the version). Each
+paper has its own `NOTICE` entry with the author list as the paper states it.
+
+**NotInject.** `leolee99/NotInject` (MIT, 339 benign queries built from
+injection trigger words) ships as three parquet files, by number of trigger
+words. Convert them once on the host, outside the repository, to one JSON line
+per row (`subset`, `index`, `category`, `prompt`), pin the result with
+`--input-sha256`, and run `--source notinject --revision <dataset commit>`.
+The dataset's four slices (`Common Queries`, `Technique Queries`,
+`Virtual Creation`, `Multilingual`) are the strata: candidates are shuffled
+under the seed within each slice and taken in rotation, so any `--limit` draws
+evenly from all four. A query is a user turn, so each is **re-homed** into web
+text (`source.framing = rehomed_direct`) as a community-question page, a Q&A
+search snippet or a `text` upload, rotating in that order; `lang` comes from the
+query's script, with stop words for Latin-script languages. All 339 rows drive
+`clean` structurally: a single trigger word is not a stage-2 phrase, so this
+slice measures the classifier, not the regexes.
+
+**The same path as every other benign record.** Each record, owned probes and
+`security_prose` included, is driven with `fallback=0.0`; one that comes back
+`flagged` or `blocked` gets `pinned: ["flagged", "blocked"]` and then
+`params.variant` from `python -m tests.corpus_stage2 name-variants`. The
+variant is the **observed** first hit and only that. An owned record's `notes`
+says `intended: <regex>` when it was written to trip one; a record that misses
+carries no variant, drives `clean` and is listed by id in the spec's
+Implementation Notes as a miss.
 
 ## Natural-language and authority/SEO poisoning (spec 2 US-005)
 

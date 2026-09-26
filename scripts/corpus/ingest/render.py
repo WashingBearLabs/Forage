@@ -184,6 +184,31 @@ def benign_search(url: str, title: str, content: str) -> dict[str, str]:
     return {"title": title, "url": url, "content": content}
 
 
+def question_page(url: str, question: str) -> dict[str, str]:
+    """A re-homed user query as a community-question ``page`` (spec 3 US-002)."""
+    title = "Community question"
+    return {
+        "url": url,
+        "title": title,
+        "head_html": "",
+        "body_html": (
+            f'<article class="question"><h1>{title}</h1>'
+            f"<p>Asked by a community member.</p>{_paragraphs(question)}</article>"
+        ),
+    }
+
+
+def question_search(url: str, question: str) -> dict[str, str]:
+    """A re-homed user query as a Q&A ``search`` result: the question is the snippet."""
+    return {
+        "title": "Community question and answers",
+        "url": url,
+        "content": question,
+        "engine": "example",
+        "content_kind": "snippet",
+    }
+
+
 def text_upload(filename: str, text: str) -> dict[str, str]:
     """A short instruction re-rendered as a ``text`` upload payload."""
     return {"filename": filename, "text": text}
