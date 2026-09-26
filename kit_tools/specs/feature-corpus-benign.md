@@ -813,6 +813,107 @@ an authoring artefact, not an organic hit, so not recorded as a false positive.
 story; `tests/test_corpus_lint.py::test_record_jsonl_stays_under_the_size_cap` asserts
 ≤ 1 500 000.
 
+### US-004 (2026-09-25)
+
+**49 `search` records, `ben-0252` … `ben-0300`, all `source.kind: synthetic`** (`name:
+forage-synthetic`). No external page carried over: the US-001 and US-003 genres took the
+offline fallback (nothing external to derive from) and the US-002 external records are
+long prose with no search-shaped counterpart. `NOTICE` and `sampler_stats.json` are
+unchanged (no third-party record written; `over_defence_probe` keeps its per-record
+provenance). All 49 were authored, driven with `fallback=0.0`, then named by
+`python -m tests.corpus_stage2 name-variants` (the observed first hit is the only
+`params.variant`); the tool appended 36 variants and touched no existing line.
+
+| Group | Ids | Genre | Records | Outcome (`fallback=0.0`) |
+|-------|-----|-------|---------|--------------------------|
+| Regex probes | ben-0252 … ben-0287 | `over_defence_probe` | 36 (31 `en`; de, es, ja, fr, zh one each) | 21 flagged, 15 blocked |
+| Parser-strip controls | ben-0288, ben-0289 | `over_defence_probe` | 2 | clean, no variant |
+| Clean controls | ben-0290 … ben-0300 | news 3 (0290–0292), ecommerce 2 (0293–0294), code 3 (0295–0297), docs 2 (0298–0299), forum 1 (0300) | 11 | clean, unpinned |
+
+All 36 probes trip exactly the regex they were written for (`intended:` is the last thing in
+each `notes`, and its regex is the whole hit set — no probe missed and none tripped a
+second regex), so `_US002_MISSES` is still exactly `ben-0193`. Every one of the 21 names
+outside `STAGE2_REGEX_NO_BENIGN` now has a `search`-surface probe.
+
+**URL-field probes (result URL carries the shape; title and snippet trip nothing):**
+ben-0268 (44-character spreadsheet document id in the path), ben-0269 (deep documentation
+path, one long dotless run), ben-0270 (click-id tracking parameter). Every other probe
+rides in the snippet, except two whose **title** carries it: ben-0273 (jobs page,
+`new_directive`) and ben-0275 (forum announcement, `admin_bracket`). No benign `search`
+record drives to a URL-rule omission (`invalid_url` / `blocked_url`); the existing
+coincidence test asserts it over all 114.
+
+**Parser-strip controls:** ben-0288 (raw tag-shaped markup in a chat-template snippet;
+entity-escaped twin ben-0254) and ben-0289 (a real anchor element pointing at a private
+address; visible-text twins ben-0280–0283). Both drive `clean`, and a test escapes their
+markup and confirms the scanner then fires, so the control is a genuine parser strip and
+not text that could never trip.
+
+**Per-regex outcomes under `fallback=0.0`** (`drive()`, `ReplayClassifier(fallback=0.0)`,
+`default` config; records carrying that `params.variant`, all surfaces — measured):
+
+| Regex | Tagged | flagged | blocked | of which `search` |
+|-------|--------|---------|---------|-------------------|
+| ignore_previous | 8 | 0 | 8 | 4 |
+| disregard_instructions | 5 | 0 | 5 | 1 |
+| new_directive | 5 | 0 | 5 | 3 |
+| system_bracket | 3 | 0 | 3 | 1 |
+| system_tag | 3 | 0 | 3 | 1 |
+| instructions_banner | 3 | 0 | 3 | 2 |
+| admin_bracket | 5 | 0 | 5 | 3 |
+| assistant_line | 7 | 0 | 7 | 2 |
+| system_line | 4 | 0 | 4 | 1 |
+| elevated_user | 5 | 0 | 5 | 2 |
+| base64_run | 12 | 12 | 0 | 9 |
+| rot13 | 4 | 4 | 0 | 2 |
+| hex_escape | 3 | 3 | 0 | 1 |
+| system_fence | 3 | 0 | 3 | 1 |
+| instructions_fence | 3 | 0 | 3 | 1 |
+| im_start | 4 | 0 | 4 | 1 |
+| endoftext | 3 | 0 | 3 | 1 |
+| data_uri | 5 | 5 | 0 | 3 |
+| javascript_scheme | 4 | 4 | 0 | 3 |
+| private_ip_href | 6 | 6 | 0 | 5 |
+| exfil_image | 5 | 5 | 0 | 2 |
+| poppy_bracket, poppy_line, envelope_breakout | 0 | 0 | 0 | 0 (exempt by name) |
+| **All** | **100** | **39** | **61** | **49** |
+
+No tagged record drives `clean`, and none is `neutralised`. The verdict follows the regex's
+category: every `instruction_override`, `authority_impersonation` and `prompt_boundary` name
+is `blocked`, every `encoded_payload`, `suspicious_url` and `exfil_beacon` name is `flagged`.
+
+**Final benign totals** (300 records, up from 251):
+
+| Floor | Required | Measured |
+|-------|----------|----------|
+| Benign records | ≥ 250 | 300 |
+| Per genre | ≥ 15 | news 18, docs 17, code 18, forum 16, ecommerce 17, security_prose 28, multilingual 34, long_form 21, over_defence_probe 131 |
+| `over_defence_probe` | ≥ 30 | 131 |
+| Languages | ≥ 6 | 10 tags (en, de, es, fr, it, ja, ko, pt, ru, zh) |
+| `windows_min ≥ 3` | ≥ 20 | 21 |
+| `search` records / regex-tagged | ≥ 40 / ≥ 24 | 114 / 49 |
+
+Surfaces: 114 `search`, 106 `page`, 80 `text`. JSONL under `tests/corpus/attacks/` +
+`benign/` is 1 354 747 bytes (cap 1 500 000).
+
+**Tests added** (`tests/test_corpus_ingest.py`, seven): the counts; the ≥ 2-per-regex
+coverage floor, derived from `STAGE2_REGEX_NAMES` minus `STAGE2_REGEX_NO_BENIGN` and crediting
+a probe only when its driven outcome is `flagged` / `blocked` **and** its variant is in
+`stage2_record_hits(record)` (then toward every regex in that set); a `search`-surface probe
+for every non-exempt name; the parser-strip controls; the URL-field probe set pinned by id
+with a check that the shape is in the URL forms and not in title or snippet (and that every
+other tagged `over_defence_probe` `search` record carries it in title or snippet); lang
+mix (mostly `en`, five siblings, all in `over_defence_probe`); and the spec-goal totals.
+`tests/corpus/README.md` gains a section on the search-shaped records.
+
+**Zero runtime change re-asserted** (rulings 6, 6a; base `40d1883`, `git merge-base main
+HEAD`): `git diff --stat "$(git merge-base main HEAD)" -- pipeline/ promptguard/ models.py
+retrieval_app.py cache.py url_validator.py model_fetcher.py contract/ config.yaml
+weights_manifest.json Dockerfile` is empty; `derive_sanitizer_revision({})` prints
+`021378efee6ab43f22b887af2f0c0c40ef76183a39802120fbfd0ca7a3a33900`, the value recorded in
+spec 1's notes and `docs/bootstrap-notes.md`; `uv run python -m scripts.export_contract
+--check` prints `export_contract OK`.
+
 ## Refinement Notes
 
 ### Research Findings

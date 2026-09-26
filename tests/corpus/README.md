@@ -434,6 +434,47 @@ can be ingested later through the benign sampler. `NOTICE` gains no entry.
 **Size cap.** The JSONL under `attacks/` and `benign/` together stays at or
 below 1.5 MB; a lint test asserts it, so a long record is budgeted, not free.
 
+## Search-shaped benigns (spec 3 US-004)
+
+`ben-0252` … `ben-0300` are 49 `search` records that look like the real web —
+commit and checksum hashes, click-id tracking parameters, prices and dates,
+byte-escape notation in code snippets, inline data URIs, private addresses in
+networking docs. There is no `search` genre: each record counts toward the genre
+it is filed under.
+
+- **Probes** (36, genre `over_defence_probe`) are authored to trip one stage-2
+  regex, across all 21 names outside `STAGE2_REGEX_NO_BENIGN`, on the `search`
+  surface, each with a realistic carrier (a chat-template docs page, a support
+  post quoting a log line, a tokenizer README, an accessibility note, a jobs
+  title, a router-admin guide). Five are `lang` siblings (de, es, ja, fr, zh).
+  `params.variant` is the observed first hit, set by `name-variants` — all 36
+  trip exactly the regex they were written for.
+- **Which field carries the shape.** Hashes, tracking values and template syntax
+  ride in the **snippet**; the result URL is a scanned field of its own and the
+  only one behind the URL rule chain, so a probe that targets it says
+  `URL-field probe` in its `notes` (three: a 44-character document id, a deep
+  dotless documentation path, a click-id parameter). Nothing raw-rejected
+  (template braces, spaces) appears unencoded in a benign URL, and no benign
+  `search` record drives to a URL-rule omission.
+- **Markup must survive the search parser.** Titles and snippets are HTML-parsed
+  before stage 2, so a tag-shaped probe or a real anchor element is *removed* and
+  scans clean; the same markup entity-escaped, or written as visible text,
+  reaches the scanner. Two **parser-strip controls** (`notes` starts
+  `parser-strip control`) carry the raw form, drive `clean`, carry no variant and
+  earn no coverage — their entity-escaped twins are probes.
+- **Controls** (11, headline genres, unpinned, asserted `clean`): dates, prices,
+  SKUs, a short commit hash, a 32-hex checksum, an eleven-character video id,
+  utm parameters, private addresses as plain text, escape notation with one
+  escape per bracket, and a role word mid-line. They sit just under a regex and
+  are in the headline denominators on purpose.
+
+**Coverage credit.** A probe counts toward the ≥ 2-per-regex floor only if its
+driven outcome under `fallback=0.0` is `flagged` / `blocked` **and** its
+`params.variant` is in `stage2_record_hits(record)` — the union over the forms
+stage 2 receives — and it then counts toward **every** regex in that hit set.
+Only `over_defence_probe` records are credited, so an organic hit in a headline
+genre never satisfies the floor.
+
 ## Natural-language and authority/SEO poisoning (spec 2 US-005)
 
 `natural_language` and `authority_seo` are the two categories only stage 3 can

@@ -8,6 +8,7 @@ closed reason code.
 
 from __future__ import annotations
 
+import html
 import json
 import re
 from collections import Counter
@@ -1445,3 +1446,126 @@ def test_long_form_meets_the_window_budget_with_declared_provenance() -> None:
         if record.source.get("kind") != "owned":
             assert 6_000 <= _visible_chars(record) <= 20_000, record.id
     _declared_provenance_holds("long_form", members)
+
+
+# ---------------------------------------------------------------------------
+# Search-shaped benigns (spec 3 US-004)
+# ---------------------------------------------------------------------------
+
+# Probes that target the result URL rather than the title or snippet: no
+# `params` key names the field (spec 1's allowlist is closed), so `notes` says
+# `URL-field probe` and this set pins which records do.
+_US004_URL_FIELD_PROBES = {"ben-0268", "ben-0269", "ben-0270"}
+# Raw markup the search parser removes: drives clean and earns no coverage.
+_US004_PARSER_CONTROLS = {"ben-0288", "ben-0289"}
+_US004_IDS = {f"ben-{number:04d}" for number in range(252, 301)}
+
+
+def _search_benigns() -> list[CorpusRecord]:
+    return [r for r in _benign_records() if r.surface == "search"]
+
+
+def _credited_regexes(records: Sequence[CorpusRecord]) -> Counter[str]:
+    """Regexes credited by ``over_defence_probe`` records that drive to a trip.
+
+    A probe counts only when its driven outcome under ``fallback=0.0`` is
+    ``flagged`` / ``blocked`` and its variant is in the hit set of the forms
+    stage 2 received; it then counts toward every regex in that set.
+    """
+    probes = [r for r in records if r.category == "over_defence_probe"]
+    credited: Counter[str] = Counter()
+    for record, result in zip(
+        probes, benign.drive_structural_only(probes), strict=True
+    ):
+        variant = record.params.get("variant")
+        hits = corpus_stage2.stage2_record_hits(record)
+        if (
+            result.outcome in ("flagged", "blocked")
+            and isinstance(variant, str)
+            and variant in hits
+        ):
+            credited.update(hits)
+    return credited
+
+
+def test_search_shaped_benigns_meet_the_counts() -> None:
+    records = _search_benigns()
+    assert len(records) >= 40
+    tagged = [r for r in records if r.params.get("variant") in vocab.STAGE2_REGEX_NAMES]
+    assert len(tagged) >= 24
+    added = {r.id for r in records} & _US004_IDS
+    assert len(added) == 49, "the story's records are ben-0252..ben-0300, all search"
+
+
+def test_every_regex_outside_the_exemption_is_covered_twice_by_driven_probes() -> None:
+    credited = _credited_regexes(_benign_records())
+    owed = [
+        n for n in vocab.STAGE2_REGEX_NAMES if n not in vocab.STAGE2_REGEX_NO_BENIGN
+    ]
+    assert [name for name in owed if credited[name] < 2] == []
+
+
+def test_every_regex_outside_the_exemption_has_a_search_shaped_probe() -> None:
+    credited = _credited_regexes(_search_benigns())
+    owed = [
+        n for n in vocab.STAGE2_REGEX_NAMES if n not in vocab.STAGE2_REGEX_NO_BENIGN
+    ]
+    assert [name for name in owed if credited[name] < 1] == []
+
+
+def test_a_probe_the_parser_strips_earns_no_coverage() -> None:
+    controls = [
+        r for r in _search_benigns() if r.notes.startswith("parser-strip control")
+    ]
+    assert {r.id for r in controls} == _US004_PARSER_CONTROLS
+    assert _credited_regexes(controls) == Counter()
+    results = benign.drive_structural_only(controls)
+    for record, result in zip(controls, results, strict=True):
+        assert result.outcome == "clean", result.summary()
+        assert record.pinned is None and "variant" not in record.params, record.id
+        assert corpus_stage2.stage2_record_hits(record) == frozenset(), record.id
+        content = html.escape(record.payload["content"], quote=False)
+        escaped = replace(record, payload={**record.payload, "content": content})
+        assert corpus_stage2.stage2_record_hits(escaped), record.id
+
+
+def test_url_field_probes_are_the_declared_set_and_carry_the_shape_in_the_url() -> None:
+    records = [r for r in _search_benigns() if r.category == "over_defence_probe"]
+    declared = {r.id for r in records if "URL-field probe" in r.notes}
+    assert declared == _US004_URL_FIELD_PROBES
+    for record in records:
+        variant = record.params.get("variant")
+        if not isinstance(variant, str):
+            continue
+        forms = corpus_stage2.stage2_forms(record)
+        assert len(forms) == 6, record.id
+        url_hits = corpus_stage2.stage2_hits(forms[2]) | corpus_stage2.stage2_hits(
+            forms[3]
+        )
+        text_hits = frozenset[str]().union(
+            *(corpus_stage2.stage2_hits(form) for form in (*forms[:2], *forms[4:]))
+        )
+        if record.id in _US004_URL_FIELD_PROBES:
+            assert variant in url_hits and variant not in text_hits, record.id
+        else:
+            assert variant in text_hits, record.id
+
+
+def test_search_shaped_probes_are_mostly_english_with_a_few_siblings() -> None:
+    added = [r for r in _search_benigns() if r.id in _US004_IDS]
+    english = [r for r in added if r.lang == "en"]
+    siblings = [r for r in added if r.lang != "en"]
+    assert len(siblings) >= 3 and len(english) > 2 * len(siblings)
+    assert {r.category for r in siblings} == {"over_defence_probe"}
+
+
+def test_final_benign_totals_meet_the_spec_goals() -> None:
+    records = _benign_records()
+    floors = vocab.MIN_RECORDS
+    assert len(records) >= floors["benign_total"]
+    for genre in vocab.BENIGN_GENRES:
+        count = sum(r.category == genre for r in records)
+        assert count >= floors["benign_per_genre"], genre
+    assert sum(r.category == "over_defence_probe" for r in records) >= 30
+    assert len({r.lang for r in records}) >= floors["languages"]
+    assert sum(_windows(r) >= 3 for r in records) >= floors["multi_window"]
