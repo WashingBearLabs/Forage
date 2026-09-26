@@ -332,20 +332,20 @@ measurement).
 - `NOTICE` entries for NotInject and each CC-BY paper (author list as the paper states).
 
 **Acceptance Criteria:**
-- [ ] Counts, provenance and fields as in the Independent Test; NotInject sampler test hermetic
+- [x] Counts, provenance and fields as in the Independent Test; NotInject sampler test hermetic
       (five-row fixture) with determinism and re-homing asserted.
-- [ ] Implementation Notes carry the per-genre outcome counts under `fallback=0.0` and the list of
+- [x] Implementation Notes carry the per-genre outcome counts under `fallback=0.0` and the list of
       record ids `blocked` by stage 2 (ids only) — the structural over-defence list — plus the ids
       of probes that missed their intended regex (misses, no `params.variant`).
-- [ ] Every US-002 record went through the drive-then-`name-variants` path; `params.variant` on
+- [x] Every US-002 record went through the drive-then-`name-variants` path; `params.variant` on
       these records is the observed first hit only (US-001's coincidence test covers them).
-- [ ] `NOTICE` complete for the sources used; rejected table updated (OWASP CC-BY-SA).
-- [ ] Lint-clean; `tests/corpus/README.md` states that `over_defence_probe` is reported separately.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] `NOTICE` complete for the sources used; rejected table updated (OWASP CC-BY-SA).
+- [x] Lint-clean; `tests/corpus/README.md` states that `over_defence_probe` is reported separately.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-003: Multilingual and long-form
 
