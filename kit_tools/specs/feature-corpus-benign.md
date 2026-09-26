@@ -390,16 +390,16 @@ fallback and triage additions contradicted, and this story carried no criterion 
   round-1 text called that smoke "superseded".)*
 
 **Acceptance Criteria:**
-- [ ] Counts, languages and window budgets as in the Independent Test; provenance and `NOTICE`
+- [x] Counts, languages and window budgets as in the Independent Test; provenance and `NOTICE`
       complete.
-- [ ] Directory-size lint (≤ 1.5 MB for `tests/corpus/attacks/` + `tests/corpus/benign/`) added and
+- [x] Directory-size lint (≤ 1.5 MB for `tests/corpus/attacks/` + `tests/corpus/benign/`) added and
       green.
-- [ ] Implementation Notes record the language × surface table and the `windows_min` histogram.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Implementation Notes record the language × surface table and the `windows_min` histogram.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-004: Search-shaped benigns — the structural false-positive families
 
