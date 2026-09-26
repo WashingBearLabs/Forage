@@ -722,6 +722,93 @@ lint cannot form without the private builder. The entry now states the surface r
 <!-- Per story: counts tables (numbers and ids only), host-run commands for US-004, leaked carriers
 for spec 5 US-005. Never a payload. -->
 
+### US-001 — Structural families with obfuscation variants (2026-09-25)
+
+**Delivered.** 157 owned records, `atk-0026` … `atk-0182`, appended one file per category to
+`tests/corpus/attacks/`; every record has a closed-list `params.variant` and a `notes` line
+`regex: <name>` (a `vocab.STAGE2_REGEX_NAMES` member). Lint-clean; `tests/test_corpus_attacks.py`
+(17 tests) is new; `tests/corpus/README.md` gains the variant vocabulary, the per-route `plain`
+definition and the pin table. No runtime, `scripts/corpus/` or `vocab.py` change — `ATTACK_VARIANTS`
+and the `params` allowlist already carried everything (ruling 6).
+
+**Records per category × surface** (pinned in the last column):
+
+| category | search | page | text | total | pinned |
+|---|---|---|---|---|---|
+| instruction_override | 14 | 12 | 8 | 34 | 10 |
+| authority_impersonation | 7 | 7 | 5 | 19 | 9 |
+| prompt_boundary | 5 | 6 | 3 | 14 | 6 |
+| encoded_payload | 6 | 5 | 5 | 16 | 7 |
+| suspicious_url | 7 | 7 | 3 | 17 | 8 |
+| exfil_beacon | 5 | 5 | 5 | 15 | 7 |
+| envelope_breakout | 4 | 6 | 5 | 15 | 4 |
+| line_anchored_role | 5 | 6 | 4 | 15 | 4 |
+| url_borne_envelope | 12 | 0 | 0 | 12 | 12 |
+
+**Outcomes under `fallback=0.0`, default config** (cell = blocked / flagged / neutralised / leaked;
+`-` = no record). The contiguity config gave the same outcome for all 157 — no record reaches a
+stage-3 score that differs, because stages 1-2 decide every one of them.
+
+| category | plain | case | entity | zwsp | split_tags | confusable | second_paragraph | url_query | url_path | title_field | all |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| instruction_override | 9/0/0/1 | 2/0/0/0 | 2/0/0/2 | 3/0/0/0 | 0/0/0/2 | 0/0/0/3 | 4/0/0/2 | 1/0/0/0 | 1/0/0/0 | 2/0/0/0 | 24/0/0/10 |
+| authority_impersonation | 9/0/0/0 | 1/0/0/2 | 1/0/0/1 | 1/0/0/0 | 0/0/0/1 | 0/0/0/1 | - | 1/0/0/0 | - | 1/0/0/0 | 14/0/0/5 |
+| prompt_boundary | 6/0/0/0 | 1/0/0/0 | 1/0/0/1 | 1/0/0/0 | 0/0/0/1 | 0/0/0/1 | 1/0/0/0 | 1/0/0/0 | - | - | 11/0/0/3 |
+| encoded_payload | 0/7/0/0 | 0/1/0/1 | 0/1/0/1 | 0/1/0/0 | 0/0/0/1 | 0/0/0/1 | 0/1/0/0 | - | 0/1/0/0 | - | 0/12/0/4 |
+| suspicious_url | 0/8/0/1 | 0/1/0/0 | 0/1/0/1 | 0/1/0/0 | 0/0/0/1 | 0/0/0/1 | - | 0/1/0/0 | - | 0/1/0/0 | 0/13/0/4 |
+| exfil_beacon | 0/6/0/0 | 0/0/0/1 | 0/1/0/1 | 0/1/0/0 | - | - | 0/2/0/2 | - | - | 0/1/0/0 | 0/11/0/4 |
+| envelope_breakout | 0/4/0/2 | 0/1/0/0 | 0/2/0/0 | 0/2/0/0 | 0/0/0/1 | 0/0/0/1 | 0/1/0/0 | - | - | 0/1/0/0 | 0/11/0/4 |
+| line_anchored_role | 4/0/0/0 | 1/0/0/1 | 1/0/0/1 | 1/0/0/0 | 0/0/0/1 | 0/0/0/1 | 3/0/0/0 | - | - | 1/0/0/0 | 11/0/0/4 |
+| url_borne_envelope | - | - | - | - | - | - | - | 4/2/0/0 | 4/2/0/0 | - | 8/4/0/0 |
+| **all nine** | 28/25/0/4 | 5/3/0/5 | 5/5/0/8 | 6/5/0/0 | 0/0/0/8 | 0/0/0/9 | 8/4/0/4 | 7/3/0/0 | 5/3/0/0 | 4/3/0/0 | 68/51/0/38 |
+
+**Pins** (67, read from the records by the existing generic test `test_seed_pins_hold_for_every_pinned_record`
+under both configs, and again over this story's ids by `test_every_pin_this_story_sets_holds_on_the_real_routes`):
+53 `plain` regex-family records (28 `blocked`, 25 `flagged`), 12 `url_borne_envelope` (shape (i) 4 `blocked`,
+shape (ii) 4 `flagged`, shape (iii) 4 `blocked` by canonicalisation), and the two `break-inside-trigger`
+`search` records (`atk-0055` `blocked`, `atk-0154` `flagged`). **Every row measured exactly as the round-4
+table hypothesised — zero gaps.** The shape-(iii) rule was read from `_canonicalize_search_url` directly:
+all four omit as `invalid_url` with rule `raw_chars`, before stage 2. Each `url_borne_envelope` record's
+`notes` records its omission reason (`structural_blocked` / `invalid_url`) or, for shape (ii), that it clears
+canonicalisation and is served `suspicious`; a test drives them and checks the note against the wire.
+
+**for AUDIT_FINDINGS (spec 5 US-005)** — measured leaks the shipped patterns' own wording suggests they
+should cover. Findings, not fixes (ruling 6); ids only:
+- Break inside a non-`DOTALL` trigger, `/retrieve` and `/extract` (the `/search` records are caught by the
+  collapsed wire form): `atk-0054` (`/retrieve`, `disregard_instructions`), `atk-0053` (`/extract`,
+  `disregard_instructions`), `atk-0153` (`/retrieve`, `exfil_image`), `atk-0152` (`/extract`, `exfil_image`).
+- Patterns compiled without `IGNORECASE` — a re-cased trigger leaks: `atk-0070` and `atk-0086` (`system_line`,
+  `/search`), `atk-0071` (`poppy_line`, `/extract`), `atk-0116` (`hex_escape`'s `\x`, `/extract`), `atk-0147`
+  (`exfil_image`'s `https?`, `/search`). The line-anchored BLOCK patterns are the consequential ones.
+- Entity depth differs by route: `/extract` decodes nothing, so `atk-0047`, `atk-0075`, `atk-0090`,
+  `atk-0103`, `atk-0119`, `atk-0136`, `atk-0149` leak while their `page` / `search` siblings are caught;
+  the double-encoded system tag leaks on `/retrieve` (`atk-0049`) and is `blocked` on `/search` (`atk-0048`).
+- Expected reach limits rather than defects: `split_tags` 8/8 and `confusable` 9/9 leak (extraction puts a
+  separator inside the token; nothing folds the Cyrillic homoglyphs), `zwsp` 11/11 is caught (stage 1
+  deletes U+200B / U+200C, rejoining the token before stage 2).
+
+**Decisions and gotchas.**
+- **No record scored `neutralised`**: no marker was lost to extraction. The four `tag-consumed` records
+  (`atk-0033`, `atk-0132`, `atk-0160`, `atk-0161` — a literal tag on `page` / `search`) and all `split_tags`
+  records score `leaked`, as the hint predicted, because the marker sits on the surrounding sentence.
+- `title_field` applies to `page` too: a page's `<title>` reaches stage 2 (`atk-0059`, `blocked` on
+  `/retrieve`), so it is not `search`-only.
+- **`rule_marker_in_payload` is weaker than hint rule (a).** Spec 1's lint accepts a marker found in the
+  *raw* payload as well as the post-pipeline form. `test_every_marker_survives_the_variant_it_sits_beside`
+  is the stricter backstop: each marker is checked against the strings stage 2 actually receives
+  (`tests.corpus_stage2.stage2_forms`) plus the raw URL. `scripts/corpus/records.py` is untouched.
+- `test_a_record_carries_the_transform_its_variant_names` keeps the labels honest (a `zwsp` record with no
+  zero-width character, a `confusable` record with no Cyrillic one, etc. fail). `url_exception` is declared
+  on `data:` / `javascript:` / private-IP records even where the lint would not require it, per the hint;
+  private-IP probes are in visible text only, never in a result URL or a live anchor.
+- Mutation-checked: flipping or dropping a pin, stripping a zero-width character, mislabelling a variant,
+  dropping `tag-consumed`, moving a marker off the wire, moving a break out of its trigger, naming the wrong
+  omission reason and naming the wrong regex each turn the named test red (corpus restored byte-identical).
+  `gitleaks detect --no-git` over `tests/corpus/` is clean.
+- Ids are contiguous, `atk-0026` … `atk-0182`; specs 2-3 of this epic continue at `atk-0183`. The
+  `_FIRST_ID` / `_LAST_ID` range in `tests/test_corpus_attacks.py` is what identifies this story's records,
+  so later stories append without editing it.
+
 ## Refinement Notes
 
 ### Research Findings

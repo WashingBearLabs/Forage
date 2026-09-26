@@ -113,6 +113,68 @@ The two audit ids are the reproduced bypasses this epic exists to keep closed:
 path, query or IPv6 zone id). `R26` is the hardening ruling on decode and strip
 order.
 
+## Structural families (spec 2 US-001)
+
+`atk-0026` … `atk-0182` are the nine stage-2 families — `instruction_override`,
+`authority_impersonation`, `prompt_boundary`, `encoded_payload`,
+`suspicious_url`, `exfil_beacon`, `envelope_breakout`, `line_anchored_role` and
+`url_borne_envelope` — each authored across the three surfaces and the ten
+obfuscation variants below. Every record targets **one** regex: its `notes` starts
+`regex: <name>`, a member of `vocab.STAGE2_REGEX_NAMES` (a `url_borne_envelope`
+record also names its URL shape and the omission reason or verdict).
+`url_borne_envelope` is `search`-only: the category is a property of `/search`
+result-URL canonicalisation, and a `page` or `text` record would have no result URL.
+
+### Variant vocabulary
+
+`params.variant` for an attack (`vocab.ATTACK_VARIANTS`) names the obfuscation
+transform. The trigger carries the transform; the `marker` sits on the
+surrounding sentence, which the transform does not touch.
+
+| Variant | What the record carries |
+|---------|-------------------------|
+| `plain` | The trigger in the form that reaches stage 2 as text on the record's route: the literal on `text`; on `page` and `search`, a tag-shaped trigger in its entity form |
+| `case` | The trigger re-cased (upper or mixed), which only the patterns compiled without `IGNORECASE` can miss |
+| `entity` | The trigger's `<`, `[`, backtick, brace or colon as an HTML character reference, or a double-encoded form; the three routes decode to different depths |
+| `zwsp` | U+200B or U+200C inside the trigger token; stage 1 deletes both, so the token is rejoined before stage 2 scans it |
+| `split_tags` | Inline markup (`<b>`, `<i>`, `<code>`) inside the trigger token; extraction puts a separator at the tag boundary, so the token is broken, not rejoined |
+| `confusable` | Cyrillic а / е / о (U+0430 / U+0435 / U+043E) substituted for their Latin twins in a trigger word; nothing in the pipeline folds them |
+| `second_paragraph` | A paragraph or line break at or inside the trigger, on any surface; a break inside the trigger adds the note `break-inside-trigger` |
+| `url_query` | The trigger carried in the query string of a `/search` result URL |
+| `url_path` | The trigger carried in the path of a `/search` result URL |
+| `title_field` | The trigger placed in the title — the `search` title field or a page's `<title>` — rather than the body or snippet |
+
+`plain` is defined per route because `/retrieve` **and** `/search` parse markup
+before stage 2: a literal tag-shaped trigger (a system tag, a retrieval-envelope
+tag, an `href` in a live anchor) is consumed there and scans clean. That record
+is still `plain`, tagged `tag-consumed` in `notes`, and left unpinned; on `text`
+nothing parses HTML, so the literal is the plain form. The two patterns compiled
+without `re.DOTALL` — `disregard_instructions` and `exfil_image` — carry a
+`break-inside-trigger` record on each route: `/search` also scans the collapsed
+wire form, `/retrieve` and `/extract` scan one newline-preserving form.
+
+### Pins
+
+Only what the spec's table gives is pinned; every obfuscated variant is a
+measurement, reported and never asserted here. The pins were set from a first run
+through the real routes with `fallback=0.0`, not from expectation, and every row
+measured as the table hypothesised.
+
+| Records | Pin | `pinned_reason` |
+|---------|-----|-----------------|
+| `plain`, `instruction_override` / `authority_impersonation` / `prompt_boundary` | `blocked` | `stage-2 regex, deterministic` |
+| `plain`, `line_anchored_role` | `blocked` | `2026-09-16-016` on `search`, else `stage-2 regex, deterministic` |
+| `plain`, `encoded_payload` / `suspicious_url` / `exfil_beacon` / `envelope_breakout` | `flagged` | `stage-2 regex, deterministic` |
+| `url_borne_envelope`, shape (i): a BLOCK token, percent- or entity-encoded, in path or query | `blocked` | `2026-09-16-032` |
+| `url_borne_envelope`, shape (ii): an encoded retrieval-envelope tag alone | `flagged` | `2026-09-16-032` |
+| `url_borne_envelope`, shape (iii): a raw `<` or `>` in the URL | `blocked` | `search-url rule raw_chars (invalid_url), not stage 2` |
+| `break-inside-trigger` on `search` | as measured | `stage-2 regex on the collapsed wire form, deterministic` |
+| everything else, including `tag-consumed` | none | — |
+
+Shape (ii) is `flagged`, not `blocked`, because `envelope_breakout` is a
+SUSPICIOUS category. Shape (iii) never reaches stage 2: the raw-character rule
+omits the result as `invalid_url` first, so its pin names that rule.
+
 ## Content rules (ruling 8)
 
 - **Hosts:** every URL — `payload.url` and any `href` / `src` / `content=`
