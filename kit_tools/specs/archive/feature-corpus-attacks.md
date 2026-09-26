@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: corpus-attacks
-status: active
+status: completed
 session_ready: true
 depends_on: [corpus-harness]
 vision_ref: "T2.3 — Injection regression corpus (CI)"
@@ -12,7 +12,8 @@ epic_seq: 2
 epic_final: false
 execution_order: [US-001, US-002, US-003, US-004, US-005]
 created: 2026-09-19
-updated: 2026-09-24
+updated: 2026-09-26
+completed: 2026-09-26
 ---
 
 # Feature Spec: Attack Corpus — Sixteen Categories, Three Surfaces, Permissive Third-Party Samples
