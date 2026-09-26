@@ -558,36 +558,36 @@ green.
   patches are the only network seams; `tests/test_hermeticity.py` is untouched.
 
 **Acceptance Criteria:**
-- [ ] `scripts/corpus/replay.py::ReplayClassifier` satisfies the stage-3 seam (`loaded`,
+- [x] `scripts/corpus/replay.py::ReplayClassifier` satisfies the stage-3 seam (`loaded`,
       `classify_windows`, `classify`), applies `max_chunks` with `PromptGuardBudgetExceededError`,
       returns placeholder chunk labels, and raises `UnrecordedTextError` on a miss — each pinned by a
       test; the `fallback` path is documented as test-only.
-- [ ] `scripts/corpus/drivers.py` exposes `corpus_app(...)`, `drive(record, classifier, *, config)
+- [x] `scripts/corpus/drivers.py` exposes `corpus_app(...)`, `drive(record, classifier, *, config)
       -> RouteResult` and `drive_all(records, classifier, *, configs) -> list[RouteResult]`; every
       request goes through `httpx.ASGITransport` with the lifespan booted; the `contiguity` config
       boots with the two keys set and a test asserts the boot-time validation saw them (a
       `[0.6, 0.6]` replay on a `search` record is `blocked` under `contiguity` and `flagged` under
       `default`).
-- [ ] `corpus_app` is hermetic against the caller's shell: a test boots it with `VALKEY_URL` set to
+- [x] `corpus_app` is hermetic against the caller's shell: a test boots it with `VALKEY_URL` set to
       an unreachable value and `FORAGE_MODEL_ID` set to a non-allowlisted id and still drives a
       record to a `RouteResult`; `RouteResult.model_id` equals the `ReplayClassifier`'s `model_id`.
-- [ ] `scripts/corpus/` imports nothing from `tests` (a test greps `scripts/corpus/*.py` for
+- [x] `scripts/corpus/` imports nothing from `tests` (a test greps `scripts/corpus/*.py` for
       `tests` imports); `scripts/corpus/doubles.py`'s `CorpusSearchProvider` and
       `CorpusContentCache` are pinned by a conformance test against the `SearchProvider` protocol
       and the `ContentCache` methods the service calls.
-- [ ] Error responses go through the closed `BLOCKING_ERRORS` map: a mapped row is `blocked`
+- [x] Error responses go through the closed `BLOCKING_ERRORS` map: a mapped row is `blocked`
       with `status_code`, `omit_reason` and `refusal = True` in `signals` (test cases: a
       harness-only `text` fixture with no visible text — built directly, deliberately bypassing the
       corpus lint, so it is not a committable record — → `/extract` 422 `unsupported_format`; a synthetic `/retrieve`
       `content_too_large` / `promptguard_budget` body); an unmapped one (a 429 `busy` and a
       `/retrieve` 422 `busy` are the test cases) raises a harness error whose message names record
       id, route, status and `error` and no payload text.
-- [ ] The Independent Test's outcome cases pass on all three routes: `blocked`, `flagged`,
+- [x] The Independent Test's outcome cases pass on all three routes: `blocked`, `flagged`,
       `neutralised`, `leaked`, `clean`, including a `page` record whose marker sits only in a stripped
       tag (`_DANGEROUS_TAGS`, `pipeline/stage1_extraction.py` ~:38-49) → `neutralised`.
-- [ ] `UnrecordedRecordError` names record id, route, config, model id and an 8-character sha
+- [x] `UnrecordedRecordError` names record id, route, config, model id and an 8-character sha
       prefix; a test asserts the payload is absent from its message.
-- [ ] The leak check ignores `injection_spans` and nothing else; a **unit test of the JSON walker
+- [x] The leak check ignores `injection_spans` and nothing else; a **unit test of the JSON walker
       over a synthetic body** with the marker present only in `injection_spans` yields `blocked`,
       not `leaked`. It cannot be an end-to-end drive: through the real app `injection_spans` never
       carries record text — every blocked result goes through `finalize_quarantine`, which sets it
@@ -596,32 +596,32 @@ green.
       placeholders. An end-to-end assertion pins that: on a blocked drive, `injection_spans` is
       exactly one member of the stage-4 diagnostic vocabulary, so the exclusion cannot quietly hide
       a future change that puts text back there. *(Clarified 2026-09-24, validation round 4.)*
-- [ ] The leak check runs on **every** drive and `signals["marker_on_wire"]` is set independently of
+- [x] The leak check runs on **every** drive and `signals["marker_on_wire"]` is set independently of
       the outcome: a `page` record whose payload sits in the document title is driven through
       `/retrieve`, and the test asserts `outcome == "blocked"` **and** `marker_on_wire is True`
       (`finalize_quarantine` passes `title` through verbatim).
-- [ ] The leak-check normaliser is `pipeline.stage1_extraction.normalize_text` + `casefold`, applied
+- [x] The leak-check normaliser is `pipeline.stage1_extraction.normalize_text` + `casefold`, applied
       to both marker and wire text, with no codepoint list of its own; a test feeds a string holding
       all nine `_INVISIBLE_CHARS` members and asserts the corpus normaliser and `normalize_text`
       agree. A second test drives a `zwsp`-variant record whose marker spans the obfuscated token and
       asserts the leak is seen (it is `leaked`, not `neutralised`).
-- [ ] A per-variant test asserts every obfuscation variant's marker survives its own transform —
+- [x] A per-variant test asserts every obfuscation variant's marker survives its own transform —
       the normalised marker is a substring of the normalised post-pipeline payload.
-- [ ] A test asserts the gate's entry point passes `fallback=None` — the promise Goal 2 makes about
+- [x] A test asserts the gate's entry point passes `fallback=None` — the promise Goal 2 makes about
       the test-only `fallback` escape hatch, which round 1 stated without giving it a home. It lives
       here because spec 1 owns `ReplayClassifier`; spec 5 US-002's gate is what it reads.
-- [ ] A test asserts that with `classifier=None` (the unavailable path) the driver still returns a
+- [x] A test asserts that with `classifier=None` (the unavailable path) the driver still returns a
       `RouteResult` (`blocked` via `promptguard_unavailable` / `unavailable_blocked` under fail-closed)
       so the structural-only measurement is possible without a cassette.
-- [ ] No payload text in any `repr`, error message or captured output — asserted as described.
-- [ ] `kit_tools/testing/TESTING_GUIDE.md` gains rows for `tests/test_corpus_harness.py` and
+- [x] No payload text in any `repr`, error message or captured output — asserted as described.
+- [x] `kit_tools/testing/TESTING_GUIDE.md` gains rows for `tests/test_corpus_harness.py` and
       `scripts/corpus/`; `kit_tools/docs/GOTCHAS.md` gains "A corpus record is data — never quote it"
       (the leak paths: assertion output, docs builds, editors rendering HTML fixtures; finding 16).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-003: Seed records — the handoff vectors, one per category, and a benign handful
 
