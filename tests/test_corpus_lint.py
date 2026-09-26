@@ -461,3 +461,15 @@ def test_stage2_record_hits_on_page_and_text_surfaces() -> None:
         _benign(surface="text", payload={"filename": "a.txt", "text": "System: ok"})
     )
     assert stage2_record_hits(text) == {"system_line"}
+
+
+def test_every_genre_holding_third_party_records_has_sampler_stats() -> None:
+    stats_path = vocab.TESTS_CORPUS_ROOT / "benign" / "sampler_stats.json"
+    stats = json.loads(stats_path.read_text())
+    genres = {
+        record.category
+        for record in load_corpus()
+        if record.kind == "benign" and record.source.get("kind") == "third_party"
+    }
+    missing = sorted(genre for genre in genres if genre not in stats)
+    assert missing == []

@@ -161,6 +161,29 @@ def search_snippet(url: str, text: str) -> dict[str, str]:
     }
 
 
+def benign_page(url: str, title: str, text: str) -> dict[str, str]:
+    """A benign excerpt as a ``page`` payload (spec 3 US-001).
+
+    The record schema keeps ``head_html`` apart from ``body_html``;
+    ``records.page_document`` assembles the full document —
+    ``<html><head><title>…</title>{head_html}</head><body>{body_html}</body>`` —
+    so stage 1 extracts the declared title. The attack corpus shares it.
+    """
+    return {
+        "url": url,
+        "title": title,
+        "head_html": "",
+        "body_html": (
+            f"<article><h1>{html.escape(title)}</h1>{_paragraphs(text)}</article>"
+        ),
+    }
+
+
+def benign_search(url: str, title: str, content: str) -> dict[str, str]:
+    """A benign excerpt as a ``search`` result: title, reserved URL, snippet."""
+    return {"title": title, "url": url, "content": content}
+
+
 def text_upload(filename: str, text: str) -> dict[str, str]:
     """A short instruction re-rendered as a ``text`` upload payload."""
     return {"filename": filename, "text": text}

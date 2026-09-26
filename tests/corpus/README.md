@@ -323,6 +323,46 @@ read, but no string from them enters the corpus.
 | WASP | CC-BY-NC 4.0 (non-commercial) |
 | HackAPrompt | MIT, but direct-framed and unnecessary |
 | PIGuard / InjecGuard | Licence unverified after the rename |
+| Wikipedia | CC-BY-SA (share-alike) |
+| Stack Exchange | CC-BY-SA (share-alike) |
+| MDN prose | CC-BY-SA (share-alike) |
+| OWASP | CC-BY-SA (share-alike) |
+| Reddit | No licence grant |
+| Hacker News | No licence grant |
+
+## Benign sampler and the core genres (spec 3 US-001)
+
+`scripts/corpus/ingest/benign.py` is one sampler with a `--source` switch
+(`wikinews` → `news` page, `cpython_docs` → `docs` page, `rust_book` → `code`
+text, `readme_changelog` → `code` search; a README directory is named
+`<owner>__<repo>@<sha>` and its licence is read from that directory). Same CLI,
+input guard, `--input-sha256` pin and ids-and-counts-only output as the spec 2
+samplers; `--out` defaults to `benign/`.
+
+Every accepted candidate is excerpted (whole paragraphs, at most 6 000
+characters), re-hosted to a reserved name (`<genre>.example`, raw-reject
+characters percent-encoded; attribution stays in `source.url`), rendered into
+its surface and **driven through `drive()` with `fallback=0.0` before it is
+written**. A candidate that trips a stage-2 regex stays in its genre with
+`pinned: ["flagged", "blocked"]` and is listed as *needs-variant*; then run
+
+```bash
+uv run python -m tests.corpus_stage2 name-variants tests/corpus/benign/<genre>.jsonl
+```
+
+to set `params.variant` to the first regex hit. Such a record is an organic
+structural false positive and counts toward its genre's FPR. Rejections are
+only for reasons unrelated to stage 2 (`benign.REJECTION_REASONS`: licence,
+unpinned, too_short, non_prose, duplicate, secret_shape, invalid_url, lint).
+`benign/sampler_stats.json` holds `{genre: {examined, rejections}}`; a genre
+whose records are not all `third_party` carries `not_ingested: <reason>` there
+(the offline fallback: its records are `source.kind: synthetic`).
+
+**Regex probes.** Records authored to match a stage-2 regex live in
+`over_defence_probe`, never in a headline genre, and are the only records that
+count toward the at-least-two-per-regex coverage floor (the three
+`vocab.STAGE2_REGEX_NO_BENIGN` names excepted). The matching string is visible
+text on its surface.
 
 ## Natural-language and authority/SEO poisoning (spec 2 US-005)
 

@@ -654,6 +654,41 @@ Implementation Notes as misses, with no variant (new US-002 criteria). The round
 <!-- Per story: source table (name, licence, revision, seed, limit, records), outcome counts under
 fallback=0.0, structural over-defence ids. Numbers and ids only. -->
 
+### US-001 (2026-09-25)
+
+**Offline fallback taken for every core genre.** No source was ingested in the
+execution session: the host download pre-step (Wikinews export, CPython `Doc/` at a
+tag, the Rust book `src/`, pinned README/CHANGELOG directories) was not run, so each
+genre is `not ingested — host download pre-step not run in this execution session`
+and its new records are `source.kind: synthetic` (`name: forage-synthetic`). The same
+reason is recorded machine-readably as `not_ingested` in
+`tests/corpus/benign/sampler_stats.json`. The sampler and all four adapters exist and
+are tested on fixtures; running them on the host is the follow-up that turns these
+genres external.
+
+| Genre | Source | Revision | sha256 | Seed | Limit | Written | Synthetic | Rejections |
+|-------|--------|----------|--------|------|-------|---------|-----------|------------|
+| news | wikinews — not ingested | — | — | — | — | 14 (ben-0011..0024) | 14 | none (examined 0) |
+| docs | cpython_docs — not ingested | — | — | — | — | 14 (ben-0025..0038) | 14 | none (examined 0) |
+| code | rust_book / readme_changelog — not ingested | — | — | — | — | 14 (ben-0039..0052) | 14 | none (examined 0) |
+| forum | no permissive source searched — synthetic | — | — | — | — | 14 (ben-0053..0066) | 14 | none (examined 0) |
+| ecommerce | no permissive source searched — synthetic | — | — | — | — | 14 (ben-0067..0080) | 14 | none (examined 0) |
+
+Each core genre now holds 15 records (the owned seed + 14 synthetic). Under
+`fallback=0.0` all 70 new headline records drive `clean`; the only headline organic
+hit remains seed `ben-0002` (`code`, `base64_run`).
+
+**Regex probes.** `ben-0081..ben-0122` (42 records, `over_defence_probe`, synthetic):
+two per stage-2 regex for all 21 names outside `STAGE2_REGEX_NO_BENIGN`, each named by
+`name-variants` (observed first hit) and driving `flagged` / `blocked`. The coverage
+floor counts only this genre (every regex in a probe's hit set).
+
+**Deviation:** `tests/test_corpus_harness.py::test_the_gate_never_passes_a_fallback`
+forbids any `fallback=` in `scripts/`; the sampler's specified triage
+(`ReplayClassifier(fallback=0.0)`) lives in `scripts/corpus/ingest/benign.py`, so that
+one file is exempted for the literal `0.0` only. `NOTICE` gains no entry: no
+third-party benign record was written.
+
 ## Refinement Notes
 
 ### Research Findings

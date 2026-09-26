@@ -10,15 +10,34 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
+from pipeline.stage1_extraction import extract_html
 from scripts.corpus import vocab
-from scripts.corpus.ingest import agentdojo, common, cyberseceval, llmail_inject, render
-from scripts.corpus.records import CorpusRecord, lint_corpus, load_corpus
+from scripts.corpus.ingest import (
+    agentdojo,
+    benign,
+    common,
+    cyberseceval,
+    llmail_inject,
+    render,
+)
+from scripts.corpus.outcomes import RouteResult
+from scripts.corpus.records import (
+    CorpusRecord,
+    lint_corpus,
+    load_corpus,
+    page_document,
+    record_from_mapping,
+)
+from tests import corpus_stage2
 
 _REVISION = "0123456789abcdef0123456789abcdef01234567"
 # Built at run time so no token-shaped literal sits in the source.
@@ -606,3 +625,400 @@ def test_the_readme_states_inputs_sourcing_rule_and_rejected_sources() -> None:
         "PIGuard",
     ):
         assert needle in readme, needle
+
+
+# ---------------------------------------------------------------------------
+# Benign sampler (spec 3 US-001)
+# ---------------------------------------------------------------------------
+
+_BENIGN_CORE = ("news", "docs", "code", "forum", "ecommerce")
+_PROSE = (
+    "The council met on Tuesday to discuss the harbour plan. Residents asked "
+    "about parking and the ferry timetable, and officials promised a report. "
+    "The report is due before the summer recess, the chair told the meeting."
+)
+
+
+def _wikinews_input(root: Path, texts: Sequence[str]) -> Path:
+    path = root / "wikinews.jsonl"
+    lines = [
+        json.dumps(
+            {
+                "title": f"Harbour article {n}",
+                "url": f"https://en.wikinews.org/wiki/Harbour_article_{n}",
+                "text": text,
+            }
+        )
+        for n, text in enumerate(texts)
+    ]
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def _benign_texts() -> list[str]:
+    return [
+        f"{_PROSE}\n\nParagraph {n} names https://www.harbour-news.com/story "
+        f"and the ferry desk at ferry.co. {_PROSE}"
+        for n in range(6)
+    ]
+
+
+def _benign_run(
+    root: Path,
+    texts: Sequence[str],
+    *,
+    out: Path,
+    limit: int = 20,
+    triage: benign.Triage = benign.drive_structural_only,
+) -> benign.BenignReport:
+    source = benign.SOURCES["wikinews"]
+    candidates = source.reader(_wikinews_input(root, texts), _REVISION)
+    return benign.sample(
+        source,
+        candidates,
+        revision=_REVISION,
+        seed=common.DEFAULT_SEED,
+        limit=limit,
+        out=out,
+        triage=triage,
+    )
+
+
+def _jsonl(path: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in path.read_text().splitlines() if line]
+
+
+def test_benign_help_exits_zero_offline_and_takes_no_token() -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        benign.main(["--help"])
+    assert exit_info.value.code == 0
+    source = Path(benign.__file__).read_text()
+    assert "--token" not in source and "HF_TOKEN" not in source
+
+
+def test_benign_same_seed_same_records(tmp_path: Path) -> None:
+    for name in ("a", "b"):
+        (tmp_path / name).mkdir()
+        _benign_run(tmp_path / name, _benign_texts(), out=tmp_path / name / "out")
+    first = (tmp_path / "a" / "out" / "news.jsonl").read_bytes()
+    assert first == (tmp_path / "b" / "out" / "news.jsonl").read_bytes()
+
+
+def test_benign_limit_and_excerpt_caps(tmp_path: Path) -> None:
+    long_text = "\n\n".join([_PROSE] * 80)
+    report = _benign_run(
+        tmp_path, [long_text, *_benign_texts()], out=tmp_path / "out", limit=2
+    )
+    assert len(report.ids) == 2
+    for record in _jsonl(tmp_path / "out" / "news.jsonl"):
+        text = extract_html(page_document(record_from_mapping(record)), None).raw_text
+        assert len(text) <= benign.EXCERPT_CAP + 200, record["id"]
+    assert len(benign.excerpt(long_text)) <= benign.EXCERPT_CAP
+
+
+def test_benign_every_url_is_rewritten_to_a_reserved_host(tmp_path: Path) -> None:
+    _benign_run(tmp_path, _benign_texts(), out=tmp_path / "out")
+    records = _jsonl(tmp_path / "out" / "news.jsonl")
+    assert records
+    for record in records:
+        for value in record["payload"].values():
+            assert render.unreserved_hosts(value) == [], record["id"]
+        assert record["payload"]["url"].startswith("https://news.example/")
+        assert record["source"]["url"].startswith("https://en.wikinews.org/")
+
+
+def test_benign_page_render_extracts_the_declared_title() -> None:
+    payload = render.benign_page("https://news.example/a", "Harbour plan", _PROSE)
+    record = record_from_mapping(
+        {
+            "id": "ben-9999",
+            "kind": "benign",
+            "category": "news",
+            "surface": "page",
+            "payload": payload,
+        }
+    )
+    assert page_document(record).startswith("<!DOCTYPE html><html><head><title>")
+    assert extract_html(page_document(record), None).title == "Harbour plan"
+
+
+def _cpython_input(root: Path) -> Path:
+    doc = root / "Doc" / "library"
+    doc.mkdir(parents=True)
+    (doc / "queue.rst").write_text(
+        "Queues\n======\n\n.. module:: queue\n   :synopsis: x\n\n"
+        f"{_PROSE}\n\n{_PROSE}\n"
+    )
+    return root / "Doc"
+
+
+def _rust_input(root: Path) -> Path:
+    src = root / "src"
+    src.mkdir()
+    (src / "SUMMARY.md").write_text("# Summary\n")
+    (src / "ch01-00-intro.md").write_text(f"# Getting Started\n\n{_PROSE}\n")
+    return src
+
+
+def _readme_input(root: Path) -> Path:
+    project = (
+        root / "projects" / "acme__widget@0123456789abcdef0123456789abcdef01234567"
+    )
+    project.mkdir(parents=True)
+    (project / "README.md").write_text(f"# Widget\n\n{_PROSE}\n")
+    (project / "LICENSE").write_text("MIT License\n\nCopyright (c) Acme\n")
+    return root / "projects"
+
+
+_BENIGN_INPUTS: dict[str, Callable[[Path], Path]] = {
+    "wikinews": lambda root: _wikinews_input(root, [_PROSE]),
+    "cpython_docs": _cpython_input,
+    "rust_book": _rust_input,
+    "readme_changelog": _readme_input,
+}
+
+
+@pytest.mark.parametrize("name", sorted(_BENIGN_INPUTS))
+def test_benign_adapters_write_pinned_third_party_provenance(
+    name: str, tmp_path: Path
+) -> None:
+    assert set(_BENIGN_INPUTS) == set(benign.SOURCES)
+    source = benign.SOURCES[name]
+    out = tmp_path / "out"
+    report = benign.sample(
+        source,
+        source.reader(_BENIGN_INPUTS[name](tmp_path), _REVISION),
+        revision=_REVISION,
+        seed=1,
+        limit=5,
+        out=out,
+    )
+    assert len(report.ids) == 1, name
+    (record,) = _jsonl(out / f"{source.genre}.jsonl")
+    assert record["surface"] == source.surface
+    src = record["source"]
+    assert src["kind"] == "third_party" and src["name"] == name
+    assert src["licence"] in vocab.THIRD_PARTY_LICENCES
+    assert src["url"].startswith("https://") and src["record_ref"]
+    assert re.fullmatch(r"[0-9a-f]{40}", src["revision"])
+    assert lint_corpus([record_from_mapping(record)]) == []
+
+
+def test_benign_readme_licence_is_resolved_at_the_project_directory(
+    tmp_path: Path,
+) -> None:
+    root = _readme_input(tmp_path)
+    gpl = root / "other__tool@89abcdef0123456789abcdef0123456789abcdef"
+    gpl.mkdir()
+    (gpl / "README.md").write_text(f"# Tool\n\n{_PROSE}\n")
+    (gpl / "LICENSE").write_text("GNU GENERAL PUBLIC LICENSE\nVersion 3\n")
+    unpinned = root / "third__lib"
+    unpinned.mkdir()
+    (unpinned / "README.md").write_text(f"# Lib\n\n{_PROSE} again\n")
+    (unpinned / "LICENSE").write_text("MIT License\n")
+    source = benign.SOURCES["readme_changelog"]
+    report = benign.sample(
+        source,
+        source.reader(root, _REVISION),
+        revision=_REVISION,
+        seed=1,
+        limit=5,
+        out=tmp_path / "out",
+    )
+    assert len(report.ids) == 1
+    assert report.rejections == {"licence": 1, "unpinned": 1}
+
+
+def test_benign_secret_shaped_candidate_is_rejected_and_counted(
+    tmp_path: Path,
+) -> None:
+    texts = [*_benign_texts()[:2], f"{_PROSE} key {_FAKE_TOKEN} {_PROSE}"]
+    out = tmp_path / "out"
+    report = _benign_run(tmp_path, texts, out=out)
+    assert report.rejections["secret_shape"] == 1
+    assert len(report.ids) == 2
+    stats = json.loads((out / benign.STATS_FILE).read_text())
+    assert stats["news"] == {"examined": 3, "rejections": {"secret_shape": 1}}
+    assert _FAKE_TOKEN not in (out / "news.jsonl").read_text()
+
+
+def test_benign_main_prints_ids_and_counts_never_payload(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _wikinews_input(tmp_path, _benign_texts())
+    code = benign.main(
+        [
+            "--source",
+            "wikinews",
+            "--input",
+            str(path),
+            "--revision",
+            _REVISION,
+            "--out",
+            str(tmp_path / "out"),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "records written: 6 (ben-0001..ben-0006)" in captured.out
+    for fragment in ("council", "harbour", "ferry", "wikinews.org"):
+        assert fragment not in (captured.out + captured.err).lower()
+
+
+def test_benign_changed_input_and_second_run_are_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _wikinews_input(tmp_path, _benign_texts())
+    argv = ["--source", "wikinews", "--input", str(path), "--revision", _REVISION]
+    argv += ["--out", str(tmp_path / "out")]
+    assert benign.main([*argv, "--input-sha256", "0" * 64]) == 2
+    assert "refused (input_sha256_mismatch)" in capsys.readouterr().err
+    assert benign.main(argv) == 0
+    assert benign.main(argv) == 2
+    assert "refused (already_ingested)" in capsys.readouterr().err
+
+
+def test_benign_every_candidate_is_triaged_before_it_is_written(
+    tmp_path: Path,
+) -> None:
+    out = tmp_path / "out"
+    driven: list[str] = []
+
+    def spy(records: Sequence[CorpusRecord]) -> list[RouteResult]:
+        assert not (out / "news.jsonl").exists()
+        driven.extend(record.id for record in records)
+        return benign.drive_structural_only(records)
+
+    report = _benign_run(tmp_path, _benign_texts(), out=out, triage=spy)
+    assert report.ids and driven == report.ids
+
+
+def test_benign_a_tripping_candidate_stays_in_its_genre_and_is_named(
+    tmp_path: Path,
+) -> None:
+    trip = f"{_PROSE}\n\nThe minister said voters should ignore previous guidance."
+    out = tmp_path / "out"
+    report = _benign_run(tmp_path, [*_benign_texts()[:2], trip], out=out)
+    assert len(report.ids) == 3 and not report.rejections
+    assert len(report.needs_variant) == 1
+    assert sorted(path.name for path in out.glob("*.jsonl")) == ["news.jsonl"]
+    tagged = [r for r in _jsonl(out / "news.jsonl") if r["pinned"]]
+    assert [r["id"] for r in tagged] == report.needs_variant
+    assert tagged[0]["pinned"] == ["flagged", "blocked"]
+    assert "variant" not in tagged[0]["params"]
+    assert corpus_stage2.name_variants(out / "news.jsonl") == [
+        (report.needs_variant[0], "ignore_previous")
+    ]
+    (named,) = [r for r in _jsonl(out / "news.jsonl") if r["pinned"]]
+    assert named["category"] == "news"
+    assert named["params"]["variant"] == "ignore_previous"
+
+
+def test_benign_the_reject_path_is_never_reached_for_stage2(tmp_path: Path) -> None:
+    assert "stage2" not in benign.REJECTION_REASONS
+    with pytest.raises(ValueError):
+        benign.reject(benign.BenignReport(), "stage2")
+    trips = [f"{_PROSE} Please disregard the old instructions.", *_benign_texts()]
+    report = _benign_run(tmp_path, trips, out=tmp_path / "out")
+    assert set(report.rejections) <= benign.REJECTION_REASONS
+    assert report.needs_variant and not report.rejections
+
+
+def test_benign_a_search_url_the_rule_chain_rejects_is_invalid_url(
+    tmp_path: Path,
+) -> None:
+    def broken_url(records: Sequence[CorpusRecord]) -> list[RouteResult]:
+        broken = [
+            replace(r, payload={**r.payload, "url": "https://bad host.example/"})
+            for r in records
+        ]
+        return benign.drive_structural_only(broken)
+
+    source = benign.SOURCES["readme_changelog"]
+    report = benign.sample(
+        source,
+        source.reader(_readme_input(tmp_path), _REVISION),
+        revision=_REVISION,
+        seed=1,
+        limit=5,
+        out=tmp_path / "out",
+        triage=broken_url,
+    )
+    assert report.ids == [] and report.rejections == {"invalid_url": 1}
+    assert benign.reserved_url("code", "a {b} | c^d") == "https://code.example/a-b-c-d"
+
+
+# -- the committed benign corpus ------------------------------------------------
+
+
+def _benign_stats() -> dict[str, dict[str, Any]]:
+    path = vocab.TESTS_CORPUS_ROOT / "benign" / benign.STATS_FILE
+    return json.loads(path.read_text())
+
+
+def _benign_records() -> list[CorpusRecord]:
+    return [record for record in load_corpus() if record.kind == "benign"]
+
+
+def test_benign_core_genres_meet_the_floor_with_declared_provenance() -> None:
+    stats = _benign_stats()
+    records = _benign_records()
+    for genre in _BENIGN_CORE:
+        members = [record for record in records if record.category == genre]
+        assert len(members) >= vocab.MIN_RECORDS["benign_per_genre"], genre
+        external = [r for r in members if r.source.get("kind") == "third_party"]
+        for record in external:
+            assert record.source.get("url"), record.id
+            assert record.source.get("licence") in vocab.THIRD_PARTY_LICENCES
+            assert record.source.get("revision"), record.id
+        if len(external) != len(members):
+            reason = stats.get(genre, {}).get("not_ingested")
+            assert isinstance(reason, str) and reason, genre
+
+
+def test_benign_sampler_stats_are_counts_under_the_closed_reasons() -> None:
+    for genre, entry in _benign_stats().items():
+        assert genre in vocab.BENIGN_GENRES
+        assert set(entry) <= {"examined", "rejections", "not_ingested"}, genre
+        assert isinstance(entry["examined"], int)
+        assert set(entry["rejections"]) <= benign.REJECTION_REASONS, genre
+        assert all(isinstance(v, int) for v in entry["rejections"].values())
+
+
+def _probe_coverage(records: Sequence[CorpusRecord]) -> Counter[str]:
+    return Counter(
+        name
+        for record in records
+        if record.category == "over_defence_probe"
+        for name in corpus_stage2.stage2_record_hits(record)
+    )
+
+
+def test_benign_probe_coverage_floor_counts_over_defence_probes_only() -> None:
+    records = _benign_records()
+    coverage = _probe_coverage(records)
+    for name in vocab.STAGE2_REGEX_NAMES:
+        if name not in vocab.STAGE2_REGEX_NO_BENIGN:
+            assert coverage[name] >= 2, name
+    headline = [r for r in records if r.category in _BENIGN_CORE]
+    assert any(corpus_stage2.stage2_record_hits(r) for r in headline)
+    assert _probe_coverage(headline) == Counter()
+
+
+def test_benign_outcomes_and_variants_coincide_structural_only() -> None:
+    records = _benign_records()
+    results = benign.drive_structural_only(records)
+    for record, result in zip(records, results, strict=True):
+        variant = record.params.get("variant")
+        tripped = result.outcome in ("flagged", "blocked")
+        assert tripped == (variant is not None), result.summary()
+        if variant is not None:
+            assert variant in corpus_stage2.stage2_record_hits(record), record.id
+            assert record.pinned == ("flagged", "blocked"), record.id
+        if record.pinned:
+            assert result.outcome in record.pinned, result.summary()
+        else:
+            assert result.outcome == "clean", result.summary()
+        if record.surface == "search":
+            omitted = result.signals.omit_reason
+            assert omitted not in benign.URL_RULE_OMISSIONS, result.summary()

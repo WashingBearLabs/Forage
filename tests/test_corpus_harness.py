@@ -333,19 +333,28 @@ def _fallback_arguments(source: str) -> list[ast.expr]:
     return values
 
 
+_FALLBACK_EXEMPT = "scripts/corpus/ingest/benign.py"
+
+
 def test_the_gate_never_passes_a_fallback() -> None:
     """Spec 5's gate constructs ``ReplayClassifier`` without ``fallback``.
 
     ``scripts/`` is the gate's home: nothing there may pass a ``fallback=``
     other than the literal ``None``, and the default is ``None``. Tests pass it
     freely — that is what the argument is for.
+
+    The one exemption is spec 3 US-001's benign sampler, an authoring tool the
+    gate never runs: its triage is specified as ``fallback=0.0`` exactly, and
+    only that literal is admitted there.
     """
     default = inspect.signature(ReplayClassifier).parameters["fallback"].default
     assert default is None
     offenders: list[str] = []
     for path in sorted((_REPO / "scripts").rglob("*.py")):
+        exempt = path.relative_to(_REPO).as_posix() == _FALLBACK_EXEMPT
         for value in _fallback_arguments(path.read_text(encoding="utf-8")):
-            if not (isinstance(value, ast.Constant) and value.value is None):
+            literal = value.value if isinstance(value, ast.Constant) else ...
+            if literal is not None and not (exempt and literal == 0.0):
                 offenders.append(path.name)
     assert offenders == []
 

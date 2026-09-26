@@ -1,0 +1,27 @@
+{
+  "code": {
+    "examined": 0,
+    "not_ingested": "host download pre-step not run in this execution session",
+    "rejections": {}
+  },
+  "docs": {
+    "examined": 0,
+    "not_ingested": "host download pre-step not run in this execution session",
+    "rejections": {}
+  },
+  "ecommerce": {
+    "examined": 0,
+    "not_ingested": "host download pre-step not run in this execution session",
+    "rejections": {}
+  },
+  "forum": {
+    "examined": 0,
+    "not_ingested": "host download pre-step not run in this execution session",
+    "rejections": {}
+  },
+  "news": {
+    "examined": 0,
+    "not_ingested": "host download pre-step not run in this execution session",
+    "rejections": {}
+  }
+}
