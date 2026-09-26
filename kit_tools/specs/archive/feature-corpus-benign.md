@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: corpus-benign
-status: active
+status: completed
 session_ready: true
 depends_on: [corpus-harness, corpus-attacks]
 vision_ref: "T2.3 — Injection regression corpus (CI)"
@@ -12,7 +12,8 @@ epic_seq: 3
 epic_final: false
 execution_order: [US-001, US-002, US-003, US-004]
 created: 2026-09-19
-updated: 2026-09-24
+updated: 2026-09-26
+completed: 2026-09-26
 ---
 
 # Feature Spec: Benign Corpus — Externally Sourced Genres, Over-Defence Probes, Multilingual, Long-Form, Search-Shaped
