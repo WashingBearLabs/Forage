@@ -692,16 +692,16 @@ lint-clean.
   stay skipped (US-001).
 
 **Acceptance Criteria:**
-- [ ] Seed corpus: ≥ 22 attack records (the pins above + one per category + the six carriers) and
+- [x] Seed corpus: ≥ 22 attack records (the pins above + one per category + the six carriers) and
       ≥ 10 benign records, lint-clean, every file under `tests/corpus/attacks/` and `tests/corpus/benign/`
       named by category / genre.
-- [ ] The Independent Test's assertions hold, including the explicit `leaked` expectation for
+- [x] The Independent Test's assertions hold, including the explicit `leaked` expectation for
       `natural_language` / `authority_seo` under `fallback=0.0` and the `flagged` expectation for the
       git-SHA `code` benign.
-- [ ] Pinned outcomes are asserted by a generic test (`for record in records if record.pinned`)
+- [x] Pinned outcomes are asserted by a generic test (`for record in records if record.pinned`)
       that reads the pin from the record — no per-record test code.
-- [ ] `tests/corpus/README.md` lists the seed's pinned records with their audit ids (ids only).
-- [ ] Zero runtime change (rulings 6, 6a): `git diff --stat
+- [x] `tests/corpus/README.md` lists the seed's pinned records with their audit ids (ids only).
+- [x] Zero runtime change (rulings 6, 6a): `git diff --stat
       "$(git merge-base main HEAD)" -- pipeline/ promptguard/ models.py
       retrieval_app.py cache.py url_validator.py model_fetcher.py contract/ config.yaml
       weights_manifest.json Dockerfile` is empty (spec 0's completion tag, not `main` — spec 0 is
@@ -710,11 +710,11 @@ lint-clean.
       `FORAGE_MODEL_REVISION` unset, equals the value recorded in this spec's Implementation Notes
       at story start (taken on that tag); `uv run python -m scripts.export_contract --check` is
       green.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ## Edge Cases
 
