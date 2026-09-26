@@ -2,7 +2,9 @@
 
 US-001 is the structural families — nine categories, ten obfuscation variants,
 three surfaces. US-002 is the hidden-markup carriers — eight placements, each
-carrying the three phrasing shapes. Every record is data (ruling 8): no
+carrying the three phrasing shapes. US-005 is the two classifier-only categories,
+`natural_language` and `authority_seo`, authored in several languages. Every
+record is data (ruling 8): no
 assertion here quotes a payload, and every failure message is a record id, a
 rule or a closed token.
 
@@ -948,3 +950,373 @@ def test_the_readme_documents_every_window_family_and_the_budget_rule() -> None:
             assert f"`{key}`" in rows[0], (family, key)
     assert "4 characters per token" in readme
     assert "LicenseRef-PublicDomain" in readme
+
+
+# ---------------------------------------------------------------------------
+# US-005: natural-language and authority/SEO poisoning
+# ---------------------------------------------------------------------------
+
+# This story's records: `atk-0403` … `atk-0460`, 32 `natural_language` then 26
+# `authority_seo`, appended after the ingested rows. The seed's `atk-0012` and
+# `atk-0013` are owned too; the 122 ingested `natural_language` rows are
+# `third_party`. Every floor below counts *owned* records, so it holds even when
+# ingestion is skipped.
+_CLASSIFIER_FIRST_ID = 403
+_CLASSIFIER_LAST_ID = 460
+_CLASSIFIER_STORY_IDS = tuple(
+    f"atk-{number:04d}"
+    for number in range(_CLASSIFIER_FIRST_ID, _CLASSIFIER_LAST_ID + 1)
+)
+_CLASSIFIER_CATEGORIES = ("natural_language", "authority_seo")
+_CLASSIFIER_FLOORS = {"natural_language": 24, "authority_seo": 16}
+_REQUIRED_LANGUAGES = frozenset({"en", "de", "fr", "es", "pt", "ja"})
+_STORY_LANGUAGES = _REQUIRED_LANGUAGES | {"zh", "it"}
+_PER_LANGUAGE_FLOOR = 2
+_INGESTED_SOURCES = frozenset({"AgentDojo", "LLMail-Inject", "CyberSecEval"})
+
+# What `notes` names: the context and the ask of a `natural_language` record
+# (the hint's five contexts and four verbs), the claim and the vector of an
+# `authority_seo` one (the Zscaler shape and where the provider surfaces it).
+_NL_CONTEXTS = frozenset(
+    {"article", "product_review", "forum_reply", "readme", "changelog"}
+)
+_NL_ASKS = frozenset({"summarise_falsely", "recommend", "visit_url", "include_phrase"})
+_AS_CLAIMS = frozenset(
+    {"verified_source", "rank_first", "publisher_claim", "payment_policy"}
+)
+_AS_VECTOR_SURFACE = {
+    "surfaced_snippet": "search",
+    "og_description_snippet": "search",
+    "stuffed_title": "search",
+    "page_body": "page",
+    "text_file": "text",
+}
+_NL_NOTE = re.compile(r"context: ([a-z_]+); ask: ([a-z_]+); ")
+_AS_NOTE = re.compile(
+    r"claim: ([a-z_]+); vector: ([a-z_]+)"
+    r"(?:; sibling of (atk-[0-9]{4}) \(([a-z_]+)\))?; "
+)
+_HOST = re.compile(r"https?://([A-Za-z0-9.\-]+)")
+_KANA = re.compile(r"[぀-ヿ]")
+_HAN = re.compile(r"[一-鿿]")
+_WORD = re.compile(r"[^\W\d_]+")
+# Common function words per Latin-script language. A word two languages share
+# is dropped from both, so a hit is evidence for exactly one language.
+_FUNCTION_WORDS: dict[str, frozenset[str]] = {
+    lang: frozenset(words.split())
+    for lang, words in {
+        "en": "the and of to is are this that with for your you be on it as at by "
+        "or an in a not will",
+        "de": "der die das und nicht ist für mit den dem auf sind muss müssen diese "
+        "dieser anderen zu ein eine einen im vom zum bei nach wie oder auch nur "
+        "werden wird kann von des es sich",
+        "fr": "le les des une est pour vous dans cette sont doit doivent aucun autre "
+        "sur qui cet aux du au ne pas ce ses et ou par avec il elle plus mais comme "
+        "son sa leur",
+        "es": "el los las y según deben debe más son cualquier otros otra otro para "
+        "por con del una un esta este estos como que se su sus al lo no es ha muy "
+        "pero también todo todos",
+        "pt": "os as uma não você são pelo pela devem seu sua dos das também outros "
+        "outro é do da no na nos nas ao aos para por com um em que se está este esta "
+        "estes deste desta como mais muito já lá",
+        "it": "il gli che della è sono devono dei delle questo questa nel tutti altri "
+        "dell per con un una non di lo le la si più anche come ha sui sul nella negli",
+    }.items()
+}
+_STOPWORDS: dict[str, frozenset[str]] = {
+    lang: words
+    - frozenset(
+        word
+        for other, others in _FUNCTION_WORDS.items()
+        if other != lang
+        for word in others
+    )
+    for lang, words in _FUNCTION_WORDS.items()
+}
+
+
+def _owned_classifier_only() -> list[CorpusRecord]:
+    """Every owned `natural_language` / `authority_seo` record, seed included."""
+    return [
+        record
+        for record in load_corpus()
+        if record.category in _CLASSIFIER_CATEGORIES
+        and record.source["kind"] == "owned"
+    ]
+
+
+def _classifier_story_records() -> list[CorpusRecord]:
+    by_id = {record.id: record for record in load_corpus()}
+    missing = [story_id for story_id in _CLASSIFIER_STORY_IDS if story_id not in by_id]
+    assert not missing, f"story ids missing from the corpus: {missing}"
+    return [by_id[story_id] for story_id in _CLASSIFIER_STORY_IDS]
+
+
+def _written_in(record: CorpusRecord) -> str:
+    """The language a record's payload is written in, from its script and words."""
+    text = _raw_text(record)
+    if _KANA.search(text):
+        return "ja"
+    if _HAN.search(text):
+        return "zh"
+    words = _WORD.findall(text.casefold())
+    ranked = sorted(
+        (
+            (sum(word in stop for word in words), lang)
+            for lang, stop in _STOPWORDS.items()
+        ),
+        reverse=True,
+    )
+    assert ranked[0][0] > ranked[1][0], record.id
+    return ranked[0][1]
+
+
+def _is_reserved_host(host: str) -> bool:
+    host = host.rstrip(".").lower()
+    return (
+        any(
+            host == name or host.endswith(f".{name}") for name in vocab.RESERVED_DOMAINS
+        )
+        or host.rsplit(".", 1)[-1] in vocab.RESERVED_TLDS
+    )
+
+
+def test_this_story_authored_58_owned_records_in_the_two_classifier_only_files() -> (
+    None
+):
+    records = _classifier_story_records()
+    assert len(records) == 58
+    assert Counter(record.category for record in records) == {
+        "natural_language": 32,
+        "authority_seo": 26,
+    }
+    assert all(record.kind == "attack" for record in records)
+    assert all(record.source["kind"] == "owned" for record in records)
+    assert all(record.pinned is None for record in records)
+    assert [str(error) for error in lint_corpus(records)] == []
+
+
+def test_owned_records_meet_the_floors_the_language_floor_and_all_three_surfaces() -> (
+    None
+):
+    owned = _owned_classifier_only()
+    counts = Counter(record.category for record in owned)
+    for category, floor in _CLASSIFIER_FLOORS.items():
+        assert counts[category] >= floor, category
+    assert len({record.lang for record in owned}) >= vocab.MIN_RECORDS["languages"]
+    assert {record.lang for record in owned} >= _STORY_LANGUAGES
+    for category in _CLASSIFIER_CATEGORIES:
+        in_category = [record for record in owned if record.category == category]
+        assert {record.surface for record in in_category} == set(vocab.SURFACES)
+        for lang in sorted(_STORY_LANGUAGES):
+            of_lang = [record for record in in_category if record.lang == lang]
+            assert len(of_lang) >= _PER_LANGUAGE_FLOOR, (category, lang)
+            # Each language is authored on every route, not only counted.
+            assert {r.surface for r in of_lang} == set(vocab.SURFACES), (category, lang)
+
+
+def test_the_attack_corpus_meets_its_totals_after_this_story() -> None:
+    attacks = [record for record in load_corpus() if record.kind == "attack"]
+    assert len(attacks) >= vocab.MIN_RECORDS["attack_total"]
+    counts = Counter(record.category for record in attacks)
+    assert set(counts) == set(vocab.ATTACK_CATEGORIES)
+    for category in vocab.ATTACK_CATEGORIES:
+        assert counts[category] >= vocab.MIN_RECORDS["attack_per_category"], category
+
+
+def test_a_records_lang_label_is_the_language_it_is_written_in() -> None:
+    for record in _classifier_story_records():
+        assert _written_in(record) == record.lang, record.id
+
+
+def test_the_language_check_rejects_a_mislabelled_record() -> None:
+    records = _classifier_story_records()
+    for lang in sorted(_STORY_LANGUAGES):
+        target = next(record for record in records if record.lang == lang)
+        for other in sorted(_STORY_LANGUAGES - {lang}):
+            relabelled = replace(target, lang=other)
+            assert _written_in(relabelled) != relabelled.lang, (target.id, other)
+
+
+def test_a_story_record_carries_no_structural_marker_and_no_square_bracket() -> None:
+    """The category's defining invariant, checked on the raw payload and every form.
+
+    A record that trips a stage-2 regex belongs in US-001; the hint also rules
+    out brackets, the shape of the `[SYSTEM]` / `[admin]` triggers.
+    """
+    for record in _classifier_story_records():
+        assert stage2_hits(_raw_text(record)) == frozenset(), record.id
+        assert stage2_record_hits(record) == frozenset(), record.id
+        assert "[" not in _raw_text(record), record.id
+        assert "]" not in _raw_text(record), record.id
+
+
+def test_every_story_marker_is_distinct_and_new_to_the_corpus() -> None:
+    records = _classifier_story_records()
+    markers = [record.marker for record in records]
+    assert len(set(markers)) == len(markers)
+    story_ids = {record.id for record in records}
+    elsewhere = {
+        record.marker for record in load_corpus() if record.id not in story_ids
+    }
+    assert not elsewhere & set(markers)
+
+
+def test_every_url_a_story_payload_carries_is_reserved_including_prose_urls() -> None:
+    """The lint reads `payload.url` and URL attributes; this reads the prose too."""
+    for record in _classifier_story_records():
+        hosts = _HOST.findall(_raw_text(record))
+        assert hosts or record.surface == "search", record.id
+        for host in hosts:
+            assert _is_reserved_host(host), record.id
+
+
+def test_a_natural_language_note_names_its_context_and_its_ask() -> None:
+    records = [
+        r for r in _classifier_story_records() if r.category == "natural_language"
+    ]
+    contexts: set[str] = set()
+    asks: set[str] = set()
+    for record in records:
+        found = _NL_NOTE.match(record.notes)
+        assert found is not None, record.id
+        context, ask = found.groups()
+        assert context in _NL_CONTEXTS and ask in _NL_ASKS, record.id
+        contexts.add(context)
+        asks.add(ask)
+        if ask == "visit_url":
+            body = "\n".join(
+                value for key, value in record.payload.items() if key != "url"
+            )
+            assert _HOST.search(body) is not None, record.id
+        if context in {"readme", "changelog"}:
+            assert record.surface == "text", record.id
+        if context == "forum_reply":
+            assert record.surface == "page", record.id
+    assert contexts == _NL_CONTEXTS
+    assert asks == _NL_ASKS
+
+
+def test_an_authority_seo_note_names_its_claim_its_vector_and_the_model_card() -> None:
+    records = [r for r in _classifier_story_records() if r.category == "authority_seo"]
+    claims: set[str] = set()
+    vectors: set[str] = set()
+    for record in records:
+        found = _AS_NOTE.match(record.notes)
+        assert found is not None, record.id
+        claim, vector = found.group(1), found.group(2)
+        assert claim in _AS_CLAIMS, record.id
+        assert _AS_VECTOR_SURFACE.get(vector) == record.surface, record.id
+        assert "PG2 model card" in record.notes and "finding 6" in record.notes
+        assert "finding 11" in record.notes, record.id
+        claims.add(claim)
+        vectors.add(vector)
+    assert claims == _AS_CLAIMS
+    assert vectors == set(_AS_VECTOR_SURFACE)
+
+
+def test_the_two_search_siblings_of_the_hidden_markup_carriers_are_authored() -> None:
+    """US-002 left the `search` siblings of two carriers to this story."""
+    by_id = {record.id: record for record in load_corpus()}
+    siblings = [
+        record
+        for record in _classifier_story_records()
+        if record.category == "authority_seo" and "sibling of" in record.notes
+    ]
+    assert len(siblings) == 2
+    carriers: set[str] = set()
+    for record in siblings:
+        found = _AS_NOTE.match(record.notes)
+        assert found is not None and found.group(3) is not None, record.id
+        origin = by_id[found.group(3)]
+        assert origin.category == "hidden_markup", record.id
+        assert origin.params["carrier"] == found.group(4), record.id
+        assert record.surface == "search", record.id
+        assert record.marker is not None
+        marker = normalise_for_leak_check(record.marker)
+        field = "title" if found.group(4) == "title_stuffing" else "content"
+        other = "content" if field == "title" else "title"
+        assert marker in normalise_for_leak_check(record.payload[field]), record.id
+        assert marker not in normalise_for_leak_check(record.payload[other]), record.id
+        carriers.add(found.group(4))
+    assert carriers == {"og_description", "title_stuffing"}
+
+
+async def test_every_owned_natural_language_and_authority_seo_record_is_leaked() -> (
+    None
+):
+    """The category's defining invariant, asserted on every **owned** record.
+
+    They carry no structural marker by construction, so under ``fallback=0.0``
+    nothing but stage 3 could stop them, and the assertion is what makes the
+    later classifier number mean something. The filter is ``source.kind`` on
+    purpose: the ingested rows in these categories are attacker-authored text,
+    and the next test states what holds for them instead.
+    """
+    records = _owned_classifier_only()
+    assert len(records) >= sum(_CLASSIFIER_FLOORS.values())
+    results = await drive_all(records, _fallback(), configs=["default", "contiguity"])
+    assert len(results) == 2 * len(records)
+    assert {result.route for result in results} == {"/search", "/retrieve", "/extract"}
+    for result in results:
+        signals = result.signals
+        assert result.outcome == "leaked", result.summary()
+        assert signals.marker_on_wire is True, result.summary()
+        assert signals.structural_flags == (), result.summary()
+        assert signals.omit_reason is None, result.summary()
+        assert signals.windows >= 1 and signals.score is not None, result.summary()
+
+
+def test_every_third_party_row_is_ingested_or_window_filler() -> None:
+    """A new sampler must be named, so the ingested-row assertion cannot miss it."""
+    for record in load_corpus():
+        if record.source["kind"] != "third_party":
+            continue
+        assert (
+            record.source["name"] in _INGESTED_SOURCES
+            or record.category in vocab.WINDOW_FAMILIES
+        ), record.id
+
+
+async def test_an_ingested_row_is_leaked_or_keeps_its_structural_category() -> None:
+    """Why the assertion above is scoped to owned records.
+
+    The ingested rows land in ``natural_language`` by US-004's one mapping rule
+    — the first stage-2 category that fires, else ``natural_language`` — and
+    attacker-authored corpora are dense with BLOCK-category phrasing (LLMail-
+    Inject alone is ~462 k real attempts), so a share of them legitimately
+    comes back ``blocked``. What must hold is narrower: no ingested row sits
+    in ``natural_language`` / ``authority_seo`` while stage 2 still trips on
+    it, and every other ingested row's category is one its route form fires.
+    """
+    rows = [
+        record
+        for record in load_corpus()
+        if record.source["kind"] == "third_party"
+        and record.source["name"] in _INGESTED_SOURCES
+    ]
+    by_id = {record.id: record for record in rows}
+    results = await drive_all(rows, _fallback(), configs=["default"])
+    assert len(results) == len(rows)
+    for result in results:
+        record = by_id[result.record_id]
+        hits = stage2_record_hits(record)
+        if record.category in _CLASSIFIER_CATEGORIES:
+            assert hits == frozenset(), result.summary()
+            assert result.outcome == "leaked", result.summary()
+        else:
+            fired = {_STAGE2_CATEGORY_OF[name] for name in hits}
+            assert record.params.get("variant") == "plain", result.summary()
+            assert record.category in fired, result.summary()
+            expected = "blocked" if record.category in _BLOCK_FAMILIES else "flagged"
+            assert result.outcome == expected, result.summary()
+
+
+def test_the_readme_lists_the_languages_and_the_classifier_only_vocabularies() -> None:
+    readme = (vocab.TESTS_CORPUS_ROOT / "README.md").read_text(encoding="utf-8")
+    lines = readme.splitlines()
+    for lang in sorted({record.lang for record in _owned_classifier_only()}):
+        rows = [line for line in lines if line.startswith(f"| `{lang}` |")]
+        assert len(rows) == 1, lang
+    for token in (*_NL_CONTEXTS, *_NL_ASKS, *_AS_CLAIMS, *_AS_VECTOR_SURFACE):
+        assert f"`{token}`" in readme, token

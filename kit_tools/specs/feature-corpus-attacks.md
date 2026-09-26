@@ -977,6 +977,95 @@ carry no environment; blob identity against the pinned commit verified through t
 No row was skipped as `secret_shape` or by a lint rule on the host runs: each quota filled before
 one was met. `LICENSE` is untouched; `NOTICE` gains "Third-party corpus samples".
 
+### US-005 — Natural-language and authority/SEO poisoning, owned and multilingual (2026-09-25)
+
+**Delivered.** 58 owned records, `atk-0403` … `atk-0460`: 32 `natural_language` (appended to
+`natural_language.jsonl` after the ingested rows) and 26 `authority_seo`. With the seed's `atk-0012` and
+`atk-0013` that is **33 owned `natural_language` and 27 owned `authority_seo`**, in **eight languages**
+(`en`, `de`, `fr`, `es`, `pt`, `ja`, plus `zh` and `it`, added because they were cheap). Every language
+is authored in both categories on all three surfaces, at least twice each. Per language,
+`natural_language`: one `search` product-review snippet, two `page` (an article plus a forum reply or a
+product review), one `text` (a README or a changelog); `authority_seo`: one `search` snippet, one `page`
+publisher claim, one `text` payment-policy file. `en` carries two more `authority_seo` `search` records,
+the siblings below. No payload is quoted here; `params.variant` is `plain`, nothing is pinned.
+
+`notes` carries the labels the tests read. `natural_language`: `context: <article | product_review |
+forum_reply | readme | changelog>; ask: <summarise_falsely | recommend | visit_url | include_phrase>`.
+`authority_seo`: `claim: <rank_first | verified_source | publisher_claim | payment_policy>; vector:
+<surfaced_snippet | og_description_snippet | stuffed_title | page_body | text_file>`, ending with the
+Zscaler (finding 11) and PG2 model-card (finding 6) pair. No lint rule and no `vocab.py` member was
+added: these live in `notes`, checked by `tests/test_corpus_attacks.py`.
+
+**The two `search` siblings US-002 deferred.** `atk-0438` (`og_description_snippet`, sibling of
+`atk-0193`) and `atk-0439` (`stuffed_title`, sibling of `atk-0213`). They are new wording, not copies:
+markers stay unique across the corpus. The stuffed-title record is `variant: plain`, not `title_field` —
+that variant is the obfuscation transform of the regex families.
+
+**Measurement** (`fallback=0.0`, `default` and `contiguity`, real routes): all 60 owned records are
+`leaked` in both configs — 120 of 120 drives — with the marker on the wire, no structural flag, no omit
+reason and one window each. All 58 new records are stage-2-clean on the raw payload and on every form
+their route hands stage 2 (six on `/search`). Nothing needed moving to US-001.
+
+**Ingested rows** (130 from US-004, 122 of them `natural_language`), `default` config: all 122 are
+`leaked` with no stage-2 hit; the other 8 keep the structural category they were given — 4
+`instruction_override` and 1 `prompt_boundary` `blocked`, 3 `encoded_payload` `flagged`. `authority_seo`
+holds no ingested row (none of the three sources is SEO-framed), so that half of the assertion has no
+row to bind yet.
+
+**Decisions and gotchas.**
+- The ingested-row test reads each row's **route-form** stage-2 hits, not `render.assign_category` over the
+  joined payload: `atk-0347` (`prompt_boundary`) is entity-escaped inside its forum-post HTML, so the
+  joined payload scans clean while `/retrieve`'s decoded form fires. That is the pre-render / post-render
+  gap the validation residue named; the two agree on the outcome for all 130.
+- Every third-party row must be a named ingested source or a window-family filler
+  (`test_every_third_party_row_is_ingested_or_window_filler`), so a fourth sampler cannot dodge the
+  ingested-row assertion by being unnamed.
+- The `lang` label test is a heuristic (script for `ja` / `zh`, else deduplicated function words). Its
+  first version tied on a Portuguese record because `es` and `pt` share words; the fix drops any word two
+  languages share, rather than loosening the strict-margin assertion.
+- The model half is unchanged by this story and waits on nothing: the records are the input a later 22M
+  cassette (spec 4 US-003) replays, and the multilingual slice is where the 22M default's model card is
+  weakest. If spec 0 releases the 86M, spec 4 records it over these same ids; otherwise it records
+  `not recorded — 86M not enabled` and the model half of the decision table stays pending.
+
+**Attack corpus totals after this story** (counts only; 460 records, all 16 categories ≥ 5, 8 languages):
+
+| category | search | page | text | total |
+|---|---|---|---|---|
+| `instruction_override` | 15 | 14 | 11 | 40 |
+| `authority_impersonation` | 7 | 7 | 6 | 20 |
+| `prompt_boundary` | 5 | 8 | 3 | 16 |
+| `encoded_payload` | 7 | 6 | 7 | 20 |
+| `suspicious_url` | 7 | 7 | 4 | 18 |
+| `exfil_beacon` | 5 | 5 | 6 | 16 |
+| `envelope_breakout` | 4 | 7 | 5 | 16 |
+| `line_anchored_role` | 7 | 6 | 4 | 17 |
+| `url_borne_envelope` | 15 | 0 | 0 | 15 |
+| `natural_language` | 28 | 94 | 33 | 155 |
+| `authority_seo` | 11 | 8 | 8 | 27 |
+| `hidden_markup` | 0 | 38 | 0 | 38 |
+| `boundary_straddle` | 0 | 7 | 6 | 13 |
+| `density_thinned` | 0 | 13 | 12 | 25 |
+| `repetition_camouflage` | 0 | 13 | 4 | 17 |
+| `sustained_midband` | 0 | 7 | 0 | 7 |
+| **all sixteen** | 111 | 240 | 109 | 460 |
+
+**Zero runtime change (rulings 6, 6a), re-asserted at spec end.** Against `git merge-base main HEAD`
+(`40d1883b…`), `git diff --stat` over `pipeline/ promptguard/ models.py retrieval_app.py cache.py
+url_validator.py model_fetcher.py contract/ config.yaml weights_manifest.json Dockerfile` is empty;
+`derive_sanitizer_revision({})` is `021378efee6ab43f22b887af2f0c0c40ef76183a39802120fbfd0ca7a3a33900`
+at HEAD and, measured from an extracted copy of that merge base, at the merge base;
+`uv run python -m scripts.export_contract --check` prints `export_contract OK`.
+
+**Verification.** Fifteen new tests in `tests/test_corpus_attacks.py`. Mutation-checked five ways, each
+turning the named test red, with the corpus files restored byte-identical (`shasum`): a stage-2 trigger
+added to an owned record, a record relabelled to another language, an ingested structural row re-filed as
+`natural_language`, every `authority_seo` `text` record dropped, and an unknown `context` in `notes`.
+Related suites (`test_corpus_attacks`, `test_corpus_lint`, `test_corpus_harness`, `test_corpus_ingest`,
+`test_governance_docs`): 453 passed, 1 skipped (the deliberate spec-5 floors skip). `ruff check`,
+`ruff format --check` and `pyright` (0 errors) were run repo-wide and are clean. The full `uv run pytest`
+is left to the orchestrator / verifier.
+
 ## Refinement Notes
 
 ### Research Findings

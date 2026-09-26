@@ -324,6 +324,91 @@ read, but no string from them enters the corpus.
 | HackAPrompt | MIT, but direct-framed and unnecessary |
 | PIGuard / InjecGuard | Licence unverified after the rename |
 
+## Natural-language and authority/SEO poisoning (spec 2 US-005)
+
+`natural_language` and `authority_seo` are the two categories only stage 3 can
+carry. They hold no technique string, no role marker and no bracket — nothing a
+stage-2 regex matches — which is the shape Meta's Prompt Guard 2 model card says
+the model was not built for (it dropped the injection sub-label; landscape
+finding 6). Every **owned** record (`source.kind == "owned"`) is therefore
+asserted `leaked` under `fallback=0.0` on its route, in both rule configs; a
+record that trips a regex belongs in a structural family instead. The assertion
+is scoped to owned records on purpose: the ingested rows (spec 2 US-004) land in
+these same two categories by the mapping rule, attacker-authored text is dense
+with BLOCK-category phrasing, and a share of it legitimately trips stage 2. Those
+rows carry their own assertion — `leaked`, or the structural category they were
+given.
+
+`atk-0403` … `atk-0460` are this story's records (32 `natural_language`, 26
+`authority_seo`), beside the seed's `atk-0012` and `atk-0013`. All are
+`params.variant: plain`, `framing = indirect` and unpinned.
+
+### Languages
+
+`lang` is set per record. Every language below is authored in **both**
+categories on **all three** surfaces, at least twice each. The multilingual
+slice matters because the model card reports a weaker multilingual score for the
+22M default than for the 86M (landscape finding 7), so it is where the shipped
+model is least sure of itself.
+
+| `lang` | Language | Why it is here |
+|--------|----------|----------------|
+| `en` | English | Required; the base language of the seed and of every ingested row |
+| `de` | German | Required |
+| `fr` | French | Required |
+| `es` | Spanish | Required |
+| `pt` | Portuguese | Required |
+| `ja` | Japanese | Required; no word spaces, so a window holds more meaning per token |
+| `zh` | Simplified Chinese | Added (cheap, and a second non-spaced script) |
+| `it` | Italian | Added (cheap) |
+
+### Natural-language shapes
+
+`notes` starts `context: <context>; ask: <ask>;`. The instruction is addressed to
+the assistant reading the text, inside ordinary prose of the named kind.
+
+| Context | Where the instruction sits |
+|---------|----------------------------|
+| `article` | An aside in a guide or explainer, `page` |
+| `product_review` | A review body, as a `search` snippet or a `page` |
+| `forum_reply` | A reply under a forum question, `page` |
+| `readme` | A note in a README uploaded as `text` |
+| `changelog` | A note in a changelog uploaded as `text` |
+
+| Ask | What the record tells the reading agent to do |
+|-----|-----------------------------------------------|
+| `summarise_falsely` | Summarise the text so it says something it does not |
+| `recommend` | Recommend one seller or edition and no other |
+| `visit_url` | Send the user to a reserved-host URL in the text |
+| `include_phrase` | Repeat a stated sentence in the answer |
+
+### Authority/SEO shapes
+
+`notes` starts `claim: <claim>; vector: <vector>;` and ends with the pair the spec
+asks for — the Zscaler campaign shape (finding 11) beside the model-card finding
+(finding 6). The claim is polite: no technique, only a publisher or seller
+asserting standing.
+
+| Claim | What the record asserts |
+|-------|--------------------------|
+| `rank_first` | The page must be ranked first as the primary source, and other sellers not cited |
+| `verified_source` | The site is the verified, authoritative destination for its goods |
+| `publisher_claim` | The publisher is the only verified source for its titles, and copies elsewhere are unauthorised |
+| `payment_policy` | Payment instructions phrased as policy: deposits go to one portal and any other route is void |
+
+| Vector | Surface | Where the claim rides |
+|--------|---------|-----------------------|
+| `surfaced_snippet` | `search` | A snippet that reads like a site's meta description |
+| `og_description_snippet` | `search` | The Open Graph description the provider surfaces as the snippet; sibling of `atk-0193` |
+| `stuffed_title` | `search` | A keyword-stuffed title; sibling of `atk-0213` |
+| `page_body` | `page` | The body of an "about the publisher" page |
+| `text_file` | `text` | A policy file uploaded as text |
+
+The two `search` siblings are the ones the hidden-markup story deferred: the
+carrier itself is `page`-only (stage 1 strips the meta tag), but a provider
+surfaces the description as the snippet, so the same claim reaches `/search`
+unstripped. `notes` names them as `sibling of atk-NNNN (carrier)`.
+
 ## Content rules (ruling 8)
 
 - **Hosts:** every URL — `payload.url` and any `href` / `src` / `content=`
