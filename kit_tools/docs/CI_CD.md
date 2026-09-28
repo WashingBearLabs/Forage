@@ -205,9 +205,11 @@ See `kit_tools/testing/TESTING_GUIDE.md` for the suite's layout and current coun
    unreproducible build.
 3. `docker/build-push-action` with `platforms: linux/amd64`, `push: false`,
    `outputs: type=docker,rewrite-timestamp=true`, `provenance: false`,
-   `cache-from: type=gha` / `cache-to: type=gha,mode=max` (the default scope). No login,
+   `cache-from: type=gha` / `cache-to: type=gha,mode=min` written **only on a push to
+   `main`** (the default scope; PR runs read main's cache and never write, because GitHub
+   isolates caches per ref), and `DOCKER_BUILD_RECORD_UPLOAD: false`. No login,
    no registry reference — the image is tagged locally as `forage:ci` (`IMAGE_REF`).
-4. Record the daemon image ID to `image-id.txt`, `docker save | gzip -1`, and upload as the
+4. Record the daemon image ID to `image-id.txt`, `docker save | zstd -T0 -3`, and upload as the
    artifact `forage-amd64-image` with `retention-days: 1`.
 
 ### `secret-grep`
@@ -480,7 +482,7 @@ one human-only credential flow around the image, vendoring weights with
 | Cache | Where | Key / scope | Notes |
 |---|---|---|---|
 | uv environment | `astral-sh/setup-uv` `enable-cache: true` | `cache-dependency-glob: uv.lock` | used by `lint`, `typecheck`, `test`, `smoke`, `searxng-smoke` |
-| amd64 image layers | GHA build cache (`type=gha,mode=max`) | default scope | written by `build-amd64`; read first by `publish` |
+| amd64 image layers | GHA build cache (`type=gha,mode=min`) | default scope | written by `build-amd64` on main pushes only; read first by `publish` |
 | arm64 image layers | GHA build cache | `scope=publish` | written and read by `publish` only, so the amd64-only manifest cannot evict the emulated layers |
 | companion layers | GHA build cache | `scope=searxng`, `scope=searxng-publish` | same split for the companion lane |
 | gated image | artifact `forage-amd64-image` | per run | `retention-days: 1`; identity asserted by every consumer |
