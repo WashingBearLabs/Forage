@@ -781,6 +781,8 @@ def _readme_input(root: Path) -> Path:
 
 # Spec 3 US-002's two sources carry per-record names and are tested below.
 _US002_SOURCES = frozenset({"notinject", "arxiv"})
+# Spec 3 US-003's two sources reuse US-001's inputs and are tested below.
+_US003_SOURCES = frozenset({"wikinews_intl", "cpython_docs_long"})
 
 _BENIGN_INPUTS: dict[str, Callable[[Path], Path]] = {
     "wikinews": lambda root: _wikinews_input(root, [_PROSE]),
@@ -794,7 +796,7 @@ _BENIGN_INPUTS: dict[str, Callable[[Path], Path]] = {
 def test_benign_adapters_write_pinned_third_party_provenance(
     name: str, tmp_path: Path
 ) -> None:
-    assert set(_BENIGN_INPUTS) | _US002_SOURCES == set(benign.SOURCES)
+    assert set(_BENIGN_INPUTS) | _US002_SOURCES | _US003_SOURCES == set(benign.SOURCES)
     source = benign.SOURCES[name]
     out = tmp_path / "out"
     report = benign.sample(
@@ -814,6 +816,186 @@ def test_benign_adapters_write_pinned_third_party_provenance(
     assert src["url"].startswith("https://") and src["record_ref"]
     assert re.fullmatch(r"[0-9a-f]{40}", src["revision"])
     assert lint_corpus([record_from_mapping(record)]) == []
+
+
+def _intl_line(n: int, lang: str, **extra: str) -> dict[str, str]:
+    return {
+        "title": f"Artikel {lang} {n}",
+        "url": f"https://{lang}.wikinews.org/w/index.php?oldid={1000 + n}",
+        "text": f"{_PROSE} ({lang} {n})",
+        "lang": lang,
+        "licence": "CC-BY-4.0",
+        "revision": str(1000 + n),
+        **extra,
+    }
+
+
+def _write_jsonl(path: Path, rows: Sequence[dict[str, str]]) -> Path:
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    return path
+
+
+def test_wikinews_lines_may_pin_their_own_revision_licence_and_lang(
+    tmp_path: Path,
+) -> None:
+    rows = [
+        _intl_line(0, "en"),
+        _intl_line(1, "en", licence="CC-BY-SA-4.0"),
+        {k: v for k, v in _intl_line(2, "en").items() if k != "revision"},
+    ]
+    path = _write_jsonl(tmp_path / "en.jsonl", rows)
+    source = benign.SOURCES["wikinews"]
+    report = benign.sample(
+        source,
+        source.reader(path, _REVISION),
+        revision=_REVISION,
+        seed=1,
+        limit=5,
+        out=tmp_path / "out",
+    )
+    assert len(report.ids) == 1
+    assert report.rejections == {"licence": 1, "unpinned": 1}
+    (record,) = _jsonl(tmp_path / "out" / "news.jsonl")
+    assert record["source"]["revision"] == "1000"
+    assert record["source"]["licence"] == "CC-BY-4.0"
+    assert record["source"]["name"] == "wikinews" and record["lang"] == "en"
+
+
+def test_wikinews_intl_names_each_edition_and_rotates_languages_and_surfaces(
+    tmp_path: Path,
+) -> None:
+    rows = [_intl_line(n, lang) for lang in ("de", "ja", "ru") for n in range(3)]
+    path = _write_jsonl(tmp_path / "intl.jsonl", rows)
+    source = benign.SOURCES["wikinews_intl"]
+    report = benign.sample(
+        source,
+        source.reader(path, "collection"),
+        revision="collection",
+        seed=1,
+        limit=6,
+        out=tmp_path / "out",
+    )
+    assert len(report.ids) == 6
+    records = _jsonl(tmp_path / "out" / "multilingual.jsonl")
+    assert Counter(r["lang"] for r in records) == {"de": 2, "ja": 2, "ru": 2}
+    assert Counter(r["surface"] for r in records) == {"page": 2, "search": 2, "text": 2}
+    for record in records:
+        src = record["source"]
+        assert src["name"] == f"wikinews-{record['lang']}"
+        assert re.fullmatch(r"[0-9]+", src["revision"])
+        assert src["licence"] == "CC-BY-4.0"
+        assert record["category"] == "multilingual"
+    assert lint_corpus([record_from_mapping(r) for r in records]) == []
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        _intl_line(0, "en"),
+        {k: v for k, v in _intl_line(0, "de").items() if k != "licence"},
+        {k: v for k, v in _intl_line(0, "de").items() if k != "lang"},
+        _intl_line(0, "not a tag"),
+    ],
+)
+def test_wikinews_intl_refuses_a_line_without_its_own_pins(
+    row: dict[str, str], tmp_path: Path
+) -> None:
+    path = _write_jsonl(tmp_path / "intl.jsonl", [row])
+    with pytest.raises(common.IngestError) as refused:
+        benign.SOURCES["wikinews_intl"].reader(path, "collection")
+    assert refused.value.reason == "input_malformed"
+
+
+def test_cpython_docs_under_a_subdirectory_keep_the_doc_relative_url(
+    tmp_path: Path,
+) -> None:
+    library = _cpython_input(tmp_path) / "library"
+    (candidate,) = benign.read_cpython_docs(library, _REVISION)
+    assert candidate.url.endswith(f"/{_REVISION}/Doc/library/queue.rst")
+    assert candidate.ref == "library/queue.rst"
+
+
+def test_windows_estimate_is_the_documented_formula() -> None:
+    assert benign.windows_estimate(0) == 1
+    assert benign.windows_estimate(2_304) == 1
+    assert benign.windows_estimate(6_000) == 3
+    assert benign.windows_estimate(9_000) == 5
+    assert benign.windows_estimate(20_000) == 8
+    assert benign.windows_estimate(90_000) == 8
+
+
+def test_cpython_docs_long_writes_long_form_with_a_window_estimate(
+    tmp_path: Path,
+) -> None:
+    howto = tmp_path / "Doc" / "howto"
+    howto.mkdir(parents=True)
+    paragraphs = "\n\n".join(f"{_PROSE} Part {n}." for n in range(60))
+    (howto / "long.rst").write_text(f"Long guide\n==========\n\n{paragraphs}\n")
+    (howto / "short.rst").write_text(f"Short guide\n===========\n\n{_PROSE}\n")
+    source = benign.SOURCES["cpython_docs_long"]
+    report = benign.sample(
+        source,
+        source.reader(howto, _REVISION),
+        revision=_REVISION,
+        seed=1,
+        limit=5,
+        out=tmp_path / "out",
+        excerpt_cap=8_000,
+    )
+    assert len(report.ids) == 1 and report.rejections == {"too_short": 1}
+    (record,) = _jsonl(tmp_path / "out" / "long_form.jsonl")
+    parsed = record_from_mapping(record)
+    chars = len(extract_html(page_document(parsed), None).raw_text)
+    assert benign.LONG_FORM_MIN <= chars <= 8_000 + 200
+    assert record["params"] == {"windows_min": benign.windows_estimate(chars)}
+    assert 3 <= record["params"]["windows_min"] <= 8
+    assert lint_corpus([parsed]) == []
+
+
+@pytest.mark.parametrize("cap", [0, 5_999, 20_001])
+def test_an_excerpt_cap_outside_the_source_bounds_is_refused(
+    cap: int, tmp_path: Path
+) -> None:
+    source = benign.SOURCES["cpython_docs_long"]
+    with pytest.raises(common.IngestError):
+        benign.sample(
+            source,
+            [],
+            revision=_REVISION,
+            seed=1,
+            limit=1,
+            out=tmp_path,
+            excerpt_cap=cap,
+        )
+
+
+def test_a_lowered_excerpt_cap_bounds_the_excerpt(tmp_path: Path) -> None:
+    source = benign.SOURCES["wikinews"]
+    long_text = "\n\n".join(f"{_PROSE} Part {n}." for n in range(40))
+    path = _wikinews_input(tmp_path, [long_text])
+    benign.sample(
+        source,
+        source.reader(path, _REVISION),
+        revision=_REVISION,
+        seed=1,
+        limit=1,
+        out=tmp_path / "out",
+        excerpt_cap=1_000,
+    )
+    (record,) = _jsonl(tmp_path / "out" / "news.jsonl")
+    text = extract_html(page_document(record_from_mapping(record)), None).raw_text
+    assert 500 < len(text) <= 1_000 + 200
+
+
+def test_an_ingest_run_retires_the_offline_fallback_note(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / benign.STATS_FILE).write_text(
+        json.dumps({"news": {"examined": 0, "not_ingested": "x", "rejections": {}}})
+    )
+    _benign_run(tmp_path, _benign_texts()[:1], out=out)
+    stats = json.loads((out / benign.STATS_FILE).read_text())
+    assert stats["news"] == {"examined": 1, "rejections": {}}
 
 
 def test_benign_readme_licence_is_resolved_at_the_project_directory(
@@ -972,26 +1154,34 @@ def _benign_records() -> list[CorpusRecord]:
     return [record for record in load_corpus() if record.kind == "benign"]
 
 
+def _synthetic_reason(genre: str) -> str | None:
+    """Why a genre holds synthetic records: never ingested, or kept on purpose.
+
+    ``not_ingested`` is the offline fallback (nothing was sampled);
+    ``synthetic`` names synthetic records an ingested genre keeps (US-004's
+    search-shaped controls). One of the two must be recorded — never a silent
+    mix — and an ingested genre never carries ``not_ingested``.
+    """
+    entry = _benign_stats().get(genre, {})
+    if entry.get("examined"):
+        assert "not_ingested" not in entry, genre
+    reason = entry.get("not_ingested", entry.get("synthetic"))
+    return reason if isinstance(reason, str) and reason else None
+
+
 def test_benign_core_genres_meet_the_floor_with_declared_provenance() -> None:
-    stats = _benign_stats()
     records = _benign_records()
     for genre in _BENIGN_CORE:
         members = [record for record in records if record.category == genre]
         assert len(members) >= vocab.MIN_RECORDS["benign_per_genre"], genre
-        external = [r for r in members if r.source.get("kind") == "third_party"]
-        for record in external:
-            assert record.source.get("url"), record.id
-            assert record.source.get("licence") in vocab.THIRD_PARTY_LICENCES
-            assert record.source.get("revision"), record.id
-        if len(external) != len(members):
-            reason = stats.get(genre, {}).get("not_ingested")
-            assert isinstance(reason, str) and reason, genre
+        _declared_provenance_holds(genre, members)
 
 
 def test_benign_sampler_stats_are_counts_under_the_closed_reasons() -> None:
     for genre, entry in _benign_stats().items():
         assert genre in vocab.BENIGN_GENRES
-        assert set(entry) <= {"examined", "rejections", "not_ingested"}, genre
+        assert set(entry) <= {"examined", "rejections", "not_ingested", "synthetic"}
+        assert not {"not_ingested", "synthetic"} <= set(entry), genre
         assert isinstance(entry["examined"], int)
         assert set(entry["rejections"]) <= benign.REJECTION_REASONS, genre
         assert all(isinstance(v, int) for v in entry["rejections"].values())
@@ -1430,8 +1620,7 @@ def _declared_provenance_holds(genre: str, members: Sequence[CorpusRecord]) -> N
         assert record.source.get("licence") in vocab.THIRD_PARTY_LICENCES
         assert record.source.get("revision"), record.id
     if any(r.source.get("kind") == "synthetic" for r in members):
-        reason = _benign_stats().get(genre, {}).get("not_ingested")
-        assert isinstance(reason, str) and reason, genre
+        assert _synthetic_reason(genre) is not None, genre
 
 
 def test_multilingual_meets_the_language_floor_with_declared_provenance() -> None:
@@ -1449,7 +1638,11 @@ def test_long_form_meets_the_window_budget_with_declared_provenance() -> None:
     assert len(windowed) >= 20
     for record in members:
         assert 3 <= _windows(record) <= 8, record.id
-        assert record.pinned is None, record.id
+        # An organic stage-2 hit is kept and pinned (US-001's triage rule);
+        # nothing else in this genre carries a pin.
+        if record.pinned is not None:
+            assert record.source.get("kind") == "third_party", record.id
+            assert record.params.get("variant") is not None, record.id
     for record in windowed:
         if record.source.get("kind") != "owned":
             assert 6_000 <= _visible_chars(record) <= 20_000, record.id

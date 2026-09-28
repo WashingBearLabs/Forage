@@ -915,6 +915,148 @@ weights_manifest.json Dockerfile` is empty; `derive_sanitizer_revision({})` prin
 spec 1's notes and `docs/bootstrap-notes.md`; `uv run python -m scripts.export_contract
 --check` prints `export_contract OK`.
 
+### Host ingest — US-001 / US-003 follow-up (2026-09-27)
+
+The host download pre-step was run and the offline-fallback genres that have a
+permissive source were re-sampled from real text. The 94 synthetic stand-ins
+it replaces were deleted (`ben-0011`…`ben-0052`: news, docs, code;
+`ben-0200`…`ben-0251`: multilingual, long_form); ids are never reused, so the
+new records are `ben-0301`…`ben-0394`. The owned seeds, US-002's records, the
+US-004 search-shaped records (including the 11 synthetic clean controls in the
+headline genres) and `forum` / `ecommerce` are unchanged.
+
+**Inputs** (all under `$FORAGE_CORPUS_INPUTS/benign-host-2026-09-27/`,
+`$FORAGE_CORPUS_INPUTS` = `~/.cache/forage-corpus-inputs`; no credential was used
+or needed — every source is public):
+
+| Input | Command | Pin | sha256 |
+|-------|---------|-----|--------|
+| CPython `Doc/` | `curl -fsSL -o cpython-<sha>.tar.gz https://codeload.github.com/python/cpython/tar.gz/<sha>`, then `tar -xzf cpython-<sha>.tar.gz cpython-<sha>/Doc cpython-<sha>/LICENSE` | `8183fa5e3f78ca6ab862de7fb8b14f3d929421e0` (tag `v3.13.9`, resolved with `git ls-remote --tags https://github.com/python/cpython`) | tarball `75847d11f01bbadc218f8a7aa96bcdc406fb68c74576aa50f14346a39bf50404` |
+| Rust book `src/` | `curl -fsSL -o rust-book-<sha>.tar.gz https://codeload.github.com/rust-lang/book/tar.gz/<sha>`, then `tar -xzf … book-<sha>/src book-<sha>/LICENSE-MIT book-<sha>/LICENSE-APACHE` | `1500248d8f230566e4ec9f27fcbb8fe9e2898ab1` (`main`, resolved with `git ls-remote`) | tarball `e4d11084f9e46cb13d2563be7a970864c5236fce51043b9665082e017e42b0e2` |
+| READMEs / CHANGELOGs | per project, `curl -fsSL -o readmes/<owner>__<repo>@<sha>/<f> https://raw.githubusercontent.com/<owner>/<repo>/<sha>/<f>` for `<f>` in `README.md CHANGELOG.md LICENSE LICENSE-MIT` (a 404 is skipped) | `sharkdp/fd@ce97e473ebaec49697c07daa50a7bc2b32f713d2`, `sharkdp/bat@4987f76709aae3a1c4db723c53874c9ddcb0c4fd`, `astral-sh/ruff@7d73e4b6dafbc891563deae9d6eb33bd658055f5`, `astral-sh/uv@83736335ff7e2125cf38de8ed5689ff98ea75426`, `psf/requests@611c6162cbc4ac2020a2f91c7cfa4f3abf9bbb60` (each `HEAD` via `git ls-remote`) | per file, below |
+| English Wikinews | `python3 fetch_wikinews.py wikinews-en.jsonl 40 en` | per article: MediaWiki revision id | `860637eb4fb65d8766c3914c8f8abc172be65f360c3d8cc400ba3f984f662535` |
+| Other editions | `python3 fetch_wikinews.py wikinews-intl.jsonl 8 de es pt it ja zh ru` | per article: MediaWiki revision id | `4d4994571b12b63137ce64490bf99e23cf8bf1a424c411039a7bd73a5d3b3c18` |
+
+`fetch_wikinews.py` (host helper, kept beside its output; final version sha256
+`3faeb6bf50a090affd18cb3c010c941a3888aa99fa54f4bc664536ffdfd1d5aa`) is a
+MediaWiki API client with nothing but these calls, one second apart, retrying
+429 / 5xx with backoff: `meta=siteinfo&siprop=rightsinfo` (the edition's
+licence, mapped to `CC-BY-2.5` / `CC-BY-3.0` / `CC-BY-4.0`; anything else would
+be written as stated and refused by the sampler as `licence`);
+`list=logevents&letype=create&lenamespace=0&lestart=2026-09-27T00:00:00Z&leend=2024-01-01T00:00:00Z`
+(newest first — the deterministic candidate order); `prop=info` in batches of
+20 (keep existing, non-redirect main-namespace pages); and per kept title
+`prop=extracts|revisions|info&explaintext=1&exsectionformat=wiki&rvprop=ids`.
+An article is written when its lead (the extract before the first `==`
+section heading, so the Sources section is dropped) has at least 400
+characters (150 for ja / zh), until the per-edition cap. Each line carries
+`title`, `url` (the `?oldid=<revid>` permalink), `text`, `revision` (the revid),
+`lang` and `licence`.
+
+Three versions of the helper ran, with the same selection rule and order. The
+other-edition file came from the first version, which checked existence one
+title at a time. The English file came from the second
+(`b595724d47ef41e226c3e61be00b25d8e61492c23791fe4a195fa7bff93b5e7b`). It checked
+in batches of 50, because the English creation log (4 248 entries, most of them
+deleted drafts) made one title at a time impractically slow. The final version
+checks in batches of 20, because a CJK title batch of 50 exceeded the API's URI
+length limit (HTTP 414). A re-fetch of the other editions with the final version
+reproduced the committed input byte-for-byte for its first 46 lines (de, es, pt,
+it, ja, zh) before it was stopped. That is evidence the selection is
+reproducible; it is not a pin. The pin is the input sha256 above.
+
+**Licences.** Wikinews: `en`, `es`, `it`, `ja`, `pt`, `ru`, `zh` declare CC BY
+4.0 and `de` CC BY 2.5 (both in `THIRD_PARTY_LICENCES`); `fr` and `sv` declare
+CC BY-SA 4.0 and were not fetched (rejected table). Only articles *created*
+from 2024-01-01 were taken, and each record carries the licence its edition
+declared at fetch time; the declared licence is the site-wide one, not a
+per-article statement. CPython `Doc/` is PSF-2.0 (the `LICENSE` at the commit,
+reproduced in `NOTICE`); the Rust book is MIT / Apache-2.0 (recorded `MIT`);
+README licences were resolved per project directory: ruff `LICENSE` MIT, uv /
+bat / fd `LICENSE-MIT`, requests `LICENSE` Apache-2.0 (its `NOTICE`, fetched the
+same way, is quoted in the repository `NOTICE`).
+
+README / CHANGELOG sha256: ruff CHANGELOG `645ac525…17da`, README
+`6ebb66af…6360`; uv CHANGELOG `11320cc1…b9a`, README `57a84a5a…f704`; requests
+README `2a9268c9…c67b`; bat CHANGELOG `e3997f6b…09fa`, README `df367a65…a49f`;
+fd CHANGELOG `cf4539cf…fd9e`, README `9c4547aa…5811` (full values beside the
+files; the directory input is pinned by each project's commit SHA).
+
+**Sampler runs** (default seed `20260919`; from the repository root, `D` the
+input directory above, `CP` / `RB` the two commit SHAs):
+
+```bash
+uv run python -m scripts.corpus.ingest.benign --source cpython_docs      --input "$D/cpython-$CP/Doc/library" --revision $CP --limit 14 --excerpt-cap 2500
+uv run python -m scripts.corpus.ingest.benign --source rust_book         --input "$D/book-$RB/src"            --revision $RB --limit 7  --excerpt-cap 2500
+uv run python -m scripts.corpus.ingest.benign --source readme_changelog  --input "$D/readmes"                 --revision readmes-2026-09-27 --limit 7
+uv run python -m scripts.corpus.ingest.benign --source cpython_docs_long --input "$D/cpython-$CP/Doc/howto"   --revision $CP --limit 20 --excerpt-cap 8000
+uv run python -m scripts.corpus.ingest.benign --source wikinews_intl     --input "$D/wikinews-intl.jsonl" --input-sha256 4d4994571b12b63137ce64490bf99e23cf8bf1a424c411039a7bd73a5d3b3c18 --revision wikinews-intl-2026-09-27 --limit 32 --excerpt-cap 1500
+uv run python -m scripts.corpus.ingest.benign --source wikinews          --input "$D/wikinews-en.jsonl"   --input-sha256 860637eb4fb65d8766c3914c8f8abc172be65f360c3d8cc400ba3f984f662535 --revision wikinews-en-2026-09-27 --limit 14 --excerpt-cap 2500
+uv run python -m tests.corpus_stage2 name-variants tests/corpus/benign/<genre>.jsonl   # docs, code, long_form, multilingual, news
+```
+
+The `--revision` of the README and Wikinews runs names the collection only;
+every record carries its own pin (project SHA or article revid). The excerpt
+caps are below the spec's maxima (6 000; 20 000 for `long_form`) to keep the
+JSONL under the 1.5 MB lint: 1 427 053 bytes after this run.
+
+| Genre | Source | Records | Examined | Rejections | Organic stage-2 hits (`fallback=0.0`) |
+|-------|--------|---------|----------|------------|----------------------------------------|
+| news | `wikinews` (en) | 14 (`ben-0381`…`ben-0394`) | 14 | none | none — all `clean` |
+| docs | `cpython_docs` (`Doc/library`) | 14 (`ben-0301`…`ben-0314`) | 14 | none | `ben-0301` flagged, `hex_escape` |
+| code | `rust_book` (text) + `readme_changelog` (search) | 7 (`ben-0315`…`ben-0321`) + 7 (`ben-0322`…`ben-0328`) | 7 + 7 | none | `ben-0328` flagged, `base64_run` |
+| multilingual | `wikinews_intl` (de, es, it, ja, pt, ru, zh) | 32 (`ben-0349`…`ben-0380`) | 32 | none | none — all `clean` |
+| long_form | `cpython_docs_long` (`Doc/howto`) | 20 (`ben-0329`…`ben-0348`) | 25 | `too_short` 5 | `ben-0331`, `ben-0332` flagged, `base64_run` |
+
+The four organic hits are kept in their genres, pinned `["flagged",
+"blocked"]` with the variant `name-variants` observed (US-001's rule); they
+count toward their genre's FPR and never toward probe coverage. The `long_form`
+test's blanket "no pins" check was narrowed to what the spec says — a pin only
+on an organic hit, which carries a variant — and the README says so.
+
+**Composition after** (benign 300 records, unchanged total):
+
+| Genre | third_party | synthetic | owned | Before (third_party / synthetic / owned) |
+|-------|-------------|-----------|-------|-------------------------------------------|
+| news | 14 | 3 (US-004 controls) | 1 | 0 / 17 / 1 |
+| docs | 14 | 2 (US-004 controls) | 1 | 0 / 16 / 1 |
+| code | 14 | 3 (US-004 controls) | 1 | 0 / 17 / 1 |
+| forum | 0 | 15 | 1 | unchanged |
+| ecommerce | 0 | 16 | 1 | unchanged |
+| multilingual | 32 | 0 | 2 | 0 / 32 / 2 |
+| long_form | 20 | 0 | 1 | 0 / 20 / 1 |
+| security_prose | 14 | 0 | 14 | unchanged |
+| over_defence_probe | 40 | 80 | 11 | unchanged |
+| **All** | **148** | **119** | **33** | 54 / 213 / 33 |
+
+Multilingual language × surface (incl. the two owned seeds): de 6 (page 3,
+search 2, text 1), es 5, it 5, ja 6, pt 4, ru 4, zh 4 — seven languages at ≥ 4
+(the synthetic `fr` / `ko` records went with the stand-ins). `long_form`
+`windows_min` (authoring estimate, now computed by the sampler with the README
+formula): 3 → 2 (the owned seed and `ben-0346`), 4 → 19; the new records are
+10 `page` / 10 `text`, 6 041–7 961 visible characters.
+
+**Not ingested — `forum`, `ecommerce`** (reasons recorded as `not_ingested` in
+`sampler_stats.json`, replacing the old "pre-step not run" text): GitHub
+Discussions posts are not licensed under the repository licence and the forum
+PII rule is still open; no CC0 product catalogue was identified, and Open Food
+Facts is ODbL / CC-BY-SA. Both stay synthetic, which the report shows by
+provenance.
+
+**Code and test changes.** `benign.py`: Wikinews lines may pin their own
+`revision` / `licence` / `lang` (the language is the sampling stratum);
+`wikinews_intl` (every line must carry all three; each edition is its own
+source, `wikinews-<lang>`) and `cpython_docs_long` (excerpt cap 20 000, minimum
+6 000, `windows_min` estimate) sources; `read_cpython_docs` keeps the
+`Doc/`-relative URL for a subdirectory input; `--excerpt-cap` may lower a
+source's cap, never raise it; a run that examines candidates drops the genre's
+`not_ingested`. `sampler_stats.json` gains an optional `synthetic` reason for
+an ingested genre that keeps synthetic records on purpose (news, docs, code:
+the US-004 controls); the provenance tests accept exactly one of the two
+reasons and refuse `not_ingested` on an ingested genre. `NOTICE` gains a
+section with one entry per source and Wikinews edition (per-article revision
+ids, the PSF licence text, the project copyright lines).
+
 ## Refinement Notes
 
 ### Research Findings

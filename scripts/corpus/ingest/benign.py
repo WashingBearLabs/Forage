@@ -15,6 +15,13 @@ regex. A candidate is rejected only for reasons unrelated to stage 2
 (``REJECTION_REASONS``); the per-genre ``examined`` count and rejections go to
 ``sampler_stats.json`` beside the records. Output is ids and counts only.
 
+Two sources feed US-003's genres from the same inputs as US-001's:
+``wikinews_intl`` reads other-language editions into ``multilingual`` (each
+line names its ``lang``, ``licence`` and revision, and the language is the
+sampling stratum), and ``cpython_docs_long`` reads long documentation pages into
+``long_form`` with a larger excerpt cap, a minimum excerpt and a
+``windows_min`` estimate.
+
 Two sources are not core-genre web text (US-002). ``notinject`` re-homes
 NotInject's benign user queries (``framing = rehomed_direct``) into
 ``over_defence_probe`` pages, snippets and uploads, stratified across the
@@ -29,11 +36,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import re
 import sys
 from collections import Counter
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Final, cast
 from urllib.parse import quote
@@ -49,6 +57,8 @@ DEFAULT_OUT: Final[Path] = vocab.TESTS_CORPUS_ROOT / "benign"
 STATS_FILE: Final[str] = "sampler_stats.json"
 DEFAULT_LIMIT: Final[int] = 20
 EXCERPT_CAP: Final[int] = 6_000
+LONG_FORM_CAP: Final[int] = 20_000
+LONG_FORM_MIN: Final[int] = 6_000
 SEARCH_CONTENT_CAP: Final[int] = 300
 MIN_CHARS: Final[int] = 200
 MIN_ALPHA_SHARE: Final[float] = 0.55
@@ -110,6 +120,8 @@ class BenignSource:
     framing: str = "indirect"
     surfaces: tuple[str, ...] = ()
     min_chars: int = MIN_CHARS
+    excerpt_cap: int = EXCERPT_CAP
+    min_excerpt: int = 0
 
 
 @dataclass(slots=True)
@@ -141,8 +153,25 @@ def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="strict")
 
 
+def _optional_str(obj: dict[str, object], key: str) -> str | None:
+    value = obj.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise common.IngestError("input_malformed")
+    return value
+
+
 def read_wikinews(path: Path, revision: str) -> list[Candidate]:
-    """A JSONL export of articles: ``{"title", "url", "text"}`` per line."""
+    """A JSONL export of articles: ``{"title", "url", "text"}`` per line.
+
+    A line may also pin itself: ``revision`` (the MediaWiki revision id the
+    text was taken at), ``licence`` (the edition's declared licence as an SPDX
+    id — anything else is a ``licence`` rejection) and ``lang``. A line that
+    names its ``licence`` must name its ``revision`` too, or it is
+    ``unpinned``. The language is the sampling stratum, so a multi-edition
+    export draws from every edition in rotation.
+    """
     del revision
     candidates: list[Candidate] = []
     for number, line in enumerate(_read_text(path).splitlines()):
@@ -154,8 +183,38 @@ def read_wikinews(path: Path, revision: str) -> list[Candidate]:
             raise common.IngestError("input_malformed")
         if not isinstance(text, str):
             raise common.IngestError("input_malformed")
-        candidates.append(Candidate(f"line {number + 1}", title, text, url))
+        lang = _optional_str(obj, "lang")
+        if lang is not None and not vocab.BCP47_PATTERN.fullmatch(lang):
+            raise common.IngestError("input_malformed")
+        candidates.append(
+            Candidate(
+                f"line {number + 1}",
+                title,
+                text,
+                url,
+                licence=_optional_str(obj, "licence"),
+                revision=_optional_str(obj, "revision"),
+                stratum=lang,
+                lang=lang or "en",
+            )
+        )
     return candidates
+
+
+def read_wikinews_intl(path: Path, revision: str) -> list[Candidate]:
+    """Other-language editions: each line must name ``lang``, ``licence``, ``revision``.
+
+    Each edition is its own source (``wikinews-<lang>``), so its records and
+    its ``NOTICE`` entry name the edition, and an English line is refused.
+    """
+    candidates = read_wikinews(path, revision)
+    for candidate in candidates:
+        if candidate.stratum in (None, "en") or candidate.licence is None:
+            raise common.IngestError("input_malformed")
+    return [
+        replace(candidate, source_name=f"wikinews-{candidate.lang}")
+        for candidate in candidates
+    ]
 
 
 def _rst_prose(text: str) -> tuple[str, str]:
@@ -184,11 +243,24 @@ def _rst_prose(text: str) -> tuple[str, str]:
     return title, "\n".join(kept)
 
 
+def _doc_root(path: Path) -> Path:
+    """The ``Doc/`` directory ``path`` is, or sits under (else ``path`` itself)."""
+    for candidate in (path, *path.parents):
+        if candidate.name == "Doc":
+            return candidate
+    return path
+
+
 def read_cpython_docs(path: Path, revision: str) -> list[Candidate]:
-    """The ``Doc/`` tree at a CPython tag: one candidate per ``.rst`` file."""
+    """The ``Doc/`` tree at a CPython commit: one candidate per ``.rst`` file.
+
+    ``path`` may be ``Doc/`` or a directory under it (``Doc/library``); the
+    upstream URL is always relative to ``Doc/``.
+    """
+    root = _doc_root(path)
     candidates: list[Candidate] = []
     for file in sorted(path.rglob("*.rst")):
-        rel = file.relative_to(path).as_posix()
+        rel = file.relative_to(root).as_posix()
         title, prose = _rst_prose(_read_text(file))
         url = f"https://github.com/python/cpython/blob/{revision}/Doc/{rel}"
         candidates.append(Candidate(rel, title or rel, prose, url))
@@ -421,6 +493,26 @@ SOURCES: Final[dict[str, BenignSource]] = {
     "readme_changelog": BenignSource(
         "readme_changelog", "MIT", "code", "search", read_readmes
     ),
+    "wikinews_intl": BenignSource(
+        "wikinews_intl",
+        "CC-BY-4.0",
+        "multilingual",
+        "page",
+        read_wikinews_intl,
+        surfaces=("page", "search", "text"),
+        min_chars=100,
+    ),
+    "cpython_docs_long": BenignSource(
+        "cpython_docs_long",
+        "PSF-2.0",
+        "long_form",
+        "page",
+        read_cpython_docs,
+        surfaces=("page", "text"),
+        min_chars=LONG_FORM_MIN,
+        excerpt_cap=LONG_FORM_CAP,
+        min_excerpt=LONG_FORM_MIN,
+    ),
     "notinject": BenignSource(
         "NotInject",
         "MIT",
@@ -502,15 +594,29 @@ def render_payload(
     return render.text_upload(f"{source.name}.txt", text)
 
 
+def windows_estimate(chars: int) -> int:
+    """The authoring estimate of ``windows_min`` (README): never a measurement.
+
+    ``ceil((chars / 4.5 - 512) / 448) + 1``, at least 1 and capped at 8.
+    """
+    tokens = chars / 4.5
+    if tokens <= 512:
+        return 1
+    return min(8, math.ceil((tokens - 512) / 448) + 1)
+
+
 def _mapping(
     source: BenignSource,
     candidate: Candidate,
     record_id: str,
     revision: str,
     surface: str,
+    text: str,
 ) -> dict[str, object]:
     title = render.rewrite_urls(candidate.title).strip()
-    text = excerpt(render.rewrite_urls(candidate.text))
+    params: dict[str, object] = {}
+    if source.genre == "long_form":
+        params["windows_min"] = windows_estimate(len(text))
     shape = "re-homed" if source.framing == "rehomed_direct" else "excerpt rendered"
     return {
         "id": record_id,
@@ -531,7 +637,7 @@ def _mapping(
             "framing": source.framing,
         },
         "lang": candidate.lang,
-        "params": {},
+        "params": params,
         "notes": f"{source.name} {shape} as {surface}",
     }
 
@@ -608,6 +714,11 @@ def write_stats(out: Path, genre: str, report: BenignReport) -> None:
         else {}
     )
     entry = stats.setdefault(genre, {"examined": 0, "rejections": {}})
+    # A run that examined candidates retires an offline-fallback note: the
+    # genre was ingested. (Synthetic records that stay are declared under
+    # ``synthetic`` by hand, with their reason.)
+    if report.examined:
+        entry.pop("not_ingested", None)
     rejections = Counter(cast(dict[str, int], entry.get("rejections", {})))
     rejections.update(report.rejections)
     entry["examined"] = cast(int, entry.get("examined", 0)) + report.examined
@@ -652,8 +763,16 @@ def sample(
     limit: int,
     out: Path,
     triage: Triage = drive_structural_only,
+    excerpt_cap: int | None = None,
 ) -> BenignReport:
-    """Screen, render and triage candidates in seed order; append to ``out``."""
+    """Screen, render and triage candidates in seed order; append to ``out``.
+
+    ``excerpt_cap`` lowers the source's cap (the corpus has a byte budget); it
+    may never raise it, and never below the source's minimum excerpt.
+    """
+    cap = source.excerpt_cap if excerpt_cap is None else excerpt_cap
+    if not max(source.min_excerpt, 1) <= cap <= source.excerpt_cap:
+        raise common.IngestError("input_malformed")
     out.mkdir(parents=True, exist_ok=True)
     highest, names = _existing(out)
     ordered = _in_sample_order(candidates, seed)
@@ -672,7 +791,10 @@ def sample(
         reason = screen(candidate, seen, source.min_chars)
         record_id = f"ben-{highest + len(written) + 1:04d}"
         surface = surfaces[len(written) % len(surfaces)]
-        mapping = _mapping(source, candidate, record_id, revision, surface)
+        text = excerpt(render.rewrite_urls(candidate.text), cap)
+        if reason is None and len(text) < source.min_excerpt:
+            reason = "too_short"
+        mapping = _mapping(source, candidate, record_id, revision, surface, text)
         if reason is None:
             record = record_from_mapping(mapping)
             if not all(rule(record) for rule in LINT_RULES.values()):
@@ -716,6 +838,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         DEFAULT_LIMIT,
     )
     parser.add_argument("--source", choices=sorted(SOURCES), required=True)
+    parser.add_argument(
+        "--excerpt-cap",
+        type=int,
+        default=None,
+        help="Lower the source's excerpt cap in characters (never raise it)",
+    )
     parser.set_defaults(out=DEFAULT_OUT)
     args = parser.parse_args(argv)
     source = SOURCES[cast(str, args.source)]
@@ -731,6 +859,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             seed=cast(int, args.seed),
             limit=cast(int, args.limit),
             out=cast(Path, args.out),
+            excerpt_cap=cast("int | None", args.excerpt_cap),
         )
     except Exception as exc:  # every failure leaves as a closed reason code
         print(f"{source.name}: refused ({common.failure_reason(exc)})", file=sys.stderr)

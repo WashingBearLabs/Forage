@@ -42,7 +42,9 @@ Third-party corpus samples
 The injection test corpus under tests/corpus/attacks/ carries capped,
 seed-fixed samples from three MIT-licensed datasets. The benign counter-corpus
 under tests/corpus/benign/ carries a fourth MIT-licensed dataset, NotInject,
-and excerpts of CC-BY-4.0 arXiv papers (the next section after the MIT text).
+excerpts of CC-BY-4.0 arXiv papers (the next section after the MIT text), and
+excerpts of Wikinews, the Python documentation, the Rust book and project
+READMEs / changelogs (the last section).
 Every sampled payload was re-rendered (as a search snippet, a page body or a
 text upload, with every host rewritten to an RFC 2606 reserved name) by
 scripts/corpus/ingest/. These records are test data only; none is shipped
@@ -238,3 +240,202 @@ Source: arXiv:2607.22024
   Licence: CC-BY-4.0 (stated on the arXiv abstract page)
   Revision: v1
   Records: ben-0176
+
+--------------------------------------------------------------------------
+Third-party benign corpus text - Wikinews, Python documentation, Rust book,
+project READMEs and changelogs
+--------------------------------------------------------------------------
+
+The headline benign genres (`news`, `docs`, `code`) and `multilingual` /
+`long_form` under tests/corpus/benign/ carry excerpts of the permissively
+licensed sources below, sampled by scripts/corpus/ingest/benign.py. Changes
+were made: each text was excerpted (whole paragraphs, capped), reflowed as a
+web page, a search result or a text upload, and every host it names was
+rewritten to an RFC 2606 reserved name. Nothing here implies that any author
+endorses this project. Each record's `source` object names its upstream URL
+(for Wikinews, the article's oldid permalink; the record's title is the
+article's title), licence and revision.
+
+Source: wikinews
+  Upstream: https://en.wikinews.org/ (Wikinews contributors)
+  Licence: CC-BY-4.0 (the edition's declared licence, https://creativecommons.org/licenses/by/4.0/)
+  Pinned per article by MediaWiki revision id:
+    ben-0381 Revision: 4954220
+    ben-0382 Revision: 4878949
+    ben-0383 Revision: 5024646
+    ben-0384 Revision: 4878826
+    ben-0385 Revision: 4991136
+    ben-0386 Revision: 4975106
+    ben-0387 Revision: 5024656
+    ben-0388 Revision: 5013891
+    ben-0389 Revision: 4878676
+    ben-0390 Revision: 5024251
+    ben-0391 Revision: 5024638
+    ben-0392 Revision: 4927582
+    ben-0393 Revision: 4982875
+    ben-0394 Revision: 4955406
+
+Source: wikinews-de
+  Upstream: https://de.wikinews.org/ (Wikinews contributors)
+  Licence: CC-BY-2.5 (the edition's declared licence, https://creativecommons.org/licenses/by/2.5/)
+  Pinned per article by MediaWiki revision id:
+    ben-0349 Revision: 864807
+    ben-0356 Revision: 862744
+    ben-0363 Revision: 864749
+    ben-0370 Revision: 862712
+    ben-0377 Revision: 862709
+
+Source: wikinews-es
+  Upstream: https://es.wikinews.org/ (Wikinews contributors)
+  Licence: CC-BY-4.0 (the edition's declared licence, https://creativecommons.org/licenses/by/4.0/)
+  Pinned per article by MediaWiki revision id:
+    ben-0350 Revision: 732591
+    ben-0357 Revision: 722950
+    ben-0364 Revision: 731391
+    ben-0371 Revision: 722956
+    ben-0378 Revision: 732744
+
+Source: wikinews-it
+  Upstream: https://it.wikinews.org/ (Wikinews contributors)
+  Licence: CC-BY-4.0 (the edition's declared licence, https://creativecommons.org/licenses/by/4.0/)
+  Pinned per article by MediaWiki revision id:
+    ben-0351 Revision: 1008605
+    ben-0358 Revision: 1005688
+    ben-0365 Revision: 1005417
+    ben-0372 Revision: 1005418
+    ben-0379 Revision: 1005161
+
+Source: wikinews-ja
+  Upstream: https://ja.wikinews.org/ (Wikinews contributors)
+  Licence: CC-BY-4.0 (the edition's declared licence, https://creativecommons.org/licenses/by/4.0/)
+  Pinned per article by MediaWiki revision id:
+    ben-0352 Revision: 211507
+    ben-0359 Revision: 201202
+    ben-0366 Revision: 201172
+    ben-0373 Revision: 200565
+    ben-0380 Revision: 200513
+
+Source: wikinews-pt
+  Upstream: https://pt.wikinews.org/ (Wikinews contributors)
+  Licence: CC-BY-4.0 (the edition's declared licence, https://creativecommons.org/licenses/by/4.0/)
+  Pinned per article by MediaWiki revision id:
+    ben-0353 Revision: 596251
+    ben-0360 Revision: 596190
+    ben-0367 Revision: 596178
+    ben-0374 Revision: 596175
+
+Source: wikinews-ru
+  Upstream: https://ru.wikinews.org/ (Wikinews contributors)
+  Licence: CC-BY-4.0 (the edition's declared licence, https://creativecommons.org/licenses/by/4.0/)
+  Pinned per article by MediaWiki revision id:
+    ben-0354 Revision: 17986743
+    ben-0361 Revision: 17986732
+    ben-0368 Revision: 17986727
+    ben-0375 Revision: 17986720
+
+Source: wikinews-zh
+  Upstream: https://zh.wikinews.org/ (Wikinews contributors)
+  Licence: CC-BY-4.0 (the edition's declared licence, https://creativecommons.org/licenses/by/4.0/)
+  Pinned per article by MediaWiki revision id:
+    ben-0355 Revision: 285380
+    ben-0362 Revision: 286350
+    ben-0369 Revision: 280198
+    ben-0376 Revision: 275220
+
+Source: cpython_docs
+  Upstream: https://github.com/python/cpython/tree/8183fa5e3f78ca6ab862de7fb8b14f3d929421e0/Doc
+  Licence: PSF-2.0 (LICENSE at the revision below)
+  Copyright (c) 2001-2024 Python Software Foundation; All Rights Reserved
+  Revision: 8183fa5e3f78ca6ab862de7fb8b14f3d929421e0
+  Records: ben-0301..ben-0314 (Doc/library)
+
+Source: cpython_docs_long
+  Upstream: https://github.com/python/cpython/tree/8183fa5e3f78ca6ab862de7fb8b14f3d929421e0/Doc
+  Licence: PSF-2.0 (LICENSE at the revision below)
+  Copyright (c) 2001-2024 Python Software Foundation; All Rights Reserved
+  Revision: 8183fa5e3f78ca6ab862de7fb8b14f3d929421e0
+  Records: ben-0329..ben-0348 (Doc/howto)
+
+Source: rust_book
+  Upstream: https://github.com/rust-lang/book (The Rust Programming Language)
+  Licence: MIT (LICENSE-MIT; the book is dual MIT / Apache-2.0)
+  Copyright (c) 2010 The Rust Project Developers
+  Revision: 1500248d8f230566e4ec9f27fcbb8fe9e2898ab1
+  Records: ben-0315..ben-0321
+
+Source: readme_changelog
+  README / CHANGELOG files, each pinned by its project's commit SHA; the
+  licence is the one in that project's directory at that commit:
+  astral-sh/ruff: MIT (LICENSE); Copyright (c) 2022 Charles Marsh
+    https://github.com/astral-sh/ruff
+    Revision: 7d73e4b6dafbc891563deae9d6eb33bd658055f5
+    Records: ben-0322 (CHANGELOG.md)
+  astral-sh/uv: MIT (LICENSE-MIT); Copyright (c) 2025 Astral Software Inc.
+    https://github.com/astral-sh/uv
+    Revision: 83736335ff7e2125cf38de8ed5689ff98ea75426
+    Records: ben-0325 (README.md), ben-0326 (CHANGELOG.md)
+  psf/requests: Apache-2.0 (LICENSE); Copyright 2019 Kenneth Reitz (NOTICE)
+    https://github.com/psf/requests
+    Revision: 611c6162cbc4ac2020a2f91c7cfa4f3abf9bbb60
+    Records: ben-0324 (README.md)
+  sharkdp/bat: MIT (LICENSE-MIT); Copyright (c) 2018-2023 bat-developers (https://github.com/sharkdp/bat).
+    https://github.com/sharkdp/bat
+    Revision: 4987f76709aae3a1c4db723c53874c9ddcb0c4fd
+    Records: ben-0323 (README.md)
+  sharkdp/fd: MIT (LICENSE-MIT); Copyright (c) 2017-present The fd developers
+    https://github.com/sharkdp/fd
+    Revision: ce97e473ebaec49697c07daa50a7bc2b32f713d2
+    Records: ben-0327 (CHANGELOG.md), ben-0328 (README.md)
+
+The MIT sources above are distributed under the MIT License, whose text is
+reproduced in the section above; the Apache-2.0 source under the Apache
+License, Version 2.0 (the LICENSE file of this repository).
+
+The Python documentation is distributed under:
+
+    PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
+    --------------------------------------------
+
+    1. This LICENSE AGREEMENT is between the Python Software Foundation
+    ("PSF"), and the Individual or Organization ("Licensee") accessing and
+    otherwise using this software ("Python") in source or binary form and
+    its associated documentation.
+
+    2. Subject to the terms and conditions of this License Agreement, PSF hereby
+    grants Licensee a nonexclusive, royalty-free, world-wide license to reproduce,
+    analyze, test, perform and/or display publicly, prepare derivative works,
+    distribute, and otherwise use Python alone or in any derivative version,
+    provided, however, that PSF's License Agreement and PSF's notice of copyright,
+    i.e., "Copyright (c) 2001-2024 Python Software Foundation; All Rights Reserved"
+    are retained in Python alone or in any derivative version prepared by Licensee.
+
+    3. In the event Licensee prepares a derivative work that is based on
+    or incorporates Python or any part thereof, and wants to make
+    the derivative work available to others as provided herein, then
+    Licensee hereby agrees to include in any such work a brief summary of
+    the changes made to Python.
+
+    4. PSF is making Python available to Licensee on an "AS IS"
+    basis.  PSF MAKES NO REPRESENTATIONS OR WARRANTIES, EXPRESS OR
+    IMPLIED.  BY WAY OF EXAMPLE, BUT NOT LIMITATION, PSF MAKES NO AND
+    DISCLAIMS ANY REPRESENTATION OR WARRANTY OF MERCHANTABILITY OR FITNESS
+    FOR ANY PARTICULAR PURPOSE OR THAT THE USE OF PYTHON WILL NOT
+    INFRINGE ANY THIRD PARTY RIGHTS.
+
+    5. PSF SHALL NOT BE LIABLE TO LICENSEE OR ANY OTHER USERS OF PYTHON
+    FOR ANY INCIDENTAL, SPECIAL, OR CONSEQUENTIAL DAMAGES OR LOSS AS
+    A RESULT OF MODIFYING, DISTRIBUTING, OR OTHERWISE USING PYTHON,
+    OR ANY DERIVATIVE THEREOF, EVEN IF ADVISED OF THE POSSIBILITY THEREOF.
+
+    6. This License Agreement will automatically terminate upon a material
+    breach of its terms and conditions.
+
+    7. Nothing in this License Agreement shall be deemed to create any
+    relationship of agency, partnership, or joint venture between PSF and
+    Licensee.  This License Agreement does not grant permission to use PSF
+    trademarks or trade name in a trademark sense to endorse or promote
+    products or services of Licensee, or any third party.
+
+    8. By copying, installing or otherwise using Python, Licensee
+    agrees to be bound by the terms and conditions of this License
+    Agreement.

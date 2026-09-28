@@ -330,18 +330,25 @@ read, but no string from them enters the corpus.
 | arXiv papers not under CC BY 4.0 / CC0 | The arXiv non-exclusive licence, CC BY-NC-*, CC BY-SA: the abstract page states the licence per paper and the `arxiv` sampler refuses anything else as a `licence` rejection |
 | Reddit | No licence grant |
 | Hacker News | No licence grant |
+| French and Swedish Wikinews | CC-BY-SA 4.0 (share-alike) — the edition's declared licence; the other editions sampled declare CC BY 2.5 (de) or CC BY 4.0 |
+| GitHub Discussions | Posts are not licensed under the repository's licence (the platform terms grant no reuse licence); the `forum` PII rule is also open |
+| Open Food Facts | ODbL database, CC-BY-SA text (share-alike) |
 
 ## Benign sampler and the core genres (spec 3 US-001)
 
 `scripts/corpus/ingest/benign.py` is one sampler with a `--source` switch
 (`wikinews` → `news` page, `cpython_docs` → `docs` page, `rust_book` → `code`
-text, `readme_changelog` → `code` search; `notinject` and `arxiv` are spec 3 US-002's; a README directory is named
+text, `readme_changelog` → `code` search; `notinject` and `arxiv` are spec 3
+US-002's, `wikinews_intl` and `cpython_docs_long` US-003's; a README directory is named
 `<owner>__<repo>@<sha>` and its licence is read from that directory). Same CLI,
 input guard, `--input-sha256` pin and ids-and-counts-only output as the spec 2
-samplers; `--out` defaults to `benign/`.
+samplers; `--out` defaults to `benign/`. A Wikinews line may pin itself
+(`revision` — the MediaWiki revision id —, `licence`, `lang`); `wikinews_intl`
+requires all three and names each edition as its own source (`wikinews-de`, …).
 
 Every accepted candidate is excerpted (whole paragraphs, at most 6 000
-characters), re-hosted to a reserved name (`<genre>.example`, raw-reject
+characters — 20 000 for `long_form`; `--excerpt-cap` lowers the cap, never
+raises it, and the host runs used it to keep the corpus under its size cap), re-hosted to a reserved name (`<genre>.example`, raw-reject
 characters percent-encoded; attribution stays in `source.url`), rendered into
 its surface and **driven through `drive()` with `fallback=0.0` before it is
 written**. A candidate that trips a stage-2 regex stays in its genre with
@@ -355,9 +362,19 @@ to set `params.variant` to the first regex hit. Such a record is an organic
 structural false positive and counts toward its genre's FPR. Rejections are
 only for reasons unrelated to stage 2 (`benign.REJECTION_REASONS`: licence,
 unpinned, too_short, non_prose, duplicate, secret_shape, invalid_url, lint).
-`benign/sampler_stats.json` holds `{genre: {examined, rejections}}`; a genre
-whose records are not all `third_party` carries `not_ingested: <reason>` there
-(the offline fallback: its records are `source.kind: synthetic`).
+`benign/sampler_stats.json` holds `{genre: {examined, rejections}}`. A genre
+holding `source.kind: synthetic` records says why, with exactly one of
+`not_ingested: <reason>` (the offline fallback: nothing was sampled —
+`forum`, `ecommerce`) or `synthetic: <reason>` (an ingested genre that keeps
+synthetic records on purpose — US-004's search-shaped controls in `news`,
+`docs`, `code`). A sampler run that examines candidates retires the genre's
+`not_ingested` note.
+
+**Host download pre-step.** The inputs behind the ingested genres, and the
+exact commands that fetched them (commit SHAs, per-article revision ids,
+input sha256 values, seed, limits, excerpt caps), are recorded in the benign
+spec's Implementation Notes (`kit_tools/specs/archive/feature-corpus-benign.md`,
+"Host ingest"). They live under `$FORAGE_CORPUS_INPUTS`, never in the tree.
 
 **Regex probes.** Records authored to match a stage-2 regex live in
 `over_defence_probe`, never in a headline genre, and are the only records that
@@ -413,23 +430,25 @@ Implementation Notes as a miss.
 
 ## Multilingual and long-form (spec 3 US-003)
 
-`multilingual` holds benign text in eight non-English languages (de, fr, es, pt,
-it, ja, zh, ru at four records or more each, plus ko) spread across all three
-surfaces, so the 22M model's false-positive rate is measured on the axis its
+`multilingual` holds benign text in seven non-English languages (de, es, it,
+ja, pt, ru, zh, four records or more each) spread across all three surfaces, so the 22M model's false-positive rate is measured on the axis its
 model card reports as weakest. `long_form` holds pages of 6 000–20 000
 characters with `params.windows_min` of 3 or more, the records on which the
-contiguity rule's accident rate is first measured; they carry no pins.
+contiguity rule's accident rate is first measured. The only pins there are
+organic stage-2 hits in real documentation, kept under US-001's triage rule.
 
 `windows_min` is an **authoring estimate, not a measurement**: windows are
 token-based (512-token windows, 64-token overlap, through the real tokenizer),
 and the estimate is `ceil((chars / 4.5 - 512) / 448) + 1`. Spec 4 checks it
 against the recorded window count; a record that falls short is re-authored.
 
-Both genres took the offline fallback in US-003 (`not_ingested` in
-`benign/sampler_stats.json`; records are `source.kind: synthetic`): the
-permissive sources — other-language Wikinews editions (CC-BY-2.5), the Python
-documentation translations (PSF-2.0) and Project Gutenberg public-domain books —
-can be ingested later through the benign sampler. `NOTICE` gains no entry.
+Both genres took the offline fallback in US-003 and were then ingested from
+real text on the host (2026-09-27), replacing the synthetic stand-ins:
+`multilingual` from seven Wikinews editions (`wikinews_intl`: de under CC BY
+2.5; es, it, ja, pt, ru, zh under CC BY 4.0; articles created from 2024 on,
+each pinned by revision id) and `long_form` from the CPython `Doc/howto` pages
+at a pinned commit (`cpython_docs_long`, PSF-2.0). The owned seeds stay.
+`NOTICE` carries one entry per edition and source.
 
 **Size cap.** The JSONL under `attacks/` and `benign/` together stays at or
 below 1.5 MB; a lint test asserts it, so a long record is budgeted, not free.
