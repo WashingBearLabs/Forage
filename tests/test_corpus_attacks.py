@@ -15,6 +15,11 @@ checked, and they are read from the records, never from this file. The rest of
 what this file asserts is that a record's labels tell the truth: the variant
 it names is the transform it carries, the regex it names is one that can fire
 on it, and its marker survives to the wire.
+
+PYTEST_DONT_REWRITE: assertion rewriting is off for this module, so a failing
+assert shows only its message, never its operands or call arguments (which
+could carry record text). ``tests/test_corpus_lint.py`` requires this marker
+in every corpus test module.
 """
 
 from __future__ import annotations

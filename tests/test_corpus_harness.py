@@ -5,6 +5,11 @@ its real lifespan, with the classifier double below stage 3 — there is no
 ``run_promptguard`` mock. A corpus record is data: nothing in this module puts
 a payload into a test name, an assertion message or a log line, and the tests
 that pin that use a unique sentinel.
+
+PYTEST_DONT_REWRITE: assertion rewriting is off for this module, so a failing
+assert shows only its message, never its operands or call arguments (which
+could carry record text). ``tests/test_corpus_lint.py`` requires this marker
+in every corpus test module.
 """
 
 from __future__ import annotations

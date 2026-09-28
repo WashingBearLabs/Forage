@@ -4,6 +4,11 @@ Each sampler is fed a small fixture in its upstream's native shape, written
 under ``tmp_path`` (outside the repository, as a real download must be). No
 assertion message quotes a payload: failures name a record id, a ref or a
 closed reason code.
+
+PYTEST_DONT_REWRITE: assertion rewriting is off for this module, so a failing
+assert shows only its message, never its operands or call arguments (which
+could carry record text). ``tests/test_corpus_lint.py`` requires this marker
+in every corpus test module.
 """
 
 from __future__ import annotations

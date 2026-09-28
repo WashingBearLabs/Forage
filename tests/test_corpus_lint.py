@@ -3,11 +3,19 @@
 Every lint rule is exercised with a record that fails it; every failure names
 the record id and the rule and never the offending value. Secret-shaped values
 are assembled at run time so this file carries no token-shaped literal.
+
+PYTEST_DONT_REWRITE: assertion rewriting is off for this module, so a failing
+assert shows only its message, never its operands or call arguments (which
+could carry record text). ``tests/test_corpus_lint.py`` requires this marker
+in every corpus test module.
 """
 
 from __future__ import annotations
 
+import ast
 import json
+import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -485,3 +493,83 @@ def test_every_genre_holding_third_party_records_has_sampler_stats() -> None:
     }
     missing = sorted(genre for genre in genres if genre not in stats)
     assert missing == []
+
+
+# ---------------------------------------------------------------------------
+# Assertion rewriting is off wherever corpus text can reach an assert
+# ---------------------------------------------------------------------------
+
+_TESTS_DIR = Path(__file__).resolve().parent
+_DONT_REWRITE = "PYTEST_DONT_REWRITE"
+
+
+def _module_docstring(path: Path) -> str:
+    return ast.get_docstring(ast.parse(path.read_text(encoding="utf-8"))) or ""
+
+
+def _corpus_test_modules() -> list[Path]:
+    """Every corpus test module, found by glob and by reference, never by list."""
+    named = set(_TESTS_DIR.glob("test_corpus_*.py"))
+    referencing = {
+        path
+        for path in _TESTS_DIR.glob("test_*.py")
+        if "corpus" in path.read_text(encoding="utf-8")
+    }
+    return sorted(named | referencing)
+
+
+def test_every_corpus_test_module_disables_assertion_rewriting() -> None:
+    # Rewriting prints a failing assert's operands and call arguments even
+    # when a message is given, so a record's text could reach the output. The
+    # module-docstring marker makes that structurally impossible; the per-site
+    # fixes (safe reprs, asserting on precomputed booleans) stay as well.
+    modules = _corpus_test_modules()
+    assert _TESTS_DIR / "test_corpus_lint.py" in modules
+    missing = [
+        path.relative_to(_TESTS_DIR.parent).as_posix()
+        for path in modules
+        if _DONT_REWRITE not in _module_docstring(path)
+    ]
+    assert missing == [], "missing PYTEST_DONT_REWRITE: " + ", ".join(missing)
+
+
+def test_the_dont_rewrite_marker_hides_assert_operands(tmp_path: Path) -> None:
+    # Measured, not assumed: the same failing assert, with and without the
+    # marker, run by a real pytest in a subprocess. The sentinel is read from a
+    # data file so the source listing in the traceback never carries it.
+    sentinel = "operand-sentinel-" + "7f3a"
+    (tmp_path / "data.txt").write_text(sentinel, encoding="utf-8")
+    body = (
+        "from pathlib import Path\n"
+        "def check(value):\n"
+        "    return False\n"
+        "def test_it():\n"
+        "    value = (Path(__file__).parent / 'data.txt').read_text()\n"
+        "    assert check(value), 'message only'\n"
+    )
+    (tmp_path / "test_rewritten.py").write_text(body, encoding="utf-8")
+    (tmp_path / "test_marked.py").write_text(
+        f'"""{_DONT_REWRITE}"""\n' + body, encoding="utf-8"
+    )
+    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+
+    def run(name: str) -> str:
+        completed = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", name],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120,
+        )
+        assert completed.returncode == 1, name
+        return completed.stdout + completed.stderr
+
+    rewritten, marked = run("test_rewritten.py"), run("test_marked.py")
+    assert "message only" in rewritten
+    assert "message only" in marked
+    # The control proves the leak exists; the marked run proves it is closed.
+    leaked_without_marker = sentinel in rewritten
+    leaked_with_marker = sentinel in marked
+    assert leaked_without_marker, "control: rewriting no longer prints operands"
+    assert not leaked_with_marker, "marker did not suppress operand printing"
