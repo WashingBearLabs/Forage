@@ -3897,3 +3897,37 @@ class TestActionsStorageFootprint:
     def test_no_consumer_still_gunzips(self, jobs: dict[str, Any]) -> None:
         offenders = [name for name in jobs if "gunzip" in _run_text(jobs, name)]
         assert offenders == [], f"{offenders} still gunzip a tarball that is now zstd"
+
+
+_SETUP_UV = "astral-sh/setup-uv"
+
+
+class TestUvCacheIsSavedFromMainOnly:
+    """setup-uv restores its cache on every run but saves it only from main.
+
+    Measured on PR #35: with the buildkit cache confined to main, the one entry a
+    PR run still wrote was setup-uv's ~245 MB cache on its own refs/pull/N/merge
+    ref, which no other ref can read.
+    """
+
+    def test_every_setup_uv_step_saves_from_main_pushes_only(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        seen = 0
+        for name in jobs:
+            for step in _steps(jobs, name):
+                if _SETUP_UV not in str(step.get("uses", "")):
+                    continue
+                seen += 1
+                with_block: dict[str, Any] = step.get("with") or {}
+                save = str(with_block.get("save-cache", ""))
+                assert save, f"{name}: setup-uv has no save-cache condition"
+                assert _evaluate(save, "refs/heads/main", "push"), name
+                for ref, event in (
+                    ("refs/pull/7/merge", "pull_request"),
+                    ("refs/tags/v9.9.9", "push"),
+                ):
+                    assert not _evaluate(save, ref, event), (
+                        f"{name}: setup-uv would save cache on {event} {ref}"
+                    )
+        assert seen >= 5, f"expected every setup-uv step to be checked; saw {seen}"

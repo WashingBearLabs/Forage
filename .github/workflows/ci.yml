@@ -142,6 +142,9 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
+          # Restore everywhere, save from main pushes only: a PR ref's copy is
+          # ~245 MB that no other ref can read (GitHub isolates caches per ref).
+          save-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Sync dev environment
         # --locked fails if uv.lock is stale relative to pyproject.toml, so a
@@ -265,6 +268,9 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
+          # Restore everywhere, save from main pushes only: a PR ref's copy is
+          # ~245 MB that no other ref can read (GitHub isolates caches per ref).
+          save-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Sync dev environment
         # Same `--locked` sync as lint: pyright's answers depend on the exact
@@ -299,6 +305,9 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
+          # Restore everywhere, save from main pushes only: a PR ref's copy is
+          # ~245 MB that no other ref can read (GitHub isolates caches per ref).
+          save-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Sync dev environment
         # Same `--locked` sync as the other two lanes: the suite must run
@@ -620,6 +629,9 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
+          # Restore everywhere, save from main pushes only: a PR ref's copy is
+          # ~245 MB that no other ref can read (GitHub isolates caches per ref).
+          save-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Sync dev environment
         # Same `--locked` sync as every other lane: the smoke's expectations
@@ -1452,6 +1464,9 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
+          # Restore everywhere, save from main pushes only: a PR ref's copy is
+          # ~245 MB that no other ref can read (GitHub isolates caches per ref).
+          save-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Sync dev environment
         run: uv sync --extra dev --locked
