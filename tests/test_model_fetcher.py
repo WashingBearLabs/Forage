@@ -751,22 +751,31 @@ def test_model_id_resolves_only_allowlisted_trimmed_values(
 
 @pytest.mark.parametrize(
     "configured",
-    ["evil/model", "meta-llama/Llama-Prompt-Guard-2-86M", "secret-sentinel\ninjected"],
+    ["evil/model", "meta-llama/Llama-Prompt-Guard-3-1B", "secret-sentinel\ninjected"],
 )
 def test_disallowed_model_id_is_a_total_closed_warning(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     configured: str,
 ) -> None:
-    monkeypatch.setattr(
-        model_fetcher, "ALLOWED_MODEL_IDS", frozenset({DEFAULT_MODEL_ID})
-    )
     monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, configured)
     assert model_fetcher.resolve_model_id() == (DEFAULT_MODEL_ID, False)
     assert [(record.levelname, record.getMessage()) for record in caplog.records] == [
         ("WARNING", "model_id_not_allowed")
     ]
     assert configured not in caplog.text
+
+
+def test_allowlist_is_exactly_the_two_vendored_models() -> None:
+    # Exact set, never "contains": a third model must arrive with its label pin,
+    # resident delta and manifest entry (corpus-86m-enablement US-002).
+    allowed = model_fetcher.ALLOWED_MODEL_IDS
+    assert allowed == frozenset(
+        {
+            "meta-llama/Llama-Prompt-Guard-2-22M",
+            "meta-llama/Llama-Prompt-Guard-2-86M",
+        }
+    )
 
 
 def test_every_allowlisted_model_has_a_manifest_entry() -> None:

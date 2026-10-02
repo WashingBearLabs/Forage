@@ -160,19 +160,18 @@ below) or `smoke` (the real-weights smoke failed), and nothing else changes.
       use_safetensors=True)` — and prints **both** softmax columns per probe. It never edits
       `_PINNED_GENERIC_LABEL_INDICES` to get a loadable classifier (that would assume the answer),
       and never goes through `classify_windows`, which returns only the pinned column.
-- [ ] **Direction test with a control.** The same script scores the same probes with the 22M, whose
-      index 1 is established by the v1.2.1 repair. The probe set is every probe the 22M scores
-      confidently (index-1 probability > 0.9 → injection probe, < 0.1 → benign probe), drawn from at
-      least two existing test modules, with at least 10 of each class. Injection text in the tests is
-      mostly inline literals, not module constants, so each probe is cited by
-      `module::test_function` plus its line at the spec 0 start commit **and** the sha256 of the probe
-      text — never quoted (ruling 8). If the tests cannot supply 10 confident probes per class, an
-      uncommitted host-side probe list may be used, and the committed record is per-probe sha256 +
-      source category + both models' columns. The 86M's candidate index must agree in direction
-      with the 22M on **every** probe; one disagreement per class may be accepted if recorded with its
-      scores and the owner signs it off; more → `gate not run — evidence`. The model card's statement
-      of class order is quoted alongside. This separates "which index is injection" (what the pin
-      asserts) from "does the 86M separate hard probes perfectly" (spec 5's question, not this one's).
+- [ ] **Direction test with a control** (*amended 2026-10-01 by owner decision 19*). The same script
+      scores the same probes with the 22M, whose index 1 is established by the v1.2.1 repair; the
+      probe set is every test-module string the 22M scores confidently (index-1 probability > 0.9 →
+      injection probe, < 0.1 → benign probe), cited by `module::function`, line and sha256 — never
+      quoted (ruling 8). Because the 22M control is itself noisy on code and config text, the
+      verdict is taken on the **stage-2-corroborated control set** (probes where stage 2's
+      structural verdict agrees with the 22M's class): the candidate index must agree with the 22M
+      on **≥ 95%** of each class there, and the opposite index on **≤ 5%** overall. The full table,
+      the stage-2 cross-check and every disagreement are recorded; below the thresholds →
+      `gate not run — evidence`. The model card's class names are quoted alongside. This separates
+      "which index is injection" (what the pin asserts) from "does the 86M separate hard probes
+      perfectly" (spec 5's question, not this one's).
 - [ ] `_PINNED_GENERIC_LABEL_INDICES` gains exactly the 86M `(model_id, revision)` entry (branch a
       only); the 22M entry is byte-unchanged; no pattern, prefix or wildcard key is introduced.
 - [ ] `tests/fixtures/promptguard_86m_config/config.json` is the genuine 86M config, and a test
@@ -403,6 +402,32 @@ scripts.export_contract --check` green, no `contract/openapi.yaml` diff since `v
 
 ## Implementation Notes
 
+### US-002 — label semantics established, 2026-10-01 (evidence; code lands in the same story)
+
+- **Config read:** the 86M `config.json` carries no `id2label` / `label2id` (`num_labels` unset;
+  `DebertaV2ForSequenceClassification`, hidden 768, vocab 251,000) — transformers names the labels
+  generically, `LABEL_0` / `LABEL_1`, exactly as for the 22M: **branch (a)**.
+- **Probe:** an uncommitted host-side script on the lab host loaded both verified snapshots
+  directly (`AutoModelForSequenceClassification.from_pretrained(<snapshot>, local_files_only=True,
+  use_safetensors=True)`, offline) and printed both softmax columns; it never touched
+  `_PINNED_GENERIC_LABEL_INDICES` or `classify_windows`. Candidates: 935 distinct string literals
+  (24–2,000 chars, ≥ 4 words, docstrings excluded) from every `tests/test_*.py` module at `fe06cd8`.
+  The 22M selected 20 confident injection probes (10 modules) and 891 confident benign probes
+  (32 modules).
+- **Result:** index 1 agrees with the 22M on 16/20 injection and 870/891 benign probes (886/911);
+  index 0 on 4/20 and 21/891 (25/911). On the **stage-2-corroborated control set** index 1 agrees on
+  **11/11** injection and **857/869 (98.6%)** benign; index 0 agrees on 2.7% overall. All 4
+  injection-class disagreements are stage-2-clean (22M false positives on config/test text); 9 of
+  the 21 benign-class disagreements are stage-2-**blocked** attack fixtures the 22M under-scored and
+  the 86M caught; 12 are clean to both and scored high by the 86M (possible 86M false positives on
+  test-suite text — spec 5's question, not the pin's).
+- **Model card:** names the classes "benign" and "malicious" but states no index order.
+- **Verdict:** injection index **1** (owner decision 19). Full table (911 rows: module, function,
+  line, sha256, both models' columns, stage-2 verdict; no text) committed at
+  `kit_tools/specs/evidence/corpus-86m-label-probe-2026-10-01.json`.
+- **Fixture:** `tests/fixtures/promptguard_86m_config/config.json` copied from the verified snapshot;
+  sha256 `cd54ac39a1f2…` equals the manifest's `config.json` entry.
+
 ### US-001 — 86M vendored, 2026-10-01
 
 Run on the lab host `thelab-claude` (Ubuntu 24.04.4, AMD Ryzen Threadripper 2970WX, 48 threads,
@@ -448,6 +473,10 @@ Run on the lab host `thelab-claude` (Ubuntu 24.04.4, AMD Ryzen Threadripper 2970
 
 - 2026-09-24 (owner decision 17): the 86M is a prerequisite inside this epic, not a follow-up and not
   a separate epic; the gates run on the lab host.
+- 2026-10-01 (owner decision 19): the literal direction rule ("every probe, at most one
+  disagreement per class against the 22M") treated a noisy control as ground truth; it is amended
+  to agreement rates on the stage-2-corroborated control set (US-002), and index 1 is accepted on
+  that evidence.
 - 2026-09-24 (owner decision 18): release as PATCH `v1.2.2`, so the two published "next MINOR"
   compatibility windows are neither triggered nor reinterpreted.
 - The label pin is new semantic-evidence work that hardening spec 7 did not cover, because the v1.2.1

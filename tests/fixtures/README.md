@@ -25,7 +25,8 @@ Commit regenerated pins with that change and explain what moved and why in the
 commit message. Without the flag tests only compare. New metrics outside the
 five-counter projection do not move these pins. The token guard walks all fixture
 directories by default, except exactly `tiny_model/`, `contract/`, this README
-and the hash-anchored `promptguard_22m_config/config.json` metadata file.
+and the hash-anchored `promptguard_22m_config/config.json` and
+`promptguard_86m_config/config.json` metadata files.
 Four long schema key names in these dumps are recognized only in JSON key
 positions; their spelling as a payload value remains forbidden.
 
@@ -86,6 +87,23 @@ The absence of label maps is intentional: transformers supplies generic labels,
 the production shape that v1.2.0 incorrectly rejected. The exact-file token-walk
 exception covers long architecture/key names, not this directory or arbitrary
 payloads; any byte change fails the hash assertion.
+
+## `promptguard_86m_config/config.json`
+
+The genuine 871-byte configuration metadata for the opt-in
+`meta-llama/Llama-Prompt-Guard-2-86M` at the pinned revision
+`a8ded8e697ce7c355e395a0df51f94adb4a2fd27`, copied from the digest-verified
+snapshot vendored in `corpus-86m-enablement` US-001. Its SHA-256 is
+`cd54ac39a1f2c3c5146bd5295b34038f8b4d9069e2f844450da014a523bb7653`, the
+`config.json` hash in the committed `weights_manifest.json` entry for that
+revision, and `test_stage3_promptguard.py` asserts exactly that before passing
+it to real offline `AutoConfig`. No weights or credentials. Like the 22M's, it
+carries no label maps, so transformers supplies generic `LABEL_0`/`LABEL_1`;
+the injection index 1 it loads with is the `(model_id, revision)` pin
+US-002 established on probe evidence, and the same bytes under any other
+revision are refused. The exact-file token-walk exception covers long
+architecture/key names, not this directory or arbitrary payloads; any byte
+change fails the hash assertion.
 
 ## `tiny_model/`
 

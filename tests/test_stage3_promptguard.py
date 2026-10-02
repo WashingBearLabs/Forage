@@ -283,6 +283,21 @@ class TestModelNotLoaded:
 # PromptGuardClassifier unit tests (mocked internals)
 # ---------------------------------------------------------------------------
 
+_MODEL_ID_86M = "meta-llama/Llama-Prompt-Guard-2-86M"
+
+
+def _genuine_86m_config() -> tuple[object, str]:
+    """The vendored 86M config, hash-anchored to the manifest, and its revision."""
+    fixture = Path(__file__).parent / "fixtures/promptguard_86m_config/config.json"
+    entry = json.loads(MANIFEST_PATH.read_text())["models"][_MODEL_ID_86M]
+    config_pin = next(file for file in entry["files"] if file["path"] == "config.json")
+    assert hashlib.sha256(fixture.read_bytes()).hexdigest() == config_pin["sha256"]
+    assert entry["revision"] == "a8ded8e697ce7c355e395a0df51f94adb4a2fd27"
+    config = AutoConfig.from_pretrained(fixture.parent, local_files_only=True)
+    assert config.num_labels == 2
+    assert config.id2label == {0: "LABEL_0", 1: "LABEL_1"}
+    return config, entry["revision"]
+
 
 class TestClassifierUnit:
     """Unit tests for PromptGuardClassifier with mocked torch/transformers."""
@@ -322,6 +337,59 @@ class TestClassifierUnit:
             score, _ = classifier.classify("some text")
             assert score == pytest.approx(torch.softmax(logits, dim=-1)[0, 1].item())
             model.return_value.eval.assert_called_once()
+
+    @pytest.mark.parametrize("logit_values", [[4.0, 0.0], [0.0, 4.0]])
+    def test_real_pinned_86m_config_loads_and_scores_class_one(
+        self, logit_values: list[float]
+    ) -> None:
+        config, revision = _genuine_86m_config()
+        classifier = PromptGuardClassifier()
+        logits = torch.tensor([logit_values])
+        with (
+            patch("transformers.AutoTokenizer.from_pretrained") as tokenizer,
+            patch(
+                "transformers.AutoModelForSequenceClassification.from_pretrained"
+            ) as model,
+        ):
+            tokenizer.return_value.encode.return_value = [1, 2]
+            tokenizer.return_value.return_value = {}
+            model.return_value.config = config
+            model.return_value.return_value = SimpleNamespace(logits=logits)
+            assert classifier.load(
+                model_id=_MODEL_ID_86M,
+                revision=revision,
+                local_files_only=True,
+            )
+            assert classifier.loaded
+            assert classifier._injection_label_index == 1
+            score, _ = classifier.classify("some text")
+            assert score == pytest.approx(torch.softmax(logits, dim=-1)[0, 1].item())
+            model.return_value.eval.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "revision", [DEFAULT_MODEL_REVISION, "0" * 40, None], ids=str
+    )
+    def test_real_86m_config_under_another_revision_is_refused(
+        self, revision: str | None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        config, pinned_revision = _genuine_86m_config()
+        assert revision != pinned_revision
+        classifier = PromptGuardClassifier()
+        with (
+            patch("transformers.AutoTokenizer.from_pretrained"),
+            patch(
+                "transformers.AutoModelForSequenceClassification.from_pretrained"
+            ) as model,
+        ):
+            model.return_value.config = config
+            assert not classifier.load(
+                model_id=_MODEL_ID_86M, revision=revision, local_files_only=True
+            )
+            assert not classifier.loaded
+            model.return_value.eval.assert_not_called()
+        assert [record.getMessage() for record in caplog.records] == [
+            "model_labels_unexpected"
+        ]
 
     @pytest.mark.parametrize(
         ("model_id", "revision", "labels"),

@@ -100,6 +100,7 @@ _TOKEN_WALK_ALLOWLIST = {
     "contract/",
     "README.md",
     "promptguard_22m_config/config.json",
+    "promptguard_86m_config/config.json",
 }
 # These are schema keys in full response/counter pins, never payload values.
 _PIN_SCHEMA_KEYS = {
@@ -145,6 +146,7 @@ class TestFixtureCarriesNoSecret:
             "contract/",
             "README.md",
             "promptguard_22m_config/config.json",
+            "promptguard_86m_config/config.json",
         } == _TOKEN_WALK_ALLOWLIST
         assert {
             "classification_wait_timeouts",

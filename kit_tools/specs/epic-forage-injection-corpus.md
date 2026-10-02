@@ -64,7 +64,7 @@ corpus surfaces is recorded as an audit finding for a follow-up, never fixed her
    the decision table; a flip is a separate owner ruling and a hardening-style follow-up, because
    both rotate `sanitizer_revision`.
 
-## Owner decisions 17–18 (2026-09-24, validation rounds 4–5)
+## Owner decisions 17–19 (2026-09-24 → 2026-10-01)
 
 17. **The 86M becomes selectable inside this epic, as spec 0.** Hardening spec 7 closed its 86M
     vendoring (US-005) and benchmark (US-004) gates as `gate not run, 2026-09-22`, and the v1.2.1
@@ -82,6 +82,12 @@ corpus surfaces is recorded as an audit finding for a follow-up, never fixed her
     `input`/`ctx`/`url` fields). Spec 0 cannot make either under ruling 6a, so its release is a
     PATCH: both windows stay open and neither promise is reinterpreted. The 86M is opt-in behind an
     existing key with the default unchanged, which is what makes a PATCH defensible.
+19. **The 86M label direction test is judged on agreement rates** (2026-10-01, spec 0 US-002). The
+    literal "every probe, ≤ 1 disagreement per class" rule treated the 22M control as ground truth,
+    and the 22M is itself noisy on code and config text. The criterion is amended to ≥ 95% agreement
+    per class on the stage-2-corroborated control set (≤ 5% for the opposite index); index 1 passed
+    at 11/11 and 857/869 and is pinned. Evidence:
+    `kit_tools/specs/evidence/corpus-86m-label-probe-2026-10-01.json`.
 
 ## Planning rulings (2026-09-19)
 

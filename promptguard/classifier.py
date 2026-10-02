@@ -29,6 +29,12 @@ DEFAULT_MODEL_ID = "meta-llama/Llama-Prompt-Guard-2-22M"
 # uses the last binary logit for maliciousness; never assume that for a new pin.
 _PINNED_GENERIC_LABEL_INDICES = {
     (DEFAULT_MODEL_ID, "11614a155199674a0a95e6602d6ab0417b790ed0"): 1,
+    # The 86M snapshot omits label names too; index 1 is pinned on probe evidence
+    # (corpus-86m-enablement US-002), not on the 22M's say-so.
+    (
+        "meta-llama/Llama-Prompt-Guard-2-86M",
+        "a8ded8e697ce7c355e395a0df51f94adb4a2fd27",
+    ): 1,
 }
 MAX_SEQ_LEN = 512
 CHUNK_OVERLAP = 64
