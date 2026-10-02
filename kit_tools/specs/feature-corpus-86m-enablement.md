@@ -147,20 +147,20 @@ one of `upstream` (US-001 not run), `evidence` (direction test failed), `label v
 below) or `smoke` (the real-weights smoke failed), and nothing else changes.
 
 **Acceptance Criteria:**
-- [ ] **Config read first**: the 86M `config.json` from the verified snapshot is inspected and its
+- [x] **Config read first**: the 86M `config.json` from the verified snapshot is inspected and its
       `id2label` / `label2id` recorded. Three branches, and only three:
       (a) generic `LABEL_0`/`LABEL_1` → the evidence criterion below, then a pin;
       (b) human-readable names `load()` already accepts → no pin; record it and go to the
           resident-delta criterion;
       (c) any other vocabulary (e.g. names `load()` does not accept) → stop,
           `gate not run — label vocabulary`; enabling it needs an owner ruling outside ruling 6a.
-- [ ] **Evidence is gathered without the pin.** The probe runs in an uncommitted host-side script
+- [x] **Evidence is gathered without the pin.** The probe runs in an uncommitted host-side script
       that loads the digest-verified snapshot directly — `AutoTokenizer` /
       `AutoModelForSequenceClassification.from_pretrained(<snapshot dir>, local_files_only=True,
       use_safetensors=True)` — and prints **both** softmax columns per probe. It never edits
       `_PINNED_GENERIC_LABEL_INDICES` to get a loadable classifier (that would assume the answer),
       and never goes through `classify_windows`, which returns only the pinned column.
-- [ ] **Direction test with a control** (*amended 2026-10-01 by owner decision 19*). The same script
+- [x] **Direction test with a control** (*amended 2026-10-01 by owner decision 19*). The same script
       scores the same probes with the 22M, whose index 1 is established by the v1.2.1 repair; the
       probe set is every test-module string the 22M scores confidently (index-1 probability > 0.9 →
       injection probe, < 0.1 → benign probe), cited by `module::function`, line and sha256 — never
@@ -172,19 +172,19 @@ below) or `smoke` (the real-weights smoke failed), and nothing else changes.
       `gate not run — evidence`. The model card's class names are quoted alongside. This separates
       "which index is injection" (what the pin asserts) from "does the 86M separate hard probes
       perfectly" (spec 5's question, not this one's).
-- [ ] `_PINNED_GENERIC_LABEL_INDICES` gains exactly the 86M `(model_id, revision)` entry (branch a
+- [x] `_PINNED_GENERIC_LABEL_INDICES` gains exactly the 86M `(model_id, revision)` entry (branch a
       only); the 22M entry is byte-unchanged; no pattern, prefix or wildcard key is introduced.
-- [ ] `tests/fixtures/promptguard_86m_config/config.json` is the genuine 86M config, and a test
+- [x] `tests/fixtures/promptguard_86m_config/config.json` is the genuine 86M config, and a test
       mirrors the 22M one (`tests/test_stage3_promptguard.py`, the `promptguard_22m_config` fixture
       test): the fixture's sha256 equals the manifest's `config.json` hash, and `load()` with it
       derives the pinned index (branch a) or the named index (branch b). A negative test: the same
       config under a different revision is refused with `model_labels_unexpected` (branch a).
-- [ ] The new fixture is added as an exact file entry to `tests/test_brave_provider.py`'s
+- [x] The new fixture is added as an exact file entry to `tests/test_brave_provider.py`'s
       `_TOKEN_WALK_ALLOWLIST` **and** to `test_token_walk_exceptions_are_pinned`'s exact-set
       assertion (a genuine DeBERTa config carries 24+-character identifiers that trip the token walk),
       and to `tests/fixtures/README.md`'s exemption sentence, with a provenance section parallel to
       the existing `promptguard_22m_config/config.json` one.
-- [ ] `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` gains the 86M with a **provisional** value — the
+- [x] `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` gains the 86M with a **provisional** value — the
       difference of the two manifests' `model.safetensors` sizes, rounded up to the next MiB, with a
       `# Provisional` comment naming US-003 as the story that replaces it — and a test boots the
       lifespan with `FORAGE_MODEL_ID=<86M>` (weights stubbed) without a `KeyError`.
@@ -192,7 +192,7 @@ below) or `smoke` (the real-weights smoke failed), and nothing else changes.
       assertion (`== {DEFAULT_MODEL_ID: 0}`) becomes an exact two-key equality — updated, never
       loosened to "contains". A new invariant test asserts every `ALLOWED_MODEL_IDS` member is a key
       of the map, so a third model cannot reintroduce the crash.
-- [ ] `ALLOWED_MODEL_IDS` gains the 86M **in the same commit** as this story's label determination
+- [x] `ALLOWED_MODEL_IDS` gains the 86M **in the same commit** as this story's label determination
       (the pin in branch a, the recorded finding in branch b) and the resident-delta entry — never
       later; a new exact-set pin `ALLOWED_MODEL_IDS == frozenset({22M, 86M})` is added (the allowlist
       has no exact-set guard today — `test_every_allowlisted_model_has_a_manifest_entry` iterates it);
@@ -201,7 +201,7 @@ below) or `smoke` (the real-weights smoke failed), and nothing else changes.
       `tests/test_model_fetcher.py::test_disallowed_model_id_is_a_total_closed_warning`) switch to a
       plausible-but-unlisted id; `docs/configuration.md` and `kit_tools/docs/ENV_REFERENCE.md` lose "Pending
       vendoring" and name both ids.
-- [ ] A **real-weights candidate smoke** on the lab host (GOTCHAS: the weights-free CI smoke cannot
+- [x] A **real-weights candidate smoke** on the lab host (GOTCHAS: the weights-free CI smoke cannot
       establish readiness), on an image built from the candidate commit **before it is pushed or
       merged**; a smoke failure reverts landing steps (2)–(4) and records `gate not run — smoke`, so no
       branch tip ever allowlists a model that cannot boot. `docker build` from that commit, run with `FORAGE_MODEL_ID=<86M>` via the
@@ -210,13 +210,13 @@ below) or `smoke` (the real-weights smoke failed), and nothing else changes.
       = the 86M, `degraded_reasons` empty; one `/extract` of a benign fixture returns
       `promptguard_state: scanned`. The same smoke with the variable unset, at `1024m`, shows the 22M
       unchanged.
-- [ ] `derive_sanitizer_revision({})` (model variables unset) prints the same value before and after
+- [x] `derive_sanitizer_revision({})` (model variables unset) prints the same value before and after
       this story; recorded.
-- [ ] **Scope asserted**: `git diff --stat <spec 0 start commit> -- pipeline/ promptguard/ models.py
+- [x] **Scope asserted**: `git diff --stat <spec 0 start commit> -- pipeline/ promptguard/ models.py
       retrieval_app.py cache.py url_validator.py contract/ config.yaml Dockerfile` lists only
       `pipeline/extraction_limits.py` and `promptguard/classifier.py`, and `git diff <start> --
       model_fetcher.py` touches only `ALLOWED_MODEL_IDS` (ruling 6a).
-- [ ] `uv run pytest`, `ruff check`, `ruff format --check`, `pyright` green; `tests/test_dockerfile.py`
+- [x] `uv run pytest`, `ruff check`, `ruff format --check`, `pyright` green; `tests/test_dockerfile.py`
       green (no build ARG).
 
 **Implementation Hints:**
@@ -427,6 +427,27 @@ scripts.export_contract --check` green, no `contract/openapi.yaml` diff since `v
   `kit_tools/specs/evidence/corpus-86m-label-probe-2026-10-01.json`.
 - **Fixture:** `tests/fixtures/promptguard_86m_config/config.json` copied from the verified snapshot;
   sha256 `cd54ac39a1f2…` equals the manifest's `config.json` entry.
+- **Code:** candidate commit `4327991` — the 86M pin `(id, a8ded8e6…): 1`, a provisional resident
+  delta of `794 * MEBIBYTE` (safetensors size difference, rounded up), and the allowlist entry, in one
+  commit; tests and docs as the criteria list. Gates: 4,272 passed, ruff clean, pyright 0 errors.
+  `derive_sanitizer_revision({})` (model variables unset) is `021378efee6a…` before and after.
+  Scope: `git diff --stat main` over the runtime paths lists only `pipeline/extraction_limits.py` and
+  `promptguard/classifier.py`; `model_fetcher.py`'s diff is the `ALLOWED_MODEL_IDS` hunk alone.
+- **Real-weights candidate smoke** (lab host, image `forage:cand-4327991` = `sha256:ad36af40c236…`,
+  built from the candidate commit **before it was pushed**, transported as a git bundle; `/extract`
+  enabled through a read-only mounted copy of `config.yaml`; loopback port 8021; per-model volumes;
+  `--env-file` holding `HF_TOKEN` only; containers removed after):
+  - **86M**, `FORAGE_MODEL_ID` set, `--memory 2048m`: cold boot healthy in 82 s (download + verify
+    through the service's own acquisition), `memory.peak` 1,859,235,840; warm boot healthy in 21 s,
+    `memory.peak` 682,188,800. `/health`: `status: healthy`, `degraded_reasons: []`,
+    `promptguard_loaded: true`, `promptguard_model: meta-llama/Llama-Prompt-Guard-2-86M`,
+    `sanitizer_revision: b5e91fd64727…` (differs by design — the selected model is a hash input).
+    `/extract` of a benign upload: 200, `promptguard_state: scanned`. No OOM.
+  - **22M**, variable unset, `--memory 1024m`: healthy in 31 s, `promptguard_model` 22M,
+    `sanitizer_revision: 021378efee6a…` (unchanged), `/extract` 200 / `scanned`,
+    `memory.peak` 850,411,520. No OOM.
+  - A first 86M run's `/extract` returned 422 because the smoke script omitted the required
+    `filename` form field — a harness error, fixed and re-run; not a service finding.
 
 ### US-001 — 86M vendored, 2026-10-01
 
