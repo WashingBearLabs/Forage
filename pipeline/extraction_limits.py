@@ -18,10 +18,10 @@ MEBIBYTE = 1024 * 1024
 PARENT_RESERVATION_BYTES = 512 * MEBIBYTE
 CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL: Mapping[str, int] = {
     DEFAULT_MODEL_ID: 0,
-    # Provisional, not measured: the two manifests' model.safetensors size
-    # difference (1115268200 - 283347432 bytes), rounded up to the next MiB.
-    # Spec 0 US-003 (corpus-86m-enablement) replaces it with a measured RSS delta.
-    "meta-llama/Llama-Prompt-Guard-2-86M": 794 * MEBIBYTE,
+    # Measured (corpus-86m-enablement US-003): the largest process VmRSS
+    # difference over the 22M at equal settings, after load and a max-budget
+    # run (404.3 MiB), rounded up. Idle reads ~115 MiB: weights page in on use.
+    "meta-llama/Llama-Prompt-Guard-2-86M": 405 * MEBIBYTE,
 }
 # Provisional, not measured: 1024 - 512 - 384 - 32 = 96 MiB residual;
 # reserve 32 MiB of that as margin. Spec 7 replaces this with measured RSS deltas.

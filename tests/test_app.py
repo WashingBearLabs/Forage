@@ -1975,7 +1975,7 @@ def test_provisional_memory_rule_constants_and_default_margins() -> None:
     assert PARENT_RESERVATION_BYTES == 512 * MEBIBYTE
     assert CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL == {
         DEFAULT_MODEL_ID: 0,
-        _MODEL_ID_86M: 794 * MEBIBYTE,
+        _MODEL_ID_86M: 405 * MEBIBYTE,
     }
     assert PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES == 64 * MEBIBYTE
     settings = extraction_settings_from_config({})
@@ -2026,7 +2026,7 @@ async def test_lifespan_boots_the_86m_without_a_resident_delta_key_error(
     ]
     assert len(warnings) == 1
     assert f"model_id={_MODEL_ID_86M} " in warnings[0]
-    assert f"parent_bytes={(512 + 794) * MEBIBYTE} " in warnings[0]
+    assert f"parent_bytes={(512 + 405) * MEBIBYTE} " in warnings[0]
 
 
 @pytest.mark.parametrize(

@@ -260,17 +260,17 @@ measured and recorded. *Gate not run for this story's own prerequisites* → `##
 run, <date>`.
 
 **Acceptance Criteria:**
-- [ ] Hardening spec 7 US-004's acceptance criteria, applied here (the table, the per-run records,
+- [x] Hardening spec 7 US-004's acceptance criteria, applied here (the table, the per-run records,
       `--env-file` only, loopback-bound port, `docker rm -f`, no `docker inspect` / `docker ps
       --no-trunc` / `docker compose config` output in the record).
-- [ ] The 86M at the default `1024m` limit is attempted and its outcome recorded (OOM line,
+- [x] The 86M at the default `1024m` limit is attempted and its outcome recorded (OOM line,
       `memory.peak`); if it does not go healthy, the 86M rows are re-run at the raised limit US-002
       started from (or the smallest that holds), and the docs name that limit in the 86M opt-in
       recipe. No default changes.
-- [ ] The five "measured in spec 7 (`feature-hardening-promptguard-86m` US-004)" placeholder cells in
+- [x] The five "measured in spec 7 (`feature-hardening-promptguard-86m` US-004)" placeholder cells in
       `docs/configuration.md` (the sizing table and the memory-rule table's 86M row) are replaced with
       measured values or `not measured — <reason>`; the grep above is `0`.
-- [ ] `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL`'s 86M entry is replaced with the measured delta and
+- [x] `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL`'s 86M entry is replaced with the measured delta and
       its `# Provisional` comment removed. The reading is the server process's **`VmRSS`** from
       `/proc/1/status` inside the container (PID 1 is uvicorn — the entrypoint `exec`s it), not
       `memory.current`: `memory.current` also charges unmapped page cache from reading
@@ -284,16 +284,16 @@ run, <date>`.
       context. US-002's provisional safetensors-size difference is a **two-sided** sanity bound: a
       delta far above it points to a cache artefact, one far below it to unmapped weights; either is
       re-read and explained before it is committed.
-- [ ] The per-classification working set is **not** measured per model here:
+- [x] The per-classification working set is **not** measured per model here:
       `PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES` is one model-independent constant outside ruling 6a.
       The `docs/configuration.md` 86M working-set cell reads `not measured — model-independent
       provisional constant`, the "Spec 7 US-004 replaces it" sentence is reworded to name a follow-up
       (BACKLOG entry added), and Known risks records that the envelope warning uses a 22M-derived
       working set for both models.
-- [ ] The record names the host and states that `--cpus` pins the envelope but absolute latencies
+- [x] The record names the host and states that `--cpus` pins the envelope but absolute latencies
       are host-specific; before the first run, port and volume availability on the host is recorded
       (see Technical Considerations).
-- [ ] `docs/configuration.md` documents the 86M opt-in recipe and its acquisition caveat once each
+- [x] `docs/configuration.md` documents the 86M opt-in recipe and its acquisition caveat once each
       (`grep -c 'FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-86M' docs/configuration.md` ≥ 1).
 
 **Implementation Hints:**
@@ -401,6 +401,48 @@ scripts.export_contract --check` green, no `contract/openapi.yaml` diff since `v
   `kit_tools/docs/GOTCHAS.md`
 
 ## Implementation Notes
+
+### US-003 — benchmark, 2026-10-02
+
+Lab host `thelab-claude` (AMD Ryzen Threadripper 2970WX, 48 threads, 31 GiB; Docker 29.5.2,
+cgroup v2; load average below 3.5 throughout, Poppy's containers under 20% of one core each).
+Image `forage:cand-4327991` (`sha256:ad36af40c236…`), commit `43279910`, manifest revisions 22M
+`11614a15…` / 86M `a8ded8e6…`. `scripts/bench_promptguard.py`, `bench/config.yaml` mounted
+read-only, one fresh container per input, loopback port 8021 (8020 and the volume names were
+checked free; per-model volumes `forage-smoke-<m>-cache`), `--env-file` holding `HF_TOKEN` only,
+`VALKEY_URL` unset, `docker rm -f` after each. Tokenizers copied (dereferenced) from each
+verified snapshot to `bench/tokenizer-<m>/` on the host (not committed). Matrix wall-clock
+5,234 s, plus an 8,780 s re-run of the three `budget` cells that hit the harness's 300 s default
+request timeout (re-run with `--timeout-seconds 1800 --runs 3`; `p95` needs more samples and is
+reported only for the 20-run cells).
+
+| Model | CPUs | Mem | 1w cold / p50 / p95 (ms) | budget cold / p50 / p95 (ms) | windows | mem after warm-up | memory.peak | OOM |
+|---|---|---|---|---|---|---|---|---|
+| 22M | 1 | 1024m | 14,801 / 13,097 / 14,104 | 500,479 / 501,211 / — | 40 | 522–532 MiB | 611,639,296 | no |
+| 22M | 4 | 1024m | 3,471 / 3,093 / 3,318 | 105,478 / 104,301 / 107,695 | 40 | 524–525 MiB | 600,821,760 | no |
+| 86M | 1 | 1024m | 28,216 / 26,213 / 26,802 | 1,296,133 / 1,316,102 / — | 55 | 653–691 MiB | 855,318,528 | no |
+| 86M | 4 | 1024m | 6,586 / 6,407 / 6,690 | 368,975 / 368,490 / — | 55 | 653–656 MiB | 807,354,368 | no |
+
+Every row's `/health` read `promptguard_loaded: true`, `promptguard_model` = the row's model,
+`sanitizer_revision` `021378ef…` (22M) / `b5e91fd6…` (86M), `contract_version` `1.3.0`. The 2 vCPU
+rows were not run. The first-pass `budget` timeouts were the harness's request timeout, not the
+service: no container stopped, none was OOM-killed, and the 86M cells retried at `2048m` timed out
+identically, so memory was ruled out. Absolute latencies are host-specific; that a single window
+costs 3–26 s here is filed as a follow-up investigation (`roadmap/BACKLOG.md`).
+
+**Resident delta (replaces the provisional 794 MiB):** process `VmRSS` from `/proc/1/status`,
+86M minus 22M at equal settings. Idle (after `promptguard_loaded`, before any request, 1 and 4
+CPUs): 708,448 − 590,352 kB = **115 MiB**; after the benchmark: 375.6 (1w), 376.8 (budget, 4 CPU)
+and **404.3 MiB (budget, 1 CPU)**. `RssFile` is ~113 MB for both models idle but ~458 vs ~207 MB
+under load: the weights are memory-mapped and page in on use, and only the embedding rows actually
+touched become resident, which is also why every measured delta sits well below the provisional
+size-difference bound. Committed value: the largest, rounded up — `405 * MEBIBYTE`.
+
+**Memory limit:** the 86M ran every cell at the default `1024m` without OOM (peak 855 MB,
+single in flight), but the memory rule (`512 + 405 + 64 + 384 + 32 MiB` at shipped settings) adds
+up to ~1,397 MiB, so the docs recommend `FORAGE_MEM_LIMIT=1536m` for the 86M; the default is
+unchanged. The per-classification working set stays the model-independent provisional constant
+(out of ruling 6a); follow-up recorded in `roadmap/BACKLOG.md`.
 
 ### US-002 — label semantics established, 2026-10-01 (evidence; code lands in the same story)
 
