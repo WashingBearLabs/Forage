@@ -349,9 +349,12 @@ verified against GHCR afterwards rather than assumed: `v1.0.0` (commit `f4c2b16`
 minted `latest`, `1.0` and `1.0.0` at index digest `sha256:d83639cc…`, and `v1.1.0` (commit
 `06b01b14`, 2026-09-18 UTC) moved `latest` and minted `1.1` and `1.1.0` at `sha256:e1b875cc…`.
 `docs/releases.md` § "Released versions" carries the full digests, anchors and tagged commits.
-The current release, **v1.2.1 / contract 1.3.0**, published and passed
+The latest published release, **v1.2.1 / contract 1.3.0**, published and passed
 artifact/runtime verification 2026-09-23. The archived US-003/US-005 handoff
 records the digest, alias equality and v1.2.0 withdrawal.
+The current release target, **v1.2.2 / contract 1.3.0** (a PATCH; contract
+unchanged from v1.2.1), is not yet published; `corpus-86m-enablement` US-004
+owns the cut and records the new digest and alias equality.
 
 ---
 
@@ -517,16 +520,16 @@ gh cache delete <id>                # delete each index-publish-* entry
 
 The git tag **is** the version (`pyproject.toml`'s `version` is inert packaging metadata),
 and the image tag and `contract_version` are independent semvers:
-image `v1.2.1` serves contract `1.3.0`.
+the pending image `v1.2.2` will serve contract `1.3.0`, unchanged from `v1.2.1`.
 
-The recorded cut below is historical; never re-run it for an existing tag.
-For the next release, choose a new version and repeat all owner gates.
+The cut below is the pending `v1.2.2` owner gate; never re-run a cut for an
+existing tag. For any later release, choose a new version and repeat all owner gates.
 
 ```bash
 git switch main && git pull
 # owner gate only: confirm authorization and all six gates for the merge commit
-git tag v1.2.1
-git push origin v1.2.1
+git tag v1.2.2
+git push origin v1.2.2
 # then watch the run; publish is the last job
 ```
 
@@ -540,8 +543,11 @@ not a release.
 deploy stage to revert. Re-pin the previous tag in the consumer's compose file
 (`image: ghcr.io/washingbearlabs/forage:<previous>`) and `docker compose -f <file> up -d`.
 `kit_tools/docs/DEPLOYMENT.md` has the operator view, including the pull/pin/verify
-sequence. The compose fragments pin published and verified `1.2.1`.
-Its merge-to-publication window is closed; never restore withdrawn v1.2.0.
+sequence. The compose fragments pin `1.2.2` ahead of `v1.2.2`: cut from the
+release PR's merge commit in the same sitting or `git revert <v1.2.2 pin commit>`.
+Until then the unpublished-tag window on `main` is outstanding and must be
+named in the release PR description, with the exact pin commit. The previous
+pin, `1.2.1`, is the latest published, verified tag; never restore withdrawn v1.2.0.
 Finalize withdrawal notices before deleting a tag: editing the old Release
 after deletion recreated its tag at `main` during this recovery.
 `docs/releases.md` records the corrected state and cancelled workflow.

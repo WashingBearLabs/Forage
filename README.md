@@ -71,9 +71,12 @@ should refuse to activate on a mismatch rather than guess.
 Two containers, one token. [`compose/minimal.yml`](compose/minimal.yml) is the whole
 deployment:
 
-The Forage pin is **v1.2.1 / contract 1.3.0**, published and verified on
-2026-09-23 (see [`docs/releases.md`](docs/releases.md)).
-v1.2.0 was withdrawn because its classifier rejected the verified default model.
+The Forage pin targets **v1.2.2 / contract 1.3.0** (contract unchanged from
+v1.2.1), not yet published; the quickstart works once the owner's release cut
+lands. Until then, the unpublished-tag window is outstanding (see
+[`docs/releases.md`](docs/releases.md)); v1.2.1 is the latest published,
+verified tag. v1.2.0 was withdrawn because its classifier rejected the verified
+default model.
 
 ```bash
 git clone https://github.com/WashingBearLabs/Forage && cd Forage/compose
@@ -244,8 +247,10 @@ weights, the Llama terms come with it.
 
 ## Status
 
-Forage is **post-1.0**, with **v1.2.1 / contract 1.3.0 published and verified
-2026-09-23**, replacing withdrawn v1.2.0. The code and its full history were split
+Forage is **post-1.0**, with **v1.2.2 / contract 1.3.0 prepared but not yet
+published** (a PATCH making the opt-in 86M classifier selectable; contract
+unchanged from v1.2.1). v1.2.1, published and verified 2026-09-23, replaced
+withdrawn v1.2.0 and remains the latest published tag. The code and its full history were split
 out of the [Poppy](https://github.com/WashingBearLabs) monorepo (`services/retrieval/`,
 `config/searxng/`, `tests/retrieval/`) on 2026-09-07; see
 [`docs/bootstrap-notes.md`](docs/bootstrap-notes.md) for the pin record and the split

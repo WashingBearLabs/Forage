@@ -402,6 +402,22 @@ scripts.export_contract --check` green, no `contract/openapi.yaml` diff since `v
 
 ## Implementation Notes
 
+### US-004 — release prep, 2026-10-03 (owner cut pending)
+
+Release-prep changes only, on `feat/corpus-86m-enablement`; nothing committed, tagged or pushed by
+this step. Version is `v1.2.2` (PATCH, owner decision 18); contract `1.3.0`, unchanged from
+`v1.2.1` (`contract/openapi.yaml` and its anchor `74b9db01…` byte-identical to the `v1.2.1` tag).
+Both "next MINOR" windows stay open. Both compose fragments and `tests/test_compose_fragments.py`'s
+`_FORAGE_RELEASE_TAG` pin `1.2.2` ahead of the cut (`FORAGE_MEM_LIMIT` default stays `1024m`);
+README, `contract/GOVERNANCE.md`, `contract_smoke.py`'s post-cut examples and the kit_tools
+current-release rows moved with them, mirroring `def26ad`. `docs/releases.md` carries a
+`v1.2.2` entry marked NOT YET PUBLISHED with placeholders `<publication date>`,
+`<index digest>`, `<tag commit>`, `<publish run>`, `<candidate smoke record>` and
+`<v1.2.2 pin commit>`, filled at the cut. Local gate at prep: 4272 passed, no xfails.
+**Still open (AC unchecked):** the per-model real-weights candidate smoke on the exact commit to
+be tagged, the cut, the six gates plus layer identity, anonymous pull, and the post-publish 86M
+boot. Until the cut, merging puts `main`'s quickstart on an unpublished tag.
+
 ### US-003 — benchmark, 2026-10-02
 
 Lab host `thelab-claude` (AMD Ryzen Threadripper 2970WX, 48 threads, 31 GiB; Docker 29.5.2,

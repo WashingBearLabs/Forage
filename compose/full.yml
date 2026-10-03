@@ -38,10 +38,13 @@ name: forage-full
 
 services:
   forage:
-    # ghcr.io/washingbearlabs/forage, tag 1.2.1 — contract 1.3.0 hardening.
-    # Published and verified on 2026-09-23; docs/releases.md has the digest.
-    # The defective 1.2.0 was withdrawn; do not roll back to it.
-    image: ghcr.io/washingbearlabs/forage:1.2.1
+    # ghcr.io/washingbearlabs/forage, tag 1.2.2 — contract 1.3.0, 86M opt-in.
+    # Pinned ahead of the owner-gated `v1.2.2` cut; until then a pull fails
+    # with `manifest unknown`. Cut from the release PR's merge commit in
+    # the same sitting or revert the v1.2.2 pin commit: this window remains
+    # outstanding. docs/releases.md has the pending-release record; 1.2.1 is
+    # the latest published tag. Never roll back to the withdrawn 1.2.0.
+    image: ghcr.io/washingbearlabs/forage:1.2.2
     restart: unless-stopped
     # Loopback only — see the DEPLOYMENT POSTURE note above.
     ports:
@@ -53,6 +56,8 @@ services:
       - HF_TOKEN
       # Model selection and its pin: bare names like HF_TOKEN, genuinely unset
       # unless supplied in `.env` or your shell. Default: the vendored 22M pin.
+      # The opt-in 86M needs its own Hugging Face gated-access grant and
+      # FORAGE_MEM_LIMIT=1536m; the 1024m default below does not change.
       - FORAGE_MODEL_ID
       - FORAGE_MODEL_REVISION
       # The search-provider chain — bare names, like HF_TOKEN: passed through
