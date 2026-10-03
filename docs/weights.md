@@ -1,6 +1,10 @@
 # Weights: the pinned model, the private mirror, and how to re-vendor
 
-Forage's injection classifier is Meta's **`meta-llama/Llama-Prompt-Guard-2-22M`**. Since
+Forage's injection classifier is Meta's **`meta-llama/Llama-Prompt-Guard-2-22M`** by default,
+or **`meta-llama/Llama-Prompt-Guard-2-86M`** when `FORAGE_MODEL_ID` selects it (one model per
+process). The pins: 22M at `11614a155199674a0a95e6602d6ab0417b790ed0`, 86M at
+`a8ded8e697ce7c355e395a0df51f94adb4a2fd27` (vendored 2026-10-01, `feature-corpus-86m-enablement`
+US-001); each has its own `weights_manifest.json` entry and its own revision-keyed mirror tag. Since
 `forage-ci-and-image` US-003 no image contains it — a build that baked the weights needed
 a Hugging Face token as a build ARG, and a build ARG is recoverable from any registry the
 image reaches (`CLAUDE.md` invariant 2). The weights arrive at **run time** instead, into
@@ -301,10 +305,13 @@ and names other models only as `untouched`. An unreadable existing document is r
 not replaced by an empty one.
 
 ```bash
-export HF_TOKEN=hf_...
-export GHCR_USER=<your-github-login>
-export GHCR_TOKEN=ghp_...          # write:packages
-export GITHUB_TOKEN=ghp_...        # read:packages
+# Credentials: one mode-0600 file, typed at a hidden prompt — never `export NAME=<value>`
+# (shell history) and never a command-line flag (`ps` is world-readable).
+umask 077; f="$(mktemp)"; trap 'rm -f "$f"' EXIT
+for n in HF_TOKEN GHCR_USER GHCR_TOKEN GITHUB_TOKEN; do   # GHCR_TOKEN: classic PAT, write:packages
+  printf '%s: ' "$n"; read -rs v; echo; printf '%s=%s\n' "$n" "$v" >> "$f"; unset v
+done
+set -a; . "$f"; set +a
 
 # Rehearse. NOT read-only: --dry-run gates only the push and the API call —
 # phases 1–4 still run, which spends the ~270 MiB download AND regenerates
@@ -362,9 +369,11 @@ The self-check proves the tarball you *built* is good. This proves the artifact 
 **published** is — the two are the same bytes only if the push did what it claimed.
 
 ```bash
-export GHCR_USER=<your-github-login>
-export GHCR_TOKEN=ghp_...             # read:packages is enough here
-echo "$GHCR_TOKEN" | oras login ghcr.io -u "$GHCR_USER" --password-stdin
+# Same one-file recipe as above, holding GHCR_USER and GHCR_TOKEN (read:packages is enough).
+umask 077; f="$(mktemp)"; trap 'rm -f "$f"' EXIT
+for n in GHCR_USER GHCR_TOKEN; do printf '%s: ' "$n"; read -rs v; echo; printf '%s=%s\n' "$n" "$v" >> "$f"; unset v; done
+set -a; . "$f"; set +a
+printf '%s' "$GHCR_TOKEN" | oras login ghcr.io -u "$GHCR_USER" --password-stdin
 
 mkdir /tmp/forage-pull && cd /tmp/forage-pull
 oras pull ghcr.io/washingbearlabs/forage-weights:<revision>
@@ -503,7 +512,9 @@ your hands.
 
 1. **Create a Hugging Face account** at https://huggingface.co if you do not have one.
 2. **Request access to the gated repository.** Visit
-   https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-22M while signed in and submit
+   https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-22M (and, if you will select the
+   larger model, https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M — Meta grants
+   access **per repository**, so 22M access does not cover 86M) while signed in and submit
    the access request — this is where you accept the **Llama 4 Community License
    Agreement** and **Acceptable Use Policy** (the terms `NOTICE` cites). Meta approves
    per account, and approval is **not instant**: minutes on a good day, longer on a bad

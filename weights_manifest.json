@@ -39,6 +39,36 @@
           "size": 1284
         }
       ]
+    },
+    "meta-llama/Llama-Prompt-Guard-2-86M": {
+      "revision": "a8ded8e697ce7c355e395a0df51f94adb4a2fd27",
+      "files": [
+        {
+          "path": "config.json",
+          "sha256": "cd54ac39a1f2c3c5146bd5295b34038f8b4d9069e2f844450da014a523bb7653",
+          "size": 871
+        },
+        {
+          "path": "model.safetensors",
+          "sha256": "e72017dbbe89c1232dcbc4a74ce0c389db5b468c42afd05850347b2a8c5f6b09",
+          "size": 1115268200
+        },
+        {
+          "path": "special_tokens_map.json",
+          "sha256": "9463f61e1b109a8eb4688b829260d7c6b1e6dff04c98ff7269bb89e2b92369b9",
+          "size": 286
+        },
+        {
+          "path": "tokenizer.json",
+          "sha256": "3e7e96867c2acdd575f0862c74822e05d1d15b93d9d9a4a2144b1ce83ae3339f",
+          "size": 16351353
+        },
+        {
+          "path": "tokenizer_config.json",
+          "sha256": "fa09cf22b9d723377f95706967f789ca1a8267e1412385705e1ed51ce0559189",
+          "size": 19674
+        }
+      ]
     }
   }
 }

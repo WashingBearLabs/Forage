@@ -16,7 +16,13 @@ from promptguard.classifier import CHUNK_OVERLAP, DEFAULT_MODEL_ID, MAX_SEQ_LEN
 MEBIBYTE = 1024 * 1024
 # Parent with the 22M model resident, but no classification in flight.
 PARENT_RESERVATION_BYTES = 512 * MEBIBYTE
-CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL: Mapping[str, int] = {DEFAULT_MODEL_ID: 0}
+CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL: Mapping[str, int] = {
+    DEFAULT_MODEL_ID: 0,
+    # Measured (corpus-86m-enablement US-003): the largest process VmRSS
+    # difference over the 22M at equal settings, after load and a max-budget
+    # run (404.3 MiB), rounded up. Idle reads ~115 MiB: weights page in on use.
+    "meta-llama/Llama-Prompt-Guard-2-86M": 405 * MEBIBYTE,
+}
 # Provisional, not measured: 1024 - 512 - 384 - 32 = 96 MiB residual;
 # reserve 32 MiB of that as margin. Spec 7 replaces this with measured RSS deltas.
 PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES = 64 * MEBIBYTE

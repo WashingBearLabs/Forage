@@ -188,7 +188,9 @@ HF_TOKEN_ENV_VAR: Final = "HF_TOKEN"
 MIRROR_ENV_VAR: Final = "FORAGE_WEIGHTS_MIRROR"
 MIRROR_TOKEN_ENV_VAR: Final = "FORAGE_MIRROR_TOKEN"
 
-ALLOWED_MODEL_IDS: frozenset[str] = frozenset({DEFAULT_MODEL_ID})
+ALLOWED_MODEL_IDS: frozenset[str] = frozenset(
+    {DEFAULT_MODEL_ID, "meta-llama/Llama-Prompt-Guard-2-86M"}
+)
 
 # Where the weights live when nothing says otherwise — the Dockerfile's
 # `ENV HF_HOME=/app/model-cache`, restated so a bare `python -c` run outside

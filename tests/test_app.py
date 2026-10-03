@@ -133,6 +133,8 @@ from tests.fakes import (
     weights_manifest_document,
 )
 
+_MODEL_ID_86M = "meta-llama/Llama-Prompt-Guard-2-86M"
+
 
 @pytest.fixture
 def client() -> httpx.AsyncClient:
@@ -1816,16 +1818,13 @@ async def test_lifespan_default_model_is_reported_even_when_unloaded(
 
 @pytest.mark.parametrize(
     "configured",
-    ["evil/model", "meta-llama/Llama-Prompt-Guard-2-86M", "secret-sentinel\ninjected"],
+    ["evil/model", "meta-llama/Llama-Prompt-Guard-3-1B", "secret-sentinel\ninjected"],
 )
 async def test_lifespan_refuses_disallowed_model_without_echoing_the_value(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     configured: str,
 ) -> None:
-    monkeypatch.setattr(
-        model_fetcher, "ALLOWED_MODEL_IDS", frozenset({DEFAULT_MODEL_ID})
-    )
     monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, configured)
     with (
         patch("model_fetcher.WeightAcquisition") as acquisition,
@@ -1974,7 +1973,10 @@ async def test_lifespan_threads_reach_the_loading_classifier(
 
 def test_provisional_memory_rule_constants_and_default_margins() -> None:
     assert PARENT_RESERVATION_BYTES == 512 * MEBIBYTE
-    assert CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL == {DEFAULT_MODEL_ID: 0}
+    assert CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL == {
+        DEFAULT_MODEL_ID: 0,
+        _MODEL_ID_86M: 405 * MEBIBYTE,
+    }
     assert PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES == 64 * MEBIBYTE
     settings = extraction_settings_from_config({})
     shared = (
@@ -1987,6 +1989,44 @@ def test_provisional_memory_rule_constants_and_default_margins() -> None:
     assert 1024 * MEBIBYTE - (shared + CacheSettings().max_bytes) == 32 * MEBIBYTE
     assert shared + CacheSettings().max_value_bytes == 964 * MEBIBYTE
     assert 1024 * MEBIBYTE - (shared + CacheSettings().max_value_bytes) == 60 * MEBIBYTE
+
+
+def test_every_allowlisted_model_has_a_resident_delta() -> None:
+    """A model the service may select must never KeyError the boot memory rule."""
+    missing = {
+        model_id
+        for model_id in model_fetcher.ALLOWED_MODEL_IDS
+        if model_id not in CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL
+    }
+    assert missing == set()
+
+
+async def test_lifespan_boots_the_86m_without_a_resident_delta_key_error(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _acquisition_that_never_loads
+    )
+    monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, _MODEL_ID_86M)
+    with patch.object(
+        retrieval_app,
+        "_cgroup_memory_snapshot",
+        return_value={"cgroup_memory_max_bytes": 1024 * MEBIBYTE},
+    ):
+        async with _running_app() as client:
+            response = await client.get("/health")
+            assert response.status_code == 200
+            assert response.json()["promptguard_model"] == _MODEL_ID_86M
+    # The rule ran against the 86M's (provisional) resident delta, not the 22M's.
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if "envelope_memory_rule_unmet" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert f"model_id={_MODEL_ID_86M} " in warnings[0]
+    assert f"parent_bytes={(512 + 405) * MEBIBYTE} " in warnings[0]
 
 
 @pytest.mark.parametrize(

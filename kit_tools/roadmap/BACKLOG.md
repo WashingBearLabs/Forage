@@ -80,3 +80,14 @@ vocabulary — no credential-bearing values, ever.
 - **A PyPI package.** The deliverable is the image.
 - **Distributing the PromptGuard weights.** Gated, Llama-licensed, downloaded by the
   operator.
+
+- **Per-model classifier working set** (from `corpus-86m-enablement` US-003, 2026-10-02).
+  `PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES` (64 MiB) is one model-independent constant with no
+  measurement behind it, so the memory rule applies a 22M-derived working set to the 86M too.
+  Measure the RSS delta between `classification_concurrency` 1 and 2 per model and make it a
+  per-model map, as `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` now is.
+- **`/extract` classify latency is high on the reference host** (same benchmark): one window
+  warm p50 13.1 s (22M) / 26.2 s (86M) at 1 vCPU, 3.1 s / 6.4 s at 4 vCPU, scaling with
+  `FORAGE_CPUS`, with the host otherwise idle. That is far above a bare forward pass at these
+  model sizes; profile where an `/extract` request spends its time (worker spawn, tokenizer,
+  forward pass) before treating these numbers as the classifier's cost.

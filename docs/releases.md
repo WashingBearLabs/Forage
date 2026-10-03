@@ -17,6 +17,104 @@ Every non-pre-release tag, newest first. The `contract:`, `anchor:`, `index dige
 into `kit_tools/specs/feature-search-release.md`'s Implementation Notes — that table is what
 the Poppy `epic-search-policy` session reads to pin a digest; nothing here pushes to Poppy.
 
+### v1.2.2 — `<publication date>`
+
+NOT YET PUBLISHED — prepared on `feat/corpus-86m-enablement`; the owner cut
+(`corpus-86m-enablement` US-004) fills the placeholders below.
+
+- contract: 1.3.0 (unchanged from v1.2.1)
+- anchor: `74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72`
+- index digest: `<index digest>`
+- tagged commit: `<tag commit>`
+
+Compose is pinned ahead of the cut; the tag lands with `v1.2.2`. Until then
+v1.2.1 below is the latest published, verified tag. The recorded index digest
+is the **pinnable form** (`ghcr.io/washingbearlabs/forage@sha256:…`) for
+deployments that need immutability; the full-semver tag pin remains the
+quickstart default.
+
+Publication: `<publish run>`. Real-weights candidate smoke on the exact
+commit to be tagged, once per model (22M at `1024m`, 86M at `1536m`):
+`<candidate smoke record>`.
+
+**Outstanding unpublished-tag window:** merging the release PR makes `main`'s
+quickstart pull an unpublished tag until the owner runs US-004. Cut from that
+merge commit in the same sitting; if the gate is not run, use
+`git revert <v1.2.2 pin commit>` before leaving that window open. The release
+PR description records the exact commit. Neither publication nor post-release
+verification is complete.
+
+**Why a PATCH** (owner decision 18, `epic-forage-injection-corpus`): the 86M is
+an opt-in addition behind an existing configuration key (`FORAGE_MODEL_ID`),
+the default model is unchanged, and the contract is unchanged. This is not
+the "next MINOR" that v1.2.1's notes and `contract/GOVERNANCE.md` promise, so
+**both compatibility windows below stay open** and neither promise is
+reinterpreted.
+
+What ships (draft, pending the owner cut):
+
+- **`meta-llama/Llama-Prompt-Guard-2-86M` is selectable** via
+  `FORAGE_MODEL_ID` — one model per process, chosen at startup. The allowlist
+  is now exactly the 22M and the 86M; any other id still refuses boot with
+  `model_id_not_allowed`. The 86M is pinned at revision
+  `a8ded8e697ce7c355e395a0df51f94adb4a2fd27` in `weights_manifest.json`,
+  digest-verified at acquisition like the 22M, and mirrored at
+  `ghcr.io/washingbearlabs/forage-weights:a8ded8e697ce7c355e395a0df51f94adb4a2fd27`
+  (private).
+- Its generic `LABEL_0` / `LABEL_1` config is accepted only for that exact
+  model/revision pair, with index 1 as the injection score — established by a
+  direction test against the 22M control (owner decision 19), not by a wider
+  rule. Unknown pins, reversed generic labels and non-binary configurations
+  still fail closed (`model_labels_unexpected`).
+- `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` carries the 86M's measured
+  resident delta, **405 MiB** over the 22M, so the boot memory-rule advisory
+  (`envelope_memory_rule_unmet`) accounts for it instead of failing on a
+  missing entry.
+- `docs/configuration.md` § "Sizing the container" now carries measured
+  classify latencies for both models at 1 and 4 vCPU (warm p50, one window /
+  max budget): at 1 vCPU / `1024m`, 22M 13.1 s / 501 s and 86M 26.2 s /
+  1,316 s; at 4 vCPU, 22M 3.1 s / 104 s and 86M 6.4 s / 368 s. Single request
+  in flight, one host; absolute latencies are host-specific.
+
+What is unchanged:
+
+- **The 22M remains the default.** With `FORAGE_MODEL_ID` unset the service
+  behaves as v1.2.1 did, and `sanitizer_revision` at the default model is
+  unchanged (selecting the 86M changes the hashed `MODEL_ID@revision` input,
+  by design).
+- **Contract 1.3.0, unchanged from v1.2.1** — the frozen `contract/openapi.yaml`
+  and its anchor are byte-identical to v1.2.1's. Nothing about v1.2.x's patch
+  number is linked to the contract version.
+- **Contiguity stays off**: the consecutive-window rule still ships disabled.
+- Compose's `FORAGE_MEM_LIMIT` default stays `1024m`.
+
+**Operator notes:**
+
+- **Selecting the 86M:** set `FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-86M`
+  and raise the limit to **`FORAGE_MEM_LIMIT=1536m`**. The memory rule adds up to
+  ~1,397 MiB for the 86M at the shipped extraction and cache settings; the
+  benchmark's measured single-in-flight peak was 855 MB at `1024m` with no OOM,
+  but that is not concurrency headroom. Its first boot acquires ~1.1 GB
+  (against ~270 MiB for the 22M).
+- **The 86M needs its own Hugging Face gated-access grant.** Meta grants access
+  per repository; a token approved for the 22M does not reach the 86M. Without
+  the grant (and without a mirror token) the service stays honestly `degraded`
+  with `promptguard_unavailable`. `/health.promptguard_model` names the
+  configured model even while unloaded; check `promptguard_loaded`.
+- **Poppy coexistence:** Poppy's in-tree copy remains the deployed source of
+  truth until Poppy pins a published Forage image. v1.2.2 adds a pin option
+  for that consumer: the same contract 1.3.0 as v1.2.1, plus the 86M as an
+  opt-in `FORAGE_MODEL_ID`. Compare contracts, not `sanitizer_revision`.
+
+**Compatibility windows — both still open:**
+
+- `retrieve.max_promptguard_chunks` still defaults to `0` and boot still warns
+  `retrieve_budget_unset coming_default=256`; the next MINOR flips the default
+  to `256` (`0` stays a legal opt-out).
+- Request-validation 422s still carry `input` / `ctx` / `url` as
+  `"[redacted]"`; the next MINOR drops them. Consumers reading
+  `detail[].input` must still stop.
+
 ### v1.2.1 — 2026-09-23
 
 - contract: 1.3.0
@@ -282,7 +380,8 @@ release gates into wishful thinking.
 A tag pushed onto a red tree still *runs* the gates. They fail, and `publish`
 never starts.
 
-**The contract 1.3.0 window is closed and v1.2.1 is published and verified.**
+**The contract 1.3.0 window is closed and v1.2.1 is published and verified;**
+**v1.2.2 (PATCH, contract 1.3.0 unchanged) is prepared, not yet published.**
 `hardening-release` US-002 froze the six-model
 `tests/golden/contract_1_3_0.json` and `_EXPECTED_ONE_THREE_ZERO_DIFF`.
 The exact-additions sweep and the release-entry completeness/tense guards run

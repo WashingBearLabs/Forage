@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # Milestones
 
-> Last updated: 2026-09-23
-> Updated by: Copilot (authorized replacement release)
+> Last updated: 2026-10-03
+> Updated by: Claude (v1.2.2 release prep, corpus-86m-enablement US-004)
 
 **Current release:** Forage `v1.2.1` — the hardened image (`epic-forage-hardening`, T2.2):
 `/retrieve` parity, search-text and URL audit in attacker-controlled forms, signed cache
@@ -10,7 +10,9 @@ entries, bounded providers, an operator-sizable envelope, and model-selection to
 at contract **1.3.0**. The 86M owner gates remain unrun; only 22M is allowlisted.
 **Status:** Shipped and verified (2026-09-23). v1.2.0 was withdrawn after its
 default-model failure. [Handoff](../specs/archive/feature-hardening-release.md).
-Next plannable work: `epic-forage-injection-corpus` (T2.3).
+**Pending:** PATCH `v1.2.2` (`epic-forage-injection-corpus` spec 0) makes the 86M
+selectable via `FORAGE_MODEL_ID` with the 22M default, contract 1.3.0 unchanged;
+prepared, not yet published — owner cut pending.
 
 `v1.0.0` (extraction epic) and `v1.1.0` (search providers) are done below. The Poppy halves
 of both families (consuming the pinned image, the policy UI, the trust boundary) execute in
