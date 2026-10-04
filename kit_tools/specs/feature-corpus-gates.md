@@ -187,19 +187,19 @@ of a `leaked` attack and no marker substring; `uv run python -m scripts.corpus.r
   measure here and record in Implementation Notes).
 
 **Acceptance Criteria:**
-- [ ] `build_report` / `render_json` / `render_markdown` / CLI as specified; determinism test;
+- [x] `build_report` / `render_json` / `render_markdown` / CLI as specified; determinism test;
       stage-attribution (total — the sum invariant, the `refused` bucket and the flagged-`/search`
       precedence), `rule` column, provenance-split and classifier-only tests as in the Independent
       Test.
-- [ ] `unmeasured` handling for a missing cassette; warnings section rendered.
-- [ ] No payload text in either renderer (sentinel test).
-- [ ] Wall time of the full corpus report on the developer machine recorded in Implementation Notes.
-- [ ] `kit_tools/testing/TESTING_GUIDE.md` row for `tests/test_corpus_report.py`.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] `unmeasured` handling for a missing cassette; warnings section rendered.
+- [x] No payload text in either renderer (sentinel test).
+- [x] Wall time of the full corpus report on the developer machine recorded in Implementation Notes.
+- [x] `kit_tools/testing/TESTING_GUIDE.md` row for `tests/test_corpus_report.py`.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-002: The gate — generated baseline, measured floors, pins, completeness, counts
 
