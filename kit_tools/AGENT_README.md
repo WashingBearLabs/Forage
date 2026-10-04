@@ -59,11 +59,9 @@ listed below exists, and nothing is listed that doesn't.
     extraction and search epic wrappers also remain in `specs/`
 25. **`roadmap/MILESTONES.md`**, **`roadmap/BACKLOG.md`**
 26. **`PRODUCT_VISION.md`** — populated product tiers and shipped outcomes;
-    T2.2 hardening is shipped; T2.3 is planned and validated as
-    `specs/epic-forage-injection-corpus.md` + five `feature-corpus-*.md` specs,
-    whose code anchors predate hardening and must be re-verified against the
-    shipped tree before execution. The 86M vendoring and benchmark owner gates
-    remain explicitly unrun
+    T2.2 hardening and T2.3 (the injection corpus; guide `docs/corpus.md`,
+    wrapper `specs/epic-forage-injection-corpus.md`) are shipped. The contiguity
+    and 86M default rulings are open (`roadmap/BACKLOG.md`)
 
 ---
 
@@ -72,8 +70,8 @@ listed below exists, and nothing is listed that doesn't.
 - [ ] Read `SYNOPSIS.md` for current state
 - [ ] Read `../CLAUDE.md` for the invariants
 - [ ] Check `specs/` and the roadmap for anything in flight; hardening closed at
-      v1.2.1 on 2026-09-23; `epic-forage-injection-corpus` is in flight — spec 0's
-      PATCH `v1.2.2` (86M opt-in) is published 2026-10-04 and verified.
+      v1.2.1 on 2026-09-23; `epic-forage-injection-corpus` closed with spec 5 (spec 0's
+      PATCH `v1.2.2`, 86M opt-in, published 2026-10-04 and verified; corpus guide `docs/corpus.md`).
       Read the hardening archived handoff before consumer or corpus work
 - [ ] Scan `docs/GOTCHAS.md`
 - [ ] Confirm the environment: `uv sync --extra dev && uv run pytest` (expect ALL green, zero

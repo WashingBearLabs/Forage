@@ -765,6 +765,35 @@ ruling-6 assertion output. -->
 - The offline/live consistency test compares each pooler with the stage-3 catch read off the wire
   (not through `_stage3_rule`, which itself uses the poolers), per record, per model, per config.
 
+### US-005 (documentation, findings, close-out)
+
+- Ruling-6 assertions, run on the epic branch at close-out. `main` already contains the published
+  `v1.2.2` (merge-base `cfb5376`, PR #37), so the merge-base is spec 0's completion state:
+  - `git diff --stat "$(git merge-base main HEAD)" -- pipeline/ promptguard/ models.py retrieval_app.py cache.py url_validator.py model_fetcher.py contract/ config.yaml weights_manifest.json Dockerfile` → **empty**.
+    (Against the `v1.2.2` tag itself the only difference is `contract/GOVERNANCE.md`, 3 lines of
+    post-tag publication-record prose from `72a9d33`; no code, no contract document.)
+  - `uv run python -c "from pipeline.sanitizer_revision import derive_sanitizer_revision as d; print(d({}))"` →
+    `021378efee6ab43f22b887af2f0c0c40ef76183a39802120fbfd0ca7a3a33900` (equal to the value recorded
+    in spec 1, `021378ef…`).
+  - `uv run python -m scripts.export_contract --check` → `export_contract OK — committed artifacts are current`.
+  - `git diff --stat v1.2.2 -- uv.lock pyproject.toml` → **empty** (no `idna` or other re-lock).
+  - `git diff --stat "$(git merge-base main HEAD)" -- .github` → `ci.yml` +8 (US-003's one step,
+    "Publish the injection corpus table") and `pull_request_template.md` +3 (the one checkbox).
+- Findings filed in `kit_tools/AUDIT_FINDINGS.md` (ids `2026-10-04-004` onward), all `open`, none fixed:
+  one per leaked (category, route) under `default` / 22M, three leaked `hidden_markup` carriers
+  (`css_offscreen`, `hidden_div`, `title_stuffing`), the blocked-but-leaked records (`atk-0059`,
+  `atk-0211`, `atk-0212`, identical under both configs and models), and every non-zero-FPR
+  (genre, route). Severity follows the hint: `warning` for structural categories, blocked-but-leaked
+  and core-genre false positives (`code` on `/search`, `docs` on `/retrieve`); `info` otherwise.
+  `tests/test_corpus_docs.py` re-derives each set from `baseline.json`, so a stale filing is red.
+- Roadmap: the "five specs, 21 stories" count was already corrected to six specs / 25 stories in
+  `PRODUCT_VISION.md` and `MILESTONES.md` before this story; `BACKLOG.md` still carried it and is
+  corrected here (re-counted from the `### US-` headings: 4 + 3 + 5 + 4 + 4 + 5 = 25). The corpus
+  item is closed and two follow-ups opened (contiguity default ruling; 86M default ruling — both
+  cassettes exist, so neither is blocked).
+- Decision inputs in `docs/corpus.md` are dated to baseline commit `4f13c52`; numbers appear nowhere
+  else in the guide or README (asserted).
+
 ## Refinement Notes
 
 ### Research Findings

@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # BACKLOG.md
 
-> Last updated: 2026-09-19
-> Updated by: Claude (plan-epic forage-hardening)
+> Last updated: 2026-10-04
+> Updated by: Claude (corpus-gates US-005 close-out)
 
 Work that is real but not yet scheduled into a feature spec. Items with an owning spec
 live in `MILESTONES.md` instead.
@@ -17,6 +17,11 @@ live in `MILESTONES.md` instead.
 | P1 | Committed hermeticity canary test (deliberately omitted at bootstrap to keep the exact-count gate) | Tech Debt | `feature-forage-ci-and-image` (US-002) | Done |
 | P2 | Rotate the SearXNG placeholder `secret_key` before the repo goes public | Security | — | Planned |
 | P2 | Automated container smoke (`docker build` + `docker run` + `/health`) — manual today | Tech Debt | `feature-forage-ci-and-image` | Done |
+
+---
+
+## Injection Regression Corpus (Completed)
+- [Epic Overview](../specs/epic-forage-injection-corpus.md) — T2.3; six specs, 25 stories (`86m-enablement` 4, `harness` 3, `attacks` 5, `benign` 4, `recording` 4, `gates` 5); the 86M became selectable as `v1.2.2`, the epic's only release. Guide: `../../docs/corpus.md`. Findings (leaks, over-defence, blocked-but-leaked) are filed in `../AUDIT_FINDINGS.md`, none fixed
 
 ---
 
@@ -49,20 +54,18 @@ Deliberately deferred at extraction — the flat layout keeps the Dockerfile,
 `sanitizer_revision`'s hashed source paths, and the whole suite working unchanged.
 Cosmetic only, and it touches `sanitizer_revision`, so it needs its own change.
 
-### Injection regression corpus in CI (T2.3) — planned
-**Priority:** Medium · **Effort:** Large
-`epic-forage-injection-corpus` was planned on 2026-09-19 (`/kit-tools:plan-epic`; five specs, 21
-stories — `feature-corpus-{harness,attacks,benign,recording,gates}.md`) and validated to
-`needs-work` the same week, then revalidated against the shipped tree on 2026-09-24, when spec 0
-(`feature-corpus-86m-enablement.md`: vendor, label-pin, allowlist, benchmark and release the 86M
-as `v1.2.2`) was added — six specs, 25 stories: a licence-clean attack corpus and benign counter-corpus driven
-hermetically through `POST /search`, `/retrieve` and `/extract`, with the real classifier measured
-once per model revision on a host and replayed in CI from committed per-window score cassettes; the
-gate is a generated baseline (exact match) plus measured floors. Ships no runtime change. Its
-dependency `epic-forage-hardening` shipped as v1.2.1 on 2026-09-23, so the specs' code anchors must
-be re-verified against the shipped tree before execution (wrapper ruling 5). Do not assume 86M
-weights or benchmark numbers exist: those two owner gates remain explicitly unrun, and only 22M is
-allowlisted.
+### Contiguity default ruling
+**Priority:** Medium · **Effort:** Small
+Owner ruling on whether contiguity gating (`promptguard_contiguity_windows` /
+`_threshold`, shipped off) earns a default. Inputs: `docs/corpus.md` "Decision inputs" (measured
+by `epic-forage-injection-corpus`, T2.3). The corpus adds no ruling of its own, and changing a
+default is a contract-governance question (`contract/GOVERNANCE.md`).
+
+### 86M default ruling
+**Priority:** Medium · **Effort:** Small
+Owner ruling on whether the 86M model replaces the 22M as the default. The 86M is selectable
+since `v1.2.2` and both models have cassettes, so the inputs are the same table: `docs/corpus.md`
+"Decision inputs", beside the latency and memory numbers in `corpus-86m-enablement`'s notes.
 
 ### Structured request logging / tracing
 **Priority:** Low · **Effort:** Small

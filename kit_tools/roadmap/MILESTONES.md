@@ -68,12 +68,13 @@ Poppy.
       example `docker-compose.yml` that makes the quickstart real.
 
 ---
-- [ ] **T2.3 Injection regression corpus** (`epic-forage-injection-corpus`, planned 2026-09-19,
+- [x] **T2.3 Injection regression corpus** (`epic-forage-injection-corpus`, planned 2026-09-19,
       six specs / 25 stories since spec 0 was added 2026-09-24; P1, `epic-forage-hardening` shipped): attack + benign corpus,
       hermetic route drivers, recorded-score cassettes (owner gates: 22M, 86M), generated baseline +
-      floors gate in the `test` job, CI step summary, contiguity / 86M decision table. No runtime
-      change; wrapper `../specs/epic-forage-injection-corpus.md`. Next:
-      `/kit-tools:validate-epic forage-injection-corpus`.
+      floors gate in the `test` job, CI step summary, contiguity / 86M decision table. Spec 0 released
+      `v1.2.2`; specs 1–5 changed no runtime behaviour. Guide `../../docs/corpus.md`; wrapper
+      `../specs/epic-forage-injection-corpus.md`. Follow-ups: contiguity default ruling and 86M default
+      ruling (`BACKLOG.md`).
 
 ## Exit Criteria for `v1.0.0`
 
@@ -99,5 +100,5 @@ of truth. Forage-side sequence after `v1.1.0`: `epic-forage-hardening` (`v1.2.1`
 2026-09-23), then `epic-forage-injection-corpus` (T2.3, planned 2026-09-19, revalidated against the
 shipped tree 2026-09-24 — six specs, 25 stories; spec 0 makes the 86M selectable on the owner's lab
 host and releases PATCH `v1.2.2`, specs 1–5 build the corpus with no runtime change; owner gates in
-spec 0 and for the two cassette recordings), then the T3 items (additional providers, provenance hooks) and the
+spec 0 and for the two cassette recordings; shipped 2026-10-04), then the T3 items (additional providers, provenance hooks) and the
 deferred `forage/` package rename.

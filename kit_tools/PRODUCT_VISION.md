@@ -102,7 +102,7 @@ Link to feature specs / epics as they are created.
 #### T2.3 — Injection regression corpus (CI)
 - **Description:** A curated indirect-injection attack corpus + classifier/pipeline gates wired into Forage CI, so injection-defense efficacy is *measured on every change* rather than asserted.
 - **Feature Spec(s):** `epic-forage-injection-corpus` (Web Access family Epic 6, Forage half) — `feature-corpus-86m-enablement` (spec 0, added 2026-09-24), `feature-corpus-harness`, `feature-corpus-attacks`, `feature-corpus-benign`, `feature-corpus-recording`, `feature-corpus-gates`
-- **Status:** Planned and validated (2026-09-19; revalidated post-T2.2 2026-09-24 — six specs, 25 stories; spec 0 makes the 86M selectable, `v1.2.2`)
+- **Status:** Shipped (2026-10-04) — six specs, 25 stories. Spec 0 made the 86M selectable (`v1.2.2`, the epic's only release); specs 1–5 added the corpus, cassettes for both models, the gate in the `test` job and the decision table, with no runtime change. Guide: `docs/corpus.md`; leaked attacks and over-defence are filed in `AUDIT_FINDINGS.md`, not fixed. The contiguity and 86M default rulings are open follow-ups
 
 ### Tier 3 — Future
 
