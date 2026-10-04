@@ -874,15 +874,16 @@ connected`, cache hits) is INFO and therefore invisible.
 an older image than expected.
 
 **Cause:** `compose/minimal.yml` and `compose/full.yml` pin
-`ghcr.io/washingbearlabs/forage:1.2.2` and `forage-searxng:0.1.1-rc`; the companion
-is published, but the service pin is ahead of the owner-gated `v1.2.2` cut.
-Until it lands, `manifest unknown` is an outstanding release-sequencing item:
-cut from the release PR's merge commit in the same sitting or
-`git revert <v1.2.2 pin commit>` (exact commit in the release PR description).
-A withdrawn or never-published tag also pulls nothing: v1.2.0 was withdrawn
-after its real-model failure; `1.2.1` is the latest published tag.
+`ghcr.io/washingbearlabs/forage:1.2.2` and `forage-searxng:0.1.1-rc`; both are
+published (`1.2.2` on 2026-10-04, verified), so a
+`manifest unknown` against these pins is not a release-sequencing gap: check
+registry reachability and the image name. The v1.2.2 merge-to-publication
+window is closed (pin commit `c933673`). A future pin that lands ahead of its
+tag reopens such a window until the cut or a revert of its pin commit. A
+withdrawn or never-published tag also pulls nothing: v1.2.0 was withdrawn
+after its real-model failure.
 
-**Fix:** after the cut, pin a full semver (`1.2.2`) or the `@sha256` digest from the Release body, never
+**Fix:** pin a full semver (`1.2.2`) or the `@sha256` digest from the Release body, never
 `latest`; then `docker compose -f <file> up -d`. Rollback is the same command with the
 previous tag; a rollback across a `sanitizer_revision` rotation flushes the content cache,
 which is expected.

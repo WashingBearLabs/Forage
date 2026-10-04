@@ -68,9 +68,9 @@ contract `1.3.0`, whose window opened in
 US-002. Withdrawing a defective image does not withdraw its contract version.
 The archived release spec's US-005 handoff records replacement verification;
 `docs/releases.md` records completed recovery and withdrawal.
-The next mapping is **pending**: image `v1.2.2`, a PATCH that makes the opt-in
-86M classifier selectable, will serve contract `1.3.0`, unchanged from
-`v1.2.1`. It is not the next MINOR, so both "next MINOR" windows below
+The next mapping is **published**: image `v1.2.2` (2026-10-04, verified), a
+PATCH that makes the opt-in 86M classifier selectable, serves contract
+`1.3.0`, unchanged from `v1.2.1`. It is not the next MINOR, so both "next MINOR" windows below
 (ruling (g)'s `retrieve.max_promptguard_chunks` flip and the 422 field drop)
 stay open. A process built from this tree reports `1.3.0` on `/health`.
 
