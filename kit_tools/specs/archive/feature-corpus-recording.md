@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: corpus-recording
-status: active
+status: completed
 session_ready: true
 depends_on: [corpus-attacks, corpus-benign, corpus-86m-enablement]
 vision_ref: "T2.3 — Injection regression corpus (CI)"
@@ -12,7 +12,8 @@ epic_seq: 4
 epic_final: false
 execution_order: [US-001, US-004, US-002, US-003]
 created: 2026-09-19
-updated: 2026-09-24
+updated: 2026-10-04
+completed: 2026-10-04
 ---
 
 # Feature Spec: Score Recording — Cassette Format, File-Backed Replay, the Host-Side Recorder, the 22M and 86M Recordings
