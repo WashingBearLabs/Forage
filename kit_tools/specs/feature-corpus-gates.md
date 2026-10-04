@@ -262,20 +262,20 @@ the record id (finding 14); the `MIN_RECORDS` test from spec 1 is un-skipped and
   `RouteResult.summary()`.
 
 **Acceptance Criteria:**
-- [ ] `tests/corpus/baseline.json` and `tests/corpus/floors.json` committed; the five gate tests
+- [x] `tests/corpus/baseline.json` and `tests/corpus/floors.json` committed; the five gate tests
       (drift, floors, pins, completeness, counts) green; the delete-an-entry test green.
-- [ ] Floors set from the measured baseline by the rounding rule; Implementation Notes carry the
+- [x] Floors set from the measured baseline by the rounding rule; Implementation Notes carry the
       first measured headline numbers (catch per category, `fpr_external`, `fpr_multilingual`,
       `over_defence_probe` FPR, per model × config) — numbers only.
-- [ ] Failure messages verified payload-free (sentinel test on a forced drift).
-- [ ] Wall time on a GitHub runner recorded.
-- [ ] `tests/corpus/README.md` explains what each red means and the two commands (regenerate
+- [x] Failure messages verified payload-free (sentinel test on a forced drift).
+- [x] Wall time on a GitHub runner recorded.
+- [x] `tests/corpus/README.md` explains what each red means and the two commands (regenerate
       baseline; re-record).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-003: CI publication and the PR checklist
 
