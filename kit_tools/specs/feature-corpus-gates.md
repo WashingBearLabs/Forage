@@ -744,6 +744,27 @@ ruling-6 assertion output. -->
 - `tests/test_corpus_lint.py::test_min_records_floors_hold` is un-skipped; the gate adds the probe,
   multi-window and cassette-window-count floors.
 
+### US-004 (decision table)
+
+- Offline sweep, `default`-config texts that reached stage 3 (denominators: attack 372, benign external 94,
+  `long_form` 21, `multilingual` 34, `over_defence_probe` 79; max windows 9 on 22M, 11 on 86M). Fired /
+  rate, `max@0.85` = `default`; `live_contiguity` = max@0.85 OR contiguity(2, 0.5); `mean@0.5`:
+  - 22M: every pooler 0 on every group above (attack 0/372, boundary_straddle 0/13, sustained_midband 0/7,
+    natural_language 0/155, FPR 0 on all four benign groups) - including `live_contiguity`,
+    bare `contiguity(2, 0.5)` and `mean@0.5`.
+  - 86M: `max@0.85` / `live_contiguity` attack 15/372 (0.0403), natural_language 15/155 (0.0968), window
+    families 0; bare `contiguity(2, 0.5)` attack 0/372; `mean@0.5` attack 21/372 (0.0565),
+    natural_language 21/155 (0.1355), window families 0; benign external / `long_form` /
+    `multilingual` / `over_defence_probe` 0 for all four. Full grid: `tests/corpus/baseline.json`
+    `offline`, or `--sweep --markdown`.
+- Both models were recorded (spec 0 enabled the 86M), so the model half is not pending.
+- No default flips, no hashed file touched; `derive_sanitizer_revision()` unchanged.
+- `--sweep` prints only the `offline` section (JSON, or Markdown with `--markdown`); the baseline
+  always carries it. A pooler needing more windows than any text of the model has renders `n/a`.
+- `smoothed(w, t)` averages a sequence shorter than `w` whole (degrades to `mean_aggregate`).
+- The offline/live consistency test compares each pooler with the stage-3 catch read off the wire
+  (not through `_stage3_rule`, which itself uses the poolers), per record, per model, per config.
+
 ## Refinement Notes
 
 ### Research Findings

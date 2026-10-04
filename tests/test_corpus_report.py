@@ -15,6 +15,7 @@ from __future__ import annotations
 import functools
 import json
 from collections.abc import Sequence
+from typing import cast
 
 import pytest
 
@@ -38,6 +39,7 @@ from scripts.corpus.report import (
     STAGES,
     AttributionError,
     Report,
+    _offline_model,
     attribute_catch,
     build_parser,
     build_report,
@@ -45,6 +47,10 @@ from scripts.corpus.report import (
     main,
     render_json,
     render_markdown,
+    render_sweep_json,
+    render_sweep_markdown,
+    sweep_groups,
+    sweep_poolers,
 )
 from tests.corpus_stage2 import stage2_record_hits
 
@@ -533,3 +539,246 @@ def test_headline_names_every_model_and_config() -> None:
     report = _full_report()
     keys: Sequence[tuple[str, str]] = [(h.model, h.config) for h in report.headline]
     assert keys == [(m, c) for m in report.models for c in report.configs]
+
+
+# ---------------------------------------------------------------------------
+# The offline pooling sweep (corpus-gates US-004)
+# ---------------------------------------------------------------------------
+
+
+def test_the_comparison_operators_are_pinned_at_the_threshold() -> None:
+    assert not poolers.max_score(0.5)([0.5])  # strict
+    assert poolers.max_score(0.5)([0.5, 0.75])
+    assert poolers.contiguity(2, 0.5)([0.5, 0.5])  # inclusive
+    assert not poolers.contiguity(2, 0.5)([0.5, 0.4999])
+    assert poolers.k_anywhere(2, 0.5)([0.5, 0.0, 0.5])  # inclusive
+    assert not poolers.k_anywhere(2, 0.5)([0.5, 0.0, 0.4999])
+    assert poolers.mean_aggregate(0.5)([0.25, 0.75])  # inclusive
+    assert not poolers.mean_aggregate(0.5)([0.25, 0.7499])
+    assert poolers.smoothed(2, 0.5)([0.0, 0.25, 0.75, 0.0])  # inclusive
+    assert not poolers.smoothed(2, 0.5)([0.0, 0.25, 0.7499, 0.0])
+
+
+def test_the_poolers_differ_on_their_defining_shapes() -> None:
+    split = [0.6, 0.2, 0.6]
+    assert poolers.k_anywhere(2, 0.5)(split)
+    assert not poolers.contiguity(2, 0.5)(split)
+    assert not poolers.k_anywhere(3, 0.5)(split)
+    assert poolers.contiguity(3, 0.5)([0.6, 0.6, 0.6, 0.1])
+    # A smoothed run fires where a mean over the whole text would not.
+    spike = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+    assert poolers.smoothed(2, 0.5)(spike)
+    assert not poolers.mean_aggregate(0.5)(spike)
+    assert not poolers.max_score(1.0)(spike)
+
+
+def test_the_live_composite_is_max_or_run() -> None:
+    live = poolers.live_contiguity()
+    assert live([0.9])  # a lone window above 0.85: the bare run misses it
+    assert not poolers.contiguity(2, 0.5)([0.9])
+    assert live([0.5, 0.5])  # a run with no window above 0.85
+    assert not live([0.85])
+    assert not live([0.6, 0.2, 0.6])
+
+
+def test_empty_and_short_sequences_never_fire_by_accident() -> None:
+    for fires in (
+        poolers.max_score(0.0),
+        poolers.contiguity(2, 0.0),
+        poolers.k_anywhere(1, 0.0),
+        poolers.mean_aggregate(0.0),
+        poolers.smoothed(2, 0.0),
+        poolers.live_contiguity(),
+    ):
+        assert not fires([])
+    assert poolers.smoothed(2, 0.5)([0.5])  # shorter than the span: averaged whole
+    assert not poolers.contiguity(2, 0.5)([0.9])
+
+
+def _swept(
+    spec: Sequence[tuple[dict[str, object], Sequence[float]]],
+    config: RuleConfig = "default",
+) -> dict[str, object]:
+    """Sweep records built from ``(overrides, scores)``; returns the JSON shape."""
+    pairs: list[tuple[CorpusRecord, RouteResult]] = []
+    for index, (overrides, scores) in enumerate(spec):
+        kind = overrides.get("kind", "attack")
+        record_id = f"{'atk' if kind == 'attack' else 'ben'}-{index + 1:04d}"
+        mapping = _mapping(
+            record_id,
+            "text",
+            {"filename": "a.txt", "text": "x"},
+            kind=str(kind),
+        )
+        mapping.update(overrides)
+        record = record_from_mapping(mapping)
+        signals = _signals(window_scores=tuple(scores))
+        pairs.append(
+            (
+                record,
+                RouteResult(
+                    record_id, "/extract", config, _MODEL_22M, "clean", signals
+                ),
+            )
+        )
+    return _offline_model(_MODEL_22M, pairs).to_json()
+
+
+def _table_of(data: dict[str, object]) -> dict[str, dict[str, dict[str, object]]]:
+    return cast(dict[str, dict[str, dict[str, object]]], data["poolers"])
+
+
+def _fired(data: dict[str, object], pooler: str, group: str) -> object:
+    return _table_of(data)[pooler][group]["fired"]
+
+
+def test_the_sweep_counts_per_group_and_pooler_on_synthetic_scores() -> None:
+    data = _swept(
+        [
+            ({"category": "boundary_straddle"}, [0.6, 0.2, 0.6]),
+            ({"category": "boundary_straddle"}, [0.6, 0.6, 0.1]),
+            ({"category": "sustained_midband"}, [0.1, 0.1]),
+            ({"kind": "benign", "category": "long_form"}, [0.6, 0.6, 0.6]),
+        ]
+    )
+    assert data["reached"] == {
+        "attack": 3,
+        "boundary_straddle": 2,
+        "sustained_midband": 1,
+        "long_form": 1,
+    }
+    assert _fired(data, "k_anywhere(2,0.5)", "boundary_straddle") == 2
+    assert _fired(data, "contiguity(2,0.5)", "boundary_straddle") == 1
+    assert _fired(data, "contiguity(2,0.5)", "attack") == 1
+    assert _fired(data, "contiguity(2,0.5)", "long_form") == 1
+    assert _fired(data, "max@0.85", "attack") == 0
+    assert _fired(data, "contiguity(3,0.5)", "long_form") == 1
+
+
+def test_a_level_group_names_its_parameter() -> None:
+    thinned = record_from_mapping(
+        {
+            **_mapping("atk-0001", "text", {"filename": "a.txt", "text": "x"}),
+            "category": "density_thinned",
+            "params": {"density": "1/4"},
+        }
+    )
+    assert sweep_groups(thinned) == [
+        "attack",
+        "density_thinned",
+        "density_thinned density=1/4",
+    ]
+
+
+def test_a_text_that_never_reached_stage_3_is_outside_the_sweep() -> None:
+    data = _swept([({"category": "boundary_straddle"}, [])])
+    assert data["reached"] == {}
+
+
+def test_the_sweep_reads_only_the_default_config() -> None:
+    data = _swept([({"category": "boundary_straddle"}, [0.9])], config="contiguity")
+    assert data["reached"] == {}
+
+
+def test_rows_that_need_more_windows_than_any_text_has_are_not_applicable() -> None:
+    data = _swept([({"category": "boundary_straddle"}, [0.9])])
+    table = _table_of(data)
+    assert table["max@0.85"]["boundary_straddle"] == {"fired": 1, "rate": 1.0}
+    for name in ("contiguity(2,0.5)", "k_anywhere(3,0.4)", "live_contiguity"):
+        assert table[name]["boundary_straddle"] == {"fired": None, "rate": None}
+
+
+def test_every_swept_setting_is_named_once_and_the_grid_is_complete() -> None:
+    names = [name for name, _, _ in sweep_poolers()]
+    assert len(names) == len(set(names))
+    for expected in (
+        "max@0.5",
+        "max@0.85",
+        "max@0.95",
+        "live_contiguity",
+        "contiguity(2,0.4)",
+        "contiguity(3,0.7)",
+        "k_anywhere(2,0.5)",
+        "k_anywhere(3,0.7)",
+        "mean@0.3",
+        "mean@0.7",
+        "smoothed(2)@0.5",
+    ):
+        assert expected in names
+
+
+def test_the_report_carries_the_offline_section_and_names_unmeasured_models() -> None:
+    report = build_report(
+        _tiny_corpus(), [_fallback(0.9)], DEFAULT_CONFIGS, cassette_headers={}
+    )
+    offline = json.loads(render_json(report))["offline"]
+    assert [entry["model"] for entry in offline] == [
+        _MODEL_22M,
+        *report.warnings.unmeasured_models,
+    ]
+    assert offline[0]["poolers"]["max@0.85"]["attack"]["fired"] == 3
+    assert offline[1:] == [
+        {"model": model, "status": "unmeasured"}
+        for model in report.warnings.unmeasured_models
+    ]
+    markdown = render_sweep_markdown(report)
+    assert "unmeasured (no cassette)" in markdown
+    assert _SENTINEL not in markdown + render_sweep_json(report)
+
+
+def test_the_sweep_json_is_the_offline_section_alone_and_deterministic() -> None:
+    report = _full_report()
+    sweep = render_sweep_json(report)
+    assert list(json.loads(sweep)) == ["offline"]
+    assert json.loads(sweep)["offline"] == json.loads(render_json(report))["offline"]
+    assert sweep == render_sweep_json(report)
+
+
+def test_main_sweep_prints_the_offline_section(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["--sweep"]) == 0
+    assert list(json.loads(capsys.readouterr().out)) == ["offline"]
+
+
+@functools.cache
+def _full_results() -> tuple[RouteResult, ...]:
+    import asyncio
+
+    classifiers, _ = load_cassettes()
+    records = load_corpus()
+    results: list[RouteResult] = []
+    for classifier in classifiers:
+        results.extend(
+            asyncio.run(drive_all(records, classifier, configs=DEFAULT_CONFIGS))
+        )
+    return tuple(results)
+
+
+def _live_stage3_catch(result: RouteResult) -> bool:
+    """Whether the wire shows a stage-3 catch, read without any pooler.
+
+    On ``/search`` that is the ``injection_detected`` omission only: a 0.5-0.85
+    flag has no omission reason and is not a stage-3 rule firing.
+    """
+    signals = result.signals
+    if result.route == "/search":
+        return signals.omit_reason == contract.OMIT_INJECTION_DETECTED
+    return signals.injection_detected is True and signals.promptguard_state == "scanned"
+
+
+def test_offline_poolers_equal_the_live_stage_3_catch_on_every_record() -> None:
+    by_config: dict[RuleConfig, poolers.Pooler] = {
+        "default": poolers.max_score(0.85),
+        "contiguity": poolers.live_contiguity(),
+    }
+    results = _full_results()
+    assert results
+    for result in results:
+        offline = by_config[result.config](result.signals.window_scores)
+        assert offline == _live_stage3_catch(result), (
+            result.record_id,
+            result.route,
+            result.config,
+            result.model_id,
+        )

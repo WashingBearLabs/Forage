@@ -340,6 +340,54 @@ class ClassifierView:
 
 
 @dataclass(frozen=True, slots=True)
+class SweepRow:
+    """One pooler setting over one model's stage-3 texts.
+
+    ``fired`` maps a group name to the count of its texts the pooler fires on;
+    ``applicable`` is false when no text of the model has enough windows for
+    the pooler to differ from a single-window rule (the row renders ``n/a``).
+    """
+
+    pooler: str
+    applicable: bool
+    fired: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class OfflineModel:
+    """The offline pooling sweep of one measured model.
+
+    ``reached`` maps a group name to the count of its records that reached
+    stage 3 in the ``default`` config (the denominator of every rate); a text
+    stage 2 blocked first never produced a call and is outside the sweep.
+    """
+
+    model: str
+    max_windows: int
+    reached: tuple[tuple[str, int], ...]
+    rows: tuple[SweepRow, ...]
+
+    def to_json(self) -> dict[str, object]:
+        reached = dict(self.reached)
+        poolers_out: dict[str, object] = {}
+        for row in self.rows:
+            fired = dict(row.fired)
+            poolers_out[row.pooler] = {
+                group: {
+                    "fired": fired[group] if row.applicable else None,
+                    "rate": (_rate(fired[group], n) if row.applicable else None),
+                }
+                for group, n in reached.items()
+            }
+        return {
+            "model": self.model,
+            "max_windows": self.max_windows,
+            "reached": reached,
+            "poolers": poolers_out,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class RecordOutcome:
     """One row of the per-record map."""
 
@@ -368,6 +416,7 @@ class Report:
     candidate_rejection: tuple[CandidateRejection, ...]
     classifier_only: tuple[ClassifierView, ...]
     records: tuple[RecordOutcome, ...] = field(repr=False)
+    offline: tuple[OfflineModel, ...] = ()
 
     def records_map(
         self,
@@ -530,6 +579,107 @@ def _classifier_view(
     return ClassifierView(model=model, attack=side("attack"), benign=side("benign"))
 
 
+SWEEP_ATTACK_FAMILIES: Final[tuple[str, ...]] = (
+    "boundary_straddle",
+    "density_thinned",
+    "repetition_camouflage",
+    "sustained_midband",
+    "natural_language",
+    "authority_seo",
+)
+SWEEP_BENIGN_GROUPS: Final[tuple[str, ...]] = (
+    "benign_external",
+    "long_form",
+    "multilingual",
+    "over_defence_probe",
+)
+_SWEEP_LEVELED: Final[Mapping[str, str]] = {
+    "density_thinned": "density",
+    "repetition_camouflage": "repeat",
+}
+_SWEEP_MAX_THRESHOLDS: Final = (0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95)
+_SWEEP_RUN_THRESHOLDS: Final = (0.4, 0.5, 0.6, 0.7)
+_SWEEP_MEAN_THRESHOLDS: Final = (0.3, 0.4, 0.5, 0.6, 0.7)
+_SWEEP_SMOOTHING_WINDOWS: Final = 2
+
+
+def sweep_poolers() -> tuple[tuple[str, poolers.Pooler, int], ...]:
+    """Every swept ``(name, pooler, windows needed to differ from max)`` setting."""
+    rows: list[tuple[str, poolers.Pooler, int]] = [
+        (f"max@{t}", poolers.max_score(t), 1) for t in _SWEEP_MAX_THRESHOLDS
+    ]
+    rows.append(("live_contiguity", poolers.live_contiguity(), 2))
+    for k in (2, 3):
+        rows += [
+            (f"contiguity({k},{t})", poolers.contiguity(k, t), k)
+            for t in _SWEEP_RUN_THRESHOLDS
+        ]
+    for k in (2, 3):
+        rows += [
+            (f"k_anywhere({k},{t})", poolers.k_anywhere(k, t), k)
+            for t in _SWEEP_RUN_THRESHOLDS
+        ]
+    rows += [
+        (f"mean@{t}", poolers.mean_aggregate(t), 2) for t in _SWEEP_MEAN_THRESHOLDS
+    ]
+    rows += [
+        (
+            f"smoothed({_SWEEP_SMOOTHING_WINDOWS})@{t}",
+            poolers.smoothed(_SWEEP_SMOOTHING_WINDOWS, t),
+            _SWEEP_SMOOTHING_WINDOWS,
+        )
+        for t in _SWEEP_MEAN_THRESHOLDS
+    ]
+    return tuple(rows)
+
+
+def sweep_groups(record: CorpusRecord) -> list[str]:
+    """The sweep groups one record counts toward (empty when it counts in none)."""
+    groups: list[str] = []
+    if record.kind == "attack":
+        groups.append("attack")
+        if record.category in SWEEP_ATTACK_FAMILIES:
+            groups.append(record.category)
+            level_key = _SWEEP_LEVELED.get(record.category)
+            if level_key is not None:
+                groups.append(
+                    f"{record.category} {level_key}={record.params.get(level_key)}"
+                )
+        return groups
+    if provenance_of(record) == "external" and record.category not in _OWN_LINE_GENRES:
+        groups.append("benign_external")
+    if record.category in SWEEP_BENIGN_GROUPS:
+        groups.append(record.category)
+    return groups
+
+
+def _offline_model(
+    model: str,
+    pairs: Sequence[tuple[CorpusRecord, RouteResult]],
+) -> OfflineModel:
+    """Pool every ``default``-config text that reached stage 3, for one model."""
+    texts: list[tuple[list[str], tuple[float, ...]]] = [
+        (sweep_groups(record), result.signals.window_scores)
+        for record, result in pairs
+        if result.config == "default" and result.signals.window_scores
+    ]
+    names = sorted({group for groups, _ in texts for group in groups})
+    reached = {name: 0 for name in names}
+    for groups, _ in texts:
+        for group in groups:
+            reached[group] += 1
+    max_windows = max((len(scores) for _, scores in texts), default=0)
+    rows: list[SweepRow] = []
+    for name, fires, needed in sweep_poolers():
+        fired = dict.fromkeys(names, 0)
+        for groups, scores in texts:
+            if fires(scores):
+                for group in groups:
+                    fired[group] += 1
+        rows.append(SweepRow(name, max_windows >= needed, tuple(sorted(fired.items()))))
+    return OfflineModel(model, max_windows, tuple(sorted(reached.items())), tuple(rows))
+
+
 def load_sampler_stats(path: Path = SAMPLER_STATS_PATH) -> dict[str, object]:
     """The benign sampler's ``{genre: {examined, rejections}}`` as committed."""
     loaded: object = json.loads(path.read_text(encoding="utf-8"))
@@ -578,6 +728,7 @@ def build_report(
     benign: list[BenignCell] = []
     headline: list[Headline] = []
     views: list[ClassifierView] = []
+    offline: list[OfflineModel] = []
     rows: list[RecordOutcome] = []
     for classifier in sorted(cassettes, key=lambda c: c.model_id):
         results = asyncio.run(drive_all(batch, classifier, configs=configs))
@@ -604,6 +755,8 @@ def build_report(
                 _headline(classifier.model_id, config, attack_cells, benign_cells)
             )
         views.append(_classifier_view(classifier.model_id, pairs))
+        if "default" in configs:
+            offline.append(_offline_model(classifier.model_id, pairs))
     measured = tuple(sorted({c.model_id for c in cassettes}))
     unmeasured = tuple(sorted(set(model_fetcher.ALLOWED_MODEL_IDS) - set(measured)))
     differ: list[str] = []
@@ -626,6 +779,7 @@ def build_report(
         records=tuple(
             sorted(rows, key=lambda r: (r.record_id, r.route, r.config, r.model))
         ),
+        offline=tuple(offline),
     )
 
 
@@ -650,6 +804,16 @@ def load_cassettes(
 # ---------------------------------------------------------------------------
 
 
+def _offline_json(report: Report) -> list[object]:
+    """Per measured model its sweep; per unmeasured model a closed status."""
+    out: list[object] = [model.to_json() for model in report.offline]
+    out += [
+        {"model": model, "status": "unmeasured"}
+        for model in report.warnings.unmeasured_models
+    ]
+    return out
+
+
 def to_json_object(report: Report) -> dict[str, object]:
     """The report as plain JSON-ready data (floats unrounded)."""
     return {
@@ -666,6 +830,7 @@ def to_json_object(report: Report) -> dict[str, object]:
         "headline": [row.to_json() for row in report.headline],
         "candidate_rejection": [row.to_json() for row in report.candidate_rejection],
         "classifier_only": [view.to_json() for view in report.classifier_only],
+        "offline": _offline_json(report),
         "records": report.records_map(),
     }
 
@@ -704,6 +869,67 @@ def _table(header: Sequence[str], rows: Sequence[Sequence[str]]) -> list[str]:
     ]
     lines.extend("| " + " | ".join(row) + " |" for row in rows)
     return lines
+
+
+def render_sweep_json(report: Report) -> str:
+    """The ``offline`` section alone, in the baseline's deterministic byte form."""
+    return (
+        json.dumps(
+            _rounded({"offline": _offline_json(report)}),
+            sort_keys=True,
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n"
+    )
+
+
+def _sweep_tables(model: OfflineModel) -> list[str]:
+    reached = dict(model.reached)
+    levels = sorted(group for group in reached if "=" in group)
+    headline = [
+        group
+        for group in ("attack", *SWEEP_ATTACK_FAMILIES, *SWEEP_BENIGN_GROUPS)
+        if group in reached
+    ]
+    lines: list[str] = []
+    for columns in (headline, levels):
+        if not columns:
+            continue
+        header = ["pooler"] + [f"{group} (n={reached[group]})" for group in columns]
+        body: list[list[str]] = []
+        for row in model.rows:
+            fired = dict(row.fired)
+            body.append(
+                [row.pooler]
+                + [
+                    _pct(_rate(fired[group], reached[group]))
+                    if row.applicable
+                    else "n/a"
+                    for group in columns
+                ]
+            )
+        lines += _table(header, body)
+        lines.append("")
+    return lines
+
+
+def render_sweep_markdown(report: Report) -> str:
+    """The offline pooling sweep as Markdown: rates over texts that reached stage 3."""
+    lines: list[str] = ["## Offline pooling sweep", ""]
+    lines += [
+        "Rates are the share of each group's stage-3 texts (the `default` config) on "
+        "which the pooler fires. `n/a`: no text has enough windows to tell the "
+        "pooler from the max rule. A text stage 2 blocked first is outside every "
+        "denominator.",
+        "",
+    ]
+    for model in report.offline:
+        lines += [f"### {model.model} (max windows {model.max_windows})", ""]
+        lines += _sweep_tables(model)
+    for model_id in report.warnings.unmeasured_models:
+        lines += [f"### {model_id}", "", "unmeasured (no cassette)", ""]
+    return "\n".join(lines).rstrip("\n") + "\n"
 
 
 def render_markdown(report: Report) -> str:
@@ -803,6 +1029,7 @@ def render_markdown(report: Report) -> str:
         classifier_rows,
     )
     lines.append("")
+    lines += [*render_sweep_markdown(report).splitlines(), ""]
     for model in report.models:
         for config in report.configs:
             lines += [f"## {model} [{config}]", "", "### Attacks", ""]
@@ -987,6 +1214,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--sweep",
+        action="store_true",
+        help=(
+            "Print only the offline pooling sweep: JSON, or Markdown with "
+            "--markdown (the baseline always carries it)"
+        ),
+    )
+    parser.add_argument(
         "--check",
         action="store_true",
         help="Compare the live JSON report with the committed baseline; write nothing",
@@ -1020,9 +1255,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         or args.write_baseline
         or args.write_floors
         or args.check
+        or args.sweep
     ):
         parser.error(
-            "choose --json, --markdown, --write-baseline, --write-floors or --check"
+            "choose --json, --markdown, --write-baseline, --write-floors, --check "
+            "or --sweep"
         )
     classifiers, headers = load_cassettes()
     report = build_report(
@@ -1044,6 +1281,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"baseline is stale; regenerate with: {REGEN_COMMAND}")
             return 1
         print("report OK — the committed baseline is current")
+    if args.sweep:
+        if args.markdown:
+            print(render_sweep_markdown(report), end="")
+        else:
+            print(render_sweep_json(report), end="")
+        return 0
     if args.json:
         print(rendered, end="")
     if args.markdown:
