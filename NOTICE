@@ -37,6 +37,15 @@ containing the weights must carry those obligations forward.
 "Llama" and "Meta" are trademarks of Meta Platforms, Inc. Forage is not
 sponsored by, endorsed by, or affiliated with Meta Platforms, Inc.
 
+The score cassettes under tests/corpus/cassettes/ hold numeric outputs of
+`meta-llama/Llama-Prompt-Guard-2-22M` and, where recorded,
+`meta-llama/Llama-Prompt-Guard-2-86M`: per-window scores and window counts,
+keyed by the SHA-256 of each classified text, at the revision named in each
+file's name and `revision` field. They are outputs of Llama Materials and are
+governed by the Llama licence cited above. They hold no model internals (no
+weights, tokenizer or configuration) and no input text. They are test data
+only and none is shipped in the image.
+
 --------------------------------------------------------------------------
 Third-party corpus samples
 --------------------------------------------------------------------------

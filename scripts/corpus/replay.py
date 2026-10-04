@@ -13,10 +13,70 @@ length, and the call log keeps hashes and scores only.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Final, Self, cast
 
+from model_fetcher import repo_dirname
 from promptguard.classifier import PromptGuardBudgetExceededError
+from scripts.corpus import vocab
+
+CASSETTE_FORMAT: Final = 1
+"""The ``format`` field a cassette carries; any other value is refused."""
+
+CASSETTES_DIR: Final[Path] = vocab.TESTS_CORPUS_ROOT / "cassettes"
+"""Where the committed cassettes live: ``<slug>@<revision>.json``."""
+
+CASSETTE_MAX_BYTES: Final = 2 * 1024 * 1024
+"""The size cap a committed cassette is linted against."""
+
+
+def cassette_slug(model_id: str) -> str:
+    """The bare ``owner--name`` form of ``model_id`` (no ``models--`` prefix)."""
+    return repo_dirname(model_id).removeprefix("models--")
+
+
+def cassette_filename(model_id: str, revision: str) -> str:
+    """The file name a cassette for ``model_id`` at ``revision`` is written to."""
+    return f"{cassette_slug(model_id)}@{revision}.json"
+
+
+class CassetteFormatError(ValueError):
+    """A cassette file is not the shape this harness reads. Names the file only."""
+
+
+def read_cassette(path: Path) -> dict[str, object]:
+    """Load and shape-check a cassette; return the decoded top-level object."""
+    try:
+        loaded: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise CassetteFormatError(f"{path.name}: unreadable") from None
+    if not isinstance(loaded, dict):
+        raise CassetteFormatError(f"{path.name}: not an object")
+    data = cast(dict[str, object], loaded)
+    if data.get("format") != CASSETTE_FORMAT:
+        raise CassetteFormatError(f"{path.name}: format")
+    for key in ("model_id", "revision"):
+        if not isinstance(data.get(key), str):
+            raise CassetteFormatError(f"{path.name}: {key}")
+    records = data.get("records")
+    if not isinstance(records, dict):
+        raise CassetteFormatError(f"{path.name}: records")
+    for sha, entry in cast(dict[str, object], records).items():
+        if not isinstance(entry, dict):
+            raise CassetteFormatError(f"{path.name}: records")
+        fields_ = cast(dict[str, object], entry)
+        scores = fields_.get("scores")
+        if (
+            len(sha) != 64
+            or not isinstance(scores, list)
+            or not all(isinstance(score, float) for score in cast(list[object], scores))
+            or fields_.get("windows") != len(cast(list[object], scores))
+        ):
+            raise CassetteFormatError(f"{path.name}: records")
+    return data
 
 
 def text_sha256(text: str) -> str:
@@ -85,6 +145,17 @@ class ReplayClassifier:
         self.revision = revision
         self.fallback = fallback
         self.calls: list[ReplayCall] = []
+
+    @classmethod
+    def from_cassette(cls, path: Path) -> Self:
+        """A classifier answering from the cassette at ``path`` (never a fallback)."""
+        data = read_cassette(path)
+        records = cast(dict[str, dict[str, list[float]]], data["records"])
+        return cls(
+            {sha: entry["scores"] for sha, entry in records.items()},
+            model_id=cast(str, data["model_id"]),
+            revision=cast(str, data["revision"]),
+        )
 
     @property
     def loaded(self) -> bool:

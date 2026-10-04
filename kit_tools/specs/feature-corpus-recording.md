@@ -626,3 +626,20 @@ cheap now and expensive to retrofit (finding 15).
   0 stops (licence, access pending, inconclusive evidence), US-003 records `not recorded — 86M not
   enabled`. For the 22M, the mirror read token remains the alternative to an HF token.
 - The 86M tokenizer changes window counts; re-authoring may ripple into the 22M cassette.
+
+### US-001 (2026-10-04)
+
+- Slug pinned to the **bare** form (`meta-llama--Llama-Prompt-Guard-2-22M@<sha>.json`,
+  `models--` stripped), by `test_the_cassette_name_is_the_bare_repo_slug_at_the_revision`.
+- `RecordingClassifier` subclasses `ReplayClassifier` so `drive_all` / `_drive_one` read its
+  `model_id` and `calls` unchanged — `drivers.py` is untouched. It takes `model_id=` /
+  `revision=` keywords beside `inner` (the drive stamps `RouteResult.model_id` from them).
+- The budget criterion is asserted at the classifier seam (real classifier, wrapper and
+  replay each raise `PromptGuardBudgetExceededError` on the same two-window text at
+  `max_chunks=1`). The shipped config sets no route chunk budget, so a route-level drive
+  would not exercise it.
+- The real loader writes a `Loading weights` tqdm bar to stderr; refusals *after* acquisition
+  (`not_loaded`, `unscanned`) therefore end stderr with the reason word, not consist of it.
+  Refusals before acquisition write exactly the word.
+- The `unscanned` test unloads the wrapped classifier between the step-4 check and the drive,
+  which takes stage 3's `model_unavailable` path on all three routes.
