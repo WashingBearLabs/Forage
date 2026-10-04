@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: corpus-86m-enablement
-status: active
+status: completed
 session_ready: false
 depends_on: [hardening-release]
 vision_ref: "T2.3 — Injection regression corpus (CI)"
@@ -12,7 +12,8 @@ epic_seq: 0
 epic_final: false
 execution_order: [US-001, US-002, US-003, US-004]
 created: 2026-09-24
-updated: 2026-09-24
+updated: 2026-10-04
+completed: 2026-10-04
 ---
 
 # Feature Spec: 86M Enablement — Vendor, Label Pin, Allowlist, Benchmark, Release
@@ -315,22 +316,22 @@ published image boots with `FORAGE_MODEL_ID=<86M>` at the recommended limit to
 scripts.export_contract --check` green, no `contract/openapi.yaml` diff since `v1.2.1`).
 
 **Acceptance Criteria:**
-- [ ] The version is **`v1.2.2` (PATCH)** — owner decision 18. The release notes say why: the 86M is
+- [x] The version is **`v1.2.2` (PATCH)** — owner decision 18. The release notes say why: the 86M is
       an opt-in addition behind an existing configuration key, the default is unchanged, and a PATCH
       does not trigger the two "next MINOR" compatibility windows `docs/releases.md` and
       `contract/GOVERNANCE.md` publish (the `retrieve.max_promptguard_chunks` default flip and the
       request-validation 422 field drop) — **both windows stay open**, and the notes say so. They
       also state "contract `1.3.0`, unchanged from `v1.2.1`".
-- [ ] The release follows `docs/releases.md` (there is no `kit_tools/docs/BUMP_VERSION.md`); all six
+- [x] The release follows `docs/releases.md` (there is no `kit_tools/docs/BUMP_VERSION.md`); all six
       gates plus the layer-identity check pass; anonymous pull verified.
-- [ ] `compose/minimal.yml` and `compose/full.yml` and the docs that pin `v1.2.1` move to `v1.2.2`
+- [x] `compose/minimal.yml` and `compose/full.yml` and the docs that pin `v1.2.1` move to `v1.2.2`
       (deployment docs, within ruling 6a's "docs"); the compose `FORAGE_MEM_LIMIT` default stays
       `1024m`, and the 86M recipe overrides it.
-- [ ] **Before the tag is pushed**, a real-weights candidate smoke runs on an image built on the lab
+- [x] **Before the tag is pushed**, a real-weights candidate smoke runs on an image built on the lab
       host from the **exact commit to be tagged** (commit recorded), once per model (22M default at
       `1024m`, 86M selected at its recommended limit). CI's own build is covered by the layer-identity
       check; the post-publish boot above confirms the released bytes.
-- [ ] Release notes state: 86M selectable, 22M remains the default, contiguity remains off, no
+- [x] Release notes state: 86M selectable, 22M remains the default, contiguity remains off, no
       contract change, the 86M's recommended memory limit and its separate gated-access grant; the
       Poppy coexistence note records the new pin option.
 - [ ] If US-002 recorded `gate not run`, this story records `### US-004 — not released (86M not
@@ -402,7 +403,52 @@ scripts.export_contract --check` green, no `contract/openapi.yaml` diff since `v
 
 ## Implementation Notes
 
-### US-004 — release prep, 2026-10-03 (owner cut pending)
+### US-004 — v1.2.2 published and verified, 2026-10-04
+
+**Current completion record.** The owner cut `v1.2.2` (PATCH, owner decision 18) from the PR #36
+merge commit; the prep note below is historical evidence. Contract `1.3.0`, byte-identical to
+`v1.2.1` (`git diff v1.2.1 v1.2.2 -- contract/openapi.yaml contract/openapi.yaml.sha256` is empty;
+anchor `74b9db01…`). Both "next MINOR" windows remain open.
+
+- **Tag:** `v1.2.2` = `c213bbfbe31c42dcf3a84dcaba14145e89805182`, the merge of PR #36 (spec 0
+  US-001–US-004 prep). The compose/doc pin commit was `c933673` (release prep), merged via
+  PR #36 at `c213bbf` (2026-10-03T23:18:28Z).
+- **Pre-tag real-weights candidate smoke on the exact tagged commit** (lab host `thelab-claude`,
+  image `forage:cand-c213bbf` = `sha256:46330782f2c9…`, built from `c213bbf` before the tag was
+  pushed):
+
+| Model | Limit | Healthy after | `promptguard_loaded` | `sanitizer_revision` | `/extract` | `memory.peak` (bytes) | OOM |
+|---|---|---|---|---|---|---|---|
+| 86M (`FORAGE_MODEL_ID`) | `1536m` | 21 s | true (`promptguard_model` 86M) | `b5e91fd64727…` | 200, `scanned` | 658,604,032 | none |
+| 22M (default) | `1024m` | 15 s | true | `021378efee6a…` (unchanged) | 200, `scanned` | 527,351,808 | none |
+
+- **Publish:** [run 37163854549](https://github.com/WashingBearLabs/Forage/actions/runs/37163854549)
+  — lint, typecheck, test, build-amd64, secret-grep, smoke and publish (which carries the
+  layer-identity check) all success; the `searxng-*` jobs skipped on a service tag.
+- **Release:** [`v1.2.2`](https://github.com/WashingBearLabs/Forage/releases/tag/v1.2.2),
+  publishedAt 2026-10-04T00:09:48Z, not draft, not prerelease, assets `openapi.yaml` and
+  `openapi.yaml.sha256`. Its body carries `contract: 1.3.0`, "Contract 1.3.0, unchanged from
+  v1.2.1", the why-a-PATCH paragraph, both open windows, 22M default, contiguity off, the
+  `1536m` recipe, the separate gated-access grant and the Poppy coexistence pin option.
+- **Index digest:** `sha256:5cb60943b99da45829613cde1f8286bdb4b72866210aa2146ca0cc5233569365`;
+  `1.2.2`, `1.2` and `latest` all resolve to it (`docker buildx imagetools inspect` from an empty
+  `DOCKER_CONFIG`, i.e. anonymously). Anonymous `docker pull ghcr.io/washingbearlabs/forage:1.2.2`
+  succeeded on the lab host.
+- **Post-publish boot of the published image** `ghcr.io/washingbearlabs/forage:1.2.2` with
+  `FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-86M` at `1536m`: `status` healthy,
+  `degraded_reasons` `[]`, `promptguard_loaded` true, `promptguard_model` 86M,
+  `sanitizer_revision` `b5e91fd64727…`, `contract_version` 1.3.0; `/extract` 200,
+  `promptguard_state` `scanned`.
+- **Credentials:** the lab host's HF token file was shredded after verification; no registry
+  login is stored. No credential value appears in this record.
+- **Window:** the merge-to-publication window (PR #36 merge 2026-10-03T23:18:28Z to publication
+  2026-10-04T00:09:48Z) is closed; the `<v1.2.2 pin commit>` revert placeholders in the docs are
+  replaced by this historical framing.
+- **AC status:** the five substantive criteria are ticked. The last criterion is a conditional
+  branch (US-002 `gate not run`, or US-003 partial) that did not occur — US-002 and US-003 both
+  completed — so it is inapplicable and left unticked, not a claim that anything was skipped.
+
+### US-004 — release prep, 2026-10-03 (historical; superseded by the record above)
 
 Release-prep changes only, on `feat/corpus-86m-enablement`; nothing committed, tagged or pushed by
 this step. Version is `v1.2.2` (PATCH, owner decision 18); contract `1.3.0`, unchanged from

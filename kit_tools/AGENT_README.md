@@ -73,7 +73,7 @@ listed below exists, and nothing is listed that doesn't.
 - [ ] Read `../CLAUDE.md` for the invariants
 - [ ] Check `specs/` and the roadmap for anything in flight; hardening closed at
       v1.2.1 on 2026-09-23; `epic-forage-injection-corpus` is in flight — spec 0's
-      PATCH `v1.2.2` (86M opt-in) is prepared, not yet published (re-anchor first).
+      PATCH `v1.2.2` (86M opt-in) is published 2026-10-04 and verified.
       Read the hardening archived handoff before consumer or corpus work
 - [ ] Scan `docs/GOTCHAS.md`
 - [ ] Confirm the environment: `uv sync --extra dev && uv run pytest` (expect ALL green, zero

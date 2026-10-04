@@ -211,7 +211,7 @@ corpus surfaces is recorded as an audit finding for a follow-up, never fixed her
 
 | Seq | Feature Spec | Stories | Status | Dependencies |
 |-----|-------------|---------|--------|--------------|
-| 0 | [`feature-corpus-86m-enablement.md`](feature-corpus-86m-enablement.md) — vendor the 86M, pin its label semantics, allowlist it, benchmark both models, release (owner gates, lab host; ruling 6a; releases `v1.2.2`) | 4 | Planned | `hardening-release` |
+| 0 | [`feature-corpus-86m-enablement.md`](archive/feature-corpus-86m-enablement.md) — vendor the 86M, pin its label semantics, allowlist it, benchmark both models, release (owner gates, lab host; ruling 6a; releases `v1.2.2`) | 4 | Completed 2026-10-04 (`v1.2.2`) | `hardening-release` |
 | 1 | [`feature-corpus-harness.md`](feature-corpus-harness.md) — record schema, loader + lint, replay classifier, the three route drivers, the outcome model, seed records | 3 | Planned | `hardening-release` (the whole hardening epic) |
 | 2 | [`feature-corpus-attacks.md`](feature-corpus-attacks.md) — the attack corpus by category and surface; third-party ingestion | 5 | Planned | `corpus-harness` |
 | 3 | [`feature-corpus-benign.md`](feature-corpus-benign.md) — the benign counter-corpus by genre, over-defence prose, multilingual and long-form | 4 | Planned | `corpus-harness` |

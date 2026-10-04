@@ -17,32 +17,35 @@ Every non-pre-release tag, newest first. The `contract:`, `anchor:`, `index dige
 into `kit_tools/specs/feature-search-release.md`'s Implementation Notes — that table is what
 the Poppy `epic-search-policy` session reads to pin a digest; nothing here pushes to Poppy.
 
-### v1.2.2 — `<publication date>`
-
-NOT YET PUBLISHED — prepared on `feat/corpus-86m-enablement`; the owner cut
-(`corpus-86m-enablement` US-004) fills the placeholders below.
+### v1.2.2 — 2026-10-04
 
 - contract: 1.3.0 (unchanged from v1.2.1)
 - anchor: `74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72`
-- index digest: `<index digest>`
-- tagged commit: `<tag commit>`
+- index digest: `sha256:5cb60943b99da45829613cde1f8286bdb4b72866210aa2146ca0cc5233569365`
+- tagged commit: `c213bbfbe31c42dcf3a84dcaba14145e89805182`
 
-Compose is pinned ahead of the cut; the tag lands with `v1.2.2`. Until then
-v1.2.1 below is the latest published, verified tag. The recorded index digest
-is the **pinnable form** (`ghcr.io/washingbearlabs/forage@sha256:…`) for
-deployments that need immutability; the full-semver tag pin remains the
-quickstart default.
+Compose pins the verified `v1.2.2` (pin commit `c933673`, merged via PR #36 at
+`c213bbf`). The recorded index digest is the **pinnable form**
+(`ghcr.io/washingbearlabs/forage@sha256:…`) for deployments that need
+immutability; the full-semver tag pin remains the quickstart default.
 
-Publication: `<publish run>`. Real-weights candidate smoke on the exact
-commit to be tagged, once per model (22M at `1024m`, 86M at `1536m`):
-`<candidate smoke record>`.
+Published 2026-10-04 through [run 37163854549](https://github.com/WashingBearLabs/Forage/actions/runs/37163854549)
+(lint, typecheck, test, build-amd64, secret-grep, smoke and publish green;
+the `searxng-*` jobs skipped on a service tag). `latest`, `1.2` and `1.2.2`
+resolve to the recorded index, checked anonymously from an empty Docker
+config, and an anonymous `docker pull` of `1.2.2` succeeded.
 
-**Outstanding unpublished-tag window:** merging the release PR makes `main`'s
-quickstart pull an unpublished tag until the owner runs US-004. Cut from that
-merge commit in the same sitting; if the gate is not run, use
-`git revert <v1.2.2 pin commit>` before leaving that window open. The release
-PR description records the exact commit. Neither publication nor post-release
-verification is complete.
+Real-weights candidate smoke on the exact tagged commit, before the tag was
+pushed (lab host, image built from `c213bbf`): the 86M at `1536m` was healthy
+in 21 s with `promptguard_model` 86M, `sanitizer_revision` `b5e91fd64727…`,
+`/extract` 200 `scanned` and a peak of 658,604,032 bytes, no OOM; the 22M
+default at `1024m` was healthy in 15 s with `sanitizer_revision`
+`021378efee6a…` (unchanged), `/extract` 200 `scanned` and a peak of
+527,351,808 bytes, no OOM. The published image was then booted with the 86M
+at `1536m`: `healthy`, no degraded reasons, `promptguard_loaded` true,
+contract 1.3.0, `/extract` 200 `scanned`. The full record is in
+`kit_tools/specs/archive/feature-corpus-86m-enablement.md` (US-004). The
+merge-to-publication window is closed.
 
 **Why a PATCH** (owner decision 18, `epic-forage-injection-corpus`): the 86M is
 an opt-in addition behind an existing configuration key (`FORAGE_MODEL_ID`),
@@ -51,7 +54,7 @@ the "next MINOR" that v1.2.1's notes and `contract/GOVERNANCE.md` promise, so
 **both compatibility windows below stay open** and neither promise is
 reinterpreted.
 
-What ships (draft, pending the owner cut):
+What ships:
 
 - **`meta-llama/Llama-Prompt-Guard-2-86M` is selectable** via
   `FORAGE_MODEL_ID` — one model per process, chosen at startup. The allowlist
@@ -122,7 +125,7 @@ What is unchanged:
 - index digest: `sha256:a29329af38ee563dcc890c9b68749e4d7bc32e20c422640b2f5ffecaa8c89e7b`
 - tagged commit: `e8cf83c51e8786abf30d79ae0a3d6608c5f8df2c`
 
-Compose pins the verified replacement `v1.2.1`.
+Compose pinned the verified replacement `v1.2.1` until v1.2.2 superseded it.
 The recorded index digest is the **pinnable form**
 (`ghcr.io/washingbearlabs/forage@sha256:…`) for deployments that need
 immutability; the full-semver tag pin remains the quickstart default.
@@ -381,7 +384,7 @@ A tag pushed onto a red tree still *runs* the gates. They fail, and `publish`
 never starts.
 
 **The contract 1.3.0 window is closed and v1.2.1 is published and verified;**
-**v1.2.2 (PATCH, contract 1.3.0 unchanged) is prepared, not yet published.**
+**v1.2.2 (PATCH, contract 1.3.0 unchanged) is published (2026-10-04) and verified.**
 `hardening-release` US-002 froze the six-model
 `tests/golden/contract_1_3_0.json` and `_EXPECTED_ONE_THREE_ZERO_DIFF`.
 The exact-additions sweep and the release-entry completeness/tense guards run

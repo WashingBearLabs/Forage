@@ -39,11 +39,9 @@ name: forage-full
 services:
   forage:
     # ghcr.io/washingbearlabs/forage, tag 1.2.2 — contract 1.3.0, 86M opt-in.
-    # Pinned ahead of the owner-gated `v1.2.2` cut; until then a pull fails
-    # with `manifest unknown`. Cut from the release PR's merge commit in
-    # the same sitting or revert the v1.2.2 pin commit: this window remains
-    # outstanding. docs/releases.md has the pending-release record; 1.2.1 is
-    # the latest published tag. Never roll back to the withdrawn 1.2.0.
+    # Published 2026-10-04 and verified; the merge-to-publication window is
+    # closed. docs/releases.md has the release record (index digest for
+    # pinning by @sha256). Never roll back to the withdrawn 1.2.0.
     image: ghcr.io/washingbearlabs/forage:1.2.2
     restart: unless-stopped
     # Loopback only — see the DEPLOYMENT POSTURE note above.
