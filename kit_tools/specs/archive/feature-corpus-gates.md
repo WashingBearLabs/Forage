@@ -269,7 +269,8 @@ the record id (finding 14); the `MIN_RECORDS` test from spec 1 is un-skipped and
       first measured headline numbers (catch per category, `fpr_external`, `fpr_multilingual`,
       `over_defence_probe` FPR, per model × config) — numbers only.
 - [x] Failure messages verified payload-free (sentinel test on a forced drift).
-- [x] Wall time on a GitHub runner recorded.
+- [ ] Wall time on a GitHub runner recorded. — pending: no CI run exists for this branch yet; read
+      from the first `test` job run (see US-002 notes).
 - [x] `tests/corpus/README.md` explains what each red means and the two commands (regenerate
       baseline; re-record).
 - [x] Tests written/updated for new functionality
@@ -331,8 +332,8 @@ is greater than `runs.index(_FULL_SUITE_RUN)`; no new action, secret or permissi
 - [x] The step exists, ordered after the step named `pytest`, conditioned as specified, pinned by tests; the
       workflow stays free of new actions / secrets / permissions (existing tests green).
 - [x] PR template line present and pinned.
-- [x] A PR run shows the table in the job summary (screenshot not required; the run URL recorded in
-      Implementation Notes).
+- [ ] A PR run shows the table in the job summary (screenshot not required; the run URL recorded in
+      Implementation Notes). — pending: requires the first PR run (see US-003 notes).
 - [x] Tests written/updated for new functionality
 - [x] Full test suite passes (`uv run pytest`)
 - [x] `uv run ruff check .` passes
@@ -744,6 +745,11 @@ ruling-6 assertion output. -->
   does not on this corpus, including `sustained_midband` (0/7) and `boundary_straddle` (0/13).
 - `tests/test_corpus_lint.py::test_min_records_floors_hold` is un-skipped; the gate adds the probe,
   multi-window and cassette-window-count floors.
+
+### US-003 (CI publication)
+
+- **PR run URL not recorded**: no PR run exists for this branch yet. The job-summary table and its
+  run URL are pending the first PR run; record the URL here when it exists.
 
 ### US-004 (decision table)
 

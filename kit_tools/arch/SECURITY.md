@@ -564,7 +564,7 @@ Forage has no audit log in the authentication sense; there is no identity to rec
 
 CI has no model weights: the Meta repository is gated, the organisation's mirror is private by decision (`docs/weights.md`), and `tests/test_ci_workflow.py::test_no_repository_secrets_referenced` pins the workflow to no repository secrets. So the real classifier is measured once per model revision, on a host, by an owner (`scripts/corpus/record.py`), and its per-window scores are committed as **cassettes** under `tests/corpus/cassettes/`. CI replays them through the real stage-3 rules via `scripts/corpus/replay.py`. A cassette is keyed by the SHA-256 of the text stage 3 classifies and carries scores and window counts only, never chunk text. A text with no recorded scores fails loudly (`UnrecordedTextError`) instead of passing. The gate cannot detect a real-model load failure; `/health.promptguard_loaded` remains the runtime truth.
 
-What the gate measures is the sanitization pipeline's behaviour on a curated set, not the classifier in isolation and not any guarantee about unseen text. Leaked records are filed in `kit_tools/AUDIT_FINDINGS.md`, not fixed by the corpus epic.
+What the gate measures is the sanitization pipeline's behaviour on a curated set, not the classifier in isolation and not any guarantee about unseen text. Leaked records are visible in the committed per-record outcome map (`records` in `tests/corpus/baseline.json`) and tracked in the local, gitignored `kit_tools/AUDIT_FINDINGS.md`; they are not fixed by the corpus epic.
 
 ### Fixtures
 

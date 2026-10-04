@@ -296,8 +296,11 @@ None of these is a property of unseen text, and none is a guarantee.
 (`density_thinned`, `repetition_camouflage` and `sustained_midband` exist to
 locate where Prompt Guard 2 stops catching) and a permanent per-record catalog of
 which categories and carriers reach the consumer under the live default
-configuration ([`AUDIT_FINDINGS.md`](../kit_tools/AUDIT_FINDINGS.md)). That is
-deliberate, and it is published in full, for three reasons:
+configuration (the per-record outcome map under `records` in
+[`tests/corpus/baseline.json`](../tests/corpus/baseline.json)). That is
+deliberate, and both are committed in full, for three reasons (leak findings are
+also tracked in `kit_tools/AUDIT_FINDINGS.md`, a local, gitignored working record
+that is not part of the published repository):
 
 - Public injection corpora are standard defensive practice, and the ones ingested
   here (AgentDojo, LLMail-Inject, CyberSecEval) are themselves public.
@@ -327,8 +330,8 @@ recorded window scores, which the baseline carries.
 **`blocked_but_leaked` is a half-worked defence, not a success.** A record counts
 here when its outcome is `blocked` while its marker is still on the wire (a
 structural block that left the claim in another field). The block is counted in the
-catch rate, and the leak is counted here, in the baseline's per-record map and in
-the audit findings. Read the two together.
+catch rate, and the leak is counted here and in the baseline's per-record map
+(and tracked in the local, gitignored audit findings). Read the two together.
 
 **The classifier-only view covers only texts that reached stage 3.** Stage 3 is
 skipped after a structural block, so a text stage 2 stopped has no window scores.
