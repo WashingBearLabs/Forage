@@ -348,12 +348,12 @@ record / text counts, the window histogram, wall time, host CPU, and the cassett
   `corpus: record 22M cassette @<revision>`.
 
 **Acceptance Criteria:**
-- [ ] Cassette committed; zero misses on every record × both configs; `windows_min` offender list
+- [x] Cassette committed; zero misses on every record × both configs; `windows_min` offender list
       empty; re-authored records (if any) listed by id in Implementation Notes with the pass count.
-- [ ] Implementation Notes section as in the Independent Test (numbers only).
-- [ ] The cassette's `revision` equals the manifest pin (US-004 guard green); `NOTICE` names the
+- [x] Implementation Notes section as in the Independent Test (numbers only).
+- [x] The cassette's `revision` equals the manifest pin (US-004 guard green); `NOTICE` names the
       22M model.
-- [ ] Full test suite passes (`uv run pytest`)
+- [x] Full test suite passes (`uv run pytest`)
 
 ### US-003: Record the 86M cassette if spec 0 enabled it (owner gate)
 
@@ -392,13 +392,13 @@ reason that stopped it (ruling 6a).
 - Memory: the 86M working set is larger; run on the host, not in the 1 GiB container.
 
 **Acceptance Criteria:**
-- [ ] One of the two Independent-Test outcomes, recorded in Implementation Notes.
-- [ ] If recorded: zero misses, `windows_min` list empty under both cassettes, `NOTICE` names the
+- [x] One of the two Independent-Test outcomes, recorded in Implementation Notes.
+- [x] If recorded: zero misses, `windows_min` list empty under both cassettes, `NOTICE` names the
       86M model, both cassettes' revisions equal their manifest pins.
-- [ ] Zero runtime change (rulings 6, 6a) re-asserted at spec end: the ruling-6 `git diff --stat`
+- [x] Zero runtime change (rulings 6, 6a) re-asserted at spec end: the ruling-6 `git diff --stat`
       set, taken against the epic branch's merge base with `main` (`git merge-base main HEAD`, ruling 6a), is empty; `derive_sanitizer_revision({})` unchanged;
       `scripts.export_contract --check` green.
-- [ ] Full test suite passes (`uv run pytest`)
+- [x] Full test suite passes (`uv run pytest`)
 
 ## Edge Cases
 
@@ -550,6 +550,38 @@ US-003 on `corpus-86m-enablement`" (~:208). Neither needs a change here.
   `HF_HOME`); `tests/corpus/README.md`; `kit_tools/docs/GOTCHAS.md`.
 
 ## Implementation Notes
+
+### US-002 — 22M recording, 2026-10-04
+
+Owner gate, run in-session on the lab host `thelab` (AMD Ryzen Threadripper 2970WX, 48 threads;
+torch 2.14.0+cpu) from the warm, manifest-verified cache (`HF_HUB_OFFLINE=1`, no token in the
+environment), `FORAGE_MODEL_ID` / `FORAGE_MODEL_REVISION` unset. Recorder:
+`python -m scripts.corpus.record --model-id meta-llama/Llama-Prompt-Guard-2-22M`.
+- **Revision:** `11614a155199674a0a95e6602d6ab0417b790ed0` (= manifest pin; US-004 guard green).
+- **Passes: 2.** Pass 1 (commit `ec51ddb`, 529 s) left three `windows_min` offenders, each one
+  window short: `atk-0021` (3 of 4), `atk-0248` (7 of 8), `ben-0009` (2 of 3). Their filler was
+  lengthened from the same sources (commit `0b4ad3b`; `atk-0021` keeps its 1/8 cadence) and both
+  cassettes were recorded from that commit.
+- **Pass 2 (final):** 760 records, 610 texts, 0 unscanned, configs `default` + `contiguity`;
+  windows histogram `{1: 507, 2: 24, 3: 28, 4: 23, 5: 18, 6: 3, 7: 1, 8: 4, 9: 2}`; wall time
+  515 s; cassette 103,865 bytes.
+- **Checks:** zero misses (`fallback=None`) on every record × both configs; `windows_min` offender
+  list empty; full suite on the lab host 4,756 passed, 1 skipped.
+
+### US-003 — 86M recording, 2026-10-04
+
+Spec 0 completed (v1.2.2, 2026-10-04): the 86M is vendored, label-pinned, allowlisted and released.
+Same host, procedure and commit (`0b4ad3b`) as US-002.
+- **Revision:** `a8ded8e697ce7c355e395a0df51f94adb4a2fd27` (= manifest pin).
+- 760 records, 610 texts, 0 unscanned; windows histogram
+  `{1: 502, 2: 28, 3: 9, 4: 21, 5: 35, 6: 8, 7: 1, 9: 1, 10: 4, 11: 1}` (the 86M tokenizer splits
+  differently); wall time 1,260 s; cassette 106,213 bytes.
+- **Checks:** zero misses and an empty `windows_min` list under **both** cassettes; no record
+  changed after the 86M pass, so no re-record was needed. Full suite with both cassettes:
+  4,756 passed, 1 skipped. `NOTICE` names both models.
+- **Ruling 6 / 6a at spec end:** the runtime `git diff --stat` against `git merge-base main HEAD`
+  is empty; `derive_sanitizer_revision({})` = `021378efee6a…` (unchanged);
+  `scripts.export_contract --check` green.
 
 <!-- US-002 / US-003 gate sections as specified. Numbers only. -->
 
