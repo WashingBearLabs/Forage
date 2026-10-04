@@ -15,8 +15,10 @@ Third-party model weights — Llama Prompt Guard 2
 
 Built with Llama.
 
-Forage's Stage 3 prompt-injection classifier runs Meta's Llama Prompt Guard 2
-(`meta-llama/Llama-Prompt-Guard-2-22M`). Those model weights are NOT part of
+Forage's Stage 3 prompt-injection classifier runs Meta's Llama Prompt Guard 2:
+`meta-llama/Llama-Prompt-Guard-2-22M` by default, or
+`meta-llama/Llama-Prompt-Guard-2-86M` when the operator selects it. Those model
+weights are NOT part of
 this repository, are NOT distributed with it, and are NOT covered by the
 Apache License above. They are obtained at run time by the operator from the
 Hugging Face gated repository, under the operator's own acceptance of:

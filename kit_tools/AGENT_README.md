@@ -72,12 +72,13 @@ listed below exists, and nothing is listed that doesn't.
 - [ ] Read `SYNOPSIS.md` for current state
 - [ ] Read `../CLAUDE.md` for the invariants
 - [ ] Check `specs/` and the roadmap for anything in flight; hardening closed at
-      v1.2.1 on 2026-09-23; `epic-forage-injection-corpus` is next (re-anchor first).
+      v1.2.1 on 2026-09-23; `epic-forage-injection-corpus` is in flight — spec 0's
+      PATCH `v1.2.2` (86M opt-in) is published 2026-10-04 and verified.
       Read the hardening archived handoff before consumer or corpus work
 - [ ] Scan `docs/GOTCHAS.md`
 - [ ] Confirm the environment: `uv sync --extra dev && uv run pytest` (expect ALL green, zero
-      failures — the current count lives in `testing/TESTING_GUIDE.md`; 4253 collected
-      and passed locally at the patch release gate, with no expected failures)
+      failures — the current count lives in `testing/TESTING_GUIDE.md`; 4272 collected
+      and passed locally at the v1.2.2 patch release gate, with no expected failures)
 
 **Flag anything that looks like:**
 - A new coupling back to Poppy → stop, it is forbidden

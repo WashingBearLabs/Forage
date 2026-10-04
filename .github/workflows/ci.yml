@@ -80,7 +80,7 @@ env:
   # job-scoped `packages: write`.
   IMAGE_REF: "forage:ci"
   IMAGE_ARTIFACT: "forage-amd64-image"
-  IMAGE_TARBALL: "forage-amd64.tar.gz"
+  IMAGE_TARBALL: "forage-amd64.tar.zst"
   IMAGE_ID_FILE: "image-id.txt"
   # `smoke` checks the repository out as well as downloading the image, so it
   # unpacks the artifact into a subdirectory instead of over the working tree.
@@ -113,7 +113,7 @@ env:
   # relaxation reaching a published image live in the suite.
   SEARXNG_IMAGE_REF: "forage-searxng:ci"
   SEARXNG_IMAGE_ARTIFACT: "forage-searxng-image"
-  SEARXNG_IMAGE_TARBALL: "forage-searxng.tar.gz"
+  SEARXNG_IMAGE_TARBALL: "forage-searxng.tar.zst"
   SEARXNG_IMAGE_ID_FILE: "searxng-image-id.txt"
   SEARXNG_IMAGE_DOWNLOAD_DIR: "downloaded-searxng-image"
   # Lower-case and spelled out, for the same reason IMAGE_NAME is: GHCR
@@ -142,6 +142,9 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
+          # Restore everywhere, save from main pushes only: a PR ref's copy is
+          # ~245 MB that no other ref can read (GitHub isolates caches per ref).
+          save-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Sync dev environment
         # --locked fails if uv.lock is stale relative to pyproject.toml, so a
@@ -265,6 +268,9 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
+          # Restore everywhere, save from main pushes only: a PR ref's copy is
+          # ~245 MB that no other ref can read (GitHub isolates caches per ref).
+          save-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Sync dev environment
         # Same `--locked` sync as lint: pyright's answers depend on the exact
@@ -299,6 +305,9 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
+          # Restore everywhere, save from main pushes only: a PR ref's copy is
+          # ~245 MB that no other ref can read (GitHub isolates caches per ref).
+          save-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Sync dev environment
         # Same `--locked` sync as the other two lanes: the suite must run
@@ -394,6 +403,9 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         env:
           SOURCE_DATE_EPOCH: ${{ steps.epoch.outputs.value }}
+          # No `.dockerbuild` build-record artifact (v7.3.0 reads this env
+          # var): each one held org Actions storage for 90 days.
+          DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: .
           platforms: linux/amd64
@@ -411,8 +423,14 @@ jobs:
           # apples to oranges.
           outputs: type=docker,rewrite-timestamp=true
           tags: ${{ env.IMAGE_REF }}
+          # PR runs read the cache and never write it: GitHub isolates caches per
+          # ref, so every refs/pull/N/merge write duplicated main's blobs, while
+          # a PR can already read main's entries. Only a push to main writes,
+          # and `mode=min` loses nothing on this single-stage Dockerfile (`max`
+          # only adds intermediate-stage layers). An empty cache-to disables
+          # the export.
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=min' || '' }}
           # The docker exporter cannot carry attestations. Leaving provenance
           # on makes buildx build something it then cannot hand to the daemon;
           # turning it off keeps the exported image exactly what gets saved,
@@ -459,13 +477,14 @@ jobs:
           echo "Built ${IMAGE_REF} = ${inspected}"
 
       - name: Save the image for the downstream jobs
-        # gzip -1: the layers inside a `docker save` tar are uncompressed, so a
-        # cheap pass is worth a lot of upload time. upload-artifact's own zip
-        # step is then disabled (compression-level: 0) rather than run over
-        # already-compressed bytes.
+        # zstd: the layers inside a `docker save` tar are uncompressed, so a
+        # multithreaded zstd pass shrinks the upload (and the storage it holds
+        # for its one-day retention) more than gzip -1 did, and faster.
+        # upload-artifact's own zip step is then disabled (compression-level:
+        # 0) rather than run over already-compressed bytes.
         run: |
           set -euo pipefail
-          docker save "${IMAGE_REF}" | gzip -1 > "${IMAGE_TARBALL}"
+          docker save "${IMAGE_REF}" | zstd -T0 -3 -q > "${IMAGE_TARBALL}"
           ls -lh "${IMAGE_TARBALL}" "${IMAGE_ID_FILE}"
 
       - name: Upload the image artifact
@@ -510,7 +529,7 @@ jobs:
             echo "::error::${IMAGE_ID_FILE} carried no image ID"
             exit 1
           fi
-          gunzip -c "${IMAGE_TARBALL}" | docker load
+          zstd -dc "${IMAGE_TARBALL}" | docker load
           loaded="$(docker image inspect --format '{{.Id}}' "${IMAGE_REF}")"
           if [ "${loaded#sha256:}" != "${recorded#sha256:}" ]; then
             echo "::error::loaded image ${loaded} is not the ${recorded} build-amd64 recorded — this job would be inspecting a different image than the one that was built"
@@ -610,6 +629,9 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
+          # Restore everywhere, save from main pushes only: a PR ref's copy is
+          # ~245 MB that no other ref can read (GitHub isolates caches per ref).
+          save-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Sync dev environment
         # Same `--locked` sync as every other lane: the smoke's expectations
@@ -641,7 +663,7 @@ jobs:
             echo "::error::${IMAGE_ID_FILE} carried no image ID"
             exit 1
           fi
-          gunzip -c "${IMAGE_DOWNLOAD_DIR}/${IMAGE_TARBALL}" | docker load
+          zstd -dc "${IMAGE_DOWNLOAD_DIR}/${IMAGE_TARBALL}" | docker load
           loaded="$(docker image inspect --format '{{.Id}}' "${IMAGE_REF}")"
           if [ "${loaded#sha256:}" != "${recorded#sha256:}" ]; then
             echo "::error::loaded image ${loaded} is not the ${recorded} build-amd64 recorded — this job would be smoking a different image than the one that was built"
@@ -822,7 +844,7 @@ jobs:
             echo "::error::${IMAGE_ID_FILE} carried no image ID"
             exit 1
           fi
-          gunzip -c "${IMAGE_DOWNLOAD_DIR}/${IMAGE_TARBALL}" | docker load
+          zstd -dc "${IMAGE_DOWNLOAD_DIR}/${IMAGE_TARBALL}" | docker load
           loaded="$(docker image inspect --format '{{.Id}}' "${IMAGE_REF}")"
           if [ "${loaded#sha256:}" != "${recorded#sha256:}" ]; then
             echo "::error::loaded image ${loaded} is not the ${recorded} build-amd64 recorded — this job would be publishing against a different image than the one that was gated"
@@ -895,6 +917,9 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         env:
           SOURCE_DATE_EPOCH: ${{ steps.epoch.outputs.value }}
+          # No `.dockerbuild` build-record artifact (v7.3.0 reads this env
+          # var): each one held org Actions storage for 90 days.
+          DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: .
           platforms: ${{ env.PUBLISH_PLATFORMS }}
@@ -1345,6 +1370,9 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         env:
           SOURCE_DATE_EPOCH: ${{ steps.epoch.outputs.value }}
+          # No `.dockerbuild` build-record artifact (v7.3.0 reads this env
+          # var): each one held org Actions storage for 90 days.
+          DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           # `searxng/`, not the repo root: the companion image's build context
           # is its own directory, so the Dockerfile's `COPY config/` cannot
@@ -1360,7 +1388,8 @@ jobs:
           # writes an amd64 service manifest on every run, and a shared scope
           # would have the two images evicting each other forever.
           cache-from: type=gha,scope=searxng
-          cache-to: type=gha,mode=max,scope=searxng
+          # Written from main pushes only, `mode=min`; see `build-amd64`.
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=min,scope=searxng' || '' }}
           # Same reason as `build-amd64`: the docker exporter `load: true` uses
           # cannot carry attestations.
           provenance: false
@@ -1393,7 +1422,7 @@ jobs:
       - name: Save the image for the downstream jobs
         run: |
           set -euo pipefail
-          docker save "${SEARXNG_IMAGE_REF}" | gzip -1 > "${SEARXNG_IMAGE_TARBALL}"
+          docker save "${SEARXNG_IMAGE_REF}" | zstd -T0 -3 -q > "${SEARXNG_IMAGE_TARBALL}"
           ls -lh "${SEARXNG_IMAGE_TARBALL}" "${SEARXNG_IMAGE_ID_FILE}"
 
       - name: Upload the companion image artifact
@@ -1435,6 +1464,9 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
+          # Restore everywhere, save from main pushes only: a PR ref's copy is
+          # ~245 MB that no other ref can read (GitHub isolates caches per ref).
+          save-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Sync dev environment
         run: uv sync --extra dev --locked
@@ -1453,7 +1485,7 @@ jobs:
             echo "::error::${SEARXNG_IMAGE_ID_FILE} carried no image ID"
             exit 1
           fi
-          gunzip -c "${SEARXNG_IMAGE_DOWNLOAD_DIR}/${SEARXNG_IMAGE_TARBALL}" | docker load
+          zstd -dc "${SEARXNG_IMAGE_DOWNLOAD_DIR}/${SEARXNG_IMAGE_TARBALL}" | docker load
           loaded="$(docker image inspect --format '{{.Id}}' "${SEARXNG_IMAGE_REF}")"
           if [ "${loaded#sha256:}" != "${recorded#sha256:}" ]; then
             echo "::error::loaded image ${loaded} is not the ${recorded} searxng-build recorded — this job would be smoking a different image than the one that was built"
@@ -1603,7 +1635,7 @@ jobs:
             echo "::error::${SEARXNG_IMAGE_ID_FILE} carried no image ID"
             exit 1
           fi
-          gunzip -c "${SEARXNG_IMAGE_DOWNLOAD_DIR}/${SEARXNG_IMAGE_TARBALL}" | docker load
+          zstd -dc "${SEARXNG_IMAGE_DOWNLOAD_DIR}/${SEARXNG_IMAGE_TARBALL}" | docker load
           loaded="$(docker image inspect --format '{{.Id}}' "${SEARXNG_IMAGE_REF}")"
           if [ "${loaded#sha256:}" != "${recorded#sha256:}" ]; then
             echo "::error::loaded image ${loaded} is not the ${recorded} searxng-build recorded — this job would be publishing against a different image than the one that was gated"
@@ -1680,6 +1712,9 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         env:
           SOURCE_DATE_EPOCH: ${{ steps.epoch.outputs.value }}
+          # No `.dockerbuild` build-record artifact (v7.3.0 reads this env
+          # var): each one held org Actions storage for 90 days.
+          DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: searxng
           platforms: ${{ env.SEARXNG_PUBLISH_PLATFORMS }}

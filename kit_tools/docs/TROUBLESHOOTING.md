@@ -356,8 +356,9 @@ Two explicit load-time refusals have their own closed markers:
 `model_identity_mismatch` means the requested and manifest snapshot directories
 differ or the directory disappeared; `model_labels_unexpected` means `id2label`
 is missing, null, non-mapping, or not exactly two indexed labels, one BENIGN and
-one INJECTION (case-insensitive), unless it is the exact pinned 22M
-`LABEL_0`/`LABEL_1` mapping documented in `docs/weights.md`.
+one INJECTION (case-insensitive), unless it is one of the exact pinned
+`LABEL_0`/`LABEL_1` mappings (22M, and from v1.2.2 the 86M, each only at its manifest
+revision) documented in `docs/weights.md`.
 v1.2.0 incorrectly rejects that genuine default config; use its verified
 replacement v1.2.1, not edited weights or a bypassed guard.
 Neither path permits a guessed injection index.
@@ -873,12 +874,16 @@ connected`, cache hits) is INFO and therefore invisible.
 an older image than expected.
 
 **Cause:** `compose/minimal.yml` and `compose/full.yml` pin
-`ghcr.io/washingbearlabs/forage:1.2.1` and `forage-searxng:0.1.1-rc`; the companion
-and service are published. The v1.2.1 release was verified 2026-09-23;
-its earlier unpublished-tag window is closed. A withdrawn or never-published
-tag pulls nothing: v1.2.0 was withdrawn after its real-model failure.
+`ghcr.io/washingbearlabs/forage:1.2.2` and `forage-searxng:0.1.1-rc`; both are
+published (`1.2.2` on 2026-10-04, verified), so a
+`manifest unknown` against these pins is not a release-sequencing gap: check
+registry reachability and the image name. The v1.2.2 merge-to-publication
+window is closed (pin commit `c933673`). A future pin that lands ahead of its
+tag reopens such a window until the cut or a revert of its pin commit. A
+withdrawn or never-published tag also pulls nothing: v1.2.0 was withdrawn
+after its real-model failure.
 
-**Fix:** pin a full semver (`1.2.1`) or the `@sha256` digest from the Release body, never
+**Fix:** pin a full semver (`1.2.2`) or the `@sha256` digest from the Release body, never
 `latest`; then `docker compose -f <file> up -d`. Rollback is the same command with the
 previous tag; a rollback across a `sanitizer_revision` rotation flushes the content cache,
 which is expected.

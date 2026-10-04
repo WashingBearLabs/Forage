@@ -84,14 +84,15 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
 
 ## Pre-deploy Checklist
 
-1. **Pick a tag.** The current release is `v1.2.1` / contract `1.3.0`,
-   published and verified 2026-09-23.
-   Pin its full semver (`1.2.1`) or the `@sha256:` digest recorded at the cut;
+1. **Pick a tag.** The current release is `v1.2.2` / contract `1.3.0`
+   (unchanged from v1.2.1), published 2026-10-04 and verified. Pin its full
+   semver (`1.2.2`) or the `@sha256:` digest recorded in `docs/releases.md`
+   (`sha256:5cb60943b99da45829613cde1f8286bdb4b72866210aa2146ca0cc5233569365`);
    never pin `latest`, and treat `sha-<short>` tags from `main` as unreleased.
-   Choose a verified published entry in `docs/releases.md`.
    Neither v1.2.0 (default model rejected) nor v0.9.2-rc (cold parity failure)
    is suitable for deployment.
-   The US-005 handoff records verified `latest` / `1.2` / `1.2.1` digest equality.
+   `corpus-86m-enablement` US-004 records the verified `latest` / `1.2` / `1.2.2`
+   digest equality.
 2. **Confirm the tag published green.** The tag's workflow run must show `publish` green
    and, for a `v*` tag, a GitHub Release carrying `openapi.yaml`, `openapi.yaml.sha256`, and
    a `contract: X.Y.Z` line in its body. A red `publish` after a push means the tags exist
@@ -102,7 +103,7 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
    CI's `secret-grep` job, including the name-only `FORAGE_CACHE_HMAC_KEY` pattern.
 
    ```bash
-   TAG=1.2.1
+   TAG=1.2.2
    docker pull ghcr.io/washingbearlabs/forage:$TAG
    docker run --rm --entrypoint cat ghcr.io/washingbearlabs/forage:$TAG /app/contract/openapi.yaml > openapi.yaml
    docker run --rm --entrypoint cat ghcr.io/washingbearlabs/forage:$TAG /app/contract/openapi.yaml.sha256 > openapi.yaml.sha256
@@ -115,7 +116,7 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
    same two files. The anchor at `HEAD` is
    `74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72`.
 4. **Check contract compatibility.** The image tag and `contract_version` are independent
-   semvers — image `1.2.1` serves contract `1.3.0`. Compare the consumer's expected MAJOR
+   semvers — image `1.2.2` serves contract `1.3.0`. Compare the consumer's expected MAJOR
    against `info.version` in the `openapi.yaml` you just extracted; a MAJOR mismatch means
    **do not deploy** (the consumer is expected to refuse activation, `CLAUDE.md`
    invariant 4). Compare contracts, never `sanitizer_revision`, which has deliberately
@@ -142,11 +143,11 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
 
 Both fragments are standalone (no `extends`), validated by CI's `lint` job with
 `docker compose config -q`, and share the fixed-name volume `forage-model-cache`. **They
-pin `ghcr.io/washingbearlabs/forage:1.2.1` and
+pin `ghcr.io/washingbearlabs/forage:1.2.2` and
 `ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`.** The companion is published;
-the service was published and verified on 2026-09-23. The temporary
-unpublished-tag window is closed. Never roll back to withdrawn v1.2.0;
-`docs/releases.md` records the replacement's digest and runtime verification.
+`1.2.2` was published 2026-10-04 and verified (index
+`sha256:5cb60943b99da45829613cde1f8286bdb4b72866210aa2146ca0cc5233569365`); the merge-to-publication window (PR #36 merged as `c213bbf` at 2026-10-03T23:18:28Z; published 2026-10-04) is closed (pin commit `c933673`). `1.2.1` remains published and
+verified; never roll back to withdrawn v1.2.0.
 
 | Fragment | Starts | Env it needs | Cache mode |
 |----------|--------|--------------|------------|
@@ -198,7 +199,7 @@ docker run --rm -p 127.0.0.1:8020:8020 \
   --env-file ./forage.env \
   -v forage-model-cache:/app/model-cache \
   -v "$PWD/config.yaml:/app/config.yaml:ro" \
-  ghcr.io/washingbearlabs/forage:1.2.1
+  ghcr.io/washingbearlabs/forage:1.2.2
 ```
 
 The env file carries `HF_TOKEN` and, if you run a Valkey, `VALKEY_URL`; only a *fully
@@ -217,7 +218,7 @@ warning and every key falls back to its code default, while a malformed `extract
    configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` — see `docs/configuration.md` § Sizing the container).
    Once weights land, expect `promptguard_loaded: true`,
    `capabilities.search_sanitization: 1`, `contract_version` matching the image's own
-   contract (`"1.3.0"` for `v1.2.1`), and
+   contract (`"1.3.0"` for `v1.2.2`, as for `v1.2.1`), and
    `cache_backend` reading `valkey` (with `cache_connected: true`) under `full.yml` or
    `memory` under `minimal.yml`. A failed acquisition retries in the background at 30 s,
    doubling to a 600 s ceiling with +/-20% jitter, forever; it converges in place without a
@@ -241,7 +242,7 @@ warning and every key falls back to its code default, while a malformed `extract
 
    ```bash
    curl -s http://127.0.0.1:8020/metrics | jq .model
-   curl -s http://127.0.0.1:8020/openapi.json | jq -r .info.version   # 1.3.0 on v1.2.1 after the cut
+   curl -s http://127.0.0.1:8020/openapi.json | jq -r .info.version   # 1.3.0 on v1.2.2
    ```
 
 3. **Run the contract smoke** from a checkout at the deployed tag. It polls `/health` until
@@ -266,7 +267,7 @@ warning and every key falls back to its code default, while a malformed `extract
    tag has neither and asserts only the weights-free contract.
 
    ```bash
-   TAG=1.2.1
+   TAG=1.2.2
    git show v$TAG:contract/openapi.yaml.sha256 > anchor-v$TAG.sha256   # the committed anchor at the tag
    # container started with no token or weights
    uv run python contract_smoke.py --base-url http://127.0.0.1:8020 \

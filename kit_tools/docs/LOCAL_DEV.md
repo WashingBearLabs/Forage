@@ -229,11 +229,9 @@ curl -s localhost:8020/health | jq
 ```
 
 Two caveats. First, **the fragments pull published images; they do not build your
-working tree.** Both pin `ghcr.io/washingbearlabs/forage:1.2.1` and
-`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`; the companion is published,
-and the service pin was published and verified 2026-09-23.
-The unpublished-tag window is closed; defective v1.2.0 is withdrawn
-(`docs/releases.md`).
+working tree.** Both pin `ghcr.io/washingbearlabs/forage:1.2.2` and
+`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`; both are published (`1.2.2`
+on 2026-10-04, verified; `docs/releases.md`). Defective v1.2.0 is withdrawn.
 To run the image you just built, use the `docker run` form
 above. Second, the image has no `HEALTHCHECK` instruction; both compose fragments declare a liveness probe.
 Its `curl -fsS -o /dev/null` discards `/health`'s body: a Docker-healthy container

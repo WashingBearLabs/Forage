@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import subprocess
 import sys
 from collections.abc import Callable
@@ -513,9 +514,17 @@ def _corpus_test_modules() -> list[Path]:
     referencing = {
         path
         for path in _TESTS_DIR.glob("test_*.py")
-        if "corpus" in path.read_text(encoding="utf-8")
+        if _CORPUS_REFERENCE.search(path.read_text(encoding="utf-8"))
     }
     return sorted(named | referencing)
+
+
+# A module that can load committed corpus text: it names the data directory or
+# imports the corpus loader / helpers. The bare word "corpus" is not enough — a
+# comment citing the `corpus-86m-enablement` spec loads no record.
+_CORPUS_REFERENCE = re.compile(
+    r"tests/corpus\b|[\"']corpus[\"']|\bscripts\.corpus\b|\bcorpus_stage2\b|\bload_corpus\b"
+)
 
 
 def test_every_corpus_test_module_disables_assertion_rewriting() -> None:

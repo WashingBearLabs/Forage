@@ -3812,3 +3812,122 @@ class TestJobGraph:
                 "across several stories; a forward reference makes GitHub "
                 "reject the whole workflow, not just that job."
             )
+
+
+_MAIN_ONLY_CACHE_TO = re.compile(
+    r"^\$\{\{\s*(?P<cond>.+?)\s*&&\s*'(?P<value>[^']+)'\s*\|\|\s*''\s*\}\}$"
+)
+_EVERY_BUILD_JOB = ("build-amd64", "publish", "searxng-build", "searxng-publish")
+
+
+class TestActionsStorageFootprint:
+    """The workflow's share of the org's Actions storage stays small.
+
+    Measured 2026-09-28: 334 caches / 7.1 GB, almost all 268 MB buildkit blobs
+    duplicated across refs/heads/main and every refs/pull/N/merge, because
+    GitHub isolates caches per ref and every PR run wrote its own copy. A PR
+    can already read main's entries, so the per-run build jobs write only from
+    a push to main.
+    """
+
+    @pytest.mark.parametrize("job", ["build-amd64", "searxng-build"])
+    def test_the_per_run_builds_write_cache_from_main_pushes_only(
+        self, jobs: dict[str, Any], job: str
+    ) -> None:
+        with_block: dict[str, Any] = (
+            _step_using(jobs, job, _BUILD_ACTION).get("with") or {}
+        )
+        cache_to = str(with_block.get("cache-to", "")).strip()
+        match = _MAIN_ONLY_CACHE_TO.match(cache_to)
+        assert match, (
+            f"{job} cache-to must be `<condition> && '<cache>' || ''`; got {cache_to!r}"
+        )
+        condition, value = match["cond"], match["value"]
+        assert _evaluate(condition, "refs/heads/main", "push")
+        for ref, event in (
+            ("refs/pull/7/merge", "pull_request"),
+            ("refs/tags/v9.9.9", "push"),
+            ("refs/heads/feature", "push"),
+        ):
+            assert not _evaluate(condition, ref, event), (
+                f"{job} would write cache on {event} {ref}: GitHub isolates caches "
+                "per ref, so that write duplicates main's blobs instead of sharing "
+                "them."
+            )
+        assert "type=gha" in value and "mode=min" in value, (
+            f"{job} writes {value!r}. The Dockerfiles are single-stage, so mode=max "
+            "adds no layers worth keeping and mode=min is the smaller footprint."
+        )
+        assert "type=gha" in str(with_block.get("cache-from", "")), (
+            f"{job} must still read the cache: PR runs reuse main's layers."
+        )
+
+    @pytest.mark.parametrize("job", _EVERY_BUILD_JOB)
+    def test_no_build_record_artifact_is_uploaded(
+        self, jobs: dict[str, Any], job: str
+    ) -> None:
+        env: dict[str, Any] = _step_using(jobs, job, _BUILD_ACTION).get("env") or {}
+        assert str(env.get("DOCKER_BUILD_RECORD_UPLOAD", "")).lower() == "false", (
+            f"{job}'s build-push step uploads a `.dockerbuild` record artifact "
+            "(90-day default retention). DOCKER_BUILD_RECORD_UPLOAD=false turns it off."
+        )
+
+    @pytest.mark.parametrize(
+        ("job", "tarball_var"),
+        [("build-amd64", "IMAGE_TARBALL"), ("searxng-build", "SEARXNG_IMAGE_TARBALL")],
+    )
+    def test_the_image_tarball_is_zstd_and_uploaded_once(
+        self, workflow: Any, jobs: dict[str, Any], job: str, tarball_var: str
+    ) -> None:
+        tarball = str(workflow["env"][tarball_var])
+        assert tarball.endswith(".tar.zst"), f"{tarball_var} is {tarball!r}"
+        assert "zstd -T0" in _run_text(jobs, job)
+        upload_withs: list[dict[str, Any]] = []
+        for step in _steps(jobs, job):
+            if _UPLOAD_ACTION not in str(step.get("uses", "")):
+                continue
+            with_block: dict[str, Any] = step.get("with") or {}
+            if f"env.{tarball_var}" in str(with_block.get("path", "")):
+                upload_withs.append(with_block)
+        assert len(upload_withs) == 1, (
+            f"{job} uploads the tarball {len(upload_withs)} times"
+        )
+        assert upload_withs[0].get("retention-days") == 1
+
+    def test_no_consumer_still_gunzips(self, jobs: dict[str, Any]) -> None:
+        offenders = [name for name in jobs if "gunzip" in _run_text(jobs, name)]
+        assert offenders == [], f"{offenders} still gunzip a tarball that is now zstd"
+
+
+_SETUP_UV = "astral-sh/setup-uv"
+
+
+class TestUvCacheIsSavedFromMainOnly:
+    """setup-uv restores its cache on every run but saves it only from main.
+
+    Measured on PR #35: with the buildkit cache confined to main, the one entry a
+    PR run still wrote was setup-uv's ~245 MB cache on its own refs/pull/N/merge
+    ref, which no other ref can read.
+    """
+
+    def test_every_setup_uv_step_saves_from_main_pushes_only(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        seen = 0
+        for name in jobs:
+            for step in _steps(jobs, name):
+                if _SETUP_UV not in str(step.get("uses", "")):
+                    continue
+                seen += 1
+                with_block: dict[str, Any] = step.get("with") or {}
+                save = str(with_block.get("save-cache", ""))
+                assert save, f"{name}: setup-uv has no save-cache condition"
+                assert _evaluate(save, "refs/heads/main", "push"), name
+                for ref, event in (
+                    ("refs/pull/7/merge", "pull_request"),
+                    ("refs/tags/v9.9.9", "push"),
+                ):
+                    assert not _evaluate(save, ref, event), (
+                        f"{name}: setup-uv would save cache on {event} {ref}"
+                    )
+        assert seen >= 5, f"expected every setup-uv step to be checked; saw {seen}"

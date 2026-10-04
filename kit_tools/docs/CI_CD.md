@@ -205,9 +205,11 @@ See `kit_tools/testing/TESTING_GUIDE.md` for the suite's layout and current coun
    unreproducible build.
 3. `docker/build-push-action` with `platforms: linux/amd64`, `push: false`,
    `outputs: type=docker,rewrite-timestamp=true`, `provenance: false`,
-   `cache-from: type=gha` / `cache-to: type=gha,mode=max` (the default scope). No login,
+   `cache-from: type=gha` / `cache-to: type=gha,mode=min` written **only on a push to
+   `main`** (the default scope; PR runs read main's cache and never write, because GitHub
+   isolates caches per ref), and `DOCKER_BUILD_RECORD_UPLOAD: false`. No login,
    no registry reference — the image is tagged locally as `forage:ci` (`IMAGE_REF`).
-4. Record the daemon image ID to `image-id.txt`, `docker save | gzip -1`, and upload as the
+4. Record the daemon image ID to `image-id.txt`, `docker save | zstd -T0 -3`, and upload as the
    artifact `forage-amd64-image` with `retention-days: 1`.
 
 ### `secret-grep`
@@ -347,9 +349,12 @@ verified against GHCR afterwards rather than assumed: `v1.0.0` (commit `f4c2b16`
 minted `latest`, `1.0` and `1.0.0` at index digest `sha256:d83639cc…`, and `v1.1.0` (commit
 `06b01b14`, 2026-09-18 UTC) moved `latest` and minted `1.1` and `1.1.0` at `sha256:e1b875cc…`.
 `docs/releases.md` § "Released versions" carries the full digests, anchors and tagged commits.
-The current release, **v1.2.1 / contract 1.3.0**, published and passed
-artifact/runtime verification 2026-09-23. The archived US-003/US-005 handoff
-records the digest, alias equality and v1.2.0 withdrawal.
+The latest published release, **v1.2.2 / contract 1.3.0** (a PATCH; contract
+unchanged from v1.2.1), published 2026-10-04 and verified: `latest`, `1.2` and
+`1.2.2` resolve to `sha256:5cb60943b99da45829613cde1f8286bdb4b72866210aa2146ca0cc5233569365`; `corpus-86m-enablement` US-004 records the cut.
+The previous release, **v1.2.1 / contract 1.3.0**, published and passed
+artifact/runtime verification 2026-09-23; the archived US-003/US-005 handoff
+records its digest, alias equality and the v1.2.0 withdrawal.
 
 ---
 
@@ -480,7 +485,7 @@ one human-only credential flow around the image, vendoring weights with
 | Cache | Where | Key / scope | Notes |
 |---|---|---|---|
 | uv environment | `astral-sh/setup-uv` `enable-cache: true` | `cache-dependency-glob: uv.lock` | used by `lint`, `typecheck`, `test`, `smoke`, `searxng-smoke` |
-| amd64 image layers | GHA build cache (`type=gha,mode=max`) | default scope | written by `build-amd64`; read first by `publish` |
+| amd64 image layers | GHA build cache (`type=gha,mode=min`) | default scope | written by `build-amd64` on main pushes only; read first by `publish` |
 | arm64 image layers | GHA build cache | `scope=publish` | written and read by `publish` only, so the amd64-only manifest cannot evict the emulated layers |
 | companion layers | GHA build cache | `scope=searxng`, `scope=searxng-publish` | same split for the companion lane |
 | gated image | artifact `forage-amd64-image` | per run | `retention-days: 1`; identity asserted by every consumer |
@@ -515,16 +520,16 @@ gh cache delete <id>                # delete each index-publish-* entry
 
 The git tag **is** the version (`pyproject.toml`'s `version` is inert packaging metadata),
 and the image tag and `contract_version` are independent semvers:
-image `v1.2.1` serves contract `1.3.0`.
+image `v1.2.2` (published 2026-10-04, verified) serves contract `1.3.0`, unchanged from `v1.2.1`.
 
-The recorded cut below is historical; never re-run it for an existing tag.
-For the next release, choose a new version and repeat all owner gates.
+`v1.2.2` is cut and published; never re-run a cut for an existing tag. For any
+later release, choose a new version and repeat all owner gates (`vX.Y.Z` below).
 
 ```bash
 git switch main && git pull
 # owner gate only: confirm authorization and all six gates for the merge commit
-git tag v1.2.1
-git push origin v1.2.1
+git tag vX.Y.Z
+git push origin vX.Y.Z
 # then watch the run; publish is the last job
 ```
 
@@ -538,8 +543,11 @@ not a release.
 deploy stage to revert. Re-pin the previous tag in the consumer's compose file
 (`image: ghcr.io/washingbearlabs/forage:<previous>`) and `docker compose -f <file> up -d`.
 `kit_tools/docs/DEPLOYMENT.md` has the operator view, including the pull/pin/verify
-sequence. The compose fragments pin published and verified `1.2.1`.
-Its merge-to-publication window is closed; never restore withdrawn v1.2.0.
+sequence. The compose fragments pin the published, verified `1.2.2` (pin commit
+`c933673`); the merge-to-publication window (PR #36 merged as `c213bbf` at 2026-10-03T23:18:28Z; published 2026-10-04) is closed. A future pin that lands ahead of its tag reopens such a
+window: cut from the release PR's merge commit in the same sitting or revert the
+pin commit, and name it in the release PR description. The previous pin, `1.2.1`,
+remains published and verified; never restore withdrawn v1.2.0.
 Finalize withdrawal notices before deleting a tag: editing the old Release
 after deletion recreated its tag at `main` during this recovery.
 `docs/releases.md` records the corrected state and cancelled workflow.
