@@ -309,16 +309,16 @@ does not fail.
 - Cassette size and count: one file per model; a lint test refuses two cassettes for one model id.
 
 **Acceptance Criteria:**
-- [ ] README section present with the exact commands, the token rule, and the re-record triggers.
-- [ ] Hard guard (revision vs manifest pin) and soft guard (versions) implemented and tested; the
+- [x] README section present with the exact commands, the token rule, and the re-record triggers.
+- [x] Hard guard (revision vs manifest pin) and soft guard (versions) implemented and tested; the
       one-cassette-per-model lint exists.
-- [ ] `kit_tools/docs/GOTCHAS.md` gains "A cassette miss is the guard; `sanitizer_revision` in a
+- [x] `kit_tools/docs/GOTCHAS.md` gains "A cassette miss is the guard; `sanitizer_revision` in a
       cassette is a note" with the re-record triggers.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-002: Record the 22M cassette (owner gate)
 
