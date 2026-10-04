@@ -517,21 +517,21 @@ lists the `tests/test_corpus_*.py` files; `kit_tools/PRODUCT_VISION.md` marks T2
   rather than at the story that caused it — the recorded diff makes such a failure explain itself.
 
 **Acceptance Criteria:**
-- [ ] `docs/corpus.md` with all **nine** sections (the ninth, "Reading the results", is what ruling
+- [x] `docs/corpus.md` with all **nine** sections (the ninth, "Reading the results", is what ruling
       14b's disclosure decision and spec 1's route-asymmetry rule require a reader to have — round 1
       added the obligation while the list and this criterion still said eight); README paragraph; SECURITY.md updated as specified (sentence replaced with the fuzz and PDF gaps retained, coverage row extended, pinned by a test);
       vision / roadmap / synopsis / agent-readme updated — including the stale "five specs, 21
       stories" count in PRODUCT_VISION.md, MILESTONES.md and BACKLOG.md, all three corrected.
-- [ ] `AUDIT_FINDINGS.md` entries for every leaked (category, route), every leaked carrier, **every
+- [x] `AUDIT_FINDINGS.md` entries for every leaked (category, route), every leaked carrier, **every
       non-zero-FPR (genre, route)** and **every blocked-but-leaked record** — ids and numbers only,
       none fixed.
-- [ ] Ruling-6 assertions recorded in Implementation Notes with the commands and their output.
-- [ ] `tests/test_governance_docs.py`-style link check: every relative link in `docs/corpus.md`
+- [x] Ruling-6 assertions recorded in Implementation Notes with the commands and their output.
+- [x] `tests/test_governance_docs.py`-style link check: every relative link in `docs/corpus.md`
       resolves.
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ## Edge Cases
 
