@@ -49,6 +49,9 @@ The ones that bite PR authors here, in the order they bite. (This list and `CLAU
       an unreachable cache or a refused fetch never looks healthy.
 - [ ] **No credential-bearing value is logged** (`VALKEY_URL` may carry a password; `cache.py`
       keeps a closed log vocabulary).
+- [ ] **If this PR changes what reaches stage 3 or how stage 2 / 3 decide:** ran
+      `uv run python -m scripts.corpus.report --write-baseline`, reviewed the baseline diff, and
+      re-recorded cassettes if CI reported a miss. The corpus table is in the `test` job's summary.
 - [ ] **Docs moved with the code**: `docs/configuration.md` for any new env var or `config.yaml`
       key, `kit_tools/docs/GOTCHAS.md` for any landmine found, `kit_tools/testing/TESTING_GUIDE.md`
       for new test modules and counts.

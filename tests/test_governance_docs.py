@@ -1,5 +1,9 @@
 """Guards on the three governance documents `feature-forage-contract` US-003 adds.
 
+PYTEST_DONT_REWRITE: these modules name the corpus report command, so
+``test_corpus_lint`` treats them as corpus test modules and requires assertion
+rewriting off (a failing assert must not echo operands).
+
 ``contract/GOVERNANCE.md``, ``SECURITY.md`` and ``.github/pull_request_template.md``
 are prose, and prose about a moving codebase rots silently. Every assertion below
 exists because the sentence it checks makes a *mechanical* claim — a version, a
@@ -743,6 +747,21 @@ class TestPullRequestTemplate:
                 f"The standing-invariants checklist is missing {phrase!r}. "
                 "These are the six in CLAUDE.md, reduced to the ones a PR "
                 "author trips over."
+            )
+
+    def test_it_asks_for_the_corpus_baseline_when_sanitization_moves(
+        self, pr_template: str
+    ) -> None:
+        body = " ".join(_section(pr_template, "## Standing invariants").split())
+        for phrase in (
+            "what reaches stage 3 or how stage 2 / 3 decide",
+            "uv run python -m scripts.corpus.report --write-baseline",
+            "reviewed the baseline diff",
+            "re-recorded cassettes",
+        ):
+            assert phrase in body, (
+                f"The standing-invariants checklist is missing {phrase!r}; the "
+                "corpus baseline line is how a sanitization change shows its numbers."
             )
 
     def test_the_hashed_source_count_matches_the_code(self, pr_template: str) -> None:

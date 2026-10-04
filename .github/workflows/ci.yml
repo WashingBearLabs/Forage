@@ -332,6 +332,14 @@ jobs:
         # and the hermeticity canary all bit only on a developer's machine.
         run: uv run pytest -q
 
+      - name: Publish the injection corpus table
+        # The gate itself already ran inside the `pytest` step above; this only
+        # puts the numbers where the review happens. `always()` so a drift
+        # failure still publishes the table that shows what moved. Same idiom
+        # as the searxng lane's "Record the advisory outcome" step.
+        if: always()
+        run: '{ echo "### Injection corpus"; uv run python -m scripts.corpus.report --markdown; } >> "${GITHUB_STEP_SUMMARY}"'
+
   build-amd64:
     name: build-amd64
     # The cross-fire guard, service side. A `searxng-v*` tag ships the
