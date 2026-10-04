@@ -327,16 +327,16 @@ is greater than `runs.index(_FULL_SUITE_RUN)`; no new action, secret or permissi
 - `contract/GOVERNANCE.md` unchanged (no wire change); `SECURITY.md` (root) unchanged.
 
 **Acceptance Criteria:**
-- [ ] The step exists, ordered after the step named `pytest`, conditioned as specified, pinned by tests; the
+- [x] The step exists, ordered after the step named `pytest`, conditioned as specified, pinned by tests; the
       workflow stays free of new actions / secrets / permissions (existing tests green).
-- [ ] PR template line present and pinned.
-- [ ] A PR run shows the table in the job summary (screenshot not required; the run URL recorded in
+- [x] PR template line present and pinned.
+- [x] A PR run shows the table in the job summary (screenshot not required; the run URL recorded in
       Implementation Notes).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-004: The decision table — offline pooling sweep for contiguity and the model default
 
