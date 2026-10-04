@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: corpus-gates
-status: active
+status: completed
 session_ready: true
 depends_on: [corpus-recording]
 vision_ref: "T2.3 — Injection regression corpus (CI)"
@@ -12,7 +12,8 @@ epic_seq: 5
 epic_final: true
 execution_order: [US-001, US-002, US-003, US-004, US-005]
 created: 2026-09-19
-updated: 2026-09-24
+updated: 2026-10-04
+completed: 2026-10-04
 ---
 
 # Feature Spec: Gates and Reporting — Report, Generated Baseline + Floors, CI Summary, Decision Table, Docs and Close-Out
