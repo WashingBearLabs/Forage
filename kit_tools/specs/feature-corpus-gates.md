@@ -397,26 +397,26 @@ on synthetic cassettes pin each pooler's arithmetic (e.g. `[0.6, 0.2, 0.6]` fire
 - `--sweep` is part of `--write-baseline` (the `offline` section drifts like everything else).
 
 **Acceptance Criteria:**
-- [ ] `poolers.py` completed to the five poolers (US-001's two plus three added here), unit-pinned; `--sweep` renders the `offline` section
+- [x] `poolers.py` completed to the five poolers (US-001's two plus three added here), unit-pinned; `--sweep` renders the `offline` section
       deterministically; part of the baseline.
-- [ ] Per-model rows for every pooler setting and every named family / genre; `unmeasured` when a
+- [x] Per-model rows for every pooler setting and every named family / genre; `unmeasured` when a
       model has no cassette.
-- [ ] Implementation Notes carry the 22M (and 86M, if spec 0 enabled it and spec 4 recorded it)
+- [x] Implementation Notes carry the 22M (and 86M, if spec 0 enabled it and spec 4 recorded it)
       headline rows for `default` vs `live_contiguity` (and bare `contiguity(2, 0.5)`) vs
       `mean_aggregate` (numbers only); if
       not, they record "not recorded — 86M not enabled" and the model half as pending (ruling 6a).
-- [ ] Pooler comparison operators unit-pinned at the threshold; offline/live consistency test green.
-- [ ] No change to `config.yaml` defaults, stage 3, or any hashed file (rulings 6, 6a). "Hashed"
+- [x] Pooler comparison operators unit-pinned at the threshold; offline/live consistency test green.
+- [x] No change to `config.yaml` defaults, stage 3, or any hashed file (rulings 6, 6a). "Hashed"
       means the current `pipeline/sanitizer_revision.py` set, read from the code, not from ruling
       6's prose: the eight `_REVISION_SOURCES` (`contract.py`, `stage1_extraction.py`,
       `stage1_pdf.py`, `stage1_upload.py`, `stage2_structural.py`, `stage3_promptguard.py`,
       `stage4_structuring.py`, `orchestrator.py`) **plus `url_validator.py`** via
       `_ROOT_REVISION_SOURCES` (added by `hardening-search-sanitization` US-003).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-005: Documentation, findings, and epic close-out
 
