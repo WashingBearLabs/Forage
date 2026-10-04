@@ -222,17 +222,17 @@ any acquisition is attempted.
   `model_id`.
 
 **Acceptance Criteria:**
-- [ ] Cassette format as specified; `from_cassette` round-trips; the 2 MB cap lint exists.
-- [ ] `RecordingClassifier` records unbudgeted and applies the budget itself; a test with
+- [x] Cassette format as specified; `from_cassette` round-trips; the 2 MB cap lint exists.
+- [x] `RecordingClassifier` records unbudgeted and applies the budget itself; a test with
       `max_chunks=1` on a two-window text asserts the recorded list has two scores and the drive
       raised the budget error both live and in replay. The tiny-model tests monkeypatch
       `MAX_SEQ_LEN` to 32 **and `CHUNK_OVERLAP` to 8** so every window fits the fixture's
       `max_position_embeddings: 64` and `step` stays positive; the patch helper asserts
       `MAX_SEQ_LEN - CHUNK_OVERLAP > 0`, and a test asserts the unpatched fixture raises on a
       full-length chunk, so both constraints are pinned rather than rediscovered.
-- [ ] Live-vs-replay equivalence on the tiny model across all three routes and both configs;
+- [x] Live-vs-replay equivalence on the tiny model across all three routes and both configs;
       cassette contains no marker text; deleting an entry → `UnrecordedRecordError` with the id.
-- [ ] Recorder CLI: `--help` offline; the `model_env_set`, `model_id_not_allowed`, `not_pinned`,
+- [x] Recorder CLI: `--help` offline; the `model_env_set`, `model_id_not_allowed`, `not_pinned`,
       `not_loaded` and `unscanned` exits each write nothing (and a mini corpus holding a
       structurally blocked record still writes, with `unscanned=0`), and `model_id_not_allowed` /
       `model_env_set` / `not_pinned` are reached with the acquisition seam never called; a test
@@ -240,8 +240,8 @@ any acquisition is attempted.
       written cassette carries the same pair; output line format pinned; no token value can reach
       stdout / stderr (a test injects a fake token into the environment and asserts it is absent
       from captured output).
-- [ ] `NOTICE` paragraph present; coverage test green.
-- [ ] **The two tests the owner gates assert against are authored here, not at the gate** (added
+- [x] `NOTICE` paragraph present; coverage test green.
+- [x] **The two tests the owner gates assert against are authored here, not at the gate** (added
       2026-09-19, validation round 1). US-002's and US-003's Independent Tests require (a) a
       full-corpus replay drive with `fallback=None` over every record × both configs reporting
       **zero misses**, and (b) a test asserting every record with `params.windows_min` has a recorded
@@ -251,13 +251,13 @@ any acquisition is attempted.
       written **here**, in `tests/test_corpus_record.py`, and both skip with the reason
       `"no cassette recorded yet"` until US-002 commits one. An owner gate must be "run the documented
       procedure, paste the numbers" — never "author two new tests first".
-- [ ] `kit_tools/testing/TESTING_GUIDE.md` rows for `tests/test_corpus_record.py` and
+- [x] `kit_tools/testing/TESTING_GUIDE.md` rows for `tests/test_corpus_record.py` and
       `tests/corpus/cassettes/`.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-004: The recording procedure and the staleness guards
 
