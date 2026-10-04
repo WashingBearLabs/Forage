@@ -55,6 +55,12 @@ from scripts.corpus.replay import (
     read_cassette,
     text_sha256,
 )
+from scripts.corpus.staleness import (
+    VERSIONS_DIFFER_TOKEN,
+    locked_versions,
+    revision_problem,
+    versions_differ,
+)
 from tests.fakes import materialize_hub_snapshot
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -281,6 +287,104 @@ def test_committed_cassettes_stay_under_the_size_cap_and_parse() -> None:
         assert path.name == cassette_filename(
             str(data["model_id"]), str(data["revision"])
         ), path.name
+
+
+# ---------------------------------------------------------------------------
+# Staleness guards (US-004)
+# ---------------------------------------------------------------------------
+
+
+def _cassette_stub(**overrides: object) -> dict[str, object]:
+    pin = model_fetcher.read_manifest_pin(model_id=DEFAULT_MODEL_ID)
+    assert pin is not None
+    document: dict[str, object] = {
+        "model_id": DEFAULT_MODEL_ID,
+        "revision": pin.revision,
+        "torch": "1.0.0",
+        "transformers": "2.0.0",
+    }
+    document.update(overrides)
+    return document
+
+
+def test_staleness_every_committed_cassette_is_at_the_manifest_pin() -> None:
+    for path in _committed_cassettes():
+        problem = revision_problem(read_cassette(path))
+        assert problem is None, f"{path.name}: {problem}"
+
+
+def test_staleness_a_revision_other_than_the_pin_names_both_values() -> None:
+    pin = model_fetcher.read_manifest_pin(model_id=DEFAULT_MODEL_ID)
+    assert pin is not None
+    problem = revision_problem(_cassette_stub(revision="0" * 40))
+    assert problem is not None
+    assert "0" * 40 in problem
+    assert pin.revision in problem
+
+
+def test_staleness_a_cassette_at_the_pin_passes() -> None:
+    assert revision_problem(_cassette_stub()) is None
+
+
+def test_staleness_a_model_outside_the_allowlist_fails() -> None:
+    problem = revision_problem(_cassette_stub(model_id="example/not-allowed"))
+    assert problem is not None
+    assert "example/not-allowed" in problem
+
+
+def test_staleness_a_missing_pin_fails_naming_the_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def no_pin(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    cassette = _cassette_stub()
+    monkeypatch.setattr(model_fetcher, "read_manifest_pin", no_pin)
+    problem = revision_problem(cassette)
+    assert problem is not None
+    assert DEFAULT_MODEL_ID in problem
+
+
+def test_staleness_the_lock_supplies_torch_and_transformers_versions() -> None:
+    locked = locked_versions()
+    assert locked["torch"]
+    assert locked["transformers"]
+
+
+def test_staleness_matching_versions_print_nothing() -> None:
+    locked = locked_versions()
+    cassette = _cassette_stub(
+        torch=sorted(locked["torch"])[0],
+        transformers=sorted(locked["transformers"])[0],
+    )
+    assert versions_differ(cassette, locked) == []
+
+
+def test_staleness_differing_versions_warn_with_both_values() -> None:
+    locked = locked_versions()
+    lines = versions_differ(_cassette_stub(), locked)
+    assert len(lines) == 2
+    assert all(line.startswith(f"WARNING {VERSIONS_DIFFER_TOKEN} ") for line in lines)
+    assert "cassette=1.0.0" in lines[0]
+    assert sorted(locked["torch"])[0] in lines[0]
+    assert "cassette=2.0.0" in lines[1]
+
+
+def test_staleness_a_version_difference_does_not_fail_the_revision_guard() -> None:
+    cassette = _cassette_stub()
+    assert versions_differ(cassette, locked_versions())
+    assert revision_problem(cassette) is None
+
+
+def test_one_cassette_per_model_id() -> None:
+    seen: dict[str, str] = {}
+    for path in _committed_cassettes():
+        model_id = str(read_cassette(path)["model_id"])
+        assert model_id not in seen, (
+            f"{path.name} and {seen[model_id]} are both cassettes for {model_id}; "
+            "delete the older one when a revision rotates"
+        )
+        seen[model_id] = path.name
 
 
 # ---------------------------------------------------------------------------

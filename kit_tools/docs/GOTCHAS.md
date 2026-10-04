@@ -39,6 +39,21 @@ service's logs, captured output and a failing assertion's text. Nothing structur
 stops a *new* test from formatting a payload into a message — that rule rests on review
 and on that one targeted test.
 
+### A cassette miss is the guard; `sanitizer_revision` in a cassette is a note
+
+A cassette (`tests/corpus/cassettes/`) is replayed by `ReplayClassifier` with no
+fallback in CI, so a text it has no scores for raises `UnrecordedRecordError` — that
+miss is what catches a cassette gone stale. The `sanitizer_revision` the cassette
+carries is **informational**: `derive_sanitizer_revision()` rotates on refactors that
+leave stage-3 inputs untouched, and a mismatch there must not fail anything or force a
+re-record. Re-record when: a miss appears in CI; the manifest revision changes (the
+revision guard in `tests/test_corpus_record.py -k staleness` fails naming both values);
+the corpus gains texts; or a sanitizer change alters what stage 3 is sent
+(search-text normalisation, extraction, the stage-3 join). A torch / transformers
+difference from `uv.lock` is only a `cassette_versions_differ` warning. The filename
+embeds the revision, so rotating one means deleting the old file; the lint allows one
+cassette per model id. Procedure: `tests/corpus/README.md`.
+
 ### A corpus drive must put `app.state` back — the app is a process singleton
 
 `retrieval_app.app` is one object for the whole test process, and its `state` outlives

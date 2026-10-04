@@ -611,3 +611,62 @@ unstripped. `notes` names them as `sibling of atk-NNNN (carrier)`.
 6. Third-party text: permitted licence, `revision`, `record_ref`, `framing`.
 7. `uv run pytest tests/test_corpus_lint.py -q` is green. Never paste the
    payload into the commit message.
+
+## Recording and re-recording (spec 4 US-004)
+
+CI has no model weights, so the real classifier is measured once per model
+revision, on a host, by an owner. Its per-window scores are committed as a
+cassette under `tests/corpus/cassettes/` and CI replays them through the real
+stage-3 rules. Either lab host or any machine that can reach the weights will
+do; **note the host in the commit body** (`recorded on <host>`).
+
+```bash
+unset FORAGE_MODEL_ID FORAGE_MODEL_REVISION   # the recorder refuses to run with either set
+read -rs HF_TOKEN && export HF_TOKEN          # or FORAGE_MIRROR_TOKEN + FORAGE_WEIGHTS_MIRROR
+export HF_HOME="$HOME/.cache/forage-weights"  # any writable cache; the manifest verifies the files
+uv run python -m scripts.corpus.record --model-id meta-llama/Llama-Prompt-Guard-2-22M
+unset HF_TOKEN
+uv run pytest tests/test_corpus_record.py tests/test_corpus_harness.py -q
+git add tests/corpus/cassettes/ && git commit -m "corpus: record 22M cassette @<revision>"
+```
+
+For the 86M, pass its `--model-id` instead; each model gets its own cassette.
+
+**The token rule.** A token never appears in argv, a log, a commit message or
+shell history (`CLAUDE.md` invariant 6; `docs/weights.md`, "Tokens, and least
+privilege for each"). `read -rs` keeps it off the command line and out of
+history; the recorder reads no token itself and prints ids and numbers only.
+The file-by-path alternative is the one-file recipe from `docs/weights.md` —
+never `export NAME=<value>`:
+
+```bash
+umask 077; f="$(mktemp)"; trap 'rm -f "$f"' EXIT
+printf 'HF_TOKEN: '; read -rs v; echo; printf 'HF_TOKEN=%s\n' "$v" > "$f"; unset v
+set -a; . "$f"; set +a
+```
+
+(`--env-file` is a `docker run` flag; neither the recorder nor
+`scripts/vendor_weights.py` has one.)
+
+### When to re-record
+
+- Any `UnrecordedRecordError` in CI — a text the cassette has no scores for.
+- A model re-vendoring: the manifest revision changed. The hard guard
+  (`tests/test_corpus_record.py -k staleness`) fails naming both revisions.
+- A corpus addition (new texts).
+- A sanitizer change that alters **stage-3 inputs** — search-text normalisation,
+  extraction, the stage-3 join. A refactor rotation of `sanitizer_revision` that
+  leaves those inputs unchanged needs no re-record: the miss check is the real
+  guard, and `sanitizer_revision` in a cassette is informational.
+
+### The staleness guards
+
+| Guard | Kind | Where | What it checks |
+|-------|------|-------|----------------|
+| Revision | hard | `tests/test_corpus_record.py` | `cassette.revision` equals `read_manifest_pin(model_id=cassette.model_id).revision`; an unpinned or non-allowlisted model fails too |
+| Versions | soft | `scripts/corpus/staleness.py` | the cassette's `torch` / `transformers` against `uv.lock`; a difference is a `cassette_versions_differ` WARNING with both values, rendered by the report, never a failure |
+| One per model | hard | `tests/test_corpus_record.py` | two cassettes for one model id are refused |
+
+The cassette filename embeds the revision, so a rotation writes a **new** file.
+Delete the old one in the same commit — the lint is per model id, not per
+(model id, revision), and an old cassette is stale by definition.
