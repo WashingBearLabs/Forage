@@ -719,6 +719,31 @@ ruling-6 assertion output. -->
 - `--sweep` is not in the parser yet (US-004 adds it); `--write-baseline` / `--check` write and
   compare `tests/corpus/baseline.json`, which US-002 commits.
 
+### US-002 (gate)
+
+- Gate wall time on the developer machine (darwin): the single replay is ~8.8 s (`tests/test_corpus_gate.py`
+  alone: 19 passed in 18.7 s, the second ~8.6 s being the separate per-cassette completeness drive).
+  **GitHub runner wall time is not recorded**: no CI run exists for this branch yet; to be read from the
+  first `test` job run's `--durations` (ruling 16: if > 60 s, record and propose the split).
+- Floors scaffolded by `--write-floors` (catch down / FPR up to 0.05), committed unedited. The `headline`
+  block is keyed model → config (`{model: {config: {max_fpr_external, min_catch_all}}}`) rather than the
+  spec's flat pair, because the two models and two configs measure differently.
+- First measured headline (numbers only), default config, `catch_all` / `fpr_external` /
+  `fpr_multilingual` / `fpr_over_defence_probe` / `fpr_security_prose`:
+  22M 0.3174 / 0.0426 / 0.0 / 0.6641 / 0.4286; 86M 0.35 / 0.0426 / 0.0 / 0.6641 / 0.4286.
+  `contiguity` config is identical to `default` on every row for both models (n_attacks 460,
+  n_external 94, n_multilingual 34, n_over_defence_probe 131, n_security_prose 28).
+- Catch per category, caught/n (default; 22M and 86M identical except `natural_language`):
+  authority_impersonation 15/20, authority_seo 0/27, boundary_straddle 0/13, density_thinned 0/25,
+  encoded_payload 16/20, envelope_breakout 12/16, exfil_beacon 12/16, hidden_markup 6/38,
+  instruction_override 30/40, line_anchored_role 13/17, natural_language 0/155 (22M) vs 15/155 (86M),
+  prompt_boundary 13/16, repetition_camouflage 0/17, suspicious_url 14/18, sustained_midband 0/7,
+  url_borne_envelope 15/15.
+- Observation for the decision table (US-004), not acted on: `contiguity` catches nothing the max rule
+  does not on this corpus, including `sustained_midband` (0/7) and `boundary_straddle` (0/13).
+- `tests/test_corpus_lint.py::test_min_records_floors_hold` is un-skipped; the gate adds the probe,
+  multi-window and cassette-window-count floors.
+
 ## Refinement Notes
 
 ### Research Findings

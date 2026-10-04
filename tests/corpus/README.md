@@ -670,3 +670,42 @@ set -a; . "$f"; set +a
 The cassette filename embeds the revision, so a rotation writes a **new** file.
 Delete the old one in the same commit — the lint is per model id, not per
 (model id, revision), and an old cassette is stale by definition.
+
+## The gate (corpus-gates US-002)
+
+`tests/test_corpus_gate.py` replays the whole corpus under every committed
+cassette and both rule configs (`default`, `contiguity`) once, and compares it
+with two committed files. Every failure names record ids, routes, models,
+configs and numbers — never text.
+
+| File | Written by | What it is |
+|------|------------|------------|
+| `baseline.json` | `--write-baseline` | The full report: per-cell counts, stage attribution, classifier-only view and the per-record outcome map. First key `_regenerate` holds the command. **Generated; never hand-edited** |
+| `floors.json` | `--write-floors`, then reviewed | `min_catch` / `min_block` per category × route × model × config, `max_fpr` per genre × route × model × config (provenance pooled), and `headline` per model × config. Catch is the measurement rounded **down** to 0.05, FPR rounded **up** — never aspirational |
+
+### What each red means
+
+| Test | Red means | Do |
+|------|-----------|----|
+| `test_the_committed_baseline_is_what_the_corpus_measures` | A number moved. The message lists each per-record outcome that changed (`id route [config] model: was -> now`), a diff capped at 200 lines and the command | Look at *which* records moved and why. If the movement is intended, regenerate and commit the diff for review |
+| `test_every_measured_cell_clears_its_floor` | A category's catch (or block) fell below its floor, or a genre's FPR rose above its ceiling | Fix the regression. A floor is lowered only by editing `floors.json` in the PR, where a reviewer sees it |
+| `test_every_cell_the_corpus_produces_has_a_floor_…` | A cell exists with no floor (a new category, route, model or config), or a floor names a cell nothing produces | Run `--write-floors`, review the generated diff, tighten or loosen deliberately. A missing floor is a gate that silently passes |
+| `test_every_pinned_record_holds_…` | A record's `pinned` outcome slipped on some model or config — usually a stage-2 regex promise | Treat as a regression in stage 2 or the route; do not edit the pin to match |
+| `test_every_cassette_answers_every_record_…` | `UnrecordedRecordError`: a cassette has no scores for a text the corpus now classifies | Re-record (below). This is reported as a miss, not folded into the drift diff |
+| `test_the_corpus_meets_every_count_floor` | The corpus shrank below the ruling 14 floors, or a cassette has too few ≥ 3-window entries | Restore the records; the floors are `vocab.MIN_RECORDS` |
+
+### The two commands
+
+```bash
+# Regenerate the baseline after an intended change (review the diff!)
+uv run python -m scripts.corpus.report --write-baseline
+
+# Scaffold floors.json from the live report, with the rounding rules applied.
+# This overwrites hand edits — review `git diff tests/corpus/floors.json`.
+uv run python -m scripts.corpus.report --write-floors
+```
+
+Re-recording a cassette is the owner procedure under *Recording and
+re-recording* above; the baseline is regenerated afterwards, because new scores
+move the numbers. `--check` compares the live report with the committed
+baseline without writing.

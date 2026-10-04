@@ -423,7 +423,6 @@ def test_record_jsonl_stays_under_the_size_cap() -> None:
     assert total <= CORPUS_SIZE_CAP_BYTES, total
 
 
-@pytest.mark.skip(reason="asserted from spec 5 US-002")
 def test_min_records_floors_hold() -> None:
     records = load_corpus()
     attacks = [record for record in records if record.kind == "attack"]

@@ -37,7 +37,9 @@ from scripts.corpus.records import CorpusRecord, load_corpus
 from scripts.corpus.replay import CASSETTES_DIR, ReplayClassifier, read_cassette
 
 REGEN_COMMAND: Final = "uv run python -m scripts.corpus.report --write-baseline"
+FLOORS_REGEN_COMMAND: Final = "uv run python -m scripts.corpus.report --write-floors"
 BASELINE_PATH: Final[Path] = vocab.TESTS_CORPUS_ROOT / "baseline.json"
+FLOORS_PATH: Final[Path] = vocab.TESTS_CORPUS_ROOT / "floors.json"
 SAMPLER_STATS_PATH: Final[Path] = (
     vocab.TESTS_CORPUS_ROOT / "benign" / "sampler_stats.json"
 )
@@ -873,6 +875,90 @@ def render_markdown(report: Report) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Floors
+# ---------------------------------------------------------------------------
+
+_FLOOR_STEP: Final = 20
+"""Floors move in steps of 0.05, i.e. 1/20."""
+_FLOOR_EPSILON: Final = 1e-9
+FLOORS_FORMAT: Final = 1
+
+
+def floor_down(value: float) -> float:
+    """``value`` rounded *down* to the nearest 0.05 — a catch floor never exceeds it."""
+    return int(value * _FLOOR_STEP + _FLOOR_EPSILON) / _FLOOR_STEP
+
+
+def ceil_up(value: float) -> float:
+    """``value`` rounded *up* to the nearest 0.05 — a ceiling never undercuts it."""
+    steps = value * _FLOOR_STEP
+    whole = int(steps)
+    return (whole if steps - whole < _FLOOR_EPSILON else whole + 1) / _FLOOR_STEP
+
+
+def pooled_benign(
+    report: Report,
+) -> dict[tuple[str, Route, str, RuleConfig], tuple[int, int]]:
+    """``(genre, route, model, config) -> (n, caught)`` with provenance pooled."""
+    out: dict[tuple[str, Route, str, RuleConfig], tuple[int, int]] = {}
+    for cell in report.benign:
+        key = (cell.genre, cell.route, cell.model, cell.config)
+        n, hit = out.get(key, (0, 0))
+        out[key] = (n + cell.n, hit + cell.blocked + cell.flagged)
+    return out
+
+
+def build_floors(report: Report) -> dict[str, object]:
+    """The floors file's content, scaffolded from ``report`` with the two rules applied.
+
+    Attack cells carry ``min_catch`` / ``min_block`` rounded down, benign cells
+    ``max_fpr`` rounded up (provenance pooled — a genre's ceiling is one
+    number), and ``headline`` the per-model, per-config ``max_fpr_external`` /
+    ``min_catch_all``. Every number is the measured one moved to the safe side
+    of the 0.05 grid, never aspirational; tightening or loosening a cell is the
+    reviewer's judgement, made on the generated diff.
+    """
+    attacks: dict[str, dict[str, dict[str, dict[str, dict[str, float]]]]] = {}
+    for cell in report.attacks:
+        attacks.setdefault(cell.category, {}).setdefault(cell.route, {}).setdefault(
+            cell.model, {}
+        )[cell.config] = {
+            "min_catch": floor_down(round(cell.caught / cell.n, 4)),
+            "min_block": floor_down(round(cell.blocked / cell.n, 4)),
+        }
+    benign: dict[str, dict[str, dict[str, dict[str, dict[str, float]]]]] = {}
+    for (genre, route, model, config), (n, hit) in sorted(
+        pooled_benign(report).items()
+    ):
+        benign.setdefault(genre, {}).setdefault(route, {}).setdefault(model, {})[
+            config
+        ] = {"max_fpr": ceil_up(round(hit / n, 4))}
+    headline: dict[str, dict[str, dict[str, float]]] = {}
+    for row in report.headline:
+        catch = _rate(row.attacks_caught, row.n_attacks)
+        fpr = _rate(row.external_fp, row.n_external)
+        headline.setdefault(row.model, {})[row.config] = {
+            "max_fpr_external": 0.0 if fpr is None else ceil_up(round(fpr, 4)),
+            "min_catch_all": 0.0 if catch is None else floor_down(round(catch, 4)),
+        }
+    return {
+        "_regenerate": FLOORS_REGEN_COMMAND,
+        "format": FLOORS_FORMAT,
+        "attacks": attacks,
+        "benign": benign,
+        "headline": headline,
+    }
+
+
+def render_floors(report: Report) -> str:
+    """The scaffolded floors file: sorted keys, indent 2, trailing newline."""
+    return (
+        json.dumps(build_floors(report), sort_keys=True, indent=2, ensure_ascii=False)
+        + "\n"
+    )
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -891,6 +977,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--write-baseline",
         action="store_true",
         help="Write the JSON report to tests/corpus/baseline.json",
+    )
+    parser.add_argument(
+        "--write-floors",
+        action="store_true",
+        help=(
+            "Scaffold tests/corpus/floors.json from the live report (catch rounded "
+            "down, FPR rounded up to 0.05); review the diff before committing"
+        ),
     )
     parser.add_argument(
         "--check",
@@ -920,8 +1014,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     """CLI entry point. Returns a process exit status."""
     parser = build_parser()
     args = parser.parse_args(argv)
-    if not (args.json or args.markdown or args.write_baseline or args.check):
-        parser.error("choose --json, --markdown, --write-baseline or --check")
+    if not (
+        args.json
+        or args.markdown
+        or args.write_baseline
+        or args.write_floors
+        or args.check
+    ):
+        parser.error(
+            "choose --json, --markdown, --write-baseline, --write-floors or --check"
+        )
     classifiers, headers = load_cassettes()
     report = build_report(
         load_corpus(), classifiers, DEFAULT_CONFIGS, cassette_headers=headers
@@ -930,6 +1032,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.write_baseline:
         BASELINE_PATH.write_text(rendered, encoding="utf-8")
         print(f"wrote {BASELINE_PATH.name}")
+    if args.write_floors:
+        FLOORS_PATH.write_text(render_floors(report), encoding="utf-8")
+        print(f"wrote {FLOORS_PATH.name}")
     if args.check:
         committed = (
             BASELINE_PATH.read_text(encoding="utf-8") if BASELINE_PATH.exists() else ""
