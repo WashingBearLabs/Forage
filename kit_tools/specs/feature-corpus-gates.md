@@ -708,6 +708,17 @@ helper), and the offline/live `max@0.85` consistency check excludes `sub_thresho
 <!-- Numbers only: first measured headline rows; wall times; the run URL for the CI summary; the
 ruling-6 assertion output. -->
 
+### US-001 (report)
+
+- Wall time of `uv run python -m scripts.corpus.report --markdown` on the developer machine
+  (darwin, both cassettes, both configs, 760 records): 15.7 s total (13.7 s user), well inside
+  the 60 s budget (ruling 16). Not yet measured on a GitHub runner.
+- Rule and classifier-only views read `Signals.window_scores`, which the driver slices from the
+  replay classifier's call log per record; no second pass over `calls` was needed.
+- `poolers.max_score(t)` / `poolers.contiguity(k, t)` are predicate factories; US-004 adds the rest.
+- `--sweep` is not in the parser yet (US-004 adds it); `--write-baseline` / `--check` write and
+  compare `tests/corpus/baseline.json`, which US-002 commits.
+
 ## Refinement Notes
 
 ### Research Findings
