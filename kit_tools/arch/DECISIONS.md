@@ -977,9 +977,29 @@ algorithm changes, but old cache keys invalidate.
      if they turn out to be load-bearing. -->
 
 
+### 2026-10-04: The 86M ships as an opt-in PATCH, its label index pinned on agreement rates
+
+**Status:** Accepted — `v1.2.2`, published 2026-10-04 (owner decisions 17–19, `epic-forage-injection-corpus`)
+
+**Context:** Hardening left the 86M vendoring and benchmark gates unrun, and the v1.2.1 label
+repair meant vendored weights would still be refused at `load()`; the corpus needed a loadable 86M
+for its decision table. Two published "next MINOR" promises (the retrieve budget flip, the 422
+field drop) were outside the work's scope.
+
+**Decision:** Enable the 86M inside the corpus epic as spec 0, its owner gates run on the lab host;
+release it as **PATCH `v1.2.2`** so neither MINOR window is triggered or reinterpreted; one model
+per process (`FORAGE_MODEL_ID`), 22M stays the default. The generic-label pin (index 1) was
+accepted on **agreement rates** against the 22M on a stage-2-corroborated control set (11/11 and
+857/869), because the literal per-probe rule treated a noisy 22M as ground truth.
+
+**Consequences:** `ALLOWED_MODEL_IDS`, `_PINNED_GENERIC_LABEL_INDICES` and
+`CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` each gained exactly one entry (measured delta 405 MiB);
+the 86M recommends `FORAGE_MEM_LIMIT=1536m`. Default flips remain separate owner rulings, now with
+measured inputs (`docs/corpus.md` "Decision inputs").
+
 ### 2026-09-19: Injection defence is measured by replaying owner-recorded classifier scores; model weights never enter CI
 
-**Status:** Accepted (planned — `epic-forage-injection-corpus`, executes after `epic-forage-hardening`)
+**Status:** Accepted — shipped 2026-10-05 (`epic-forage-injection-corpus`, PR #38): real-weights cassettes for 22M and 86M are committed under `tests/corpus/cassettes/` and replayed by the `test` job
 
 **Context:**
 Injection coverage was example-based unit testing (`kit_tools/arch/SECURITY.md` "Observations").

@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # GOTCHAS.md
 
-> Last updated: 2026-09-25
-> Updated by: corpus-harness US-002
+> Last updated: 2026-10-05
+> Updated by: close-session (corpus epic leg 2, v1.2.2)
 
 ## Overview
 
@@ -15,6 +15,35 @@ live in, and losing them in the move was an identified risk.
 ---
 
 ## Active Gotchas
+
+### A story verifier can pass a sanctioned fallback that guts the spec's intent
+
+`corpus-benign` US-001 allowed a synthetic stand-in "with a recorded reason" when an external
+source could not be ingested. The execution session never ran the host download step, recorded
+`not_ingested` for every external genre, and the per-story verifier passed it — 213 of 300 benign
+records shipped synthetic, hollowing the false-positive measurement the spec existed for. The same
+run archived a spec whose validation reviewer had rated a payload-leak critical. At every spec
+close, read `tests/corpus/*/sampler_stats.json`-style provenance and the
+`kit_tools/.validate_impl_*.json` reviewer files yourself; a green story is not proof the
+fallback branch was the right one.
+
+### Gitignored files written inside an execution worktree die with the worktree
+
+`kit_tools/AUDIT_FINDINGS.md` is gitignored by repo policy. `corpus-gates` US-005 filed the corpus
+findings into the **worktree's** copy, and `registry.py teardown` deleted the worktree after the
+merge — the findings existed nowhere else. The re-derivation tests in `tests/test_corpus_docs.py`
+skip in CI (file absent) but run in the owner's checkout, which is how the loss surfaced. Before
+tearing down an execution worktree, copy any gitignored working records it wrote (audit findings,
+scratch notes) back into the main checkout.
+
+### The Prompt Guard tokenizers pack ~5 characters per token — author `windows_min` with margin
+
+Authoring estimates of 3.5–4.5 chars/token were wrong for these tokenizers: measured 4.7–5.6 on
+English prose (`corpus-recording` US-002). Three records came up exactly one window short of
+their `windows_min` promise on the first 22M recording. The 86M tokenizer splits differently
+again (its histogram reaches 11 windows where the 22M's stops at 9), so a promise must hold under
+**both** cassettes. Pad filler by ~1.5 windows beyond the promise and let the recorded windows
+decide.
 
 ### A corpus record is data — never quote it
 

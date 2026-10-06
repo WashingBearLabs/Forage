@@ -2,7 +2,7 @@
 # SESSION_LOG.md
 
 > Running history of development sessions. Enables continuity across sessions.
-> Last updated: 2026-09-24
+> Last updated: 2026-10-05
 
 ---
 
@@ -501,3 +501,76 @@ notes and the planning checkout remain untouched.
   allowlisted. No measurements or expanded model support are implied.
 - Accepted Stage-5 fetch-decoder residual `2026-09-16-020` remains open.
 - Poppy's consumer handoff/pinning remains separate; no Poppy files were changed.
+
+---
+
+## 2026-09-24 → 2026-10-05 — Copilot-handoff cleanup; CI storage; corpus epic revalidated, executed and shipped; `v1.2.2`
+
+**Duration:** twelve days of supervised work across many context windows (with several laptop-sleep
+interruptions; long jobs moved under `nohup` on the lab host)
+**Focus:** Clean up after the Copilot hardening handoff, cut the Actions storage footprint, then take
+`epic-forage-injection-corpus` from a pre-hardening plan to a merged, measured CI gate.
+**Feature specs:** `epic-forage-injection-corpus` and all six children — `feature-corpus-86m-enablement`
+(spec 0, new), `-harness`, `-attacks`, `-benign`, `-recording`, `-gates` — all archived, epic completed.
+
+### Accomplished
+
+- **Git cleanup (09-24).** PR #29 merged the corpus plan with the never-pushed Copilot close-out
+  (`2a04506`) and a recovered 09-19/20 log entry; two Copilot worktrees and 11 stale branches removed;
+  `model_preferences.json` restored to Claude roles (the handoff had switched every role to `gpt-6-astra`).
+- **Revalidation (09-24, rounds 4–7).** `validate-epic` against the shipped `v1.2.1` tree: round 4 had
+  1 critical / 103 warnings (~45 anchor drift). Owner decisions 17–19 added **spec 0** (86M enablement
+  inside the epic, lab-host gates), the **PATCH** release ruling, and the agreement-rate label rule;
+  ruling 6a scoped spec 0's runtime edits. Closed `needs-work`, no open critical (PRs #33, #34).
+- **Execution, leg 1 (specs 1–3, 09-25/26).** Guarded orchestrator, 12/12 stories, 17 attempts; every
+  external-source story timed out once at 1,500 s then passed. Post-run fixes the verifiers missed:
+  pytest assertion rewriting could echo payload text (`PYTEST_DONT_REWRITE` guard on every corpus test
+  module) and the benign corpus had shipped mostly synthetic (external ingest: third-party 54 → 148).
+- **CI storage (09-28, PR #35).** Actions cache 7.10 GB / 334 entries → 0 per PR run: buildkit and
+  `setup-uv` caches written from `main` only (`mode=min`, single-stage Dockerfiles), zstd image
+  tarballs (~24% smaller), no `.dockerbuild` records. The repo cache size limit cannot be set (API 402).
+- **Spec 0 → `v1.2.2` (09-30 → 10-04, PRs #36, #37).** 86M vendored on `thelab-claude` (licence identical,
+  private mirror tag, fresh pull re-verified); label index 1 by a direction test against the 22M; resident
+  delta measured at 405 MiB; benchmark {22M, 86M} × {1, 4} CPUs with no OOM; real-weights smokes before
+  tag and after publish. **`v1.2.2`** published 2026-10-04, digest `sha256:5cb60943b99d…`; contract
+  `1.3.0` unchanged; both "next MINOR" windows still open. All lab credential files shredded.
+- **Execution, leg 2 (specs 4–5, 10-04/05, PR #38).** Orchestrator paused before the two owner gates;
+  both **real-weights cassettes** recorded in-session on the lab host from the verified cache (760 records,
+  610 texts, 0 unscanned; three records re-authored for `windows_min`, both cassettes re-recorded). The
+  epic-wide deep check's three criticals (a link to a gitignored file, two unrecorded CI claims) were
+  fixed with run 37231593223 as evidence. CI: 4,846 passed, 4 skipped. PR #39 marked the epic completed.
+
+### The measured result
+
+Of 372 attack texts reaching stage 3: the **22M at `max@0.85` fires on 0**, the **86M on 15** (all
+`natural_language`), both with **0 benign false positives**; contiguity (`2 @ 0.5`) adds nothing on either
+model. Stage 2 does nearly all the blocking (`docs/corpus.md` "Decision inputs").
+
+### Documentation Updated
+
+- [x] `kit_tools/specs/` — wrapper (decisions 17–19, ruling 6a, completed) + six archived specs
+- [x] `docs/releases.md`, `docs/weights.md`, `docs/configuration.md` (sizing table), `docs/corpus.md`
+- [x] `kit_tools/SYNOPSIS.md`, `AGENT_README.md`, `PRODUCT_VISION.md`, `roadmap/MILESTONES.md`, `BACKLOG.md`
+- [x] `kit_tools/arch/DECISIONS.md` (86M opt-in PATCH; corpus decision now shipped), `kit_tools/docs/GOTCHAS.md`
+      (verifier-passed fallbacks; tokenizer density), `kit_tools/docs/CI_CD.md`, `testing/TESTING_GUIDE.md`
+
+### Decisions
+
+- Spec 0 ran **in parallel** on its own branch while legs ran on the epic branch; ruling 6's diff base
+  became the epic branch's merge base with `main`.
+- Owner gates are run by pausing the orchestrator (pause file armed once the preceding story starts) and
+  ticking the gate stories in-session — not by `skip_story`, which would erase the record.
+- Recordings ran offline from the manifest-verified cache, so no token was needed for spec 4.
+
+### Open / Next
+
+- **Owner rulings now unblocked:** contiguity default (data: leave off) and 86M default (data: +15 catches,
+  0 FP, ~2× latency, 1536m). Bigger question: the 22M's 0.85 threshold catches nothing — sweep it offline
+  over the committed cassettes.
+- `/retrieve` decoder bound (backlog High; audit `2026-09-16-020`); `/extract` per-window latency
+  investigation; per-model classifier working set (both in BACKLOG).
+- Poppy: pin to published `v1.2.2` (ends the coexistence rule); Poppy commit `b56a47fc` still unpushed.
+- The promised next MINOR: `retrieve.max_promptguard_chunks` default → 256 and the 422 field drop.
+- The classic PAT created for the mirror push can be revoked.
+- Close-out found the corpus audit findings lost with the torn-down worktree (gitignored file);
+  regenerated into the local `AUDIT_FINDINGS.md` from the committed baseline, and recorded as a gotcha.
