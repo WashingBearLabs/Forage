@@ -1,10 +1,11 @@
 <!-- Template Version: 2.1.0 -->
 ---
 epic: forage-injection-corpus
-status: active
+status: completed
 vision_ref: "T2.3 — Injection regression corpus (CI)"
 created: 2026-09-14
 updated: 2026-10-05
+completed: 2026-10-05
 ---
 
 # Epic: Forage Injection Regression Corpus — Measure Injection Defence in CI
