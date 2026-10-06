@@ -5,7 +5,9 @@ All tests mock DNS resolution and HTTP responses — no real network calls.
 
 from __future__ import annotations
 
+import gzip
 import socket
+import zlib
 from collections.abc import Callable
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from pipeline.bounded_body import MalformedBody, UnsupportedEncoding
 from pipeline.stage5_url_audit import (
     DEFAULT_TIMEOUT,
     DEFAULT_USER_AGENTS,
@@ -21,7 +24,12 @@ from pipeline.stage5_url_audit import (
     TooManyRedirectsError,
     fetch_url,
 )
-from tests.fakes import assert_frozen, make_response, make_stream_cm
+from tests.fakes import (
+    assert_frozen,
+    make_response,
+    make_stream_cm,
+    record_decompressors,
+)
 from url_validator import BlockedDomainError, PrivateIPError
 
 # ---------------------------------------------------------------------------
@@ -595,7 +603,7 @@ class TestStreamingByteCap:
     async def test_redirect_hop_large_body_not_buffered(self) -> None:
         """Redirect hop body is never read — a large redirect body does not OOM.
 
-        The redirect response is exited without calling aiter_bytes(); only
+        The redirect response is exited without reading its body; only
         the Location header is consumed. Setting max_content_bytes very small
         confirms the 1 MB redirect body does not trigger ContentTooLargeError.
         """
@@ -639,6 +647,91 @@ class TestStreamingByteCap:
             result = await fetch_url("https://example.com/", max_content_bytes=1024)
         assert result.response_body == b"hello"
         assert result.status_code == 200
+
+
+class TestBoundedDecoding:
+    """The body is decoded by Forage's bounded reader, never httpx's decoder."""
+
+    @pytest.mark.asyncio
+    async def test_compressed_bomb_is_bounded_per_decompress_call(self) -> None:
+        """A small gzip stream that inflates past the cap is refused, and no
+        single decompress call returns more than the cap plus one byte."""
+        compressed = gzip.compress(b"\0" * 4_000_000)
+        assert len(compressed) < 100_000  # under the cap on the wire
+        response = _make_response(
+            content=compressed, headers={"content-encoding": "gzip"}
+        )
+        with (
+            patch("url_validator.socket.getaddrinfo", return_value=_fake_addrinfo()),
+            patch("httpx.AsyncClient.stream", return_value=_make_stream_cm(response)),
+            record_decompressors() as recording,
+            pytest.raises(ContentTooLargeError, match="Response body exceeds"),
+        ):
+            await fetch_url("https://example.com/", max_content_bytes=100_000)
+        assert recording.calls > 0
+        assert recording.largest_output <= 100_000 + 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("encoding", ["gzip", "deflate", "raw"])
+    async def test_supported_compression_is_decoded(self, encoding: str) -> None:
+        body = b"<html>compressed page</html>"
+        encoded = (
+            gzip.compress(body)
+            if encoding == "gzip"
+            else zlib.compress(
+                body, wbits=-zlib.MAX_WBITS if encoding == "raw" else zlib.MAX_WBITS
+            )
+        )
+        response = _make_response(
+            content=encoded,
+            headers={"content-encoding": "deflate" if encoding == "raw" else encoding},
+        )
+        with (
+            patch("url_validator.socket.getaddrinfo", return_value=_fake_addrinfo()),
+            patch("httpx.AsyncClient.stream", return_value=_make_stream_cm(response)),
+        ):
+            result = await fetch_url("https://example.com/")
+        assert result.response_body == body
+
+    @pytest.mark.asyncio
+    async def test_unsupported_encoding_is_refused(self) -> None:
+        """An encoding the bounded reader cannot decode is refused, not passed
+        through as raw bytes into extraction."""
+        response = _make_response(
+            content=b"\x1b\x00\x00", headers={"content-encoding": "br"}
+        )
+        with (
+            patch("url_validator.socket.getaddrinfo", return_value=_fake_addrinfo()),
+            patch("httpx.AsyncClient.stream", return_value=_make_stream_cm(response)),
+            pytest.raises(UnsupportedEncoding),
+        ):
+            await fetch_url("https://example.com/")
+
+    @pytest.mark.asyncio
+    async def test_truncated_stream_is_malformed(self) -> None:
+        response = _make_response(
+            content=gzip.compress(b"<html>page</html>")[:-8],
+            headers={"content-encoding": "gzip"},
+        )
+        with (
+            patch("url_validator.socket.getaddrinfo", return_value=_fake_addrinfo()),
+            patch("httpx.AsyncClient.stream", return_value=_make_stream_cm(response)),
+            pytest.raises(MalformedBody),
+        ):
+            await fetch_url("https://example.com/")
+
+    @pytest.mark.asyncio
+    async def test_accept_encoding_is_pinned_to_decodable_set(self) -> None:
+        with (
+            patch("url_validator.socket.getaddrinfo", return_value=_fake_addrinfo()),
+            patch(
+                "httpx.AsyncClient.stream",
+                return_value=_make_stream_cm(_make_response()),
+            ) as mock_stream,
+        ):
+            await fetch_url("https://example.com/")
+        headers = mock_stream.call_args.kwargs["headers"]
+        assert headers["Accept-Encoding"] == "gzip, deflate"
 
 
 # ---------------------------------------------------------------------------
