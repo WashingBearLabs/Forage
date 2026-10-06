@@ -1224,7 +1224,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Compare the live JSON report with the committed baseline; write nothing",
+        help=(
+            "Compare the live JSON report with the committed baseline; write "
+            "nothing (not combinable with --write-baseline / --write-floors)"
+        ),
     )
     return parser
 
@@ -1245,8 +1248,27 @@ def _diff(expected: str, actual: str, *, limit: int = 200) -> str:
     return "\n".join(shown)
 
 
+def _check_baseline(rendered: str) -> int:
+    committed = (
+        BASELINE_PATH.read_text(encoding="utf-8") if BASELINE_PATH.exists() else ""
+    )
+    if committed != rendered:
+        print(_diff(committed, rendered))
+        print(f"baseline is stale; regenerate with: {REGEN_COMMAND}")
+        return 1
+    print("report OK — the committed baseline is current")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """CLI entry point. Returns a process exit status."""
+    """CLI entry point. Returns a process exit status.
+
+    ``--check`` writes nothing and may not be combined with ``--write-baseline``
+    or ``--write-floors``: a check that ran after a write would compare the file
+    with itself. ``--sweep`` replaces the full ``--json`` / ``--markdown`` output
+    with the offline section only (Markdown when ``--markdown`` is given); it may
+    follow a ``--check`` or a write in the same invocation.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
     if not (
@@ -1261,26 +1283,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             "choose --json, --markdown, --write-baseline, --write-floors, --check "
             "or --sweep"
         )
+    if args.check and (args.write_baseline or args.write_floors):
+        parser.error(
+            "--check compares the committed baseline and writes nothing; it cannot "
+            "be combined with --write-baseline or --write-floors"
+        )
     classifiers, headers = load_cassettes()
     report = build_report(
         load_corpus(), classifiers, DEFAULT_CONFIGS, cassette_headers=headers
     )
     rendered = render_json(report)
+    if args.check and _check_baseline(rendered) != 0:
+        return 1
     if args.write_baseline:
         BASELINE_PATH.write_text(rendered, encoding="utf-8")
         print(f"wrote {BASELINE_PATH.name}")
     if args.write_floors:
         FLOORS_PATH.write_text(render_floors(report), encoding="utf-8")
         print(f"wrote {FLOORS_PATH.name}")
-    if args.check:
-        committed = (
-            BASELINE_PATH.read_text(encoding="utf-8") if BASELINE_PATH.exists() else ""
-        )
-        if committed != rendered:
-            print(_diff(committed, rendered))
-            print(f"baseline is stale; regenerate with: {REGEN_COMMAND}")
-            return 1
-        print("report OK — the committed baseline is current")
     if args.sweep:
         if args.markdown:
             print(render_sweep_markdown(report), end="")

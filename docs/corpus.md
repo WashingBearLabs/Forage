@@ -239,26 +239,43 @@ and pin by commit SHA or dataset revision, never a branch. Downloads live under
 Two defaults were left unflipped by the hardening epic, to be ruled on from
 measurement: whether **contiguity gating** (`promptguard_contiguity_windows` /
 `_threshold`, shipped off) earns its default, and whether the **86M model**
-(opt-in) does. This table is the input to both rulings. Nothing here flips a
+(opt-in) does. These two tables are the input to both rulings. Nothing here flips a
 default.
 
 *Measured at baseline commit `4f13c52`, from `default`-config texts that reached
-stage 3 (a text stage 2 blocked first is outside every denominator).
-Denominators: attack 372, `boundary_straddle` 13, `sustained_midband` 7,
-`natural_language` 155, benign external 94, `over_defence_probe` 79. Cells are
-texts fired. `live_contiguity` is the live `contiguity` config: max at 0.85 OR
-a run of 2 windows at 0.5.*
+stage 3 (a text stage 2 blocked first is outside every denominator). Cells are
+texts fired, read from `baseline.json`'s `offline` key (a test re-derives every
+cell). `live_contiguity` is the live `contiguity` config: max at 0.85 OR a run
+of 2 windows at 0.5.*
 
-| Model | Pooler | attack | boundary_straddle | sustained_midband | natural_language | benign external | over_defence_probe |
-|-------|--------|-------:|------------------:|------------------:|-----------------:|----------------:|-------------------:|
-| 22M | `max@0.85` (default) | 0 | 0 | 0 | 0 | 0 | 0 |
-| 22M | `live_contiguity` | 0 | 0 | 0 | 0 | 0 | 0 |
-| 22M | `contiguity(2,0.5)` | 0 | 0 | 0 | 0 | 0 | 0 |
-| 22M | `mean@0.5` | 0 | 0 | 0 | 0 | 0 | 0 |
-| 86M | `max@0.85` (default) | 15 | 0 | 0 | 15 | 0 | 0 |
-| 86M | `live_contiguity` | 15 | 0 | 0 | 15 | 0 | 0 |
-| 86M | `contiguity(2,0.5)` | 0 | 0 | 0 | 0 | 0 | 0 |
-| 86M | `mean@0.5` | 21 | 0 | 0 | 21 | 0 | 0 |
+**Attack catch.** Denominators: attack 372, `boundary_straddle` 13,
+`sustained_midband` 7, `natural_language` 155, `density_thinned` 25,
+`repetition_camouflage` 17, `authority_seo` 27.
+
+| Model | Pooler | attack | boundary_straddle | sustained_midband | natural_language | density_thinned | repetition_camouflage | authority_seo |
+|-------|--------|-------:|------------------:|------------------:|-----------------:|----------------:|----------------------:|--------------:|
+| 22M | `max@0.85` (default) | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 22M | `live_contiguity` | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 22M | `contiguity(2,0.5)` | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 22M | `mean@0.5` | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 86M | `max@0.85` (default) | 15 | 0 | 0 | 15 | 0 | 0 | 0 |
+| 86M | `live_contiguity` | 15 | 0 | 0 | 15 | 0 | 0 | 0 |
+| 86M | `contiguity(2,0.5)` | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 86M | `mean@0.5` | 21 | 0 | 0 | 21 | 0 | 0 | 0 |
+
+**Benign false positives.** Denominators: benign external 94, `long_form` 21,
+`multilingual` 34, `over_defence_probe` 79.
+
+| Model | Pooler | benign external | long_form | multilingual | over_defence_probe |
+|-------|--------|----------------:|----------:|-------------:|-------------------:|
+| 22M | `max@0.85` (default) | 0 | 0 | 0 | 0 |
+| 22M | `live_contiguity` | 0 | 0 | 0 | 0 |
+| 22M | `contiguity(2,0.5)` | 0 | 0 | 0 | 0 |
+| 22M | `mean@0.5` | 0 | 0 | 0 | 0 |
+| 86M | `max@0.85` (default) | 0 | 0 | 0 | 0 |
+| 86M | `live_contiguity` | 0 | 0 | 0 | 0 |
+| 86M | `contiguity(2,0.5)` | 0 | 0 | 0 | 0 |
+| 86M | `mean@0.5` | 0 | 0 | 0 | 0 |
 
 The full grid (every threshold, window count, `k_anywhere` and smoothed pooler,
 and the per-density and per-repeat splits) is `baseline.json`'s `offline` key, or
@@ -268,7 +285,8 @@ and the per-density and per-repeat splits) is `baseline.json`'s `offline` key, o
 
 1. *Does contiguity at `2 @ 0.5` add catch over max at 0.85 without adding
    false positives?* Compare the `live_contiguity` row with `max@0.85`, per
-   model. In this table the two rows are equal for both models: contiguity
+   model, in both tables — including the `long_form` and `multilingual` benign
+   columns. In this table the two rows are equal for both models: contiguity
    added no catch, including on the two families built to test it
    (`boundary_straddle`, `sustained_midband`). That is a statement about this
    corpus and these two cassettes; on the 86M the firing texts are effectively
@@ -325,7 +343,7 @@ surfaces as `suspicious`; on `/retrieve` and `/extract` nothing below the thresh
 surfaces at all. The same text scored 0.6 is `flagged` on one route and `leaked` on
 another. That is a difference in what the API exposes, not in what the defence
 caught. Outcomes are read within a route; any cross-route comparison uses the
-recorded window scores, which the baseline carries.
+recorded window scores, which the cassettes in `tests/corpus/cassettes/` carry.
 
 **`blocked_but_leaked` is a half-worked defence, not a success.** A record counts
 here when its outcome is `blocked` while its marker is still on the wire (a

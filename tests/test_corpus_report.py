@@ -15,13 +15,14 @@ from __future__ import annotations
 import functools
 import json
 from collections.abc import Sequence
-from typing import cast
+from typing import NoReturn, cast
 
 import pytest
 
 import model_fetcher
 from pipeline import contract
 from scripts.corpus import poolers
+from scripts.corpus import report as report_module
 from scripts.corpus.drivers import drive_all
 from scripts.corpus.outcomes import (
     BLOCKING_ERRORS,
@@ -452,6 +453,31 @@ def test_the_parser_names_its_flags() -> None:
 def test_main_requires_a_mode() -> None:
     with pytest.raises(SystemExit):
         main([])
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ["--check", "--write-baseline"],
+        ["--check", "--write-floors"],
+        ["--check", "--write-baseline", "--write-floors"],
+    ],
+)
+def test_check_cannot_be_combined_with_a_write(
+    flags: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # The refusal happens at parse time, before any drive or write: a check
+    # preceded by a write would compare the baseline with itself.
+    def _no_drive() -> NoReturn:
+        raise AssertionError("main drove the corpus before refusing the flags")
+
+    monkeypatch.setattr(report_module, "load_cassettes", _no_drive)
+    with pytest.raises(SystemExit) as exit_info:
+        main(flags)
+    assert exit_info.value.code == 2
+    assert "cannot be combined" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import cast
 
@@ -81,6 +82,61 @@ def test_numbers_appear_only_in_the_decision_inputs_table() -> None:
     assert re.findall(r"\b\d+\.\d{2,}\b", outside) == []
 
 
+_DECISION_POOLERS = {
+    "`max@0.85` (default)": "max@0.85",
+    "`live_contiguity`": "live_contiguity",
+    "`contiguity(2,0.5)`": "contiguity(2,0.5)",
+    "`mean@0.5`": "mean@0.5",
+}
+_DECISION_COLUMNS = {"benign external": "benign_external"}
+_DECISION_GROUPS = (
+    "attack",
+    "boundary_straddle",
+    "sustained_midband",
+    "natural_language",
+    "density_thinned",
+    "repetition_camouflage",
+    "authority_seo",
+    "benign_external",
+    "long_form",
+    "multilingual",
+    "over_defence_probe",
+)
+
+
+def test_decision_tables_are_rederived_from_the_baseline_offline_section() -> None:
+    inputs = _section(_text(_CORPUS_DOC), "Decision inputs")
+    offline = cast(
+        list[dict[str, object]],
+        json.loads(_text(_ROOT / "tests" / "corpus" / "baseline.json"))["offline"],
+    )
+    by_model = {
+        cast(str, entry["model"]).rsplit("-", 1)[1]: cast(
+            dict[str, dict[str, dict[str, object]]], entry["poolers"]
+        )
+        for entry in offline
+    }
+    columns: list[str] = []
+    seen_groups: set[str] = set()
+    cells = 0
+    for line in inputs.splitlines():
+        if not line.startswith("| "):
+            continue
+        fields = [field.strip() for field in line.strip("|").split("|")]
+        if fields[0] == "Model":
+            columns = [_DECISION_COLUMNS.get(name, name) for name in fields[2:]]
+            seen_groups.update(columns)
+            continue
+        if fields[0] not in by_model:
+            continue
+        poolers = by_model[fields[0]][_DECISION_POOLERS[fields[1]]]
+        for group, value in zip(columns, fields[2:], strict=True):
+            assert int(value) == poolers[group]["fired"], (fields[0], fields[1], group)
+            cells += 1
+    assert seen_groups == set(_DECISION_GROUPS)
+    assert cells == len(by_model) * len(_DECISION_POOLERS) * len(_DECISION_GROUPS)
+
+
 def test_rejected_sources_are_listed_with_a_reason() -> None:
     section = _section(_text(_CORPUS_DOC), "Sources and licences")
     for source in (
@@ -100,15 +156,53 @@ def test_rejected_sources_are_listed_with_a_reason() -> None:
         assert len(rows[0].split("|")[2].strip()) > 0, source
 
 
+def _tracked_paths() -> frozenset[Path] | None:
+    """Every path git tracks (files and their parent directories), or ``None``.
+
+    A link must resolve to something a clean checkout has, so a gitignored file
+    that happens to exist in this working copy must not satisfy it. Outside a
+    git checkout (a ``git archive`` export) there is nothing ignored to be
+    fooled by, and the caller falls back to the filesystem.
+    """
+    try:
+        listing = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=_ROOT,
+            capture_output=True,
+            check=True,
+        ).stdout.decode("utf-8")
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    tracked: set[Path] = set()
+    for name in filter(None, listing.split("\0")):
+        path = (_ROOT / name).resolve()
+        tracked.add(path)
+        tracked.update(path.parents)
+    return frozenset(tracked)
+
+
 def test_every_relative_link_in_the_corpus_guide_resolves() -> None:
+    tracked = _tracked_paths()
     broken: list[str] = []
     for target in _MARKDOWN_LINK_RE.findall(_text(_CORPUS_DOC)):
         link = target.split("#", 1)[0]
         if not link or link.startswith(("http://", "https://", "mailto:")):
             continue
-        if not (_CORPUS_DOC.parent / link).resolve().exists():
+        resolved = (_CORPUS_DOC.parent / link).resolve()
+        found = resolved in tracked if tracked is not None else resolved.exists()
+        if not found:
             broken.append(link)
-    assert broken == [], f"Broken relative links: {broken}"
+    assert broken == [], f"Broken or untracked relative links: {broken}"
+
+
+def test_the_link_check_rejects_an_untracked_local_file() -> None:
+    # The gitignored audit record is the case that once passed locally and
+    # failed on a clean checkout; it must never count as a link target.
+    tracked = _tracked_paths()
+    if tracked is None:
+        pytest.skip("not a git checkout; the link check uses the filesystem here")
+    assert (_ROOT / "kit_tools" / "AUDIT_FINDINGS.md").resolve() not in tracked
+    assert _CORPUS_DOC.resolve() in tracked
 
 
 def test_readme_has_the_measured_injection_defence_paragraph() -> None:
@@ -148,7 +242,11 @@ def _findings_text() -> str:
     # checkout has none; the findings checks run wherever the owner keeps it.
     path = _ROOT / "kit_tools" / "AUDIT_FINDINGS.md"
     if not path.exists():
-        pytest.skip("kit_tools/AUDIT_FINDINGS.md is gitignored and absent here")
+        pytest.skip(
+            "kit_tools/AUDIT_FINDINGS.md is gitignored by repo policy (a local "
+            "working record, absent from clean checkouts and CI); the findings "
+            "checks run only on an owner checkout that keeps it"
+        )
     return _text(path)
 
 
