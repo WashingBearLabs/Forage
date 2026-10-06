@@ -20,6 +20,15 @@ live in `MILESTONES.md` instead.
 
 ---
 
+## Forage Structural Hardening (Epic)
+- [Epic Overview](../specs/epic-forage-structural-hardening.md) — closes the corpus's 30 structural findings with derived stage-2 scan forms; stage-3 input byte-identical (no re-record); ratchet both ways
+- [Scan forms](../specs/feature-structural-scan-forms.md) — case-insensitive patterns; shared decode/collapse builder on all routes; generated confusable fold (3 stories)
+- [Markup surface](../specs/feature-structural-markup-surface.md) — inline-tag-unwrapped form; bounded raw-markup scan (2 stories; depends on: scan-forms)
+- [Wire closure](../specs/feature-structural-wire-closure.md) — quarantine blocked titles; visibility pass on the served body (2 stories; depends on: markup-surface)
+- [Close-out](../specs/feature-structural-closeout.md) — floors ratchet, findings re-filed, records (2 stories; owner checkout; depends on: wire-closure)
+
+---
+
 ## Injection Regression Corpus (Completed)
 - [Epic Overview](../specs/epic-forage-injection-corpus.md) — T2.3; six specs, 25 stories (`86m-enablement` 4, `harness` 3, `attacks` 5, `benign` 4, `recording` 4, `gates` 5); the 86M became selectable as `v1.2.2`, the epic's only release. Guide: `../../docs/corpus.md`. Findings (leaks, over-defence, blocked-but-leaked) are filed in `../AUDIT_FINDINGS.md`, none fixed
 

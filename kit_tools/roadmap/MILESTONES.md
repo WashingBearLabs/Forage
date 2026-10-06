@@ -76,6 +76,12 @@ Poppy.
       `../specs/epic-forage-injection-corpus.md`. Follow-ups resolved 2026-10-06 (unreleased): the 86M
       becomes the default and contiguity stays off (`../arch/DECISIONS.md`).
 
+- [ ] **Structural hardening** (`epic-forage-structural-hardening`, planned 2026-10-06, four specs /
+      nine stories; P1, follows T2.3): closes the corpus's 30 structural findings (case, entity,
+      confusable, split-tag, newline-split and markup-consumed variants; blocked-page titles;
+      inline-hidden body content) with stage-2 scan forms, keeping stage-3 input byte-identical
+      so no cassette is re-recorded. Wrapper `../specs/epic-forage-structural-hardening.md`.
+
 ## Exit Criteria for `v1.0.0`
 
 - [x] Published image contains **no HF token and no baked weights** — `docker history`
