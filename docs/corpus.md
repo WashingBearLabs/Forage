@@ -248,7 +248,7 @@ texts fired, read from `baseline.json`'s `offline` key (a test re-derives every
 cell). `live_contiguity` is the live `contiguity` config: max at 0.85 OR a run
 of 2 windows at 0.5.*
 
-**Attack catch.** Denominators: attack 372, `boundary_straddle` 13,
+**Attack catch.** Denominators: attack 369, `boundary_straddle` 13,
 `sustained_midband` 7, `natural_language` 155, `density_thinned` 25,
 `repetition_camouflage` 17, `authority_seo` 27.
 

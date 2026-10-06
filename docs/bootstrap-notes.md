@@ -2092,3 +2092,28 @@ known third-party consumers. The opt-out is permanent — the 22M stays allowlis
 **Consumer handoff (Poppy):** compare contracts, not revisions. A Poppy pin of the next
 release gets the 86M unless it sets `FORAGE_MODEL_ID=…22M`, and needs the larger memory
 limit. **Not replayed to Poppy.**
+
+### The forty-fourth rotation: Stage 2 patterns become case-insensitive (`structural-scan-forms` US-001)
+
+Seven Stage 2 patterns were case-sensitive and a re-cased trigger evaded them:
+`instructions_banner`, `poppy_line`, `system_line`, `hex_escape`, `im_start`, `endoftext`
+and `exfil_image`. Each gained `re.IGNORECASE`; `base64_run` is untouched (its class is
+deliberately case-bearing) and no pattern was renamed. Only `pipeline/stage2_structural.py`
+moves among the nine hashed sources:
+
+| State | Revision |
+|---|---|
+| Before (`c878f23`) / `stage2_structural.py` reverted | `b5e91fd647270be4dfb3dc9a95f2447f1961fca7746441ca65e691c986ba0ded` |
+| After | `8ca7db8d9dfff3117aa0e402cfb39b208d96285e0b457af66c262e4fc639bd47` |
+
+Measured for default `{}` and shipped `config.yaml`, which agree. This is the **ninth
+sanitization-behaviour-changing rotation**. Decided false-positive cost: a line starting
+`system:` or `poppy:` in any case now BLOCKs, including a column-0 YAML `system:` key and a
+`Poppy:` transcript line; narrowing would reopen `atk-0070` and `atk-0086`. Both are pinned as
+benign unit fixtures asserted blocked.
+
+Corpus effect (regenerated `baseline.json`): `atk-0070`, `atk-0071`, `atk-0086` and `atk-0116`,
+`atk-0147` are no longer `leaked` (three now `blocked`, two `flagged`); no benign record
+moved and `git diff tests/corpus/cassettes/` is empty. The stage-3 attack denominator in
+`docs/corpus.md`'s Decision inputs falls 372 → 369 (three texts no longer reach stage 3); every
+fired cell is unchanged. Old cache keys invalidate. Contract stays `1.3.0`.

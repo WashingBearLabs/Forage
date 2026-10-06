@@ -567,6 +567,18 @@ contiguity stays off. Compose's memory default rises to `1536m`. The governance
 compatibility window was waived by the owner (no known third-party consumers).
 Full values: `docs/bootstrap-notes.md`.
 
+The forty-fourth rotation is `b5e91fd6…` → `8ca7db8d…` for
+`structural-scan-forms` US-001 — **the ninth sanitization-behaviour-changing
+rotation**: seven Stage 2 patterns (`instructions_banner`, `poppy_line`,
+`system_line`, `hex_escape`, `im_start`, `endoftext`, `exfil_image`) gained
+`re.IGNORECASE`, so re-casing a trigger no longer evades it. Only
+`pipeline/stage2_structural.py` moves; a read-only whole-file reversal against
+`c878f23` reproduces `b5e91fd6…` under default and shipped config. `base64_run`
+stays case-bearing. Decided false-positive cost: a column-0 `system:` or
+`poppy:` line in any case now BLOCKs (pinned by benign unit fixtures asserted
+blocked). No core-genre benign corpus record moved; five `case` attack records
+stopped leaking; cassettes untouched. Full values: `docs/bootstrap-notes.md`.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:

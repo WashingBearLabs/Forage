@@ -99,6 +99,7 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         "instruction_override",
         re.compile(
             r"---INSTRUCTIONS---",
+            re.IGNORECASE,
         ),
     ),
     # -- Authority impersonation (some need line-start anchors) --
@@ -127,14 +128,14 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         "authority_impersonation",
         re.compile(
             r"^POPPY:",
-            re.MULTILINE,
+            re.MULTILINE | re.IGNORECASE,
         ),
     ),
     (
         "authority_impersonation",
         re.compile(
             r"^System:",
-            re.MULTILINE,
+            re.MULTILINE | re.IGNORECASE,
         ),
     ),
     (
@@ -162,6 +163,7 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         "encoded_payload",
         re.compile(
             r"(?:\\x[0-9a-fA-F]{2}){4,}",
+            re.IGNORECASE,
         ),
     ),
     # -- Prompt boundary markers --
@@ -183,12 +185,14 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         "prompt_boundary",
         re.compile(
             r"<\|im_start\|>",
+            re.IGNORECASE,
         ),
     ),
     (
         "prompt_boundary",
         re.compile(
             r"<\|endoftext\|>",
+            re.IGNORECASE,
         ),
     ),
     # -- Suspicious URLs --
@@ -221,6 +225,7 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         "exfil_beacon",
         re.compile(
             r"!\[.*?\]\(https?://[^)]*(?:\{\{|\$\{|%7[Bb])",
+            re.IGNORECASE,
         ),
     ),
     # -- Envelope tag breakout --

