@@ -549,7 +549,7 @@ Forage has no audit log in the authentication sense; there is no identity to rec
 | Control | Test files |
 |---|---|
 | SSRF | `tests/test_url_validator.py`, `tests/test_stage5_url_audit.py`, `tests/test_orchestrator.py` (refusal paths) |
-| Injection signalling and quarantine | `tests/test_stage1_extraction.py`, `tests/test_stage1_pdf.py`, `tests/test_stage2_structural.py`, `tests/test_stage3_promptguard.py`, `tests/test_orchestrator.py` |
+| Injection signalling and quarantine | `tests/test_stage1_extraction.py`, `tests/test_stage1_pdf.py`, `tests/test_stage2_structural.py`, `tests/test_stage3_promptguard.py`, `tests/test_orchestrator.py`, `tests/test_corpus_*.py` (`harness`, `attacks`, `ingest`, `record`, `report`, `gate`, `lint`) |
 | Upload bounds and isolation | `tests/test_app.py`, `tests/test_contract_errors.py`, `tests/test_smart_extraction.py`, `tests/test_models.py` |
 | Secrets | `tests/test_dockerfile.py::TestNoSecretEntersTheBuild`, `tests/test_cache.py::TestReconnect`, `tests/test_app.py::test_no_selection_path_logs_the_valkey_url`, `tests/test_ci_workflow.py::TestSecretGrepJob`, `tests/test_brave_provider.py::TestKeyNeverLeaks` |
 | Supply chain | `tests/test_model_fetcher.py`, `tests/test_vendor_weights.py`, `tests/test_dependency_lock.py`, `tests/test_contract_export.py`, `tests/test_dockerfile.py` (pins, lock-driven install, contract in image), `tests/test_ci_workflow.py` (permissions, publish, release assets) |
@@ -558,13 +558,21 @@ Forage has no audit log in the authentication sense; there is no identity to rec
 | Posture documents | `tests/test_governance_docs.py::TestSecurityPolicy` (pins prose in the root `SECURITY.md` and `contract/GOVERNANCE.md`) |
 | Type-safety policy | `tests/test_pyright_policy.py` (strict, `enableTypeIgnoreComments = false`, so a suppression cannot quietly restore green) |
 
+### The injection corpus gate
+
+`tests/corpus/` holds attack and benign records that `tests/test_corpus_gate.py` drives through the real `/search`, `/retrieve` and `/extract` routes on every `uv run pytest`, reporting catch rate and false-positive rate per category, route, model and rule configuration against the generated `tests/corpus/baseline.json` and the reviewed `tests/corpus/floors.json` (`docs/corpus.md`, "The gate"). Any drift or floor breach turns the suite red, and the CI `test` job's one extra step writes the same tables to the job summary.
+
+CI has no model weights: the Meta repository is gated, the organisation's mirror is private by decision (`docs/weights.md`), and `tests/test_ci_workflow.py::test_no_repository_secrets_referenced` pins the workflow to no repository secrets. So the real classifier is measured once per model revision, on a host, by an owner (`scripts/corpus/record.py`), and its per-window scores are committed as **cassettes** under `tests/corpus/cassettes/`. CI replays them through the real stage-3 rules via `scripts/corpus/replay.py`. A cassette is keyed by the SHA-256 of the text stage 3 classifies and carries scores and window counts only, never chunk text. A text with no recorded scores fails loudly (`UnrecordedTextError`) instead of passing. The gate cannot detect a real-model load failure; `/health.promptguard_loaded` remains the runtime truth.
+
+What the gate measures is the sanitization pipeline's behaviour on a curated set, not the classifier in isolation and not any guarantee about unseen text. Leaked records are visible in the committed per-record outcome map (`records` in `tests/corpus/baseline.json`) and tracked in the local, gitignored `kit_tools/AUDIT_FINDINGS.md`; they are not fixed by the corpus epic.
+
 ### Fixtures
 
 `tests/golden/contract_1_0_0.json` and `tests/golden/contract_1_1_0.json` are schema goldens retained forever (a contract change adds one, never edits one). `tests/fixtures/tiny_model/` is a real, loadable safetensors DeBERTa for loader tests, and `tests/fixtures/contract/unregenerated_openapi.yaml` is the drift-check failure case. `tests/fixtures/brave/llm_context_sample.json` is the Brave LLM-Context response **envelope** captured by the owner on 2026-09-16 with every chunk body, title, URL, hostname and date replaced by synthetic values — no Brave-authored text, no request headers, no key (provenance and the observed shape are in `tests/fixtures/README.md`); `tests/test_brave_provider.py` asserts nothing under `tests/fixtures/` carries an auth header name and nothing under `tests/fixtures/brave/` carries a token-shaped literal.
 
 ### Observations
 
-- Injection coverage is example-based unit testing. No fuzz harness or adversarial corpus exists for the stage-2 regexes or the HTML and PDF parsers.
+- An adversarial corpus now exists for stage 2 and stage 3 over HTML and plain-text carriers ([`docs/corpus.md`](../../docs/corpus.md)); it is a measured, gated example set, not a guarantee. There is still no fuzz harness for the stage-2 regexes or the HTML and PDF parsers, and PDF-borne text is outside the corpus (ruling 8: no text-bearing PDF generator exists in `tests/fixtures/`).
 - No dependency-vulnerability scanning runs in CI or is described in the docs.
 
 ---

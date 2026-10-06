@@ -4,7 +4,7 @@ epic: forage-injection-corpus
 status: active
 vision_ref: "T2.3 — Injection regression corpus (CI)"
 created: 2026-09-14
-updated: 2026-09-24
+updated: 2026-10-05
 ---
 
 # Epic: Forage Injection Regression Corpus — Measure Injection Defence in CI
@@ -212,11 +212,11 @@ corpus surfaces is recorded as an audit finding for a follow-up, never fixed her
 | Seq | Feature Spec | Stories | Status | Dependencies |
 |-----|-------------|---------|--------|--------------|
 | 0 | [`feature-corpus-86m-enablement.md`](archive/feature-corpus-86m-enablement.md) — vendor the 86M, pin its label semantics, allowlist it, benchmark both models, release (owner gates, lab host; ruling 6a; releases `v1.2.2`) | 4 | Completed 2026-10-04 (`v1.2.2`) | `hardening-release` |
-| 1 | [`feature-corpus-harness.md`](feature-corpus-harness.md) — record schema, loader + lint, replay classifier, the three route drivers, the outcome model, seed records | 3 | Planned | `hardening-release` (the whole hardening epic) |
-| 2 | [`feature-corpus-attacks.md`](feature-corpus-attacks.md) — the attack corpus by category and surface; third-party ingestion | 5 | Planned | `corpus-harness` |
-| 3 | [`feature-corpus-benign.md`](feature-corpus-benign.md) — the benign counter-corpus by genre, over-defence prose, multilingual and long-form | 4 | Planned | `corpus-harness` |
-| 4 | [`feature-corpus-recording.md`](feature-corpus-recording.md) — cassette format, file-backed replay, the host-side recorder, the 22M and 86M recordings (owner gates) | 4 | Planned | `corpus-attacks`, `corpus-benign`; US-003 on `corpus-86m-enablement` |
-| 5 | [`feature-corpus-gates.md`](feature-corpus-gates.md) — report, baseline + floors gate, CI summary, decision table, docs and close-out | 5 | Planned | `corpus-recording` |
+| 1 | [`feature-corpus-harness.md`](archive/feature-corpus-harness.md) — record schema, loader + lint, replay classifier, the three route drivers, the outcome model, seed records | 3 | Completed 2026-09-26 | `hardening-release` (the whole hardening epic) |
+| 2 | [`feature-corpus-attacks.md`](archive/feature-corpus-attacks.md) — the attack corpus by category and surface; third-party ingestion | 5 | Completed 2026-09-26 | `corpus-harness` |
+| 3 | [`feature-corpus-benign.md`](archive/feature-corpus-benign.md) — the benign counter-corpus by genre, over-defence prose, multilingual and long-form | 4 | Completed 2026-09-26 | `corpus-harness` |
+| 4 | [`feature-corpus-recording.md`](archive/feature-corpus-recording.md) — cassette format, file-backed replay, the host-side recorder, the 22M and 86M recordings (owner gates) | 4 | Completed 2026-10-04 | `corpus-attacks`, `corpus-benign`; US-003 on `corpus-86m-enablement` |
+| 5 | [`feature-corpus-gates.md`](archive/feature-corpus-gates.md) — report, baseline + floors gate, CI summary, decision table, docs and close-out | 5 | Completed 2026-10-04 | `corpus-recording` |
 
 Execution (owner, 2026-09-25): spec 0 runs in parallel on its own branch and lands on `main` via its
 PR and `v1.2.2`; specs 1–3 run guarded on `epic/forage-injection-corpus`; the epic branch then merges

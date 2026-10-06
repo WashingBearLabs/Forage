@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: corpus-recording
-status: active
+status: completed
 session_ready: true
 depends_on: [corpus-attacks, corpus-benign, corpus-86m-enablement]
 vision_ref: "T2.3 — Injection regression corpus (CI)"
@@ -12,7 +12,8 @@ epic_seq: 4
 epic_final: false
 execution_order: [US-001, US-004, US-002, US-003]
 created: 2026-09-19
-updated: 2026-09-24
+updated: 2026-10-04
+completed: 2026-10-04
 ---
 
 # Feature Spec: Score Recording — Cassette Format, File-Backed Replay, the Host-Side Recorder, the 22M and 86M Recordings
@@ -222,17 +223,17 @@ any acquisition is attempted.
   `model_id`.
 
 **Acceptance Criteria:**
-- [ ] Cassette format as specified; `from_cassette` round-trips; the 2 MB cap lint exists.
-- [ ] `RecordingClassifier` records unbudgeted and applies the budget itself; a test with
+- [x] Cassette format as specified; `from_cassette` round-trips; the 2 MB cap lint exists.
+- [x] `RecordingClassifier` records unbudgeted and applies the budget itself; a test with
       `max_chunks=1` on a two-window text asserts the recorded list has two scores and the drive
       raised the budget error both live and in replay. The tiny-model tests monkeypatch
       `MAX_SEQ_LEN` to 32 **and `CHUNK_OVERLAP` to 8** so every window fits the fixture's
       `max_position_embeddings: 64` and `step` stays positive; the patch helper asserts
       `MAX_SEQ_LEN - CHUNK_OVERLAP > 0`, and a test asserts the unpatched fixture raises on a
       full-length chunk, so both constraints are pinned rather than rediscovered.
-- [ ] Live-vs-replay equivalence on the tiny model across all three routes and both configs;
+- [x] Live-vs-replay equivalence on the tiny model across all three routes and both configs;
       cassette contains no marker text; deleting an entry → `UnrecordedRecordError` with the id.
-- [ ] Recorder CLI: `--help` offline; the `model_env_set`, `model_id_not_allowed`, `not_pinned`,
+- [x] Recorder CLI: `--help` offline; the `model_env_set`, `model_id_not_allowed`, `not_pinned`,
       `not_loaded` and `unscanned` exits each write nothing (and a mini corpus holding a
       structurally blocked record still writes, with `unscanned=0`), and `model_id_not_allowed` /
       `model_env_set` / `not_pinned` are reached with the acquisition seam never called; a test
@@ -240,8 +241,8 @@ any acquisition is attempted.
       written cassette carries the same pair; output line format pinned; no token value can reach
       stdout / stderr (a test injects a fake token into the environment and asserts it is absent
       from captured output).
-- [ ] `NOTICE` paragraph present; coverage test green.
-- [ ] **The two tests the owner gates assert against are authored here, not at the gate** (added
+- [x] `NOTICE` paragraph present; coverage test green.
+- [x] **The two tests the owner gates assert against are authored here, not at the gate** (added
       2026-09-19, validation round 1). US-002's and US-003's Independent Tests require (a) a
       full-corpus replay drive with `fallback=None` over every record × both configs reporting
       **zero misses**, and (b) a test asserting every record with `params.windows_min` has a recorded
@@ -251,13 +252,13 @@ any acquisition is attempted.
       written **here**, in `tests/test_corpus_record.py`, and both skip with the reason
       `"no cassette recorded yet"` until US-002 commits one. An owner gate must be "run the documented
       procedure, paste the numbers" — never "author two new tests first".
-- [ ] `kit_tools/testing/TESTING_GUIDE.md` rows for `tests/test_corpus_record.py` and
+- [x] `kit_tools/testing/TESTING_GUIDE.md` rows for `tests/test_corpus_record.py` and
       `tests/corpus/cassettes/`.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-004: The recording procedure and the staleness guards
 
@@ -309,16 +310,16 @@ does not fail.
 - Cassette size and count: one file per model; a lint test refuses two cassettes for one model id.
 
 **Acceptance Criteria:**
-- [ ] README section present with the exact commands, the token rule, and the re-record triggers.
-- [ ] Hard guard (revision vs manifest pin) and soft guard (versions) implemented and tested; the
+- [x] README section present with the exact commands, the token rule, and the re-record triggers.
+- [x] Hard guard (revision vs manifest pin) and soft guard (versions) implemented and tested; the
       one-cassette-per-model lint exists.
-- [ ] `kit_tools/docs/GOTCHAS.md` gains "A cassette miss is the guard; `sanitizer_revision` in a
+- [x] `kit_tools/docs/GOTCHAS.md` gains "A cassette miss is the guard; `sanitizer_revision` in a
       cassette is a note" with the re-record triggers.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-002: Record the 22M cassette (owner gate)
 
@@ -348,12 +349,12 @@ record / text counts, the window histogram, wall time, host CPU, and the cassett
   `corpus: record 22M cassette @<revision>`.
 
 **Acceptance Criteria:**
-- [ ] Cassette committed; zero misses on every record × both configs; `windows_min` offender list
+- [x] Cassette committed; zero misses on every record × both configs; `windows_min` offender list
       empty; re-authored records (if any) listed by id in Implementation Notes with the pass count.
-- [ ] Implementation Notes section as in the Independent Test (numbers only).
-- [ ] The cassette's `revision` equals the manifest pin (US-004 guard green); `NOTICE` names the
+- [x] Implementation Notes section as in the Independent Test (numbers only).
+- [x] The cassette's `revision` equals the manifest pin (US-004 guard green); `NOTICE` names the
       22M model.
-- [ ] Full test suite passes (`uv run pytest`)
+- [x] Full test suite passes (`uv run pytest`)
 
 ### US-003: Record the 86M cassette if spec 0 enabled it (owner gate)
 
@@ -392,13 +393,13 @@ reason that stopped it (ruling 6a).
 - Memory: the 86M working set is larger; run on the host, not in the 1 GiB container.
 
 **Acceptance Criteria:**
-- [ ] One of the two Independent-Test outcomes, recorded in Implementation Notes.
-- [ ] If recorded: zero misses, `windows_min` list empty under both cassettes, `NOTICE` names the
+- [x] One of the two Independent-Test outcomes, recorded in Implementation Notes.
+- [x] If recorded: zero misses, `windows_min` list empty under both cassettes, `NOTICE` names the
       86M model, both cassettes' revisions equal their manifest pins.
-- [ ] Zero runtime change (rulings 6, 6a) re-asserted at spec end: the ruling-6 `git diff --stat`
+- [x] Zero runtime change (rulings 6, 6a) re-asserted at spec end: the ruling-6 `git diff --stat`
       set, taken against the epic branch's merge base with `main` (`git merge-base main HEAD`, ruling 6a), is empty; `derive_sanitizer_revision({})` unchanged;
       `scripts.export_contract --check` green.
-- [ ] Full test suite passes (`uv run pytest`)
+- [x] Full test suite passes (`uv run pytest`)
 
 ## Edge Cases
 
@@ -551,6 +552,38 @@ US-003 on `corpus-86m-enablement`" (~:208). Neither needs a change here.
 
 ## Implementation Notes
 
+### US-002 — 22M recording, 2026-10-04
+
+Owner gate, run in-session on the lab host `thelab` (AMD Ryzen Threadripper 2970WX, 48 threads;
+torch 2.14.0+cpu) from the warm, manifest-verified cache (`HF_HUB_OFFLINE=1`, no token in the
+environment), `FORAGE_MODEL_ID` / `FORAGE_MODEL_REVISION` unset. Recorder:
+`python -m scripts.corpus.record --model-id meta-llama/Llama-Prompt-Guard-2-22M`.
+- **Revision:** `11614a155199674a0a95e6602d6ab0417b790ed0` (= manifest pin; US-004 guard green).
+- **Passes: 2.** Pass 1 (commit `ec51ddb`, 529 s) left three `windows_min` offenders, each one
+  window short: `atk-0021` (3 of 4), `atk-0248` (7 of 8), `ben-0009` (2 of 3). Their filler was
+  lengthened from the same sources (commit `0b4ad3b`; `atk-0021` keeps its 1/8 cadence) and both
+  cassettes were recorded from that commit.
+- **Pass 2 (final):** 760 records, 610 texts, 0 unscanned, configs `default` + `contiguity`;
+  windows histogram `{1: 507, 2: 24, 3: 28, 4: 23, 5: 18, 6: 3, 7: 1, 8: 4, 9: 2}`; wall time
+  515 s; cassette 103,865 bytes.
+- **Checks:** zero misses (`fallback=None`) on every record × both configs; `windows_min` offender
+  list empty; full suite on the lab host 4,756 passed, 1 skipped.
+
+### US-003 — 86M recording, 2026-10-04
+
+Spec 0 completed (v1.2.2, 2026-10-04): the 86M is vendored, label-pinned, allowlisted and released.
+Same host, procedure and commit (`0b4ad3b`) as US-002.
+- **Revision:** `a8ded8e697ce7c355e395a0df51f94adb4a2fd27` (= manifest pin).
+- 760 records, 610 texts, 0 unscanned; windows histogram
+  `{1: 502, 2: 28, 3: 9, 4: 21, 5: 35, 6: 8, 7: 1, 9: 1, 10: 4, 11: 1}` (the 86M tokenizer splits
+  differently); wall time 1,260 s; cassette 106,213 bytes.
+- **Checks:** zero misses and an empty `windows_min` list under **both** cassettes; no record
+  changed after the 86M pass, so no re-record was needed. Full suite with both cassettes:
+  4,756 passed, 1 skipped. `NOTICE` names both models.
+- **Ruling 6 / 6a at spec end:** the runtime `git diff --stat` against `git merge-base main HEAD`
+  is empty; `derive_sanitizer_revision({})` = `021378efee6a…` (unchanged);
+  `scripts.export_contract --check` green.
+
 <!-- US-002 / US-003 gate sections as specified. Numbers only. -->
 
 ## Refinement Notes
@@ -626,3 +659,20 @@ cheap now and expensive to retrofit (finding 15).
   0 stops (licence, access pending, inconclusive evidence), US-003 records `not recorded — 86M not
   enabled`. For the 22M, the mirror read token remains the alternative to an HF token.
 - The 86M tokenizer changes window counts; re-authoring may ripple into the 22M cassette.
+
+### US-001 (2026-10-04)
+
+- Slug pinned to the **bare** form (`meta-llama--Llama-Prompt-Guard-2-22M@<sha>.json`,
+  `models--` stripped), by `test_the_cassette_name_is_the_bare_repo_slug_at_the_revision`.
+- `RecordingClassifier` subclasses `ReplayClassifier` so `drive_all` / `_drive_one` read its
+  `model_id` and `calls` unchanged — `drivers.py` is untouched. It takes `model_id=` /
+  `revision=` keywords beside `inner` (the drive stamps `RouteResult.model_id` from them).
+- The budget criterion is asserted at the classifier seam (real classifier, wrapper and
+  replay each raise `PromptGuardBudgetExceededError` on the same two-window text at
+  `max_chunks=1`). The shipped config sets no route chunk budget, so a route-level drive
+  would not exercise it.
+- The real loader writes a `Loading weights` tqdm bar to stderr; refusals *after* acquisition
+  (`not_loaded`, `unscanned`) therefore end stderr with the reason word, not consist of it.
+  Refusals before acquisition write exactly the word.
+- The `unscanned` test unloads the wrapped classifier between the step-4 check and the drive,
+  which takes stage 3's `model_unavailable` path on all three routes.

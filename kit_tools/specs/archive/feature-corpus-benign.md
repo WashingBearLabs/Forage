@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: corpus-benign
-status: active
+status: completed
 session_ready: true
 depends_on: [corpus-harness, corpus-attacks]
 vision_ref: "T2.3 — Injection regression corpus (CI)"
@@ -12,7 +12,8 @@ epic_seq: 3
 epic_final: false
 execution_order: [US-001, US-002, US-003, US-004]
 created: 2026-09-19
-updated: 2026-09-24
+updated: 2026-09-26
+completed: 2026-09-26
 ---
 
 # Feature Spec: Benign Corpus — Externally Sourced Genres, Over-Defence Probes, Multilingual, Long-Form, Search-Shaped
@@ -240,13 +241,13 @@ offline fallback and made organic false positives unrepresentable.)*
 - Ids `ben-0011` … continue the seed.
 
 **Acceptance Criteria:**
-- [ ] `scripts/corpus/ingest/benign.py` with adapters for at least Wikinews, CPython docs, the Rust
+- [x] `scripts/corpus/ingest/benign.py` with adapters for at least Wikinews, CPython docs, the Rust
       book and a README/CHANGELOG source; hermetic tests for determinism, caps, URL rewriting,
       provenance fields, secret-shape refusal, no payload in output.
-- [ ] ≥ 15 records per core genre; provenance as in the Independent Test; every external record has
+- [x] ≥ 15 records per core genre; provenance as in the Independent Test; every external record has
       `source.url`, `licence`, `revision`; `NOTICE` gains one entry per source and the coverage test
       passes.
-- [ ] ≥ 2 **`over_defence_probe`** records per stage-2 regex across US-001 + US-004 (except the three
+- [x] ≥ 2 **`over_defence_probe`** records per stage-2 regex across US-001 + US-004 (except the three
       in `STAGE2_REGEX_NO_BENIGN`), each with `params.variant`; their `flagged` / `blocked` outcome
       under `fallback=0.0` asserted by a generic test over `params.variant`, and the variant
       confirmed by spec 1's tests-side `stage2_record_hits(record)` over the text stage 2 received
@@ -255,14 +256,14 @@ offline fallback and made organic false positives unrepresentable.)*
       first hit) — so a probe that trips two regexes, e.g. a realistic `data:` URI that also reads as
       an encoded payload, covers both. A test asserts the coverage floor is computed over
       `over_defence_probe` records only, so an organic hit in a headline genre can never satisfy it.
-- [ ] **The sampler triages before writing**: a test asserts every candidate is rendered and driven
+- [x] **The sampler triages before writing**: a test asserts every candidate is rendered and driven
       through spec 1's `drive()` with `ReplayClassifier(fallback=0.0)` before it is written, that a
       driven `flagged` / `blocked` outcome and a set `params.variant` always coincide in the
       committed files, and that a tripping candidate is written with `pinned` set, its id listed as
       needs-variant, and — after the tests-side `name-variants` step — `params.variant` set, its genre
       unchanged — never moved to `over_defence_probe`, never rejected. A second test asserts the
       reject path is never reached with `reason == "stage2"`.
-- [ ] **The rejection count has a home, and a denominator**: the sampler emits
+- [x] **The rejection count has a home, and a denominator**: the sampler emits
       `{genre: {examined: n, rejections: {reason: count}}}` to a committed sidecar,
       **`tests/corpus/benign/sampler_stats.json`** — `rejections` is not a record and cannot ride in
       the `.jsonl`, so it needs its own file; `examined` is every candidate drawn, so spec 5 can
@@ -274,18 +275,18 @@ offline fallback and made organic false positives unrepresentable.)*
       rendered report. *(Added 2026-09-19, validation round 2 — round 1 put the honesty mechanism in
       one prose paragraph with no criterion, no test and no consumer; three reviewers found it
       discharged to a spec that never mentioned it.)*
-- [ ] **The offline fallback is a criterion, not an aside**: for every genre, if a source cannot be
+- [x] **The offline fallback is a criterion, not an aside**: for every genre, if a source cannot be
       fetched, Implementation Notes carry `not ingested — <reason>` and the records are written
       `source.kind: synthetic`; the per-genre floors still hold; a test asserts a genre's records are
       either all-third_party-with-revision or carry a recorded synthetic reason — never a silent mix.
-- [ ] Rejected-sources table in `tests/corpus/README.md` gains the share-alike / no-grant entries.
-- [ ] Implementation Notes record per genre: source, revision, seed, limit, records written,
+- [x] Rejected-sources table in `tests/corpus/README.md` gains the share-alike / no-grant entries.
+- [x] Implementation Notes record per genre: source, revision, seed, limit, records written,
       synthetic count, **rejection count by reason** (numbers and names only).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-002: Security prose and over-defence probes
 
@@ -332,20 +333,20 @@ measurement).
 - `NOTICE` entries for NotInject and each CC-BY paper (author list as the paper states).
 
 **Acceptance Criteria:**
-- [ ] Counts, provenance and fields as in the Independent Test; NotInject sampler test hermetic
+- [x] Counts, provenance and fields as in the Independent Test; NotInject sampler test hermetic
       (five-row fixture) with determinism and re-homing asserted.
-- [ ] Implementation Notes carry the per-genre outcome counts under `fallback=0.0` and the list of
+- [x] Implementation Notes carry the per-genre outcome counts under `fallback=0.0` and the list of
       record ids `blocked` by stage 2 (ids only) — the structural over-defence list — plus the ids
       of probes that missed their intended regex (misses, no `params.variant`).
-- [ ] Every US-002 record went through the drive-then-`name-variants` path; `params.variant` on
+- [x] Every US-002 record went through the drive-then-`name-variants` path; `params.variant` on
       these records is the observed first hit only (US-001's coincidence test covers them).
-- [ ] `NOTICE` complete for the sources used; rejected table updated (OWASP CC-BY-SA).
-- [ ] Lint-clean; `tests/corpus/README.md` states that `over_defence_probe` is reported separately.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] `NOTICE` complete for the sources used; rejected table updated (OWASP CC-BY-SA).
+- [x] Lint-clean; `tests/corpus/README.md` states that `over_defence_probe` is reported separately.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-003: Multilingual and long-form
 
@@ -390,16 +391,16 @@ fallback and triage additions contradicted, and this story carried no criterion 
   round-1 text called that smoke "superseded".)*
 
 **Acceptance Criteria:**
-- [ ] Counts, languages and window budgets as in the Independent Test; provenance and `NOTICE`
+- [x] Counts, languages and window budgets as in the Independent Test; provenance and `NOTICE`
       complete.
-- [ ] Directory-size lint (≤ 1.5 MB for `tests/corpus/attacks/` + `tests/corpus/benign/`) added and
+- [x] Directory-size lint (≤ 1.5 MB for `tests/corpus/attacks/` + `tests/corpus/benign/`) added and
       green.
-- [ ] Implementation Notes record the language × surface table and the `windows_min` histogram.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Implementation Notes record the language × surface table and the `windows_min` histogram.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-004: Search-shaped benigns — the structural false-positive families
 
@@ -489,19 +490,19 @@ recorded per regex in Implementation Notes.
   floors of their genre, not toward a `search` genre (there is none).
 
 **Acceptance Criteria:**
-- [ ] ≥ 40 `search` benign records; ≥ 24 regex-tagged; every `STAGE2_REGEX_NAMES` entry **except the
+- [x] ≥ 40 `search` benign records; ≥ 24 regex-tagged; every `STAGE2_REGEX_NAMES` entry **except the
       three in `STAGE2_REGEX_NO_BENIGN`** covered ≥ 2
       across the whole benign corpus (test); lint-clean.
-- [ ] Implementation Notes: per-regex outcome counts under `fallback=0.0` and the final benign totals
+- [x] Implementation Notes: per-regex outcome counts under `fallback=0.0` and the final benign totals
       (≥ 250; ≥ 15 per genre; ≥ 30 `over_defence_probe`; ≥ 6 languages; ≥ 20 with `windows_min ≥ 3`).
-- [ ] Zero runtime change (rulings 6, 6a) re-asserted at spec end: the `git diff --stat` set,
+- [x] Zero runtime change (rulings 6, 6a) re-asserted at spec end: the `git diff --stat` set,
       diffed against the epic branch's merge base with `main` (`git merge-base main HEAD`, ruling 6a), is empty,
       `derive_sanitizer_revision({})` unchanged, `scripts.export_contract --check` green.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ## Edge Cases
 
@@ -653,6 +654,408 @@ Implementation Notes as misses, with no variant (new US-002 criteria). The round
 
 <!-- Per story: source table (name, licence, revision, seed, limit, records), outcome counts under
 fallback=0.0, structural over-defence ids. Numbers and ids only. -->
+
+### US-001 (2026-09-25)
+
+**Offline fallback taken for every core genre.** No source was ingested in the
+execution session: the host download pre-step (Wikinews export, CPython `Doc/` at a
+tag, the Rust book `src/`, pinned README/CHANGELOG directories) was not run, so each
+genre is `not ingested — host download pre-step not run in this execution session`
+and its new records are `source.kind: synthetic` (`name: forage-synthetic`). The same
+reason is recorded machine-readably as `not_ingested` in
+`tests/corpus/benign/sampler_stats.json`. The sampler and all four adapters exist and
+are tested on fixtures; running them on the host is the follow-up that turns these
+genres external.
+
+| Genre | Source | Revision | sha256 | Seed | Limit | Written | Synthetic | Rejections |
+|-------|--------|----------|--------|------|-------|---------|-----------|------------|
+| news | wikinews — not ingested | — | — | — | — | 14 (ben-0011..0024) | 14 | none (examined 0) |
+| docs | cpython_docs — not ingested | — | — | — | — | 14 (ben-0025..0038) | 14 | none (examined 0) |
+| code | rust_book / readme_changelog — not ingested | — | — | — | — | 14 (ben-0039..0052) | 14 | none (examined 0) |
+| forum | no permissive source searched — synthetic | — | — | — | — | 14 (ben-0053..0066) | 14 | none (examined 0) |
+| ecommerce | no permissive source searched — synthetic | — | — | — | — | 14 (ben-0067..0080) | 14 | none (examined 0) |
+
+Each core genre now holds 15 records (the owned seed + 14 synthetic). Under
+`fallback=0.0` all 70 new headline records drive `clean`; the only headline organic
+hit remains seed `ben-0002` (`code`, `base64_run`).
+
+**Regex probes.** `ben-0081..ben-0122` (42 records, `over_defence_probe`, synthetic):
+two per stage-2 regex for all 21 names outside `STAGE2_REGEX_NO_BENIGN`, each named by
+`name-variants` (observed first hit) and driving `flagged` / `blocked`. The coverage
+floor counts only this genre (every regex in a probe's hit set).
+
+**Deviation:** `tests/test_corpus_harness.py::test_the_gate_never_passes_a_fallback`
+forbids any `fallback=` in `scripts/`; the sampler's specified triage
+(`ReplayClassifier(fallback=0.0)`) lives in `scripts/corpus/ingest/benign.py`, so that
+one file is exempted for the literal `0.0` only. `NOTICE` gains no entry: no
+third-party benign record was written.
+
+### US-002 (2026-09-25)
+
+**Both external sources were reachable and ingested** (no `not ingested` for this story).
+Inputs were prepared on the host outside the repository and pinned with
+`--input-sha256`; both samplers ran with the default seed `20260919`.
+
+| Genre | Source | Revision | Input sha256 | Limit | Examined | Written | Rejections |
+|-------|--------|----------|--------------|-------|----------|---------|------------|
+| over_defence_probe | NotInject (MIT) | `847ae76cf8fea5ed325429e569ae8cfef022d2e0` | `2539c93f28f5adcc6fe250efa37fcb92a0ead822600ba6dcde419e6a13910ef6` (JSONL converted from the three parquet files) | 40 | 40 | 40 (ben-0123..0162) | none |
+| security_prose | arXiv, CC-BY-4.0 papers | per paper: id + version (`v1` / `v2`) | `535c5497406ba18fcb173ea2dacd27c779a8ea625a9a5dd9884bbb614477ba62` | 14 | 16 | 14 (ben-0163..0176) | licence=2 |
+
+NotInject upstream files (sha256, at the revision above): subset one
+`5b1d3a8ec341205305efd8c6d2cabeb5ba0f594dd8726b08ee7fde1a46ddc6ec`, two
+`a5a8c1b3b851b0b5acc3b6caf8bfee26d7da631b2967dd31ca90358df8883feb`, three
+`d5c685b123570c092a0f374ba6bdf324b2026d905a2751a243eb2bb360d411a8`; dataset card
+`ffaf685021522a526f94af2047e5099ec6b7439a462c67e0ecaca0d631a0d43f`. NotInject has three subsets (one / two / three trigger words) and
+four slices (`Common Queries` 126, `Technique Queries` 87, `Multilingual` 84,
+`Virtual Creation` 42); the sampler stratifies on the **slice** (10 each at
+`--limit 40`), rotates page / search / text (14 / 13 / 13), and `lang` is en 30,
+zh 9, es 1. The two arXiv rejections are the two non-CC candidates the input
+carried on purpose (arXiv non-exclusive licence; CC BY-NC-ND): the licence
+refusal ran on real data, not only on a fixture. arXiv papers (14): abstract + the
+first section with ≥ 1 500 characters of prose; one `NOTICE` entry each.
+
+**Census (informational, not committed):** all 339 NotInject rows were driven
+structural-only on one surface each and **all 339 are `clean`**. A single trigger
+word is not a stage-2 phrase, so this slice measures the classifier (spec 4), not
+the regexes; the structural over-defence list below contains no NotInject id.
+
+**Outcomes under `fallback=0.0`** (`drive()`, `ReplayClassifier(fallback=0.0)`,
+`default` config; measured, not asserted):
+
+| Set | Records | clean | flagged | blocked |
+|-----|---------|-------|---------|---------|
+| US-002 records | 77 | 56 | 3 | 18 |
+| — NotInject | 40 | 40 | 0 | 0 |
+| — arXiv | 14 | 12 | 0 | 2 |
+| — owned `security_prose` | 13 | 3 | 3 | 7 |
+| — owned `over_defence_probe` | 10 | 1 | 0 | 9 |
+| genre `security_prose` (all) | 28 | 16 | 3 | 9 |
+| genre `over_defence_probe` (all, incl. US-001 probes) | 93 | 42 | 14 | 37 |
+
+**Structural over-defence list — US-002 records `blocked` by stage 2 (ids only):**
+ben-0167, ben-0171 (arXiv, organic hits); ben-0177, ben-0178, ben-0180, ben-0181,
+ben-0183, ben-0186, ben-0187 (owned `security_prose`); ben-0190, ben-0191, ben-0192,
+ben-0194, ben-0195, ben-0196, ben-0197, ben-0198, ben-0199 (owned
+`over_defence_probe`). `flagged` (SUSPICIOUS category): ben-0179, ben-0188, ben-0189.
+Two of fourteen real CC-BY papers block on their own introduction, both
+`ignore_previous`; the other twelve are clean.
+
+**Misses (no `params.variant`, drive `clean`, not counted toward any floor):**
+`ben-0193` — the recipe-step probe, intended regex `ignore_previous` (the pattern
+allows only "all" between its verb and "previous", as the spec predicted). It is
+the only miss: every other owned record with an `intended:` note trips it, and three
+owned `security_prose` records (ben-0182, ben-0184, ben-0185) were written with no
+trigger string and drive clean. A test pins the miss list to exactly `ben-0193`.
+
+**Path.** Every US-002 record — NotInject, arXiv and owned — was driven with
+`fallback=0.0`, `flagged` / `blocked` ones written with `pinned: ["flagged",
+"blocked"]` and listed as needs-variant, then named by `python -m tests.corpus_stage2
+name-variants`; the observed first hit is the only `params.variant`. It differs from the
+intended regex on two owned records: ben-0177 (intended `system_bracket`, first hit
+`ignore_previous`) and ben-0181 (intended `system_line`, first hit `assistant_line`);
+the intended regex is still in each record's hit set. US-001's coincidence test covers
+all of it.
+
+**Not done:** no CC-BY / MIT defence README or docs source was ingested (arXiv covers
+the external half; owned pages cover the rest) — the `readme_changelog` adapter can
+take one later as a `security_prose` source. `NOTICE` gains NotInject (among the MIT
+sources) and a CC-BY-4.0 section with one entry per paper (title, authors as the paper
+states them, version, record id). The rejected table gains the non-CC-BY arXiv row
+(OWASP CC-BY-SA was already there from US-001).
+
+Corpus size after this story: 199 benign records (93 `over_defence_probe`, 28
+`security_prose`), 1 094 838 bytes of JSONL under `tests/corpus/` — about 405 KB of
+headroom for US-003's 1.5 MB directory-size lint.
+
+### US-003 (2026-09-25)
+
+**Offline fallback taken for both genres** (attempt 2, after attempt 1 timed out):
+`multilingual` and `long_form` are each `not ingested — host download pre-step not run
+in this execution session` (other-language Wikinews editions, Python documentation
+translations, Project Gutenberg were not fetched). The reason is recorded as
+`not_ingested` in `tests/corpus/benign/sampler_stats.json`; new records are
+`source.kind: synthetic`, `name: forage-synthetic`. `NOTICE` gains no entry (no
+third-party record written).
+
+| Genre | Written | Synthetic | Owned seed | Rejections |
+|-------|---------|-----------|------------|------------|
+| multilingual | 32 (ben-0200..0231) | 32 | ben-0007, ben-0008 | none (examined 0) |
+| long_form | 20 (ben-0232..0251) | 20 | ben-0009 | none (examined 0) |
+
+**Language × surface** (`multilingual`, all 34 records incl. seeds):
+
+| lang | page | search | text | total |
+|------|------|--------|------|-------|
+| de | 2 | 1 | 1 | 4 |
+| fr | 2 | 1 | 1 | 4 |
+| es | 1 | 2 | 1 | 4 |
+| pt | 2 | 1 | 1 | 4 |
+| it | 1 | 2 | 1 | 4 |
+| ja | 1 | 1 | 2 | 4 |
+| zh | 1 | 2 | 1 | 4 |
+| ru | 2 | 1 | 1 | 4 |
+| ko | 0 | 1 | 1 | 2 |
+
+Eight non-English languages at ≥ 4 each (floor: 6). CJK records are short prose, well
+under any excerpt cap, so the 30 % CJK over-provision rule did not bind.
+
+**`windows_min` histogram** (`long_form`, all 21 records; authoring estimate
+`ceil((chars / 4.5 − 512) / 448) + 1` over the visible text, capped at 8 — not a
+measurement; spec 4 US-002 checks it): 3 → 1 (seed ben-0009), 4 → 9, 5 → 6, 6 → 3,
+7 → 2. New records are 6 641–13 205 characters of joined paragraph text, 10 `page` / 10 `text` (no
+`search`: its content is capped at 300 characters).
+
+**Outcomes under `fallback=0.0`** (`drive_structural_only`): all 55 records in both
+genres drive `clean`; no pins, no variants. One authoring draft (a build-tool docs page
+saying "adds a new task") tripped `new_directive` and was re-worded before commit —
+an authoring artefact, not an organic hit, so not recorded as a false positive.
+
+**Size.** JSONL under `tests/corpus/attacks/` + `benign/` is 1 314 651 bytes after this
+story; `tests/test_corpus_lint.py::test_record_jsonl_stays_under_the_size_cap` asserts
+≤ 1 500 000.
+
+### US-004 (2026-09-25)
+
+**49 `search` records, `ben-0252` … `ben-0300`, all `source.kind: synthetic`** (`name:
+forage-synthetic`). No external page carried over: the US-001 and US-003 genres took the
+offline fallback (nothing external to derive from) and the US-002 external records are
+long prose with no search-shaped counterpart. `NOTICE` and `sampler_stats.json` are
+unchanged (no third-party record written; `over_defence_probe` keeps its per-record
+provenance). All 49 were authored, driven with `fallback=0.0`, then named by
+`python -m tests.corpus_stage2 name-variants` (the observed first hit is the only
+`params.variant`); the tool appended 36 variants and touched no existing line.
+
+| Group | Ids | Genre | Records | Outcome (`fallback=0.0`) |
+|-------|-----|-------|---------|--------------------------|
+| Regex probes | ben-0252 … ben-0287 | `over_defence_probe` | 36 (31 `en`; de, es, ja, fr, zh one each) | 21 flagged, 15 blocked |
+| Parser-strip controls | ben-0288, ben-0289 | `over_defence_probe` | 2 | clean, no variant |
+| Clean controls | ben-0290 … ben-0300 | news 3 (0290–0292), ecommerce 2 (0293–0294), code 3 (0295–0297), docs 2 (0298–0299), forum 1 (0300) | 11 | clean, unpinned |
+
+All 36 probes trip exactly the regex they were written for (`intended:` is the last thing in
+each `notes`, and its regex is the whole hit set — no probe missed and none tripped a
+second regex), so `_US002_MISSES` is still exactly `ben-0193`. Every one of the 21 names
+outside `STAGE2_REGEX_NO_BENIGN` now has a `search`-surface probe.
+
+**URL-field probes (result URL carries the shape; title and snippet trip nothing):**
+ben-0268 (44-character spreadsheet document id in the path), ben-0269 (deep documentation
+path, one long dotless run), ben-0270 (click-id tracking parameter). Every other probe
+rides in the snippet, except two whose **title** carries it: ben-0273 (jobs page,
+`new_directive`) and ben-0275 (forum announcement, `admin_bracket`). No benign `search`
+record drives to a URL-rule omission (`invalid_url` / `blocked_url`); the existing
+coincidence test asserts it over all 114.
+
+**Parser-strip controls:** ben-0288 (raw tag-shaped markup in a chat-template snippet;
+entity-escaped twin ben-0254) and ben-0289 (a real anchor element pointing at a private
+address; visible-text twins ben-0280–0283). Both drive `clean`, and a test escapes their
+markup and confirms the scanner then fires, so the control is a genuine parser strip and
+not text that could never trip.
+
+**Per-regex outcomes under `fallback=0.0`** (`drive()`, `ReplayClassifier(fallback=0.0)`,
+`default` config; records carrying that `params.variant`, all surfaces — measured):
+
+| Regex | Tagged | flagged | blocked | of which `search` |
+|-------|--------|---------|---------|-------------------|
+| ignore_previous | 8 | 0 | 8 | 4 |
+| disregard_instructions | 5 | 0 | 5 | 1 |
+| new_directive | 5 | 0 | 5 | 3 |
+| system_bracket | 3 | 0 | 3 | 1 |
+| system_tag | 3 | 0 | 3 | 1 |
+| instructions_banner | 3 | 0 | 3 | 2 |
+| admin_bracket | 5 | 0 | 5 | 3 |
+| assistant_line | 7 | 0 | 7 | 2 |
+| system_line | 4 | 0 | 4 | 1 |
+| elevated_user | 5 | 0 | 5 | 2 |
+| base64_run | 12 | 12 | 0 | 9 |
+| rot13 | 4 | 4 | 0 | 2 |
+| hex_escape | 3 | 3 | 0 | 1 |
+| system_fence | 3 | 0 | 3 | 1 |
+| instructions_fence | 3 | 0 | 3 | 1 |
+| im_start | 4 | 0 | 4 | 1 |
+| endoftext | 3 | 0 | 3 | 1 |
+| data_uri | 5 | 5 | 0 | 3 |
+| javascript_scheme | 4 | 4 | 0 | 3 |
+| private_ip_href | 6 | 6 | 0 | 5 |
+| exfil_image | 5 | 5 | 0 | 2 |
+| poppy_bracket, poppy_line, envelope_breakout | 0 | 0 | 0 | 0 (exempt by name) |
+| **All** | **100** | **39** | **61** | **49** |
+
+No tagged record drives `clean`, and none is `neutralised`. The verdict follows the regex's
+category: every `instruction_override`, `authority_impersonation` and `prompt_boundary` name
+is `blocked`, every `encoded_payload`, `suspicious_url` and `exfil_beacon` name is `flagged`.
+
+**Final benign totals** (300 records, up from 251):
+
+| Floor | Required | Measured |
+|-------|----------|----------|
+| Benign records | ≥ 250 | 300 |
+| Per genre | ≥ 15 | news 18, docs 17, code 18, forum 16, ecommerce 17, security_prose 28, multilingual 34, long_form 21, over_defence_probe 131 |
+| `over_defence_probe` | ≥ 30 | 131 |
+| Languages | ≥ 6 | 10 tags (en, de, es, fr, it, ja, ko, pt, ru, zh) |
+| `windows_min ≥ 3` | ≥ 20 | 21 |
+| `search` records / regex-tagged | ≥ 40 / ≥ 24 | 114 / 49 |
+
+Surfaces: 114 `search`, 106 `page`, 80 `text`. JSONL under `tests/corpus/attacks/` +
+`benign/` is 1 354 747 bytes (cap 1 500 000).
+
+**Tests added** (`tests/test_corpus_ingest.py`, seven): the counts; the ≥ 2-per-regex
+coverage floor, derived from `STAGE2_REGEX_NAMES` minus `STAGE2_REGEX_NO_BENIGN` and crediting
+a probe only when its driven outcome is `flagged` / `blocked` **and** its variant is in
+`stage2_record_hits(record)` (then toward every regex in that set); a `search`-surface probe
+for every non-exempt name; the parser-strip controls; the URL-field probe set pinned by id
+with a check that the shape is in the URL forms and not in title or snippet (and that every
+other tagged `over_defence_probe` `search` record carries it in title or snippet); lang
+mix (mostly `en`, five siblings, all in `over_defence_probe`); and the spec-goal totals.
+`tests/corpus/README.md` gains a section on the search-shaped records.
+
+**Zero runtime change re-asserted** (rulings 6, 6a; base `40d1883`, `git merge-base main
+HEAD`): `git diff --stat "$(git merge-base main HEAD)" -- pipeline/ promptguard/ models.py
+retrieval_app.py cache.py url_validator.py model_fetcher.py contract/ config.yaml
+weights_manifest.json Dockerfile` is empty; `derive_sanitizer_revision({})` prints
+`021378efee6ab43f22b887af2f0c0c40ef76183a39802120fbfd0ca7a3a33900`, the value recorded in
+spec 1's notes and `docs/bootstrap-notes.md`; `uv run python -m scripts.export_contract
+--check` prints `export_contract OK`.
+
+### Host ingest — US-001 / US-003 follow-up (2026-09-27)
+
+The host download pre-step was run and the offline-fallback genres that have a
+permissive source were re-sampled from real text. The 94 synthetic stand-ins
+it replaces were deleted (`ben-0011`…`ben-0052`: news, docs, code;
+`ben-0200`…`ben-0251`: multilingual, long_form); ids are never reused, so the
+new records are `ben-0301`…`ben-0394`. The owned seeds, US-002's records, the
+US-004 search-shaped records (including the 11 synthetic clean controls in the
+headline genres) and `forum` / `ecommerce` are unchanged.
+
+**Inputs** (all under `$FORAGE_CORPUS_INPUTS/benign-host-2026-09-27/`,
+`$FORAGE_CORPUS_INPUTS` = `~/.cache/forage-corpus-inputs`; no credential was used
+or needed — every source is public):
+
+| Input | Command | Pin | sha256 |
+|-------|---------|-----|--------|
+| CPython `Doc/` | `curl -fsSL -o cpython-<sha>.tar.gz https://codeload.github.com/python/cpython/tar.gz/<sha>`, then `tar -xzf cpython-<sha>.tar.gz cpython-<sha>/Doc cpython-<sha>/LICENSE` | `8183fa5e3f78ca6ab862de7fb8b14f3d929421e0` (tag `v3.13.9`, resolved with `git ls-remote --tags https://github.com/python/cpython`) | tarball `75847d11f01bbadc218f8a7aa96bcdc406fb68c74576aa50f14346a39bf50404` |
+| Rust book `src/` | `curl -fsSL -o rust-book-<sha>.tar.gz https://codeload.github.com/rust-lang/book/tar.gz/<sha>`, then `tar -xzf … book-<sha>/src book-<sha>/LICENSE-MIT book-<sha>/LICENSE-APACHE` | `1500248d8f230566e4ec9f27fcbb8fe9e2898ab1` (`main`, resolved with `git ls-remote`) | tarball `e4d11084f9e46cb13d2563be7a970864c5236fce51043b9665082e017e42b0e2` |
+| READMEs / CHANGELOGs | per project, `curl -fsSL -o readmes/<owner>__<repo>@<sha>/<f> https://raw.githubusercontent.com/<owner>/<repo>/<sha>/<f>` for `<f>` in `README.md CHANGELOG.md LICENSE LICENSE-MIT` (a 404 is skipped) | `sharkdp/fd@ce97e473ebaec49697c07daa50a7bc2b32f713d2`, `sharkdp/bat@4987f76709aae3a1c4db723c53874c9ddcb0c4fd`, `astral-sh/ruff@7d73e4b6dafbc891563deae9d6eb33bd658055f5`, `astral-sh/uv@83736335ff7e2125cf38de8ed5689ff98ea75426`, `psf/requests@611c6162cbc4ac2020a2f91c7cfa4f3abf9bbb60` (each `HEAD` via `git ls-remote`) | per file, below |
+| English Wikinews | `python3 fetch_wikinews.py wikinews-en.jsonl 40 en` | per article: MediaWiki revision id | `860637eb4fb65d8766c3914c8f8abc172be65f360c3d8cc400ba3f984f662535` |
+| Other editions | `python3 fetch_wikinews.py wikinews-intl.jsonl 8 de es pt it ja zh ru` | per article: MediaWiki revision id | `4d4994571b12b63137ce64490bf99e23cf8bf1a424c411039a7bd73a5d3b3c18` |
+
+`fetch_wikinews.py` (host helper, kept beside its output; final version sha256
+`3faeb6bf50a090affd18cb3c010c941a3888aa99fa54f4bc664536ffdfd1d5aa`) is a
+MediaWiki API client with nothing but these calls, one second apart, retrying
+429 / 5xx with backoff: `meta=siteinfo&siprop=rightsinfo` (the edition's
+licence, mapped to `CC-BY-2.5` / `CC-BY-3.0` / `CC-BY-4.0`; anything else would
+be written as stated and refused by the sampler as `licence`);
+`list=logevents&letype=create&lenamespace=0&lestart=2026-09-27T00:00:00Z&leend=2024-01-01T00:00:00Z`
+(newest first — the deterministic candidate order); `prop=info` in batches of
+20 (keep existing, non-redirect main-namespace pages); and per kept title
+`prop=extracts|revisions|info&explaintext=1&exsectionformat=wiki&rvprop=ids`.
+An article is written when its lead (the extract before the first `==`
+section heading, so the Sources section is dropped) has at least 400
+characters (150 for ja / zh), until the per-edition cap. Each line carries
+`title`, `url` (the `?oldid=<revid>` permalink), `text`, `revision` (the revid),
+`lang` and `licence`.
+
+Three versions of the helper ran, with the same selection rule and order. The
+other-edition file came from the first version, which checked existence one
+title at a time. The English file came from the second
+(`b595724d47ef41e226c3e61be00b25d8e61492c23791fe4a195fa7bff93b5e7b`). It checked
+in batches of 50, because the English creation log (4 248 entries, most of them
+deleted drafts) made one title at a time impractically slow. The final version
+checks in batches of 20, because a CJK title batch of 50 exceeded the API's URI
+length limit (HTTP 414). A re-fetch of the other editions with the final version
+reproduced the committed input byte-for-byte for its first 46 lines (de, es, pt,
+it, ja, zh) before it was stopped. That is evidence the selection is
+reproducible; it is not a pin. The pin is the input sha256 above.
+
+**Licences.** Wikinews: `en`, `es`, `it`, `ja`, `pt`, `ru`, `zh` declare CC BY
+4.0 and `de` CC BY 2.5 (both in `THIRD_PARTY_LICENCES`); `fr` and `sv` declare
+CC BY-SA 4.0 and were not fetched (rejected table). Only articles *created*
+from 2024-01-01 were taken, and each record carries the licence its edition
+declared at fetch time; the declared licence is the site-wide one, not a
+per-article statement. CPython `Doc/` is PSF-2.0 (the `LICENSE` at the commit,
+reproduced in `NOTICE`); the Rust book is MIT / Apache-2.0 (recorded `MIT`);
+README licences were resolved per project directory: ruff `LICENSE` MIT, uv /
+bat / fd `LICENSE-MIT`, requests `LICENSE` Apache-2.0 (its `NOTICE`, fetched the
+same way, is quoted in the repository `NOTICE`).
+
+README / CHANGELOG sha256: ruff CHANGELOG `645ac525…17da`, README
+`6ebb66af…6360`; uv CHANGELOG `11320cc1…b9a`, README `57a84a5a…f704`; requests
+README `2a9268c9…c67b`; bat CHANGELOG `e3997f6b…09fa`, README `df367a65…a49f`;
+fd CHANGELOG `cf4539cf…fd9e`, README `9c4547aa…5811` (full values beside the
+files; the directory input is pinned by each project's commit SHA).
+
+**Sampler runs** (default seed `20260919`; from the repository root, `D` the
+input directory above, `CP` / `RB` the two commit SHAs):
+
+```bash
+uv run python -m scripts.corpus.ingest.benign --source cpython_docs      --input "$D/cpython-$CP/Doc/library" --revision $CP --limit 14 --excerpt-cap 2500
+uv run python -m scripts.corpus.ingest.benign --source rust_book         --input "$D/book-$RB/src"            --revision $RB --limit 7  --excerpt-cap 2500
+uv run python -m scripts.corpus.ingest.benign --source readme_changelog  --input "$D/readmes"                 --revision readmes-2026-09-27 --limit 7
+uv run python -m scripts.corpus.ingest.benign --source cpython_docs_long --input "$D/cpython-$CP/Doc/howto"   --revision $CP --limit 20 --excerpt-cap 8000
+uv run python -m scripts.corpus.ingest.benign --source wikinews_intl     --input "$D/wikinews-intl.jsonl" --input-sha256 4d4994571b12b63137ce64490bf99e23cf8bf1a424c411039a7bd73a5d3b3c18 --revision wikinews-intl-2026-09-27 --limit 32 --excerpt-cap 1500
+uv run python -m scripts.corpus.ingest.benign --source wikinews          --input "$D/wikinews-en.jsonl"   --input-sha256 860637eb4fb65d8766c3914c8f8abc172be65f360c3d8cc400ba3f984f662535 --revision wikinews-en-2026-09-27 --limit 14 --excerpt-cap 2500
+uv run python -m tests.corpus_stage2 name-variants tests/corpus/benign/<genre>.jsonl   # docs, code, long_form, multilingual, news
+```
+
+The `--revision` of the README and Wikinews runs names the collection only;
+every record carries its own pin (project SHA or article revid). The excerpt
+caps are below the spec's maxima (6 000; 20 000 for `long_form`) to keep the
+JSONL under the 1.5 MB lint: 1 427 053 bytes after this run.
+
+| Genre | Source | Records | Examined | Rejections | Organic stage-2 hits (`fallback=0.0`) |
+|-------|--------|---------|----------|------------|----------------------------------------|
+| news | `wikinews` (en) | 14 (`ben-0381`…`ben-0394`) | 14 | none | none — all `clean` |
+| docs | `cpython_docs` (`Doc/library`) | 14 (`ben-0301`…`ben-0314`) | 14 | none | `ben-0301` flagged, `hex_escape` |
+| code | `rust_book` (text) + `readme_changelog` (search) | 7 (`ben-0315`…`ben-0321`) + 7 (`ben-0322`…`ben-0328`) | 7 + 7 | none | `ben-0328` flagged, `base64_run` |
+| multilingual | `wikinews_intl` (de, es, it, ja, pt, ru, zh) | 32 (`ben-0349`…`ben-0380`) | 32 | none | none — all `clean` |
+| long_form | `cpython_docs_long` (`Doc/howto`) | 20 (`ben-0329`…`ben-0348`) | 25 | `too_short` 5 | `ben-0331`, `ben-0332` flagged, `base64_run` |
+
+The four organic hits are kept in their genres, pinned `["flagged",
+"blocked"]` with the variant `name-variants` observed (US-001's rule); they
+count toward their genre's FPR and never toward probe coverage. The `long_form`
+test's blanket "no pins" check was narrowed to what the spec says — a pin only
+on an organic hit, which carries a variant — and the README says so.
+
+**Composition after** (benign 300 records, unchanged total):
+
+| Genre | third_party | synthetic | owned | Before (third_party / synthetic / owned) |
+|-------|-------------|-----------|-------|-------------------------------------------|
+| news | 14 | 3 (US-004 controls) | 1 | 0 / 17 / 1 |
+| docs | 14 | 2 (US-004 controls) | 1 | 0 / 16 / 1 |
+| code | 14 | 3 (US-004 controls) | 1 | 0 / 17 / 1 |
+| forum | 0 | 15 | 1 | unchanged |
+| ecommerce | 0 | 16 | 1 | unchanged |
+| multilingual | 32 | 0 | 2 | 0 / 32 / 2 |
+| long_form | 20 | 0 | 1 | 0 / 20 / 1 |
+| security_prose | 14 | 0 | 14 | unchanged |
+| over_defence_probe | 40 | 80 | 11 | unchanged |
+| **All** | **148** | **119** | **33** | 54 / 213 / 33 |
+
+Multilingual language × surface (incl. the two owned seeds): de 6 (page 3,
+search 2, text 1), es 5, it 5, ja 6, pt 4, ru 4, zh 4 — seven languages at ≥ 4
+(the synthetic `fr` / `ko` records went with the stand-ins). `long_form`
+`windows_min` (authoring estimate, now computed by the sampler with the README
+formula): 3 → 2 (the owned seed and `ben-0346`), 4 → 19; the new records are
+10 `page` / 10 `text`, 6 041–7 961 visible characters.
+
+**Not ingested — `forum`, `ecommerce`** (reasons recorded as `not_ingested` in
+`sampler_stats.json`, replacing the old "pre-step not run" text): GitHub
+Discussions posts are not licensed under the repository licence and the forum
+PII rule is still open; no CC0 product catalogue was identified, and Open Food
+Facts is ODbL / CC-BY-SA. Both stay synthetic, which the report shows by
+provenance.
+
+**Code and test changes.** `benign.py`: Wikinews lines may pin their own
+`revision` / `licence` / `lang` (the language is the sampling stratum);
+`wikinews_intl` (every line must carry all three; each edition is its own
+source, `wikinews-<lang>`) and `cpython_docs_long` (excerpt cap 20 000, minimum
+6 000, `windows_min` estimate) sources; `read_cpython_docs` keeps the
+`Doc/`-relative URL for a subdirectory input; `--excerpt-cap` may lower a
+source's cap, never raise it; a run that examines candidates drops the genre's
+`not_ingested`. `sampler_stats.json` gains an optional `synthetic` reason for
+an ingested genre that keeps synthetic records on purpose (news, docs, code:
+the US-004 controls); the provenance tests accept exactly one of the two
+reasons and refuse `not_ingested` on an ingested genre. `NOTICE` gains a
+section with one entry per source and Wikinews edition (per-article revision
+ids, the PSF licence text, the project copyright lines).
 
 ## Refinement Notes
 

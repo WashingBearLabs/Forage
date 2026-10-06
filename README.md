@@ -49,6 +49,10 @@ Every fetched or searched document runs the same five stages:
 Stage 5 runs first chronologically for `/retrieve` and `/search` (it *is* the fetch);
 the numbering follows the sanitization order the contract reports.
 
+### Measured injection defence
+
+The stage 2 and stage 3 defences are measured, not asserted: a corpus of indirect prompt-injection attacks (search snippets, page bodies, page metadata, chunk-boundary interleavings) and a benign counter-corpus are driven through the real `/search`, `/retrieve` and `/extract` routes on every `uv run pytest`, and a change that moves a catch rate or false-positive rate fails the build. The numbers live in the generated `tests/corpus/baseline.json` and in the CI job summary, not here. Because CI has no model weights, the real classifier's scores are recorded once per model revision and replayed. The corpus lists, in public, what gets through; Forage is not a trust boundary. [`docs/corpus.md`](docs/corpus.md) explains what the numbers do and do not claim.
+
 ### HTTP surface
 
 <!-- boundary-text:start -->

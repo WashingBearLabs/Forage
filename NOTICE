@@ -36,3 +36,417 @@ containing the weights must carry those obligations forward.
 
 "Llama" and "Meta" are trademarks of Meta Platforms, Inc. Forage is not
 sponsored by, endorsed by, or affiliated with Meta Platforms, Inc.
+
+The score cassettes under tests/corpus/cassettes/ hold numeric outputs of
+`meta-llama/Llama-Prompt-Guard-2-22M` and, where recorded,
+`meta-llama/Llama-Prompt-Guard-2-86M`: per-window scores and window counts,
+keyed by the SHA-256 of each classified text, at the revision named in each
+file's name and `revision` field. They are outputs of Llama Materials and are
+governed by the Llama licence cited above. They hold no model internals (no
+weights, tokenizer or configuration) and no input text. They are test data
+only and none is shipped in the image.
+
+--------------------------------------------------------------------------
+Third-party corpus samples
+--------------------------------------------------------------------------
+
+The injection test corpus under tests/corpus/attacks/ carries capped,
+seed-fixed samples from three MIT-licensed datasets. The benign counter-corpus
+under tests/corpus/benign/ carries a fourth MIT-licensed dataset, NotInject,
+excerpts of CC-BY-4.0 arXiv papers (the next section after the MIT text), and
+excerpts of Wikinews, the Python documentation, the Rust book and project
+READMEs / changelogs (the last section).
+Every sampled payload was re-rendered (as a search snippet, a page body or a
+text upload, with every host rewritten to an RFC 2606 reserved name) by
+scripts/corpus/ingest/. These records are test data only; none is shipped
+in the image. Each record's `source` object names its dataset, licence,
+revision and upstream row.
+
+Source: AgentDojo
+  Upstream: https://github.com/ethz-spylab/agentdojo
+  Licence: MIT (LICENSE at the repository root)
+  Copyright (c) 2024 Edoardo Debenedetti, Jie Zhang, Mislav Balunovic, Luca Beurer-Kellner, Marc Fischer, and Florian Tramèr
+  Revision: 089ed468cf3ed0322acc66b0211f26d9d90dbf60
+  Records: atk-0273..atk-0312
+
+Source: LLMail-Inject
+  Upstream: https://huggingface.co/datasets/microsoft/llmail-inject-challenge
+  Licence: MIT (dataset card `license: mit`)
+  Copyright: the dataset repository publishes no copyright line or
+    LICENSE file; its card declares `license: mit` (publisher: Microsoft)
+  Revision: 1063bdf01ec8762b812d5e06ee768a06faa5a6f7
+  Records: atk-0313..atk-0372
+
+Source: CyberSecEval
+  Upstream: https://github.com/meta-llama/PurpleLlama
+  Licence: MIT (CybersecurityBenchmarks/LICENSE — only files under that
+    directory were taken; the repository root carries a different licence)
+  Copyright (c) Meta Platforms, Inc. and affiliates.
+  Revision: 4be64c3a24442b51c76175e6ec67722cc3f5fe38
+  Records: atk-0373..atk-0402
+
+Source: NotInject
+  Upstream: https://huggingface.co/datasets/leolee99/NotInject
+  Licence: MIT (dataset card `license: mit`)
+  Copyright: the dataset repository publishes no copyright line or
+    LICENSE file; its card declares `license: mit` (publisher: leolee99;
+    the InjecGuard work it accompanies is by Hao Li and Xiaogeng Liu)
+  Revision: 847ae76cf8fea5ed325429e569ae8cfef022d2e0
+  Records: ben-0123..ben-0162
+
+Each source is distributed under the MIT License:
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the
+    "Software"), to deal in the Software without restriction, including
+    without limitation the rights to use, copy, modify, merge, publish,
+    distribute, sublicense, and/or sell copies of the Software, and to
+    permit persons to whom the Software is furnished to do so, subject to
+    the following conditions:
+
+    The above copyright notice and this permission notice shall be included
+    in all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+    IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+    TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+    SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+--------------------------------------------------------------------------
+Third-party benign corpus text - CC-BY-4.0 arXiv papers
+--------------------------------------------------------------------------
+
+The `security_prose` genre under tests/corpus/benign/ carries excerpts of
+papers on prompt injection whose arXiv abstract page states the licence
+Creative Commons Attribution 4.0 International (CC BY 4.0):
+
+    https://creativecommons.org/licenses/by/4.0/
+
+Each record is the paper's abstract and one section, taken from the arXiv HTML
+version pinned below. Changes were made: the text was excerpted, reflowed as a
+web page, and every host it names was rewritten to an RFC 2606 reserved name
+by scripts/corpus/ingest/. Nothing here implies that the authors endorse this
+project. The authors are named as the paper states them.
+
+Source: arXiv:2606.20746
+  Title: Amplify, Don't Create: Temporal Accumulation for Slow-Burn Prompt Injection
+  Authors: J Alex Corll
+  Upstream: https://arxiv.org/abs/2606.20746v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0163
+
+Source: arXiv:2608.08795
+  Title: Toward Metacognitive One-Shot Indirect Prompt Injection: Strategy Abstraction Via Outcome-Conditioned Reflection
+  Authors: Sihan Hou, Xinmeng Hou, Zhijun Zhang, Zehao Wang, Xuhong Ren,
+    Sibo Qin, Kuntharrgyal Khysru, Qing Guo
+  Upstream: https://arxiv.org/abs/2608.08795v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0164
+
+Source: arXiv:2609.15017
+  Title: PIDS-Bench: Evaluating Prompt-Injection Detectors Under Over-Defense, Obfuscation, and Distribution Shift
+  Authors: Yusuf Khalid Shire, Sang-Chul Kim
+  Upstream: https://arxiv.org/abs/2609.15017v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0165
+
+Source: arXiv:2609.08371
+  Title: Authority Is Not a String: A Capability-Scoped Harness for Prompt-Injection-Resistant Coding Agents
+  Authors: Dimitrios Stamatios Bouras, Yihan Dai, Sergey Mechtaev
+  Upstream: https://arxiv.org/abs/2609.08371v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0166
+
+Source: arXiv:2608.28411
+  Title: LongPIBench: A Long-Context Benchmark for Prompt Injection
+  Authors: Yupei Liu, Yuqi Jia, Neil Zhenqiang Gong, Jinyuan Jia
+  Upstream: https://arxiv.org/abs/2608.28411v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0167
+
+Source: arXiv:2606.19660
+  Title: A Layered Security Framework Against Prompt Injection in RAG-Based Chatbots
+  Authors: Gulshan Saleem, Nisar Ahmed, Muhammad Imran Zaman, Ali Hassan,
+    Umar Mujahid
+  Upstream: https://arxiv.org/abs/2606.19660v2
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v2
+  Records: ben-0168
+
+Source: arXiv:2608.02657
+  Title: Your Agentic LLMs Secretly Encode Indirect Prompt-Injection Exposure in Hidden States
+  Authors: Jianshuo Dong, Yiming Liu, Maosen Zhang, Nan Deng, Peng Xu,
+    Xiaoping Zhang, Tianwei Zhang, Jie Zhang, Han Qiu
+  Upstream: https://arxiv.org/abs/2608.02657v2
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v2
+  Records: ben-0169
+
+Source: arXiv:2608.14876
+  Title: Workspace Topology as an Attack Vector in Agentic Coding Assistants
+  Authors: Alexandre G. R. Day, Pradeep Yadlapalli, Sriram Venkatapathy,
+    Thomas Paniagua, Nick Raines, Sahil Wadhwa, Himanshu Kumar, Andy Luo,
+    Sudeep Panyam, Rikhiya Ghosh, Pranab Mohanty, Giri Iyengar
+  Upstream: https://arxiv.org/abs/2608.14876v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0170
+
+Source: arXiv:2608.07808
+  Title: The Anatomy of a Prompt Injection: A Component Model for Structured Analysis
+  Authors: Jeremy McHugh
+  Upstream: https://arxiv.org/abs/2608.07808v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0171
+
+Source: arXiv:2609.10707
+  Title: Architecting the Secure AI-SOC: A Neurosymbolic Framework for Pipeline Integrity and Threat Mitigation
+  Authors: Anna Gazani, Spyridon Kounoupidis, Panagiotis Katsaros, Nikolaos
+    Kekatos, Grigorios Tsoumakas, Georgios Koutidis
+  Upstream: https://arxiv.org/abs/2609.10707v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0172
+
+Source: arXiv:2608.30362
+  Title: Will the User Ever Know? Covert Indirect Prompt Injection Attacks on Tool-Using LLM Agents
+  Authors: Yunseok Lee, Yunji Kim, Woojin Lee
+  Upstream: https://arxiv.org/abs/2608.30362v2
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v2
+  Records: ben-0173
+
+Source: arXiv:2606.30783
+  Title: Security--Fidelity Tradeoffs: The Hidden Cost of Prompt Injection Defense
+  Authors: Mitchell Hermon, Rahul Gupta, Weitong Ruan, Ekraam Sabir, Haohan
+    Wang
+  Upstream: https://arxiv.org/abs/2606.30783v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0174
+
+Source: arXiv:2608.05495
+  Title: PromptShield Home: Ambient Multimodal Prompt Injection Defense for Smart-Home Agents
+  Authors: He Zhang, Feilong Li, Dingning Long, Yilin Cui, Peijun Zhang,
+    Yuewen Zhang, Qianyao Xu, Xinyi Fu
+  Upstream: https://arxiv.org/abs/2608.05495v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0175
+
+Source: arXiv:2607.22024
+  Title: Agent Security Needs Redefinition through a Holistic Framework
+  Authors: Vincent Siu, Jingxuan He, Kyle Montgomery, Zhun Wang, Chenguang
+    Wang, Dawn Song
+  Upstream: https://arxiv.org/abs/2607.22024v1
+  Licence: CC-BY-4.0 (stated on the arXiv abstract page)
+  Revision: v1
+  Records: ben-0176
+
+--------------------------------------------------------------------------
+Third-party benign corpus text - Wikinews, Python documentation, Rust book,
+project READMEs and changelogs
+--------------------------------------------------------------------------
+
+The headline benign genres (`news`, `docs`, `code`) and `multilingual` /
+`long_form` under tests/corpus/benign/ carry excerpts of the permissively
+licensed sources below, sampled by scripts/corpus/ingest/benign.py. Changes
+were made: each text was excerpted (whole paragraphs, capped), reflowed as a
+web page, a search result or a text upload, and every host it names was
+rewritten to an RFC 2606 reserved name. Nothing here implies that any author
+endorses this project. Each record's `source` object names its upstream URL
+(for Wikinews, the article's oldid permalink; the record's title is the
+article's title), licence and revision.
+
+Source: wikinews
+  Upstream: https://en.wikinews.org/ (Wikinews contributors)
+  Licence: CC-BY-4.0 (the edition's declared licence, https://creativecommons.org/licenses/by/4.0/)
+  Pinned per article by MediaWiki revision id:
+    ben-0381 Revision: 4954220
+    ben-0382 Revision: 4878949
+    ben-0383 Revision: 5024646
+    ben-0384 Revision: 4878826
+    ben-0385 Revision: 4991136
+    ben-0386 Revision: 4975106
+    ben-0387 Revision: 5024656
+    ben-0388 Revision: 5013891
+    ben-0389 Revision: 4878676
+    ben-0390 Revision: 5024251
+    ben-0391 Revision: 5024638
+    ben-0392 Revision: 4927582
+    ben-0393 Revision: 4982875
+    ben-0394 Revision: 4955406
+
+Source: wikinews-de
+  Upstream: https://de.wikinews.org/ (Wikinews contributors)
+  Licence: CC-BY-2.5 (the edition's declared licence, https://creativecommons.org/licenses/by/2.5/)
+  Pinned per article by MediaWiki revision id:
+    ben-0349 Revision: 864807
+    ben-0356 Revision: 862744
+    ben-0363 Revision: 864749
+    ben-0370 Revision: 862712
+    ben-0377 Revision: 862709
+
+Source: wikinews-es
+  Upstream: https://es.wikinews.org/ (Wikinews contributors)
+  Licence: CC-BY-4.0 (the edition's declared licence, https://creativecommons.org/licenses/by/4.0/)
+  Pinned per article by MediaWiki revision id:
+    ben-0350 Revision: 732591
+    ben-0357 Revision: 722950
+    ben-0364 Revision: 731391
+    ben-0371 Revision: 722956
+    ben-0378 Revision: 732744
+
+Source: wikinews-it
+  Upstream: https://it.wikinews.org/ (Wikinews contributors)
+  Licence: CC-BY-4.0 (the edition's declared licence, https://creativecommons.org/licenses/by/4.0/)
+  Pinned per article by MediaWiki revision id:
+    ben-0351 Revision: 1008605
+    ben-0358 Revision: 1005688
+    ben-0365 Revision: 1005417
+    ben-0372 Revision: 1005418
+    ben-0379 Revision: 1005161
+
+Source: wikinews-ja
+  Upstream: https://ja.wikinews.org/ (Wikinews contributors)
+  Licence: CC-BY-4.0 (the edition's declared licence, https://creativecommons.org/licenses/by/4.0/)
+  Pinned per article by MediaWiki revision id:
+    ben-0352 Revision: 211507
+    ben-0359 Revision: 201202
+    ben-0366 Revision: 201172
+    ben-0373 Revision: 200565
+    ben-0380 Revision: 200513
+
+Source: wikinews-pt
+  Upstream: https://pt.wikinews.org/ (Wikinews contributors)
+  Licence: CC-BY-4.0 (the edition's declared licence, https://creativecommons.org/licenses/by/4.0/)
+  Pinned per article by MediaWiki revision id:
+    ben-0353 Revision: 596251
+    ben-0360 Revision: 596190
+    ben-0367 Revision: 596178
+    ben-0374 Revision: 596175
+
+Source: wikinews-ru
+  Upstream: https://ru.wikinews.org/ (Wikinews contributors)
+  Licence: CC-BY-4.0 (the edition's declared licence, https://creativecommons.org/licenses/by/4.0/)
+  Pinned per article by MediaWiki revision id:
+    ben-0354 Revision: 17986743
+    ben-0361 Revision: 17986732
+    ben-0368 Revision: 17986727
+    ben-0375 Revision: 17986720
+
+Source: wikinews-zh
+  Upstream: https://zh.wikinews.org/ (Wikinews contributors)
+  Licence: CC-BY-4.0 (the edition's declared licence, https://creativecommons.org/licenses/by/4.0/)
+  Pinned per article by MediaWiki revision id:
+    ben-0355 Revision: 285380
+    ben-0362 Revision: 286350
+    ben-0369 Revision: 280198
+    ben-0376 Revision: 275220
+
+Source: cpython_docs
+  Upstream: https://github.com/python/cpython/tree/8183fa5e3f78ca6ab862de7fb8b14f3d929421e0/Doc
+  Licence: PSF-2.0 (LICENSE at the revision below)
+  Copyright (c) 2001-2024 Python Software Foundation; All Rights Reserved
+  Revision: 8183fa5e3f78ca6ab862de7fb8b14f3d929421e0
+  Records: ben-0301..ben-0314 (Doc/library)
+
+Source: cpython_docs_long
+  Upstream: https://github.com/python/cpython/tree/8183fa5e3f78ca6ab862de7fb8b14f3d929421e0/Doc
+  Licence: PSF-2.0 (LICENSE at the revision below)
+  Copyright (c) 2001-2024 Python Software Foundation; All Rights Reserved
+  Revision: 8183fa5e3f78ca6ab862de7fb8b14f3d929421e0
+  Records: ben-0329..ben-0348 (Doc/howto)
+
+Source: rust_book
+  Upstream: https://github.com/rust-lang/book (The Rust Programming Language)
+  Licence: MIT (LICENSE-MIT; the book is dual MIT / Apache-2.0)
+  Copyright (c) 2010 The Rust Project Developers
+  Revision: 1500248d8f230566e4ec9f27fcbb8fe9e2898ab1
+  Records: ben-0315..ben-0321
+
+Source: readme_changelog
+  README / CHANGELOG files, each pinned by its project's commit SHA; the
+  licence is the one in that project's directory at that commit:
+  astral-sh/ruff: MIT (LICENSE); Copyright (c) 2022 Charles Marsh
+    https://github.com/astral-sh/ruff
+    Revision: 7d73e4b6dafbc891563deae9d6eb33bd658055f5
+    Records: ben-0322 (CHANGELOG.md)
+  astral-sh/uv: MIT (LICENSE-MIT); Copyright (c) 2025 Astral Software Inc.
+    https://github.com/astral-sh/uv
+    Revision: 83736335ff7e2125cf38de8ed5689ff98ea75426
+    Records: ben-0325 (README.md), ben-0326 (CHANGELOG.md)
+  psf/requests: Apache-2.0 (LICENSE); Copyright 2019 Kenneth Reitz (NOTICE)
+    https://github.com/psf/requests
+    Revision: 611c6162cbc4ac2020a2f91c7cfa4f3abf9bbb60
+    Records: ben-0324 (README.md)
+  sharkdp/bat: MIT (LICENSE-MIT); Copyright (c) 2018-2023 bat-developers (https://github.com/sharkdp/bat).
+    https://github.com/sharkdp/bat
+    Revision: 4987f76709aae3a1c4db723c53874c9ddcb0c4fd
+    Records: ben-0323 (README.md)
+  sharkdp/fd: MIT (LICENSE-MIT); Copyright (c) 2017-present The fd developers
+    https://github.com/sharkdp/fd
+    Revision: ce97e473ebaec49697c07daa50a7bc2b32f713d2
+    Records: ben-0327 (CHANGELOG.md), ben-0328 (README.md)
+
+The MIT sources above are distributed under the MIT License, whose text is
+reproduced in the section above; the Apache-2.0 source under the Apache
+License, Version 2.0 (the LICENSE file of this repository).
+
+The Python documentation is distributed under:
+
+    PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
+    --------------------------------------------
+
+    1. This LICENSE AGREEMENT is between the Python Software Foundation
+    ("PSF"), and the Individual or Organization ("Licensee") accessing and
+    otherwise using this software ("Python") in source or binary form and
+    its associated documentation.
+
+    2. Subject to the terms and conditions of this License Agreement, PSF hereby
+    grants Licensee a nonexclusive, royalty-free, world-wide license to reproduce,
+    analyze, test, perform and/or display publicly, prepare derivative works,
+    distribute, and otherwise use Python alone or in any derivative version,
+    provided, however, that PSF's License Agreement and PSF's notice of copyright,
+    i.e., "Copyright (c) 2001-2024 Python Software Foundation; All Rights Reserved"
+    are retained in Python alone or in any derivative version prepared by Licensee.
+
+    3. In the event Licensee prepares a derivative work that is based on
+    or incorporates Python or any part thereof, and wants to make
+    the derivative work available to others as provided herein, then
+    Licensee hereby agrees to include in any such work a brief summary of
+    the changes made to Python.
+
+    4. PSF is making Python available to Licensee on an "AS IS"
+    basis.  PSF MAKES NO REPRESENTATIONS OR WARRANTIES, EXPRESS OR
+    IMPLIED.  BY WAY OF EXAMPLE, BUT NOT LIMITATION, PSF MAKES NO AND
+    DISCLAIMS ANY REPRESENTATION OR WARRANTY OF MERCHANTABILITY OR FITNESS
+    FOR ANY PARTICULAR PURPOSE OR THAT THE USE OF PYTHON WILL NOT
+    INFRINGE ANY THIRD PARTY RIGHTS.
+
+    5. PSF SHALL NOT BE LIABLE TO LICENSEE OR ANY OTHER USERS OF PYTHON
+    FOR ANY INCIDENTAL, SPECIAL, OR CONSEQUENTIAL DAMAGES OR LOSS AS
+    A RESULT OF MODIFYING, DISTRIBUTING, OR OTHERWISE USING PYTHON,
+    OR ANY DERIVATIVE THEREOF, EVEN IF ADVISED OF THE POSSIBILITY THEREOF.
+
+    6. This License Agreement will automatically terminate upon a material
+    breach of its terms and conditions.
+
+    7. Nothing in this License Agreement shall be deemed to create any
+    relationship of agency, partnership, or joint venture between PSF and
+    Licensee.  This License Agreement does not grant permission to use PSF
+    trademarks or trade name in a trademark sense to endorse or promote
+    products or services of Licensee, or any third party.
+
+    8. By copying, installing or otherwise using Python, Licensee
+    agrees to be bound by the terms and conditions of this License
+    Agreement.

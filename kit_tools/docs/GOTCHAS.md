@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # GOTCHAS.md
 
-> Last updated: 2026-09-23
-> Updated by: Copilot (verified replacement release)
+> Last updated: 2026-09-25
+> Updated by: corpus-harness US-002
 
 ## Overview
 
@@ -15,6 +15,57 @@ live in, and losing them in the move was an identified risk.
 ---
 
 ## Active Gotchas
+
+### A corpus record is data — never quote it
+
+The injection corpus (`tests/corpus/`) holds hostile text on purpose, and the ways it
+escapes are all ordinary developer habits, not exploits: a failing `assert` that
+formats the payload into its message; pytest's own `where ... = <object>` line, which
+prints the `repr` of whatever the assertion touched; a log line or `print` in a
+helper; a commit message, issue or README that pastes an example; a docs build or an
+editor that *renders* an `.html` / `.md` fixture instead of showing it as text.
+A quoted payload that lands in an LLM-assisted workflow (a review bot, an agent
+reading a failed CI log) is a prompt injection delivered by the repo's own tests.
+
+The guards, each mechanical: records are stored **only** as `.jsonl` (a renderable
+extension under `tests/corpus/attacks/` or `benign/` fails the lint); the lint reports
+`<id>: <rule>` and never a value; `RouteResult.__repr__` prints ids and signals only;
+`UnrecordedRecordError` / `HarnessError` name ids, a route, a status and a closed token;
+and the way to write an outcome assertion is
+`assert result.outcome == "blocked", result.summary()`. Refer to a record by its `id`,
+always. `tests/test_corpus_harness.py` drives a record whose marker is a unique
+sentinel and asserts the sentinel is absent from the repr, both error types, the
+service's logs, captured output and a failing assertion's text. Nothing structural
+stops a *new* test from formatting a payload into a message — that rule rests on review
+and on that one targeted test.
+
+### A cassette miss is the guard; `sanitizer_revision` in a cassette is a note
+
+A cassette (`tests/corpus/cassettes/`) is replayed by `ReplayClassifier` with no
+fallback in CI, so a text it has no scores for raises `UnrecordedRecordError` — that
+miss is what catches a cassette gone stale. The `sanitizer_revision` the cassette
+carries is **informational**: `derive_sanitizer_revision()` rotates on refactors that
+leave stage-3 inputs untouched, and a mismatch there must not fail anything or force a
+re-record. Re-record when: a miss appears in CI; the manifest revision changes (the
+revision guard in `tests/test_corpus_record.py -k staleness` fails naming both values);
+the corpus gains texts; or a sanitizer change alters what stage 3 is sent
+(search-text normalisation, extraction, the stage-3 join). A torch / transformers
+difference from `uv.lock` is only a `cassette_versions_differ` warning. The filename
+embeds the revision, so rotating one means deleting the old file; the lint allows one
+cassette per model id. Procedure: `tests/corpus/README.md`.
+
+### A corpus drive must put `app.state` back — the app is a process singleton
+
+`retrieval_app.app` is one object for the whole test process, and its `state` outlives
+any single lifespan: `search_providers` is `None` at import, and the lifespan and the
+drivers overwrite `search_providers`, `cache` and `classifier`. A drive that leaves a
+`CorpusSearchProvider` behind makes a *later, unrelated* test's `/search` return a
+served result — `tests/test_orchestrator.py::test_post_search_endpoint_searxng_error`
+turned red only when the last drive before it happened to be a `search` record, so the
+leak passed for a whole story. `scripts/corpus/drivers.py::corpus_app` now restores all
+three on exit (and deletes an attribute that was absent before), and
+`test_a_drive_puts_back_the_app_state_it_overwrote` pins it. Any new driver, recorder or
+gate entry point must go through `corpus_app` rather than setting `app.state` itself.
 
 ### Real model configs can omit human-readable labels
 

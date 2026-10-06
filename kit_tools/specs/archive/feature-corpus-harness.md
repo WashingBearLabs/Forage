@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: corpus-harness
-status: active
+status: completed
 session_ready: true
 depends_on: [hardening-release]
 vision_ref: "T2.3 — Injection regression corpus (CI)"
@@ -12,7 +12,8 @@ epic_seq: 1
 epic_final: false
 execution_order: [US-001, US-002, US-003]
 created: 2026-09-19
-updated: 2026-09-24
+updated: 2026-09-26
+completed: 2026-09-26
 ---
 
 # Feature Spec: Corpus Harness — Record Format, Lint, Replay Classifier, Route Drivers, Outcome Model
@@ -187,15 +188,15 @@ offending value.
   Path = TESTS_CORPUS_ROOT)` so tests can point it at a temporary directory.
 
 **Acceptance Criteria:**
-- [ ] `scripts/corpus/records.py` defines `CorpusRecord` (frozen dataclass, `tests.fakes.assert_frozen`
+- [x] `scripts/corpus/records.py` defines `CorpusRecord` (frozen dataclass, `tests.fakes.assert_frozen`
       pins it), `load_corpus(root)`, `lint_corpus(records) -> list[CorpusLintError]`, and
       `CorpusLintError(record_id, rule)` whose message carries the id and rule only.
-- [ ] `scripts/corpus/vocab.py` holds the 16 attack categories, 9 benign genres, 3 surfaces, the
+- [x] `scripts/corpus/vocab.py` holds the 16 attack categories, 9 benign genres, 3 surfaces, the
       surface → payload-key map, the `params` key allowlist **per category and per genre** (see the
       note below), the permitted third-party licence ids, the RFC 2606 host rule, the secret-shape
       regexes, the size caps and the `MIN_RECORDS` floors — each as a typed constant with a one-line
       comment naming its ruling.
-- [ ] `scripts/corpus/vocab.py` also holds **`STAGE2_REGEX_NAMES`**: the closed, ordered tuple of
+- [x] `scripts/corpus/vocab.py` also holds **`STAGE2_REGEX_NAMES`**: the closed, ordered tuple of
       human names for the compiled patterns in `pipeline/stage2_structural.py` (24 at 403e9c5, by
       `_PATTERNS`), plus `STAGE2_REGEX_PROBES` mapping each name to the literal fixture substring
       that provokes it, and **`STAGE2_REGEX_NO_BENIGN`** — the three names exempt from spec 3's
@@ -208,7 +209,7 @@ offending value.
       of one genre's coverage test. `vocab.py` is spec 1's deliverable and the single source of every
       closed vocabulary — it belongs here, and spec 2's `notes` convention and spec 3's coverage test
       both read it.)*
-- [ ] Per-pattern identification is done by **running the patterns**, not by the public `category`
+- [x] Per-pattern identification is done by **running the patterns**, not by the public `category`
       field and not by probe literal: a helper `stage2_hits(text) -> frozenset[str]` returns
       `frozenset(name for name, (_, pattern) in zip(STAGE2_REGEX_NAMES, _PATTERNS) if
       pattern.search(text))`. It lives **tests-side** (`tests/corpus_stage2.py`), because
@@ -258,22 +259,22 @@ offending value.
       for any variable-width pattern — a base64 run, `disregard.*instructions`, the URL patterns — a
       real benign match never equals the probe, so the helper could not name the pattern for exactly
       the benign records spec 3's per-regex coverage test counts.)*
-- [ ] `tests/test_corpus_lint.py` parametrises every lint rule with a failing record and asserts the
+- [x] `tests/test_corpus_lint.py` parametrises every lint rule with a failing record and asserts the
       rule name in the error, the payload absent from the error text, and the seed corpus (US-003)
       lint-clean; the negative-control test covers every secret regex; the `MIN_RECORDS` test exists
       and skips with reason `"asserted from spec 5 US-002"`.
-- [ ] `tests/corpus/README.md` documents the record shape field by field, the outcome vocabulary
+- [x] `tests/corpus/README.md` documents the record shape field by field, the outcome vocabulary
       (ruling 9), the content rules (ruling 8), the add-a-record checklist, and states in its first
       paragraph that payload text is data never quoted elsewhere.
-- [ ] Records are stored only as `.jsonl` (non-renderable; finding 16) — a test asserts no `.html`
+- [x] Records are stored only as `.jsonl` (non-renderable; finding 16) — a test asserts no `.html`
       / `.htm` / `.md` file exists under `tests/corpus/attacks/` or `tests/corpus/benign/`.
-- [ ] `kit_tools/testing/TESTING_GUIDE.md` gains a mapping row for `tests/test_corpus_lint.py` and
+- [x] `kit_tools/testing/TESTING_GUIDE.md` gains a mapping row for `tests/test_corpus_lint.py` and
       a `tests/corpus/` fixtures row; the test count line is updated.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-002: Replay classifier, route drivers and the outcome model
 
@@ -558,36 +559,36 @@ green.
   patches are the only network seams; `tests/test_hermeticity.py` is untouched.
 
 **Acceptance Criteria:**
-- [ ] `scripts/corpus/replay.py::ReplayClassifier` satisfies the stage-3 seam (`loaded`,
+- [x] `scripts/corpus/replay.py::ReplayClassifier` satisfies the stage-3 seam (`loaded`,
       `classify_windows`, `classify`), applies `max_chunks` with `PromptGuardBudgetExceededError`,
       returns placeholder chunk labels, and raises `UnrecordedTextError` on a miss — each pinned by a
       test; the `fallback` path is documented as test-only.
-- [ ] `scripts/corpus/drivers.py` exposes `corpus_app(...)`, `drive(record, classifier, *, config)
+- [x] `scripts/corpus/drivers.py` exposes `corpus_app(...)`, `drive(record, classifier, *, config)
       -> RouteResult` and `drive_all(records, classifier, *, configs) -> list[RouteResult]`; every
       request goes through `httpx.ASGITransport` with the lifespan booted; the `contiguity` config
       boots with the two keys set and a test asserts the boot-time validation saw them (a
       `[0.6, 0.6]` replay on a `search` record is `blocked` under `contiguity` and `flagged` under
       `default`).
-- [ ] `corpus_app` is hermetic against the caller's shell: a test boots it with `VALKEY_URL` set to
+- [x] `corpus_app` is hermetic against the caller's shell: a test boots it with `VALKEY_URL` set to
       an unreachable value and `FORAGE_MODEL_ID` set to a non-allowlisted id and still drives a
       record to a `RouteResult`; `RouteResult.model_id` equals the `ReplayClassifier`'s `model_id`.
-- [ ] `scripts/corpus/` imports nothing from `tests` (a test greps `scripts/corpus/*.py` for
+- [x] `scripts/corpus/` imports nothing from `tests` (a test greps `scripts/corpus/*.py` for
       `tests` imports); `scripts/corpus/doubles.py`'s `CorpusSearchProvider` and
       `CorpusContentCache` are pinned by a conformance test against the `SearchProvider` protocol
       and the `ContentCache` methods the service calls.
-- [ ] Error responses go through the closed `BLOCKING_ERRORS` map: a mapped row is `blocked`
+- [x] Error responses go through the closed `BLOCKING_ERRORS` map: a mapped row is `blocked`
       with `status_code`, `omit_reason` and `refusal = True` in `signals` (test cases: a
       harness-only `text` fixture with no visible text — built directly, deliberately bypassing the
       corpus lint, so it is not a committable record — → `/extract` 422 `unsupported_format`; a synthetic `/retrieve`
       `content_too_large` / `promptguard_budget` body); an unmapped one (a 429 `busy` and a
       `/retrieve` 422 `busy` are the test cases) raises a harness error whose message names record
       id, route, status and `error` and no payload text.
-- [ ] The Independent Test's outcome cases pass on all three routes: `blocked`, `flagged`,
+- [x] The Independent Test's outcome cases pass on all three routes: `blocked`, `flagged`,
       `neutralised`, `leaked`, `clean`, including a `page` record whose marker sits only in a stripped
       tag (`_DANGEROUS_TAGS`, `pipeline/stage1_extraction.py` ~:38-49) → `neutralised`.
-- [ ] `UnrecordedRecordError` names record id, route, config, model id and an 8-character sha
+- [x] `UnrecordedRecordError` names record id, route, config, model id and an 8-character sha
       prefix; a test asserts the payload is absent from its message.
-- [ ] The leak check ignores `injection_spans` and nothing else; a **unit test of the JSON walker
+- [x] The leak check ignores `injection_spans` and nothing else; a **unit test of the JSON walker
       over a synthetic body** with the marker present only in `injection_spans` yields `blocked`,
       not `leaked`. It cannot be an end-to-end drive: through the real app `injection_spans` never
       carries record text — every blocked result goes through `finalize_quarantine`, which sets it
@@ -596,32 +597,32 @@ green.
       placeholders. An end-to-end assertion pins that: on a blocked drive, `injection_spans` is
       exactly one member of the stage-4 diagnostic vocabulary, so the exclusion cannot quietly hide
       a future change that puts text back there. *(Clarified 2026-09-24, validation round 4.)*
-- [ ] The leak check runs on **every** drive and `signals["marker_on_wire"]` is set independently of
+- [x] The leak check runs on **every** drive and `signals["marker_on_wire"]` is set independently of
       the outcome: a `page` record whose payload sits in the document title is driven through
       `/retrieve`, and the test asserts `outcome == "blocked"` **and** `marker_on_wire is True`
       (`finalize_quarantine` passes `title` through verbatim).
-- [ ] The leak-check normaliser is `pipeline.stage1_extraction.normalize_text` + `casefold`, applied
+- [x] The leak-check normaliser is `pipeline.stage1_extraction.normalize_text` + `casefold`, applied
       to both marker and wire text, with no codepoint list of its own; a test feeds a string holding
       all nine `_INVISIBLE_CHARS` members and asserts the corpus normaliser and `normalize_text`
       agree. A second test drives a `zwsp`-variant record whose marker spans the obfuscated token and
       asserts the leak is seen (it is `leaked`, not `neutralised`).
-- [ ] A per-variant test asserts every obfuscation variant's marker survives its own transform —
+- [x] A per-variant test asserts every obfuscation variant's marker survives its own transform —
       the normalised marker is a substring of the normalised post-pipeline payload.
-- [ ] A test asserts the gate's entry point passes `fallback=None` — the promise Goal 2 makes about
+- [x] A test asserts the gate's entry point passes `fallback=None` — the promise Goal 2 makes about
       the test-only `fallback` escape hatch, which round 1 stated without giving it a home. It lives
       here because spec 1 owns `ReplayClassifier`; spec 5 US-002's gate is what it reads.
-- [ ] A test asserts that with `classifier=None` (the unavailable path) the driver still returns a
+- [x] A test asserts that with `classifier=None` (the unavailable path) the driver still returns a
       `RouteResult` (`blocked` via `promptguard_unavailable` / `unavailable_blocked` under fail-closed)
       so the structural-only measurement is possible without a cassette.
-- [ ] No payload text in any `repr`, error message or captured output — asserted as described.
-- [ ] `kit_tools/testing/TESTING_GUIDE.md` gains rows for `tests/test_corpus_harness.py` and
+- [x] No payload text in any `repr`, error message or captured output — asserted as described.
+- [x] `kit_tools/testing/TESTING_GUIDE.md` gains rows for `tests/test_corpus_harness.py` and
       `scripts/corpus/`; `kit_tools/docs/GOTCHAS.md` gains "A corpus record is data — never quote it"
       (the leak paths: assertion output, docs builds, editors rendering HTML fixtures; finding 16).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-003: Seed records — the handoff vectors, one per category, and a benign handful
 
@@ -692,16 +693,16 @@ lint-clean.
   stay skipped (US-001).
 
 **Acceptance Criteria:**
-- [ ] Seed corpus: ≥ 22 attack records (the pins above + one per category + the six carriers) and
+- [x] Seed corpus: ≥ 22 attack records (the pins above + one per category + the six carriers) and
       ≥ 10 benign records, lint-clean, every file under `tests/corpus/attacks/` and `tests/corpus/benign/`
       named by category / genre.
-- [ ] The Independent Test's assertions hold, including the explicit `leaked` expectation for
+- [x] The Independent Test's assertions hold, including the explicit `leaked` expectation for
       `natural_language` / `authority_seo` under `fallback=0.0` and the `flagged` expectation for the
       git-SHA `code` benign.
-- [ ] Pinned outcomes are asserted by a generic test (`for record in records if record.pinned`)
+- [x] Pinned outcomes are asserted by a generic test (`for record in records if record.pinned`)
       that reads the pin from the record — no per-record test code.
-- [ ] `tests/corpus/README.md` lists the seed's pinned records with their audit ids (ids only).
-- [ ] Zero runtime change (rulings 6, 6a): `git diff --stat
+- [x] `tests/corpus/README.md` lists the seed's pinned records with their audit ids (ids only).
+- [x] Zero runtime change (rulings 6, 6a): `git diff --stat
       "$(git merge-base main HEAD)" -- pipeline/ promptguard/ models.py
       retrieval_app.py cache.py url_validator.py model_fetcher.py contract/ config.yaml
       weights_manifest.json Dockerfile` is empty (spec 0's completion tag, not `main` — spec 0 is
@@ -710,11 +711,11 @@ lint-clean.
       `FORAGE_MODEL_REVISION` unset, equals the value recorded in this spec's Implementation Notes
       at story start (taken on that tag); `uv run python -m scripts.export_contract --check` is
       green.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ## Edge Cases
 
@@ -923,6 +924,195 @@ empty-body failure — a 200 with `body == ""`); the ruling-15 boot mechanism ch
 raw-NUL split-token record's measured outcome. Also record, once, that the reviewer-sampled
 assumptions held at 403e9c5 (stage 3 calls only `classify_windows`; the contiguity keys' defaults
 `0` / `0.5`; `PromptGuardResult.rule` exists and is not on the wire). -->
+
+### US-002 — 2026-09-25 (implementation, branch base `40d1883`)
+
+**Measured at story start** (merge base of the epic branch with `main` = `40d1883`; spec 0 has not
+merged):
+
+- `derive_sanitizer_revision({})`, `FORAGE_MODEL_ID` / `FORAGE_MODEL_REVISION` unset:
+  `021378efee6ab43f22b887af2f0c0c40ef76183a39802120fbfd0ca7a3a33900` — reproduces the 403e9c5
+  value. US-003's zero-runtime-change criterion compares against this.
+- Stage-3 seam: `classify_windows(self, text: str, *, max_chunks: int | None = None) ->
+  tuple[list[float], list[str]]` (`promptguard/classifier.py` :260; the budget raise :283).
+  `run_promptguard` calls **only** `classify_windows` (`asyncio.to_thread(classifier.classify_windows,
+  text, max_chunks=max_chunks)`); `classify()` delegates to it and pools with `max`.
+- Search-time stage-3 join: `f"Title: {title}\nURL: {url}\nSnippet: {snippet}"`
+  (`_search_result_promptguard_input`, `pipeline/orchestrator.py` :1285) — unchanged.
+- Re-grepped anchors (symbol : line at `40d1883`): `_load_config` :488, `_select_cache_storage`
+  :312, `_resolved_search_providers` :387, `ExtractionAdmissionMiddleware` :1507, `lifespan` :1642,
+  `retrieve` :2283, `extract` :2417, `search` :2534 (all `retrieval_app.py`);
+  `run_retrieve_pipeline` :346, `run_search_pipeline` :1604 (`pipeline/orchestrator.py`);
+  `RETRY_INITIAL_BACKOFF_S` :243, `acquire_and_load` :1630, `resolve_model_id` :938
+  (`model_fetcher.py`); `FetchResult` :56 (`stage5_url_audit.py`); `normalize_text` :113
+  (`stage1_extraction.py`); `apply_request_policy` :35 (`search_providers/policy.py`);
+  `finalize_quarantine` :179 (`stage4_structuring.py`); `promptguard_settings_from_config` :44
+  (`stage3_promptguard.py`); `_running_app` :1278, `_started_with_valkey_url` :3573
+  (`tests/test_app.py`).
+- `ContentCache` call surface — pinned by `tests/test_corpus_harness.py` from an AST walk of
+  `retrieval_app.py` and `pipeline/orchestrator.py`: `connect`, `close` (lifespan), `ping_if_due`
+  (`/health`), `get`, `put`, `delete` (`run_retrieve_pipeline`). **Nothing reads an attribute of the
+  cache object**, so `CorpusContentCache` does *not* carry the `metrics` attribute the spec
+  sketched (`ContentCache` itself keeps its metrics private); the call surface is those six
+  methods, with signatures compared to the real ones.
+- `BLOCKING_ERRORS`, each row re-measured by a mini drive through the real app: `/extract` empty /
+  whitespace-only / NUL text → 422 `unsupported_format` ✓; `/extract` 115 000 characters → 422
+  `content_too_large_to_classify` (character ceiling) ✓, and a 65-window replay → the same code
+  via `PromptGuardBudgetExceededError` ✓; `/retrieve` with `retrieve.max_promptguard_chunks`
+  lowered to 1 and a 2-window replay → 422 `content_too_large` / `promptguard_budget` ✓. All three
+  rows reproduce; none removed. Measured non-rows: `/retrieve` of a document with empty title and
+  body → 200, `body == ""`, `promptguard_state == "scanned"` (a document *with* a title serves the
+  title text as its body); real 429 `busy` on `/extract` and 422 `busy` on `/retrieve` (admission
+  controller refusing at queue depth 0) and 404 with the route disabled → each a `HarnessError`.
+- Ruling-15 boot mechanism: **`acquire_and_load` patched never to load, plus the post-entry swap**
+  (`app.state.classifier = classifier` after `lifespan` starts) — not the `PromptGuardClassifier`
+  factory patch, so `ReplayClassifier` carries no `configure_threads`. With `classifier=None` nothing
+  is installed and the lifespan's own unloaded classifier stays (the weight-less boot).
+- Reviewer-sampled assumptions held: stage 3 calls only `classify_windows`; the contiguity keys'
+  defaults are `0` / `0.5` (a test asserts `PromptGuardSettings(0, 0.5)` vs `(2, 0.5)` at boot);
+  `PromptGuardResult.rule` exists and is not on the wire (no response model has a `rule` field).
+
+**Decisions the spec left open** (each deliberate; spec 5 should read them):
+
+- `Signals` is a frozen `Mapping[str, object]` dataclass with **eleven** typed keys (`rule` is not
+  one — it is not on the wire; spec 5 reads it from `ReplayClassifier.calls`, which stores hash,
+  length and scores per answered call). Sequences are **tuples** (`window_scores`,
+  `structural_flags`) so the mapping is really frozen, where the spec sketched `list`s. `None` means
+  *not applicable to this route* (`suspicious` off `/search`; `injection_detected` and
+  `promptguard_state` on `/search`) — and, for `score`, that no window was replayed (structural block,
+  refusal, unavailable classifier), which is why `score` is not `0.0` there.
+- `RouteResult.route` holds the path (`"/search"`, `"/retrieve"`, `"/extract"`).
+  `classifier=None` reports `model_id == "unavailable"` (`NO_CLASSIFIER_MODEL_ID`).
+- `drive_all` returns results grouped by config in the order given, each group in record order; it
+  boots one lifespan per config. `exchange(client, record) -> WireExchange` is the public seam that
+  returns the raw wire, for tests that must see the body (the end-to-end `injection_spans` pin).
+- The leak walker collects dict **keys** as well as values; only a key named `injection_spans`
+  (its whole value, at any depth) is ignored.
+- `corpus_app` reads `config.yaml` itself instead of calling `retrieval_app._load_config`
+  (private, and pyright strict outside `tests/`); a test asserts the two agree.
+- A drive that finds the same record answered by more than one stage-3 call raises
+  `HarnessError(..., "multiple_classifications")`; a `/search` response that is neither one served
+  result nor one omission raises `unexpected_shape`.
+- "The gate's entry point passes `fallback=None`" has no entry point yet (spec 5). The test asserts
+  the constructor default is `None` and AST-scans every `scripts/**/*.py` for a `ReplayClassifier(...)`
+  call passing anything but a literal `None`, so spec 5's gate is covered the day it lands.
+
+**Findings for later specs:**
+
+- **A marker spanning a tag boundary can never be seen on the wire.** `extract_html` joins text with
+  `\n` and `normalize_text` preserves newlines, so `<p>… the <b>session</b> notes …</p>` reaches
+  the consumer as `the\nsession\nnotes` while the marker reads `the session notes`. The lint's
+  `marker_in_payload` rule already rejects such a record (US-001), which is what keeps it out of the
+  corpus; `test_a_marker_split_by_a_tag_is_a_lint_failure_not_a_missed_leak` pins both halves. Spec 2's
+  `split_tags` records must put the tag boundary outside the marker (the per-variant test's case does).
+- `/search` can drive `neutralised` end to end (an HTML comment or `<script>` in the snippet is
+  stripped); `/extract` cannot (a plain-text upload is served whole), so its `neutralised` case is
+  read from a synthetic wire body through the same pure `interpret_response`.
+- The service logged no record text through the `/search` drive the sentinel test makes (`caplog` at
+  DEBUG, plus captured stdout / stderr); the other two routes are not covered by that check.
+- The stage-2 drift guard (`stage2_record_hits` non-empty iff the driven result carries a stage-2
+  signal) landed here over ten synthetic records; US-003 should extend it over the seed corpus.
+- Not done here, by scope: the raw-NUL split-token record's measured outcome (US-003).
+
+### US-003 — 2026-09-25 (implementation, branch base `40d1883`)
+
+**Measured at story start and again at story end** (merge base of the epic branch with `main` =
+`40d1883`; spec 0 has not merged):
+
+- `derive_sanitizer_revision({})`, `FORAGE_MODEL_ID` / `FORAGE_MODEL_REVISION` unset:
+  `021378efee6ab43f22b887af2f0c0c40ef76183a39802120fbfd0ca7a3a33900` — the value US-002 recorded, unchanged.
+- The ruling-6 `git diff --stat "$(git merge-base main HEAD)" -- pipeline/ promptguard/ models.py
+  retrieval_app.py cache.py url_validator.py model_fetcher.py contract/ config.yaml
+  weights_manifest.json Dockerfile` is empty; `uv run python -m scripts.export_contract --check` is green.
+  The story touches `scripts/corpus/`, `tests/`, `tests/corpus/` and docs only.
+
+**The seed** — 25 attack records (`atk-0001` … `atk-0025`) and 10 benign (`ben-0001` … `ben-0010`),
+all `source.kind: owned`, in 16 attack files and 9 benign files named by category / genre. Driven
+through the real routes with `ReplayClassifier(fallback=0.0)`; ids and outcomes only:
+
+| id | category | route | outcome under `fallback=0.0` |
+|----|----------|-------|------------------------------|
+| `atk-0001` `-0002` `-0003` | `instruction_override` / `authority_impersonation` / `prompt_boundary` | `/retrieve` `/extract` `/retrieve` | `blocked` (`structural_blocked`) |
+| `atk-0004` `-0005` `-0006` `-0007` | `encoded_payload` / `suspicious_url` / `exfil_beacon` / `envelope_breakout` | `/search` `/extract` `/extract` `/retrieve` | `flagged` |
+| `atk-0008` (pinned, -016) | `line_anchored_role` | `/search` | `blocked` — `structural_blocked`, on the snippet field |
+| `atk-0009` (pinned, -032, path) | `url_borne_envelope` | `/search` | `blocked` — `invalid_url`, rule `raw_chars` (raw angle brackets never reach stage 2) |
+| `atk-0010` (pinned, -032, query) | `url_borne_envelope` | `/search` | `blocked` — `structural_blocked` on the **url** field (percent-decoded scan text; the envelope alone is SUSPICIOUS, the record also carries a BLOCK token) |
+| `atk-0011` (pinned, -032, zone id) | `url_borne_envelope` | `/search` | `blocked` — `invalid_url`, rule `raw_chars` |
+| `atk-0012` `-0013` | `natural_language` / `authority_seo` | `/retrieve` `/search` | `leaked` |
+| `atk-0014` `-0015` `-0016` (pinned) | `hidden_markup`: `jsonld_offers` / `meta_description` / `og_description` | `/retrieve` | `neutralised` |
+| `atk-0017` `-0018` `-0019` | `hidden_markup`: `css_offscreen` / `hidden_div` / `title_stuffing` | `/retrieve` | `leaked` |
+| `atk-0020` `-0021` `-0022` `-0023` | `boundary_straddle` / `density_thinned` / `repetition_camouflage` / `sustained_midband` | `/retrieve` | `leaked` (stage-2-clean; one replayed window each — window counts are not asserted) |
+| `atk-0024` (pinned, R26) | `line_anchored_role` | `/search` | `blocked` — `structural_blocked`, on the title field |
+| `atk-0025` (pinned, R26) | `instruction_override` | `/search` | `blocked` — `structural_blocked`, on the title field |
+
+Attack totals: `blocked` 9, `flagged` 4, `neutralised` 3, `leaked` 9 (surfaces: 14 `page`, 8 `search`,
+3 `text`). Benign: 9 `clean` and `ben-0002` (`code`, a 40-hex commit id in the result URL) `flagged` by
+`base64_run`, pinned `["flagged", "blocked"]` with `params.variant: base64_run` and asserted exactly
+`flagged`.
+
+**The raw-NUL split-token record's measured outcome** (`atk-0025`, the item the notes header asks
+for): a raw NUL splits `[SYSTEM]` (`system_bracket`, a non-line-anchored BLOCK pattern) inside the
+**title**. Measured through the real app: `blocked`, `omit_reason == structural_blocked`, the
+`search_result_omitted` log naming `field=title`, `marker_on_wire == False`. That is what the strip-then-scan
+order promises, so the pin is `["blocked"]`. The test also shows the block is attributable to the
+pre-parser control strip and nothing else: the raw title is stage-2-clean, the NUL-stripped title trips
+exactly `system_bracket`, and is not line-anchored. Mutation-checked: removing the first
+`_CONTROL_CHARS_RE.sub` in `_scan_forms_for_search_text` turns four tests red (the pin, the per-category
+table, the record's own test and the own-category guard). `atk-0024` (double entity, `&amp;#83;ystem`)
+is clean raw and after one decode and trips exactly `system_line` after two; removing the
+`html.unescape` turns the pin and the table red.
+
+**Decisions the spec left open** (each deliberate; specs 2 and 4 should read them):
+
+- **A third URL exception, `ipv6_zone`** (`vocab.URL_EXCEPTIONS`, `records._url_allowed`). The audit -032
+  zone-id vector needs an IPv6 literal host, which is neither an RFC 2606 name nor an RFC 1918 address, so
+  the seed record `atk-0011` could not be lint-clean under US-001's two exceptions — and spec 2 explicitly
+  leaves that shape to this seed. The exception admits only a link-local (`fe80::/10`) or documentation
+  (`2001:db8::/32`) literal, with or without a zone id, and only when the record declares it; tests cover
+  both kinds, the range restriction and that a declared exception does not admit another shape. Spec 2's
+  sentence "spec 1's lint has no exception for it" is now stale.
+- **The zone-id record uses the opening tag.** A closing envelope tag cannot sit in a bracketed host: its `/`
+  ends the netloc and `urlsplit` raises `ValueError` (measured on 3.12). Both forms are `invalid_url`.
+- **Carrier names follow this story**, `jsonld_offers` rather than spec 2 US-002's closed-list `jsonld`;
+  `params.carrier` has no vocabulary constant yet, so spec 2 reconciles the name when it defines the list.
+- **The seed ends at `atk-0025` / `ben-0010`**, not the `atk-0023` spec 2 assumes: one record per category
+  (16), three `url_borne_envelope` shapes, six carriers, two R26 records and the two residual shapes are 25
+  distinct records. Spec 2 continues at `atk-0026`; spec 3 at `ben-0011`.
+- **The generic pin test drives both rule configurations** (`default` and `contiguity`), since a pin holds on
+  every applicable route and configuration; under `fallback=0.0` the two agree.
+- The three metadata-carrier pins carry a descriptive `pinned_reason` (which stage strips the carrier), not an
+  audit id. The README's table repeats each `pinned_reason` verbatim and a test compares them, so the README
+  cannot drift from the records.
+- The seed tests read the seed by id (`atk-0001` … `atk-0025`, `ben-0001` … `ben-0010`), not by "every
+  record", so specs 2 and 3 grow the corpus without touching them; only the generic pin test and the
+  untagged-benign-is-`clean` test range over `load_corpus()`.
+- Residual shapes are authored to the 4-characters-per-token planning budget and asserted only by character
+  count (`4 * (448 * (windows_min - 1) + 64)`; the straddle also to the spec's 1 200 tokens): `atk-0020` is
+  6 325 characters with one payload half ending at ~1 720 and the other starting at ~1 803, flanking the
+  1 792-character step; `atk-0021` 7 948; `atk-0023` 6 529; `ben-0009` 5 246. Spec 4 US-002 verifies the real
+  window counts.
+
+**Findings for later specs:**
+
+- **Boilerplate placements never reach the wire.** `/retrieve` serves trafilatura's main content, so a
+  payload inside `class="cookie-banner"`, `id="cookie-notice"`, `<footer>` or `<aside>` measured `neutralised`
+  (marker absent from the wire) while the same sentence in ordinary paragraphs measured `leaked`. Spec 2
+  US-003's "half camouflaged as cookie-banner / footer boilerplate" `repetition_camouflage` records would
+  measure main-content extraction, not the classifier; `atk-0022` therefore repeats its phrase in body
+  paragraphs. Decide there whether the boilerplate half is a `hidden_markup`-style extraction measurement or
+  is dropped from the sweep.
+- **The served body is the main content, not `raw_text`.** Removing `script` from `_DANGEROUS_TAGS` (a
+  mutation) leaves `atk-0014` `neutralised`, because it only changes the text stages 2 and 3 scan. The
+  carrier pins bite when JSON-LD or meta text reaches the served content: a mutation surfacing both there
+  turns the pin, the table and the carrier test red.
+- `atk-0017` (`css_offscreen`), `atk-0018` (`hidden_div`) and `atk-0019` (`title_stuffing`) are `leaked`
+  structural-only, as the story expects: stage 1 keeps styled and `hidden` text and the title passes through
+  verbatim. They are the records stage 3 must catch; none is a finding yet.
+- **A latent driver leak, fixed here.** `corpus_app` left its per-request overrides on the process-wide
+  `app.state` (`search_providers` is `None` at import). It surfaced when the seed drift guard's last record was
+  a `search` one and `tests/test_orchestrator.py::test_post_search_endpoint_searxng_error` ran next (200
+  instead of 422). `corpus_app` now restores `search_providers`, `cache` and `classifier` on exit, and a test
+  pins it — read by spec 4's recorder and spec 5's gate, which go through `corpus_app`.
 
 ## Refinement Notes
 

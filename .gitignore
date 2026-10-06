@@ -38,3 +38,7 @@ compose/.env
 # Host-side benchmark output and local tokenizer snapshots
 bench/*.json
 bench/tokenizer-*/
+
+# Third-party corpus downloads live outside the tree ($FORAGE_CORPUS_INPUTS,
+# default ~/.cache/forage-corpus-inputs/) and are never committed (spec 2 US-004).
+/corpus-inputs/

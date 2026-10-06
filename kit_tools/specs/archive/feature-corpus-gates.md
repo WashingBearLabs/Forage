@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: corpus-gates
-status: active
+status: completed
 session_ready: true
 depends_on: [corpus-recording]
 vision_ref: "T2.3 — Injection regression corpus (CI)"
@@ -12,7 +12,8 @@ epic_seq: 5
 epic_final: true
 execution_order: [US-001, US-002, US-003, US-004, US-005]
 created: 2026-09-19
-updated: 2026-09-24
+updated: 2026-10-04
+completed: 2026-10-04
 ---
 
 # Feature Spec: Gates and Reporting — Report, Generated Baseline + Floors, CI Summary, Decision Table, Docs and Close-Out
@@ -187,19 +188,19 @@ of a `leaked` attack and no marker substring; `uv run python -m scripts.corpus.r
   measure here and record in Implementation Notes).
 
 **Acceptance Criteria:**
-- [ ] `build_report` / `render_json` / `render_markdown` / CLI as specified; determinism test;
+- [x] `build_report` / `render_json` / `render_markdown` / CLI as specified; determinism test;
       stage-attribution (total — the sum invariant, the `refused` bucket and the flagged-`/search`
       precedence), `rule` column, provenance-split and classifier-only tests as in the Independent
       Test.
-- [ ] `unmeasured` handling for a missing cassette; warnings section rendered.
-- [ ] No payload text in either renderer (sentinel test).
-- [ ] Wall time of the full corpus report on the developer machine recorded in Implementation Notes.
-- [ ] `kit_tools/testing/TESTING_GUIDE.md` row for `tests/test_corpus_report.py`.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] `unmeasured` handling for a missing cassette; warnings section rendered.
+- [x] No payload text in either renderer (sentinel test).
+- [x] Wall time of the full corpus report on the developer machine recorded in Implementation Notes.
+- [x] `kit_tools/testing/TESTING_GUIDE.md` row for `tests/test_corpus_report.py`.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-002: The gate — generated baseline, measured floors, pins, completeness, counts
 
@@ -262,20 +263,20 @@ the record id (finding 14); the `MIN_RECORDS` test from spec 1 is un-skipped and
   `RouteResult.summary()`.
 
 **Acceptance Criteria:**
-- [ ] `tests/corpus/baseline.json` and `tests/corpus/floors.json` committed; the five gate tests
+- [x] `tests/corpus/baseline.json` and `tests/corpus/floors.json` committed; the five gate tests
       (drift, floors, pins, completeness, counts) green; the delete-an-entry test green.
-- [ ] Floors set from the measured baseline by the rounding rule; Implementation Notes carry the
+- [x] Floors set from the measured baseline by the rounding rule; Implementation Notes carry the
       first measured headline numbers (catch per category, `fpr_external`, `fpr_multilingual`,
       `over_defence_probe` FPR, per model × config) — numbers only.
-- [ ] Failure messages verified payload-free (sentinel test on a forced drift).
-- [ ] Wall time on a GitHub runner recorded.
-- [ ] `tests/corpus/README.md` explains what each red means and the two commands (regenerate
+- [x] Failure messages verified payload-free (sentinel test on a forced drift).
+- [x] Wall time on a GitHub runner recorded. — PR #38 run `37231593223` (see US-002 notes).
+- [x] `tests/corpus/README.md` explains what each red means and the two commands (regenerate
       baseline; re-record).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-003: CI publication and the PR checklist
 
@@ -327,16 +328,16 @@ is greater than `runs.index(_FULL_SUITE_RUN)`; no new action, secret or permissi
 - `contract/GOVERNANCE.md` unchanged (no wire change); `SECURITY.md` (root) unchanged.
 
 **Acceptance Criteria:**
-- [ ] The step exists, ordered after the step named `pytest`, conditioned as specified, pinned by tests; the
+- [x] The step exists, ordered after the step named `pytest`, conditioned as specified, pinned by tests; the
       workflow stays free of new actions / secrets / permissions (existing tests green).
-- [ ] PR template line present and pinned.
-- [ ] A PR run shows the table in the job summary (screenshot not required; the run URL recorded in
-      Implementation Notes).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] PR template line present and pinned.
+- [x] A PR run shows the table in the job summary (screenshot not required; the run URL recorded in
+      Implementation Notes). — PR #38 run `37231593223` (see US-003 notes).
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-004: The decision table — offline pooling sweep for contiguity and the model default
 
@@ -397,26 +398,26 @@ on synthetic cassettes pin each pooler's arithmetic (e.g. `[0.6, 0.2, 0.6]` fire
 - `--sweep` is part of `--write-baseline` (the `offline` section drifts like everything else).
 
 **Acceptance Criteria:**
-- [ ] `poolers.py` completed to the five poolers (US-001's two plus three added here), unit-pinned; `--sweep` renders the `offline` section
+- [x] `poolers.py` completed to the five poolers (US-001's two plus three added here), unit-pinned; `--sweep` renders the `offline` section
       deterministically; part of the baseline.
-- [ ] Per-model rows for every pooler setting and every named family / genre; `unmeasured` when a
+- [x] Per-model rows for every pooler setting and every named family / genre; `unmeasured` when a
       model has no cassette.
-- [ ] Implementation Notes carry the 22M (and 86M, if spec 0 enabled it and spec 4 recorded it)
+- [x] Implementation Notes carry the 22M (and 86M, if spec 0 enabled it and spec 4 recorded it)
       headline rows for `default` vs `live_contiguity` (and bare `contiguity(2, 0.5)`) vs
       `mean_aggregate` (numbers only); if
       not, they record "not recorded — 86M not enabled" and the model half as pending (ruling 6a).
-- [ ] Pooler comparison operators unit-pinned at the threshold; offline/live consistency test green.
-- [ ] No change to `config.yaml` defaults, stage 3, or any hashed file (rulings 6, 6a). "Hashed"
+- [x] Pooler comparison operators unit-pinned at the threshold; offline/live consistency test green.
+- [x] No change to `config.yaml` defaults, stage 3, or any hashed file (rulings 6, 6a). "Hashed"
       means the current `pipeline/sanitizer_revision.py` set, read from the code, not from ruling
       6's prose: the eight `_REVISION_SOURCES` (`contract.py`, `stage1_extraction.py`,
       `stage1_pdf.py`, `stage1_upload.py`, `stage2_structural.py`, `stage3_promptguard.py`,
       `stage4_structuring.py`, `orchestrator.py`) **plus `url_validator.py`** via
       `_ROOT_REVISION_SOURCES` (added by `hardening-search-sanitization` US-003).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ### US-005: Documentation, findings, and epic close-out
 
@@ -517,21 +518,21 @@ lists the `tests/test_corpus_*.py` files; `kit_tools/PRODUCT_VISION.md` marks T2
   rather than at the story that caused it — the recorded diff makes such a failure explain itself.
 
 **Acceptance Criteria:**
-- [ ] `docs/corpus.md` with all **nine** sections (the ninth, "Reading the results", is what ruling
+- [x] `docs/corpus.md` with all **nine** sections (the ninth, "Reading the results", is what ruling
       14b's disclosure decision and spec 1's route-asymmetry rule require a reader to have — round 1
       added the obligation while the list and this criterion still said eight); README paragraph; SECURITY.md updated as specified (sentence replaced with the fuzz and PDF gaps retained, coverage row extended, pinned by a test);
       vision / roadmap / synopsis / agent-readme updated — including the stale "five specs, 21
       stories" count in PRODUCT_VISION.md, MILESTONES.md and BACKLOG.md, all three corrected.
-- [ ] `AUDIT_FINDINGS.md` entries for every leaked (category, route), every leaked carrier, **every
+- [x] `AUDIT_FINDINGS.md` entries for every leaked (category, route), every leaked carrier, **every
       non-zero-FPR (genre, route)** and **every blocked-but-leaked record** — ids and numbers only,
       none fixed.
-- [ ] Ruling-6 assertions recorded in Implementation Notes with the commands and their output.
-- [ ] `tests/test_governance_docs.py`-style link check: every relative link in `docs/corpus.md`
+- [x] Ruling-6 assertions recorded in Implementation Notes with the commands and their output.
+- [x] `tests/test_governance_docs.py`-style link check: every relative link in `docs/corpus.md`
       resolves.
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run ruff format --check .` passes
-- [ ] `uv run pyright` passes
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` passes
+- [x] `uv run ruff format --check .` passes
+- [x] `uv run pyright` passes
 
 ## Edge Cases
 
@@ -697,6 +698,26 @@ Scope Adjustments release lines were then corrected to name spec 0's `v1.2.2`. *
 flagged-`/search` invariant moved from a report raise to a test (scripts may not call the tests-side
 helper), and the offline/live `max@0.85` consistency check excludes `sub_threshold` flags.
 
+### Epic-wide validation residue — 2026-10-05
+
+Fixed in this pass (`/kit-tools:validate-implementation`, epic-wide): the corpus guide no longer links a
+gitignored path and its link check resolves against `git ls-files`; `--check` refuses the write flags;
+the decision inputs carry the `long_form` / `multilingual` benign columns and the three window
+families, re-derived from `baseline.json` by a test; the runner wall time and the US-003 run URL are
+recorded above. Carried, not implemented:
+
+- **`render_markdown` is ~180 lines** of sequential section appends in `scripts/corpus/report.py`. A
+  split into one helper per section (as `_sweep_tables` already is) is deferred; the renderer is
+  pinned by determinism and sentinel tests, so a refactor is safe whenever it is taken up.
+- **The report tests use synthetic `Signals`, not the US-001 Independent Test's fourteen-record mini
+  corpus driven through the routes.** The synthetic attribution tests cover the same branches
+  (every bucket, every `BLOCKING_ERRORS` row landing in `refused`); the gap is a real `/extract`
+  drive that lands in `refused` — the committed corpus reaches none (baseline `count_refused` sums
+  to 0).
+- **The findings live in the gitignored `kit_tools/AUDIT_FINDINGS.md` by repo policy**, so the four
+  `tests/test_corpus_docs.py` findings checks skip on a clean checkout and in CI (the skip reason
+  says so) and are re-derived from `baseline.json` only on an owner checkout that keeps the file.
+
 ## Related Documentation
 
 - `contract/GOVERNANCE.md` (unchanged — no wire change); `kit_tools/arch/SECURITY.md`;
@@ -707,6 +728,111 @@ helper), and the offline/live `max@0.85` consistency check excludes `sub_thresho
 
 <!-- Numbers only: first measured headline rows; wall times; the run URL for the CI summary; the
 ruling-6 assertion output. -->
+
+### US-001 (report)
+
+- Wall time of `uv run python -m scripts.corpus.report --markdown` on the developer machine
+  (darwin, both cassettes, both configs, 760 records): 15.7 s total (13.7 s user), well inside
+  the 60 s budget (ruling 16). On a GitHub runner the publish step's single `--markdown` run took 16 s
+  (PR #38 run `37231593223`; see US-002 notes).
+- Rule and classifier-only views read `Signals.window_scores`, which the driver slices from the
+  replay classifier's call log per record; no second pass over `calls` was needed.
+- `poolers.max_score(t)` / `poolers.contiguity(k, t)` are predicate factories; US-004 adds the rest.
+- `--sweep` is not in the parser yet (US-004 adds it); `--write-baseline` / `--check` write and
+  compare `tests/corpus/baseline.json`, which US-002 commits.
+
+### US-002 (gate)
+
+- Gate wall time on the developer machine (darwin): the single replay is ~8.8 s (`tests/test_corpus_gate.py`
+  alone: 19 passed in 18.7 s, the second ~8.6 s being the separate per-cassette completeness drive).
+  **GitHub runner wall time (recorded 2026-10-05)**: PR #38 CI run https://github.com/WashingBearLabs/Forage/actions/runs/37231593223 (head `1b9dfc3`), `test` job
+  https://github.com/WashingBearLabs/Forage/actions/runs/37231593223/job/111522243141: job 254 s total; the `pytest` step (the full suite, corpus gate included) 220 s, pytest
+  reporting `4841 passed, 4 skipped in 217.77s`; the "Publish the injection corpus table" step 16 s,
+  success. The `test` job runs no `--durations`, so the gate module's own runner time is an
+  **estimate**: `tests/test_corpus_gate.py` alone takes 18.7-19.6 s on the developer machine (darwin),
+  where the full suite takes 130 s; scaled by the runner/local full-suite ratio (217.77 / 130.29, about
+  1.7) that is roughly 31-33 s on the runner, and the single report run in the publish step measured
+  16 s outright. Both are inside ruling 16's 60 s; no split is proposed.
+- Floors scaffolded by `--write-floors` (catch down / FPR up to 0.05), committed unedited. The `headline`
+  block is keyed model → config (`{model: {config: {max_fpr_external, min_catch_all}}}`) rather than the
+  spec's flat pair, because the two models and two configs measure differently.
+- First measured headline (numbers only), default config, `catch_all` / `fpr_external` /
+  `fpr_multilingual` / `fpr_over_defence_probe` / `fpr_security_prose`:
+  22M 0.3174 / 0.0426 / 0.0 / 0.6641 / 0.4286; 86M 0.35 / 0.0426 / 0.0 / 0.6641 / 0.4286.
+  `contiguity` config is identical to `default` on every row for both models (n_attacks 460,
+  n_external 94, n_multilingual 34, n_over_defence_probe 131, n_security_prose 28).
+- Catch per category, caught/n (default; 22M and 86M identical except `natural_language`):
+  authority_impersonation 15/20, authority_seo 0/27, boundary_straddle 0/13, density_thinned 0/25,
+  encoded_payload 16/20, envelope_breakout 12/16, exfil_beacon 12/16, hidden_markup 6/38,
+  instruction_override 30/40, line_anchored_role 13/17, natural_language 0/155 (22M) vs 15/155 (86M),
+  prompt_boundary 13/16, repetition_camouflage 0/17, suspicious_url 14/18, sustained_midband 0/7,
+  url_borne_envelope 15/15.
+- Observation for the decision table (US-004), not acted on: `contiguity` catches nothing the max rule
+  does not on this corpus, including `sustained_midband` (0/7) and `boundary_straddle` (0/13).
+- `tests/test_corpus_lint.py::test_min_records_floors_hold` is un-skipped; the gate adds the probe,
+  multi-window and cassette-window-count floors.
+
+### US-003 (CI publication)
+
+- PR run: https://github.com/WashingBearLabs/Forage/actions/runs/37231593223 (PR #38, head `1b9dfc3`); `test` job https://github.com/WashingBearLabs/Forage/actions/runs/37231593223/job/111522243141.
+- Verified: the "Publish the injection corpus table" step ran after the `pytest` step under
+  `if: always()` and concluded `success` in 16 s, writing `uv run python -m scripts.corpus.report
+  --markdown` to `$GITHUB_STEP_SUMMARY`. The rendered summary is visible on the run page, but GitHub's
+  API does not expose job summaries, so this was verified by the step's success plus
+  `tests/test_ci_workflow.py::TestTestJob::test_corpus_summary_step_follows_the_full_suite_and_always_runs` (which
+  pins the run text, its position after `pytest` and the condition) — not by reading the rendered page.
+- The step is named "Publish the injection corpus table", not the Independent Test's
+  `Publish the corpus report`; the test pins the run text, position and condition, not the name.
+
+### US-004 (decision table)
+
+- Offline sweep, `default`-config texts that reached stage 3 (denominators: attack 372, benign external 94,
+  `long_form` 21, `multilingual` 34, `over_defence_probe` 79; max windows 9 on 22M, 11 on 86M). Fired /
+  rate, `max@0.85` = `default`; `live_contiguity` = max@0.85 OR contiguity(2, 0.5); `mean@0.5`:
+  - 22M: every pooler 0 on every group above (attack 0/372, boundary_straddle 0/13, sustained_midband 0/7,
+    natural_language 0/155, FPR 0 on all four benign groups) - including `live_contiguity`,
+    bare `contiguity(2, 0.5)` and `mean@0.5`.
+  - 86M: `max@0.85` / `live_contiguity` attack 15/372 (0.0403), natural_language 15/155 (0.0968), window
+    families 0; bare `contiguity(2, 0.5)` attack 0/372; `mean@0.5` attack 21/372 (0.0565),
+    natural_language 21/155 (0.1355), window families 0; benign external / `long_form` /
+    `multilingual` / `over_defence_probe` 0 for all four. Full grid: `tests/corpus/baseline.json`
+    `offline`, or `--sweep --markdown`.
+- Both models were recorded (spec 0 enabled the 86M), so the model half is not pending.
+- No default flips, no hashed file touched; `derive_sanitizer_revision()` unchanged.
+- `--sweep` prints only the `offline` section (JSON, or Markdown with `--markdown`); the baseline
+  always carries it. A pooler needing more windows than any text of the model has renders `n/a`.
+- `smoothed(w, t)` averages a sequence shorter than `w` whole (degrades to `mean_aggregate`).
+- The offline/live consistency test compares each pooler with the stage-3 catch read off the wire
+  (not through `_stage3_rule`, which itself uses the poolers), per record, per model, per config.
+
+### US-005 (documentation, findings, close-out)
+
+- Ruling-6 assertions, run on the epic branch at close-out. `main` already contains the published
+  `v1.2.2` (merge-base `cfb5376`, PR #37), so the merge-base is spec 0's completion state:
+  - `git diff --stat "$(git merge-base main HEAD)" -- pipeline/ promptguard/ models.py retrieval_app.py cache.py url_validator.py model_fetcher.py contract/ config.yaml weights_manifest.json Dockerfile` → **empty**.
+    (Against the `v1.2.2` tag itself the only difference is `contract/GOVERNANCE.md`, 3 lines of
+    post-tag publication-record prose from `72a9d33`; no code, no contract document.)
+  - `uv run python -c "from pipeline.sanitizer_revision import derive_sanitizer_revision as d; print(d({}))"` →
+    `021378efee6ab43f22b887af2f0c0c40ef76183a39802120fbfd0ca7a3a33900` (equal to the value recorded
+    in spec 1, `021378ef…`).
+  - `uv run python -m scripts.export_contract --check` → `export_contract OK — committed artifacts are current`.
+  - `git diff --stat v1.2.2 -- uv.lock pyproject.toml` → **empty** (no `idna` or other re-lock).
+  - `git diff --stat "$(git merge-base main HEAD)" -- .github` → `ci.yml` +8 (US-003's one step,
+    "Publish the injection corpus table") and `pull_request_template.md` +3 (the one checkbox).
+- Findings filed in `kit_tools/AUDIT_FINDINGS.md` (ids `2026-10-04-004` onward), all `open`, none fixed:
+  one per leaked (category, route) under `default` / 22M, three leaked `hidden_markup` carriers
+  (`css_offscreen`, `hidden_div`, `title_stuffing`), the blocked-but-leaked records (`atk-0059`,
+  `atk-0211`, `atk-0212`, identical under both configs and models), and every non-zero-FPR
+  (genre, route). Severity follows the hint: `warning` for structural categories, blocked-but-leaked
+  and core-genre false positives (`code` on `/search`, `docs` on `/retrieve`); `info` otherwise.
+  `tests/test_corpus_docs.py` re-derives each set from `baseline.json`, so a stale filing is red.
+- Roadmap: the "five specs, 21 stories" count was already corrected to six specs / 25 stories in
+  `PRODUCT_VISION.md` and `MILESTONES.md` before this story; `BACKLOG.md` still carried it and is
+  corrected here (re-counted from the `### US-` headings: 4 + 3 + 5 + 4 + 4 + 5 = 25). The corpus
+  item is closed and two follow-ups opened (contiguity default ruling; 86M default ruling — both
+  cassettes exist, so neither is blocked).
+- Decision inputs in `docs/corpus.md` are dated to baseline commit `4f13c52`; numbers appear nowhere
+  else in the guide or README (asserted).
 
 ## Refinement Notes
 
@@ -748,8 +874,11 @@ included — and cassettes make an aggregate comparison free.
 
 ## Open Questions
 
-- [ ] Whether the full replay fits ≤ 60 s on a GitHub runner — non-blocking; measured at US-002,
-      with a split proposal if not.
+- [x] Whether the full replay fits ≤ 60 s on a GitHub runner — **closed 2026-10-05: yes.** PR #38's
+      run `37231593223`: the report's full drive in the publish step took 16 s on the runner; the gate
+      module is estimated at roughly 31-33 s (local 18.7-19.6 s scaled by the measured full-suite
+      ratio; the `test` job prints no per-test durations, so this part is an estimate). The whole
+      `pytest` step took 220 s inside the job's 20-minute timeout. No split needed.
 
 ## Known risks (planning)
 

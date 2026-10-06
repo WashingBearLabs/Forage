@@ -128,7 +128,7 @@ reason. Any new startup or cache code must preserve this.
 
 ```bash
 uv sync --extra dev     # environment (creates .venv)
-uv run pytest           # hermetic blocking CI gate; 4272 passed, no xfails (v1.2.2 patch release gate)
+uv run pytest           # hermetic blocking CI gate; 4850 collected, no xfails (count: TESTING_GUIDE.md)
 uv run ruff check .     # must stay clean — blocking CI gate
 uv run ruff format .    # must stay clean — blocking CI gate
 uv run pyright          # strict, ZERO errors — blocking CI gate

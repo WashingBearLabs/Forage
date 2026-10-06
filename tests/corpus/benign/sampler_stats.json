@@ -1,0 +1,47 @@
+{
+  "code": {
+    "examined": 14,
+    "rejections": {},
+    "synthetic": "search-shaped clean controls (US-004) are synthetic by design; the genre's other non-owned records are third_party"
+  },
+  "docs": {
+    "examined": 14,
+    "rejections": {},
+    "synthetic": "search-shaped clean controls (US-004) are synthetic by design; the genre's other non-owned records are third_party"
+  },
+  "ecommerce": {
+    "examined": 0,
+    "not_ingested": "no permissive source: Open Food Facts is ODbL / CC-BY-SA (share-alike) and no CC0 product catalogue was identified",
+    "rejections": {}
+  },
+  "forum": {
+    "examined": 0,
+    "not_ingested": "no permissive source: GitHub Discussions posts are not licensed under the repository licence, and the forum PII rule is open",
+    "rejections": {}
+  },
+  "long_form": {
+    "examined": 25,
+    "rejections": {
+      "too_short": 5
+    }
+  },
+  "multilingual": {
+    "examined": 32,
+    "rejections": {}
+  },
+  "news": {
+    "examined": 14,
+    "rejections": {},
+    "synthetic": "search-shaped clean controls (US-004) are synthetic by design; the genre's other non-owned records are third_party"
+  },
+  "over_defence_probe": {
+    "examined": 40,
+    "rejections": {}
+  },
+  "security_prose": {
+    "examined": 16,
+    "rejections": {
+      "licence": 2
+    }
+  }
+}

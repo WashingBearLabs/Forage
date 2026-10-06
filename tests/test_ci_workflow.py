@@ -1,5 +1,9 @@
 """Structural guards for ``.github/workflows/ci.yml``.
 
+PYTEST_DONT_REWRITE: these modules name the corpus report command, so
+``test_corpus_lint`` treats them as corpus test modules and requires assertion
+rewriting off (a failing assert must not echo operands).
+
 A trimmed port of Poppy's ``tests/deployment/test_ci_workflow.py``, kept
 because ``actionlint`` and these tests answer two different questions:
 actionlint checks that the workflow is *valid*, and nothing in it checks that
@@ -988,6 +992,7 @@ _SUITE_NARROWING_FLAGS = frozenset(
 
 _SANITIZER_STEP_RUN = "uv run pytest -q tests/test_sanitizer_revision.py"
 _FULL_SUITE_RUN = "uv run pytest -q"
+_CORPUS_SUMMARY_RUN = "uv run python -m scripts.corpus.report --markdown"
 
 
 class TestTestJob:
@@ -1068,6 +1073,27 @@ class TestTestJob:
             "The targeted sanitizer-revision step must run before the full "
             "suite; after it, an unrelated failure anywhere in 607 tests would "
             "stop the contract guard from reporting at all"
+        )
+
+    def test_corpus_summary_step_follows_the_full_suite_and_always_runs(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        steps = _steps(jobs, "test")
+        runs = [str(step.get("run", "")).strip() for step in steps]
+        index = next(
+            (i for i, run in enumerate(runs) if _CORPUS_SUMMARY_RUN in run), None
+        )
+        assert index is not None, (
+            f"Expected a test-job step running {_CORPUS_SUMMARY_RUN!r} that appends "
+            "to GITHUB_STEP_SUMMARY"
+        )
+        assert "${GITHUB_STEP_SUMMARY}" in runs[index]
+        assert index > runs.index(_FULL_SUITE_RUN), (
+            "The corpus table must be published after the step named `pytest`"
+        )
+        assert str(steps[index].get("if", "")).strip() == "always()", (
+            "The corpus step must carry `if: always()` so a drift failure still "
+            "publishes the table"
         )
 
     def test_test_job_syncs_against_the_committed_lock(
