@@ -95,6 +95,14 @@ the same text, as `/search` already does. The text is never rewritten.
   and an all-patterns timing sweep; re-normalised derived forms with no truncation cap; a
   linear walk; first-match markup scan; two I/l fold readings; `unicodedata@` hashed; the
   owner step moved last in spec 4. The epic is now 13 stories.
+- **Validation round 3 (2026-10-06, 4 reviewers on the redesigned specs):** 3 criticals, all
+  addressed. These were a quadratic `exfil_image` reading, fold-form memory on `/retrieve`, and
+  the `ben-0288`/`ben-0289` ratchet conflict. Owner decisions: a named exemption for those two
+  probes; the `disregard` gap is paragraph-bounded; a reviewed look-alike supplement plus a
+  generated pre-NFKC table. Prototypes confirmed:
+  - the linear walk (8/8 split-tag records);
+  - the no-cut markup scan (4/4 markup-consumed records, 1.19 s worst case on 10 MB);
+  - all 24 patterns at 0.2–0.4 s per 2 MiB form.
 - **Found in passing, not in scope:** `extract_html` takes about 150 s on a 10 MB element-dense
   page. This pre-existing CPU-exhaustion exposure on `/retrieve` is filed separately in
   `AUDIT_FINDINGS.md`.

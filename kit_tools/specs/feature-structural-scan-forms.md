@@ -130,24 +130,37 @@ leaks are caught on `/retrieve` and `/extract`. No other corpus record changes v
 **Implementation Hints:**
 - **Tempered-token rewrites**, measured 0.03–0.09 s on 2 MiB adversarial input against 0.65–3 s
   for a bounded gap:
-  - `disregard_instructions`: from `disregard.*instructions` to roughly
-    `disregard(?:(?!disregard)[\s\S])*?instructions`. Each attempt stops at the next start
-    token. It still matches an arbitrarily long same-line or multi-line gap, so there is **no
-    padding bypass**.
-  - `exfil_image`: temper the same way on `![`, so that `[^\]]` and `[^)]` don't scan past the
-    next `![`. Alt text may span a newline. Keep the `(?:\{\{|\$\{|%7[Bb])` tail and the
-    IGNORECASE from US-001.
+  - `disregard_instructions`, **paragraph-bounded** (owner, 2026-10-06):
+    `disregard(?:(?!disregard|\n\n)[\s\S])*?instructions`, with IGNORECASE.
+    - The gap may cross single newlines but **not a paragraph break**. After `_normalize_text`
+      that is exactly `\n\n`, because 3+ newlines collapse to 2.
+    - Within a paragraph there is no length bound, so no padding bypass.
+    - Each attempt stops at the next start token or paragraph break, which makes it linear.
+  - `exfil_image`, **pinned exactly**:
+    `!\[[^\]]*\]\(https?://(?:(?!!\[)[^)])*?(?:\{\{|\$\{|%7[Bb])`, with IGNORECASE.
+    - The alt text stops at the first `]`, which is deterministic and may span a newline.
+    - The URL part is lazy and stops at the next `![`.
+    - Validation measured the looser tempered-alt reading as quadratic, with one `![` followed
+      by many `](http://a` (40 s on 200 KB). This form is linear on that shape.
+    - Accepted loss: alt text containing a nested `]` no longer matches.
   - `envelope_breakout` (:236): change the adjacent `\s*/?\s*` to `\s*(?:/\s*)?`. The match set
     is the same and backtracking becomes linear.
 - **All-patterns sweep** (`tests/test_stage2_complexity.py`). For **every** entry in
-  `_PATTERNS`, generate adversarial inputs:
-  - the pattern's start token repeated with no terminator;
-  - each prefix followed by a long whitespace run;
-  - mixed newlines.
-  Generate each at 1 MiB and 2 MiB. Assert per pattern that 2 MiB time ≤ 3× 1 MiB time (a
-  machine-independent quadratic detector), and a **total ceiling of 2 s** for all 24 patterns on
-  one 2 MiB form, with a hard test timeout. 2 MiB is `MAX_EXTRACTED_OUTPUT_BYTES`, the largest
-  stage-2 input. Record the measurements.
+  `_PATTERNS`, generate these **shape families**:
+  1. the start token repeated with no terminator;
+  2. **one start token followed by many intermediate delimiters** (each pattern's interior
+     literals, for example `](http://a`);
+  3. each prefix followed by a long whitespace run (including non-breaking spaces);
+  4. mixed newlines;
+  5. match-dense input (thousands of `private_ip_href`/`base64_run` matches).
+  - **Measure robustly:** best of 3, at 256 KiB and 2 MiB. Assert time(2 MiB) ≤ 12 × time(256 KiB)
+    (linear is 8×, quadratic is 64×). Skip the ratio when both times are under 20 ms, which
+    already proves the pattern fast.
+  - Also assert a **total ceiling of 2 s** for all 24 patterns on one 2 MiB form, with a hard
+    test timeout.
+  - 2 MiB is `/extract`'s cap. `/retrieve` text is bounded separately (US-005's expansion
+    rule).
+  - Record the measurements.
 - **Line-number lookup must be linear too.** `_line_number_of` (:249-251) is O(n) per match,
   so a match-dense input is quadratic. Precompute newline offsets once per scanned text and use
   `bisect`, with the same values as today.
@@ -160,12 +173,14 @@ leaks are caught on `/retrieve` and `/extract`. No other corpus record changes v
 - Only `stage2_structural.py` moves.
 
 **Acceptance Criteria:**
-- [ ] `disregard_instructions`, `exfil_image` and `envelope_breakout` are rewritten as
-      described. Both gap patterns match their probe (and the constructed spaced-alt-text
-      exfil probe) split by a newline at every interior whitespace position, and with a
-      10,000-character same-line gap.
-- [ ] The all-patterns sweep passes: each pattern's 2 MiB/1 MiB ratio is ≤ 3, and all 24
-      patterns finish one 2 MiB form within 2 s. A **match-dense** 2 MiB input (thousands of
+- [ ] `disregard_instructions`, `exfil_image` and `envelope_breakout` are rewritten exactly as
+      pinned. Both gap patterns match their probe (and the constructed spaced-alt-text exfil
+      probe) split by a single newline at every interior whitespace position. `disregard`
+      matches with a 10,000-character same-paragraph gap and does **not** match across a
+      paragraph break (`\n\n`). Both behaviours are pinned as benign fixtures.
+- [ ] The all-patterns sweep passes over all five shape families: each pattern's
+      2 MiB/256 KiB best-of-3 ratio is ≤ 12 (or both times are under 20 ms), and all 24 patterns
+      finish one 2 MiB form within 2 s. A **match-dense** 2 MiB input (thousands of
       `private_ip_href` and `base64_run` matches) is included. The numbers are recorded in
       Implementation Notes.
 - [ ] Line numbers come from a precomputed newline index, and every corpus record's
@@ -204,6 +219,11 @@ entity-encoded whitespace input.
      from becoming a long run, as `/search` already does. No fixed-point loop.
 - **No truncation cap:** a cap is a padding bypass. Linear patterns (US-002) make full-length
   derived forms safe. Add entity-encoded whitespace and entity-dense inputs to the timing sweep.
+- **Lazy forms, early stop:** `structural_scan_forms` is a **generator**. `scan_structural_forms`
+  scans each form as it's produced, keeps only the running worst result, and **stops at the
+  first BLOCKED**. So at most one derived form is held in memory at a time. The flags and
+  penalty rule still holds: BLOCKED is the maximum verdict, so stopping can't change the
+  outcome.
 - **`html_parsed`** is `content_type == "html"` at the `sanitize_and_structure` call site. The
   orchestrator already knows the content type, so no new `ExtractionResult` field is needed.
   `/extract` uploads and PDFs are `False`.
@@ -276,8 +296,9 @@ byte for byte, and the fold-table tests pass. Nothing is wired into stage 2 yet.
 
 **Implementation Hints:**
 - **Data:**
-  - Vendor `confusables.txt` (UTS #39, Unicode 18.0.0, 2026-08-27,
-    <https://www.unicode.org/reports/tr39/>) at `scripts/data/unicode/confusables.txt`.
+  - Vendor `confusables.txt` (UTS #39, Unicode 18.0.0; the file is dated 2026-08-06; sha256
+    `6ed3ee967c9dfdf6677d563c9985182fbc50a2efb7d6059cd57b2e2ce18f5b92` as fetched during
+    validation; re-verify on vendoring) at `scripts/data/unicode/confusables.txt`.
   - Add a `README` there recording the URL, date and sha256.
   - `.dockerignore` already keeps `scripts/` data out of the image (guard at
     `tests/test_dockerfile.py:724`).
@@ -293,6 +314,21 @@ byte for byte, and the fold-table tests pass. Nothing is wired into stage 2 yet.
     `str.maketrans` keys must be single characters, so record the number of multi-code-point
     sources skipped.
   - ASCII text never changes.
+- **Reviewed supplement (owner, 2026-10-06):** TR39 has no ASCII mapping for common
+  look-alikes (Cyrillic к т п м и н д л, Greek κ τ η μ ε β, and others).
+  - Commit `scripts/data/unicode/forage_supplement.tsv`: about 20 hand-reviewed rows of
+    `codepoint<TAB>latin<TAB>reason`. The generator merges it after TR39, and **refuses** a row
+    whose target is non-ASCII or whose source is ASCII.
+  - Every row is reviewed against the `multilingual` benign genre, so a supplement entry can't
+    move a benign record.
+- **Pre-NFKC table:** NFKC can destroy a TR39 mapping. Greek lunate sigma `ϲ`/`Ϲ` → `c` in TR39,
+  but NFKC first turns it into a plain sigma, which has no mapping.
+  - The generator computes `PRE_NFKC_TABLE` automatically: every TR39 or supplement source
+    whose NFKC form differs and has no mapping of its own.
+  - It is applied **before** NFKC. Don't reverse the global order: long `ſ` would become `f`.
+- **Data facts measured in validation:** every TR39 source is a single code point, so the
+  "skipped multi-code-point" count is expected to be 0. The project's Python reports Unicode
+  15.0.0 for NFKC, which is older than the 18.0.0 confusables data. US-005 hashes both.
 - **The I/l ambiguity, two tables, no override:** TR39 maps capital-I look-alikes (Cyrillic
   `U+0406`, Greek `U+0399`, palochka `U+04C0`, and others in that prototype class) to `l`, but
   the same glyphs also read as `I`. Emit:
@@ -309,9 +345,12 @@ byte for byte, and the fold-table tests pass. Nothing is wired into stage 2 yet.
 - [ ] Folding never changes ASCII: 500 fixed-seed strings over `chr(0)`-`chr(127)`, plus every
       benign corpus ASCII text.
 - [ ] An **independent** hand-written oracle of Cyrillic and Greek look-alikes for every Latin
-      letter in any probe (both cases) folds each entry to its intended letter
-      case-insensitively, under `FOLD_TABLE`, or under the `i` reading for `AMBIGUOUS_IL`
-      members.
+      letter in any probe (both cases, including к т п м и н д л κ τ η μ ε β ϲ) folds each
+      entry to its intended letter case-insensitively, through `PRE_NFKC_TABLE` → NFKC →
+      `FOLD_TABLE` (supplement merged), or under the `i` reading for `AMBIGUOUS_IL` members.
+- [ ] `scripts/data/unicode/forage_supplement.tsv` exists with a reason on every row. The
+      generator refuses malformed rows (test), and `PRE_NFKC_TABLE` is generated, not
+      hand-written.
 - [ ] `pipeline/confusables.py` passes `ruff check` and `ruff format --check`, contains no
       literal non-ASCII character, and its header records the skipped multi-code-point count.
 - [ ] `NOTICE` carries the Unicode attribution, and `scripts/data/unicode/README` records the
@@ -334,9 +373,21 @@ passes, and the 9 `confusable` leaks are caught on every route without moving `m
 benign records.
 
 **Implementation Hints:**
-- **Forms:** NFKC, then `FOLD_TABLE`, applied to US-003's decoded form, then `_normalize_text`,
-  appended as the third form. If the text contains any `AMBIGUOUS_IL` member, add a fourth
-  form with those mapped to `i`. Deduplication drops it otherwise.
+- **Forms:** `PRE_NFKC_TABLE`, then NFKC, then `FOLD_TABLE`, applied to US-003's decoded form,
+  then `_normalize_text`, yielded as the third form. If the **post-NFKC** text contains any
+  `AMBIGUOUS_IL` member, also yield a fourth form with those mapped to `i`.
+- **Expansion rule (memory, `/retrieve`):** `/retrieve` extracted text is not capped at 2 MiB
+  (`retrieve.max_promptguard_chunks: 0` ships off). Validation measured a 10 MiB page of
+  U+FDFA (18× NFKC expansion) peaking at 1.56 GB while building the fold form. So:
+  - compute the fold incrementally;
+  - if its length would exceed **4× the decoded form's length**, stop building it, skip both
+    fold forms, and add a `FlaggedSpan` in the existing **`encoded_payload`** category
+    (SUSPICIOUS);
+  - log the closed WARNING token `stage2_fold_expansion_refused` with lengths only.
+  This fails loudly instead of truncating, so there is no padding bypass. No new category, so
+  no contract change.
+- **`/search`:** fold forms are derived from each **title and snippet scan form** (the decoded
+  one). URL fields are excluded: `_SEARCH_URL_RULES` already audits them.
 - **`/search`:** add the fold forms of each field's scan form to the loop at
   `orchestrator.py:1810-1846`, **immediately after that field's existing scan and wire
   entries**. Update `tests/corpus_stage2.py` `stage2_forms()` in the same order. Wire forms are
@@ -371,6 +422,9 @@ benign records.
       "ten" in every prose count.
 - [ ] US-002's timing sweep passes, including the maximal-NFKC-expansion input through the fold
       forms.
+- [ ] A 10 MiB `/retrieve` page of U+FDFA is flagged `encoded_payload`, skips the fold forms,
+      logs `stage2_fold_expansion_refused`, and peaks under 400 MB of traced allocation for
+      stage 2 (`tracemalloc` test). A page at 3.9× expansion is folded normally.
 - [ ] Both cassette files are byte-unchanged, with zero misses. `tests/test_search_pipeline_pins.py`
       is green.
 - [ ] `docs/corpus.md` "Decision inputs" tables are updated, and `tests/test_corpus_docs.py` is
@@ -532,3 +586,12 @@ so cross-form merging would move flags on unchanged records.
 - Q: How should confusables be folded? → A: generated from Unicode `confusables.txt`, non-ASCII only, hashed into `sanitizer_revision`.
 - Q (validation): Should `system_line` / `poppy_line` be case-insensitive despite YAML and transcript false positives? → A: yes, with the cost pinned as fixtures (planner decision under the ratchet rule; override at review if wanted).
 - Q (validation): Collapse form, bounded gaps, or tempered tokens? → A: tempered tokens (measured linear, no padding bypass).
+- Q (validation round 3): How far may the `disregard … instructions` gap reach? → A: the same paragraph. It crosses single newlines, not `\n\n`, with no length bound inside a paragraph.
+- Q (validation round 3): Should look-alikes TR39 doesn't map be covered? → A: yes, with a small reviewed supplement table plus a generated pre-NFKC table.
+- Validation round 3 fixes:
+  - `exfil_image` pinned exactly (the tempered-alt reading was quadratic);
+  - five sweep shape families, with robust timing;
+  - lazy forms with an early stop;
+  - the fold expansion refused at 4×, flagged `encoded_payload`;
+  - the `/search` fold applies to title and snippet only;
+  - data facts corrected.

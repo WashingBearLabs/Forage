@@ -73,19 +73,28 @@ cassettes are unchanged.
 - **Recipe: one iterative walk, no tree mutation, no `unwrap()`, no `smooth()`.** Walk the soup
   (or the same copy `_extract_raw_text` uses, `stage1_extraction.py:249-265`) in document order:
   - skip `_DANGEROUS_TAGS` subtrees and comments;
-  - append each `NavigableString`'s text to a list;
+  - append the text of plain `NavigableString` and `CData` nodes only, as `get_text` does,
+    skipping `Comment`, `Doctype`, `ProcessingInstruction` and `Declaration`;
   - emit `"\n"` on entering and leaving any element in the **closed block set**: `address,
     article, aside, blockquote, body, br, caption, dd, details, dialog, div, dl, dt, fieldset,
-    figcaption, figure, footer, form, h1-h6, head, header, hr, html, legend, li, main, nav, ol,
+    figcaption, figure, footer, h1-h6, head, header, hr, html, legend, li, main, nav, ol,
     p, pre, section, summary, table, tbody, td, tfoot, th, thead, title, tr, ul`;
   - emit nothing for any other element, so `wbr`, `font` and custom elements are joined.
   Then `"".join`, then `_normalize_text`.
 - **Never change `raw_text`:** it is stage 3's input.
-- **Scan inside the stage-1 thread, carry only the result.**
-  - On `/retrieve`, wrap `extract_html` in an orchestrator-local function, run inside the
-    existing `to_thread` call, that also builds the inline text, feeds it to spec 1's builder
-    (`html_parsed=True`, so it gets the decode and fold forms too), scans, and returns
-    `(ExtractionResult, StructuralScanResult)`.
+- **Parse once, scan inside the stage-1 thread, carry only the result.**
+  - `extract_html` gains a keyword `with_inline: bool = False`. When `True`, it builds the
+    inline text **from its own soup**, with no second parse, into a new defaulted field
+    `ExtractionResult.scan_text_inline: str | None = None`. The default keeps
+    `pdf_subprocess.py` and the test constructors unchanged.
+  - On `/retrieve` (any non-PDF fetch), an orchestrator-local function runs inside the existing
+    `to_thread` call. It calls the **module-level name `extract_html`** (about 11 tests patch
+    `pipeline.orchestrator.extract_html`, including the off-loop stub at
+    `tests/test_app.py:1524`) with `with_inline=True`, then feeds the inline text to spec 1's
+    builder (`html_parsed=True`) and scans it.
+  - It then returns `dataclasses.replace(extraction, scan_text_inline=None)` plus the
+    `StructuralScanResult`, so no inline text leaves the thread.
+  - Run the existing `/retrieve` size pre-check before these scans.
   - The orchestrator deletes `html_text` early (around :585) so a queued request holds only
     extracted text. Carrying the inline text would break that; carrying a scan result doesn't.
 - **Seam into `sanitize_and_structure`:** add a keyword-only `extra_scans:
@@ -96,14 +105,24 @@ cassettes are unchanged.
     from the first result that reaches it.
   Update its three call sites (`orchestrator.py:653`, `:780`, `:864`); PDF and upload pass
   nothing.
-- **`/search`:** `_scan_forms_for_search_text` already calls `extract_html` per field. Have that
-  **same call** also produce the inline text, by returning a small named tuple instead of the
-  pair. Pass it through spec 1's builder (decode and fold forms) and scan it as an extra entry
-  per field in the loop (:1810-1846). Never parse twice. Update `tests/corpus_stage2.py`
-  `stage2_forms()` to match. Wire forms are unchanged.
+- **`/search`:** `_scan_forms_for_search_text` already calls `extract_html` per field, on the
+  truncated provider value. Pass `with_inline=True` to **that same call**, and return a small
+  named tuple instead of the pair. Pass the inline text through spec 1's builder (decode and
+  fold forms) and scan it as an extra entry per field in the loop (:1810-1846). Never parse
+  twice.
+  - The named tuple breaks existing `wire, scan = …` unpacking. Update `tests/test_orchestrator.py`,
+    `tests/test_brave_provider.py:530` and `tests/corpus_stage2.py` `stage2_forms()`.
+  - Wire forms are unchanged.
 - **Splitter strings for the property test, exactly:** `<b></b>` inserted at the boundary;
   `<span>`+second-half+`</span>`; `<wbr>`; `<font>`+second-half+`</font>`;
-  `<x-custom>`+second-half+`</x-custom>`. The probe is passed through `html.escape` first.
+  `<x-custom>`+second-half+`</x-custom>`.
+  - Split **between probe characters** (unescaped), then `html.escape` **each half**
+    separately.
+  - Escaping first and splitting inside an entity (`&l|t;`) renders different text, which
+    would make the test unpassable.
+- **Benign accepted-cost fixtures:** a bold `<b>Assistant</b>:` label at line start, and
+  syntax-highlighted code whose spans rejoin into a base64-like run. Pin their outcomes, since
+  the corpus has no `code`-genre page records to guard this.
 - Hashed files: `orchestrator.py`, and `stage1_extraction.py` if the walker lives there. List
   exactly what moved in the rotation record.
 
@@ -117,8 +136,12 @@ cassettes are unchanged.
       interior character boundary by each of the five splitter strings, the result is caught on
       `/retrieve` and `/search`. A split probe whose letters are also double-entity-encoded is
       caught on `/search` (decode forms apply to the inline text).
-- [ ] Only `StructuralScanResult` values leave the stage-1 thread: no inline text or markup is
-      held by the request after `extract_html` returns (test asserting the returned types).
+- [ ] Only `StructuralScanResult` values leave the stage-1 thread: the returned
+      `ExtractionResult.scan_text_inline` is `None` (test). `extract_html` parses the HTML
+      **once** per request: a test counts `BeautifulSoup` constructions on `/retrieve` and on
+      one `/search` field.
+- [ ] The inline text has the same non-whitespace characters as `raw_text` for every corpus
+      page record (test).
 - [ ] The 8 `split_tags` records are not `leaked` in the regenerated baseline. No core-genre
       benign record (watch `code`) moves from `passed`, and the pin tests are green.
 - [ ] `tests/test_search_pipeline_pins.py` is unchanged and green. Both cassette files are
@@ -145,9 +168,13 @@ are caught. A trigger after 9 MB of padding is caught. Match-dense, whitespace-b
 `&lt;`-flood pages scan in linear time.
 
 **Implementation Hints:**
+- **Widen `system_tag` (:94)** from the bare literal `<system>` to `<\s*/?\s*system\b[^<>]*>`,
+  case-insensitive. Today `<system >`, `<system id=a>` and `<SYSTEM/>` are eaten by the parser
+  and missed by both scans. Validation measured the widened form as linear, and over the
+  corpus it matches only `atk-0033` and `ben-0288`. It's the same name and category, so no
+  vocab change.
 - **The subset is defined by reference:** `_MARKUP_PATTERNS: tuple[re.Pattern[str], ...]` in
-  `pipeline/stage2_structural.py` references the compiled `system_tag` (:94, the literal
-  `<system>`), `envelope_breakout` (:236, linearised by spec 1 US-002) and `private_ip_href`
+  `pipeline/stage2_structural.py` references the compiled `system_tag` (:94, widened), `envelope_breakout` (:236, linearised by spec 1 US-002) and `private_ip_href`
   (:212) objects. A test maps each to `vocab.STAGE2_REGEX_NAMES` through `_PATTERNS`' index.
   The set is closed: additions require a corpus record id cited in Implementation Notes.
 - **First match per pattern, with no per-match line lookup.** Use `pattern.search()`, not
@@ -155,23 +182,15 @@ are caught. A trigger after 9 MB of padding is caught. Match-dense, whitespace-b
   whitespace collapse, only the category reaches the wire, and the penalty saturates at 3
   flags. This removes the measured quadratic, which grew from 3.6 s at 1 MB to 56.8 s at 4 MB.
 - **Input: the raw source string, never a re-serialised tree.**
-  1. **Default: no span cutting.** Scan the raw source with whitespace runs collapsed to one
-     space. Use `re.sub(r"\s+", " ", …)` on `str`, which is Unicode-aware, so non-breaking-space
-     runs collapse too. `envelope_breakout` and `private_ip_href` tolerate the collapse; the
-     literal `<system>` is unaffected.
-  2. **Measure the regenerated baseline.** If no core-genre benign record moves, ship with no
-     cut. That avoids a tokenizer and any `html.parser`/lxml span disagreement.
-  3. **Only if a core-genre record moves** because of `<script>`/`<style>`/comment content,
-     cut those three span kinds:
-     - use an offset-reporting tokenizer (stdlib `html.parser.HTMLParser`). Absolute offsets
-       need a line-start table counting `\n` only. `getpos()` reports span *starts*, so find
-       each end tag's offset explicitly;
-     - **never cut `template` or `noscript`**: their text reaches `raw_text` and the wire;
-     - **fail toward scanning:** an unterminated span is not cut;
-     - put the cutter in `stage2_structural.py` (hashed);
-     - add a parametrised agreement test against lxml on tricky cases: unterminated
-       `script`/comment, CDATA, `--!>`, nested comment-like text.
-     Record which branch shipped.
+  - **No span cutting** (measured in validation round 3: across the whole benign corpus, a
+    no-cut scan moves only `ben-0288`/`ben-0289`, with no core-genre record). That means no
+    tokenizer and no parser-agreement risk.
+  - Scan the raw source with whitespace runs collapsed to one space, using
+    `re.sub(r"\s+", " ", …)` on `str`, which is Unicode-aware. That is cheap defence in depth;
+    the linearised patterns don't need it.
+  - If a future core-genre record moves because of `<script>`/`<style>` content, cutting
+    becomes its own story, with an lxml agreement test. `template` and `noscript` are never
+    cut.
 - **No bound:** scan the whole body (≤ 10 MB, `DEFAULT_MAX_CONTENT_BYTES`,
   `stage5_url_audit.py:31`). A head-only bound is a padding bypass.
 - **Runs inside the stage-1 thread** with US-001's function, returning one more
@@ -179,11 +198,15 @@ are caught. A trigger after 9 MB of padding is caught. Match-dense, whitespace-b
 - **`/search`:** run the subset on each field's raw provider value, using the same truncated
   string `_scan_forms_for_search_text` feeds to `extract_html`.
 - **`/extract` is out:** uploads are plain text.
-- **Benign controls that will flip:** `ben-0288` and `ben-0289` are `/search` parser-strip
-  controls, pinned "drives clean" by `tests/test_corpus_ingest.py:1661` and `:1718-1730`. The raw
-  scan blocks `ben-0288` and flags `ben-0289`, which has the same shape as `atk-0132`.
-  **Decision:** they now trip, because they are literally the markup-consumed shape this story
-  exists to catch. Update their pins and those tests, with a comment citing this spec.
+- **Benign controls that will flip, as a named exemption (owner, 2026-10-06):** `ben-0288` and
+  `ben-0289` are `/search` `over_defence_probe` parser-strip controls, pinned "drives clean" by
+  `tests/test_corpus_ingest.py:1661` and `:1718-1730`. The raw scan blocks `ben-0288` and flags
+  `ben-0289`, which has the same shape as `atk-0132`.
+  - The owner granted **exactly these two** an exemption from the over-defence ratchet.
+  - Re-pin them, update those tests with a comment citing this decision, and record the
+    exemption in `kit_tools/arch/DECISIONS.md`.
+  - Spec 4's exact-FPR check exempts them **by id**. No other over-defence record may get
+    worse.
 - **Corpus mirrors:**
   - keep `tests/corpus_stage2.py` `stage2_forms`/`stage2_record_hits` as the extracted-text
     view, and add `stage2_markup_hits`;
@@ -191,7 +214,8 @@ are caught. A trigger after 9 MB of padding is caught. Match-dense, whitespace-b
     converse;
   - also check `scripts/corpus/records.py:489-511` and `tests/test_corpus_attacks.py:385,1163`.
 - **Logging:** the scan emits category tokens only, never `matched_text`.
-- **Residuals for spec 4:** entity-encoded attribute values; `javascript:` in `href`/`src`,
+- **Residuals for spec 4:** entity-encoded attribute values; markup triggers other than the
+  three subset patterns; `javascript:` in `href`/`src`,
   which the parser consumes but which isn't in the subset; block elements restyled
   `display:inline`, which still split text.
 - Leaked records: `atk-0033`, `atk-0160` (page), `atk-0161`, `atk-0132` (`/search`).
@@ -209,10 +233,14 @@ are caught. A trigger after 9 MB of padding is caught. Match-dense, whitespace-b
 - [ ] Linearity: on a match-dense page (private-IP links), a whitespace-bomb page and an
       `&lt;`-flood page, the scan's 10 MB time is ≤ 3× its 5 MB time. Absolute times are
       recorded.
-- [ ] Implementation Notes records which branch shipped (no cut, or cut with the parser
-      agreement test), with the baseline evidence for the choice.
-- [ ] `ben-0288` and `ben-0289` are re-pinned to their new outcomes with a comment citing this
-      decision. `tests/test_corpus_ingest.py` is green.
+- [ ] `system_tag` is widened to `<\s*/?\s*system\b[^<>]*>` (case-insensitive). `<system >`,
+      `<system id=a>` and `<SYSTEM/>` are caught in raw markup and text forms, and the corpus
+      shows no new benign match beyond `ben-0288`.
+- [ ] The raw scan does no span cutting. Implementation Notes records the benign baseline
+      evidence (only `ben-0288`/`ben-0289` move).
+- [ ] `ben-0288` and `ben-0289` are re-pinned with a comment citing the owner's named exemption,
+      which is recorded in `kit_tools/arch/DECISIONS.md`. `tests/test_corpus_ingest.py` is
+      green.
 - [ ] The 4 tag-consumed `plain` records are not `leaked` in the regenerated baseline. No
       core-genre benign record moves from `passed`, and the pin tests are green.
 - [ ] Both cassette files are byte-unchanged, with zero misses. `tests/test_search_pipeline_pins.py`
@@ -325,4 +353,12 @@ for further channels before adding surfaces.
 ### Session 2026-10-06
 - Q: Should normalised text reach stage 3? → A: no. Stage 2 only (spec 1 has the full epic Q&A).
 - Q (validation): Should the raw-markup scan have a bound? → A: no. The whole body is scanned linearly.
-- Q (validation round 2): `ben-0288` and `ben-0289` are parser-strip benign controls that the raw scan trips. → A: they flip by decision, because they are the exact shape the story exists to catch (planner decision; override at review if wanted).
+- Q (validation round 2/3): `ben-0288` and `ben-0289` are over-defence probes that the raw scan trips, against the ratchet. → A: a **named exemption for exactly these two** (owner, 2026-10-06). They are re-pinned, spec 4's FPR check exempts them by id, and the exemption is recorded in DECISIONS.
+- Validation round 3 fixes:
+  - parse once (`with_inline` on `extract_html`);
+  - the walker reads only text and CData nodes;
+  - `form` removed from the block set (it's a dangerous tag);
+  - the property test splits between characters;
+  - `system_tag` widened;
+  - the no-cut branch fixed as the design;
+  - accepted-cost fixtures for bold labels and highlighted code.

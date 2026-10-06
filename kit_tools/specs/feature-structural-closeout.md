@@ -79,6 +79,11 @@ fails on named cells.
   - **`--baseline-fpr OLD_BASELINE NEW_BASELINE` mode:** compare the exact measured benign FPR
     per (genre, route, model, config) between two `baseline.json` files, and fail on any rise.
     The grid can hide a one-record rise in a 23–50-record cell.
+    - **Named exemption (owner, 2026-10-06):** an `--exempt ben-0288,ben-0289` option removes
+      exactly those records from both baselines before comparing, so the `/search`
+      `over_defence_probe` cell is compared on the remaining records.
+    - The exemption list is a module constant with a comment citing DECISIONS.md. Any other
+      exemption fails code review.
   - Use `git show 03f7a96:<path>` into a temp file for the OLD inputs.
 - **Ratchet proof (exact procedure):**
   1. `git worktree add /tmp/ratchet-proof HEAD`.
@@ -101,7 +106,9 @@ fails on named cells.
 - [ ] `scripts/corpus/floors_diff.py` has unit tests covering a lowered `min_*`, a raised
       `max_*`, a loosened headline key, an unrecognised key, a changed cell set, and a one-record
       FPR rise in `--baseline-fpr` mode (all non-zero exit).
-- [ ] `floors_diff --baseline-fpr` between `03f7a96`'s and the final `baseline.json` exits 0.
+- [ ] `floors_diff --baseline-fpr --exempt ben-0288,ben-0289` between `03f7a96`'s and the final
+      `baseline.json` exits 0. Without `--exempt` it fails, which proves the exemption is
+      exactly what moved (both runs pasted).
 - [ ] The recorded ratchet proof shows `test_every_measured_cell_clears_its_floor` failing on
       named cells with the seven case flags removed and the baseline regenerated. The temporary
       worktree is removed, and `git status` is clean.
@@ -315,3 +322,4 @@ name residuals by class, so they don't depend on it.
 ### Session 2026-10-06
 - Q: How should catch be traded against false positives? → A: ratchet both ways. Floors only tighten; FPRs never rise.
 - Q (validation): Should the findings tests use the 22M or the 86M? → A: keep 22M for this epic.
+- Q (validation round 3): The raw-markup scan flips over-defence probes `ben-0288` and `ben-0289`. → A: a named exemption for exactly those two, applied by id in `--baseline-fpr`.
