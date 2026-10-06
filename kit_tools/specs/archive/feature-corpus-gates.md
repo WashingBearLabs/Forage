@@ -269,8 +269,7 @@ the record id (finding 14); the `MIN_RECORDS` test from spec 1 is un-skipped and
       first measured headline numbers (catch per category, `fpr_external`, `fpr_multilingual`,
       `over_defence_probe` FPR, per model × config) — numbers only.
 - [x] Failure messages verified payload-free (sentinel test on a forced drift).
-- [ ] Wall time on a GitHub runner recorded. — pending: no CI run exists for this branch yet; read
-      from the first `test` job run (see US-002 notes).
+- [x] Wall time on a GitHub runner recorded. — PR #38 run `37231593223` (see US-002 notes).
 - [x] `tests/corpus/README.md` explains what each red means and the two commands (regenerate
       baseline; re-record).
 - [x] Tests written/updated for new functionality
@@ -332,8 +331,8 @@ is greater than `runs.index(_FULL_SUITE_RUN)`; no new action, secret or permissi
 - [x] The step exists, ordered after the step named `pytest`, conditioned as specified, pinned by tests; the
       workflow stays free of new actions / secrets / permissions (existing tests green).
 - [x] PR template line present and pinned.
-- [ ] A PR run shows the table in the job summary (screenshot not required; the run URL recorded in
-      Implementation Notes). — pending: requires the first PR run (see US-003 notes).
+- [x] A PR run shows the table in the job summary (screenshot not required; the run URL recorded in
+      Implementation Notes). — PR #38 run `37231593223` (see US-003 notes).
 - [x] Tests written/updated for new functionality
 - [x] Full test suite passes (`uv run pytest`)
 - [x] `uv run ruff check .` passes
@@ -699,6 +698,26 @@ Scope Adjustments release lines were then corrected to name spec 0's `v1.2.2`. *
 flagged-`/search` invariant moved from a report raise to a test (scripts may not call the tests-side
 helper), and the offline/live `max@0.85` consistency check excludes `sub_threshold` flags.
 
+### Epic-wide validation residue — 2026-10-05
+
+Fixed in this pass (`/kit-tools:validate-implementation`, epic-wide): the corpus guide no longer links a
+gitignored path and its link check resolves against `git ls-files`; `--check` refuses the write flags;
+the decision inputs carry the `long_form` / `multilingual` benign columns and the three window
+families, re-derived from `baseline.json` by a test; the runner wall time and the US-003 run URL are
+recorded above. Carried, not implemented:
+
+- **`render_markdown` is ~180 lines** of sequential section appends in `scripts/corpus/report.py`. A
+  split into one helper per section (as `_sweep_tables` already is) is deferred; the renderer is
+  pinned by determinism and sentinel tests, so a refactor is safe whenever it is taken up.
+- **The report tests use synthetic `Signals`, not the US-001 Independent Test's fourteen-record mini
+  corpus driven through the routes.** The synthetic attribution tests cover the same branches
+  (every bucket, every `BLOCKING_ERRORS` row landing in `refused`); the gap is a real `/extract`
+  drive that lands in `refused` — the committed corpus reaches none (baseline `count_refused` sums
+  to 0).
+- **The findings live in the gitignored `kit_tools/AUDIT_FINDINGS.md` by repo policy**, so the four
+  `tests/test_corpus_docs.py` findings checks skip on a clean checkout and in CI (the skip reason
+  says so) and are re-derived from `baseline.json` only on an owner checkout that keeps the file.
+
 ## Related Documentation
 
 - `contract/GOVERNANCE.md` (unchanged — no wire change); `kit_tools/arch/SECURITY.md`;
@@ -714,7 +733,8 @@ ruling-6 assertion output. -->
 
 - Wall time of `uv run python -m scripts.corpus.report --markdown` on the developer machine
   (darwin, both cassettes, both configs, 760 records): 15.7 s total (13.7 s user), well inside
-  the 60 s budget (ruling 16). Not yet measured on a GitHub runner.
+  the 60 s budget (ruling 16). On a GitHub runner the publish step's single `--markdown` run took 16 s
+  (PR #38 run `37231593223`; see US-002 notes).
 - Rule and classifier-only views read `Signals.window_scores`, which the driver slices from the
   replay classifier's call log per record; no second pass over `calls` was needed.
 - `poolers.max_score(t)` / `poolers.contiguity(k, t)` are predicate factories; US-004 adds the rest.
@@ -725,8 +745,14 @@ ruling-6 assertion output. -->
 
 - Gate wall time on the developer machine (darwin): the single replay is ~8.8 s (`tests/test_corpus_gate.py`
   alone: 19 passed in 18.7 s, the second ~8.6 s being the separate per-cassette completeness drive).
-  **GitHub runner wall time is not recorded**: no CI run exists for this branch yet; to be read from the
-  first `test` job run's `--durations` (ruling 16: if > 60 s, record and propose the split).
+  **GitHub runner wall time (recorded 2026-10-05)**: PR #38 CI run https://github.com/WashingBearLabs/Forage/actions/runs/37231593223 (head `1b9dfc3`), `test` job
+  https://github.com/WashingBearLabs/Forage/actions/runs/37231593223/job/111522243141: job 254 s total; the `pytest` step (the full suite, corpus gate included) 220 s, pytest
+  reporting `4841 passed, 4 skipped in 217.77s`; the "Publish the injection corpus table" step 16 s,
+  success. The `test` job runs no `--durations`, so the gate module's own runner time is an
+  **estimate**: `tests/test_corpus_gate.py` alone takes 18.7-19.6 s on the developer machine (darwin),
+  where the full suite takes 130 s; scaled by the runner/local full-suite ratio (217.77 / 130.29, about
+  1.7) that is roughly 31-33 s on the runner, and the single report run in the publish step measured
+  16 s outright. Both are inside ruling 16's 60 s; no split is proposed.
 - Floors scaffolded by `--write-floors` (catch down / FPR up to 0.05), committed unedited. The `headline`
   block is keyed model → config (`{model: {config: {max_fpr_external, min_catch_all}}}`) rather than the
   spec's flat pair, because the two models and two configs measure differently.
@@ -748,8 +774,15 @@ ruling-6 assertion output. -->
 
 ### US-003 (CI publication)
 
-- **PR run URL not recorded**: no PR run exists for this branch yet. The job-summary table and its
-  run URL are pending the first PR run; record the URL here when it exists.
+- PR run: https://github.com/WashingBearLabs/Forage/actions/runs/37231593223 (PR #38, head `1b9dfc3`); `test` job https://github.com/WashingBearLabs/Forage/actions/runs/37231593223/job/111522243141.
+- Verified: the "Publish the injection corpus table" step ran after the `pytest` step under
+  `if: always()` and concluded `success` in 16 s, writing `uv run python -m scripts.corpus.report
+  --markdown` to `$GITHUB_STEP_SUMMARY`. The rendered summary is visible on the run page, but GitHub's
+  API does not expose job summaries, so this was verified by the step's success plus
+  `tests/test_ci_workflow.py::TestTestJob::test_corpus_summary_step_follows_the_full_suite_and_always_runs` (which
+  pins the run text, its position after `pytest` and the condition) — not by reading the rendered page.
+- The step is named "Publish the injection corpus table", not the Independent Test's
+  `Publish the corpus report`; the test pins the run text, position and condition, not the name.
 
 ### US-004 (decision table)
 
@@ -841,8 +874,11 @@ included — and cassettes make an aggregate comparison free.
 
 ## Open Questions
 
-- [ ] Whether the full replay fits ≤ 60 s on a GitHub runner — non-blocking; measured at US-002,
-      with a split proposal if not.
+- [x] Whether the full replay fits ≤ 60 s on a GitHub runner — **closed 2026-10-05: yes.** PR #38's
+      run `37231593223`: the report's full drive in the publish step took 16 s on the runner; the gate
+      module is estimated at roughly 31-33 s (local 18.7-19.6 s scaled by the measured full-suite
+      ratio; the `test` job prints no per-test durations, so this part is an estimate). The whole
+      `pytest` step took 220 s inside the job's 20-minute timeout. No split needed.
 
 ## Known risks (planning)
 
