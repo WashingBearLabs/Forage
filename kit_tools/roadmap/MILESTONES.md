@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # Milestones
 
-> Last updated: 2026-10-04
-> Updated by: Claude (v1.2.2 published and verified, corpus-86m-enablement US-004)
+> Last updated: 2026-10-06
+> Updated by: Claude (86M-default and contiguity rulings taken; unreleased)
 
 **Previous release:** Forage `v1.2.1` — the hardened image (`epic-forage-hardening`, T2.2):
 `/retrieve` parity, search-text and URL audit in attacker-controlled forms, signed cache
@@ -73,8 +73,14 @@ Poppy.
       hermetic route drivers, recorded-score cassettes (owner gates: 22M, 86M), generated baseline +
       floors gate in the `test` job, CI step summary, contiguity / 86M decision table. Spec 0 released
       `v1.2.2`; specs 1–5 changed no runtime behaviour. Guide `../../docs/corpus.md`; wrapper
-      `../specs/epic-forage-injection-corpus.md`. Follow-ups: contiguity default ruling and 86M default
-      ruling (`BACKLOG.md`).
+      `../specs/epic-forage-injection-corpus.md`. Follow-ups resolved 2026-10-06 (unreleased): the 86M
+      becomes the default and contiguity stays off (`../arch/DECISIONS.md`).
+
+- [ ] **Structural hardening** (`epic-forage-structural-hardening`, planned 2026-10-06, four specs /
+      thirteen stories; P1, follows T2.3): closes the corpus's 30 structural findings (case, entity,
+      confusable, split-tag, newline-split and markup-consumed variants; blocked-page titles;
+      inline-hidden body content) with stage-2 scan forms, keeping stage-3 input byte-identical
+      so no cassette is re-recorded. Wrapper `../specs/epic-forage-structural-hardening.md`.
 
 ## Exit Criteria for `v1.0.0`
 

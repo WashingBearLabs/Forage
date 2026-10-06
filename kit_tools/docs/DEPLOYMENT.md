@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document deployment procedures and rollback processes. How to ship safely.
 
-> Last updated: 2026-09-23
-> Updated by: Copilot (hardening-release US-004)
+> Last updated: 2026-10-06
+> Updated by: Claude (86M default ruling)
 
 ---
 
@@ -67,8 +67,10 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
   host-local port, or a VPN). Forage binds `127.0.0.1:8020` in the reference fragments and
   that binding is the only access control; see the "Deployment posture" note in `README.md`.
 - A weights source, or a decision to run without one: an `HF_TOKEN` (fine-grained read
-  token on an account that has accepted the Meta license for
-  `meta-llama/Llama-Prompt-Guard-2-22M`), or a reachable oras mirror via
+  token on an account that has accepted the Meta license for the default
+  `meta-llama/Llama-Prompt-Guard-2-86M`, which needs its own gated-access grant; a
+  22M-only grant boots degraded unless `FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-22M`
+  opts back to the smaller model), or a reachable oras mirror via
   `FORAGE_WEIGHTS_MIRROR` plus `FORAGE_MIRROR_TOKEN` (the default mirror
   `ghcr.io/washingbearlabs/forage-weights` is private to WashingBearLabs). With neither,
   Forage runs in the supported, loud, `degraded` mode. `docs/weights.md` covers all of this.
@@ -120,7 +122,7 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
    against `info.version` in the `openapi.yaml` you just extracted; a MAJOR mismatch means
    **do not deploy** (the consumer is expected to refuse activation, `CLAUDE.md`
    invariant 4). Compare contracts, never `sanitizer_revision`, which has deliberately
-   diverged from Poppy's forty-two times (`docs/bootstrap-notes.md` keeps the record).
+   diverged from Poppy's forty-three times (`docs/bootstrap-notes.md` keeps the record).
 5. **Confirm the weights source is reachable** from the host: an `HF_TOKEN` with gated-repo
    access, or mirror credentials. Weights are fetched at runtime, so a wrong token is a
    `degraded` boot, not a failed one.
@@ -155,7 +157,7 @@ verified; never roll back to withdrawn v1.2.0.
 | `compose/full.yml` (project `forage-full`) | `forage` + `searxng` + `valkey` (`valkey/valkey:8` digest-pinned, 8.1.10) | the same, plus `FORAGE_CACHE_HMAC_KEY` (bare passthrough, Forage only) for signed caching at contract 1.3.0 | `VALKEY_URL=redis://valkey:6379/4` as a literal; Valkey persists to `forage-valkey-data` (`--save 60 1`, no password, no ports). Without the key, a 1.3.0 service is `degraded: cache_unauthenticated` even when reachable |
 
 Common to both: `forage` publishes only `127.0.0.1:8020:8020`, runs with
-`restart: unless-stopped`, `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` (default `1024m`)
+`restart: unless-stopped`, `mem_limit: ${FORAGE_MEM_LIMIT:-1536m}` (default `1536m`, sized for the 86M)
 and `cpus: ${FORAGE_CPUS:-0}` (`0` omits the CPU cap), mounts `forage-model-cache:/app/model-cache`,
 and leaves `SEARXNG_URL` unset so the built-in default `http://searxng:8080` resolves to the
 companion by service name (the name `searxng` is load-bearing). There is no `depends_on`:
@@ -214,7 +216,7 @@ warning and every key falls back to its code default, while a malformed `extract
 1. **Read the `/health` body.** It always returns HTTP 200; the truth is in the body
    (`CLAUDE.md` invariant 5). On the first boot against an empty volume, expect
    `status: "degraded"` with `degraded_reasons: ["promptguard_unavailable"]` while the
-   ~270 MiB weight set downloads (measured 19 s cold, 9 s warm on the reference envelope (1 vCPU / 1 GB),
+   weight set downloads (~1.1 GiB for the default 86M; the 22M's ~270 MiB measured 19 s cold, 9 s warm on the reference envelope (1 vCPU / 1 GB),
    configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` — see `docs/configuration.md` § Sizing the container).
    Once weights land, expect `promptguard_loaded: true`,
    `capabilities.search_sanitization: 1`, `contract_version` matching the image's own
@@ -327,7 +329,7 @@ Things that change across versions and are expected, not bugs:
   "Re-vendoring": pick the upstream sha, update `model_fetcher.DEFAULT_MODEL_REVISION`
   for the default model, run `uv run python -m scripts.vendor_weights --model-id <id> --revision <sha>`, commit any constant change and
   `weights_manifest.json` together, record the rotation). For the operator that means the
-  next start is cold again (a fresh ~270 MiB fetch into `hub/`). Drop any
+  next start is cold again (a fresh fetch into `hub/`, ~1.1 GiB for the 86M). Drop any
   `FORAGE_MODEL_REVISION` override when upgrading: an override that does not match the
   selected model's manifest entry refuses before a snapshot lookup
   (`weights_revision_unpinned`), by design.
@@ -353,7 +355,7 @@ What the exploration supports about state across a rollback:
   change, the volume layout keeps one `snapshots/<revision>/` tree per revision under
   `hub/` and nothing sweeps `hub/`, so the older set is normally still there; but a warm
   rollback across revisions is not something CI or the docs verify, so budget for a cold
-  ~270 MiB re-fetch. Losing the volume entirely costs a re-download, never a rebuild.
+  re-fetch (~1.1 GiB for the 86M, ~270 MiB for the 22M). Losing the volume entirely costs a re-download, never a rebuild.
 - **There is no database**, so there are no migrations to reverse. Content-cache entries
   written under the newer `sanitizer_revision` simply become misses; under `full.yml` they
   persist harmlessly in the `forage-valkey-data` volume and are never read again.
@@ -398,8 +400,8 @@ guarantee under your traffic.
 | Resource | Reference figure | Source |
 |----------|------------------|--------|
 | Host | Reference envelope (1 vCPU / 1 GB), configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT`; 19 s cold weights boot, 9 s warm, not classify latency | `docs/configuration.md` § Sizing the container |
-| Container memory | `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` (default `1024m`): 512 MiB parent + 384 MiB pypdf child + ~128 MiB headroom (32 MiB cache, 64 MiB provisional classifier working set, 32 MiB margin) at reference defaults | `compose/*.yml`; `docs/configuration.md` § Sizing the container |
-| Weights volume | ~270 MiB (`model.safetensors` is 283,347,432 bytes); a mirror pull needs roughly 2.2x the manifest bytes free during the fetch | `docs/weights.md` |
+| Container memory | `mem_limit: ${FORAGE_MEM_LIMIT:-1536m}` (default `1536m`): 512 MiB parent + 405 MiB 86M resident delta + 384 MiB pypdf child + 32 MiB cache + 64 MiB provisional classifier working set = 1397 MiB, 139 MiB margin at reference defaults (the 22M opt-out is 992 MiB and fits `1024m`) | `compose/*.yml`; `docs/configuration.md` § Sizing the container |
+| Weights volume | ~1.1 GiB for the default 86M (`model.safetensors` is 1,115,268,200 bytes); ~270 MiB for the 22M (283,347,432 bytes); a mirror pull needs roughly 2.2x the manifest bytes free during the fetch | `docs/weights.md` |
 | Image | ~348 MB, single stage, CPU-only torch | `Dockerfile`, CI notes |
 | Concurrency | one uvicorn worker; `/extract` concurrency pinned at 1 with queue depth 1 (excess is a 429 `busy`); `/retrieve` fetches time out at 30 s and cap bodies at 10 MiB | `config.yaml`, `pipeline/stage5_url_audit.py` |
 

@@ -10,8 +10,8 @@
 
 > **TEMPLATE_INTENT:** Complete local development setup guide. Get a new developer running quickly.
 
-> Last updated: 2026-09-23
-> Updated by: Copilot (hardening-release US-004)
+> Last updated: 2026-10-06
+> Updated by: Claude (86M default ruling)
 
 ---
 
@@ -31,8 +31,9 @@ the container path, which is the documented way to *run* the service.
 
 - `curl` and `jq`: every document in this repo reads `/health` with
   `curl -s localhost:8020/health | jq`. Read the body, never just the status code.
-- A Hugging Face read token (`HF_TOKEN`) for the gated `meta-llama/Llama-Prompt-Guard-2-22M`
-  repository: optional. Without it the service runs in a supported, loudly degraded mode.
+- A Hugging Face read token (`HF_TOKEN`) for the gated `meta-llama/Llama-Prompt-Guard-2-86M`
+  repository (the default; it needs its own grant, separate from the 22M's, or set
+  `FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-22M`): optional. Without it the service runs in a supported, loudly degraded mode.
   The walk-through (account, Meta's access approval, token scope) is
   [`docs/weights.md`](../../docs/weights.md) § "Bring your own token".
 - `oras` 1.3.4: only for `scripts/vendor_weights.py` (operator re-vendoring of the private
@@ -189,7 +190,7 @@ from a file. Never as a build argument: a Docker `ARG` is recoverable from the i
 layer history, the `Dockerfile` takes no arguments at all, and both
 `tests/test_dockerfile.py` and CI's `secret-grep` job enforce that
 ([CLAUDE.md](../../CLAUDE.md) invariant 2). Never inline `-e` either (shell history,
-`ps`). Mount the named weights volume at `HF_HOME` so the ~270 MiB download happens once
+`ps`). Mount the named weights volume at `HF_HOME` so the ~1.1 GiB download (86M default) happens once
 (`.env` at the repo root is gitignored):
 
 ```bash

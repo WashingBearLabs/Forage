@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # CODE_ARCH.md
 
-> Last updated: 2026-09-23
-> Updated by: Copilot (hardening-release US-004)
+> Last updated: 2026-10-06
+> Updated by: Claude (86M default ruling)
 
 ---
 
@@ -108,13 +108,13 @@ file in the repo. |
 | `pipeline/extraction_limits.py` | 181 | Resource limits from `config.yaml`'s `extraction:` block. |
 | `pipeline/stage1_upload.py` | 172 | Upload path for `/extract` (gated by `extract_route_enabled`). |
 | `promptguard/classifier.py` | 296 | Loads and runs Llama Prompt Guard 2 (`use_safetensors=True` — the loader can never fall back to a pickle); absent weights → degraded, never silent. `classify_windows(text, *, max_chunks=None)` returns per-window scores and chunk texts in document order, enforcing the budget before inference; `classify()` delegates to it and preserves max-score pooling and all tied chunks. Stage 3 consumes `classify_windows()` for both verdict rules. The classifier source is not a sanitizer-revision input; the stage-3 rule is. |
-| `model_fetcher.py` | 1995 | Per-model weight acquisition. `_manifest_entry(path, model_id)` memoises both entries and failures; `resolve_revision(model_id)` is total (shaped override, selected pin, default-only fallback, otherwise `unpinned`). `acquire_and_load` refuses an unusable/unknown entry or unpinned revision before any snapshot lookup, then verifies cache → **Hugging Face → GHCR mirror**. All legs verify the requested pair against `weights_manifest.json.models`, exact-set and safetensors-only, with symlink containment and one-generation quarantine. The mirror extracts with `filter="data"` into bounded staging, verifies there and installs by rename. `_load_verified` independently re-derives requested and manifest snapshot paths, requiring equality and existence before loading from `$HF_HOME/hub` offline. `WeightAcquisition(model_id=...)` forwards identity through its single-flight, 30 s→10 min jittered retry loop. Six runtime environment variables since US-006: `resolve_model_id()` returns `(id, allowed)` for `FORAGE_MODEL_ID`; only the lifespan raises `ModelConfigurationError`, keeping revision fallbacks total. The allowlist ships only 22M until the owner vendors a second entry. |
+| `model_fetcher.py` | 1995 | Per-model weight acquisition. `_manifest_entry(path, model_id)` memoises both entries and failures; `resolve_revision(model_id)` is total (shaped override, selected pin, default-only fallback, otherwise `unpinned`). `acquire_and_load` refuses an unusable/unknown entry or unpinned revision before any snapshot lookup, then verifies cache → **Hugging Face → GHCR mirror**. All legs verify the requested pair against `weights_manifest.json.models`, exact-set and safetensors-only, with symlink containment and one-generation quarantine. The mirror extracts with `filter="data"` into bounded staging, verifies there and installs by rename. `_load_verified` independently re-derives requested and manifest snapshot paths, requiring equality and existence before loading from `$HF_HOME/hub` offline. `WeightAcquisition(model_id=...)` forwards identity through its single-flight, 30 s→10 min jittered retry loop. Six runtime environment variables since US-006: `resolve_model_id()` returns `(id, allowed)` for `FORAGE_MODEL_ID`; only the lifespan raises `ModelConfigurationError`, keeping revision fallbacks total. The allowlist is 22M and 86M; `DEFAULT_MODEL_ID` is the 86M since the 2026-10-06 owner ruling, and `DEFAULT_MODEL_REVISION` is its pin `a8ded8e697ce7c355e395a0df51f94adb4a2fd27`. |
 | `pipeline/stage1_pdf.py` | 156 | PDF branch of stage 1. |
 | `pipeline/stage3_promptguard.py` | 282 | ML injection scan: strict max-score rule OR opt-in consecutive-window contiguity rule; trusted domains skip both. Frozen `PromptGuardSettings`, `PromptGuardConfigurationError` and the once-at-boot `promptguard_settings_from_config` builder live beside the rule. Windows `0` ships disabled, otherwise 2–8; threshold defaults to an absolute server-side 0.5. Flags union window indices in document order; stage 4 remains unchanged and publishes diagnostic labels only. |
 | `pipeline/contract.py` | 358 | The versioned response contract (`contract_version`, currently **1.3.0**), the 18-code error vocabulary, and the `ContentKind` Literal. |
 | `contract_smoke.py` | 759 | CI's published-image smoke: polls a running container's `/health`, validates it against the same `HealthResponse` model the golden test pins, and reads every wire value from `pipeline/contract.py` at run time. Two modes via `--expect-status`: `degraded` (the default, CI's weights-free image) and `healthy` (a container started with weights — the three PromptGuard-coupled checks invert, every other check is identical); the wait polls until `/health` answers 200 with the expected `status`, not merely the first 200. With `--image` (US-004) it also `cat`s `/app/contract/openapi.yaml` out of the candidate image, hashes it against the `--anchor` file (default the committed anchor) and compares its `info.version` with the version the container serves. Ships in no image. |
 | `searxng_smoke.py` | 779 | CI's companion-image smoke: creates an egress-free Docker network, runs SearXNG beside a Valkey and probes it from a third container. Docker goes through an injected runner and every judgement is a pure function, so `tests/test_searxng_smoke.py` covers the failure branches without a daemon. Ships in no image. |
-| `scripts/vendor_weights.py` | 1198 | Operator-only, supervised: `--model-id` (default 22M, no environment selection) and `--revision` flow through download, per-model manifest merge and scoped diff, deterministic symlink-dereferenced tarball, real-verifier self-check and revision-tagged push. The safetensors allowlist is enforced **at generation time**, other model entries are preserved, and GHCR privacy is checked after push. No credential reaches an argv. Ships in no image; `docs/weights.md` is the procedure. |
+| `scripts/vendor_weights.py` | 1198 | Operator-only, supervised: `--model-id` (default `DEFAULT_MODEL_ID`, now the 86M; no environment selection) and `--revision` flow through download, per-model manifest merge and scoped diff, deterministic symlink-dereferenced tarball, real-verifier self-check and revision-tagged push. The safetensors allowlist is enforced **at generation time**, other model entries are preserved, and GHCR privacy is checked after push. No credential reaches an argv. Ships in no image; `docs/weights.md` is the procedure. |
 | `scripts/export_contract.py` | 327 | Operator-only: renders `app.openapi()` into `contract/openapi.yaml` in a canonical form pinned here (JSON round-trip, no anchors, sorted keys, `width=88`), writes the sha256 anchor, and writes the drift check's own committed failure case. Byte-stable across processes and hash seeds — `tests/test_contract_export.py` calls `drift_report()` directly, so the gate runs on every `uv run pytest` rather than in a lane someone has to remember. |
 | `pipeline/sanitizer_revision.py` | 82 | Hashes nine source files — the eight `pipeline/` sources (`_REVISION_SOURCES`) plus repo-root `url_validator.py` (`_ROOT_REVISION_SOURCES`, resolved against `pipeline_dir.parent`) — the model identity, `idna@<version>`, max threshold, contiguity windows and contiguity threshold into a `sanitizer_revision` string. The last three inputs are ASCII, in that order, even when contiguity is disabled. See the gotcha below. |
 | `pipeline/search_providers/searxng.py` | 262 | `SearxngProvider` — the key-less free floor behind the protocol, and the home of `DEFAULT_SEARXNG_URL`, `SEARXNG_ENGINES`, `HTTP_STATUS_DETAIL_PREFIX` and the closed `_SEARXNG_FAILURE_DETAILS` vocabulary. A behavior-preserving extraction of the `httpx` block that used to sit inline in `run_search_pipeline`, with two recorded deviations: `trust_env=False` on the client and a `reason` text that no longer carries `str(exc)` or userinfo. Not in `_REVISION_SOURCES`, for the same reason as `base.py`. |
@@ -381,12 +381,13 @@ sources and hash definition are unchanged. The corrected code docstrings
 are outside the hash. Full values and handoff: `docs/bootstrap-notes.md`.
 
 **Model identity is startup state, label meaning is checked before publication.**
-`FORAGE_MODEL_ID` selects only an allowlisted id; unset and blank mean 22M.
+`FORAGE_MODEL_ID` selects only an allowlisted id; unset and blank mean 86M
+(the default since 2026-10-06; set the 22M id to opt out).
 The configured id reaches acquisition, both classifier auto-classes, the memory
 advisory and the revision's `model_id@revision` input. `/health.promptguard_model`
 reports it even while unloaded, never inferring readiness from configuration.
 `load()` checks `id2label` after the import/load `try`: exactly two indexed
-BENIGN/INJECTION labels, case-insensitive, or the exact pinned 22M
+BENIGN/INJECTION labels, case-insensitive, or the exact pinned 22M or 86M
 `LABEL_0`/`LABEL_1` mapping documented in `docs/weights.md`; otherwise
 `model_labels_unexpected` and no
 publication. The successful labels supply the instance's injection index.
@@ -454,6 +455,13 @@ both reproduces the former hash under default and shipped config.
 This changes policy enforcement, not text scanning or response shape.
 The UTF-8 raw-threshold serialization remains ASCII-compatible; provider
 transport sources are not hash inputs. Full controls: `docs/bootstrap-notes.md`.
+
+The forty-third rotation is `021378ef…` → `b5e91fd6…` for the 2026-10-06
+owner ruling that makes the 86M the default model. No hashed source moves;
+only the default `model_id@revision` input does, and
+`FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-22M` reproduces `021378ef…`
+exactly. No response shape changes (contract stays 1.3.0); old cache keys
+invalidate. Contiguity gating stays off by the same ruling.
 
 **Network reads enforce the raw ceiling before allocation.**
 `pipeline/provider_transport.py` connects both providers through HTTPX's public
@@ -541,7 +549,7 @@ keyless Valkey. Memory-mode health is unchanged; an unused supplied key warns.
 synchronous wiring, starts weight acquisition as
 `asyncio.create_task(model_fetcher.WeightAcquisition(...).run())`, and yields — it never
 awaits the fetch. uvicorn serves nothing until lifespan startup returns, so an `await`
-there would hold the port closed for the length of a ~270 MiB download and a Compose
+there would hold the port closed for the length of a ~1.1 GiB download and a Compose
 healthcheck would report unhealthy. Plain Compose does not restart a container
 for unhealthy status; restart policies react to process exits.
 The handle lives on `app.state.model_task`
@@ -556,7 +564,7 @@ until the classifier loads, so an outage or a late gated-repo approval converges
 a restart; `model.retries_scheduled` and a per-retry WARNING are what distinguish
 "waiting" from "wedged". Exactly **one acquisition is in flight at a time**: the lock is
 held for the whole of `attempt_once()`, and a second caller is turned away rather than
-queued, because queuing means a second ~270 MiB download the moment the first ends
+queued, because queuing means a second ~1.1 GiB download the moment the first ends
 (`app.state.model_acquisition` is the object any future caller must go through). And the
 load itself runs under a **scoped hub-offline pin** — `local_files_only=True` does not
 stop `huggingface_hub` from fetching its agent-harness registry while building headers,

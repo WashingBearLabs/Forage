@@ -53,9 +53,10 @@ services:
       # docs/weights.md § "Bring your own token".
       - HF_TOKEN
       # Model selection and its pin: bare names like HF_TOKEN, genuinely unset
-      # unless supplied in `.env` or your shell. Default: the vendored 22M pin.
-      # The opt-in 86M needs its own Hugging Face gated-access grant and
-      # FORAGE_MEM_LIMIT=1536m; the 1024m default below does not change.
+      # unless supplied in `.env` or your shell. Default: the vendored 86M pin,
+      # which needs its own Hugging Face gated-access grant (the 22M's does not
+      # cover it). FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-22M opts back
+      # to the smaller model, which also fits FORAGE_MEM_LIMIT=1024m.
       - FORAGE_MODEL_ID
       - FORAGE_MODEL_REVISION
       # The search-provider chain — bare names, like HF_TOKEN: passed through
@@ -95,11 +96,11 @@ services:
     # behaviour; Compose omits the key). Below 1 vCPU is unsupported.
     # Service-level `cpus` needs Docker Compose v2 (Compose Spec); verified
     # on v2.40.3. FORAGE_MEM_LIMIT takes Docker's byte-unit syntax, default
-    # 1024m; FORAGE_MEM_LIMIT=abc fails at Compose, before Forage starts.
+    # 1536m (sized for the default 86M); FORAGE_MEM_LIMIT=abc fails at Compose, before Forage starts.
     # See docs/configuration.md § "Sizing the container" for both variables
     # and the CPU/memory rules before raising concurrency or cache bounds.
     cpus: ${FORAGE_CPUS:-0}
-    mem_limit: ${FORAGE_MEM_LIMIT:-1024m}
+    mem_limit: ${FORAGE_MEM_LIMIT:-1536m}
     # Liveness, not health: /health's body is health; this status-only probe
     # discards it so Docker's State.Health.Log[].Output captures no body.
     # One /health every 30 s calls cache.ping_if_due(), detecting recovery
@@ -160,7 +161,7 @@ volumes:
   forage-model-cache:
     # Fixed name, exactly as in `minimal.yml` and for the same two reasons: it
     # is docs/weights.md's canonical spelling, and it lets the two fragments
-    # share one verified weight set instead of downloading ~270 MiB twice.
+    # share one verified weight set instead of downloading ~1.1 GiB twice.
     name: forage-model-cache
   # Project-scoped, deliberately unlike the one above: the cache contents are
   # this deployment's, there is nothing to share, and a fixed name would let

@@ -24,17 +24,20 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL_ID = "meta-llama/Llama-Prompt-Guard-2-22M"
+PROMPT_GUARD_22M_ID = "meta-llama/Llama-Prompt-Guard-2-22M"
+PROMPT_GUARD_86M_ID = "meta-llama/Llama-Prompt-Guard-2-86M"
+# The 86M since the 2026-10-06 owner ruling: on the injection corpus the 22M's
+# stage-3 catch was nil and the 86M's was not, with no benign false positive
+# for either (docs/corpus.md "Decision inputs"). The 22M stays allowlisted as
+# the smaller opt-out via FORAGE_MODEL_ID.
+DEFAULT_MODEL_ID = PROMPT_GUARD_86M_ID
 # This verified snapshot omits label names. Meta's Prompt Guard 2 inference
 # uses the last binary logit for maliciousness; never assume that for a new pin.
 _PINNED_GENERIC_LABEL_INDICES = {
-    (DEFAULT_MODEL_ID, "11614a155199674a0a95e6602d6ab0417b790ed0"): 1,
+    (PROMPT_GUARD_22M_ID, "11614a155199674a0a95e6602d6ab0417b790ed0"): 1,
     # The 86M snapshot omits label names too; index 1 is pinned on probe evidence
     # (corpus-86m-enablement US-002), not on the 22M's say-so.
-    (
-        "meta-llama/Llama-Prompt-Guard-2-86M",
-        "a8ded8e697ce7c355e395a0df51f94adb4a2fd27",
-    ): 1,
+    (PROMPT_GUARD_86M_ID, "a8ded8e697ce7c355e395a0df51f94adb4a2fd27"): 1,
 }
 MAX_SEQ_LEN = 512
 CHUNK_OVERLAP = 64

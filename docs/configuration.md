@@ -109,8 +109,8 @@ instance is private-network-only and Forage is its only client.
 | `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION` | unset | **Break-glass only** — see below. |
 | `POPPY_RETRIEVAL_LEGACY_CAPABILITY` | unset | Deprecated alias of `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION`, kept so a pre-extraction deployment keeps working. Identical semantics. |
 | `HF_HOME` | `/app/model-cache` (set by the image) | Hugging Face cache directory the PromptGuard weights are fetched into and read from. Override only if you mount the weights elsewhere. Mount a volume here or the weights are re-fetched on every container recreate. |
-| `HF_TOKEN` | unset | Hugging Face access token for the **gated** `meta-llama/Llama-Prompt-Guard-2-22M` repository. Optional — see "Weights acquisition" below. **Carries a credential**; supply it the same way as `VALKEY_URL`. |
-| `FORAGE_MODEL_ID` | `meta-llama/Llama-Prompt-Guard-2-22M` | Model selected at startup; surrounding whitespace is stripped and unset or blank uses the default. Unknown values refuse boot with `ModelConfigurationError` and WARNING `model_id_not_allowed`, never echoing the value. The allowlist is exactly two ids: `meta-llama/Llama-Prompt-Guard-2-22M` (the default) and the opt-in `meta-llama/Llama-Prompt-Guard-2-86M`. The 86M needs its own Hugging Face gated-access grant (the 22M's does not cover it) and needs a raised memory limit (`FORAGE_MEM_LIMIT=1536m` recommended; its measured resident delta in `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` is 405 MiB — see [Sizing the container](#sizing-the-container)). Both Compose fragments pass this and `FORAGE_MODEL_REVISION` through as bare names. Restart to apply; `/health.promptguard_model` reports the configured id even while unloaded. |
+| `HF_TOKEN` | unset | Hugging Face access token for the **gated** repository of the selected model — `meta-llama/Llama-Prompt-Guard-2-86M` by default, `meta-llama/Llama-Prompt-Guard-2-22M` if `FORAGE_MODEL_ID` selects it. Meta grants access per repository: the token needs the grant for the model you actually run. Optional — see "Weights acquisition" below. **Carries a credential**; supply it the same way as `VALKEY_URL`. |
+| `FORAGE_MODEL_ID` | `meta-llama/Llama-Prompt-Guard-2-86M` | Model selected at startup; surrounding whitespace is stripped and unset or blank uses the default. Unknown values refuse boot with `ModelConfigurationError` and WARNING `model_id_not_allowed`, never echoing the value. The allowlist is exactly two ids: `meta-llama/Llama-Prompt-Guard-2-86M` (the default since the 2026-10-06 owner ruling) and `meta-llama/Llama-Prompt-Guard-2-22M`, the smaller opt-out. Each needs its own Hugging Face gated-access grant (one does not cover the other). The 86M's measured resident delta in `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` is 405 MiB, which is why the Compose default `FORAGE_MEM_LIMIT` is `1536m`; the 22M fits `1024m` — see [Sizing the container](#sizing-the-container). Both Compose fragments pass this and `FORAGE_MODEL_REVISION` through as bare names. Restart to apply; `/health.promptguard_model` reports the configured id even while unloaded. |
 | `FORAGE_MODEL_REVISION` | the selected model's committed pin (a 40-character commit sha) | Uses the selected model's committed pin; a malformed value falls back to the pin with `model_revision_invalid`; a well-formed value that is not that pin refuses to verify (`weights_revision_unpinned`). Each pin lives at `weights_manifest.json` → `models[model_id].revision`; acquisition refuses before any cache lookup or fetch. |
 | `FORAGE_WEIGHTS_MIRROR` | `ghcr.io/washingbearlabs/forage-weights` | The OCI **repository** holding the vendored weights, used when Hugging Face cannot supply them. A repository, never a tag: the tag is always `FORAGE_MODEL_REVISION`, so redirecting the mirror cannot also redirect which revision it serves. Validated to a lower-case `<registry>/<owner>/<name>`, optionally prefixed `https://` — anything else (an `http://` scheme, embedded credentials, a tag or digest) is refused with an error and the mirror is treated as unconfigured. |
 | `TMPDIR` | the platform default (`/tmp` in the image) | Parent of the process-private spool directory `forage-spool-<uid>` that `/extract` uploads and `/retrieve`'s fetched PDFs are written to for the PDF worker. **Must be sticky or not writable by other users**; tmpfs recommended. See "The spool directory" below. |
@@ -554,14 +554,15 @@ standard-tier content as unscanned while it reads `false`.
 ## Sizing the container
 
 The host envelope is an operator choice, not a fixed box. These are starting
-recommendations for the 22M model, not measured throughput guarantees. The reference
-envelope (1 vCPU / 1 GB) is configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT`;
-the fragments' unchanged defaults are **no CPU limit**, `1024m`, threads `0` and
-classification concurrency `1`, not the tuned first row below.
+recommendations, not measured throughput guarantees. The reference envelope (1 vCPU /
+1.5 GB for the default 86M; 1 GB suffices for the 22M opt-out) is configurable via
+`FORAGE_CPUS` / `FORAGE_MEM_LIMIT`; the fragments' defaults are **no CPU limit**,
+`1536m` (raised from `1024m` with the 86M default), threads `0` and classification
+concurrency `1`, not the tuned first row below.
 
 | Host envelope | FORAGE_CPUS | FORAGE_MEM_LIMIT | promptguard_threads | classification_concurrency | cache.max_bytes | `/extract` classify latency, warm p50 (one window / max budget) |
 |---|---|---|---|---|---|---|
-| 1 vCPU / 1 GB (reference envelope) | 1 | 1024m | 1 | 1 | 33554432 | 22M **13.1 s / 501 s** (40 windows); 86M **26.2 s / 1,316 s** (55 windows) |
+| 1 vCPU / 1.5 GB (reference envelope) | 1 | 1536m (`1024m` for the 22M) | 1 | 1 | 33554432 | measured at `1024m`: 86M **26.2 s / 1,316 s** (55 windows); 22M **13.1 s / 501 s** (40 windows) |
 | 2 / 2 GB | 2 | 2048m | 2 | 1 | 67108864 | not measured |
 | 4 / 4 GB | 4 | 4096m | 2 | 2 | 134217728 | not measured at this row's settings; at `--cpus 4`, `1024m`, default threads: 22M **3.1 s / 104 s**, 86M **6.4 s / 368 s** |
 
@@ -572,11 +573,13 @@ Measured 2026-10-02 by `corpus-86m-enablement` US-003 on one host (AMD Ryzen Thr
 host-specific** — re-measure on your own hardware before sizing a deployment. No run was
 OOM-killed; the 86M's highest `memory.peak` at `1024m` was 855 MB.
 
-**Selecting the 86M:** set `FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-86M` and raise the
-limit to `FORAGE_MEM_LIMIT=1536m` — the memory rule below adds up to ~1,397 MiB for the 86M at
-the shipped extraction and cache settings, even though the benchmark's single-in-flight peak
-stayed under 1 GB. Its first boot acquires ~1.1 GB (against ~270 MiB for the 22M), and the
-Hugging Face token must hold a separate gated-access grant for the 86M repository.
+**The default 86M** needs the `1536m` Compose default — the memory rule below adds up to
+~1,397 MiB for it at the shipped extraction and cache settings, even though the benchmark's
+single-in-flight peak stayed under 1 GB. Its first boot acquires ~1.1 GB, and the Hugging Face
+token must hold the gated-access grant for the 86M repository. **The 22M opt-out**
+(`FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-22M`) classifies about twice as fast,
+acquires ~270 MiB and fits `FORAGE_MEM_LIMIT=1024m`, at the cost of the stage-3 catch the
+injection corpus measured (`docs/corpus.md` "Decision inputs").
 
 See [Benchmarking the classifier](weights.md#benchmarking-the-classifier) for the
 host-side service harness: each input uses a separate fresh service for process-cold
@@ -600,8 +603,8 @@ resident memory is shared, not multiplied by concurrency:
 
 | Selected model | Resident delta over 22M (`CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL`) | Per-classification working set |
 |---|---|---|
-| `meta-llama/Llama-Prompt-Guard-2-22M` | 0 MiB (baseline) | provisional 64 MiB |
-| `meta-llama/Llama-Prompt-Guard-2-86M` (opt-in) | 405 MiB (measured, `corpus-86m-enablement` US-003) | not measured — model-independent provisional constant |
+| `meta-llama/Llama-Prompt-Guard-2-22M` (opt-out) | 0 MiB (baseline) | provisional 64 MiB |
+| `meta-llama/Llama-Prompt-Guard-2-86M` (default) | 405 MiB (measured, `corpus-86m-enablement` US-003) | not measured — model-independent provisional constant |
 
 `CLASSIFIER_WORKING_SET` is currently
 `PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES = 64 MiB`. It has **no measurement behind
@@ -624,10 +627,11 @@ no concurrency bound. Enabling `/extract` also requires budgeting simultaneous
 upload and fetched-PDF workers, as explained under the `retrieve:` block; the
 advisory boot rule is not a measured peak-RSS guarantee.
 
-The worked reference row on `minimal.yml` is
-`512 + 0 + 64 + 384 + 32 = 992 MiB` under `1024m`, a **32 MiB margin**.
-On `full.yml` it is `512 + 0 + 64 + 384 + 4 = 964 MiB`, a 60 MiB margin.
-Thus the old ~128 MiB headroom holds the 32 MiB cache, the 64 MiB provisional
+The worked reference row on `minimal.yml` with the default 86M is
+`512 + 405 + 64 + 384 + 32 = 1,397 MiB` under `1536m`, a **139 MiB margin**; on
+`full.yml` it is `512 + 405 + 64 + 384 + 4 = 1,369 MiB`, a 167 MiB margin. With the 22M
+opt-out at `1024m` the rows are `512 + 0 + 64 + 384 + 32 = 992 MiB` (a 32 MiB margin) and
+`964 MiB` (60 MiB): that ~128 MiB headroom holds the 32 MiB cache, the 64 MiB provisional
 classifier working set and a 32 MiB margin; it is not all classifier working set.
 Boot warns `envelope_memory_rule_unmet` when the cgroup limit is readable and strictly
 below the rule; above it the failure is an OOM kill `/health` cannot report.
@@ -888,9 +892,10 @@ selection" above). They are validated at startup regardless of which storage
 is active, so an invalid known value refuses boot rather than silently widening a
 memory bound. A misspelled key instead warns and is ignored.
 
-The reference budget uses `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` (default `1024m`): 512 MiB
-for the parent FastAPI + torch + PromptGuard process and 384 MiB for the spawned
-extraction worker leave roughly 128 MiB. The 32 MiB cache spends a quarter of it;
+The reference budget uses `mem_limit: ${FORAGE_MEM_LIMIT:-1536m}` (default `1536m`): 512 MiB
+for the parent FastAPI + torch + PromptGuard process, plus the default 86M's 405 MiB resident
+delta, and 384 MiB for the spawned extraction worker leave roughly 235 MiB (with the 22M
+opt-out at `1024m`, roughly 128 MiB). The 32 MiB cache spends a quarter of it;
 64 MiB is the provisional classifier working set and 32 MiB is margin. See
 [Sizing the container](#sizing-the-container) before changing any operand.
 

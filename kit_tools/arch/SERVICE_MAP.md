@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document dependencies and integrations. Shows what talks to what and failure impacts.
 
-> Last updated: 2026-09-23
-> Updated by: Copilot (hardening-release US-004)
+> Last updated: 2026-10-06
+> Updated by: Claude (86M default ruling)
 
 ---
 
@@ -158,7 +158,7 @@ Reachability alone does not authenticate cached content.
 
 | Attribute | Value |
 |-----------|-------|
-| **Purpose** | Runtime acquisition of `meta-llama/Llama-Prompt-Guard-2-22M` (gated repo, Llama 4 Community License) at the pinned revision `11614a155199674a0a95e6602d6ab0417b790ed0` (`DEFAULT_MODEL_REVISION` in `model_fetcher.py`). `weights_manifest.json` pins five files with sha256 and size (`config.json`, `model.safetensors` 283,347,432 B, `special_tokens_map.json`, `tokenizer.json`, `tokenizer_config.json`; about 270 MiB). No weights are ever in the image. |
+| **Purpose** | Runtime acquisition of the selected PromptGuard model (gated repos, Llama 4 Community License; each needs its own access grant): default `meta-llama/Llama-Prompt-Guard-2-86M` at the pinned revision `a8ded8e697ce7c355e395a0df51f94adb4a2fd27` (`DEFAULT_MODEL_REVISION` in `model_fetcher.py`), or the `FORAGE_MODEL_ID` opt-out `meta-llama/Llama-Prompt-Guard-2-22M` at `11614a155199674a0a95e6602d6ab0417b790ed0`. `weights_manifest.json` pins five files per model with sha256 and size (`config.json`, `model.safetensors`, `special_tokens_map.json`, `tokenizer.json`, `tokenizer_config.json`; about 1.1 GiB for the 86M, 270 MiB for the 22M). No weights are ever in the image. |
 | **Client / protocol** | Primary leg: `huggingface_hub.snapshot_download(MODEL_ID, revision, cache_dir=$HF_HOME/hub, allow_patterns=[*.json, *.model, *.safetensors, *.txt], token=HF_TOKEN)`. Fallback leg (tried only after the HF leg fails): `oras pull <FORAGE_WEIGHTS_MIRROR>:<revision>` (oras 1.3.4, sha256-pinned per arch in `Dockerfile`; `ORAS_TIMEOUT_S` 1800; token on stdin; artifact type `application/vnd.washingbearlabs.forage-weights.v1+tar`; staged under `$HF_HOME/staging/`, capped at 2x manifest bytes + 10%). Both legs end in exact-set sha256 verification; a refused set is moved to `$HF_HOME/quarantine/` (one generation kept) and never loaded. Loader uses `use_safetensors=True`, `local_files_only=True`. |
 | **Configuration** | `HF_TOKEN` (**secret**, optional; read token, only ever passed to `snapshot_download`). `HF_HOME` (image sets `/app/model-cache`; mount the `forage-model-cache` volume here or every recreate re-downloads). `FORAGE_MODEL_REVISION` uses the selected model's committed pin; a malformed value falls back to the pin with `model_revision_invalid`; a well-formed value that is not that pin refuses to verify (`weights_revision_unpinned`). Pins live per model under `weights_manifest.json.models`. `FORAGE_WEIGHTS_MIRROR` (default `ghcr.io/washingbearlabs/forage-weights`, **private** — useless to third parties; `http://`, userinfo, `:tag` or `@digest` are refused). `FORAGE_MIRROR_TOKEN` (**secret**, optional read-only registry token). Walk-through: `docs/weights.md`. |
 | **Timeouts / retries** | Acquisition runs in an `asyncio` task started by the lifespan and **never blocks startup**. `WeightAcquisition.run()` retries **forever** until loaded: 30 s initial backoff doubling to 600 s, plus or minus 20% jitter (`RETRY_*` constants in `model_fetcher.py`, not env-configurable), single-flight (a second caller is refused, not queued). Each armed retry logs WARNING `weights_retry_scheduled`; each failed round logs ERROR `weights_unavailable — … Attempts: huggingface=<code>, mirror=<code>`. Warm start with a verified set does zero network (measured 9 s warm / 19 s cold on the reference envelope (1 vCPU / 1 GB), configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` — see `docs/configuration.md` § Sizing the container). |
@@ -207,7 +207,7 @@ behaviour is described here from Forage's own docs and tests
 **What Poppy must do:**
 - Compare `/health.contract_version` (**1.3.0**) on its **MAJOR** and refuse to activate on
   a mismatch (`CLAUDE.md` invariant 4). **Never** compare `sanitizer_revision`: the two
-  repos' revisions diverged deliberately forty-two times (Forage `021378ef…`, Poppy still
+  repos' revisions diverged deliberately forty-three times (Forage `b5e91fd6…`, Poppy still
   `e6b2b56d…`; `docs/bootstrap-notes.md` is the running record, not this count).
 - Vendor the contract by the procedure in `contract/GOVERNANCE.md`: pick a tag (never
   `latest`); fetch `openapi.yaml` and `openapi.yaml.sha256` from the **same** tag (git
@@ -283,7 +283,7 @@ single-label allowlists are invalid.
 (4 MiB, including the signed prefix) after deleting any superseded entry;
 `storage_oversize_skips` also counts memory's own `cache.max_bytes` refusal.
 Memory bounds: `cache.max_entries` 256 and `cache.max_bytes` 32 MiB, evicting
-expired entries first then LRU; sized for the 1 GiB `mem_limit` in compose.
+expired entries first then LRU; sized within the 1536m `mem_limit` in compose.
 Keep `cache.max_value_bytes` equal across replicas; lowering it can reject old,
 larger Forage-authored values as `oversize`, not proof of tampering.
 
@@ -298,7 +298,7 @@ outcomes; `/metrics.cache.storage_*` count storage operations.
 - **`forage-model-cache` volume** at `/app/model-cache` (= `HF_HOME`): `hub/` (verified
   snapshot), `quarantine/` (one generation of refused weights), `staging/` and `xet/`
   (purged on every acquisition path). Both compose fragments name it explicitly so it is
-  shared between them. Without it every recreate is a cold 270 MiB download — not an
+  shared between them. Without it every recreate is a cold ~1.1 GiB download (86M default) — not an
   error, just slow. See `docs/weights.md`.
 - **Upload spool** for `/extract`: `0600` tempfiles, unlinked in `finally`.
 - **In-process metrics** (`/metrics`): reset on restart, per container; there is no exporter.
@@ -388,10 +388,10 @@ binding, service names, volume literal, absent limiter, required secret) are ass
 |---|---|---|
 | **Starts** | `forage` + `searxng` | `forage` + `searxng` + `valkey` |
 | **Published ports** | `forage`: `127.0.0.1:8020:8020` only. `searxng`: none. | Same, plus `valkey`: none. |
-| **Forage env** | `HF_TOKEN`, `FORAGE_MODEL_ID`, `FORAGE_MODEL_REVISION`, `FORAGE_SEARCH_PROVIDERS` and `FORAGE_BRAVE_API_KEY` bare pass-through (genuinely unset if absent — unset is the default `searxng` chain and vendored 22M pin). `VALKEY_URL` deliberately absent (memory mode). `SEARXNG_URL` absent (default `http://searxng:8080` — the compose service name `searxng` is load-bearing). | Same, plus the literal `VALKEY_URL=redis://valkey:6379/4` and bare `FORAGE_CACHE_HMAC_KEY` for signing; without it cached content is unsigned and health reports `cache_unauthenticated`. `SEARXNG_VALKEY_URL` is intentionally **not** wired (limiter stays off). |
+| **Forage env** | `HF_TOKEN`, `FORAGE_MODEL_ID`, `FORAGE_MODEL_REVISION`, `FORAGE_SEARCH_PROVIDERS` and `FORAGE_BRAVE_API_KEY` bare pass-through (genuinely unset if absent — unset is the default `searxng` chain and vendored 86M pin). `VALKEY_URL` deliberately absent (memory mode). `SEARXNG_URL` absent (default `http://searxng:8080` — the compose service name `searxng` is load-bearing). | Same, plus the literal `VALKEY_URL=redis://valkey:6379/4` and bare `FORAGE_CACHE_HMAC_KEY` for signing; without it cached content is unsigned and health reports `cache_unauthenticated`. `SEARXNG_VALKEY_URL` is intentionally **not** wired (limiter stays off). |
 | **Volumes** | `forage-model-cache:/app/model-cache` (explicit `name:`, shared across fragments) | Same, plus `forage-valkey-data:/data` (project-scoped) |
 | **Secrets** | `compose/.env` (gitignored): `HF_TOKEN` (optional), `FORAGE_BRAVE_API_KEY` (optional), `SEARXNG_SECRET` (required-or-fail via `${SEARXNG_SECRET:?…}`) | Same, plus `FORAGE_CACHE_HMAC_KEY` for signed caching |
-| **Limits** | `forage` `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` (default `1024m`), `cpus: ${FORAGE_CPUS:-0}` (unset/0 omits the cap), `restart: unless-stopped` | Same |
+| **Limits** | `forage` `mem_limit: ${FORAGE_MEM_LIMIT:-1536m}` (default `1536m`), `cpus: ${FORAGE_CPUS:-0}` (unset/0 omits the cap), `restart: unless-stopped` | Same |
 | **Image pins** | `forage:1.2.2` (published), `forage-searxng:0.1.1-rc` | Same |
 
 **Pin sequencing:** both fragments pin `ghcr.io/washingbearlabs/forage:1.2.2` and

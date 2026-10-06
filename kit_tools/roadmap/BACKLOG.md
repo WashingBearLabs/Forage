@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # BACKLOG.md
 
-> Last updated: 2026-10-04
-> Updated by: Claude (corpus-gates US-005 close-out)
+> Last updated: 2026-10-06
+> Updated by: Claude (decoder bound shipped; 86M-default and contiguity rulings taken)
 
 Work that is real but not yet scheduled into a feature spec. Items with an owning spec
 live in `MILESTONES.md` instead.
@@ -17,6 +17,15 @@ live in `MILESTONES.md` instead.
 | P1 | Committed hermeticity canary test (deliberately omitted at bootstrap to keep the exact-count gate) | Tech Debt | `feature-forage-ci-and-image` (US-002) | Done |
 | P2 | Rotate the SearXNG placeholder `secret_key` before the repo goes public | Security | — | Planned |
 | P2 | Automated container smoke (`docker build` + `docker run` + `/health`) — manual today | Tech Debt | `feature-forage-ci-and-image` | Done |
+
+---
+
+## Forage Structural Hardening (Epic)
+- [Epic Overview](../specs/epic-forage-structural-hardening.md) — closes the corpus's 30 structural findings with derived stage-2 scan forms; stage-3 input byte-identical (no re-record); ratchet both ways
+- [Scan forms](../specs/feature-structural-scan-forms.md) — case-insensitive patterns; linear patterns; shared decoded form; generated confusable tables and fold forms (5 stories)
+- [Markup surface](../specs/feature-structural-markup-surface.md) — inline-joined form (linear walk); first-match raw-source markup scan (2 stories; depends on: scan-forms)
+- [Wire closure](../specs/feature-structural-wire-closure.md) — quarantined titles null (ruling (m)); body-only visibility pass (2 stories; depends on: markup-surface)
+- [Close-out](../specs/feature-structural-closeout.md) — floors ratchet script, findings re-file (owner step), docs, records preflight (4 stories; depends on: wire-closure)
 
 ---
 
@@ -40,32 +49,11 @@ live in `MILESTONES.md` instead.
 
 ## Future Work (no spec yet)
 
-### Bound the `/retrieve` fetch path's decoder
-**Priority:** High · **Effort:** Medium
-`pipeline/stage5_url_audit.py` counts decoded bytes from `aiter_bytes()` after
-httpx's uncapped decoder, on a caller-chosen URL under the 10 MB cap. Adopt
-`pipeline/bounded_body.py`; the accepted-body cap is not a peak-allocation
-bound. Provider-bounds US-003 closes only the provider seam; finding
-2026-09-16-020 remains open for this path.
-
 ### Rename modules into a `forage/` package
 **Priority:** Low · **Effort:** Medium
 Deliberately deferred at extraction — the flat layout keeps the Dockerfile,
 `sanitizer_revision`'s hashed source paths, and the whole suite working unchanged.
 Cosmetic only, and it touches `sanitizer_revision`, so it needs its own change.
-
-### Contiguity default ruling
-**Priority:** Medium · **Effort:** Small
-Owner ruling on whether contiguity gating (`promptguard_contiguity_windows` /
-`_threshold`, shipped off) earns a default. Inputs: `docs/corpus.md` "Decision inputs" (measured
-by `epic-forage-injection-corpus`, T2.3). The corpus adds no ruling of its own, and changing a
-default is a contract-governance question (`contract/GOVERNANCE.md`).
-
-### 86M default ruling
-**Priority:** Medium · **Effort:** Small
-Owner ruling on whether the 86M model replaces the 22M as the default. The 86M is selectable
-since `v1.2.2` and both models have cassettes, so the inputs are the same table: `docs/corpus.md`
-"Decision inputs", beside the latency and memory numbers in `corpus-86m-enablement`'s notes.
 
 ### Structured request logging / tracing
 **Priority:** Low · **Effort:** Small

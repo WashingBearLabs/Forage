@@ -997,6 +997,42 @@ accepted on **agreement rates** against the 22M on a stage-2-corroborated contro
 the 86M recommends `FORAGE_MEM_LIMIT=1536m`. Default flips remain separate owner rulings, now with
 measured inputs (`docs/corpus.md` "Decision inputs").
 
+### 2026-10-06: The 86M becomes the default; contiguity gating stays off
+
+**Status:** Accepted — owner rulings on the two backlog items the corpus epic left open; unreleased
+
+**Context:** The injection corpus measured both defaults (`docs/corpus.md` "Decision inputs").
+At `max@0.85` the 22M fires on 0 of 372 stage-3 attack texts and the 86M on 15 (all
+`natural_language`), with no benign false positive for either. The contiguity run rule
+(`2 @ 0.5`) added no catch over the max rule on either model, including the two families built
+to exercise it; the 86M's firing texts are effectively single-window.
+
+**Decision:**
+1. `DEFAULT_MODEL_ID` is the 86M (`DEFAULT_MODEL_REVISION` its pin). The 22M stays allowlisted
+   as a permanent opt-out (`FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-22M`). Compose's
+   `FORAGE_MEM_LIMIT` default rises to `1536m`.
+2. Contiguity gating keeps its shipped default (`promptguard_contiguity_windows: 0`, off).
+3. GOVERNANCE worked example 6's announce-then-flip window is **waived** for (1): the project has
+   no known third-party consumers (unannounced, no stars), and the only consumer, Poppy, is the
+   owner's own.
+
+**Rationale:** On this corpus the 22M's stage-3 contribution is nil, so the default classifier
+was paying memory and latency for nothing measurable; the 86M buys real catch at no measured
+false-positive cost. Contiguity bought nothing measurable and carries unmeasured risk: an attacker
+controlling part of a page (comments, reviews) can sustain mid-band scores to get the page
+blocked or a result omitted, a benign ~448-token gap evades it anyway, and one-window inputs
+(most search snippets) can never trigger it.
+
+**Consequences:** `sanitizer_revision` rotates (forty-third, identity-only; the 22M opt-out
+reproduces the old value). About 2× per-window latency, ~1.1 GiB first acquisition, and the
+token needs the 86M repository's own gated grant — without it a deployment boots `degraded`
+(`promptguard_unavailable`), loudly. Contiguity remains an operator knob; revisit only if the
+corpus grows families where a run rule adds catch without benign cost.
+
+**Source:** owner, this session (2026-10-06); `docs/corpus.md` "Decision inputs";
+`kit_tools/specs/archive/feature-corpus-86m-enablement.md` (latency/memory);
+`docs/bootstrap-notes.md` (forty-third rotation).
+
 ### 2026-09-19: Injection defence is measured by replaying owner-recorded classifier scores; model weights never enter CI
 
 **Status:** Accepted — shipped 2026-10-05 (`epic-forage-injection-corpus`, PR #38): real-weights cassettes for 22M and 86M are committed under `tests/corpus/cassettes/` and replayed by the `test` job

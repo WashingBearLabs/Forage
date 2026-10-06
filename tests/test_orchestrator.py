@@ -41,6 +41,7 @@ from models import (
     TrustTier,
 )
 from pipeline import contract, orchestrator, pdf_subprocess
+from pipeline.bounded_body import MalformedBody, UnsupportedEncoding
 from pipeline.extraction_limits import (
     ExtractionSettings,
     extraction_settings_from_config,
@@ -1116,6 +1117,37 @@ async def test_retrieve_timeout_raises_pipeline_error(
         )
 
     assert exc_info.value.error == "fetch_timeout"
+
+
+@pytest.mark.parametrize("error", [UnsupportedEncoding(), MalformedBody()])
+async def test_retrieve_undecodable_body_is_fetch_error(error: Exception) -> None:
+    """The bounded reader's decode refusals keep the existing fetch_error code."""
+    cache_mock = MagicMock()
+    cache_mock.get = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "pipeline.orchestrator.validate_url",
+            new_callable=AsyncMock,
+            return_value=("93.184.216.34", "example.com"),
+        ),
+        patch(
+            "pipeline.orchestrator.fetch_url",
+            new_callable=AsyncMock,
+            side_effect=error,
+        ),
+        pytest.raises(PipelineError) as exc_info,
+    ):
+        await run_retrieve_pipeline(
+            _make_retrieve_request(),
+            cache=cache_mock,
+            classifier=None,
+            config=_SAMPLE_CONFIG,
+            sanitizer_revision=_SAMPLE_REVISION,
+            **_retrieve_kwargs(),
+        )
+
+    assert exc_info.value.error == "fetch_error"
 
 
 @patch(

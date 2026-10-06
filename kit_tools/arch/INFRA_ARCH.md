@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document cloud resources, networking, and infrastructure. The map of deployed systems.
 
-> Last updated: 2026-09-23
-> Updated by: Copilot (hardening-release US-004)
+> Last updated: 2026-10-06
+> Updated by: Claude (86M default ruling)
 
 ---
 
@@ -58,10 +58,10 @@ is bound to loopback.
  │  │  ┌──▼──────────────────────┐                      │ │
  │  │  │ forage   :8020          │──── http://searxng:8080 ─┐ │
  │  │  │ uvicorn, user poppy     │                      │ │ │
- │  │  │ mem_limit 1024m         │──── redis://valkey:6379/4 (full.yml only)
+ │  │  │ mem_limit 1536m         │──── redis://valkey:6379/4 (full.yml only)
  │  │  │ HF_HOME=/app/model-cache│                      │ │ │
  │  │  └──┬──────────────────────┘                      │ │ │
- │  │     │ volume forage-model-cache (~270 MiB weights) │ │ │
+ │  │     │ volume forage-model-cache (~1.1 GiB weights) │ │ │
  │  │     │                                              │ │ │
  │  │  ┌──▼──────────────────────┐   ┌─────────────────┐ │ │ │
  │  │  │ searxng  :8080          │   │ valkey :6379    │ │ │ │
@@ -143,7 +143,7 @@ docker compose -f minimal.yml up -d && curl -s localhost:8020/health | jq
 
 | Service | In | Image (as pinned today) | Ports | Volumes | Limits / env |
 |---------|----|-------------------------|-------|---------|--------------|
-| `forage` | both | `ghcr.io/washingbearlabs/forage:1.2.2` (published) | `127.0.0.1:8020:8020` | `forage-model-cache:/app/model-cache` | `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` (default `1024m`), `cpus: ${FORAGE_CPUS:-0}`, `restart: unless-stopped`; bare `HF_TOKEN`, `FORAGE_MODEL_ID`, `FORAGE_MODEL_REVISION`, `FORAGE_SEARCH_PROVIDERS` and `FORAGE_BRAVE_API_KEY` pass-through (each stays unset if unset; credentials belong in `compose/.env`, never inline); `SEARXNG_URL` not set (default `http://searxng:8080`) |
+| `forage` | both | `ghcr.io/washingbearlabs/forage:1.2.2` (published) | `127.0.0.1:8020:8020` | `forage-model-cache:/app/model-cache` | `mem_limit: ${FORAGE_MEM_LIMIT:-1536m}` (default `1536m`), `cpus: ${FORAGE_CPUS:-0}`, `restart: unless-stopped`; bare `HF_TOKEN`, `FORAGE_MODEL_ID`, `FORAGE_MODEL_REVISION`, `FORAGE_SEARCH_PROVIDERS` and `FORAGE_BRAVE_API_KEY` pass-through (each stays unset if unset; credentials belong in `compose/.env`, never inline); `SEARXNG_URL` not set (default `http://searxng:8080`) |
 | `forage` extras | full only | same | same | same | literal `VALKEY_URL=redis://valkey:6379/4` (DB 4 matches `ContentCache`'s default), bare `FORAGE_CACHE_HMAC_KEY` for signing; unset means unsigned cached content and `cache_unauthenticated`. Minimal omits `VALKEY_URL` entirely so the cache runs in memory mode |
 | `searxng` | both | `ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc` | **none published** | none | `SEARXNG_SECRET: ${SEARXNG_SECRET:?...}` — unset is a hard start failure; service name `searxng` is load-bearing for Forage's default URL |
 | `valkey` | full only | `valkey/valkey:8@sha256:3fbd2e3e4b6e85e046c1e7c215e8f79087bc0357789184305806664e320996f3` (8.1.10) | none | `forage-valkey-data:/data` (project-scoped) | `valkey-server --save 60 1 --appendonly no`; no password |
@@ -222,7 +222,7 @@ cold start.
 
 | Volume | Mount | Declared in | Contents | Refresh |
 |--------|-------|-------------|----------|---------|
-| `forage-model-cache` (explicit `name:`, shared by both fragments) | `/app/model-cache` (`HF_HOME`) | `compose/minimal.yml`, `compose/full.yml` | `hub/` (the verified snapshot of `meta-llama/Llama-Prompt-Guard-2-22M` at revision `11614a155199674a0a95e6602d6ab0417b790ed0`), `staging/`, `quarantine/`, `xet/`; ~270 MiB (`model.safetensors` is 283,347,432 bytes) | Background task at every start: verify cached set against `weights_manifest.json` (5 files, sha256 + size, exact-set allowlist); if absent or refused, download from Hugging Face Hub (`HF_TOKEN`) then the oras mirror; refused sets move to `quarantine/` (one generation kept); retry 30 s doubling to 600 s, forever |
+| `forage-model-cache` (explicit `name:`, shared by both fragments) | `/app/model-cache` (`HF_HOME`) | `compose/minimal.yml`, `compose/full.yml` | `hub/` (the verified snapshot of the selected model: default `meta-llama/Llama-Prompt-Guard-2-86M` at revision `a8ded8e697ce7c355e395a0df51f94adb4a2fd27`, or the 22M opt-out at `11614a155199674a0a95e6602d6ab0417b790ed0`), `staging/`, `quarantine/`, `xet/`; ~1.1 GiB for the 86M (`model.safetensors` is 1,115,268,200 bytes), ~270 MiB for the 22M | Background task at every start: verify cached set against `weights_manifest.json` (5 files, sha256 + size, exact-set allowlist); if absent or refused, download from Hugging Face Hub (`HF_TOKEN`, with a gated-access grant for the selected model; the 86M's is separate from the 22M's) then the oras mirror; refused sets move to `quarantine/` (one generation kept); retry 30 s doubling to 600 s, forever |
 | `forage-valkey-data` (project-scoped) | `/data` | `compose/full.yml` only | Valkey RDB (`--save 60 1`, AOF off) | Operator's concern; not read by Forage |
 
 A warm volume means a start with **zero network** (measured 9 s warm vs 19 s cold on the
@@ -264,22 +264,22 @@ the service is ever exposed beyond a private network — another reason not to.
 
 The reference envelope (1 vCPU / 1 GB) is configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT`;
 see [`docs/configuration.md` § Sizing the container](../../docs/configuration.md#sizing-the-container).
-Add the ~270 MiB volume; these are the
+Add the ~1.1 GiB volume (86M default); these are the
 figures the measurements in `docs/configuration.md` were taken on, not a tested floor or
 ceiling. Torch is CPU-only by construction (no CUDA wheels in the lock), so no GPU is ever
 used.
 
 | Budget | Value | Source |
 |--------|-------|--------|
-| Container memory cap | `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` (default `1024m`) | both compose fragments |
+| Container memory cap | `mem_limit: ${FORAGE_MEM_LIMIT:-1536m}` (default `1536m`; the 22M opt-out fits `1024m`) | both compose fragments |
 | Container CPU cap | `${FORAGE_CPUS:-0}` (0 = no limit) | both compose fragments |
-| — parent process (FastAPI + torch + PromptGuard) | ~512 MiB | budget breakdown in `docs/configuration.md` |
+| — parent process (FastAPI + torch + PromptGuard) | ~512 MiB with the 22M, + 405 MiB resident delta for the default 86M | budget breakdown in `docs/configuration.md` |
 | — extraction child address space | 384 MiB (`extraction.*` in `config.yaml`) | same |
-| — headroom | ~128 MiB: 32 MiB in-memory cache + 64 MiB provisional classifier working set + 32 MiB margin | same |
+| — headroom | 32 MiB in-memory cache + 64 MiB provisional classifier working set; rule total 1397 MiB with the 86M (139 MiB margin under 1536m), 992 MiB with the 22M | same |
 | Extraction admission | extraction concurrency 1, queue depth 1 (0–4), 50 MiB input, 500 pages, 20 s CPU, 90 s wall; `classification_concurrency` 1–8 under the memory rule | `config.yaml` (see `kit_tools/docs/ENV_REFERENCE.md`) |
-| Weights boot to classifier loaded | 19 s cold / 9 s warm on the reference host; `/health` serves during acquisition, not a classify-latency figure | `docs/configuration.md` § Sizing the container |
+| Weights boot to classifier loaded | 19 s cold / 9 s warm on the reference host (measured with the 22M); `/health` serves during acquisition, not a classify-latency figure | `docs/configuration.md` § Sizing the container |
 | CI smoke budget | 120 s to first `/health` 200 | `SMOKE_TIMEOUT_SECONDS` in `ci.yml` |
-| Disk | ~270 MiB volume; ~348 MB image (recorded, not re-measured); ~1 GB free recommended for vendoring | `docs/weights.md` |
+| Disk | ~1.1 GiB volume (86M; ~270 MiB for the 22M); ~348 MB image (recorded, not re-measured); ~1 GB free recommended for vendoring | `docs/weights.md` |
 
 Live memory pressure is readable from `/metrics` `extraction.cgroup_memory_current_bytes`,
 `cgroup_memory_max_bytes`, and `oom_proximity_ratio` (cgroup v2 only; `null` on macOS).

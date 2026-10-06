@@ -2051,3 +2051,44 @@ apply consistently, honest unavailable-model outcomes during warmup, and strict
 provider read-budget failures rather than one-chunk overshoot.
 **Not replayed to Poppy.** Publication is still pending the authorized release
 gate and is not established by these local fixes.
+
+### The forty-third rotation: the 86M becomes the default model (owner ruling, 2026-10-06)
+
+Owner ruling on the backlog's "86M default ruling", taken from the injection corpus's
+decision inputs (`docs/corpus.md`): at `max@0.85` the 22M fires on none of the 372
+stage-3 attack texts and the 86M on 15, with no benign false positive for either. The
+contiguity ruling taken alongside it changes nothing: the run rule stays off.
+
+`promptguard/classifier.py` names both models (`PROMPT_GUARD_22M_ID`,
+`PROMPT_GUARD_86M_ID`) and sets `DEFAULT_MODEL_ID` to the 86M; `model_fetcher.py`'s
+`DEFAULT_MODEL_REVISION` follows it to the 86M pin. **None of the nine hashed sources
+moves** — the rotation is entirely the hashed model-identity input, the same kind as the
+fourth (`MODEL_ID@revision`, `forage-model-bootstrap` US-001):
+
+| State | Revision |
+|---|---|
+| Before (`cf39b9a`) / classifier and fetcher changes reverted | `021378efee6ab43f22b887af2f0c0c40ef76183a39802120fbfd0ca7a3a33900` |
+| After, `FORAGE_MODEL_ID` unset | `b5e91fd647270be4dfb3dc9a95f2447f1961fca7746441ca65e691c986ba0ded` |
+| After, `FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-22M` | `021378efee6ab43f22b887af2f0c0c40ef76183a39802120fbfd0ca7a3a33900` |
+
+Each row measured for default `{}` and shipped `config.yaml`, which agree. The last row is
+the proof that nothing but the default identity moved, and the operator guarantee: a
+deployment that opts back to the 22M keeps its previous revision and cache keys.
+
+**What changes at shipped defaults:** stage-3 verdicts, because the classifier does —
+the 86M blocks or flags some texts the 22M passed. Not the text-scanning algorithm, the
+threshold, the max rule or any response shape; contract stays `1.3.0`, OpenAPI and
+goldens are byte-identical. `/health.promptguard_model` reports the 86M id by default.
+
+**Operational changes shipped with it:** Compose's `FORAGE_MEM_LIMIT` default rises
+`1024m` → `1536m` (the boot memory rule is 1,397 MiB for the 86M at shipped settings);
+first acquisition is ~1.1 GiB; the Hugging Face token needs the 86M repository's own
+gated grant, or the service runs `degraded` (`promptguard_unavailable`) until it has one.
+
+**Governance note:** worked example 6 would announce a tightening one release ahead of
+flipping it. The owner waived that window deliberately (2026-10-06): the project has no
+known third-party consumers. The opt-out is permanent — the 22M stays allowlisted.
+
+**Consumer handoff (Poppy):** compare contracts, not revisions. A Poppy pin of the next
+release gets the 86M unless it sets `FORAGE_MODEL_ID=…22M`, and needs the larger memory
+limit. **Not replayed to Poppy.**

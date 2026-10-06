@@ -90,7 +90,7 @@ def make_response(
     """Build a stream-backed response usable by ``aiter_raw`` or ``aiter_bytes``.
 
     No ``content-length`` is synthesized: tests relying on it must set it.
-    ``aiter_bytes`` still decodes this shape, as the stage-5 fetcher expects.
+    ``aiter_bytes`` still decodes this shape; Forage's own readers use ``aiter_raw``.
     Each response is single-use, like a real HTTP stream.
     """
     hdrs = {"content-type": content_type}

@@ -21,6 +21,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 
 import httpx
 
+from pipeline.bounded_body import BodyTooLarge, read_bounded_body
 from url_validator import validate_url
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,11 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_MAX_REDIRECTS = 5
 DEFAULT_MAX_CONTENT_BYTES = 10 * 1024 * 1024  # 10 MB
+
+# Exactly the encodings ``read_bounded_body`` decodes. Pinned rather than left
+# to httpx, whose default grows ``br`` / ``zstd`` when those packages happen to
+# be installed -- and a server that answers in one would then be refused.
+_ACCEPT_ENCODING = "gzip, deflate"
 
 
 class ContentTooLargeError(Exception):
@@ -161,7 +167,10 @@ async def fetch_url(
                 )
             )
 
-            headers: dict[str, str] = {"Host": hostname}
+            headers: dict[str, str] = {
+                "Host": hostname,
+                "Accept-Encoding": _ACCEPT_ENCODING,
+            }
             if selected_ua:
                 headers["User-Agent"] = selected_ua
 
@@ -171,7 +180,7 @@ async def fetch_url(
             # ensures correct virtual-host routing.
             #
             # Streaming mode: headers are read immediately; body is only
-            # read on demand via aiter_bytes(). This prevents a malicious
+            # read on demand via read_bounded_body(). This prevents a malicious
             # server from OOM-ing the sidecar by sending a multi-GB body
             # on any hop (redirect or final) before any size check runs.
             async with client.stream(
@@ -205,20 +214,23 @@ async def fetch_url(
                         f"{max_content_bytes} bytes for URL: {url}"
                     )
 
-                # Stream body with incremental byte cap. Raises and closes
-                # the response the moment the running total exceeds the cap.
-                chunks: list[bytes] = []
-                running = 0
-                async for chunk in response.aiter_bytes():
-                    running += len(chunk)
-                    if running > max_content_bytes:
-                        raise ContentTooLargeError(
-                            f"Response body exceeds "
-                            f"{max_content_bytes} bytes for URL: {url}"
-                        )
-                    chunks.append(chunk)
-
-                response_body = b"".join(chunks)
+                # Stream the raw body through Forage's own decoder, which
+                # bounds every decompress call's *output* as well as the
+                # accumulated total. httpx's aiter_bytes() decoder has no
+                # max_length, so a small gzip stream could allocate tens of
+                # MB in one chunk before a running count ever saw it. An
+                # encoding outside gzip/deflate, or a body that is not exactly
+                # one complete stream, raises UnsupportedEncoding /
+                # MalformedBody, which surface as fetch_error.
+                try:
+                    response_body = await read_bounded_body(
+                        response, max_bytes=max_content_bytes
+                    )
+                except BodyTooLarge:
+                    raise ContentTooLargeError(
+                        f"Response body exceeds "
+                        f"{max_content_bytes} bytes for URL: {url}"
+                    ) from None
                 final_status_code = response.status_code
                 final_content_type = response.headers.get("content-type", "")
                 break

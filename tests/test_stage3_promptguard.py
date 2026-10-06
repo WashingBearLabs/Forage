@@ -22,7 +22,7 @@ import pytest
 import torch
 from transformers import AutoConfig, AutoTokenizer
 
-from model_fetcher import DEFAULT_MODEL_REVISION, MANIFEST_PATH
+from model_fetcher import MANIFEST_PATH
 from models import Stage2Verdict, Stage3Verdict, TrustTier
 from pipeline.extraction_limits import extraction_settings_from_config
 from pipeline.orchestrator import sanitize_and_structure
@@ -37,8 +37,8 @@ from pipeline.stage3_promptguard import (
 )
 from pipeline.stage4_structuring import SanitizationResult
 from promptguard.classifier import (
-    DEFAULT_MODEL_ID,
     MAX_SEQ_LEN,
+    PROMPT_GUARD_22M_ID,
     PromptGuardBudgetExceededError,
     PromptGuardClassifier,
     PromptGuardThreadsConfigurationError,
@@ -284,6 +284,9 @@ class TestModelNotLoaded:
 # ---------------------------------------------------------------------------
 
 _MODEL_ID_86M = "meta-llama/Llama-Prompt-Guard-2-86M"
+# The 22M's committed pin: these label tests are about that exact snapshot,
+# not about whichever model is the service default.
+_REVISION_22M = "11614a155199674a0a95e6602d6ab0417b790ed0"
 
 
 def _genuine_86m_config() -> tuple[object, str]:
@@ -307,12 +310,12 @@ class TestClassifierUnit:
         self, logit_values: list[float]
     ) -> None:
         fixture = Path(__file__).parent / "fixtures/promptguard_22m_config/config.json"
-        entry = json.loads(MANIFEST_PATH.read_text())["models"][DEFAULT_MODEL_ID]
+        entry = json.loads(MANIFEST_PATH.read_text())["models"][PROMPT_GUARD_22M_ID]
         config_pin = next(
             file for file in entry["files"] if file["path"] == "config.json"
         )
         assert hashlib.sha256(fixture.read_bytes()).hexdigest() == config_pin["sha256"]
-        assert entry["revision"] == DEFAULT_MODEL_REVISION
+        assert entry["revision"] == _REVISION_22M
         config = AutoConfig.from_pretrained(fixture.parent, local_files_only=True)
         assert config.num_labels == 2
         assert config.id2label == {0: "LABEL_0", 1: "LABEL_1"}
@@ -329,8 +332,8 @@ class TestClassifierUnit:
             model.return_value.config = config
             model.return_value.return_value = SimpleNamespace(logits=logits)
             assert classifier.load(
-                model_id=DEFAULT_MODEL_ID,
-                revision=DEFAULT_MODEL_REVISION,
+                model_id=PROMPT_GUARD_22M_ID,
+                revision=_REVISION_22M,
                 local_files_only=True,
             )
             assert classifier.loaded
@@ -366,9 +369,7 @@ class TestClassifierUnit:
             assert score == pytest.approx(torch.softmax(logits, dim=-1)[0, 1].item())
             model.return_value.eval.assert_called_once()
 
-    @pytest.mark.parametrize(
-        "revision", [DEFAULT_MODEL_REVISION, "0" * 40, None], ids=str
-    )
+    @pytest.mark.parametrize("revision", [_REVISION_22M, "0" * 40, None], ids=str)
     def test_real_86m_config_under_another_revision_is_refused(
         self, revision: str | None, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -394,19 +395,19 @@ class TestClassifierUnit:
     @pytest.mark.parametrize(
         ("model_id", "revision", "labels"),
         [
-            ("unknown/model", DEFAULT_MODEL_REVISION, {0: "LABEL_0", 1: "LABEL_1"}),
-            (DEFAULT_MODEL_ID, "0" * 40, {0: "LABEL_0", 1: "LABEL_1"}),
-            (DEFAULT_MODEL_ID, None, {0: "LABEL_0", 1: "LABEL_1"}),
+            ("unknown/model", _REVISION_22M, {0: "LABEL_0", 1: "LABEL_1"}),
+            (PROMPT_GUARD_22M_ID, "0" * 40, {0: "LABEL_0", 1: "LABEL_1"}),
+            (PROMPT_GUARD_22M_ID, None, {0: "LABEL_0", 1: "LABEL_1"}),
             (
                 "meta-llama/Llama-Prompt-Guard-2-86M",
-                DEFAULT_MODEL_REVISION,
+                _REVISION_22M,
                 {0: "LABEL_0", 1: "LABEL_1"},
             ),
-            (DEFAULT_MODEL_ID, DEFAULT_MODEL_REVISION, {0: "LABEL_1", 1: "LABEL_0"}),
-            (DEFAULT_MODEL_ID, DEFAULT_MODEL_REVISION, {0: "OTHER", 1: "LABEL_1"}),
+            (PROMPT_GUARD_22M_ID, _REVISION_22M, {0: "LABEL_1", 1: "LABEL_0"}),
+            (PROMPT_GUARD_22M_ID, _REVISION_22M, {0: "OTHER", 1: "LABEL_1"}),
             (
-                DEFAULT_MODEL_ID,
-                DEFAULT_MODEL_REVISION,
+                PROMPT_GUARD_22M_ID,
+                _REVISION_22M,
                 {0: "LABEL_0", 1: "LABEL_1", 2: "LABEL_2"},
             ),
         ],

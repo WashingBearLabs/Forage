@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document logs, metrics, alerts, and dashboards. How to observe the system.
 
-> Last updated: 2026-09-23
-> Updated by: Copilot (hardening-release US-004)
+> Last updated: 2026-10-06
+> Updated by: Claude (86M default ruling)
 
 ---
 
@@ -59,7 +59,7 @@ Forage listens on `0.0.0.0:8020` inside the container; the compose fragments pub
 |-------|------|-----------------|---------|
 | `status` | string | `healthy`, `degraded` | `degraded` iff `degraded_reasons` is non-empty. |
 | `promptguard_loaded` | bool | `true`, `false` | Whether the PromptGuard classifier is loaded (`app.state.classifier.loaded`). Always honest; the break-glass override does not touch it. |
-| `promptguard_model` | string | `meta-llama/Llama-Prompt-Guard-2-22M` (current allowlist) | Configured id from startup state, whether loaded or not; never re-read from the environment per request. The 86M remains pending the vendoring gate. |
+| `promptguard_model` | string | `meta-llama/Llama-Prompt-Guard-2-86M` (default; `meta-llama/Llama-Prompt-Guard-2-22M` when opted out) | Configured id from startup state, whether loaded or not; never re-read from the environment per request. |
 | `cache_connected` | bool | `true`, `false` | Valkey mode: a live ping via `cache.ping_if_due()`, subject to reconnect backoff. Memory mode: always `true` (the backend is in-process). Not a statement that Valkey is present; read `cache_backend` for that. |
 | `capabilities` | dict | `{"search_sanitization": 1, "brave_api_key": 1, "cache_hmac_key": 1}`, any subset, or `{}` | Presence map, three keys as of contract 1.3.0. `search_sanitization` is present when the classifier is loaded **or** when break-glass is armed (`FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION=1`, alias `POPPY_RETRIEVAL_LEGACY_CAPABILITY=1`, exact string `1`) — break-glass lies only for this key. `brave_api_key` is present when this start resolved a usable `FORAGE_BRAVE_API_KEY` (`brave_key_present()`), independently of whether `brave` is in `search_providers`. `cache_hmac_key` is present only when this start resolved a usable `FORAGE_CACHE_HMAC_KEY` and selected Valkey, independently of connectivity; absent in memory mode. Both credential-presence keys are untouched by break-glass and disclose no value or entropy guarantee. |
 | `sanitizer_revision` | string | 64-hex sha256 | `derive_sanitizer_revision(config)`: hash of eight `pipeline/*.py` sources, root `url_validator.py`, selected `model_id@revision`, `idna@version`, plus `promptguard_threshold` plus the two contiguity values (`promptguard_contiguity_windows` then `promptguard_contiguity_threshold`). Even disabled defaults enter the hash. The literal `unknown` appears only when no lifespan ran (test transports). |

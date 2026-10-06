@@ -40,7 +40,7 @@ from retrieval_app import (
     SearchMetrics,
     app,
 )
-from tests.fakes import FakeContentCache, make_mock_classifier
+from tests.fakes import ChunkStream, FakeContentCache, make_mock_classifier
 
 _URL = "https://example.com/"
 _PAGE = b"<html><body><p>A calm page about gardening.</p></body></html>"
@@ -468,7 +468,11 @@ async def test_total_fetch_deadline_stops_periodic_stream_and_unblocks_queue(
         if request.url.path == "/redirected":
             await asyncio.sleep(0.04)
             return httpx.Response(200, stream=SlowStream())
-        return httpx.Response(200, content=_PAGE, headers={"content-type": "text/html"})
+        # A stream, as a real transport returns: ``content=`` is read eagerly
+        # and the fetcher's raw read would find it already consumed.
+        return httpx.Response(
+            200, stream=ChunkStream([_PAGE]), headers={"content-type": "text/html"}
+        )
 
     # Only the streaming seam and DNS are faked; use the production fetcher and its
     # redirect/body handling without sockets or relaxed pytest-socket guards.

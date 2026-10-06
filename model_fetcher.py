@@ -141,7 +141,11 @@ from functools import cache
 from pathlib import Path
 from typing import Any, Final, Protocol, cast
 
-from promptguard.classifier import DEFAULT_MODEL_ID
+from promptguard.classifier import (
+    DEFAULT_MODEL_ID,
+    PROMPT_GUARD_22M_ID,
+    PROMPT_GUARD_86M_ID,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +180,7 @@ XET_DIRNAME: Final = "xet"
 # US-003 vendors the mirror artifact under exactly this tag — one value, three
 # places, locked together by test. Bumping it is a deliberate re-vendor:
 # revision + manifest + mirror tag move in one commit.
-DEFAULT_MODEL_REVISION: Final = "11614a155199674a0a95e6602d6ab0417b790ed0"
+DEFAULT_MODEL_REVISION: Final = "a8ded8e697ce7c355e395a0df51f94adb4a2fd27"
 
 # The six environment variables this module reads. Named constants rather
 # than inline literals so `tests/test_model_fetcher.py` can assert the whole
@@ -189,7 +193,7 @@ MIRROR_ENV_VAR: Final = "FORAGE_WEIGHTS_MIRROR"
 MIRROR_TOKEN_ENV_VAR: Final = "FORAGE_MIRROR_TOKEN"
 
 ALLOWED_MODEL_IDS: frozenset[str] = frozenset(
-    {DEFAULT_MODEL_ID, "meta-llama/Llama-Prompt-Guard-2-86M"}
+    {DEFAULT_MODEL_ID, PROMPT_GUARD_22M_ID, PROMPT_GUARD_86M_ID}
 )
 
 # Where the weights live when nothing says otherwise — the Dockerfile's

@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document authentication, authorization, and secrets management. Security architecture reference.
 
-> Last updated: 2026-09-22
-> Updated by: Copilot (hardening-promptguard-86m US-006)
+> Last updated: 2026-10-06
+> Updated by: Claude (86M default ruling)
 
 ---
 
@@ -179,7 +179,7 @@ A blocking hit yields verdict `blocked` and quarantine. Each suspicious hit cost
 
 ### Stage 3: Llama Prompt Guard 2
 
-`promptguard/classifier.py` loads `meta-llama/Llama-Prompt-Guard-2-22M` (a DeBERTa-v3 sequence classifier) on CPU with `use_safetensors=True`. Text is chunked at `MAX_SEQ_LEN = 512` tokens with `CHUNK_OVERLAP = 64`, up to `MAX_PROMPTGUARD_CHUNKS = 64`; over budget raises `PromptGuardBudgetExceededError` rather than silently classifying a prefix. `pipeline/stage3_promptguard.py` applies the handler-resolved threshold (`config.yaml` `promptguard_threshold`, shipped as 0.85; overridable per `/retrieve` or `/search` request within 0.0 to 1.0, then operator-capped): a score above threshold is `injection_detected` with `INJECTION_PENALTY = -0.5`.
+`promptguard/classifier.py` loads the selected model, by default `meta-llama/Llama-Prompt-Guard-2-86M` (the 22M is the `FORAGE_MODEL_ID` opt-out; both are DeBERTa-v3 sequence classifiers), on CPU with `use_safetensors=True`. Text is chunked at `MAX_SEQ_LEN = 512` tokens with `CHUNK_OVERLAP = 64`, up to `MAX_PROMPTGUARD_CHUNKS = 64`; over budget raises `PromptGuardBudgetExceededError` rather than silently classifying a prefix. `pipeline/stage3_promptguard.py` applies the handler-resolved threshold (`config.yaml` `promptguard_threshold`, shipped as 0.85; overridable per `/retrieve` or `/search` request within 0.0 to 1.0, then operator-capped): a score above threshold is `injection_detected` with `INJECTION_PENALTY = -0.5`.
 
 Stage 3 consumes `classify_windows`: the unchanged **max-score** rule fires on
 `max_score > threshold`; the opt-in **contiguity** rule fires on any run of at
@@ -476,8 +476,9 @@ The base is `python:3.12-slim@sha256:78387bc3...` (digest, with the resolved tag
 
 Weights are a runtime input, never baked. `weights_manifest.json.models` holds one
 **exact-set** allowlist per model, with revision, path, sha256 and size. The default
-22M still pins the same five files at `11614a155199674a0a95e6602d6ab0417b790ed0`,
-equal to the 22M-only `DEFAULT_MODEL_REVISION` fallback. `FORAGE_MODEL_REVISION`
+86M pins five files at `a8ded8e697ce7c355e395a0df51f94adb4a2fd27`, equal to the
+default-model-only `DEFAULT_MODEL_REVISION` fallback; the 22M opt-out still pins its
+same five files at `11614a155199674a0a95e6602d6ab0417b790ed0`. `FORAGE_MODEL_REVISION`
 cannot select an uncommitted pin: malformed values fall back loudly; shaped
 non-pins refuse before disk lookup (`weights_revision_unpinned`). Entry failures
 are isolated to that model, while a broken document refuses every model.
@@ -606,7 +607,7 @@ These are recorded in the repo with a source and a reason; they are decisions, n
 | No rate limiting on `/retrieve` or `/search`; exhaustion by an admitted caller is out of scope | root `SECURITY.md` |
 | Accepted risk, finding 2026-09-16-054: `search.policy_unknown_provider` increments once per ignored entry, including duplicates and every entry beyond eight, with no cap on entry count. `/search` has no body cap: both size/admission middlewares early-return unless `scope["path"] == "/extract"`, and `SearchRequest.providers` has no `max_length`. The caller's array is parsed in full before the policy's eight-entry slice; both the counter value and parse cost scale with an uncapped request body. The impact is an inflated/misleading counter value and CPU cost, not resource exhaustion bounded by the counter. Network placement is the control. A body cap would change accepted requests into rejections and requires its own GOVERNANCE ruling; per-entry counting is deliberately unchanged. | `hardening-provider-bounds` US-004, R14; `retrieval_app.py::search`, `DocumentSizeLimitMiddleware`, `ExtractionAdmissionMiddleware`; `models.py::SearchRequest`; `pipeline/search_providers/policy.py` |
 | A slow upstream can hold a `/search` for **at least** the sum of the configured per-provider budgets — 10 s on the default `[searxng]` chain, 25 s on `searxng,brave` at the shipped defaults, up to 2 × 60 s at the ranges' maxima — plus parse, sanitization and classification time, which sit outside the budget. There is no chain-wide deadline and no concurrency ceiling on the provider-fetch phase; the classification semaphore bounds stage 3, not the fetch. Network placement and the per-call budget are the controls. | `hardening-provider-bounds` US-003; `docs/configuration.md` |
-| Accepted risk: `/retrieve` still counts decoded bytes from `aiter_bytes()` after httpx's uncapped decoder, on a caller-chosen URL. The 10 MB cap bounds accepted body bytes, not peak decoder output allocation. Adopt `pipeline/bounded_body.py` in a fetch-path story; the provider fix does not cover stage 5. | `pipeline/stage5_url_audit.py`; `kit_tools/roadmap/BACKLOG.md`, finding 2026-09-16-020 (open) |
+| `/retrieve` decoder bound — fixed 2026-10-05: stage 5 reads `aiter_raw()` through `pipeline/bounded_body.py`, so each decompress call's output, not just the accepted total, stays within the 10 MB cap; `Accept-Encoding` is pinned to `gzip, deflate`, and any other encoding or a malformed stream is refused as `fetch_error`. Raw input is budgeted at 4× the cap, and a `deflate` body keeps a raw replay buffer within that budget | `pipeline/stage5_url_audit.py`; `tests/test_stage5_url_audit.py::TestBoundedDecoding`; finding 2026-09-16-020 (resolved) |
 | Companion SearXNG runs `limiter: false` | `searxng/config/settings.yml`; `kit_tools/docs/GOTCHAS.md` |
 | Weights are not shipped; a token-less container is degraded indefinitely | root `SECURITY.md`; `README.md` |
 | Verifier/loader directory agreement — fixed by `hardening-promptguard-86m` US-001; a requested unpinned or missing snapshot is never loaded | `model_fetcher._load_verified`; `tests/test_model_fetcher.py::TestModelIdentity` |
@@ -639,7 +640,7 @@ filtered to a strict `YYYY-MM-DD` calendar date or `None`, so neither can carry 
 The exploration found no source that either accepts or rejects these. They are listed so that a decision can be recorded, not because one has been made.
 
 - **Exception text on the wire.** `/retrieve` `fetch_error` is now the **only** reason that interpolates `str(exc)` into the response body (`pipeline/orchestrator.py`, the fetch catch-all). Whether upstream error text can carry anything sensitive is neither documented nor tested there. Redaction would be a wire change under `contract/GOVERNANCE.md`. `/search`'s `searxng_unavailable` was the other case and is closed: `search-provider-abstraction` US-002 replaced `str(exc)` with the provider's closed `detail` token and replaced the raw `SEARXNG_URL` echo with `SearxngProvider.origin` — scheme, host and port, userinfo stripped — so a credential in `SEARXNG_URL` can no longer reach a 422 body on an unauthenticated route. The host:port echo stays deliberately (GOVERNANCE ruling (d) treats it as a documented caveat; it is what makes a misconfigured deployment diagnosable from the response alone).
-- **Container hardening beyond non-root.** The compose fragments set `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` and `cpus: ${FORAGE_CPUS:-0}` (no CPU quota unless the operator sets one) and nothing else: no `read_only` rootfs, no `cap_drop`, no `no-new-privileges`, no seccomp profile, no `pids_limit`. Unknown whether that is a deliberate omission.
+- **Container hardening beyond non-root.** The compose fragments set `mem_limit: ${FORAGE_MEM_LIMIT:-1536m}` and `cpus: ${FORAGE_CPUS:-0}` (no CPU quota unless the operator sets one) and nothing else: no `read_only` rootfs, no `cap_drop`, no `no-new-privileges`, no seccomp profile, no `pids_limit`. Unknown whether that is a deliberate omission.
 - **TLS to companions.** Whether the Valkey and SearXNG links must be TLS-protected on the private network is not stated; `VALKEY_URL` examples are plain `redis://`.
 - **Dependency vulnerability scanning.** None found (see "Supply Chain Integrity").
 - **Fuzzing.** None found (see "Security Testing").

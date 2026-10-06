@@ -78,9 +78,10 @@ services:
       # docs/weights.md § "Bring your own token" is the walk-through.
       - HF_TOKEN
       # Model selection and its pin: bare names like HF_TOKEN, genuinely unset
-      # unless supplied in `.env` or your shell. Default: the vendored 22M pin.
-      # The opt-in 86M needs its own Hugging Face gated-access grant and
-      # FORAGE_MEM_LIMIT=1536m; the 1024m default below does not change.
+      # unless supplied in `.env` or your shell. Default: the vendored 86M pin,
+      # which needs its own Hugging Face gated-access grant (the 22M's does not
+      # cover it). FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-22M opts back
+      # to the smaller model, which also fits FORAGE_MEM_LIMIT=1024m.
       - FORAGE_MODEL_ID
       - FORAGE_MODEL_REVISION
       # The search-provider chain (docs/configuration.md). Both are bare names
@@ -98,7 +99,7 @@ services:
       #
       # VALKEY_URL is deliberately NOT set. See the NO VALKEY note above.
     volumes:
-      # The PromptGuard weights (~270 MiB) land here and are verified against
+      # The PromptGuard weights (~1.1 GiB) land here and are verified against
       # the committed manifest before anything opens them. Without the volume
       # the container re-downloads them on every recreate — documented
       # behaviour, not an error, but a slow one. `forage-model-cache` is the
@@ -109,11 +110,11 @@ services:
     # behaviour; Compose omits the key). Below 1 vCPU is unsupported.
     # Service-level `cpus` needs Docker Compose v2 (Compose Spec); verified
     # on v2.40.3. FORAGE_MEM_LIMIT takes Docker's byte-unit syntax, default
-    # 1024m; FORAGE_MEM_LIMIT=abc fails at Compose, before Forage starts.
+    # 1536m (sized for the default 86M); FORAGE_MEM_LIMIT=abc fails at Compose, before Forage starts.
     # See docs/configuration.md § "Sizing the container" for both variables
     # and the CPU/memory rules before raising concurrency or cache bounds.
     cpus: ${FORAGE_CPUS:-0}
-    mem_limit: ${FORAGE_MEM_LIMIT:-1024m}
+    mem_limit: ${FORAGE_MEM_LIMIT:-1536m}
     # Liveness, not health: /health's body is health; this status-only probe
     # discards it so Docker's State.Health.Log[].Output captures no body.
     # One /health every 30 s calls cache.ping_if_due(), detecting recovery
@@ -165,7 +166,7 @@ volumes:
     # An explicit `name:`, so the volume is literally `forage-model-cache` and
     # not `forage-minimal_forage-model-cache`. Two reasons: it is the canonical
     # spelling docs/weights.md pins, and it means `full.yml` reuses the *same*
-    # verified weights rather than re-downloading ~270 MiB when you switch
+    # verified weights rather than re-downloading ~1.1 GiB when you switch
     # modes. The cost of a fixed name is that `docker compose down -v` from
     # either fragment removes the weights both were using; `down` without `-v`
     # leaves them alone.

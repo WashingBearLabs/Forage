@@ -60,8 +60,8 @@ listed below exists, and nothing is listed that doesn't.
 25. **`roadmap/MILESTONES.md`**, **`roadmap/BACKLOG.md`**
 26. **`PRODUCT_VISION.md`** — populated product tiers and shipped outcomes;
     T2.2 hardening and T2.3 (the injection corpus; guide `docs/corpus.md`,
-    wrapper `specs/epic-forage-injection-corpus.md`) are shipped. The contiguity
-    and 86M default rulings are open (`roadmap/BACKLOG.md`)
+    wrapper `specs/epic-forage-injection-corpus.md`) are shipped. Both default
+    rulings were taken 2026-10-06: 86M default, contiguity off (`arch/DECISIONS.md`)
 
 ---
 
