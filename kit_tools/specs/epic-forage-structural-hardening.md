@@ -40,10 +40,10 @@ the same text, as `/search` already does. The text is never rewritten.
 
 | Seq | Feature Spec | Status | Dependencies |
 |-----|-------------|--------|--------------|
-| 1 | [feature-structural-scan-forms.md](feature-structural-scan-forms.md) — case-insensitive patterns; shared scan-form builder (entity decode, control strip, collapse) on all routes; generated confusable fold | Planned | None |
-| 2 | [feature-structural-markup-surface.md](feature-structural-markup-surface.md) — inline-tag-unwrapped scan form; bounded raw-markup scan for tag-consumed triggers | Planned | structural-scan-forms |
-| 3 | [feature-structural-wire-closure.md](feature-structural-wire-closure.md) — quarantine a blocked page's title; Forage-owned visibility pass on the served body | Planned | structural-markup-surface |
-| 4 | [feature-structural-closeout.md](feature-structural-closeout.md) — floors ratchet, findings re-filed from the new baseline, docs and records | Planned | structural-wire-closure |
+| 1 | [feature-structural-scan-forms.md](feature-structural-scan-forms.md) — 4 stories: case-insensitive patterns; shared decode forms + bounded newline gaps on all routes; vendored/generated confusable table; fold form hashed into the revision | Planned | None |
+| 2 | [feature-structural-markup-surface.md](feature-structural-markup-surface.md) — 2 stories: inline-joined form (block allowlist + `smooth()`); whole-body raw-source markup scan for a closed pattern subset | Planned | structural-scan-forms |
+| 3 | [feature-structural-wire-closure.md](feature-structural-wire-closure.md) — 2 stories: quarantined titles null (ruling (m), no bump); body-only visibility pass with explicit fallback flag | Planned | structural-markup-surface |
+| 4 | [feature-structural-closeout.md](feature-structural-closeout.md) — 4 stories: floors ratchet with a monotonicity script; findings re-file (**owner step, main checkout**); docs; records preflight | Planned | structural-wire-closure |
 
 ## Completion Criteria
 
@@ -60,8 +60,8 @@ the same text, as `/search` already does. The text is never rewritten.
       (`news`/`docs`/`forum`/`ecommerce`/`code`). Every pinned benign record's pin holds.
 - [ ] Each catch floor that improved is raised in `tests/corpus/floors.json` (ratchet); none is
       lowered.
-- [ ] Contract stays `1.3.0`: `contract/openapi.yaml.sha256` unchanged, unless spec 3 US-001's
-      governance check rules otherwise, in which case the ruling is recorded.
+- [ ] Contract stays `1.3.0`: `contract/openapi.yaml.sha256` unchanged. The quarantined-title
+      change is GOVERNANCE ruling (m), a sanitizer outcome with no bump (owner, 2026-10-06).
 - [ ] Every `sanitizer_revision` rotation is recorded (CLAUDE.md, `docs/bootstrap-notes.md`,
       the GOTCHAS table) with read-only reversal controls, per house practice.
 
@@ -81,3 +81,18 @@ the same text, as `/search` already does. The text is never rewritten.
 - **Acceptance criteria are written per technique class**, not per leaked row: adaptive attackers
   defeat row-shaped fixes (landscape research, arXiv 2510.09023).
 - Branch base: this epic stacks on `feat/86m-default` until that merges.
+- **Validation round 1 (2026-10-06, 24 reviewers): not-ready, 13 criticals → specs revised.**
+  - Collapse form replaced by bounded gaps (ReDoS measured).
+  - Unwrap recipe fixed (`smooth()`, block allowlist).
+  - Raw-markup scan moved to the raw source, whole body, whitespace-collapsed.
+  - Explicit fallback flag for summary mode.
+  - Corpus mirrors and carrier tests brought into scope.
+  - Floors ratchet made mechanical.
+  - The epic grows from 9 to 12 stories.
+- **Owner decisions (2026-10-06):**
+  - `hidden` attribute prunes, except `until-found`;
+  - quarantined title null is ruling (m), no bump;
+  - `system_line` and `poppy_line` go case-insensitive, with the YAML/transcript cost pinned as
+    fixtures (planner call under the ratchet rule).
+- **Spec 4 US-002 is a supervised owner step on the main checkout,** never in an execution
+  worktree (gitignored findings file).

@@ -22,10 +22,10 @@ live in `MILESTONES.md` instead.
 
 ## Forage Structural Hardening (Epic)
 - [Epic Overview](../specs/epic-forage-structural-hardening.md) — closes the corpus's 30 structural findings with derived stage-2 scan forms; stage-3 input byte-identical (no re-record); ratchet both ways
-- [Scan forms](../specs/feature-structural-scan-forms.md) — case-insensitive patterns; shared decode/collapse builder on all routes; generated confusable fold (3 stories)
-- [Markup surface](../specs/feature-structural-markup-surface.md) — inline-tag-unwrapped form; bounded raw-markup scan (2 stories; depends on: scan-forms)
-- [Wire closure](../specs/feature-structural-wire-closure.md) — quarantine blocked titles; visibility pass on the served body (2 stories; depends on: markup-surface)
-- [Close-out](../specs/feature-structural-closeout.md) — floors ratchet, findings re-filed, records (2 stories; owner checkout; depends on: wire-closure)
+- [Scan forms](../specs/feature-structural-scan-forms.md) — case-insensitive patterns; shared decode forms + bounded newline gaps; generated confusable table and fold form (4 stories)
+- [Markup surface](../specs/feature-structural-markup-surface.md) — inline-joined form (block allowlist + smooth()); whole-body raw-source markup scan (2 stories; depends on: scan-forms)
+- [Wire closure](../specs/feature-structural-wire-closure.md) — quarantined titles null (ruling (m)); body-only visibility pass (2 stories; depends on: markup-surface)
+- [Close-out](../specs/feature-structural-closeout.md) — floors ratchet script, findings re-file (owner step), docs, records preflight (4 stories; depends on: wire-closure)
 
 ---
 
