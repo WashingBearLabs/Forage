@@ -103,6 +103,7 @@ from promptguard.classifier import (
     CHUNK_OVERLAP,
     DEFAULT_MODEL_ID,
     MAX_SEQ_LEN,
+    PROMPT_GUARD_22M_ID,
     PromptGuardClassifier,
     PromptGuardThreadsConfigurationError,
 )
@@ -1974,21 +1975,36 @@ async def test_lifespan_threads_reach_the_loading_classifier(
 def test_provisional_memory_rule_constants_and_default_margins() -> None:
     assert PARENT_RESERVATION_BYTES == 512 * MEBIBYTE
     assert CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL == {
-        DEFAULT_MODEL_ID: 0,
+        PROMPT_GUARD_22M_ID: 0,
         _MODEL_ID_86M: 405 * MEBIBYTE,
     }
+    assert DEFAULT_MODEL_ID == _MODEL_ID_86M
     assert PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES == 64 * MEBIBYTE
     settings = extraction_settings_from_config({})
-    shared = (
-        PARENT_RESERVATION_BYTES
-        + CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[DEFAULT_MODEL_ID]
-        + settings.classification_concurrency * PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES
-        + settings.extraction_concurrency * settings.child_address_space_bytes
+
+    def shared(model_id: str) -> int:
+        return (
+            PARENT_RESERVATION_BYTES
+            + CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[model_id]
+            + settings.classification_concurrency
+            * PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES
+            + settings.extraction_concurrency * settings.child_address_space_bytes
+        )
+
+    # The default 86M against the compose default of 1536m.
+    default = shared(DEFAULT_MODEL_ID)
+    assert default + CacheSettings().max_bytes == 1397 * MEBIBYTE
+    assert 1536 * MEBIBYTE - (default + CacheSettings().max_bytes) == 139 * MEBIBYTE
+    assert default + CacheSettings().max_value_bytes == 1369 * MEBIBYTE
+    assert (
+        1536 * MEBIBYTE - (default + CacheSettings().max_value_bytes) == 167 * MEBIBYTE
     )
-    assert shared + CacheSettings().max_bytes == 992 * MEBIBYTE
-    assert 1024 * MEBIBYTE - (shared + CacheSettings().max_bytes) == 32 * MEBIBYTE
-    assert shared + CacheSettings().max_value_bytes == 964 * MEBIBYTE
-    assert 1024 * MEBIBYTE - (shared + CacheSettings().max_value_bytes) == 60 * MEBIBYTE
+    # The 22M opt-out still fits the previous 1 GiB envelope.
+    small = shared(PROMPT_GUARD_22M_ID)
+    assert small + CacheSettings().max_bytes == 992 * MEBIBYTE
+    assert 1024 * MEBIBYTE - (small + CacheSettings().max_bytes) == 32 * MEBIBYTE
+    assert small + CacheSettings().max_value_bytes == 964 * MEBIBYTE
+    assert 1024 * MEBIBYTE - (small + CacheSettings().max_value_bytes) == 60 * MEBIBYTE
 
 
 def test_every_allowlisted_model_has_a_resident_delta() -> None:
@@ -3661,6 +3677,8 @@ async def test_lifespan_memory_rule_counts_one_bounded_valkey_read(
     value_mib: int,
     required_mib: int,
 ) -> None:
+    # The arithmetic below is the 22M's (zero resident delta) at 1 GiB.
+    monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, PROMPT_GUARD_22M_ID)
     monkeypatch.setattr(
         retrieval_app,
         "_load_config",
@@ -3695,24 +3713,37 @@ async def test_lifespan_memory_rule_counts_one_bounded_valkey_read(
             f"envelope_memory_rule_unmet — memory_max={1024 * MEBIBYTE} "
             f"required={required_mib * MEBIBYTE} "
             f"classification_concurrency={concurrency} extraction_concurrency=1 "
-            f"child_address_space_bytes={384 * MEBIBYTE} model_id={DEFAULT_MODEL_ID} "
+            f"child_address_space_bytes={384 * MEBIBYTE} "
+            f"model_id={PROMPT_GUARD_22M_ID} "
             f"parent_bytes={512 * MEBIBYTE} cache_backend=valkey "
             f"cache_term_bytes={value_mib * MEBIBYTE}"
         )
     assert _WORKING_VALKEY_URL not in caplog.text
 
 
-async def test_shipped_memory_envelope_is_silent_at_one_gib(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize(
+    ("model_id", "limit_mib"),
+    [(None, 1536), (PROMPT_GUARD_22M_ID, 1024)],
+    ids=["default-86m-at-compose-default", "22m-at-one-gib"],
+)
+async def test_shipped_memory_envelope_is_silent(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    model_id: str | None,
+    limit_mib: int,
 ) -> None:
     _park_the_retry(monkeypatch)
     monkeypatch.setattr(
         model_fetcher, "acquire_and_load", _acquisition_that_never_loads
     )
+    if model_id is None:
+        monkeypatch.delenv(model_fetcher.MODEL_ID_ENV_VAR, raising=False)
+    else:
+        monkeypatch.setenv(model_fetcher.MODEL_ID_ENV_VAR, model_id)
     with patch.object(
         retrieval_app,
         "_cgroup_memory_snapshot",
-        return_value={"cgroup_memory_max_bytes": 1024 * MEBIBYTE},
+        return_value={"cgroup_memory_max_bytes": limit_mib * MEBIBYTE},
     ):
         async with _running_app() as client:
             assert app.state.config["promptguard_threads"] == 0

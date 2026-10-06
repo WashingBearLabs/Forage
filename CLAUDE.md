@@ -128,7 +128,7 @@ reason. Any new startup or cache code must preserve this.
 
 ```bash
 uv sync --extra dev     # environment (creates .venv)
-uv run pytest           # hermetic blocking CI gate; 4859 collected, no xfails (count: TESTING_GUIDE.md)
+uv run pytest           # hermetic blocking CI gate; 4860 collected, no xfails (count: TESTING_GUIDE.md)
 uv run ruff check .     # must stay clean — blocking CI gate
 uv run ruff format .    # must stay clean — blocking CI gate
 uv run pyright          # strict, ZERO errors — blocking CI gate
@@ -555,6 +555,17 @@ individually against `84c02af`, with a both-reverted control reproducing
 not text scanning or response shape. Raw-threshold UTF-8 hashing preserves
 ASCII inputs; provider transport sources remain outside the revision inputs.
 Full controls and the consumer handoff: `docs/bootstrap-notes.md`.
+
+The forty-third rotation is `021378ef…` → `b5e91fd6…` for the 2026-10-06 owner
+ruling that makes the **86M the default model**. No hashed source moves: the
+hashed `MODEL_ID@revision` input changes because `DEFAULT_MODEL_ID` and
+`DEFAULT_MODEL_REVISION` now name the 86M. Reverting the change reproduces
+`021378ef…`, and so does `FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-22M`
+on the new code — the 22M opt-out keeps its old revision. Stage-3 verdicts
+change with the model; text scanning, threshold and response shape do not, and
+contiguity stays off. Compose's memory default rises to `1536m`. The governance
+compatibility window was waived by the owner (no known third-party consumers).
+Full values: `docs/bootstrap-notes.md`.
 
 ## Session Scratchpad
 

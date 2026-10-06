@@ -96,11 +96,11 @@ crash reads as a false regression.
 
 **47 `test_*.py` modules** under `tests/`, flat, one per subject — 51 Python files in all
 once `conftest.py`, `fakes.py`, `corpus_stage2.py` and `__init__.py` are counted — plus
-`golden/`, `fixtures/` and `corpus/`. **4859 tests collected** on 2026-10-05 (the `/retrieve` bounded-decoder fix added nine; before it
+`golden/`, `fixtures/` and `corpus/`. **4860 tests collected** on 2026-10-06 (the 86M default split the shipped-envelope test into the 86M and 22M cases; the `/retrieve` bounded-decoder fix added nine before it; before that
 4850, after the epic-wide validation fixes for `forage-injection-corpus`; `uv run pytest --collect-only -q`).
 Every per-module row below is remeasured
 from collection, not incremented from a previous story's count; their sum
-equals the total. The complete local run on an owner checkout reports **4859 passed, 0 skipped,
+equals the total. The complete local run on an owner checkout reports **4860 passed, 0 skipped,
 no xfails**. On a clean checkout (and in CI) the four `tests/test_corpus_docs.py` findings checks
 skip, because `kit_tools/AUDIT_FINDINGS.md` is gitignored by repo policy — PR #38's CI run
 (`37231593223`, at 4845 collected) reported 4841 passed, 4 skipped. The `MIN_RECORDS` floor test
@@ -150,7 +150,7 @@ the story implementer did not run it.
 | `tests/test_stage1_extraction.py` | 66 | HTML extraction, `raw_text` vs `main_content`, shared config bounds including non-finite numbers and oversized integers (measured at US-005 retry) |
 | `tests/test_stage4_structuring.py` | 39 | Response assembly + composite trust score |
 | `tests/test_models.py` | 80 | Pydantic request/response models |
-| `tests/test_app.py` | 491 | FastAPI endpoints, `/health`, capability break-glass, `/metrics`, provider policy, and lifespan wiring; closed-message policy bound refusals, threshold-default warning/fallback for invalid values (including booleans, non-finite and oversized numbers), numeric strings, Unicode/surrogate threshold boot safety, once-only INFO default publication, and the unchanged `/extract` boolean divergence; SearXNG query-cap boot wiring and unconditional refusal of invalid values |
+| `tests/test_app.py` | 492 | FastAPI endpoints, `/health`, capability break-glass, `/metrics`, provider policy, and lifespan wiring; closed-message policy bound refusals, threshold-default warning/fallback for invalid values (including booleans, non-finite and oversized numbers), numeric strings, Unicode/surrogate threshold boot safety, once-only INFO default publication, and the unchanged `/extract` boolean divergence; SearXNG query-cap boot wiring and unconditional refusal of invalid values |
 | `tests/test_promptguard_policy.py` | 131 | Handler-side policy resolution, field-name guard, nullable bounded thresholds on both routes, default-before-ceiling classification and zero preservation, null/explicit/capped cache-key equivalence, resolved-keyword isolation, absent/contended classifier floors, trusted/VERIFIED exemptions, stamped hits (including old entries), unchanged `/extract` and policy-free 422s (recounted at hostname/config US-005) |
 | `tests/test_stage3_promptguard.py` | 169 | ML scan; mocked inference plus real pinned-config resolution |
 | `tests/test_ci_workflow.py` | 300 | Workflow shape, SHA pins/permissions, six-gate graph and both publish lanes; image/contract mapping, Release body/assets read-back against the anchor, reproducible exporters and four secret-grep patterns. Executes the actual POSIX awk docstring extractor against live and hostile inputs; whole-entry tense and uniqueness guards reject provisional publication-state clauses, with five permanent counterexamples for the frozen 1.3.0 announcement |

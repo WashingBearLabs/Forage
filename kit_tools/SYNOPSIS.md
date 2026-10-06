@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # SYNOPSIS.md
 
-> Last updated: 2026-09-23
-> Updated by: Copilot (hardening-release US-004)
+> Last updated: 2026-10-06
+> Updated by: Claude (86M default ruling; /retrieve decoder bound)
 
 ---
 
@@ -29,13 +29,13 @@ preserved). See `docs/bootstrap-notes.md` for the pin record.
 |--------|--------|
 | Maturity | `v1.2.2` / contract `1.3.0` (PATCH: 86M selectable via `FORAGE_MODEL_ID`, 22M default; contract unchanged from v1.2.1) published 2026-10-04 and verified (`corpus-86m-enablement` US-004). `v1.2.1` / contract `1.3.0` published and verified 2026-09-23; hardening epic complete. Defective v1.2.0 is withdrawn. The schema golden is frozen |
 | Repo visibility | **Public** since the US-008 flip (2026-09-10), repository and both packages; `main` is PR-only, with six required status checks (audit-measured 2026-09-11 — this row said "Private" for a month after the flip) |
-| Tests | 4272 collected and **4272 passed, no xfails** at the local v1.2.2 patch release gate (2026-10-03); fresh PR CI is still required. Hermetic via `pytest-socket`, **enforced in CI**, with a committed hermeticity canary |
+| Tests | 4860 collected and **4860 passed, no xfails** locally (2026-10-06, `feat/86m-default`); the count lives in `testing/TESTING_GUIDE.md`. Hermetic via `pytest-socket`, **enforced in CI**, with a committed hermeticity canary |
 | Lint | `uv run ruff check .` and `ruff format --check .` both clean — **enforced in CI** |
 | Types | `uv run pyright` (strict) is **clean — 0 errors**, no baseline; **enforced in CI** |
 | CI | `.github/workflows/ci.yml` — ten jobs in two lanes: `lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke`, `publish` for the service image, and `searxng-build`/`-smoke`/`-publish` for the companion |
 | Published image | `ghcr.io/washingbearlabs/forage` — `1.2.2` published 2026-10-04 and verified, index `sha256:5cb60943b99da45829613cde1f8286bdb4b72866210aa2146ca0cc5233569365`; `latest` / `1.2` / `1.2.2` equality verified anonymously. Tag commit `c213bbfbe31c42dcf3a84dcaba14145e89805182`; [publish run](https://github.com/WashingBearLabs/Forage/actions/runs/37163854549); [record](specs/feature-corpus-86m-enablement.md). Previous: `1.2.1`, index `sha256:a29329af38ee563dcc890c9b68749e4d7bc32e20c422640b2f5ffecaa8c89e7b`, tag commit `e8cf83c51e8786abf30d79ae0a3d6608c5f8df2c`; [handoff](specs/archive/feature-hardening-release.md). `docs/releases.md` records v1.2.0's withdrawal |
 | Deployment | Poppy's in-tree copy is still the deployed source of truth (coexistence rule) |
-| Planned next | `epic-forage-injection-corpus` is complete (six specs, 25 stories): spec 0 released PATCH `v1.2.2`; specs 1–5 added the measured injection corpus, cassettes for both models and a gate in the `test` job with no runtime change — guide `docs/corpus.md`, findings in `AUDIT_FINDINGS.md`. Open: the contiguity and 86M default rulings (`roadmap/BACKLOG.md`) |
+| Planned next | `epic-forage-injection-corpus` is complete (six specs, 25 stories): spec 0 released PATCH `v1.2.2`; specs 1–5 added the measured injection corpus, cassettes for both models and a gate in the `test` job with no runtime change — guide `docs/corpus.md`, findings in `AUDIT_FINDINGS.md`. Both rulings taken 2026-10-06 (unreleased, on `feat/86m-default`): the **86M is the default** (22M opt-out; Compose memory default `1536m`) and **contiguity stays off** — `arch/DECISIONS.md`. Also unreleased: the `/retrieve` fetch path's bounded decoder |
 
 **Coexistence rule:** until Poppy pins a published Forage image, any fix to the extracted
 paths on either side must be replayed onto the other, and `docs/bootstrap-notes.md`'s pin
@@ -52,7 +52,7 @@ record updated.
 | Package/env manager | **uv** (`uv.lock` committed; torch pinned to the CPU index on Linux) |
 | Build backend | hatchling, explicit wheel target (flat module layout — no `forage/` package) |
 | Extraction | trafilatura, BeautifulSoup4 + lxml, pypdf |
-| ML | transformers + torch (CPU) running Llama Prompt Guard 2 22M |
+| ML | transformers + torch (CPU) running Llama Prompt Guard 2 — 86M by default (unreleased; 22M opt-out via `FORAGE_MODEL_ID`) |
 | Cache | Valkey/Redis via `redis` (optional-in-memory fallback lands in `feature-forage-cache-fallback`) |
 | Search | SearXNG (companion service; config in `searxng/config/`) |
 | Host canonicalisation | **`idna`** (`>=3.7`, direct since `hardening-search-sanitization` US-003; `url_validator.canonicalize_host` is the one UTS-46 call site, and `idna@<version>` is a `sanitizer_revision` input) |

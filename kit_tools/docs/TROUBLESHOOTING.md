@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document debugging procedures and common fixes. How to diagnose problems.
 
-> Last updated: 2026-09-23
-> Updated by: Copilot (hardening-release US-004)
+> Last updated: 2026-10-06
+> Updated by: Claude (86M default ruling)
 
 ---
 
@@ -246,8 +246,8 @@ boot; everything else is reported through `/health` and `/metrics`.
 outside its range (ranges in `docs/configuration.md`). A *missing* file is not this: it
 logs `config.yaml not found at /app/config.yaml` and runs on code defaults.
 `ModelConfigurationError` instead means `FORAGE_MODEL_ID` is outside the closed
-allowlist: unset it or select the vendored 22M id, then restart. A blank value
-also selects the default. The 86M remains refused until the owner vendoring gate.
+allowlist: unset it (default 86M) or select the 22M id, then restart. A blank value
+also selects the default.
 
 **Fix:** correct the mounted file and restart. This is the only dependency whose failure is
 a refused boot rather than a degraded service.
@@ -286,9 +286,11 @@ This is a supported mode, not a broken deploy, but content is unscanned (see Req
 Problems, "Content unscanned").
 
 **Fix:** a Hugging Face account with the Meta license accepted on
-`meta-llama/Llama-Prompt-Guard-2-22M` and a fine-grained read token, supplied as `HF_TOKEN`
+`meta-llama/Llama-Prompt-Guard-2-86M` (the default; it needs its own gated-access grant,
+so a token approved only for the 22M is refused and the service stays degraded; or set
+`FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-22M` to use the 22M's grant) and a fine-grained read token, supplied as `HF_TOKEN`
 through the env file (`docker run --env-file`, or `compose/.env`). The retry loop converges
-**in place**, no restart; expect about 270 MiB and 19 s cold on the reference envelope (1 vCPU / 1 GB),
+**in place**, no restart; expect about 1.1 GiB for the 86M (about 270 MiB and 19 s cold for the 22M on the reference envelope, 1 vCPU / 1 GB),
 configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` — see `docs/configuration.md` § Sizing the container. The
 token-less container keeps logging the ERROR at the 10-minute ceiling forever; that is
 deliberate. Never "fix" this with `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION`: it makes
@@ -325,7 +327,7 @@ reasons: file_extra` (or `hash_mismatch`, `size_mismatch`, `file_missing`,
 `weights_quarantined — refused weight set moved to <HF_HOME>/quarantine/...`.
 
 **Cause:** the downloaded set does not match its per-model entry in
-`weights_manifest.json` exactly (22M still has five files, sha256 and size each,
+`weights_manifest.json` exactly (each model has five files, sha256 and size each,
 safetensors only). `file_extra` typically means a plain
 `snapshot_download` without `ALLOW_PATTERNS` pulled README or `.gitattributes`.
 
@@ -367,7 +369,7 @@ do not bypass the checks. `/health.promptguard_model` remains the configured id,
 not evidence that the model loaded.
 
 **Fix:** rebuild the image from `main`; check `mem_limit` (the compose fragments give
-1024m) and `docker inspect` for `OOMKilled`. `weights_acquisition_crashed` with a traceback
+1536m, sized for the default 86M) and `docker inspect` for `OOMKilled`. `weights_acquisition_crashed` with a traceback
 is the catch-all for anything else in the acquisition thread; the retry loop re-arms after
 it too.
 
@@ -393,7 +395,7 @@ mirror variables unset; the Hub leg is theirs.
 
 ### Every start is a cold download
 
-**Symptom:** each `docker run` fetches about 270 MiB again; `fetch_in_progress: true` for
+**Symptom:** each `docker run` fetches the weights again (about 1.1 GiB for the default 86M, 270 MiB for the 22M); `fetch_in_progress: true` for
 the first minutes after every recreate.
 
 **Cause:** no volume is mounted at `HF_HOME` (`/app/model-cache`), so the cache lives in the
@@ -547,7 +549,7 @@ different `sanitizer_revision` than before the deploy.
 
 **Cause:** expected, not a bug. `sanitizer_revision` hashes eight `pipeline/*.py` files, the
 model identity and `promptguard_threshold`, and it is part of the content-cache key
-fingerprint, so a rotation invalidates every existing entry on purpose. Forty-two rotations
+fingerprint, so a rotation invalidates every existing entry on purpose. Forty-three rotations
 are recorded in `docs/bootstrap-notes.md` (`e6b2b56d` → ... → `41ac98ca`); that file, not
 this count, is the record. Any consumer cache keyed on the revision must flush too.
 
@@ -799,7 +801,7 @@ git show v1.0.0:contract/openapi.yaml.sha256 | diff - openapi.yaml.sha256 && sha
 **Symptom:** someone concludes the two deployments are "out of sync" because the revisions
 differ.
 
-**Cause:** wrong measure. Forage's revision has deliberately diverged from Poppy's forty-two times
+**Cause:** wrong measure. Forage's revision has deliberately diverged from Poppy's forty-three times
 (recorded in `docs/bootstrap-notes.md`); it hashes source bytes, model identity and the
 threshold, not the wire shape.
 
@@ -838,10 +840,11 @@ Fix the mounted `config.yaml` or raise memory, then recreate.
 `extraction_failed` clustering on large PDFs. `/metrics.extraction.oom_proximity_ratio`
 approaches 1.
 
-**Cause:** the reference budget behind `mem_limit: ${FORAGE_MEM_LIMIT:-1024m}` (default `1024m`) is 512 MiB for the
-parent (torch and the 22M-parameter model), 384 MiB for the pypdf child's address space,
-and about 128 MiB headroom: 32 MiB in-memory cache, 64 MiB provisional classifier
-working set and 32 MiB margin. See `docs/configuration.md` § Sizing the container
+**Cause:** the reference budget behind `mem_limit: ${FORAGE_MEM_LIMIT:-1536m}` (default `1536m`) is 512 MiB for the
+parent (torch and the 22M-parameter model) plus a 405 MiB resident delta for the default
+86M, 384 MiB for the pypdf child's address space, 32 MiB in-memory cache and 64 MiB
+provisional classifier working set: 1397 MiB, leaving 139 MiB margin (the 22M opt-out
+totals 992 MiB and fits 1024m). See `docs/configuration.md` § Sizing the container
 for the model-dependent rule and Valkey branch. `oom_proximity_ratio` is
 `cgroup memory.current / memory.max` and is `null` off Linux or when the limit is `max`;
 the explorer's suggested alert line is above 0.9.

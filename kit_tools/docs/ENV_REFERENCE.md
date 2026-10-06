@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document environment variables and secrets. What config exists and where to find it.
 
-> Last updated: 2026-09-22
-> Updated by: Copilot (hardening-promptguard-86m US-006)
+> Last updated: 2026-10-06
+> Updated by: Claude (86M default ruling)
 
 ## Overview
 
@@ -50,8 +50,8 @@ Naming rule (`CLAUDE.md` invariant 1): the primary name of every Forage-specific
 |---|---|---|---|---|---|---|
 | `HF_HOME` | none | `/app/model-cache` (Dockerfile `ENV`, line 156; code `DEFAULT_CACHE_ROOT` restates it) | no | no | `resolve_cache_root()`, acquisition | Code default `/app/model-cache`; weights land in `$HF_HOME/hub/`, refused sets in `$HF_HOME/quarantine/`. Always set in the image; on a bare host the default path does not exist. |
 | `HF_TOKEN` | none | unset | no | **yes** | `_resolve_token()`, acquisition, cold fetch only | Hugging Face leg skipped (`weights_fetch_skipped`, outcome `skipped_no_token`). With no mirror token either and no warm volume: `degraded` with `promptguard_unavailable`, indefinitely and honestly. |
-| `FORAGE_MODEL_ID` | none | `meta-llama/Llama-Prompt-Guard-2-22M` | no | no | `resolve_model_id()` in `model_fetcher.py`; lifespan and revision hashing | Unset or stripped-blank uses 22M. Unknown values refuse boot with `ModelConfigurationError` / `model_id_not_allowed`, without echoing the value. Allowlist is exactly `meta-llama/Llama-Prompt-Guard-2-22M` (default) and `meta-llama/Llama-Prompt-Guard-2-86M` (opt-in; needs its own gated-access grant and is expected to need a raised memory limit, measured in `corpus-86m-enablement` US-003). Selected once at startup for acquisition and `/health.promptguard_model`; both Compose fragments pass it and the revision through as bare names. |
-| `FORAGE_MODEL_REVISION` | none | The selected model's `weights_manifest.json` → `models[model_id].revision` (22M: `11614a155199674a0a95e6602d6ab0417b790ed0`, equal to `DEFAULT_MODEL_REVISION`) | no | no | `resolve_revision(model_id)`, acquisition | Uses the selected model's committed pin; a malformed value falls back to the pin with `model_revision_invalid`; a well-formed value that is not that pin refuses to verify (`weights_revision_unpinned`). The value is never echoed. |
+| `FORAGE_MODEL_ID` | none | `meta-llama/Llama-Prompt-Guard-2-86M` | no | no | `resolve_model_id()` in `model_fetcher.py`; lifespan and revision hashing | Unset or stripped-blank uses 86M (default since the 2026-10-06 owner ruling). Unknown values refuse boot with `ModelConfigurationError` / `model_id_not_allowed`, without echoing the value. Allowlist is exactly `meta-llama/Llama-Prompt-Guard-2-86M` (default; needs its own gated-access grant, a 22M-only grant boots degraded `promptguard_unavailable`; ~1.1 GiB weights; sized for the 1536m compose default) and `meta-llama/Llama-Prompt-Guard-2-22M` (opt-out to the smaller, ~2x faster model; fits 1024m). Selected once at startup for acquisition and `/health.promptguard_model`; both Compose fragments pass it and the revision through as bare names. |
+| `FORAGE_MODEL_REVISION` | none | The selected model's `weights_manifest.json` → `models[model_id].revision` (86M: `a8ded8e697ce7c355e395a0df51f94adb4a2fd27`, equal to `DEFAULT_MODEL_REVISION`; 22M: `11614a155199674a0a95e6602d6ab0417b790ed0`) | no | no | `resolve_revision(model_id)`, acquisition | Uses the selected model's committed pin; a malformed value falls back to the pin with `model_revision_invalid`; a well-formed value that is not that pin refuses to verify (`weights_revision_unpinned`). The value is never echoed. |
 | `FORAGE_WEIGHTS_MIRROR` | none | `ghcr.io/washingbearlabs/forage-weights` (`DEFAULT_WEIGHTS_MIRROR`) | no | no | `resolve_mirror_repository()`, acquisition | Default private mirror. Must be lower-case `<registry>/<owner>/<name>`, optional `https://`; anything else logs `weights_mirror_invalid` and the mirror is treated as unconfigured. The tag is always the revision. |
 | `FORAGE_MIRROR_TOKEN` | none | unset | no | **yes** | `_resolve_mirror_token()`, acquisition; fed to `oras login --password-stdin` | Mirror leg skipped, the same shape as a missing `HF_TOKEN`. Third parties cannot read the mirror, so leave both unset. |
 
@@ -60,7 +60,7 @@ Naming rule (`CLAUDE.md` invariant 1): the primary name of every Forage-specific
 | Variable | Default | Required | Secret | Effect |
 |---|---|---|---|---|
 | `FORAGE_CPUS` | `0` | no | no | Both fragments substitute service-level `cpus`; unset or `0` makes Compose omit the cap, exposing every host core. Non-zero quotas require explicit thread sizing in `config.yaml`. Below 1 vCPU is unsupported. |
-| `FORAGE_MEM_LIMIT` | `1024m` | no | no | Both fragments substitute `mem_limit` using Docker byte-unit syntax. Invalid syntax fails before startup; verify the applied ceiling with `/metrics` `extraction.cgroup_memory_max_bytes`. |
+| `FORAGE_MEM_LIMIT` | `1536m` | no | no | Both fragments substitute `mem_limit` using Docker byte-unit syntax. Sized for the default 86M; `1024m` still fits the 22M opt-out. Invalid syntax fails before startup; verify the applied ceiling with `/metrics` `extraction.cgroup_memory_max_bytes`. |
 
 Use Docker Compose v2 (Compose Spec; verified v2.40.3). Set these in `compose/.env`
 or the Compose process's environment, not the service's runtime environment;
@@ -169,14 +169,16 @@ Validated at start by `pipeline.extraction_limits.extraction_settings_from_confi
 | `max_queued_upload_bytes` | `52428800` (50 MiB) | 0 to 50 MiB | Bytes of queued uploads held in flight; `0` disables queuing |
 
 The parent reservation is **512 MiB with the 22M model resident and no classification
-in flight**; that model's resident delta is `0`. The working-set coefficient is
+in flight**; the per-model resident delta is `0` for the 22M and 405 MiB for the
+default 86M. The working-set coefficient is
 **provisional 64 MiB, not measured**: `1024 − 512 − 384 − 32 = 96 MiB` residual,
 less a retained 32 MiB margin. Spec 7 measures the marginal classification RSS and
 each model's idle resident delta before enabling a second model. The child term
 reads the configured `child_address_space_bytes`, not the shipped literal.
 `cache_term_bytes` is `cache.max_bytes` in memory mode and `cache.max_value_bytes`
-under Valkey (one in-flight bounded read). Shipped totals are 992 / 964 MiB,
-leaving 32 / 60 MiB below 1 GiB. This advisory is not a peak-RSS guarantee.
+under Valkey (one in-flight bounded read). Shipped totals with the default 86M are
+1397 / 1369 MiB (memory / Valkey), leaving 139 / 167 MiB below the 1536m compose
+default; with the 22M they are 992 / 964 MiB, which still fit 1024m. This advisory is not a peak-RSS guarantee.
 Equality or an unreadable/unlimited cgroup limit is silent; under-sizing warns once
 with model, backend and all term values, never refuses boot.
 

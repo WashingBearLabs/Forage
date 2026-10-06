@@ -247,10 +247,11 @@ class CacheMetrics:
 
 MEBIBYTE = 1024 * 1024
 
-# Sized to the reference envelope: default ``mem_limit: 1024m`` reserves
-# 512 MiB for the parent FastAPI + torch + PromptGuard process and 384 MiB for
-# the spawned extraction child, leaving ~128 MiB. The 32 MiB default spends a
-# quarter of that; 64 MiB is provisional classifier working set, 32 MiB margin.
+# Sized to the 22M's 1 GiB envelope: ``mem_limit: 1024m`` reserves 512 MiB for
+# the parent FastAPI + torch + PromptGuard process and 384 MiB for the spawned
+# extraction child, leaving ~128 MiB. The 32 MiB default spends a quarter of
+# that; 64 MiB is provisional classifier working set, 32 MiB margin. The default
+# 86M adds its 405 MiB resident delta, which the 1536m Compose default covers.
 # The 128 MiB cache ceiling is inclusive and requires a larger memory envelope.
 # See docs/configuration.md, "Sizing the container" (FORAGE_MEM_LIMIT).
 DEFAULT_CACHE_MAX_ENTRIES = 256

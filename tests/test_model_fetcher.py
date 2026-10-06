@@ -1220,7 +1220,7 @@ class TestSingleEntryPoint:
         path = snapshot_path("/app/model-cache", DEFAULT_MODEL_ID, "0" * 40)
 
         assert path == Path(
-            "/app/model-cache/hub/models--meta-llama--Llama-Prompt-Guard-2-22M"
+            "/app/model-cache/hub/models--meta-llama--Llama-Prompt-Guard-2-86M"
             "/snapshots/" + "0" * 40
         )
 

@@ -518,8 +518,8 @@ given.
 `lang` is set per record. Every language below is authored in **both**
 categories on **all three** surfaces, at least twice each. The multilingual
 slice matters because the model card reports a weaker multilingual score for the
-22M default than for the 86M (landscape finding 7), so it is where the shipped
-model is least sure of itself.
+22M than for the 86M (landscape finding 7), so it is where the 22M — the default
+when the corpus was built, now the opt-out — is least sure of itself.
 
 | `lang` | Language | Why it is here |
 |--------|----------|----------------|

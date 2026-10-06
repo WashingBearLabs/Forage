@@ -98,9 +98,9 @@ gate entry point must go through `corpus_app` rather than setting `app.state` it
 
 ### Real model configs can omit human-readable labels
 
-The verified default 22M config has no label maps: transformers supplies
-`LABEL_0`/`LABEL_1`. Synthetic BENIGN/INJECTION fixtures missed the v1.2.0
-startup failure. The repair recognizes generic labels only for the exact
+The verified 22M and default 86M configs have no label maps: transformers
+supplies `LABEL_0`/`LABEL_1`. Synthetic BENIGN/INJECTION fixtures missed the v1.2.0
+startup failure. The repair recognizes generic labels only for each exact
 verified model/revision, with a manifest-hash-checked genuine config fixture.
 New pins require new semantic evidence, not a blanket acceptance of arbitrary
 binary labels. Run a real weights-loaded candidate smoke before publication;
@@ -668,7 +668,7 @@ the pass-list advice; the baked image still ships `limiter: false`.
 `derive_sanitizer_revision()` hashes nine source files — the eight under `pipeline/` plus
 repo-root `url_validator.py` — plus the model identity, the `idna` version
 (`idna@<version>`: UTS-46 tables decide which hosts are dropped) and the active
-threshold. Forage's revision has moved forty-two times. The twenty-sixth was
+threshold. Forage's revision has moved forty-three times. The twenty-sixth was
 reconciled from the preceding validation commit during US-001's pre-flight; the rest
 were recorded at their implementation boundaries:
 
@@ -717,15 +717,16 @@ were recorded at their implementation boundaries:
 | `hardening-release` US-001 | `bffeb7ba…47fe1` | Fortieth, **not a text-sanitization change**. Only `contract.py` announces redacted request-validation 422s, their 100-entry cap and one-minor-release placeholders (GOVERNANCE ruling (l)). Whole-file read-only reversal against clean `7a4819b` reproduces `b641e6a5…` under default and shipped config; the other eight sources and hash definition are unchanged. The total handler and location allowlist live in unhashed `retrieval_app.py`. Existing 36th–39th bootstrap heading forms and stale count prose were reconciled before the mandatory preflight. Full values: `docs/bootstrap-notes.md`. |
 | `hardening-release` US-002 | `6884dc29…bd7ec` | Forty-first, **no wire or sanitization behavior change**. Only `contract.py`'s final single 1.3.0 announcement and timeless 1.2.0 entry move; whole-file read-only reversal against clean `3ea0b32` reproduces `bffeb7ba…` under default and shipped config. The other eight sources and hash definition are unchanged. The six-model golden is frozen, cache metrics retain dedicated coverage, and OpenAPI/anchors are byte-identical. Publication remains pending. Full values: `docs/bootstrap-notes.md`. |
 | Whole-epic release gate | `021378ef…33900` | Forty-second: `orchestrator.py` pins unavailable classifier readiness before skipping admission; `url_validator.py` compares IPv6 policy identities by address value while preserving wire spelling. Both hashed files individually reversed against `84c02af`; both-reverted reproduces `6884dc29…` under default/shipped config. Policy enforcement changes, not text scanning or response shape. Raw-threshold UTF-8 hashing preserves ASCII inputs; provider transport sources stay unhashed. Full measurements: `docs/bootstrap-notes.md`. |
+| 86M default ruling (2026-10-06) | `b5e91fd6…a0ded` | Forty-third, **a classification change at shipped defaults, not a text-scanning change**: `DEFAULT_MODEL_ID` becomes the 86M, so the hashed `MODEL_ID@revision` input moves from the 22M pin to `meta-llama/Llama-Prompt-Guard-2-86M@a8ded8e6…`. **No hashed source moves.** Reverting the classifier/fetcher change reproduces `021378ef…` under default and shipped config, and so does `FORAGE_MODEL_ID=…22M` on the new code — the 22M opt-out keeps its old revision and cache keys. Stage-3 verdicts change because the model does; the max rule, threshold and contiguity (still off) do not. Full values: `docs/bootstrap-notes.md`. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Thirty-three of the forty-two rotations changed no sanitization policy or algorithm at shipped defaults; the
+**Thirty-three of the forty-three rotations changed no sanitization policy or algorithm at shipped defaults; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
 US-001, US-002, US-003 and its validation fix) and the twenty-seventh
 through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005),
-and the forty-second release-gate policy repair are the nine
+the forty-second release-gate policy repair, and the forty-third (the 86M default) are the ten
 that did, and the seventeenth
 (US-004, contract `1.3.0`) does not join them** — hostname policy can now skip
 classification on an opted-in trusted suffix; search-sanitization US-001's

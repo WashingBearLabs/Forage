@@ -11,17 +11,24 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from pipeline.config_bounds import bounded_int
-from promptguard.classifier import CHUNK_OVERLAP, DEFAULT_MODEL_ID, MAX_SEQ_LEN
+from promptguard.classifier import (
+    CHUNK_OVERLAP,
+    MAX_SEQ_LEN,
+    PROMPT_GUARD_22M_ID,
+    PROMPT_GUARD_86M_ID,
+)
 
 MEBIBYTE = 1024 * 1024
-# Parent with the 22M model resident, but no classification in flight.
+# Parent with the 22M model resident, but no classification in flight. The
+# reservation stays measured against the 22M, the smaller model; each model's
+# delta below is relative to it, so the default 86M carries its 405 MiB here.
 PARENT_RESERVATION_BYTES = 512 * MEBIBYTE
 CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL: Mapping[str, int] = {
-    DEFAULT_MODEL_ID: 0,
+    PROMPT_GUARD_22M_ID: 0,
     # Measured (corpus-86m-enablement US-003): the largest process VmRSS
     # difference over the 22M at equal settings, after load and a max-budget
     # run (404.3 MiB), rounded up. Idle reads ~115 MiB: weights page in on use.
-    "meta-llama/Llama-Prompt-Guard-2-86M": 405 * MEBIBYTE,
+    PROMPT_GUARD_86M_ID: 405 * MEBIBYTE,
 }
 # Provisional, not measured: 1024 - 512 - 384 - 32 = 96 MiB residual;
 # reserve 32 MiB of that as margin. Spec 7 replaces this with measured RSS deltas.

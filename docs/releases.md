@@ -10,6 +10,32 @@ lane and is documented separately in `docs/searxng.md` (US-004).
 > **Public since US-008's 2026-09-10 flip** — repository and packages; anonymous
 > pulls verified at the gate.
 
+## Unreleased
+
+Not yet tagged; the version number is decided at the release gate. Contract stays `1.3.0`.
+
+- **The 86M is the default model** (owner ruling 2026-10-06). With `FORAGE_MODEL_ID`
+  unset the service now loads `meta-llama/Llama-Prompt-Guard-2-86M`;
+  `meta-llama/Llama-Prompt-Guard-2-22M` stays allowlisted as the opt-out. On the injection
+  corpus the 86M catches 15 stage-3 attack texts the 22M does not, with no measured benign
+  false positive (`docs/corpus.md` "Decision inputs"). `/health.promptguard_model` reports
+  the 86M id by default. **Upgrade checks:** the Hugging Face token needs the 86M
+  repository's own gated grant (otherwise `degraded` / `promptguard_unavailable` until it
+  has one); first acquisition is ~1.1 GiB; classification is about 2× slower per window.
+- **Compose's `FORAGE_MEM_LIMIT` default is `1536m`** (was `1024m`) — the boot memory rule
+  is 1,397 MiB for the 86M at shipped settings. The 22M opt-out still fits `1024m`.
+- **`sanitizer_revision` rotates** `021378ef…` → `b5e91fd6…` at the default model (old
+  cache entries become misses). Setting `FORAGE_MODEL_ID=…22M` keeps `021378ef…`.
+- **Contiguity gating stays off** (owner ruling 2026-10-06).
+- **`/retrieve` bounds its decoder:** fetched bodies are read through Forage's bounded
+  decoder (`pipeline/bounded_body.py`), with `Accept-Encoding: gzip, deflate` pinned. A body
+  in any other encoding, or a truncated/concatenated compressed stream, is now refused as
+  `fetch_error` (reason ending `unsupported_encoding` / `malformed_body`); previously such a
+  body was passed through undecoded into extraction. Oversized bodies keep
+  `content_too_large`.
+- GOVERNANCE worked example 6's announce-then-flip window was **waived** by the owner for
+  the default-model change (no known third-party consumers).
+
 ## Released versions
 
 Every non-pre-release tag, newest first. The `contract:`, `anchor:`, `index digest:` and

@@ -1,7 +1,8 @@
 # Weights: the pinned model, the private mirror, and how to re-vendor
 
-Forage's injection classifier is Meta's **`meta-llama/Llama-Prompt-Guard-2-22M`** by default,
-or **`meta-llama/Llama-Prompt-Guard-2-86M`** when `FORAGE_MODEL_ID` selects it (one model per
+Forage's injection classifier is Meta's **`meta-llama/Llama-Prompt-Guard-2-86M`** by default
+(since the 2026-10-06 owner ruling; `v1.2.2` and earlier defaulted to the 22M), or the smaller
+**`meta-llama/Llama-Prompt-Guard-2-22M`** when `FORAGE_MODEL_ID` selects it (one model per
 process). The pins: 22M at `11614a155199674a0a95e6602d6ab0417b790ed0`, 86M at
 `a8ded8e697ce7c355e395a0df51f94adb4a2fd27` (vendored 2026-10-01, `feature-corpus-86m-enablement`
 US-001); each has its own `weights_manifest.json` entry and its own revision-keyed mirror tag. Since
@@ -113,7 +114,7 @@ done
 The snapshot must already exist before invocation. The harness waits up to
 `--health-timeout-seconds` (900 by default), polling every 5 seconds, and requires
 both `status: healthy` and `promptguard_loaded: true` in the returned `/health`
-body. Merely answering 200 is not readiness. `--model-id` defaults to 22M and must
+body. Merely answering 200 is not readiness. `--model-id` defaults to the 86M and must
 equal `/health.promptguard_model`. That field is **configuration, not proof of
 loaded weights**: each written row also carries the loaded flag, sanitizer
 revision and contract version. Matching the CLI id does not authenticate arbitrary
@@ -219,7 +220,7 @@ row, and rerun after any model-revision or envelope-default change.
 
 | Where | What it is |
 |---|---|
-| The resolved revision for the selected model | the revision acquisition, verification and loading all receive; `model_fetcher.DEFAULT_MODEL_REVISION` is the 22M-only last resort |
+| The resolved revision for the selected model | the revision acquisition, verification and loading all receive; `model_fetcher.DEFAULT_MODEL_REVISION` (the 86M pin) is the default-model-only last resort |
 | `weights_manifest.json`'s `models["<model id>"].revision` | that model's pin, paired with its own exact-set `files` allowlist |
 | `ghcr.io/washingbearlabs/forage-weights:<revision>` | the mirror tag US-004 falls back to |
 
@@ -259,7 +260,7 @@ prefix — pushed as an OCI artifact with type
 
 The committed document is `{"_comment": [...], "models": {"<model id>":
 {"revision": "<commit sha>", "files": [...]}}}`: one exact-set allowlist per model.
-The shipped entry is still the same five 22M files and revision. Verification selects
+Each model's entry is its own five files and revision. Verification selects
 only the requested pair; immediately before loading, `_load_verified` checks that the
 requested and manifest-derived snapshot directories agree and still exist.
 This parameterisation alone does not enable another deployment model or vendor weights.
@@ -296,7 +297,7 @@ subprocess call three phases in.
 
 ### Run it
 
-`--model-id` selects the entry to vendor and defaults to `DEFAULT_MODEL_ID` (22M).
+`--model-id` selects the entry to vendor and defaults to `DEFAULT_MODEL_ID` (the 86M).
 The tool does **not** read `FORAGE_MODEL_ID`. `--revision` defaults to that entry's
 committed pin; for a new model it is required. Keep the same pair on every phased
 invocation. Generation reads the existing document, adds or replaces only that entry,
@@ -512,9 +513,9 @@ your hands.
 
 1. **Create a Hugging Face account** at https://huggingface.co if you do not have one.
 2. **Request access to the gated repository.** Visit
-   https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-22M (and, if you will select the
-   larger model, https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M — Meta grants
-   access **per repository**, so 22M access does not cover 86M) while signed in and submit
+   https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M, the default model (and, if you
+   will select the smaller opt-out, https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-22M —
+   Meta grants access **per repository**, so one grant does not cover the other) while signed in and submit
    the access request — this is where you accept the **Llama 4 Community License
    Agreement** and **Acceptable Use Policy** (the terms `NOTICE` cites). Meta approves
    per account, and approval is **not instant**: minutes on a good day, longer on a bad
@@ -530,7 +531,7 @@ your hands.
    a matching manifest fails verification, loudly and correctly (see [the
    rule](#the-three-places-the-revision-appears--and-the-rule-about-them)).
 5. **Start the container and watch it converge.** Startup does not block on the
-   download: the service answers immediately as `degraded`, fetches the ~270 MiB behind
+   download: the service answers immediately as `degraded`, fetches the ~1.1 GiB (86M; ~270 MiB for the 22M) behind
    a live `/health`, verifies every byte against the committed manifest, and
    `promptguard_loaded` flips to `true` in place — no restart.
 
@@ -623,7 +624,7 @@ Inside it:
 ```
 /app/model-cache/
 ├── hub/
-│   └── models--meta-llama--Llama-Prompt-Guard-2-22M/
+│   └── models--meta-llama--Llama-Prompt-Guard-2-86M/
 │       ├── blobs/                     # the real bytes
 │       └── snapshots/<revision>/      # symlinks into blobs/ — what the loader opens
 ├── quarantine/                        # a refused set, one generation only

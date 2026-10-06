@@ -302,6 +302,11 @@ and the per-density and per-repeat splits) is `baseline.json`'s `offline` key, o
 Lower thresholds (see the full grid) trade FPR for catch; do not read a single
 row in isolation from the benign columns beside it.
 
+**Rulings (owner, 2026-10-06).** Both questions are answered: the **86M is the default
+model** (the 22M stays a `FORAGE_MODEL_ID` opt-out), and **contiguity gating stays off**.
+Reasoning and consequences: `kit_tools/arch/DECISIONS.md` (2026-10-06). The tables above
+are unchanged by the rulings: the gate replays both cassettes whatever the default is.
+
 ## Reading the results
 
 **What the headline numbers claim.** A catch rate is the share of *this corpus's*

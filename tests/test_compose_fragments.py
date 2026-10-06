@@ -767,7 +767,7 @@ class TestResourceEnvelope:
     ) -> None:
         service = _services(fragments[name])[_FORAGE_SERVICE]
         assert service["cpus"] == "${FORAGE_CPUS:-0}"
-        assert service["mem_limit"] == "${FORAGE_MEM_LIMIT:-1024m}"
+        assert service["mem_limit"] == "${FORAGE_MEM_LIMIT:-1536m}"
 
     def test_healthcheck_is_status_only_liveness(
         self, fragments: dict[str, dict[str, Any]], name: str

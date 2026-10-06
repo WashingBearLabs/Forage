@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # BACKLOG.md
 
-> Last updated: 2026-10-04
-> Updated by: Claude (corpus-gates US-005 close-out)
+> Last updated: 2026-10-06
+> Updated by: Claude (decoder bound shipped; 86M-default and contiguity rulings taken)
 
 Work that is real but not yet scheduled into a feature spec. Items with an owning spec
 live in `MILESTONES.md` instead.
@@ -45,19 +45,6 @@ live in `MILESTONES.md` instead.
 Deliberately deferred at extraction — the flat layout keeps the Dockerfile,
 `sanitizer_revision`'s hashed source paths, and the whole suite working unchanged.
 Cosmetic only, and it touches `sanitizer_revision`, so it needs its own change.
-
-### Contiguity default ruling
-**Priority:** Medium · **Effort:** Small
-Owner ruling on whether contiguity gating (`promptguard_contiguity_windows` /
-`_threshold`, shipped off) earns a default. Inputs: `docs/corpus.md` "Decision inputs" (measured
-by `epic-forage-injection-corpus`, T2.3). The corpus adds no ruling of its own, and changing a
-default is a contract-governance question (`contract/GOVERNANCE.md`).
-
-### 86M default ruling
-**Priority:** Medium · **Effort:** Small
-Owner ruling on whether the 86M model replaces the 22M as the default. The 86M is selectable
-since `v1.2.2` and both models have cassettes, so the inputs are the same table: `docs/corpus.md`
-"Decision inputs", beside the latency and memory numbers in `corpus-86m-enablement`'s notes.
 
 ### Structured request logging / tracing
 **Priority:** Low · **Effort:** Small

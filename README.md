@@ -208,8 +208,9 @@ break-glass caveat, and credential-handling guidance — lives in
 
 ## PromptGuard weights and the Hugging Face gated repo
 
-Stage 3 runs `meta-llama/Llama-Prompt-Guard-2-22M`, which lives in a **gated** Hugging
-Face repository. You must accept Meta's license on Hugging Face and supply your own
+Stage 3 runs `meta-llama/Llama-Prompt-Guard-2-86M` by default (the smaller
+`meta-llama/Llama-Prompt-Guard-2-22M` is a supported opt-out via `FORAGE_MODEL_ID`); each lives in
+its own **gated** Hugging Face repository, and Meta grants access per repository. You must accept Meta's license on Hugging Face and supply your own
 token to obtain the weights; Forage cannot and does not distribute them for you.
 
 **Without the weights, Forage runs degraded**: `/health` reports
