@@ -14,47 +14,48 @@ created: 2026-10-06
 updated: 2026-10-06
 ---
 
-# Feature Spec: Structural Scan Forms — Case, Entities, Newline Gaps and Confusables on Every Route
+# Feature Spec: Structural Scan Forms — Case, Linear Patterns, Entities and Confusables on Every Route
 
 ## Overview
 
 Stage 2 (`pipeline/stage2_structural.py`, 24 patterns in `_PATTERNS`) applies **no
-normalisation of its own**. It matches the patterns directly against `ExtractionResult.raw_text`.
+normalisation of its own**. Stage 1 (`_normalize_text`, `stage1_extraction.py:97-110`) applies
+NFC, strips 9 invisible code points and collapses whitespace within lines. `/search` also scans
+a decoded, control-stripped pair (`_scan_forms_for_search_text`, `orchestrator.py:940-982`).
+`/retrieve` and `/extract` get nothing more.
 
-- **Stage 1** (`_normalize_text`, `stage1_extraction.py:97-110`) applies NFC, strips 9 invisible
-  code points and collapses whitespace within lines.
-- **`/search`** additionally scans a decoded, control-stripped pair of forms
-  (`_scan_forms_for_search_text`, `orchestrator.py:940-982`).
-- **`/retrieve` and `/extract`** get nothing more.
-
-The corpus measured the cost:
+The corpus measured four leak families:
 - **`case` (5 records):** seven patterns are case-sensitive.
-- **`entity` (8 records):** `/extract` uploads are never decoded, and the `/retrieve` HTML
-  parser decodes one level.
-- **`second_paragraph` (4 records):** `disregard_instructions` and `exfil_image` cannot cross
-  a newline.
-- **`confusable` (9 records):** nothing folds look-alike characters on any route.
+- **`entity` (8 records):** uploads are never decoded; the HTML parser decodes one level.
+- **`second_paragraph` (4 records):** two patterns can't cross a newline.
+- **`confusable` (9 records):** nothing folds look-alikes.
 
-This spec closes all four on every route by giving stage 2 extra **derived forms** of the same
-text. Stage-3 input stays byte-identical, so the replayed cassettes need no re-recording. The
-newline-gap leak is closed by **bounding the two patterns' gaps** rather than by a whitespace
-collapse form, which validation measured as quadratic: 15.8 s on 200 KB.
+Validation also measured **three quadratic patterns**:
+- `disregard.*instructions` (:73)
+- the lazy `exfil_image` (:223)
+- `envelope_breakout`'s adjacent `\s*/?\s*` (:236)
+
+A whitespace run in any scanned form triggers the third one.
+
+This spec closes the four leak families on every route with extra **derived scan forms**, and
+first makes every pattern linear. Stage-3 input stays byte-identical, so the replayed cassettes
+need no re-recording.
 
 ## Goals
 
-- All 26 attack records in the Research Findings leak table (`case`, `entity`,
-  `second_paragraph`, `confusable`) are `blocked` or `flagged` in the regenerated
-  `tests/corpus/baseline.json` on every route where they leaked.
-- Class-level property tests show that every one of the 24 patterns catches its registered probe
+- All 26 attack records in the Research Findings leak table are `blocked` or `flagged` in the
+  regenerated `tests/corpus/baseline.json` on every route where they leaked.
+- Class-level property tests show that every one of the 24 patterns catches its probe
   (`scripts/corpus/vocab.py` `STAGE2_REGEX_PROBES`) in each of these variants:
   - case-varied;
   - entity-encoded at one and two levels (pinned encoders);
   - newline-split (the two gap patterns);
-  - single-position confusable substitution.
-- An adversarial 2 MiB input scans in bounded time on every form: no stage-2 form scan exceeds
-  the ceiling stated in US-002.
-- Zero cassette misses: both cassette files are byte-unchanged. Zero core-genre benign records
-  move from `passed`, and every pinned benign record's pin holds.
+  - single-position confusable substitution, including both readings of the ambiguous I/l
+    class.
+- **Every pattern is linear:** an all-patterns adversarial sweep scales sub-quadratically
+  (2 MiB time ≤ 3× 1 MiB time per pattern) and stays under a total ceiling per form.
+- Zero cassette misses (both cassette files byte-unchanged). Zero core-genre benign records move
+  from `passed`, and every pinned benign record's pin holds.
 
 ## User Stories
 
@@ -72,33 +73,27 @@ regenerated baseline shows the 5 `case` leaks caught, with no other benign movem
 - **Only `pipeline/stage2_structural.py` moves**, so the reversal control reverts that file
   alone.
 - The seven patterns:
-  - `instructions_banner` :101 (no IGNORECASE)
-  - `poppy_line` :129, literally `^POPPY:`, MULTILINE only
-  - `system_line` :136, literally `^System:`, MULTILINE only
-  - `hex_escape` :164 (lowercase `\x`)
+  - `instructions_banner` :101
+  - `poppy_line` :129, literally `^POPPY:`
+  - `system_line` :136, literally `^System:`
+  - `hex_escape` :164
   - `im_start` :185
   - `endoftext` :191
-  - `exfil_image` :223 (lowercase `https?`)
-- Add `re.IGNORECASE`. Don't touch `base64_run` :151: its character class is deliberately
-  case-bearing.
-- **Don't rename `poppy_line`.** The names are pinned by `scripts/corpus/vocab.py`
-  `STAGE2_REGEX_NAMES` (:224-249) and `tests/test_corpus_lint.py:443-461`. CLAUDE.md
-  invariant 1 forbids only *new* "poppy" names.
-- **Decided false-positive cost (owner, 2026-10-06; see Clarifications):** a line starting with
-  `system:` or `poppy:` in any case now BLOCKs. That includes a YAML key `system:` at column 0
-  and a transcript line `Poppy:`. Narrowing it would reopen `atk-0070` and `atk-0086`.
-  - Pin the cost as explicit benign unit fixtures asserted **BLOCKED**, so it is a recorded
-    decision, not an accident.
-  - The corpus ratchet still applies: if a corpus *core-genre* benign record moves, stop and
-    raise it rather than narrow silently.
-- `tests/test_corpus_attacks.py` `_is_re_cased` (:176-192) defines a `case` record as one that
-  matches only with IGNORECASE forced. Re-read it and the `_VARIANT_SHAPE` assertions
-  (:194-209), and update their premise to "re-cased relative to the probe" if needed.
-- Reuse the existing probe table: `tests/test_corpus_lint.py:443-461` already pins `NAMES` and
-  `PROBES` alignment.
-- Test location: `tests/test_stage2_structural.py`.
-- Leaked records: `atk-0071` (`poppy_line`), `atk-0070` and `atk-0086` (`system_line`),
-  `atk-0116` (`hex_escape`), `atk-0147` (`exfil_image`).
+  - `exfil_image` :223
+- Add `re.IGNORECASE`. Don't touch `base64_run` :151: its class is deliberately case-bearing.
+- **Don't rename `poppy_line`.** The names are pinned by `vocab.py` `STAGE2_REGEX_NAMES`
+  (:224-249) and `tests/test_corpus_lint.py:443-461`. CLAUDE.md invariant 1 forbids only *new*
+  "poppy" names.
+- **Decided false-positive cost** (Clarifications): a line starting `system:` or `poppy:` in any
+  case now BLOCKs, including a column-0 YAML `system:` key and a `Poppy:` transcript line.
+  Narrowing would reopen `atk-0070` and `atk-0086`. Pin the cost as benign unit fixtures
+  asserted **BLOCKED**. If a corpus *core-genre* benign record moves, stop and raise it.
+- `tests/test_corpus_attacks.py` `_is_re_cased` (:176-192) should be unaffected: it tests the
+  record against the forced-IGNORECASE regex. Re-read it and the `_VARIANT_SHAPE` checks
+  (:194-209) to confirm.
+- Reuse the probe table pinned by `tests/test_corpus_lint.py:443-461`. Test location:
+  `tests/test_stage2_structural.py`.
+- Leaked records: `atk-0071`, `atk-0070`, `atk-0086`, `atk-0116`, `atk-0147`.
 
 **Acceptance Criteria:**
 - [ ] A parametrised test over exactly the seven named patterns asserts `scan_structural` gives
@@ -106,234 +101,282 @@ regenerated baseline shows the 5 `case` leaks caught, with no other benign movem
       unvaried probe. The test fails on the pre-story file.
 - [ ] Benign unit fixtures, a column-0 YAML `system:` key and a `Poppy:` transcript line, are
       asserted BLOCKED, with a comment citing this spec's decision.
-- [ ] `atk-0071`, `atk-0070`, `atk-0086`, `atk-0116` and `atk-0147` are not `leaked` in the
-      baseline regenerated with `uv run python -m scripts.corpus.report --write-baseline`.
+- [ ] The 5 `case` records are not `leaked` in the baseline regenerated with
+      `uv run python -m scripts.corpus.report --write-baseline`.
 - [ ] No core-genre benign record (`news`/`docs`/`forum`/`ecommerce`/`code`) moves from
-      `passed` in the regenerated baseline, and `tests/test_corpus_gate.py` pin tests are green.
-- [ ] Both files under `tests/corpus/cassettes/` are byte-unchanged (`git diff --exit-code
-      tests/corpus/cassettes/`), and the cassette-replay tests are green.
-- [ ] `docs/corpus.md` "Decision inputs" tables are updated from the regenerated baseline's
-      `offline` section, and `tests/test_corpus_docs.py` is green.
-- [ ] The `sanitizer_revision` rotation is recorded in CLAUDE.md, `docs/bootstrap-notes.md` and
-      the `kit_tools/docs/GOTCHAS.md` table, with a read-only reversal control reproducing the
-      prior value under default and shipped config.
+      `passed`, and the pin tests in `tests/test_corpus_gate.py` are green.
+- [ ] `git diff --exit-code tests/corpus/cassettes/` exits 0, and the cassette-replay tests are
+      green.
+- [ ] `docs/corpus.md` "Decision inputs" tables are updated from the regenerated `offline`
+      section, and `tests/test_corpus_docs.py` is green.
+- [ ] The rotation is recorded in CLAUDE.md, `docs/bootstrap-notes.md` and the GOTCHAS table,
+      with a read-only reversal control under default and shipped config.
 - [ ] Tests written/updated for new functionality
 - [ ] Full test suite passes (`uv run pytest`)
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
 - [ ] `uv run pyright` reports 0 errors
 
-### US-002: Shared decoded scan forms and bounded newline gaps on all routes
+### US-002: Make every stage-2 pattern linear, and let the gap patterns cross newlines
 
 **Priority:** P1
 
-**Description:** As an operator, I want `/retrieve` and `/extract` to scan an entity-decoded form,
-and the two non-DOTALL patterns to match across a bounded newline gap, so that double-encoded
-entities and newline-split triggers can't pass stage 2. I also want an adversarial page not to be
-able to stall it.
+**Description:** As an operator, I want no stage-2 pattern to be slow on hostile input, and the
+two gap patterns to match across a newline at any distance, so that newline-split triggers are
+caught and no page can stall the process.
 
-**Independent Test:** Drive `/retrieve` and `/extract` through the corpus drivers with the 8
-`entity` and 4 `second_paragraph` leaks: all are caught. The adversarial timing test passes, and
-`tests/test_search_pipeline_pins.py` is unchanged.
+**Independent Test:** The all-patterns adversarial timing sweep passes. The 4 `second_paragraph`
+leaks are caught on `/retrieve` and `/extract`. No other corpus record changes verdict.
 
 **Implementation Hints:**
-- **Bounded gaps.** Rewrite `disregard_instructions` (:73, `disregard.*instructions`) and
-  `exfil_image` (:223, `!\[.*?\]\(https?://[^)]*(...)`) with **bounded, newline-crossing**
-  quantifiers. For example:
-  - `disregard[\s\S]{0,N}?instructions`
-  - `!\[[^\]]{0,N}\]\(https?://[^)]{0,M}(?:…)`
-  Choose N and M so **no corpus record loses a match** (the baseline diff proves it), and
-  record them.
-  - This replaces the planned collapse form. Every other multi-token pattern already crosses
-    newlines through `\s+` or `[^)]*` (validation, second opinion).
-- **Builder.** Put it in `pipeline/stage2_structural.py`, which is already hashed. A new module
-  deciding what stage 2 sees would otherwise have to join `_REVISION_SOURCES`.
-  - Signature: `structural_scan_forms(text: str, *, html_parsed: bool) -> tuple[str, ...]`.
-  - Forms are deduplicated, in this order:
-    1. **the as-is text;**
-    2. **its decode:** `html.unescape` applied **exactly once** when `html_parsed=True` (the
-       parser already decoded one level, giving two effective levels, the depth `/search` has),
-       or **exactly twice** when `False` (PDF and upload text). Then strip C0/C1 control
-       characters, mirroring `orchestrator.py:927,976,980`. No fixed-point loop.
-  - US-004 appends the folded form.
-- **Size cap:** a derived form longer than 4× its input (the `/search` parser-input precedent)
-  is truncated to that length and scanned. Log the closed WARNING token
-  `stage2_scan_form_truncated` with lengths only, never text. The as-is form is always scanned
-  in full.
-- **Combine.** `scan_structural_forms(forms) -> StructuralScanResult`:
-  - The verdict is the worst across forms (BLOCKED > SUSPICIOUS > CLEAN).
-  - `flags` and `penalty` come **from the as-is form if it already has the worst verdict**,
-    otherwise from the first form that reaches it.
-  - So a record whose verdict doesn't move keeps **byte-identical** `structural_flags`
-    (`stage4_structuring.py:166`) and penalty. Accepted: a penalty reflects one form's spans.
-- **`matched_text` is never logged or counted.** Assert it in a test. Derived forms put decoded
-  attacker text in it.
-- **Wiring.** `sanitize_and_structure` (`orchestrator.py:263`) switches to
-  `scan_structural_forms(structural_scan_forms(extraction.raw_text, html_parsed=…))`.
-  - Stage 3 at :278 keeps receiving `extraction.raw_text`. That is the no-re-record guarantee.
-  - `html_parsed` is true for HTML pages and false for PDF and upload. Derive it at the call
-    site from the content type the orchestrator already knows, or from a new
-    `ExtractionResult` field with a default (`pipeline/pdf_subprocess.py:140,260` constructs
-    `ExtractionResult` too).
-- **`/search`.** Make `_scan_forms_for_search_text` (:940-982) delegate its control-strip and
-  second-level decode to the shared helpers, keeping its wire form (stage-3 input,
-  :1285-1287) byte-identical. The six-entry field loop (:1810-1846) stays as is: its scan/wire
-  pair already covers this story's variants. `tests/test_search_pipeline_pins.py` is the guard.
-- **Corpus mirrors must use the builder.** `tests/corpus_stage2.py` `stage2_forms()` and
-  `stage2_record_hits()`, `scripts/corpus/records.py` `_stage2_form()` and
-  `rule_sweep_stage2_clean()`, and `scripts/corpus/ingest/render.py` `assign_category()` all
-  hand-mirror "what stage 2 sees" and scan only the as-is form. Point them at the shared
-  builder through a public name, so lint and the "stage two never sees it" assertions stay
-  truthful.
-- Stage 2 runs off-loop via `asyncio.to_thread` (:263), but the GIL means a slow regex still
-  stalls the process. That is why the gaps are bounded.
-- Leaked records:
-  - `entity`: `atk-0075`, `atk-0119`, `atk-0047`, `atk-0090`, `atk-0103`, `atk-0136`,
-    `atk-0149` (`/extract`), `atk-0049` (`/retrieve`)
-  - `second_paragraph`: `atk-0053`, `atk-0152` (`/extract`), `atk-0054`, `atk-0153`
-    (`/retrieve`)
-- Hashed files that move: `stage2_structural.py` and `orchestrator.py`.
+- **Tempered-token rewrites**, measured 0.03–0.09 s on 2 MiB adversarial input against 0.65–3 s
+  for a bounded gap:
+  - `disregard_instructions`: from `disregard.*instructions` to roughly
+    `disregard(?:(?!disregard)[\s\S])*?instructions`. Each attempt stops at the next start
+    token. It still matches an arbitrarily long same-line or multi-line gap, so there is **no
+    padding bypass**.
+  - `exfil_image`: temper the same way on `![`, so that `[^\]]` and `[^)]` don't scan past the
+    next `![`. Alt text may span a newline. Keep the `(?:\{\{|\$\{|%7[Bb])` tail and the
+    IGNORECASE from US-001.
+  - `envelope_breakout` (:236): change the adjacent `\s*/?\s*` to `\s*(?:/\s*)?`. The match set
+    is the same and backtracking becomes linear.
+- **All-patterns sweep** (`tests/test_stage2_complexity.py`). For **every** entry in
+  `_PATTERNS`, generate adversarial inputs:
+  - the pattern's start token repeated with no terminator;
+  - each prefix followed by a long whitespace run;
+  - mixed newlines.
+  Generate each at 1 MiB and 2 MiB. Assert per pattern that 2 MiB time ≤ 3× 1 MiB time (a
+  machine-independent quadratic detector), and a **total ceiling of 2 s** for all 24 patterns on
+  one 2 MiB form, with a hard test timeout. 2 MiB is `MAX_EXTRACTED_OUTPUT_BYTES`, the largest
+  stage-2 input. Record the measurements.
+- **Line-number lookup must be linear too.** `_line_number_of` (:249-251) is O(n) per match,
+  so a match-dense input is quadratic. Precompute newline offsets once per scanned text and use
+  `bisect`, with the same values as today.
+- **Flags identity:** records matched by a rewritten pattern may see a different `matched_text`
+  span. Compare `structural_flags` and penalty for every corpus record before and after, and
+  list any record whose flags change (expected: none or few) in Implementation Notes.
+- **Newline test:** the `exfil_image` probe has no interior whitespace, so build a dedicated
+  probe whose alt text contains spaces, and split it at each one.
+- Leaked records: `atk-0053`, `atk-0152` (`/extract`), `atk-0054`, `atk-0153` (`/retrieve`).
+- Only `stage2_structural.py` moves.
 
 **Acceptance Criteria:**
-- [ ] Both newline-gap patterns match their probe split by a newline at every interior
-      whitespace position, through `sanitize_and_structure`, on `/retrieve` and `/extract`
-      (parametrised).
-- [ ] An adversarial **single-line** 2 MiB input (repeated `disregard` with no terminator;
-      repeated `![` with no `)`) scans through every form in under 2 s per pattern on the test
-      host, with a hard test timeout. The measured times are recorded in Implementation Notes.
-- [ ] Each of the 24 probes is caught when every character is encoded as a numeric-hex entity,
-      at one level and at two levels, and when its punctuation is named-entity-encoded. This
-      holds on `/retrieve` (HTML) and `/extract` (text). A three-level payload is asserted
-      **not** caught and documented as an accepted out-of-scope gap.
-- [ ] Stage 3 receives exactly `extraction.raw_text` (argument-identity test). Both cassette
-      files are byte-unchanged, with zero misses.
-- [ ] A record whose verdict doesn't move has byte-identical `structural_flags` and penalty
-      before and after (test over the corpus records). A derived-form-only catch takes its
-      flags from that form (unit test).
-- [ ] A derived form over 4× its input is truncated and logged with
-      `stage2_scan_form_truncated` (lengths only). No log line or metric contains
-      `matched_text` (log-capture test).
-- [ ] `tests/corpus_stage2.py`, `scripts/corpus/records.py` and `scripts/corpus/ingest/render.py`
-      obtain forms from the shared builder, and `tests/test_corpus_attacks.py`,
-      `tests/test_corpus_lint.py` and `tests/test_corpus_ingest.py` are green.
-- [ ] The 12 `entity` and `second_paragraph` records are not `leaked` in the regenerated
-      baseline. No corpus record that matched before loses its match (baseline diff), no
-      core-genre benign record moves from `passed`, and the pin tests are green.
-- [ ] `tests/test_search_pipeline_pins.py` is unchanged and green.
-- [ ] `docs/corpus.md` "Decision inputs" tables are updated from the regenerated `offline`
-      section, and `tests/test_corpus_docs.py` is green.
-- [ ] The rotation is recorded (CLAUDE.md, `docs/bootstrap-notes.md`, GOTCHAS table). Each
-      hashed file is reverted alone, and a both-reverted control reproduces the prior value.
+- [ ] `disregard_instructions`, `exfil_image` and `envelope_breakout` are rewritten as
+      described. Both gap patterns match their probe (and the constructed spaced-alt-text
+      exfil probe) split by a newline at every interior whitespace position, and with a
+      10,000-character same-line gap.
+- [ ] The all-patterns sweep passes: each pattern's 2 MiB/1 MiB ratio is ≤ 3, and all 24
+      patterns finish one 2 MiB form within 2 s. A **match-dense** 2 MiB input (thousands of
+      `private_ip_href` and `base64_run` matches) is included. The numbers are recorded in
+      Implementation Notes.
+- [ ] Line numbers come from a precomputed newline index, and every corpus record's
+      `FlaggedSpan.line_number` values are unchanged (test).
+- [ ] The 4 `second_paragraph` records are not `leaked` in the regenerated baseline. No corpus
+      record that matched before loses its match, and any changed `structural_flags` are listed.
+- [ ] No core-genre benign record moves from `passed`, and the pin tests are green. Both
+      cassette files are byte-unchanged.
+- [ ] `docs/corpus.md` "Decision inputs" tables are updated, and `tests/test_corpus_docs.py` is
+      green.
+- [ ] The rotation is recorded with a reversal control.
 - [ ] Tests written/updated for new functionality
 - [ ] Full test suite passes (`uv run pytest`)
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
 - [ ] `uv run pyright` reports 0 errors
 
-### US-003: Vendor Unicode confusables and generate the fold table
+### US-003: A shared decoded scan form on all routes
+
+**Priority:** P1
+
+**Description:** As an operator, I want `/retrieve` and `/extract` to scan an entity-decoded form
+of their text, so that single- and double-encoded triggers can't pass stage 2.
+
+**Independent Test:** Drive `/retrieve` and `/extract` with the 8 `entity` leaks: all are caught.
+`tests/test_search_pipeline_pins.py` is unchanged, and the timing sweep still passes with
+entity-encoded whitespace input.
+
+**Implementation Hints:**
+- **Builder:** put it in `pipeline/stage2_structural.py`, which is hashed. Signature:
+  `structural_scan_forms(text: str, *, html_parsed: bool) -> tuple[str, ...]`. Forms are
+  deduplicated, in this order:
+  1. **the as-is text;**
+  2. **its decode:** `html.unescape` applied **exactly once** when `html_parsed`, or **exactly
+     twice** otherwise. Then C0/C1 control-strip, then **`_normalize_text` again** (stage 1's
+     whitespace collapse; expose it publicly). Re-normalising is what keeps encoded whitespace
+     from becoming a long run, as `/search` already does. No fixed-point loop.
+- **No truncation cap:** a cap is a padding bypass. Linear patterns (US-002) make full-length
+  derived forms safe. Add entity-encoded whitespace and entity-dense inputs to the timing sweep.
+- **`html_parsed`** is `content_type == "html"` at the `sanitize_and_structure` call site. The
+  orchestrator already knows the content type, so no new `ExtractionResult` field is needed.
+  `/extract` uploads and PDFs are `False`.
+- **Control-character regex, single owner:** move `_CONTROL_CHARS_RE` (`orchestrator.py:927`)
+  into `stage2_structural.py` and import it in the orchestrator. Keep one copy.
+- **Combine:** `scan_structural_forms(forms) -> StructuralScanResult`, built on a public
+  result-level helper `combine_scan_results(*results)` with the same rule. Spec 2 reuses it
+  through a keyword-only `extra_scans` parameter on `sanitize_and_structure`.
+  - The verdict is the worst across forms.
+  - `flags` and `penalty` come **from the as-is form if it already has the worst verdict**,
+    otherwise from the first form that reaches it.
+  - So a record whose verdict doesn't move keeps **byte-identical** `structural_flags`
+    (`stage4_structuring.py:166`) and penalty. Accepted: the penalty reflects one form.
+- **`matched_text` is never logged or counted** (a test asserts it).
+- **Wiring:** `sanitize_and_structure` (`orchestrator.py:263`) scans the forms. Stage 3 at :278
+  keeps receiving `extraction.raw_text`, which is the no-re-record guarantee. `/search`'s
+  `_scan_forms_for_search_text` delegates its control-strip and second decode to the shared
+  helpers, and its wire form (stage-3 input, :1285-1287) stays byte-identical.
+- **Corpus mirrors use the builder.** Update every one:
+  - `tests/corpus_stage2.py` `stage2_forms()` and `stage2_record_hits()`;
+  - `scripts/corpus/records.py` `_stage2_form()`, which **becomes a tuple of forms**, and
+    `rule_sweep_stage2_clean()`;
+  - `scripts/corpus/ingest/render.py` `assign_category()`;
+  - `tests/test_corpus_attacks.py` at :330-342, :385, :1163, :1326 (re-check each assertion's
+    premise against the union of forms).
+- **Benign cost fixture:** a tutorial page that shows escaped markup (`&lt;system&gt;` as visible
+  text) decodes to a tag in form 2 and now flags or blocks. Pin it as an accepted cost, like
+  US-001's YAML fixture.
+- Leaked records: `atk-0075`, `atk-0119`, `atk-0047`, `atk-0090`, `atk-0103`, `atk-0136`,
+  `atk-0149` (`/extract`), `atk-0049` (`/retrieve`).
+- Hashed files: `stage2_structural.py` and `orchestrator.py`.
+
+**Acceptance Criteria:**
+- [ ] Each of the 24 probes is caught when every character is numeric-hex entity-encoded at one
+      level and at two levels, and when its punctuation is named-entity-encoded. This holds on
+      `/retrieve` (HTML) and `/extract` (text). A three-level payload is asserted not caught and
+      documented as an accepted gap.
+- [ ] The timing sweep includes entity-encoded whitespace runs and entity-dense 2 MiB input
+      through the decoded form, and passes US-002's ratio and ceiling.
+- [ ] Stage 3 receives exactly `extraction.raw_text` (argument-identity test). Both cassette
+      files are byte-unchanged, with zero misses (`UnrecordedTextError` would surface as
+      `UnrecordedRecordError` in the drivers).
+- [ ] A record whose verdict doesn't move has byte-identical `structural_flags` and penalty (test
+      over all corpus records). A decoded-form-only catch takes its flags from that form (unit
+      test). No log line or metric contains `matched_text` (log-capture test).
+- [ ] `_CONTROL_CHARS_RE` exists once, in `stage2_structural.py`.
+- [ ] All listed corpus mirrors obtain forms from the builder, and `tests/test_corpus_attacks.py`,
+      `tests/test_corpus_lint.py` and `tests/test_corpus_ingest.py` are green.
+- [ ] The tutorial-page benign fixture is pinned with its decided outcome.
+- [ ] The 8 `entity` records are not `leaked`, no core-genre benign record moves from `passed`,
+      and the pin tests are green. `tests/test_search_pipeline_pins.py` is unchanged.
+- [ ] `docs/corpus.md` "Decision inputs" tables are updated, and `tests/test_corpus_docs.py` is
+      green.
+- [ ] The rotation is recorded. Each hashed file is reverted alone, and a both-reverted control
+      reproduces the prior value.
+- [ ] Tests written/updated for new functionality
+- [ ] Full test suite passes (`uv run pytest`)
+- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [ ] `uv run pyright` reports 0 errors
+
+### US-004: Vendor Unicode confusables and generate the fold tables
 
 **Priority:** P2
 
-**Description:** As a maintainer, I want a fold table generated reproducibly from Unicode's own
-data, so that confusable folding is auditable, pinned and regenerable rather than hand-curated.
+**Description:** As a maintainer, I want fold tables generated reproducibly from Unicode's own
+data, so that confusable folding is auditable, pinned and regenerable.
 
 **Independent Test:** `scripts/generate_confusables.py --check` reproduces the committed module
-byte for byte from the vendored data, and the fold-table unit tests pass. Nothing is wired into
-stage 2 yet.
+byte for byte, and the fold-table tests pass. Nothing is wired into stage 2 yet.
 
 **Implementation Hints:**
 - **Data:**
   - Vendor `confusables.txt` (UTS #39, Unicode 18.0.0, 2026-08-27,
     <https://www.unicode.org/reports/tr39/>) at `scripts/data/unicode/confusables.txt`.
-  - Add a `README` there recording the retrieval URL, date and sha256.
-  - Make sure `.dockerignore` keeps `scripts/` data out of the image.
+  - Add a `README` there recording the URL, date and sha256.
+  - `.dockerignore` already keeps `scripts/` data out of the image (guard at
+    `tests/test_dockerfile.py:724`).
   - Licence: Unicode License v3. Add the attribution to `NOTICE`.
 - **Generator:** `scripts/generate_confusables.py`, modelled on `scripts/export_contract.py`.
   - A `--check` mode, with a drift test like `tests/test_contract_export.py`.
   - **Refuse** input whose sha256 differs from the pinned value.
   - Output: `pipeline/confusables.py`, "generated — do not hand-edit", naming the Unicode
-    version and source sha256. Keys and values are `\uXXXX`-escaped (ruff `RUF001`-`RUF003`
-    flag literal confusables) and the file is `ruff format`-clean.
+    version and sha. Keys and values are `\uXXXX`-escaped (ruff `RUF001`-`RUF003`), and the
+    file is `ruff format`-clean.
 - **Rules:**
-  - Keep entries whose **source is non-ASCII** and whose prototype is entirely ASCII, so ASCII
-    text never changes.
-  - Apply a small, reviewed **override table** for prototype classes whose ASCII
-    representative isn't the letter a reader intends. In `confusables.txt`, capital-I
-    look-alikes (Cyrillic `U+0406`, Greek capital iota `U+0399`, palochka `U+04C0`) fold to
-    lowercase `l`, so patterns containing `i` would miss them. Override those to `i`, and
-    document each override with its reason. Stage-2 patterns are case-insensitive after
-    US-001, so lowercase targets are fine.
-  - Expose `FOLD_TABLE` (a `str.maketrans` mapping) and `UNICODE_VERSION`.
-- **Don't adopt a library.** `disarm` (MIT, 2026-09-26) has one maintainer and unverified
-  aarch64 wheels; the image is multi-arch. `confusable-homoglyphs` appears archived, and PyICU
-  is a heavy native build (Research Findings).
+  - Keep entries with a **single-code-point, non-ASCII source** and an all-ASCII prototype.
+    `str.maketrans` keys must be single characters, so record the number of multi-code-point
+    sources skipped.
+  - ASCII text never changes.
+- **The I/l ambiguity, two tables, no override:** TR39 maps capital-I look-alikes (Cyrillic
+  `U+0406`, Greek `U+0399`, palochka `U+04C0`, and others in that prototype class) to `l`, but
+  the same glyphs also read as `I`. Emit:
+  - `FOLD_TABLE`, the TR39 prototypes (→ `l`);
+  - `AMBIGUOUS_IL`, the set of sources in that class.
+  US-005 builds a second folded form that maps `AMBIGUOUS_IL` to `i`. Neither reading breaks
+  the other.
+- **Don't adopt a library** (Research Findings).
 
 **Acceptance Criteria:**
 - [ ] `scripts/generate_confusables.py --check` exits 0 against the committed
       `pipeline/confusables.py`. A hermetic drift test runs it, and the generator refuses a data
       file with the wrong sha256 (test).
-- [ ] Folding never changes ASCII: for 500 strings over `chr(0)`-`chr(127)` with a fixed seed,
-      plus every benign corpus ASCII text, `s.translate(FOLD_TABLE) == s`.
-- [ ] An **independent** oracle, a hand-written list of Cyrillic and Greek look-alikes for every
-      Latin letter that appears in any probe (upper and lower case, including the capital-I
-      class), folds each entry to its intended Latin letter case-insensitively. This list is
-      not derived from the table.
-- [ ] `pipeline/confusables.py` passes `ruff check` and `ruff format --check`, and contains no
-      literal non-ASCII character.
-- [ ] `NOTICE` carries the Unicode attribution. `scripts/data/unicode/README` records the URL,
-      date and sha256. The data file is not in the Docker image (`tests/test_dockerfile.py` or
-      a `.dockerignore` assertion).
+- [ ] Folding never changes ASCII: 500 fixed-seed strings over `chr(0)`-`chr(127)`, plus every
+      benign corpus ASCII text.
+- [ ] An **independent** hand-written oracle of Cyrillic and Greek look-alikes for every Latin
+      letter in any probe (both cases) folds each entry to its intended letter
+      case-insensitively, under `FOLD_TABLE`, or under the `i` reading for `AMBIGUOUS_IL`
+      members.
+- [ ] `pipeline/confusables.py` passes `ruff check` and `ruff format --check`, contains no
+      literal non-ASCII character, and its header records the skipped multi-code-point count.
+- [ ] `NOTICE` carries the Unicode attribution, and `scripts/data/unicode/README` records the
+      URL, date and sha256.
 - [ ] Tests written/updated for new functionality
 - [ ] Full test suite passes (`uv run pytest`)
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
 - [ ] `uv run pyright` reports 0 errors
 
-### US-004: Add the confusable fold as a scan form and hash it into the revision
+### US-005: Add the confusable fold forms and hash them into the revision
 
 **Priority:** P2
 
 **Description:** As an operator, I want stage 2 to see look-alike characters folded to Latin on
-every route, so that swapping one letter for a homoglyph cannot evade any pattern.
+every route, under both readings of the I/l class, so that swapping one letter for a homoglyph
+cannot evade any pattern.
 
-**Independent Test:** Requires US-002's builder and US-003's table. The confusable property test
+**Independent Test:** Requires US-003's builder and US-004's tables. The confusable property test
 passes, and the 9 `confusable` leaks are caught on every route without moving `multilingual`
 benign records.
 
 **Implementation Hints:**
-- **The form:** NFKC, then `FOLD_TABLE`, applied to the decoded form from US-002's builder, and
-  appended as the last form. Subject to the same 4× size cap.
-- **`/search`:** also scan the fold of each field's scan form. Add it to the field loop at
-  `orchestrator.py:1810-1846` in a fixed position, and update `tests/corpus_stage2.py`
-  `stage2_forms()` to match. `/search` wire forms (stage-3 input) are unchanged.
-- **Revision:** add `confusables.py` to `_REVISION_SOURCES` (`pipeline/sanitizer_revision.py:13-22`),
-  which takes the hashed-source count from **nine to ten**. Update:
-  - `tests/test_sanitizer_revision.py` (:254, :297-306);
-  - `tests/test_governance_docs.py:773`, which asserts the count word in prose;
-  - every prose site that says "nine hashed". Find them with
-    `grep -rn "nine hashed\|nine of the\|nine sources" CLAUDE.md .github contract kit_tools docs`.
-- Record the rotation as the first that **adds a hashed source** since `url_validator.py`
-  (CLAUDE.md, eighteenth rotation).
+- **Forms:** NFKC, then `FOLD_TABLE`, applied to US-003's decoded form, then `_normalize_text`,
+  appended as the third form. If the text contains any `AMBIGUOUS_IL` member, add a fourth
+  form with those mapped to `i`. Deduplication drops it otherwise.
+- **`/search`:** add the fold forms of each field's scan form to the loop at
+  `orchestrator.py:1810-1846`, **immediately after that field's existing scan and wire
+  entries**. Update `tests/corpus_stage2.py` `stage2_forms()` in the same order. Wire forms are
+  unchanged.
+- **Revision:**
+  - `confusables.py` joins `_REVISION_SOURCES` (`pipeline/sanitizer_revision.py:13-22`),
+    taking the hashed-source count from nine to ten;
+  - **`unicodedata.unidata_version` joins the hashed inputs**, as `unicodedata@<version>`
+    beside `idna@<version>`. NFKC's tables depend on Python's Unicode database, so a Python bump
+    must rotate the revision.
+  - Update `tests/test_sanitizer_revision.py` (:254, :297-306), `tests/test_governance_docs.py:773`,
+    and every "nine hashed" prose site (`grep -rni "nine hashed\|nine of the\|nine sources"`).
+- **Timing:** add a maximal-NFKC-expansion 2 MiB input to US-002's sweep, through the fold form.
+- Record the rotation as the first to **add a hashed source and an input** since
+  `url_validator.py` and `idna`.
 - Leaked records:
   - page: `atk-0073`, `atk-0168`, `atk-0043`, `atk-0091`, `atk-0104`, `atk-0137`
   - text: `atk-0045`
   - search: `atk-0121`, `atk-0044`
 
 **Acceptance Criteria:**
-- [ ] For each of the 24 probes, at each Latin-letter position, each look-alike from US-003's
-      independent oracle substituted at that single position is non-CLEAN through
+- [ ] For each of the 24 probes, at each Latin-letter position, each oracle look-alike (both
+      readings for `AMBIGUOUS_IL`) substituted at that single position is non-CLEAN through
       `sanitize_and_structure` (`/retrieve`, `/extract`) and the `/search` field scan.
-      Variants are generated in sorted order, so the test is deterministic.
+      Variants are generated in sorted order.
 - [ ] The 9 `confusable` records are not `leaked` in the regenerated baseline. The
-      `multilingual` benign genre's outcomes and every core-genre benign record are unchanged,
-      and the pin tests are green.
-- [ ] `pipeline/confusables.py` is in `_REVISION_SOURCES`. `tests/test_sanitizer_revision.py`
-      and `tests/test_governance_docs.py` are green with "ten" in every prose count.
-- [ ] Stage-2 time on the adversarial 2 MiB input, now including the fold form, stays within
-      US-002's ceiling (same test).
-- [ ] Both cassette files are byte-unchanged with zero misses. `tests/test_search_pipeline_pins.py`
+      `multilingual` benign genre and every core-genre benign record are unchanged, and the pin
+      tests are green.
+- [ ] `pipeline/confusables.py` is in `_REVISION_SOURCES`, and `unicodedata@<version>` is a
+      hashed input (test: changing the reported version changes the revision).
+      `tests/test_sanitizer_revision.py` and `tests/test_governance_docs.py` are green with
+      "ten" in every prose count.
+- [ ] US-002's timing sweep passes, including the maximal-NFKC-expansion input through the fold
+      forms.
+- [ ] Both cassette files are byte-unchanged, with zero misses. `tests/test_search_pipeline_pins.py`
       is green.
-- [ ] `docs/corpus.md` "Decision inputs" tables are updated from the regenerated `offline`
-      section, and `tests/test_corpus_docs.py` is green.
-- [ ] The rotation is recorded, with controls: module removed, plus each edited hashed file
-      reverted alone.
+- [ ] `docs/corpus.md` "Decision inputs" tables are updated, and `tests/test_corpus_docs.py` is
+      green.
+- [ ] The rotation is recorded, with controls: module removed, the input removed, and each
+      edited hashed file reverted alone.
 - [ ] Tests written/updated for new functionality
 - [ ] Full test suite passes (`uv run pytest`)
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
@@ -341,68 +384,57 @@ benign records.
 
 ## Edge Cases
 
-- A literal three-level entity chain: decoded twice at most, never looped. Three levels is an
-  asserted, documented gap (US-002).
-- An entity that decodes to a control character: stripped after decoding, as on `/search`
+- A literal three-level entity chain: decoded twice at most. Three levels is an asserted,
+  documented gap (US-003).
+- An entity decoding to a control character: stripped after decoding (US-003).
+- Entity-encoded whitespace runs: re-normalised in the decoded form, never long runs (US-003).
+- Empty `raw_text`: one empty form, CLEAN, no exception (US-003).
+- Identical forms (plain ASCII prose): deduplicated (US-003).
+- Very long single lines and repeated start tokens: linear by construction, pinned by the sweep
   (US-002).
-- Empty `raw_text`: the builder returns one empty form, giving CLEAN and no exception (US-002).
-- Identical forms (plain ASCII prose): deduplicated, so each is scanned once (US-002).
-- A derived form expanding past 4× (NFKC of ligature-dense text, entity-dense text): truncated
-  and logged. The as-is form is still scanned in full (US-002, US-004).
-- Very long lines: the bounded gaps keep both patterns linear-bounded (US-002).
-- A fold to a multi-character prototype (`ﬁ` → `fi`): allowed. Scan-only forms aren't mapped
-  back to the wire (US-004).
+- A fold to a multi-character prototype: allowed for single-code-point sources. Multi-code-point
+  sources are skipped and counted (US-004).
 - A legitimate Cyrillic or Greek page: folds to Latin-looking gibberish. The `multilingual`
-  genre is the guard (US-004).
-- A full-width trigger: caught by NFKC in the fold form (US-004).
-- A YAML `system:` key or `Poppy:` transcript line at column 0: BLOCKED by decision (US-001).
+  genre is the guard (US-005).
+- A full-width trigger: caught by NFKC in the fold form (US-005).
+- A YAML `system:` key or `Poppy:` line at column 0: BLOCKED by decision (US-001). A tutorial
+  page showing escaped markup: flagged or blocked by decision (US-003).
 
 ## Out of Scope
 
-- Changing what stage 3 classifies (owner, 2026-10-06). That is a later epic with an owner
-  recording gate.
+- Changing what stage 3 classifies (owner, 2026-10-06). That is a later epic with a recording
+  gate.
 - Inline-tag splits and markup-consumed triggers: spec 2.
-- Body-level percent or base64 decode-then-rescan, typoglycemia or fuzzy matching, and NFD
-  combining-mark stripping. These are candidate follow-ups with their own false-positive
-  measurement.
-- Three-or-more-level entity encoding (an asserted gap).
-- Reducing over-defence on `security_prose` / `over_defence_probe`.
+- Body-level percent or base64 decoding, typoglycemia matching, NFD combining-mark stripping,
+  and three-level entity encoding.
+- Reducing over-defence.
 
 ## Assumptions
 
-- Stage 2 never rewrites text, and only verdict, categories and penalty reach the response. So
-  derived forms change outcomes, never served bytes.
-- The corpus variants are representative of their technique classes. The class-level property
-  tests generalise beyond them.
+- Stage 2 never rewrites text, and only verdict, categories and penalty reach the response.
+- The corpus variants are representative of their technique classes; the property tests
+  generalise.
 - No contract change: no new `Stage2Verdict` member and no new category.
-- **All rotations in this epic land in one unreleased window,** so consumers see a single cache
-  invalidation at the next release, not one per story. Note this in the release entry.
+- **All rotations in this epic land in one unreleased window,** which is a single cache
+  invalidation at release. Note it in the release entry.
 
 ## Technical Considerations
 
 - **Hashed files per story:**
-  - US-001: `stage2_structural.py` only.
-  - US-002: `stage2_structural.py` and `orchestrator.py`.
-  - US-003: none. The generated module is not yet referenced by the revision.
-  - US-004: `confusables.py` joins the revision, plus `stage2_structural.py` and
-    `orchestrator.py`.
-- **The no-re-record guarantee is mechanical.** Any change to stage-3 input turns the
-  cassette-replay test red with `UnrecordedRecordError`. Treat that failure as a design error,
-  never as a cue to re-record.
-- **The baseline is exact-match** (`tests/test_corpus_gate.py:163-166`). Each story regenerates
-  it with `uv run python -m scripts.corpus.report --write-baseline`, and the PR diff is the
-  review surface. Floors are raised in spec 4.
-- **The decision-input tables move.**
-  `tests/test_corpus_docs.py::test_decision_tables_are_rederived_from_the_baseline_offline_section`
-  re-derives `docs/corpus.md`'s tables from the `offline` section, which holds only texts that
-  reached stage 3. New stage-2 blocks shrink that pool.
-  - Update the tables in the same story, plus any prose citing their numbers
-    (`kit_tools/arch/DECISIONS.md` 2026-10-06, `docs/releases.md` Unreleased).
-  - The test runs in CI.
-- **Findings checks skip in worktrees.** `kit_tools/AUDIT_FINDINGS.md` is gitignored, so
-  `tests/test_corpus_docs.py`'s findings checks skip in an execution worktree and in CI.
-  Re-filing is spec 4's owner step (GOTCHAS: "Gitignored files written inside an execution
-  worktree die with the worktree").
+  - US-001 and US-002: `stage2_structural.py`.
+  - US-003: `stage2_structural.py` and `orchestrator.py`.
+  - US-004: none.
+  - US-005: `confusables.py` joins, plus a new `unicodedata@` input, `stage2_structural.py`
+    and `orchestrator.py`.
+- **The no-re-record guarantee is mechanical:** a stage-3 input change raises
+  `UnrecordedTextError` in the replay classifier (`scripts/corpus/replay.py`), which the drivers
+  re-raise as `UnrecordedRecordError`. Treat that as a design error, never as a cue to re-record.
+- **Exact-match baseline:** each story regenerates it, and the PR diff is the review surface.
+  Floors are spec 4.
+- **Decision-input tables move** as new blocks shrink the stage-3 pool. Update `docs/corpus.md`
+  and the prose citing it in the same story (CI test).
+- **Findings checks skip in worktrees** (gitignored `AUDIT_FINDINGS.md`). Re-filing is spec 4's
+  owner step.
 
 ## Related Documentation
 
@@ -418,69 +450,73 @@ benign records.
 
 ### Research Findings
 
-**Leak root causes (codebase, verified by running stage 1 and stage 2 on each leaked record, 2026-10-06):**
+**Leak root causes (codebase, verified on each leaked record, 2026-10-06):**
 
 | Variant | Records | Root cause | Fix |
 |---|---|---|---|
-| `case` | atk-0071, 0070, 0086, 0116, 0147 | `poppy_line` :129, `system_line` :136, `hex_escape` :164 and `exfil_image` :223 are case-sensitive (and so are `instructions_banner` :101, `im_start` :185 and `endoftext` :191) | IGNORECASE (US-001) |
-| `entity` | atk-0075, 0119, 0047, 0090, 0103, 0136, 0149 (`/extract`); 0049 (`/retrieve`) | uploads are never decoded; the parser decodes one level, and double encoding survives | decoded form (US-002) |
-| `second_paragraph` | atk-0053, 0152 (`/extract`); 0054, 0153 (`/retrieve`) | `disregard_instructions` :73 and `exfil_image` :223 can't cross a newline | bounded newline-crossing gaps (US-002) |
-| `confusable` | atk-0073, 0168, 0043, 0091, 0104, 0137, 0045, 0121, 0044 | no fold anywhere; NFC and NFKC both leave Cyrillic | fold form (US-003/004) |
+| `case` | atk-0071, 0070, 0086, 0116, 0147 | seven case-sensitive patterns | IGNORECASE (US-001) |
+| `second_paragraph` | atk-0053, 0152 (`/extract`); 0054, 0153 (`/retrieve`) | `disregard.*instructions` and `exfil_image` can't cross a newline | tempered-token rewrites (US-002) |
+| `entity` | atk-0075, 0119, 0047, 0090, 0103, 0136, 0149 (`/extract`); 0049 (`/retrieve`) | uploads are never decoded; double encoding survives the parser | decoded form (US-003) |
+| `confusable` | atk-0073, 0168, 0043, 0091, 0104, 0137, 0045, 0121, 0044 | no fold anywhere | fold forms (US-004/005) |
 
 **Decision:** Derived scan forms for stage 2 only; stage-3 input byte-identical.
 **Rationale:** Cassettes are keyed by the sha256 of stage-3 input (`scripts/corpus/replay.py:82-84`).
-A miss raises `UnrecordedTextError`, and re-recording needs model weights CI doesn't have.
-**Alternatives considered:** normalising `raw_text`. Rejected: it forces a re-record (owner,
-2026-10-06).
-**Source:** `pipeline/orchestrator.py:263,278`; `scripts/corpus/drivers.py:360-365`.
+Re-recording needs weights CI doesn't have.
+**Source:** `pipeline/orchestrator.py:263,278`.
 
-**Decision:** Bounded gaps, not a collapse form (validation, 2026-10-06).
-**Rationale:** The collapse form makes `disregard.*instructions` and the lazy exfil pattern
-quadratic on one long line. The second-opinion reviewer measured 15.8 s on 200 KB and 5.8 s on
-80 KB. `to_thread` doesn't help, because the regex holds the GIL. Bounded gaps fix the leak and
-the cost together, with fewer forms.
-**Alternatives considered:** a collapse form with a length cap. Rejected: the cap is a bypass
-and the cost is still superlinear.
-**Source:** `.validate_epic_feature-structural-scan-forms_6.json` (deleted after consolidation;
-summary in Clarifications).
+**Decision:** Tempered-token patterns, not a collapse form or bounded gaps.
+**Rationale:** Validation measured:
+- the collapse form quadratic (15.8 s on 200 KB);
+- bounded gaps at 0.65–3.07 s on 2 MiB, with a padding bypass past N;
+- tempered tokens at 0.03–0.09 s with no bypass.
+`envelope_breakout`'s `\s*/?\s*` was quadratic on whitespace runs (4.7 s on 40k), and
+`\s*(?:/\s*)?` is linear with the same match set.
+**Source:** validation rounds 1–2 (second opinion, codebase fit).
 
-**Decision:** Flags and penalty come from one form (the as-is form on ties).
-**Rationale:** The wire carries one `structural_flags` entry per span
-(`stage4_structuring.py:166`). Merging across forms would change flags on records whose verdict
-didn't move, and `(category, matched_text)` deduplication doesn't collapse one attack seen
-encoded, decoded and folded.
+**Decision:** Re-normalise derived forms; no truncation cap.
+**Rationale:** Decoding entity-encoded whitespace recreates long runs (`/search` re-normalises
+for this reason). A truncation cap is a padding bypass, and linear patterns make it unnecessary.
+**Source:** validation round 2.
+
+**Decision:** Flags and penalty come from one form (as-is on ties).
+**Rationale:** The wire carries one `structural_flags` entry per span (`stage4_structuring.py:166`),
+so cross-form merging would move flags on unchanged records.
 **Source:** `pipeline/stage2_structural.py:290-304`.
 
-**Decision:** The decode depth is per route.
-**Rationale:** `/search`'s "two levels" are the parser's one plus one `html.unescape`
-(`orchestrator.py:975-978`). On `/retrieve` HTML the parser has already decoded once, so one
-unescape gives the same depth. PDF and upload text needs two.
-**Source:** `pipeline/stage1_extraction.py:296-337`; `stage1_upload.py:28-75`.
+**Decision:** Decode depth per route via `content_type == "html"`.
+**Rationale:** `/search`'s two levels are the parser plus one unescape (`orchestrator.py:975-978`).
+**Source:** `pipeline/stage1_extraction.py:296-337`.
 
-**Decision:** A generated fold table with a reviewed capital-I override, joining `_REVISION_SOURCES`.
-**Rationale:** `confusables.txt` maps capital-I look-alikes to `l`, which patterns containing
-`i` would miss. A table-derived property test can't see that, hence the independent oracle.
-**Source:** <https://www.unicode.org/reports/tr39/> (v18.0.0, 2026-08-27); validation second
-opinion.
+**Decision:** Generated tables; two fold readings for the I/l class; hash the module and
+`unicodedata@<version>`.
+**Rationale:**
+- TR39 maps capital-I look-alikes to `l`. Overriding to `i` breaks their `l` reading, so scan
+  both.
+- NFKC depends on Python's Unicode database, so it is an input like `idna`.
+**Source:** <https://www.unicode.org/reports/tr39/> (v18.0.0); validation rounds 1–2.
 
 **Landscape (2026-10-06):**
-- *Decode, normalise, then rescan, before every detector.* <https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html> (fetched 2026-10-06).
-- *TR39 skeleton is a comparison function; pin the table version.* <https://www.unicode.org/reports/tr39/>.
-- *Weak library options.* `disarm` (MIT, one maintainer): <https://pypi.org/project/disarm/> (2026-09-26). `confusable-homoglyphs` appears archived (search snippet: <https://snyk.io/advisor/python/confusable-homoglyphs>).
-- *Prompt Guard is evaded about 70% of the time by character injection,* which motivates the
-  deferred stage-3 normalisation epic. <https://arxiv.org/html/2504.11168v1> (2025-04-15).
-- *Write criteria per technique class.* <https://arxiv.org/abs/2510.09023> (2025-10-10, snippet).
-- *Counting invisible or tag characters as a signal* is a follow-up, because it is a contract
-  change. <https://protectai.github.io/llm-guard/input_scanners/prompt_injection/> (2025-05-19).
+- Decode, normalise, rescan:
+  <https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html>.
+- TR39: <https://www.unicode.org/reports/tr39/>.
+- Library options: `disarm` (<https://pypi.org/project/disarm/>, 2026-09-26; one maintainer).
+  `confusable-homoglyphs` appears archived (snippet).
+- Prompt Guard is evaded about 70% of the time by character injection
+  (<https://arxiv.org/html/2504.11168v1>), which motivates the deferred stage-3 normalisation
+  epic.
+- Write criteria per technique class: <https://arxiv.org/abs/2510.09023> (snippet).
 
 ### Scope Adjustments
-- 2026-10-06 validation:
-  - The collapse form was replaced by bounded gaps (ReDoS).
-  - The old US-003 was split into US-003 (vendor and generate) and US-004 (wire and hash).
-  - US-003 and US-004 were demoted to P2.
-  - The corpus mirrors were brought into US-002's scope.
-- Percent and base64 body decoding, and NFD combining-mark stripping, were deferred (no leak
-  depends on them; false-positive risk).
+- Round 1: collapse form replaced; US-003 split; corpus mirrors in scope.
+- Round 2:
+  - the old US-002 split into pattern linearity (US-002) and decoded forms (US-003);
+  - bounded gaps replaced by tempered tokens;
+  - `envelope_breakout` linearised;
+  - an all-patterns sweep;
+  - derived forms re-normalised, and the truncation cap dropped;
+  - the I/l override replaced by two fold readings;
+  - `unicodedata@<version>` hashed.
+  Five stories.
 
 ### Decisions Made
 - See Research Findings and Clarifications.
@@ -489,10 +525,10 @@ opinion.
 
 ### Session 2026-10-06
 - Q: Which finding groups does the epic cover? → A: structural leaks, blocked-but-leaked, hidden-markup carriers. Over-defence reduction is out.
-- Q: How should the epic trade catch against false positives? → A: ratchet both ways. Catch only rises, core-genre false-positive rate never rises, and pins hold.
+- Q: How should the epic trade catch against false positives? → A: ratchet both ways.
 - Q: Run landscape research? → A: yes (folded above).
 - Q: Classifier-only categories? → A: out of scope.
 - Q: Should normalised text reach stage 3? → A: no. Stage 2 only; no re-record.
-- Q: How should confusables be folded? → A: a table generated from Unicode `confusables.txt`, non-ASCII only, hashed into `sanitizer_revision`.
-- Q (validation): Should `system_line` / `poppy_line` be case-insensitive despite blocking YAML `system:` keys and `Poppy:` transcripts? → A: yes. Narrowing would reopen atk-0070 and atk-0086. The cost is pinned as explicit benign fixtures (planner decision under the owner's ratchet rule; override at review if wanted).
-- Q (validation): Collapse form or bounded gaps? → A: bounded gaps (ReDoS measured on the collapse form).
+- Q: How should confusables be folded? → A: generated from Unicode `confusables.txt`, non-ASCII only, hashed into `sanitizer_revision`.
+- Q (validation): Should `system_line` / `poppy_line` be case-insensitive despite YAML and transcript false positives? → A: yes, with the cost pinned as fixtures (planner decision under the ratchet rule; override at review if wanted).
+- Q (validation): Collapse form, bounded gaps, or tempered tokens? → A: tempered tokens (measured linear, no padding bypass).

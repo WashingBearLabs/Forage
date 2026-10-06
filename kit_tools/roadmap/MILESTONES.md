@@ -77,7 +77,7 @@ Poppy.
       becomes the default and contiguity stays off (`../arch/DECISIONS.md`).
 
 - [ ] **Structural hardening** (`epic-forage-structural-hardening`, planned 2026-10-06, four specs /
-      twelve stories; P1, follows T2.3): closes the corpus's 30 structural findings (case, entity,
+      thirteen stories; P1, follows T2.3): closes the corpus's 30 structural findings (case, entity,
       confusable, split-tag, newline-split and markup-consumed variants; blocked-page titles;
       inline-hidden body content) with stage-2 scan forms, keeping stage-3 input byte-identical
       so no cassette is re-recorded. Wrapper `../specs/epic-forage-structural-hardening.md`.

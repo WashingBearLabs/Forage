@@ -41,8 +41,8 @@ Two leak families are about **what reaches the wire**:
 ## Goals
 
 - `atk-0059`, `atk-0211` and `atk-0212` report `marker_on_wire` false in the regenerated
-  baseline. **No quarantined response on any route carries a non-null `title`, including a
-  cache-hit replay.**
+  baseline. **No quarantined response on any route carries a non-null `title`.** Quarantined
+  responses are never cached, so there is no replay path.
 - The 6 `css_offscreen` and `hidden_div` records are no longer `leaked`.
 - Every signal in the visibility set prunes its target, with a positive and a negative fixture
   per rule.
@@ -73,11 +73,14 @@ their title.
   stage-3 INJECTION_DETECTED and `unavailable_blocked`. Unit-test each in
   `tests/test_stage4_structuring.py`, whose helpers at :39-45 already take `title=`.
 - **Route-level tests:**
-  - `/retrieve` with a stage-2 block, `/retrieve` with a stage-3 block, and `/extract` with a
-    block;
-  - a **cache-hit replay** of a blocked `/retrieve` body.
-  Cached pre-change bodies can't replay, because the rotation invalidates their keys. The test
-  pins the post-change replay.
+  - `/retrieve` with a stage-2 block, a stage-3 block and an `unavailable_blocked` outcome;
+  - `/extract` with a block. Every `/extract` extraction already has `title=None`, so the test
+    must **inject an extraction carrying a title at the route seam** (patch the stage-1
+    result); otherwise it passes vacuously.
+  - **Quarantined bodies are never cached:** `orchestrator.py` step 8 calls `cache.put` only when
+    `not content.injection_detected`. So instead of a cache-replay test, assert that a
+    quarantined response is never written to the cache, which pins that there's no replay path
+    to protect.
 - **Governance (pre-resolved, owner 2026-10-06):**
   - Record a new lettered ruling **(m)** in `contract/GOVERNANCE.md` "Recorded rulings": a
     quarantined response's `title` becoming `null` is a **sanitizer outcome, no bump**.
@@ -88,12 +91,18 @@ their title.
   - Include a `**Source:**` line.
   - **No description edit:** `contract/openapi.yaml` and its anchor stay byte-identical.
 - **Ruling counts move from thirteen to fourteen:**
-  - `contract/GOVERNANCE.md:182` ("Thirteen rulings…");
-  - `tests/test_governance_docs.py:442-465`, which asserts the count sentence and the
-    registered headings;
+  - `contract/GOVERNANCE.md:182`, both the number *and* its origin breakdown ("five from …,
+    eight from …"; add "one from `forage-structural-hardening`");
+  - `tests/test_governance_docs.py`: the `_RULING_MARKERS` tuple (:100-114) gains `"### (m) "`.
+    The count assertions (:442-465) follow; `_NUMBER_WORDS` already has "fourteen";
   - CLAUDE.md invariant 4 ("records the thirteen rulings");
-  - `kit_tools/AGENT_README.md`, `kit_tools/SYNOPSIS.md`, `kit_tools/arch/CODE_ARCH.md`.
-  Find them with `grep -rn "thirteen rulings\|thirteen recorded"`.
+  - `kit_tools/AGENT_README.md`, `kit_tools/SYNOPSIS.md`, and `kit_tools/arch/CODE_ARCH.md`
+    (two sites, :70 and :579).
+  - Find them with the case-insensitive `grep -rni "thirteen rulings\|thirteen recorded"`. Do
+    **not** touch "thirteenth rotation" text, which is unrelated.
+- **Consumer note:** add a `docs/releases.md` Unreleased bullet ("quarantined responses now
+  carry `title: null`"). Record in `docs/bootstrap-notes.md` that this is not replayed to
+  Poppy: compare contracts, not revisions.
 - **Findings test:** `tests/test_corpus_docs.py::test_every_blocked_but_leaked_record_is_filed`
   asserts `ids != []`. Change it to "every blocked-but-leaked id in the baseline is filed;
   the set may be empty". Keep a non-vacuity guard: assert the baseline's `records` mapping is
@@ -105,13 +114,16 @@ their title.
       and `unavailable_blocked` (three unit tests). A non-quarantined result keeps its title
       (unit test).
 - [ ] Route-level tests assert `title` is `null` on the wire for a `/retrieve` stage-2 block, a
-      `/retrieve` stage-3 block, an `/extract` block, and a cache-hit replay of a blocked
-      `/retrieve` body.
+      stage-3 block and `unavailable_blocked`, and for an `/extract` block whose injected
+      extraction carries a title. Each test fails on the pre-story code.
+- [ ] A test asserts a quarantined `/retrieve` response is never written to the cache.
 - [ ] `atk-0059`, `atk-0211` and `atk-0212` report `marker_on_wire` false in the baseline
       regenerated with `uv run python -m scripts.corpus.report --write-baseline`.
 - [ ] `contract/GOVERNANCE.md` records ruling (m) with a `**Source:**` line, distinguished from
-      ruling (e). Every "thirteen rulings" count reads "fourteen", and
-      `tests/test_governance_docs.py` is green.
+      ruling (e), and its origin breakdown is updated. `_RULING_MARKERS` includes `### (m) `,
+      every "thirteen rulings" count reads "fourteen", and `tests/test_governance_docs.py` is
+      green.
+- [ ] `docs/releases.md` Unreleased carries the null-title consumer note.
 - [ ] `contract/openapi.yaml` and `contract/openapi.yaml.sha256` are byte-unchanged, and
       `tests/test_contract_export.py` is green.
 - [ ] `test_every_blocked_but_leaked_record_is_filed` accepts an empty id set and keeps a
@@ -140,7 +152,9 @@ byte-identical `main_content`, and summary mode on the fallback path behaves as 
 - **Where:** `extract_html` (`pipeline/stage1_extraction.py:296-337`). Read the current line
   numbers, since spec 2 edits this function first.
   - `raw_text` stays built from the original soup, unchanged (stage-3 input).
-  - A prune helper returns the pruned soup plus a `pruned: bool`.
+  - The prune helper **works on `copy.copy(soup)`**, the existing convention at
+    `stage1_extraction.py:254`, and never mutates the shared soup. Title, author, date and
+    `raw_text` all read the original. It returns the pruned copy plus a `pruned: bool`.
   - **Only if `pruned`:** trafilatura gets `str(pruned_soup)`. Otherwise it gets the
     **original `html` string**, unchanged; re-serialising every page would move benign bodies.
   - **Fallback** (trafilatura returns `None`): the body is
@@ -148,10 +162,13 @@ byte-identical `main_content`, and summary mode on the fallback path behaves as 
     parallel flattener. If nothing was pruned, that equals `raw_text`, as today.
 - **The explicit fallback flag:** `pipeline/smart_extraction.py:176` infers the fallback path
   from `main_content == raw_text`, which pruning breaks.
-  - Add `main_content_is_fallback: bool | None = None` to `ExtractionResult`. `extract_html`
-    sets it `True` or `False`. `None` means "infer by equality", which preserves the
-    behaviour of `pipeline/pdf_subprocess.py:140,260`, `stage1_upload.py` and existing test
-    constructors.
+  - Add `main_content_is_fallback: bool | None = None` to `ExtractionResult`. `None` means
+    "infer by equality", which is today's behaviour and the value for PDF, upload,
+    `pdf_subprocess.py:140,260` and test constructors.
+  - `extract_html` sets it **only when something was pruned** (`True` on the trafilatura-failed
+    path, `False` otherwise). On unpruned pages it stays `None`, so a short page whose
+    trafilatura output happens to equal `raw_text` keeps today's summary-mode branch
+    exactly.
   - `extract_summary` takes the flag and falls back to the equality test only when it is
     `None`. The stage-4 caller passes it through.
 - **Visibility set.** Inline signals only; no stylesheet or class resolution (owner,
@@ -168,8 +185,10 @@ byte-identical `main_content`, and summary mode on the fallback path behaves as 
     - `overflow:hidden` AND (`width` zero OR `height` zero).
   - **Inherited (overridable):** `visibility:hidden|collapse` and `font-size` equal to zero
     (any unit). The element's own text is removed, but a descendant carrying an inline re-show
-    (`visibility:visible`, or a non-zero `font-size`) is **kept with its subtree**, as a
-    browser renders it.
+    is **kept with its subtree**, as a browser renders it. A re-show is `visibility:visible`,
+    or a non-zero `font-size` in an **absolute or root-relative unit** (`px`, `pt`, `pc`, `cm`,
+    `mm`, `in`, `Q`, `rem`). Relative units (`em`, `%`, `ex`, `ch`, keywords such as `larger`)
+    under a zero parent still compute to zero, so they are **not** a re-show.
   - Offsets match **px only**. Other units don't match; they are residuals. Zero tests accept
     any unit. `overflow:hidden` alone never prunes.
 - **Style parsing:**
@@ -178,14 +197,18 @@ byte-identical `main_content`, and summary mode on the fallback path behaves as 
   - For a repeated property, the **last declaration wins**.
   - Malformed declarations are ignored, and the element is kept.
   - Traversal is **iterative**, not recursive.
-- **`/search` skips pruning:** it calls `extract_html` per field (`orchestrator.py:978`) and
-  reads only `raw_text`. Add `prune_hidden: bool = True` to `extract_html`, pass `False` there,
-  and save the CPU.
+- **Callers that only read `raw_text` skip pruning.** Add `prune_hidden: bool = True` to
+  `extract_html`, and pass `False` from:
+  - `/search` (`orchestrator.py:978`);
+  - `scripts/corpus/records.py:314,492`;
+  - `tests/corpus_stage2.py`.
 - **Corpus tests hard-code these carriers as leaked**, and they must move:
   - `tests/test_corpus_harness.py:1417-1418` `_STRUCTURAL_ONLY_BY_CARRIER` (`css_offscreen`,
-    `hidden_div` → their new outcome; confirm per record);
+    `hidden_div` → their new outcome; confirm per record), and the stale comment around :1413;
   - the per-seed assertion around :1530;
-  - the `marker_on_wire` assertion around :1730.
+  - `test_seed_stripped_carriers_are_neutralised_kept_ones_leak` (around :1730-1738). This
+    becomes a **three-way split**: stripped carriers are neutralised, `css_offscreen` and
+    `hidden_div` are no longer leaked, and `title_stuffing` stays leaked.
   `tests/test_corpus_docs.py:315-326` asserts the exact carrier set among findings *entries*.
   Entries persist when resolved, so it stays green (spec 4 re-files).
 - **Benign-loss fixtures,** so the cost is a decision rather than an accident:
@@ -193,10 +216,19 @@ byte-identical `main_content`, and summary mode on the fallback path behaves as 
   - a `hidden="until-found"` section (asserted kept);
   - an `opacity:0` animated hero (asserted pruned, documented cost);
   - a `font-size:0` layout container with re-shown children (asserted kept).
-  Report how many benign corpus bodies changed in Implementation Notes.
+  - a page where pruning removes the element trafilatura would have picked, leaving visible
+    text elsewhere (asserted: the fallback serves the remaining visible text, and the
+    response is a well-formed 200).
+  - **Benign-loss decision rule:** zero corpus benign pages without a listed signal may change
+    (an acceptance criterion). For pages *with* a signal, list each one with its character loss
+    in Implementation Notes for owner review. Any core-genre page losing more than 20% of its
+    body is raised before merging, not after.
 - **Framing:** this pass is defence in depth, best effort. The real control remains stage 2 and
-  3 scanning `raw_text`. Unlisted techniques go to spec 4 as residuals: class or stylesheet
-  rules, `transform:scale(0)`, colour camouflage, non-px offsets, tiny non-zero font sizes.
+  3 scanning `raw_text`. These go to spec 4 as residuals:
+  - unlisted techniques: class or stylesheet rules, `transform:scale(0)`, colour camouflage,
+    non-px offsets, tiny non-zero font sizes, and the 1px "visually hidden" clip pattern;
+  - accepted benign losses: `[hidden]` content that an inline `display` overrides, and
+    `aria-hidden` text that browsers still render.
 
 **Acceptance Criteria:**
 - [ ] Each non-overridable signal prunes its subtree, and each inherited signal prunes its own
@@ -219,6 +251,14 @@ byte-identical `main_content`, and summary mode on the fallback path behaves as 
       within a recorded time.
 - [ ] An empty pruned body still returns a well-formed `/retrieve` 200 in both extract modes
       (route test).
+- [ ] The prune helper never mutates the shared soup: `raw_text`, title, author and date are
+      identical with pruning on and off (test). The 10,000-level nesting test runs end to end
+      through `extract_html`.
+- [ ] `main_content_is_fallback` stays `None` on an unpruned page, including a short page whose
+      trafilatura output equals `raw_text`. Summary-mode output for that page is unchanged
+      (test).
+- [ ] A relative-unit `font-size` (`1em`, `150%`) under a `font-size:0` parent is pruned, and an
+      absolute or `rem` re-show is kept (fixtures).
 - [ ] The rotation is recorded with a reversal control.
 - [ ] Tests written/updated for new functionality
 - [ ] Full test suite passes (`uv run pytest`)
@@ -322,3 +362,13 @@ removing the subtree drops visible text.
 - Q: How far should the title fix go? → A: quarantine the title. Unmarked stuffing is stage 3's job, an accepted residual.
 - Q (validation): How should the `hidden` attribute be treated? → A: prune it, except `hidden="until-found"`.
 - Q (validation): How is the null title classified? → A: a sanitizer outcome, no bump. Recorded as ruling (m), distinguished from (e).
+- Validation round 2 (2026-10-06):
+  - prune on a copy;
+  - the fallback flag is set only when pruned;
+  - only absolute or `rem` font sizes count as a re-show;
+  - the cache-replay test is replaced by a never-cached assertion;
+  - an injected-title `/extract` test;
+  - ruling-count edit sites completed;
+  - the harness three-way split;
+  - corpus callers skip pruning;
+  - a benign-loss decision rule.
