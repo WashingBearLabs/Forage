@@ -231,39 +231,39 @@ byte-identical `main_content`, and summary mode on the fallback path behaves as 
     `aria-hidden` text that browsers still render.
 
 **Acceptance Criteria:**
-- [ ] Each non-overridable signal prunes its subtree, and each inherited signal prunes its own
+- [x] Each non-overridable signal prunes its subtree, and each inherited signal prunes its own
       text while keeping an inline re-shown descendant. There is one positive and one negative
       fixture per rule, including `overflow:hidden` alone (kept), `hidden="until-found"` (kept),
       a non-px offset (kept), and a repeated-declaration last-wins case.
-- [ ] Every benign corpus page with no listed signal has `main_content` byte-identical to its
+- [x] Every benign corpus page with no listed signal has `main_content` byte-identical to its
       pre-story value (test over the corpus pages). The count of benign pages whose body changed
       is recorded in Implementation Notes.
-- [ ] `raw_text` is byte-identical for every corpus page. Both cassette files are
+- [x] `raw_text` is byte-identical for every corpus page. Both cassette files are
       byte-unchanged, with zero misses.
-- [ ] `ExtractionResult.main_content_is_fallback` is set by `extract_html`, and `extract_summary`
+- [x] `ExtractionResult.main_content_is_fallback` is set by `extract_html`, and `extract_summary`
       uses it. Summary-mode output on the fallback path is unchanged for an unpruned page and
       defined (tested) for a pruned one. PDF and upload results (`None`) behave as before.
-- [ ] The 6 `css_offscreen` and `hidden_div` records are not `leaked` in the regenerated
+- [x] The 6 `css_offscreen` and `hidden_div` records are not `leaked` in the regenerated
       baseline. `tests/test_corpus_harness.py` carrier expectations are updated to the measured
       outcomes. No core-genre benign record moves from `passed`, and the pin tests are green.
-- [ ] Style parsing tolerates mixed case, whitespace, `!important` and malformed declarations.
+- [x] Style parsing tolerates mixed case, whitespace, `!important` and malformed declarations.
       A page with 10,000 levels of nesting and a 1 MB style value is processed without raising,
       within a recorded time.
-- [ ] An empty pruned body still returns a well-formed `/retrieve` 200 in both extract modes
+- [x] An empty pruned body still returns a well-formed `/retrieve` 200 in both extract modes
       (route test).
-- [ ] The prune helper never mutates the shared soup: `raw_text`, title, author and date are
+- [x] The prune helper never mutates the shared soup: `raw_text`, title, author and date are
       identical with pruning on and off (test). The 10,000-level nesting test runs end to end
       through `extract_html`.
-- [ ] `main_content_is_fallback` stays `None` on an unpruned page, including a short page whose
+- [x] `main_content_is_fallback` stays `None` on an unpruned page, including a short page whose
       trafilatura output equals `raw_text`. Summary-mode output for that page is unchanged
       (test).
-- [ ] A relative-unit `font-size` (`1em`, `150%`) under a `font-size:0` parent is pruned, and an
+- [x] A relative-unit `font-size` (`1em`, `150%`) under a `font-size:0` parent is pruned, and an
       absolute or `rem` re-show is kept (fixtures).
-- [ ] The rotation is recorded with a reversal control.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` reports 0 errors
+- [x] The rotation is recorded with a reversal control.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` reports 0 errors
 
 ## Edge Cases
 
