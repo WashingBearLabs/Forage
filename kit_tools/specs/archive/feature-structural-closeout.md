@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: structural-closeout
-status: active
+status: completed
 session_ready: true
 depends_on: [structural-wire-closure]
 vision_ref: "T2.3 follow-up — close the injection corpus's structural findings"
@@ -11,7 +11,8 @@ epic: forage-structural-hardening
 epic_seq: 4
 epic_final: true
 created: 2026-10-06
-updated: 2026-10-06
+updated: 2026-10-07
+completed: 2026-10-07
 ---
 
 # Feature Spec: Structural Close-out — Ratchet the Floors, Record the Epic, Re-file the Findings

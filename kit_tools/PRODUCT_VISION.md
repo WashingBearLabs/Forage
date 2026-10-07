@@ -107,7 +107,7 @@ Link to feature specs / epics as they are created.
 #### T2.4 — Structural hardening
 - **Description:** Close the stage-2 leaks the T2.3 corpus measured, without changing stage 3's input (no cassette re-record): scan-only derived forms (decoded, confusable-folded under both I/l readings, inline-joined), case-insensitive and linear patterns, a first-match raw-markup scan for the patterns a parser consumes, a null title on every quarantined response, and a body-only visibility pass over inline hiding signals. Bounded heuristics, measured on the corpus, not guarantees; residuals are listed in `kit_tools/arch/SECURITY.md`.
 - **Feature Spec(s):** `epic-forage-structural-hardening` — `feature-structural-scan-forms`, `feature-structural-markup-surface`, `feature-structural-wire-closure`, `feature-structural-closeout`
-- **Status:** Implemented on `epic/forage-structural-hardening` (PR #42, open); close-out in progress. Unreleased, contract stays `1.3.0`.
+- **Status:** Completed 2026-10-07 on `epic/forage-structural-hardening` (PR #42): 13 stories across four specs; every structural corpus cell at 1.0, no cassette re-record. Unreleased; contract stays `1.3.0`. Residuals and follow-ups in `AUDIT_FINDINGS.md`.
 
 ### Tier 3 — Future
 

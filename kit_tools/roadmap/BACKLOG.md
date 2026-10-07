@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # BACKLOG.md
 
-> Last updated: 2026-10-06
-> Updated by: Claude (decoder bound shipped; 86M-default and contiguity rulings taken)
+> Last updated: 2026-10-07
+> Updated by: Claude (structural-hardening epic completed; PR #42)
 
 Work that is real but not yet scheduled into a feature spec. Items with an owning spec
 live in `MILESTONES.md` instead.
@@ -20,12 +20,12 @@ live in `MILESTONES.md` instead.
 
 ---
 
-## Forage Structural Hardening (Epic)
+## Forage Structural Hardening (Completed)
 - [Epic Overview](../specs/epic-forage-structural-hardening.md) — closes the corpus's 30 structural findings with derived stage-2 scan forms; stage-3 input byte-identical (no re-record); ratchet both ways
-- [Scan forms](../specs/feature-structural-scan-forms.md) — case-insensitive patterns; linear patterns; shared decoded form; generated confusable tables and fold forms (5 stories)
-- [Markup surface](../specs/feature-structural-markup-surface.md) — inline-joined form (linear walk); first-match raw-source markup scan (2 stories; depends on: scan-forms)
-- [Wire closure](../specs/feature-structural-wire-closure.md) — quarantined titles null (ruling (m)); body-only visibility pass (2 stories; depends on: markup-surface)
-- [Close-out](../specs/feature-structural-closeout.md) — floors ratchet script, findings re-file (owner step), docs, records preflight (4 stories; depends on: wire-closure)
+- [Scan forms](../specs/archive/feature-structural-scan-forms.md) — case-insensitive patterns; linear patterns; shared decoded form; generated confusable tables and fold forms (5 stories)
+- [Markup surface](../specs/archive/feature-structural-markup-surface.md) — inline-joined form (linear walk); first-match raw-source markup scan (2 stories; depends on: scan-forms)
+- [Wire closure](../specs/archive/feature-structural-wire-closure.md) — quarantined titles null (ruling (m)); body-only visibility pass (2 stories; depends on: markup-surface)
+- [Close-out](../specs/archive/feature-structural-closeout.md) — floors ratchet script, findings re-file (owner step), docs, records preflight (4 stories; depends on: wire-closure)
 
 ---
 

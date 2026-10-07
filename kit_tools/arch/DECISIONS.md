@@ -1099,7 +1099,7 @@ ratchet check exempts them by id (spec 4). No other record is exempt.
 **Consequences:** Literal `<system>` or a private-IP link in a search result is now caught at
 the cost of these two benign-by-intent snippets; the decision was preferred over cutting spans.
 
-**Source:** `kit_tools/specs/feature-structural-markup-surface.md` (Clarifications);
+**Source:** `kit_tools/specs/archive/feature-structural-markup-surface.md` (Clarifications);
 `docs/bootstrap-notes.md` (fiftieth rotation).
 
 ### 2026-10-07: Structural hardening — scan-only derived forms, linear patterns, generated folds, bounded wire-side heuristics
@@ -1159,5 +1159,5 @@ scan forms"). Feeding normalised text to stage 3 is a later epic with an owner r
 **Source:** `kit_tools/specs/epic-forage-structural-hardening.md`; archived
 `feature-structural-scan-forms.md`, `feature-structural-markup-surface.md`,
 `feature-structural-wire-closure.md` (Research Findings, Implementation Notes);
-`kit_tools/specs/feature-structural-closeout.md`; `contract/GOVERNANCE.md` ruling (m);
+`kit_tools/specs/archive/feature-structural-closeout.md`; `contract/GOVERNANCE.md` ruling (m);
 `docs/bootstrap-notes.md` (forty-fourth to fifty-second rotations).

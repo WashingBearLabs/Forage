@@ -724,6 +724,6 @@ hostile document text. The two rulings do not generalise into each other: normal
 metadata field stays MINOR; withholding document text on quarantine is a sanitizer
 outcome.
 
-**Source:** `kit_tools/specs/feature-structural-wire-closure.md`, US-001 *Implementation
+**Source:** `kit_tools/specs/archive/feature-structural-wire-closure.md`, US-001 *Implementation
 Hints* (owner pre-resolution, 2026-10-06); `pipeline/stage4_structuring.py`
 `finalize_quarantine`; `tests/test_stage4_structuring.py` and `tests/test_orchestrator.py`.
