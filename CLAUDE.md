@@ -621,6 +621,17 @@ non-PDF `/retrieve` and on `/search`'s title and snippet. `stage1_extraction.py`
 reproducing `c04bd68e…` under default and shipped config. `raw_text`, wire forms and both
 cassettes are byte-unchanged. Full values: `docs/bootstrap-notes.md`.
 
+The forty-ninth rotation is `b9a4a9de…` → `9c8bb9a6…` for
+`structural-markup-surface` US-010 — **the fourteenth sanitization-behaviour-changing
+rotation**: `system_tag` widens to `<\s*(?:/\s*)?system\b[^<>]*>` (attributes, whitespace,
+closing and self-closing forms, any case), and stage 2 gains `_MARKUP_PATTERNS` and the pure
+first-match `scan_raw_markup` (not yet wired; US-011). Only `pipeline/stage2_structural.py`
+moves; a read-only whole-file reversal against `e2df89d` reproduces `b9a4a9de…` under default
+and shipped config. `atk-0378` and `atk-0396` (`<SYSTEM MODE>`) are now blocked; no benign
+record moved; both cassettes are byte-unchanged. By the ingest rule the two rows are re-homed
+to `instruction_override` and one `natural_language` floor pair is lowered by hand. Full
+values: `docs/bootstrap-notes.md`.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:

@@ -241,6 +241,25 @@ Depends on US-010's `scan_raw_markup` and `_MARKUP_PATTERNS`. Read the original 
 
 ## Implementation Notes
 
+### US-010
+
+- `system_tag` is spelled `<\s*(?:/\s*)?system\b[^<>]*>`, the same language as the criterion's
+  `<\s*/?\s*system\b[^<>]*>`. The literal spelling lets two adjacent `\s*` split one whitespace
+  run (quadratic on `<` plus a long run, which `tests/test_stage2_complexity.py`'s
+  `prefix_then_whitespace` family exercises); the grouped form is the `envelope_breakout` fix.
+- `_MARKUP_PATTERNS` is `_PATTERNS[4]`, `[21]`, `[23]` (object identity pinned against
+  `STAGE2_REGEX_NAMES` in `tests/test_stage2_raw_markup.py`). `scan_raw_markup` is not wired
+  anywhere yet (US-011).
+- Linearity, `scan_raw_markup`, best of 3 with GC paused: match-dense 0.098 s (5 MB) /
+  0.199 s (10 MB); whitespace bomb 0.016 s / 0.032 s; `&lt;` flood 0.267 s / 0.534 s.
+- Baseline: `atk-0378` and `atk-0396` (`<SYSTEM MODE>`, `/extract`) are now blocked via the
+  widened `system_tag`; no benign record moved, so `ben-0288` was not re-pinned; cassettes
+  byte-unchanged. Revision `b9a4a9de…` → `9c8bb9a6…`, `stage2_structural.py` alone.
+- Both are ingested CyberSecEval rows; the ingest rule (first stage-2 category that fires) now
+  assigns `instruction_override`, so they were re-homed to `instruction_override.jsonl` (ids,
+  text, markers unchanged). `natural_language` `/extract` 86M catch fell to 3/31 as a result, so
+  those two `floors.json` cells were hand-lowered 0.10 → 0.05 (the catch moved, not regressed).
+
 ## Refinement Notes
 
 ### Research Findings

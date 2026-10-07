@@ -99,8 +99,11 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ),
     (
         "instruction_override",
+        # Any attribute, whitespace, closing or self-closing form. The slash
+        # and its trailing whitespace are one optional group, so two adjacent
+        # whitespace runs never split one run between them (quadratic).
         re.compile(
-            r"<system>",
+            r"<\s*(?:/\s*)?system\b[^<>]*>",
             re.IGNORECASE,
         ),
     ),
@@ -257,6 +260,19 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ),
 ]
 
+
+# The subset of ``_PATTERNS`` whose trigger is markup a parser consumes (a tag
+# or an attribute), so it is scanned on the raw source (``scan_raw_markup``).
+# Indexes are ``system_tag``, ``private_ip_href`` and ``envelope_breakout``.
+_MARKUP_PATTERNS: tuple[re.Pattern[str], ...] = (
+    _PATTERNS[4][1],
+    _PATTERNS[21][1],
+    _PATTERNS[23][1],
+)
+_MARKUP_CATEGORIES: dict[re.Pattern[str], str] = {
+    pattern: category for category, pattern in _PATTERNS if pattern in _MARKUP_PATTERNS
+}
+_WHITESPACE_RUN_RE = re.compile(r"\s+")
 
 # ---------------------------------------------------------------------------
 # Line number lookup helper
@@ -558,3 +574,35 @@ def scan_structural_forms(forms: Iterable[str]) -> StructuralScanResult:
             penalty=max(-0.45, -0.15 * suspicious_count),
         )
     return best
+
+
+def scan_raw_markup(markup: str) -> StructuralScanResult:
+    """Scan raw markup for the ``_MARKUP_PATTERNS`` subset, first match only.
+
+    Whitespace runs collapse to one space, then each pattern runs one
+    ``search()``: one flag per pattern at most, so a match-dense page costs no
+    more than a clean one. Line numbers are 0 (the markup is not the served
+    text). Matched text is carried in the flags but never logged here.
+    """
+    collapsed = _WHITESPACE_RUN_RE.sub(" ", markup)
+    flags: list[FlaggedSpan] = []
+    for pattern in _MARKUP_PATTERNS:
+        match = pattern.search(collapsed)
+        if match is not None:
+            flags.append(
+                FlaggedSpan(
+                    category=_MARKUP_CATEGORIES[pattern],
+                    matched_text=match.group(),
+                    line_number=0,
+                )
+            )
+    if not flags:
+        return StructuralScanResult(verdict=Stage2Verdict.CLEAN)
+    if {f.category for f in flags} & _BLOCKING_CATEGORIES:
+        return StructuralScanResult(verdict=Stage2Verdict.BLOCKED, flags=flags)
+    suspicious_count = sum(1 for f in flags if f.category in _SUSPICIOUS_CATEGORIES)
+    return StructuralScanResult(
+        verdict=Stage2Verdict.SUSPICIOUS,
+        flags=flags,
+        penalty=max(-0.45, -0.15 * suspicious_count),
+    )

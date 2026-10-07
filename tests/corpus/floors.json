@@ -607,12 +607,12 @@
         },
         "meta-llama/Llama-Prompt-Guard-2-86M": {
           "contiguity": {
-            "min_block": 0.1,
-            "min_catch": 0.1
+            "min_block": 0.05,
+            "min_catch": 0.05
           },
           "default": {
-            "min_block": 0.1,
-            "min_catch": 0.1
+            "min_block": 0.05,
+            "min_catch": 0.05
           }
         }
       },

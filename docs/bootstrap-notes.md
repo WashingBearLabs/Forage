@@ -2300,3 +2300,44 @@ Corpus effect (regenerated `baseline.json`): the eight `split_tags` records are 
 `atk-0138`, `atk-0167` now `flagged`). No benign record moved and `git diff tests/corpus/cassettes/`
 is empty. The stage-3 attack denominator in `docs/corpus.md`'s Decision inputs falls 356 → 351; every
 fired cell is unchanged. Old cache keys invalidate. Contract stays `1.3.0`.
+
+### The forty-ninth rotation: the widened `system_tag` and the raw-markup scan primitive (`structural-markup-surface` US-010)
+
+`system_tag` widens from `<system>` to `<\s*(?:/\s*)?system\b[^<>]*>` (`re.IGNORECASE`), so
+`<system >`, `<system id=a>`, `<SYSTEM/>` and `</ system>` match. The slash and its trailing
+whitespace are one optional group, the same linearisation `envelope_breakout` received: the
+literal `<\s*/?\s*system…` lets two adjacent `\s*` split one whitespace run between them, which
+is quadratic on `<` followed by a long run. The two spellings accept the same language.
+
+Stage 2 also gains `_MARKUP_PATTERNS` (the registry objects for `system_tag`, `private_ip_href`
+and `envelope_breakout`) and `scan_raw_markup(markup)`, which collapses whitespace runs and runs
+one `search()` per subset pattern (first match only, `line_number=0`). It is not called by any
+route yet; US-011 wires it. Only `pipeline/stage2_structural.py` moves.
+
+| State | Revision |
+|---|---|
+| Before (`e2df89d`) / `stage2_structural.py` reverted | `b9a4a9de1cab6a2cb68281956a10bdbe972abb5161f281c0492c07e5e0d4cb99` |
+| After | `9c8bb9a67e8f13f07ea759f63d4a1126c87da9549efa72b04d27838ae3c9ee54` |
+
+Measured read-only (whole-file `git show HEAD:pipeline/stage2_structural.py` bytes substituted
+into the hash) for default `{}` and shipped `config.yaml`, which agree. No input moved. This is
+the **fourteenth sanitization-behaviour-changing rotation**.
+
+Corpus effect (regenerated `baseline.json`): `atk-0378` and `atk-0396` (`natural_language`,
+`/extract`, both carry `<SYSTEM MODE>`) are now `blocked` at stage 2 under both models and both
+configs. No benign record moved (`ben-0288` included). Attack stage-3 denominator 351 → 349,
+`natural_language` 155 → 153; the 86M's `max@0.85` fired count 15 → 14 and `mean@0.5` 21 → 20,
+because `atk-0396` was an 86M stage-3 catch. `docs/corpus.md` Decision inputs updated;
+`git diff tests/corpus/cassettes/` is empty.
+
+Both are ingested CyberSecEval rows, and the ingest rule is "the first stage-2 category that
+fires, else `natural_language`" (`scripts/corpus/ingest/render.py` `assign_category`), which
+now returns `instruction_override` for each. They are re-homed to
+`tests/corpus/attacks/instruction_override.jsonl` with their ids, text and markers unchanged
+(`test_an_ingested_row_is_leaked_or_keeps_its_structural_category`). Moving `atk-0396`, an 86M
+stage-3 catch, out of `natural_language` drops that cell's `/extract` 86M catch to 3/31, so
+its two `floors.json` cells (`default`, `contiguity`) are lowered by hand from 0.10 to 0.05;
+the catch did not regress, it moved with the record.
+
+Timing (`scan_raw_markup`, best of 3, GC paused): match-dense private-IP links 0.098 s at 5 MB /
+0.199 s at 10 MB; whitespace bomb 0.016 s / 0.032 s; `&lt;` flood 0.267 s / 0.534 s.
