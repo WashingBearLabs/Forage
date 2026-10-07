@@ -112,6 +112,7 @@ from pipeline.stage3_promptguard import (
     promptguard_settings_from_config,
 )
 from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES
+from pipeline.worker_launch import make_process_non_dumpable
 from promptguard.classifier import (
     DEFAULT_MODEL_ID,
     PromptGuardClassifier,
@@ -1641,6 +1642,8 @@ def _sanitize_upload_metadata(
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Startup/shutdown lifecycle."""
+    if not make_process_non_dumpable():
+        logger.info("process_non_dumpable_not_set")
     model_id, model_allowed = model_fetcher.resolve_model_id()
     if not model_allowed:
         raise model_fetcher.ModelConfigurationError("model_id_not_allowed")

@@ -6110,3 +6110,21 @@ async def test_health_unrelated_fields_are_unaffected_by_search_provider_state(
     assert data["promptguard_loaded"] is False
     assert data["cache_connected"] is True
     assert data["cache_backend"] == "memory"
+
+
+async def test_lifespan_marks_the_process_non_dumpable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Startup asks for ``PR_SET_DUMPABLE`` 0 before anything else runs."""
+    calls: list[str] = []
+
+    def record() -> bool:
+        calls.append("called")
+        return True
+
+    monkeypatch.setattr("retrieval_app.make_process_non_dumpable", record)
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _blocking_acquisition(threading.Event())
+    )
+    async with _running_app():
+        assert calls == ["called"]

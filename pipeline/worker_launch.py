@@ -143,6 +143,28 @@ def worker_environment(parent: Mapping[str, str] | None = None) -> dict[str, str
     return {name: source[name] for name in WORKER_ENV_ALLOWLIST if name in source}
 
 
+_PR_SET_DUMPABLE = 4
+
+
+def make_process_non_dumpable() -> bool:
+    """Mark this process non-dumpable on Linux so a same-uid child cannot read it.
+
+    ``prctl(PR_SET_DUMPABLE, 0)`` makes ``/proc/<pid>/*`` root-owned, so a
+    compromised worker child gets ``PermissionError`` on ``/proc/<ppid>/environ``.
+    The flag is inherited across fork and reset on exec, so workers are
+    unaffected. Returns whether the flag was set; elsewhere it is a no-op.
+    """
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        return libc.prctl(_PR_SET_DUMPABLE, 0, 0, 0, 0) == 0
+    except (OSError, AttributeError):
+        return False
+
+
 def project_root() -> Path:
     """Return the directory holding the ``pipeline`` package.
 

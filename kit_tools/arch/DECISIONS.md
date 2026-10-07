@@ -1176,9 +1176,24 @@ request threads. The allowlist is `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, 
 `PYTHONPATH`, `VIRTUAL_ENV`, `PYTHONHASHSEED`, `PYTHONDONTWRITEBYTECODE`. `cwd` is pinned because
 the image does not install the project.
 
-**Consequences:** `/proc/<ppid>/environ` stays readable until US-003. Verdict integrity against a
+**Consequences:** `/proc/<ppid>/environ` stays readable until US-003 (since added; see the next entry). Verdict integrity against a
 compromised parser is an accepted residual (SECURITY.md, "Worker isolation"). No hashed file
 changed, so `sanitizer_revision` does not rotate: default and shipped config both remain
 `0ace27cae20e17e6c6eae7fa51f3126483bf8d07d6e555afbeee0a39364f4911` (`0ace27ca…`).
 
 **Source:** `kit_tools/specs/feature-release-resource-bounds.md` US-002.
+
+### 2026-10-07: The parent marks itself non-dumpable on Linux
+
+**Decision:** The lifespan calls `make_process_non_dumpable()` (`prctl(PR_SET_DUMPABLE, 0)` via
+`ctypes`; no-op off Linux) before anything else.
+
+**Rationale:** The allowlisted environment keeps secrets out of the worker's own environ, but a
+same-uid child could still read `/proc/<ppid>/environ`. Non-dumpable makes that raise
+`PermissionError`. Spawn latency was unchanged (0.22 ms vs 0.19 ms, `nofile` 1,048,576).
+
+**Consequences:** No core dumps or `py-spy`/`gdb` attach. Residuals (same-uid peers, `--init`,
+`--workers`, non-exec wrappers, shared PID namespaces, `CAP_SYS_PTRACE`) are in SECURITY.md. No
+hashed file changed; `sanitizer_revision` stays `0ace27ca…`.
+
+**Source:** `kit_tools/specs/feature-release-resource-bounds.md` US-003.

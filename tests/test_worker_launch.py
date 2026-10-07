@@ -150,6 +150,46 @@ class TestWorkingDirectory:
         assert (worker_launch.project_root() / "pipeline" / "worker_entry.py").is_file()
 
 
+_PARENT_SCRIPT = textwrap.dedent(
+    """
+    import subprocess, sys
+    from pipeline.worker_launch import make_process_non_dumpable
+
+    assert make_process_non_dumpable() is True
+    child = subprocess.run(
+        [sys.executable, "-c",
+         "import os\\ntry:\\n open(f'/proc/{os.getppid()}/environ','rb').read()\\n"
+         "except PermissionError:\\n print('denied')\\nelse:\\n print('readable')"],
+        capture_output=True, text=True, check=True,
+    )
+    print(child.stdout.strip())
+    """
+)
+
+
+class TestNonDumpableParent:
+    @pytest.mark.skipif(
+        not sys.platform.startswith("linux"),
+        reason="PR_SET_DUMPABLE and /proc/<ppid>/environ are Linux-only",
+    )
+    def test_a_child_cannot_read_the_non_dumpable_parents_environ(self) -> None:
+        done = subprocess.run(
+            [sys.executable, "-c", _PARENT_SCRIPT],
+            cwd=worker_launch.project_root(),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        assert done.stdout.strip() == "denied"
+
+    @pytest.mark.skipif(
+        sys.platform.startswith("linux"), reason="the no-op path is non-Linux only"
+    )
+    def test_it_is_a_no_op_off_linux(self) -> None:
+        assert worker_launch.make_process_non_dumpable() is False
+
+
 class TestSpawnFailure:
     def test_a_popen_oserror_maps_to_the_pdf_worker_failure(
         self, spool_root: Path, monkeypatch: pytest.MonkeyPatch

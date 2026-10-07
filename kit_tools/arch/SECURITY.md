@@ -404,8 +404,27 @@ Extraction workers (today the PDF worker) are launched by `pipeline/worker_launc
 **Residual: verdict integrity.** The worker bounds **resource cost**; it does not protect the
 verdict against a *compromised* parser. A child under native-code control can return a
 well-formed CLEAN frame with scrubbed text. Frame validation catches malformed frames, not
-lies. Accepted; US-003 adds the non-dumpable parent hardening (still open as of US-002, so a
-same-uid child can read `/proc/<ppid>/environ`).
+lies. Accepted.
+
+**Non-dumpable parent (Linux).** At lifespan start the parent calls
+`prctl(PR_SET_DUMPABLE, 0)` through `ctypes` (`make_process_non_dumpable()` in
+`pipeline/worker_launch.py`), so `/proc/<pid>/*` is root-owned and a compromised worker child's
+read of `/proc/<ppid>/environ` raises `PermissionError` (tested on Linux). The flag is inherited
+across fork and reset on exec, so workers are unaffected. Elsewhere it is a no-op and the
+`/proc` read is a Linux-only concern. Nothing in non-test Python reads `/proc` (grepped).
+Measured on Linux (python:3.12-slim, `nofile` 1,048,576): `subprocess` spawn of `/bin/true`
+with `close_fds=True` took 0.22 ms with dumpable 1 and 0.19 ms with dumpable 0 — no
+brute-force-close penalty.
+
+- **Operator cost.** A non-dumpable process writes no core dump, and `py-spy` and `gdb`
+  attach (and `strace -p`) fail unless run as root with the needed capability.
+- **Residual: same uid.** The guarantee holds only while Forage is the only same-uid process
+  in its PID namespace that holds secrets; a same-uid child can still read any *other*
+  same-uid process's `/proc/<pid>/environ`.
+- **Residual: named exceptions.** `docker run --init` / compose `init: true` (tini is PID 1
+  with the same uid and may hold the environment), a uvicorn master under `--workers`, a
+  wrapper shell that does not `exec`, and `shareProcessNamespace` pods.
+- **Residual: `CAP_SYS_PTRACE`.** The guarantee assumes the container lacks it.
 
 ### Admission control (the only rate limiting)
 
