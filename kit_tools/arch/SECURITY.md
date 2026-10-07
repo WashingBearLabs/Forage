@@ -372,11 +372,40 @@ See [`docs/configuration.md` § Sizing the container](../../docs/configuration.m
 
 ### The upload path
 
-In `retrieval_app.py`, `DocumentSizeLimitMiddleware` counts ASGI body bytes as they arrive and does **not** trust `Content-Length`; `_spool_upload` spools to a `0600` temp file under a second cap and always unlinks it — inside `pipeline.pdf_subprocess.spool_dir()`, the process-private `0700` `forage-spool-<uid>` directory (created with that mode, verified with `lstat` on every call and refused rather than repaired if it is a symlink, a non-directory, foreign-owned or group/other-accessible; the lifespan's check refuses boot); `_sanitize_upload_metadata` bounds `filename` and `mime_hint` to 255 characters, constrains `request_id` to `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`, strips control characters, reduces `filename` to a basename, and rejects `""`, `.`, and `..`. `UploadProvenance` in `models.py` documents that `filename` and `mime_hint` are display-only and never used as filesystem paths.
+In `retrieval_app.py`, `DocumentSizeLimitMiddleware` counts ASGI body bytes as they arrive and does **not** trust `Content-Length`; `_spool_upload` spools to a `0600` temp file under a second cap and always unlinks it — inside `pipeline.worker_launch.spool_dir()` (re-exported by `pdf_subprocess`), the process-private `0700` `forage-spool-<uid>` directory (created with that mode, verified with `lstat` on every call and refused rather than repaired if it is a symlink, a non-directory, foreign-owned or group/other-accessible; the lifespan's check refuses boot); `_sanitize_upload_metadata` bounds `filename` and `mime_hint` to 255 characters, constrains `request_id` to `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`, strips control characters, reduces `filename` to a basename, and rejects `""`, `.`, and `..`. `UploadProvenance` in `models.py` documents that `filename` and `mime_hint` are display-only and never used as filesystem paths.
 
 ### Content-type detection and process isolation
 
-`pipeline/stage1_upload.py` decides the format from bytes, not from the caller: `%PDF-` magic wins; otherwise the body must decode as strict UTF-8, contain no NUL byte, and have at most 5 % non-whitespace control characters (`_MAX_CONTROL_CHARACTER_RATIO = 0.05`); `mime_hint` is explicitly discarded (`del mime_hint`). PDF parsing runs in a spawned, killable subprocess (`pipeline/pdf_subprocess.py`) under `RLIMIT_CPU`, `RLIMIT_AS`, and a `setitimer` wall clock; the result comes back over a length-framed JSON pipe capped at `max_ipc_result_bytes`, and parser exceptions map to fixed status tokens so document-derived text never crosses the pipe. Since `hardening-retrieve-parity` US-003 this is true of **both** routes: a fetched PDF on `/retrieve` is spooled to a `0600` `forage-retrieve-*` file in the same private directory and parsed by the same worker under `/extract`'s rlimits, and every failure is a coded 422 (`extraction_failed` with a fixed reason, or `content_too_large` / `promptguard_budget`) rather than the 500 an in-process `pypdf` exception produced before. The spool file holds fetched third-party content; it is unlinked on every normal exit path, and an orphan left by a SIGKILL on a non-tmpfs `TMPDIR` is content-bearing (`docs/configuration.md`, "The spool directory").
+`pipeline/stage1_upload.py` decides the format from bytes, not from the caller: `%PDF-` magic wins; otherwise the body must decode as strict UTF-8, contain no NUL byte, and have at most 5 % non-whitespace control characters (`_MAX_CONTROL_CHARACTER_RATIO = 0.05`); `mime_hint` is explicitly discarded (`del mime_hint`). PDF parsing runs in a launched, killable subprocess (`pipeline/pdf_subprocess.py` on the shared `pipeline/worker_launch.py` launcher; see "Worker isolation" below) under `RLIMIT_CPU`, `RLIMIT_AS`, and a `setitimer` wall clock; the result comes back over a length-framed JSON pipe capped at `max_ipc_result_bytes`, and parser exceptions map to fixed status tokens so document-derived text never crosses the pipe. Since `hardening-retrieve-parity` US-003 this is true of **both** routes: a fetched PDF on `/retrieve` is spooled to a `0600` `forage-retrieve-*` file in the same private directory and parsed by the same worker under `/extract`'s rlimits, and every failure is a coded 422 (`extraction_failed` with a fixed reason, or `content_too_large` / `promptguard_budget`) rather than the 500 an in-process `pypdf` exception produced before. The spool file holds fetched third-party content; it is unlinked on every normal exit path, and an orphan left by a SIGKILL on a non-tmpfs `TMPDIR` is content-bearing (`docs/configuration.md`, "The spool directory").
+
+### Worker isolation
+
+Extraction workers (today the PDF worker) are launched by `pipeline/worker_launch.py` as
+`subprocess.Popen([sys.executable, "-m", "pipeline.worker_entry", <kind>, ...])`, not
+`multiprocessing` spawn, which inherits `os.environ` and takes no per-process `env=`.
+
+- **Allowlisted environment.** The child receives only `PATH`, `HOME`, `LANG`, `LC_ALL`,
+  `LC_CTYPE`, `TMPDIR`, `PYTHONPATH`, `VIRTUAL_ENV`, `PYTHONHASHSEED` and
+  `PYTHONDONTWRITEBYTECODE`, each only when the parent has it (`WORKER_ENV_ALLOWLIST`; no
+  addition was needed for the parse path, and `HF_HOME` is deliberately absent). A credential
+  is therefore absent from the child's `os.environ`, its `/proc/self/environ` and its memory.
+  Platform-injected names (macOS `__CF_USER_TEXT_ENCODING`) are not granted and the test
+  tolerates them.
+- **fd-passed pipe.** The frame comes back on a pipe fd handed to the child alone
+  (`pass_fds`, `close_fds=True`, stdin/stdout/stderr `DEVNULL`); argv carries only the spool
+  path, the fd number and numeric limits. No `preexec_fn` (unsafe with threads).
+- **Fixed working directory.** `cwd=` is the project root, resolved from the `pipeline`
+  package, because the image installs with `--no-install-project`.
+- **Limits first, logging off.** `worker_entry` applies the rlimits and wall-clock timer before
+  importing any parser and then disables logging, so parser output cannot carry content.
+- **Kill and reap on every path.** The parent kills and waits in `finally`; a spawn `OSError`
+  maps to the worker's ordinary failure error.
+
+**Residual: verdict integrity.** The worker bounds **resource cost**; it does not protect the
+verdict against a *compromised* parser. A child under native-code control can return a
+well-formed CLEAN frame with scrubbed text. Frame validation catches malformed frames, not
+lies. Accepted; US-003 adds the non-dumpable parent hardening (still open as of US-002, so a
+same-uid child can read `/proc/<ppid>/environ`).
 
 ### Admission control (the only rate limiting)
 

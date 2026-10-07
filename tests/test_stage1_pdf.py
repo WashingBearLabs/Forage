@@ -18,7 +18,7 @@ import pytest
 from pypdf import PdfReader, PdfWriter
 
 from models import RetrieveRequest
-from pipeline import orchestrator, pdf_subprocess
+from pipeline import orchestrator, pdf_subprocess, worker_launch
 from pipeline.extraction_limits import ExtractionSettings
 from pipeline.pdf_subprocess import (
     PDFClassifiableTextLimitError,
@@ -436,9 +436,9 @@ class TestSpoolDir:
         assert isinstance(exc_info.value, SpoolDirectoryError)
         assert str(spool_root) not in str(exc_info.value)
 
-    def test_the_only_chmod_in_the_module_is_the_spool_files_fchmod(self) -> None:
+    def test_the_only_chmod_in_the_launcher_is_the_spool_files_fchmod(self) -> None:
         """Repair-then-verify would pass the 0755 test by fixing what it refuses."""
-        source = Path(pdf_subprocess.__file__).read_text()
+        source = Path(worker_launch.__file__).read_text()
         lines = [line for line in source.splitlines() if "chmod" in line]
         assert len(lines) == 1
         assert "os.fchmod(" in lines[0]

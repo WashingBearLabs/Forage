@@ -1162,3 +1162,23 @@ scan forms"). Feeding normalised text to stage 3 is a later epic with an owner r
 `feature-structural-wire-closure.md` (Research Findings, Implementation Notes);
 `kit_tools/specs/archive/feature-structural-closeout.md`; `contract/GOVERNANCE.md` ruling (m);
 `docs/bootstrap-notes.md` (forty-fourth to fifty-second rotations).
+
+### 2026-10-07: Extraction workers launch through `subprocess.Popen` with an allowlisted environment
+
+**Decision:** The PDF worker moved from `multiprocessing` spawn to `pipeline/worker_launch.py`:
+`Popen(env=<allowlist>, cwd=<project root>, pass_fds=(write_fd,), close_fds=True)` running
+`pipeline.worker_entry`, which applies rlimits first, disables logging, then imports the parser.
+The result is one length-prefixed JSON frame on the passed fd, capped and parent-re-validated as before.
+
+**Rationale:** `multiprocessing` cannot give a child a different environment: clearing it in the
+child leaves secrets in `/proc/self/environ`, and swapping `os.environ` around `start()` races
+request threads. The allowlist is `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TMPDIR`,
+`PYTHONPATH`, `VIRTUAL_ENV`, `PYTHONHASHSEED`, `PYTHONDONTWRITEBYTECODE`. `cwd` is pinned because
+the image does not install the project.
+
+**Consequences:** `/proc/<ppid>/environ` stays readable until US-003. Verdict integrity against a
+compromised parser is an accepted residual (SECURITY.md, "Worker isolation"). No hashed file
+changed, so `sanitizer_revision` does not rotate: default and shipped config both remain
+`0ace27cae20e17e6c6eae7fa51f3126483bf8d07d6e555afbeee0a39364f4911` (`0ace27ca…`).
+
+**Source:** `kit_tools/specs/feature-release-resource-bounds.md` US-002.

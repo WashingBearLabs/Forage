@@ -783,6 +783,12 @@ worker thread, so that the event-loop thread is not held for a whole parse.
 - Before/after seconds (64 / 256 KiB): sibling-dense 0.197/0.802 -> 0.130/0.533; deep span 0.337/3.403 -> 0.043/0.152; attribute-heavy 0.066/0.247 -> 0.060/0.224; unclosed span 1.792/26.323 -> 0.118/0.453; deep hidden 0.704/9.930 -> 0.077/0.288; unclosed hidden 3.460/52.141 -> 0.208/0.825. `/search` 8,000-char unclosed snippet: 47.7 ms -> 14.5 ms.
 - Equivalence pin: `tests/golden/stage1_equivalence.json` (1,484 digests, generated from pre-change code).
 
+### US-002
+- No rotation: default and shipped `sanitizer_revision` stay `0ace27cae20e17e6c6eae7fa51f3126483bf8d07d6e555afbeee0a39364f4911`; no hashed file edited.
+- Final env allowlist: `PATH HOME LANG LC_ALL LC_CTYPE TMPDIR PYTHONPATH VIRTUAL_ENV PYTHONHASHSEED PYTHONDONTWRITEBYTECODE`; no addition needed (`HF_HOME` absent). Platform-injected set recorded in the test: `__CF_USER_TEXT_ENCODING`.
+- The env test injects a `sitecustomize.py` via the allowlisted `PYTHONPATH` to dump the child's environment, so there is no production test seam. Spawn `OSError` returns `None` from `run_worker`, which the PDF side maps to `PDFExtractionError`.
+- `spool_dir`/`SpoolDirectoryError` moved to `worker_launch` and are re-exported from `pdf_subprocess`; the only PDF test edit is the chmod-source test, which now reads `worker_launch`.
+
 ## Refinement Notes
 
 ### Research Findings
