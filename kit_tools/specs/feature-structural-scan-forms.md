@@ -500,6 +500,19 @@ benign records.
 
 ## Implementation Notes
 
+### US-002
+
+- **Deviation from the pinned `exfil_image`:** `!\[[^\]]*\]…` is quadratic on `![![![…` with no `]`
+  (10.1 s at 256 KiB; the sweep caught it). The alt text is `(?:(?!!\[)[^\]])*`, so it also stops at the
+  next `![`. Everything else is as pinned.
+- Sweep: every 2 MiB/256 KiB ratio is 7.0-9.6; all 24 patterns on one 2 MiB form total 0.40-0.50 s per
+  family. GC is paused while timing: match-dense runs allocate ~10^5 match objects and the collector
+  otherwise reads as a 15x "ratio".
+- Corpus flags changed (gains only, none lost): `atk-0053`, `atk-0054` (clean -> BLOCKED), `atk-0152`,
+  `atk-0153` (clean -> SUSPICIOUS), `atk-0055`, `atk-0154` (search: the match now also fires on the
+  newline-preserving form). No benign record moved. Stage-3 attack denominator 369 -> 367.
+- Revision `8ca7db8d…` -> `61c41b1a…`; reverting `stage2_structural.py` reproduces `8ca7db8d…`.
+
 ## Refinement Notes
 
 ### Research Findings

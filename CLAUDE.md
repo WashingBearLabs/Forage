@@ -579,6 +579,16 @@ stays case-bearing. Decided false-positive cost: a column-0 `system:` or
 blocked). No core-genre benign corpus record moved; five `case` attack records
 stopped leaking; cassettes untouched. Full values: `docs/bootstrap-notes.md`.
 
+The forty-fifth rotation is `8ca7db8d…` → `61c41b1a…` for
+`structural-scan-forms` US-002 — **the tenth sanitization-behaviour-changing
+rotation**: `disregard_instructions` (paragraph-bounded) and `exfil_image` now
+match across a single newline at any distance, every stage-2 pattern is linear
+on hostile input (`tests/test_stage2_complexity.py`), and line numbers come from
+a precomputed newline index. Only `pipeline/stage2_structural.py` moves; a
+read-only whole-file reversal reproduces `8ca7db8d…` under default and shipped
+config. Accepted loss: a nested `]` in exfil alt text no longer matches. Full
+values: `docs/bootstrap-notes.md`.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:

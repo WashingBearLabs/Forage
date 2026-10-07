@@ -668,7 +668,7 @@ the pass-list advice; the baked image still ships `limiter: false`.
 `derive_sanitizer_revision()` hashes nine source files — the eight under `pipeline/` plus
 repo-root `url_validator.py` — plus the model identity, the `idna` version
 (`idna@<version>`: UTS-46 tables decide which hosts are dropped) and the active
-threshold. Forage's revision has moved forty-four times. The twenty-sixth was
+threshold. Forage's revision has moved forty-five times. The twenty-sixth was
 reconciled from the preceding validation commit during US-001's pre-flight; the rest
 were recorded at their implementation boundaries:
 
@@ -719,15 +719,16 @@ were recorded at their implementation boundaries:
 | Whole-epic release gate | `021378ef…33900` | Forty-second: `orchestrator.py` pins unavailable classifier readiness before skipping admission; `url_validator.py` compares IPv6 policy identities by address value while preserving wire spelling. Both hashed files individually reversed against `84c02af`; both-reverted reproduces `6884dc29…` under default/shipped config. Policy enforcement changes, not text scanning or response shape. Raw-threshold UTF-8 hashing preserves ASCII inputs; provider transport sources stay unhashed. Full measurements: `docs/bootstrap-notes.md`. |
 | 86M default ruling (2026-10-06) | `b5e91fd6…a0ded` | Forty-third, **a classification change at shipped defaults, not a text-scanning change**: `DEFAULT_MODEL_ID` becomes the 86M, so the hashed `MODEL_ID@revision` input moves from the 22M pin to `meta-llama/Llama-Prompt-Guard-2-86M@a8ded8e6…`. **No hashed source moves.** Reverting the classifier/fetcher change reproduces `021378ef…` under default and shipped config, and so does `FORAGE_MODEL_ID=…22M` on the new code — the 22M opt-out keeps its old revision and cache keys. Stage-3 verdicts change because the model does; the max rule, threshold and contiguity (still off) do not. Full values: `docs/bootstrap-notes.md`. |
 | `structural-scan-forms` US-001 | `8ca7db8d…bd47` | Forty-fourth, **the ninth sanitization-behaviour-changing rotation**: `re.IGNORECASE` added to the seven case-sensitive Stage 2 patterns (`instructions_banner`, `poppy_line`, `system_line`, `hex_escape`, `im_start`, `endoftext`, `exfil_image`; `base64_run` stays case-bearing). `stage2_structural.py` alone moves; whole-file read-only reversal reproduces `b5e91fd6…` under default and shipped config. A column-0 `system:`/`poppy:` line in any case now BLOCKs (decided cost). |
+| `structural-scan-forms` US-002 | `61c41b1a…1dfda4` | Forty-fifth, **the tenth sanitization-behaviour-changing rotation**: `disregard_instructions` becomes the paragraph-bounded tempered form (crosses single newlines, never `\n\n`), `exfil_image` is rewritten so alt text and URL stop at the next `![`, `envelope_breakout`'s `\s*/?\s*` becomes `\s*(?:/\s*)?`, and `_line_number_of` reads a precomputed newline index. `stage2_structural.py` alone moves; whole-file read-only reversal reproduces `8ca7db8d…` under default and shipped config. A nested `]` in exfil alt text no longer matches (accepted). |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Thirty-three of the forty-four rotations changed no sanitization policy or algorithm at shipped defaults; the
+**Thirty-three of the forty-five rotations changed no sanitization policy or algorithm at shipped defaults; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
 US-001, US-002, US-003 and its validation fix) and the twenty-seventh
 through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005),
-the forty-second release-gate policy repair, the forty-third (the 86M default) and the forty-fourth (case-insensitive Stage 2) are the eleven
+the forty-second release-gate policy repair, the forty-third (the 86M default) and the forty-fourth (case-insensitive Stage 2) and the forty-fifth (newline-crossing, linear Stage 2) are the twelve
 that did, and the seventeenth
 (US-004, contract `1.3.0`) does not join them** — hostname policy can now skip
 classification on an opted-in trusted suffix; search-sanitization US-001's
