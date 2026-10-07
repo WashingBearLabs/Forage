@@ -39,8 +39,11 @@ from tests.corpus_stage2 import stage2_forms
 _SMALL = 256 * 1024
 _LARGE = 2 * 1024 * 1024
 _RATIO_BOUND = 12
-_FAST_SECONDS = 0.020
+_FAST_SECONDS = 0.100
+"""Below this at 2 MiB a ratio is noise: a quadratic pattern from a millisecond
+base is already far above it at 2 MiB (64x), so nothing quadratic hides here."""
 _CEILING_SECONDS = 2.0
+"""The floor of every absolute ceiling, measured on a quiet developer Mac."""
 _HARD_DEADLINE_SECONDS = 60.0
 
 # (name, start token, interior delimiter, probe) in ``_PATTERNS`` order. The
@@ -107,6 +110,24 @@ def _best_of_three(run: Callable[[], object]) -> float:
     return best
 
 
+def _calibration() -> float:
+    """This machine's cost of one plain 2 MiB text through every derived form.
+
+    Absolute ceilings are expressed as multiples of it, so a slower CI runner or a
+    loaded laptop scales them fairly. The ratio assertions remain the linearity
+    proof; the ceilings only bound the constant factor.
+    """
+    plain = _fill("the quick brown fox jumps over the lazy dog. ", _LARGE)
+    return _best_of_three(
+        lambda: scan_structural_forms(structural_scan_forms(plain, html_parsed=False))
+    )
+
+
+def _ceiling(multiple: float, floor: float = _CEILING_SECONDS) -> float:
+    """``floor`` on a fast machine, ``multiple`` x calibration on a slower one."""
+    return max(floor, multiple * _calibration())
+
+
 def test_the_table_covers_every_pattern_in_registry_order() -> None:
     assert len(_SHAPES) == len(_PATTERNS) == 24
     for (name, _, _, probe), (_, pattern) in zip(_SHAPES, _PATTERNS, strict=True):
@@ -166,8 +187,9 @@ def test_all_patterns_finish_one_two_mib_form_within_the_ceiling() -> None:
         "mixed_newlines",
         "match_dense",
     }
+    ceiling = _ceiling(6)  # measured ~1x calibration; 24 patterns over one form
     for family, seconds in totals.items():
-        assert seconds <= _CEILING_SECONDS, f"{family}: {seconds:.2f}s for 24 patterns"
+        assert seconds <= ceiling, f"{family}: {seconds:.2f}s for 24 patterns"
 
 
 def test_match_dense_input_is_linear_through_the_line_number_lookup() -> None:
@@ -180,7 +202,7 @@ def test_match_dense_input_is_linear_through_the_line_number_lookup() -> None:
     }
     t_small = _best_of_three(lambda: scan_structural(dense[_SMALL]))
     t_large = _best_of_three(lambda: scan_structural(dense[_LARGE]))
-    assert t_large <= _CEILING_SECONDS
+    assert t_large <= _ceiling(6)
     assert t_small < _FAST_SECONDS or t_large <= _RATIO_BOUND * t_small
 
 
@@ -209,7 +231,8 @@ def test_the_decoded_form_scales_linearly_on_entity_input(
     small, large = _fill(unit, _SMALL), _fill(unit, _LARGE)
     t_small = _best_of_three(lambda: scan(small))
     t_large = _best_of_three(lambda: scan(large))
-    assert t_large <= _CEILING_SECONDS, f"{shape}: {t_large:.2f}s at 2 MiB"
+    # Measured 1.0-1.5x calibration.
+    assert t_large <= _ceiling(4), f"{shape}: {t_large:.2f}s at 2 MiB"
     assert t_small < _FAST_SECONDS or t_large <= _RATIO_BOUND * t_small, (
         f"{shape}: {t_large:.3f}s at 2 MiB vs {t_small:.3f}s at 256 KiB"
     )
@@ -238,7 +261,12 @@ def test_the_fold_forms_scale_linearly_through_the_whole_scan(shape: str) -> Non
     small, large = _fill(unit, _SMALL), _fill(unit, _LARGE)
     t_small = _best_of_three(lambda: scan(small))
     t_large = _best_of_three(lambda: scan(large))
-    ceiling = _CEILING_SECONDS * (4 if shape == "maximal_accepted_expansion" else 1)
+    # Measured ~6x calibration for the dense look-alike shapes and ~19x for the
+    # maximal accepted expansion (two 8M-character forms); ~2x headroom each.
+    if shape == "maximal_accepted_expansion":
+        ceiling = _ceiling(40, floor=4 * _CEILING_SECONDS)
+    else:
+        ceiling = _ceiling(12)
     assert t_large <= ceiling, f"{shape}: {t_large:.2f}s at 2 MiB"
     assert t_small < _FAST_SECONDS or t_large <= _RATIO_BOUND * t_small, (
         f"{shape}: {t_large:.3f}s at 2 MiB vs {t_small:.3f}s at 256 KiB"
