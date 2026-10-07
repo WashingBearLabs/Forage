@@ -96,25 +96,25 @@ regenerated baseline shows the 5 `case` leaks caught, with no other benign movem
 - Leaked records: `atk-0071`, `atk-0070`, `atk-0086`, `atk-0116`, `atk-0147`.
 
 **Acceptance Criteria:**
-- [ ] A parametrised test over exactly the seven named patterns asserts `scan_structural` gives
+- [x] A parametrised test over exactly the seven named patterns asserts `scan_structural` gives
       each probe, rendered upper-case, lower-case and alternating-case, the same verdict as the
       unvaried probe. The test fails on the pre-story file.
-- [ ] Benign unit fixtures, a column-0 YAML `system:` key and a `Poppy:` transcript line, are
+- [x] Benign unit fixtures, a column-0 YAML `system:` key and a `Poppy:` transcript line, are
       asserted BLOCKED, with a comment citing this spec's decision.
-- [ ] The 5 `case` records are not `leaked` in the baseline regenerated with
+- [x] The 5 `case` records are not `leaked` in the baseline regenerated with
       `uv run python -m scripts.corpus.report --write-baseline`.
-- [ ] No core-genre benign record (`news`/`docs`/`forum`/`ecommerce`/`code`) moves from
+- [x] No core-genre benign record (`news`/`docs`/`forum`/`ecommerce`/`code`) moves from
       `passed`, and the pin tests in `tests/test_corpus_gate.py` are green.
-- [ ] `git diff --exit-code tests/corpus/cassettes/` exits 0, and the cassette-replay tests are
+- [x] `git diff --exit-code tests/corpus/cassettes/` exits 0, and the cassette-replay tests are
       green.
-- [ ] `docs/corpus.md` "Decision inputs" tables are updated from the regenerated `offline`
+- [x] `docs/corpus.md` "Decision inputs" tables are updated from the regenerated `offline`
       section, and `tests/test_corpus_docs.py` is green.
-- [ ] The rotation is recorded in CLAUDE.md, `docs/bootstrap-notes.md` and the GOTCHAS table,
+- [x] The rotation is recorded in CLAUDE.md, `docs/bootstrap-notes.md` and the GOTCHAS table,
       with a read-only reversal control under default and shipped config.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` reports 0 errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` reports 0 errors
 
 ### US-002: Make every stage-2 pattern linear, and let the gap patterns cross newlines
 
