@@ -257,32 +257,32 @@ entity-encoded whitespace input.
 - Hashed files: `stage2_structural.py` and `orchestrator.py`.
 
 **Acceptance Criteria:**
-- [ ] Each of the 24 probes is caught when every character is numeric-hex entity-encoded at one
+- [x] Each of the 24 probes is caught when every character is numeric-hex entity-encoded at one
       level and at two levels, and when its punctuation is named-entity-encoded. This holds on
       `/retrieve` (HTML) and `/extract` (text). A three-level payload is asserted not caught and
       documented as an accepted gap.
-- [ ] The timing sweep includes entity-encoded whitespace runs and entity-dense 2 MiB input
+- [x] The timing sweep includes entity-encoded whitespace runs and entity-dense 2 MiB input
       through the decoded form, and passes US-002's ratio and ceiling.
-- [ ] Stage 3 receives exactly `extraction.raw_text` (argument-identity test). Both cassette
+- [x] Stage 3 receives exactly `extraction.raw_text` (argument-identity test). Both cassette
       files are byte-unchanged, with zero misses (`UnrecordedTextError` would surface as
       `UnrecordedRecordError` in the drivers).
-- [ ] A record whose verdict doesn't move has byte-identical `structural_flags` and penalty (test
+- [x] A record whose verdict doesn't move has byte-identical `structural_flags` and penalty (test
       over all corpus records). A decoded-form-only catch takes its flags from that form (unit
       test). No log line or metric contains `matched_text` (log-capture test).
-- [ ] `_CONTROL_CHARS_RE` exists once, in `stage2_structural.py`.
-- [ ] All listed corpus mirrors obtain forms from the builder, and `tests/test_corpus_attacks.py`,
+- [x] `_CONTROL_CHARS_RE` exists once, in `stage2_structural.py`.
+- [x] All listed corpus mirrors obtain forms from the builder, and `tests/test_corpus_attacks.py`,
       `tests/test_corpus_lint.py` and `tests/test_corpus_ingest.py` are green.
-- [ ] The tutorial-page benign fixture is pinned with its decided outcome.
-- [ ] The 8 `entity` records are not `leaked`, no core-genre benign record moves from `passed`,
+- [x] The tutorial-page benign fixture is pinned with its decided outcome.
+- [x] The 8 `entity` records are not `leaked`, no core-genre benign record moves from `passed`,
       and the pin tests are green. `tests/test_search_pipeline_pins.py` is unchanged.
-- [ ] `docs/corpus.md` "Decision inputs" tables are updated, and `tests/test_corpus_docs.py` is
+- [x] `docs/corpus.md` "Decision inputs" tables are updated, and `tests/test_corpus_docs.py` is
       green.
-- [ ] The rotation is recorded. Each hashed file is reverted alone, and a both-reverted control
+- [x] The rotation is recorded. Each hashed file is reverted alone, and a both-reverted control
       reproduces the prior value.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` reports 0 errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` reports 0 errors
 
 ### US-004: Vendor Unicode confusables and generate the fold tables
 
