@@ -149,25 +149,25 @@ byte-unchanged.
   354 ms per field. Record the before and after for a 8,000-character unclosed-span snippet.
 
 **Acceptance Criteria:**
-- [ ] `copy.copy` no longer appears in `pipeline/stage1_extraction.py` (grep), and `import copy`
+- [x] `copy.copy` no longer appears in `pipeline/stage1_extraction.py` (grep), and `import copy`
       is removed if unused.
-- [ ] For every corpus HTML record and every stage-1 unit fixture, all `ExtractionResult` fields
+- [x] For every corpus HTML record and every stage-1 unit fixture, all `ExtractionResult` fields
       equal the pre-story output, under all four `with_inline`/`prune_hidden` combinations. This is
       an in-process equivalence test against frozen values generated before the change.
   - The fixtures include a hidden-element page and a pruned-fallback page
     (`main_content_is_fallback=True`).
-- [ ] The pruned fallback strips `pruned_soup` in place, and is never a re-parse of the input. The
+- [x] The pruned fallback strips `pruned_soup` in place, and is never a re-parse of the input. The
       hidden-element fallback fixture proves the hidden text stays out.
-- [ ] `tests/stage1_shapes.py` defines the four pinned shapes, and `tests/test_stage1_complexity.py`
+- [x] `tests/stage1_shapes.py` defines the four pinned shapes, and `tests/test_stage1_complexity.py`
       shows each scales within `_RATIO_BOUND` between 64 KiB and 256 KiB under calibrated ceilings.
       Before and after seconds per shape are recorded.
-- [ ] The corpus baseline regenerates with zero outcome changes, and both cassettes are
+- [x] The corpus baseline regenerates with zero outcome changes, and both cassettes are
       byte-unchanged.
-- [ ] The rotation is recorded per the procedure.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] The rotation is recorded per the procedure.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-002: A shared worker launcher — explicit environment, fd-passed pipe, fixed working directory
 
