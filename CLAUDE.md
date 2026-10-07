@@ -86,7 +86,7 @@ consuming repo.
 
 **The bump policy is written down: [`contract/GOVERNANCE.md`](contract/GOVERNANCE.md).**
 Read it before touching `pipeline/contract.py` or the response models in `models.py`. It
-classifies any change, answers the six standing examples, and records the thirteen rulings
+classifies any change, answers the six standing examples, and records the fourteen rulings
 the contract and hardening epics already made — including the one that is not obvious from the code: the
 `/extract` 413 is documented but unreachable (FastAPI turns it into a 400), documenting it
 carried no bump, and *correcting* it is a MAJOR. `.github/pull_request_template.md` is the
@@ -128,7 +128,7 @@ reason. Any new startup or cache code must preserve this.
 
 ```bash
 uv sync --extra dev     # environment (creates .venv)
-uv run pytest           # hermetic blocking CI gate; 4860 collected, no xfails (count: TESTING_GUIDE.md)
+uv run pytest           # hermetic blocking CI gate; 5389 collected, no xfails (count: TESTING_GUIDE.md)
 uv run ruff check .     # must stay clean — blocking CI gate
 uv run ruff format .    # must stay clean — blocking CI gate
 uv run pyright          # strict, ZERO errors — blocking CI gate
@@ -566,6 +566,104 @@ change with the model; text scanning, threshold and response shape do not, and
 contiguity stays off. Compose's memory default rises to `1536m`. The governance
 compatibility window was waived by the owner (no known third-party consumers).
 Full values: `docs/bootstrap-notes.md`.
+
+The forty-fourth rotation is `b5e91fd6…` → `8ca7db8d…` for
+`structural-scan-forms` US-001 — **the ninth sanitization-behaviour-changing
+rotation**: seven Stage 2 patterns (`instructions_banner`, `poppy_line`,
+`system_line`, `hex_escape`, `im_start`, `endoftext`, `exfil_image`) gained
+`re.IGNORECASE`, so re-casing a trigger no longer evades it. Only
+`pipeline/stage2_structural.py` moves; a read-only whole-file reversal against
+`c878f23` reproduces `b5e91fd6…` under default and shipped config. `base64_run`
+stays case-bearing. Decided false-positive cost: a column-0 `system:` or
+`poppy:` line in any case now BLOCKs (pinned by benign unit fixtures asserted
+blocked). No core-genre benign corpus record moved; five `case` attack records
+stopped leaking; cassettes untouched. Full values: `docs/bootstrap-notes.md`.
+
+The forty-fifth rotation is `8ca7db8d…` → `61c41b1a…` for
+`structural-scan-forms` US-002 — **the tenth sanitization-behaviour-changing
+rotation**: `disregard_instructions` (paragraph-bounded) and `exfil_image` now
+match across a single newline at any distance, every stage-2 pattern is linear
+on hostile input (`tests/test_stage2_complexity.py`), and line numbers come from
+a precomputed newline index. Only `pipeline/stage2_structural.py` moves; a
+read-only whole-file reversal reproduces `8ca7db8d…` under default and shipped
+config. Accepted loss: a nested `]` in exfil alt text no longer matches. Full
+values: `docs/bootstrap-notes.md`.
+
+The forty-sixth rotation is `61c41b1a…` → `62a90323…` for
+`structural-scan-forms` US-003 — **the eleventh sanitization-behaviour-changing
+rotation**: stage 2 scans an entity-decoded derived form beside the as-is text on every
+route (`structural_scan_forms`, `scan_structural_forms`, `combine_scan_results` in
+`pipeline/stage2_structural.py`; wired in `sanitize_and_structure`). Two hashed sources
+move, each reverted alone against `db74dc7` with a both-reverted control reproducing
+`61c41b1a…` under default and shipped config. Stage 3's input is unchanged. Full values:
+`docs/bootstrap-notes.md`.
+
+The forty-seventh rotation is `62a90323…` → `c04bd68e…` for
+`structural-scan-forms` US-005 — **the twelfth sanitization-behaviour-changing
+rotation**, and the first to **add a hashed source and an input** since `url_validator.py`
+and `idna`: stage 2 scans a confusable fold of the decoded form (`PRE_NFKC_TABLE`, NFKC,
+`FOLD_TABLE`) under both readings of the I/l class, on every route and on `/search`'s
+title and snippet. `pipeline/confusables.py` joins `_REVISION_SOURCES` (ten hashed sources
+now) and `unicodedata@<version>` joins the hashed inputs beside `idna@<version>`. A fold
+that would exceed 4× the decoded form is refused, never truncated: `encoded_payload`
+SUSPICIOUS plus the WARNING token `stage2_fold_expansion_refused`. Two edited hashed files
+(`stage2_structural.py`, `orchestrator.py`) were each reverted alone, and the module and the
+input each removed alone; an all-reverted control reproduces `62a90323…` under default and
+shipped config. Stage 3's input is unchanged and both cassettes are byte-unchanged. Full
+values: `docs/bootstrap-notes.md`.
+
+The forty-eighth rotation is `c04bd68e…` → `b9a4a9de…` for
+`structural-markup-surface` US-001 — **the thirteenth sanitization-behaviour-changing
+rotation**: stage 2 also scans an inline-joined form of HTML text (non-block elements joined,
+one iterative walk, built from `extract_html`'s own soup with `with_inline=True`) on every
+non-PDF `/retrieve` and on `/search`'s title and snippet. `stage1_extraction.py` and
+`orchestrator.py` move, each reverted alone against `801e8af` with a both-reverted control
+reproducing `c04bd68e…` under default and shipped config. `raw_text`, wire forms and both
+cassettes are byte-unchanged. Full values: `docs/bootstrap-notes.md`.
+
+The forty-ninth rotation is `b9a4a9de…` → `9c8bb9a6…` for
+`structural-markup-surface` US-010 — **the fourteenth sanitization-behaviour-changing
+rotation**: `system_tag` widens to `<\s*(?:/\s*)?system\b[^<>]*>` (attributes, whitespace,
+closing and self-closing forms, any case), and stage 2 gains `_MARKUP_PATTERNS` and the pure
+first-match `scan_raw_markup` (not yet wired; US-011). Only `pipeline/stage2_structural.py`
+moves; a read-only whole-file reversal against `e2df89d` reproduces `b9a4a9de…` under default
+and shipped config. `atk-0378` and `atk-0396` (`<SYSTEM MODE>`) are now blocked; no benign
+record moved; both cassettes are byte-unchanged. By the ingest rule the two rows are re-homed
+to `instruction_override` and one `natural_language` floor pair is lowered by hand. Full
+values: `docs/bootstrap-notes.md`.
+
+The fiftieth rotation is `9c8bb9a6…` → `3cfe54c9…` for
+`structural-markup-surface` US-011 — **the fifteenth sanitization-behaviour-changing
+rotation**: the raw-markup scan is wired. `/retrieve`'s stage-1 thread also runs
+`scan_raw_markup` on the fetched HTML (through `extra_scans`) and `/search` scans each field's
+raw provider value as one more loop entry. Only `pipeline/orchestrator.py` moves; reverting
+it alone reproduces `9c8bb9a6…` under default and shipped config. No span is cut. `atk-0033`,
+`atk-0160`, `atk-0161`, `atk-0132` stop leaking; `ben-0288`/`ben-0289` flip by the owner's named exemption
+(2026-10-06) and are re-pinned. Both cassettes are byte-unchanged. Full values:
+`docs/bootstrap-notes.md`.
+
+The fifty-first rotation is `3cfe54c9…` → `919fa977…` for
+`structural-wire-closure` US-001 — **the sixteenth sanitization-behaviour-changing
+rotation**: `finalize_quarantine` returns `title=None` for every quarantined response
+(stage-2 block, stage-3 injection, `unavailable_blocked`). Only
+`pipeline/stage4_structuring.py` moves; a read-only whole-file reversal reproduces
+`3cfe54c9…` under default and shipped config. GOVERNANCE ruling (m): sanitizer outcome, no
+bump; `contract/openapi.yaml` and its anchor are byte-identical. `atk-0059`, `atk-0211`,
+`atk-0212` stop leaking their title; cassettes untouched. Not replayed to Poppy. Full
+values: `docs/bootstrap-notes.md`.
+
+The fifty-second rotation is `919fa977…` → `46b8d1bb…` for
+`structural-wire-closure` US-002 — **the seventeenth sanitization-behaviour-changing
+rotation**: `extract_html` runs a Forage-owned visibility pass over body descendants and
+serves the pruned `main_content` (inline signals only: `hidden`, `aria-hidden`,
+`display:none`, zero opacity, zero clip rect, far-negative indent/offset, `overflow:hidden`
+with a zero dimension, and the inheritable `visibility`/`font-size:0` with their re-shows).
+`raw_text`, title, author, date and `/search` are untouched. Three hashed files move
+(`stage1_extraction.py`, `stage4_structuring.py`, `orchestrator.py`), each reverted alone
+with an all-reverted control reproducing `919fa977…` under default and shipped config;
+`smart_extraction.py` is not hashed. GOVERNANCE ruling (m): sanitizer outcome, no bump.
+The six leaked `css_offscreen`/`hidden_div` records are neutralised; no benign page moves;
+cassettes byte-unchanged. Not replayed to Poppy. Full values: `docs/bootstrap-notes.md`.
 
 ## Session Scratchpad
 

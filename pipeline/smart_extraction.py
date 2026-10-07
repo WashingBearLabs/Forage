@@ -153,6 +153,7 @@ def extract_summary(
     main_content: str,
     raw_text: str,
     title: str | None,
+    main_content_is_fallback: bool | None = None,
 ) -> tuple[str, str]:
     """Extract high-signal content for summary mode.
 
@@ -164,6 +165,9 @@ def extract_summary(
         Full flattened text from bs4 (Stage 1).
     title:
         Page title (currently unused, reserved for future heuristics).
+    main_content_is_fallback:
+        Whether *main_content* is the flattened-text fallback. ``None`` infers
+        it from ``main_content == raw_text``.
 
     Returns
     -------
@@ -173,7 +177,11 @@ def extract_summary(
     if not main_content:
         return "", ""
 
-    is_fallback = main_content == raw_text
+    is_fallback = (
+        main_content == raw_text
+        if main_content_is_fallback is None
+        else main_content_is_fallback
+    )
 
     paragraphs = _split_paragraphs(main_content)
     total_words = sum(len(p.split()) for p in paragraphs)

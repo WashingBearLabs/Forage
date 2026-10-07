@@ -40,11 +40,7 @@ import yaml
 import pipeline.search_providers
 from pipeline import orchestrator
 from pipeline.contract import CONTENT_KINDS
-from pipeline.orchestrator import (
-    _CONTROL_CHARS_RE,
-    PipelineError,
-    run_search_pipeline,
-)
+from pipeline.orchestrator import PipelineError, run_search_pipeline
 from pipeline.search_providers import (
     DEFAULT_PROVIDER_NAME,
     SearchProviderConfigurationError,
@@ -75,6 +71,7 @@ from pipeline.search_providers.searxng import (
     SearxngSettings,
     searxng_settings_from_config,
 )
+from pipeline.stage2_structural import _CONTROL_CHARS_RE
 from tests.fakes import (
     ChunkStream,
     FakeSearchProvider,

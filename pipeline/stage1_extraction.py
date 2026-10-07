@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from bs4 import BeautifulSoup, Comment, Tag
-from bs4.element import NavigableString
+from bs4.element import CData, NavigableString
 
 try:
     import trafilatura
@@ -48,6 +48,61 @@ _DANGEROUS_TAGS = frozenset(
         "svg",
     }
 )
+
+# Elements that separate text in the inline scan form. Closed on purpose: every
+# other element (``b``, ``span``, ``wbr``, ``font``, custom elements) is joined
+# into its surrounding text, so a tag splitting a trigger word cannot hide it.
+_INLINE_SCAN_BLOCK_TAGS = frozenset(
+    {
+        "address",
+        "article",
+        "aside",
+        "blockquote",
+        "body",
+        "br",
+        "caption",
+        "dd",
+        "details",
+        "dialog",
+        "div",
+        "dl",
+        "dt",
+        "fieldset",
+        "figcaption",
+        "figure",
+        "footer",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "head",
+        "header",
+        "hr",
+        "html",
+        "legend",
+        "li",
+        "main",
+        "nav",
+        "ol",
+        "p",
+        "pre",
+        "section",
+        "summary",
+        "table",
+        "tbody",
+        "td",
+        "tfoot",
+        "th",
+        "thead",
+        "title",
+        "tr",
+        "ul",
+    }
+)
+
+_BLOCK_CLOSE = object()
 
 # Invisible Unicode codepoints to collapse
 _INVISIBLE_CHARS = frozenset(
@@ -82,6 +137,15 @@ class ExtractionResult:
     raw_text: str  # full flattened text for security scanning
     main_content: str  # trafilatura main content (or raw_text fallback)
     word_count: int  # counted on main_content
+    # Scan-only inline-joined text, built by ``extract_html(with_inline=True)``.
+    # The orchestrator scans it inside the stage-1 thread and clears it, so it
+    # never leaves that thread.
+    scan_text_inline: str | None = None
+    # Whether ``main_content`` is the flattened-text fallback rather than
+    # trafilatura output. ``None`` means "infer by ``main_content == raw_text``"
+    # (PDF, upload, test constructors); ``extract_html`` sets it only when the
+    # visibility pass removed something, because pruning breaks that equality.
+    main_content_is_fallback: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +329,241 @@ def _extract_raw_text(soup: BeautifulSoup) -> str:
     return soup.get_text(separator="\n")
 
 
+def _extract_inline_text(soup: BeautifulSoup) -> str:
+    """Flatten *soup* with every non-block element joined into its text.
+
+    One iterative walk in document order: no tree mutation, no ``unwrap()``,
+    no ``smooth()``, so the cost is linear in the node count. Dangerous
+    subtrees and non-text nodes are skipped exactly as ``_extract_raw_text``
+    drops them; entering and leaving a block element emits a newline.
+    """
+    parts: list[str] = []
+    stack: list[object] = [soup]
+    while stack:
+        node = stack.pop()
+        if node is _BLOCK_CLOSE:
+            parts.append("\n")
+        elif isinstance(node, Tag):
+            if node.name in _DANGEROUS_TAGS:
+                continue
+            if node.name in _INLINE_SCAN_BLOCK_TAGS:
+                parts.append("\n")
+                stack.append(_BLOCK_CLOSE)
+            stack.extend(reversed(node.contents))
+        elif type(node) in (NavigableString, CData):
+            parts.append(str(node))
+    return _normalize_text("".join(parts))
+
+
+# ---------------------------------------------------------------------------
+# Visibility pass (Forage-owned, inline signals only)
+# ---------------------------------------------------------------------------
+
+# Offsets and indents of at least this many pixels off-screen count as hidden.
+_OFFSCREEN_PX = -999.0
+# A style value longer than this is not a length or keyword we recognise.
+_MAX_STYLE_TOKEN = 64
+# Units that stay non-zero under a zero-sized parent (absolute or root-relative).
+_RESHOW_FONT_UNITS = frozenset({"px", "pt", "pc", "cm", "mm", "in", "q", "rem"})
+
+
+def _parse_style(style: str) -> dict[str, str]:
+    """Parse an inline ``style`` value into ``{property: value}``, linearly.
+
+    Split on ``;`` then the first ``:``; names and values are lowercased and
+    stripped, a trailing ``!important`` is dropped, a repeated property is won
+    by its last declaration, and a declaration without a ``:`` or a name is
+    ignored.
+    """
+    declarations: dict[str, str] = {}
+    for declaration in style.split(";"):
+        name, separator, value = declaration.partition(":")
+        if not separator:
+            continue
+        name = name.strip().lower()
+        if not name:
+            continue
+        value = value.strip().lower()
+        if value.endswith("!important"):
+            value = value[: -len("!important")].rstrip()
+        declarations[name] = value
+    return declarations
+
+
+def _split_length(value: str) -> tuple[float, str] | None:
+    """Split ``"-12.5px"`` into ``(-12.5, "px")``; ``None`` if not a length."""
+    if not value or len(value) > _MAX_STYLE_TOKEN:
+        return None
+    index = 0
+    if value[0] in "+-":
+        index = 1
+    digits_start = index
+    seen_dot = False
+    while index < len(value):
+        char = value[index]
+        if char == ".":
+            if seen_dot:
+                return None
+            seen_dot = True
+        elif not char.isascii() or not char.isdigit():
+            break
+        index += 1
+    number = value[digits_start:index]
+    if not number or number == ".":
+        return None
+    unit = value[index:]
+    if unit and not unit.isalpha() and unit != "%":
+        return None
+    return float(value[:index]), unit
+
+
+def _is_zero(value: str | None) -> bool:
+    """True for a zero length in any unit (``0``, ``0.0``, ``0%``, ``0em``)."""
+    if value is None:
+        return False
+    parsed = _split_length(value)
+    return parsed is not None and parsed[0] == 0
+
+
+def _is_offscreen_px(value: str | None) -> bool:
+    """True for a pixel length at or beyond the off-screen threshold."""
+    if value is None:
+        return False
+    parsed = _split_length(value)
+    return parsed is not None and parsed[1] == "px" and parsed[0] <= _OFFSCREEN_PX
+
+
+def _is_zero_clip(value: str | None) -> bool:
+    """True for ``rect(...)`` with all four components zero, any separator."""
+    if value is None or not value.startswith("rect(") or not value.endswith(")"):
+        return False
+    parts = value[len("rect(") : -1].replace(",", " ").split()
+    return len(parts) == 4 and all(_is_zero(part) for part in parts)
+
+
+def _is_non_overridable_hidden(tag: Tag, style: dict[str, str]) -> bool:
+    """Whether *tag*'s whole subtree is invisible regardless of descendants."""
+    hidden = tag.get("hidden")
+    if hidden is not None and str(hidden).strip().lower() != "until-found":
+        return True
+    aria_hidden = tag.get("aria-hidden")
+    if isinstance(aria_hidden, str) and aria_hidden.strip().lower() == "true":
+        return True
+    if not style:
+        return False
+    if style.get("display") == "none":
+        return True
+    opacity = style.get("opacity")
+    if opacity is not None:
+        parsed = _split_length(opacity)
+        if parsed is not None and parsed[0] == 0 and parsed[1] in ("", "%"):
+            return True
+    if _is_zero_clip(style.get("clip")):
+        return True
+    if _is_offscreen_px(style.get("text-indent")):
+        return True
+    if style.get("position") in ("absolute", "fixed") and (
+        _is_offscreen_px(style.get("left")) or _is_offscreen_px(style.get("top"))
+    ):
+        return True
+    return style.get("overflow") == "hidden" and (
+        _is_zero(style.get("width")) or _is_zero(style.get("height"))
+    )
+
+
+def _inherit_visibility(style: dict[str, str], hidden: bool) -> bool:
+    """The element's computed ``visibility`` hidden state, given its parent's."""
+    value = style.get("visibility")
+    if value == "visible":
+        return False
+    if value in ("hidden", "collapse"):
+        return True
+    return hidden
+
+
+def _inherit_font_zero(style: dict[str, str], zero: bool) -> bool:
+    """The element's computed zero-``font-size`` state, given its parent's.
+
+    Zero in any unit zeroes it; a non-zero absolute or root-relative size
+    re-shows it; a relative size (``em``, ``%``, keywords) computes against
+    the parent and so inherits the parent's state.
+    """
+    value = style.get("font-size")
+    if value is None:
+        return zero
+    parsed = _split_length(value)
+    if parsed is None:
+        return zero
+    number, unit = parsed
+    if number == 0:
+        return True
+    if unit in _RESHOW_FONT_UNITS:
+        return False
+    return zero
+
+
+def _has_visibility_signal(body: Tag) -> bool:
+    """Read-only pre-check: does a body descendant carry a candidate attribute?"""
+    for node in body.descendants:
+        if isinstance(node, Tag) and (
+            node.has_attr("hidden")
+            or node.has_attr("aria-hidden")
+            or node.has_attr("style")
+        ):
+            return True
+    return False
+
+
+def _prune_hidden(soup: BeautifulSoup) -> tuple[BeautifulSoup, bool]:
+    """Remove text a browser would not show; return ``(soup, pruned)``.
+
+    Best effort, inline signals only (no stylesheet or class resolution), and
+    only descendants of ``<body>``. The shared *soup* is never mutated: when a
+    candidate attribute exists the work happens on ``copy.copy(soup)``, and
+    when none does the original is returned untouched with ``pruned=False``.
+    Traversal is iterative so nesting depth cannot exhaust the stack.
+    """
+    original_body = soup.body
+    if original_body is None or not _has_visibility_signal(original_body):
+        return soup, False
+    pruned_soup = copy.copy(soup)
+    body = pruned_soup.body
+    if body is None:  # pragma: no cover - a copy of a soup with a body has one
+        return soup, False
+
+    pruned = False
+    # (tag, inherited visibility-hidden, inherited font-size-zero)
+    stack: list[tuple[Tag, bool, bool]] = [
+        (child, False, False)
+        for child in reversed(body.contents)
+        if isinstance(child, Tag)
+    ]
+    while stack:
+        tag, inherited_hidden, inherited_zero = stack.pop()
+        if tag.name in _DANGEROUS_TAGS:
+            continue
+        style = _parse_style(str(tag.get("style", ""))) if tag.has_attr("style") else {}
+        if _is_non_overridable_hidden(tag, style):
+            tag.decompose()
+            pruned = True
+            continue
+        hidden = _inherit_visibility(style, inherited_hidden)
+        zero = _inherit_font_zero(style, inherited_zero)
+        children = list(tag.contents)
+        if hidden or zero:
+            for child in children:
+                if isinstance(child, NavigableString):
+                    if str(child).strip():
+                        pruned = True
+                    child.extract()
+        stack.extend(
+            (child, hidden, zero)
+            for child in reversed(children)
+            if isinstance(child, Tag)
+        )
+    return pruned_soup, pruned
+
+
 # ---------------------------------------------------------------------------
 # Main content extraction (trafilatura)
 # ---------------------------------------------------------------------------
@@ -293,7 +592,13 @@ def _extract_main_content(html: str, url: str | None = None) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def extract_html(html: str, url: str | None = None) -> ExtractionResult:
+def extract_html(
+    html: str,
+    url: str | None = None,
+    *,
+    with_inline: bool = False,
+    prune_hidden: bool = True,
+) -> ExtractionResult:
     """Extract text and metadata from HTML content.
 
     Parameters
@@ -302,6 +607,13 @@ def extract_html(html: str, url: str | None = None) -> ExtractionResult:
         Raw HTML string.
     url:
         Optional source URL (improves trafilatura heuristics).
+    with_inline:
+        Also build the inline-joined scan text from this same soup (no second
+        parse) into ``scan_text_inline``. ``raw_text`` is unaffected.
+    prune_hidden:
+        Run the visibility pass over the served ``main_content``. ``raw_text``,
+        the metadata and the inline scan text always read the unpruned soup, so
+        callers that only read ``raw_text`` pass ``False`` to skip the work.
 
     Returns
     -------
@@ -316,10 +628,22 @@ def extract_html(html: str, url: str | None = None) -> ExtractionResult:
 
     # -- Dual extraction --
     raw_text = _normalize_text(_extract_raw_text(soup))
-    main_content_raw = _extract_main_content(html, url=url)
+    pruned_soup, pruned = _prune_hidden(soup) if prune_hidden else (soup, False)
+    # Unpruned pages hand trafilatura the original string: re-serialising every
+    # page would move benign bodies.
+    main_content_raw = _extract_main_content(
+        str(pruned_soup) if pruned else html, url=url
+    )
 
+    is_fallback: bool | None = None
     if main_content_raw is not None:
         main_content = _normalize_text(main_content_raw)
+        if pruned:
+            is_fallback = False
+    elif pruned:
+        # Fallback: the flattened text of what remains visible
+        main_content = _normalize_text(_extract_raw_text(pruned_soup))
+        is_fallback = True
     else:
         # Fallback: use raw_text when trafilatura fails
         main_content = raw_text
@@ -334,4 +658,6 @@ def extract_html(html: str, url: str | None = None) -> ExtractionResult:
         raw_text=raw_text,
         main_content=main_content,
         word_count=word_count,
+        scan_text_inline=_extract_inline_text(soup) if with_inline else None,
+        main_content_is_fallback=is_fallback,
     )

@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # Milestones
 
-> Last updated: 2026-10-06
-> Updated by: Claude (86M-default and contiguity rulings taken; unreleased)
+> Last updated: 2026-10-07
+> Updated by: Claude (structural-hardening epic completed; PR #42)
 
 **Previous release:** Forage `v1.2.1` — the hardened image (`epic-forage-hardening`, T2.2):
 `/retrieve` parity, search-text and URL audit in attacker-controlled forms, signed cache
@@ -76,7 +76,7 @@ Poppy.
       `../specs/epic-forage-injection-corpus.md`. Follow-ups resolved 2026-10-06 (unreleased): the 86M
       becomes the default and contiguity stays off (`../arch/DECISIONS.md`).
 
-- [ ] **Structural hardening** (`epic-forage-structural-hardening`, planned 2026-10-06, four specs /
+- [x] **Structural hardening** (`epic-forage-structural-hardening`, planned 2026-10-06, completed 2026-10-07 on PR #42, four specs /
       thirteen stories; P1, follows T2.3): closes the corpus's 30 structural findings (case, entity,
       confusable, split-tag, newline-split and markup-consumed variants; blocked-page titles;
       inline-hidden body content) with stage-2 scan forms, keeping stage-3 input byte-identical

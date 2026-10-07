@@ -1147,12 +1147,12 @@ async def test_a_safe_drive_exposes_no_injection_spans() -> None:
     assert body["injection_spans"] == []
 
 
-async def test_a_blocked_page_can_still_leak_its_title() -> None:
-    """``finalize_quarantine`` replaces the body but passes ``title`` through."""
+async def test_a_blocked_page_does_not_leak_its_title() -> None:
+    """``finalize_quarantine`` replaces the body and drops ``title`` with it."""
     record = _page(title=_MARKER, body_html="<p>Benign body.</p>")
     result = await drive(record, await _replaying(record, [0.97]), config="default")
     assert result.outcome == "blocked", result.summary()
-    assert result.signals["marker_on_wire"] is True
+    assert result.signals["marker_on_wire"] is False
 
 
 def test_the_leak_normaliser_is_the_pipelines_own() -> None:
@@ -1408,14 +1408,15 @@ _STRUCTURAL_ONLY_BY_CATEGORY: dict[str, str] = {
     "repetition_camouflage": "leaked",
     "sustained_midband": "leaked",
 }
-# `hidden_markup` is keyed by its carrier: stage 1 strips `script` and `meta`
-# and keeps the text of styled and `hidden` elements and of the page title.
+# `hidden_markup` is keyed by its carrier: stage 1 strips `script` and `meta`,
+# the visibility pass (structural-wire-closure US-002) prunes inline-hidden
+# elements from the served body, and only the page title still reaches the wire.
 _STRUCTURAL_ONLY_BY_CARRIER: dict[str, str] = {
     "jsonld": "neutralised",
     "meta_description": "neutralised",
     "og_description": "neutralised",
-    "css_offscreen": "leaked",
-    "hidden_div": "leaked",
+    "css_offscreen": "neutralised",
+    "hidden_div": "neutralised",
     "title_stuffing": "leaked",
 }
 _STRUCTURAL_CATEGORIES = (
@@ -1727,22 +1728,20 @@ def test_seed_metadata_carriers_are_the_six_named_ones() -> None:
     assert in_title
 
 
-async def test_seed_stripped_carriers_are_neutralised_kept_ones_leak() -> None:
+async def test_seed_stripped_and_pruned_carriers_are_neutralised_title_leaks() -> None:
     carriers = [
         record for record in _seed_attacks() if record.category == "hidden_markup"
     ]
     results = await _structural_only(carriers)
     for record in carriers:
         result = results[record.id]
-        stripped = str(record.params["carrier"]) in {
-            "jsonld",
-            "meta_description",
-            "og_description",
-        }
-        assert result.outcome == ("neutralised" if stripped else "leaked"), (
+        # Three-way split: stripped by stage 1, pruned by the visibility pass,
+        # and the one carrier no inline signal covers.
+        leaks = str(record.params["carrier"]) == "title_stuffing"
+        assert result.outcome == ("leaked" if leaks else "neutralised"), (
             result.summary()
         )
-        assert result.signals.marker_on_wire is (not stripped), result.summary()
+        assert result.signals.marker_on_wire is leaks, result.summary()
 
 
 def test_seed_residual_shapes_meet_their_character_budget() -> None:

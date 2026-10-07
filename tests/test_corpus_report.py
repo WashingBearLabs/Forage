@@ -53,7 +53,7 @@ from scripts.corpus.report import (
     sweep_groups,
     sweep_poolers,
 )
-from tests.corpus_stage2 import stage2_record_hits
+from tests.corpus_stage2 import stage2_markup_hits, stage2_record_hits
 
 _MODEL_22M = "meta-llama/Llama-Prompt-Guard-2-22M"
 _MODEL_86M = "meta-llama/Llama-Prompt-Guard-2-86M"
@@ -543,7 +543,7 @@ def test_a_flagged_search_result_at_or_below_the_flag_score_carries_a_stage2_hit
         signals = result.signals
         if result.outcome != "flagged" or (signals.score or 0.0) > 0.5:
             continue
-        assert stage2_record_hits(record), record.id
+        assert stage2_record_hits(record) | stage2_markup_hits(record), record.id
 
 
 def test_search_attribution_matches_the_stage2_scanner_on_flagged_results() -> None:
@@ -551,7 +551,9 @@ def test_search_attribution_matches_the_stage2_scanner_on_flagged_results() -> N
         if result.outcome == "flagged":
             attribution = attribute_catch(result)
             if attribution.stage == "stage2":
-                assert stage2_record_hits(record), record.id
+                assert stage2_record_hits(record) | stage2_markup_hits(record), (
+                    record.id
+                )
 
 
 def test_the_unavailable_model_is_in_the_allowlist_set_used_for_unmeasured() -> None:

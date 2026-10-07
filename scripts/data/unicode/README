@@ -1,0 +1,22 @@
+Unicode data vendored for scripts/generate_confusables.py
+
+confusables.txt
+  What:    UTS #39 (Unicode Security Mechanisms) confusables data, Unicode 18.0.0
+  URL:     https://www.unicode.org/Public/security/latest/confusables.txt
+  Dated:   2026-08-06, 01:05:35 GMT (the file's own header)
+  Fetched: 2026-10-06
+  sha256:  6ed3ee967c9dfdf6677d563c9985182fbc50a2efb7d6059cd57b2e2ce18f5b92
+  Licence: Unicode License v3 (https://www.unicode.org/license.txt); the file's
+           copyright header is kept verbatim. Attribution is in /NOTICE.
+
+  The generator refuses any other bytes. To update: fetch the new file into a
+  fresh directory, review the diff against this one, then change PINNED_SHA256
+  and UNICODE_VERSION in scripts/generate_confusables.py and this README
+  together, and regenerate.
+
+forage_supplement.tsv
+  Forage's own owner-reviewed additions (2026-10-06). Not Unicode data; covered
+  by the repository's Apache-2.0 licence. Format and rules are in its header.
+
+These files are build inputs only. .dockerignore keeps scripts/ out of the
+image; only the generated pipeline/confusables.py ships.

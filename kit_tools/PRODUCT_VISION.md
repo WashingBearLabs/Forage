@@ -9,7 +9,7 @@
 
 > **TEMPLATE_INTENT:** Singular strategic document capturing the product's why, who, and what. Guides feature planning and prioritization. One per project.
 
-> Last updated: 2026-09-17
+> Last updated: 2026-10-07 (T2.4 added; earlier: 2026-09-17)
 > Updated by: Claude (drafted from the Poppy Web Access family context — landing `WEB_ACCESS_FAMILY.md`, the 2026-08-28 provider-independence ADR, and the 2026-09-12 §10 "extraction + telemetry service, not a trust boundary" ADR)
 
 ---
@@ -102,7 +102,12 @@ Link to feature specs / epics as they are created.
 #### T2.3 — Injection regression corpus (CI)
 - **Description:** A curated indirect-injection attack corpus + classifier/pipeline gates wired into Forage CI, so injection-defense efficacy is *measured on every change* rather than asserted.
 - **Feature Spec(s):** `epic-forage-injection-corpus` (Web Access family Epic 6, Forage half) — `feature-corpus-86m-enablement` (spec 0, added 2026-09-24), `feature-corpus-harness`, `feature-corpus-attacks`, `feature-corpus-benign`, `feature-corpus-recording`, `feature-corpus-gates`
-- **Status:** Shipped (2026-10-04) — six specs, 25 stories. Spec 0 made the 86M selectable (`v1.2.2`, the epic's only release); specs 1–5 added the corpus, cassettes for both models, the gate in the `test` job and the decision table, with no runtime change. Guide: `docs/corpus.md`; leaked attacks and over-defence are filed in `AUDIT_FINDINGS.md`, not fixed. The contiguity and 86M default rulings are open follow-ups
+- **Status:** Shipped (2026-10-04) — six specs, 25 stories. Spec 0 made the 86M selectable (`v1.2.2`, the epic's only release); specs 1–5 added the corpus, cassettes for both models, the gate in the `test` job and the decision table, with no runtime change. Guide: `docs/corpus.md`; leaked attacks and over-defence were filed in `AUDIT_FINDINGS.md`, not fixed by this epic. Follow-ups: the contiguity and 86M default rulings were made 2026-10-06 (86M default, contiguity off); the structural (stage 1/2/4) findings are T2.4's; the classifier-only categories and over-defence stay open
+
+#### T2.4 — Structural hardening
+- **Description:** Close the stage-2 leaks the T2.3 corpus measured, without changing stage 3's input (no cassette re-record): scan-only derived forms (decoded, confusable-folded under both I/l readings, inline-joined), case-insensitive and linear patterns, a first-match raw-markup scan for the patterns a parser consumes, a null title on every quarantined response, and a body-only visibility pass over inline hiding signals. Bounded heuristics, measured on the corpus, not guarantees; residuals are listed in `kit_tools/arch/SECURITY.md`.
+- **Feature Spec(s):** `epic-forage-structural-hardening` — `feature-structural-scan-forms`, `feature-structural-markup-surface`, `feature-structural-wire-closure`, `feature-structural-closeout`
+- **Status:** Completed 2026-10-07 on `epic/forage-structural-hardening` (PR #42): 13 stories across four specs; every structural corpus cell at 1.0, no cassette re-record. Unreleased; contract stays `1.3.0`. Residuals and follow-ups in `AUDIT_FINDINGS.md`.
 
 ### Tier 3 — Future
 
@@ -133,6 +138,7 @@ Link to feature specs / epics as they are created.
 | T2.1 | T1.1, T1.2 | Search providers build on the shipped pipeline + versioned contract |
 | T2.2 | T1.1, T1.2 | Hardening deepens the shipped pipeline; PG-86M coordinates with the resource envelope |
 | T2.3 | T2.2 (partly) | The corpus gates the classifier improvements T2.2 makes |
+| T2.4 | T2.3 | The corpus measured the structural leaks; its ratchet gates the fixes |
 | T3.1 | T2.1 | New providers slot into the T2.1 abstraction |
 | T3.2 | T2.1 | Provenance rides the provider result shape |
 
@@ -141,8 +147,9 @@ Link to feature specs / epics as they are created.
 1. **Phase 1 (done):** T1.1 + T1.2 — extraction, packaging, contract, v1.0.0.
 2. **Phase 2 (done):** T2.1 — search-provider abstraction + reliable search, v1.1.0.
 3. **Phase 3 (done):** T2.2 — hardening, v1.2.1 (86M owner gates explicitly unrun).
-4. **Phase 4:** T2.3 — injection regression corpus in CI.
-5. **Later:** T3.x — more providers/adapters, provenance/datamarking hooks, image ingestion (post trust-review).
+4. **Phase 4 (done):** T2.3 — injection regression corpus in CI.
+5. **Phase 5 (in progress):** T2.4 — structural hardening against the corpus findings.
+6. **Later:** T3.x — more providers/adapters, provenance/datamarking hooks, image ingestion (post trust-review).
 
 ---
 

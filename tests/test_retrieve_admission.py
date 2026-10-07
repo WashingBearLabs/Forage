@@ -30,7 +30,7 @@ from pipeline.extraction_limits import extraction_settings_from_config
 from pipeline.orchestrator import PipelineError, run_retrieve_pipeline
 from pipeline.retrieve_limits import retrieve_settings_from_config
 from pipeline.stage1_extraction import ExtractionResult, extract_html
-from pipeline.stage2_structural import scan_structural
+from pipeline.stage2_structural import scan_structural_forms
 from pipeline.stage4_structuring import structure_sanitization_result
 from pipeline.stage5_url_audit import FetchResult
 from retrieval_app import (
@@ -275,7 +275,7 @@ async def _fetch_error(admission: _Admission, fetch: _GatedFetch) -> None:
 async def _extraction_exception(admission: _Admission, fetch: _GatedFetch) -> None:
     fetch.gate.set()
 
-    def _explodes(*_args: object) -> object:
+    def _explodes(*_args: object, **_kwargs: object) -> object:
         raise ValueError("parser fell over")
 
     with (
@@ -368,7 +368,7 @@ async def test_html_cancellation_retains_slot_until_extractor_exits(
     peak = 0
     lock = threading.Lock()
 
-    def extract(text: str, url: str) -> ExtractionResult:
+    def extract(text: str, url: str, **kwargs: bool) -> ExtractionResult:
         nonlocal active, peak, calls
         with lock:
             calls += 1
@@ -381,7 +381,7 @@ async def test_html_cancellation_retains_slot_until_extractor_exits(
                 assert finish.wait(5), "test did not release HTML worker"
                 if worker_fails:
                     raise ValueError("extraction-failure-sentinel")
-            return extract_html(text, url)
+            return extract_html(text, url, **kwargs)
         finally:
             with lock:
                 active -= 1
@@ -562,7 +562,7 @@ async def test_stages_one_two_and_four_run_off_the_event_loop(
     monkeypatch.setattr("pipeline.orchestrator.fetch_url", fetch)
     for name, real in (
         ("extract_html", extract_html),
-        ("scan_structural", scan_structural),
+        ("scan_structural_forms", scan_structural_forms),
         ("structure_sanitization_result", structure_sanitization_result),
     ):
         monkeypatch.setattr(f"pipeline.orchestrator.{name}", _recording(name, real))
@@ -570,7 +570,7 @@ async def test_stages_one_two_and_four_run_off_the_event_loop(
     await defaults.run()
     assert set(seen) == {
         "extract_html",
-        "scan_structural",
+        "scan_structural_forms",
         "structure_sanitization_result",
     }
     assert loop_thread not in set(seen.values())
@@ -587,7 +587,7 @@ async def test_stages_one_two_and_four_run_off_the_event_loop(
         promptguard_threshold=0.85,
         sanitizer_revision="revision-under-test",
     )
-    assert set(seen) == {"scan_structural", "structure_sanitization_result"}
+    assert set(seen) == {"scan_structural_forms", "structure_sanitization_result"}
     assert loop_thread not in set(seen.values())
 
 

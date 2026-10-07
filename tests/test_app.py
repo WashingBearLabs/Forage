@@ -1500,11 +1500,14 @@ async def test_health_answers_while_a_fetched_page_is_being_extracted(
     release = threading.Event()
 
     def _blocking_extract_html(
-        html_content: str, source_url: str | None = None
+        html_content: str,
+        source_url: str | None = None,
+        *,
+        with_inline: bool = False,
     ) -> ExtractionResult:
         entered.set()
         release.wait(timeout=10)
-        return extract_html(html_content, source_url)
+        return extract_html(html_content, source_url, with_inline=with_inline)
 
     fetch = AsyncMock(
         return_value=FetchResult(
@@ -5026,7 +5029,7 @@ async def test_search_domain_policy_omits_before_scans_without_paid_fallback(
     assert data["provider_errors"] == []
     assert paid.calls == []
     assert pg.await_count == (0 if all_blocked else 1)
-    assert scan.call_count == (0 if all_blocked else 6)
+    assert scan.call_count == (0 if all_blocked else 8)
     for call in [*scan.call_args_list, *pg.call_args_list]:
         assert "blocked.example" not in call.args[0]
         assert "Result 2" not in call.args[0]

@@ -1,10 +1,11 @@
 <!-- Template Version: 2.1.0 -->
 ---
 epic: forage-structural-hardening
-status: active
+status: completed
 vision_ref: "T2.3 follow-up — close the injection corpus's structural findings"
 created: 2026-10-06
-updated: 2026-10-06
+updated: 2026-10-07
+completed: 2026-10-07
 ---
 
 # Epic: Forage Structural Hardening — Close the Stage-2 Leaks the Corpus Found
@@ -40,29 +41,29 @@ the same text, as `/search` already does. The text is never rewritten.
 
 | Seq | Feature Spec | Status | Dependencies |
 |-----|-------------|--------|--------------|
-| 1 | [feature-structural-scan-forms.md](feature-structural-scan-forms.md) — 5 stories: case-insensitive patterns; every pattern linear (tempered tokens, all-patterns sweep); shared decoded form on all routes; vendored/generated confusable tables; fold forms + `unicodedata@` hashed into the revision | Planned | None |
-| 2 | [feature-structural-markup-surface.md](feature-structural-markup-surface.md) — 2 stories: inline-joined form by one linear walk; first-match raw-source markup scan for a closed pattern subset (no-cut default); scans run in the stage-1 thread | Planned | structural-scan-forms |
-| 3 | [feature-structural-wire-closure.md](feature-structural-wire-closure.md) — 2 stories: quarantined titles null (ruling (m), no bump); body-only visibility pass with explicit fallback flag | Planned | structural-markup-surface |
-| 4 | [feature-structural-closeout.md](feature-structural-closeout.md) — 4 stories: floors ratchet with a monotonicity script; findings re-file (**owner step, main checkout**); docs; records preflight | Planned | structural-wire-closure |
+| 1 | [feature-structural-scan-forms.md](archive/feature-structural-scan-forms.md) — 5 stories: case-insensitive patterns; every pattern linear (tempered tokens, all-patterns sweep); shared decoded form on all routes; vendored/generated confusable tables; fold forms + `unicodedata@` hashed into the revision | Completed | None |
+| 2 | [feature-structural-markup-surface.md](archive/feature-structural-markup-surface.md) — 2 stories: inline-joined form by one linear walk; first-match raw-source markup scan for a closed pattern subset (no-cut default); scans run in the stage-1 thread | Completed | structural-scan-forms |
+| 3 | [feature-structural-wire-closure.md](archive/feature-structural-wire-closure.md) — 2 stories: quarantined titles null (ruling (m), no bump); body-only visibility pass with explicit fallback flag | Completed | structural-markup-surface |
+| 4 | [feature-structural-closeout.md](archive/feature-structural-closeout.md) — 4 stories: floors ratchet with a monotonicity script; findings re-file (**owner step, main checkout**); docs; records preflight | Completed | structural-wire-closure |
 
 ## Completion Criteria
 
-- [ ] All four feature specs completed and archived.
-- [ ] Every one of the 22 structural leaked-cell findings (2026-10-04-004 … -025) and the three
+- [x] All four feature specs completed and archived.
+- [x] Every one of the 22 structural leaked-cell findings (2026-10-04-004 … -025) and the three
       blocked-but-leaked findings (-043 … -045) is `resolved` against the regenerated baseline.
       Any record still leaking has its own finding with a stated reason.
-- [ ] The `css_offscreen` and `hidden_div` carrier findings (-040, -041) are resolved.
+- [x] The `css_offscreen` and `hidden_div` carrier findings (-040, -041) are resolved.
       `title_stuffing` (-042) is re-filed as an accepted residual: unmarked text in a title is
       stage 3's job.
-- [ ] Both cassettes replay every record with **no re-recording**: the cassette files are
+- [x] Both cassettes replay every record with **no re-recording**: the cassette files are
       byte-unchanged at the end of the epic.
-- [ ] No core-genre benign false-positive rate rises on any route
+- [x] No core-genre benign false-positive rate rises on any route
       (`news`/`docs`/`forum`/`ecommerce`/`code`). Every pinned benign record's pin holds.
-- [ ] Each catch floor that improved is raised in `tests/corpus/floors.json` (ratchet); none is
+- [x] Each catch floor that improved is raised in `tests/corpus/floors.json` (ratchet); none is
       lowered.
-- [ ] Contract stays `1.3.0`: `contract/openapi.yaml.sha256` unchanged. The quarantined-title
+- [x] Contract stays `1.3.0`: `contract/openapi.yaml.sha256` unchanged. The quarantined-title
       change is GOVERNANCE ruling (m), a sanitizer outcome with no bump (owner, 2026-10-06).
-- [ ] Every `sanitizer_revision` rotation is recorded (CLAUDE.md, `docs/bootstrap-notes.md`,
+- [x] Every `sanitizer_revision` rotation is recorded (CLAUDE.md, `docs/bootstrap-notes.md`,
       the GOTCHAS table) with read-only reversal controls, per house practice.
 
 ## Notes
@@ -113,3 +114,16 @@ the same text, as `/search` already does. The text is never rewritten.
     fixtures (planner call under the ratchet rule).
 - **Spec 4 US-002 is a supervised owner step on the main checkout,** never in an execution
   worktree (gitignored findings file).
+
+- **Completed 2026-10-07.** Specs 1-3 ran guarded (11/11 stories; US-002 split into US-010/US-011
+  after timeouts; markup-surface and wire-closure resized to L). Spec 4 ran supervised on the owner
+  checkout. PR #42.
+  - **Floors:** 136 tightened (every structural cell at 1.0), 8 justified loosenings proved per
+    record, 0 problems.
+  - **No re-record:** cassettes are byte-identical to `03f7a96`, and the contract is unchanged.
+  - **Revision:** final `46b8d1bb…`, the fifty-second rotation.
+  - **Findings:** 22 structural leaked cells and 3 blocked-but-leaked records resolved; residuals
+    filed as `2026-10-04-056`…`-061`.
+  - **Follow-ups filed:** `2026-10-07-001` (pre-existing payload quotes in docs, frozen
+    allowlist), `2026-10-07-002` (fold-expansion cost), `2026-10-06-001` (stage-1 parse cost), and
+    validation warnings `2026-10-06-019`…`-024`.

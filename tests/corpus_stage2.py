@@ -16,6 +16,7 @@ names only — never record text.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -23,7 +24,11 @@ from pathlib import Path
 from pipeline import orchestrator
 from pipeline.stage1_extraction import extract_html
 from pipeline.stage1_upload import extract_upload_text
-from pipeline.stage2_structural import _PATTERNS
+from pipeline.stage2_structural import (
+    _PATTERNS,
+    fold_scan_forms,
+    structural_scan_forms,
+)
 from scripts.corpus.records import (
     CorpusRecord,
     page_document,
@@ -32,6 +37,8 @@ from scripts.corpus.records import (
 )
 from scripts.corpus.vocab import RECORD_KEYS, STAGE2_REGEX_NAMES
 from url_validator import hostname_matches
+
+_MARKUP_NAMES = frozenset({"system_tag", "envelope_breakout", "private_ip_href"})
 
 
 def stage2_hits(text: str) -> frozenset[str]:
@@ -50,11 +57,14 @@ def stage2_forms(
 
     ``search``: ``()`` when the URL is omitted by the rule chain or the
     effective blocklist (``seed_blocklist`` + ``blocked_domains``) — the result
-    ``continue``s before the stage-2 loop — else the loop's six forms in order.
+    ``continue``s before the stage-2 loop — else the loop's forms in order (each text
+    field's fold and inline-joined forms follow its wire form).
+    ``page``: the builder's forms of ``raw_text``, then of the inline-joined text.
+    ``text``: the builder's forms (``structural_scan_forms``), as-is first.
     """
     payload = record.payload
     if record.surface == "search":
-        title, title_scan = orchestrator._scan_forms_for_search_text(
+        title, title_scan, title_inline = orchestrator._scan_forms_for_search_text(
             payload.get("title", ""),
             max_length=orchestrator._MAX_SEARCH_TITLE_LENGTH,
         )
@@ -66,21 +76,37 @@ def stage2_forms(
             return ()
         if outcome.omission_reason is not None or outcome.domain is None:
             return ()
-        snippet, snippet_scan = orchestrator._scan_forms_for_search_text(
-            payload.get("content", ""),
-            max_length=orchestrator._MAX_SEARCH_SNIPPET_LENGTH,
+        snippet, snippet_scan, snippet_inline = (
+            orchestrator._scan_forms_for_search_text(
+                payload.get("content", ""),
+                max_length=orchestrator._MAX_SEARCH_SNIPPET_LENGTH,
+            )
         )
         return (
             title_scan,
             title,
+            *fold_scan_forms(title_scan).forms,
+            *structural_scan_forms(title_inline, html_parsed=True),
             outcome.scan_texts[0],
             outcome.scan_texts[1],
             snippet_scan,
             snippet,
+            *fold_scan_forms(snippet_scan).forms,
+            *structural_scan_forms(snippet_inline, html_parsed=True),
         )
     if record.surface == "page":
-        return (extract_html(page_document(record), payload.get("url")).raw_text,)
-    return (extract_upload_text(payload.get("text", "").encode("utf-8")).raw_text,)
+        extraction = extract_html(
+            page_document(record),
+            payload.get("url"),
+            with_inline=True,
+            prune_hidden=False,
+        )
+        return (
+            *structural_scan_forms(extraction.raw_text, html_parsed=True),
+            *structural_scan_forms(extraction.scan_text_inline or "", html_parsed=True),
+        )
+    raw = extract_upload_text(payload.get("text", "").encode("utf-8")).raw_text
+    return tuple(structural_scan_forms(raw, html_parsed=False))
 
 
 def stage2_record_hits(
@@ -91,6 +117,37 @@ def stage2_record_hits(
     for form in stage2_forms(record, blocklist=blocklist):
         hits |= stage2_hits(form)
     return hits
+
+
+def stage2_markup_hits(record: CorpusRecord) -> frozenset[str]:
+    """The regex names ``scan_raw_markup`` finds in the raw markup of ``record``.
+
+    ``page``: the whole document; ``search``: each raw provider field as the
+    loop's markup entry holds it; ``text`` has no markup route.
+    """
+    payload = record.payload
+    if record.surface == "page":
+        markups = [page_document(record)]
+    elif record.surface == "search":
+        markups = [
+            orchestrator._search_markup_entry(
+                payload.get("title", ""),
+                max_length=orchestrator._MAX_SEARCH_TITLE_LENGTH,
+            ),
+            orchestrator._search_markup_entry(
+                payload.get("content", ""),
+                max_length=orchestrator._MAX_SEARCH_SNIPPET_LENGTH,
+            ),
+        ]
+    else:
+        return frozenset()
+    names = {
+        name
+        for markup in markups
+        for name in stage2_hits(re.sub(r"\s+", " ", markup))
+        if name in _MARKUP_NAMES
+    }
+    return frozenset(names)
 
 
 def name_variants(path: Path) -> list[tuple[str, str]]:

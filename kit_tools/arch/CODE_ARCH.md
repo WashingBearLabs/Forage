@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # CODE_ARCH.md
 
-> Last updated: 2026-10-06
-> Updated by: Claude (86M default ruling)
+> Last updated: 2026-10-07
+> Updated by: Claude (structural-closeout US-002)
 
 ---
 
@@ -67,14 +67,16 @@ Design principles:
 ├── contract/                # the frozen wire contract: openapi.yaml (generated) and
 │                            # openapi.yaml.sha256, the committed anchor every other
 │                            # copy is verified against (generated, never hand-edited),
-│                            # plus GOVERNANCE.md — the semver rules, the thirteen recorded
+│                            # plus GOVERNANCE.md — the semver rules, the fourteen recorded
 │                            # rulings, and the consumer vendoring procedure. Copied
 │                            # whole into the image and published as Release assets
 ├── SECURITY.md              # reporting channel, supported versions, in/out of scope;
 │                            # the posture itself stays in README.md
 ├── scripts/                 # operator-only, run by hand: vendor_weights.py vendors the
 │                            # pinned weights to the private GHCR mirror;
-│                            # export_contract.py regenerates contract/. Ships in no
+│                            # export_contract.py regenerates contract/;
+│                            # generate_confusables.py regenerates
+│                            # pipeline/confusables.py. Ships in no
 │                            # image — the Dockerfile COPY list names nothing here
 ├── tests/                   # 39 test_*.py modules (+ conftest.py, fakes.py, __init__.py); flat, one module per subject
 ├── docs/                    # configuration.md, weights.md, releases.md, searxng.md,
@@ -98,11 +100,13 @@ file in the repo. |
 | `retrieval_app.py` | 1824 | FastAPI app + the five endpoints, startup wiring, `/health` body assembly, the legacy-capability break-glass warning. Since `forage-contract` it also carries the documentation surface: the five per-shape error **mirrors** (US-001) and the six `/metrics` response models (US-005), all `extra="forbid"`, none of which any emission site routes through — the emission sites are unchanged and parity tests hold the models to them. The `FastAPI(...)` call serves `title="Forage"`, `version=CONTRACT_VERSION` and the no-auth/private-network posture, so `/openapi.json` cannot disagree with `/health` about which contract this process implements. Since `hardening-promptguard-86m` US-006 the lifespan alone refuses a disallowed `FORAGE_MODEL_ID`, passes the resolved id into `WeightAcquisition` and the memory advisory, and publishes `app.state.promptguard_model`; `/health` reads that id unconditionally without re-reading the environment. |
 | `cache.py` | 860 | Valkey content cache. **Never logs the connection URL** — it may carry a password; enforced by a closed log vocabulary and a dedicated regression test. |
 | `models.py` | 470 | Pydantic models for every request and response shape. |
-| `pipeline/stage4_structuring.py` | 308 | Assembles the response object and the composite trust score. |
-| `pipeline/stage1_extraction.py` | 337 | HTML extraction → `raw_text` (for scanning) + `main_content` (for the agent). |
+| `pipeline/stage4_structuring.py` | 309 | Assembles the response object and the composite trust score. `finalize_quarantine` builds every quarantined result with `title=None` beside the fixed body (`structural-wire-closure` US-001, GOVERNANCE ruling (m)); summary mode reads `main_content_is_fallback` instead of inferring it from `main_content == raw_text`. |
+| `pipeline/stage1_extraction.py` | 663 | HTML extraction → `raw_text` (for scanning) + `main_content` (for the agent). One parse also feeds two `structural-hardening` additions: `_extract_inline_text`, the scan-only inline-joined text (`extract_html(with_inline=True)` → `scan_text_inline`), built by one iterative walk with a block-element allowlist and no tree mutation; and `_prune_hidden`, the body-only visibility pass over inline signals that runs on a `copy.copy` of the soup (the original is untouched when no body descendant carries `hidden`, `aria-hidden` or `style`) and feeds only `main_content`. When trafilatura fails on a pruned page, the fallback is the pruned flattened text and `main_content_is_fallback=True`; it is `None` when nothing was pruned. |
 | `pipeline/stage5_url_audit.py` | 237 | Outbound fetch with manual redirect following and redirect-chain auditing. |
 | `pipeline/pdf_subprocess.py` | 297 | PDF parsing isolated in a subprocess (pypdf is not trusted with hostile input in-process), for both routes; also `spool_dir()`, the process-private `0700` spool directory, and `extract_pdf_bytes_in_subprocess`, `/retrieve`'s bytes entry point. |
-| `pipeline/stage2_structural.py` | 304 | Deterministic regex injection scan. |
+| `pipeline/stage2_structural.py` | 608 | Deterministic regex injection scan: 24 case-insensitive, linear patterns in `_PATTERNS`, plus the scan-form builder (`structural_scan_forms` → lazy `ScanForms`; `decode_scan_text`; `fold_scan_forms`), `scan_structural_forms` (worst verdict across forms, stop at first `blocked`, refusal flag), `combine_scan_results` (worst verdict wins, flags and penalty from the first result at it) and `scan_raw_markup` over the `_MARKUP_PATTERNS` subset. |
+| `pipeline/confusables.py` | 2443 | **Generated — never hand-edit.** `FOLD_TABLE`, `PRE_NFKC_TABLE`, `AMBIGUOUS_IL` and the provenance constants (`UNICODE_VERSION`, `CONFUSABLES_SHA256`, `NFKC_UNICODE_VERSION`). A `_REVISION_SOURCES` member since `structural-scan-forms` US-005. |
+| `scripts/generate_confusables.py` | 335 | Writes `pipeline/confusables.py` from the sha256-pinned UTS #39 `scripts/data/unicode/confusables.txt` plus the reviewed `forage_supplement.tsv`; computes the pre-NFKC table from the running interpreter's `unicodedata`. `--check` (and `tests/test_confusables.py` via `drift_report`) fails on any drift, so a Python Unicode upgrade can legitimately fail it: regenerate and review. Ships in no image. |
 | `pipeline/smart_extraction.py` | 207 | Summary mode that preserves high-signal content (stats, quotes, references). |
 | `url_validator.py` | 336 | Private-IP rejection and DNS-rebinding protection, plus the service's one host canonicaliser. `canonicalize_host` / `canonical_host` (literals first: an IPv6 literal is recognised by its colons and never reaches the encode; every other host loses exactly one trailing dot, is lower-cased, is UTS-46-encoded via **`idna`** — a direct dependency, floor `>=3.7` for CVE-2024-3651 — and only then classified as numeric or named) and `private_address_class`, which reports *how* an address was reached (`private_literal` / `embedded_private`) and unwraps IPv4-mapped, 6to4, Teredo, prefix-guarded NAT64 and prefix-guarded IPv4-compatible embeddings. In `_ROOT_REVISION_SOURCES` since `hardening-search-sanitization` US-003. |
 | `pipeline/extraction_limits.py` | 181 | Resource limits from `config.yaml`'s `extraction:` block. |
@@ -116,7 +120,7 @@ file in the repo. |
 | `searxng_smoke.py` | 779 | CI's companion-image smoke: creates an egress-free Docker network, runs SearXNG beside a Valkey and probes it from a third container. Docker goes through an injected runner and every judgement is a pure function, so `tests/test_searxng_smoke.py` covers the failure branches without a daemon. Ships in no image. |
 | `scripts/vendor_weights.py` | 1198 | Operator-only, supervised: `--model-id` (default `DEFAULT_MODEL_ID`, now the 86M; no environment selection) and `--revision` flow through download, per-model manifest merge and scoped diff, deterministic symlink-dereferenced tarball, real-verifier self-check and revision-tagged push. The safetensors allowlist is enforced **at generation time**, other model entries are preserved, and GHCR privacy is checked after push. No credential reaches an argv. Ships in no image; `docs/weights.md` is the procedure. |
 | `scripts/export_contract.py` | 327 | Operator-only: renders `app.openapi()` into `contract/openapi.yaml` in a canonical form pinned here (JSON round-trip, no anchors, sorted keys, `width=88`), writes the sha256 anchor, and writes the drift check's own committed failure case. Byte-stable across processes and hash seeds — `tests/test_contract_export.py` calls `drift_report()` directly, so the gate runs on every `uv run pytest` rather than in a lane someone has to remember. |
-| `pipeline/sanitizer_revision.py` | 82 | Hashes nine source files — the eight `pipeline/` sources (`_REVISION_SOURCES`) plus repo-root `url_validator.py` (`_ROOT_REVISION_SOURCES`, resolved against `pipeline_dir.parent`) — the model identity, `idna@<version>`, max threshold, contiguity windows and contiguity threshold into a `sanitizer_revision` string. The last three inputs are ASCII, in that order, even when contiguity is disabled. See the gotcha below. |
+| `pipeline/sanitizer_revision.py` | 94 | Hashes ten source files — the nine `pipeline/` sources (`_REVISION_SOURCES`, `confusables.py` the ninth since `structural-scan-forms` US-005) plus repo-root `url_validator.py` (`_ROOT_REVISION_SOURCES`, resolved against `pipeline_dir.parent`) — the model identity, `idna@<version>`, `unicodedata@<version>`, max threshold, contiguity windows and contiguity threshold into a `sanitizer_revision` string. The last three inputs are ASCII, in that order, even when contiguity is disabled. See the gotcha below. |
 | `pipeline/search_providers/searxng.py` | 262 | `SearxngProvider` — the key-less free floor behind the protocol, and the home of `DEFAULT_SEARXNG_URL`, `SEARXNG_ENGINES`, `HTTP_STATUS_DETAIL_PREFIX` and the closed `_SEARXNG_FAILURE_DETAILS` vocabulary. A behavior-preserving extraction of the `httpx` block that used to sit inline in `run_search_pipeline`, with two recorded deviations: `trust_env=False` on the client and a `reason` text that no longer carries `str(exc)` or userinfo. Not in `_REVISION_SOURCES`, for the same reason as `base.py`. |
 | `pipeline/search_providers/base.py` | 146 | The `SearchProvider` protocol (`name`, `paid`, `origin`, `search()`) plus the internal `ProviderSearchResult` / `ProviderFailure` types and the closed `FailureClass` vocabulary every backend implements. First nested package under `pipeline/` (its `__init__.py` is the registry, below, not a bare marker); not in `_REVISION_SOURCES` — provider code changes what is fetched, not how it is sanitized. |
 | `pipeline/search_providers/brave.py` | 504 | `BraveApiProvider` (`feature-brave-provider`) — the paid Brave LLM-Context backend, `paid = True`, returning content chunks (`content_kind="chunk"`, `engine="brave-api"`, deliberately distinct from SearXNG's own `brave` sub-engine) parsed against one owner-captured pinned sample (`tests/fixtures/brave/llm_context_sample.json`). A hardened per-call `httpx.AsyncClient` (`trust_env=False`, `follow_redirects=False`, TLS verified) against a fixed constant endpoint, a response body bounded before any `json.loads`, and `config.yaml`-tunable timeout/chunk/query caps read unconditionally in the lifespan. Also home of `brave_key_present()` — strip, non-empty; the one key-presence helper the registry and `/health` share (ruling 28) — and of the closed `_BRAVE_FAILURE_DETAILS` vocabulary every failure's `detail` token is drawn from (`http_401`/`http_403` → `auth`, `http_429` → `rate_limited`, everything else → `hard_error`). Not in `_REVISION_SOURCES`, for the same reason as the other two provider modules. |
@@ -159,10 +163,10 @@ would detach the still-running thread and release admission early.
 
 **The sanitizer revision is a content hash of source files *and of the model pin*.**
 `sanitizer_revision.py` resolves `_REVISION_SOURCES` relative to its own file and
-`_ROOT_REVISION_SOURCES` against its parent, and hashes the nine files in that order, then
-the model identity (`MODEL_ID@revision`), then `idna@<version>`, then the configured threshold;
+`_ROOT_REVISION_SOURCES` against its parent, and hashes the ten files in that order, then
+the model identity (`MODEL_ID@revision`), then `idna@<version>`, then `unicodedata@<version>`, then the configured threshold;
 the value ships in every `/health` body and response envelope so a consumer can tell which
-sanitizer version produced a result. Editing any of those nine files — or bumping `idna`,
+sanitizer version produced a result. Editing any of those ten files — or bumping `idna` or Python's Unicode database,
 whose UTS-46 tables decide which hosts the search audit drops and `validate_url` refuses —
 changes it. That
 is the intent, but it means Forage's revision has **deliberately diverged** from Poppy's
@@ -463,6 +467,38 @@ only the default `model_id@revision` input does, and
 exactly. No response shape changes (contract stays 1.3.0); old cache keys
 invalidate. Contiguity gating stays off by the same ruling.
 
+**Stage 2 scans derived forms; stage 3's input never changes.** `epic-forage-structural-hardening`
+kept `ExtractionResult.raw_text` and `/search`'s wire forms byte-identical, because the corpus
+cassettes are keyed by the sha256 of stage-3 input. Everything new is scan-only:
+
+- `structural_scan_forms(text, html_parsed=...)` lazily yields the as-is text, its entity decode
+  (`decode_scan_text`: one `html.unescape` level after a parse, two otherwise, then control strip
+  and `normalize_text`), and the confusable fold of the decode (`fold_scan_forms`:
+  `PRE_NFKC_TABLE` → NFKC → `FOLD_TABLE`, one form per I/l reading, deduplicated). The fold is
+  built in NFKC-safe chunks and refused past four times the decoded length; a refusal surfaces
+  as an `encoded_payload` flag, never a truncated fold. `scan_structural_forms` consumes the
+  generator and keeps the worst verdict; `combine_scan_results` merges results from other
+  forms (as-is flags win ties, because the wire carries one entry per span).
+- Every pattern is linear by construction: gaps are tempered tokens
+  (`(?:(?!stop)[\s\S])*?`) rather than `.*`, and `envelope_breakout` / `system_tag` group the
+  optional slash with its whitespace. `tests/test_stage2_complexity.py` sweeps all 24 patterns
+  over adversarial families and asserts sub-quadratic scaling; a new pattern must pass it.
+- `_MARKUP_PATTERNS` (`system_tag`, `private_ip_href`, `envelope_breakout`, by identity from
+  `_PATTERNS`) runs in `scan_raw_markup`: one `search()` per pattern over the
+  whitespace-collapsed raw source, line number 0, nothing cut. Raw source, never re-serialised
+  markup (lxml round-trips drop stray end tags).
+- On `/retrieve`, `_extract_html_and_scan_inline` runs inside the stage-1 thread: it parses once,
+  scans the inline-joined text through the forms and the raw HTML through `scan_raw_markup`, and
+  returns only a combined `StructuralScanResult` (via `sanitize_and_structure`'s `extra_scans`),
+  so no page-sized scan text or markup outlives the thread. `/search` builds each field's inline
+  forms from its single parse and routes each raw field value to `scan_raw_markup`.
+- The inline walk never uses `unwrap()` + `smooth()` (quadratic in sibling count); the visibility
+  pass prunes only under `<body>`, only for the served `main_content`, and keeps `until-found`.
+- `pipeline/confusables.py` is regenerated by `scripts/generate_confusables.py`, never edited.
+
+The epic's nine rotations (forty-fourth to fifty-second) end at `46b8d1bb…`; per-rotation
+controls are in `docs/bootstrap-notes.md`.
+
 **Network reads enforce the raw ceiling before allocation.**
 `pipeline/provider_transport.py` connects both providers through HTTPX's public
 transport seam and httpcore's public network backend. A public h11 observer
@@ -576,7 +612,7 @@ add a new golden under `tests/golden/` (older ones are retained, never edited), 
 `contract/` with `uv run python -m scripts.export_contract`, and note it for the consuming
 repo. Since `feature-forage-contract` US-003 the rules are written down rather than
 remembered: **`contract/GOVERNANCE.md`** classifies any change (MAJOR / MINOR / PATCH / no
-bump), carries the thirteen rulings the contract and hardening epics recorded — including the documentation pass taking no bump,
+bump), carries the fourteen rulings the contract and hardening epics recorded — including the documentation pass taking no bump,
 the unreachable `/extract` 413 and what fixing it would cost, enum additions as MINOR with
 an announcement obligation, fixture retention, the private-IP echo caveat and validation
 redaction's one-release compatibility window — and states

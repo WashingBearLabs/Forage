@@ -2092,3 +2092,340 @@ known third-party consumers. The opt-out is permanent — the 22M stays allowlis
 **Consumer handoff (Poppy):** compare contracts, not revisions. A Poppy pin of the next
 release gets the 86M unless it sets `FORAGE_MODEL_ID=…22M`, and needs the larger memory
 limit. **Not replayed to Poppy.**
+
+### The forty-fourth rotation: Stage 2 patterns become case-insensitive (`structural-scan-forms` US-001)
+
+Seven Stage 2 patterns were case-sensitive and a re-cased trigger evaded them:
+`instructions_banner`, `poppy_line`, `system_line`, `hex_escape`, `im_start`, `endoftext`
+and `exfil_image`. Each gained `re.IGNORECASE`; `base64_run` is untouched (its class is
+deliberately case-bearing) and no pattern was renamed. Only `pipeline/stage2_structural.py`
+moves among the nine hashed sources:
+
+| State | Revision |
+|---|---|
+| Before (`c878f23`) / `stage2_structural.py` reverted | `b5e91fd647270be4dfb3dc9a95f2447f1961fca7746441ca65e691c986ba0ded` |
+| After | `8ca7db8d9dfff3117aa0e402cfb39b208d96285e0b457af66c262e4fc639bd47` |
+
+Measured for default `{}` and shipped `config.yaml`, which agree. This is the **ninth
+sanitization-behaviour-changing rotation**. Decided false-positive cost: a line starting
+`system:` or `poppy:` in any case now BLOCKs, including a column-0 YAML `system:` key and a
+`Poppy:` transcript line; narrowing would reopen `atk-0070` and `atk-0086`. Both are pinned as
+benign unit fixtures asserted blocked.
+
+Corpus effect (regenerated `baseline.json`): `atk-0070`, `atk-0071`, `atk-0086` and `atk-0116`,
+`atk-0147` are no longer `leaked` (three now `blocked`, two `flagged`); no benign record
+moved and `git diff tests/corpus/cassettes/` is empty. The stage-3 attack denominator in
+`docs/corpus.md`'s Decision inputs falls 372 → 369 (three texts no longer reach stage 3); every
+fired cell is unchanged. Old cache keys invalidate. Contract stays `1.3.0`.
+
+### The forty-fifth rotation: linear, newline-crossing Stage 2 patterns (`structural-scan-forms` US-002)
+
+Three patterns were rewritten and the line-number lookup made logarithmic. Only
+`pipeline/stage2_structural.py` moves among the nine hashed sources:
+
+| State | Revision |
+|---|---|
+| Before (`1d87c8e`) / `stage2_structural.py` reverted | `8ca7db8d9dfff3117aa0e402cfb39b208d96285e0b457af66c262e4fc639bd47` |
+| After | `61c41b1a24252057028bf5508f17c5c473989b48665168f37922eb8fc1dcfda4` |
+
+Measured for default `{}` and shipped `config.yaml`, which agree. This is the **tenth
+sanitization-behaviour-changing rotation**:
+
+- `disregard_instructions` is `disregard(?:(?!disregard|\n\n)[\s\S])*?instructions`: the gap crosses
+  single newlines at any length and never a paragraph break.
+- `exfil_image` is `!\[(?:(?!!\[)[^\]])*\]\(https?://(?:(?!!\[)[^)])*?(?:\{\{|\$\{|%7[Bb])`. The spec
+  pinned `[^\]]*` for the alt text; the new sweep measured that quadratic on `![![![…` with no `]`
+  (10.1 s at 256 KiB), so the alt text also stops at the next `![`. Accepted losses: a nested `]`
+  in alt text, and an image start inside alt text, no longer extend the match.
+- `envelope_breakout` uses `\s*(?:/\s*)?` (same match set, linear backtracking).
+- `_line_number_of` takes a once-per-scan newline index and uses `bisect_left` (values identical,
+  asserted over every corpus form).
+
+Sweep (`tests/test_stage2_complexity.py`; best of 3, GC paused): every (pattern, family) ratio of
+2 MiB to 256 KiB is 7.0–9.6 (linear is 8); slowest 2 MiB cell is 104 ms (`ignore_previous` after
+whitespace runs); the sum over all 24 patterns on one 2 MiB form is 0.47 s (`start_repeated`),
+0.40 s (`one_start_many_interior`), 0.50 s (`prefix_then_whitespace`), 0.40 s (`mixed_newlines`)
+and 0.43 s (`match_dense`).
+
+Corpus effect: structural flags and penalty changed for six records, all gains and no match lost —
+`atk-0053`, `atk-0054` now BLOCK; `atk-0152`, `atk-0153` are now flagged (SUSPICIOUS); `atk-0055`
+and `atk-0154` (search) gain the same match on the newline-preserving form. No benign record
+moved, `git diff tests/corpus/cassettes/` is empty, and the stage-3 attack denominator falls
+369 → 367 with every fired cell unchanged. Old cache keys invalidate. Contract stays `1.3.0`.
+
+### The forty-sixth rotation: the shared decoded scan form (`structural-scan-forms` US-003)
+
+Stage 2 now scans, on every route that goes through `sanitize_and_structure`, the as-is text
+**and** an entity-decoded derived form. Two hashed sources move:
+
+| State | Revision |
+|---|---|
+| Before (`db74dc7`) / both reverted | `61c41b1a24252057028bf5508f17c5c473989b48665168f37922eb8fc1dcfda4` |
+| `stage2_structural.py` reverted alone | `4d2eaa0a8530a3e89df31ecaefbcdbf95c936e5489c702d4edb4f2cd13644a1b` |
+| `orchestrator.py` reverted alone | `516ad85238647e397c33d7fd7c8d22f1a364205aaecf08d727660c98a13d781e` |
+| After | `62a903231e3ec640c373f85f9fa5a9a719333596457b47947c14b8a306bf3c91` |
+
+Measured read-only (whole-file `git show db74dc7:<path>` bytes substituted into the hash) for
+default `{}` and shipped `config.yaml`, which agree. This is the **eleventh
+sanitization-behaviour-changing rotation**:
+
+- `structural_scan_forms(text, *, html_parsed)` is a generator: the as-is text, then
+  `html.unescape` once (`html_parsed`, i.e. `content_type == "html"`, whose parser already
+  decoded one level) or twice (text uploads, PDFs), then the C0/C1 control strip, then stage 1's
+  whitespace collapse again. Forms are deduplicated, never truncated and there is no fixed-point
+  loop, so a **three-level payload is an accepted gap** (pinned).
+- `scan_structural_forms` scans each form as produced, keeps the running worst result and stops
+  at the first BLOCKED. `combine_scan_results(*results)` is the public rule: worst verdict wins,
+  flags and penalty come from the first form that reaches it, so a record whose verdict does not
+  move keeps byte-identical `structural_flags` and penalty (asserted over every corpus record).
+- Stage 3 still receives `extraction.raw_text` by identity; both cassettes are byte-unchanged.
+- `_CONTROL_CHARS_RE` moved into `stage2_structural.py` (one owner; the orchestrator calls
+  `strip_control_chars`), and `/search`'s `_scan_forms_for_search_text` delegates its second
+  decode to `decode_scan_text`. Its wire form is byte-identical (`test_search_pipeline_pins.py`
+  unchanged).
+- Accepted cost: a tutorial page that shows escaped markup (`&amp;lt;system&amp;gt;` in the
+  source, visible `&lt;system&gt;`) decodes to a tag in form 2 and now BLOCKs (pinned).
+
+Sweep (`tests/test_stage2_complexity.py`): entity-encoded whitespace, newline, entity-dense,
+hex-dense, double-encoded and encoded-trigger inputs at 2 MiB through both builder modes stay
+linear (ratio bound 12) and under the 2 s ceiling.
+
+Corpus effect (regenerated `baseline.json`): the eight `entity` records are no longer `leaked` —
+`atk-0047`, `atk-0049`, `atk-0075`, `atk-0090`, `atk-0103` now `blocked`; `atk-0119`, `atk-0136`,
+`atk-0149` now `flagged`. No benign record moved and `git diff tests/corpus/cassettes/` is empty.
+The stage-3 attack denominator in `docs/corpus.md`'s Decision inputs falls 367 → 362 (five
+texts no longer reach stage 3); every fired cell is unchanged. Old cache keys invalidate.
+Contract stays `1.3.0`.
+
+### The forty-seventh rotation: the confusable fold forms (`structural-scan-forms` US-005)
+
+Stage 2 now also scans a **confusable fold** of the decoded form, on every route through
+`sanitize_and_structure` and on `/search`'s title and snippet. This is the first rotation since
+`url_validator.py` and `idna` (eighteenth) to **add a hashed source and an input**: ten hashed
+sources now (`pipeline/confusables.py` is the ninth `pipeline/` one, hashed after
+`orchestrator.py`), and `unicodedata@<version>` joins the inputs right after `idna@<version>`
+because NFKC's tables are Python's, not this repository's.
+
+| State | Revision |
+|---|---|
+| Before (`87dbb6c`) / all reverted and both additions removed | `62a903231e3ec640c373f85f9fa5a9a719333596457b47947c14b8a306bf3c91` |
+| `confusables.py` removed from the hash alone | `24d2eb1639b2d836ca403815f608f167a41cad6d3177eeff58555f187f14a723` |
+| `unicodedata@<version>` removed alone | `773991a6ccd8a269aedf21dc7d35085478f15e74826a65f6062bc4a7621d6197` |
+| `stage2_structural.py` reverted alone | `c2e62910caf3080df7b66339775a362f8256120026aee204ffab359e57fcaf25` |
+| `orchestrator.py` reverted alone | `e1a9c469660fff0f29796b90a2fabfc96420236b3656e0d79fd5df49cded7e2e` |
+| After | `c04bd68ed35bbcc343d3769ea8db3ed3cf7a03ccf0e7831bc5faf92c254ed683` |
+
+Measured read-only (whole-file `git show HEAD:<path>` bytes substituted into the hash) for default
+`{}` and shipped `config.yaml`, which agree. Under `uv` the project's Python reports Unicode
+database `15.0.0`. This is the **twelfth sanitization-behaviour-changing rotation**:
+
+- `fold_scan_forms(decoded)` applies `PRE_NFKC_TABLE`, NFKC, `FOLD_TABLE`, then stage 1's
+  whitespace collapse, and is yielded after the decoded form. If the **post-NFKC** text holds
+  any `AMBIGUOUS_IL` member a fourth form reads those as `i` instead of `l`. ASCII text has no
+  fold form; a fold equal to an earlier form is not repeated.
+- The fold is built chunk by chunk, cutting only at seams NFKC cannot compose or reorder across.
+  A first pass measures the NFKC length alone and keeps nothing; a second applies the tables.
+  If the fold would pass **4× the decoded form's length** it is refused, not truncated: the scan
+  result gains an `encoded_payload` span (SUSPICIOUS, so no contract change) and the WARNING
+  token `stage2_fold_expansion_refused` logs two lengths and no text. A 10 MiB `/retrieve` page
+  of U+FDFA (18× under NFKC) is refused with a traced peak under 400 MB; a page at 3.83× is folded.
+- `/search` derives the fold forms from each title and snippet **scan form** and scans them
+  right after that field's wire form; URL fields are excluded (`_SEARCH_URL_RULES` audits them).
+  The wire forms are byte-identical and `tests/test_search_pipeline_pins.py` is unchanged.
+  A refused fold marks the result `suspicious`.
+- Stage 3 still receives `extraction.raw_text` by identity; both cassettes are byte-unchanged.
+- The property test substitutes each oracle look-alike at each Latin-letter position of the 24
+  probes and requires a non-CLEAN verdict through `sanitize_and_structure` (`html` and `text`) and
+  the `/search` field scan. Two probes (`<system>`, `</retrieved_content>`) are already consumed by
+  the search scan form's HTML parse before any fold, so they are skipped there and pinned.
+
+Sweep (`tests/test_stage2_complexity.py`): U+FDFA, the largest accepted expansion, and two
+look-alike-dense inputs at 2 MiB through the whole forms scan stay linear (ratio bound 12). The
+largest accepted expansion builds and scans two 8M-character forms and gets four times the
+single-form ceiling.
+
+Corpus effect (regenerated `baseline.json`): the nine `confusable` records are no longer `leaked` —
+`atk-0043`, `atk-0044`, `atk-0045`, `atk-0073`, `atk-0091`, `atk-0104` now `blocked`;
+`atk-0121`, `atk-0137`, `atk-0168` now `flagged`. No benign record moved and
+`git diff tests/corpus/cassettes/` is empty. The stage-3 attack denominator in `docs/corpus.md`'s
+Decision inputs falls 362 → 356 (six texts no longer reach stage 3); every fired cell is unchanged.
+Old cache keys invalidate. Contract stays `1.3.0`.
+
+### The forty-eighth rotation: the inline-joined scan form (`structural-markup-surface` US-001)
+
+Stage 2 now also scans HTML text with every **non-block** element joined into its surrounding
+text, so a tag splitting a trigger word (`ig<b></b>nore previous`, `<wbr>`, `<font>`, a custom
+element) can no longer hide it behind a line break. Two hashed sources move:
+`pipeline/stage1_extraction.py` (the walker `_extract_inline_text`, the closed block set, the
+`with_inline` keyword and the defaulted `ExtractionResult.scan_text_inline`) and
+`pipeline/orchestrator.py` (`_extract_html_and_scan_inline`, `sanitize_and_structure`'s
+`extra_scans`, `SearchScanForms` and the per-field inline entries in `/search`'s loop).
+
+| State | Revision |
+|---|---|
+| Before (`801e8af`) / both files reverted | `c04bd68ed35bbcc343d3769ea8db3ed3cf7a03ccf0e7831bc5faf92c254ed683` |
+| `orchestrator.py` reverted alone | `93fc1415e8b537fbfc26abcf5f1f65c3ab2718d27ca805862bde23e915e23a0e` |
+| `stage1_extraction.py` reverted alone | `39902da4f8c7274185f611a17ba6e30a74b7623d057546698cc65b9b4830bde2` |
+| After | `b9a4a9de1cab6a2cb68281956a10bdbe972abb5161f281c0492c07e5e0d4cb99` |
+
+Measured read-only (whole-file `git show HEAD:<path>` bytes substituted into the hash) for default
+`{}` and shipped `config.yaml`, which agree. No input moved; the other eight hashed sources and
+`url_validator.py` are byte-unchanged. This is the **thirteenth sanitization-behaviour-changing
+rotation**:
+
+- The walk is one iterative pass in document order with no tree mutation, `unwrap()` or
+  `smooth()`. It skips `_DANGEROUS_TAGS` subtrees, comments and every non-text node, appends plain
+  `NavigableString`/`CData` text only, and emits `"\n"` on entering and leaving an element of the
+  closed block set (the spec's list). Every other element emits nothing. Then `_normalize_text`.
+- `extract_html(with_inline=True)` builds it **from its own soup**: no parse of its own. (The
+  existing `copy.copy` in `_extract_raw_text` already re-feeds the parser once; the inline form
+  adds none, pinned by comparing parser runs with and without it.)
+- `/retrieve` (any non-PDF fetch) scans it inside the existing `to_thread` hop through the module
+  name `extract_html`, then returns the extraction with `scan_text_inline=None` plus a
+  `StructuralScanResult`; no inline text leaves the thread and the early `del html_text` still
+  holds. The scan is skipped for a page over the character pre-check, which step 4a refuses.
+  `sanitize_and_structure` merges it after the as-is scan with `combine_scan_results`.
+- `/search` passes `with_inline=True` to the call it already makes per field and scans the builder's
+  forms of the inline text (`html_parsed=True`) as one more entry after each field's fold forms. The
+  inline text is bounded to the same cap as the scan form, so blank-line padding still cannot push a
+  payload past the cap and have it scanned. Wire forms and stage 3's input are byte-identical.
+- Accepted costs, pinned: a bold `<b>Assistant</b>:` label at line start now BLOCKs, and
+  syntax-highlighted code whose spans rejoin into a base64-like run is SUSPICIOUS.
+
+Timing: the walker over a pre-parsed 10 MB page of 1.25 M sibling `<b>` elements took 0.37 s (the
+parse itself 9.0 s on the same machine); 80 000 siblings take at most 3× the time of 40 000 (test).
+
+Corpus effect (regenerated `baseline.json`): the eight `split_tags` records are no longer `leaked`
+(`atk-0041`, `atk-0076`, `atk-0092`, `atk-0105` and `atk-0042` now `blocked`; `atk-0120`,
+`atk-0138`, `atk-0167` now `flagged`). No benign record moved and `git diff tests/corpus/cassettes/`
+is empty. The stage-3 attack denominator in `docs/corpus.md`'s Decision inputs falls 356 → 351; every
+fired cell is unchanged. Old cache keys invalidate. Contract stays `1.3.0`.
+
+### The forty-ninth rotation: the widened `system_tag` and the raw-markup scan primitive (`structural-markup-surface` US-010)
+
+`system_tag` widens from `<system>` to `<\s*(?:/\s*)?system\b[^<>]*>` (`re.IGNORECASE`), so
+`<system >`, `<system id=a>`, `<SYSTEM/>` and `</ system>` match. The slash and its trailing
+whitespace are one optional group, the same linearisation `envelope_breakout` received: the
+literal `<\s*/?\s*system…` lets two adjacent `\s*` split one whitespace run between them, which
+is quadratic on `<` followed by a long run. The two spellings accept the same language.
+
+Stage 2 also gains `_MARKUP_PATTERNS` (the registry objects for `system_tag`, `private_ip_href`
+and `envelope_breakout`) and `scan_raw_markup(markup)`, which collapses whitespace runs and runs
+one `search()` per subset pattern (first match only, `line_number=0`). It is not called by any
+route yet; US-011 wires it. Only `pipeline/stage2_structural.py` moves.
+
+| State | Revision |
+|---|---|
+| Before (`e2df89d`) / `stage2_structural.py` reverted | `b9a4a9de1cab6a2cb68281956a10bdbe972abb5161f281c0492c07e5e0d4cb99` |
+| After | `9c8bb9a67e8f13f07ea759f63d4a1126c87da9549efa72b04d27838ae3c9ee54` |
+
+Measured read-only (whole-file `git show HEAD:pipeline/stage2_structural.py` bytes substituted
+into the hash) for default `{}` and shipped `config.yaml`, which agree. No input moved. This is
+the **fourteenth sanitization-behaviour-changing rotation**.
+
+Corpus effect (regenerated `baseline.json`): `atk-0378` and `atk-0396` (`natural_language`,
+`/extract`, both carry `<SYSTEM MODE>`) are now `blocked` at stage 2 under both models and both
+configs. No benign record moved (`ben-0288` included). Attack stage-3 denominator 351 → 349,
+`natural_language` 155 → 153; the 86M's `max@0.85` fired count 15 → 14 and `mean@0.5` 21 → 20,
+because `atk-0396` was an 86M stage-3 catch. `docs/corpus.md` Decision inputs updated;
+`git diff tests/corpus/cassettes/` is empty.
+
+Both are ingested CyberSecEval rows, and the ingest rule is "the first stage-2 category that
+fires, else `natural_language`" (`scripts/corpus/ingest/render.py` `assign_category`), which
+now returns `instruction_override` for each. They are re-homed to
+`tests/corpus/attacks/instruction_override.jsonl` with their ids, text and markers unchanged
+(`test_an_ingested_row_is_leaked_or_keeps_its_structural_category`). Moving `atk-0396`, an 86M
+stage-3 catch, out of `natural_language` drops that cell's `/extract` 86M catch to 3/31, so
+its two `floors.json` cells (`default`, `contiguity`) are lowered by hand from 0.10 to 0.05;
+the catch did not regress, it moved with the record.
+
+Timing (`scan_raw_markup`, best of 3, GC paused): match-dense private-IP links 0.098 s at 5 MB /
+0.199 s at 10 MB; whitespace bomb 0.016 s / 0.032 s; `&lt;` flood 0.267 s / 0.534 s.
+
+### The fiftieth rotation: the raw-markup scan is wired (`structural-markup-surface` US-011)
+
+`/retrieve` (non-PDF): `_extract_html_and_scan_inline`, the stage-1 thread function, runs
+`scan_raw_markup` on the fetched HTML string beside the inline scan and returns one combined
+`StructuralScanResult` through `extra_scans`; only a scan result leaves the thread. `/search`:
+each field's raw provider value (the string `extract_html` is fed, after NFC, control strip
+and the 4× bound) is scanned with `scan_raw_markup` as one more loop entry. No span is cut:
+nothing is removed from `raw_text` or any wire form, so stage 3's input is unchanged.
+
+| State | Revision |
+|---|---|
+| Before (`6e84a56`) / `orchestrator.py` reverted | `9c8bb9a67e8f13f07ea759f63d4a1126c87da9549efa72b04d27838ae3c9ee54` |
+| After | `3cfe54c9d8cf3f744300eeb51cd86608282535b5fceeda6fb5d768ef035110aa` |
+
+Measured read-only (whole-file `git show HEAD:pipeline/orchestrator.py` bytes substituted)
+under default `{}` and shipped `config.yaml`, both giving the values above;
+`stage2_structural.py` did not move in this story. The **fifteenth
+sanitization-behaviour-changing rotation**.
+
+Corpus effect: `atk-0033` (`/retrieve`) is `blocked`; `atk-0160` (`/retrieve`) and `atk-0161`,
+`atk-0132` (`/search`) are `flagged`; none is `leaked`. `ben-0288` (`blocked`) and `ben-0289`
+(`flagged`) move on `/search` by the owner's named exemption (2026-10-06) and are re-pinned; no
+other benign record moves. Attack stage-3 denominator 349 → 348, `over_defence_probe` 79 → 78;
+`over_defence_probe` `/search` `max_fpr` floor raised 0.75 → 0.80. Cassettes byte-unchanged.
+
+### The fifty-first rotation: a quarantined response carries no title (`structural-wire-closure` US-001)
+
+`finalize_quarantine` (`pipeline/stage4_structuring.py`) returns `title=None` for stage-2
+BLOCKED, stage-3 INJECTION_DETECTED and `unavailable_blocked`, so quarantine removes all
+hostile document text from the wire. Quarantined bodies are never cached (step 8 writes
+only when `not injection_detected`), so there is no replay path to protect.
+
+| State | Revision |
+|---|---|
+| Before (`ec63043`) / `stage4_structuring.py` reverted | `3cfe54c9d8cf3f744300eeb51cd86608282535b5fceeda6fb5d768ef035110aa` |
+| After | `919fa9775d89782cc084f038803da248c1b1e7b407776e9d5ddedb14baff2f2c` |
+
+Measured read-only (whole-file `git show HEAD:pipeline/stage4_structuring.py` bytes
+substituted) under default `{}` and shipped `config.yaml`, both giving the values above.
+`stage4_structuring.py` is the only hashed file that moved. This is a sanitizer outcome
+(GOVERNANCE ruling (m)): no contract bump, `contract/openapi.yaml` and its anchor
+byte-identical. Corpus effect: `atk-0059`, `atk-0211`, `atk-0212` (`/retrieve`) report
+`marker_on_wire` false; baseline `blocked_but_leaked` is 0 everywhere. Cassettes
+byte-unchanged. **Not replayed to Poppy:** compare contracts, not revisions.
+
+### The fifty-second rotation: a visibility pass on the served body (`structural-wire-closure` US-002)
+
+`extract_html` (`pipeline/stage1_extraction.py`) now prunes text a browser would not show from
+the body it hands trafilatura. Inline signals only, body descendants only, best effort; the
+real control remains stages 2 and 3 scanning `raw_text`, which is unchanged.
+
+- **Non-overridable** (subtree removed): `hidden` (not `until-found`), `aria-hidden="true"`,
+  `display:none`, zero `opacity`, a four-zero `clip:rect()`, `text-indent` <= -999px,
+  `position:absolute|fixed` with `left`/`top` <= -999px, `overflow:hidden` with a zero
+  `width`/`height`.
+- **Inherited** (own text removed, a re-shown descendant kept with its subtree):
+  `visibility:hidden|collapse`, `font-size` zero. Re-show: `visibility:visible`, or a non-zero
+  `font-size` in `px pt pc cm mm in Q rem`; relative sizes under a zero parent stay zero.
+- Offsets match px only; `overflow:hidden` alone never prunes; last declaration wins;
+  malformed declarations are ignored. Traversal and parsing are iterative and linear.
+- Only when something was pruned does trafilatura get `str(pruned_soup)`, and the trafilatura-
+  failed fallback is the pruned flattened text with `main_content_is_fallback=True`.
+  Unpruned pages get the original string and the flag stays `None` (equality inference, as
+  before). `/search`, `scripts/corpus/records.py` and `tests/corpus_stage2.py` pass
+  `prune_hidden=False`.
+
+| State | Revision |
+|---|---|
+| Before (`a7b7666`) / all three files reverted | `919fa9775d89782cc084f038803da248c1b1e7b407776e9d5ddedb14baff2f2c` |
+| `stage1_extraction.py` reverted alone | `4833c46180cef46ee23cc4222ca246647512be3a5bcb3c49df8fafa6d355463f` |
+| `stage4_structuring.py` reverted alone | `1e762f31c370a6a4d47ab2c7540ff9976f907b89f682b8f24ed3bc044f7b272f` |
+| `orchestrator.py` reverted alone | `4924b0a6c6d06a6a606a7969891fd58ff2bd38ac39ac7ee789cd6eedb0b79dfc` |
+| After | `46b8d1bbc79f3fc4fe273e4ca2488b0e0ba0c281658910b3dd8cfad2924a2d21` |
+
+Whole-file read-only reversals against `HEAD`, under default `{}` and shipped `config.yaml`,
+both giving the values above. `smart_extraction.py` is not a `_REVISION_SOURCES` member.
+Sanitizer outcome (GOVERNANCE ruling (m)): no contract bump, `contract/openapi.yaml` and its
+anchor untouched. Corpus effect: of 359 page records, 10 `hidden_markup` attack records
+(`css_offscreen`, `hidden_div`) change `main_content` and none of the 349 others; the six
+that leaked on `/retrieve` are `neutralised` (24 baseline entries across two models and two
+configs). **Benign pages whose body changed: 0**, so no per-page character loss to list.
+`raw_text`, title, author and date are byte-identical for all 359; both cassettes are
+byte-unchanged. Residuals for spec 4: class/stylesheet hiding, `transform:scale(0)`, colour
+camouflage, non-px offsets, tiny non-zero fonts, the 1px visually-hidden clip, `[hidden]`
+overridden by an inline `display`, and `aria-hidden` text browsers still render. Accepted
+benign costs (fixtured): ARIA tab panels using `hidden` and `opacity:0` hero blocks are
+pruned. **Not replayed to Poppy:** compare contracts, not revisions.

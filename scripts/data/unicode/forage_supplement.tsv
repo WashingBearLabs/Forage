@@ -1,0 +1,34 @@
+# Forage reviewed supplement to Unicode TR39 confusables (owner ruling, 2026-10-06).
+#
+# TR39 maps many look-alikes to a non-ASCII "prototype" (for example Cyrillic
+# U+043A to U+0138 KRA), which the generator drops: a fold must end in ASCII.
+# Each row below names the Latin letter a reader sees instead. The generator
+# merges these after TR39 (a row wins over a TR39 mapping of the same source)
+# and refuses a row whose target is non-ASCII, whose source is ASCII, or whose
+# reason is blank.
+#
+# Format: U+XXXX<TAB>latin<TAB>reason. Lines starting with '#' and blank lines
+# are ignored. Every row was checked against the `multilingual` benign genre:
+# folding that genre's records moves no stage-2 verdict (see
+# tests/test_confusables.py::test_supplement_leaves_multilingual_benign_verdicts).
+U+043A	k	CYRILLIC SMALL LETTER KA reads as k
+U+0442	t	CYRILLIC SMALL LETTER TE reads as a small-cap t
+U+043F	n	CYRILLIC SMALL LETTER PE reads as n
+U+041F	n	CYRILLIC CAPITAL LETTER PE reads as a wide N
+U+043C	m	CYRILLIC SMALL LETTER EM reads as a small-cap m
+U+0438	n	CYRILLIC SMALL LETTER I is a mirrored n
+U+0418	n	CYRILLIC CAPITAL LETTER I is a mirrored N
+U+043D	h	CYRILLIC SMALL LETTER EN reads as a small-cap h
+U+0434	g	CYRILLIC SMALL LETTER DE reads as g in many typefaces
+U+0414	g	CYRILLIC CAPITAL LETTER DE reads as g in many typefaces
+U+043B	n	CYRILLIC SMALL LETTER EL reads as a flat-topped n
+U+041B	n	CYRILLIC CAPITAL LETTER EL reads as a flat-topped N
+U+03BA	k	GREEK SMALL LETTER KAPPA reads as k
+U+03C4	t	GREEK SMALL LETTER TAU reads as t
+U+03B7	n	GREEK SMALL LETTER ETA reads as n
+U+03BC	u	GREEK SMALL LETTER MU reads as u
+U+03B5	e	GREEK SMALL LETTER EPSILON reads as e
+U+03B2	b	GREEK SMALL LETTER BETA reads as b
+U+03C0	n	GREEK SMALL LETTER PI reads as n
+U+03A0	n	GREEK CAPITAL LETTER PI reads as a wide N
+U+03C7	x	GREEK SMALL LETTER CHI reads as x

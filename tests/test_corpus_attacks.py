@@ -47,7 +47,12 @@ from scripts.corpus.records import (
     page_document,
 )
 from scripts.corpus.replay import ReplayClassifier
-from tests.corpus_stage2 import stage2_forms, stage2_hits, stage2_record_hits
+from tests.corpus_stage2 import (
+    stage2_forms,
+    stage2_hits,
+    stage2_markup_hits,
+    stage2_record_hits,
+)
 
 # ---------------------------------------------------------------------------
 # US-001: structural families with obfuscation variants
@@ -328,6 +333,8 @@ def test_a_tag_consumed_record_carries_the_literal_and_stage_two_never_sees_it()
         raw_hits_name = name in stage2_hits(_raw_text(record))
         assert raw_hits_name, record.id
         assert name not in stage2_record_hits(record), record.id
+        # The converse: the raw-markup scan sees the literal the parser ate.
+        assert name in stage2_markup_hits(record), record.id
 
 
 def test_a_pinned_record_fires_the_regex_it_names() -> None:

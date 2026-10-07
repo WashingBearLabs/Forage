@@ -179,8 +179,8 @@ An urgent fix does not get to skip the rules; it gets a faster lane through them
 
 ## Recorded rulings
 
-Thirteen rulings — five from `feature-forage-contract`, eight from
-`epic-forage-hardening` — kept here so the next change re-reads them instead of
+Fourteen rulings — five from `feature-forage-contract`, eight from
+`epic-forage-hardening`, one from `forage-structural-hardening` — kept here so the next change re-reads them instead of
 re-litigating them. Each cites its source.
 
 ### (a) The documentation pass does not bump the contract
@@ -701,3 +701,29 @@ Both extraction middlewares still refuse before routing.
 marker liveness, interpolating-validator counterexample, never-raises guards
 and closed-log captures); `tests/test_models.py` (structural canaries);
 `kit_tools/arch/SECURITY.md`; `docs/releases.md`.
+
+### (m) A quarantined response's `title` becoming `null` is a sanitizer outcome, no bump
+
+**Ruling:** `structural-wire-closure` US-001 makes `finalize_quarantine` return
+`title=None` for every quarantined response — stage-2 BLOCKED, stage-3
+INJECTION_DETECTED and `unavailable_blocked`. That is a **sanitizer outcome, not a
+contract change: no bump**. The contract stays at `1.3.0`, and `contract/openapi.yaml`
+and its anchor are byte-identical (no description edit).
+
+**Why no bump.** `title` is `str | None` with default `None` on both response models, so
+the shape is unchanged, and the title is *document text*. Which document text a
+quarantined response carries is decided by the sanitizer — exactly as it already decides
+that the body is replaced by a fixed notice. A consumer must already treat `title` as
+nullable.
+
+**Distinguished from ruling (e).** (e) classed the normalisation of `SearchResult.engine`
+as a MINOR because `engine` is *provider-asserted metadata*: a field whose emitted values
+moved for inputs the sanitizer had never judged. A title is not metadata about the
+document; it is the document's own text, and quarantine is the sanitizer withholding
+hostile document text. The two rulings do not generalise into each other: normalising a
+metadata field stays MINOR; withholding document text on quarantine is a sanitizer
+outcome.
+
+**Source:** `kit_tools/specs/archive/feature-structural-wire-closure.md`, US-001 *Implementation
+Hints* (owner pre-resolution, 2026-10-06); `pipeline/stage4_structuring.py`
+`finalize_quarantine`; `tests/test_stage4_structuring.py` and `tests/test_orchestrator.py`.

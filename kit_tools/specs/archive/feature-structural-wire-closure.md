@@ -1,17 +1,18 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: structural-wire-closure
-status: active
+status: completed
 session_ready: true
 depends_on: [structural-markup-surface]
 vision_ref: "T2.3 follow-up — close the injection corpus's structural findings"
 type: epic-child
-size: M
+size: L
 epic: forage-structural-hardening
 epic_seq: 3
 epic_final: false
 created: 2026-10-06
-updated: 2026-10-06
+updated: 2026-10-07
+completed: 2026-10-07
 ---
 
 # Feature Spec: Structural Wire Closure — Quarantined Titles and Hidden Content Off the Served Body
@@ -110,32 +111,32 @@ their title.
 - `stage4_structuring.py` is hashed, so record the rotation.
 
 **Acceptance Criteria:**
-- [ ] `finalize_quarantine` returns `title=None` for stage-2 BLOCKED, stage-3 INJECTION_DETECTED
+- [x] `finalize_quarantine` returns `title=None` for stage-2 BLOCKED, stage-3 INJECTION_DETECTED
       and `unavailable_blocked` (three unit tests). A non-quarantined result keeps its title
       (unit test).
-- [ ] Route-level tests assert `title` is `null` on the wire for a `/retrieve` stage-2 block, a
+- [x] Route-level tests assert `title` is `null` on the wire for a `/retrieve` stage-2 block, a
       stage-3 block and `unavailable_blocked`, and for an `/extract` block whose injected
       extraction carries a title. Each test fails on the pre-story code.
-- [ ] A test asserts a quarantined `/retrieve` response is never written to the cache.
-- [ ] `atk-0059`, `atk-0211` and `atk-0212` report `marker_on_wire` false in the baseline
+- [x] A test asserts a quarantined `/retrieve` response is never written to the cache.
+- [x] `atk-0059`, `atk-0211` and `atk-0212` report `marker_on_wire` false in the baseline
       regenerated with `uv run python -m scripts.corpus.report --write-baseline`.
-- [ ] `contract/GOVERNANCE.md` records ruling (m) with a `**Source:**` line, distinguished from
+- [x] `contract/GOVERNANCE.md` records ruling (m) with a `**Source:**` line, distinguished from
       ruling (e), and its origin breakdown is updated. `_RULING_MARKERS` includes `### (m) `,
       every "thirteen rulings" count reads "fourteen", and `tests/test_governance_docs.py` is
       green.
-- [ ] `docs/releases.md` Unreleased carries the null-title consumer note.
-- [ ] `contract/openapi.yaml` and `contract/openapi.yaml.sha256` are byte-unchanged, and
+- [x] `docs/releases.md` Unreleased carries the null-title consumer note.
+- [x] `contract/openapi.yaml` and `contract/openapi.yaml.sha256` are byte-unchanged, and
       `tests/test_contract_export.py` is green.
-- [ ] `test_every_blocked_but_leaked_record_is_filed` accepts an empty id set and keeps a
+- [x] `test_every_blocked_but_leaked_record_is_filed` accepts an empty id set and keeps a
       non-vacuity assertion on the baseline's records.
-- [ ] Both cassette files are byte-unchanged, with zero misses. No core-genre benign record
+- [x] Both cassette files are byte-unchanged, with zero misses. No core-genre benign record
       moves, and the pin tests are green.
-- [ ] The rotation is recorded (CLAUDE.md, `docs/bootstrap-notes.md`, GOTCHAS table) with a
+- [x] The rotation is recorded (CLAUDE.md, `docs/bootstrap-notes.md`, GOTCHAS table) with a
       reversal control.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` reports 0 errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` reports 0 errors
 
 ### US-002: A Forage-owned visibility pass on the served body
 
@@ -231,39 +232,39 @@ byte-identical `main_content`, and summary mode on the fallback path behaves as 
     `aria-hidden` text that browsers still render.
 
 **Acceptance Criteria:**
-- [ ] Each non-overridable signal prunes its subtree, and each inherited signal prunes its own
+- [x] Each non-overridable signal prunes its subtree, and each inherited signal prunes its own
       text while keeping an inline re-shown descendant. There is one positive and one negative
       fixture per rule, including `overflow:hidden` alone (kept), `hidden="until-found"` (kept),
       a non-px offset (kept), and a repeated-declaration last-wins case.
-- [ ] Every benign corpus page with no listed signal has `main_content` byte-identical to its
+- [x] Every benign corpus page with no listed signal has `main_content` byte-identical to its
       pre-story value (test over the corpus pages). The count of benign pages whose body changed
       is recorded in Implementation Notes.
-- [ ] `raw_text` is byte-identical for every corpus page. Both cassette files are
+- [x] `raw_text` is byte-identical for every corpus page. Both cassette files are
       byte-unchanged, with zero misses.
-- [ ] `ExtractionResult.main_content_is_fallback` is set by `extract_html`, and `extract_summary`
+- [x] `ExtractionResult.main_content_is_fallback` is set by `extract_html`, and `extract_summary`
       uses it. Summary-mode output on the fallback path is unchanged for an unpruned page and
       defined (tested) for a pruned one. PDF and upload results (`None`) behave as before.
-- [ ] The 6 `css_offscreen` and `hidden_div` records are not `leaked` in the regenerated
+- [x] The 6 `css_offscreen` and `hidden_div` records are not `leaked` in the regenerated
       baseline. `tests/test_corpus_harness.py` carrier expectations are updated to the measured
       outcomes. No core-genre benign record moves from `passed`, and the pin tests are green.
-- [ ] Style parsing tolerates mixed case, whitespace, `!important` and malformed declarations.
+- [x] Style parsing tolerates mixed case, whitespace, `!important` and malformed declarations.
       A page with 10,000 levels of nesting and a 1 MB style value is processed without raising,
       within a recorded time.
-- [ ] An empty pruned body still returns a well-formed `/retrieve` 200 in both extract modes
+- [x] An empty pruned body still returns a well-formed `/retrieve` 200 in both extract modes
       (route test).
-- [ ] The prune helper never mutates the shared soup: `raw_text`, title, author and date are
+- [x] The prune helper never mutates the shared soup: `raw_text`, title, author and date are
       identical with pruning on and off (test). The 10,000-level nesting test runs end to end
       through `extract_html`.
-- [ ] `main_content_is_fallback` stays `None` on an unpruned page, including a short page whose
+- [x] `main_content_is_fallback` stays `None` on an unpruned page, including a short page whose
       trafilatura output equals `raw_text`. Summary-mode output for that page is unchanged
       (test).
-- [ ] A relative-unit `font-size` (`1em`, `150%`) under a `font-size:0` parent is pruned, and an
+- [x] A relative-unit `font-size` (`1em`, `150%`) under a `font-size:0` parent is pruned, and an
       absolute or `rem` re-show is kept (fixtures).
-- [ ] The rotation is recorded with a reversal control.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` reports 0 errors
+- [x] The rotation is recorded with a reversal control.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` reports 0 errors
 
 ## Edge Cases
 
@@ -316,6 +317,23 @@ byte-identical `main_content`, and summary mode on the fallback path behaves as 
 - Security posture: [SECURITY.md](../arch/SECURITY.md)
 
 ## Implementation Notes
+
+**US-002 (visibility pass).**
+- Rotation `919fa977…` → `46b8d1bb…`; stage1, stage4 and orchestrator each reverted alone
+  (`4833c461…`, `1e762f31…`, `4924b0a6…`), all-reverted control reproduces `919fa977…`.
+  `smart_extraction.py` is not hashed. Details in `docs/bootstrap-notes.md`.
+- Benign corpus pages whose `main_content` changed: **0** of the benign page records (so no
+  per-page character losses or >20% core-genre losses to raise). 10 attack records changed
+  (`css_offscreen`/`hidden_div`); the 6 that leaked are now neutralised. `raw_text`, title,
+  author, date byte-identical across all 359 page records; cassettes byte-unchanged.
+- 10,000-level nesting through `extract_html`: ~1.5 s; 1 MB style value: ~0.04 s.
+- `_has_visibility_signal` pre-check: when no body descendant has `hidden`, `aria-hidden` or
+  `style`, the helper returns the original soup unchanged (no copy); otherwise it prunes
+  `copy.copy(soup)`.
+- Inherited-hidden elements keep their (emptied) tag shell; only non-blank removed text counts
+  as `pruned`. An all-hidden, title-less page serves `body == ""` as a 200 in both modes; a
+  title still reaches the pruned-fallback body because the flattener includes `<title>` text
+  exactly as `raw_text` does.
 
 ## Refinement Notes
 

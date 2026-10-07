@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: structural-scan-forms
-status: active
+status: completed
 session_ready: true
 depends_on: []
 vision_ref: "T2.3 follow-up — close the injection corpus's structural findings"
@@ -11,7 +11,8 @@ epic: forage-structural-hardening
 epic_seq: 1
 epic_final: false
 created: 2026-10-06
-updated: 2026-10-06
+updated: 2026-10-07
+completed: 2026-10-07
 ---
 
 # Feature Spec: Structural Scan Forms — Case, Linear Patterns, Entities and Confusables on Every Route
@@ -96,25 +97,25 @@ regenerated baseline shows the 5 `case` leaks caught, with no other benign movem
 - Leaked records: `atk-0071`, `atk-0070`, `atk-0086`, `atk-0116`, `atk-0147`.
 
 **Acceptance Criteria:**
-- [ ] A parametrised test over exactly the seven named patterns asserts `scan_structural` gives
+- [x] A parametrised test over exactly the seven named patterns asserts `scan_structural` gives
       each probe, rendered upper-case, lower-case and alternating-case, the same verdict as the
       unvaried probe. The test fails on the pre-story file.
-- [ ] Benign unit fixtures, a column-0 YAML `system:` key and a `Poppy:` transcript line, are
+- [x] Benign unit fixtures, a column-0 YAML `system:` key and a `Poppy:` transcript line, are
       asserted BLOCKED, with a comment citing this spec's decision.
-- [ ] The 5 `case` records are not `leaked` in the baseline regenerated with
+- [x] The 5 `case` records are not `leaked` in the baseline regenerated with
       `uv run python -m scripts.corpus.report --write-baseline`.
-- [ ] No core-genre benign record (`news`/`docs`/`forum`/`ecommerce`/`code`) moves from
+- [x] No core-genre benign record (`news`/`docs`/`forum`/`ecommerce`/`code`) moves from
       `passed`, and the pin tests in `tests/test_corpus_gate.py` are green.
-- [ ] `git diff --exit-code tests/corpus/cassettes/` exits 0, and the cassette-replay tests are
+- [x] `git diff --exit-code tests/corpus/cassettes/` exits 0, and the cassette-replay tests are
       green.
-- [ ] `docs/corpus.md` "Decision inputs" tables are updated from the regenerated `offline`
+- [x] `docs/corpus.md` "Decision inputs" tables are updated from the regenerated `offline`
       section, and `tests/test_corpus_docs.py` is green.
-- [ ] The rotation is recorded in CLAUDE.md, `docs/bootstrap-notes.md` and the GOTCHAS table,
+- [x] The rotation is recorded in CLAUDE.md, `docs/bootstrap-notes.md` and the GOTCHAS table,
       with a read-only reversal control under default and shipped config.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` reports 0 errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` reports 0 errors
 
 ### US-002: Make every stage-2 pattern linear, and let the gap patterns cross newlines
 
@@ -173,29 +174,29 @@ leaks are caught on `/retrieve` and `/extract`. No other corpus record changes v
 - Only `stage2_structural.py` moves.
 
 **Acceptance Criteria:**
-- [ ] `disregard_instructions`, `exfil_image` and `envelope_breakout` are rewritten exactly as
+- [x] `disregard_instructions`, `exfil_image` and `envelope_breakout` are rewritten exactly as
       pinned. Both gap patterns match their probe (and the constructed spaced-alt-text exfil
       probe) split by a single newline at every interior whitespace position. `disregard`
       matches with a 10,000-character same-paragraph gap and does **not** match across a
       paragraph break (`\n\n`). Both behaviours are pinned as benign fixtures.
-- [ ] The all-patterns sweep passes over all five shape families: each pattern's
+- [x] The all-patterns sweep passes over all five shape families: each pattern's
       2 MiB/256 KiB best-of-3 ratio is ≤ 12 (or both times are under 20 ms), and all 24 patterns
       finish one 2 MiB form within 2 s. A **match-dense** 2 MiB input (thousands of
       `private_ip_href` and `base64_run` matches) is included. The numbers are recorded in
       Implementation Notes.
-- [ ] Line numbers come from a precomputed newline index, and every corpus record's
+- [x] Line numbers come from a precomputed newline index, and every corpus record's
       `FlaggedSpan.line_number` values are unchanged (test).
-- [ ] The 4 `second_paragraph` records are not `leaked` in the regenerated baseline. No corpus
+- [x] The 4 `second_paragraph` records are not `leaked` in the regenerated baseline. No corpus
       record that matched before loses its match, and any changed `structural_flags` are listed.
-- [ ] No core-genre benign record moves from `passed`, and the pin tests are green. Both
+- [x] No core-genre benign record moves from `passed`, and the pin tests are green. Both
       cassette files are byte-unchanged.
-- [ ] `docs/corpus.md` "Decision inputs" tables are updated, and `tests/test_corpus_docs.py` is
+- [x] `docs/corpus.md` "Decision inputs" tables are updated, and `tests/test_corpus_docs.py` is
       green.
-- [ ] The rotation is recorded with a reversal control.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` reports 0 errors
+- [x] The rotation is recorded with a reversal control.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` reports 0 errors
 
 ### US-003: A shared decoded scan form on all routes
 
@@ -257,32 +258,32 @@ entity-encoded whitespace input.
 - Hashed files: `stage2_structural.py` and `orchestrator.py`.
 
 **Acceptance Criteria:**
-- [ ] Each of the 24 probes is caught when every character is numeric-hex entity-encoded at one
+- [x] Each of the 24 probes is caught when every character is numeric-hex entity-encoded at one
       level and at two levels, and when its punctuation is named-entity-encoded. This holds on
       `/retrieve` (HTML) and `/extract` (text). A three-level payload is asserted not caught and
       documented as an accepted gap.
-- [ ] The timing sweep includes entity-encoded whitespace runs and entity-dense 2 MiB input
+- [x] The timing sweep includes entity-encoded whitespace runs and entity-dense 2 MiB input
       through the decoded form, and passes US-002's ratio and ceiling.
-- [ ] Stage 3 receives exactly `extraction.raw_text` (argument-identity test). Both cassette
+- [x] Stage 3 receives exactly `extraction.raw_text` (argument-identity test). Both cassette
       files are byte-unchanged, with zero misses (`UnrecordedTextError` would surface as
       `UnrecordedRecordError` in the drivers).
-- [ ] A record whose verdict doesn't move has byte-identical `structural_flags` and penalty (test
+- [x] A record whose verdict doesn't move has byte-identical `structural_flags` and penalty (test
       over all corpus records). A decoded-form-only catch takes its flags from that form (unit
       test). No log line or metric contains `matched_text` (log-capture test).
-- [ ] `_CONTROL_CHARS_RE` exists once, in `stage2_structural.py`.
-- [ ] All listed corpus mirrors obtain forms from the builder, and `tests/test_corpus_attacks.py`,
+- [x] `_CONTROL_CHARS_RE` exists once, in `stage2_structural.py`.
+- [x] All listed corpus mirrors obtain forms from the builder, and `tests/test_corpus_attacks.py`,
       `tests/test_corpus_lint.py` and `tests/test_corpus_ingest.py` are green.
-- [ ] The tutorial-page benign fixture is pinned with its decided outcome.
-- [ ] The 8 `entity` records are not `leaked`, no core-genre benign record moves from `passed`,
+- [x] The tutorial-page benign fixture is pinned with its decided outcome.
+- [x] The 8 `entity` records are not `leaked`, no core-genre benign record moves from `passed`,
       and the pin tests are green. `tests/test_search_pipeline_pins.py` is unchanged.
-- [ ] `docs/corpus.md` "Decision inputs" tables are updated, and `tests/test_corpus_docs.py` is
+- [x] `docs/corpus.md` "Decision inputs" tables are updated, and `tests/test_corpus_docs.py` is
       green.
-- [ ] The rotation is recorded. Each hashed file is reverted alone, and a both-reverted control
+- [x] The rotation is recorded. Each hashed file is reverted alone, and a both-reverted control
       reproduces the prior value.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` reports 0 errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` reports 0 errors
 
 ### US-004: Vendor Unicode confusables and generate the fold tables
 
@@ -339,26 +340,26 @@ byte for byte, and the fold-table tests pass. Nothing is wired into stage 2 yet.
 - **Don't adopt a library** (Research Findings).
 
 **Acceptance Criteria:**
-- [ ] `scripts/generate_confusables.py --check` exits 0 against the committed
+- [x] `scripts/generate_confusables.py --check` exits 0 against the committed
       `pipeline/confusables.py`. A hermetic drift test runs it, and the generator refuses a data
       file with the wrong sha256 (test).
-- [ ] Folding never changes ASCII: 500 fixed-seed strings over `chr(0)`-`chr(127)`, plus every
+- [x] Folding never changes ASCII: 500 fixed-seed strings over `chr(0)`-`chr(127)`, plus every
       benign corpus ASCII text.
-- [ ] An **independent** hand-written oracle of Cyrillic and Greek look-alikes for every Latin
+- [x] An **independent** hand-written oracle of Cyrillic and Greek look-alikes for every Latin
       letter in any probe (both cases, including к т п м и н д л κ τ η μ ε β ϲ) folds each
       entry to its intended letter case-insensitively, through `PRE_NFKC_TABLE` → NFKC →
       `FOLD_TABLE` (supplement merged), or under the `i` reading for `AMBIGUOUS_IL` members.
-- [ ] `scripts/data/unicode/forage_supplement.tsv` exists with a reason on every row. The
+- [x] `scripts/data/unicode/forage_supplement.tsv` exists with a reason on every row. The
       generator refuses malformed rows (test), and `PRE_NFKC_TABLE` is generated, not
       hand-written.
-- [ ] `pipeline/confusables.py` passes `ruff check` and `ruff format --check`, contains no
+- [x] `pipeline/confusables.py` passes `ruff check` and `ruff format --check`, contains no
       literal non-ASCII character, and its header records the skipped multi-code-point count.
-- [ ] `NOTICE` carries the Unicode attribution, and `scripts/data/unicode/README` records the
+- [x] `NOTICE` carries the Unicode attribution, and `scripts/data/unicode/README` records the
       URL, date and sha256.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` reports 0 errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` reports 0 errors
 
 ### US-005: Add the confusable fold forms and hash them into the revision
 
@@ -409,32 +410,32 @@ benign records.
   - search: `atk-0121`, `atk-0044`
 
 **Acceptance Criteria:**
-- [ ] For each of the 24 probes, at each Latin-letter position, each oracle look-alike (both
+- [x] For each of the 24 probes, at each Latin-letter position, each oracle look-alike (both
       readings for `AMBIGUOUS_IL`) substituted at that single position is non-CLEAN through
       `sanitize_and_structure` (`/retrieve`, `/extract`) and the `/search` field scan.
       Variants are generated in sorted order.
-- [ ] The 9 `confusable` records are not `leaked` in the regenerated baseline. The
+- [x] The 9 `confusable` records are not `leaked` in the regenerated baseline. The
       `multilingual` benign genre and every core-genre benign record are unchanged, and the pin
       tests are green.
-- [ ] `pipeline/confusables.py` is in `_REVISION_SOURCES`, and `unicodedata@<version>` is a
+- [x] `pipeline/confusables.py` is in `_REVISION_SOURCES`, and `unicodedata@<version>` is a
       hashed input (test: changing the reported version changes the revision).
       `tests/test_sanitizer_revision.py` and `tests/test_governance_docs.py` are green with
       "ten" in every prose count.
-- [ ] US-002's timing sweep passes, including the maximal-NFKC-expansion input through the fold
+- [x] US-002's timing sweep passes, including the maximal-NFKC-expansion input through the fold
       forms.
-- [ ] A 10 MiB `/retrieve` page of U+FDFA is flagged `encoded_payload`, skips the fold forms,
+- [x] A 10 MiB `/retrieve` page of U+FDFA is flagged `encoded_payload`, skips the fold forms,
       logs `stage2_fold_expansion_refused`, and peaks under 400 MB of traced allocation for
       stage 2 (`tracemalloc` test). A page at 3.9× expansion is folded normally.
-- [ ] Both cassette files are byte-unchanged, with zero misses. `tests/test_search_pipeline_pins.py`
+- [x] Both cassette files are byte-unchanged, with zero misses. `tests/test_search_pipeline_pins.py`
       is green.
-- [ ] `docs/corpus.md` "Decision inputs" tables are updated, and `tests/test_corpus_docs.py` is
+- [x] `docs/corpus.md` "Decision inputs" tables are updated, and `tests/test_corpus_docs.py` is
       green.
-- [ ] The rotation is recorded, with controls: module removed, the input removed, and each
+- [x] The rotation is recorded, with controls: module removed, the input removed, and each
       edited hashed file reverted alone.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` reports 0 errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` reports 0 errors
 
 ## Edge Cases
 
@@ -499,6 +500,19 @@ benign records.
 - Known Issues: [GOTCHAS.md](../docs/GOTCHAS.md)
 
 ## Implementation Notes
+
+### US-002
+
+- **Deviation from the pinned `exfil_image`:** `!\[[^\]]*\]…` is quadratic on `![![![…` with no `]`
+  (10.1 s at 256 KiB; the sweep caught it). The alt text is `(?:(?!!\[)[^\]])*`, so it also stops at the
+  next `![`. Everything else is as pinned.
+- Sweep: every 2 MiB/256 KiB ratio is 7.0-9.6; all 24 patterns on one 2 MiB form total 0.40-0.50 s per
+  family. GC is paused while timing: match-dense runs allocate ~10^5 match objects and the collector
+  otherwise reads as a 15x "ratio".
+- Corpus flags changed (gains only, none lost): `atk-0053`, `atk-0054` (clean -> BLOCKED), `atk-0152`,
+  `atk-0153` (clean -> SUSPICIOUS), `atk-0055`, `atk-0154` (search: the match now also fires on the
+  newline-preserving form). No benign record moved. Stage-3 attack denominator 369 -> 367.
+- Revision `8ca7db8d…` -> `61c41b1a…`; reverting `stage2_structural.py` reproduces `8ca7db8d…`.
 
 ## Refinement Notes
 

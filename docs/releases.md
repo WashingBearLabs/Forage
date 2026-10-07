@@ -33,6 +33,41 @@ Not yet tagged; the version number is decided at the release gate. Contract stay
   `fetch_error` (reason ending `unsupported_encoding` / `malformed_body`); previously such a
   body was passed through undecoded into extraction. Oversized bodies keep
   `content_too_large`.
+- **Stage 2 catches more variants of the same 24 patterns** (`epic-forage-structural-hardening`).
+  Besides the extracted text as-is, stage 2 now scans scan-only derived forms of it: an
+  entity-decoded form (one level after an HTML parse, two for uploads), a confusable-folded
+  form under both readings of the ambiguous I/l class, and, for HTML, an inline-joined form
+  in which an inline tag no longer splits a keyword. The patterns are case-insensitive, the two
+  gap patterns cross a newline (the `disregard … instructions` gap stops at a blank line),
+  and three markup patterns (`<system>` tags,
+  private-IP `href`/`src`, envelope tags) also run on the raw markup the parser would
+  consume. Pages and search results using those case, entity, newline-split, confusable,
+  inline-tag-split or markup-consumed variants are now `blocked` or `suspicious` where they
+  previously passed. Stage 3's input is byte-unchanged; a fold that would expand past 4× is
+  refused and the page flagged `suspicious` (`encoded_payload`), never truncated.
+- **Quarantined responses now carry `title: null`.** A `/retrieve` or `/extract` response
+  that is blocked (stage-2 block, stage-3 injection, or `unavailable_blocked`) no longer
+  echoes the document's `<title>`; the body was already replaced and now the title goes
+  with it. The field is unchanged in shape (`string | null`); contract stays `1.3.0`
+  (GOVERNANCE ruling (m)). Consumers that displayed the title of a blocked page should
+  treat `null` as expected.
+- **The served `body` omits text a browser would not show.** `/retrieve` and `/extract` drop
+  inline-hidden content (`hidden`, `aria-hidden="true"`, `display:none`, zero opacity, and
+  similar inline signals) from `body`, best effort; stylesheet and class rules are not
+  resolved. Scanning still reads the full text. `body` is free text, so the contract stays
+  `1.3.0` (GOVERNANCE ruling (m)). Pages that rely on `hidden` tab panels or `opacity:0`
+  blocks will serve less text.
+- **Two over-defence probes now trip stage 2 by decision.** The raw-markup scan blocks a
+  search snippet with a literal `<system>` tag and flags one with a private-IP link; the
+  corpus records `ben-0288` and `ben-0289` are re-pinned under a named exemption
+  (`kit_tools/arch/DECISIONS.md`, 2026-10-06). Consumers whose results legitimately carry
+  such markup will see them omitted or marked `suspicious`.
+- **`sanitizer_revision` rotates nine more times on this branch** (the forty-fourth to the
+  fifty-second rotations in `docs/bootstrap-notes.md`): `b5e91fd6…` → `46b8d1bbc79f3fc4fe273e4ca2488b0e0ba0c281658910b3dd8cfad2924a2d21`
+  at the default model. They land together, so a deployment sees **one** cache-invalidating
+  window (every old entry becomes a miss), not nine. The hash now covers ten sources
+  (`pipeline/confusables.py` joined) plus a `unicodedata@<version>` input, so a Python
+  Unicode-database change also rotates it.
 - GOVERNANCE worked example 6's announce-then-flip window was **waived** by the owner for
   the default-model change (no known third-party consumers).
 

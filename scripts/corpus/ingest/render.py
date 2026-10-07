@@ -5,8 +5,9 @@ No third-party row is committed as it came: an email body becomes a forum-post
 short instruction a ``text`` upload. Every host the text names is rewritten to
 an RFC 2606 reserved one first, so a record can never point a reader at a real
 site. The category is assigned by one rule for every source: the text is
-scanned with ``scan_structural`` and takes the first matching structural
-category (``variant = plain``), otherwise ``natural_language``.
+scanned over the builder's forms (``structural_scan_forms``) and takes the
+first matching structural category (``variant = plain``), otherwise
+``natural_language``.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import html
 import re
 from typing import Final
 
-from pipeline.stage2_structural import scan_structural
+from pipeline.stage2_structural import scan_structural_forms, structural_scan_forms
 from scripts.corpus import vocab
 
 # A URL with a scheme: the host part is rewritten, the rest kept.
@@ -94,7 +95,7 @@ def has_secret_shape(text: str) -> bool:
 
 def assign_category(text: str) -> str:
     """The one category rule: the first stage-2 category that fires, else NL."""
-    flags = scan_structural(text).flags
+    flags = scan_structural_forms(structural_scan_forms(text, html_parsed=False)).flags
     if flags:
         return flags[0].category
     return "natural_language"
