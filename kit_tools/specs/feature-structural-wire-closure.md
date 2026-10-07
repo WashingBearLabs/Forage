@@ -6,7 +6,7 @@ session_ready: true
 depends_on: [structural-markup-surface]
 vision_ref: "T2.3 follow-up — close the injection corpus's structural findings"
 type: epic-child
-size: M
+size: L
 epic: forage-structural-hardening
 epic_seq: 3
 epic_final: false
