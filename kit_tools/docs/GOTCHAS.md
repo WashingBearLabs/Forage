@@ -16,6 +16,53 @@ live in, and losing them in the move was an identified risk.
 
 ## Active Gotchas
 
+### Derived Stage 2 scan forms must never change Stage 3's input
+
+`epic-forage-structural-hardening` closed thirty structural findings by giving Stage 2 extra
+**scan-only** forms (decoded, confusable-folded, inline-joined, raw markup) while
+`ExtractionResult.raw_text` and `/search`'s wire forms stayed byte-identical. That is the only
+reason no cassette was re-recorded: cassettes are keyed by the sha256 of exactly the text Stage 3
+classifies. A change that normalises `raw_text` itself, however helpful, turns
+`test_every_cassette_answers_every_record_*` red with `UnrecordedRecordError`. Treat that red as a
+design error, not as a cue to re-record. Normalising what Stage 3 sees is its own epic with an
+owner recording gate.
+
+### `pipeline/confusables.py` is generated; regenerate it, never hand-edit
+
+The fold tables come from the vendored `scripts/data/unicode/confusables.txt`, the reviewed
+`forage_supplement.tsv` and a computed pre-NFKC table. `uv run python -m
+scripts.generate_confusables --check` is the drift test. The module is a hashed
+`sanitizer_revision` source, and `unicodedata@<version>` is a hashed input. A Python upgrade that
+moves the Unicode database rotates the revision on purpose, with no source byte to show for it.
+Adding a look-alike means a reviewed supplement row with its reason, then regenerating.
+
+### Inline-tag joining is one linear walk; `unwrap()` + `smooth()` is quadratic
+
+`unwrap()` followed by `get_text("\n")` catches nothing, because the text nodes stay separate.
+Adding `soup.smooth()` makes it work but costs 54 s at 40k sibling `<b>` elements. The shipped form
+is a single iterative walk that emits newlines only at a closed set of block elements, with no
+tree mutation. Unknown and custom elements are **joined**, which is the closed direction for
+catch. Never reintroduce mutation-based unwrapping.
+
+### Scan raw markup as source, never as a re-serialised tree
+
+lxml drops stray closing tags on a parse/serialise round-trip, so an `envelope_breakout` written
+as a stray end tag disappears. `scan_raw_markup` therefore runs the closed three-pattern subset on
+the raw source with whitespace runs collapsed, using first-match `search()` with no per-match line
+lookup (per-match `finditer` with a line index was quadratic on match-dense pages). There is no
+head-only bound, because any bound is a padding bypass. `<template>` and `<noscript>` text reaches
+the wire and is never cut.
+
+### Every Stage 2 pattern must pass the all-patterns linearity sweep
+
+Stage 2 runs off-loop in a thread, but the regex holds the GIL, so one quadratic pattern stalls the
+whole service. `disregard.*instructions`, the lazy `exfil_image` and `envelope_breakout`'s
+`\s*/?\s*` were all quadratic on hostile input (seconds at 100–200 KB, minutes at the 2 MiB
+cap). A pinned-looking rewrite of `exfil_image` was still quadratic on `![![![…`.
+`tests/test_stage2_complexity.py` sweeps every `_PATTERNS` entry over five shape families. A new
+or edited pattern must pass it; disable GC while timing, because match-dense runs otherwise look
+superlinear.
+
 ### A story verifier can pass a sanctioned fallback that guts the spec's intent
 
 `corpus-benign` US-001 allowed a synthetic stand-in "with a recorded reason" when an external
@@ -669,7 +716,7 @@ the pass-list advice; the baked image still ships `limiter: false`.
 forty-seventh rotation) plus repo-root `url_validator.py` — plus the model identity, the
 `idna` version (`idna@<version>`: UTS-46 tables decide which hosts are dropped), the
 `unicodedata` version (`unicodedata@<version>`: NFKC's tables decide what the fold forms
-see) and the active threshold. Forage's revision has moved forty-seven times. The twenty-sixth was
+see) and the active threshold. Forage's revision has moved fifty-two times. The twenty-sixth was
 reconciled from the preceding validation commit during US-001's pre-flight; the rest
 were recorded at their implementation boundaries:
 
@@ -721,6 +768,9 @@ were recorded at their implementation boundaries:
 | 86M default ruling (2026-10-06) | `b5e91fd6…a0ded` | Forty-third, **a classification change at shipped defaults, not a text-scanning change**: `DEFAULT_MODEL_ID` becomes the 86M, so the hashed `MODEL_ID@revision` input moves from the 22M pin to `meta-llama/Llama-Prompt-Guard-2-86M@a8ded8e6…`. **No hashed source moves.** Reverting the classifier/fetcher change reproduces `021378ef…` under default and shipped config, and so does `FORAGE_MODEL_ID=…22M` on the new code — the 22M opt-out keeps its old revision and cache keys. Stage-3 verdicts change because the model does; the max rule, threshold and contiguity (still off) do not. Full values: `docs/bootstrap-notes.md`. |
 | `structural-scan-forms` US-001 | `8ca7db8d…bd47` | Forty-fourth, **the ninth sanitization-behaviour-changing rotation**: `re.IGNORECASE` added to the seven case-sensitive Stage 2 patterns (`instructions_banner`, `poppy_line`, `system_line`, `hex_escape`, `im_start`, `endoftext`, `exfil_image`; `base64_run` stays case-bearing). `stage2_structural.py` alone moves; whole-file read-only reversal reproduces `b5e91fd6…` under default and shipped config. A column-0 `system:`/`poppy:` line in any case now BLOCKs (decided cost). |
 | `structural-scan-forms` US-002 | `61c41b1a…1dfda4` | Forty-fifth, **the tenth sanitization-behaviour-changing rotation**: `disregard_instructions` becomes the paragraph-bounded tempered form (crosses single newlines, never `\n\n`), `exfil_image` is rewritten so alt text and URL stop at the next `![`, `envelope_breakout`'s `\s*/?\s*` becomes `\s*(?:/\s*)?`, and `_line_number_of` reads a precomputed newline index. `stage2_structural.py` alone moves; whole-file read-only reversal reproduces `8ca7db8d…` under default and shipped config. A nested `]` in exfil alt text no longer matches (accepted). |
+| `structural-scan-forms` US-003 | `62a90323…bf3c91` | Forty-sixth, **the eleventh sanitization-behaviour-changing rotation**: every route through `sanitize_and_structure` also scans an entity-decoded derived form (one `html.unescape` on parsed HTML, two on PDF/upload text, controls stripped, re-normalised). `stage2_structural.py` alone reverted gives `4d2eaa0a…`, `orchestrator.py` alone `516ad852…`; both reverted reproduce `61c41b1a…` under default and shipped config. Stage-3 input unchanged; cassettes byte-identical. Full values: `docs/bootstrap-notes.md`. |
+| `structural-scan-forms` US-005 | `c04bd68e…54ed683` | Forty-seventh, **the twelfth sanitization-behaviour-changing rotation**, and the first since the eighteenth to **add a hashed source and an input**: `pipeline/confusables.py` joins `_REVISION_SOURCES` (ten hashed sources) and `unicodedata@<version>` follows `idna@<version>`. Controls: module removed alone `24d2eb16…`, input removed alone `773991a6…`, `stage2_structural.py` alone `c2e62910…`, `orchestrator.py` alone `e1a9c469…`; all reverted reproduce `62a90323…`. Full values: `docs/bootstrap-notes.md`. |
+| `structural-markup-surface` US-001 | `b9a4a9de…4cb99` | Forty-eighth, **the thirteenth sanitization-behaviour-changing rotation**: HTML text is also scanned with every non-block element joined (one iterative walk, no tree mutation). `orchestrator.py` alone reverted gives `93fc1415…`, `stage1_extraction.py` alone `39902da4…`; both reverted reproduce `c04bd68e…` under default and shipped config. `raw_text` and `/search` wire forms unchanged. Full values: `docs/bootstrap-notes.md`. |
 | `structural-markup-surface` US-010 | `9c8bb9a6…c9ee54` | Forty-ninth, **the fourteenth sanitization-behaviour-changing rotation**: `system_tag` widens to `<\s*(?:/\s*)?system\b[^<>]*>` (attributes, whitespace, closing/self-closing, any case) and stage 2 gains `_MARKUP_PATTERNS` plus the unwired first-match `scan_raw_markup`. `stage2_structural.py` alone moves; whole-file read-only reversal reproduces `b9a4a9de…` under default and shipped config. `atk-0378`/`atk-0396` now blocked; no benign movement; cassettes unchanged |
 | `structural-markup-surface` US-011 | `3cfe54c9…` | Fiftieth, **the fifteenth sanitization-behaviour-changing rotation**: `scan_raw_markup` is wired into `/retrieve` (stage-1 thread, `extra_scans`) and `/search` (raw field value, one more loop entry). `orchestrator.py` alone moves; reverting it reproduces `9c8bb9a6…` under default and shipped config. No span cut. `ben-0288`/`ben-0289` flip by named exemption; cassettes unchanged |
 | `structural-wire-closure` US-001 | `919fa977…` | Fifty-first, **the sixteenth sanitization-behaviour-changing rotation**: `finalize_quarantine` returns `title=None` for stage-2 BLOCKED, stage-3 INJECTION_DETECTED and `unavailable_blocked`. `stage4_structuring.py` alone moves; reverting it reproduces `3cfe54c9…` under default and shipped config. GOVERNANCE ruling (m), no bump; openapi byte-identical; cassettes unchanged |
@@ -729,12 +779,17 @@ were recorded at their implementation boundaries:
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Thirty-three of the forty-seven rotations changed no sanitization policy or algorithm at shipped defaults; the
+**Thirty-three of the fifty-two rotations changed no sanitization policy or algorithm at shipped defaults; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
 US-001, US-002, US-003 and its validation fix) and the twenty-seventh
 through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005),
-the forty-second release-gate policy repair, the forty-third (the 86M default) and the forty-fourth (case-insensitive Stage 2) the forty-fifth (newline-crossing, linear Stage 2) the forty-sixth (the decoded scan form) and the forty-seventh (the confusable fold forms) are the fourteen
-that did, and the seventeenth
+the forty-second release-gate policy repair, the forty-third (the 86M default), and the nine
+`epic-forage-structural-hardening` rotations — the forty-fourth (case-insensitive Stage 2),
+forty-fifth (newline-crossing, linear Stage 2), forty-sixth (the decoded scan form),
+forty-seventh (the confusable fold forms), forty-eighth (the inline-joined form), forty-ninth
+(the widened `system_tag` and raw-markup primitive), fiftieth (the raw-markup scan wired),
+fifty-first (quarantined titles) and fifty-second (the served-body visibility pass) — are the
+nineteen that did, and the seventeenth
 (US-004, contract `1.3.0`) does not join them** — hostname policy can now skip
 classification on an opted-in trusted suffix; search-sanitization US-001's
 is that `/search` scans `title` and `snippet` newline-preserved now, so line-anchored Stage 2

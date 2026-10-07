@@ -9,8 +9,8 @@
 
 > **TEMPLATE_INTENT:** Document authentication, authorization, and secrets management. Security architecture reference.
 
-> Last updated: 2026-10-06
-> Updated by: Claude (86M default ruling)
+> Last updated: 2026-10-07
+> Updated by: Claude (structural-closeout US-002)
 
 ---
 
@@ -177,6 +177,59 @@ Forage never decides whether content is safe; it produces signals and, for the c
 
 A blocking hit yields verdict `blocked` and quarantine. Each suspicious hit costs `-0.15` trust, capped at `-0.45` (`penalty = max(-0.45, -0.15 * suspicious_count)`); blocking always overrides suspicious. `tests/test_stage2_structural.py` (78 tests) has a class per category plus `TestMixedContent::test_blocking_overrides_suspicious` and `::test_penalty_cap`.
 
+### Stage 2 scan forms: measured, bounded, not exhaustive
+
+`epic-forage-structural-hardening` (2026-10-06/07) widened what the same 24 patterns see. The
+basis is measurement, not proof: each change closed a leak family the injection corpus
+(`docs/corpus.md`, baseline `tests/corpus/baseline.json`) recorded, and each is gated by that
+corpus's floors, which may only rise. Stage 2 is an evidence signal for the consumer; adaptive
+attackers routinely defeat fixed defences tuned to known shapes (arXiv 2510.09023), and nothing
+below is claimed to hold for text outside the corpus.
+
+- **Derived forms, scan-only.** `structural_scan_forms` yields the as-is text, its entity
+  decode (one level after an HTML parse, two for uploads; controls stripped and whitespace
+  re-normalised), and its confusable fold; `scan_structural_forms` keeps the worst verdict,
+  stopping at the first `blocked`. For HTML the inline-joined text (inline elements joined,
+  newlines only at block boundaries) is scanned the same way. None of these forms is served
+  or sent to stage 3: Prompt Guard still sees the un-normalised text.
+- **Patterns.** All 24 are case-insensitive. The gap patterns use tempered tokens, so every
+  pattern is linear; an all-patterns adversarial timing sweep (`tests/test_stage2_complexity.py`)
+  measures it. The `disregard … instructions` gap stops at a blank line.
+- **The fold table is a bounded heuristic.** `pipeline/confusables.py` is generated from UTS #39
+  `confusables.txt` (pinned by sha256) plus an owner-reviewed supplement, with a pre-NFKC table
+  for mappings NFKC would otherwise destroy, and two readings of the ambiguous capital-I /
+  lower-l class. It covers single-code-point look-alikes with an ASCII prototype, nothing more.
+  The fold is refused (never truncated) once it would exceed four times the decoded length;
+  the refusal adds an `encoded_payload` flag, so the result is `suspicious`, not `blocked`.
+- **Raw-markup subset.** `scan_raw_markup` runs `system_tag`, `private_ip_href` and
+  `envelope_breakout` once each over the whitespace-collapsed raw source, first match only,
+  because the parser consumes those triggers. It adds a verdict and cuts nothing.
+- **The visibility pass is a bounded heuristic.** `_prune_hidden` removes body content hidden
+  by inline signals (`hidden` except `until-found`, `aria-hidden="true"`, `display:none`,
+  zero opacity, zero clip, off-screen pixel offsets or indents, zero-size overflow-hidden
+  boxes, inherited `visibility:hidden` and zero font size) from the served `body` only;
+  `raw_text`, the metadata and every scan still read the unpruned page.
+
+**Unmitigated residuals (technique classes, record ids only; no payload text here).** None of
+the mechanisms above addresses these; each remains open:
+
+- `title_stuffing` with no structural marker (`atk-0019`, `atk-0213`, `atk-0214`): stage 3 only.
+- Hiding the visibility pass does not read: stylesheet or class rules, `transform:scale(0)`,
+  colour camouflage, non-pixel offsets, tiny non-zero font sizes, the one-pixel
+  visually-hidden clip pattern. Accepted benign losses in the other direction: `[hidden]`
+  content that an inline `display` overrides is pruned, and `aria-hidden` text that browsers
+  still render is pruned.
+- Attribute channels (`aria-label`, `data-*`), entity-encoded attribute values, `javascript:`
+  URLs in markup, and markup triggers outside the three-pattern raw-markup subset.
+- Body-level percent or base64 decode-then-rescan; three or more levels of entity encoding.
+- `exfil_image` alt text containing nested brackets (the accepted cost of the linear rewrite).
+- Fold refusal forced by NFKC-expanding padding (for example U+FDFA): the page becomes
+  `suspicious` only, and on the `trusted` tier stage 3 is skipped, so nothing else looks.
+- Stage-3 normalisation is deferred: Prompt Guard sees un-normalised text, and character
+  tricks are known to evade it.
+- Stage-1 `extract_html` cost on element-dense pages (roughly 150 s at 10 MB), a
+  CPU-exhaustion exposure on `/retrieve` filed separately on 2026-10-06.
+
 ### Stage 3: Llama Prompt Guard 2
 
 `promptguard/classifier.py` loads the selected model, by default `meta-llama/Llama-Prompt-Guard-2-86M` (the 22M is the `FORAGE_MODEL_ID` opt-out; both are DeBERTa-v3 sequence classifiers), on CPU with `use_safetensors=True`. Text is chunked at `MAX_SEQ_LEN = 512` tokens with `CHUNK_OVERLAP = 64`, up to `MAX_PROMPTGUARD_CHUNKS = 64`; over budget raises `PromptGuardBudgetExceededError` rather than silently classifying a prefix. `pipeline/stage3_promptguard.py` applies the handler-resolved threshold (`config.yaml` `promptguard_threshold`, shipped as 0.85; overridable per `/retrieve` or `/search` request within 0.0 to 1.0, then operator-capped): a score above threshold is `injection_detected` with `INJECTION_PENALTY = -0.5`.
@@ -239,7 +292,7 @@ unavailable to the request (absent or permit wait timed out). `promptguard_state
 
 ### Quarantine
 
-When stage 2 says `blocked` or stage 3 says `injection_detected`, `finalize_quarantine` in `pipeline/stage4_structuring.py` replaces `body` with the fixed string "Content quarantined due to potential prompt injection." and `injection_spans` with a single stable diagnostic (`structural_injection_detected`, `promptguard_injection_detected`, or `promptguard_unavailable`). Hostile text never rides the response, and quarantined results are never cached. `tests/test_orchestrator.py::test_post_extract_structural_block_is_content_free` and `::test_post_extract_promptguard_block_is_content_free` pin this.
+When stage 2 says `blocked` or stage 3 says `injection_detected`, `finalize_quarantine` in `pipeline/stage4_structuring.py` sets `title` to `null` (GOVERNANCE ruling (m); a blocked page's title no longer reaches the wire), replaces `body` with the fixed string "Content quarantined due to potential prompt injection." and `injection_spans` with a single stable diagnostic (`structural_injection_detected`, `promptguard_injection_detected`, or `promptguard_unavailable`). Hostile text never rides the response, and quarantined results are never cached. `tests/test_orchestrator.py::test_post_extract_structural_block_is_content_free` and `::test_post_extract_promptguard_block_is_content_free` pin this.
 
 ### Trust score
 

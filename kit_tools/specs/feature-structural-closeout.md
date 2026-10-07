@@ -99,26 +99,26 @@ fails on named cells.
   branch: the scaffold already floors the measurement.
 
 **Acceptance Criteria:**
-- [ ] `tests/corpus/floors.json` is regenerated and committed. `floors_diff` against `03f7a96`
+- [x] `tests/corpus/floors.json` is regenerated and committed. `floors_diff` against `03f7a96`
       exits 0, its output (pasted in Implementation Notes) lists every tightened entry
       including headline keys, and at least the cells holding `atk-0070`, `atk-0071` and
       `atk-0116` are tightened.
-- [ ] `scripts/corpus/floors_diff.py` has unit tests covering a lowered `min_*`, a raised
+- [x] `scripts/corpus/floors_diff.py` has unit tests covering a lowered `min_*`, a raised
       `max_*`, a loosened headline key, an unrecognised key, a changed cell set, and a one-record
       FPR rise in `--baseline-fpr` mode (all non-zero exit).
-- [ ] `floors_diff --baseline-fpr --exempt ben-0288,ben-0289` between `03f7a96`'s and the final
+- [x] `floors_diff --baseline-fpr --exempt ben-0288,ben-0289` between `03f7a96`'s and the final
       `baseline.json` exits 0. Without `--exempt` it fails, which proves the exemption is
       exactly what moved (both runs pasted).
-- [ ] The recorded ratchet proof shows `test_every_measured_cell_clears_its_floor` failing on
+- [x] The recorded ratchet proof shows `test_every_measured_cell_clears_its_floor` failing on
       named cells with the seven case flags removed and the baseline regenerated. The temporary
       worktree is removed, and `git status` is clean.
-- [ ] `git diff --exit-code 03f7a96 -- tests/corpus/cassettes/` exits 0 (no re-record across the
+- [x] `git diff --exit-code 03f7a96 -- tests/corpus/cassettes/` exits 0 (no re-record across the
       epic).
-- [ ] `tests/test_corpus_gate.py` passes against the new `floors.json`, including the cell-set
+- [x] `tests/test_corpus_gate.py` passes against the new `floors.json`, including the cell-set
       equality check (:363-380).
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` reports 0 errors
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` reports 0 errors
 
 ### US-002: Update the docs for the new stage-2 behaviour
 
@@ -161,12 +161,12 @@ not finding id, so this story doesn't depend on US-004):
   `*.md` file. Cite record ids and technique classes only.
 
 **Acceptance Criteria:**
-- [ ] Each per-file checklist item above is present in its file.
-- [ ] `kit_tools/arch/SECURITY.md` contains no sentence claiming stage 2 prevents or guarantees
+- [x] Each per-file checklist item above is present in its file.
+- [x] `kit_tools/arch/SECURITY.md` contains no sentence claiming stage 2 prevents or guarantees
       anything (`grep -ni "prevent\|guarantee"` output reviewed in Implementation Notes).
-- [ ] The payload-leak test exists and passes over all tracked Markdown.
-- [ ] `tests/test_corpus_docs.py` and `tests/test_governance_docs.py` are green.
-- [ ] Full test suite passes (`uv run pytest`)
+- [x] The payload-leak test exists and passes over all tracked Markdown.
+- [x] `tests/test_corpus_docs.py` and `tests/test_governance_docs.py` are green.
+- [x] Full test suite passes (`uv run pytest`)
 
 ### US-003: Verify the rotation, count and tally records
 
@@ -197,17 +197,17 @@ of truth, and each spec 1–3 rotation has its three records.
 - This spec moves no hashed source.
 
 **Acceptance Criteria:**
-- [ ] The preflight output (pasted) shows every current-state rotation count equal to the last
+- [x] The preflight output (pasted) shows every current-state rotation count equal to the last
       bootstrap-notes ordinal, every hashed-source count equal to ten, and the tally sentence
       consistent with the per-rotation classification. Historical sentences are listed as
       exempt.
-- [ ] Each spec 1–3 rotation has a bootstrap-notes heading with reversal controls, a GOTCHAS
+- [x] Each spec 1–3 rotation has a bootstrap-notes heading with reversal controls, a GOTCHAS
       row and a CLAUDE.md paragraph.
-- [ ] `derive_sanitizer_revision` for default and shipped config equals the value spec 3's last
+- [x] `derive_sanitizer_revision` for default and shipped config equals the value spec 3's last
       rotation recorded.
-- [ ] `git diff --exit-code 03f7a96 -- contract/openapi.yaml contract/openapi.yaml.sha256` exits
+- [x] `git diff --exit-code 03f7a96 -- contract/openapi.yaml contract/openapi.yaml.sha256` exits
       0.
-- [ ] Full test suite passes (`uv run pytest`)
+- [x] Full test suite passes (`uv run pytest`)
 
 ### US-004: Re-file the corpus findings (owner step, main checkout)
 
@@ -246,13 +246,13 @@ id.
 - Record ids and technique classes only, never payload text.
 
 **Acceptance Criteria:**
-- [ ] Every in-scope id reads `resolved` with spec and story, `open` with a re-derived count and
+- [x] Every in-scope id reads `resolved` with spec and story, `open` with a re-derived count and
       reason, or `dismissed` as an accepted residual.
-- [ ] Residual entries `2026-10-04-056`+ exist for every technique class in US-002's list, in
+- [x] Residual entries `2026-10-04-056`+ exist for every technique class in US-002's list, in
       headings that match neither the carrier nor the leaked-cell form.
-- [ ] `uv run pytest -rs tests/test_corpus_docs.py` on the owner checkout reports 0 skipped and 0
+- [x] `uv run pytest -rs tests/test_corpus_docs.py` on the owner checkout reports 0 skipped and 0
       failed. The output is pasted in Implementation Notes.
-- [ ] Implementation Notes has a before/after status table for every in-scope id.
+- [x] Implementation Notes has a before/after status table for every in-scope id.
 
 ## Edge Cases
 
@@ -289,6 +289,120 @@ id.
 - Epic: [epic-forage-structural-hardening.md](epic-forage-structural-hardening.md)
 
 ## Implementation Notes
+
+Executed supervised in the owner's main checkout on 2026-10-07, after the guarded run of specs 1-3
+completed (11/11 stories, PR #42).
+
+### US-001 — floors ratchet
+
+- `--write-floors` regenerated `tests/corpus/floors.json` from the final baseline (commit `6a546ff`).
+- `uv run python -m scripts.corpus.floors_diff <03f7a96 floors> tests/corpus/floors.json
+  --old-baseline <03f7a96 baseline> --new-baseline tests/corpus/baseline.json` gave
+  **136 tightened, 8 justified, 0 problems** (exit 0):
+  - **Tightened:** every structural category cell (`authority_impersonation`, `encoded_payload`,
+    `envelope_breakout`, `exfil_beacon`, `instruction_override`, `line_anchored_role`,
+    `prompt_boundary`, `suspicious_url`) goes to `1.0` on every route, model and config.
+    Headline `min_catch_all` goes 0.30 → 0.40 (22M) and 0.35 → 0.40 (86M).
+  - **Justified, denominator only:** `natural_language` `/extract` 86M `min_catch`/`min_block`
+    0.10 → 0.05 (default and contiguity). n went 33 → 31 because two records are now caught at
+    Stage 2 and leave the Stage-3 pool. No record moved from caught to uncaught.
+  - **Justified, exempt records only:** `over_defence_probe` `/search` `max_fpr` 0.75 → 0.80
+    (both models, both configs). The only newly positive records are `ben-0288` and `ben-0289`
+    (owner's named exemption).
+- `--baseline-fpr --exempt ben-0288,ben-0289` gives 0 rises (exit 0). Without `--exempt` it gives
+  4 rises, all `over_defence_probe` `/search` 47/63 → 49/63 (exit 1): the exemption is exactly
+  what moved.
+- **Ratchet proof:** in a detached throwaway worktree, `re.IGNORECASE` was stripped from exactly
+  the seven US-001 patterns and the baseline regenerated.
+  `test_every_measured_cell_clears_its_floor` then **failed** on, among others:
+  - `authority_impersonation`: `/extract` 5/6, `/search` 6/7 (catch and block);
+  - `encoded_payload`: `/extract` 6/7;
+  - `exfil_beacon`: `/search` 4/5;
+  - `line_anchored_role`: `/search` 6/7;
+  for both models and configs, each below its new 1.0 floor. The worktree was removed and `.venv`
+  re-synced: the shared venv had picked up an editable install from the temp path, which
+  `uv sync --extra dev` restored.
+- `git diff --exit-code 03f7a96 -- tests/corpus/cassettes/` exits 0 (no re-record across the
+  epic). `tests/test_corpus_gate.py`: 19 passed.
+
+### US-002 — docs
+
+- **Docs updated:**
+  - `docs/corpus.md`: which stage-2 form closes which variant; no new numbers outside Decision
+    inputs.
+  - `kit_tools/arch/SECURITY.md`: a new "Stage 2 scan forms: measured, bounded, not exhaustive"
+    section listing the eight residual classes as unmitigated, with no prevent or guarantee claim.
+  - `CODE_ARCH.md`.
+  - `DECISIONS.md`: a 2026-10-07 entry, which references the existing ben-0288/0289 exemption.
+  - `docs/releases.md` Unreleased.
+  - `PRODUCT_VISION.md`: T2.4.
+  - Five new `GOTCHAS.md` entries.
+- **New `tests/test_corpus_docs_payloads.py`:**
+  - It found **pre-existing** attack-payload quoting in tracked Markdown: 101 (record, file) pairs,
+    73 once windows shared with benign records were excluded as boilerplate.
+  - Scrubbing archived history is out of scope, so the 73 pairs are frozen in
+    `tests/corpus/payload_quote_allowlist.json` (ids and paths only). That list is shrink-only: a
+    new pair fails, and a scrubbed pair left listed fails.
+  - The scrub is audit finding 2026-10-07-001.
+- **PR #42 CI `test` job failed** on `tests/test_stage2_complexity.py` timing, not correctness
+  (run 37578034731):
+  - Millisecond ratios crossed 12x (`hex_escape` 0.004 s vs 0.048 s).
+  - Fixed 2 s ceilings were breached on the slower runner (fold shapes 2.2 s; maximal accepted
+    expansion 8.49 s).
+  - Fix: ceilings are now `max(floor, K x calibration)`, where calibration is this machine's
+    plain 2 MiB scan through every derived form, measured per test. K was set from measured ratios
+    with about 2x headroom: entity 4, dense folds 12, maximal expansion 40, all-patterns and
+    match-dense 6. The ratio noise floor rises to 0.1 s; a quadratic from a millisecond base still
+    exceeds it at 2 MiB.
+  - The ratio assertions, which are the linearity proof, are unchanged.
+  - The 8.5 s maximal-expansion cost itself is audit finding 2026-10-07-002.
+- Full gates: ruff, format and pyright clean; `uv run pytest`: **5389 passed, 0 skipped** on the
+  owner checkout.
+
+### US-003 — records preflight
+
+- **Source of truth:** the last `docs/bootstrap-notes.md` heading is **the fifty-second rotation**.
+  Final revision `46b8d1bbc79f3fc4fe273e4ca2488b0e0ba0c281658910b3dd8cfad2924a2d21` (default and
+  shipped agree). Ten hashed sources (nine `pipeline/` + `url_validator.py`).
+- **Stale counts fixed to fifty-two:**
+  - `GOTCHAS.md` (moved-times sentence, and the tally, which now reads 33 + 19 = 52 and lists all
+    nine epic rotations);
+  - `TROUBLESHOOTING.md` (two sites);
+  - `DEPLOYMENT.md`;
+  - `SERVICE_MAP.md`, which also now names Forage `46b8d1bb…`.
+- **Exempt as historical:** `CLAUDE.md`'s "now agree on forty-two rotations" (the fortieth
+  rotation's moment), and the per-rotation "N hashed sources" sentences.
+- **Rotation records:** every rotation 44-52 has a bootstrap-notes heading with reversal controls
+  and a CLAUDE.md paragraph. GOTCHAS was **missing table rows for 46, 47 and 48**; they were added
+  from bootstrap-notes values and controls.
+- `git diff --exit-code 03f7a96 -- contract/openapi.yaml contract/openapi.yaml.sha256` exits 0
+  (ruling (m), no bump).
+
+### US-004 — findings re-file (owner checkout)
+
+- Re-derived from the final baseline (`_MODEL_22M`, default config):
+  - all 22 structural cells (-004 … -025) are at 0 leaked;
+  - blocked-but-leaked is empty;
+  - `hidden_markup` `/retrieve` is 3 of 38 (the three `title_stuffing` records).
+
+| Finding(s) | Before | After |
+|---|---|---|
+| 2026-10-04-004 … -025 | open (1-5 leaked each) | **resolved**: 0 leaked, closing stories named per entry from its recorded variants |
+| 2026-10-04-033 | open, 9 of 38 | **open**, re-scoped to 3 of 38 (`title_stuffing`: atk-0019, atk-0213, atk-0214) |
+| 2026-10-04-040, -041 | open | **resolved** (structural-wire-closure US-002) |
+| 2026-10-04-042 | open | **dismissed**, accepted residual (stage 3's job) |
+| 2026-10-04-043 … -045 | open | **resolved** (structural-wire-closure US-001, ruling (m)) |
+| 2026-10-04-026 … -032, -034 … -039, -046 … -055 | open | unchanged (classifier-only and over-defence, out of scope) |
+| 2026-10-04-056 … -061 | — | **filed** as accepted residuals (dismissed): stylesheet hiding and other unlisted inline techniques; attribute and URL channels outside the subset; deeper decoding; exfil nested brackets; fold-refusal padding (warning); Stage-3 normalisation |
+
+- The three validation reports written into the execution worktree were merged in, renumbered to
+  unique ids: markup-surface 2026-10-06-002…014, wire-closure -015…018, epic-wide final -019…030.
+  The planning finding keeps 2026-10-06-001.
+- `uv run pytest -rs -q tests/test_corpus_docs.py`: **13 passed, 0 skipped**.
+- The findings tests keep `_MODEL_22M` (decided). Validation finding 2026-10-06-024 notes that
+  `test_every_leaked_hidden_markup_carrier_is_filed` hardcodes the carrier set. It still holds,
+  because resolved entries keep their headings; deriving the set from the baseline is left as a
+  follow-up.
 
 ## Refinement Notes
 

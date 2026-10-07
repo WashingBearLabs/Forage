@@ -8,8 +8,8 @@
 
 > **TEMPLATE_INTENT:** Record architectural decisions and their rationale. Explains the 'why' behind technical choices.
 
-> Last updated: 2026-09-23
-> Updated by: Copilot (hardening-release US-004)
+> Last updated: 2026-10-07
+> Updated by: Claude (structural-closeout US-002)
 
 This file records significant architectural and technical decisions.
 
@@ -1101,3 +1101,63 @@ the cost of these two benign-by-intent snippets; the decision was preferred over
 
 **Source:** `kit_tools/specs/feature-structural-markup-surface.md` (Clarifications);
 `docs/bootstrap-notes.md` (fiftieth rotation).
+
+### 2026-10-07: Structural hardening — scan-only derived forms, linear patterns, generated folds, bounded wire-side heuristics
+
+**Status:** Accepted — implemented on `epic/forage-structural-hardening` (PR #42); unreleased, contract stays `1.3.0`
+
+**Context:** The injection corpus measured stage-2 leaks by letter case, HTML entities, a
+newline inside a gap pattern, Unicode look-alikes, inline tags splitting a keyword, and markup
+the parser consumes; plus blocked pages whose titles still reached the wire and two hidden-markup
+carriers. The cassettes that make the corpus gate deterministic are keyed by the sha256 of
+stage 3's input, and re-recording needs weights CI never has.
+
+**Options Considered (recorded in the spec Research Findings):** rewriting `raw_text` into a
+normalised form (forces a re-record, rejected); a whitespace-collapse form and bounded-gap
+patterns (measured quadratic, or a padding bypass past the bound; rejected); `unwrap()` +
+`smooth()` for split tags (quadratic in sibling count; rejected); re-serialising the parsed tree
+for a markup scan (drops stray end tags; rejected); cutting matched markup spans (tokenizer drift
+from lxml; deferred, not needed with three patterns); a hand-written or third-party look-alike
+table (unreviewable or single-maintainer; rejected).
+
+**Decision:**
+1. **Derived forms for stage 2 only.** As-is, decoded, confusable-folded and (HTML) inline-joined
+   forms are scanned and the worst verdict kept; stage-3 input stays byte-identical, so neither
+   cassette is re-recorded.
+2. **Tempered-token patterns.** Every gap is a tempered token, every pattern case-insensitive;
+   linearity is measured by an all-patterns adversarial sweep that every new pattern must pass.
+   The `exfil_image` alt text also stops at the next image opener (nested-bracket alt text is the
+   accepted loss).
+3. **Generated confusable tables.** `pipeline/confusables.py` is generated from the sha256-pinned
+   UTS #39 data plus an owner-reviewed supplement, with a generated pre-NFKC table and **two**
+   readings of the ambiguous I/l class. The module is a hashed source and `unicodedata@<version>`
+   a revision input, because NFKC depends on the interpreter's Unicode database. A fold that would
+   pass four times the decoded length is refused and flagged, never truncated.
+4. **A block-allowlist linear walk** builds the inline-joined form: unknown elements join (the
+   closed direction for catch), and no tree is mutated.
+5. **A first-match raw-source markup scan** for three patterns (`system_tag`, `private_ip_href`,
+   `envelope_breakout`), whitespace-collapsed, one `search()` each; no span cutting.
+6. **Wire closure.** A quarantined response's `title` is `null` (GOVERNANCE ruling (m), no bump);
+   a body-only visibility pass prunes inline-hidden content from the served body, keeps
+   `hidden="until-found"`, and records an explicit `main_content_is_fallback` flag for summary
+   mode. Both are bounded heuristics; stylesheet and class hiding is out of scope.
+7. **Over-defence.** `ben-0288` and `ben-0289` move under the named exemption recorded in the
+   2026-10-06 entry above; nothing else is exempt.
+8. **Ratchet.** Floors only tighten; `scripts/corpus/floors_diff.py` proves it mechanically
+   against the old and new baselines, including exact benign FPRs the 0.05 grid could hide.
+
+**Rationale:** Each choice was measured before it was adopted (validation rounds 1–3); the
+constraint that stage 3 sees unchanged text kept the CI gate deterministic without owner
+re-recording. Acceptance was written per technique class, not per leaked row, because adaptive
+attackers defeat row-shaped fixes (arXiv 2510.09023).
+
+**Consequences:** Nine `sanitizer_revision` rotations (forty-fourth to fifty-second) end at
+`46b8d1bb…`; they ship as one cache-invalidating window. Stage 2 remains an evidence signal, not a
+boundary: the unmitigated technique classes are listed in `kit_tools/arch/SECURITY.md` ("Stage 2
+scan forms"). Feeding normalised text to stage 3 is a later epic with an owner recording gate.
+
+**Source:** `kit_tools/specs/epic-forage-structural-hardening.md`; archived
+`feature-structural-scan-forms.md`, `feature-structural-markup-surface.md`,
+`feature-structural-wire-closure.md` (Research Findings, Implementation Notes);
+`kit_tools/specs/feature-structural-closeout.md`; `contract/GOVERNANCE.md` ruling (m);
+`docs/bootstrap-notes.md` (forty-fourth to fifty-second rotations).

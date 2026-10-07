@@ -361,6 +361,36 @@ skipped after a structural block, so a text stage 2 stopped has no window scores
 The view's denominators say how many reached it; it cannot show what the
 classifier would have done to the rest.
 
+**Which stage-2 form closes which variant.** Since `epic-forage-structural-hardening`,
+stage 2 runs its patterns over several scan-only forms of the same text and keeps the worst
+verdict; stage 3's input never changes, which is why the cassettes replay unchanged. Read a
+catch on an attack variant (`params.variant`) as the work of one of these forms:
+
+- **As-is** — the extracted text exactly as stage 3 sees it. The patterns are now
+  case-insensitive and linear, so `case` variants and `second_paragraph` variants of the
+  two gap patterns are caught here (the `disregard` gap stops at a blank line).
+- **Decoded** — HTML entities unescaped (one level after an HTML parse, two for uploads),
+  controls stripped, whitespace re-normalised. Closes `entity` variants,
+  including double encoding the parser left half-decoded.
+- **Confusable-folded** — the decoded form passed through the generated look-alike table,
+  NFKC and the Latin fold, under **two** readings of the ambiguous capital-I / lower-l
+  class (one reading each way, so neither hides the other). Closes `confusable` variants
+  that the table covers; a fold that would expand past its bound is refused and flagged,
+  never truncated.
+- **Inline-joined** (HTML only) — the page flattened with inline elements joined into their
+  text and line breaks only at block boundaries. Closes `split_tags` variants, where an
+  inline tag split a keyword across text nodes.
+- **Raw-markup subset** — three markup patterns (`system_tag`, `private_ip_href`,
+  `envelope_breakout`) run once each over the raw source, because the parser consumes the
+  trigger before any text exists. Closes `plain` records whose trigger is the markup itself.
+
+Two wire-side changes affect what `blocked_but_leaked` and the hidden carriers read: a
+quarantined response's `title` is `null` (a blocked page no longer leaks its title), and the
+served body drops inline-hidden content (`css_offscreen`, `hidden_div`). Neither is a scan
+form, and both are bounded heuristics. The forms are listed in
+`kit_tools/arch/SECURITY.md` together with the technique classes none of them reaches
+(`title_stuffing` with no structural marker is stage 3's alone).
+
 **What it does not cover.** PDF-borne text is outside the corpus (there is no
 text-bearing PDF generator in `tests/fixtures/`), caller-set trust tiers on
 `/retrieve` (`trusted_domains` skips stage 3 by design, so a "bypass" there is the
