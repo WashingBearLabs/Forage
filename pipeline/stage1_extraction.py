@@ -11,7 +11,6 @@ collapsing, UTF-8 normalization, and whitespace collapsing.
 
 from __future__ import annotations
 
-import copy
 import json
 import re
 import unicodedata
@@ -311,18 +310,36 @@ def _extract_date(soup: BeautifulSoup) -> str | None:
 
 
 def _extract_raw_text(soup: BeautifulSoup) -> str:
-    """Strip dangerous elements and extract full flattened text."""
-    # Work on a copy to avoid mutating the original soup.
-    # Use copy.copy instead of re-parsing via str(soup) to avoid
-    # the overhead of serialisation + re-parse.
-    soup = copy.copy(soup)
+    """Flatten *soup* to its text, one string per line, dangerous subtrees skipped.
 
-    # Remove dangerous tags
+    A non-mutating iterative walk (the ``_extract_inline_text`` pattern): no
+    copy of the tree, so the cost is linear in the node count. Comments and
+    other non-text nodes are skipped exactly as ``get_text`` skips them.
+    """
+    parts: list[str] = []
+    stack: list[object] = [soup]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, Tag):
+            if node.name in _DANGEROUS_TAGS:
+                continue
+            stack.extend(reversed(node.contents))
+        elif type(node) in (NavigableString, CData):
+            parts.append(str(node))
+    return "\n".join(parts)
+
+
+def _strip_in_place_raw_text(soup: BeautifulSoup) -> str:
+    """Strip dangerous elements and comments from *soup* itself, then flatten it.
+
+    Mutates the tree with no copy. Only for a private tree that is not read
+    again, such as the visibility pass's output; never re-parse the input for
+    it, which would bring the pruned text back.
+    """
     for tag_name in _DANGEROUS_TAGS:
         for tag in soup.find_all(tag_name):
             tag.decompose()
 
-    # Remove HTML comments
     for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
         comment.extract()
 
@@ -514,21 +531,22 @@ def _has_visibility_signal(body: Tag) -> bool:
     return False
 
 
-def _prune_hidden(soup: BeautifulSoup) -> tuple[BeautifulSoup, bool]:
+def _prune_hidden(soup: BeautifulSoup, html: str) -> tuple[BeautifulSoup, bool]:
     """Remove text a browser would not show; return ``(soup, pruned)``.
 
     Best effort, inline signals only (no stylesheet or class resolution), and
     only descendants of ``<body>``. The shared *soup* is never mutated: when a
-    candidate attribute exists the work happens on ``copy.copy(soup)``, and
-    when none does the original is returned untouched with ``pruned=False``.
+    candidate attribute exists the work happens on a fresh parse of *html* (the
+    string *soup* was built from), and when none does the original is returned
+    untouched with ``pruned=False``.
     Traversal is iterative so nesting depth cannot exhaust the stack.
     """
     original_body = soup.body
     if original_body is None or not _has_visibility_signal(original_body):
         return soup, False
-    pruned_soup = copy.copy(soup)
+    pruned_soup = BeautifulSoup(html, "lxml")
     body = pruned_soup.body
-    if body is None:  # pragma: no cover - a copy of a soup with a body has one
+    if body is None:  # pragma: no cover - a re-parse of a soup with a body has one
         return soup, False
 
     pruned = False
@@ -628,7 +646,7 @@ def extract_html(
 
     # -- Dual extraction --
     raw_text = _normalize_text(_extract_raw_text(soup))
-    pruned_soup, pruned = _prune_hidden(soup) if prune_hidden else (soup, False)
+    pruned_soup, pruned = _prune_hidden(soup, html) if prune_hidden else (soup, False)
     # Unpruned pages hand trafilatura the original string: re-serialising every
     # page would move benign bodies.
     main_content_raw = _extract_main_content(
@@ -642,7 +660,7 @@ def extract_html(
             is_fallback = False
     elif pruned:
         # Fallback: the flattened text of what remains visible
-        main_content = _normalize_text(_extract_raw_text(pruned_soup))
+        main_content = _normalize_text(_strip_in_place_raw_text(pruned_soup))
         is_fallback = True
     else:
         # Fallback: use raw_text when trafilatura fails

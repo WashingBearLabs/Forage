@@ -1152,7 +1152,8 @@ re-recording. Acceptance was written per technique class, not per leaked row, be
 attackers defeat row-shaped fixes (arXiv 2510.09023).
 
 **Consequences:** Nine `sanitizer_revision` rotations (forty-fourth to fifty-second) end at
-`46b8d1bb…`; they ship as one cache-invalidating window. Stage 2 remains an evidence signal, not a
+`46b8d1bb…`; they ship as one cache-invalidating window (the v1.3.0 `release-resource-bounds` US-001 adds a
+fifty-third, `0ace27ca…`, with byte-identical output). Stage 2 remains an evidence signal, not a
 boundary: the unmitigated technique classes are listed in `kit_tools/arch/SECURITY.md` ("Stage 2
 scan forms"). Feeding normalised text to stage 3 is a later epic with an owner recording gate.
 

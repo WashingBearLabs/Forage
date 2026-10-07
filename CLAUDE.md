@@ -665,6 +665,16 @@ with an all-reverted control reproducing `919fa977…` under default and shipped
 The six leaked `css_offscreen`/`hidden_div` records are neutralised; no benign page moves;
 cassettes byte-unchanged. Not replayed to Poppy. Full values: `docs/bootstrap-notes.md`.
 
+The fifty-third rotation is `46b8d1bb…` → `0ace27ca…` for
+`release-resource-bounds` US-001 — **not a sanitization-behaviour change**: stage 1 no
+longer deep-copies BeautifulSoup trees (`copy.copy` was quadratic on deep and unclosed-tag
+pages). Only `pipeline/stage1_extraction.py` moves; a read-only whole-file reversal against
+`HEAD` reproduces `46b8d1bb…` under default and shipped config. Every `ExtractionResult` field
+is byte-identical across all page records and the synthetic fixtures under all four
+`with_inline`/`prune_hidden` combinations (and the forced trafilatura-`None` fallback), so
+stage 3's input and both cassettes are unchanged. Not replayed to Poppy. Full values:
+`docs/bootstrap-notes.md`.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:

@@ -2429,3 +2429,36 @@ camouflage, non-px offsets, tiny non-zero fonts, the 1px visually-hidden clip, `
 overridden by an inline `display`, and `aria-hidden` text browsers still render. Accepted
 benign costs (fixtured): ARIA tab panels using `hidden` and `opacity:0` hero blocks are
 pruned. **Not replayed to Poppy:** compare contracts, not revisions.
+
+### The fifty-third rotation: stage 1 made linear (`release-resource-bounds` US-001)
+
+`pipeline/stage1_extraction.py` no longer imports `copy`. `_extract_raw_text` is a non-mutating
+iterative walk (dangerous subtrees and non-text nodes skipped, the `_extract_inline_text`
+pattern); `_prune_hidden(soup, html)` re-parses `html` instead of copying the tree; the pruned
+fallback strips its private `pruned_soup` in place (`_strip_in_place_raw_text`) and is never a
+re-parse of the input, so hidden text stays out.
+
+| State | Revision (default and shipped config) |
+|---|---|
+| Before (`HEAD`) / `stage1_extraction.py` reverted | `46b8d1bbc79f3fc4fe273e4ca2488b0e0ba0c281658910b3dd8cfad2924a2d21` |
+| After | `0ace27cae20e17e6c6eae7fa51f3126483bf8d07d6e555afbeee0a39364f4911` |
+
+One hashed file moved, so the single reversal is also the all-reverted control; it was loaded
+read-only from `git show HEAD:` into a temp directory. Not a sanitization-behaviour change:
+1,484 frozen SHA-256 digests of the full `ExtractionResult` (every corpus page record plus
+synthetic hidden-element, dangerous-tag, no-body and forced trafilatura-`None` pages, under
+all four `with_inline`/`prune_hidden` combinations) were generated from the pre-change module
+and match (`tests/golden/stage1_equivalence.json`). Stage 3's input is byte-identical.
+Best-of-1/3 seconds, `extract_html(with_inline=True, prune_hidden=True)`, 64 KiB / 256 KiB:
+
+| Shape | Before | After |
+|---|---|---|
+| sibling-dense | 0.197 / 0.802 | 0.130 / 0.533 |
+| deep span | 0.337 / 3.403 | 0.043 / 0.152 |
+| attribute-heavy | 0.066 / 0.247 | 0.060 / 0.224 |
+| unclosed span | 1.792 / 26.323 | 0.118 / 0.453 |
+| deep span, hidden | 0.704 / 9.930 | 0.077 / 0.288 |
+| unclosed span, hidden | 3.460 / 52.141 | 0.208 / 0.825 |
+
+`/search` field parse, one 8,000-character unclosed-span snippet: 47.7 ms before, 14.5 ms after.
+**Not replayed to Poppy:** compare contracts, not revisions.

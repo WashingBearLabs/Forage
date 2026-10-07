@@ -209,7 +209,7 @@ def test_a_split_double_entity_encoded_probe_is_caught_on_search(name: str) -> N
 
 
 def _count_parses() -> Any:
-    """Count parser runs. ``_extract_raw_text``'s ``copy.copy`` re-feeds too."""
+    """Count parser runs. The visibility pass re-parses its input too."""
     return patch.object(
         BeautifulSoup, "_feed", autospec=True, side_effect=BeautifulSoup._feed
     )

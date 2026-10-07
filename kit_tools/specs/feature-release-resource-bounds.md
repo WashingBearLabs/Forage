@@ -777,6 +777,12 @@ worker thread, so that the event-loop thread is not held for a whole parse.
 
 ## Implementation Notes
 
+### US-001
+- Rotation 52nd -> 53rd: `46b8d1bb…` -> `0ace27ca…` (`stage1_extraction.py` alone; measured, see `docs/bootstrap-notes.md`).
+- `_extract_raw_text` became a non-mutating walk (no re-parse needed); `_prune_hidden(soup, html)` re-parses; pruned fallback uses `_strip_in_place_raw_text`.
+- Before/after seconds (64 / 256 KiB): sibling-dense 0.197/0.802 -> 0.130/0.533; deep span 0.337/3.403 -> 0.043/0.152; attribute-heavy 0.066/0.247 -> 0.060/0.224; unclosed span 1.792/26.323 -> 0.118/0.453; deep hidden 0.704/9.930 -> 0.077/0.288; unclosed hidden 3.460/52.141 -> 0.208/0.825. `/search` 8,000-char unclosed snippet: 47.7 ms -> 14.5 ms.
+- Equivalence pin: `tests/golden/stage1_equivalence.json` (1,484 digests, generated from pre-change code).
+
 ## Refinement Notes
 
 ### Research Findings

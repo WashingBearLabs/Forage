@@ -40,8 +40,8 @@ def _page(inner: str, *, head: str = "") -> str:
 
 
 def _pruned_text(inner: str) -> tuple[str, bool]:
-    soup = BeautifulSoup(_page(inner), "lxml")
-    pruned, flag = _prune_hidden(soup)
+    page = _page(inner)
+    pruned, flag = _prune_hidden(BeautifulSoup(page, "lxml"), page)
     return pruned.get_text(" "), flag
 
 
@@ -237,7 +237,7 @@ def test_head_title_meta_and_html_body_attributes_are_never_pruned() -> None:
     assert result.title == "Kept title"
     assert result.author == "Ann"
     assert "Visible article" in result.main_content
-    _, pruned = _prune_hidden(BeautifulSoup(page, "lxml"))
+    _, pruned = _prune_hidden(BeautifulSoup(page, "lxml"), page)
     assert not pruned
 
 
@@ -311,9 +311,10 @@ def test_a_huge_style_value_with_a_trailing_signal_is_still_pruned() -> None:
 
 
 def test_the_prune_helper_never_mutates_the_shared_soup() -> None:
-    soup = BeautifulSoup(_page(f"<div hidden>{_SECRET}</div>"), "lxml")
+    page = _page(f"<div hidden>{_SECRET}</div>")
+    soup = BeautifulSoup(page, "lxml")
     before = str(soup)
-    pruned, flag = _prune_hidden(soup)
+    pruned, flag = _prune_hidden(soup, page)
     assert flag
     assert str(soup) == before
     assert pruned is not soup

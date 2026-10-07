@@ -68,6 +68,10 @@ Not yet tagged; the version number is decided at the release gate. Contract stay
   window (every old entry becomes a miss), not nine. The hash now covers ten sources
   (`pipeline/confusables.py` joined) plus a `unicodedata@<version>` input, so a Python
   Unicode-database change also rotates it.
+- **A fifty-third rotation, `46b8d1bb…` → `0ace27cae20e17e6c6eae7fa51f3126483bf8d07d6e555afbeee0a39364f4911`**
+  (`release-resource-bounds` US-001): stage 1 no longer deep-copies BeautifulSoup trees, so
+  deeply nested or unclosed-tag pages cost linear time. Output is byte-identical; old cache
+  entries still become misses.
 - GOVERNANCE worked example 6's announce-then-flip window was **waived** by the owner for
   the default-model change (no known third-party consumers).
 
