@@ -47,6 +47,24 @@ weights, tokenizer or configuration) and no input text. They are test data
 only and none is shipped in the image.
 
 --------------------------------------------------------------------------
+Unicode confusables data
+--------------------------------------------------------------------------
+
+pipeline/confusables.py is generated from the Unicode Consortium's UTS #39
+data file confusables.txt (Unicode 18.0.0, dated 2026-08-06), vendored at
+scripts/data/unicode/confusables.txt with its copyright header intact:
+
+    Copyright (c) 2026 Unicode, Inc.
+    Unicode and the Unicode Logo are registered trademarks of Unicode, Inc.
+    in the U.S. and other countries.
+
+    Source: https://www.unicode.org/Public/security/latest/confusables.txt
+    Licence: Unicode License v3, https://www.unicode.org/license.txt
+
+The vendored data file is a build input only and is not shipped in the image;
+the generated module carries derived mapping tables (see its header).
+
+--------------------------------------------------------------------------
 Third-party corpus samples
 --------------------------------------------------------------------------
 
