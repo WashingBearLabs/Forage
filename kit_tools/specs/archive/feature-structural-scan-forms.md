@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: structural-scan-forms
-status: active
+status: completed
 session_ready: true
 depends_on: []
 vision_ref: "T2.3 follow-up — close the injection corpus's structural findings"
@@ -11,7 +11,8 @@ epic: forage-structural-hardening
 epic_seq: 1
 epic_final: false
 created: 2026-10-06
-updated: 2026-10-06
+updated: 2026-10-07
+completed: 2026-10-07
 ---
 
 # Feature Spec: Structural Scan Forms — Case, Linear Patterns, Entities and Confusables on Every Route
