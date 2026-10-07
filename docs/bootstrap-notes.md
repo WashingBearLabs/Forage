@@ -2152,3 +2152,47 @@ Corpus effect: structural flags and penalty changed for six records, all gains a
 and `atk-0154` (search) gain the same match on the newline-preserving form. No benign record
 moved, `git diff tests/corpus/cassettes/` is empty, and the stage-3 attack denominator falls
 369 → 367 with every fired cell unchanged. Old cache keys invalidate. Contract stays `1.3.0`.
+
+### The forty-sixth rotation: the shared decoded scan form (`structural-scan-forms` US-003)
+
+Stage 2 now scans, on every route that goes through `sanitize_and_structure`, the as-is text
+**and** an entity-decoded derived form. Two hashed sources move:
+
+| State | Revision |
+|---|---|
+| Before (`db74dc7`) / both reverted | `61c41b1a24252057028bf5508f17c5c473989b48665168f37922eb8fc1dcfda4` |
+| `stage2_structural.py` reverted alone | `4d2eaa0a8530a3e89df31ecaefbcdbf95c936e5489c702d4edb4f2cd13644a1b` |
+| `orchestrator.py` reverted alone | `516ad85238647e397c33d7fd7c8d22f1a364205aaecf08d727660c98a13d781e` |
+| After | `62a903231e3ec640c373f85f9fa5a9a719333596457b47947c14b8a306bf3c91` |
+
+Measured read-only (whole-file `git show db74dc7:<path>` bytes substituted into the hash) for
+default `{}` and shipped `config.yaml`, which agree. This is the **eleventh
+sanitization-behaviour-changing rotation**:
+
+- `structural_scan_forms(text, *, html_parsed)` is a generator: the as-is text, then
+  `html.unescape` once (`html_parsed`, i.e. `content_type == "html"`, whose parser already
+  decoded one level) or twice (text uploads, PDFs), then the C0/C1 control strip, then stage 1's
+  whitespace collapse again. Forms are deduplicated, never truncated and there is no fixed-point
+  loop, so a **three-level payload is an accepted gap** (pinned).
+- `scan_structural_forms` scans each form as produced, keeps the running worst result and stops
+  at the first BLOCKED. `combine_scan_results(*results)` is the public rule: worst verdict wins,
+  flags and penalty come from the first form that reaches it, so a record whose verdict does not
+  move keeps byte-identical `structural_flags` and penalty (asserted over every corpus record).
+- Stage 3 still receives `extraction.raw_text` by identity; both cassettes are byte-unchanged.
+- `_CONTROL_CHARS_RE` moved into `stage2_structural.py` (one owner; the orchestrator calls
+  `strip_control_chars`), and `/search`'s `_scan_forms_for_search_text` delegates its second
+  decode to `decode_scan_text`. Its wire form is byte-identical (`test_search_pipeline_pins.py`
+  unchanged).
+- Accepted cost: a tutorial page that shows escaped markup (`&amp;lt;system&amp;gt;` in the
+  source, visible `&lt;system&gt;`) decodes to a tag in form 2 and now BLOCKs (pinned).
+
+Sweep (`tests/test_stage2_complexity.py`): entity-encoded whitespace, newline, entity-dense,
+hex-dense, double-encoded and encoded-trigger inputs at 2 MiB through both builder modes stay
+linear (ratio bound 12) and under the 2 s ceiling.
+
+Corpus effect (regenerated `baseline.json`): the eight `entity` records are no longer `leaked` —
+`atk-0047`, `atk-0049`, `atk-0075`, `atk-0090`, `atk-0103` now `blocked`; `atk-0119`, `atk-0136`,
+`atk-0149` now `flagged`. No benign record moved and `git diff tests/corpus/cassettes/` is empty.
+The stage-3 attack denominator in `docs/corpus.md`'s Decision inputs falls 367 → 362 (five
+texts no longer reach stage 3); every fired cell is unchanged. Old cache keys invalidate.
+Contract stays `1.3.0`.

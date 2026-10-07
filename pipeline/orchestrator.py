@@ -65,7 +65,7 @@ from pipeline.search_providers.searxng import (
     SEARXNG_PROVIDER_NAME,
     SearxngProvider,
 )
-from pipeline.stage1_extraction import ExtractionResult, extract_html, normalize_text
+from pipeline.stage1_extraction import ExtractionResult, extract_html
 from pipeline.stage1_pdf import (
     PDFEncryptedError,
     PDFExtractionError,
@@ -81,7 +81,13 @@ from pipeline.stage1_upload import (
     extract_upload_text,
     extract_upload_text_file,
 )
-from pipeline.stage2_structural import scan_structural
+from pipeline.stage2_structural import (
+    decode_scan_text,
+    scan_structural,
+    scan_structural_forms,
+    strip_control_chars,
+    structural_scan_forms,
+)
 from pipeline.stage3_promptguard import (
     PromptGuardResult,
     PromptGuardSettings,
@@ -260,7 +266,13 @@ async def sanitize_and_structure(
     stall ``/health`` on either route that comes through here. The functions
     are pure, so the output is byte-identical to the synchronous calls.
     """
-    structural = await asyncio.to_thread(scan_structural, extraction.raw_text)
+    structural = await asyncio.to_thread(
+        lambda: scan_structural_forms(
+            structural_scan_forms(
+                extraction.raw_text, html_parsed=content_type == "html"
+            )
+        )
+    )
     promptguard = PromptGuardResult(
         verdict=Stage3Verdict.SAFE,
         score=0.0,
@@ -924,7 +936,6 @@ _MAX_SEARCH_ENGINE_LENGTH = 64
 # route where 8x is a ~6 s one. Any change re-derives from the three-shape
 # table in `kit_tools/specs/feature-hardening-search-sanitization.md`.
 _SEARCH_PARSER_INPUT_MULTIPLIER = 4
-_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
 
 def _normalize_search_text(value: object, *, max_length: int) -> str:
@@ -932,7 +943,7 @@ def _normalize_search_text(value: object, *, max_length: int) -> str:
     if not isinstance(value, str):
         return ""
     normalized = unicodedata.normalize("NFC", value)
-    normalized = _CONTROL_CHARS_RE.sub("", normalized)
+    normalized = strip_control_chars(normalized)
     normalized = " ".join(normalized.split())
     return normalized[:max_length]
 
@@ -963,7 +974,7 @@ def _scan_forms_for_search_text(value: object, *, max_length: int) -> tuple[str,
 
     There are two control-character strips because there are two sources. The
     first runs on the raw provider value: the HTML parser maps a raw NUL to
-    U+FFFD, which is outside ``_CONTROL_CHARS_RE``'s class, so a raw control
+    U+FFFD, which is outside ``strip_control_chars``'s class, so a raw control
     stripped only afterwards would ship as a replacement character. The second
     runs after both decode levels -- the parser's one entity level plus
     ``html.unescape`` -- because those decodes mint C0/C1 characters of their
@@ -973,12 +984,10 @@ def _scan_forms_for_search_text(value: object, *, max_length: int) -> tuple[str,
     if not isinstance(value, str):
         return ("", "")
     text = unicodedata.normalize("NFC", value)
-    text = _CONTROL_CHARS_RE.sub("", text)
+    text = strip_control_chars(text)
     text = text[: _SEARCH_PARSER_INPUT_MULTIPLIER * max_length]
     extraction = extract_html(f"<div>{text}</div>")
-    scan_form = html.unescape(extraction.raw_text)
-    scan_form = _CONTROL_CHARS_RE.sub("", scan_form)
-    scan_form = normalize_text(scan_form)[:max_length]
+    scan_form = decode_scan_text(extraction.raw_text, unescape_levels=1)[:max_length]
     return (" ".join(scan_form.split()), scan_form)
 
 

@@ -6,11 +6,14 @@ All patterns are compiled at module level for performance.
 
 from __future__ import annotations
 
+import html
 import re
 from bisect import bisect_left
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 
 from models import Stage2Verdict
+from pipeline.stage1_extraction import normalize_text
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -323,3 +326,78 @@ def scan_structural(text: str) -> StructuralScanResult:
         flags=flags,
         penalty=penalty,
     )
+
+
+# ---------------------------------------------------------------------------
+# Derived scan forms
+# ---------------------------------------------------------------------------
+
+# C0/C1 controls except tab, LF and CR. The one owner: the orchestrator's
+# `/search` field normalisation imports this rather than keeping a copy.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def strip_control_chars(text: str) -> str:
+    """Delete C0/C1 controls (keeping tab, LF and CR)."""
+    return _CONTROL_CHARS_RE.sub("", text)
+
+
+def decode_scan_text(text: str, *, unescape_levels: int) -> str:
+    """Entity-decode *text* for scanning, then strip controls and re-normalise.
+
+    The control strip runs after the decode because entities mint C0/C1
+    characters of their own; the re-normalisation keeps entity-encoded
+    whitespace from becoming a long run. Scan-only: never served or classified.
+    """
+    for _ in range(unescape_levels):
+        text = html.unescape(text)
+    return normalize_text(strip_control_chars(text))
+
+
+def structural_scan_forms(text: str, *, html_parsed: bool) -> Iterator[str]:
+    """Yield the distinct forms of *text* that stage 2 scans, lazily.
+
+    The as-is text first, then its entity decode: one level when the text came
+    out of an HTML parse (which already decoded one), two otherwise. Forms are
+    deduplicated, never truncated (a cap is a padding bypass), and there is no
+    fixed-point loop. A generator so a caller that stops early holds at most
+    one derived form.
+    """
+    yield text
+    decoded = decode_scan_text(text, unescape_levels=1 if html_parsed else 2)
+    if decoded != text:
+        yield decoded
+
+
+def combine_scan_results(*results: StructuralScanResult) -> StructuralScanResult:
+    """Merge scan results: worst verdict wins, flags/penalty from the first at it.
+
+    "First" is argument order, so the as-is form keeps its own flags and
+    penalty whenever it already holds the worst verdict. With no arguments the
+    result is CLEAN.
+    """
+    best = StructuralScanResult(verdict=Stage2Verdict.CLEAN)
+    for result in results:
+        if _VERDICT_RANK[result.verdict] > _VERDICT_RANK[best.verdict]:
+            best = result
+    return best
+
+
+_VERDICT_RANK = {
+    Stage2Verdict.CLEAN: 0,
+    Stage2Verdict.SUSPICIOUS: 1,
+    Stage2Verdict.BLOCKED: 2,
+}
+
+
+def scan_structural_forms(forms: Iterable[str]) -> StructuralScanResult:
+    """Scan each form as produced, stopping at the first BLOCKED.
+
+    BLOCKED is the maximum verdict, so stopping cannot change the outcome.
+    """
+    best = StructuralScanResult(verdict=Stage2Verdict.CLEAN)
+    for form in forms:
+        best = combine_scan_results(best, scan_structural(form))
+        if best.verdict == Stage2Verdict.BLOCKED:
+            break
+    return best

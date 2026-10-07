@@ -589,6 +589,15 @@ read-only whole-file reversal reproduces `8ca7db8d…` under default and shipped
 config. Accepted loss: a nested `]` in exfil alt text no longer matches. Full
 values: `docs/bootstrap-notes.md`.
 
+The forty-sixth rotation is `61c41b1a…` → `62a90323…` for
+`structural-scan-forms` US-003 — **the eleventh sanitization-behaviour-changing
+rotation**: stage 2 scans an entity-decoded derived form beside the as-is text on every
+route (`structural_scan_forms`, `scan_structural_forms`, `combine_scan_results` in
+`pipeline/stage2_structural.py`; wired in `sanitize_and_structure`). Two hashed sources
+move, each reverted alone against `db74dc7` with a both-reverted control reproducing
+`61c41b1a…` under default and shipped config. Stage 3's input is unchanged. Full values:
+`docs/bootstrap-notes.md`.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:

@@ -23,7 +23,7 @@ from pathlib import Path
 from pipeline import orchestrator
 from pipeline.stage1_extraction import extract_html
 from pipeline.stage1_upload import extract_upload_text
-from pipeline.stage2_structural import _PATTERNS
+from pipeline.stage2_structural import _PATTERNS, structural_scan_forms
 from scripts.corpus.records import (
     CorpusRecord,
     page_document,
@@ -51,6 +51,7 @@ def stage2_forms(
     ``search``: ``()`` when the URL is omitted by the rule chain or the
     effective blocklist (``seed_blocklist`` + ``blocked_domains``) — the result
     ``continue``s before the stage-2 loop — else the loop's six forms in order.
+    ``page`` and ``text``: the builder's forms (``structural_scan_forms``), as-is first.
     """
     payload = record.payload
     if record.surface == "search":
@@ -79,8 +80,10 @@ def stage2_forms(
             snippet,
         )
     if record.surface == "page":
-        return (extract_html(page_document(record), payload.get("url")).raw_text,)
-    return (extract_upload_text(payload.get("text", "").encode("utf-8")).raw_text,)
+        raw = extract_html(page_document(record), payload.get("url")).raw_text
+        return tuple(structural_scan_forms(raw, html_parsed=True))
+    raw = extract_upload_text(payload.get("text", "").encode("utf-8")).raw_text
+    return tuple(structural_scan_forms(raw, html_parsed=False))
 
 
 def stage2_record_hits(

@@ -27,7 +27,12 @@ from multiprocessing.connection import Connection
 import pytest
 
 from models import Stage2Verdict
-from pipeline.stage2_structural import _PATTERNS, scan_structural
+from pipeline.stage2_structural import (
+    _PATTERNS,
+    scan_structural,
+    scan_structural_forms,
+    structural_scan_forms,
+)
 from scripts.corpus.records import load_corpus
 from tests.corpus_stage2 import stage2_forms
 
@@ -177,6 +182,37 @@ def test_match_dense_input_is_linear_through_the_line_number_lookup() -> None:
     t_large = _best_of_three(lambda: scan_structural(dense[_LARGE]))
     assert t_large <= _CEILING_SECONDS
     assert t_small < _FAST_SECONDS or t_large <= _RATIO_BOUND * t_small
+
+
+_ENTITY_SHAPES: dict[str, str] = {
+    "encoded_whitespace": "a&#x20;&#32;&nbsp;&Tab;&ensp;&#x2003;",
+    "encoded_newlines": "x&NewLine;&#10;&#xA; ",
+    "entity_dense": "&amp;",
+    "hex_dense": "&#x41;",
+    "double_encoded_dense": "&amp;#x41;",
+    "encoded_trigger": "&#x5b;SYSTEM&#x5d;\n",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_ENTITY_SHAPES))
+@pytest.mark.parametrize("html_parsed", [True, False])
+def test_the_decoded_form_scales_linearly_on_entity_input(
+    shape: str, html_parsed: bool
+) -> None:
+    unit = _ENTITY_SHAPES[shape]
+
+    def scan(text: str) -> object:
+        return scan_structural_forms(
+            structural_scan_forms(text, html_parsed=html_parsed)
+        )
+
+    small, large = _fill(unit, _SMALL), _fill(unit, _LARGE)
+    t_small = _best_of_three(lambda: scan(small))
+    t_large = _best_of_three(lambda: scan(large))
+    assert t_large <= _CEILING_SECONDS, f"{shape}: {t_large:.2f}s at 2 MiB"
+    assert t_small < _FAST_SECONDS or t_large <= _RATIO_BOUND * t_small, (
+        f"{shape}: {t_large:.3f}s at 2 MiB vs {t_small:.3f}s at 256 KiB"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -492,7 +492,7 @@ def _make_pg_safe(**overrides: Any) -> PromptGuardResult:
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
-@patch("pipeline.orchestrator.scan_structural")
+@patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.build_retrieved_content")
 async def test_retrieve_full_pipeline_happy_path(
@@ -682,7 +682,7 @@ async def test_retrieve_summary_cache_does_not_serve_full_request(
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
-@patch("pipeline.orchestrator.scan_structural")
+@patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.build_retrieved_content")
 async def test_retrieve_ttl_zero_deletes_without_cache_read_or_write(
@@ -744,7 +744,7 @@ async def test_retrieve_ttl_zero_deletes_without_cache_read_or_write(
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
-@patch("pipeline.orchestrator.scan_structural")
+@patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.build_retrieved_content")
 async def test_retrieve_stage2_blocked_returns_quarantine(
     mock_build: MagicMock,
@@ -807,7 +807,7 @@ async def test_retrieve_stage2_blocked_returns_quarantine(
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
-@patch("pipeline.orchestrator.scan_structural")
+@patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.build_retrieved_content")
 async def test_retrieve_stage3_injection_returns_quarantine(
@@ -875,7 +875,7 @@ async def test_retrieve_stage3_injection_returns_quarantine(
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
-@patch("pipeline.orchestrator.scan_structural")
+@patch("pipeline.orchestrator.scan_structural_forms")
 async def test_retrieve_classifier_absent_fail_closed_reports_unavailable_blocked(
     mock_scan: MagicMock,
     mock_detect: MagicMock,
@@ -911,7 +911,7 @@ async def test_retrieve_classifier_absent_fail_closed_reports_unavailable_blocke
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
-@patch("pipeline.orchestrator.scan_structural")
+@patch("pipeline.orchestrator.scan_structural_forms")
 async def test_retrieve_classifier_absent_fail_open_reports_unavailable_allowed(
     mock_scan: MagicMock,
     mock_detect: MagicMock,
@@ -946,7 +946,7 @@ async def test_retrieve_classifier_absent_fail_open_reports_unavailable_allowed(
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
-@patch("pipeline.orchestrator.scan_structural")
+@patch("pipeline.orchestrator.scan_structural_forms")
 async def test_retrieve_trusted_tier_loaded_classifier_reports_skipped_trusted(
     mock_scan: MagicMock,
     mock_detect: MagicMock,
@@ -2259,7 +2259,7 @@ def client() -> httpx.AsyncClient:
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
-@patch("pipeline.orchestrator.scan_structural")
+@patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.build_retrieved_content")
 async def test_post_retrieve_endpoint(
@@ -2329,7 +2329,7 @@ def memory_cache_client(client: httpx.AsyncClient) -> httpx.AsyncClient:
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
-@patch("pipeline.orchestrator.scan_structural")
+@patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.build_retrieved_content")
 async def test_post_retrieve_repeat_is_served_from_the_in_memory_cache(
@@ -2397,7 +2397,7 @@ async def test_post_retrieve_repeat_is_served_from_the_in_memory_cache(
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
-@patch("pipeline.orchestrator.scan_structural")
+@patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
 @patch("pipeline.orchestrator.build_retrieved_content")
 async def test_a_rotated_sanitizer_revision_invalidates_the_cached_entry(
