@@ -240,25 +240,25 @@ PDF worker moved onto the shared launcher so a second worker reuses reviewed cod
   `kit_tools/arch/DECISIONS.md` gets a dated entry.
 
 **Acceptance Criteria:**
-- [ ] `pipeline/worker_launch.py` and `pipeline/worker_entry.py` exist, and the PDF worker runs
+- [x] `pipeline/worker_launch.py` and `pipeline/worker_entry.py` exist, and the PDF worker runs
       through them. Every existing PDF worker test passes with at most import and seam edits.
-- [ ] With every name in `_CLEARED_ENV_VARS` and a pattern-matching sentinel set in the parent, a
+- [x] With every name in `_CLEARED_ENV_VARS` and a pattern-matching sentinel set in the parent, a
       real worker child's `os.environ` keys are a subset of the recorded allowlist ∪ the recorded
       platform-injected set (`__CF_USER_TEXT_ENCODING` on darwin), and contain no excluded or
       pattern-matching name (test).
-- [ ] The child imports its parsers successfully under that environment.
-- [ ] On Linux (CI), the child's `/proc/self/environ` contains no excluded name (test; skipped with
+- [x] The child imports its parsers successfully under that environment.
+- [x] On Linux (CI), the child's `/proc/self/environ` contains no excluded name (test; skipped with
       a recorded reason elsewhere).
-- [ ] A real worker launched while the parent's cwd is an unrelated temp dir succeeds (test).
+- [x] A real worker launched while the parent's cwd is an unrelated temp dir succeeds (test).
       `cwd=` is the project root.
-- [ ] A `Popen` `OSError` maps to the PDF worker's existing failure error (test).
-- [ ] SECURITY.md (worker isolation and the verdict-integrity residual) and DECISIONS.md are
+- [x] A `Popen` `OSError` maps to the PDF worker's existing failure error (test).
+- [x] SECURITY.md (worker isolation and the verdict-integrity residual) and DECISIONS.md are
       updated.
-- [ ] `sanitizer_revision` is unchanged (no hashed file edited), with the values recorded.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] `sanitizer_revision` is unchanged (no hashed file edited), with the values recorded.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-003: Make the parent non-dumpable on Linux
 
