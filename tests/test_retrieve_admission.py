@@ -275,7 +275,7 @@ async def _fetch_error(admission: _Admission, fetch: _GatedFetch) -> None:
 async def _extraction_exception(admission: _Admission, fetch: _GatedFetch) -> None:
     fetch.gate.set()
 
-    def _explodes(*_args: object) -> object:
+    def _explodes(*_args: object, **_kwargs: object) -> object:
         raise ValueError("parser fell over")
 
     with (
@@ -368,7 +368,7 @@ async def test_html_cancellation_retains_slot_until_extractor_exits(
     peak = 0
     lock = threading.Lock()
 
-    def extract(text: str, url: str) -> ExtractionResult:
+    def extract(text: str, url: str, **kwargs: bool) -> ExtractionResult:
         nonlocal active, peak, calls
         with lock:
             calls += 1
@@ -381,7 +381,7 @@ async def test_html_cancellation_retains_slot_until_extractor_exits(
                 assert finish.wait(5), "test did not release HTML worker"
                 if worker_fails:
                     raise ValueError("extraction-failure-sentinel")
-            return extract_html(text, url)
+            return extract_html(text, url, **kwargs)
         finally:
             with lock:
                 active -= 1

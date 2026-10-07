@@ -527,7 +527,7 @@ class TestRunSearchPipelineIntegration:
             direct_outcome = await provider.search("q", 5)
         assert isinstance(direct_outcome, ProviderSearchResult)
         raw_content = direct_outcome.results[0]["content"]
-        expected_snippet, _ = _scan_forms_for_search_text(
+        expected_snippet, _, _ = _scan_forms_for_search_text(
             raw_content, max_length=_MAX_SEARCH_SNIPPET_LENGTH
         )
 

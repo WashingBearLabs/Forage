@@ -2250,3 +2250,53 @@ Corpus effect (regenerated `baseline.json`): the nine `confusable` records are n
 `git diff tests/corpus/cassettes/` is empty. The stage-3 attack denominator in `docs/corpus.md`'s
 Decision inputs falls 362 → 356 (six texts no longer reach stage 3); every fired cell is unchanged.
 Old cache keys invalidate. Contract stays `1.3.0`.
+
+### The forty-eighth rotation: the inline-joined scan form (`structural-markup-surface` US-001)
+
+Stage 2 now also scans HTML text with every **non-block** element joined into its surrounding
+text, so a tag splitting a trigger word (`ig<b></b>nore previous`, `<wbr>`, `<font>`, a custom
+element) can no longer hide it behind a line break. Two hashed sources move:
+`pipeline/stage1_extraction.py` (the walker `_extract_inline_text`, the closed block set, the
+`with_inline` keyword and the defaulted `ExtractionResult.scan_text_inline`) and
+`pipeline/orchestrator.py` (`_extract_html_and_scan_inline`, `sanitize_and_structure`'s
+`extra_scans`, `SearchScanForms` and the per-field inline entries in `/search`'s loop).
+
+| State | Revision |
+|---|---|
+| Before (`801e8af`) / both files reverted | `c04bd68ed35bbcc343d3769ea8db3ed3cf7a03ccf0e7831bc5faf92c254ed683` |
+| `orchestrator.py` reverted alone | `93fc1415e8b537fbfc26abcf5f1f65c3ab2718d27ca805862bde23e915e23a0e` |
+| `stage1_extraction.py` reverted alone | `39902da4f8c7274185f611a17ba6e30a74b7623d057546698cc65b9b4830bde2` |
+| After | `b9a4a9de1cab6a2cb68281956a10bdbe972abb5161f281c0492c07e5e0d4cb99` |
+
+Measured read-only (whole-file `git show HEAD:<path>` bytes substituted into the hash) for default
+`{}` and shipped `config.yaml`, which agree. No input moved; the other eight hashed sources and
+`url_validator.py` are byte-unchanged. This is the **thirteenth sanitization-behaviour-changing
+rotation**:
+
+- The walk is one iterative pass in document order with no tree mutation, `unwrap()` or
+  `smooth()`. It skips `_DANGEROUS_TAGS` subtrees, comments and every non-text node, appends plain
+  `NavigableString`/`CData` text only, and emits `"\n"` on entering and leaving an element of the
+  closed block set (the spec's list). Every other element emits nothing. Then `_normalize_text`.
+- `extract_html(with_inline=True)` builds it **from its own soup**: no parse of its own. (The
+  existing `copy.copy` in `_extract_raw_text` already re-feeds the parser once; the inline form
+  adds none, pinned by comparing parser runs with and without it.)
+- `/retrieve` (any non-PDF fetch) scans it inside the existing `to_thread` hop through the module
+  name `extract_html`, then returns the extraction with `scan_text_inline=None` plus a
+  `StructuralScanResult`; no inline text leaves the thread and the early `del html_text` still
+  holds. The scan is skipped for a page over the character pre-check, which step 4a refuses.
+  `sanitize_and_structure` merges it after the as-is scan with `combine_scan_results`.
+- `/search` passes `with_inline=True` to the call it already makes per field and scans the builder's
+  forms of the inline text (`html_parsed=True`) as one more entry after each field's fold forms. The
+  inline text is bounded to the same cap as the scan form, so blank-line padding still cannot push a
+  payload past the cap and have it scanned. Wire forms and stage 3's input are byte-identical.
+- Accepted costs, pinned: a bold `<b>Assistant</b>:` label at line start now BLOCKs, and
+  syntax-highlighted code whose spans rejoin into a base64-like run is SUSPICIOUS.
+
+Timing: the walker over a pre-parsed 10 MB page of 1.25 M sibling `<b>` elements took 0.37 s (the
+parse itself 9.0 s on the same machine); 80 000 siblings take at most 3× the time of 40 000 (test).
+
+Corpus effect (regenerated `baseline.json`): the eight `split_tags` records are no longer `leaked`
+(`atk-0041`, `atk-0076`, `atk-0092`, `atk-0105` and `atk-0042` now `blocked`; `atk-0120`,
+`atk-0138`, `atk-0167` now `flagged`). No benign record moved and `git diff tests/corpus/cassettes/`
+is empty. The stage-3 attack denominator in `docs/corpus.md`'s Decision inputs falls 356 → 351; every
+fired cell is unchanged. Old cache keys invalidate. Contract stays `1.3.0`.

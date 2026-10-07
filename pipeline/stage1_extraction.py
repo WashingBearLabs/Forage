@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from bs4 import BeautifulSoup, Comment, Tag
-from bs4.element import NavigableString
+from bs4.element import CData, NavigableString
 
 try:
     import trafilatura
@@ -48,6 +48,61 @@ _DANGEROUS_TAGS = frozenset(
         "svg",
     }
 )
+
+# Elements that separate text in the inline scan form. Closed on purpose: every
+# other element (``b``, ``span``, ``wbr``, ``font``, custom elements) is joined
+# into its surrounding text, so a tag splitting a trigger word cannot hide it.
+_INLINE_SCAN_BLOCK_TAGS = frozenset(
+    {
+        "address",
+        "article",
+        "aside",
+        "blockquote",
+        "body",
+        "br",
+        "caption",
+        "dd",
+        "details",
+        "dialog",
+        "div",
+        "dl",
+        "dt",
+        "fieldset",
+        "figcaption",
+        "figure",
+        "footer",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "head",
+        "header",
+        "hr",
+        "html",
+        "legend",
+        "li",
+        "main",
+        "nav",
+        "ol",
+        "p",
+        "pre",
+        "section",
+        "summary",
+        "table",
+        "tbody",
+        "td",
+        "tfoot",
+        "th",
+        "thead",
+        "title",
+        "tr",
+        "ul",
+    }
+)
+
+_BLOCK_CLOSE = object()
 
 # Invisible Unicode codepoints to collapse
 _INVISIBLE_CHARS = frozenset(
@@ -82,6 +137,10 @@ class ExtractionResult:
     raw_text: str  # full flattened text for security scanning
     main_content: str  # trafilatura main content (or raw_text fallback)
     word_count: int  # counted on main_content
+    # Scan-only inline-joined text, built by ``extract_html(with_inline=True)``.
+    # The orchestrator scans it inside the stage-1 thread and clears it, so it
+    # never leaves that thread.
+    scan_text_inline: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +324,32 @@ def _extract_raw_text(soup: BeautifulSoup) -> str:
     return soup.get_text(separator="\n")
 
 
+def _extract_inline_text(soup: BeautifulSoup) -> str:
+    """Flatten *soup* with every non-block element joined into its text.
+
+    One iterative walk in document order: no tree mutation, no ``unwrap()``,
+    no ``smooth()``, so the cost is linear in the node count. Dangerous
+    subtrees and non-text nodes are skipped exactly as ``_extract_raw_text``
+    drops them; entering and leaving a block element emits a newline.
+    """
+    parts: list[str] = []
+    stack: list[object] = [soup]
+    while stack:
+        node = stack.pop()
+        if node is _BLOCK_CLOSE:
+            parts.append("\n")
+        elif isinstance(node, Tag):
+            if node.name in _DANGEROUS_TAGS:
+                continue
+            if node.name in _INLINE_SCAN_BLOCK_TAGS:
+                parts.append("\n")
+                stack.append(_BLOCK_CLOSE)
+            stack.extend(reversed(node.contents))
+        elif type(node) in (NavigableString, CData):
+            parts.append(str(node))
+    return _normalize_text("".join(parts))
+
+
 # ---------------------------------------------------------------------------
 # Main content extraction (trafilatura)
 # ---------------------------------------------------------------------------
@@ -293,7 +378,9 @@ def _extract_main_content(html: str, url: str | None = None) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def extract_html(html: str, url: str | None = None) -> ExtractionResult:
+def extract_html(
+    html: str, url: str | None = None, *, with_inline: bool = False
+) -> ExtractionResult:
     """Extract text and metadata from HTML content.
 
     Parameters
@@ -302,6 +389,9 @@ def extract_html(html: str, url: str | None = None) -> ExtractionResult:
         Raw HTML string.
     url:
         Optional source URL (improves trafilatura heuristics).
+    with_inline:
+        Also build the inline-joined scan text from this same soup (no second
+        parse) into ``scan_text_inline``. ``raw_text`` is unaffected.
 
     Returns
     -------
@@ -334,4 +424,5 @@ def extract_html(html: str, url: str | None = None) -> ExtractionResult:
         raw_text=raw_text,
         main_content=main_content,
         word_count=word_count,
+        scan_text_inline=_extract_inline_text(soup) if with_inline else None,
     )

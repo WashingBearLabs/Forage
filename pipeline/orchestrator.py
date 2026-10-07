@@ -21,7 +21,7 @@ from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol, get_args
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Protocol, get_args
 from urllib.parse import SplitResult, unquote, urlparse, urlsplit, urlunsplit
 
 import httpx
@@ -82,6 +82,8 @@ from pipeline.stage1_upload import (
     extract_upload_text_file,
 )
 from pipeline.stage2_structural import (
+    StructuralScanResult,
+    combine_scan_results,
     decode_scan_text,
     fold_scan_forms,
     scan_structural,
@@ -230,6 +232,30 @@ async def _bounded_permit(
 _DEFAULT_PROMPTGUARD_SETTINGS = PromptGuardSettings()
 
 
+def _extract_html_and_scan_inline(
+    html_text: str, url: str | None, budget_characters: int | None
+) -> tuple[ExtractionResult, StructuralScanResult | None]:
+    """Stage 1 plus the inline-form stage-2 scan, for one thread hop.
+
+    Parses once (``extract_html`` builds the inline text from its own soup),
+    scans the inline text here, and returns the extraction with
+    ``scan_text_inline`` cleared, so only a ``StructuralScanResult`` leaves the
+    thread and a request queued on the classification permit holds no
+    page-sized scan text. An over-budget page is refused by the caller's
+    pre-check, so the scan is skipped for it.
+    """
+    extraction = extract_html(html_text, url, with_inline=True)
+    inline = extraction.scan_text_inline
+    extraction = replace(extraction, scan_text_inline=None)
+    if inline is None or (
+        budget_characters is not None and len(extraction.raw_text) > budget_characters
+    ):
+        return extraction, None
+    return extraction, scan_structural_forms(
+        structural_scan_forms(inline, html_parsed=True)
+    )
+
+
 async def sanitize_and_structure(
     *,
     extraction: ExtractionResult,
@@ -247,6 +273,7 @@ async def sanitize_and_structure(
     classification_semaphore: asyncio.Semaphore | None = None,
     classification_wait_seconds: float | None = None,
     on_classification_wait_timeout: Callable[[], None] | None = None,
+    extra_scans: Sequence[StructuralScanResult] = (),
 ) -> SanitizationResult:
     """Run the shared Stage 2-4 gauntlet for any extracted content source.
 
@@ -266,14 +293,20 @@ async def sanitize_and_structure(
     the way stage 3's inference already does, so a pathological page cannot
     stall ``/health`` on either route that comes through here. The functions
     are pure, so the output is byte-identical to the synchronous calls.
+
+    *extra_scans* are stage-2 results the caller already computed on other
+    scan-only forms of the same page (the inline-joined text); only results,
+    never text, cross into here. They merge after the as-is scan through
+    ``combine_scan_results``.
     """
-    structural = await asyncio.to_thread(
+    as_is = await asyncio.to_thread(
         lambda: scan_structural_forms(
             structural_scan_forms(
                 extraction.raw_text, html_parsed=content_type == "html"
             )
         )
     )
+    structural = combine_scan_results(as_is, *extra_scans)
     promptguard = PromptGuardResult(
         verdict=Stage3Verdict.SAFE,
         score=0.0,
@@ -544,6 +577,7 @@ async def run_retrieve_pipeline(
             fetch_result.response_body,
         )
 
+        extra_scans: tuple[StructuralScanResult, ...] = ()
         if content_type == "pdf":
             # `/extract`'s spawned, rlimited worker, from a 0600 file in the
             # process-private spool directory — so a fetched PDF runs under
@@ -597,9 +631,15 @@ async def run_retrieve_pipeline(
         else:
             html_text = fetch_result.response_body.decode("utf-8", errors="replace")
             async with completed_thread(
-                asyncio.to_thread(extract_html, html_text, request.url)
+                asyncio.to_thread(
+                    _extract_html_and_scan_inline,
+                    html_text,
+                    request.url,
+                    settings.max_extracted_characters,
+                )
             ) as html_worker:
-                extraction = html_worker.result()
+                extraction, inline_scan = html_worker.result()
+                extra_scans = (inline_scan,) if inline_scan is not None else ()
             del html_text
         # The three post-stage-1 scalars leave the fetch result here, so the
         # body and its decoded copy go with the slot: a request parked on the
@@ -682,6 +722,7 @@ async def run_retrieve_pipeline(
             classification_semaphore=classification_semaphore,
             classification_wait_seconds=settings.promptguard_wait_seconds,
             on_classification_wait_timeout=classification_wait_timed_out,
+            extra_scans=extra_scans,
         )
     except PromptGuardBudgetExceededError as exc:
         raise PipelineError(
@@ -949,8 +990,20 @@ def _normalize_search_text(value: object, *, max_length: int) -> str:
     return normalized[:max_length]
 
 
-def _scan_forms_for_search_text(value: object, *, max_length: int) -> tuple[str, str]:
-    """Return ``(wire_form, scan_form)`` for one model-visible search text field.
+class SearchScanForms(NamedTuple):
+    """The three texts derived from one model-visible search field."""
+
+    wire: str
+    scan: str
+    inline: str
+
+
+def _scan_forms_for_search_text(value: object, *, max_length: int) -> SearchScanForms:
+    """Return ``(wire, scan, inline)`` forms for one model-visible search field.
+
+    ``inline`` is the scan-only inline-joined text (non-block elements joined
+    into their surroundings), built from the same single parse as the others;
+    it never reaches the wire.
 
     The scan form keeps line breaks so Stage 2's line-anchored BLOCK patterns
     (``^System:``, ``^POPPY:``, ``^assistant:`` under ``MULTILINE``) fire on any
@@ -983,13 +1036,16 @@ def _scan_forms_for_search_text(value: object, *, max_length: int) -> tuple[str,
     and bidi code points, not the C0/C1 range.
     """
     if not isinstance(value, str):
-        return ("", "")
+        return SearchScanForms("", "", "")
     text = unicodedata.normalize("NFC", value)
     text = strip_control_chars(text)
     text = text[: _SEARCH_PARSER_INPUT_MULTIPLIER * max_length]
-    extraction = extract_html(f"<div>{text}</div>")
+    extraction = extract_html(f"<div>{text}</div>", with_inline=True)
     scan_form = decode_scan_text(extraction.raw_text, unescape_levels=1)[:max_length]
-    return (" ".join(scan_form.split()), scan_form)
+    # Bounded to the same cap as the scan form so blank-line padding cannot
+    # push a payload past the cap and still have it scanned (and blocked) here.
+    inline = (extraction.scan_text_inline or "")[:max_length]
+    return SearchScanForms(" ".join(scan_form.split()), scan_form, inline)
 
 
 SearchUrlRule = Literal[
@@ -1767,7 +1823,7 @@ async def run_search_pipeline(
         if len(sanitized_results) >= request.num_results:
             break
 
-        title, title_scan_text = _scan_forms_for_search_text(
+        title, title_scan_text, title_inline = _scan_forms_for_search_text(
             raw.get("title", ""),
             max_length=_MAX_SEARCH_TITLE_LENGTH,
         )
@@ -1802,7 +1858,7 @@ async def run_search_pipeline(
                 )
             omitted_by_reason[omission_reason or contract.OMIT_INVALID_URL] += 1
             continue
-        snippet, snippet_scan_text = _scan_forms_for_search_text(
+        snippet, snippet_scan_text, snippet_inline = _scan_forms_for_search_text(
             raw.get("content", ""),
             max_length=_MAX_SEARCH_SNIPPET_LENGTH,
         )
@@ -1821,6 +1877,17 @@ async def run_search_pipeline(
         title_fold = fold_scan_forms(title_scan_text)
         snippet_fold = fold_scan_forms(snippet_scan_text)
         if title_fold.refused or snippet_fold.refused:
+            suspicious = True
+        # The inline-joined text goes through the same builder (decode and
+        # fold forms), one more entry per field; its first form is as-is.
+        title_inline_forms = structural_scan_forms(title_inline, html_parsed=True)
+        snippet_inline_forms = structural_scan_forms(snippet_inline, html_parsed=True)
+        title_inline_list = list(title_inline_forms)
+        snippet_inline_list = list(snippet_inline_forms)
+        if (
+            title_inline_forms.expansion_refused
+            or snippet_inline_forms.expansion_refused
+        ):
             suspicious = True
 
         # Stage 2: scan every model-visible field before exposing the result.
@@ -1843,11 +1910,13 @@ async def run_search_pipeline(
             ("title", title_scan_text),
             ("title", title),
             *(("title", form) for form in title_fold.forms),
+            *(("title", form) for form in title_inline_list),
             ("url", url_outcome.scan_texts[0]),
             ("url", url_outcome.scan_texts[1]),
             ("snippet", snippet_scan_text),
             ("snippet", snippet),
             *(("snippet", form) for form in snippet_fold.forms),
+            *(("snippet", form) for form in snippet_inline_list),
         ):
             scan = scan_structural(field_text)
             if scan.verdict == Stage2Verdict.BLOCKED:

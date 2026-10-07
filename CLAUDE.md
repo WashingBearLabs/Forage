@@ -612,6 +612,15 @@ input each removed alone; an all-reverted control reproduces `62a90323…` under
 shipped config. Stage 3's input is unchanged and both cassettes are byte-unchanged. Full
 values: `docs/bootstrap-notes.md`.
 
+The forty-eighth rotation is `c04bd68e…` → `b9a4a9de…` for
+`structural-markup-surface` US-001 — **the thirteenth sanitization-behaviour-changing
+rotation**: stage 2 also scans an inline-joined form of HTML text (non-block elements joined,
+one iterative walk, built from `extract_html`'s own soup with `with_inline=True`) on every
+non-PDF `/retrieve` and on `/search`'s title and snippet. `stage1_extraction.py` and
+`orchestrator.py` move, each reverted alone against `801e8af` with a both-reverted control
+reproducing `c04bd68e…` under default and shipped config. `raw_text`, wire forms and both
+cassettes are byte-unchanged. Full values: `docs/bootstrap-notes.md`.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:

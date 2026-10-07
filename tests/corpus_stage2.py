@@ -55,12 +55,13 @@ def stage2_forms(
     ``search``: ``()`` when the URL is omitted by the rule chain or the
     effective blocklist (``seed_blocklist`` + ``blocked_domains``) — the result
     ``continue``s before the stage-2 loop — else the loop's forms in order (each text
-    field's fold forms follow its wire form).
-    ``page`` and ``text``: the builder's forms (``structural_scan_forms``), as-is first.
+    field's fold and inline-joined forms follow its wire form).
+    ``page``: the builder's forms of ``raw_text``, then of the inline-joined text.
+    ``text``: the builder's forms (``structural_scan_forms``), as-is first.
     """
     payload = record.payload
     if record.surface == "search":
-        title, title_scan = orchestrator._scan_forms_for_search_text(
+        title, title_scan, title_inline = orchestrator._scan_forms_for_search_text(
             payload.get("title", ""),
             max_length=orchestrator._MAX_SEARCH_TITLE_LENGTH,
         )
@@ -72,23 +73,32 @@ def stage2_forms(
             return ()
         if outcome.omission_reason is not None or outcome.domain is None:
             return ()
-        snippet, snippet_scan = orchestrator._scan_forms_for_search_text(
-            payload.get("content", ""),
-            max_length=orchestrator._MAX_SEARCH_SNIPPET_LENGTH,
+        snippet, snippet_scan, snippet_inline = (
+            orchestrator._scan_forms_for_search_text(
+                payload.get("content", ""),
+                max_length=orchestrator._MAX_SEARCH_SNIPPET_LENGTH,
+            )
         )
         return (
             title_scan,
             title,
             *fold_scan_forms(title_scan).forms,
+            *structural_scan_forms(title_inline, html_parsed=True),
             outcome.scan_texts[0],
             outcome.scan_texts[1],
             snippet_scan,
             snippet,
             *fold_scan_forms(snippet_scan).forms,
+            *structural_scan_forms(snippet_inline, html_parsed=True),
         )
     if record.surface == "page":
-        raw = extract_html(page_document(record), payload.get("url")).raw_text
-        return tuple(structural_scan_forms(raw, html_parsed=True))
+        extraction = extract_html(
+            page_document(record), payload.get("url"), with_inline=True
+        )
+        return (
+            *structural_scan_forms(extraction.raw_text, html_parsed=True),
+            *structural_scan_forms(extraction.scan_text_inline or "", html_parsed=True),
+        )
     raw = extract_upload_text(payload.get("text", "").encode("utf-8")).raw_text
     return tuple(structural_scan_forms(raw, html_parsed=False))
 

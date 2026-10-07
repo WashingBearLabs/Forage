@@ -71,7 +71,7 @@ async def _verdict(raw_text: str, content_type: str) -> Stage2Verdict:
 
 def _search_field_verdict(text: str) -> Stage2Verdict:
     """The `/search` field scan for one title: scan form, wire form, fold forms."""
-    title, scan = orchestrator._scan_forms_for_search_text(
+    title, scan, _inline = orchestrator._scan_forms_for_search_text(
         text, max_length=orchestrator._MAX_SEARCH_TITLE_LENGTH
     )
     verdicts = [

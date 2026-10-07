@@ -1832,7 +1832,7 @@ async def test_search_truncates_the_scan_form_once_and_derives_the_wire() -> Non
     assert "System:" not in snippet
     assert not any("System:" in text for text in scanned)
 
-    wire, scan = _scan_forms_for_search_text(
+    wire, scan, _ = _scan_forms_for_search_text(
         _PAD_PAST_CAP, max_length=_MAX_SEARCH_SNIPPET_LENGTH
     )
     assert snippet == wire
@@ -2015,7 +2015,7 @@ def test_legacy_scan_form_shows_what_each_fixture_proves(
 ) -> None:
     """No fixture can be mistaken for a closed bypass it did not close."""
     legacy = _legacy_scan_form(content, max_length=_MAX_SEARCH_SNIPPET_LENGTH)
-    wire, scan = _scan_forms_for_search_text(
+    wire, scan, _ = _scan_forms_for_search_text(
         content, max_length=_MAX_SEARCH_SNIPPET_LENGTH
     )
 
@@ -4521,7 +4521,7 @@ def _parity_scan_text(content: str) -> str:
     newline-preserving and at least as long as the wire form, which is its
     whitespace collapse.
     """
-    _wire, scanned = _scan_forms_for_search_text(
+    _wire, scanned, _ = _scan_forms_for_search_text(
         content, max_length=_MAX_SEARCH_SNIPPET_LENGTH
     )
     return scanned
@@ -4627,7 +4627,7 @@ class TestSanitizationParityAcrossProviders:
             scan_structural(_parity_scan_text(_PARITY_STAGE3_CONTENT)).verdict
             == Stage2Verdict.CLEAN
         )
-        visible_snippet, _scanned = _scan_forms_for_search_text(
+        visible_snippet, _scanned, _ = _scan_forms_for_search_text(
             _PARITY_STAGE3_CONTENT, max_length=_MAX_SEARCH_SNIPPET_LENGTH
         )
         expected_input = _search_result_promptguard_input(
@@ -4802,7 +4802,7 @@ class TestSanitizationParityAcrossProviders:
         # whitespace collapse -- so the served snippet is shorter than the cap
         # by exactly the blank lines the collapse removes from the first 2 000
         # characters (1 968 on this fixture), not equal to it as before.
-        expected_snippet, expected_scan = _scan_forms_for_search_text(
+        expected_snippet, expected_scan, _ = _scan_forms_for_search_text(
             chunk, max_length=_MAX_SEARCH_SNIPPET_LENGTH
         )
         assert len(expected_scan) == _MAX_SEARCH_SNIPPET_LENGTH
@@ -4829,20 +4829,26 @@ class TestSanitizationParityAcrossProviders:
         assert snippet == expected_snippet
         assert len(snippet) == 1_968
         # Stage 2 scans each text field in both forms -- scan form (line breaks
-        # in) then wire form (collapsed) -- plus the URL's two scan texts
+        # in) then wire form (collapsed), then the inline-joined form -- plus
+        # the URL's two scan texts
         # (entity-decoded and once-percent-decoded, identical for this plain
         # URL). Both snippet forms are scanned because the two patterns
         # compiled without `re.DOTALL` match across a space but not a newline.
-        title_wire, title_scan = _scan_forms_for_search_text(
+        title_wire, title_scan, title_inline = _scan_forms_for_search_text(
             _PARITY_TITLE, max_length=_MAX_SEARCH_TITLE_LENGTH
+        )
+        _, _, expected_inline = _scan_forms_for_search_text(
+            chunk, max_length=_MAX_SEARCH_SNIPPET_LENGTH
         )
         assert scanned == [
             title_scan,
             title_wire,
+            title_inline,
             _PARITY_URL,
             _PARITY_URL,
             expected_scan,
             expected_snippet,
+            expected_inline,
         ]
         assert " ".join(expected_scan.split()) == snippet
         # Stage 3 classifies the model-visible string.
@@ -5352,9 +5358,11 @@ class TestSearchUrlRulesThroughThePipeline:
         extracted: list[str] = []
         real_extract_html = extract_html
 
-        def _record_extract(html_text: str) -> ExtractionResult:
+        def _record_extract(
+            html_text: str, *, with_inline: bool = False
+        ) -> ExtractionResult:
             extracted.append(html_text)
-            return real_extract_html(html_text)
+            return real_extract_html(html_text, with_inline=with_inline)
 
         with (
             patch("pipeline.orchestrator.scan_structural", side_effect=_record),
@@ -5366,13 +5374,13 @@ class TestSearchUrlRulesThroughThePipeline:
                 config=_SAMPLE_CONFIG,
             )
 
-        # Each text field is scanned in both forms (scan form then wire form),
-        # so the two URL texts sit after the title's pair.
-        assert scanned[2:4] == [
+        # Each text field is scanned in its scan and wire forms and then its
+        # inline-joined form, so the two URL texts sit after the title's three.
+        assert scanned[3:5] == [
             "https://example.com/?q=%3Csystem%3E&r=1",
             "https://example.com/?q=<system>&r=1",
         ]
-        for text in scanned[1:3]:
+        for text in scanned[3:5]:
             assert len(text) <= _MAX_SEARCH_URL_LENGTH
         assert not any("example.com" in html_text for html_text in extracted)
 
