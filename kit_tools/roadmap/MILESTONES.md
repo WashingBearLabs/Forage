@@ -2,7 +2,7 @@
 # Milestones
 
 > Last updated: 2026-10-07
-> Updated by: Claude (structural-hardening epic completed; PR #42)
+> Updated by: Claude (v1.3.0 release epic planned 2026-10-07)
 
 **Previous release:** Forage `v1.2.1` — the hardened image (`epic-forage-hardening`, T2.2):
 `/retrieve` parity, search-text and URL audit in attacker-controlled forms, signed cache
@@ -81,6 +81,13 @@ Poppy.
       confusable, split-tag, newline-split and markup-consumed variants; blocked-page titles;
       inline-hidden body content) with stage-2 scan forms, keeping stage-3 input byte-identical
       so no cassette is re-recorded. Wrapper `../specs/epic-forage-structural-hardening.md`.
+
+- [ ] **v1.3.0 release** (`epic-forage-v1-3-0-release`, planned 2026-10-07, three specs / seven
+      stories; P1, follows structural hardening): `/retrieve` HTML above a measured size parses in
+      the rlimited worker (coded 422), `/search` parse off the event loop, a refused look-alike
+      fold BLOCKs at 2×, budget default 256, validation-422 placeholders dropped → contract
+      `1.4.0`, release notes and pins. Tag/publish are owner gates. Wrapper
+      `../specs/epic-forage-v1-3-0-release.md`.
 
 ## Exit Criteria for `v1.0.0`
 

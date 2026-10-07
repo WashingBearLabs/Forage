@@ -2,7 +2,7 @@
 # BACKLOG.md
 
 > Last updated: 2026-10-07
-> Updated by: Claude (structural-hardening epic completed; PR #42)
+> Updated by: Claude (v1.3.0 release epic planned 2026-10-07)
 
 Work that is real but not yet scheduled into a feature spec. Items with an owning spec
 live in `MILESTONES.md` instead.
@@ -19,6 +19,12 @@ live in `MILESTONES.md` instead.
 | P2 | Automated container smoke (`docker build` + `docker run` + `/health`) — manual today | Tech Debt | `feature-forage-ci-and-image` | Done |
 
 ---
+
+## Forage v1.3.0 Release (Planned)
+- [Epic Overview](../specs/epic-forage-v1-3-0-release.md) — bound the stage-1 parse (rlimited worker above a size threshold, `/search` off the event loop), refused look-alike fold BLOCKs at 2×, close the two next-MINOR windows (budget 256, 422 placeholders) → contract 1.4.0, cut v1.3.0 (tag/publish owner gates)
+  - [feature-release-resource-bounds.md](../specs/feature-release-resource-bounds.md) — 3 stories
+  - [feature-release-padding-gate.md](../specs/feature-release-padding-gate.md) — 1 story
+  - [feature-release-1-3-0.md](../specs/feature-release-1-3-0.md) — 3 stories
 
 ## Forage Structural Hardening (Completed)
 - [Epic Overview](../specs/epic-forage-structural-hardening.md) — closes the corpus's 30 structural findings with derived stage-2 scan forms; stage-3 input byte-identical (no re-record); ratchet both ways
@@ -48,6 +54,12 @@ live in `MILESTONES.md` instead.
 ---
 
 ## Future Work (no spec yet)
+
+### Evaluate a compiled HTML parser
+**Priority:** Low · **Effort:** Medium
+`selectolax` (lexbor) or a Rust extension could cut normal-page stage-1 cost 10–50×, so the
+v1.3.0 worker threshold trips less often. Changes stage-1 output, so it forces a cassette
+re-record (owner gate) and a corpus re-baseline. A bound, not a speed-up, closed 2026-10-06-001.
 
 ### Rename modules into a `forage/` package
 **Priority:** Low · **Effort:** Medium
