@@ -127,32 +127,32 @@ cassettes are unchanged.
   exactly what moved in the rotation record.
 
 **Acceptance Criteria:**
-- [ ] For `<p>ab<b></b>cd</p>`, the inline form contains `abcd`. For `<p>ab</p><p>cd</p>`, it keeps
+- [x] For `<p>ab<b></b>cd</p>`, the inline form contains `abcd`. For `<p>ab</p><p>cd</p>`, it keeps
       `ab` and `cd` on separate lines (unit tests).
-- [ ] Building the inline form for 80,000 sibling `<b>` elements takes ≤ 3× the time for 40,000
+- [x] Building the inline form for 80,000 sibling `<b>` elements takes ≤ 3× the time for 40,000
       (linearity), and the time for a 10 MB element-dense page is recorded.
-- [ ] `raw_text` is byte-identical to its pre-story value for every corpus page record.
-- [ ] For each of the 24 probes in `STAGE2_REGEX_PROBES`, HTML-escaped and split at every
+- [x] `raw_text` is byte-identical to its pre-story value for every corpus page record.
+- [x] For each of the 24 probes in `STAGE2_REGEX_PROBES`, HTML-escaped and split at every
       interior character boundary by each of the five splitter strings, the result is caught on
       `/retrieve` and `/search`. A split probe whose letters are also double-entity-encoded is
       caught on `/search` (decode forms apply to the inline text).
-- [ ] Only `StructuralScanResult` values leave the stage-1 thread: the returned
+- [x] Only `StructuralScanResult` values leave the stage-1 thread: the returned
       `ExtractionResult.scan_text_inline` is `None` (test). `extract_html` parses the HTML
       **once** per request: a test counts `BeautifulSoup` constructions on `/retrieve` and on
       one `/search` field.
-- [ ] The inline text has the same non-whitespace characters as `raw_text` for every corpus
+- [x] The inline text has the same non-whitespace characters as `raw_text` for every corpus
       page record (test).
-- [ ] The 8 `split_tags` records are not `leaked` in the regenerated baseline. No core-genre
+- [x] The 8 `split_tags` records are not `leaked` in the regenerated baseline. No core-genre
       benign record (watch `code`) moves from `passed`, and the pin tests are green.
-- [ ] `tests/test_search_pipeline_pins.py` is unchanged and green. Both cassette files are
+- [x] `tests/test_search_pipeline_pins.py` is unchanged and green. Both cassette files are
       byte-unchanged, with zero misses.
-- [ ] `docs/corpus.md` "Decision inputs" tables are updated, and `tests/test_corpus_docs.py` is
+- [x] `docs/corpus.md` "Decision inputs" tables are updated, and `tests/test_corpus_docs.py` is
       green.
-- [ ] The rotation is recorded with per-file reversal controls.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` reports 0 errors
+- [x] The rotation is recorded with per-file reversal controls.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` reports 0 errors
 
 ### US-002: A first-match raw-markup scan for markup-consumed triggers
 
