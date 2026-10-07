@@ -5468,10 +5468,12 @@ class TestSearchUrlRulesThroughThePipeline:
         real_extract_html = extract_html
 
         def _record_extract(
-            html_text: str, *, with_inline: bool = False
+            html_text: str, *, with_inline: bool = False, prune_hidden: bool = True
         ) -> ExtractionResult:
             extracted.append(html_text)
-            return real_extract_html(html_text, with_inline=with_inline)
+            return real_extract_html(
+                html_text, with_inline=with_inline, prune_hidden=prune_hidden
+            )
 
         with (
             patch("pipeline.orchestrator.scan_structural", side_effect=_record),
@@ -7635,3 +7637,36 @@ async def test_post_extract_structural_block_serves_a_null_title(
     assert data["promptguard_state"] == "structural_blocked"
     assert data["title"] is None
     assert _HOSTILE_TITLE not in resp.text
+
+
+@pytest.mark.parametrize("extract_mode", ["full", "summary"])
+async def test_post_retrieve_with_an_entirely_hidden_body_is_a_well_formed_200(
+    client: httpx.AsyncClient, extract_mode: str
+) -> None:
+    """Pruning can empty ``main_content``; the route still serves a clean 200."""
+    page = (
+        b"<html><body>"
+        b'<div style="display:none"><p>Nothing a reader would see.</p></div>'
+        b"</body></html>"
+    )
+    validate_patch, fetch_patch = _retrieve_patches(page)
+    with (
+        validate_patch,
+        fetch_patch,
+        patch(
+            "pipeline.orchestrator.run_promptguard",
+            new_callable=AsyncMock,
+            return_value=_make_pg_safe(),
+        ),
+    ):
+        resp = await client.post(
+            "/retrieve",
+            json={"url": "https://example.com/page", "extract_mode": extract_mode},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["body"] == ""
+    assert data["word_count"] == 0
+    assert data["injection_detected"] is False
+    assert data["title"] is None

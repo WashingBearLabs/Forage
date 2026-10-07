@@ -149,6 +149,7 @@ def structure_sanitization_result(
             extraction.main_content,
             extraction.raw_text,
             extraction.title,
+            extraction.main_content_is_fallback,
         )
         truncation_notice = notice if notice else None
     else:

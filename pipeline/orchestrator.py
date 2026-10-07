@@ -1065,7 +1065,9 @@ def _scan_forms_for_search_text(value: object, *, max_length: int) -> SearchScan
     if not isinstance(value, str):
         return SearchScanForms("", "", "")
     text = _search_parser_input(value, max_length=max_length)
-    extraction = extract_html(f"<div>{text}</div>", with_inline=True)
+    extraction = extract_html(
+        f"<div>{text}</div>", with_inline=True, prune_hidden=False
+    )
     scan_form = decode_scan_text(extraction.raw_text, unescape_levels=1)[:max_length]
     # Bounded to the same cap as the scan form so blank-line padding cannot
     # push a payload past the cap and still have it scanned (and blocked) here.

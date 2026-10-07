@@ -2386,3 +2386,46 @@ substituted) under default `{}` and shipped `config.yaml`, both giving the value
 byte-identical. Corpus effect: `atk-0059`, `atk-0211`, `atk-0212` (`/retrieve`) report
 `marker_on_wire` false; baseline `blocked_but_leaked` is 0 everywhere. Cassettes
 byte-unchanged. **Not replayed to Poppy:** compare contracts, not revisions.
+
+### The fifty-second rotation: a visibility pass on the served body (`structural-wire-closure` US-002)
+
+`extract_html` (`pipeline/stage1_extraction.py`) now prunes text a browser would not show from
+the body it hands trafilatura. Inline signals only, body descendants only, best effort; the
+real control remains stages 2 and 3 scanning `raw_text`, which is unchanged.
+
+- **Non-overridable** (subtree removed): `hidden` (not `until-found`), `aria-hidden="true"`,
+  `display:none`, zero `opacity`, a four-zero `clip:rect()`, `text-indent` <= -999px,
+  `position:absolute|fixed` with `left`/`top` <= -999px, `overflow:hidden` with a zero
+  `width`/`height`.
+- **Inherited** (own text removed, a re-shown descendant kept with its subtree):
+  `visibility:hidden|collapse`, `font-size` zero. Re-show: `visibility:visible`, or a non-zero
+  `font-size` in `px pt pc cm mm in Q rem`; relative sizes under a zero parent stay zero.
+- Offsets match px only; `overflow:hidden` alone never prunes; last declaration wins;
+  malformed declarations are ignored. Traversal and parsing are iterative and linear.
+- Only when something was pruned does trafilatura get `str(pruned_soup)`, and the trafilatura-
+  failed fallback is the pruned flattened text with `main_content_is_fallback=True`.
+  Unpruned pages get the original string and the flag stays `None` (equality inference, as
+  before). `/search`, `scripts/corpus/records.py` and `tests/corpus_stage2.py` pass
+  `prune_hidden=False`.
+
+| State | Revision |
+|---|---|
+| Before (`a7b7666`) / all three files reverted | `919fa9775d89782cc084f038803da248c1b1e7b407776e9d5ddedb14baff2f2c` |
+| `stage1_extraction.py` reverted alone | `4833c46180cef46ee23cc4222ca246647512be3a5bcb3c49df8fafa6d355463f` |
+| `stage4_structuring.py` reverted alone | `1e762f31c370a6a4d47ab2c7540ff9976f907b89f682b8f24ed3bc044f7b272f` |
+| `orchestrator.py` reverted alone | `4924b0a6c6d06a6a606a7969891fd58ff2bd38ac39ac7ee789cd6eedb0b79dfc` |
+| After | `46b8d1bbc79f3fc4fe273e4ca2488b0e0ba0c281658910b3dd8cfad2924a2d21` |
+
+Whole-file read-only reversals against `HEAD`, under default `{}` and shipped `config.yaml`,
+both giving the values above. `smart_extraction.py` is not a `_REVISION_SOURCES` member.
+Sanitizer outcome (GOVERNANCE ruling (m)): no contract bump, `contract/openapi.yaml` and its
+anchor untouched. Corpus effect: of 359 page records, 10 `hidden_markup` attack records
+(`css_offscreen`, `hidden_div`) change `main_content` and none of the 349 others; the six
+that leaked on `/retrieve` are `neutralised` (24 baseline entries across two models and two
+configs). **Benign pages whose body changed: 0**, so no per-page character loss to list.
+`raw_text`, title, author and date are byte-identical for all 359; both cassettes are
+byte-unchanged. Residuals for spec 4: class/stylesheet hiding, `transform:scale(0)`, colour
+camouflage, non-px offsets, tiny non-zero fonts, the 1px visually-hidden clip, `[hidden]`
+overridden by an inline `display`, and `aria-hidden` text browsers still render. Accepted
+benign costs (fixtured): ARIA tab panels using `hidden` and `opacity:0` hero blocks are
+pruned. **Not replayed to Poppy:** compare contracts, not revisions.

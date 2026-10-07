@@ -652,6 +652,19 @@ bump; `contract/openapi.yaml` and its anchor are byte-identical. `atk-0059`, `at
 `atk-0212` stop leaking their title; cassettes untouched. Not replayed to Poppy. Full
 values: `docs/bootstrap-notes.md`.
 
+The fifty-second rotation is `919fa977…` → `46b8d1bb…` for
+`structural-wire-closure` US-002 — **the seventeenth sanitization-behaviour-changing
+rotation**: `extract_html` runs a Forage-owned visibility pass over body descendants and
+serves the pruned `main_content` (inline signals only: `hidden`, `aria-hidden`,
+`display:none`, zero opacity, zero clip rect, far-negative indent/offset, `overflow:hidden`
+with a zero dimension, and the inheritable `visibility`/`font-size:0` with their re-shows).
+`raw_text`, title, author, date and `/search` are untouched. Three hashed files move
+(`stage1_extraction.py`, `stage4_structuring.py`, `orchestrator.py`), each reverted alone
+with an all-reverted control reproducing `919fa977…` under default and shipped config;
+`smart_extraction.py` is not hashed. GOVERNANCE ruling (m): sanitizer outcome, no bump.
+The six leaked `css_offscreen`/`hidden_div` records are neutralised; no benign page moves;
+cassettes byte-unchanged. Not replayed to Poppy. Full values: `docs/bootstrap-notes.md`.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:

@@ -311,7 +311,9 @@ def _payload_forms(record: CorpusRecord) -> list[str]:
     forms.extend(html.unescape(value) for value in record.payload.values())
     if record.surface == "page":
         url = record.payload.get("url")
-        forms.append(extract_html(page_document(record), url).raw_text)
+        forms.append(
+            extract_html(page_document(record), url, prune_hidden=False).raw_text
+        )
     return forms
 
 
@@ -489,7 +491,9 @@ def rule_params_values(record: CorpusRecord) -> bool:
 def _stage2_forms(record: CorpusRecord) -> tuple[str, ...] | None:
     """The forms stage 2 scans for a ``page`` or ``text`` record, from the builder."""
     if record.surface == "page":
-        raw = extract_html(page_document(record), record.payload.get("url")).raw_text
+        raw = extract_html(
+            page_document(record), record.payload.get("url"), prune_hidden=False
+        ).raw_text
         return tuple(structural_scan_forms(raw, html_parsed=True))
     if record.surface == "text":
         text = record.payload.get("text", "")

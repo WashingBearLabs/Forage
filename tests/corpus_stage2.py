@@ -96,7 +96,10 @@ def stage2_forms(
         )
     if record.surface == "page":
         extraction = extract_html(
-            page_document(record), payload.get("url"), with_inline=True
+            page_document(record),
+            payload.get("url"),
+            with_inline=True,
+            prune_hidden=False,
         )
         return (
             *structural_scan_forms(extraction.raw_text, html_parsed=True),

@@ -317,6 +317,23 @@ byte-identical `main_content`, and summary mode on the fallback path behaves as 
 
 ## Implementation Notes
 
+**US-002 (visibility pass).**
+- Rotation `919fa977…` → `46b8d1bb…`; stage1, stage4 and orchestrator each reverted alone
+  (`4833c461…`, `1e762f31…`, `4924b0a6…`), all-reverted control reproduces `919fa977…`.
+  `smart_extraction.py` is not hashed. Details in `docs/bootstrap-notes.md`.
+- Benign corpus pages whose `main_content` changed: **0** of the benign page records (so no
+  per-page character losses or >20% core-genre losses to raise). 10 attack records changed
+  (`css_offscreen`/`hidden_div`); the 6 that leaked are now neutralised. `raw_text`, title,
+  author, date byte-identical across all 359 page records; cassettes byte-unchanged.
+- 10,000-level nesting through `extract_html`: ~1.5 s; 1 MB style value: ~0.04 s.
+- `_has_visibility_signal` pre-check: when no body descendant has `hidden`, `aria-hidden` or
+  `style`, the helper returns the original soup unchanged (no copy); otherwise it prunes
+  `copy.copy(soup)`.
+- Inherited-hidden elements keep their (emptied) tag shell; only non-blank removed text counts
+  as `pruned`. An all-hidden, title-less page serves `body == ""` as a 200 in both modes; a
+  title still reaches the pruned-fallback body because the flattener includes `<title>` text
+  exactly as `raw_text` does.
+
 ## Refinement Notes
 
 ### Research Findings

@@ -39,6 +39,12 @@ Not yet tagged; the version number is decided at the release gate. Contract stay
   with it. The field is unchanged in shape (`string | null`); contract stays `1.3.0`
   (GOVERNANCE ruling (m)). Consumers that displayed the title of a blocked page should
   treat `null` as expected.
+- **The served `body` omits text a browser would not show.** `/retrieve` and `/extract` drop
+  inline-hidden content (`hidden`, `aria-hidden="true"`, `display:none`, zero opacity, and
+  similar inline signals) from `body`, best effort; stylesheet and class rules are not
+  resolved. Scanning still reads the full text. `body` is free text, so the contract stays
+  `1.3.0` (GOVERNANCE ruling (m)). Pages that rely on `hidden` tab panels or `opacity:0`
+  blocks will serve less text.
 - GOVERNANCE worked example 6's announce-then-flip window was **waived** by the owner for
   the default-model change (no known third-party consumers).
 
