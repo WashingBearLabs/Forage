@@ -21,10 +21,10 @@ live in `MILESTONES.md` instead.
 ---
 
 ## Forage v1.3.0 Release (Planned)
-- [Epic Overview](../specs/epic-forage-v1-3-0-release.md) — bound the stage-1 parse (rlimited worker above a size threshold, `/search` off the event loop), refused look-alike fold BLOCKs at 2×, close the two next-MINOR windows (budget 256, 422 placeholders) → contract 1.4.0, cut v1.3.0 (tag/publish owner gates)
-  - [feature-release-resource-bounds.md](../specs/feature-release-resource-bounds.md) — 3 stories
+- [Epic Overview](../specs/epic-forage-v1-3-0-release.md) — bound the stage-1 parse (rlimited worker above a size threshold, `/search` off the event loop), refused look-alike fold BLOCKs at max(2n, n+256), close the two next-MINOR windows (budget 256, 422 placeholders) → contract 1.4.0, cut v1.3.0 (tag/publish owner gates)
+  - [feature-release-resource-bounds.md](../specs/feature-release-resource-bounds.md) — 5 stories
   - [feature-release-padding-gate.md](../specs/feature-release-padding-gate.md) — 1 story
-  - [feature-release-1-3-0.md](../specs/feature-release-1-3-0.md) — 3 stories
+  - [feature-release-1-3-0.md](../specs/feature-release-1-3-0.md) — 5 stories
 
 ## Forage Structural Hardening (Completed)
 - [Epic Overview](../specs/epic-forage-structural-hardening.md) — closes the corpus's 30 structural findings with derived stage-2 scan forms; stage-3 input byte-identical (no re-record); ratchet both ways

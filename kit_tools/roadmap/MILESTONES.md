@@ -82,10 +82,10 @@ Poppy.
       inline-hidden body content) with stage-2 scan forms, keeping stage-3 input byte-identical
       so no cassette is re-recorded. Wrapper `../specs/epic-forage-structural-hardening.md`.
 
-- [ ] **v1.3.0 release** (`epic-forage-v1-3-0-release`, planned 2026-10-07, three specs / seven
+- [ ] **v1.3.0 release** (`epic-forage-v1-3-0-release`, planned 2026-10-07, three specs / eleven
       stories; P1, follows structural hardening): `/retrieve` HTML above a measured size parses in
       the rlimited worker (coded 422), `/search` parse off the event loop, a refused look-alike
-      fold BLOCKs at 2×, budget default 256, validation-422 placeholders dropped → contract
+      fold BLOCKs at `max(2n, n + 256)`, budget default 256, validation-422 placeholders dropped → contract
       `1.4.0`, release notes and pins. Tag/publish are owner gates. Wrapper
       `../specs/epic-forage-v1-3-0-release.md`.
 

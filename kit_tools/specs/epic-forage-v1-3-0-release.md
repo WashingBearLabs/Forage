@@ -22,14 +22,19 @@ the release that the 1.3.0 contract's compatibility windows promised:
 
 1. **Parse cost (finding 2026-10-06-001).** An element-dense 10 MB page costs about 150 s of
    stage-1 parse on `/retrieve`. The parse holds the admission slot and the GIL the whole time.
-   - Pages above a measured size move into the CPU- and memory-rlimited worker that fetched
-     PDFs already use, with a coded 422 on overrun.
+   - Pages above a size threshold calibrated on four hostile shapes move into the CPU- and
+     memory-rlimited worker that fetched PDFs already use, with a coded 422 on overrun. Both
+     workers start with a credential-free environment, and stale spool files are swept at
+     startup.
+   - Realistic pages above about 2 MB are refused by design (owner, 2026-10-07). The 256-chunk
+     budget already refuses about 1 MB of realistic text.
    - `/search`'s per-field parse moves off the event loop.
 2. **Look-alike padding gate (residual 2026-10-04-060) and fold cost (finding 2026-10-07-002).**
    - Today a refused confusable fold only *flags* the page. On the TRUSTED tier, where stage 3
      is skipped, that leaves no control at all. A refusal will now **BLOCK**.
-   - The refusal multiple drops from 4× to 2×, which halves the worst accepted fold cost
-     (8.5 s on CI at 4×).
+   - The refusal limit drops from 4× to `max(2n, n + 256)`. The constant slack keeps short
+     fields with everyday ligatures from being blocked. The worst accepted fold cost falls to
+     about 56% of its 4× figure (measured).
 3. **The two next-MINOR windows.**
    - The `/retrieve` `max_promptguard_chunks` default flips 0 → 256 (ruling (g)). `0` stays the
      opt-out.
@@ -43,9 +48,9 @@ the release that the 1.3.0 contract's compatibility windows promised:
 
 | Seq | Feature Spec | Status | Dependencies |
 |-----|-------------|--------|--------------|
-| 1 | [feature-release-resource-bounds.md](feature-release-resource-bounds.md) — HTML parse in the rlimited worker above a size threshold; `/search` parse off the event loop | Planned | None |
-| 2 | [feature-release-padding-gate.md](feature-release-padding-gate.md) — fold refusal multiple 4× → 2×, refusal BLOCKs on every route and tier | Planned | None (runs after 1 for ordering only) |
-| 3 | [feature-release-1-3-0.md](feature-release-1-3-0.md) — budget default 256, drop 422 placeholders, contract 1.4.0, release notes and pins | Planned | 1, 2 |
+| 1 | [feature-release-resource-bounds.md](feature-release-resource-bounds.md) — 5 stories: worker plumbing and environment scrub, HTML worker, threshold routing and telemetry, held contract 1.4.0, `/search` off the loop | Planned | None |
+| 2 | [feature-release-padding-gate.md](feature-release-padding-gate.md) — 1 story: fold limit `max(2n, n + 256)`, refusal BLOCKs on every route | Planned | None (runs after 1 for ordering only) |
+| 3 | [feature-release-1-3-0.md](feature-release-1-3-0.md) — 5 stories: budget default 256, measured sizing docs, 422 key drop and final 1.4.0 entry, GOVERNANCE closure, release prep | Planned | 1, 2 |
 
 ## Completion Criteria
 
