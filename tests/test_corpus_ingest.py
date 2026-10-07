@@ -25,6 +25,7 @@ from typing import Any
 
 import pytest
 
+from pipeline import orchestrator
 from pipeline.stage1_extraction import extract_html
 from scripts.corpus import vocab
 from scripts.corpus.ingest import (
@@ -1739,13 +1740,23 @@ def test_url_field_probes_are_the_declared_set_and_carry_the_shape_in_the_url() 
         if not isinstance(variant, str):
             continue
         forms = corpus_stage2.stage2_forms(record)
-        form_count = len(forms)
-        assert form_count == 6, record.id
-        url_hits = corpus_stage2.stage2_hits(forms[2]) | corpus_stage2.stage2_hits(
-            forms[3]
+        # The URL forms sit between the title's and the snippet's; each text
+        # field's confusable fold forms follow its wire form, so count from the
+        # rule chain's own scan texts rather than a fixed index.
+        url_forms = orchestrator._canonicalize_search_url(
+            record.payload.get("url", "")
+        ).scan_texts
+        assert len(url_forms) == 2 and len(forms) >= 6, record.id
+        first = forms.index(url_forms[0])
+        assert forms[first : first + 2] == url_forms, record.id
+        url_hits = corpus_stage2.stage2_hits(url_forms[0]) | corpus_stage2.stage2_hits(
+            url_forms[1]
         )
         text_hits = frozenset[str]().union(
-            *(corpus_stage2.stage2_hits(form) for form in (*forms[:2], *forms[4:]))
+            *(
+                corpus_stage2.stage2_hits(form)
+                for form in (*forms[:first], *forms[first + 2 :])
+            )
         )
         if record.id in _US004_URL_FIELD_PROBES:
             assert variant in url_hits and variant not in text_hits, record.id

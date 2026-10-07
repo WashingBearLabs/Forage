@@ -2196,3 +2196,57 @@ Corpus effect (regenerated `baseline.json`): the eight `entity` records are no l
 The stage-3 attack denominator in `docs/corpus.md`'s Decision inputs falls 367 → 362 (five
 texts no longer reach stage 3); every fired cell is unchanged. Old cache keys invalidate.
 Contract stays `1.3.0`.
+
+### The forty-seventh rotation: the confusable fold forms (`structural-scan-forms` US-005)
+
+Stage 2 now also scans a **confusable fold** of the decoded form, on every route through
+`sanitize_and_structure` and on `/search`'s title and snippet. This is the first rotation since
+`url_validator.py` and `idna` (eighteenth) to **add a hashed source and an input**: ten hashed
+sources now (`pipeline/confusables.py` is the ninth `pipeline/` one, hashed after
+`orchestrator.py`), and `unicodedata@<version>` joins the inputs right after `idna@<version>`
+because NFKC's tables are Python's, not this repository's.
+
+| State | Revision |
+|---|---|
+| Before (`87dbb6c`) / all reverted and both additions removed | `62a903231e3ec640c373f85f9fa5a9a719333596457b47947c14b8a306bf3c91` |
+| `confusables.py` removed from the hash alone | `24d2eb1639b2d836ca403815f608f167a41cad6d3177eeff58555f187f14a723` |
+| `unicodedata@<version>` removed alone | `773991a6ccd8a269aedf21dc7d35085478f15e74826a65f6062bc4a7621d6197` |
+| `stage2_structural.py` reverted alone | `c2e62910caf3080df7b66339775a362f8256120026aee204ffab359e57fcaf25` |
+| `orchestrator.py` reverted alone | `e1a9c469660fff0f29796b90a2fabfc96420236b3656e0d79fd5df49cded7e2e` |
+| After | `c04bd68ed35bbcc343d3769ea8db3ed3cf7a03ccf0e7831bc5faf92c254ed683` |
+
+Measured read-only (whole-file `git show HEAD:<path>` bytes substituted into the hash) for default
+`{}` and shipped `config.yaml`, which agree. Under `uv` the project's Python reports Unicode
+database `15.0.0`. This is the **twelfth sanitization-behaviour-changing rotation**:
+
+- `fold_scan_forms(decoded)` applies `PRE_NFKC_TABLE`, NFKC, `FOLD_TABLE`, then stage 1's
+  whitespace collapse, and is yielded after the decoded form. If the **post-NFKC** text holds
+  any `AMBIGUOUS_IL` member a fourth form reads those as `i` instead of `l`. ASCII text has no
+  fold form; a fold equal to an earlier form is not repeated.
+- The fold is built chunk by chunk, cutting only at seams NFKC cannot compose or reorder across.
+  A first pass measures the NFKC length alone and keeps nothing; a second applies the tables.
+  If the fold would pass **4× the decoded form's length** it is refused, not truncated: the scan
+  result gains an `encoded_payload` span (SUSPICIOUS, so no contract change) and the WARNING
+  token `stage2_fold_expansion_refused` logs two lengths and no text. A 10 MiB `/retrieve` page
+  of U+FDFA (18× under NFKC) is refused with a traced peak under 400 MB; a page at 3.83× is folded.
+- `/search` derives the fold forms from each title and snippet **scan form** and scans them
+  right after that field's wire form; URL fields are excluded (`_SEARCH_URL_RULES` audits them).
+  The wire forms are byte-identical and `tests/test_search_pipeline_pins.py` is unchanged.
+  A refused fold marks the result `suspicious`.
+- Stage 3 still receives `extraction.raw_text` by identity; both cassettes are byte-unchanged.
+- The property test substitutes each oracle look-alike at each Latin-letter position of the 24
+  probes and requires a non-CLEAN verdict through `sanitize_and_structure` (`html` and `text`) and
+  the `/search` field scan. Two probes (`<system>`, `</retrieved_content>`) are already consumed by
+  the search scan form's HTML parse before any fold, so they are skipped there and pinned.
+
+Sweep (`tests/test_stage2_complexity.py`): U+FDFA, the largest accepted expansion, and two
+look-alike-dense inputs at 2 MiB through the whole forms scan stay linear (ratio bound 12). The
+largest accepted expansion builds and scans two 8M-character forms and gets four times the
+single-form ceiling.
+
+Corpus effect (regenerated `baseline.json`): the nine `confusable` records are no longer `leaked` —
+`atk-0043`, `atk-0044`, `atk-0045`, `atk-0073`, `atk-0091`, `atk-0104` now `blocked`;
+`atk-0121`, `atk-0137`, `atk-0168` now `flagged`. No benign record moved and
+`git diff tests/corpus/cassettes/` is empty. The stage-3 attack denominator in `docs/corpus.md`'s
+Decision inputs falls 362 → 356 (six texts no longer reach stage 3); every fired cell is unchanged.
+Old cache keys invalidate. Contract stays `1.3.0`.

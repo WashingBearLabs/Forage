@@ -665,10 +665,11 @@ the pass-list advice; the baked image still ships `limiter: false`.
 **Added:** 2026-09-07 (forage-repo-bootstrap US-002)
 
 **What happens:**
-`derive_sanitizer_revision()` hashes nine source files — the eight under `pipeline/` plus
-repo-root `url_validator.py` — plus the model identity, the `idna` version
-(`idna@<version>`: UTS-46 tables decide which hosts are dropped) and the active
-threshold. Forage's revision has moved forty-six times. The twenty-sixth was
+`derive_sanitizer_revision()` hashes ten source files — the nine under `pipeline/` (`confusables.py` joined at the
+forty-seventh rotation) plus repo-root `url_validator.py` — plus the model identity, the
+`idna` version (`idna@<version>`: UTS-46 tables decide which hosts are dropped), the
+`unicodedata` version (`unicodedata@<version>`: NFKC's tables decide what the fold forms
+see) and the active threshold. Forage's revision has moved forty-seven times. The twenty-sixth was
 reconciled from the preceding validation commit during US-001's pre-flight; the rest
 were recorded at their implementation boundaries:
 
@@ -724,11 +725,11 @@ were recorded at their implementation boundaries:
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Thirty-three of the forty-six rotations changed no sanitization policy or algorithm at shipped defaults; the
+**Thirty-three of the forty-seven rotations changed no sanitization policy or algorithm at shipped defaults; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
 US-001, US-002, US-003 and its validation fix) and the twenty-seventh
 through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005),
-the forty-second release-gate policy repair, the forty-third (the 86M default) and the forty-fourth (case-insensitive Stage 2) the forty-fifth (newline-crossing, linear Stage 2) and the forty-sixth (the decoded scan form) are the thirteen
+the forty-second release-gate policy repair, the forty-third (the 86M default) and the forty-fourth (case-insensitive Stage 2) the forty-fifth (newline-crossing, linear Stage 2) the forty-sixth (the decoded scan form) and the forty-seventh (the confusable fold forms) are the fourteen
 that did, and the seventeenth
 (US-004, contract `1.3.0`) does not join them** — hostname policy can now skip
 classification on an opted-in trusted suffix; search-sanitization US-001's

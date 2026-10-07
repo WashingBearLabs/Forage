@@ -159,10 +159,10 @@ would detach the still-running thread and release admission early.
 
 **The sanitizer revision is a content hash of source files *and of the model pin*.**
 `sanitizer_revision.py` resolves `_REVISION_SOURCES` relative to its own file and
-`_ROOT_REVISION_SOURCES` against its parent, and hashes the nine files in that order, then
-the model identity (`MODEL_ID@revision`), then `idna@<version>`, then the configured threshold;
+`_ROOT_REVISION_SOURCES` against its parent, and hashes the ten files in that order, then
+the model identity (`MODEL_ID@revision`), then `idna@<version>`, then `unicodedata@<version>`, then the configured threshold;
 the value ships in every `/health` body and response envelope so a consumer can tell which
-sanitizer version produced a result. Editing any of those nine files — or bumping `idna`,
+sanitizer version produced a result. Editing any of those ten files — or bumping `idna` or Python's Unicode database,
 whose UTS-46 tables decide which hosts the search audit drops and `validate_url` refuses —
 changes it. That
 is the intent, but it means Forage's revision has **deliberately diverged** from Poppy's

@@ -598,6 +598,20 @@ move, each reverted alone against `db74dc7` with a both-reverted control reprodu
 `61c41b1a…` under default and shipped config. Stage 3's input is unchanged. Full values:
 `docs/bootstrap-notes.md`.
 
+The forty-seventh rotation is `62a90323…` → `c04bd68e…` for
+`structural-scan-forms` US-005 — **the twelfth sanitization-behaviour-changing
+rotation**, and the first to **add a hashed source and an input** since `url_validator.py`
+and `idna`: stage 2 scans a confusable fold of the decoded form (`PRE_NFKC_TABLE`, NFKC,
+`FOLD_TABLE`) under both readings of the I/l class, on every route and on `/search`'s
+title and snippet. `pipeline/confusables.py` joins `_REVISION_SOURCES` (ten hashed sources
+now) and `unicodedata@<version>` joins the hashed inputs beside `idna@<version>`. A fold
+that would exceed 4× the decoded form is refused, never truncated: `encoded_payload`
+SUSPICIOUS plus the WARNING token `stage2_fold_expansion_refused`. Two edited hashed files
+(`stage2_structural.py`, `orchestrator.py`) were each reverted alone, and the module and the
+input each removed alone; an all-reverted control reproduces `62a90323…` under default and
+shipped config. Stage 3's input is unchanged and both cassettes are byte-unchanged. Full
+values: `docs/bootstrap-notes.md`.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:

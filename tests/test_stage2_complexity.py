@@ -215,6 +215,36 @@ def test_the_decoded_form_scales_linearly_on_entity_input(
     )
 
 
+# U+FDFA expands 18x under NFKC: refused past 4x, so its sweep times the refusal.
+# One U+FDFA plus five ASCII is 3.83x, the largest expansion the fold accepts,
+# so its sweep times the whole fold (both I/l readings) plus the scan of each form.
+# That input builds and scans two 8M-character forms, so it gets four times the
+# single-form ceiling; the ratio bound is what proves it linear.
+_FOLD_SHAPES: dict[str, str] = {
+    "maximal_nfkc_expansion": "\ufdfa",
+    "maximal_accepted_expansion": "\ufdfa" + "a" * 5,
+    "ambiguous_dense": "\u0406gnore ",
+    "lookalike_dense": "\u0456gn\u043er\u0435 pr\u0435vi\u043eus ",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_FOLD_SHAPES))
+def test_the_fold_forms_scale_linearly_through_the_whole_scan(shape: str) -> None:
+    unit = _FOLD_SHAPES[shape]
+
+    def scan(text: str) -> object:
+        return scan_structural_forms(structural_scan_forms(text, html_parsed=False))
+
+    small, large = _fill(unit, _SMALL), _fill(unit, _LARGE)
+    t_small = _best_of_three(lambda: scan(small))
+    t_large = _best_of_three(lambda: scan(large))
+    ceiling = _CEILING_SECONDS * (4 if shape == "maximal_accepted_expansion" else 1)
+    assert t_large <= ceiling, f"{shape}: {t_large:.2f}s at 2 MiB"
+    assert t_small < _FAST_SECONDS or t_large <= _RATIO_BOUND * t_small, (
+        f"{shape}: {t_large:.3f}s at 2 MiB vs {t_small:.3f}s at 256 KiB"
+    )
+
+
 # ---------------------------------------------------------------------------
 # The two gap patterns across a newline
 # ---------------------------------------------------------------------------

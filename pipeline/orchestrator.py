@@ -83,6 +83,7 @@ from pipeline.stage1_upload import (
 )
 from pipeline.stage2_structural import (
     decode_scan_text,
+    fold_scan_forms,
     scan_structural,
     scan_structural_forms,
     strip_control_chars,
@@ -1814,6 +1815,14 @@ async def run_search_pipeline(
         result_date = raw.get("date")
         suspicious = False
 
+        # Confusable fold forms of the two text fields' scan forms. URLs are
+        # excluded: `_SEARCH_URL_RULES` already audits them. A refused fold
+        # (expansion past 4x) is flagged SUSPICIOUS, never silently skipped.
+        title_fold = fold_scan_forms(title_scan_text)
+        snippet_fold = fold_scan_forms(snippet_scan_text)
+        if title_fold.refused or snippet_fold.refused:
+            suspicious = True
+
         # Stage 2: scan every model-visible field before exposing the result.
         blocked = False
         for field_name, field_text in (
@@ -1833,10 +1842,12 @@ async def run_search_pipeline(
             # own collapsed wire form would have blocked. Scan both.
             ("title", title_scan_text),
             ("title", title),
+            *(("title", form) for form in title_fold.forms),
             ("url", url_outcome.scan_texts[0]),
             ("url", url_outcome.scan_texts[1]),
             ("snippet", snippet_scan_text),
             ("snippet", snippet),
+            *(("snippet", form) for form in snippet_fold.forms),
         ):
             scan = scan_structural(field_text)
             if scan.verdict == Stage2Verdict.BLOCKED:

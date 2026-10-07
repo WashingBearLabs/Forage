@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ _REVISION_SOURCES = (
     "stage3_promptguard.py",
     "stage4_structuring.py",
     "orchestrator.py",
+    "confusables.py",
 )
 
 # Hashed sources that live at the repo root rather than under ``pipeline/``,
@@ -66,6 +68,11 @@ def derive_sanitizer_revision(config: dict[str, Any]) -> str:
     the tables is a sanitization change with no source byte to show for it,
     and a cache keyed on a value that could not see it would serve decisions
     the running code no longer makes.
+
+    ``confusables.py`` is hashed as the ninth ``pipeline/`` source, and
+    ``unicodedata@<version>`` beside ``idna@<version>``, for the same reason:
+    the fold forms apply NFKC (decided by Python's Unicode database) and then
+    the generated tables, so either moving changes what stage 2 sees.
     """
     digest = hashlib.sha256()
     pipeline_dir = Path(__file__).parent
@@ -76,6 +83,7 @@ def derive_sanitizer_revision(config: dict[str, Any]) -> str:
     model_id = resolve_model_id()[0]
     digest.update(f"{model_id}@{resolve_revision(model_id)}".encode())
     digest.update(f"idna@{idna.__version__}".encode())
+    digest.update(f"unicodedata@{unicodedata.unidata_version}".encode())
     digest.update(
         str(config.get("promptguard_threshold", 0.85)).encode("utf-8", "surrogatepass")
     )

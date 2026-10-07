@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import unicodedata
 from pathlib import Path
 
 import idna
@@ -240,7 +241,8 @@ def test_the_hashed_model_identity_is_model_id_at_revision(
 
     Extended by ``hardening-search-sanitization`` US-003 to both new inputs,
     in exactly the order the code feeds them: the root sources after the
-    ``pipeline/`` ones, ``idna@<version>`` after the model identity. Extended
+    ``pipeline/`` ones, ``idna@<version>`` and ``unicodedata@<version>`` after the
+    model identity. Extended
     rather than weakened to "the value differs" — an order this test could not
     see is an order a cache key could not rely on.
     """
@@ -258,6 +260,7 @@ def test_the_hashed_model_identity_is_model_id_at_revision(
     revision = DEFAULT_MODEL_REVISION if model_id == DEFAULT_MODEL_ID else "unpinned"
     expected.update(f"{model_id}@{revision}".encode())
     expected.update(f"idna@{idna.__version__}".encode())
+    expected.update(f"unicodedata@{unicodedata.unidata_version}".encode())
     expected.update(encoded)
     expected.update(str(windows).encode("ascii"))
     expected.update(str(threshold).encode("ascii"))
@@ -319,5 +322,24 @@ def test_sanitizer_revision_changes_for_the_idna_version(
     original_revision = sanitizer_revision.derive_sanitizer_revision(config)
 
     monkeypatch.setattr(sanitizer_revision.idna, "__version__", "0.0-test")
+
+    assert sanitizer_revision.derive_sanitizer_revision(config) != original_revision
+
+
+def test_confusables_is_a_hashed_pipeline_source() -> None:
+    """The generated fold tables decide what stage 2 sees, so their bytes rotate it."""
+    assert "confusables.py" in sanitizer_revision._REVISION_SOURCES
+    pipeline_dir = Path(sanitizer_revision.__file__).parent
+    assert (pipeline_dir / "confusables.py").is_file()
+
+
+def test_sanitizer_revision_changes_for_the_unicodedata_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NFKC reads Python's Unicode database, so a Python bump must rotate it."""
+    config = {"promptguard_threshold": 0.85}
+    original_revision = sanitizer_revision.derive_sanitizer_revision(config)
+
+    monkeypatch.setattr(sanitizer_revision.unicodedata, "unidata_version", "0.0-test")
 
     assert sanitizer_revision.derive_sanitizer_revision(config) != original_revision
