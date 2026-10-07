@@ -173,29 +173,29 @@ leaks are caught on `/retrieve` and `/extract`. No other corpus record changes v
 - Only `stage2_structural.py` moves.
 
 **Acceptance Criteria:**
-- [ ] `disregard_instructions`, `exfil_image` and `envelope_breakout` are rewritten exactly as
+- [x] `disregard_instructions`, `exfil_image` and `envelope_breakout` are rewritten exactly as
       pinned. Both gap patterns match their probe (and the constructed spaced-alt-text exfil
       probe) split by a single newline at every interior whitespace position. `disregard`
       matches with a 10,000-character same-paragraph gap and does **not** match across a
       paragraph break (`\n\n`). Both behaviours are pinned as benign fixtures.
-- [ ] The all-patterns sweep passes over all five shape families: each pattern's
+- [x] The all-patterns sweep passes over all five shape families: each pattern's
       2 MiB/256 KiB best-of-3 ratio is ≤ 12 (or both times are under 20 ms), and all 24 patterns
       finish one 2 MiB form within 2 s. A **match-dense** 2 MiB input (thousands of
       `private_ip_href` and `base64_run` matches) is included. The numbers are recorded in
       Implementation Notes.
-- [ ] Line numbers come from a precomputed newline index, and every corpus record's
+- [x] Line numbers come from a precomputed newline index, and every corpus record's
       `FlaggedSpan.line_number` values are unchanged (test).
-- [ ] The 4 `second_paragraph` records are not `leaked` in the regenerated baseline. No corpus
+- [x] The 4 `second_paragraph` records are not `leaked` in the regenerated baseline. No corpus
       record that matched before loses its match, and any changed `structural_flags` are listed.
-- [ ] No core-genre benign record moves from `passed`, and the pin tests are green. Both
+- [x] No core-genre benign record moves from `passed`, and the pin tests are green. Both
       cassette files are byte-unchanged.
-- [ ] `docs/corpus.md` "Decision inputs" tables are updated, and `tests/test_corpus_docs.py` is
+- [x] `docs/corpus.md` "Decision inputs" tables are updated, and `tests/test_corpus_docs.py` is
       green.
-- [ ] The rotation is recorded with a reversal control.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` reports 0 errors
+- [x] The rotation is recorded with a reversal control.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` reports 0 errors
 
 ### US-003: A shared decoded scan form on all routes
 
