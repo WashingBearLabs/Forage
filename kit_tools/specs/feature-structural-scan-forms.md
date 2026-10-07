@@ -339,26 +339,26 @@ byte for byte, and the fold-table tests pass. Nothing is wired into stage 2 yet.
 - **Don't adopt a library** (Research Findings).
 
 **Acceptance Criteria:**
-- [ ] `scripts/generate_confusables.py --check` exits 0 against the committed
+- [x] `scripts/generate_confusables.py --check` exits 0 against the committed
       `pipeline/confusables.py`. A hermetic drift test runs it, and the generator refuses a data
       file with the wrong sha256 (test).
-- [ ] Folding never changes ASCII: 500 fixed-seed strings over `chr(0)`-`chr(127)`, plus every
+- [x] Folding never changes ASCII: 500 fixed-seed strings over `chr(0)`-`chr(127)`, plus every
       benign corpus ASCII text.
-- [ ] An **independent** hand-written oracle of Cyrillic and Greek look-alikes for every Latin
+- [x] An **independent** hand-written oracle of Cyrillic and Greek look-alikes for every Latin
       letter in any probe (both cases, including к т п м и н д л κ τ η μ ε β ϲ) folds each
       entry to its intended letter case-insensitively, through `PRE_NFKC_TABLE` → NFKC →
       `FOLD_TABLE` (supplement merged), or under the `i` reading for `AMBIGUOUS_IL` members.
-- [ ] `scripts/data/unicode/forage_supplement.tsv` exists with a reason on every row. The
+- [x] `scripts/data/unicode/forage_supplement.tsv` exists with a reason on every row. The
       generator refuses malformed rows (test), and `PRE_NFKC_TABLE` is generated, not
       hand-written.
-- [ ] `pipeline/confusables.py` passes `ruff check` and `ruff format --check`, contains no
+- [x] `pipeline/confusables.py` passes `ruff check` and `ruff format --check`, contains no
       literal non-ASCII character, and its header records the skipped multi-code-point count.
-- [ ] `NOTICE` carries the Unicode attribution, and `scripts/data/unicode/README` records the
+- [x] `NOTICE` carries the Unicode attribution, and `scripts/data/unicode/README` records the
       URL, date and sha256.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` reports 0 errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` reports 0 errors
 
 ### US-005: Add the confusable fold forms and hash them into the revision
 
