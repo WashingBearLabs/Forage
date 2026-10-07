@@ -290,18 +290,18 @@ tests pass.
   - The guarantee also assumes the container lacks `CAP_SYS_PTRACE`.
 
 **Acceptance Criteria:**
-- [ ] On Linux the parent sets `PR_SET_DUMPABLE` to 0 at startup, and a real worker child's read
+- [x] On Linux the parent sets `PR_SET_DUMPABLE` to 0 at startup, and a real worker child's read
       of `/proc/<ppid>/environ` raises `PermissionError` (test; skipped with a recorded reason
       elsewhere).
-- [ ] Existing metrics and health tests pass. Spawn latency under dumpable 0 is measured on Linux
+- [x] Existing metrics and health tests pass. Spawn latency under dumpable 0 is measured on Linux
       and recorded.
-- [ ] SECURITY.md lists the same-uid, `--init`, `--workers`, non-exec-wrapper and
+- [x] SECURITY.md lists the same-uid, `--init`, `--workers`, non-exec-wrapper and
       `CAP_SYS_PTRACE` residuals, and the loss of core dumps and debugger attach.
-- [ ] `sanitizer_revision` is unchanged.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] `sanitizer_revision` is unchanged.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-004: Sweep stale spool files at startup, safely
 
