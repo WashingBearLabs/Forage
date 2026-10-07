@@ -67,7 +67,7 @@ Design principles:
 ├── contract/                # the frozen wire contract: openapi.yaml (generated) and
 │                            # openapi.yaml.sha256, the committed anchor every other
 │                            # copy is verified against (generated, never hand-edited),
-│                            # plus GOVERNANCE.md — the semver rules, the thirteen recorded
+│                            # plus GOVERNANCE.md — the semver rules, the fourteen recorded
 │                            # rulings, and the consumer vendoring procedure. Copied
 │                            # whole into the image and published as Release assets
 ├── SECURITY.md              # reporting channel, supported versions, in/out of scope;
@@ -576,7 +576,7 @@ add a new golden under `tests/golden/` (older ones are retained, never edited), 
 `contract/` with `uv run python -m scripts.export_contract`, and note it for the consuming
 repo. Since `feature-forage-contract` US-003 the rules are written down rather than
 remembered: **`contract/GOVERNANCE.md`** classifies any change (MAJOR / MINOR / PATCH / no
-bump), carries the thirteen rulings the contract and hardening epics recorded — including the documentation pass taking no bump,
+bump), carries the fourteen rulings the contract and hardening epics recorded — including the documentation pass taking no bump,
 the unreachable `/extract` 413 and what fixing it would cost, enum additions as MINOR with
 an announcement obligation, fixture retention, the private-IP echo caveat and validation
 redaction's one-release compatibility window — and states

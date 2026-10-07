@@ -194,7 +194,7 @@ def finalize_quarantine(result: SanitizationResult) -> SanitizationResult:
     else:
         diagnostic = DIAG_INJECTION_DETECTED
     return SanitizationResult(
-        title=result.title,
+        title=None,
         body=_QUARANTINE_BODY,
         word_count=len(_QUARANTINE_BODY.split()),
         content_type=result.content_type,

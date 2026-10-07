@@ -2366,3 +2366,23 @@ Corpus effect: `atk-0033` (`/retrieve`) is `blocked`; `atk-0160` (`/retrieve`) a
 (`flagged`) move on `/search` by the owner's named exemption (2026-10-06) and are re-pinned; no
 other benign record moves. Attack stage-3 denominator 349 → 348, `over_defence_probe` 79 → 78;
 `over_defence_probe` `/search` `max_fpr` floor raised 0.75 → 0.80. Cassettes byte-unchanged.
+
+### The fifty-first rotation: a quarantined response carries no title (`structural-wire-closure` US-001)
+
+`finalize_quarantine` (`pipeline/stage4_structuring.py`) returns `title=None` for stage-2
+BLOCKED, stage-3 INJECTION_DETECTED and `unavailable_blocked`, so quarantine removes all
+hostile document text from the wire. Quarantined bodies are never cached (step 8 writes
+only when `not injection_detected`), so there is no replay path to protect.
+
+| State | Revision |
+|---|---|
+| Before (`ec63043`) / `stage4_structuring.py` reverted | `3cfe54c9d8cf3f744300eeb51cd86608282535b5fceeda6fb5d768ef035110aa` |
+| After | `919fa9775d89782cc084f038803da248c1b1e7b407776e9d5ddedb14baff2f2c` |
+
+Measured read-only (whole-file `git show HEAD:pipeline/stage4_structuring.py` bytes
+substituted) under default `{}` and shipped `config.yaml`, both giving the values above.
+`stage4_structuring.py` is the only hashed file that moved. This is a sanitizer outcome
+(GOVERNANCE ruling (m)): no contract bump, `contract/openapi.yaml` and its anchor
+byte-identical. Corpus effect: `atk-0059`, `atk-0211`, `atk-0212` (`/retrieve`) report
+`marker_on_wire` false; baseline `blocked_but_leaked` is 0 everywhere. Cassettes
+byte-unchanged. **Not replayed to Poppy:** compare contracts, not revisions.

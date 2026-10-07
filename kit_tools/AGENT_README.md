@@ -50,7 +50,7 @@ listed below exists, and nothing is listed that doesn't.
 **For the outside view (what a third party sees):**
 21. **`../README.md`** — framing, deployment posture, licensing
 22. **`../docs/configuration.md`** — the complete env + `config.yaml` reference
-23. **`../contract/GOVERNANCE.md`** — the contract bump policy and the thirteen rulings
+23. **`../contract/GOVERNANCE.md`** — the contract bump policy and the fourteen rulings
 
 **For project status and planned work:**
 24. **`specs/epic-forage-hardening.md`** — completed at v1.2.1 on 2026-09-23;

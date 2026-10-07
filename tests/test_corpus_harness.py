@@ -1147,12 +1147,12 @@ async def test_a_safe_drive_exposes_no_injection_spans() -> None:
     assert body["injection_spans"] == []
 
 
-async def test_a_blocked_page_can_still_leak_its_title() -> None:
-    """``finalize_quarantine`` replaces the body but passes ``title`` through."""
+async def test_a_blocked_page_does_not_leak_its_title() -> None:
+    """``finalize_quarantine`` replaces the body and drops ``title`` with it."""
     record = _page(title=_MARKER, body_html="<p>Benign body.</p>")
     result = await drive(record, await _replaying(record, [0.97]), config="default")
     assert result.outcome == "blocked", result.summary()
-    assert result.signals["marker_on_wire"] is True
+    assert result.signals["marker_on_wire"] is False
 
 
 def test_the_leak_normaliser_is_the_pipelines_own() -> None:

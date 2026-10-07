@@ -86,7 +86,7 @@ consuming repo.
 
 **The bump policy is written down: [`contract/GOVERNANCE.md`](contract/GOVERNANCE.md).**
 Read it before touching `pipeline/contract.py` or the response models in `models.py`. It
-classifies any change, answers the six standing examples, and records the thirteen rulings
+classifies any change, answers the six standing examples, and records the fourteen rulings
 the contract and hardening epics already made — including the one that is not obvious from the code: the
 `/extract` 413 is documented but unreachable (FastAPI turns it into a 400), documenting it
 carried no bump, and *correcting* it is a MAJOR. `.github/pull_request_template.md` is the
@@ -641,6 +641,16 @@ it alone reproduces `9c8bb9a6…` under default and shipped config. No span is c
 `atk-0160`, `atk-0161`, `atk-0132` stop leaking; `ben-0288`/`ben-0289` flip by the owner's named exemption
 (2026-10-06) and are re-pinned. Both cassettes are byte-unchanged. Full values:
 `docs/bootstrap-notes.md`.
+
+The fifty-first rotation is `3cfe54c9…` → `919fa977…` for
+`structural-wire-closure` US-001 — **the sixteenth sanitization-behaviour-changing
+rotation**: `finalize_quarantine` returns `title=None` for every quarantined response
+(stage-2 block, stage-3 injection, `unavailable_blocked`). Only
+`pipeline/stage4_structuring.py` moves; a read-only whole-file reversal reproduces
+`3cfe54c9…` under default and shipped config. GOVERNANCE ruling (m): sanitizer outcome, no
+bump; `contract/openapi.yaml` and its anchor are byte-identical. `atk-0059`, `atk-0211`,
+`atk-0212` stop leaking their title; cassettes untouched. Not replayed to Poppy. Full
+values: `docs/bootstrap-notes.md`.
 
 ## Session Scratchpad
 

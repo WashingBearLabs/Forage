@@ -33,6 +33,12 @@ Not yet tagged; the version number is decided at the release gate. Contract stay
   `fetch_error` (reason ending `unsupported_encoding` / `malformed_body`); previously such a
   body was passed through undecoded into extraction. Oversized bodies keep
   `content_too_large`.
+- **Quarantined responses now carry `title: null`.** A `/retrieve` or `/extract` response
+  that is blocked (stage-2 block, stage-3 injection, or `unavailable_blocked`) no longer
+  echoes the document's `<title>`; the body was already replaced and now the title goes
+  with it. The field is unchanged in shape (`string | null`); contract stays `1.3.0`
+  (GOVERNANCE ruling (m)). Consumers that displayed the title of a blocked page should
+  treat `null` as expected.
 - GOVERNANCE worked example 6's announce-then-flip window was **waived** by the owner for
   the default-model change (no known third-party consumers).
 

@@ -94,7 +94,7 @@ _SIX_EXAMPLES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("An urgent security tightening", ("MINOR",)),
 )
 
-# The thirteen rulings the contract and hardening epics recorded, by heading.
+# The fourteen rulings the contract and hardening epics recorded, by heading.
 # (a2) is US-001's verification finding and is listed separately from
 # (a) precisely because it is a different ruling about a different thing.
 _RULING_MARKERS = (
@@ -111,6 +111,7 @@ _RULING_MARKERS = (
     "### (j) ",
     "### (k) ",
     "### (l) ",
+    "### (m) ",
 )
 
 # Counts these documents state in words. Both are read back out of the code —
@@ -439,7 +440,7 @@ class TestTheSixWorkedExamples:
 
 
 class TestTheRecordedRulings:
-    """The thirteen rulings, each with a source a reader can go and check."""
+    """The fourteen rulings, each with a source a reader can go and check."""
 
     def test_ruling_count_matches_the_governance_and_invariant_text(
         self, governance: str
