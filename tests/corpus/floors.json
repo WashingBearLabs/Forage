@@ -1253,18 +1253,18 @@
       "/search": {
         "meta-llama/Llama-Prompt-Guard-2-22M": {
           "contiguity": {
-            "max_fpr": 0.75
+            "max_fpr": 0.8
           },
           "default": {
-            "max_fpr": 0.75
+            "max_fpr": 0.8
           }
         },
         "meta-llama/Llama-Prompt-Guard-2-86M": {
           "contiguity": {
-            "max_fpr": 0.75
+            "max_fpr": 0.8
           },
           "default": {
-            "max_fpr": 0.75
+            "max_fpr": 0.8
           }
         }
       }

@@ -16,6 +16,7 @@ names only — never record text.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -36,6 +37,8 @@ from scripts.corpus.records import (
 )
 from scripts.corpus.vocab import RECORD_KEYS, STAGE2_REGEX_NAMES
 from url_validator import hostname_matches
+
+_MARKUP_NAMES = frozenset({"system_tag", "envelope_breakout", "private_ip_href"})
 
 
 def stage2_hits(text: str) -> frozenset[str]:
@@ -111,6 +114,37 @@ def stage2_record_hits(
     for form in stage2_forms(record, blocklist=blocklist):
         hits |= stage2_hits(form)
     return hits
+
+
+def stage2_markup_hits(record: CorpusRecord) -> frozenset[str]:
+    """The regex names ``scan_raw_markup`` finds in the raw markup of ``record``.
+
+    ``page``: the whole document; ``search``: each raw provider field as the
+    loop's markup entry holds it; ``text`` has no markup route.
+    """
+    payload = record.payload
+    if record.surface == "page":
+        markups = [page_document(record)]
+    elif record.surface == "search":
+        markups = [
+            orchestrator._search_markup_entry(
+                payload.get("title", ""),
+                max_length=orchestrator._MAX_SEARCH_TITLE_LENGTH,
+            ),
+            orchestrator._search_markup_entry(
+                payload.get("content", ""),
+                max_length=orchestrator._MAX_SEARCH_SNIPPET_LENGTH,
+            ),
+        ]
+    else:
+        return frozenset()
+    names = {
+        name
+        for markup in markups
+        for name in stage2_hits(re.sub(r"\s+", " ", markup))
+        if name in _MARKUP_NAMES
+    }
+    return frozenset(names)
 
 
 def name_variants(path: Path) -> list[tuple[str, str]]:

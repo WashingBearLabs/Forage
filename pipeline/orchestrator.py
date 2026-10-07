@@ -86,6 +86,7 @@ from pipeline.stage2_structural import (
     combine_scan_results,
     decode_scan_text,
     fold_scan_forms,
+    scan_raw_markup,
     scan_structural,
     scan_structural_forms,
     strip_control_chars,
@@ -235,24 +236,27 @@ _DEFAULT_PROMPTGUARD_SETTINGS = PromptGuardSettings()
 def _extract_html_and_scan_inline(
     html_text: str, url: str | None, budget_characters: int | None
 ) -> tuple[ExtractionResult, StructuralScanResult | None]:
-    """Stage 1 plus the inline-form stage-2 scan, for one thread hop.
+    """Stage 1 plus the inline-form and raw-markup stage-2 scans, one thread hop.
 
     Parses once (``extract_html`` builds the inline text from its own soup),
-    scans the inline text here, and returns the extraction with
-    ``scan_text_inline`` cleared, so only a ``StructuralScanResult`` leaves the
-    thread and a request queued on the classification permit holds no
-    page-sized scan text. An over-budget page is refused by the caller's
-    pre-check, so the scan is skipped for it.
+    scans the inline text and the fetched markup here, and returns the
+    extraction with ``scan_text_inline`` cleared plus one combined
+    ``StructuralScanResult``, so only a scan result leaves the thread and a
+    request queued on the classification permit holds no page-sized scan text
+    or markup. An over-budget page is refused by the caller's pre-check, so
+    both scans are skipped for it.
     """
     extraction = extract_html(html_text, url, with_inline=True)
     inline = extraction.scan_text_inline
     extraction = replace(extraction, scan_text_inline=None)
-    if inline is None or (
-        budget_characters is not None and len(extraction.raw_text) > budget_characters
-    ):
+    if budget_characters is not None and len(extraction.raw_text) > budget_characters:
         return extraction, None
-    return extraction, scan_structural_forms(
-        structural_scan_forms(inline, html_parsed=True)
+    markup_scan = scan_raw_markup(html_text)
+    if inline is None:
+        return extraction, markup_scan
+    return extraction, combine_scan_results(
+        scan_structural_forms(structural_scan_forms(inline, html_parsed=True)),
+        markup_scan,
     )
 
 
@@ -638,8 +642,8 @@ async def run_retrieve_pipeline(
                     settings.max_extracted_characters,
                 )
             ) as html_worker:
-                extraction, inline_scan = html_worker.result()
-                extra_scans = (inline_scan,) if inline_scan is not None else ()
+                extraction, page_scan = html_worker.result()
+                extra_scans = (page_scan,) if page_scan is not None else ()
             del html_text
         # The three post-stage-1 scalars leave the fetch result here, so the
         # body and its decoded copy go with the slot: a request parked on the
@@ -998,6 +1002,29 @@ class SearchScanForms(NamedTuple):
     inline: str
 
 
+def _search_parser_input(value: str, *, max_length: int) -> str:
+    """The raw provider value as fed to the parser: NFC, stripped, bounded.
+
+    Also what ``scan_raw_markup`` scans, so the markup scan and the parsed
+    forms see the same truncated string.
+    """
+    text = unicodedata.normalize("NFC", value)
+    text = strip_control_chars(text)
+    return text[: _SEARCH_PARSER_INPUT_MULTIPLIER * max_length]
+
+
+class _RawMarkup(str):
+    """A search field's raw value, routed to ``scan_raw_markup`` by the loop."""
+
+    __slots__ = ()
+
+
+def _search_markup_entry(value: object, *, max_length: int) -> _RawMarkup:
+    if not isinstance(value, str):
+        return _RawMarkup("")
+    return _RawMarkup(_search_parser_input(value, max_length=max_length))
+
+
 def _scan_forms_for_search_text(value: object, *, max_length: int) -> SearchScanForms:
     """Return ``(wire, scan, inline)`` forms for one model-visible search field.
 
@@ -1037,9 +1064,7 @@ def _scan_forms_for_search_text(value: object, *, max_length: int) -> SearchScan
     """
     if not isinstance(value, str):
         return SearchScanForms("", "", "")
-    text = unicodedata.normalize("NFC", value)
-    text = strip_control_chars(text)
-    text = text[: _SEARCH_PARSER_INPUT_MULTIPLIER * max_length]
+    text = _search_parser_input(value, max_length=max_length)
     extraction = extract_html(f"<div>{text}</div>", with_inline=True)
     scan_form = decode_scan_text(extraction.raw_text, unescape_levels=1)[:max_length]
     # Bounded to the same cap as the scan form so blank-line padding cannot
@@ -1911,14 +1936,30 @@ async def run_search_pipeline(
             ("title", title),
             *(("title", form) for form in title_fold.forms),
             *(("title", form) for form in title_inline_list),
+            (
+                "title",
+                _search_markup_entry(
+                    raw.get("title", ""), max_length=_MAX_SEARCH_TITLE_LENGTH
+                ),
+            ),
             ("url", url_outcome.scan_texts[0]),
             ("url", url_outcome.scan_texts[1]),
             ("snippet", snippet_scan_text),
             ("snippet", snippet),
             *(("snippet", form) for form in snippet_fold.forms),
             *(("snippet", form) for form in snippet_inline_list),
+            (
+                "snippet",
+                _search_markup_entry(
+                    raw.get("content", ""), max_length=_MAX_SEARCH_SNIPPET_LENGTH
+                ),
+            ),
         ):
-            scan = scan_structural(field_text)
+            scan = (
+                scan_raw_markup(field_text)
+                if isinstance(field_text, _RawMarkup)
+                else scan_structural(field_text)
+            )
             if scan.verdict == Stage2Verdict.BLOCKED:
                 logger.info(
                     "search_result_omitted reason=%s domain=%s field=%s",

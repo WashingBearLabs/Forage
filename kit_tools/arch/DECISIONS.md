@@ -1082,3 +1082,22 @@ never quoted in docs or assertion output, `.jsonl` only, RFC 2606 hosts, secret-
 2026-09-19); landscape research folded into spec 2/3/5 Research Findings (PG2 model card; Prompt
 Overflow, arXiv 2605.23196; Zenity 2026-03-12; PIDS-Bench, arXiv 2609.15017; Zscaler ThreatLabz
 2026-07-02); `docs/weights.md`; `.github/workflows/ci.yml` `test` job.
+
+### 2026-10-06: Named exemption for `ben-0288` and `ben-0289` under the raw-markup scan
+
+**Status:** Accepted — owner ruling (validation rounds 2/3 of `feature-structural-markup-surface`)
+
+**Context:** The raw-markup scan (`scan_raw_markup`) reads markup the HTML parser would otherwise
+consume. Two over-defence probes, `ben-0288` (literal `<system>` in a snippet) and `ben-0289`
+(a private-IP `<a href>`), were deliberately built as parser-strip controls that drove clean; the
+scan now blocks and flags them, against the corpus ratchet.
+
+**Decision:** A named exemption for exactly these two ids. They are re-pinned (`blocked` /
+`flagged`) citing it, `over_defence_probe` `/search` `max_fpr` is raised to 0.80, and the FPR
+ratchet check exempts them by id (spec 4). No other record is exempt.
+
+**Consequences:** Literal `<system>` or a private-IP link in a search result is now caught at
+the cost of these two benign-by-intent snippets; the decision was preferred over cutting spans.
+
+**Source:** `kit_tools/specs/feature-structural-markup-surface.md` (Clarifications);
+`docs/bootstrap-notes.md` (fiftieth rotation).

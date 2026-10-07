@@ -1214,7 +1214,10 @@ def test_benign_outcomes_and_variants_coincide_structural_only() -> None:
     for record, result in zip(records, results, strict=True):
         variant = record.params.get("variant")
         tripped = result.outcome in ("flagged", "blocked")
-        assert tripped == (variant is not None), result.summary()
+        # The two raw-markup controls trip with no variant: the parsed forms
+        # are clean and only the raw-markup scan fires (named exemption).
+        exempt = record.id in _US004_PARSER_CONTROLS
+        assert tripped == (variant is not None or exempt), result.summary()
         if variant is not None:
             assert variant in corpus_stage2.stage2_record_hits(record), record.id
             assert record.pinned == ("flagged", "blocked"), record.id
@@ -1658,7 +1661,9 @@ def test_long_form_meets_the_window_budget_with_declared_provenance() -> None:
 # `params` key names the field (spec 1's allowlist is closed), so `notes` says
 # `URL-field probe` and this set pins which records do.
 _US004_URL_FIELD_PROBES = {"ben-0268", "ben-0269", "ben-0270"}
-# Raw markup the search parser removes: drives clean and earns no coverage.
+# Raw markup the search parser removes: earns no coverage. Drove clean until the
+# raw-markup scan (structural-markup-surface US-011); they now trip it by the
+# owner's named exemption (2026-10-06, DECISIONS.md) and are pinned to that.
 _US004_PARSER_CONTROLS = {"ben-0288", "ben-0289"}
 _US004_IDS = {f"ben-{number:04d}" for number in range(252, 301)}
 
@@ -1722,10 +1727,15 @@ def test_a_probe_the_parser_strips_earns_no_coverage() -> None:
     assert {r.id for r in controls} == _US004_PARSER_CONTROLS
     assert _credited_regexes(controls) == Counter()
     results = benign.drive_structural_only(controls)
+    expected = {"ben-0288": "blocked", "ben-0289": "flagged"}
     for record, result in zip(controls, results, strict=True):
-        assert result.outcome == "clean", result.summary()
-        assert record.pinned is None and "variant" not in record.params, record.id
+        assert result.outcome == expected[record.id], result.summary()
+        assert record.pinned == (expected[record.id],), record.id
+        assert "named exemption" in (record.pinned_reason or ""), record.id
+        assert "variant" not in record.params, record.id
+        # The parsed forms stay clean; only the raw-markup scan trips.
         assert corpus_stage2.stage2_record_hits(record) == frozenset(), record.id
+        assert corpus_stage2.stage2_markup_hits(record), record.id
         content = html.escape(record.payload["content"], quote=False)
         escaped = replace(record, payload={**record.payload, "content": content})
         assert corpus_stage2.stage2_record_hits(escaped), record.id

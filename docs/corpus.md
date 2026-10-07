@@ -248,7 +248,7 @@ texts fired, read from `baseline.json`'s `offline` key (a test re-derives every
 cell). `live_contiguity` is the live `contiguity` config: max at 0.85 OR a run
 of 2 windows at 0.5.*
 
-**Attack catch.** Denominators: attack 349, `boundary_straddle` 13,
+**Attack catch.** Denominators: attack 348, `boundary_straddle` 13,
 `sustained_midband` 7, `natural_language` 153, `density_thinned` 25,
 `repetition_camouflage` 17, `authority_seo` 27.
 
@@ -264,7 +264,7 @@ of 2 windows at 0.5.*
 | 86M | `mean@0.5` | 20 | 0 | 0 | 20 | 0 | 0 | 0 |
 
 **Benign false positives.** Denominators: benign external 94, `long_form` 21,
-`multilingual` 34, `over_defence_probe` 79.
+`multilingual` 34, `over_defence_probe` 78.
 
 | Model | Pooler | benign external | long_form | multilingual | over_defence_probe |
 |-------|--------|----------------:|----------:|-------------:|-------------------:|

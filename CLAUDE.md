@@ -632,6 +632,16 @@ record moved; both cassettes are byte-unchanged. By the ingest rule the two rows
 to `instruction_override` and one `natural_language` floor pair is lowered by hand. Full
 values: `docs/bootstrap-notes.md`.
 
+The fiftieth rotation is `9c8bb9a6…` → `3cfe54c9…` for
+`structural-markup-surface` US-011 — **the fifteenth sanitization-behaviour-changing
+rotation**: the raw-markup scan is wired. `/retrieve`'s stage-1 thread also runs
+`scan_raw_markup` on the fetched HTML (through `extra_scans`) and `/search` scans each field's
+raw provider value as one more loop entry. Only `pipeline/orchestrator.py` moves; reverting
+it alone reproduces `9c8bb9a6…` under default and shipped config. No span is cut. `atk-0033`,
+`atk-0160`, `atk-0161`, `atk-0132` stop leaking; `ben-0288`/`ben-0289` flip by the owner's named exemption
+(2026-10-06) and are re-pinned. Both cassettes are byte-unchanged. Full values:
+`docs/bootstrap-notes.md`.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:
