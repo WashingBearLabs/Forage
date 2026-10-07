@@ -110,32 +110,32 @@ their title.
 - `stage4_structuring.py` is hashed, so record the rotation.
 
 **Acceptance Criteria:**
-- [ ] `finalize_quarantine` returns `title=None` for stage-2 BLOCKED, stage-3 INJECTION_DETECTED
+- [x] `finalize_quarantine` returns `title=None` for stage-2 BLOCKED, stage-3 INJECTION_DETECTED
       and `unavailable_blocked` (three unit tests). A non-quarantined result keeps its title
       (unit test).
-- [ ] Route-level tests assert `title` is `null` on the wire for a `/retrieve` stage-2 block, a
+- [x] Route-level tests assert `title` is `null` on the wire for a `/retrieve` stage-2 block, a
       stage-3 block and `unavailable_blocked`, and for an `/extract` block whose injected
       extraction carries a title. Each test fails on the pre-story code.
-- [ ] A test asserts a quarantined `/retrieve` response is never written to the cache.
-- [ ] `atk-0059`, `atk-0211` and `atk-0212` report `marker_on_wire` false in the baseline
+- [x] A test asserts a quarantined `/retrieve` response is never written to the cache.
+- [x] `atk-0059`, `atk-0211` and `atk-0212` report `marker_on_wire` false in the baseline
       regenerated with `uv run python -m scripts.corpus.report --write-baseline`.
-- [ ] `contract/GOVERNANCE.md` records ruling (m) with a `**Source:**` line, distinguished from
+- [x] `contract/GOVERNANCE.md` records ruling (m) with a `**Source:**` line, distinguished from
       ruling (e), and its origin breakdown is updated. `_RULING_MARKERS` includes `### (m) `,
       every "thirteen rulings" count reads "fourteen", and `tests/test_governance_docs.py` is
       green.
-- [ ] `docs/releases.md` Unreleased carries the null-title consumer note.
-- [ ] `contract/openapi.yaml` and `contract/openapi.yaml.sha256` are byte-unchanged, and
+- [x] `docs/releases.md` Unreleased carries the null-title consumer note.
+- [x] `contract/openapi.yaml` and `contract/openapi.yaml.sha256` are byte-unchanged, and
       `tests/test_contract_export.py` is green.
-- [ ] `test_every_blocked_but_leaked_record_is_filed` accepts an empty id set and keeps a
+- [x] `test_every_blocked_but_leaked_record_is_filed` accepts an empty id set and keeps a
       non-vacuity assertion on the baseline's records.
-- [ ] Both cassette files are byte-unchanged, with zero misses. No core-genre benign record
+- [x] Both cassette files are byte-unchanged, with zero misses. No core-genre benign record
       moves, and the pin tests are green.
-- [ ] The rotation is recorded (CLAUDE.md, `docs/bootstrap-notes.md`, GOTCHAS table) with a
+- [x] The rotation is recorded (CLAUDE.md, `docs/bootstrap-notes.md`, GOTCHAS table) with a
       reversal control.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` reports 0 errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` reports 0 errors
 
 ### US-002: A Forage-owned visibility pass on the served body
 
