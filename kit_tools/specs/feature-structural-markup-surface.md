@@ -154,104 +154,45 @@ cassettes are unchanged.
 - [x] `uv run ruff check .` and `uv run ruff format --check .` pass
 - [x] `uv run pyright` reports 0 errors
 
-### US-002: A first-match raw-markup scan for markup-consumed triggers
+### US-002: [SPLIT — see US-010, US-011]
 
-**Priority:** P2
+> Split by supervisor: Timed out 3x at 900s (size M). Split along the natural seam: pure stage-2 pieces (unit-testable, no wiring) vs. route wiring + corpus/pin bookkeeping.
 
-**Description:** As an operator, I want the triggers that live *in markup* (fake system tags,
-envelope-breakout tags, private-IP `href` and `src` attributes) to be matched on the raw source
-anywhere in the page, so that writing a trigger as markup, or padding it, can't hide it. The
-scan must stay linear on hostile pages.
+### US-010: Markup-subset patterns and a linear first-match raw-markup scan function (stage 2 only)
 
-**Independent Test:** Drive `/retrieve` and `/search` with the 4 tag-consumed `plain` leaks: all
-are caught. A trigger after 9 MB of padding is caught. Match-dense, whitespace-bomb and
-`&lt;`-flood pages scan in linear time.
-
-**Implementation Hints:**
-- **Widen `system_tag` (:94)** from the bare literal `<system>` to `<\s*/?\s*system\b[^<>]*>`,
-  case-insensitive. Today `<system >`, `<system id=a>` and `<SYSTEM/>` are eaten by the parser
-  and missed by both scans. Validation measured the widened form as linear, and over the
-  corpus it matches only `atk-0033` and `ben-0288`. It's the same name and category, so no
-  vocab change.
-- **The subset is defined by reference:** `_MARKUP_PATTERNS: tuple[re.Pattern[str], ...]` in
-  `pipeline/stage2_structural.py` references the compiled `system_tag` (:94, widened), `envelope_breakout` (:236, linearised by spec 1 US-002) and `private_ip_href`
-  (:212) objects. A test maps each to `vocab.STAGE2_REGEX_NAMES` through `_PATTERNS`' index.
-  The set is closed: additions require a corpus record id cited in Implementation Notes.
-- **First match per pattern, with no per-match line lookup.** Use `pattern.search()`, not
-  `finditer`, and build a `FlaggedSpan` with `line_number=0`. Line numbers mean nothing after
-  whitespace collapse, only the category reaches the wire, and the penalty saturates at 3
-  flags. This removes the measured quadratic, which grew from 3.6 s at 1 MB to 56.8 s at 4 MB.
-- **Input: the raw source string, never a re-serialised tree.**
-  - **No span cutting** (measured in validation round 3: across the whole benign corpus, a
-    no-cut scan moves only `ben-0288`/`ben-0289`, with no core-genre record). That means no
-    tokenizer and no parser-agreement risk.
-  - Scan the raw source with whitespace runs collapsed to one space, using
-    `re.sub(r"\s+", " ", …)` on `str`, which is Unicode-aware. That is cheap defence in depth;
-    the linearised patterns don't need it.
-  - If a future core-genre record moves because of `<script>`/`<style>` content, cutting
-    becomes its own story, with an lxml agreement test. `template` and `noscript` are never
-    cut.
-- **No bound:** scan the whole body (≤ 10 MB, `DEFAULT_MAX_CONTENT_BYTES`,
-  `stage5_url_audit.py:31`). A head-only bound is a padding bypass.
-- **Runs inside the stage-1 thread** with US-001's function, returning one more
-  `StructuralScanResult` through `extra_scans`. Never carry the markup.
-- **`/search`:** run the subset on each field's raw provider value, using the same truncated
-  string `_scan_forms_for_search_text` feeds to `extract_html`.
-- **`/extract` is out:** uploads are plain text.
-- **Benign controls that will flip, as a named exemption (owner, 2026-10-06):** `ben-0288` and
-  `ben-0289` are `/search` `over_defence_probe` parser-strip controls, pinned "drives clean" by
-  `tests/test_corpus_ingest.py:1661` and `:1718-1730`. The raw scan blocks `ben-0288` and flags
-  `ben-0289`, which has the same shape as `atk-0132`.
-  - The owner granted **exactly these two** an exemption from the over-defence ratchet.
-  - Re-pin them, update those tests with a comment citing this decision, and record the
-    exemption in `kit_tools/arch/DECISIONS.md`.
-  - Spec 4's exact-FPR check exempts them **by id**. No other over-defence record may get
-    worse.
-- **Corpus mirrors:**
-  - keep `tests/corpus_stage2.py` `stage2_forms`/`stage2_record_hits` as the extracted-text
-    view, and add `stage2_markup_hits`;
-  - `tests/test_corpus_attacks.py:330-345` keeps its extracted-text assertion and gains the
-    converse;
-  - also check `scripts/corpus/records.py:489-511` and `tests/test_corpus_attacks.py:385,1163`.
-- **Logging:** the scan emits category tokens only, never `matched_text`.
-- **Residuals for spec 4:** entity-encoded attribute values; markup triggers other than the
-  three subset patterns; `javascript:` in `href`/`src`,
-  which the parser consumes but which isn't in the subset; block elements restyled
-  `display:inline`, which still split text.
-- Leaked records: `atk-0033`, `atk-0160` (page), `atk-0161`, `atk-0132` (`/search`).
-- Hashed files: `stage2_structural.py` and `orchestrator.py`.
+As an operator, I want the markup-consumed trigger patterns widened and a pure, linear stage-2 function that scans raw markup with first-match semantics, so that the route wiring in US-011 has a correct, fast primitive to call.
 
 **Acceptance Criteria:**
-- [ ] `_MARKUP_PATTERNS` references exactly the compiled `system_tag`, `envelope_breakout` and
-      `private_ip_href` patterns, pinned by name through `_PATTERNS`' index.
-- [ ] The scan uses `search()` (first match per pattern) on whitespace-collapsed raw source
-      (Unicode `\s`). A test shows a stray closing `envelope_breakout` tag in raw HTML caught,
-      and a trigger in an `iframe` or `form` attribute caught.
-- [ ] Each subset probe written as literal markup at the start, the middle and after 9 MB of
-      single-text-node padding in a 10 MB page is caught on `/retrieve`. Each is also caught in
-      a `/search` raw field value.
-- [ ] Linearity: on a match-dense page (private-IP links), a whitespace-bomb page and an
-      `&lt;`-flood page, the scan's 10 MB time is ≤ 3× its 5 MB time. Absolute times are
-      recorded.
-- [ ] `system_tag` is widened to `<\s*/?\s*system\b[^<>]*>` (case-insensitive). `<system >`,
-      `<system id=a>` and `<SYSTEM/>` are caught in raw markup and text forms, and the corpus
-      shows no new benign match beyond `ben-0288`.
-- [ ] The raw scan does no span cutting. Implementation Notes records the benign baseline
-      evidence (only `ben-0288`/`ben-0289` move).
-- [ ] `ben-0288` and `ben-0289` are re-pinned with a comment citing the owner's named exemption,
-      which is recorded in `kit_tools/arch/DECISIONS.md`. `tests/test_corpus_ingest.py` is
-      green.
-- [ ] The 4 tag-consumed `plain` records are not `leaked` in the regenerated baseline. No
-      core-genre benign record moves from `passed`, and the pin tests are green.
-- [ ] Both cassette files are byte-unchanged, with zero misses. `tests/test_search_pipeline_pins.py`
-      is green.
-- [ ] `docs/corpus.md` "Decision inputs" tables are updated, and `tests/test_corpus_docs.py` is
-      green.
-- [ ] The rotation is recorded with reversal controls.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` reports 0 errors
+- [ ] `system_tag` (pipeline/stage2_structural.py:94) is widened to `<\s*/?\s*system\b[^<>]*>` with re.IGNORECASE; unit tests show `<system >`, `<system id=a>` and `<SYSTEM/>` match
+- [ ] `_MARKUP_PATTERNS: tuple[re.Pattern[str], ...]` references exactly the compiled `system_tag`, `envelope_breakout` and `private_ip_href` pattern objects; a test pins the three names via `_PATTERNS` index against `scripts/corpus/vocab.py` `STAGE2_REGEX_NAMES` (inline the names in the test module if importing scripts.corpus trips the PYTEST_DONT_REWRITE lint)
+- [ ] A public `scan_raw_markup(markup: str) -> StructuralScanResult` collapses whitespace runs (`re.sub(r"\s+", " ", ...)`, Unicode \s) and runs `pattern.search()` once per `_MARKUP_PATTERNS` entry, building FlaggedSpan with line_number=0; verdict/penalty follow the existing category rules; it never logs matched_text
+- [ ] Unit tests: a stray closing envelope tag in raw HTML, a private-IP href inside an iframe and a form attribute, and each subset probe placed after 9 MB of single-text-node padding are all caught by `scan_raw_markup`
+- [ ] Linearity unit tests on `scan_raw_markup`: match-dense (private-IP links), whitespace-bomb and `&lt;`-flood inputs at 5 MB and 10 MB; best-of-3, 10 MB time <= 3x 5 MB time (skip ratio when both < 20 ms); absolute times recorded in Implementation Notes
+- [ ] Regenerate the corpus baseline (`uv run python -m scripts.corpus.report --write-baseline`); the only allowed movement is from the system_tag widening (expected none or atk-0033/ben-0288 via text forms); if ben-0288 moves, re-pin it citing the owner's named exemption (DECISIONS.md, ben-0288/ben-0289) and update tests/test_corpus_ingest.py; both cassette files byte-unchanged; docs/corpus.md Decision inputs updated if the offline section moves
+- [ ] The sanitizer_revision rotation is recorded (CLAUDE.md, docs/bootstrap-notes.md, GOTCHAS table) with a read-only reversal control of stage2_structural.py
+- [ ] Full test suite passes (`uv run pytest`); `uv run ruff check .`, `uv run ruff format --check .` pass; `uv run pyright` reports 0 errors
+
+**Implementation Hints:**
+Only pipeline/stage2_structural.py and tests move; NO orchestrator wiring (that is US-011). Read the original US-002 hints in kit_tools/specs/feature-structural-markup-surface.md for context (no span cutting; template/noscript never cut). TIME BUDGET: the previous single-story attempts timed out at 900s. Keep 10 MB tests to single-text-node padding and in-memory strings; run targeted test files while iterating (`uv run pytest tests/test_stage2_structural.py tests/test_stage2_complexity.py -q`) and the full suite ONCE at the end. Do not build 10 MB HTML through extract_html in tests (extract_html is ~150 s on element-dense 10 MB; finding 2026-10-06-001). Prior learnings: timing sweeps must disable GC (gc.disable()) during measurement; tests importing scripts.corpus need PYTEST_DONT_REWRITE in their docstring.
+
+### US-011: Wire the raw-markup scan into /retrieve and /search, with corpus and pin bookkeeping
+
+As an operator, I want the raw-markup scan applied to /retrieve page source and /search raw field values, so that markup-consumed triggers are caught end to end, with the corpus, pins and records kept true.
+
+**Acceptance Criteria:**
+- [ ] /retrieve (non-PDF): the orchestrator-local stage-1 thread function from US-001 also calls `scan_raw_markup` on the fetched HTML string and returns its StructuralScanResult through the existing `extra_scans` seam of `sanitize_and_structure`; the markup string is not referenced after the thread returns (test asserting returned types)
+- [ ] /search: each field's raw provider value (the same truncated string fed to extract_html in `_scan_forms_for_search_text`) is scanned with `scan_raw_markup` as one more loop entry; `tests/test_search_pipeline_pins.py` unchanged and green
+- [ ] Route-level tests: a subset probe as literal markup in a /retrieve page (start, middle, after padding using single-text-node padding) and in a /search raw field value is caught
+- [ ] `tests/corpus_stage2.py` gains `stage2_markup_hits`; `tests/test_corpus_attacks.py:330-345` keeps its extracted-text assertion and gains the raw-markup converse
+- [ ] The 4 tag-consumed `plain` records (atk-0033, atk-0160, atk-0161, atk-0132) are not `leaked` in the regenerated baseline; ben-0288 and ben-0289 are re-pinned citing the owner's named exemption (recorded in kit_tools/arch/DECISIONS.md) and tests/test_corpus_ingest.py is green; no core-genre benign record moves from `passed`
+- [ ] Both cassette files byte-unchanged with zero misses; docs/corpus.md Decision inputs updated; tests/test_corpus_docs.py green
+- [ ] Implementation Notes record that no span cutting is done, with the benign baseline evidence (only ben-0288/ben-0289 move)
+- [ ] The sanitizer_revision rotation is recorded with per-file reversal controls (orchestrator.py and any other hashed file moved)
+- [ ] Full test suite passes (`uv run pytest`); `uv run ruff check .`, `uv run ruff format --check .` pass; `uv run pyright` reports 0 errors
+
+**Implementation Hints:**
+Depends on US-010's `scan_raw_markup` and `_MARKUP_PATTERNS`. Read the original US-002 hints in kit_tools/specs/feature-structural-markup-surface.md (wiring, /search raw value, ben-0288/0289 exemption, corpus mirrors at scripts/corpus/records.py:489-511 and tests/test_corpus_attacks.py:385,1163). US-001 already added the `extra_scans` keyword and the stage-1 thread function; extend that function rather than adding a new thread call. Keep calling the module-level `extract_html` name (tests patch pipeline.orchestrator.extract_html). TIME BUDGET: iterate with targeted tests (tests/test_orchestrator.py -k retrieve/search, tests/test_corpus_*.py), run the full suite once at the end; route-level padding tests use single-text-node padding, never element-dense 10 MB pages.
+
 
 ## Edge Cases
 
