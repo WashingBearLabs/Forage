@@ -409,32 +409,32 @@ benign records.
   - search: `atk-0121`, `atk-0044`
 
 **Acceptance Criteria:**
-- [ ] For each of the 24 probes, at each Latin-letter position, each oracle look-alike (both
+- [x] For each of the 24 probes, at each Latin-letter position, each oracle look-alike (both
       readings for `AMBIGUOUS_IL`) substituted at that single position is non-CLEAN through
       `sanitize_and_structure` (`/retrieve`, `/extract`) and the `/search` field scan.
       Variants are generated in sorted order.
-- [ ] The 9 `confusable` records are not `leaked` in the regenerated baseline. The
+- [x] The 9 `confusable` records are not `leaked` in the regenerated baseline. The
       `multilingual` benign genre and every core-genre benign record are unchanged, and the pin
       tests are green.
-- [ ] `pipeline/confusables.py` is in `_REVISION_SOURCES`, and `unicodedata@<version>` is a
+- [x] `pipeline/confusables.py` is in `_REVISION_SOURCES`, and `unicodedata@<version>` is a
       hashed input (test: changing the reported version changes the revision).
       `tests/test_sanitizer_revision.py` and `tests/test_governance_docs.py` are green with
       "ten" in every prose count.
-- [ ] US-002's timing sweep passes, including the maximal-NFKC-expansion input through the fold
+- [x] US-002's timing sweep passes, including the maximal-NFKC-expansion input through the fold
       forms.
-- [ ] A 10 MiB `/retrieve` page of U+FDFA is flagged `encoded_payload`, skips the fold forms,
+- [x] A 10 MiB `/retrieve` page of U+FDFA is flagged `encoded_payload`, skips the fold forms,
       logs `stage2_fold_expansion_refused`, and peaks under 400 MB of traced allocation for
       stage 2 (`tracemalloc` test). A page at 3.9× expansion is folded normally.
-- [ ] Both cassette files are byte-unchanged, with zero misses. `tests/test_search_pipeline_pins.py`
+- [x] Both cassette files are byte-unchanged, with zero misses. `tests/test_search_pipeline_pins.py`
       is green.
-- [ ] `docs/corpus.md` "Decision inputs" tables are updated, and `tests/test_corpus_docs.py` is
+- [x] `docs/corpus.md` "Decision inputs" tables are updated, and `tests/test_corpus_docs.py` is
       green.
-- [ ] The rotation is recorded, with controls: module removed, the input removed, and each
+- [x] The rotation is recorded, with controls: module removed, the input removed, and each
       edited hashed file reverted alone.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` reports 0 errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` reports 0 errors
 
 ## Edge Cases
 
