@@ -180,15 +180,15 @@ Only pipeline/stage2_structural.py and tests move; NO orchestrator wiring (that 
 As an operator, I want the raw-markup scan applied to /retrieve page source and /search raw field values, so that markup-consumed triggers are caught end to end, with the corpus, pins and records kept true.
 
 **Acceptance Criteria:**
-- [ ] /retrieve (non-PDF): the orchestrator-local stage-1 thread function from US-001 also calls `scan_raw_markup` on the fetched HTML string and returns its StructuralScanResult through the existing `extra_scans` seam of `sanitize_and_structure`; the markup string is not referenced after the thread returns (test asserting returned types)
-- [ ] /search: each field's raw provider value (the same truncated string fed to extract_html in `_scan_forms_for_search_text`) is scanned with `scan_raw_markup` as one more loop entry; `tests/test_search_pipeline_pins.py` unchanged and green
-- [ ] Route-level tests: a subset probe as literal markup in a /retrieve page (start, middle, after padding using single-text-node padding) and in a /search raw field value is caught
-- [ ] `tests/corpus_stage2.py` gains `stage2_markup_hits`; `tests/test_corpus_attacks.py:330-345` keeps its extracted-text assertion and gains the raw-markup converse
-- [ ] The 4 tag-consumed `plain` records (atk-0033, atk-0160, atk-0161, atk-0132) are not `leaked` in the regenerated baseline; ben-0288 and ben-0289 are re-pinned citing the owner's named exemption (recorded in kit_tools/arch/DECISIONS.md) and tests/test_corpus_ingest.py is green; no core-genre benign record moves from `passed`
-- [ ] Both cassette files byte-unchanged with zero misses; docs/corpus.md Decision inputs updated; tests/test_corpus_docs.py green
-- [ ] Implementation Notes record that no span cutting is done, with the benign baseline evidence (only ben-0288/ben-0289 move)
-- [ ] The sanitizer_revision rotation is recorded with per-file reversal controls (orchestrator.py and any other hashed file moved)
-- [ ] Full test suite passes (`uv run pytest`); `uv run ruff check .`, `uv run ruff format --check .` pass; `uv run pyright` reports 0 errors
+- [x] /retrieve (non-PDF): the orchestrator-local stage-1 thread function from US-001 also calls `scan_raw_markup` on the fetched HTML string and returns its StructuralScanResult through the existing `extra_scans` seam of `sanitize_and_structure`; the markup string is not referenced after the thread returns (test asserting returned types)
+- [x] /search: each field's raw provider value (the same truncated string fed to extract_html in `_scan_forms_for_search_text`) is scanned with `scan_raw_markup` as one more loop entry; `tests/test_search_pipeline_pins.py` unchanged and green
+- [x] Route-level tests: a subset probe as literal markup in a /retrieve page (start, middle, after padding using single-text-node padding) and in a /search raw field value is caught
+- [x] `tests/corpus_stage2.py` gains `stage2_markup_hits`; `tests/test_corpus_attacks.py:330-345` keeps its extracted-text assertion and gains the raw-markup converse
+- [x] The 4 tag-consumed `plain` records (atk-0033, atk-0160, atk-0161, atk-0132) are not `leaked` in the regenerated baseline; ben-0288 and ben-0289 are re-pinned citing the owner's named exemption (recorded in kit_tools/arch/DECISIONS.md) and tests/test_corpus_ingest.py is green; no core-genre benign record moves from `passed`
+- [x] Both cassette files byte-unchanged with zero misses; docs/corpus.md Decision inputs updated; tests/test_corpus_docs.py green
+- [x] Implementation Notes record that no span cutting is done, with the benign baseline evidence (only ben-0288/ben-0289 move)
+- [x] The sanitizer_revision rotation is recorded with per-file reversal controls (orchestrator.py and any other hashed file moved)
+- [x] Full test suite passes (`uv run pytest`); `uv run ruff check .`, `uv run ruff format --check .` pass; `uv run pyright` reports 0 errors
 
 **Implementation Hints:**
 Depends on US-010's `scan_raw_markup` and `_MARKUP_PATTERNS`. Read the original US-002 hints in kit_tools/specs/feature-structural-markup-surface.md (wiring, /search raw value, ben-0288/0289 exemption, corpus mirrors at scripts/corpus/records.py:489-511 and tests/test_corpus_attacks.py:385,1163). US-001 already added the `extra_scans` keyword and the stage-1 thread function; extend that function rather than adding a new thread call. Keep calling the module-level `extract_html` name (tests patch pipeline.orchestrator.extract_html). TIME BUDGET: iterate with targeted tests (tests/test_orchestrator.py -k retrieve/search, tests/test_corpus_*.py), run the full suite once at the end; route-level padding tests use single-text-node padding, never element-dense 10 MB pages.
