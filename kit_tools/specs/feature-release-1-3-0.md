@@ -28,14 +28,16 @@ The 1.3.0 contract shipped two published compatibility windows. Both close at th
    - At 256 chunks a single page would hold the classifier ~77 s (1 CPU) or ~51 s (4 CPUs). That is
      past the 30 s `promptguard_wait_seconds`, so concurrent requests would time out into the
      classifier-unavailable outcome.
-   - 64 chunks holds ~19 s / ~13 s, inside the wait everywhere. The character ceiling is
+   - 64 chunks holds ~19 s / ~13 s, inside the wait **for one holder queued ahead**. With two
+     holders ahead at 1 CPU (shared `classification_concurrency: 1`) the wait is ~38.6 s, past
+     30 s. The character ceiling is
      64 × 1,792 = **114,688**, the same figure the extraction path already uses at 64.
    - `0` remains the opt-out.
 2. **Ruling (l).** Request-validation 422s carry `input`, `ctx` and `url` as the fixed placeholder
    `"[redacted]"`. The next MINOR drops those keys. This uses the ruling's
    description-admitted-key carve-out, so it is a **MINOR**.
 
-Spec 1 US-006 has already bumped `CONTRACT_VERSION` to **1.4.0**, created a held
+Spec 1 US-007 has already bumped `CONTRACT_VERSION` to **1.4.0**, created a held
 `tests/golden/contract_1_4_0.json`, and written an in-progress 1.4.0 entry. This spec:
 - closes both windows;
 - adds the missing operator signal for budget refusals;
@@ -196,7 +198,10 @@ outcome.
     download.**
 - **The rewrite states:**
   - the per-window figures, the method and its caveats;
-  - the hold at 64 and at 256, at 1 and 4 CPUs, against `promptguard_wait_seconds` (30.0);
+  - the hold at 64 and at 256, at 1 and 4 CPUs, against `promptguard_wait_seconds` (30.0), for
+    **k = 1, 2, 3 holders queued ahead**. The permit is shared by `/extract`, `/retrieve` and
+    `/search` at `classification_concurrency: 1`. Say plainly that the 30 s fit is per single
+    holder.
   - the budget that fits 30 s at each CPU count;
   - **what a waiter gets when its wait expires** (`unavailable_allowed`, served unclassified, unless
     `promptguard_fail_closed` refuses it; check the exact behaviour in
@@ -231,7 +236,7 @@ vendor matches the closed windows and the new refusals are visible.
 - The held 1.4.0 golden matches, and `openapi.yaml` matches its anchor.
 
 **Implementation Hints:**
-- **Precondition:** confirm from `feature-release-resource-bounds.md` US-006's Implementation
+- **Precondition:** confirm from `feature-release-resource-bounds.md` US-007's Implementation
   Notes that `CONTRACT_VERSION == "1.4.0"` and the held golden exists. This story regenerates;
   it never bumps.
 - **422 key drop** (`retrieval_app.py`):
@@ -242,10 +247,13 @@ vendor matches the closed windows and the new refusals are visible.
   - **Do not touch** the unrelated `"[redacted]"` at :1673 (tests at `test_app.py:2699, :2827`).
 - **Ruling (l)'s invariants stay green:** no request value in logs, the closed `loc` allowlist,
   the cap of 100, and the two WARNING tokens.
-- **`msg` sentinel test.** For each route, send a malformed body carrying a distinctive sentinel in
-  every field. Assert the sentinel is in no 422 item's `msg` and in no log record.
-  - Add a comment that a future validator interpolating its input into `msg` would fail this
-    test. That is the guard.
+- **`msg` check.** `tests/test_contract_errors.py` already has `_VALIDATION_MARKER` (:587). It is
+  injected into every request field per route (:660-697) and checked against the response and the
+  WARNING logs (:640, :831-866).
+  - **Extend it rather than adding a parallel suite.** Assert per item that the marker is not in
+    `msg`, and add a caplog check at all levels.
+  - Add a comment that a validator interpolating its input into `msg` would fail this. That is
+    the guard.
 - **Test edits** (`tests/test_contract_errors.py`):
   - Delete `_strip_window_keys` (:174-178, used at :185).
   - `_VALIDATION_ITEM_KEYS` (:588) becomes `{loc, msg, type}`.
@@ -254,14 +262,19 @@ vendor matches the closed windows and the new refusals are visible.
   - Add an exact-key-set test per route.
   - `tests/test_governance_docs.py:479` (`'"[redacted]"'` in ruling (l)): keep the history text,
     or update it to the closure wording.
-- **Budget-refusal counter.** No dedicated signal exists today: the three refusal sites
-  (`orchestrator.py` ~:604, ~:669, ~:733) return the 422 body only. Add
-  `retrieve.promptguard_budget_refusals`:
-  - increment it at each site through the `RetrieveMetricsSink` (`orchestrator.py:1495`,
-    `_NullRetrieveMetrics` :1506);
-  - add it to `retrieval_app.RetrieveMetrics` (:1243) and `RetrieveMetricsResponse` (:784);
-  - name it in the 1.4.0 entry (spec 1 US-006's metric-addition test enforces this);
-  - name it in `docs/configuration.md` as the way to see the new refusals.
+- **Budget-refusal counter.** No dedicated signal exists today; the three refusal sites
+  (`orchestrator.py` ~:604, ~:669, ~:733) return only the 422 body. Add
+  `retrieve.promptguard_budget_refusals`, counted **at the handler**:
+  `retrieval_app.py` ~:2349-2351 already catches every retrieve `PipelineError` to call
+  `record_error(exc.error)`. Add `if exc.reason == contract.PROMPTGUARD_BUDGET` there.
+  - Add the counter to `retrieval_app.RetrieveMetrics` (:1243) and `RetrieveMetricsResponse` (:784).
+  - Name it in the 1.4.0 entry (enforced by spec 1 US-007's metric-addition test) and in
+    `docs/configuration.md`.
+  - The orchestrator rotation still happens, because of the stale-comment fix below.
+- **The three new counters** (the list US-004 and US-005 refer to):
+  - `retrieve.html_worker_spawns` (spec 1)
+  - `retrieve.html_worker_refusals` (spec 1)
+  - `retrieve.promptguard_budget_refusals` (this story)
 - **Stale comment.** Fix the `orchestrator.py` ~:663 "coming default of 256" comment.
 - **Finalise the 1.4.0 entry** (`pipeline/contract.py`): one final `* ``1.4.0`` —` bullet,
   replacing the in-progress text.
@@ -287,11 +300,13 @@ vendor matches the closed windows and the new refusals are visible.
 - [ ] On `/search`, `/retrieve` and `/extract`, every request-validation 422 item has exactly
       `loc`, `msg`, `type` (one test per route). `_VALIDATION_PLACEHOLDER`,
       `_VALIDATION_WINDOW_KEYS` and `_strip_window_keys` no longer exist (grep).
-- [ ] A per-route sentinel appears in no 422 `msg` and in no log record (tests).
+- [ ] The existing `_VALIDATION_MARKER` parametrization asserts the marker is in no 422 item's
+      `msg` and in no log record at any level (tests).
 - [ ] Ruling (l)'s other invariants pass unchanged.
 - [ ] The `:1673` value is untouched.
-- [ ] `retrieve.promptguard_budget_refusals` increments at each of the three refusal sites
-      (tests), appears on `/metrics`, and is named in `docs/configuration.md`.
+- [ ] `retrieve.promptguard_budget_refusals` increments on a budget refusal from each of the
+      three refusal sites (tests through the handler), appears on `/metrics`, and is named in
+      `docs/configuration.md`.
 - [ ] The `orchestrator.py` "coming default" comment is gone.
 - [ ] The 1.4.0 bullet is final.
   - It covers every change in `git diff 7fe91c0..HEAD -- pipeline/contract.py
@@ -339,7 +354,7 @@ and rulings (g) and (l) record the closure. `docs/bootstrap-notes.md` carries th
   - 1.4.0 MINOR activation (activates, no refusal);
   - `html_extraction_error`;
   - the budget default 64 and what an over-budget page returns;
-  - the three new counters.
+  - the three new counters, as listed in US-003.
   - No push to Poppy.
 - Docs only, so no rotation.
 
@@ -390,27 +405,37 @@ merging and the owner gates are all that remain.
     9. The fold BLOCK at `max(2n, n+256)`.
     10. Budget default 64 (256 was announced; why it changed).
     11. The 422 key drop.
-    12. The three counters.
+    12. The three counters, named as listed in US-003.
     13. The rotation range from `021378ef…` to the final value, with its count.
     14. "Compatibility windows: none open".
-- **Pin fan-out** (`1.2.2` → `1.3.0`):
-  - `compose/minimal.yml:52, :64, :66` and `compose/full.yml:41, :45`.
-  - `tests/test_compose_fragments.py:78`.
-  - `README.md:78, :253`.
-  - The `contract_smoke.py` docstring example (:97-99), changed as `c933673` did for 1.2.2.
-  - **Current-release rows to rewrite:** `kit_tools/roadmap/MILESTONES.md:13` ("Current
-    release"), `kit_tools/SYNOPSIS.md:30`, and `kit_tools/AGENT_README.md:74, :79`.
-    `contract/GOVERNANCE.md:71` is rewritten by US-004.
-  - **Allowed historical `1\.2\.2` hits:**
-    - `docs/releases.md` history entries;
-    - `docs/bootstrap-notes.md`;
-    - `kit_tools/specs/archive/` and `kit_tools/SESSION_LOG.md`;
-    - `kit_tools/arch/DECISIONS.md` history;
-    - the GOTCHAS rotation table and its header line (:5);
-    - `kit_tools/PRODUCT_VISION.md:105`;
-    - `kit_tools/roadmap/BACKLOG.md:39`;
-    - MILESTONES history rows (:75, :115);
-    - GOVERNANCE history lines.
+- **Pin fan-out** (`1.2.2` → `1.3.0`), driven by a full classification rather than a hand list:
+  1. Run `git show --stat c933673` to list every file the v1.2.2 prepare commit touched. Each is a
+     candidate.
+  2. Run `git grep -n '1\.2\.2'` and classify **every** hit as *rewrite* (a current-release
+     statement) or *history*. Record the table in Implementation Notes.
+  3. Known rewrites, not exhaustive:
+     - `compose/minimal.yml:52, :64, :66` and `compose/full.yml:41, :45`
+     - `tests/test_compose_fragments.py:78`
+     - `contract_smoke.py:66` and the docstring example (:97-99)
+     - `README.md:78, :253`
+     - `kit_tools/roadmap/MILESTONES.md:13` ("Current release")
+     - `kit_tools/SYNOPSIS.md:30, :36`
+     - `kit_tools/AGENT_README.md:74, :79`
+     - `kit_tools/arch/INFRA_ARCH.md` (~:146, :160-161, :201)
+     - `kit_tools/arch/SERVICE_MAP.md` (~:195, :395-398)
+     - `kit_tools/docs/CI_CD.md` (~:352-354, :523-525, :546)
+     - `kit_tools/docs/DEPLOYMENT.md` (~:89-272, including the `TAG=1.2.2` examples)
+     - `kit_tools/docs/LOCAL_DEV.md` (~:233-234)
+     - `kit_tools/docs/TROUBLESHOOTING.md` (~:880-889)
+  4. Known history, to keep:
+     - `docs/releases.md` entries and `docs/bootstrap-notes.md`
+     - archived specs and `kit_tools/SESSION_LOG.md`
+     - `DECISIONS.md` history and the GOTCHAS table and header (:5)
+     - `kit_tools/PRODUCT_VISION.md:105` and `kit_tools/roadmap/BACKLOG.md:39`
+     - MILESTONES history rows (:75, :115) and GOVERNANCE history lines
+     - `docs/weights.md:4` if historical
+     - the unarchived injection-corpus epic wrapper
+  - `contract/GOVERNANCE.md:71` is rewritten by US-004.
 - **Tracking:**
   - Update SYNOPSIS and the MILESTONES epic item (unchecked until publish).
   - **Counts last:** run `uv run pytest --collect-only -q | tail -1` and update
@@ -422,7 +447,11 @@ merging and the owner gates are all that remain.
   (`docs/releases.md` ~:99-110). **No story runs any of it.**
   1. Real-weights candidate smoke on an image built from the merge commit: the 86M at `1536m`,
      `/health` healthy, `promptguard_model` 86M, `/extract` 200 `scanned`, `/retrieve` of a
-     large page returning `html_extraction_error`, peak recorded, no OOM.
+     large page returning `html_extraction_error`. Also check:
+     - an over-budget page (more than 114,688 extracted characters, under the worker threshold)
+       returns `promptguard_budget` and increments `retrieve.promptguard_budget_refusals`;
+     - an at-budget page classifies within the wait, with its latency recorded;
+     - peak memory is recorded, with no OOM.
   2. Merge.
   3. `git switch main && git pull`.
   4. Confirm the six gates are green.
@@ -439,8 +468,9 @@ merging and the owner gates are all that remain.
       final revision equals `derive_sanitizer_revision()` at the final commit (checked by a
       command recorded in Implementation Notes).
 - [ ] The entry covers each of the 14 listed items, each with a link where one exists.
-- [ ] Every listed pin and current-release row names `1.3.0`, and `tests/test_compose_fragments.py`
-      passes. A `1\.2\.2` grep hits only the allowed historical sites.
+- [ ] Every `git grep -n '1\.2\.2'` hit is classified in a recorded table as rewritten or history,
+      and every rewrite now names `1.3.0`. Every file in `git show --stat c933673` is accounted
+      for. `tests/test_compose_fragments.py` passes.
 - [ ] SYNOPSIS and MILESTONES are updated. TESTING_GUIDE and `CLAUDE.md` counts equal the
       `--collect-only` total.
 - [ ] Implementation Notes list the findings ready to resolve and the exact nine-step owner
@@ -524,6 +554,13 @@ release with the 86M as default.
 
 ### Scope Adjustments
 
+- Round 3 made these changes:
+  - the "64 fits" claim is scoped to a single holder, with a k-holder table;
+  - the counter moved to the handler;
+  - the existing validation marker is reused;
+  - the three counters are named;
+  - the `1.2.2` sweep is driven by a full grep classification;
+  - the over-budget smoke check was added.
 - Round 1 split the spec into five stories.
 - Round 2 made these changes:
   - the default changed to 64;

@@ -81,7 +81,7 @@ validation catches malformed frames, not lies.
   in-thread path (in-process frame round trip, plus real spawns on a fixed sample). The baseline
   regenerates with zero outcome changes.
 - **`/search`.** Zero `extract_html` calls on the event-loop thread. The six
-  `hardening-provider-bounds` US-005 captures are unchanged.
+  `hardening-provider-bounds` US-006 captures are unchanged.
 
 ## User Stories
 
@@ -102,20 +102,38 @@ byte-unchanged.
   :522-529 (the visibility pass, `pruned_soup = copy.copy(soup)`). The :316 comment chose copy
   "to avoid re-parse overhead". That is backwards on deep trees: parse is about 0.07 s where the
   copy is 4.6 s at 128 KiB.
-- **Replacement:** re-parse the *original input string* with the same parser (`"lxml"`) where a
-  mutable private tree is needed, or replace the mutation with a non-mutating walk (the pattern of
-  `_extract_inline_text`).
-  - **Check what was mutated before each copy.** If the tree had already been changed when it was
-    copied, a re-parse is not equivalent. Then either re-apply the same mutations, or walk
-    instead.
-  - Prove equivalence: for every corpus HTML record (and the stage-1 unit fixtures), every
-    `ExtractionResult` field is equal before and after. Run in-process; this is a pure function.
-- **Pinned hostile shapes,** shared with US-005's calibration. Put them in one test-helper module,
+- **Replacement (decided; round-3 prototype gave zero `ExtractionResult` differences across all
+  359 page records × the four `with_inline`/`prune_hidden` combinations):** `extract_html` uses a
+  soup copy in **three** places, and each needs its own treatment.
+  1. **`_extract_raw_text(soup)` on the pristine soup (~:630).** Nothing has mutated the tree here,
+     and `_extract_inline_text(soup)` reads it afterwards, so it must not be mutated.
+     - Have `_extract_raw_text` re-parse the input `html` string (pass it in) instead of
+       `copy.copy`.
+     - Alternatively, make it a non-mutating walk that skips `_DANGEROUS_TAGS` subtrees and
+       `Comment` nodes, on the `_extract_inline_text` pattern (:332).
+  2. **The visibility pass `_prune_hidden` (~:522-529).** Nothing has mutated the tree here either.
+     - Pass `html` in and re-parse instead of `pruned_soup = copy.copy(soup)`.
+     - `_prune_hidden(soup)` is called directly at `tests/test_visibility_pass.py:44, :240, :316`.
+       Update those three call sites to the new signature.
+  3. **The pruned fallback, `_extract_raw_text(pruned_soup)` (~:645).** This tree is **already
+     mutated** by `_prune_hidden`, so re-parsing `html` here would bring back the hidden text.
+     - `pruned_soup` is private and not read again afterwards. Strip it **in place** with no copy,
+       through a variant or flag of the raw-text helper.
+- **Equivalence fixtures must hit every path.** Pin all of these explicitly, by fixture or
+  synthetic HTML (no corpus text):
+  - a page with a hidden element;
+  - a page where trafilatura returns `None`, so `main_content_is_fallback=True` and the pruned
+    fallback (3) runs;
+  - inline and non-inline variants.
+- **Pinned hostile shapes,** shared with US-006's calibration. Put them in one test-helper module,
   e.g. `tests/stage1_shapes.py`, built from string multiplication, no corpus text:
   - sibling-dense `<b>g</b>`
   - deep `<span>` nesting (open N, text, close N)
   - attribute/style-heavy elements
-  - **repeated unclosed `<span>x`** (no closing tags; validation's worst shape)
+  - **repeated unclosed `<span>x`** (no closing tags; validation's worst shape before the fix)
+  - a **hidden-attribute** variant of the deep and unclosed shapes, which exercises `_prune_hidden`
+  - After the fix, the worst shape measured is **sibling-dense** (1.21 s at 512 KiB, 3.04 s at
+    1 MiB on an M-series Mac), not unclosed spans.
 - **Linearity test** (`tests/test_stage1_complexity.py`, new), patterned on
   `tests/test_stage2_complexity.py`:
   - GC disabled, best of 3.
@@ -134,8 +152,12 @@ byte-unchanged.
 - [ ] `copy.copy` no longer appears in `pipeline/stage1_extraction.py` (grep), and `import copy`
       is removed if unused.
 - [ ] For every corpus HTML record and every stage-1 unit fixture, all `ExtractionResult` fields
-      equal the pre-story output (in-process equivalence test, comparing against frozen
-      expected values generated before the change).
+      equal the pre-story output, under all four `with_inline`/`prune_hidden` combinations. This is
+      an in-process equivalence test against frozen values generated before the change.
+  - The fixtures include a hidden-element page and a pruned-fallback page
+    (`main_content_is_fallback=True`).
+- [ ] The pruned fallback strips `pruned_soup` in place, and is never a re-parse of the input. The
+      hidden-element fallback fixture proves the hidden text stays out.
 - [ ] `tests/stage1_shapes.py` defines the four pinned shapes, and `tests/test_stage1_complexity.py`
       shows each scales within `_RATIO_BOUND` between 64 KiB and 256 KiB under calibrated ceilings.
       Before and after seconds per shape are recorded.
@@ -147,14 +169,13 @@ byte-unchanged.
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
 - [ ] `uv run pyright` passes with zero errors
 
-### US-002: A shared worker launcher — explicit environment, fd-passed pipe, non-dumpable parent
+### US-002: A shared worker launcher — explicit environment, fd-passed pipe, fixed working directory
 
 **Priority:** P1
 
 **Description:** As an operator, I want every extraction worker launched with only an allowlisted
-environment and unable to read the parent's environment, so that a parser compromise reaches no
-credential. I also want the PDF worker moved onto the shared launcher so a second worker reuses
-reviewed code.
+environment, so that a parser compromise finds no credential in its own process. I also want the
+PDF worker moved onto the shared launcher so a second worker reuses reviewed code.
 
 **Independent Test:**
 - The existing PDF worker tests pass on the new launcher.
@@ -188,13 +209,16 @@ reviewed code.
       plus a `*_API_KEY|*_TOKEN|*_SECRET|*_PASSWORD` pattern check.
     - If an import needs another variable (check `HF_HOME`: nothing in the parse path should touch
       it), add it with a comment, and record the final allowlist.
-  - **Parent non-dumpable.** On Linux, at lifespan start, call `prctl(PR_SET_DUMPABLE, 0)` via
-    `ctypes` (validation measured it: the child's read of `/proc/<ppid>/environ` then fails with
-    `PermissionError`).
-    - Side effects to check: `/proc/self/*` becomes root-owned. Grep the parent for `/proc/self`
-      reads and confirm memory metrics still work (`resource.getrusage` is unaffected).
-    - Core dumps are disabled; document that.
-    - No-op on macOS, recorded as a residual.
+  - **Working directory.** `python -m pipeline.worker_entry` resolves `pipeline` through the
+    working directory or `PYTHONPATH`.
+    - The image installs with `--no-install-project` (Dockerfile:142) and works today only
+      because uvicorn runs from `/app`.
+    - Pass `cwd=` the project root, `Path(pipeline.__file__).resolve().parent.parent`, explicitly.
+    - Test: launch a real worker while the parent's cwd is an unrelated temp dir.
+  - **Platform-injected names.** macOS injects `__CF_USER_TEXT_ENCODING`, and PEP 538 adds
+    `LC_CTYPE`.
+    - Do not put them in the allowlist.
+    - The test accepts "allowlist ∪ recorded platform-injected set".
 - **Move the PDF worker** (`pipeline/pdf_subprocess.py`, unhashed) onto the launcher.
   - Keep its public functions (`extract_pdf_in_subprocess`, `extract_pdf_bytes_in_subprocess`),
     the result vocabulary, the IPC cap, and the parent-side re-validation.
@@ -207,33 +231,79 @@ reviewed code.
   - The PDF tests (`tests/test_stage1_pdf.py` `TestExtractPdfBytesInSubprocess` :464,
     `TestSpoolDir` :346, the orchestrator PDF mapping ~2620-2830) are the regression guard. They
     must pass with at most import and seam-name edits.
+  - The PDF worker keeps its spool prefix `forage-retrieve-` in this story; US-004 renames it.
 - **Spawn failure.** `OSError`/`EAGAIN` from `Popen` maps to the worker's failure error.
 - **GOTCHAS:** "Cancelling a PDF await does not stop its worker thread" (:856-871). The parent
   must kill and wait on every path.
-- **Docs.** `kit_tools/arch/SECURITY.md` gets a "worker isolation" section: the allowlist, the
-  non-dumpable parent, the macOS residual, and the verdict-integrity residual from the Overview.
+- **Docs.** `kit_tools/arch/SECURITY.md` gets a "worker isolation" section: the allowlist, and the
+  verdict-integrity residual from the Overview. US-003 adds the non-dumpable part.
   `kit_tools/arch/DECISIONS.md` gets a dated entry.
 
 **Acceptance Criteria:**
 - [ ] `pipeline/worker_launch.py` and `pipeline/worker_entry.py` exist, and the PDF worker runs
       through them. Every existing PDF worker test passes with at most import and seam edits.
 - [ ] With every name in `_CLEARED_ENV_VARS` and a pattern-matching sentinel set in the parent, a
-      real worker child's `os.environ` keys are a subset of the recorded allowlist (test). The
-      child imports its parsers successfully under that environment.
-- [ ] On Linux (CI), the child's `/proc/self/environ` contains no excluded name, and its read of
-      `/proc/<ppid>/environ` raises `PermissionError`. Both are tested, and skipped with a recorded
-      reason on non-Linux.
-- [ ] The parent sets `PR_SET_DUMPABLE` to 0 on Linux at startup. Existing metrics and health
-      tests pass.
+      real worker child's `os.environ` keys are a subset of the recorded allowlist ∪ the recorded
+      platform-injected set (`__CF_USER_TEXT_ENCODING` on darwin), and contain no excluded or
+      pattern-matching name (test).
+- [ ] The child imports its parsers successfully under that environment.
+- [ ] On Linux (CI), the child's `/proc/self/environ` contains no excluded name (test; skipped with
+      a recorded reason elsewhere).
+- [ ] A real worker launched while the parent's cwd is an unrelated temp dir succeeds (test).
+      `cwd=` is the project root.
 - [ ] A `Popen` `OSError` maps to the PDF worker's existing failure error (test).
-- [ ] SECURITY.md (worker isolation, plus both residuals) and DECISIONS.md are updated.
+- [ ] SECURITY.md (worker isolation and the verdict-integrity residual) and DECISIONS.md are
+      updated.
 - [ ] `sanitizer_revision` is unchanged (no hashed file edited), with the values recorded.
 - [ ] Tests written/updated for new functionality
 - [ ] Full test suite passes (`uv run pytest`)
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
 - [ ] `uv run pyright` passes with zero errors
 
-### US-003: Sweep stale spool files at startup, safely
+### US-003: Make the parent non-dumpable on Linux
+
+**Priority:** P2
+
+**Description:** As an operator, I want the Forage process marked non-dumpable on Linux, so that a
+compromised worker child cannot read the parent's environment through `/proc/<ppid>/environ`.
+
+**Independent Test:** On Linux, a real worker child's read of `/proc/<ppid>/environ` raises
+`PermissionError` once the parent has set `PR_SET_DUMPABLE` to 0. Existing metrics and health
+tests pass.
+
+**Implementation Hints:**
+- At lifespan start on Linux, call `prctl(PR_SET_DUMPABLE, 0)` through `ctypes`. On other
+  platforms this is a no-op with a recorded residual. Validation measured it: the child's read
+  then fails with `PermissionError`.
+- **Side effects:**
+  - The parent's `/proc/self/*` becomes root-owned. Round 3 grepped non-test Python and found
+    nothing that reads `/proc`; confirm it.
+  - Core dumps, `py-spy` attach and `gdb` attach stop working. Document this for operators.
+  - The non-dumpable flag is inherited across fork and reset on exec. **Measure `Popen` spawn
+    latency on Linux** with dumpable 0 and a high `nofile` limit, because CPython's `close_fds`
+    may fall back to brute-force closing, and record it.
+- **Residuals for SECURITY.md** (worker isolation section):
+  - The guarantee holds only when Forage is the only same-uid process in its PID namespace that
+    holds secrets.
+  - Named exceptions: `docker run --init` / compose `init: true` (tini as PID 1), a uvicorn master
+    under `--workers`, a wrapper shell that does not `exec`, and `shareProcessNamespace` pods.
+  - The guarantee also assumes the container lacks `CAP_SYS_PTRACE`.
+
+**Acceptance Criteria:**
+- [ ] On Linux the parent sets `PR_SET_DUMPABLE` to 0 at startup, and a real worker child's read
+      of `/proc/<ppid>/environ` raises `PermissionError` (test; skipped with a recorded reason
+      elsewhere).
+- [ ] Existing metrics and health tests pass. Spawn latency under dumpable 0 is measured on Linux
+      and recorded.
+- [ ] SECURITY.md lists the same-uid, `--init`, `--workers`, non-exec-wrapper and
+      `CAP_SYS_PTRACE` residuals, and the loss of core dumps and debugger attach.
+- [ ] `sanitizer_revision` is unchanged.
+- [ ] Tests written/updated for new functionality
+- [ ] Full test suite passes (`uv run pytest`)
+- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [ ] `uv run pyright` passes with zero errors
+
+### US-004: Sweep stale spool files at startup, safely
 
 **Priority:** P2
 
@@ -248,14 +318,20 @@ fresh one, a symlink, a foreign-prefix file and a subdirectory entry all survive
 - **Prefixes.**
   - Rename `/extract`'s upload spool prefix `poppy-extract-` (`retrieval_app.py:1569`) to
     `forage-extract-` (invariant 1: no new "poppy" names).
-  - Per-worker retrieve prefixes: `forage-retrieve-pdf-`, then `forage-retrieve-html-` from
-    US-004.
+  - Rename the PDF worker's spool prefix from `forage-retrieve-` to `forage-retrieve-pdf-`, and
+    update its spool tests. The HTML worker in US-005 uses `forage-retrieve-html-`.
   - The sweep matches `forage-extract-`, `forage-retrieve-` (covers both new ones) **and the
     legacy** `poppy-extract-`.
-- **Age gate.** Remove only files whose `mtime` is older than `wall_clock_seconds + 60`. No live
-  spool can be that old, because the worker's wall clock kills it first. That makes the sweep
-  safe even when several Forage processes share the per-euid spool directory (uvicorn
-  `--workers`, a restart overlapping a draining process, a shared `/tmp` volume).
+- **Age gate.** Remove only files whose `mtime` is older than the **maximum permitted**
+  `wall_clock_seconds` (its config bound in `extraction_limits.py`, not the running value) plus
+  60 s.
+  - Using the bound rather than the running value keeps the gate safe when several Forage
+    processes with different configs share the per-euid spool directory (uvicorn `--workers`, a
+    restart overlapping a draining process, a shared `/tmp` volume).
+  - A worker spool can never be that old.
+  - An `/extract` upload spool's `mtime` advances only on writes. An upload stalled past the gate
+    can therefore be swept, and that request then fails closed with a coded 422. This is
+    accepted: it is an availability effect on a stalled client only. Document it.
 - **Mechanics.**
   - Open the spool dir with `os.open(..., O_RDONLY | O_DIRECTORY)`.
   - Iterate with `os.scandir(fd)`. For each entry: `os.stat(name, dir_fd=fd,
@@ -274,9 +350,13 @@ fresh one, a symlink, a foreign-prefix file and a subdirectory entry all survive
       `forage-retrieve-` and `poppy-extract-` prefixes. It keeps a fresh prefixed file, a
       symlink, a foreign-prefix file and an entry in a subdirectory (one test each, with `mtime`
       set via `os.utime`).
-- [ ] Unlinks are `dir_fd`-relative after a no-follow `stat` (asserted by a test that swaps a
-      file for a symlink between scan and unlink, or by code review noted in Implementation
-      Notes).
+- [ ] Unlinks are `dir_fd`-relative after a no-follow `stat`. Covered by two tests:
+  - a seam swaps the entry for a symlink to an outside file after the stat; the outside file
+    survives;
+  - `FileNotFoundError`, `IsADirectoryError` and `PermissionError` during unlink are swallowed
+    without logging a name.
+- [ ] The PDF worker's spool prefix is `forage-retrieve-pdf-` (test). The age gate uses the
+      maximum permitted wall clock (test with a raised running value).
 - [ ] The log record is a closed token plus a count (test).
 - [ ] The configuration and security docs describe the lifecycle.
 - [ ] Tests written/updated for new functionality
@@ -284,7 +364,7 @@ fresh one, a symlink, a foreign-prefix file and a subdirectory entry all survive
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
 - [ ] `uv run pyright` passes with zero errors
 
-### US-004: The HTML extraction worker — shared stage-1 function, strict frame, measured envelope
+### US-005: The HTML extraction worker — shared stage-1 function, strict frame, measured envelope
 
 **Priority:** P1
 
@@ -306,7 +386,7 @@ validated plain-data frame, so that the parse cost of a hostile page is bounded 
   - Its body is a copy of `orchestrator._extract_html_and_scan_inline` (:236-260).
   - It is not in `stage1_extraction.py`: `stage2_structural.py:19` imports from there, so that
     would be a cycle.
-  - **This story does not edit `orchestrator.py`.** US-005 re-points it.
+  - **This story does not edit `orchestrator.py`.** US-006 re-points it.
 - **Entry point.**
   `extract_html_bytes_in_subprocess(body: bytes, url: str, budget_characters: int | None, settings: ExtractionSettings) -> tuple[ExtractionResult, StructuralScanResult | None]`.
   - It uses the US-002 launcher (kind `html`) and the spool helper (prefix
@@ -340,7 +420,11 @@ validated plain-data frame, so that the parse cost of a hostile page is bounded 
   - each category in `_BLOCKING_CATEGORIES ∪ _SUSPICIOUS_CATEGORIES ∪ set(_MARKUP_CATEGORIES.values())`;
   - `line_number` an int ≥ 0;
   - `word_count` an int ≥ 0;
-  - string fields within size;
+  - string fields within explicit bounds:
+    - `raw_text` and `main_content` ≤ `MAX_HTML_FRAME_BYTES` decoded;
+    - `title`, `author` and `date` ≤ the maximum `extract_html` can emit for that field. Determine
+      it from the code and record it; if a field is uncapped, use the frame cap. A legitimate
+      page must never be rejected by an invented bound.
   - `fold_refused` a bool.
 
   One forged-frame test per rule, through the parent's decode and validate seam.
@@ -358,11 +442,13 @@ validated plain-data frame, so that the parse cost of a hostile page is bounded 
 - **Test cost.** A spawn plus imports costs about 0.3 s wall and 0.29 s child CPU. There are
   359 page-surface records. So run **all** records through the in-process round trip, and real
   spawns on a fixed sample: 10 records, plus a synthetic non-UTF-8 body and an over-budget body.
-- **Kill test.** A real worker given 256 KiB of the pinned unclosed-span shape (or, if US-001
-  made it linear, a size measured to exceed 1 s of CPU on the CI runner) with
-  `child_cpu_seconds=1`.
+- **Kill test.** Use a real worker with `child_cpu_seconds=1`. Pick the body so it exceeds 1 s of
+  child CPU but stays **under** the 384 MiB address-space cap. After US-001 that is about 512 KiB of
+  the sibling-dense shape; measure on the CI runner. A 1 MiB body peaks around 430 MiB and would
+  die from address space instead, which would not prove the CPU limit.
   - Assert `HTMLExtractionError`, no surviving child, and elapsed < `wall_clock_seconds`.
-  - Import CPU (about 0.3 s) counts against `RLIMIT_CPU`; state this in `docs/configuration.md`.
+  - The docstring states which limit the size targets.
+  - Import CPU (about 0.33 s) counts against `RLIMIT_CPU`; state that in `docs/configuration.md`.
   - **Never** push 10 MB element-dense HTML through `extract_html` in a test.
 - **Envelope measurement** (record only). In a Linux container (`docker run --cpus 1 -m 1536m`),
   run realistic pages (div/h2/p/a/em/nested-ul) at 0.5, 1, 2 and 4 MB.
@@ -373,7 +459,7 @@ validated plain-data frame, so that the parse cost of a hostile page is bounded 
 
 **Acceptance Criteria:**
 - [ ] `pipeline/html_subprocess.py` holds `extract_html_and_scan` and
-      `extract_html_bytes_in_subprocess`, using the US-002 launcher and the US-003 prefix.
+      `extract_html_bytes_in_subprocess`, using the US-002 launcher and the US-004 prefix.
       `orchestrator.py` is not edited.
 - [ ] For every corpus `/retrieve` HTML record, plus a non-UTF-8 body and an over-budget body, the
       in-process frame round trip equals `orchestrator._extract_html_and_scan_inline`. That covers
@@ -398,7 +484,7 @@ validated plain-data frame, so that the parse cost of a hostile page is bounded 
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
 - [ ] `uv run pyright` passes with zero errors
 
-### US-005: Route large `/retrieve` HTML bodies through the worker
+### US-006: Route large `/retrieve` HTML bodies through the worker
 
 **Priority:** P1
 
@@ -418,8 +504,9 @@ hostile page costs at most the worker's limits, while ordinary pages keep today'
   - About 26 test sites patch `pipeline.orchestrator.extract_html` or call the function directly:
     `test_orchestrator.py`, `test_app.py:1527`, `test_retrieve_admission.py:282/394/564-572`,
     and `test_inline_scan_form.py`.
-  - Keep the patch target working, or update the patches. Their bodies are tiny, so they stay
-    in-thread.
+  - **Decided:** re-patch those sites to `pipeline.html_subprocess.extract_html` (the shared
+    function looks `extract_html` up in its own module). List the re-patched files in
+    Implementation Notes. Their bodies are tiny, so they stay in-thread.
 - **Branch.** The HTML branch (~:635-647) mirrors the PDF branch (~:585-634):
   `completed_thread(asyncio.to_thread(extract_html_bytes_in_subprocess, ...))` **inside** the
   admission slot (acquired ~:528, released in `finally` ~:655-656).
@@ -427,7 +514,7 @@ hostile page costs at most the worker's limits, while ordinary pages keep today'
   - Compare the **fetched byte length**, before decode.
 - **Contract constant.** `RETRIEVE_HTML_EXTRACTION_ERROR = "html_extraction_error"` goes in
   `pipeline/contract.py` beside `RETRIEVE_PDF_*` (:527-546).
-  - Only the constant. No description, no `CONTRACT_VERSION` change (US-006 does those), so the
+  - Only the constant. No description, no `CONTRACT_VERSION` change (US-007 does those), so the
     1.3.0 golden stays green.
 - **Failure mapping.**
   - `HTMLExtractionError` → 422 `extraction_failed` / `html_extraction_error`, with the closed
@@ -436,7 +523,7 @@ hostile page costs at most the worker's limits, while ordinary pages keep today'
     `retrieve_spool_error` token, exactly as the PDF branch does it.
   - Never exception text.
 - **Internal counters.** Count worker spawns and refusals as plain attributes on the metrics
-  object. US-006 exposes them on `/metrics`.
+  object. US-007 exposes them on `/metrics`.
   - Touch points: `RetrieveMetricsSink` (`orchestrator.py:1495`), `_NullRetrieveMetrics`
     (`:1506`) and `retrieval_app.RetrieveMetrics` (`:1243`).
   - **Not** `RetrieveMetricsResponse` (`:784`): adding response fields here would turn
@@ -451,17 +538,23 @@ hostile page costs at most the worker's limits, while ordinary pages keep today'
     `kit_tools/docs/ENV_REFERENCE.md`.
   - It joins neither the cache fingerprint nor the revision inputs, because output is
     byte-identical; say so.
-  - Its **maximum is 4× the calibrated default.** Document the measured worst-case in-thread
-    seconds at the maximum beside the key, and that raising it weakens the bound. `0` routes
-    everything to the worker.
-- **Calibration.**
-  - Use the four pinned shapes from `tests/stage1_shapes.py`, GC off, median of 3, on the US-001
-    linear code.
-  - The default is the largest power-of-two KiB at which the **worst** shape parses in-thread
-    in ≤ 2 s on this machine. Record per shape.
-  - Regression test: each shape at the default runs in-thread under a calibrated ceiling.
-  - Note in Implementation Notes what share of ordinary pages a spawn will now cost (median HTML
-    is tens of KB) at the chosen default.
+  - Its **maximum is 2× the calibrated default.**
+    - Document the measured worst-case in-thread seconds **and** parent peak-RSS delta at the
+      maximum beside the key.
+    - Document that raising it weakens the bound.
+    - `0` routes everything to the worker.
+- **Calibration, on two axes.** Use the pinned shapes from `tests/stage1_shapes.py` on the US-001
+  linear code, with GC off and the median of 3.
+  - The default is the largest power-of-two KiB at which **both** hold:
+    - the worst shape parses in-thread in ≤ 2 s on this machine;
+    - the parent's peak-RSS delta is ≤ 25% of the 1536 MiB Compose default.
+  - Record both figures per shape. Round 3 measured the worst shape as sibling-dense, at about 1.2 s
+    for 512 KiB, so the default is likely around 512 KiB.
+- **Timing tests.** The blocking assertion is the ratio test (`_RATIO_BOUND` with its fast-floor
+  escape, as in `tests/test_stage2_complexity.py`). Absolute ceilings are a generous 5× of the
+  recorded dev-machine seconds. Record the seconds in the test's comment.
+- Note in Implementation Notes what share of ordinary pages a spawn will cost at the chosen
+  default (median HTML is tens of KB).
 - **Cancellation.** Real-task `cancel()` with the worker held: admission is released only after
   reap and unlink (GOTCHAS:856-871).
 - **Corpus comparison.** Run the default-versus-`0` comparison through the in-process seam for all
@@ -480,11 +573,12 @@ hostile page costs at most the worker's limits, while ordinary pages keep today'
       body (grep).
 - [ ] A body exactly at the threshold parses in-thread, one byte over goes to the worker, and `0`
       sends everything to the worker. The decision uses fetched byte length (tests).
-- [ ] `retrieve.html_worker_threshold_bytes` is bounded to `0 … 4 × default`, registered in
+- [ ] `retrieve.html_worker_threshold_bytes` is bounded to `0 … 2 × default`, registered in
       `KNOWN_CONFIG_KEYS` as security-relevant, and documented in all four sites with the
       worst-case-at-maximum figure. The partition and shipped-default tests pass.
-- [ ] The default is the calibrated value, recorded per shape, and a regression test runs all four
-      shapes at the default under a calibrated ceiling.
+- [ ] The default is the two-axis calibrated value (time and parent RSS), recorded per shape. A
+      regression test runs every pinned shape at the default, using the ratio assertion plus a
+      5× absolute ceiling.
 - [ ] `HTMLExtractionError` maps to 422 `extraction_failed` / `html_extraction_error`, and spool
       errors map to the existing reason. Each logs its closed token, with no exception text
       (tests).
@@ -501,7 +595,7 @@ hostile page costs at most the worker's limits, while ordinary pages keep today'
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
 - [ ] `uv run pyright` passes with zero errors
 
-### US-006: Contract surface — announce the reason and counters, cut held 1.4.0
+### US-007: Contract surface — announce the reason and counters, cut held 1.4.0
 
 **Priority:** P1
 
@@ -523,12 +617,12 @@ so that the published surface matches the new behaviour.
   by version. The new golden is **held**: spec 3 regenerates it until the tag.
 - **`pipeline/contract.py`.**
   - `CONTRACT_VERSION = "1.4.0"` (:22).
-  - A `* ``1.4.0`` —` bullet written as an in-progress record that spec 3 US-003 finalises. It
+  - A `* ``1.4.0`` —` bullet written as an in-progress record that spec 3 US-004 finalises. It
     covers the reason, the two counters, and the large-page refusal (a served-outcome change).
   - Column 0, two-space continuation, tense guard (`tests/test_ci_workflow.py:2410-2430`).
   - Update the `RetrieveErrorCode` docstring (:382-401).
 - **Counters on `/metrics`.** Add the two fields to `RetrieveMetricsResponse`
-  (`retrieval_app.py:784`) and wire the emission from US-005's internal counters.
+  (`retrieval_app.py:784`) and wire the emission from US-006's internal counters.
   - `tests/test_contract_metrics.py` `test_every_1_3_0_metric_addition_is_named_in_the_contract_entry`
     (~:171-185) and the payload key-set pins (~:307-336) need a **1.4.0 analogue**: fields added
     since 1.3.0 must be named in the 1.4.0 entry. Extend the baseline map
@@ -545,7 +639,7 @@ so that the published surface matches the new behaviour.
 **Acceptance Criteria:**
 - [ ] The `/retrieve` 422 description and the `RetrieveErrorCode` docstring name
       `html_extraction_error`.
-- [ ] `/metrics` emits both counters, wired from US-005's counters (test). A 1.4.0
+- [ ] `/metrics` emits both counters, wired from US-006's counters (test). A 1.4.0
       metric-addition test requires them in the 1.4.0 entry.
 - [ ] `CONTRACT_VERSION == "1.4.0"`, and the 1.4.0 bullet covers the reason, the counters and the
       large-page refusal. The tense guard passes.
@@ -559,7 +653,7 @@ so that the published surface matches the new behaviour.
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
 - [ ] `uv run pyright` passes with zero errors
 
-### US-007: `/search` parses titles and snippets off the event-loop thread
+### US-008: `/search` parses titles and snippets off the event-loop thread
 
 **Priority:** P2
 
@@ -584,7 +678,7 @@ worker thread, so that the event-loop thread is not held for a whole parse.
     titles, 8,000-char snippets) in Implementation Notes only.
 - **Byte-identical.** The six captures from `8e449fc` and the `/search` corpus outcomes stay
   unchanged.
-- **Resource-envelope counters** (`hardening-resource-envelope` US-004):
+- **Resource-envelope counters** (`hardening-resource-envelope` US-005):
   - With a stub parse delay and no contention, the classification-wait counter and the high-water
     mark equal the pre-story capture (test).
   - `docs/configuration.md` states which of them includes thread-hop time.
@@ -608,22 +702,22 @@ worker thread, so that the event-loop thread is not held for a whole parse.
 ## Edge Cases
 
 - **Threshold boundaries.** A body exactly at the threshold parses in-thread. `0` sends
-  everything to the worker. The maximum is 4× the default, enforced at boot. (US-005)
+  everything to the worker. The maximum is 4× the default, enforced at boot. (US-006)
 - **Worker failures** all become `HTMLExtractionError`, which maps to 422: address space (Linux),
-  CPU, wall clock, spawn `EAGAIN`, an oversized frame, bad JSON, and a forged frame. (US-004,
-  US-005)
+  CPU, wall clock, spawn `EAGAIN`, an oversized frame, bad JSON, and a forged frame. (US-005,
+  US-006)
 - **A compromised parser returning a valid CLEAN frame** is not detected. This is an accepted
   residual, recorded in SECURITY.md. (US-002)
-- **Several Forage processes sharing a spool dir:** the age gate keeps live spools. (US-003)
+- **Several Forage processes sharing a spool dir:** the age gate keeps live spools. (US-004)
 - **A symlink swapped in during the sweep:** the no-follow stat plus `dir_fd` unlink handles it.
-  (US-003)
+  (US-004)
 - **Cancellation mid-parse:** the child is killed and reaped, the spool unlinked, and only then
-  is admission released. (US-005)
-- **Non-UTF-8 and over-budget bodies** are covered by the equivalence tests. (US-004)
-- **A fold refusal inside the child** is re-emitted by the parent. (US-004)
+  is admission released. (US-006)
+- **Non-UTF-8 and over-budget bodies** are covered by the equivalence tests. (US-005)
+- **A fold refusal inside the child** is re-emitted by the parent. (US-005)
 - **macOS:** no `RLIMIT_AS` and no `PR_SET_DUMPABLE`. Both are residuals, documented. (US-002,
-  US-004)
-- **A `/search` provider returning zero results** makes no thread hop. (US-007)
+  US-005)
+- **A `/search` provider returning zero results** makes no thread hop. (US-008)
 
 ## Out of Scope
 
@@ -648,8 +742,8 @@ worker thread, so that the event-loop thread is not held for a whole parse.
 - **Hashed vs unhashed.** Hashed: `stage1_extraction.py`, `orchestrator.py`, `contract.py`.
   Unhashed: `html_subprocess.py`, `worker_launch.py`, `worker_entry.py`, `pdf_subprocess.py`,
   `extraction_limits.py`, `retrieve_limits.py`, `retrieval_app.py`.
-  - US-001, US-005, US-006 and US-007 each rotate once.
-  - US-002, US-003 and US-004 must not rotate.
+  - US-001, US-006, US-007 and US-008 each rotate once.
+  - US-002, US-003, US-004 and US-005 must not rotate.
 - **Rotation record procedure** (shared by every rotating story in this epic):
   1. Compute `derive_sanitizer_revision()` under default and shipped config, before and after.
   2. For each hashed file the story changed, reconstruct the pre-story bytes **read-only**: load
@@ -704,7 +798,7 @@ child can read `/proc/<ppid>/environ`. `PR_SET_DUMPABLE 0` blocks that (measured
 **Rationale:** The spool dir is per-euid, not per-process. An ungated sweep deletes live spools.
 `/extract` uploads were missed by the original prefix list.
 
-**Decision:** Counters are internal in US-005 and exposed in US-006.
+**Decision:** Counters are internal in US-006 and exposed in US-007.
 **Rationale:** `test_every_1_3_0_metric_addition_is_named_in_the_contract_entry` pins response
 fields to the 1.3.0 entry.
 
@@ -713,16 +807,24 @@ fields to the 1.3.0 entry.
 
 ### Scope Adjustments
 
+- Round 3 made these changes:
+  - non-dumpable split into its own story (US-003), bringing the spec to eight stories;
+  - the three copy sites decided, with in-place mutation for the pruned fallback;
+  - explicit worker cwd, and the macOS platform-injected names;
+  - the sweep gate uses the bound, not the running value;
+  - two-axis calibration, with the knob maximum at 2× the default;
+  - re-patch decided for the test sites;
+  - kill-test size kept under the address-space cap.
 - Round 1 split the spec into five stories. Round 2 brought it to seven:
   - added the copy fix (US-001);
-  - split plumbing into the launcher (US-002) and the sweep (US-003);
+  - split plumbing into the launcher (US-002) and the sweep (US-004);
   - replaced multiprocessing spawn with `Popen`;
   - moved the counters to the contract story;
   - pinned the four shapes and capped the knob at 4× the default.
 
 ### Decisions Made
 
-- The contract bump to 1.4.0 happens in US-006. Spec 3 finalises the entry.
+- The contract bump to 1.4.0 happens in US-007. Spec 3 finalises the entry.
 
 ## Clarifications
 

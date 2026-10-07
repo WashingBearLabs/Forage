@@ -49,7 +49,7 @@ the release that the 1.3.0 contract's compatibility windows promised:
 
 | Seq | Feature Spec | Status | Dependencies |
 |-----|-------------|--------|--------------|
-| 1 | [feature-release-resource-bounds.md](feature-release-resource-bounds.md) — 7 stories: linear stage 1 (soup-copy fix), `Popen` worker launcher with allowlisted env and non-dumpable parent, stale-spool sweep, HTML worker, threshold routing, held contract 1.4.0 + counters, `/search` off the loop | Planned | None |
+| 1 | [feature-release-resource-bounds.md](feature-release-resource-bounds.md) — 8 stories: linear stage 1 (soup-copy fix), `Popen` worker launcher with allowlisted env, non-dumpable parent, stale-spool sweep, HTML worker, threshold routing, held contract 1.4.0 + counters, `/search` off the loop | Planned | None |
 | 2 | [feature-release-padding-gate.md](feature-release-padding-gate.md) — 1 story: fold limit `max(2n, n + 256)`, refusal BLOCKs on every route | Planned | 1 (rotation procedure and ordinal) |
 | 3 | [feature-release-1-3-0.md](feature-release-1-3-0.md) — 5 stories: budget default 64 + refusal counter, measured sizing docs, 422 key drop and final 1.4.0 entry, GOVERNANCE closure, release prep | Planned | 1, 2 |
 
@@ -79,9 +79,8 @@ the release that the 1.3.0 contract's compatibility windows promised:
 
 ## Notes
 
-- **Pre-epic reference commit:** the commit that adds these specs. Every "pre-epic" comparison
-  in the three specs means `git show <that commit>:<path>`; the first story records the hash in
-  its Implementation Notes.
+- **Pre-epic reference commit:** `7fe91c0`, the PR #42 merge, which is the base the spec commits sit on.
+  Every "pre-epic" comparison in the three specs means `git show 7fe91c0:<path>`.
 - **Execution:** guarded mode. Every spec is **size L**, because stories regenerate the corpus
   baseline and run the complexity sweep (structural-hardening lesson: M = 900 s timed out on
   exactly these stories).

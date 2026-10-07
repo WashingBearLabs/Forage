@@ -113,6 +113,9 @@ the limit through `scan_structural_forms(structural_scan_forms(...))` and get BL
      `title_inline_forms` and `field=snippet` for the snippet pair. Then skip the scan loop for
      that result.
    - Update the comment ("A refused fold (expansion past 4x) is flagged SUSPICIOUS").
+   - **Precedence** when several sources refuse: title before snippet, then fold before inline,
+     matching the scan loop's own field order. Each per-source test refuses exactly one source, so
+     the expected `field` is unambiguous.
 5. **Tests** (`tests/test_stage2_fold_forms.py`).
    - `test_a_ratio_under_the_limit_is_folded_normally` (~:216, `_ratio_text(3.9)`) moves under the
      new limit, for example `_ratio_text(1.9)` on a text long enough that the slack is not the
@@ -138,9 +141,15 @@ the limit through `scan_structural_forms(structural_scan_forms(...))` and get BL
        decoded text whose NFKC (pass one) or fold (pass two) length lands exactly at
        `max(2n, n+256)`, or one character over.
      - The **pass-two** boundary needs a source that `FOLD_TABLE` maps to several characters while
-       NFKC leaves it at one, so that pass one accepts and pass two refuses. Pick one from
-       `FOLD_TABLE` by code (for example U+00E6, if the table maps it to two characters; check)
-       and write it as a code-point escape.
+       NFKC leaves it at one, so that pass one accepts and pass two refuses. Round 3 confirmed
+       that U+00E6 maps to `ae` (length 2) and that 114 such NFKC-stable sources exist. Write it as
+       a code-point escape.
+     - The builder asserts its own postcondition: it recomputes the NFKC and fold lengths and
+       checks they equal the target. A later `FOLD_TABLE` change then cannot silently turn a
+       boundary test into a non-boundary one.
+   - Add one `/retrieve` benign fixture at a plausible density: one U+FDFA per ~150 Arabic letters
+     across a few KiB, built from code-point escapes, asserting it is folded and not refused. It
+     documents the margin the 2n branch relies on.
    - Test both refusal paths: pass-one NFKC, and the pass-two exact total.
 6. **Route tests.**
    - `/retrieve` TRUSTED and default tier, `/extract`, and `/search` with one test **per refusal
@@ -297,7 +306,7 @@ not halve.
 - Round 2 updated the tests and the measurement: the 10 MiB test flips to BLOCKED, the
   exact-length and pass-two boundary builders were added, the ceiling formula and the 65-70% rule
   were set, and `depends_on` now names spec 1 (rotation procedure and ordinal).
-- On the worker path, spec 1 US-004 carries `fold_refused` in the frame and the parent re-emits
+- On the worker path, spec 1 US-005 carries `fold_refused` in the frame and the parent re-emits
   the token. This spec changes only the verdict a refusal produces.
 - Validation round 1 added: the slack, the shape fix, the per-route tier wording, the explicit
   `/search` omission mechanics, and the penalty value.
