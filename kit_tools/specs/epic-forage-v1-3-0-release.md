@@ -26,8 +26,8 @@ the release that the 1.3.0 contract's compatibility windows promised:
      memory-rlimited worker that fetched PDFs already use, with a coded 422 on overrun. Both
      workers start with a credential-free environment, and stale spool files are swept at
      startup.
-   - Realistic pages above about 2 MB are refused by design (owner, 2026-10-07). The 256-chunk
-     budget already refuses about 1 MB of realistic text.
+   - Realistic pages above about 2 MB are refused by design (owner, 2026-10-07). The 64-chunk
+     budget default (114,688 characters) refuses far smaller pages anyway.
    - `/search`'s per-field parse moves off the event loop.
 2. **Look-alike padding gate (residual 2026-10-04-060) and fold cost (finding 2026-10-07-002).**
    - Today a refused confusable fold only *flags* the page. On the TRUSTED tier, where stage 3
@@ -36,8 +36,9 @@ the release that the 1.3.0 contract's compatibility windows promised:
      fields with everyday ligatures from being blocked. The worst accepted fold cost falls to
      about 56% of its 4× figure (measured).
 3. **The two next-MINOR windows.**
-   - The `/retrieve` `max_promptguard_chunks` default flips 0 → 256 (ruling (g)). `0` stays the
-     opt-out.
+   - The `/retrieve` `max_promptguard_chunks` default flips 0 → **64**. Ruling (g) announced 256;
+     the owner chose 64 on 2026-10-07 after measuring that 256 chunks hold the 86M for ~51–77 s,
+     past the 30 s wait. `0` stays the opt-out.
    - Request-validation 422s drop the `"[redacted]"` `input`/`ctx`/`url` placeholder keys
      (ruling (l)).
    - Together these are contract **1.3.0 → 1.4.0**.
@@ -48,17 +49,18 @@ the release that the 1.3.0 contract's compatibility windows promised:
 
 | Seq | Feature Spec | Status | Dependencies |
 |-----|-------------|--------|--------------|
-| 1 | [feature-release-resource-bounds.md](feature-release-resource-bounds.md) — 5 stories: worker plumbing and environment scrub, HTML worker, threshold routing and telemetry, held contract 1.4.0, `/search` off the loop | Planned | None |
-| 2 | [feature-release-padding-gate.md](feature-release-padding-gate.md) — 1 story: fold limit `max(2n, n + 256)`, refusal BLOCKs on every route | Planned | None (runs after 1 for ordering only) |
-| 3 | [feature-release-1-3-0.md](feature-release-1-3-0.md) — 5 stories: budget default 256, measured sizing docs, 422 key drop and final 1.4.0 entry, GOVERNANCE closure, release prep | Planned | 1, 2 |
+| 1 | [feature-release-resource-bounds.md](feature-release-resource-bounds.md) — 7 stories: linear stage 1 (soup-copy fix), `Popen` worker launcher with allowlisted env and non-dumpable parent, stale-spool sweep, HTML worker, threshold routing, held contract 1.4.0 + counters, `/search` off the loop | Planned | None |
+| 2 | [feature-release-padding-gate.md](feature-release-padding-gate.md) — 1 story: fold limit `max(2n, n + 256)`, refusal BLOCKs on every route | Planned | 1 (rotation procedure and ordinal) |
+| 3 | [feature-release-1-3-0.md](feature-release-1-3-0.md) — 5 stories: budget default 64 + refusal counter, measured sizing docs, 422 key drop and final 1.4.0 entry, GOVERNANCE closure, release prep | Planned | 1, 2 |
 
 ## Completion Criteria
 
 - [ ] All three feature specs completed and archived.
-- [ ] Hostile inputs are bounded, measured on the CI runner and recorded in
-      `docs/bootstrap-notes.md`.
-  - An element-dense `/retrieve` page above the threshold is refused with a coded 422 within
-    the worker's CPU limit.
+- [ ] Hostile inputs are bounded. The measurements are recorded in `docs/bootstrap-notes.md`, and
+      machine-calibrated ceiling tests run on CI.
+  - Stage 1 is linear on the four pinned hostile shapes.
+  - A hostile `/retrieve` page above the threshold is refused with a coded 422 within the
+    worker's CPU limit.
   - No `/retrieve` HTML parse runs in-process above the threshold.
   - `/search` never runs `extract_html` on the event loop thread.
 - [ ] A refused fold is a BLOCK on `/retrieve`, `/extract` and `/search`. The exact benign false

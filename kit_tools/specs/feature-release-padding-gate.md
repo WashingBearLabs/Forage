@@ -3,7 +3,7 @@
 feature: release-padding-gate
 status: active
 session_ready: true
-depends_on: []
+depends_on: [release-resource-bounds]
 vision_ref: "T2 hardening follow-through — bound the remaining CPU costs and cut v1.3.0"
 type: epic-child
 size: L
@@ -128,7 +128,19 @@ the limit through `scan_structural_forms(structural_scan_forms(...))` and get BL
      refused form.
    - `test_a_refused_page_reaches_the_sanitization_result_suspicious` (~:289) asserts
      quarantine (title `None`, ruling (m)); rename it.
-   - `test_ten_mib_of_fdfa_is_refused_within_the_memory_budget` must still hold.
+   - `test_ten_mib_of_fdfa_is_refused_within_the_memory_budget` (~:284) asserts
+     `verdict == SUSPICIOUS` today. It **must flip to BLOCKED**, with its memory bound unchanged.
+     That makes **six** updated tests.
+   - In `test_padding_does_not_bypass_the_refusal`, tighten the unpadded assertion from
+     `!= CLEAN` to `== BLOCKED`.
+   - **Boundary tests need an exact-length builder.**
+     - `_ratio_text` only brings the ratio to *at most* the target, so add a helper that builds a
+       decoded text whose NFKC (pass one) or fold (pass two) length lands exactly at
+       `max(2n, n+256)`, or one character over.
+     - The **pass-two** boundary needs a source that `FOLD_TABLE` maps to several characters while
+       NFKC leaves it at one, so that pass one accepts and pass two refuses. Pick one from
+       `FOLD_TABLE` by code (for example U+00E6, if the table maps it to two characters; check)
+       and write it as a code-point escape.
    - Test both refusal paths: pass-one NFKC, and the pass-two exact total.
 6. **Route tests.**
    - `/retrieve` TRUSTED and default tier, `/extract`, and `/search` with one test **per refusal
@@ -136,14 +148,21 @@ the limit through `scan_structural_forms(structural_scan_forms(...))` and get BL
    - Each asserts the omission log token and counter.
    - Place them beside the existing fold route test and the `/search` orchestrator tests.
 7. **Sweep** (`tests/test_stage2_complexity.py` ~:241-270).
-   - `maximal_accepted_expansion` becomes `"a" * 16 + "ﷺ"`, **ASCII first**. `_fill`
+   - `maximal_accepted_expansion` becomes `"a" * 16 + "\ufdfa"`, **ASCII first**. `_fill`
      truncates the repeated unit (2097152 mod 17 = 15), and a trailing U+FDFA with fewer than 16
      ASCII after it pushes the total over 2×, so the shape would time the refusal. Validation
      reproduced this.
    - Add an assertion inside the sweep that `fold_scan_forms(large).refused is False` for that
      shape.
-   - Recalibrate its ceiling multiple and floor from measurement × ~2 headroom, and update the
-     comment. Record pre and post seconds, same machine, GC off, median of 3.
+   - **Ceiling:** set the multiple so that `ceiling ≈ 2 × measured post-shape median` on this
+     machine, keeping the `floor=` argument at its current form, and update the comment.
+   - **Cost bar:** measure the pre shape (U+FDFA + 5 ASCII, run against the pre-story limit via a
+     read-only copy of the old module) and the post shape **back to back in one process**. GC off,
+     median of 5.
+   - If the ratio lands between 65% and 70%, re-measure with 9 samples on a quiet machine and
+     record both runs. If it is still over 65%, record the numbers and leave the criterion failing
+     for the owner. **Never** tune the limit or the shape to pass.
+   - Validation measured 56% (2.29 s / 4.10 s) and 56% (2.45 s / 4.37 s) on two runs.
 8. **Corpus.**
    - Run `uv run python -m scripts.corpus.report --write-baseline`, then `--write-floors`.
    - Run `uv run python -m scripts.corpus.floors_diff OLD NEW --old-baseline … --new-baseline …`
@@ -184,21 +203,24 @@ the limit through `scan_structural_forms(structural_scan_forms(...))` and get BL
       both the pass-one and the pass-two refusal paths.
 - [ ] `scan_structural_forms` returns BLOCKED, with penalty `0.0` and the `encoded_payload`
       refusal flag (plus any suspicious flags already found), whenever the fold is refused. The
-      five listed fold-form tests are updated or renamed, and the 10 MiB memory test still
-      passes.
+      six listed fold-form tests are updated or renamed: the 10 MiB test now asserts BLOCKED, and
+      the unpadded padding assertion is `== BLOCKED`.
 - [ ] Refused pages are quarantined or omitted on every route: `/retrieve` (TRUSTED and default
       tier) and `/extract` quarantine (title `None`). `/search` omits the result for each of the
       four refusal sources, with the existing `search_result_omitted` token, the right `field`
       value and the `omitted_by_reason` structural-blocked counter (one test each).
 - [ ] A 6-character Arabic title ending in U+FDFA (code-point escapes) is folded, not refused,
       on `/search` (test).
-- [ ] The sweep's `maximal_accepted_expansion` is `"a" * 16 + "ﷺ"`, with an in-sweep
-      assertion that the large input is not refused. The ceiling is recalibrated, and the
-      post-shape median is ≤ 65% of the pre-shape median, both recorded.
+- [ ] The sweep's `maximal_accepted_expansion` is `"a" * 16 + "\ufdfa"`, with an in-sweep
+      assertion that the large input is not refused. The ceiling is about 2× the measured
+      post-shape median. The back-to-back post/pre median ratio is ≤ 65%, and every run is
+      recorded.
 - [ ] The corpus baseline and floors are regenerated, `floors_diff` reports 0 problems and
       `--baseline-fpr` reports 0 rises. Both cassettes are byte-unchanged.
 - [ ] The rotation is recorded per the procedure: each file reverted alone plus an all-reverted
-      control, under default and shipped config, with all count sites updated.
+      control, under default and shipped config. Every count site in step 9 shows the new
+      ordinal, and a grep for the previous ordinal word over those files finds no stale
+      current-count hit.
 - [ ] `SECURITY.md`, `docs/releases.md` Unreleased and GOTCHAS describe the rule.
       `tests/test_corpus_docs_payloads.py` passes, and new fixtures use code-point escapes only.
 - [ ] Tests written/updated for new functionality
@@ -272,6 +294,11 @@ not halve.
 ### Scope Adjustments
 
 - The fold-cap lowering moved here from spec 1, so the multiple and the block share one rotation.
+- Round 2 updated the tests and the measurement: the 10 MiB test flips to BLOCKED, the
+  exact-length and pass-two boundary builders were added, the ceiling formula and the 65-70% rule
+  were set, and `depends_on` now names spec 1 (rotation procedure and ordinal).
+- On the worker path, spec 1 US-004 carries `fold_refused` in the frame and the parent re-emits
+  the token. This spec changes only the verdict a refusal produces.
 - Validation round 1 added: the slack, the shape fix, the per-route tier wording, the explicit
   `/search` omission mechanics, and the penalty value.
 
