@@ -12,93 +12,7 @@ lane and is documented separately in `docs/searxng.md` (US-004).
 
 ## Unreleased
 
-Not yet tagged; the version number is decided at the release gate. Contract is `1.4.0` (the held cut; v1.3.0 is prepared, not published).
-
-- **The 86M is the default model** (owner ruling 2026-10-06). With `FORAGE_MODEL_ID`
-  unset the service now loads `meta-llama/Llama-Prompt-Guard-2-86M`;
-  `meta-llama/Llama-Prompt-Guard-2-22M` stays allowlisted as the opt-out. On the injection
-  corpus the 86M catches 15 stage-3 attack texts the 22M does not, with no measured benign
-  false positive (`docs/corpus.md` "Decision inputs"). `/health.promptguard_model` reports
-  the 86M id by default. **Upgrade checks:** the Hugging Face token needs the 86M
-  repository's own gated grant (otherwise `degraded` / `promptguard_unavailable` until it
-  has one); first acquisition is ~1.1 GiB; classification is about 2× slower per window.
-- **Compose's `FORAGE_MEM_LIMIT` default is `1536m`** (was `1024m`) — the boot memory rule
-  is 1,397 MiB for the 86M at shipped settings. The 22M opt-out still fits `1024m`.
-- **`sanitizer_revision` rotates** `021378ef…` → `b5e91fd6…` at the default model (old
-  cache entries become misses). Setting `FORAGE_MODEL_ID=…22M` keeps `021378ef…`.
-- **Contiguity gating stays off** (owner ruling 2026-10-06).
-- **`/retrieve` bounds its decoder:** fetched bodies are read through Forage's bounded
-  decoder (`pipeline/bounded_body.py`), with `Accept-Encoding: gzip, deflate` pinned. A body
-  in any other encoding, or a truncated/concatenated compressed stream, is now refused as
-  `fetch_error` (reason ending `unsupported_encoding` / `malformed_body`); previously such a
-  body was passed through undecoded into extraction. Oversized bodies keep
-  `content_too_large`.
-- **Stage 2 catches more variants of the same 24 patterns** (`epic-forage-structural-hardening`).
-  Besides the extracted text as-is, stage 2 now scans scan-only derived forms of it: an
-  entity-decoded form (one level after an HTML parse, two for uploads), a confusable-folded
-  form under both readings of the ambiguous I/l class, and, for HTML, an inline-joined form
-  in which an inline tag no longer splits a keyword. The patterns are case-insensitive, the two
-  gap patterns cross a newline (the `disregard … instructions` gap stops at a blank line),
-  and three markup patterns (`<system>` tags,
-  private-IP `href`/`src`, envelope tags) also run on the raw markup the parser would
-  consume. Pages and search results using those case, entity, newline-split, confusable,
-  inline-tag-split or markup-consumed variants are now `blocked` or `suspicious` where they
-  previously passed. Stage 3's input is byte-unchanged; a fold that would expand past
-  `max(2n, n + 256)` is refused and the page blocked (`encoded_payload`), never truncated.
-- **Quarantined responses now carry `title: null`.** A `/retrieve` or `/extract` response
-  that is blocked (stage-2 block, stage-3 injection, or `unavailable_blocked`) no longer
-  echoes the document's `<title>`; the body was already replaced and now the title goes
-  with it. The field is unchanged in shape (`string | null`); contract stays `1.3.0`
-  (GOVERNANCE ruling (m)). Consumers that displayed the title of a blocked page should
-  treat `null` as expected.
-- **The served `body` omits text a browser would not show.** `/retrieve` and `/extract` drop
-  inline-hidden content (`hidden`, `aria-hidden="true"`, `display:none`, zero opacity, and
-  similar inline signals) from `body`, best effort; stylesheet and class rules are not
-  resolved. Scanning still reads the full text. `body` is free text, so the contract stays
-  `1.3.0` (GOVERNANCE ruling (m)). Pages that rely on `hidden` tab panels or `opacity:0`
-  blocks will serve less text.
-- **Two over-defence probes now trip stage 2 by decision.** The raw-markup scan blocks a
-  search snippet with a literal `<system>` tag and flags one with a private-IP link; the
-  corpus records `ben-0288` and `ben-0289` are re-pinned under a named exemption
-  (`kit_tools/arch/DECISIONS.md`, 2026-10-06). Consumers whose results legitimately carry
-  such markup will see them omitted or marked `suspicious`.
-- **`sanitizer_revision` rotates nine more times on this branch** (the forty-fourth to the
-  fifty-second rotations in `docs/bootstrap-notes.md`): `b5e91fd6…` → `46b8d1bbc79f3fc4fe273e4ca2488b0e0ba0c281658910b3dd8cfad2924a2d21`
-  at the default model. They land together, so a deployment sees **one** cache-invalidating
-  window (every old entry becomes a miss), not nine. The hash now covers ten sources
-  (`pipeline/confusables.py` joined) plus a `unicodedata@<version>` input, so a Python
-  Unicode-database change also rotates it.
-- **A fifty-third rotation, `46b8d1bb…` → `0ace27cae20e17e6c6eae7fa51f3126483bf8d07d6e555afbeee0a39364f4911`**
-  (`release-resource-bounds` US-001): stage 1 no longer deep-copies BeautifulSoup trees, so
-  deeply nested or unclosed-tag pages cost linear time. Output is byte-identical; old cache
-  entries still become misses.
-- **A fifty-fourth rotation, `0ace27ca…` → `54aa96492868e3e2785dba28008815b0ea5f76e3bb1c4c5336b3d15fd2efa3ca`**
-  (`release-resource-bounds` US-006): `/retrieve` HTML bodies above
-  `retrieve.html_worker_threshold_bytes` (512 KiB) parse in the rlimited worker. Output within
-  bounds is byte-identical; old cache entries still become misses.
-- **A fifty-fifth rotation, `54aa9649…` → `ff18b0bfb436e14ea19269c54d1582991797eec9c055ea35260ff80959a0528c`**
-  (`release-resource-bounds` US-007): the held contract `1.4.0` entry (`contract.py` alone)
-  announces `html_extraction_error` and `retrieve.html_worker_spawns` / `html_worker_refusals`.
-  No sanitization or served-body change; old cache entries still become misses.
-- **A fifty-sixth rotation, `ff18b0bf…` → `d582f8dad7ce7c37d41faf5bca47ec5daf9c1edfba9eefc0086560513b4a523c`**
-  (`release-resource-bounds` US-008): `/search` parses titles and snippets in a worker thread
-  (`orchestrator.py` alone). Output is byte-identical; old cache entries still become misses.
-- **A fifty-seventh rotation, `d582f8da…` → `23444fe43e67bab3768e8e095bb3231f91a76a5f9e500b83dcff05338f7c5925`**
-  (`release-padding-gate` US-001, the eighteenth sanitization-behaviour-changing rotation): the
-  look-alike fold limit is `max(2n, n + 256)` (was 4n) and a refused fold is a **BLOCK** on every
-  route and tier, where it was a SUSPICIOUS flag: `/retrieve` (trusted and default) and `/extract`
-  quarantine the page, `/search` omits the result as `structural_blocked`. Short real fields
-  (a 6-character title ending in U+FDFA) still fold. The worst accepted fold at 2 MiB costs about
-  55% of the old one. No response-shape change and no contract bump (GOVERNANCE ruling (m)); the
-  corpus baseline, floors and both cassettes are byte-unchanged; old cache entries become misses.
-- **A fifty-eighth rotation, `23444fe4…` → `91455b21a91fe928e2038358198e7cb9222c203beccbe0ec2ce06700ad409f78`**
-  (`release-1-3-0` US-003): the final contract `1.4.0` entry (`contract.py`) and a stale comment
-  (`orchestrator.py`). Text only, no sanitization change; old cache entries still become misses.
-  Request-validation 422 items are now exactly `loc`, `msg`, `type` (the `"[redacted]"`
-  `input`/`ctx`/`url` placeholders are gone, GOVERNANCE ruling (l)), and `/metrics` adds
-  `retrieve.promptguard_budget_refusals`.
-- GOVERNANCE worked example 6's announce-then-flip window was **waived** by the owner for
-  the default-model change (no known third-party consumers).
+Not yet tagged; the version number is decided at the release gate.
 
 ## Released versions
 
@@ -106,6 +20,78 @@ Every non-pre-release tag, newest first. The `contract:`, `anchor:`, `index dige
 `tagged commit:` lines are the same fields `search-release` US-003's handoff record carries
 into `kit_tools/specs/feature-search-release.md`'s Implementation Notes — that table is what
 the Poppy `epic-search-policy` session reads to pin a digest; nothing here pushes to Poppy.
+
+### v1.3.0 — `<publication date>` (NOT YET PUBLISHED)
+
+NOT YET PUBLISHED — prepared on `epic/forage-v1-3-0-release`; the owner cut
+(`release-1-3-0` US-005 owner sequence) fills the placeholders below.
+
+- contract: 1.4.0
+- anchor: `dcc4983033eb064636fb66d2b33266fd64a0f24adcd03a6aec21fd4b0e32d9db`
+- index digest: `<index digest>`
+- tagged commit: `<tag commit>`
+
+Compose is pinned ahead of the cut; the tag lands with `v1.3.0`. Until then
+v1.2.2 above is the latest published, verified tag. The recorded index digest
+is the **pinnable form** (`ghcr.io/washingbearlabs/forage@sha256:…`) for
+deployments that need immutability; the full-semver tag pin remains the
+quickstart default.
+
+Publication: `<publish run>`. Real-weights candidate smoke on the exact
+commit to be tagged (86M at `1536m`): `<candidate smoke record>`.
+
+**Outstanding unpublished-tag window:** merging the release PR makes `main`'s
+quickstart pull an unpublished tag until the owner runs the sequence. Cut from
+that merge commit in the same sitting; if the gate is not run, use
+`git revert <v1.3.0 pin commit>` before leaving that window open. Neither
+publication nor post-release verification is complete.
+
+What ships (draft, pending the owner cut):
+
+1. **The 86M is the default model** (owner ruling 2026-10-06). With `FORAGE_MODEL_ID`
+   unset the service loads `meta-llama/Llama-Prompt-Guard-2-86M`; the 22M stays allowlisted
+   as the opt-out ([`docs/weights.md`](weights.md), [`docs/corpus.md`](corpus.md)). The
+   Hugging Face token needs the 86M repository's own gated grant (otherwise `degraded` /
+   `promptguard_unavailable`), and Compose's `FORAGE_MEM_LIMIT` default is now `1536m`
+   ([`docs/configuration.md`](configuration.md)).
+2. **`/retrieve` bounds its decoder** (`pipeline/bounded_body.py`): `Accept-Encoding: gzip,
+   deflate` is pinned, and an unsupported or malformed body is `fetch_error`
+   (`unsupported_encoding` / `malformed_body`) instead of being passed through undecoded.
+3. **Stage 2 scans more forms of the same 24 patterns**: entity-decoded, confusable-folded,
+   inline-joined and raw-markup forms, case-insensitively. **Quarantined responses carry
+   `title: null`** (GOVERNANCE ruling (m)); stage 3's input is byte-unchanged.
+4. **Hidden text is removed from the served `body`** (inline signals only, best effort;
+   scanning still reads the full text). Two over-defence probes, `ben-0288` and `ben-0289`,
+   are re-pinned under a named exemption (`kit_tools/arch/DECISIONS.md`, 2026-10-06).
+5. **Stage 1 is linear**: BeautifulSoup trees are no longer deep-copied, so deeply nested or
+   unclosed-tag pages no longer cost quadratic time. Output is byte-identical.
+6. **Large `/retrieve` HTML parses in the rlimited worker.** Bodies above
+   `retrieve.html_worker_threshold_bytes` (512 KiB default) go to the worker; a page it
+   refuses is a coded 422 `html_extraction_error`, the large-page envelope is documented in
+   [`docs/configuration.md`](configuration.md).
+7. **Worker isolation:** extraction workers launch with an allowlisted environment and the
+   parent is non-dumpable on Linux; stale spool files are swept at startup.
+8. **`/search` parses titles and snippets off the event loop**, one worker thread per result.
+   Output is byte-identical.
+9. **A refused look-alike fold BLOCKs** at `max(2n, n + 256)` (was 4n, and a SUSPICIOUS flag)
+   on every route and tier; `/search` omits the result as `structural_blocked`.
+10. **`retrieve.max_promptguard_chunks` defaults to 64.** `256` was announced; `64` shipped
+    because the measured per-window cost of the 86M does not fit 256 windows in the wait
+    ([`docs/configuration.md`](configuration.md) "Sizing"). Over-budget bodies are refused
+    `promptguard_budget`; `0` stays a legal opt-out and the boot warning is retired.
+11. **Request-validation 422 items are exactly `loc`, `msg`, `type`.** The `"[redacted]"`
+    `input` / `ctx` / `url` placeholder keys are dropped (GOVERNANCE ruling (l)).
+12. **Three new `/metrics` counters:** `retrieve.html_worker_spawns`,
+    `retrieve.html_worker_refusals` and `retrieve.promptguard_budget_refusals`.
+13. **`sanitizer_revision` rotates sixteen times** (the forty-third to the fifty-eighth
+    rotations in [`docs/bootstrap-notes.md`](bootstrap-notes.md)): `021378ef…` →
+    `91455b21a91fe928e2038358198e7cb9222c203beccbe0ec2ce06700ad409f78` at the default model.
+    A deployment sees **one** cache-invalidating window. Setting
+    `FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-22M` no longer reproduces `021378ef…`.
+14. **Compatibility windows: none open.** The `max_promptguard_chunks` window closed at `64`
+    and the 422 placeholder window closed with the key drop; GOVERNANCE worked example 6's
+    announce-then-flip window was waived by the owner for the default-model change (no known
+    third-party consumers). The consumer note is in `docs/bootstrap-notes.md`.
 
 ### v1.2.2 — 2026-10-04
 
@@ -476,7 +462,8 @@ A tag pushed onto a red tree still *runs* the gates. They fail, and `publish`
 never starts.
 
 **The contract 1.3.0 window is closed and v1.2.1 is published and verified;**
-**v1.2.2 (PATCH, contract 1.3.0 unchanged) is published (2026-10-04) and verified.**
+**v1.2.2 (PATCH, contract 1.3.0 unchanged) is published (2026-10-04) and verified;**
+**v1.3.0 (MINOR, contract 1.4.0) is prepared, not yet published.**
 `hardening-release` US-002 froze the six-model
 `tests/golden/contract_1_3_0.json` and `_EXPECTED_ONE_THREE_ZERO_DIFF`.
 The exact-additions sweep and the release-entry completeness/tense guards run

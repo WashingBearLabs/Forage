@@ -29,3 +29,7 @@
 [--:--] US-001 release-padding-gate: fold limit max(2n,n+256), refusal BLOCKs on all routes; rotation 57th d582f8da -> 23444fe4
 - Files: pipeline/stage2_structural.py, pipeline/orchestrator.py, tests/test_stage2_fold_forms.py, docs
 - Decision: /search refusal uses early continue (not hoisted blocked); per-source tests patch _scan_search_result_fields
+
+[--:--] US-005: v1.3.0 release tree prepared (releases.md entry, pins 1.2.2->1.3.0, tracking docs, counts 5557)
+- Files: docs/releases.md, compose/*.yml, tests/test_compose_fragments.py, contract_smoke.py, README, kit_tools docs
+- Decision: README/docs say 'prepared, not yet published' with v1.2.2 as latest published

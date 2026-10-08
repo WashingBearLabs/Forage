@@ -10,7 +10,7 @@ entries, bounded providers, an operator-sizable envelope, and model-selection to
 at contract **1.3.0**. At v1.2.1 only the 22M was allowlisted.
 **Status:** Shipped and verified (2026-09-23). v1.2.0 was withdrawn after its
 default-model failure. [Handoff](../specs/archive/feature-hardening-release.md).
-**Current release:** PATCH `v1.2.2` (`epic-forage-injection-corpus` spec 0) makes the 86M
+**Current release:** MINOR `v1.3.0` / contract `1.4.0` is prepared and **not yet published** (`epic-forage-v1-3-0-release`; pins moved ahead of the cut, owner gates pending). Latest published: PATCH `v1.2.2` (`epic-forage-injection-corpus` spec 0) makes the 86M
 selectable via `FORAGE_MODEL_ID` with the 22M default, contract 1.3.0 unchanged;
 published 2026-10-04 and verified (index `sha256:5cb60943b99da45829613cde1f8286bdb4b72866210aa2146ca0cc5233569365`).
 

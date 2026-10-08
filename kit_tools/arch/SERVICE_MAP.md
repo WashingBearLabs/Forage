@@ -192,7 +192,7 @@ Operator-side vendoring of a new revision to the mirror is `scripts/vendor_weigh
 | **Runtime use** | Only the weights-mirror fallback (`oras pull`), and only when `FORAGE_MIRROR_TOKEN` is set. A GHCR outage does not affect a running container beyond that leg (`pull_failed` / `timeout` outcomes). |
 | **Publish gates** | `.github/workflows/ci.yml` `publish` job needs `lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke`; the pushed amd64 image is verified layer-for-layer against the smoke-tested artifact; on `v*` tags a Release is created carrying `contract/openapi.yaml` and `openapi.yaml.sha256`, read back and checked against the committed anchor. |
 | **Tag scheme** | `v1.2.3` publishes `1.2.3`, `1.2`, `latest`; any tag containing `-` (e.g. `v0.9.3-rc`) publishes the exact tag only; push to `main` publishes `sha-<short>`. The git tag is the version; `pyproject.toml`'s `version` is inert. Reference: `docs/releases.md`. |
-| **Current state** | `v1.2.2` / contract `1.3.0` (PATCH, 86M opt-in; contract unchanged from v1.2.1) is the latest published tag, published 2026-10-04 and verified (index `sha256:5cb60943b99da45829613cde1f8286bdb4b72866210aa2146ca0cc5233569365`). `compose/*.yml` pin `forage:1.2.2` and the published `forage-searxng:0.1.1-rc`. `v1.2.1` / contract `1.3.0` was published and verified 2026-09-23. `docs/releases.md` and the archived release spec record the digest, alias equality, healthy runtime and v1.2.0 withdrawal. `v0.9.2-rc` was withdrawn after failing the parity gate (its unrelated package-version deletion remains pending). |
+| **Current state** | `v1.3.0` / contract `1.4.0` (MINOR, 86M default) is prepared and not yet published; `v1.2.2` / contract `1.3.0` (PATCH, 86M opt-in) is the latest published tag, published 2026-10-04 and verified (index `sha256:5cb60943b99da45829613cde1f8286bdb4b72866210aa2146ca0cc5233569365`). `compose/*.yml` pin `forage:1.3.0` and the published `forage-searxng:0.1.1-rc`. `v1.2.1` / contract `1.3.0` was published and verified 2026-09-23. `docs/releases.md` and the archived release spec record the digest, alias equality, healthy runtime and v1.2.0 withdrawal. `v0.9.2-rc` was withdrawn after failing the parity gate (its unrelated package-version deletion remains pending). |
 
 ---
 
@@ -392,12 +392,12 @@ binding, service names, volume literal, absent limiter, required secret) are ass
 | **Volumes** | `forage-model-cache:/app/model-cache` (explicit `name:`, shared across fragments) | Same, plus `forage-valkey-data:/data` (project-scoped) |
 | **Secrets** | `compose/.env` (gitignored): `HF_TOKEN` (optional), `FORAGE_BRAVE_API_KEY` (optional), `SEARXNG_SECRET` (required-or-fail via `${SEARXNG_SECRET:?…}`) | Same, plus `FORAGE_CACHE_HMAC_KEY` for signed caching |
 | **Limits** | `forage` `mem_limit: ${FORAGE_MEM_LIMIT:-1536m}` (default `1536m`), `cpus: ${FORAGE_CPUS:-0}` (unset/0 omits the cap), `restart: unless-stopped` | Same |
-| **Image pins** | `forage:1.2.2` (published), `forage-searxng:0.1.1-rc` | Same |
+| **Image pins** | `forage:1.3.0` (not yet published), `forage-searxng:0.1.1-rc` | Same |
 
-**Pin sequencing:** both fragments pin `ghcr.io/washingbearlabs/forage:1.2.2` and
-`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`. Both are published: `1.2.2`
-on 2026-10-04, verified; its merge-to-publication window (pin commit `c933673`)
-is closed. `docs/releases.md` carries the record. Do not deploy withdrawn v1.2.0.
+**Pin sequencing:** both fragments pin `ghcr.io/washingbearlabs/forage:1.3.0` and
+`ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`. The companion is published; `1.3.0`
+is prepared and not yet published, so its merge-to-publication window is open until the
+cut (`1.2.2`, published 2026-10-04 and verified, is the latest published). `docs/releases.md` carries the record. Do not deploy withdrawn v1.2.0.
 The companion stays a pre-release because no non-pre-release `searxng-v*` tag exists.
 
 **Egress from the `forage` container:** `searxng:8080` and `valkey:6379` on the compose

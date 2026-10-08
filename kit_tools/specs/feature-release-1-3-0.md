@@ -576,6 +576,42 @@ merging and the owner gates are all that remain.
   rewritten (measured table, k = 1-3 holds, wait-expiry behaviour via `unavailable_result`, Known
   risk). `grep -n "100 ms" docs/configuration.md` is empty. No hashed file touched; no rotation.
 
+### US-005 — prepare the v1.3.0 release tree
+- `docs/releases.md`: Unreleased is now empty; a `### v1.3.0 — <publication date> (NOT YET PUBLISHED)`
+  entry sits above v1.2.2 with `contract: 1.4.0`, anchor `dcc4983033eb064636fb66d2b33266fd64a0f24adcd03a6aec21fd4b0e32d9db`
+  (= `contract/openapi.yaml.sha256`), placeholder `index digest` / `tagged commit` / publish run / smoke record, and the
+  14 listed items. Final revision `91455b21a91fe928e2038358198e7cb9222c203beccbe0ec2ce06700ad409f78`
+  (= `derive_sanitizer_revision({})`); rotations 43rd-58th = sixteen from `021378ef…`.
+- No hashed source changed: no rotation. `contract_version` stays 1.4.0; `export_contract --check` untouched.
+- **`1\.2\.2` classification** (`git grep -n '1\.2\.2'` outside `kit_tools/specs`, after the edit):
+
+  | Site | Class |
+  |---|---|
+  | `compose/minimal.yml`, `compose/full.yml`, `tests/test_compose_fragments.py:78`, `contract_smoke.py` (:66, :97-99) | rewritten → 1.3.0 |
+  | `README.md:78`, `:253` | rewritten (v1.3.0 prepared); remaining mentions say "latest published v1.2.2" |
+  | `kit_tools/SYNOPSIS.md`, `roadmap/MILESTONES.md:13`, `AGENT_README.md:74/79` | rewritten; remaining v1.2.2 text = latest-published/history |
+  | `arch/INFRA_ARCH.md`, `arch/SERVICE_MAP.md`, `docs/CI_CD.md`, `docs/DEPLOYMENT.md`, `docs/LOCAL_DEV.md`, `docs/TROUBLESHOOTING.md`, `docs/MONITORING.md` | rewritten (pins, current-release, `TAG=`, `info.version` examples); remaining hits name v1.2.2 as the latest published or its closed window |
+  | `testing/TESTING_GUIDE.md:157` | rewritten (pin) |
+  | `docs/releases.md` v1.2.2 entry and prose, `docs/bootstrap-notes.md`, `SESSION_LOG.md`, `DECISIONS.md`, `GOTCHAS.md` header/table, `PRODUCT_VISION.md:105`, `BACKLOG.md:39`, MILESTONES :75/:115, `docs/weights.md:4`, `contract/GOVERNANCE.md:71` (US-004's), archived specs, injection-corpus epic wrapper | history, kept |
+- Full suite: 5551 passed, 6 skipped (= 5557 collected); ruff check and format clean.
+- Counts: `uv run pytest --collect-only -q | tail -1` = **5557 tests collected**; `CLAUDE.md`, `TESTING_GUIDE.md` and `SYNOPSIS.md` match.
+- **Findings ready to resolve** (`kit_tools/AUDIT_FINDINGS.md` not edited): `2026-10-06-001`; `2026-10-04-060`
+  (dismissed-as-residual, now fixed: re-status it); `2026-10-07-002`.
+- **Owner sequence (no story runs any of it):**
+  1. Real-weights candidate smoke on an image built from the merge commit: the 86M at `1536m`, `/health` healthy,
+     `promptguard_model` 86M, `/extract` 200 `scanned`, `/retrieve` of a large page returning `html_extraction_error`.
+     Also: an over-budget page (> 114,688 extracted characters, under the worker threshold) returns `promptguard_budget`
+     and increments `retrieve.promptguard_budget_refusals`; an at-budget page classifies within the wait, latency recorded;
+     peak memory recorded, no OOM.
+  2. Merge.
+  3. `git switch main && git pull`.
+  4. Confirm the six gates are green.
+  5. `git tag v1.3.0 && git push origin v1.3.0`.
+  6. Watch `publish`.
+  7. Anonymous pull of `1.3.0`.
+  8. Boot the published image with the 86M and confirm it is healthy.
+  9. Fill `index digest`, `tagged commit` and the smoke record, and remove NOT YET PUBLISHED.
+
 ## Refinement Notes
 
 ### Research Findings
