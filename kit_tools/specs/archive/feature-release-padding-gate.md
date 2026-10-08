@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: release-padding-gate
-status: active
+status: completed
 session_ready: true
 depends_on: [release-resource-bounds]
 vision_ref: "T2 hardening follow-through — bound the remaining CPU costs and cut v1.3.0"
@@ -11,7 +11,8 @@ epic: forage-v1-3-0-release
 epic_seq: 2
 epic_final: false
 created: 2026-10-07
-updated: 2026-10-07
+updated: 2026-10-08
+completed: 2026-10-08
 ---
 
 # Feature Spec: Release Padding Gate — a Refused Look-alike Fold Blocks, at 2× Plus Slack
