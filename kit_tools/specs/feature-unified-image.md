@@ -18,404 +18,427 @@ updated: 2026-10-08
 
 ## Overview
 
-**Today.** The lock pins torch to the CPU index on Linux. Three guards enforce "no `nvidia-*`":
-- `tests/test_dependency_lock.py` ~:34-58;
-- the CI lint at `.github/workflows/ci.yml` ~:155-180, pinned by `tests/test_ci_workflow.py` ~:691;
-- DECISIONS.md :522.
+**Today:**
+- the lock pins torch to the CPU index on Linux;
+- three guards enforce "no `nvidia-*`": `tests/test_dependency_lock.py` ~:34-58, CI lint
+  `.github/workflows/ci.yml` ~:155-180 (pinned by `tests/test_ci_workflow.py` ~:691), and
+  DECISIONS.md :522;
+- `Dockerfile` takes **no build arguments** (invariant 2), and `tests/test_dockerfile.py` pins its
+  text.
 
-`Dockerfile` takes **no build arguments** (invariant 2), and `tests/test_dockerfile.py` pins its
-text.
+**The goal:** one image, repo and tag for CPU and GPU hosts (owner ruling 2026-10-08). Measured on
+thelab, the CUDA-built torch wheel runs CPU inference at speed parity with the CPU wheel (86M,
+8 CPUs):
 
-**The goal** (owner ruling 2026-10-08) is one image, repo and tag for CPU and GPU hosts.
-- Measured on thelab, the CUDA-built torch wheel runs CPU inference at speed parity with the CPU
-  wheel: 1,172 ms vs 1,196 ms per window (86M, 8 CPUs).
-- Measured in validation (uv 0.9.28, scratch copy), the design below locks and resolves, with these
-  corrections already applied:
-  - torch lives **only in extras**;
-  - the `cuda` extra on non-x86_64 Linux maps to the **CPU** index (otherwise arm64 pulls PyPI's
-    CUDA torch);
-  - the CUDA payload is `nvidia-*` **plus `cuda-*` and `triton`**.
+| torch wheel | ms per window |
+|---|---|
+| CUDA build (`+cu130`) | 1,172 |
+| CPU build (`+cpu`) | 1,196 |
+
+**Measured by validation (uv 0.9.28, scratch copy).** The layout below locks and exports correctly.
+- `uv.lock` records `source.registry` as URLs:
+  - torch `+cpu` from `https://download.pytorch.org/whl/cpu`;
+  - torch `+cu130` from `https://download.pytorch.org/whl/cu130`;
+  - the CUDA payload (`nvidia-*`, `cuda-*`, `triton`, about 18 packages) from `https://pypi.org/simple`;
+  - macOS/Windows torch from PyPI.
+- After the re-lock, `uv.lock` always contains the payload.
+- A plain `uv sync --extra dev` **removes torch**, because sync is exact. So the install commands
+  change in the **same story** as the re-lock.
 
 **Design:**
-- **Lock.** Conflicting extras `cpu` and `cuda`, each `torch==2.14.0`. Three sources:
+- **Lock.** Conflicting extras `cpu`/`cuda`, each `torch==2.14.0`, with three sources:
   - `cpu` on Linux: `pytorch-cpu`;
   - `cuda` on Linux x86_64: `pytorch-cu130`;
   - `cuda` on Linux non-x86_64: `pytorch-cpu`.
 
-  macOS and Windows use PyPI. Developers and CI use `--extra dev --extra cpu`.
-- **Image.** The single Dockerfile picks the extra by `dpkg --print-architecture` inside `RUN`:
-  amd64 → `cuda`, arm64 → `cpu`. No `ARG`. A build-time check verifies the torch suffix per
-  architecture.
-- **Guards.** A **behavioural** checker runs `uv export` for each install profile. It asserts:
-  - the CUDA payload appears only in the `cuda` profile, and only for x86_64 Linux;
-  - every torch and CUDA-payload wheel comes from an allowed index, with hashes.
-
-  The existing "synced environment has no CUDA payload" CI step stays as an independent second
-  guard.
+  Dev and CI use `--extra dev --extra cpu`.
+- **Image.** One Dockerfile picks the extra by `dpkg --print-architecture` inside `RUN` (amd64 →
+  `cuda`, arm64 → `cpu`), with no `ARG`. At build time it verifies the torch suffix and that the
+  installed CUDA payload matches the allowlist (none on arm64).
+- **Guards.** A behavioural checker on `uv export` profiles, using `packaging.markers` evaluation,
+  plus provenance per package class. The CI "synced environment has no CUDA payload" step remains an
+  independent second guard.
 - **Compose.** A `compose/gpu.yml` overlay requests **one** GPU and sets `FORAGE_DEVICE=cuda`.
-  The base fragments are unchanged.
 
 ## Goals
 
-- **Dev and CI installs stay CPU-only.** `uv sync --extra dev --extra cpu` on Linux x86_64 installs
-  no CUDA payload (CI asserts it). CI sync time is recorded before and after, and grows by no more
-  than 10%.
-- **Each architecture gets the right torch.** The amd64 image has torch `+cu130`, the arm64 image
-  `+cpu`, both checked at build time.
-- **Size is gated.** The amd64 **compressed** registry size is ≤ 5 GB, recorded with the
-  uncompressed size.
-- **CPU numerics are proven on amd64.** In the candidate image, a seeded tiny DeBERTa on CPU gives
-  logits equal to the committed CPU goldens (spec 1) within 1e-6. This proves the +cu130 CPU path
-  scores like +cpu.
-- **CI smoke without a GPU** covers three cases:
-  - default boot works as today;
-  - `cuda` with fallback `cpu` reports `promptguard_requested_device: "cuda"`;
-  - `cuda` with fallback `refuse` exits non-zero before serving.
+- **Dev and CI keep their CPU install set.** The `--extra dev --extra cpu` export after the change
+  lists exactly the same packages and versions as the pre-change `--extra dev` export (the
+  install-set proof, instead of a timing bar). CI's synced environment has no CUDA payload.
+- **Build-time checks.** The amd64 image has torch `+cu130` and the allowlisted payload. The arm64
+  image has `+cpu` and no payload.
+- **Size gate.** The amd64 **sum of per-layer gzip sizes** (computed in CI) is ≤ 5 GB, with the
+  largest layer recorded.
+- **CPU numerics on amd64.** The tiny-model builder (spec 1) gives `==` scores in the amd64 candidate
+  (`+cu130`, CPU) and in CI's `+cpu` environment. Any mismatch stops for an owner decision.
+- **No-GPU CI smoke:** default boot works; `cuda` + `cpu` reports the requested device; `cuda` +
+  `refuse` exits non-zero.
 
 ## User Stories
 
-### US-001: Extras-only torch with three arch-scoped sources
+### US-001: Extras-only torch, arch-scoped sources, and every install command in one commit
 
 **Priority:** P1
 
-**Description:** As a maintainer, I want torch declared only in conflicting `cpu`/`cuda` extras,
-with arch-scoped sources, so that the image can install CUDA torch on amd64 while every other install
-stays CPU-only and a missing extra fails loudly.
+**Description:** As a maintainer, I want torch moved into conflicting `cpu`/`cuda` extras with
+arch-scoped sources, and every install command and lock guard updated in the same story, so that no
+commit leaves CI, the orchestrator worktree or a developer without torch, or red.
 
 **Independent Test:**
 - `uv lock --check` passes.
-- `uv export --frozen --extra dev --extra cpu` contains `torch==2.14.0+cpu` and no CUDA payload.
+- The `--extra dev --extra cpu` export equals the pre-change `--extra dev` export.
 - `--extra cuda` resolves `+cu130` for x86_64 Linux and `+cpu` for aarch64 Linux.
-- A bare `uv sync` without an extra makes `import torch` fail, with the conftest guard naming the fix.
+- The suite and CI lint pass at this story's commit.
 
 **Implementation Hints:**
 - **`pyproject.toml`** (~:37, :50-68):
-  - Remove `torch>=2.2.0` from base dependencies.
-  - Add `[project.optional-dependencies] cpu = ["torch==2.14.0"]` and `cuda = ["torch==2.14.0"]`.
-  - Add `[tool.uv] conflicts = [[{ extra = "cpu" }, { extra = "cuda" }]]`.
-  - Indexes `pytorch-cpu` and `pytorch-cu130` (`https://download.pytorch.org/whl/cu130`), both
-    `explicit = true`.
-  - Sources:
+  - remove `torch>=2.2.0` from base dependencies;
+  - add `[project.optional-dependencies] cpu = ["torch==2.14.0"]` and `cuda = ["torch==2.14.0"]`;
+  - add a new `[tool.uv]` table with `conflicts = [[{ extra = "cpu" }, { extra = "cuda" }]]` (none
+    exists today);
+  - indexes `pytorch-cpu` and `pytorch-cu130`, both `explicit = true`;
+  - torch sources:
     ```
-    torch = [
-      { index = "pytorch-cpu",   extra = "cpu",  marker = "sys_platform == 'linux'" },
-      { index = "pytorch-cu130", extra = "cuda", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
-      { index = "pytorch-cpu",   extra = "cuda", marker = "sys_platform == 'linux' and platform_machine != 'x86_64'" },
-    ]
+    { index = "pytorch-cpu",   extra = "cpu",  marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu130", extra = "cuda", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+    { index = "pytorch-cpu",   extra = "cuda", marker = "sys_platform == 'linux' and platform_machine != 'x86_64'" },
     ```
-  - Replace the stale comment at ~:55-59 ("the image … never reads this lock" is false: the
-    Dockerfile runs `uv sync --locked`).
-  - Source: https://docs.astral.sh/uv/guides/integration/pytorch/. Validation measured this
-    layout locking under uv 0.9.28.
-- **Lock.** Re-run `uv lock`. Expect three torch builds (PyPI, `+cpu`, `+cu130`) with
-  conflict-scoped markers.
-- **Guard for a forgotten extra.** In `tests/conftest.py`, at import time: if `import torch` fails,
-  fail the session with "install with `uv sync --extra dev --extra cpu`". The image's build-time
-  check (US-004) covers the runtime.
-- Keep `tests/test_dependency_lock.py::test_pyproject_pins_the_cpu_torch_index`, extended to the
-  cu130 index, the third source and the `conflicts` table.
-  `test_lock_contains_no_cuda_wheels` is replaced in US-002; mark it in this story by moving it to
-  US-002's checker, so the suite stays green across commits.
+  - replace the stale comment at ~:55-59.
+  - Source: https://docs.astral.sh/uv/guides/integration/pytorch/.
+- **Same-commit install commands** (sync is exact):
+  - **Sync sites:**
+    - `.github/workflows/ci.yml` lint (~:152), typecheck (~:279), test (~:316), smoke (~:648) and
+      searxng-smoke (~:1480). Give searxng-smoke `--extra cpu` too if it imports torch; check and
+      record.
+    - `kit_tools/worktree.yaml` `env_bootstrap`.
+    - `CLAUDE.md` Development, `README.md` ~:163, `kit_tools/docs/LOCAL_DEV.md`,
+      `kit_tools/testing/TESTING_GUIDE.md`, `kit_tools/docs/CI_CD.md` ~:162/:420.
+  - **Pins:** `tests/test_ci_workflow.py` ~:3464 (the literal `uv sync --extra dev --locked`) and
+    ~:685.
+- **Same-commit guard change.**
+  - Delete `tests/test_dependency_lock.py::test_lock_contains_no_cuda_wheels`, and delete the CI
+    lint "Assert the committed lock is CPU-only" grep step.
+  - Add a temporary inline test: `uv export --frozen --extra dev --extra cpu` contains no line
+    matching `^(nvidia-|cuda-|triton==)`. US-002 lifts it into the checker.
+  - Widen the CI synced-environment step's pattern to that regex now.
+- **Missing-extra guard.** In `tests/conftest.py`, if `import torch` fails, fail the session with
+  "install with `uv sync --extra dev --extra cpu`".
+- **Install-set proof.** Before changing anything, record `uv export --frozen --extra dev` (the
+  pre-change export) to the scratchpad. After the re-lock, diff it against
+  `--extra dev --extra cpu`; the result must be identical.
+- **Pin test.** Extend `test_pyproject_pins_the_cpu_torch_index` to the cu130 index, the third
+  source and the `conflicts` table.
 
 **Acceptance Criteria:**
-- [ ] torch is only in the `cpu` and `cuda` extras (pinned `==2.14.0`), and the conflicts table and
-      three sources are declared. `uv lock --check` passes, and the stale comment is replaced.
-- [ ] These hold, as recorded command outputs in Implementation Notes:
-  - `uv export --frozen --extra dev --extra cpu` resolves `torch==2.14.0+cpu`;
-  - `--extra cuda` resolves `+cu130` under an x86_64 Linux marker;
-  - `--extra cuda` resolves `+cpu` under an aarch64 Linux marker.
-- [ ] A missing torch fails the test session with the install hint (test that simulates the import
-      failure).
-- [ ] The pyproject pin test covers the cu130 index, the third source and the conflicts table.
+- [ ] torch is only in the `cpu` and `cuda` extras (`==2.14.0`), with the conflicts table and three
+      sources. `uv lock --check` passes, and the stale comment is replaced.
+- [ ] The post-change `--extra dev --extra cpu` export is identical to the pre-change `--extra dev`
+      export, with the diff command recorded. `--extra cuda` gives `+cu130` under the x86_64 Linux
+      marker and `+cpu` under the aarch64 Linux marker (recorded outputs).
+- [ ] Every listed sync site uses the `cpu` extra in this commit. `tests/test_ci_workflow.py` pins
+      the new strings, and `kit_tools/worktree.yaml` `env_bootstrap` is
+      `uv sync --extra dev --extra cpu`. A repo grep (excluding archives) finds no extra-less
+      `uv sync`; the grep is recorded.
+- [ ] The old lock-grep test and CI grep step are gone, the temporary export-based assertion passes,
+      and the widened CI environment pattern is pinned.
+- [ ] A missing torch fails the session with the install hint (test).
 - [ ] Tests written/updated for new functionality
 - [ ] Full test suite passes (`uv run pytest`)
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
 - [ ] `uv run pyright` passes with zero errors
 
-### US-002: A behavioural CUDA-scope checker, with sources and hashes
+### US-002: A behavioural CUDA-scope checker with per-class provenance
 
 **Priority:** P1
 
-**Description:** As a maintainer, I want a checker that proves the CUDA payload reaches only amd64
-`cuda` installs from allowed indexes with hashes, used by both the tests and CI, so that a lock
-mistake can never put CUDA wheels into dev or CI environments, or an unhashed binary into the image.
+**Description:** As a maintainer, I want one checker that proves the torch variant and the CUDA
+payload per install profile, plus provenance and hashes per package class, used by both the tests
+and CI. Then a lock mistake can never put CUDA into dev or CI environments, or an unexpected binary
+into the public image.
 
 **Independent Test:** The checker passes on the real lock and fails on each planted violation.
 
 **Implementation Hints:**
-- **New `scripts/check_lock_cuda_scope.py`.**
-  - Define the **CUDA payload** once: package names matching `^(nvidia-|cuda-)` or exactly
-    `triton`.
-  - Run `uv export --frozen --no-hashes --format requirements-txt` for these profiles:
-    - `--extra dev --extra cpu`: no payload;
-    - `--extra cpu`: no payload;
-    - `--extra cuda`: payload allowed, but every payload line's marker must imply
-      `platform_machine == 'x86_64'` and `sys_platform == 'linux'`.
-  - Behavioural export avoids hand-parsing uv's internal conflict markers, which validation found
-    fragile (e.g. `extra == 'extra-1-<project>-cuda'` and impossible conjunctions).
-  - **Provenance check.** Parse `uv.lock` as TOML. For every `torch` and payload package:
-    - its `source.registry` must be in the allowlist {pytorch-cpu, pytorch-cu130, PyPI}, where
-      PyPI applies only to the macOS/Windows torch and the nvidia payload the cu130 index
-      redirects to (check how uv records it);
-    - every wheel must carry a non-empty `hash`;
-    - payload names must match a committed allowlist (`scripts/cuda_payload_allowlist.txt`), so a
-      new CUDA package cannot appear silently.
+- **New `scripts/check_lock_cuda_scope.py`** (stdlib, `tomllib`, `packaging`):
+  - **Payload:** names matching `^(nvidia-|cuda-)`, or exactly `triton`.
+  - **Profiles:** run `uv export --frozen --no-hashes --format requirements-txt` for
+    `--extra dev --extra cpu`, `--extra cpu` and `--extra cuda`.
+  - **Marker evaluation:** use `packaging.markers.Marker(...).evaluate(env)` under explicit
+    environments: linux/x86_64, linux/aarch64, darwin/arm64 and win32/AMD64. Never reason about
+    "implies" textually.
+  - **Rules:**
+    1. **Payload scope.** `dev+cpu` and `cpu` export no payload line. In `cuda`, every payload line
+       evaluates true only on linux/x86_64.
+    2. **Torch variant per profile.**
+       - `cpu`: on any Linux environment the selected torch line is `+cpu`.
+       - `cuda`: on linux/x86_64 it is `+cu130`, and on linux/aarch64 it is `+cpu`.
+       - On macOS/Windows it is plain PyPI.
+       - A torch line without a local suffix must evaluate false on every Linux environment.
+    3. **Provenance** (parse `uv.lock` as TOML; registry **URLs**, measured):
+       - Linux torch comes from `https://download.pytorch.org/whl/cpu` or `/cu130`, and PyPI
+         torch only for non-Linux;
+       - payload packages come from `https://pypi.org/simple`;
+       - every wheel has a non-empty `hash`;
+       - wheel-URL hosts are not checked (`download-r2.pytorch.org` serves `+cpu`). Say so in the
+         docstring.
+    4. **Allowlist.** Payload names match a committed `scripts/cuda_payload_allowlist.txt`.
   - Print names only, and exit non-zero on any violation.
-- **Tests** (`tests/test_dependency_lock.py`): run the checker on the committed lock. Add planted
-  violations in temp copies:
-  - a payload under a base dependency;
-  - a payload under the `cpu` extra;
-  - a payload under `cuda` without the x86_64 marker;
-  - a torch `+cu130` resolving on aarch64;
-  - a wheel without a hash;
-  - an unknown payload name.
-
-  Each must fail. Delete `test_lock_contains_no_cuda_wheels`.
-- **CI lint** (~:155-180): replace the lock grep with `uv run python -m scripts.check_lock_cuda_scope`.
-  - Keep the synced-environment step, but widen its pattern to the payload regex.
-  - Pin both in `tests/test_ci_workflow.py` (~:691).
+- **Tests** (`tests/test_dependency_lock.py`; replaces US-001's temporary assertion). Each planted
+  violation lives in a temp copy and must fail:
+  1. a payload under a base dependency;
+  2. a payload under `cpu`;
+  3. a payload under `cuda` without the x86_64 marker;
+  4. torch `+cu130` resolving on aarch64;
+  5. Linux torch from PyPI;
+  6. a wheel without a hash;
+  7. an unknown payload name;
+  8. a lock resolving both extras together (conflicts table removed).
+- **CI lint.** Run `uv run python -m scripts.check_lock_cuda_scope`, pinned in
+  `tests/test_ci_workflow.py`.
 
 **Acceptance Criteria:**
-- [ ] `scripts/check_lock_cuda_scope.py` passes on the committed lock and enforces three things:
-      payload scope per profile, allowed sources with hashes, and the payload-name allowlist.
-- [ ] Each of the six planted violations makes it fail (one test each).
-- [ ] CI lint runs the checker, and the CI synced-environment step uses the widened payload regex.
-      Both are pinned in `tests/test_ci_workflow.py`.
+- [ ] The checker enforces all four rules with marker evaluation under explicit environments, and
+      passes on the committed lock.
+- [ ] Each of the eight planted violations fails it (one test each). The temporary US-001 assertion
+      is removed.
+- [ ] CI lint runs the checker (pinned).
 - [ ] Tests written/updated for new functionality
 - [ ] Full test suite passes (`uv run pytest`)
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
 - [ ] `uv run pyright` passes with zero errors
 
-### US-003: Sweep install commands and CPU-only claims
+### US-003: Correct the CPU-only claims in the docs
 
-**Priority:** P1
+**Priority:** P2
 
-**Description:** As a maintainer, I want every install command to name the `cpu` extra, and every
-"CPU-only" claim corrected, so that no environment silently lacks torch and the docs describe the
-real image.
+**Description:** As a maintainer, I want every "CPU-only" statement about the image corrected, so
+that the docs describe the image that ships.
 
-**Independent Test:**
-- `grep -rn "uv sync"` across the repo, excluding archives, finds no invocation lacking an extra,
-  except where intentional and listed.
-- A grep for `CPU-only|pytorch-cpu|no nvidia` finds only accurate statements.
+**Independent Test:** A grep for `CPU-only|pytorch-cpu|no nvidia|nvidia-` (excluding archives)
+equals the recorded list of expected surviving matches.
 
 **Implementation Hints:**
-- **Sync sites** (all of them):
-  - `.github/workflows/ci.yml` lint (~:152), typecheck (~:279), test (~:316), smoke (~:648) and
-    searxng-smoke (~:1480): decide searxng-smoke explicitly (it needs `--extra cpu` if it imports
-    torch);
-  - `tests/test_ci_workflow.py:3464` (the literal `uv sync --extra dev --locked`) and the ~:685
-    region;
-  - `kit_tools/worktree.yaml` `env_bootstrap` (**critical**: without it the orchestrator installs
-    no torch);
-  - `CLAUDE.md` Development, `README.md` ~:163, `kit_tools/docs/LOCAL_DEV.md`,
-    `kit_tools/testing/TESTING_GUIDE.md`, `kit_tools/docs/CI_CD.md` ~:162/:420.
-- **Claim sweep:**
-  - `Dockerfile` header comment (~:22-23, "exactly the CPU-only torch uv.lock pins");
+- **Correct these sites:**
+  - `Dockerfile` header comment (~:22-23);
   - `kit_tools/arch/INFRA_ARCH.md` :96 and :270;
   - `kit_tools/arch/CODE_ARCH.md` :56 and :62;
   - `kit_tools/docs/LOCAL_DEV.md` ~:383;
-  - `kit_tools/docs/GOTCHAS.md` ~:943-952;
+  - `kit_tools/docs/GOTCHAS.md` ~:943-952 (its "image never reads the lock" claim is false);
   - `kit_tools/docs/CI_CD.md`;
   - `docs/releases.md` (size statements).
-- **DECISIONS.md:** a dated entry superseding :522, recording the single-image ruling and cu130.
-- Docs and config only, plus the CI pin test. No rotation.
+- **Expected surviving matches** (record them): `pyproject.toml` (index name), the checker and its
+  tests, the CI step names, and the new DECISIONS entry.
+- **DECISIONS.md:** a dated entry superseding :522 (single image, cu130, three sources).
+- Docs only. No rotation.
 
 **Acceptance Criteria:**
-- [ ] Every listed sync site uses `--extra dev --extra cpu`, or `--extra cpu`, and
-      `tests/test_ci_workflow.py` pins the new strings. A repo grep (excluding `kit_tools/specs/archive/`)
-      finds no extra-less `uv sync`, and the grep is recorded.
-- [ ] `kit_tools/worktree.yaml` `env_bootstrap` is `uv sync --extra dev --extra cpu`.
-- [ ] Every listed CPU-only claim is corrected, and a recorded grep shows only accurate statements.
+- [ ] Every listed site is corrected, and the grep output equals the recorded expected list.
 - [ ] The DECISIONS.md entry supersedes :522.
 - [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
 
-### US-004: One Dockerfile that installs CUDA torch on amd64 and CPU torch on arm64
+### US-004: One Dockerfile with arch-selected torch and build-time content checks
 
 **Priority:** P1
 
 **Description:** As an operator, I want the same `forage:<version>` tag to run on CPU or GPU hosts,
-with the image proving at build time that it carries the right torch, so that I install once and
-pick the device with an environment variable.
+with the image proving at build time that it carries the right torch and payload, and that CPU scores
+are unchanged on amd64. Then I install once and pick the device at install time.
 
 **Independent Test:**
-- The amd64 build's check prints `+cu130`, and the arm64 build's prints `+cpu`.
-- In the amd64 image, a seeded tiny model's CPU logits equal the spec-1 goldens within 1e-6.
+- amd64 build checks: `+cu130`, with the allowlisted payload installed.
+- arm64 build checks: `+cpu`, with no payload.
+- The CI CPU-parity step gives `==` scores between the amd64 candidate and the CI `+cpu`
+  environment.
 - `tests/test_dockerfile.py` passes, with no `ARG`.
 
 **Implementation Hints:**
-- **The sync RUN** (`Dockerfile` ~:137-143). Use the oras pattern (~:106-119), `set -eu`:
-  `arch="$(dpkg --print-architecture)"`, then
-  `case "$arch" in amd64) extra=cuda ;; arm64) extra=cpu ;; *) echo "unsupported architecture" >&2; exit 1 ;; esac`,
-  then `uv sync --locked --no-dev --no-install-project --extra "$extra"`.
+- **Sync RUN** (`Dockerfile` ~:137-143), oras pattern (~:106-119), `set -eu`:
+  - `arch="$(dpkg --print-architecture)"`;
+  - `case` maps amd64 → `cuda`, arm64 → `cpu`, and anything else fails with "unsupported
+    architecture";
+  - then `uv sync --locked --no-dev --no-install-project --extra "$extra"`, with `--no-cache` or the
+    existing `rm -rf /root/.cache/uv`.
   - Never `ARG TARGETARCH`.
-  - Keep `rm -rf /root/.cache/uv`, or use `--no-cache`, to limit layer size.
-- **Build-time torch check.** Extend the existing import smoke (~:214) to assert
-  `torch.__version__` ends with `+cu130` on amd64 and `+cpu` on arm64. The same `case` mapping makes
-  a mismatch fail the build.
-- **Base image.** Keep `python:3.12-slim` (digest-pinned). The cu130 wheels carry the CUDA runtime as
-  pip packages, so the host needs only the driver and the NVIDIA Container Toolkit.
-- **`tests/test_dockerfile.py`.** Pin the arch-to-extra mapping, using the oras mapping test as the
-  template. Check that the `uv sync --locked` assertion (~:480-500) still matches on the joined
-  RUN; read how `instructions` is built.
-- **CPU numeric parity.** Add a CI step after the build:
-  - mount `tests/golden/promptguard_cpu_scores.json` and the tiny-model fixture script into the
-    amd64 candidate;
-  - run the seeded tiny DeBERTa on CPU;
-  - compare with the goldens at 1e-6;
-  - record the max difference.
-- **Size.**
-  - Record the **compressed** size (sum of `docker manifest inspect` layer sizes, or the
-    zstd-tarball size) as the gate, ≤ 5 GB.
-  - Record the uncompressed size and `docker history` per-layer sizes.
-  - If over the gate, stop and record for the owner; do not drop CUDA.
+- **Build-time checks.** Extend the import smoke (~:214) with a small inline Python step that:
+  - asserts `torch.__version__` ends `+cu130` (amd64) or `+cpu` (arm64), using the same mapping;
+  - lists installed distributions via `importlib.metadata`: on arm64 none may match the payload
+    regex, and on amd64 the matches must equal `scripts/cuda_payload_allowlist.txt`. COPY that file
+    into a build-only location and remove it after.
+- **`tests/test_dockerfile.py`.** Pin the mapping and the checks, using the oras mapping test as the
+  template, and check that the `uv sync --locked` assertion (~:480-500) still matches the joined
+  RUN.
+- **CPU parity CI step.**
+  - In the same job, run `scripts/promptguard_tiny_model.py` (spec 1, pytest-free) twice: in the
+    amd64 candidate (`docker run --rm -v "$PWD/scripts:/work/scripts:ro" … python -m …`, with
+    `--no-dev` dependencies only) and in CI's `+cpu` environment.
+  - Diff the printed scores.
+  - **Expect `==`.** If they differ, record the max difference and **stop for an owner
+    decision**: accept a 1e-6 tolerance, and correct the epic's "byte-identical" wording for amd64
+    CPU installs.
+- **Size.** In CI, sum the per-layer gzip sizes (`docker save`, gzip each layer tar, sum) as the
+  gate (≤ 5 GB). Record the uncompressed size and the largest layer. If over the gate, stop for the
+  owner; do not drop CUDA.
 
 **Acceptance Criteria:**
-- [ ] The Dockerfile selects `cuda` on amd64 and `cpu` on arm64 inside `RUN`, with no `ARG`.
-      `tests/test_dockerfile.py` pins the mapping, and every existing assertion passes.
-- [ ] The build-time check asserts the torch suffix per architecture and fails on mismatch (test
-      on the Dockerfile text; CI build).
-- [ ] The CI CPU-parity step passes in the amd64 candidate within 1e-6, with the max difference
-      recorded.
-- [ ] Compressed and uncompressed amd64 sizes and per-layer sizes are recorded in
-      Implementation Notes and `kit_tools/docs/CI_CD.md`, with compressed size ≤ 5 GB.
+- [ ] The Dockerfile selects the extra inside `RUN`, with no `ARG`. `tests/test_dockerfile.py` pins
+      the mapping and the build-time checks, and its existing assertions pass.
+- [ ] The build-time checks assert the torch suffix and the payload set per architecture, and fail
+      on mismatch.
+- [ ] The CI CPU-parity step compares the amd64 candidate with the CI `+cpu` environment and passes
+      on `==`, or the mismatch is recorded with an owner decision.
+- [ ] The gzip-sum size, uncompressed size and largest layer are recorded in Implementation Notes and
+      CI_CD.md, with gzip-sum ≤ 5 GB.
 - [ ] Tests written/updated for new functionality
 - [ ] Full test suite passes (`uv run pytest`)
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
 - [ ] `uv run pyright` passes with zero errors
 
-### US-005: CI budgets and no-GPU failover smokes
+### US-005: CI disk, timeout and cache budgets for the larger image
 
 **Priority:** P1
 
-**Description:** As a maintainer, I want CI to build, scan, smoke and publish the larger image within
-recorded budgets, and to prove both failover policies on a GPU-less runner, so that the release lane
-stays reliable and the failover contract is tested on every PR.
+**Description:** As a maintainer, I want CI's image jobs given explicit disk, timeout and cache
+budgets for a ~3 GB dependency layer, so that the release lane stays reliable.
 
-**Independent Test:** On a CI run of the branch:
-- build-amd64, secret-grep, smoke and the new failover smokes are green;
-- the measured durations, artifact size and disk headroom are recorded;
-- `tests/test_ci_workflow.py` pins the smoke steps.
+**Independent Test:** `tests/test_ci_workflow.py` pins the disk-free steps, the timeout values and
+the cache decision. The baseline figures are recorded.
 
 **Implementation Hints:**
-- **Baseline first.** Record the current (v1.3.0) durations for build-amd64, secret-grep, smoke and
-  the artifact upload and download, the artifact size, and `uv sync` time, from a recent `main` run.
-- **Image handoff.** `build-amd64` runs `docker save | zstd` and uploads an artifact (~:488-540) that
-  secret-grep, smoke and publish each download and load. Record the artifact size and the
-  per-consumer transfer and load times.
-  - Add a disk-free step pre-emptively to build-amd64 and the consumers: remove preinstalled
-    toolchains, and assert ≥ 20 GB free with `df`.
-  - Set explicit `timeout-minutes` from the measurements × 1.5.
-  - Check the GHA cache size after a `main` push.
-- **Smokes:**
-  - Extend `contract_smoke.py` with an `--expect-requested-device` / `--expect-device` mode, and
-    update `tests/test_contract_smoke.py`.
-  - Reuse the smoke job's container naming, cleanup and health-wait.
-  - **Run 2:** `FORAGE_DEVICE=cuda` (fallback `cpu`, no GPU, no weights). Expect
-    `promptguard_requested_device: "cuda"`, `promptguard_device: null` (unloaded) and
-    `promptguard_unavailable`, plus the log token `promptguard_device_probe result=unavailable`.
-  - **Run 3:** `FORAGE_DEVICE=cuda` with `FORAGE_DEVICE_FALLBACK=refuse`. `docker wait` returns a
-    non-zero exit within the smoke timeout, and the logs contain the fixed
-    `DeviceConfigurationError` message, not a traceback with values.
-  - Pin these in `tests/test_ci_workflow.py`.
-- **Publish.** arm64 builds under qemu, unchanged in size. Confirm the layer-identity (diff_ids)
-  gate still passes with the large CUDA layer.
+- **Baseline.** From a recent `main` run, record the durations of build-amd64, secret-grep and smoke,
+  the artifact size, and the upload and download times. The image handoff (~:488-540) is
+  `docker save | zstd`, uploaded as an artifact, then downloaded and loaded by secret-grep, smoke
+  and publish.
+- **Disk.** Add a disk-free step (remove the preinstalled toolchains) to build-amd64 and each image
+  consumer, asserting ≥ 20 GB free with `df`.
+- **Timeouts.** This story cannot measure the new image before it exists, so:
+  - set initial generous values (build-amd64 90 min; consumers 45 min);
+  - after the PR's first green run, set each to `ceil(1.5 × measured)`, pinned;
+  - record the measured values beside them.
+- **Cache.**
+  - build-amd64 writes `type=gha,mode=min` on main (~:441); publish writes
+    `type=gha,mode=max,scope=publish` (~:963).
+  - Decision rule: if the projected cache exceeds 80% of the 10 GB GHA limit, drop build-amd64's
+    `cache-to` for the dependency layer, or scope it, and record the choice.
+- **Publish.** Confirm the diff_ids layer-identity gate still matches with the large layer.
 
 **Acceptance Criteria:**
-- [ ] Baseline and post-change durations, artifact size and `uv sync` time are recorded in
-      Implementation Notes and CI_CD.md. CI `uv sync` time grows by no more than 10%.
-- [ ] build-amd64 and the image consumers have a disk-free step asserting ≥ 20 GB free, and
-      explicit `timeout-minutes` set to measurement × 1.5, pinned in `tests/test_ci_workflow.py`.
-- [ ] Smoke run 2 asserts the requested device, a null active device and the probe token. Run 3
-      asserts a non-zero exit and the fixed error message. `contract_smoke.py` and its tests are
-      extended.
-- [ ] A branch CI run is green across lint, typecheck, test, build-amd64, secret-grep and smoke.
-      The run URL is recorded.
+- [ ] The baseline figures are recorded in Implementation Notes and CI_CD.md.
+- [ ] Disk-free steps asserting ≥ 20 GB exist on build-amd64 and the consumers. Initial
+      `timeout-minutes` values are set, and the cache decision is recorded, all pinned in
+      `tests/test_ci_workflow.py`.
+- [ ] The post-PR-run timeout adjustment procedure is documented in CI_CD.md. The measured values
+      are filled in at PR time.
 - [ ] Tests written/updated for new functionality
 - [ ] Full test suite passes (`uv run pytest`)
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
 
-### US-006: The `compose/gpu.yml` overlay and the GPU install guide
+### US-006: No-GPU failover smokes in CI
+
+**Priority:** P1
+
+**Description:** As a maintainer, I want CI to prove both failover policies on a GPU-less runner on
+every PR, so that the install-time contract cannot regress unnoticed.
+
+**Independent Test:** The smoke job runs the candidate three ways:
+1. default;
+2. `cuda` + `cpu`, which asserts the requested device, a null active device and the probe token;
+3. `cuda` + `refuse`, which asserts a non-zero exit and the fixed message.
+
+All are pinned in `tests/test_ci_workflow.py`.
+
+**Implementation Hints:**
+- **`contract_smoke.py`:** add `--expect-requested-device` and `--expect-device` (accepts `null`),
+  and update `tests/test_contract_smoke.py`. Reuse the smoke job's container naming, cleanup and
+  health-wait.
+- **Run 2:** `FORAGE_DEVICE=cuda`, no weights, no GPU. Expect `promptguard_requested_device: "cuda"`,
+  `promptguard_device: null` and `promptguard_unavailable`, plus the log token
+  `promptguard_device_probe result=unavailable`.
+- **Run 3:** `FORAGE_DEVICE=cuda` with `FORAGE_DEVICE_FALLBACK=refuse`. `docker wait` returns a
+  non-zero exit within the smoke timeout, and the logs contain the fixed `DeviceConfigurationError`
+  message, with no traceback that includes values.
+
+**Acceptance Criteria:**
+- [ ] `contract_smoke.py` supports the two device expectations (tests).
+- [ ] The smoke job runs runs 2 and 3 with the stated assertions, pinned in `tests/test_ci_workflow.py`.
+- [ ] Tests written/updated for new functionality
+- [ ] Full test suite passes (`uv run pytest`)
+- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [ ] `uv run pyright` passes with zero errors
+
+### US-007: The `compose/gpu.yml` overlay and the GPU install guide
 
 **Priority:** P2
 
 **Description:** As an operator, I want a one-line way to enable one GPU in Compose and a clear
 install guide, so that installing on a GPU host uses the same tag and a documented switch.
 
-**Independent Test:**
-- `docker compose -f compose/minimal.yml -f compose/gpu.yml config` renders a single-GPU device
-  request and `FORAGE_DEVICE: cuda`, with ports unchanged.
-- The same holds with `compose/full.yml`.
-- The base fragments are byte-unchanged.
+**Independent Test:** Rendering the overlay with each base fragment
+(`docker compose -f compose/minimal.yml -f compose/gpu.yml config`, and the same with `full.yml`)
+shows a single-GPU device request, `FORAGE_DEVICE: cuda` and the overlay's memory default. Ports and
+binding are unchanged, and the base fragments are byte-unchanged.
 
 **Implementation Hints:**
-- **`compose/gpu.yml`.** Request **one** GPU, not all of them:
-  `deploy.resources.reservations.devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]`
-  (or `gpus` with `count: 1`; check which the pinned Compose spec renders). Add
-  `environment: { FORAGE_DEVICE: cuda }`.
-  - The service name must match the base fragments.
-  - No image pin, and no port change.
+- **`compose/gpu.yml`:**
+  - `deploy.resources.reservations.devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]`
+    (or the `gpus` equivalent the pinned Compose spec renders);
+  - `environment: { FORAGE_DEVICE: cuda }`;
+  - `mem_limit: ${FORAGE_MEM_LIMIT:-3072m}`. This is **provisional**: the CUDA context and libraries
+    add host RSS. Spec 5 measures it on thelab and adjusts the default.
+  - No image pin and no port change.
   - Source: https://github.com/compose-spec/compose-spec/blob/main/05-services.md.
-- **Tests** (`tests/test_compose_fragments.py`). Keep `_FRAGMENT_PATHS` (~:69) for the base
-  fragments, with their identical-envelope tests unmodified. Add overlay tests:
+- **Tests** (`tests/test_compose_fragments.py`). Leave `_FRAGMENT_PATHS` (~:69) and the base tests
+  unmodified. Overlay tests:
   - it parses;
-  - it sets only the device request and `FORAGE_DEVICE`;
+  - it sets only the device request, `FORAGE_DEVICE` and `mem_limit`;
   - it pins no image;
-  - it merges onto both base fragments without changing ports or the `127.0.0.1` binding.
+  - it merges onto both bases without changing ports or the `127.0.0.1` binding.
 - **Docs:**
   - **`docs/configuration.md` "Installing on a GPU host":**
-    - the NVIDIA driver ≥ 580 (cu130) and the NVIDIA Container Toolkit;
+    - driver ≥ 580 (cu130) and the NVIDIA Container Toolkit;
     - the overlay command and `FORAGE_DEVICE_FALLBACK`;
     - the `/health` state table (spec 2);
-    - GPU sharing (memory is not reserved; Ollama coexistence);
-    - that the GPU is a shared, non-isolated resource: do not use it on multi-tenant hosts, and
-      keep the loopback binding;
-    - that a host without the Container Toolkit fails at `compose up` (a runtime error, not a
-      degraded boot);
-    - that Compose ≥ 2.30 is required.
-  - **`README.md`:** the quickstart shows the overlay command.
+    - GPU memory is not reserved, and how to coexist with Ollama;
+    - the GPU is a shared, non-isolated resource: no multi-tenant hosts, keep the loopback binding;
+    - a missing Toolkit fails at `compose up`, not as a degraded boot;
+    - Compose ≥ 2.30;
+    - the provisional memory default.
+  - **`README.md`:** the overlay command.
   - **`kit_tools/docs/DEPLOYMENT.md`:** the GPU steps.
 
 **Acceptance Criteria:**
-- [ ] `compose/gpu.yml` requests one GPU and sets `FORAGE_DEVICE: cuda`. Merged with each base
-      fragment, ports and binding are unchanged, and the base fragments are byte-unchanged
-      (tests).
-- [ ] The `docs/configuration.md` GPU section covers each listed topic.
-- [ ] README shows the exact overlay command, and DEPLOYMENT lists the driver, Toolkit and overlay
-      steps.
+- [ ] `compose/gpu.yml` requests one GPU and sets `FORAGE_DEVICE: cuda` and the provisional
+      `mem_limit` default. Merged with each base fragment, ports and binding are unchanged, and the
+      base fragments are byte-unchanged (tests).
+- [ ] The `docs/configuration.md` GPU section covers each listed topic. README shows the overlay
+      command, and DEPLOYMENT lists the steps.
 - [ ] Tests written/updated for new functionality
 - [ ] Full test suite passes (`uv run pytest`)
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
 
 ## Edge Cases
 
-- **`--extra cuda` on a Mac:** PyPI torch is used (CPU on macOS). Documented. (US-001)
-- **A bare `uv sync` without an extra:** no torch, so the tests fail with the hint. The image always
-  passes an extra. (US-001)
-- **An unsupported architecture:** the build fails loudly. (US-004)
-- **A driver older than 580:** CUDA is unavailable, so the fallback policy applies. Documented.
-  (US-004, US-006)
-- **No Container Toolkit:** `compose up` fails. Documented. (US-006)
-- **Runner disk exhaustion:** the disk-free assertion fails first, with a clear message. (US-005)
+- **`--extra cuda` on macOS:** PyPI torch. Documented. (US-001)
+- **A bare `uv sync`:** no torch, so the session fails with the hint. (US-001)
+- **An unsupported architecture:** the build fails. (US-004)
+- **A driver older than 580, or no Toolkit:** fallback, or a `compose up` error. Documented.
+  (US-007)
+- **Runner disk:** the `df` assertion fails first, with a clear message. (US-005)
 
 ## Out of Scope
 
-- A separate repo or tag (rejected), GPU on arm64, CUDA base images, TensorRT, ONNX Runtime and
-  multi-GPU.
+- A separate repo or tag, GPU on arm64, CUDA base images, TensorRT, ONNX Runtime and multi-GPU.
 
 ## Assumptions
 
-- The uv conflicting-extras layout behaves as validation measured (uv 0.9.28). If the CI uv
-  version differs, the lock check catches it.
-- GitHub-hosted runners can build and transfer a 4–5 GB image with the added disk cleanup.
+- The uv layout behaves as measured (0.9.28). CI's `uv lock --check` catches version drift.
+- GitHub-hosted runners have about 14 GB free before cleanup; cleanup reclaims enough for ≥ 20 GB.
 
 ## Technical Considerations
 
-- **Invariant 2.** Architecture selection happens only inside `RUN`.
-- **Size.** CPU-only amd64 users pull about 3 GB compressed. This is accepted under the
-  single-image ruling, and documented.
+- **Invariant 2:** architecture selection happens only inside `RUN`.
 - **No hashed source changes** in this spec.
+- CPU-only amd64 users pull a few GB more; this is accepted under the single-image ruling, and
+  documented.
 
 ## Related Documentation
 
@@ -428,30 +451,35 @@ install guide, so that installing on a GPU host uses the same tag and a document
 
 ### Research Findings
 
-**Decision:** torch only in extras, with three sources (arm64 `cuda` maps to the CPU index).
-**Rationale:** Validation measured that without the third source `--extra cuda` on aarch64 pulls
-PyPI's CUDA torch and the whole payload.
+**Decision:** torch only in extras, with three sources.
+**Rationale:** Validation measured that without the third source, arm64 `--extra cuda` pulls PyPI's
+CUDA torch.
 
-**Decision:** A behavioural checker via `uv export` profiles, a payload regex including `cuda-*` and
-`triton`, and a provenance check with hashes.
-**Rationale:** uv's conflict markers are internal and fragile to parse. torch+cu130 also pulls
-`cuda-toolkit`, `cuda-bindings` and `triton` (248 MB). The image is public, so binary provenance
-matters.
+**Decision:** Change the install commands and guards in the same story as the re-lock.
+**Rationale:** Validation measured that `uv sync --extra dev` removes torch after the re-lock, and
+that the old grep goes red.
 
-**Decision:** cu130.
-**Rationale:** It covers Ada and Blackwell, with driver ≥ 580 (thelab has 590).
+**Decision:** Provenance by registry URL and package class, with marker evaluation via
+`packaging.markers`.
+**Rationale:** Measured lock layout: the payload registry is PyPI, and markers are uv-internal.
 
-**Decision:** The overlay requests one GPU.
-**Rationale:** Least privilege on shared hosts (validation round 1, security).
+**Decision:** Install-set equality, not a timing bar.
+**Rationale:** Cold `uv sync` timing noise exceeds 10% (round 2).
 
 ### Scope Adjustments
 
-- Round 1 split the spec into six stories (lock; checker; sweep; Dockerfile; CI; Compose). It also:
-  - made spec 2 a dependency, so the smokes can assert `/health` device fields;
-  - added the CPU numeric-parity check and the compressed-size gate.
+- Round 2 brought the spec to seven stories:
+  - install commands moved into US-001;
+  - US-003 narrowed to docs;
+  - CI budgets (US-005) separated from the failover smokes (US-006);
+  - eight checker violations;
+  - the in-image payload scan;
+  - the gzip-sum size gate;
+  - `==` CPU parity with an owner fallback;
+  - the provisional overlay memory default.
 
 ## Clarifications
 
 ### Session 2026-10-08
-- **Q:** Separate repo or tag suffix? **A:** Neither. One image, configured at install.
+- **Q:** A separate repo or tag suffix? **A:** Neither. One image.
 - **Q:** Which CUDA build? **A:** cu130.

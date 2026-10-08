@@ -55,10 +55,11 @@ installs nothing in speed. The only cost is size: amd64 grows from about 350 MB 
 
 | Seq | Feature Spec | Status | Dependencies |
 |-----|-------------|--------|--------------|
-| 1 | [feature-inference-device.md](feature-inference-device.md) — 4 stories: device settings and boot probe; CUDA load with failover; GPU window batching; GPU OOM handling (atomic model swap, cache guard) | Planned | v1.3.0 merged |
-| 2 | [feature-inference-surface.md](feature-inference-surface.md) — 3 stories: `/health` active and requested device and reasons (contract 1.5.0); `/metrics` counters and bench; `device@` revision input and active device in the cache fingerprint | Planned | 1 |
-| 3 | [feature-unified-image.md](feature-unified-image.md) — 6 stories: extras-only torch with three sources; behavioural CUDA-scope checker; install-command and docs sweep; arch-selected Dockerfile; CI budgets and no-GPU smokes; `compose/gpu.yml` and install docs | Planned | 2 |
-| 4 | [feature-gpu-validation.md](feature-gpu-validation.md) — 6 stories: parity tool; owner gates for GPU smoke and latency, parity runs, failover proof; sizing docs; v1.4.0 prep | Planned | 3 |
+| 1 | [feature-inference-device.md](feature-inference-device.md) — 4 stories: device settings and boot probe; CUDA load with failover; GPU batching; GPU OOM handling | Planned | v1.3.0 merged |
+| 2 | [feature-inference-surface.md](feature-inference-surface.md) — 3 stories: `/health` fields and reasons (contract 1.5.0); `/metrics` and bench; revision input and cache fingerprint | Planned | 1 |
+| 3 | [feature-unified-image.md](feature-unified-image.md) — 7 stories: lock and install commands; CUDA-scope checker; docs claims; Dockerfile with build checks; CI budgets; failover smokes; `compose/gpu.yml` | Planned | 2 |
+| 4 | [feature-gpu-parity-tool.md](feature-gpu-parity-tool.md) — 2 stories: shared live loader; parity tool | Planned | 3 |
+| 5 | [feature-gpu-validation.md](feature-gpu-validation.md) — 5 stories, **supervised mode**: owner gates for GPU smoke and latency, parity, and failover on thelab; sizing docs; v1.4.0 prep | Planned | 4 |
 
 ## Completion Criteria
 
@@ -102,7 +103,7 @@ installs nothing in speed. The only cost is size: amd64 grows from about 350 MB 
      `kit_tools/arch/SERVICE_MAP.md` (also names the current value), `kit_tools/arch/CODE_ARCH.md`,
      `kit_tools/arch/DECISIONS.md` and `CLAUDE.md`.
   - The current value at epic start is `2c6d0382…`, the fifty-ninth rotation.
-- **Spec order is strict: 1 → 2 → 3 → 4.** Spec 3's smokes assert spec 2's `/health` fields.
+- **Spec order is strict: 1 → 2 → 3 → 4 → 5.** Specs 1-4 run under the guarded orchestrator. **Spec 5 runs in supervised mode only**: its owner gates touch a production host. Stop the orchestrator after spec 4.
 
 - **Engine:** torch, with a seam (owner ruling 2026-10-07).
   - ONNX Runtime measured 1.4–1.6× on CPU but needs per-site conversion of gated weights, which

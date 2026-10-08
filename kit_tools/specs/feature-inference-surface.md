@@ -46,7 +46,19 @@ These fields and reasons make contract **1.5.0**, a MINOR.
 | yes | cuda | cpu | yes | no | `cpu` | `promptguard_device_failover` |
 | yes | cuda | cuda | no | yes | `cuda` | `promptguard_device_oom` |
 
-`promptguard_device_failover` never accompanies `promptguard_unavailable`.
+`promptguard_device_failover` never accompanies `promptguard_unavailable`. `oom_refused` only latches
+under `refuse` with active `cuda`, so it never co-occurs with a failover. With active `cpu` it is
+ignored.
+
+**Field sources and fallbacks:**
+- `promptguard_requested_device` comes from `app.state.promptguard_requested_device`, set at
+  lifespan.
+- The helper `_resolved_requested_device()` (beside `_resolved_promptguard_model`, ~:382) falls back
+  to `requested_device_token(os.environ)` for lifespan-less test apps, mapping `"invalid"` to
+  `"cpu"`.
+- The active device and flags come from `classifier.device_state()` through a **tolerant accessor**,
+  `_device_snapshot(classifier) -> DeviceState | None`. It returns `None` when the classifier is
+  `None`, unloaded, or has no `device_state` (mocks, the corpus `ReplayClassifier`).
 
 **Other surfaces:**
 - **`/metrics` `model`:**
@@ -134,17 +146,24 @@ batch size on `/metrics`, and the bench to record the device, so that GPU behavi
 bench output contains `promptguard_device` and `promptguard_requested_device`.
 
 **Implementation Hints:**
-- **`ModelMetricsResponse`** (`retrieval_app.py` ~:942) gains `device_failovers`,
-  `oom_batch_reductions`, `oom_refusals` and `effective_batch_size`.
+- **`ModelMetricsResponse`** (`retrieval_app.py` ~:942) gains `device_failovers: int`,
+  `oom_batch_reductions: int`, `oom_refusals: int` and `effective_batch_size: int | None`.
+  - `effective_batch_size` is `None` when the active device is `cpu` or no snapshot exists. The
+    counters are `0` without a snapshot.
+  - **The model is never constructed.** `/metrics` builds a dict field by field (~:2246-2255, e.g.
+    `'retries_scheduled': model_metrics.retries_scheduled`). Add the four keys there, read from
+    `_device_snapshot(app.state.classifier)`, which is a different source from the acquisition
+    metrics.
 - **`tests/test_contract_metrics.py`:**
   - add a model-section "later" set to `test_every_1_3_0_metric_addition_is_named_in_the_contract_entry`
     (~:221);
   - add a 1.4.0 model baseline frozenset;
   - add `test_every_1_5_0_metric_addition_is_named_in_the_contract_entry`, slicing the 1.5.0 entry;
   - name the four fields in the 1.5.0 bullet.
-- **Regenerate** the held 1.5.0 golden, the OpenAPI file and the anchor. Extend
-  `_EXPECTED_ONE_FIVE_ZERO_DIFF` only if the metrics models are in the schema sweep; check
-  `_SCHEMA_MODELS`.
+- **Regenerate** the OpenAPI file and the anchor. The metrics models are **not** in `_SCHEMA_MODELS`
+  (verified: Health, SearchRequest, SearchResponse, RetrievedContent, ExtractedContent,
+  Pipeline422ErrorResponse), so the golden and `_EXPECTED_ONE_FIVE_ZERO_DIFF` do not change for
+  these fields. Assert that.
 - **Bench.** In `scripts/bench_promptguard.py` (~:460-470) copy both device fields. Update
   `tests/test_bench_promptguard.py` (~:71).
 - **Docs.** `kit_tools/docs/MONITORING.md` lists the four fields with their meaning.
@@ -153,8 +172,10 @@ bench output contains `promptguard_device` and `promptguard_requested_device`.
 **Acceptance Criteria:**
 - [ ] `/metrics.model` exposes the four fields, mirroring `device_state()` (test). The 1.5.0
       metric-addition test passes and names them.
-- [ ] The held 1.5.0 golden, the OpenAPI file and the anchor are regenerated, and export and
-      schema tests pass.
+- [ ] The OpenAPI file and anchor are regenerated. The 1.5.0 golden and `_EXPECTED_ONE_FIVE_ZERO_DIFF`
+      are unchanged by the metrics fields, and export and schema tests pass.
+- [ ] Without a classifier snapshot, `/metrics.model` reports zero counters and a null
+      `effective_batch_size` (test).
 - [ ] Bench output includes both device fields (test).
 - [ ] MONITORING.md lists the four fields with meanings.
 - [ ] The rotation is recorded per the epic procedure.
@@ -179,34 +200,46 @@ always match the device that produced them.
 **Implementation Hints:**
 - **The revision** (`pipeline/sanitizer_revision.py` ~:80-93). After the model identity (~:83-84),
   add `if token == "cuda": digest.update(b"device@cuda")`, with `token` from spec 1's non-raising
-  `requested_device_token(os.environ)`.
-  - `"invalid"` hashes nothing extra; the lifespan refuses such a process anyway. Document it.
-  - Call sites: the lifespan (`retrieval_app.py` ~:1771) and request paths (~:2073, ~:2518). Those
-    re-derive from the environment, with `_resolved_sanitizer_revision` (~:373) as fallback. They
-    all read the same env, so they agree. Add a test that every call site gets the same value for
-    the same environment.
-  - **Rotation:** the default-config revision is **unchanged by the input** (the cpu branch adds
-    nothing), but `sanitizer_revision.py` is a source whose bytes change.
-    - Measure per the epic procedure.
-    - The cpu-default revision moves only because the file bytes change. Record the cuda value
-      too.
-- **The cache fingerprint** (`cache.py` ~:127-175, `cache_policy_fingerprint`; unhashed): add the
-  **active** device from the classifier's `device_state()` beside `classifier_loaded`, and pass it
-  from the handlers that already pass `classifier_loaded`.
+  `requested_device_token(os.environ)`. `"invalid"` hashes nothing; the lifespan refuses such a
+  process anyway.
+  - **`sanitizer_revision.py` is not a `_REVISION_SOURCES` member**, so this is a **new input with
+    no rotation of the default**. The cpu (default, `config.yaml`, `bench/config.yaml`) revision is
+    unchanged by it. Record a no-rotation entry, following the `hardening-promptguard-86m` US-001
+    precedent, and record the cuda value.
+  - **Call sites, all reading the same environment:** the lifespan `app.state` value
+    (`retrieval_app.py` ~:1771), `/health` (via `_resolved_sanitizer_revision` ~:373), and the
+    `/retrieve` and `/search` stamped revisions (~:2073, ~:2518). Test each under `FORAGE_DEVICE`
+    unset, `cpu` and `cuda`.
+- **The cache fingerprint.**
+  - `cache.cache_policy_fingerprint` (`cache.py` ~:127, unhashed) gains a required keyword
+    `active_device: str | None`. Keep `classifier_loaded` as an independent input.
+  - Its **only** call site is `pipeline/orchestrator.py` ~:442-453 (`run_retrieve_pipeline`), where
+    `classifier_loaded` is derived. Compute
+    `active_device = snap.device if (snap := _device_snapshot(classifier)) else None` there,
+    putting the accessor in an unhashed helper module importable by both the orchestrator and the
+    app.
+  - **Mid-request failover.** At Step 8, re-read the snapshot. If the active device differs from the
+    one used for the fingerprint, **skip the cache write**: one comparison, beside the existing
+    guard.
+  - **`orchestrator.py` is hashed, so this story rotates.** Follow the epic procedure: the
+    orchestrator reverted alone, with an all-reverted control.
 - **Docs.** In `docs/configuration.md`, state that `FORAGE_DEVICE=cuda` is a revision input, the
   active device is a cache-key input, and `promptguard_cuda_batch_size` is neither.
 - **A residual to document.** Batch size affects GPU scores within parity tolerance, but it is not
   in the cache key.
 
 **Acceptance Criteria:**
-- [ ] The revision for requested `cpu` equals the value computed by the same file with the device
-      line removed, and for `cuda` it differs (tests). Every call site agrees for one environment
-      (test).
-- [ ] `cache_policy_fingerprint` includes the active device. Active `cpu` and `cuda` give different
-      fingerprints, and a simulated failover changes the fingerprint while `/health`'s
-      `sanitizer_revision` stays the same (tests).
-- [ ] The rotation is measured per the epic procedure, with default, `config.yaml`, `bench/config.yaml`
-      and a cuda-env value recorded.
+- [ ] With `FORAGE_DEVICE` unset and with `cpu`, the revision is identical and equal to the
+      pre-story value. With `cuda` it differs (tests). The four call sites agree for each
+      environment (tests driving the lifespan app, `/health`, `/retrieve` and `/search`).
+- [ ] `cache_policy_fingerprint` takes `active_device`. Active `cpu`, active `cuda` and `None` give
+      different fingerprints, and existing mock-classifier tests pass through the tolerant accessor
+      (tests).
+- [ ] A failover during a request (a simulated snapshot change between fingerprint and Step 8) skips
+      the cache write. `/health`'s `sanitizer_revision` does not change (tests).
+- [ ] The `orchestrator.py` rotation is measured per the epic procedure. The device input is recorded
+      as no-rotation for cpu, with default, `config.yaml`, `bench/config.yaml` and cuda values
+      recorded.
 - [ ] `docs/configuration.md` states which settings are revision inputs and which are cache-key
       inputs.
 - [ ] Tests written/updated for new functionality

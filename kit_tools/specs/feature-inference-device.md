@@ -45,9 +45,9 @@ There is no `auto` value.
 
 ## Goals
 
-- **Default `cpu` changes nothing.** A tiny seeded DeBERTa's classifier scores equal golden floats
-  committed before the change (`==`), and `load()` makes no `Module.to` call. Corpus baseline and
-  cassettes are unchanged.
+- **Default `cpu` changes nothing.** On a tiny seeded DeBERTa, `classify_windows` returns exactly the
+  scores of a frozen copy of the pre-change batch-1 loop, run in the same process (`==`). `load()`
+  makes no `Module.to` call. Corpus baseline and cassettes are unchanged.
 - **Failover and refusal work as the table says.** Every row is tested with mocked `torch.cuda` and
   fake models, with no GPU needed.
 - **Batching is correct.** On a tiny seeded CPU model, forced batching matches batch 1 within 1e-5
@@ -100,6 +100,9 @@ under `refuse` stop the service immediately and loudly.
   these names live in `promptguard/device.py`, outside it.
 - **Tests** go in `tests/test_promptguard_device.py`. Lifespan tests use the app-factory pattern
   from `tests/test_app.py`'s `ModelConfigurationError` tests.
+- **Hermeticity.** Add `FORAGE_DEVICE` and `FORAGE_DEVICE_FALLBACK` to `tests/conftest.py`
+  `_CLEARED_ENV_VARS` (~:45-56), and update the exact-set assertion in `tests/test_hermeticity.py`
+  (~:129). A developer's or a CI host's env must never reach the suite.
 - **Docs:**
   - `docs/configuration.md`: two env rows, plus a "Device selection" subsection containing the
     Overview table;
@@ -118,6 +121,8 @@ under `refuse` stop the service immediately and loudly.
 - [ ] `cuda` + `refuse` with a failing probe raises during lifespan startup, before serving. `cuda`
       + `cpu` with a failing probe starts the app (app-factory tests).
 - [ ] The configuration doc and ENV_REFERENCE document both variables and the table.
+- [ ] Both variables are in `_CLEARED_ENV_VARS`, and `tests/test_hermeticity.py`'s exact set is
+      updated.
 - [ ] Tests written/updated for new functionality
 - [ ] Full test suite passes (`uv run pytest`)
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
@@ -154,11 +159,15 @@ fallback `cpu`, so that a GPU host classifies on the GPU and a broken one keeps 
        the **locked** torch (2.14); use `allow_tf32 = False` if they are absent.
     2. Record which precision mode was used in `device_state()`.
     3. Call `model.to("cuda")` after `model.eval()` (~:201).
-  - **On a CUDA failure during the move:**
+  - **On a CUDA failure during the move:** the whole move-and-recover block sits inside one
+    `try`. In it:
     1. Call `model.to("cpu")`.
-    2. Call `torch.cuda.empty_cache()` inside its own `try`, so a dead driver cannot raise.
-    3. Verify every parameter's device is CPU; if not, return False and let acquisition retry the
-       load.
+    2. Call `torch.cuda.empty_cache()` inside its own `try`.
+    3. Verify that every parameter's device is CPU.
+    - **Any** exception from the recovery itself (a sticky CUDA error, a lost driver), or a
+      parameter still off CPU, returns False with `promptguard_device_load_failed reason=recovery_error`.
+      Acquisition then retries.
+    - `load()` assigns `_active` once, at its end, as the single swap point.
     4. Then:
        - fallback `cpu`: mark failed over and log `promptguard_device_failover reason=<unavailable|oom|load_error>`;
        - fallback `refuse`: return False, which is degraded `promptguard_unavailable`. Log the
@@ -169,22 +178,28 @@ fallback `cpu`, so that a GPU host classifies on the GPU and a broken one keeps 
     reason `unavailable`.
 - **Inputs:** in `classify_windows`, take the `(model, device)` snapshot at entry and move the
   tokenizer outputs to that device. On CPU nothing moves.
-- **Golden test.** A tiny seeded CPU DeBERTa (2 layers, small vocab, random init, `torch.manual_seed`)
-  and a fixed tokenizer stub.
-  - Generate golden scores at the **pre-change** commit, and commit them under `tests/golden/`
-    (e.g. `promptguard_cpu_scores.json`).
-  - Assert `==` after the change.
-  - Never construct the 86M.
+- **Tiny-model builder.** New `scripts/promptguard_tiny_model.py`, **pytest-free**, importing only
+  torch and transformers. Spec 3's in-image CPU parity step imports it too. It provides:
+  - `build_model(seed=0)`: a 2-layer, small-vocab random-init DeBERTa-v2 sequence classifier;
+  - `sample_inputs()`: a fixed list of token-id windows of varied lengths;
+  - `reference_scores(model, inputs)`: a **frozen copy of today's batch-1 loop** (forward per window,
+    softmax, `.item()` at index 1).
+- **Unchanged-path test.** `classify_windows` on the builder's model, with a stub tokenizer that
+  returns those inputs, must `==` `reference_scores` in the same process. No cross-platform golden
+  files, because CPU kernels differ by platform. Never construct the 86M.
 
 **Acceptance Criteria:**
-- [ ] With default settings, `load()` makes no `Module.to` call, and the tiny seeded model's scores
-      equal the committed golden floats exactly (test). The goldens were generated before the
-      change, and the generating commit is noted in the test file.
+- [ ] `scripts/promptguard_tiny_model.py` exists and imports nothing beyond torch, transformers and
+      the standard library (an import test with pytest blocked).
+- [ ] With default settings, `load()` makes no `Module.to` call, and `classify_windows` equals
+      `reference_scores` exactly (`==`) on the builder's model (test).
 - [ ] `cuda` with a working mocked GPU applies the fp32 settings before `.to("cuda")`, records the
       precision mode, and moves the inputs to cuda (test with a recording fake model).
 - [ ] A move that relocates half the parameters and then raises ends with every parameter on CPU,
       `failed_over` true and one closed `promptguard_device_failover` WARNING under fallback
       `cpu` (test).
+- [ ] A recovery `.to("cpu")` that itself raises makes `load()` return False, with
+      `reason=recovery_error` (test).
 - [ ] Under `refuse` it returns False, with a `promptguard_device_load_failed` token, and the
       classifier stays unloaded (test).
 - [ ] A boot-probe failure under fallback `cpu` loads on CPU, marked failed over with reason
@@ -214,9 +229,10 @@ exactly one forward pass per window.
   - Update the partition test and the shipped-defaults test (`tests/test_contract_metrics.py`
     ~:800-850).
   - Add it to `config.yaml`, `bench/config.yaml` and `docs/configuration.md`.
-- **Effective batch size.** Process-wide `_effective_batch`, initialised to the knob. It only
-  **shrinks** (US-004) and is restored only by a restart. This is consistent with no re-probe, and
-  it is reported in `device_state()`.
+- **Effective batch size.** Process-wide `_effective_batch`, initialised by
+  `configure_batch_size(n)`. The lifespan calls it from the config key, and spec 4's parity tool calls
+  it directly. It only **shrinks** (US-004) and is restored only by a restart (no re-probe). It is
+  reported in `device_state()` as `effective_batch_size`.
 - **The batched path** runs only when the snapshot device is `cuda`:
   1. tokenize the window list in one call **under `_tokenizer_lock`** (the tokenizer is not
      thread-safe), with `padding=True`, `truncation=True`, `max_length=512` and
@@ -230,7 +246,8 @@ exactly one forward pass per window.
 
 **Acceptance Criteria:**
 - [ ] `promptguard_cuda_batch_size` is bounded 1–64 (default 16), registered, classified, present
-      in both configs and documented.
+      in both configs and documented. `configure_batch_size(n)` sets the effective batch size, and
+      `device_state().effective_batch_size` reports it (test).
 - [ ] On `cpu`, `classify_windows` makes exactly one forward pass per window (call-count test).
 - [ ] The forced batched path returns the right count, in window order, each score within 1e-5 of
       batch 1, for page sizes 1, b−1, b, b+1 and 3b. The max difference is recorded.
@@ -259,24 +276,41 @@ GPU degrades the service honestly instead of failing requests at random.
 **Implementation Hints:**
 - **Sequence**, in `classify_windows` on a cuda snapshot. Catch only `torch.cuda.OutOfMemoryError`,
   then call `torch.cuda.empty_cache()` (guarded).
-  1. While `_effective_batch > 1`: halve it under `_state_lock`, increment `oom_batch_reductions`,
-     and retry the remaining windows.
-  2. At batch 1, under fallback `cpu`:
-     - under `_state_lock`, if `_active` is still the cuda pair, build a **separate** CPU model
-       (`copy.deepcopy(model).to("cpu")`, or reload the state dict into a fresh CPU module);
-     - swap `_active` atomically and set `failed_over` with reason `oom`;
-     - increment `device_failovers` and log `promptguard_device_failover reason=oom`;
-     - re-run this request's remaining windows on the CPU snapshot at batch 1.
-     - The old GPU model is released when its last in-flight user drops it.
-     - Host RAM for the copy is about 1.1 GB for the 86M. Document it beside the memory advisory
-       (`pipeline/extraction_limits.py` resident-delta table).
-  3. At batch 1, under `refuse`: raise the new `PromptGuardUnavailableError` (defined in
-     `promptguard/classifier.py`), set the latched `oom_refused` and increment `oom_refusals`. The
-     model stays on cuda. Clear `oom_refused` on the next successful cuda classification.
-- **In-flight safety.** Every call works on its entry snapshot. A thread whose snapshot is cuda and
-  that gets a device-mismatch `RuntimeError` (impossible with a separate copy, but defend anyway) or
-  an OOM after a swap re-reads `_active` and retries once on the current snapshot. This is a test
-  case.
+  1. **Compare-and-halve.** Each call records the batch size it used. Under `_state_lock` (held for
+     microseconds): if `_effective_batch` still equals it and is > 1, halve it and increment
+     `oom_batch_reductions`. Otherwise just adopt the current value. Then retry the remaining
+     windows. Two threads hitting the same OOM event halve once.
+  2. **At batch 1, under fallback `cpu`.** Take `_failover_lock`, which only serialises failovers,
+     never readers. Re-check that `_active` is still the cuda pair, then build the CPU copy
+     **without touching the GPU**:
+     - `cpu_model = type(model)(model.config)` (or `AutoModelForSequenceClassification.from_config`);
+     - `cpu_model.load_state_dict({k: v.detach().to("cpu") for k, v in model.state_dict().items()})`;
+     - then `.eval()`.
+
+     This is built **outside `_state_lock`**. **Never `copy.deepcopy` a cuda module**: that clones on
+     the GPU, the device that just ran out. Then, under `_state_lock`, swap `_active`, set
+     `failed_over` with reason `oom`, increment `device_failovers`, and log
+     `promptguard_device_failover reason=oom`. Re-run the remaining windows on the CPU snapshot.
+     - The host RAM for the copy (~1.1 GB for the 86M) is documented beside the memory advisory
+       (`pipeline/extraction_limits.py`).
+     - **If building the copy fails** (host OOM, any exception), the request takes the refuse
+       outcome (step 3) with log reason `copy_failed`. `failed_over` stays false, and a later OOM
+       may try again.
+  3. **At batch 1, under `refuse`** (or a failed copy): raise the new `PromptGuardUnavailableError`
+     (defined in `promptguard/classifier.py`). Set the latched `oom_refused` and increment
+     `oom_refusals`. The model stays on cuda, and the next successful cuda classification clears
+     `oom_refused`.
+- **In-flight safety.** Every call works on its entry snapshot, and the old GPU model stays alive
+  until its last user drops it.
+  - A thread whose cuda snapshot raises a **device-mismatch** `RuntimeError` (recognised by
+    `"Expected all tensors to be on the same device"` in the message) or an OOM after a swap
+    re-reads `_active` and retries **once** on the current snapshot.
+  - A second failure propagates.
+- **Security note.** Under `refuse`, fail-open tiers (VERIFIED) serve `unavailable_allowed`, which is
+  unscanned. Document in `docs/configuration.md` that `refuse` deployments should pair with
+  `promptguard_fail_closed` and a non-zero `max_promptguard_chunks` (default 64) to bound
+  OOM-inducing pages. The sticky batch reduction is visible through spec 2's `/metrics`; restart to
+  recover.
 - **stage3 mapping. This rotation is certain.** `pipeline/stage3_promptguard.py` (hashed) is the
   only caller.
   - Catch `PromptGuardUnavailableError` around the `completed_thread` block (~:227-231) and return
@@ -284,19 +318,29 @@ GPU degrades the service honestly instead of failing requests at random.
     fail-closed tiers get `unavailable_blocked`, fail-open tiers get `unavailable_allowed`.
   - Log the closed token `promptguard_oom_refused route=…`.
   - Never return empty scores.
-- **Cache guard. A second hashed file, `pipeline/orchestrator.py`.** Step 8 (~:764-790) refuses to
-  cache only a wait-timeout unscanned body while the classifier is loaded. Generalise the guard to
-  "stage 3 skipped as model-unavailable while `classifier_loaded`", which covers both cases.
-  - Test it with the same shape as the wait-timeout test, on every route that caches.
+- **Cache guard. A second hashed file, `pipeline/orchestrator.py`.** Step 8 (~:764-790) today
+  excludes only `wait_timed_out`, a closure flag set by the wait-timeout callback (~:711-718).
+  - Replace that condition with
+    `not (content.promptguard_state == "unavailable_allowed" and classifier_loaded)`. This subsumes
+    the wait timeout and covers the OOM refusal without a new signal. The absent-classifier body
+    (`classifier_loaded=False`) still caches under its own key, as before.
+  - Update the comment and the `cache.cache_policy_fingerprint` docstring note.
+  - Only `run_retrieve_pipeline` caches; test it there, mirroring the wait-timeout guard test.
 - **Rotation.** `stage3_promptguard.py` and `orchestrator.py` move. Follow the epic's **Rotation
   record procedure**: each file reverted alone, plus a both-reverted control.
 
 **Acceptance Criteria:**
 - [ ] An OOM at batch 16 retries at 8, and the request returns all scores in order. The effective
       batch stays 8 for the next request, and `oom_batch_reductions` increments (test).
-- [ ] An OOM at batch 1 under fallback `cpu` swaps to a separate CPU copy exactly once, even with
-      two concurrent callers. It sets `failed_over` and increments `device_failovers`, and the
-      request returns scores (threaded test).
+- [ ] Two threads OOMing from one event halve the batch once, not twice (threaded test).
+- [ ] An OOM at batch 1 under fallback `cpu` builds the CPU copy from host-side state (no
+      `deepcopy` of a cuda module; asserted by patching `copy.deepcopy` to raise) and swaps it
+      exactly once, even with two concurrent callers. It sets `failed_over` and increments
+      `device_failovers`, and the request returns scores (threaded test).
+- [ ] `device_state()` is not blocked while the copy is built: the read completes during a
+      deliberately slow build (test).
+- [ ] A failing copy build gives that request the refuse outcome with reason `copy_failed`, and
+      `failed_over` stays false (test).
 - [ ] A third thread already mid-forward on the cuda snapshot during the swap finishes without a
       device-mismatch error (threaded test with an event-gated fake forward).
 - [ ] An OOM at batch 1 under `refuse` gives `unavailable_result` for that request's tier: one
@@ -304,8 +348,11 @@ GPU degrades the service honestly instead of failing requests at random.
       `oom_refusals`. A later cuda success clears `oom_refused` (tests).
 - [ ] An OOM-refused body is never written to the content cache on any caching route (test,
       mirroring the wait-timeout guard test).
-- [ ] Only `torch.cuda.OutOfMemoryError` enters this path; other exceptions propagate as today. Logs
-      are closed tokens only (caplog sentinel test).
+- [ ] Only `torch.cuda.OutOfMemoryError`, and the recognised device-mismatch `RuntimeError` on a
+      stale snapshot (retried once), enter this path. A second failure, and every other exception,
+      propagate as today (tests). Logs are closed tokens only (caplog sentinel test).
+- [ ] `docs/configuration.md` documents the `refuse` and fail-open interaction, and the
+      restart-to-recover batch size.
 - [ ] The rotation (`stage3_promptguard.py`, `orchestrator.py`) is measured and recorded per the
       epic procedure.
 - [ ] Tests written/updated for new functionality
@@ -357,10 +404,10 @@ GPU degrades the service honestly instead of failing requests at random.
 
 ### Research Findings
 
-**Decision:** Fail over by building and atomically swapping a separate CPU copy, never with an
-in-place `model.to("cpu")`.
-**Rationale:** `nn.Module.to` swaps parameter storage in place, which breaks concurrent forwards
-(validation round 1).
+**Decision:** Fail over by building a CPU copy **from host-side state**, outside the state lock, and
+swapping it atomically. Never in-place `model.to("cpu")`, and never `deepcopy` of a cuda module.
+**Rationale:** In-place `.to` breaks concurrent forwards (round 1). `Tensor.__deepcopy__` clones on
+the GPU that just ran out (round 2).
 
 **Decision:** `PromptGuardUnavailableError` is caught in `stage3_promptguard.py`, and the cache guard
 is generalised in `orchestrator.py`. Both rotate.
@@ -376,6 +423,17 @@ memory fraction is advisory: https://github.com/pytorch/pytorch/issues/69688.
 
 ### Scope Adjustments
 
+- Round 2 made these changes:
+  - host-side failover copy and the lock split;
+  - compare-and-halve;
+  - the device-mismatch retry criterion;
+  - the Step 8 guard via `promptguard_state`;
+  - in-process reference scores instead of cross-platform goldens;
+  - a pytest-free tiny-model builder;
+  - hermetic env vars;
+  - a recovery-failure path;
+  - the `configure_batch_size` API;
+  - the refuse/fail-open note.
 - Round 1 split the spec into four stories (settings and probe; load; batching; OOM) and decided:
   - the refuse semantics;
   - the in-flight rule;
