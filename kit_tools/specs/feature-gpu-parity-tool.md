@@ -69,7 +69,8 @@ parity tool load classifiers identically and safely.
     2. Check the allowlist and the manifest pin.
     3. Run `probe_cuda()` when the device is cuda.
     4. `PromptGuardClassifier()`, then `configure_device(device_settings, boot_probe_failed)`
-       (spec 1).
+       (spec 1). A cuda `device_settings` always carries fallback `refuse`: a parity run must
+       never silently land on CPU.
     5. `configure_batch_size(batch_size)` if given.
     6. `model_fetcher.acquire_and_load`.
     7. Refuse if not loaded.
@@ -108,8 +109,9 @@ disproven, mechanically.
 - a fake that reports an OOM batch reduction exits 1.
 
 **Implementation Hints:**
-- **`ParityClassifier`** (`scripts/corpus/parity.py`), mirroring `RecordingClassifier` (`record.py`
-  ~:73-114):
+- **`ParityClassifier`** (`scripts/corpus/parity.py`) **subclasses `ReplayClassifier`** (reusing its
+  cassette lookup) and wraps the live classifier the way `RecordingClassifier` (`record.py` ~:73-114)
+  does:
   - calls the live classifier unbudgeted (`max_chunks=None`), then **re-applies `max_chunks`
     post hoc**, exactly as `RecordingClassifier` does;
   - looks the sha up in the cassette and records `(live, recorded)` per sha;
@@ -120,26 +122,40 @@ disproven, mechanically.
   - a live drive with `ParityClassifier`;
   - a replay drive with `ReplayClassifier`, over `load_corpus()` for each `configs` entry in the
     cassette;
-  - the replay drive skips shas recorded as unrecorded (catch `UnrecordedTextError` per record) and
-    reports them.
+  - `drive_all` converts `UnrecordedTextError` into `UnrecordedRecordError` and **aborts the whole
+    drive**, so per-record catching inside it is impossible. Run the replay drive over **only the
+    records whose live-drive shas are all recorded**: pass `drive_all` that filtered record list.
+    Every excluded record id is reported with its unrecorded shas.
+  - **Unrecorded** shas (produced live, absent from the cassette) exit 1. **Never-produced** shas
+    (in the cassette, never produced by this drive; 25 exist today) are reported for information
+    only and do **not** affect the exit code.
 - **A verdict change** is any difference in
-  `(outcome, signals.injection_detected, signals.promptguard_state, signals.rule, signals.omit_reason, signals.refusal)`
-  for a (record id, route, config). Score fields are excluded and reported separately as drift.
-  Check the actual `RouteResult` / `Signals` field names in `scripts/corpus/outcomes.py` and
-  `drivers.py`.
+  `(outcome, signals.injection_detected, signals.promptguard_state, signals.omit_reason, signals.refusal, status_code)`
+  for a (record id, route, config). `Signals` has no `rule` field; confirm each name against
+  `scripts/corpus/outcomes.py` and `drivers.py` before writing the comparison. Score fields are
+  excluded and reported separately as drift.
 - **The run is valid only if it really happened as requested.** Read `device_state()` at the end. Exit
   1 if:
   - `failed_over`;
   - `oom_batch_reductions > 0`;
   - the effective batch size differs from `--batch-size`;
   - the device differs from `--device`.
+- **Batch and device are instance state.** `configure_batch_size` is a per-instance setter (spec 1
+  US-003), so the tool reconfigures the **same** loaded classifier between phases. No second load.
+- **Order:** live drive, then the validity check (`device_state()`), then the long-text check, which
+  sets batch 1 and then the requested batch on that instance.
 - **The long-text check.** Build a synthetic benign text (generated, no corpus text) of
-  `2 × batch + 3` windows. Classify it at batch 1 and at the requested batch on the device, and
-  report max window drift and any threshold crossing.
+  `2 × batch + 3` windows.
+  - **Assert** that both runs produced exactly that many windows; a different count exits 1.
+  - Classify it at batch 1 and at the requested batch on the device. Report max window drift.
+  - Any window whose verdict crosses the threshold between the two runs exits 1.
+- **Near-threshold** means a live score `s` with `|s − threshold| ≤ 0.01`, using the shipped
+  `promptguard_threshold` for that config. Report the ids only; it never affects the exit code.
 - **CLI:**
   - `--model-id`, required; the cassette is chosen by the manifest pin, and refused on mismatch;
   - `--device cpu|cuda`;
-  - `--batch-size N`;
+  - `--batch-size N`, default 1. On `--device cpu` any value other than 1 is refused (exit 2),
+    since batching is GPU-only;
   - `--json PATH`.
 - **Output** (JSON):
   - device, torch version and precision mode;
@@ -154,8 +170,8 @@ disproven, mechanically.
   - **Never corpus text.**
 - **Exit codes:**
   - 0: clean;
-  - 1: verdict change, count mismatch, unrecorded sha, OOM event, failover, or device or batch
-    mismatch;
+  - 1: verdict change, count mismatch, unrecorded sha, OOM event, failover, device or batch
+    mismatch, or a long-text window-count mismatch or threshold crossing;
   - 2: refusal.
 - **Tests** (`tests/test_corpus_parity.py`): fakes over **a small corpus subset** to keep the suite
   fast (pass a filtered record list); hermetic.
@@ -165,10 +181,15 @@ disproven, mechanically.
 **Acceptance Criteria:**
 - [ ] The live and replay drives, the tuple comparison, post-hoc `max_chunks` and miss handling are
       implemented. Tests cover an offset, a boundary flip, a count mismatch and an unrecorded sha.
+- [ ] A cassette with an unrecorded sha still completes the replay drive over the remaining records,
+      reports the excluded ids, and exits 1. A never-produced sha alone exits 0 (tests).
+- [ ] `--batch-size` defaults to 1. `--device cpu --batch-size 16` exits 2 (test).
 - [ ] Runs with `failed_over`, OOM reductions, a batch mismatch or a device mismatch exit 1 (tests).
-- [ ] The long-text check is reported, and its synthetic text contains no corpus text (test).
-- [ ] No output contains corpus text (test scanning output against a record's text). Exit codes are
-      0/1/2 as specified.
+- [ ] The long-text check is reported, and its synthetic text contains no corpus text. A fake that
+      returns the wrong window count, or crosses the threshold between batch 1 and the requested
+      batch, exits 1 (tests).
+- [ ] No output contains corpus text (test scanning stdout, stderr and the JSON file against a
+      record's text). Exit codes are 0/1/2 as specified.
 - [ ] `docs/corpus.md` documents the procedure, the control run and the batch pairing.
 - [ ] Tests written/updated for new functionality
 - [ ] Full test suite passes (`uv run pytest`)
@@ -177,8 +198,8 @@ disproven, mechanically.
 
 ## Edge Cases
 
-- **A stale cassette:** shas that are unrecorded or never produced are reported, and the run exits
-  1. Re-record first. (US-002)
+- **A stale cassette:** unrecorded shas are reported, and the run exits 1. Re-record first.
+  Never-produced shas are reported only. (US-002)
 - **An OOM mid-run:** the run exits 1 as invalid. (US-002)
 - **`FORAGE_DEVICE` set in the shell:** refused as `device_env_set`. (US-001)
 

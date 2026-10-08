@@ -57,8 +57,17 @@ ignored.
   to `requested_device_token(os.environ)` for lifespan-less test apps, mapping `"invalid"` to
   `"cpu"`.
 - The active device and flags come from `classifier.device_state()` through a **tolerant accessor**,
-  `_device_snapshot(classifier) -> DeviceState | None`. It returns `None` when the classifier is
-  `None`, unloaded, or has no `device_state` (mocks, the corpus `ReplayClassifier`).
+  `_device_snapshot(classifier) -> DeviceState | None`:
+  ```
+  snap = getattr(classifier, "device_state", None)
+  result = snap() if callable(snap) and getattr(classifier, "loaded", False) is True else None
+  return result if isinstance(result, DeviceState) else None
+  ```
+  - The `isinstance` check matters: `MagicMock` classifiers (`tests/fakes.py:45`
+    `make_mock_classifier`, `tests/test_app.py:259` and others) have every attribute, so without it a
+    mock would reach the cache key and `/health`.
+  - **An extra table row:** loaded, with snapshot `None` (stub or mock classifiers, the corpus
+    `ReplayClassifier`). `promptguard_device` is `null`, and no device reason is added.
 
 **Other surfaces:**
 - **`/metrics` `model`:**
@@ -120,8 +129,10 @@ value, reasons and status.
 - **Rotation.** `contract.py` moves; follow the epic's **Rotation record procedure**.
 
 **Acceptance Criteria:**
-- [ ] `/health` matches every state-table row: device value, reasons and status (one stubbed test
-      per row). `promptguard_device_failover` never appears together with `promptguard_unavailable`.
+- [ ] `/health` matches every state-table row, plus the loaded-with-no-snapshot row: device value,
+      reasons and status (one stubbed test per row). `promptguard_device_failover` never appears
+      together with `promptguard_unavailable`.
+- [ ] A bare `MagicMock` classifier yields `None` from `_device_snapshot` (test).
 - [ ] Both reasons are in the `DegradedReason` Literal and `DEGRADED_REASONS`.
 - [ ] `CONTRACT_VERSION == "1.5.0"`, with an in-progress bullet naming both fields and both reasons.
       `tests/golden/contract_1_5_0.json` and `_EXPECTED_ONE_FIVE_ZERO_DIFF` exist, and goldens
@@ -154,6 +165,10 @@ bench output contains `promptguard_device` and `promptguard_requested_device`.
     `'retries_scheduled': model_metrics.retries_scheduled`). Add the four keys there, read from
     `_device_snapshot(app.state.classifier)`, which is a different source from the acquisition
     metrics.
+  - `tests/test_contract_metrics.py::test_dataclass_counters_and_their_models_carry_the_same_fields`
+    (~:668-686) compares `ModelMetrics` with `ModelMetricsResponse`. Exclude a named
+    `_DEVICE_FIELDS` frozenset from the model side, and assert that those four are exactly the
+    device-sourced ones.
 - **`tests/test_contract_metrics.py`:**
   - add a model-section "later" set to `test_every_1_3_0_metric_addition_is_named_in_the_contract_entry`
     (~:221);
@@ -206,10 +221,15 @@ always match the device that produced them.
     no rotation of the default**. The cpu (default, `config.yaml`, `bench/config.yaml`) revision is
     unchanged by it. Record a no-rotation entry, following the `hardening-promptguard-86m` US-001
     precedent, and record the cuda value.
-  - **Call sites, all reading the same environment:** the lifespan `app.state` value
-    (`retrieval_app.py` ~:1771), `/health` (via `_resolved_sanitizer_revision` ~:373), and the
-    `/retrieve` and `/search` stamped revisions (~:2073, ~:2518). Test each under `FORAGE_DEVICE`
-    unset, `cpu` and `cuda`.
+  - **Call sites, all reading the same environment:**
+    - the lifespan `app.state` value (`retrieval_app.py` ~:1771);
+    - `/health` (~:2114, via `_resolved_sanitizer_revision` ~:373);
+    - the `/extract` success body (~:2518);
+    - the `/extract` 422 body (~:2073);
+    - `/retrieve`, through the fingerprint (~:2372).
+
+    Test the lifespan app, `/health` and both `/extract` bodies under `FORAGE_DEVICE` unset, `cpu`
+    and `cuda`.
 - **The cache fingerprint.**
   - `cache.cache_policy_fingerprint` (`cache.py` ~:127, unhashed) gains a required keyword
     `active_device: str | None`. Keep `classifier_loaded` as an independent input.
@@ -218,9 +238,10 @@ always match the device that produced them.
     `active_device = snap.device if (snap := _device_snapshot(classifier)) else None` there,
     putting the accessor in an unhashed helper module importable by both the orchestrator and the
     app.
-  - **Mid-request failover.** At Step 8, re-read the snapshot. If the active device differs from the
-    one used for the fingerprint, **skip the cache write**: one comparison, beside the existing
-    guard.
+  - **Mid-request failover.** At Step 8, beside spec 1's guard (`not wait_timed_out`, plus the
+    `unavailable_allowed`-while-loaded condition), re-read the snapshot. Skip the cache write when
+    the active device at Step 8 differs from the one used for the fingerprint, including `None` vs a
+    value. That is conservative, and rare.
   - **`orchestrator.py` is hashed, so this story rotates.** Follow the epic procedure: the
     orchestrator reverted alone, with an all-reverted control.
 - **Docs.** In `docs/configuration.md`, state that `FORAGE_DEVICE=cuda` is a revision input, the
@@ -230,13 +251,15 @@ always match the device that produced them.
 
 **Acceptance Criteria:**
 - [ ] With `FORAGE_DEVICE` unset and with `cpu`, the revision is identical and equal to the
-      pre-story value. With `cuda` it differs (tests). The four call sites agree for each
-      environment (tests driving the lifespan app, `/health`, `/retrieve` and `/search`).
+      pre-story value. With `cuda` it differs (tests). The lifespan app, `/health` and both
+      `/extract` bodies agree for each environment (tests).
 - [ ] `cache_policy_fingerprint` takes `active_device`. Active `cpu`, active `cuda` and `None` give
       different fingerprints, and existing mock-classifier tests pass through the tolerant accessor
       (tests).
 - [ ] A failover during a request (a simulated snapshot change between fingerprint and Step 8) skips
       the cache write. `/health`'s `sanitizer_revision` does not change (tests).
+- [ ] Using spec 1's threaded failover fixture, a request whose windows straddle the swap returns a
+      scanned body, and no cache write happens (test).
 - [ ] The `orchestrator.py` rotation is measured per the epic procedure. The device input is recorded
       as no-rotation for cpu, with default, `config.yaml`, `bench/config.yaml` and cuda values
       recorded.

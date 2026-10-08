@@ -93,6 +93,8 @@ under `refuse` stop the service immediately and loudly.
   `promptguard_threads_from_config` (~:1895).
   - Resolve and probe **before** `app.state.classifier` is created (~:1894) and before
     `asyncio.create_task(acquisition.run())` (~:1902).
+  - **Probe only when the device is `cuda`.** With `cpu`, the lifespan never calls `probe_cuda` and
+    never imports torch early. Run the probe via `asyncio.to_thread`.
   - `cuda` + `refuse` with a non-ok probe raises `DeviceConfigurationError`.
   - `cuda` + `cpu` with a non-ok probe records `boot_probe_failed=True` for US-002.
   - `FORAGE_DEVICE_FALLBACK` with device `cpu`: an INFO log, otherwise ignored.
@@ -120,6 +122,8 @@ under `refuse` stop the service immediately and loudly.
       asserts the sentinel is absent from every log record.
 - [ ] `cuda` + `refuse` with a failing probe raises during lifespan startup, before serving. `cuda`
       + `cpu` with a failing probe starts the app (app-factory tests).
+- [ ] With default settings, `probe_cuda` is never called and the lifespan imports no torch (mock
+      assertion).
 - [ ] The configuration doc and ENV_REFERENCE document both variables and the table.
 - [ ] Both variables are in `_CLEARED_ENV_VARS`, and `tests/test_hermeticity.py`'s exact set is
       updated.
@@ -166,7 +170,10 @@ fallback `cpu`, so that a GPU host classifies on the GPU and a broken one keeps 
     3. Verify that every parameter's device is CPU.
     - **Any** exception from the recovery itself (a sticky CUDA error, a lost driver), or a
       parameter still off CPU, returns False with `promptguard_device_load_failed reason=recovery_error`.
-      Acquisition then retries.
+      It also latches `_cuda_unusable = True`.
+    - Under fallback `cpu`, the **retried** `load()` then goes straight down the CPU path, marked
+      failed over with reason `load_error`. Under `refuse`, every retry still fails, as documented.
+      Without this latch the retry would re-attempt CUDA forever.
     - `load()` assigns `_active` once, at its end, as the single swap point.
     4. Then:
        - fallback `cpu`: mark failed over and log `promptguard_device_failover reason=<unavailable|oom|load_error>`;
@@ -183,7 +190,9 @@ fallback `cpu`, so that a GPU host classifies on the GPU and a broken one keeps 
   - `build_model(seed=0)`: a 2-layer, small-vocab random-init DeBERTa-v2 sequence classifier;
   - `sample_inputs()`: a fixed list of token-id windows of varied lengths;
   - `reference_scores(model, inputs)`: a **frozen copy of today's batch-1 loop** (forward per window,
-    softmax, `.item()` at index 1).
+    softmax, `.item()` at index 1);
+  - a `__main__` that builds the model with seed 0 and prints one `float.hex()` score per window, in
+    order, one per line. Spec 3's in-image parity step diffs this output.
 - **Unchanged-path test.** `classify_windows` on the builder's model, with a stub tokenizer that
   returns those inputs, must `==` `reference_scores` in the same process. No cross-platform golden
   files, because CPU kernels differ by platform. Never construct the 86M.
@@ -198,8 +207,9 @@ fallback `cpu`, so that a GPU host classifies on the GPU and a broken one keeps 
 - [ ] A move that relocates half the parameters and then raises ends with every parameter on CPU,
       `failed_over` true and one closed `promptguard_device_failover` WARNING under fallback
       `cpu` (test).
-- [ ] A recovery `.to("cpu")` that itself raises makes `load()` return False, with
-      `reason=recovery_error` (test).
+- [ ] A recovery `.to("cpu")` that itself raises makes `load()` return False with
+      `reason=recovery_error`. Under fallback `cpu`, the next `load()` loads on CPU, marked failed
+      over with reason `load_error` (test).
 - [ ] Under `refuse` it returns False, with a `promptguard_device_load_failed` token, and the
       classifier stays unloaded (test).
 - [ ] A boot-probe failure under fallback `cpu` loads on CPU, marked failed over with reason
@@ -229,10 +239,13 @@ exactly one forward pass per window.
   - Update the partition test and the shipped-defaults test (`tests/test_contract_metrics.py`
     ~:800-850).
   - Add it to `config.yaml`, `bench/config.yaml` and `docs/configuration.md`.
-- **Effective batch size.** Process-wide `_effective_batch`, initialised by
-  `configure_batch_size(n)`. The lifespan calls it from the config key, and spec 4's parity tool calls
-  it directly. It only **shrinks** (US-004) and is restored only by a restart (no re-probe). It is
-  reported in `device_state()` as `effective_batch_size`.
+- **Effective batch size.** `_effective_batch` is **per classifier instance**, never module-global.
+  - `configure_batch_size(n)` is a setter callable any number of times. It sets the value
+    explicitly, and the lifespan calls it from the config key.
+  - Spec 4's parity tool calls it on its own instance.
+  - "Only shrinks" describes the OOM path (US-004) between explicit sets; a restart restores the
+    configured value.
+  - It is reported in `device_state()` as `effective_batch_size`.
 - **The batched path** runs only when the snapshot device is `cuda`:
   1. tokenize the window list in one call **under `_tokenizer_lock`** (the tokenizer is not
      thread-safe), with `padding=True`, `truncation=True`, `max_length=512` and
@@ -246,8 +259,9 @@ exactly one forward pass per window.
 
 **Acceptance Criteria:**
 - [ ] `promptguard_cuda_batch_size` is bounded 1–64 (default 16), registered, classified, present
-      in both configs and documented. `configure_batch_size(n)` sets the effective batch size, and
-      `device_state().effective_batch_size` reports it (test).
+      in both configs and documented. `configure_batch_size(n)` sets the effective batch size on
+      that instance only, and a second instance is unaffected. `device_state().effective_batch_size`
+      reports it (tests).
 - [ ] On `cpu`, `classify_windows` makes exactly one forward pass per window (call-count test).
 - [ ] The forced batched path returns the right count, in window order, each score within 1e-5 of
       batch 1, for page sizes 1, b−1, b, b+1 and 3b. The max difference is recorded.
@@ -320,10 +334,12 @@ GPU degrades the service honestly instead of failing requests at random.
   - Never return empty scores.
 - **Cache guard. A second hashed file, `pipeline/orchestrator.py`.** Step 8 (~:764-790) today
   excludes only `wait_timed_out`, a closure flag set by the wait-timeout callback (~:711-718).
-  - Replace that condition with
-    `not (content.promptguard_state == "unavailable_allowed" and classifier_loaded)`. This subsumes
-    the wait timeout and covers the OOM refusal without a new signal. The absent-classifier body
-    (`classifier_loaded=False`) still caches under its own key, as before.
+  - **Keep** `not wait_timed_out`, and **add**
+    `not (content.promptguard_state == "unavailable_allowed" and classifier_loaded)`.
+  - It does not subsume the wait timeout: `classifier_loaded` is the request-entry snapshot (~:442),
+    and a model can finish loading mid-request.
+  - The absent-classifier body (`classifier_loaded=False`, no wait timeout) still caches under its
+    own key, as before.
   - Update the comment and the `cache.cache_policy_fingerprint` docstring note.
   - Only `run_retrieve_pipeline` caches; test it there, mirroring the wait-timeout guard test.
 - **Rotation.** `stage3_promptguard.py` and `orchestrator.py` move. Follow the epic's **Rotation
@@ -348,6 +364,8 @@ GPU degrades the service honestly instead of failing requests at random.
       `oom_refusals`. A later cuda success clears `oom_refused` (tests).
 - [ ] An OOM-refused body is never written to the content cache on any caching route (test,
       mirroring the wait-timeout guard test).
+- [ ] The existing wait-timeout guard still blocks the cache write when the classifier was unloaded
+      at request entry and loaded before the timeout (test).
 - [ ] Only `torch.cuda.OutOfMemoryError`, and the recognised device-mismatch `RuntimeError` on a
       stale snapshot (retried once), enter this path. A second failure, and every other exception,
       propagate as today (tests). Logs are closed tokens only (caplog sentinel test).

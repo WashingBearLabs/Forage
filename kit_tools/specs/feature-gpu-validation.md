@@ -33,12 +33,18 @@ updated: 2026-10-08
   - Ollama's loaded models, and the VRAM its largest model needs;
   - free VRAM.
 
-  The floor is (Ollama's largest model need + the candidate's measured peak, with US-001's first
-  run measuring the peak). Abort if free VRAM is below it.
+  The floor is the free VRAM the candidate must leave untouched for Ollama:
+  `floor = Ollama's largest model need + candidate peak + 512 MiB margin`.
+  - Until US-001's first run measures the candidate peak, use the estimate **2.5 GiB** (86M fp32
+    weights plus batch-16 activations and the CUDA context).
+  - Abort if free VRAM is below the floor before starting.
 - **Mid-run guard.** Poll `nvidia-smi` free VRAM and the production containers' `StartedAt` every
   5 s. Kill the candidate or process if free VRAM drops below the floor or any production container
   restarts.
-- **Isolation.** Run under `nice -n 10`, as the `claude` user.
+- **Isolation.** As the `claude` user.
+  - Host processes (`docker build`, `uv run` parity runs) run under `nice -n 10`.
+  - `nice` does not reach a container's processes, so containers are constrained with
+    `--cpus 8 --cpu-shares 256` instead.
 - **Production attestation.**
   - Committed: a SHA-256 over the sorted list of production `(ID, StartedAt)` pairs, plus the
     count, before and after. The two must be equal.
@@ -50,9 +56,15 @@ updated: 2026-10-08
   - a uv env (`uv sync --extra dev --extra cuda`);
   - a scratch HF cache: weights copied, mounted read-only into containers, and never production's
     cache.
+    - The container runs as the image's non-root user, not `claude`. Read its uid first
+      (`docker run --rm --entrypoint id <image>`).
+    - Make the cache subtree readable to that uid: directories 0755, files 0644. The 0700 parent
+      does not block a bind mount.
+    - Confirm with a read-only `ls` from inside a throwaway container before the first gate.
   - If the weights are missing, the owner acquires them into the scratch cache, with the token read
     via `read -rs`, never on argv.
-- **Image.** Built on thelab from the checkout (`nice docker build`). Record the image ID and commit.
+- **Image.** Built on thelab from the checkout (`nice -n 10 docker build`). Record the image ID and
+  commit.
 - **Teardown:**
   - remove containers;
   - confirm the candidate's process is absent from `nvidia-smi --query-compute-apps`;
@@ -65,8 +77,12 @@ updated: 2026-10-08
 
 - **Latency** (86M, real weights, RTX 4070 Ti):
   - the **marginal per-window cost**,
-    `(warm_p50_ms_budget − warm_p50_ms_1w) / (budget_windows − 1)`, is ≤ 25 ms;
-  - `warm_p95_ms_budget` < 2,000 ms, with `budget_windows == 64`, over at least 10 runs;
+    `m50 = (warm_p50_ms_budget − warm_p50_ms_1w) / (budget_windows − 1)`, is ≤ 25 ms;
+  - the **p95 per-window cost**, `p = (warm_p95_ms_budget − warm_p50_ms_1w) / (budget_windows − 1)`,
+    is recorded (US-004's formula uses it);
+  - the **projected 64-window p95**, `warm_p95_ms_budget + (64 − budget_windows) × p`, is
+    < 2,000 ms, over at least 10 runs. The bench's budget document yields about 55 windows, not 64,
+    so the figure is projected rather than measured;
   - `warm_p50_ms_1w` (end-to-end) and VRAM peak are recorded.
 - **Parity:**
   - 22M and 86M at batch 16: zero verdict changes and a valid run (no OOM, no failover);
@@ -91,7 +107,7 @@ evidence.
 **Independent Test:** The recorded run shows:
 - healthy `/health` with `promptguard_device: "cuda"`;
 - marginal per-window ≤ 25 ms;
-- budget p95 < 2 s with 64 windows;
+- projected 64-window p95 < 2 s;
 - VRAM and host RSS recorded;
 - an equal attestation hash.
 
@@ -109,13 +125,15 @@ evidence.
   - the overlay's memory default.
 - **Bench:**
   - copy the tokenizer snapshot out of the scratch cache for `--tokenizer-dir`;
-  - run `uv run python scripts/bench_promptguard.py --base-url http://127.0.0.1:18020 --container forage-gpu-candidate --tokenizer-dir … --model-id … --runs 20 --json …`;
-  - use **a fresh container per `--input`** (`1w`, then `budget`), per the tool's design.
+  - run `nice -n 10 uv run python scripts/bench_promptguard.py --base-url http://127.0.0.1:18020 --container forage-gpu-candidate --tokenizer-dir … --model-id … --input 1w|budget --runs 20 --json …`;
+  - use **a fresh container per `--input`** (`1w`, then `budget`), per the tool's design;
+  - **sanity check** before using the figures: the `1w` JSON reports 1 window and the `budget` JSON
+    reports `budget_windows` > 1 (expected about 55). Otherwise the run is void.
 - **Record:**
   - cold load time;
   - the warm 1w and budget p50/p95;
   - `budget_windows`;
-  - the computed marginal per-window cost;
+  - the computed `m50`, `p` and projected 64-window p95;
   - VRAM peak, and host RSS peak (for the overlay's `mem_limit`);
   - GPU utilisation during the run.
   - The 22M runs the same way via `FORAGE_MODEL_ID`. Its figures are recorded, with no bar.
@@ -125,8 +143,8 @@ evidence.
 - [ ] The safety pre-flight (floor, quiet window, attestation hash), the mid-run guard and teardown
       are recorded, and the attestation hash is equal before and after.
 - [ ] `/health` was healthy with `promptguard_device: "cuda"` for the 86M.
-- [ ] Marginal per-window ≤ 25 ms, and `warm_p95_ms_budget` < 2,000 with `budget_windows == 64`
-      over 10+ runs. 1w p50/p95, VRAM peak and host RSS peak are recorded. The 22M figures are
+- [ ] `m50` ≤ 25 ms, and the projected 64-window p95 < 2,000 ms over 10+ runs, with the window-count
+      sanity check passing. 1w p50/p95, VRAM peak and host RSS peak are recorded. The 22M figures are
       recorded.
 - [ ] The host RSS figure is compared with the overlay's provisional 3,072 MiB default, and the
       default is confirmed or a change is recorded.
@@ -146,7 +164,7 @@ control, so that the release has proof of zero verdict changes on the GPU.
 **Implementation Hints:**
 - From the scratch checkout:
   `uv run python -m scripts.corpus.parity --model-id <id> --device cuda --batch-size 16 --json …`
-  under `nice`, with the mid-run guard active.
+  under `nice -n 10`, with the mid-run guard active.
 - Then `--batch-size 1`, then `--device cpu`, for both models.
 - **If the CPU control shows drift,** the cuda drift is not purely GPU-attributable. Record it, and
   the owner rules.
@@ -196,7 +214,7 @@ budget and wait for a GPU host.
   the stated formula.
 
 **Implementation Hints:**
-- **Formula** (single holder), with `p` = recorded p95 per-window cost:
+- **Formula** (single holder), with `p` = US-001's p95 per-window cost (defined in Goals):
   - `budget = min(1024, floor(0.5 × 90 / p))`, so a worst-case page uses at most half of the
     default 90 s wait;
   - `wait` stays 90.

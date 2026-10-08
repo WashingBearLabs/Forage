@@ -120,7 +120,8 @@ commit leaves CI, the orchestrator worktree or a developer without torch, or red
     lint "Assert the committed lock is CPU-only" grep step.
   - Add a temporary inline test: `uv export --frozen --extra dev --extra cpu` contains no line
     matching `^(nvidia-|cuda-|triton==)`. US-002 lifts it into the checker.
-  - Widen the CI synced-environment step's pattern to that regex now.
+  - Widen the CI synced-environment step's pattern now. That step reads installed-package
+    listings (`name version`), not export lines, so its regex is `^(nvidia-|cuda-|triton\b)`.
 - **Missing-extra guard.** In `tests/conftest.py`, if `import torch` fails, fail the session with
   "install with `uv sync --extra dev --extra cpu`".
 - **Install-set proof.** Before changing anything, record `uv export --frozen --extra dev` (the
@@ -160,7 +161,9 @@ into the public image.
 
 **Implementation Hints:**
 - **New `scripts/check_lock_cuda_scope.py`** (stdlib, `tomllib`, `packaging`):
-  - **Payload:** names matching `^(nvidia-|cuda-)`, or exactly `triton`.
+  - **Payload:** names matching `^(nvidia-|cuda-)`, or exactly `triton`, compared **after PEP 503
+    normalisation** (`re.sub(r"[-_.]+", "-", name).lower()`) on both sides, including the
+    allowlist.
   - **Profiles:** run `uv export --frozen --no-hashes --format requirements-txt` for
     `--extra dev --extra cpu`, `--extra cpu` and `--extra cuda`.
   - **Marker evaluation:** use `packaging.markers.Marker(...).evaluate(env)` under explicit
@@ -262,16 +265,23 @@ are unchanged on amd64. Then I install once and pick the device at install time.
 - **Build-time checks.** Extend the import smoke (~:214) with a small inline Python step that:
   - asserts `torch.__version__` ends `+cu130` (amd64) or `+cpu` (arm64), using the same mapping;
   - lists installed distributions via `importlib.metadata`: on arm64 none may match the payload
-    regex, and on amd64 the matches must equal `scripts/cuda_payload_allowlist.txt`. COPY that file
-    into a build-only location and remove it after.
+    regex, and on amd64 the matches must equal `scripts/cuda_payload_allowlist.txt`. Both sides are
+    PEP 503-normalised. COPY that file into a build-only location and remove it after.
+- **Where the arm64 checks run.** PR CI builds amd64 only. The arm64 build-time checks run in the
+  publish lane's multi-arch build, where a failing assertion fails the build before any push. The
+  PR-time arm64 guarantee is static: US-002's checker rule 2 (linux/aarch64 resolves `+cpu`, no
+  payload). No qemu build is added to PR CI. Record this split in CI_CD.md.
 - **`tests/test_dockerfile.py`.** Pin the mapping and the checks, using the oras mapping test as the
   template, and check that the `uv sync --locked` assertion (~:480-500) still matches the joined
   RUN.
 - **CPU parity CI step.**
-  - In the same job, run `scripts/promptguard_tiny_model.py` (spec 1, pytest-free) twice: in the
-    amd64 candidate (`docker run --rm -v "$PWD/scripts:/work/scripts:ro" … python -m …`, with
-    `--no-dev` dependencies only) and in CI's `+cpu` environment.
-  - Diff the printed scores.
+  - In the same job, run `scripts/promptguard_tiny_model.py` (spec 1, pytest-free; its `__main__`
+    prints one `float.hex()` score per line) twice:
+    - in the amd64 candidate, with `--no-dev` dependencies only:
+      `docker run --rm --entrypoint /app/.venv/bin/python -e CUDA_VISIBLE_DEVICES= -v "$PWD/scripts:/work/scripts:ro" -w /work <candidate> scripts/promptguard_tiny_model.py > image.txt`
+      (confirm the venv path against the Dockerfile and record it);
+    - in CI's `+cpu` environment: `uv run python scripts/promptguard_tiny_model.py > ci.txt`.
+  - `diff image.txt ci.txt`.
   - **Expect `==`.** If they differ, record the max difference and **stop for an owner
     decision**: accept a 1e-6 tolerance, and correct the epic's "byte-identical" wording for amd64
     CPU installs.
@@ -311,21 +321,25 @@ the cache decision. The baseline figures are recorded.
 - **Disk.** Add a disk-free step (remove the preinstalled toolchains) to build-amd64 and each image
   consumer, asserting ≥ 20 GB free with `df`.
 - **Timeouts.** This story cannot measure the new image before it exists, so:
-  - set initial generous values (build-amd64 90 min; consumers 45 min);
+  - set initial generous values (build-amd64 90 min; consumers 45 min; **publish ≥ 90 min**, since
+    it rebuilds both architectures);
+  - publish gets its **own** disk-free step (≥ 20 GB), since it builds rather than only loading;
   - after the PR's first green run, set each to `ceil(1.5 × measured)`, pinned;
   - record the measured values beside them.
 - **Cache.**
   - build-amd64 writes `type=gha,mode=min` on main (~:441); publish writes
     `type=gha,mode=max,scope=publish` (~:963).
-  - Decision rule: if the projected cache exceeds 80% of the 10 GB GHA limit, drop build-amd64's
-    `cache-to` for the dependency layer, or scope it, and record the choice.
+  - Decision rule: if the projected cache, **summed across both scopes** (build-amd64's and
+    `scope=publish`, which holds both architectures at `mode=max`), exceeds 80% of the 10 GB GHA
+    limit, drop build-amd64's `cache-to` for the dependency layer or move publish to `mode=min`,
+    and record the choice.
 - **Publish.** Confirm the diff_ids layer-identity gate still matches with the large layer.
 
 **Acceptance Criteria:**
 - [ ] The baseline figures are recorded in Implementation Notes and CI_CD.md.
-- [ ] Disk-free steps asserting ≥ 20 GB exist on build-amd64 and the consumers. Initial
-      `timeout-minutes` values are set, and the cache decision is recorded, all pinned in
-      `tests/test_ci_workflow.py`.
+- [ ] Disk-free steps asserting ≥ 20 GB exist on build-amd64, the consumers and publish. Initial
+      `timeout-minutes` values are set (publish ≥ 90), and the cache decision covering both scopes
+      is recorded, all pinned in `tests/test_ci_workflow.py`.
 - [ ] The post-PR-run timeout adjustment procedure is documented in CI_CD.md. The measured values
       are filled in at PR time.
 - [ ] Tests written/updated for new functionality
@@ -381,7 +395,8 @@ binding are unchanged, and the base fragments are byte-unchanged.
 - **`compose/gpu.yml`:**
   - `deploy.resources.reservations.devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]`
     (or the `gpus` equivalent the pinned Compose spec renders);
-  - `environment: { FORAGE_DEVICE: cuda }`;
+  - `environment: { FORAGE_DEVICE: cuda, FORAGE_DEVICE_FALLBACK: "${FORAGE_DEVICE_FALLBACK:-cpu}" }`,
+    so the operator picks the failover policy from `.env` without editing the overlay;
   - `mem_limit: ${FORAGE_MEM_LIMIT:-3072m}`. This is **provisional**: the CUDA context and libraries
     add host RSS. Spec 5 measures it on thelab and adjusts the default.
   - No image pin and no port change.
@@ -389,7 +404,8 @@ binding are unchanged, and the base fragments are byte-unchanged.
 - **Tests** (`tests/test_compose_fragments.py`). Leave `_FRAGMENT_PATHS` (~:69) and the base tests
   unmodified. Overlay tests:
   - it parses;
-  - it sets only the device request, `FORAGE_DEVICE` and `mem_limit`;
+  - it sets only the device request, `FORAGE_DEVICE`, `FORAGE_DEVICE_FALLBACK` and `mem_limit`;
+  - `FORAGE_DEVICE_FALLBACK` renders `cpu` by default and `refuse` when the variable is set;
   - it pins no image;
   - it merges onto both bases without changing ports or the `127.0.0.1` binding.
 - **Docs:**
@@ -406,8 +422,8 @@ binding are unchanged, and the base fragments are byte-unchanged.
   - **`kit_tools/docs/DEPLOYMENT.md`:** the GPU steps.
 
 **Acceptance Criteria:**
-- [ ] `compose/gpu.yml` requests one GPU and sets `FORAGE_DEVICE: cuda` and the provisional
-      `mem_limit` default. Merged with each base fragment, ports and binding are unchanged, and the
+- [ ] `compose/gpu.yml` requests one GPU and sets `FORAGE_DEVICE: cuda`, a
+      `FORAGE_DEVICE_FALLBACK` defaulting to `cpu`, and the provisional `mem_limit` default. Merged with each base fragment, ports and binding are unchanged, and the
       base fragments are byte-unchanged (tests).
 - [ ] The `docs/configuration.md` GPU section covers each listed topic. README shows the overlay
       command, and DEPLOYMENT lists the steps.
