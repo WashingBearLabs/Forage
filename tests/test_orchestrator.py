@@ -495,7 +495,7 @@ def _make_pg_safe(**overrides: Any) -> PromptGuardResult:
     return_value=("93.184.216.34", "example.com"),
 )
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
-@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.html_subprocess.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
@@ -685,7 +685,7 @@ async def test_retrieve_summary_cache_does_not_serve_full_request(
     return_value=("93.184.216.34", "example.com"),
 )
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
-@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.html_subprocess.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
@@ -747,7 +747,7 @@ async def test_retrieve_ttl_zero_deletes_without_cache_read_or_write(
     return_value=("93.184.216.34", "example.com"),
 )
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
-@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.html_subprocess.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.build_retrieved_content")
@@ -810,7 +810,7 @@ async def test_retrieve_stage2_blocked_returns_quarantine(
     return_value=("93.184.216.34", "example.com"),
 )
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
-@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.html_subprocess.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
@@ -878,7 +878,7 @@ async def test_retrieve_stage3_injection_returns_quarantine(
     return_value=("93.184.216.34", "example.com"),
 )
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
-@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.html_subprocess.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural_forms")
 async def test_retrieve_classifier_absent_fail_closed_reports_unavailable_blocked(
@@ -914,7 +914,7 @@ async def test_retrieve_classifier_absent_fail_closed_reports_unavailable_blocke
     return_value=("93.184.216.34", "example.com"),
 )
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
-@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.html_subprocess.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural_forms")
 async def test_retrieve_classifier_absent_fail_open_reports_unavailable_allowed(
@@ -949,7 +949,7 @@ async def test_retrieve_classifier_absent_fail_open_reports_unavailable_allowed(
     return_value=("93.184.216.34", "example.com"),
 )
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
-@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.html_subprocess.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural_forms")
 async def test_retrieve_trusted_tier_loaded_classifier_reports_skipped_trusted(
@@ -1866,15 +1866,15 @@ async def test_a_markup_subset_probe_is_caught_on_search(name: str, field: str) 
 
 
 def test_the_retrieve_thread_returns_only_a_scan_result_for_the_markup() -> None:
-    from pipeline.orchestrator import _extract_html_and_scan_inline
+    from pipeline.html_subprocess import extract_html_and_scan
 
-    extraction, page_scan = _extract_html_and_scan_inline(
+    extraction, page_scan = extract_html_and_scan(
         "<html><body><system>x</system></body></html>", None, None
     )
     assert extraction.scan_text_inline is None
     assert isinstance(page_scan, StructuralScanResult)
     assert page_scan.verdict != Stage2Verdict.CLEAN
-    clean_extraction, clean_scan = _extract_html_and_scan_inline(
+    clean_extraction, clean_scan = extract_html_and_scan(
         "<html><body><p>hello</p></body></html>", None, None
     )
     assert isinstance(clean_extraction, ExtractionResult)
@@ -2389,7 +2389,7 @@ def client() -> httpx.AsyncClient:
     return_value=("93.184.216.34", "example.com"),
 )
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
-@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.html_subprocess.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
@@ -2459,7 +2459,7 @@ def memory_cache_client(client: httpx.AsyncClient) -> httpx.AsyncClient:
     return_value=("93.184.216.34", "example.com"),
 )
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
-@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.html_subprocess.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
@@ -2527,7 +2527,7 @@ async def test_post_retrieve_repeat_is_served_from_the_in_memory_cache(
     return_value=("93.184.216.34", "example.com"),
 )
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
-@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.html_subprocess.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
@@ -6040,7 +6040,7 @@ async def _retrieve_with_text(
             return_value=_make_fetch_result(),
         ),
         patch(
-            "pipeline.orchestrator.extract_html",
+            "pipeline.html_subprocess.extract_html",
             MagicMock(return_value=_make_extraction(raw_text=raw_text)),
         ),
     ):
@@ -7560,7 +7560,7 @@ async def test_post_retrieve_quarantine_serves_a_null_title_and_is_never_cached(
         validate_patch,
         fetch_patch,
         patch(
-            "pipeline.orchestrator.extract_html",
+            "pipeline.html_subprocess.extract_html",
             return_value=_make_extraction(title=_HOSTILE_TITLE),
         ),
         patch(
@@ -7596,7 +7596,7 @@ async def test_post_retrieve_clean_page_still_serves_its_title(
         validate_patch,
         fetch_patch,
         patch(
-            "pipeline.orchestrator.extract_html",
+            "pipeline.html_subprocess.extract_html",
             return_value=_make_extraction(title="A Fine Title"),
         ),
         patch(

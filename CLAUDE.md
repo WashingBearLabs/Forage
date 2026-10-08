@@ -675,6 +675,18 @@ is byte-identical across all page records and the synthetic fixtures under all f
 stage 3's input and both cassettes are unchanged. Not replayed to Poppy. Full values:
 `docs/bootstrap-notes.md`.
 
+The fifty-fourth rotation is `0ace27ca…` → `54aa9649…` for
+`release-resource-bounds` US-006 — **not a sanitization-behaviour change**: `/retrieve` HTML
+bodies above `retrieve.html_worker_threshold_bytes` (512 KiB default) parse in the rlimited
+worker inside the admission slot, and `orchestrator._extract_html_and_scan_inline` is gone in
+favour of `html_subprocess.extract_html_and_scan`. Two hashed files move: `orchestrator.py`
+(the routing branch, the 422 mapping, the spawn/refusal counters) and `contract.py`
+(`RETRIEVE_HTML_EXTRACTION_ERROR`). Each was reverted alone, read-only, against `HEAD`, with a
+both-reverted control reproducing `0ace27ca…` under default and shipped config. A served
+outcome moves only for a page the worker refuses (a coded 422); within bounds the response is
+byte-identical (corpus comparison against `0`, in-process for all page records and by real
+spawn on a sample). Not replayed to Poppy. Full values: `docs/bootstrap-notes.md`.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:

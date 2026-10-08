@@ -545,3 +545,11 @@ RETRIEVE_PDF_FAILURE_REASONS = frozenset(
         RETRIEVE_PDF_SPOOL_ERROR,
     }
 )
+
+# A large fetched HTML body (above `retrieve.html_worker_threshold_bytes`) the
+# bounded worker could not turn into a result: a deadline, CPU or address-space
+# kill, an oversized or forged frame, or a spawn failure. The causes are
+# deliberately indistinguishable. Logged once as the closed WARNING token
+# `retrieve_html_extraction_failed`. A spool fault on this path reuses
+# `RETRIEVE_PDF_SPOOL_ERROR`.
+RETRIEVE_HTML_EXTRACTION_ERROR = "html_extraction_error"

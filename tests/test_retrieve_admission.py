@@ -25,7 +25,7 @@ import pytest
 from cache import CacheMetrics
 from model_fetcher import ModelMetrics
 from models import RetrieveRequest
-from pipeline import contract, orchestrator
+from pipeline import contract, html_subprocess, orchestrator
 from pipeline.extraction_limits import extraction_settings_from_config
 from pipeline.orchestrator import PipelineError, run_retrieve_pipeline
 from pipeline.retrieve_limits import retrieve_settings_from_config
@@ -279,7 +279,7 @@ async def _extraction_exception(admission: _Admission, fetch: _GatedFetch) -> No
         raise ValueError("parser fell over")
 
     with (
-        patch("pipeline.orchestrator.extract_html", new=_explodes),
+        patch("pipeline.html_subprocess.extract_html", new=_explodes),
         pytest.raises(ValueError, match="parser fell over"),
     ):
         await admission.run()
@@ -391,7 +391,7 @@ async def test_html_cancellation_retains_slot_until_extractor_exits(
     fetch = _GatedFetch()
     fetch.gate.set()
     monkeypatch.setattr(orchestrator, "fetch_url", fetch)
-    monkeypatch.setattr(orchestrator, "extract_html", extract)
+    monkeypatch.setattr(html_subprocess, "extract_html", extract)
     controller = depth_one.controller
     first = asyncio.create_task(depth_one.run())
     second: asyncio.Task[Any] | None = None
@@ -560,12 +560,19 @@ async def test_stages_one_two_and_four_run_off_the_event_loop(
     fetch = _GatedFetch()
     fetch.gate.set()
     monkeypatch.setattr("pipeline.orchestrator.fetch_url", fetch)
-    for name, real in (
-        ("extract_html", extract_html),
-        ("scan_structural_forms", scan_structural_forms),
-        ("structure_sanitization_result", structure_sanitization_result),
+    # Stage 1 and the inline scan live in `html_subprocess`; the structural scan
+    # of the as-is text and stage 4 are looked up in `orchestrator`.
+    for module, name, real in (
+        ("html_subprocess", "extract_html", extract_html),
+        ("html_subprocess", "scan_structural_forms", scan_structural_forms),
+        ("orchestrator", "scan_structural_forms", scan_structural_forms),
+        (
+            "orchestrator",
+            "structure_sanitization_result",
+            structure_sanitization_result,
+        ),
     ):
-        monkeypatch.setattr(f"pipeline.orchestrator.{name}", _recording(name, real))
+        monkeypatch.setattr(f"pipeline.{module}.{name}", _recording(name, real))
 
     await defaults.run()
     assert set(seen) == {

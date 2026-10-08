@@ -22,6 +22,7 @@ from bs4 import BeautifulSoup
 
 from models import Stage2Verdict
 from pipeline import orchestrator
+from pipeline.html_subprocess import extract_html_and_scan
 from pipeline.stage1_extraction import _extract_inline_text, extract_html
 from pipeline.stage2_structural import (
     scan_structural,
@@ -57,9 +58,7 @@ def _splits(probe: str, *, escape: Any) -> list[str]:
 
 def _retrieve_verdict(body: str) -> Stage2Verdict:
     page = f"<html><body><p>{body}</p></body></html>"
-    extraction, inline_scan = orchestrator._extract_html_and_scan_inline(
-        page, None, None
-    )
+    extraction, inline_scan = extract_html_and_scan(page, None, None)
     as_is = scan_structural_forms(
         structural_scan_forms(extraction.raw_text, html_parsed=True)
     )
@@ -220,9 +219,7 @@ def test_retrieve_parses_once_and_only_a_scan_result_leaves_the_thread() -> None
     with _count_parses() as baseline:
         extract_html(page)
     with _count_parses() as feed:
-        extraction, inline_scan = orchestrator._extract_html_and_scan_inline(
-            page, None, None
-        )
+        extraction, inline_scan = extract_html_and_scan(page, None, None)
     # The inline form adds no parse of its own: same parser runs as without it.
     assert feed.call_count == baseline.call_count
     assert extraction.scan_text_inline is None
@@ -231,7 +228,7 @@ def test_retrieve_parses_once_and_only_a_scan_result_leaves_the_thread() -> None
 
 
 def test_an_over_budget_page_skips_the_inline_scan() -> None:
-    extraction, inline_scan = orchestrator._extract_html_and_scan_inline(
+    extraction, inline_scan = extract_html_and_scan(
         "<p>" + "word " * 50 + "</p>", None, 10
     )
     assert extraction.scan_text_inline is None

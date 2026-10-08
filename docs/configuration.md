@@ -970,8 +970,9 @@ and `admission_queue_depth` (0–4).
 `pipeline/html_subprocess.py` runs a fetched page's stage-1 work (`extract_html` plus the
 inline-form and raw-markup scans) in the same rlimited worker the PDF path uses, under the
 `extraction:` limits above (`child_cpu_seconds`, `child_address_space_bytes`,
-`wall_clock_seconds`). Routing `/retrieve` bodies to it lands in a later story; this section
-records what the worker itself costs. Any failure — a limit kill, a deadline, a malformed or
+`wall_clock_seconds`). `/retrieve` sends it every fetched HTML body above
+`retrieve.html_worker_threshold_bytes` (see [The `retrieve:` block](#retrieve--fetch-route-limits));
+this section records what the worker itself costs. Any failure — a limit kill, a deadline, a malformed or
 forged frame, an oversize frame, a spawn error — is one `HTMLExtractionError`.
 
 **Import CPU counts against `child_cpu_seconds`.** The child applies `RLIMIT_CPU` before it
@@ -1018,6 +1019,35 @@ A frame over the cap is refused, never truncated. Derivation, with
 - So the cap is 96 MiB, and the only bodies refused are ones that are mostly C0 control bytes
   (more than about 8 million of them) — those fail as an `HTMLExtractionError`.
 
+<a id="html-worker-threshold"></a>
+
+#### HTML worker threshold
+
+`retrieve.html_worker_threshold_bytes` is calibrated on two axes, on the pinned hostile shapes
+in `tests/stage1_shapes.py` (linear stage 1, GC off, median of 3, macOS arm64 dev machine, each
+sample in a fresh process; parent peak-RSS delta is `ru_maxrss` after minus before the parse,
+with the body and its decoded copy already held). The default is the largest power-of-two KiB at
+which **both** hold: the worst shape parses in-thread in ≤ 2 s, and the parent's peak-RSS delta
+is ≤ 25% of the 1536 MiB Compose default (384 MiB). Seconds / RSS delta in MiB:
+
+| Shape | 256 KiB | **512 KiB (default)** | **1 MiB (maximum)** | 2 MiB |
+|---|---|---|---|---|
+| sibling-dense | 0.41 / 78 | 0.88 / 156 | 2.28 / 313 | 5.24 / 624 |
+| deep span | 0.17 / 39 | 0.29 / 48 | 0.52 / 66 | 0.97 / 102 |
+| attribute-heavy | 0.18 / 39 | 0.35 / 76 | 0.70 / 152 | 1.41 / 319 |
+| unclosed span | 0.34 / 37 | 0.68 / 75 | 1.38 / 147 | 2.72 / 296 |
+| deep span, hidden | 0.27 / 48 | 0.48 / 66 | 0.90 / 102 | 1.76 / 176 |
+| unclosed span, hidden | 0.60 / 74 | **1.19 / 149** | **2.39 / 303** | 4.79 / 608 |
+
+At the default the worst shape is unclosed-hidden at 1.19 s / 149 MiB. At 1 MiB it is
+2.28–2.39 s and 303–313 MiB: the time limit is already exceeded, which is why 1 MiB is the
+**maximum** and not a safe default, and why raising the key above 512 KiB weakens the bound.
+The in-thread parse holds a thread (and the single admission slot) for those seconds and cannot
+be cancelled or killed; the worker can. The key is not a cache-fingerprint or revision input,
+because both paths return byte-identical results (pinned by a corpus comparison against `0`).
+Per spawn, expect a few hundred milliseconds of launch plus about 0.33 s of import CPU, which is
+why small pages stay in-thread: median HTML is tens of KiB, far under the default.
+
 #### Advisory memory rule
 
 The boot check reads cgroup v2 `memory.max`, not an environment-variable string.
@@ -1045,8 +1075,9 @@ They bound queued and classified text, which the 10 MB fetch cap already bounds 
 `extraction.extraction_concurrency` is: a fetched PDF spawns the same bounded child under
 the same `child_address_space_bytes` rlimit, so N fetch slots would put N × 384 MiB of
 worker address space in a 1 GiB container. The constraint is worker address space, not
-fetched-body size — which means an HTML-only deployment, whose fetch path spawns no worker
-at all, is throttled to single flight by a bound sized for PDFs. That is accepted; sizing
+fetched-body size — which means an HTML-only deployment, whose large pages (above
+`html_worker_threshold_bytes`) spawn the same worker, is throttled to single flight by a
+bound sized for PDFs. That is accepted; sizing
 the envelope is covered in [Sizing the container](#sizing-the-container), without
 widening these worker counts.
 
@@ -1066,7 +1097,11 @@ queued by depth and three by bytes — the byte bound binds first — so the fif
 **Worst-case queue latency** is a derived number, not a knob:
 `admission_queue_depth / fetch_concurrency × max(fetch timeout 30 s, PDF worker wall clock)`
 — at the defaults, 4 × 30 s = **120 s** before a queued request reaches the fetch, plus the
-stage-1 time of the requests ahead of it.
+stage-1 time of the requests ahead of it. A request ahead of you may be a fetched PDF or a
+large HTML page in the worker, so the wall-clock term is the worker's `wall_clock_seconds`
+(90 s at the default), not only the fetch timeout: `max(fetch timeout, worker wall clock)`
+applies to HTML above the threshold exactly as it does to PDFs. The in-thread path keeps
+today's latency.
 
 **Memory, honestly.** At most `fetch_concurrency` bodies are alive during fetch and stage 1;
 a queued request holds nothing; the queue is bounded in depth and reserved bytes; a request
@@ -1083,8 +1118,10 @@ Each such waiter costs at most `max_extracted_characters(256)` ≈ 459 KB of tex
 `arrival rate × promptguard_wait_seconds × ≤ 0.5 MB`. `--limit-concurrency` is the envelope
 knob that bounds it, and the resource-envelope spec owns it.
 
-**Disk.** The HTML path writes nothing to disk: the fetched body lives in memory, inside the
-slot, and nowhere else. The PDF path (`hardening-retrieve-parity` US-003) spools the fetched
+**Disk.** An HTML body at or below `html_worker_threshold_bytes` writes nothing to disk: it
+lives in memory, inside the slot, and nowhere else. A larger one is spooled like a PDF
+(`0600`, `forage-retrieve-html-*`, the request URL in a small header rather than argv) and
+unlinked after the worker is reaped, on every outcome — including cancellation. The PDF path (`hardening-retrieve-parity` US-003) spools the fetched
 body to a `0600` `forage-retrieve-pdf-*` file in the process-private spool directory and parses
 it in `/extract`'s spawned, rlimited worker, under `extraction.max_promptguard_chunks`
 rather than this block's budget; the file is unlinked as soon as the worker returns, on
@@ -1093,8 +1130,12 @@ the spawn latency. Every fetched-PDF failure is a 422 — `extraction_failed` wi
 `pdf_encrypted`, `pdf_no_text`, `pdf_extraction_error` or `pdf_spool_error`, or
 `content_too_large` / `promptguard_budget` over the ceiling — never a 500. Stage 1 runs on the default thread pool (`asyncio.to_thread`, shared
 with stage 3's inference), which is uncancellable — the slot is what keeps hostile pages from
-starving the classifier of threads. No wall clock is put on HTML extraction; the 30 s fetch
-timeout and the 10 MB cap bound its input.
+starving the classifier of threads. No wall clock is put on **in-thread** HTML extraction
+(bodies at or below the threshold); the 30 s fetch timeout, the 10 MB cap and the threshold
+bound its input. A larger body runs in the worker under `extraction.wall_clock_seconds`,
+`child_cpu_seconds` and `child_address_space_bytes`, and a failure there is a 422
+`extraction_failed` / `html_extraction_error` (a spool fault is `pdf_spool_error`, as for
+PDFs) — never a 500.
 
 There is **no environment-variable override for any key below**. `config.yaml` is copied
 into the image, so changing one in a deployed container means bind-mounting a replacement
@@ -1105,6 +1146,7 @@ file — the procedure the resource-envelope spec documents.
 | `max_promptguard_chunks` | `0` | 0 – 1024 | PromptGuard chunk budget for one **fetched page**. `0` means **no pre-check** and no `max_chunks` handed to the classifier — today's behaviour — and boot logs one WARNING `retrieve_budget_unset coming_default=256`. Non-zero derives the classifiable character ceiling `(512 − 64) × chunks × 4` (458,752 at the coming default of 256); a page over it is refused 422 `content_too_large` with reason `promptguard_budget`. Ships at `0` for one minor release; the next MINOR flips the default to `256`, and `0` stays a legal opt-out (`contract/GOVERNANCE.md` ruling (g)). |
 | `fetch_concurrency` | `1` | 1 – 1 | Admission slots: concurrent `/retrieve` fetch-and-stage-1 work. Fixed at one for the PDF worker budget above; widening remains deferred. |
 | `admission_queue_depth` | `4` | 0 – 16 | Requests allowed to wait for the fetch slot, holding no body while they wait. Beyond it a request is refused 422 `busy` / `admission_queue_full` (`retrieve.busy_rejections`). `0` means refuse immediately whenever the slot is taken. Worst-case queue latency is `admission_queue_depth / fetch_concurrency × 30 s` — 120 s at the defaults. |
+| `html_worker_threshold_bytes` | `524288` (512 KiB) | 0 – 1048576 (1 MiB) | Fetched HTML bodies **larger than** this many bytes (compared on the fetched byte length, before decoding) parse in the rlimited worker inside the admission slot; a body of exactly this size parses in-thread. `0` routes every body to the worker. A worker failure is 422 `extraction_failed` / `html_extraction_error`. **Security-relevant: raising it weakens the bound** — see [HTML worker threshold](#html-worker-threshold). Not a cache-fingerprint or `sanitizer_revision` input, because the served output is byte-identical on either path. |
 | `max_queued_fetch_bytes` | `31457280` (30 MiB) | 10 MiB – 160 MiB | Bytes reserved for queued requests, one 10 MB fetch-cap reservation each — three at the default. A request whose reservation would exceed it is refused 422 `busy` / `admission_queue_full` (`retrieve.busy_rejections`). Deliberately **not** `admission_queue_depth × 10 MB`, so at the shipped defaults the byte bound binds before the depth bound and both are exercisable. |
 
 ### Top-level PromptGuard policy keys

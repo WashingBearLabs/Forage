@@ -97,6 +97,13 @@ retrieve:
   # exercisable.
   admission_queue_depth: 4
   max_queued_fetch_bytes: 31457280
+  # Fetched HTML bodies above this many bytes parse in the bounded worker
+  # (rlimited, killable) instead of the request thread; at or below it they
+  # stay in-thread. 0 sends every body to the worker. Maximum 2 x the default
+  # (1048576): raising it weakens the bound. Not a cache-key or revision
+  # input -- the output is byte-identical either way. See docs/configuration.md,
+  # "HTML worker threshold".
+  html_worker_threshold_bytes: 524288
 # Per-request PromptGuard policy floors for the fetch routes. A request may
 # not relax below `promptguard_fail_closed_floor` nor above
 # `promptguard_threshold_ceiling`; the shipped values (false / 1.0) impose no

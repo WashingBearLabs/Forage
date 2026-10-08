@@ -463,6 +463,7 @@ KNOWN_CONFIG_KEYS: frozenset[str] = frozenset(
         "retrieve.fetch_concurrency",
         "retrieve.admission_queue_depth",
         "retrieve.max_queued_fetch_bytes",
+        "retrieve.html_worker_threshold_bytes",
     }
 )
 
@@ -1263,6 +1264,10 @@ class RetrieveMetrics:
         self.busy_rejections = 0
         self.classification_wait_timeouts = 0
         self.promptguard_contiguity_detections = 0
+        # Internal until the contract cut that exposes them on `/metrics`:
+        # large HTML bodies handed to the worker, and the worker's refusals.
+        self.html_worker_spawns = 0
+        self.html_worker_refusals = 0
 
     def record_error(self, error: str) -> None:
         """Record one content-free retrieve error, keyed by ``PipelineError.error``."""

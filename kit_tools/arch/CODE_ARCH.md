@@ -487,7 +487,8 @@ cassettes are keyed by the sha256 of stage-3 input. Everything new is scan-only:
   `_PATTERNS`) runs in `scan_raw_markup`: one `search()` per pattern over the
   whitespace-collapsed raw source, line number 0, nothing cut. Raw source, never re-serialised
   markup (lxml round-trips drop stray end tags).
-- On `/retrieve`, `_extract_html_and_scan_inline` runs inside the stage-1 thread: it parses once,
+- On `/retrieve`, `html_subprocess.extract_html_and_scan` runs inside the stage-1 thread (or, above
+  `retrieve.html_worker_threshold_bytes`, in the rlimited worker): it parses once,
   scans the inline-joined text through the forms and the raw HTML through `scan_raw_markup`, and
   returns only a combined `StructuralScanResult` (via `sanitize_and_structure`'s `extra_scans`),
   so no page-sized scan text or markup outlives the thread. `/search` builds each field's inline
@@ -498,7 +499,9 @@ cassettes are keyed by the sha256 of stage-3 input. Everything new is scan-only:
 
 The epic's nine rotations (forty-fourth to fifty-second) end at `46b8d1bb…`; per-rotation
 controls are in `docs/bootstrap-notes.md`. The fifty-third rotation (`release-resource-bounds`
-US-001, stage 1 made linear, output byte-identical) moves it to `0ace27ca…`.
+US-001, stage 1 made linear, output byte-identical) moves it to `0ace27ca…`; the fifty-fourth
+(US-006, large `/retrieve` HTML bodies routed to the worker, output byte-identical) moves it to
+`54aa9649…`.
 
 **Network reads enforce the raw ceiling before allocation.**
 `pipeline/provider_transport.py` connects both providers through HTTPX's public

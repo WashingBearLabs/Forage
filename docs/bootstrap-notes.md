@@ -2463,6 +2463,56 @@ Best-of-1/3 seconds, `extract_html(with_inline=True, prune_hidden=True)`, 64 KiB
 `/search` field parse, one 8,000-character unclosed-span snippet: 47.7 ms before, 14.5 ms after.
 **Not replayed to Poppy:** compare contracts, not revisions.
 
+### The fifty-fourth rotation: large `/retrieve` HTML bodies use the worker (`release-resource-bounds` US-006)
+
+`run_retrieve_pipeline` compares the **fetched byte length** (before any decode) with
+`retrieve.html_worker_threshold_bytes`. At or below it, stage 1 runs in the request thread through
+`html_subprocess.extract_html_and_scan`; `orchestrator._extract_html_and_scan_inline` is deleted
+(no second copy). One byte over, or any body when the key is `0`, goes to
+`extract_html_bytes_in_subprocess` inside the admission slot, awaited through `completed_thread`
+so cancellation releases admission only after the worker is reaped and the spool unlinked.
+`HTMLExtractionError` maps to 422 `extraction_failed` / `html_extraction_error` with the closed
+WARNING token `retrieve_html_extraction_failed`; a spool `OSError` / `SpoolDirectoryError` maps to
+`pdf_spool_error` with `retrieve_spool_error`. `RetrieveMetrics.html_worker_spawns` and
+`html_worker_refusals` are plain attributes (not in `RetrieveMetricsResponse`; US-007 exposes them).
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`HEAD`) / `orchestrator.py` and `contract.py` both reverted | `0ace27cae20e17e6c6eae7fa51f3126483bf8d07d6e555afbeee0a39364f4911` |
+| `orchestrator.py` alone reverted | `3f6665030a34211600ab5e770974cdbd87f659d228d132ea9c45baa2526ac923` |
+| `contract.py` alone reverted | `0905fed7ddfb7de59370da7fccd7b04071cfe5836d0f40f7b494df90617e4e4c` |
+| After | `54aa96492868e3e2785dba28008815b0ea5f76e3bb1c4c5336b3d15fd2efa3ca` |
+
+Each reversal loaded the pre-story bytes read-only (`git show HEAD:<path>` into a copy of the tree
+in a temp directory). `html_subprocess.py`, `retrieve_limits.py` and `retrieval_app.py` are not
+hashed, so the new knob moves nothing on its own. The knob is neither a cache-fingerprint nor a
+revision input: the served response is byte-identical on either path.
+
+Calibration (pinned `tests/stage1_shapes.py` shapes on the linear stage 1, GC off, median of 3, a
+fresh process per sample, macOS arm64; seconds / parent peak-RSS delta in MiB):
+
+| Shape | 256 KiB | 512 KiB | 1 MiB | 2 MiB |
+|---|---|---|---|---|
+| sibling-dense | 0.408 / 78.3 | 0.878 / 155.8 | 2.275 / 312.5 | 5.237 / 624.1 |
+| deep span | 0.174 / 39.4 | 0.287 / 48.2 | 0.518 / 65.7 | 0.969 / 102.3 |
+| attribute-heavy | 0.175 / 38.8 | 0.350 / 76.3 | 0.698 / 152.3 | 1.405 / 318.9 |
+| unclosed span | 0.340 / 37.2 | 0.683 / 74.6 | 1.379 / 147.0 | 2.722 / 295.9 |
+| deep span, hidden | 0.272 / 48.3 | 0.483 / 65.7 | 0.898 / 101.7 | 1.756 / 175.9 |
+| unclosed span, hidden | 0.598 / 74.2 | 1.192 / 149.0 | 2.386 / 302.5 | 4.788 / 607.5 |
+
+The default is 512 KiB (524,288): the largest power-of-two KiB where the worst shape (unclosed span,
+hidden) parses in <= 2 s (1.19 s) and the RSS delta is <= 25% of 1536 MiB = 384 MiB (149 MiB).
+1 MiB fails the time axis (2.39 s), so the maximum (2x the default, 1 MiB) is a documented
+weakening, not a safe value. Share of pages that pay for a spawn at the default: the 359 corpus
+page records are synthetic (median 591 B, largest 15,640 B), so none spawns; for real pages, whose
+median HTML is tens of KiB, only the tail above 512 KiB does — each costing a few hundred
+milliseconds of launch plus about 0.33 s of import CPU, in exchange for a killable parse.
+
+Equivalence: default-versus-`0` served responses are equal (modulo `request_id` and
+`retrieved_at`) for all 359 page records through the in-process frame round trip, at chunk budgets
+`0` and `64`, and for a 12-record sample through real spawns. Stage 3's input is byte-identical
+and both cassettes are unchanged. Not replayed to Poppy.
+
 ### HTML extraction worker (`release-resource-bounds` US-005)
 
 `pipeline/html_subprocess.py` (new, **unhashed**) holds `extract_html_and_scan`, a copy of

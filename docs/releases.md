@@ -72,6 +72,10 @@ Not yet tagged; the version number is decided at the release gate. Contract stay
   (`release-resource-bounds` US-001): stage 1 no longer deep-copies BeautifulSoup trees, so
   deeply nested or unclosed-tag pages cost linear time. Output is byte-identical; old cache
   entries still become misses.
+- **A fifty-fourth rotation, `0ace27ca…` → `54aa96492868e3e2785dba28008815b0ea5f76e3bb1c4c5336b3d15fd2efa3ca`**
+  (`release-resource-bounds` US-006): `/retrieve` HTML bodies above
+  `retrieve.html_worker_threshold_bytes` (512 KiB) parse in the rlimited worker. Output within
+  bounds is byte-identical; old cache entries still become misses.
 - GOVERNANCE worked example 6's announce-then-flip window was **waived** by the owner for
   the default-model change (no known third-party consumers).
 

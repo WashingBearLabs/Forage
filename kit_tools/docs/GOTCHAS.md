@@ -716,7 +716,7 @@ the pass-list advice; the baked image still ships `limiter: false`.
 forty-seventh rotation) plus repo-root `url_validator.py` — plus the model identity, the
 `idna` version (`idna@<version>`: UTS-46 tables decide which hosts are dropped), the
 `unicodedata` version (`unicodedata@<version>`: NFKC's tables decide what the fold forms
-see) and the active threshold. Forage's revision has moved fifty-three times. The twenty-sixth was
+see) and the active threshold. Forage's revision has moved fifty-four times. The twenty-sixth was
 reconciled from the preceding validation commit during US-001's pre-flight; the rest
 were recorded at their implementation boundaries:
 
@@ -776,11 +776,12 @@ were recorded at their implementation boundaries:
 | `structural-wire-closure` US-001 | `919fa977…` | Fifty-first, **the sixteenth sanitization-behaviour-changing rotation**: `finalize_quarantine` returns `title=None` for stage-2 BLOCKED, stage-3 INJECTION_DETECTED and `unavailable_blocked`. `stage4_structuring.py` alone moves; reverting it reproduces `3cfe54c9…` under default and shipped config. GOVERNANCE ruling (m), no bump; openapi byte-identical; cassettes unchanged |
 | `structural-wire-closure` US-002 | `46b8d1bb…` | Fifty-second, **the seventeenth sanitization-behaviour-changing rotation**: `extract_html` prunes inline-hidden body descendants from the served `main_content` (`_prune_hidden`; `raw_text`, metadata and `/search` unchanged) and sets `ExtractionResult.main_content_is_fallback` only when something was pruned, which `extract_summary` honours; `/retrieve` and `/extract` bodies lose hidden text. `stage1_extraction.py`, `stage4_structuring.py` and `orchestrator.py` move (each reverted alone; all-reverted control reproduces `919fa977…` under default and shipped config). GOVERNANCE ruling (m), no bump; cassettes unchanged |
 | `release-resource-bounds` US-001 | `0ace27ca…` | Fifty-third, **not a sanitization-behaviour change**: `stage1_extraction.py` alone. The three `copy.copy(soup)` sites are gone: `_extract_raw_text` is a non-mutating walk, `_prune_hidden(soup, html)` re-parses `html`, and the pruned fallback strips its private `pruned_soup` in place. Every `ExtractionResult` field is byte-identical (1,484 frozen digests); stage 3's input is unchanged. |
+| `release-resource-bounds` US-006 | `54aa9649…` | Fifty-fourth, **not a sanitization-behaviour change**: `orchestrator.py` (the byte-length routing branch, the 422 `html_extraction_error` and spool mapping, the spawn/refusal counters, `_extract_html_and_scan_inline` deleted) and `contract.py` (`RETRIEVE_HTML_EXTRACTION_ERROR`). Each reverted alone against `HEAD`; the both-reverted control reproduces `0ace27ca…`. The served response is byte-identical on either path (corpus comparison against `0`); only a worker refusal is a new, coded 422. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Thirty-four of the fifty-three rotations changed no sanitization policy or algorithm at shipped defaults; the
+**Thirty-five of the fifty-four rotations changed no sanitization policy or algorithm at shipped defaults; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
 US-001, US-002, US-003 and its validation fix) and the twenty-seventh
 through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005),

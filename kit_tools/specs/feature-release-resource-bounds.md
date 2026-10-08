@@ -799,6 +799,16 @@ worker thread, so that the event-loop thread is not held for a whole parse.
 - Spool `OSError` propagates (as in the PDF path) for US-006 to map; only worker/frame failures become `HTMLExtractionError`.
 - Kill test uses 768 KiB sibling-dense (not 512 KiB) for margin on a faster runner; verified on Linux in Docker.
 
+### US-006
+- Rotation 53rd -> 54th: `0ace27ca…` -> `54aa9649…` (`orchestrator.py` and `contract.py`; each reverted alone against `HEAD`, both-reverted control reproduces `0ace27ca…` under default, `config.yaml` and `bench/config.yaml`; see `docs/bootstrap-notes.md`). Not a sanitization-behaviour change.
+- Default `retrieve.html_worker_threshold_bytes` = 524288 (512 KiB), max 1048576. Worst shape at the default: unclosed-span-hidden, 1.19 s / +149 MiB parent RSS; at the 1 MiB max 2.39 s / +303 MiB (sibling-dense 2.28 s / +313 MiB). 1 MiB fails the 2 s axis; RSS (384 MiB limit) holds up to 1 MiB. Full per-shape table in `docs/configuration.md` and `docs/bootstrap-notes.md`.
+- Spawn share: the 359 corpus page records are synthetic (median 591 B, max 15,640 B), so none spawns at the default; real median HTML is tens of KiB, so only the tail above 512 KiB pays the spawn.
+- `orchestrator._extract_html_and_scan_inline` was removed; the callers use `html_subprocess.extract_html_and_scan`. Re-patched `pipeline.orchestrator.extract_html` -> `pipeline.html_subprocess.extract_html` (retrieve sites only; `/search` sites keep the orchestrator patch): `tests/test_orchestrator.py`, `tests/test_app.py`, `tests/test_retrieve_admission.py` (which also patches `scan_structural_forms` in both modules in the off-loop test). `tests/test_inline_scan_form.py`, `tests/test_html_subprocess.py` and one `test_orchestrator.py` test now call the shared function directly; the old orchestrator-vs-shared equivalence test became an identity/no-second-copy test.
+- Counters `html_worker_spawns` / `html_worker_refusals` are plain attributes on `RetrieveMetrics`, `_NullRetrieveMetrics` and the `RetrieveMetricsSink` protocol; `RetrieveMetricsResponse` is unchanged. `test_domain_policy_counters_match_classes_models_and_wire` excludes them through `_INTERNAL_RETRIEVE_COUNTERS` (delete the set when US-007 adds the response fields). A spool fault counts a spawn but not a refusal.
+- `contract.py` gained only `RETRIEVE_HTML_EXTRACTION_ERROR` (no description, not in `RETRIEVE_PDF_FAILURE_REASONS`); `CONTRACT_VERSION`, OpenAPI and the 1.3.0 golden are unchanged.
+- The corpus comparison needs `retrieved_at` and `request_id` excluded: they are per-call by construction.
+- Calibration figures are macOS arm64, not Linux/x86_64.
+
 ## Refinement Notes
 
 ### Research Findings

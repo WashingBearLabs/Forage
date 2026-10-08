@@ -801,7 +801,7 @@ git show v1.0.0:contract/openapi.yaml.sha256 | diff - openapi.yaml.sha256 && sha
 **Symptom:** someone concludes the two deployments are "out of sync" because the revisions
 differ.
 
-**Cause:** wrong measure. Forage's revision has deliberately diverged from Poppy's fifty-three times
+**Cause:** wrong measure. Forage's revision has deliberately diverged from Poppy's fifty-four times
 (recorded in `docs/bootstrap-notes.md`); it hashes source bytes, model identity and the
 threshold, not the wire shape.
 

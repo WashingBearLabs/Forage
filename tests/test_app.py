@@ -1524,7 +1524,7 @@ async def test_health_answers_while_a_fetched_page_is_being_extracted(
                 new=AsyncMock(return_value=("93.184.216.34", "example.com")),
             ),
             patch("pipeline.orchestrator.fetch_url", new=fetch),
-            patch("pipeline.orchestrator.extract_html", new=_blocking_extract_html),
+            patch("pipeline.html_subprocess.extract_html", new=_blocking_extract_html),
         ):
             async with _running_app(cache_connected=True) as client:
                 retrieve = asyncio.create_task(

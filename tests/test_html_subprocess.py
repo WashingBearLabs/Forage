@@ -116,7 +116,7 @@ def _in_thread(
     body: bytes, url: str | None, budget: int | None
 ) -> tuple[ExtractionResult, StructuralScanResult | None]:
     html = body.decode("utf-8", errors="replace")
-    return orchestrator._extract_html_and_scan_inline(html, url, budget)
+    return extract_html_and_scan(html, url, budget)
 
 
 def _assert_equivalent(
@@ -128,11 +128,11 @@ def _assert_equivalent(
 
 
 class TestSharedFunction:
-    def test_it_matches_the_orchestrators_inline_function(self) -> None:
-        for body in (_NON_UTF8, _OVER_BUDGET):
-            html = body.decode("utf-8", errors="replace")
-            want = orchestrator._extract_html_and_scan_inline(html, _URL, 50)
-            assert extract_html_and_scan(html, _URL, 50) == want
+    def test_the_orchestrator_calls_this_function_and_keeps_no_second_copy(
+        self,
+    ) -> None:
+        assert orchestrator.extract_html_and_scan is extract_html_and_scan
+        assert not hasattr(orchestrator, "_extract_html_and_scan_inline")
 
     def test_the_category_vocabulary_equals_stage_twos(self) -> None:
         assert (

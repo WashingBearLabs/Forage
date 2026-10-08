@@ -46,6 +46,11 @@ from pipeline.extraction_limits import (
     ExtractionSettings,
     max_extracted_characters,
 )
+from pipeline.html_subprocess import (
+    HTMLExtractionError,
+    extract_html_and_scan,
+    extract_html_bytes_in_subprocess,
+)
 from pipeline.pdf_subprocess import (
     PDFClassifiableTextLimitError,
     extract_pdf_bytes_in_subprocess,
@@ -231,33 +236,6 @@ async def _bounded_permit(
 
 
 _DEFAULT_PROMPTGUARD_SETTINGS = PromptGuardSettings()
-
-
-def _extract_html_and_scan_inline(
-    html_text: str, url: str | None, budget_characters: int | None
-) -> tuple[ExtractionResult, StructuralScanResult | None]:
-    """Stage 1 plus the inline-form and raw-markup stage-2 scans, one thread hop.
-
-    Parses once (``extract_html`` builds the inline text from its own soup),
-    scans the inline text and the fetched markup here, and returns the
-    extraction with ``scan_text_inline`` cleared plus one combined
-    ``StructuralScanResult``, so only a scan result leaves the thread and a
-    request queued on the classification permit holds no page-sized scan text
-    or markup. An over-budget page is refused by the caller's pre-check, so
-    both scans are skipped for it.
-    """
-    extraction = extract_html(html_text, url, with_inline=True)
-    inline = extraction.scan_text_inline
-    extraction = replace(extraction, scan_text_inline=None)
-    if budget_characters is not None and len(extraction.raw_text) > budget_characters:
-        return extraction, None
-    markup_scan = scan_raw_markup(html_text)
-    if inline is None:
-        return extraction, markup_scan
-    return extraction, combine_scan_results(
-        scan_structural_forms(structural_scan_forms(inline, html_parsed=True)),
-        markup_scan,
-    )
 
 
 async def sanitize_and_structure(
@@ -633,18 +611,52 @@ async def run_retrieve_pipeline(
                         request_id=request_id,
                     ) from exc
         else:
-            html_text = fetch_result.response_body.decode("utf-8", errors="replace")
-            async with completed_thread(
-                asyncio.to_thread(
-                    _extract_html_and_scan_inline,
-                    html_text,
-                    request.url,
-                    settings.max_extracted_characters,
-                )
-            ) as html_worker:
-                extraction, page_scan = html_worker.result()
-                extra_scans = (page_scan,) if page_scan is not None else ()
-            del html_text
+            # Compare the fetched byte length, before any decode: a body at the
+            # threshold parses in-thread, one byte over goes to the worker, and
+            # `0` sends every body there. The worker sits inside the admission
+            # slot exactly as the PDF one does.
+            if len(fetch_result.response_body) > settings.html_worker_threshold_bytes:
+                retrieve_metrics.html_worker_spawns += 1
+                async with completed_thread(
+                    asyncio.to_thread(
+                        extract_html_bytes_in_subprocess,
+                        fetch_result.response_body,
+                        request.url,
+                        settings.max_extracted_characters,
+                        extraction_settings,
+                    )
+                ) as html_worker:
+                    try:
+                        extraction, page_scan = html_worker.result()
+                    except HTMLExtractionError as exc:
+                        retrieve_metrics.html_worker_refusals += 1
+                        logger.warning("retrieve_html_extraction_failed")
+                        raise PipelineError(
+                            error="extraction_failed",
+                            reason=contract.RETRIEVE_HTML_EXTRACTION_ERROR,
+                            request_id=request_id,
+                        ) from exc
+                    except OSError as exc:
+                        # Host fault (spool directory or file), not input.
+                        logger.warning("retrieve_spool_error")
+                        raise PipelineError(
+                            error="extraction_failed",
+                            reason=contract.RETRIEVE_PDF_SPOOL_ERROR,
+                            request_id=request_id,
+                        ) from exc
+            else:
+                html_text = fetch_result.response_body.decode("utf-8", errors="replace")
+                async with completed_thread(
+                    asyncio.to_thread(
+                        extract_html_and_scan,
+                        html_text,
+                        request.url,
+                        settings.max_extracted_characters,
+                    )
+                ) as html_thread:
+                    extraction, page_scan = html_thread.result()
+                del html_text
+            extra_scans = (page_scan,) if page_scan is not None else ()
         # The three post-stage-1 scalars leave the fetch result here, so the
         # body and its decoded copy go with the slot: a request parked on the
         # classification permit holds only its extracted text.
@@ -1501,6 +1513,8 @@ class RetrieveMetricsSink(AdmissionMetrics, PromptGuardMetricsSink, Protocol):
 
     classification_wait_timeouts: int
     policy_suffix_trusted_skip: int
+    html_worker_spawns: int
+    html_worker_refusals: int
 
 
 class _NullRetrieveMetrics:
@@ -1517,6 +1531,8 @@ class _NullRetrieveMetrics:
         self.classification_wait_timeouts = 0
         self.policy_suffix_trusted_skip = 0
         self.promptguard_contiguity_detections = 0
+        self.html_worker_spawns = 0
+        self.html_worker_refusals = 0
 
 
 # Structural conformance, checked by the type checker rather than asserted in

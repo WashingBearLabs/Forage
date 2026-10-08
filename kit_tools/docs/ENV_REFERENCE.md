@@ -168,6 +168,14 @@ Validated at start by `pipeline.extraction_limits.extraction_settings_from_confi
 | `admission_queue_depth` | `1` | 0 to 4 | Requests that may wait for the slot; `0` means immediate `busy` (429) |
 | `max_queued_upload_bytes` | `52428800` (50 MiB) | 0 to 50 MiB | Bytes of queued uploads held in flight; `0` disables queuing |
 
+### `retrieve:` block (HTML worker threshold)
+
+Validated at start by `pipeline.retrieve_limits.retrieve_settings_from_config()`; an out-of-range value raises `RetrieveConfigurationError` and the boot is refused. Security-relevant. Not a cache-fingerprint or `sanitizer_revision` input. Full table and calibration: `docs/configuration.md`, "HTML worker threshold".
+
+| Key | Code default = shipped | Allowed range | Controls |
+|---|---|---|---|
+| `html_worker_threshold_bytes` | `524288` (512 KiB) | 0 to 1048576 | Fetched HTML bodies larger than this parse in the rlimited worker inside the admission slot (422 `extraction_failed` / `html_extraction_error` on failure); `0` sends every body; raising it weakens the bound (worst in-thread shape at the 1 MiB maximum: 2.39 s, +313 MiB parent RSS) |
+
 The parent reservation is **512 MiB with the 22M model resident and no classification
 in flight**; the per-model resident delta is `0` for the 22M and 405 MiB for the
 default 86M. The working-set coefficient is
