@@ -141,22 +141,22 @@ classification permit past the wait other requests are given.
 - **No rotation:** record `derive_sanitizer_revision()` before and after (equal).
 
 **Acceptance Criteria:**
-- [ ] `RETRIEVE_MAX_PROMPTGUARD_CHUNKS == 64`, and `COMING_MAX_PROMPTGUARD_CHUNKS` appears nowhere
+- [x] `RETRIEVE_MAX_PROMPTGUARD_CHUNKS == 64`, and `COMING_MAX_PROMPTGUARD_CHUNKS` appears nowhere
       (grep).
-- [ ] An empty config gives 64 and a ceiling of 114,688. An explicit `0` gives no pre-check and
+- [x] An empty config gives 64 and a ceiling of 114,688. An explicit `0` gives no pre-check and
       no `max_chunks` (tests).
-- [ ] No `retrieve_budget_unset` record under empty, 64 or 0 config (test).
-- [ ] An over-budget fetched page under the default config is refused `422 content_too_large` /
+- [x] No `retrieve_budget_unset` record under empty, 64 or 0 config (test).
+- [x] An over-budget fetched page under the default config is refused `422 content_too_large` /
       `promptguard_budget` (test).
-- [ ] The corpus baseline regenerates with zero outcome changes, and `sanitizer_revision` is
+- [x] The corpus baseline regenerates with zero outcome changes, and `sanitizer_revision` is
       unchanged (values recorded).
-- [ ] The doc-sweep greps find no current statement of a `0` or `256` default outside the allowed
+- [x] The doc-sweep greps find no current statement of a `0` or `256` default outside the allowed
       historical list. The commands and hits are recorded. `GOVERNANCE.md:499` carries the
       dated 64 closure.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-002: Measure the 86M per-window cost and rewrite the budget sizing guidance
 
